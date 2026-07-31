@@ -61,6 +61,40 @@ var (
 	// segments the data section actually carries.
 	ErrDataCountMismatch = errors.New("data count and data section have inconsistent lengths")
 
+	// ErrPayloadEnd is the payload grammar wanting a byte the image does not
+	// have. It is face 2 of the size mechanism (see sections.go).
+	//
+	// Note the relationship to ErrTruncated: "unexpected end" is a *substring* of
+	// this text, and the harness matches by substring, so this error satisfies
+	// both the vectors expecting the long form and the three custom.wast vectors
+	// expecting the short one. That containment is the suite's, not a convenience
+	// — it is why a payload-level truncation must never be reported as the bare
+	// preamble-level ErrTruncated, which would fail the long-form vectors while
+	// looking correct on the short ones.
+	ErrPayloadEnd = errors.New("unexpected end of section or function")
+
+	// ErrSectionSizeMismatch is a section whose grammar consumed a different
+	// number of bytes than its header declared. Face 3, and the two-signed one:
+	// grammar-short and grammar-long are both this error.
+	ErrSectionSizeMismatch = errors.New("section size mismatch")
+
+	// The malformed-form errors of the payload grammars. Each names the byte it
+	// rejected, because "malformed limits flags" alone does not say which flags.
+	ErrMalformedFuncType   = errors.New("malformed function type")
+	ErrMalformedValType    = errors.New("malformed value type")
+	ErrMalformedRefType    = errors.New("malformed reference type")
+	ErrMalformedLimits     = errors.New("malformed limits flags")
+	ErrMalformedMutability = errors.New("malformed mutability")
+	ErrMalformedImportKind = errors.New("malformed import kind")
+	ErrMalformedExportKind = errors.New("malformed export kind")
+
+	// ErrFeatureDisabled is a well-formed construct from a gated proposal met
+	// with its gate off. Deliberately *not* a suite malformed-string: the module
+	// is well-formed and the spec would accept it, so claiming otherwise would be
+	// the gate manufacturing malformedness (CLAUDE.md). Callers wrap it with the
+	// feature's name via featureErr.
+	ErrFeatureDisabled = errors.New("feature gate disabled")
+
 	// ErrDataCountRequired is memory.init or data.drop appearing without a data
 	// count section.
 	//
@@ -156,13 +190,32 @@ type Module struct {
 type reader struct {
 	b   []byte
 	off int
+
+	// eof is the error to report when the cursor runs off the end. The preamble
+	// reads with ErrTruncated ("unexpected end") and payload grammars read with
+	// ErrPayloadEnd ("unexpected end of section or function"): the suite draws
+	// that line — binary.wast:6 is the short form, binary.wast:88 the long one —
+	// and it is a property of *where* the cursor is, not of which call runs out.
+	// Threading it through the reader keeps every leaf read honest without each
+	// one having to know its own depth.
+	//
+	// The zero value is ErrTruncated, via eofErr, so a reader constructed for a
+	// preamble read needs no ceremony.
+	eof error
+}
+
+func (r *reader) eofErr() error {
+	if r.eof != nil {
+		return r.eof
+	}
+	return ErrTruncated
 }
 
 func (r *reader) remaining() int { return len(r.b) - r.off }
 
 func (r *reader) bytes(n int) ([]byte, error) {
 	if n < 0 || r.remaining() < n {
-		return nil, ErrTruncated
+		return nil, r.eofErr()
 	}
 	p := r.b[r.off : r.off+n]
 	r.off += n
@@ -171,11 +224,39 @@ func (r *reader) bytes(n int) ([]byte, error) {
 
 func (r *reader) byte() (byte, error) {
 	if r.remaining() < 1 {
-		return 0, ErrTruncated
+		return 0, r.eofErr()
 	}
 	c := r.b[r.off]
 	r.off++
 	return c, nil
+}
+
+// byteVec reads a length-prefixed byte sequence — the encoding of a name, and of
+// a data segment's contents.
+//
+// The length is checked against the image before the slice is taken, and the
+// overrun is ErrSectionOverrun ("length out of bounds") rather than an
+// end-of-input error. binary.wast:754 is the vector that decides this: a name
+// length of 10 with 6 bytes left in the image is what the suite calls "length out
+// of bounds", not "unexpected end of section or function".
+//
+// The returned bytes have no caller yet, which unparam correctly notices. They
+// have a *consumer* though: a name must be valid UTF-8, and 704 suite vectors
+// across four utf8-*.wast files assert it (#26). Dropping the return to satisfy
+// the linter would be deleting the check's only input — the disguise the
+// ErrTrailingData ruling names. Declared and tracked instead, and the
+// suppression comes off when #26 lands.
+//
+//nolint:unparam // #26: the returned name bytes are the UTF-8 check's input, not yet written
+func (r *reader) byteVec() ([]byte, error) {
+	n, err := r.u32()
+	if err != nil {
+		return nil, err
+	}
+	if uint64(n) > uint64(r.remaining()) {
+		return nil, fmt.Errorf("%w: %d bytes declared, %d left", ErrSectionOverrun, n, r.remaining())
+	}
+	return r.bytes(int(n))
 }
 
 // uleb reads an unsigned LEB128 integer of the given bit width.
@@ -240,8 +321,14 @@ func (r *reader) u32() (uint32, error) {
 //nolint:unused // tracked in #19; awaits i64 immediates (#7) / memory64 gate
 func (r *reader) u64() (uint64, error) { return r.uleb(64) }
 
-// DecodeModule performs a section-level decode of a complete module image.
+// DecodeModule decodes a complete module image under v0's default gate posture:
+// every 3.0 proposal gate present and off (contract §9).
 func DecodeModule(b []byte) (*Module, error) {
+	return (&Decoder{}).DecodeModule(b)
+}
+
+// DecodeModule decodes a complete module image under d's gate set.
+func (d *Decoder) DecodeModule(b []byte) (*Module, error) {
 	r := &reader{b: b}
 
 	// A *short* preamble is "unexpected end"; a full-width but wrong one is
@@ -293,10 +380,36 @@ func DecodeModule(b []byte) (*Module, error) {
 		if err != nil {
 			return nil, err
 		}
-		payload, err := r.bytes(int(size))
-		if err != nil {
-			return nil, ErrSectionOverrun
+
+		// Face 1 of the size mechanism: the declared extent must exist in the
+		// image at all. Checked before the grammar runs, because a grammar let
+		// loose on a bogus extent reports the wrong face.
+		if uint64(size) > uint64(r.remaining()) {
+			return nil, fmt.Errorf("%w: %d bytes declared, %d left", ErrSectionOverrun, size, r.remaining())
 		}
+		payload := r.b[r.off : r.off+int(size)]
+
+		// The grammar reads from a payload-scoped cursor that is *not* bounded by
+		// the section — see sections.go on why over-reading is required rather
+		// than merely tolerated.
+		pr := &reader{b: r.b, off: r.off, eof: ErrPayloadEnd}
+		decoded, err := d.decodePayload(sid, size, pr)
+		if err != nil {
+			return nil, err
+		}
+
+		if decoded {
+			// Faces 2 and 3. Face 2 already fired inside the grammar if the image
+			// ran out; reaching here means the grammar completed, so what remains
+			// is whether it agreed with the declared extent. Both signs are the
+			// same error, and the message reports which sign so a swap is visible.
+			if used := pr.off - r.off; used != int(size) {
+				return nil, fmt.Errorf("%w: %s section declared %d bytes, grammar consumed %d",
+					ErrSectionSizeMismatch, sid, size, used)
+			}
+		}
+
+		r.off += int(size)
 		m.Sections = append(m.Sections, Section{ID: sid, Payload: payload})
 	}
 
@@ -307,9 +420,10 @@ func DecodeModule(b []byte) (*Module, error) {
 }
 
 // vecCount reads the element count from the head of a vec-shaped section
-// payload.
+// payload. It runs after the payload grammars, so a payload short enough to
+// truncate the count here is a section-level end, not a preamble one.
 func vecCount(payload []byte) (uint32, error) {
-	r := &reader{b: payload}
+	r := &reader{b: payload, eof: ErrPayloadEnd}
 	return r.u32()
 }
 
