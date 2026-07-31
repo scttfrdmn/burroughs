@@ -54,6 +54,18 @@ weakly-ordered platform.
   mutation-only needle no seed can reach) — and **a design debt is discharged by a
   tripwire, never by an intention**, the declared-and-tracked ruling pointed at
   architecture instead of at a constant.
+- Three more disciplines ratified from this PR's review. **A control scoped to the
+  current sample inherits the current blind spot; scope controls to the space** —
+  the general form of #33's widening past the eight opcodes the reader needs, and
+  the overfitting law (§9 G-3) turned on the controls rather than the engine:
+  *derive the domain, never enumerate it.* **A ruling retroactively falsifies prose
+  written before it**, so accepting a ruling includes sweeping for the sentences it
+  orphaned — *truth has a maintenance cost*, and a comment citing a tracking
+  location that no longer exists is the drifted-citation defect in other clothes.
+  And **second-order honesty: apply the discipline to its own output** — catching a
+  figure as fiction earns nothing if its replacement carries the same
+  overconfidence; n=1 cannot separate a property of an environment from an accident
+  of one scheduling.
 - Decision 0005: tooling gates. Quality is enforced by pinned tools wired into
   CI rather than left to habit, because a convention that depends on
   remembering decays across session boundaries.

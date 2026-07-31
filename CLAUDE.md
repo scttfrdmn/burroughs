@@ -294,6 +294,17 @@ the choice, and consequences once Scott has called it.
   cross-check narrowed to those is the overfitting failure applied to a control.
   So: *prefer the risk a control can catch, then file the control.* (Ruling: Scott,
   decision 0006; the tripwire is #33.)
+- **A control scoped to the current sample inherits the current blind spot; scope
+  controls to the space.** The general form of #33's widening: the condition asked
+  for agreement over the const-legal *subset*, which would have cross-checked the
+  eight opcodes the reader needs today and stayed green while saying nothing about
+  whatever opcode either side adds next — a control that freezes at the moment of
+  authorship. Scoped to all 256 single-byte opcodes plus the tracked multi-byte
+  prefixes, the coverage grows with the thing controlled. Same move as reflecting
+  over `Features` rather than listing today's gates: *derive the domain, never
+  enumerate it*, because an enumeration is a sample and a sample has a blind spot
+  by construction. This is the overfitting law (§9 G-3) turned on the controls
+  themselves rather than on the engine. (Ruling: Scott, decision 0006 / #33.)
 - **No cgo. Pure Go.** `make check` clean at every commit (see Tooling gates).
 - **Parsers prove progress, they don't assume it.** A loop whose exit condition
   and error condition are the same predicate is the zero-progress bug; it
@@ -314,6 +325,26 @@ the choice, and consequences once Scott has called it.
   non-zero on findings is asked for its status, a tool that reports on stdout and
   exits 0 is asked for its output, and capturing `2>&1` to test for non-empty
   confuses a cold module cache with a defect (grave, PR #21).
+- **A ruling retroactively falsifies prose written before it, so accepting a ruling
+  includes sweeping for the sentences it orphaned.** *Truth has a maintenance cost.*
+  `ci.yml` said the runner stalls were "tracked in #28's thread"; the no-issue
+  ruling made that false the moment it was given, and the sentence would have sat
+  there citing a tracking location that does not exist — the drifted-fixture-citation
+  defect wearing different clothes, since a citation nobody re-checks is a claim.
+  So a ruling is not applied when the decision is recorded; it is applied when
+  everything the decision contradicts has been found. Grep for the old answer, not
+  just for the place you expect it. (Ruling: Scott, #28.)
+- **Second-order honesty: apply the discipline to its own output.** Catching a
+  figure as fiction earns nothing if its replacement is quoted with the same
+  overconfidence. The ~70k/sec average was correctly called an artefact of a
+  bimodal distribution — and then replaced with one run's numbers, one witness
+  dressed as an environmental fact. The re-measurement is what separated the two
+  claims: *the shape reproduces, the numbers don't* — dead windows and sprint
+  bursts in both runs, peaks differing 2× (605k → 1.25M). So the shape is the
+  finding and the numbers are the weather, and a two-run range is the honest
+  representation of exactly that much knowledge. The sibling of *benchstat or it
+  didn't happen*, pointed at environmental measurement: n=1 cannot separate a
+  property from an accident of one scheduling. (#28.)
 - **Honest boards.** The PR description and the issue tracker reflect
   reality, including what's red. Never quote a suite count that wasn't run.
 - **Bucketed failures are the work plan.** A suite Board line reports pass /
