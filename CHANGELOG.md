@@ -302,8 +302,116 @@ weakly-ordered platform.
   nobody ordered. Falsified on all four paths, and the missing-file probe found a
   real defect — the already-at-the-right-rev path returned early and skipped both
   assertions, the precondition excusing the check that polices it.
+- `internal/binary/optable.go`: the opcode immediate-shape table, **machine-extracted
+  from the reference interpreter** and committed with its provenance header (authority,
+  revision, extractor version, arm count). 542 arms — 218 single-byte including the
+  three prefix escapes, 31 `0xfb`, 18 `0xfc`, 275 `0xfd`. `make opcodes` regenerates,
+  `make opcode-drift` asserts the committed file still agrees with the pinned source
+  and refuses to run without it. Every spec vector bearing on this table is
+  `assert_malformed`, so a table that wrongly *rejects* a valid opcode is invisible on
+  the board by construction (contract §9 G-3); the extractor is the accept direction's
+  only witness.
+- The extractor errors on any arm it cannot read, never skips one, and carries the
+  vacuity control 0007's condition 1 required: per-region arm floors, so an extraction
+  finding nothing fails instead of producing an empty table that a drift check would
+  find in perfect agreement with an empty committed table (grave #29's shape relocated
+  into a code generator). Falsified per mechanism rather than per sentinel — the locate
+  check and the floors share `ErrVacuous`, and two of four subtests stayed green until
+  the assertion moved to the discriminating message text (#34's lesson).
+- The agreement test decision 0006 pre-registered (#33), landing in the same PR as the
+  table it cross-checks. Seven controls over **all 256 single-byte opcodes** and every
+  prefix region, derived from the table rather than enumerated: immediate-vocabulary
+  totality, the const set as a subset of the authority, a differential extent
+  comparison, the full rejection partition (38 absent / 3 escape / 21 illegal / 186
+  present / 8 const-legal = 256), dispatch coverage both ways, and invariance across
+  all 16 tracked feature configurations. Each one falsified by inducing the defect it
+  names.
+- **`immBytes` is an enrolled witness**, which is the ruling that settles decision
+  0006's shape once: *every copy of a fact is either an enrolled witness or a derived
+  artifact* — three copies with only some checked is a drift farm. So the seam between
+  the authority's vocabulary and this package's readers now testifies. Every entry
+  cites the `decode.ml:N` definition it mirrors and quotes it, machine-checked against
+  the vendored source (`TestImmBytesCitationsResolve` — the fixture-provenance
+  mechanism pointed at a reader table; it caught two drifted citations of its author's
+  on its first run). And every flat reader is measured **on its own** against a derived
+  vector stating the reference rule that entails its extent
+  (`TestEveryReaderAgreesWithItsAuthorityDefinition`), because composition over the
+  const set reaches eight opcodes out of a nineteen-entry vocabulary. On disagreement
+  the reference-derived table is the presumptive authority.
 
 ### Fixed
+- Four extractor defects found by printing what the code returned rather than by
+  reading it, all invisible to the suite. `i8x16_shuffle` reads `repeat 16 laneidx s`
+  and extracted as **one** lane byte instead of sixteen — 15 lost bytes that would
+  shift every following instruction in a body. The four structural arms all reported
+  the mnemonic `end_`, because "the last `in`" is not "the last statement".
+  `0xfb/0x18` reported the OCaml keyword `if`, and that arm needs *two* mnemonics
+  (`br_on_cast`/`br_on_cast_fail`) selected by opcode. A multi-line alternation head
+  (`decode.ml:601`) was read as an unrecognized arm — which was the extractor working
+  as specified, refusing to guess.
+- The three prefix escapes (`0xfb`, `0xfc`, `0xfd`) were **absent from the single-byte
+  table**, so a walker could not tell "escape to a sub-table" from "no such opcode" —
+  the absent-versus-rejected conflation `opInfo.illegal` exists to prevent, in a third
+  flavour. Found by #33's agreement test from outside the generator, because the
+  generator's own 256-byte partition test *enumerated* `{0xfb, 0xfc, 0xfd}` as a
+  literal and so scored the hole as expected. Now recorded as `escape: true` and
+  derived on both sides: a hardcoded exception list in a totality check is a hole with
+  a comment.
+- Two controls in name only, caught by falsification rather than by review. A reader
+  check passed with the shuffle fix removed, because deleting the longer pattern lets
+  a *shorter* one mask the same text — the check could only see readers surviving
+  masking, never one whose territory had been usurped; replaced by an invariant the
+  defect actually violates (a matched reader must be *called*, not passed to a
+  combinator). And a test asserting the generated table is clean under the repo's
+  formatter passed on deliberately mangled input: golangci-lint skips files carrying
+  `Code generated ... DO NOT EDIT.`, so the gap it controlled does not exist. Deleted,
+  with the measurement recorded at the site — before controlling a gap, check the gap
+  exists.
+- Two `immBytes` readers were wrong and **no test could reach them** (grave #47).
+  `laneidx` read a raw byte; `let laneidx s = u8 s` is `uN 8`, a LEB, so the legal
+  two-byte encoding `81 00` consumed one byte instead of two. `laneidx16` read a flat
+  `bytes(16)`; `repeat 16 laneidx s` is sixteen LEB reads, 16..32 bytes. Both invisible
+  for two compounding reasons: no lane instruction is const-legal, so the extent
+  differential never executed either entry, and "a lane index is 0..15, so it is a
+  byte" is true about the value and false about the encoding. The general form is
+  *a control that only exercises a fact in composition covers the compositions, not the
+  fact* — scope controls to the space the **map** spans, not the one its current callers
+  reach. Neither is suite-visible: a non-canonical-but-legal LEB is well-formed, which
+  is the accept direction 0007 exists to cover.
+- Two drifted citations in the same map, found by the citation check on its first run
+  (`blocktype` 230→334, `instr_block'` 612→967) — hand-written line numbers, exactly
+  the defect `TestFixtureProvenance` was built for, in a new place.
+- Decision 0007's stale figures wear a pointer at their point of reading, not just a
+  correction three sections away (ruling: Scott, PR #43). *Records are append-corrected;
+  stale claims wear a pointer* — the body is preserved per the 0003 precedent, and the
+  `counted (not estimated)` heading now forward-references the section that falsifies
+  it. The Correction's own single-byte figure was stale too (215, written before the
+  escape rows landed in the same PR) and is now 218.
+- CI's `conformance` job vendors the reference **before** the board step, not after it.
+  The reference-vendoring steps sat below the board on the reasoning that only
+  `make opcode-drift` reads decode.ml — then `internal/binary` grew a test that reads it
+  too, and the board step failed under `BURROUGHS_NO_SKIP=1` on a corpus the same job
+  fetches nine lines later. Reproduced by hiding `third_party/`, not guessed. The
+  corollary to the lesson below: a job's corpora are its **preconditions**, satisfied
+  before the first step that runs tests rather than next to the step whose name mentions
+  them — which package needs which corpus is not a fact a workflow file can track.
+- CI's `build` job vendors the reference interpreter too, not only the suite. It runs
+  `go test ./...`, which reaches the extractor's tests, which call `RequireSpecRef` —
+  and under the workflow-wide `BURROUGHS_NO_SKIP=1` that is a **fail**, not a skip.
+  Caught on PR #43's first CI run by the strictness policy doing exactly its job: the
+  drift check had been placed in the `conformance` job while the corpus requirement it
+  introduced was inherited tree-wide. The general shape, now stated at the site: *a job
+  running `go test ./...` inherits every corpus requirement in the tree*, so it must
+  vendor all of them rather than the one it was thinking about. Both presence guards
+  now run in that job as well, because a truncated fetch passes the Go-level door and
+  is a different failure from a missing one.
+- Decision 0007's "counted (not estimated)" figures were wrong and are corrected in an
+  appended section, body preserved: 201/29/18/256 (504) counted arm *lines*, and
+  assumed the SIMD sub-opcode was a byte where the reference runs to `0x113`. The
+  reader histogram was a whole-file grep, so it counted occurrences outside the `instr`
+  function, and `grep 'idx s'` silently matched the tail of `laneidx s`. Each figure
+  had been checked for plausibility rather than against a second method — and the
+  extractor, which is that second method, disagreed on its first successful run.
 - `binary.wast:112` is settled by asking the authority instead of reasoning about
   it: `decode.ml`'s `sized` runs a section's payload grammar **unbounded** and
   reconciles the declared extent afterwards, which is Burroughs' existing doctrine

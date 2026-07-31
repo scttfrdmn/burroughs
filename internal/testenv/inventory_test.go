@@ -22,11 +22,22 @@ import (
 // So this test reads the AST rather than trusting the convention. Adding a skip
 // means adding a line here, and adding a line here means writing down why the test
 // may decline to answer. A license nobody had to state is a license nobody reviewed.
-// The tree currently has exactly one, which is the point: routing every skip
-// through one helper is what makes one env var able to revoke them all. Callers
-// like internal/spec's requireSuite delegate here and so are not sites themselves.
+// Callers like internal/spec's requireSuite delegate here and so are not sites
+// themselves.
+//
+// Every entry is in this one file, which is the point: routing all skips through
+// testenv is what makes a single env var able to revoke them all. The inventory
+// grows one line per *corpus*, not one per test — a second corpus (the reference
+// interpreter, decision 0007) meant a second door, not a second convention.
 var licensed = map[string]string{
-	"internal/testenv/testenv.go:RequireSuite": "the sole skip in the tree: local dev on a clone without `make spec-tests`, revoked by BURROUGHS_NO_SKIP=1",
+	"internal/testenv/testenv.go:RequireSuite": "local dev on a clone without `make spec-tests`, revoked by BURROUGHS_NO_SKIP=1",
+	// The 0007 authority is a separate corpus from the suite with a separate fetch
+	// (`make spec-ref`), so it needs its own door rather than a widened RequireSuite:
+	// the two absences have different remedies, and a message naming the wrong one
+	// sends a reader to the wrong make target. Belt and suspenders, as with the
+	// suite: `make opcode-drift` refuses to run at all without the reference, so
+	// this license only ever fires under a bare `go test ./...`.
+	"internal/testenv/testenv.go:RequireSpecRef": "local dev on a clone without `make spec-ref`, revoked by BURROUGHS_NO_SKIP=1",
 }
 
 // skipCalls are the testing.TB methods that end a test without a verdict.

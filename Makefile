@@ -5,7 +5,7 @@ GO ?= go
 # anything globally.
 TOOL = $(GO) tool -modfile=tools/go.mod
 
-.PHONY: all build test vet fmt lint check vuln deadcode fuzz bench spec-tests spec-ref tidy conformance strict
+.PHONY: all build test vet fmt lint check vuln deadcode fuzz bench spec-tests spec-ref tidy conformance strict opcodes opcode-drift
 
 # The default gate. `check` is what must be green before a report — it is the
 # local mirror of CI, so a surprise in CI means a bug in this line, not a bug in
@@ -149,3 +149,28 @@ spec-tests:
 # generate and drift-check the opcode table.
 spec-ref:
 	./scripts/fetch-spec-ref.sh
+
+# Regenerate the opcode table from the vendored reference (decision 0007). The output
+# is committed, so this is run when the pin moves, not on every build.
+opcodes: spec-ref
+	$(GO) run ./internal/binary/internal/opcodegen/cmd/opcodegen -o internal/binary/optable.go
+	@echo "regenerated internal/binary/optable.go"
+
+# Condition 4 of 0007: re-extract from the pinned reference and assert the committed
+# table still agrees. Drift becomes a build failure rather than a diff nobody ordered.
+#
+# Its own target rather than part of `check`, for the same reason `conformance` is:
+# `check` must pass on a fresh clone with nothing vendored, and this needs
+# third_party/spec. $(STRICT) is the point — without it the drift check would *skip*
+# when the reference is absent, reporting agreement with an authority it never read,
+# which is the #29 grave in a code generator. CI runs it, so it is not optional.
+#
+# The whole package rather than a -run list of test names: an enumeration is a sample,
+# so a control added later would silently not run here, and the gate would quietly
+# narrow while still reporting green. -count=1 because a cached result is a verdict
+# about a previous tree.
+opcode-drift:
+	@if [ ! -f third_party/spec/interpreter/binary/decode.ml ]; then \
+		echo "reference not vendored; run: make spec-ref"; exit 1; \
+	fi
+	$(STRICT) $(GO) test -v -shuffle=on -count=1 ./internal/binary/internal/opcodegen/
