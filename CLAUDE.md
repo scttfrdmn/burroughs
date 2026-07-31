@@ -72,20 +72,31 @@ session. Anything Scott must decide is *flagged*, never decided for him.
 
 ### Waiting on CI
 
-**Block on the verdict, never on a timer.** After pushing:
+**Wait on the verdict, never on a timer — and wait in the background.** After
+pushing, resolve the run for `HEAD` and watch it detached:
 
 ```bash
-gh pr checks <n> --watch --fail-fast    # blocks until done; non-zero if any check failed
-gh run watch <run-id> --compact         # same for a specific run
+RUN=$(gh run list --commit "$(git rev-parse HEAD)" --limit 1 --json databaseId -q '.[0].databaseId')
+gh run watch "$RUN" --compact --exit-status   # run this with run_in_background
 ```
 
-Both return the moment the run finishes and exit non-zero on failure, so the
-exit code is the answer. `sleep 200 && gh pr checks` is the same error as reading
-a verdict off a tool's stderr: **a duration is not a completion signal.** It
-guesses low and reports a pending run as though that were news, or guesses high
-and wastes the difference — and either way the shell, not the CI system, decided
-when to look. Same rule as *verdict channel and mechanism channel are different
-instruments*, applied to time.
+Three separate mistakes are being avoided, and they were made in that order:
+
+1. **`sleep N && gh pr checks` — a duration is not a completion signal.** It
+   guesses low and reports a pending run as though that were news, or guesses high
+   and wastes the difference; either way the shell, not the CI system, decided
+   when to look. Same error as reading a verdict off a tool's stderr.
+2. **`gh pr checks --watch` races the run's creation.** It watches whatever checks
+   exist *now*, so seconds after a push it finds the previous commit's run,
+   reports pass, and exits 0 — a stale green. Always resolve the run id from the
+   pushed SHA. `--exit-status` then makes failure non-zero.
+3. **Blocking the tool call wastes the wait.** Watch with `run_in_background` and
+   keep working; the completion arrives as a notification. A five-minute CI run
+   should cost five minutes of *CI*, not five minutes of doing nothing.
+
+The first two are *verdict channel and mechanism channel are different
+instruments* applied to time and to identity: ask the right channel, and ask it
+about the right run.
 
 ## Versioning and the changelog
 
