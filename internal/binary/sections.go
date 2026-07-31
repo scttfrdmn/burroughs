@@ -201,12 +201,15 @@ func (d *Decoder) decodeFuncType(r *reader) error {
 		return err
 	}
 	if form != -0x20 { // 0x60
-		// The message names the byte the image actually held, which at width 7 is the
-		// low seven bits of the decoded value: the range is -64..63, so form&0x7f is
-		// exactly the input byte, and a multi-byte encoding never reaches here (sleb(7)
-		// has already returned "too long"). Printed for nine tags before being trusted
-		// — the first attempt here or'd in a high bit for negative forms and reported
-		// 0x5e (array) as 0xde, an error message lying about its own input.
+		// GRAVE (#36): the message names the byte the image actually held, which at
+		// width 7 is the low seven bits of the decoded value — the range is -64..63, so
+		// form&0x7f is exactly the input byte, and a multi-byte encoding never reaches
+		// here (sleb(7) has already returned "too long"). The first version of this
+		// expression or'd a high bit in for every negative form and reported 0x5e
+		// (array) as 0xde: an error about the module lying about the module, which no
+		// suite can catch because the harness matches the sentinel and never reads past
+		// the colon. Found by *printing* the output for nine tags rather than reading
+		// the expression's shape. Pinned by TestFuncTypeFormIsASignedLEB.
 		return fmt.Errorf("%w: %#02x", ErrMalformedFuncType, byte(form&0x7F))
 	}
 	for range 2 { // params, then results — same grammar, twice
