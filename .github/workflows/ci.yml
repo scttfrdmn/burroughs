@@ -35,13 +35,14 @@ jobs:
 
       - name: gofumpt
         # A diff check, not a suggestion. Formatting is never a review topic.
-        # --diff reports without rewriting, which is the same command `make
-        # fmt-check` runs, so local and CI verdicts cannot diverge.
+        # --diff reports without rewriting and exits non-zero when it would
+        # change something, so the exit code is the verdict — capturing output
+        # and testing for non-empty would also catch `go: downloading ...`
+        # progress lines on a cold module cache, which is how the first version
+        # of this step failed on both arches while lint passed.
         run: |
-          out="$(go tool -modfile=tools/go.mod golangci-lint fmt --diff ./... 2>&1)"
-          if [ -n "$out" ]; then
+          if ! go tool -modfile=tools/go.mod golangci-lint fmt --diff ./...; then
             echo "::error::gofumpt would reformat the tree; run: make fmt"
-            printf '%s\n' "$out"
             exit 1
           fi
 
@@ -56,11 +57,16 @@ jobs:
         run: go test -race -shuffle=on ./...
 
       - name: go mod tidy is clean
+        # The engine module only. `tidy` is NOT run on tools/go.mod: a tool
+        # modfile has no packages of its own, so tidy resolves the tools'
+        # transitive test dependencies *and* discovers this repo through the
+        # module proxy, adding `require github.com/scttfrdmn/burroughs v0.0.1`
+        # — the project depending on a published copy of itself. `go get -tool`
+        # maintains that file; tidy actively damages it.
         run: |
           go mod tidy
-          go mod tidy -modfile=tools/go.mod
-          if ! git diff --exit-code -- go.mod tools/go.mod tools/go.sum; then
-            echo "::error::go mod tidy changed a module file; commit the result"
+          if ! git diff --exit-code -- go.mod; then
+            echo "::error::go mod tidy changed go.mod; commit the result"
             exit 1
           fi
 
@@ -84,7 +90,10 @@ jobs:
         # and tracked is a TODO with an audit trail, silent is a grave. Anything
         # not in the allowlist below has failed to answer that question.
         run: |
-          out="$(go tool -modfile=tools/go.mod deadcode -test ./... || true)"
+          # 2>/dev/null deliberately: deadcode reports findings on stdout and
+          # exits 0, so the output *is* the verdict here — but stderr carries
+          # `go: downloading ...` on a cold cache, which would read as a finding.
+          out="$(go tool -modfile=tools/go.mod deadcode -test ./... 2>/dev/null || true)"
           printf 'deadcode says:\n%s\n' "$out"
           # reader.u64: tracked in #19, //nolint:unused with a reason at the site.
           filtered="$(printf '%s\n' "$out" | grep -v 'reader\.u64' | grep -v '^$' || true)"

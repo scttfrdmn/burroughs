@@ -33,13 +33,11 @@ fmt:
 
 # Reports which files gofumpt would change without rewriting them, so it is
 # usable on a dirty tree — a `git diff` check here would flag the work in
-# progress rather than the formatting.
+# progress rather than the formatting. The exit code is the verdict; testing for
+# non-empty output instead would also trip on `go: downloading ...` lines when
+# the module cache is cold.
 fmt-check:
-	@out="$$($(TOOL) golangci-lint fmt --diff ./... 2>&1)"; \
-	if [ -n "$$out" ]; then \
-		echo "gofumpt would reformat:"; printf '%s\n' "$$out"; \
-		echo "run: make fmt"; exit 1; \
-	fi
+	@$(TOOL) golangci-lint fmt --diff ./... || { echo "run: make fmt"; exit 1; }
 
 lint:
 	$(TOOL) golangci-lint run ./...
@@ -51,7 +49,7 @@ vuln:
 # here: declared, tracked in #19, and suppressed at its definition site with a
 # reason. Anything else is a classification question to answer.
 deadcode:
-	@out="$$($(TOOL) deadcode -test ./... || true)"; \
+	@out="$$($(TOOL) deadcode -test ./... 2>/dev/null || true)"; \
 	printf '%s\n' "$$out"; \
 	filtered="$$(printf '%s\n' "$$out" | grep -v 'reader\.u64' | grep -v '^$$' || true)"; \
 	if [ -n "$$filtered" ]; then \
@@ -78,9 +76,13 @@ bench:
 	@echo "baseline comparison: $(TOOL) benchstat old.txt new.txt"
 	@$(TOOL) benchstat new.txt
 
+# The engine module only. Deliberately NOT tools/go.mod: a tool modfile has no
+# packages of its own, so tidy pulls in the tools' transitive test dependencies
+# and — via the module proxy — adds this very repo as a requirement of its own
+# tooling (`require github.com/scttfrdmn/burroughs v0.0.1`). `go get -tool` is
+# what maintains that file. Verified the hard way; see decision 0005.
 tidy:
 	$(GO) mod tidy
-	$(GO) mod tidy -modfile=tools/go.mod
 
 spec-tests:
 	./scripts/fetch-spec-tests.sh

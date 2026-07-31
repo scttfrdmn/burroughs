@@ -129,7 +129,13 @@ inside the bands) where in-place pays 14%.
 
 ### 8. Hygiene gates
 
-- `go mod tidy` diff-check in CI, for both modfiles.
+- `go mod tidy` diff-check in CI, **for the engine module only**. Not for
+  `tools/go.mod`: a tool modfile has no packages of its own, so `tidy` resolves
+  the tools' transitive *test* dependencies and — finding no local package for
+  the import path — discovers this repository through the module proxy and adds
+  `require github.com/scttfrdmn/burroughs v0.0.1`. The project would depend on a
+  published copy of itself to lint itself. `go get -tool` is what maintains that
+  file; `tidy` damages it. Found by running it.
 - **`deadcode` (x/tools)** — the unreachable-error grave promoted to a tool.
   A finding is a *classification question*, not automatically a bug: declared
   and tracked passes, silent fails. CI allowlists only `reader.u64` (#19).
