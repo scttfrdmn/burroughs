@@ -72,28 +72,39 @@ session. Anything Scott must decide is *flagged*, never decided for him.
 
 ## Versioning and the changelog
 
-- **Semantic Versioning 2.0.0** (semver.org). Public API is everything
-  exported outside `internal/`. While the major version is `0`, the API is
-  unstable by definition — but MINOR still means "features added" and PATCH
-  "fixes only", so the phase ladder maps to minors: `v0.1.0` for the v0
-  interpreter, `v0.2.0` for threads, and so on. `v1.0.0` waits until the
-  contract itself is stable (§1 non-goal 4: harden when the contract is).
-  Pre-release and build metadata use semver's own syntax (`v0.2.0-rc.1`).
-  Go module rules ride on this: tags are `vX.Y.Z`, and a `v2+` major would
-  need a `/vN` module path suffix.
+See **decision 0004** for the full scheme; the short version:
+
+- **Semantic Versioning 2.0.0** (semver.org), which Go's module system is
+  native to. Public API is everything exported outside `internal/`.
+- **The version number is a conformance statement, not a mood.** Minor
+  versions map to milestones: `v0.1.0` = MVP core suite green, one minor per
+  proposal gate flipped (`v0.2.0` = +GC), `v1.0.0` **reserved** for the v1
+  threads-and-safepoints milestone landing *with the §4 litmus battery
+  passing dual-platform*. Never bump a minor for a gate whose suite you did
+  not run.
+- **`v0.x` is a privileged place to live** — no compatibility promise, no
+  `/vN` import-path dance, freedom to break — and it is the right place while
+  the contract is still v0.1. A `v2+` major would need a `/vN` module path
+  suffix.
+- **The contract versions independently** and every release states which
+  contract version it implements: engine SemVer for code compatibility,
+  contract version for semantic promises (resolves contract §10.7).
 - **Keep a Changelog 1.1.0** (keepachangelog.com). `CHANGELOG.md` is
   maintained by hand, newest first, with an `## [Unreleased]` section at the
   top and the standard groups — **Added · Changed · Deprecated · Removed ·
   Fixed · Security**. Entries are written for humans reading the project, not
   copied from `git log`.
-- **Every PR updates `[Unreleased]`** in the same PR as the change. Releasing
-  means renaming that section to `## [X.Y.Z] - YYYY-MM-DD`, opening a fresh
-  `[Unreleased]`, tagging `vX.Y.Z` signed, and letting the tag be the
-  release record.
-- Two project-specific groups by convention, because they are the things this
-  project actually ships: gate flips (a proposal's suite going green) are
-  **Added** with the `gate:` name, and graves are **Fixed** with the issue
-  link — so the changelog and `label:type:grave` agree.
+- **A PR's Landed section is a changelog entry wearing a different hat.**
+  Update `[Unreleased]` **in the same PR** as the change — the two are the
+  same information, so they cannot be allowed to drift.
+- Two project conventions, because they are what this project actually ships:
+  gate flips (a proposal's suite going green) are **Added** with the `gate:`
+  name, and graves are **Fixed** with their `type:grave` issue link — so the
+  changelog and `label:type:grave` agree.
+- **Cutting a release is one motion:** close the milestone, move
+  `[Unreleased]` under a new `## [X.Y.Z] - YYYY-MM-DD` header, open a fresh
+  `[Unreleased]`, tag `vX.Y.Z` signed. Milestones, changelog, and tags click
+  as one mechanism.
 
 `CHANGELOG.md` is a standard repo file and therefore an allowed exception to
 the frozen-markdown rule above.
