@@ -77,9 +77,12 @@ func RequireSuite(tb testing.TB, suiteDir string) {
 		reason = fmt.Sprintf("%s: %v", reason, err)
 	}
 
-	// if/else rather than Fatalf-then-Skip: Fatalf only stops the test because it
-	// calls runtime.Goexit, and leaning on a callee not returning is control flow
-	// that is one refactor away from reporting both verdicts.
+	// GRAVE (#32, sibling): if/else rather than Fatalf-then-Skip. Fatalf only stops
+	// the test because it calls runtime.Goexit, and leaning on a callee not
+	// returning is control flow one refactor away from reporting both verdicts —
+	// which is what the first version did, caught by a testing.TB fake. A verdict
+	// that is correct only by accident of another function's behaviour is the same
+	// family as a test that passes for the wrong reason.
 	if NoSkip() {
 		tb.Fatalf("%s\n\t%s=1 revokes skip licenses: a skip is a report that the question could not be asked, and CI must not accept that as an answer",
 			reason, NoSkipEnv)

@@ -139,13 +139,17 @@ func TestValidNamesAccepted(t *testing.T) {
 // *refactor*: the cheap generalisation passes every vector and is wrong about the
 // grammar.
 //
-// This tests the reader seam directly rather than a module carrying a data segment,
-// and the difference is not stylistic. The first version of this test *was* a
-// module with a `\ff\fe\80` data segment, it passed, and a probe showed it passed
-// vacuously: the data section payload is not descended into yet (#25), so no
-// byteVec was ever reached and the assertion could not have failed. A test whose
-// green survives the bug it names is a control in name only. Calling byteVec
-// directly is the level at which the claim is checkable today.
+// GRAVE (#32): this tests the reader seam directly rather than a module carrying a
+// data segment, and the difference is not stylistic. The first version *was* a
+// module with a `\ff\fe\80` data segment; it passed, and a probe that pushed the
+// UTF-8 check down into byteVec — the exact defect this test names — left it green.
+// The data section payload is not descended into yet (#25), so no byteVec was ever
+// reached and the assertion could not have failed.
+//
+// The lesson: a green that survives the bug it names is a control in name only, and
+// on the board it is indistinguishable from one passing for the right reason. The
+// fix is not a better fixture; it is testing at the level where the claim is
+// checkable today. Verified by re-running the probe, which now fails.
 func TestByteVecIsNotAName(t *testing.T) {
 	// synthetic: bytes no UTF-8 decoder would accept as text, length-prefixed. The
 	// spec places no encoding requirement on a data segment's contents.
