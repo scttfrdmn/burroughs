@@ -221,6 +221,16 @@ the choice, and consequences once Scott has called it.
   *silent degradation is a skip one step quieter* — a fuzz seeder that falls back
   to two literal seeds still passes, and only an `f.Log` says the corpus was
   missing. (Directive: Scott, PR #30.)
+- **A control's green must be falsifiable, and the way to know is to break it.**
+  Write the test, then introduce the defect it names and watch it fail. A test
+  asserting a property of code that does not run yet passes for the wrong reason and
+  is indistinguishable, on the board, from one that passes for the right one — *a
+  green that survives the bug it names is a control in name only*. Found twice in
+  one session: a data-segment test that could never fail because the data section is
+  not descended into yet (#25), and a strictness helper reporting a fail *and* a
+  skip, because `Fatalf`-then-`Skip` leans on `runtime.Goexit` to not return. The
+  first was caught by probing, the second by a `testing.TB` fake. Neither was caught
+  by the suite, because the suite was never asked.
 - **Gates never manufacture malformedness.** *Malformed* is the spec's word: it
   belongs to the grammar, and the grammar here is the **union of the tracked
   set** (§9 G-2) — section id 13 is defined by Wasm 3.0 and so is well-formed,

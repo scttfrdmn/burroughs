@@ -51,6 +51,9 @@ var declaredErrors = []error{
 	ErrMalformedImportKind,
 	ErrMalformedExportKind,
 
+	// The name grammar (#26): a name's bytes must be well-formed UTF-8.
+	ErrMalformedUTF8,
+
 	// ErrFeatureDisabled is a declared error but not a malformed-verdict: it means
 	// the decoder declined to judge. Listed here because the fuzz target's question
 	// is "is this error one the decoder is allowed to return", and it is.

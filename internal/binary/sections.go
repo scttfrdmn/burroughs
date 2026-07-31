@@ -165,7 +165,7 @@ func (d *Decoder) decodeVec(r *reader, elem func(*reader) error) error {
 // is no later grammar step for face 3 to catch the over-read with.
 func (d *Decoder) decodeCustom(size uint32, r *reader) error {
 	start := r.off
-	if _, err := r.byteVec(); err != nil {
+	if err := r.name(); err != nil {
 		return err
 	}
 	rest := int(size) - (r.off - start)
@@ -295,7 +295,7 @@ func (d *Decoder) decodeGlobalType(r *reader) error {
 // decodeImport reads module name, field name, and the kind-specific descriptor.
 func (d *Decoder) decodeImport(r *reader) error {
 	for range 2 { // module name, then field name
-		if _, err := r.byteVec(); err != nil {
+		if err := r.name(); err != nil {
 			return err
 		}
 	}
@@ -328,7 +328,7 @@ func (d *Decoder) decodeImport(r *reader) error {
 
 // decodeExport reads a name, a kind byte, and an index.
 func (d *Decoder) decodeExport(r *reader) error {
-	if _, err := r.byteVec(); err != nil {
+	if err := r.name(); err != nil {
 		return err
 	}
 	kind, err := r.byte()

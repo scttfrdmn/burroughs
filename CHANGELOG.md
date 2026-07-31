@@ -160,6 +160,35 @@ weakly-ordered platform.
   non-bool field fails loudly, because "I could not turn this on" must never read
   as "it is on". Both failure modes were verified by deliberately breaking them.
 
+- Decoder: **name validation** — a `name` must be well-formed UTF-8. Phase 1 total
+  **179 → 707 pass** (57 fail, 0 unsupported, 2 gated), closing all three
+  byte-string `utf8-*.wast` files at **176/176** each. The largest single bucket in
+  the corpus, and the check is nine lines.
+- The rule is `utf8.Valid`, which *is* the spec's side condition (`name ::=
+  b*:vec(byte)` with `b* = utf8(name)`) — not a list of rejected byte patterns
+  derived from the suite. The suite enumerates 176 violations per file, and a check
+  written from that enumeration would pass every vector while being wrong about
+  byte sequences the suite has no vector for. The stdlib predicate was measured
+  against all 528 executable vectors as *evidence it is implemented correctly*,
+  never as the source of the rule. Unit tests are organised by violation **class**
+  — overlong forms, unpaired surrogates, past U+10FFFF, truncations, 5- and 6-byte
+  sequences — with the accept direction pinned just as hard, because "reject
+  everything" would score 528/528 while making the decoder reject valid modules.
+- The predicate is on `name()`, not `byteVec()`: a data segment's contents are
+  `vec(byte)` with no encoding constraint, so the cheap generalisation would pass
+  every vector and reject modules the spec accepts. `utf8-invalid-encoding.wast`
+  stays off the board — its 176 forms are `(module quote ...)` text-format modules
+  phase 1 cannot execute, and they belong to #8.
+- The `//nolint:unparam` on `byteVec` is **removed with its purpose fulfilled**,
+  which is what a declared-and-tracked suppression is supposed to look like at the
+  end. `name()` returns only an error: the bytes are consumed by the predicate, so
+  the same classification question gets the opposite answer on different facts.
+- `phase1Files` is one definition instead of four copies. Adding the utf8 files to
+  the board list alone would have left the gated allowlist, the verdict partition,
+  and the bucket-ordering property scoped to a narrower corpus than the board
+  reports — three controls quietly watching less than the number beside them.
+  `TestClosedBuckets` keys are pinned as a subset.
+
 - **`internal/testenv` and a skip-forbidden CI mode** — the class behind the
   passing-by-not-running grave, closed rather than just its instance. Every skip
   license in the tree routes through one helper, each names what it licenses

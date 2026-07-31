@@ -19,6 +19,33 @@ import (
 // CI job that runs tests sets. See the package doc there for the grave (#29).
 const suiteDir = "../../testdata/spec"
 
+// phase1Files is every suite file phase 1 can meaningfully score: all-byte-string
+// corpora, no text-format modules.
+//
+// One definition, because four tests need it and four copies of a list is the drift
+// vector TestEveryFixtureFileIsChecked exists to close. It had already started:
+// adding the utf8 files to the board list alone would have left the gated
+// allowlist, the verdict partition, and the priority-queue property checking a
+// narrower corpus than the board reports — three controls quietly scoped to less
+// than the number they sit beside.
+//
+// utf8-invalid-encoding.wast is deliberately absent. Its 176 forms are
+// `(module quote ...)` text-format modules rather than byte strings, so phase 1
+// cannot execute them; they belong to the text-format work (#8). Listing a file the
+// harness cannot read would inflate the unsupported count and call it coverage.
+var phase1Files = []string{
+	"binary.wast",
+	"binary-leb128.wast",
+	"binary_leb128_64.wast",
+	"binary0.wast",
+	"custom.wast",
+
+	// The name grammar (#26): 176 vectors each, all "malformed UTF-8 encoding".
+	"utf8-import-module.wast",
+	"utf8-import-field.wast",
+	"utf8-custom-section-id.wast",
+}
+
 func decode(image []byte) error {
 	_, err := binary.DecodeModule(image)
 	return err
@@ -122,7 +149,28 @@ func TestClosedBuckets(t *testing.T) {
 			"malformed section id",
 			"unexpected end", // #5, was 2 — the custom section's name-inside-its-extent rule
 		},
+
+		// The utf8-*.wast files are single-bucket by construction: 176 vectors each,
+		// every one expecting "malformed UTF-8 encoding". Closing all three at once
+		// is what a general rule looks like on the board — one predicate, three
+		// name positions (#26).
+		"utf8-import-module.wast":     {"malformed UTF-8 encoding"},
+		"utf8-import-field.wast":      {"malformed UTF-8 encoding"},
+		"utf8-custom-section-id.wast": {"malformed UTF-8 encoding"},
 	}
+	// The keys are a fifth file list, so pin them against phase1Files. A closed
+	// bucket in a file the board does not score is a regression control watching a
+	// number nobody reports.
+	inPhase1 := make(map[string]bool, len(phase1Files))
+	for _, f := range phase1Files {
+		inPhase1[f] = true
+	}
+	for file := range closed {
+		if !inPhase1[file] {
+			t.Errorf("%s has closed buckets but is not in phase1Files; the board does not score it", file)
+		}
+	}
+
 	for file, keys := range closed {
 		s, err := ParseFile(filepath.Join(suiteDir, file))
 		if err != nil {
@@ -165,10 +213,7 @@ func TestGatedVectors(t *testing.T) {
 		},
 	}
 
-	files := []string{
-		"binary.wast", "binary-leb128.wast", "binary_leb128_64.wast",
-		"binary0.wast", "custom.wast",
-	}
+	files := phase1Files
 	for _, f := range files {
 		s, err := ParseFile(filepath.Join(suiteDir, f))
 		if err != nil {
@@ -255,10 +300,7 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 		return err
 	}
 
-	files := []string{
-		"binary.wast", "binary-leb128.wast", "binary_leb128_64.wast",
-		"binary0.wast", "custom.wast",
-	}
+	files := phase1Files
 	var totalPass, totalFail, totalGated int
 	for _, f := range files {
 		s, err := ParseFile(filepath.Join(suiteDir, f))
@@ -297,10 +339,7 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 // how a suite silently stops covering something.
 func TestVerdictsPartitionCommands(t *testing.T) {
 	requireSuite(t)
-	files := []string{
-		"binary.wast", "binary-leb128.wast", "binary_leb128_64.wast",
-		"binary0.wast", "custom.wast",
-	}
+	files := phase1Files
 	for _, f := range files {
 		s, err := ParseFile(filepath.Join(suiteDir, f))
 		if err != nil {
@@ -319,13 +358,7 @@ func TestVerdictsPartitionCommands(t *testing.T) {
 // so the board covers the byte-string corpus rather than one file.
 func TestPhase1Files(t *testing.T) {
 	requireSuite(t)
-	files := []string{
-		"binary.wast",
-		"binary-leb128.wast",
-		"binary_leb128_64.wast",
-		"binary0.wast",
-		"custom.wast",
-	}
+	files := phase1Files
 	totalPass, totalFail, totalUnsup, totalGated := 0, 0, 0, 0
 	for _, f := range files {
 		s, err := ParseFile(filepath.Join(suiteDir, f))
