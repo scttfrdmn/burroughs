@@ -1,8 +1,57 @@
 # 0006 — Where the const-expression opcode table lives
 
-Date: 2026-07-30 · Status: **proposed** — awaiting Scott
+Date: 2026-07-30 · Status: **accepted** (Scott, 2026-07-31)
 Issues: #25 (const-expr grammars), #7 (interpreter core)
 Contract refs: §9 (G-2, G-3)
+
+## Decision
+
+**Option B — a `constexpr` reader in `internal/binary`, no shared table yet.**
+
+chat-Claude's shared-table steer is withdrawn: the drift risk was right, the
+remedy wrong. Shaping #7's central structure from the decoder's requirements
+before a second consumer exists is speculative design in the load-bearing spot,
+and today `internal/interp` holds only a benchmark — so "shared from the start"
+would be shared with nobody.
+
+**The condition that makes the yield safe, and it is normative here, not a
+follow-up:** the agreement test below is **part of #7's definition of done.** The
+drift risk is only "convertible into a failing test" if the conversion is a
+recorded obligation with a tripwire rather than an intention. Declared now so it
+cannot read as a surprise later — the `ErrDataCountRequired` manoeuvre applied to
+a design debt.
+
+### The agreement test (pre-registered, §9 obligation on #7)
+
+When the interpreter's opcode table exists, a test asserts that **the table's
+const-legal subset and the decoder's `constexpr` reader answer identically over
+the full opcode space** — not over the eight opcodes this ADR needs, and not over
+the vectors the suite happens to carry.
+
+Three properties, because "identically" has to be said precisely:
+
+1. **Same membership.** For every one of the 256 single-byte opcodes and every
+   tracked multi-byte prefix, the two agree on whether it is const-legal. Over the
+   *whole* space, so an opcode either side adds later is covered by construction
+   rather than by someone remembering to extend a list — a table walked
+   exhaustively cannot drift silently in its uncovered region, because it has none.
+2. **Same immediate extent.** For every const-legal opcode, both consume the same
+   number of bytes from the same input. This is the fact that goes wrong quietly
+   when duplicated: a `memarg` read as one LEB instead of two shifts every
+   subsequent byte, and the error surfaces far from its cause.
+3. **Same rejection.** For every opcode the decoder rejects as not const-legal,
+   the interpreter's table agrees it is absent from the const subset — the
+   accept-direction half, which is the direction the suite cannot catch, since it
+   has no valid-const-expr-that-must-be-rejected vectors.
+
+Failure of any of the three is a **fail, not a skip**: if #7's table is absent the
+test asserts nothing and must say so through `internal/testenv`, per *a skip is
+not a verdict*. And it is written to fail first — the falsifiability discipline
+applies to this control as much as any other, so it is checked against a
+deliberately mismatched extent before being trusted.
+
+Filed as **#33**, attached to the `v0 interpreter` milestone, so the obligation is
+queryable and not resident in this file alone.
 
 ## Question
 
@@ -13,9 +62,10 @@ opcodes — encodings, and how many immediate bytes each carries — and that is
 first place the decoder and the interpreter (#7) want the same table.
 
 Decide where that knowledge lives before writing it, per decision-before-code.
-This doc gathers the deliberation; the choice is Scott's.
 
 ---
+
+*Deliberation as written before the decision follows, unedited.*
 
 ## Measured facts
 
@@ -158,10 +208,33 @@ What B commits to, so it is not a deferral wearing a disguise:
    TODO. Filed as an issue at this ADR's acceptance so it is tracked, not
    remembered.
 
-## Decision
-
-*Awaiting Scott.*
-
 ## Consequences
 
-*To be written on acceptance.*
+**The accepted condition is wider than the deliberation's item 3 above,** which
+proposed a cross-check over "the eight shared opcodes." That is superseded: the
+agreement test walks the **full opcode space**. Recorded here rather than edited
+into the deliberation, which stands as written — and the widening matters, because
+a cross-check scoped to the eight opcodes this ADR happens to need would be the
+overfitting failure applied to a control: it would pass while saying nothing about
+the opcode either side adds next.
+
+Accepted:
+
+- #25 is unblocked and goes to work on **nine** vectors, not twelve (see the
+  measured facts above). *unexpected end of section or function* goes 6 → 3;
+  *section size mismatch* goes 5 → 0.
+- Two places will know that `0x41` takes a signed LEB, for as long as it takes #7
+  to land. That is a real debt, held with a tripwire rather than a promise.
+- #7's definition of done grows a test it must write. Deliberately: that is the
+  price of not designing its central structure early, and it is cheaper than the
+  reshaping cost option A would have imposed.
+
+Declined, with the reason recorded so it is not relitigated silently:
+
+- **Option A** — no second consumer exists to disagree with a shared table, so it
+  would be shaped by the decoder alone, against ADR 0002's pin that the
+  interpreter's form (`[]ins`, pre-decoded immediates, resolved branch targets) is
+  not the wire form.
+- **Option C** — a third package holding one map, before a second consumer, is
+  option A's speculative-structure cost in miniature. Revisit only if the
+  agreement test starts failing for reasons that are not bugs.

@@ -49,12 +49,18 @@ weakly-ordered platform.
 - Decision 0005: tooling gates. Quality is enforced by pinned tools wired into
   CI rather than left to habit, because a convention that depends on
   remembering decays across session boundaries.
-- Decision 0006 (**proposed**, awaiting Scott): where the const-expression opcode
-  table lives — shared with the interpreter from the start, or a `constexpr`
-  reader in `internal/binary` merged later. Blocks #25. Recommends the latter,
-  because its risk (silent drift between two tables) converts into a failing test
-  while the alternative's risk (a shared structure shaped by its only consumer,
-  before the second consumer exists) converts into nothing.
+- Decision 0006: the const-expression opcode table is **not** shared with the
+  interpreter yet — `internal/binary` gets its own `constexpr` reader. Sharing from
+  the start would shape #7's central structure from the decoder's requirements
+  before a second consumer exists, and `internal/interp` currently holds only a
+  benchmark, so "shared" would be shared with nobody. Unblocks #25.
+- The accepted form of 0006 carries a **pre-registered agreement test** (#33) as part
+  of #7's definition of done: when the interpreter's opcode table lands, a test
+  asserts its const-legal subset and the decoder's reader agree over the *full*
+  opcode space — membership, immediate extent, and rejection. The design debt 0006
+  accepts is only "convertible into a failing test" if the conversion is an
+  obligation with a tripwire rather than an intention, so it is filed, milestoned,
+  and required to be falsified before it is trusted.
 - `tools/go.mod` pins every quality tool via `tool` directives —
   `golangci-lint` v2.12.2, `govulncheck`, `deadcode`, `benchstat` — so the
   versions are repo state and a green board means the same thing on a laptop
