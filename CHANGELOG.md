@@ -355,6 +355,16 @@ weakly-ordered platform.
   `Code generated ... DO NOT EDIT.`, so the gap it controlled does not exist. Deleted,
   with the measurement recorded at the site — before controlling a gap, check the gap
   exists.
+- CI's `build` job vendors the reference interpreter too, not only the suite. It runs
+  `go test ./...`, which reaches the extractor's tests, which call `RequireSpecRef` —
+  and under the workflow-wide `BURROUGHS_NO_SKIP=1` that is a **fail**, not a skip.
+  Caught on PR #43's first CI run by the strictness policy doing exactly its job: the
+  drift check had been placed in the `conformance` job while the corpus requirement it
+  introduced was inherited tree-wide. The general shape, now stated at the site: *a job
+  running `go test ./...` inherits every corpus requirement in the tree*, so it must
+  vendor all of them rather than the one it was thinking about. Both presence guards
+  now run in that job as well, because a truncated fetch passes the Go-level door and
+  is a different failure from a missing one.
 - Decision 0007's "counted (not estimated)" figures were wrong and are corrected in an
   appended section, body preserved: 201/29/18/256 (504) counted arm *lines*, and
   assumed the SIMD sub-opcode was a byte where the reference runs to `0x113`. The

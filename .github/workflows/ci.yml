@@ -74,6 +74,40 @@ jobs:
         # made every green in this job's history vacuous.
         run: make spec-tests
 
+      - name: vendor the reference interpreter
+        # A second corpus with a second fetch (decision 0007), needed here for a
+        # reason worth stating: this job runs `go test ./...`, which includes the
+        # extractor's tests, and those call testenv.RequireSpecRef. Under
+        # BURROUGHS_NO_SKIP=1 that is a *fail*, not a skip — which is the policy
+        # working, and it caught this omission on the first CI run of PR #43. The
+        # drift check proper lives in the conformance job; what this job needs is
+        # merely the corpus its whole-tree test run reaches.
+        #
+        # The general shape: `go test ./...` inherits every corpus requirement in
+        # the tree, so a job running it must vendor everything, not only the corpus
+        # the job was thinking about.
+        run: make spec-ref
+
+      - name: both corpora are vendored
+        # Guard the guard, for both. A skip is impossible under NO_SKIP, but a
+        # *truncated* fetch is a different failure: it satisfies os.Stat, passes the
+        # Go-level door, and then yields a board or an extraction computed over
+        # whatever happened to arrive. Assert the inputs before trusting anything
+        # computed from them.
+        run: |
+          n="$(ls testdata/spec/*.wast 2>/dev/null | wc -l | tr -d ' ')"
+          d=third_party/spec/interpreter/binary/decode.ml
+          b="$(wc -c <"$d" 2>/dev/null | tr -d ' ' || echo 0)"
+          echo "vendored $n .wast files; reference decode.ml $b bytes"
+          if [ "$n" -lt 250 ]; then
+            echo "::error::expected ≥250 .wast files, found $n — the suite fetch is broken"
+            exit 1
+          fi
+          if [ "${b:-0}" -lt 20000 ]; then
+            echo "::error::decode.ml is $b bytes (want ≥20000) — the reference fetch is broken"
+            exit 1
+          fi
+
       - name: test
         # -shuffle=on so test order is never load-bearing.
         run: go test -shuffle=on ./...
