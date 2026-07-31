@@ -5,7 +5,7 @@ GO ?= go
 # anything globally.
 TOOL = $(GO) tool -modfile=tools/go.mod
 
-.PHONY: all build test vet fmt lint check vuln deadcode fuzz bench spec-tests tidy conformance strict
+.PHONY: all build test vet fmt lint check vuln deadcode fuzz bench spec-tests spec-ref tidy conformance strict
 
 # The default gate. `check` is what must be green before a report — it is the
 # local mirror of CI, so a surprise in CI means a bug in this line, not a bug in
@@ -143,3 +143,9 @@ tidy:
 
 spec-tests:
 	./scripts/fetch-spec-tests.sh
+
+# The reference interpreter — the authority for accept-direction facts the suite
+# cannot falsify (decision 0007). Not needed to build or to run the board; needed to
+# generate and drift-check the opcode table.
+spec-ref:
+	./scripts/fetch-spec-ref.sh
