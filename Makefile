@@ -102,6 +102,12 @@ deadcode:
 
 # Local fuzzing. Corpora seed from testdata/spec, so run spec-tests first.
 # FUZZTIME overrides the budget: make fuzz FUZZTIME=5m
+#
+# Wall clock here is deliberate, and the contrast with CI's executions budgets
+# (#28) is the whole point of naming it. This target's purpose is "fuzz until I
+# get bored", an interactive one whose unit genuinely *is* time; CI's purpose is
+# "ask a fixed number of questions", whose unit is executions. Same flag, two
+# purposes, so two units. Accepts either form — FUZZTIME=2000000x works.
 FUZZTIME ?= 30s
 fuzz:
 	$(GO) test ./internal/binary/ -run XXX -fuzz FuzzDecodeModule -fuzztime $(FUZZTIME)

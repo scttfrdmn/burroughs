@@ -42,6 +42,11 @@ jobs:
         run: make spec-tests
 
       - name: fuzz ${{ matrix.target }}
+        # Wall clock is correct here, unlike the PR smoke budgets (#28). This job's
+        # purpose is "spend ten minutes of machine time looking for deep bugs" — a
+        # duration is the quantity that purpose names, and throughput variance
+        # changes how much searching a run does, never whether it passes. Budget by
+        # the quantity the purpose names; the units differ because the purposes do.
         run: go test ${{ matrix.pkg }} -run XXX -fuzz ${{ matrix.target }} -fuzztime 10m
 
       - name: upload crashers

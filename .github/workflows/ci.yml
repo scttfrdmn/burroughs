@@ -217,12 +217,29 @@ jobs:
     # a seed corpus that regressed, not enough to find deep bugs. The long runs
     # are scheduled — see nightly.yml.
     #
-    # NOTE (#28): the budgets here are wall-clock on a runner whose throughput
-    # varies ~6x from a dev box, which made this job timing-sensitive by
-    # construction — it flaked once on PR #27 with `context deadline exceeded` and
-    # no crasher. The fix is to budget by executions (-fuzztime Nx), since
-    # executions are what this job's purpose actually names. Tracked, not silent.
+    # Budgets are in executions (-fuzztime Nx), not wall clock (#28). The purpose
+    # above names *executions* — "did the target still build and still churn the
+    # corpus" — and the budget must be in the quantity the purpose names, or the
+    # job fails for reasons that are not findings. Wall clock was the wrong unit
+    # twice: `context deadline exceeded` with no crasher on PR #27 and again on
+    # PR #31, both after real progress (the second at ~70k execs/sec into a 20s
+    # wall), against 130k–670k/sec locally — a ~7x spread that is a property of
+    # shared runners, not of the code under test.
+    #
+    # Sizes are derived from the measured CI floor (~70k/sec, the rate on the run
+    # that failed), not from converting the old seconds at a dev box's rate, and
+    # they hold the old 2:1 ratio between targets. So the floor case costs about
+    # what the seconds budgets did and a fast runner simply finishes sooner —
+    # which is the point: the same number of questions get asked either way.
+    #
+    # timeout-minutes is a failsafe, not a budget. An executions budget has no
+    # upper bound on duration, so a genuine hang would run until GitHub's default
+    # 6h cap. 15 minutes is ~7x the floor-case cost: loose enough that throughput
+    # variance can never reach it, tight enough that a hang is caught. Naming it
+    # separately keeps the two concerns distinct — the budget asks a fixed number
+    # of questions, the timeout says something is structurally wrong.
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
@@ -237,13 +254,13 @@ jobs:
 
       - name: fuzz decoder
         run: |
-          go test ./internal/binary/ -run XXX -fuzz FuzzDecodeModule -fuzztime 45s
-          go test ./internal/binary/ -run XXX -fuzz FuzzULEB -fuzztime 20s
+          go test ./internal/binary/ -run XXX -fuzz FuzzDecodeModule -fuzztime 3000000x
+          go test ./internal/binary/ -run XXX -fuzz FuzzULEB -fuzztime 1500000x
 
       - name: fuzz wast lexer
         run: |
-          go test ./internal/spec/ -run XXX -fuzz FuzzWastLexer -fuzztime 45s
-          go test ./internal/spec/ -run XXX -fuzz FuzzParseNodeProgress -fuzztime 20s
+          go test ./internal/spec/ -run XXX -fuzz FuzzWastLexer -fuzztime 3000000x
+          go test ./internal/spec/ -run XXX -fuzz FuzzParseNodeProgress -fuzztime 1500000x
 
       - name: upload crashers
         if: failure()

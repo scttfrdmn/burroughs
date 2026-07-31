@@ -212,6 +212,17 @@ weakly-ordered platform.
   because `Fatalf`-then-`Skip` leans on `runtime.Goexit` to not return.
 
 ### Fixed
+- **`fuzz-smoke` was budgeted in the wrong unit** (#28). The job exists to catch a
+  target that stopped building or a corpus that regressed — its purpose names
+  *executions* — but its budget was wall clock on a shared runner, making it
+  timing-sensitive by construction. It failed twice that way, on PR #27 and again
+  on PR #31, both times `context deadline exceeded` with no crasher and after real
+  progress: the second at ~70k execs/sec against 130k–670k/sec measured locally, a
+  ~7x spread that is a property of the runner and not of the code. Now
+  `-fuzztime Nx`, sized from the measured CI floor rather than converted from a dev
+  box's rate. `make fuzz` and the nightly 10-minute runs stay wall-clock *because
+  their purposes are durations* — the units differ because the purposes do, and both
+  sites now say so. Budget by the quantity the purpose names.
 - **CI board tests had been passing by not running.** The `build` job never
   vendored the spec suite, and `requireSuite` skips when `testdata/spec` is absent
   — so the pass floor, the closed buckets, the fixture-citation checks, and the
