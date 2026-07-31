@@ -46,6 +46,14 @@ weakly-ordered platform.
 - Two disciplines ratified into `CLAUDE.md`: *unreachability is a grave only
   when it's silent — declared and tracked, it's a TODO with an audit trail*,
   and *bucketed failures are the work plan*.
+- Two disciplines ratified into `CLAUDE.md` from #28: **a stateful instrument
+  measures history until its state is controlled** — *fuzzing is stateful, so a
+  measurement that doesn't clear the corpus is measuring the last run*, with the
+  sibling law that a fuzzer's two halves fail independently and must be certified
+  independently (seed-replay by a reintroduced known defect, exploration by a
+  mutation-only needle no seed can reach) — and **a design debt is discharged by a
+  tripwire, never by an intention**, the declared-and-tracked ruling pointed at
+  architecture instead of at a constant.
 - Decision 0005: tooling gates. Quality is enforced by pinned tools wired into
   CI rather than left to habit, because a convention that depends on
   remembering decays across session boundaries.

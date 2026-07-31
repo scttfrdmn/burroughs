@@ -192,7 +192,30 @@ the choice, and consequences once Scott has called it.
   `fuzz-smoke` exists to catch a target that stopped building or a corpus that
   regressed — its purpose is *executions*, and it was budgeted in *seconds* on
   hardware whose throughput varies 6× from a dev box. Wall-clock budgets on
-  shared runners are timing-sensitive by construction.
+  shared runners are timing-sensitive by construction. Sharpened by measuring the
+  runner: it does not run *slowly*, it **stalls and sprints** — 47 dead
+  three-second windows, one 18s unbroken, against 605k/sec bursts faster than the
+  dev box. So the ~70k/sec "floor" was an average over a bimodal distribution,
+  describing neither mode, and *a wall-clock budget against a bimodal rate is a
+  coin flip on where the stalls land*. The unit fix cost 65s → 3m26s and the
+  budgets were **not** shrunk to buy it back, because the job's purpose is the
+  questions. The sweep's negative space is half the lesson: `make fuzz` and the
+  nightly runs stay wall-clock, their purposes being durations — same flag, three
+  purposes, two units, stated at each site. *A sweep that knows where the class
+  doesn't apply is a sweep that understood the class.* (#28.)
+- **A stateful instrument measures history until its state is controlled.**
+  *Fuzzing is stateful — a measurement that doesn't clear the corpus is measuring
+  the last run.* Adopting the executions budget needed proof a real crasher still
+  fails under it; the second reading was a `FAIL` in 0.175s that looked like a
+  spectacular find and was a **replay of a crasher the previous run had written
+  into `testdata/fuzz`** — an instrument contaminated by its own priors. Generalizes
+  past fuzzing: any instrument persisting state between measurements is reporting
+  history, not the present, until that state is cleared or asserted. The sibling
+  law is that **a fuzzer has two halves that fail independently, so certify them
+  independently**: seed-replay proven by reintroducing a *known* defect (grave
+  #18's zero-progress bug), exploration proven by a mutation-only needle *no seed
+  can reach*. A budget that passes the first and never exercised the second has
+  tested a corpus, not a fuzzer. (#28.)
 - **Gates.** Proposals land behind build tags / config gates; acceptance is
   the proposal's own suite green (contract §9). Nothing defaults on
   without it.
@@ -258,6 +281,19 @@ the choice, and consequences once Scott has called it.
   *named at its definition site* and carries a tracking issue. A sweep that
   turns up a labelled placeholder has still done its job: it forced the
   classification question. (Ruling on `ErrTrailingData`, #6.)
+- **A design debt is discharged by a tripwire, never by an intention.** The same
+  manoeuvre as the declared-and-tracked ruling above, pointed at *architecture*
+  instead of at a constant. Declining to share a structure is legitimate when the
+  second consumer doesn't exist yet — building it early means shaping it from its
+  only consumer's requirements, in the load-bearing spot. What makes that decline
+  honest is that the risk it accepts (two places knowing the same fact, drifting
+  silently) is **pre-registered as a failing test in the other work's definition of
+  done**, filed and milestoned at the deciding ADR's acceptance. "Convertible into
+  a failing test" is a claim about an obligation, not a hope, and the conversion is
+  scoped to the *whole* space rather than the cases today's work needs — a
+  cross-check narrowed to those is the overfitting failure applied to a control.
+  So: *prefer the risk a control can catch, then file the control.* (Ruling: Scott,
+  decision 0006; the tripwire is #33.)
 - **No cgo. Pure Go.** `make check` clean at every commit (see Tooling gates).
 - **Parsers prove progress, they don't assume it.** A loop whose exit condition
   and error condition are the same predicate is the zero-progress bug; it
