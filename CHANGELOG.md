@@ -66,6 +66,14 @@ weakly-ordered platform.
   figure as fiction earns nothing if its replacement carries the same
   overconfidence; n=1 cannot separate a property of an environment from an accident
   of one scheduling.
+- Grave #34's lesson ratified into `CLAUDE.md` as a discipline: **a test named for a
+  partition must be checked against the partition, not against its own case labels** —
+  the coverage cousin of *a green that survives the bug it names*, and the failure
+  mode where the pass count is right and the coverage is wrong. Its corollary is the
+  mechanism, and is why the defect was invisible: **when a partition's members share
+  an error value, `errors.Is` is not a partition check**, so the discriminating field
+  gets asserted or every member scores as every other. The check is to print what the
+  code actually returns for each case rather than read the labels.
 - `internal/binary`: the `constexpr` production and the three section grammars that
   need it — global, element, and data (#25). A constant expression is not
   length-prefixed; its extent is discovered by reading instructions to the END

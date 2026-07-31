@@ -254,6 +254,22 @@ the choice, and consequences once Scott has called it.
   skip, because `Fatalf`-then-`Skip` leans on `runtime.Goexit` to not return. The
   first was caught by probing, the second by a `testing.TB` fake. Neither was caught
   by the suite, because the suite was never asked.
+- **A test named for a partition must be checked against the partition, not against
+  its own case labels.** The coverage cousin of the rule above: there, a green
+  survives the bug it names; here, a green covers less than its name claims, and the
+  pass count is *right* while the coverage is wrong. `TestSectionSizeBothSigns`
+  existed to pin both signs of one comparison and pinned the short sign twice — one
+  case labelled "grammar consumed MORE than declared" actually produced `declared 7,
+  grammar consumed 4`, and the case meant to carry the long sign couldn't, because
+  the grammar it needed did not exist yet. Nothing said so, because nothing compared
+  the cases to the partition. Check by *printing what the code actually returns for
+  each case*, not by reading the labels; then falsify by swapping the comparison's
+  operands and confirming the named direction fails. The corollary is the mechanism:
+  **when a partition's members share an error value, `errors.Is` is not a partition
+  check** — assert the discriminating field (here the message's declared/consumed
+  numbers), or every member scores as every other. And a sign the suite never
+  exercises is a sign a pass count cannot defend, so it gets a synthetic vector and
+  says that it is one. (Grave, #34.)
 - **Gates never manufacture malformedness.** *Malformed* is the spec's word: it
   belongs to the grammar, and the grammar here is the **union of the tracked
   set** (§9 G-2) — section id 13 is defined by Wasm 3.0 and so is well-formed,
