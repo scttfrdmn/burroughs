@@ -1,0 +1,39 @@
+name: ci
+
+# Two architectures on purpose (contract §9, G-1): GitHub's ubuntu-24.04 runner
+# is x86-64 (TSO) and ubuntu-24.04-arm is AArch64 (weakly ordered). The dev box
+# is arm64 — the weak side, which is the side that caught D20. The §4 litmus
+# battery is a v1 acceptance artifact, but the runners it needs exist from the
+# first push (decision: Scott, session 0002/0003).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "gofmt needed on:"; echo "$unformatted"; exit 1
+          fi
+      - run: go build ./...
+      - run: go vet ./...
+      - run: go test ./...
+      - name: race
+        run: go test -race ./...

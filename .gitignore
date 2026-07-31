@@ -1,0 +1,4 @@
+/bin/
+/testdata/spec/
+/third_party/
+*.out
