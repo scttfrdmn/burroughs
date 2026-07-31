@@ -144,7 +144,31 @@ weakly-ordered platform.
   *unexpected end of section or function* 9 → 6 and *section size mismatch* 8 → 5 —
   and earn no entry; their remainder needs the code, global, and element grammars.
 
+- **CI `conformance` job — the suite is the oracle, so CI now actually runs it.**
+  Two lanes sharing one suite fetch: default features (every 3.0 gate off, v0's
+  posture) for the board numbers, regression floor, closed buckets, and the gated
+  allowlist; and **all tracked gates on, where the gated count must be zero**. The
+  second is the structural control on the third verdict — under full features every
+  vector answers on the merits, so a vector parked in `gated` on the default board
+  is simultaneously being honestly *failed* in the all-on lane and stays failed
+  until its feature actually works. A deferral that cannot become a disappearance.
+  `make conformance` is the local mirror.
+- `TestAllGatesOnLeavesNothingGated` discovers the gate set by **reflection over
+  `Features`**, not from an enumerated literal: adding a fifth gate and forgetting
+  to list it would leave the all-on lane running with that gate off, letting a
+  vector hide in `gated` in *both* lanes — the exact failure the lane prevents. A
+  non-bool field fails loudly, because "I could not turn this on" must never read
+  as "it is on". Both failure modes were verified by deliberately breaking them.
+
 ### Fixed
+- **CI board tests had been passing by not running.** The `build` job never
+  vendored the spec suite, and `requireSuite` skips when `testdata/spec` is absent
+  — so the pass floor, the closed buckets, the fixture-citation checks, and the
+  gated allowlist all skipped on every green CI run in the project's history. No CI
+  green had ever asserted a suite count. The `conformance` job vendors the suite and
+  **asserts ≥250 `.wast` files are present before trusting any number out of it**:
+  a skip is not a verdict, and a job that passes by asking nothing is the
+  dishonest-board failure wearing CI's clothes.
 - `parseString` returned a nil slice for the empty literal `""`, entangling
   "is a string" with "has bytes" — so a reader checking `str != nil` would
   misread `(module binary "")`, the empty image, which is the *unexpected end*
