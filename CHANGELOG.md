@@ -160,6 +160,28 @@ weakly-ordered platform.
   non-bool field fails loudly, because "I could not turn this on" must never read
   as "it is on". Both failure modes were verified by deliberately breaking them.
 
+- **`internal/testenv` and a skip-forbidden CI mode** — the class behind the
+  passing-by-not-running grave, closed rather than just its instance. Every skip
+  license in the tree routes through one helper, each names what it licenses
+  (local dev on a clone without `make spec-tests`), and `BURROUGHS_NO_SKIP=1`
+  revokes them all: `requireSuite` fails instead of skipping, and the two fuzz
+  seeders that silently *degraded* to literal seeds — the same shape one step
+  quieter, since nothing but an `f.Log` said the corpus was missing — fail too.
+  The flag is set **workflow-wide** in CI, not per job: a job added next month
+  inherits strictness rather than needing someone to remember, so the `build`
+  job now vendors the suite because it must.
+- `TestEverySkipSiteIsLicensed` reads the AST for `Skip`/`Skipf`/`SkipNow` across
+  the tree and requires an inventory entry per site, both directions. Without it
+  the mechanism would have the shape it exists to forbid — a rule enforcing all
+  skips route through `testenv` while nothing asserted that they do. The tree has
+  exactly one skip site, which is what makes one env var able to revoke them all.
+- `make strict` mirrors the CI mode locally, and the harness's own controls are
+  pinned from both sides: present corpus, absent corpus, *partial* corpus (three
+  files satisfy an `os.Stat` and then yield a board over three files), and the
+  flag on and off. Probing the inventory control with a deliberate unlicensed skip
+  caught a real defect in the strictness helper — it reported a fail *and* a skip,
+  because `Fatalf`-then-`Skip` leans on `runtime.Goexit` to not return.
+
 ### Fixed
 - **CI board tests had been passing by not running.** The `build` job never
   vendored the spec suite, and `requireSuite` skips when `testdata/spec` is absent

@@ -2,17 +2,21 @@ package spec
 
 import (
 	"errors"
-	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
 
 	"github.com/scttfrdmn/burroughs/internal/binary"
+	"github.com/scttfrdmn/burroughs/internal/testenv"
 )
 
 // suiteDir is where make spec-tests vendors the upstream suite. Gitignored;
 // tests skip rather than fail when it is absent, so a fresh clone is green
 // before the fetch.
+//
+// That skip license is exactly one thing — local-dev convenience on an unvendored
+// clone — and internal/testenv revokes it under BURROUGHS_NO_SKIP=1, which every
+// CI job that runs tests sets. See the package doc there for the grave (#29).
 const suiteDir = "../../testdata/spec"
 
 func decode(image []byte) error {
@@ -28,11 +32,31 @@ func isGated(err error) bool { return errors.Is(err, binary.ErrFeatureDisabled) 
 // run scores a script with gate declines separated from verdicts.
 func run(s *Script) *Result { return s.RunGated(decode, isGated) }
 
+// requireSuite gates every board test on the corpus actually being there.
+//
+// License: local dev on a clone where `make spec-tests` has not been run.
+// Revoked by BURROUGHS_NO_SKIP=1.
+//
+// It asserts a file *count*, not `os.Stat` on the directory as it once did: a
+// partial or empty fetch passes an existence check and then produces a board over
+// whatever happened to be present, which is a number with an unasserted input.
 func requireSuite(t *testing.T) {
 	t.Helper()
-	if _, err := os.Stat(suiteDir); err != nil {
-		t.Skip("spec suite not vendored; run: make spec-tests")
+	testenv.RequireSuite(t, suiteDir)
+}
+
+// suitePaths returns every vendored .wast file, having already required the
+// corpus. An empty result here is impossible rather than skippable — requireSuite
+// asserted the count — so it is a Fatal: the two disagreeing would mean the glob
+// and the assertion are looking at different things.
+func suitePaths(t *testing.T) []string {
+	t.Helper()
+	requireSuite(t)
+	paths, err := filepath.Glob(filepath.Join(suiteDir, "*.wast"))
+	if err != nil || len(paths) == 0 {
+		t.Fatalf("glob %s after requireSuite passed: %d paths, err=%v", suiteDir, len(paths), err)
 	}
+	return paths
 }
 
 // TestBinaryWast is the first real suite number: binary.wast is 107
@@ -325,11 +349,7 @@ func TestPhase1Files(t *testing.T) {
 // full of wat it cannot interpret. Parsing and understanding are separate
 // concerns, and conflating them would hide the real unsupported count.
 func TestParseEverySuiteFile(t *testing.T) {
-	requireSuite(t)
-	paths, err := filepath.Glob(filepath.Join(suiteDir, "*.wast"))
-	if err != nil || len(paths) == 0 {
-		t.Skip("no .wast files found")
-	}
+	paths := suitePaths(t)
 	var broken int
 	for _, p := range paths {
 		if _, err := ParseFile(p); err != nil {

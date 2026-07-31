@@ -211,7 +211,16 @@ the choice, and consequences once Scott has called it.
   a green that has never once asserted a count. Any job whose verdict depends on
   a corpus asserts the corpus is present *before* trusting a number out of it.
   This is the identity-check law pointed at the oracle's inputs rather than at
-  the run: guard the guard, or the guard is decoration.
+  the run: guard the guard, or the guard is decoration. The general form: **a
+  precondition that excuses a gate is licensed at one place, or it is a hole.**
+  Every skip routes through `internal/testenv`, names what it licenses, and is
+  revoked by `BURROUGHS_NO_SKIP=1` — set workflow-wide in CI so strictness is
+  inherited rather than remembered. `TestEverySkipSiteIsLicensed` reads the AST,
+  because a rule requiring all skips go through one door needs something asserting
+  that they do; otherwise the mechanism has the shape it exists to forbid. And
+  *silent degradation is a skip one step quieter* — a fuzz seeder that falls back
+  to two literal seeds still passes, and only an `f.Log` says the corpus was
+  missing. (Directive: Scott, PR #30.)
 - **Gates never manufacture malformedness.** *Malformed* is the spec's word: it
   belongs to the grammar, and the grammar here is the **union of the tracked
   set** (§9 G-2) — section id 13 is defined by Wasm 3.0 and so is well-formed,

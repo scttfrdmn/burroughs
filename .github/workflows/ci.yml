@@ -19,6 +19,24 @@ on:
 permissions:
   contents: read
 
+# Skip-forbidden mode, workflow-wide (grave #29, Scott's directive on #30).
+#
+# A skip is not a verdict: it reports that the question could not be asked, and
+# every board control in internal/spec declines that way when testdata/spec is
+# absent. CI ran the project's entire history without the oracle in the room, green
+# every time, because a job that asks nothing passes.
+#
+# Set here rather than per-job on purpose. Per-job is the instance fix; the class is
+# "a CI job that runs tests without the corpus it judges against," and a job added
+# next month would need someone to remember. Inheritance means the default is
+# strict and an exemption has to be written down. Jobs that run no tests (lint,
+# vuln) simply never read it.
+#
+# The consequence is deliberate: any job running `go test` must now vendor the
+# suite. That is the point — it is what makes the numbers in the log mean something.
+env:
+  BURROUGHS_NO_SKIP: '1'
+
 jobs:
   build:
     strategy:
@@ -49,12 +67,32 @@ jobs:
       - run: go build ./...
       - run: go vet ./...
 
+      - name: vendor the spec suite
+        # Required, not optional: BURROUGHS_NO_SKIP=1 is set workflow-wide, so the
+        # board controls below now *fail* on an unvendored corpus instead of
+        # skipping. This step is the grave's actual fix — the one line whose absence
+        # made every green in this job's history vacuous.
+        run: make spec-tests
+
       - name: test
         # -shuffle=on so test order is never load-bearing.
         run: go test -shuffle=on ./...
 
       - name: race
         run: go test -race -shuffle=on ./...
+
+      - name: no test declined to answer
+        # Suspenders to the harness's belt. The flag makes a skip impossible from
+        # inside; this makes it visible from outside, so the two would have to fail
+        # together for a skip to pass unnoticed. Reads the *output* channel, not the
+        # exit code — a skip does not fail a test run, which is the entire problem.
+        run: |
+          out="$(go test -v -shuffle=on ./... 2>&1)"
+          if printf '%s\n' "$out" | grep -E '^\s*(---\s*)?SKIP' ; then
+            echo "::error::a test skipped under BURROUGHS_NO_SKIP=1 — every skip must route through internal/testenv, where the flag revokes it"
+            exit 1
+          fi
+          echo "no SKIP lines"
 
       - name: go mod tidy is clean
         # The engine module only. `tidy` is NOT run on tools/go.mod: a tool

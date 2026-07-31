@@ -5,7 +5,7 @@ GO ?= go
 # anything globally.
 TOOL = $(GO) tool -modfile=tools/go.mod
 
-.PHONY: all build test vet fmt lint check vuln deadcode fuzz bench spec-tests tidy conformance
+.PHONY: all build test vet fmt lint check vuln deadcode fuzz bench spec-tests tidy conformance strict
 
 # The default gate. `check` is what must be green before a report — it is the
 # local mirror of CI, so a surprise in CI means a bug in this line, not a bug in
@@ -14,22 +14,49 @@ all: check
 
 check: fmt-check build vet lint test deadcode
 
+# Skip-forbidden mode (grave #29). Exported so every recipe below inherits it —
+# see internal/testenv for what it revokes and why. `check` deliberately does NOT
+# set it: `check` must stay green on a fresh clone, and the local-dev skip license
+# is exactly the case that makes it so.
+STRICT = BURROUGHS_NO_SKIP=1
+
 # The board, asserted rather than skipped. Separate from `check` because it needs
 # the vendored suite and `check` must stay green on a fresh clone — but CI runs
 # both, so this is not optional, it is the other half of the mirror.
 #
-# Every board test calls requireSuite() and *skips* when testdata/spec is absent,
+# Every board test calls requireSuite(), which *skips* when testdata/spec is absent,
 # which is why this target refuses to run without it: a skip is not a verdict, and
 # a target that passes by asking nothing is the failure the board controls exist to
-# prevent. Includes the all-gates-on lane, where the gated count must be zero.
+# prevent. $(STRICT) makes that refusal come from the harness rather than from this
+# file — the presence check below is the belt, the flag is the suspenders, and a
+# skip would have to defeat both. Includes the all-gates-on lane, where the gated
+# count must be zero.
 conformance:
 	@n="$$(ls testdata/spec/*.wast 2>/dev/null | wc -l | tr -d ' ')"; \
 	if [ "$$n" -lt 250 ]; then \
 		echo "spec suite not vendored ($$n files); run: make spec-tests"; exit 1; \
 	fi; \
 	echo "vendored $$n .wast files"
-	$(GO) test -v -shuffle=on ./internal/spec/ ./internal/binary/
-	$(GO) test -v -run TestAllGatesOnLeavesNothingGated ./internal/spec/
+	$(STRICT) $(GO) test -v -shuffle=on ./internal/spec/ ./internal/binary/
+	$(STRICT) $(GO) test -v -run TestAllGatesOnLeavesNothingGated ./internal/spec/
+
+# The whole tree with no skip licenses — the local mirror of CI's workflow-level
+# BURROUGHS_NO_SKIP=1. `make check` proves the code is sound on any clone; this
+# proves nothing declined to answer. Run it after `make spec-tests`.
+#
+# The grep is not redundant with the flag: the flag closes the skips that route
+# through internal/testenv, and TestEverySkipSiteIsLicensed proves that is all of
+# them today. This reads the output channel for the case where a future skip escapes
+# both. A skip does not fail a test run, so the exit code cannot be asked.
+strict:
+	@out="$$($(STRICT) $(GO) test -v -shuffle=on ./... 2>&1)"; \
+	status=$$?; \
+	printf '%s\n' "$$out" | grep -E '^[[:space:]]*(---[[:space:]]*)?(FAIL|SKIP)' || true; \
+	if [ $$status -ne 0 ]; then echo "tests failed"; exit 1; fi; \
+	if printf '%s\n' "$$out" | grep -qE '^[[:space:]]*(---[[:space:]]*)?SKIP'; then \
+		echo "a test skipped under BURROUGHS_NO_SKIP=1"; exit 1; \
+	fi; \
+	echo "no SKIP lines"
 
 build:
 	$(GO) build -o bin/burroughs ./cmd/burroughs

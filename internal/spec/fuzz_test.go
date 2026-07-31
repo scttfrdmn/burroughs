@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/scttfrdmn/burroughs/internal/testenv"
 )
 
 // FuzzWastLexer fuzzes the s-expression reader. This is grave #18's home turf:
@@ -103,11 +105,16 @@ func FuzzParseNodeProgress(f *testing.F) {
 // the inputs the reader must survive by contract (TestParseEverySuiteFile), so
 // they are the right starting point for mutation — and unlike a hand-written
 // corpus, they cost nothing to keep current.
+//
+// License for running without the corpus: a seedless fuzz target is weaker, not
+// broken, so a fresh clone can still fuzz. That degradation is quieter than a skip
+// — the target passes and only an f.Log says why — which is exactly why
+// BURROUGHS_NO_SKIP=1 turns it into a failure.
 func seedFromSuiteText(f *testing.F) {
 	f.Helper()
 
-	paths, err := filepath.Glob(filepath.Join(suiteDir, "*.wast"))
-	if err != nil || len(paths) == 0 {
+	paths := testenv.SuiteFiles(f, suiteDir)
+	if len(paths) == 0 {
 		f.Log("spec suite not vendored; fuzzing with literal seeds only (run: make spec-tests)")
 		f.Add([]byte(`(module binary "\00asm\01\00\00\00")`))
 		f.Add([]byte(`(@a , ; ] [ }} }x{ ({) ,{{};}] ;)`))
