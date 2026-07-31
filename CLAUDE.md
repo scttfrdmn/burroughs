@@ -70,6 +70,23 @@ issue `type:contract`.
 Keep descriptions terse and factual — written for a reader who wasn't in the
 session. Anything Scott must decide is *flagged*, never decided for him.
 
+### Waiting on CI
+
+**Block on the verdict, never on a timer.** After pushing:
+
+```bash
+gh pr checks <n> --watch --fail-fast    # blocks until done; non-zero if any check failed
+gh run watch <run-id> --compact         # same for a specific run
+```
+
+Both return the moment the run finishes and exit non-zero on failure, so the
+exit code is the answer. `sleep 200 && gh pr checks` is the same error as reading
+a verdict off a tool's stderr: **a duration is not a completion signal.** It
+guesses low and reports a pending run as though that were news, or guesses high
+and wastes the difference — and either way the shell, not the CI system, decided
+when to look. Same rule as *verdict channel and mechanism channel are different
+instruments*, applied to time.
+
 ## Versioning and the changelog
 
 See **decision 0004** for the full scheme; the short version:
