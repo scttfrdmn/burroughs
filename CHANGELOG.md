@@ -46,9 +46,41 @@ weakly-ordered platform.
 - Two disciplines ratified into `CLAUDE.md`: *unreachability is a grave only
   when it's silent — declared and tracked, it's a TODO with an audit trail*,
   and *bucketed failures are the work plan*.
+- Two disciplines ratified into `CLAUDE.md` from #28: **a stateful instrument
+  measures history until its state is controlled** — *fuzzing is stateful, so a
+  measurement that doesn't clear the corpus is measuring the last run*, with the
+  sibling law that a fuzzer's two halves fail independently and must be certified
+  independently (seed-replay by a reintroduced known defect, exploration by a
+  mutation-only needle no seed can reach) — and **a design debt is discharged by a
+  tripwire, never by an intention**, the declared-and-tracked ruling pointed at
+  architecture instead of at a constant.
+- Three more disciplines ratified from this PR's review. **A control scoped to the
+  current sample inherits the current blind spot; scope controls to the space** —
+  the general form of #33's widening past the eight opcodes the reader needs, and
+  the overfitting law (§9 G-3) turned on the controls rather than the engine:
+  *derive the domain, never enumerate it.* **A ruling retroactively falsifies prose
+  written before it**, so accepting a ruling includes sweeping for the sentences it
+  orphaned — *truth has a maintenance cost*, and a comment citing a tracking
+  location that no longer exists is the drifted-citation defect in other clothes.
+  And **second-order honesty: apply the discipline to its own output** — catching a
+  figure as fiction earns nothing if its replacement carries the same
+  overconfidence; n=1 cannot separate a property of an environment from an accident
+  of one scheduling.
 - Decision 0005: tooling gates. Quality is enforced by pinned tools wired into
   CI rather than left to habit, because a convention that depends on
   remembering decays across session boundaries.
+- Decision 0006: the const-expression opcode table is **not** shared with the
+  interpreter yet — `internal/binary` gets its own `constexpr` reader. Sharing from
+  the start would shape #7's central structure from the decoder's requirements
+  before a second consumer exists, and `internal/interp` currently holds only a
+  benchmark, so "shared" would be shared with nobody. Unblocks #25.
+- The accepted form of 0006 carries a **pre-registered agreement test** (#33) as part
+  of #7's definition of done: when the interpreter's opcode table lands, a test
+  asserts its const-legal subset and the decoder's reader agree over the *full*
+  opcode space — membership, immediate extent, and rejection. The design debt 0006
+  accepts is only "convertible into a failing test" if the conversion is an
+  obligation with a tripwire rather than an intention, so it is filed, milestoned,
+  and required to be falsified before it is trusted.
 - `tools/go.mod` pins every quality tool via `tool` directives —
   `golangci-lint` v2.12.2, `govulncheck`, `deadcode`, `benchstat` — so the
   versions are repo state and a green board means the same thing on a laptop
@@ -160,7 +192,79 @@ weakly-ordered platform.
   non-bool field fails loudly, because "I could not turn this on" must never read
   as "it is on". Both failure modes were verified by deliberately breaking them.
 
+- Decoder: **name validation** — a `name` must be well-formed UTF-8. Phase 1 total
+  **179 → 707 pass** (57 fail, 0 unsupported, 2 gated), closing all three
+  byte-string `utf8-*.wast` files at **176/176** each. The largest single bucket in
+  the corpus, and the check is nine lines.
+- The rule is `utf8.Valid`, which *is* the spec's side condition (`name ::=
+  b*:vec(byte)` with `b* = utf8(name)`) — not a list of rejected byte patterns
+  derived from the suite. The suite enumerates 176 violations per file, and a check
+  written from that enumeration would pass every vector while being wrong about
+  byte sequences the suite has no vector for. The stdlib predicate was measured
+  against all 528 executable vectors as *evidence it is implemented correctly*,
+  never as the source of the rule. Unit tests are organised by violation **class**
+  — overlong forms, unpaired surrogates, past U+10FFFF, truncations, 5- and 6-byte
+  sequences — with the accept direction pinned just as hard, because "reject
+  everything" would score 528/528 while making the decoder reject valid modules.
+- The predicate is on `name()`, not `byteVec()`: a data segment's contents are
+  `vec(byte)` with no encoding constraint, so the cheap generalisation would pass
+  every vector and reject modules the spec accepts. `utf8-invalid-encoding.wast`
+  stays off the board — its 176 forms are `(module quote ...)` text-format modules
+  phase 1 cannot execute, and they belong to #8.
+- The `//nolint:unparam` on `byteVec` is **removed with its purpose fulfilled**,
+  which is what a declared-and-tracked suppression is supposed to look like at the
+  end. `name()` returns only an error: the bytes are consumed by the predicate, so
+  the same classification question gets the opposite answer on different facts.
+- `phase1Files` is one definition instead of four copies. Adding the utf8 files to
+  the board list alone would have left the gated allowlist, the verdict partition,
+  and the bucket-ordering property scoped to a narrower corpus than the board
+  reports — three controls quietly watching less than the number beside them.
+  `TestClosedBuckets` keys are pinned as a subset.
+
+- **`internal/testenv` and a skip-forbidden CI mode** — the class behind the
+  passing-by-not-running grave, closed rather than just its instance. Every skip
+  license in the tree routes through one helper, each names what it licenses
+  (local dev on a clone without `make spec-tests`), and `BURROUGHS_NO_SKIP=1`
+  revokes them all: `requireSuite` fails instead of skipping, and the two fuzz
+  seeders that silently *degraded* to literal seeds — the same shape one step
+  quieter, since nothing but an `f.Log` said the corpus was missing — fail too.
+  The flag is set **workflow-wide** in CI, not per job: a job added next month
+  inherits strictness rather than needing someone to remember, so the `build`
+  job now vendors the suite because it must.
+- `TestEverySkipSiteIsLicensed` reads the AST for `Skip`/`Skipf`/`SkipNow` across
+  the tree and requires an inventory entry per site, both directions. Without it
+  the mechanism would have the shape it exists to forbid — a rule enforcing all
+  skips route through `testenv` while nothing asserted that they do. The tree has
+  exactly one skip site, which is what makes one env var able to revoke them all.
+- `make strict` mirrors the CI mode locally, and the harness's own controls are
+  pinned from both sides: present corpus, absent corpus, *partial* corpus (three
+  files satisfy an `os.Stat` and then yield a board over three files), and the
+  flag on and off. Probing the inventory control with a deliberate unlicensed skip
+  caught a real defect in the strictness helper — it reported a fail *and* a skip,
+  because `Fatalf`-then-`Skip` leans on `runtime.Goexit` to not return.
+
 ### Fixed
+- **`fuzz-smoke` was budgeted in the wrong unit** (#28). The job exists to catch a
+  target that stopped building or a corpus that regressed — its purpose names
+  *executions* — but its budget was wall clock on a shared runner, making it
+  timing-sensitive by construction. It failed twice that way, on PR #27 and again
+  on PR #31, both times `context deadline exceeded` with no crasher and after real
+  progress: the second at ~70k execs/sec against 130k–670k/sec measured locally, a
+  ~7x spread that is a property of the runner and not of the code. Now
+  `-fuzztime Nx`, sized from the measured CI floor rather than converted from a dev
+  box's rate. Cost, measured on the first green run rather than estimated: the
+  `fuzz wast lexer` step went 65s nominal → **3m08s–3m26s**, because the runner's real
+  floor is ~17–18k execs/sec, not the ~70k the sizing assumed. Measured across two
+  independent green runs, which is the point: 46–47 three-second windows reporting
+  `0/sec` against recovery bursts of 605k–**1.25M**/sec — long stalls, not a slow
+  steady rate, and a peak that doubles between runs is why no single figure was
+  trustworthy. Accepted: a job that takes three minutes and answers a fixed question
+  beats one that takes one and sometimes answers none. The stalls get no issue by
+  ruling — an issue no work can close is a wish with a label — so the finding lives in
+  the budget rationale, where it has consequences.
+  `make fuzz` and the nightly 10-minute runs stay wall-clock *because
+  their purposes are durations* — the units differ because the purposes do, and both
+  sites now say so. Budget by the quantity the purpose names.
 - **CI board tests had been passing by not running.** The `build` job never
   vendored the spec suite, and `requireSuite` skips when `testdata/spec` is absent
   — so the pass floor, the closed buckets, the fixture-citation checks, and the

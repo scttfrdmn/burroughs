@@ -9,6 +9,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"unicode/utf8"
 )
 
 // Magic is the module preamble "\0asm".
@@ -87,6 +88,15 @@ var (
 	ErrMalformedMutability = errors.New("malformed mutability")
 	ErrMalformedImportKind = errors.New("malformed import kind")
 	ErrMalformedExportKind = errors.New("malformed export kind")
+
+	// ErrMalformedUTF8 is a name whose bytes are not well-formed UTF-8.
+	//
+	// The spec's `name` production is `utf8(char*)` where char is a Unicode scalar
+	// value, so the constraint is a property of the *encoding*, not a list of
+	// rejected byte patterns: overlong forms, unpaired surrogates, code points
+	// above U+10FFFF, truncated and stray continuation bytes are all the same
+	// violation of the same rule. utf8.Valid is that rule.
+	ErrMalformedUTF8 = errors.New("malformed UTF-8 encoding")
 
 	// ErrFeatureDisabled is a well-formed construct from a gated proposal met
 	// with its gate off. Deliberately *not* a suite malformed-string: the module
@@ -240,14 +250,10 @@ func (r *reader) byte() (byte, error) {
 // length of 10 with 6 bytes left in the image is what the suite calls "length out
 // of bounds", not "unexpected end of section or function".
 //
-// The returned bytes have no caller yet, which unparam correctly notices. They
-// have a *consumer* though: a name must be valid UTF-8, and 704 suite vectors
-// across four utf8-*.wast files assert it (#26). Dropping the return to satisfy
-// the linter would be deleting the check's only input — the disguise the
-// ErrTrailingData ruling names. Declared and tracked instead, and the
-// suppression comes off when #26 lands.
-//
-//nolint:unparam // #26: the returned name bytes are the UTF-8 check's input, not yet written
+// byteVec is deliberately byte-neutral: a data segment's contents are arbitrary
+// bytes, so the UTF-8 constraint belongs to name() rather than here. Reading a
+// name is byteVec plus a predicate, and keeping them separate is what stops the
+// predicate from being applied to bytes that were never text.
 func (r *reader) byteVec() ([]byte, error) {
 	n, err := r.u32()
 	if err != nil {
@@ -257,6 +263,36 @@ func (r *reader) byteVec() ([]byte, error) {
 		return nil, fmt.Errorf("%w: %d bytes declared, %d left", ErrSectionOverrun, n, r.remaining())
 	}
 	return r.bytes(int(n))
+}
+
+// name reads a `name`: a byte vector that must be well-formed UTF-8.
+//
+// The spec's production is `name ::= b*:vec(byte) => name` with the side condition
+// that the bytes are `utf8(name)` — so the check is the encoding's own rule, and
+// utf8.Valid *is* that rule. The suite's four utf8-*.wast files enumerate 176
+// specific violations each (overlong forms, unpaired surrogates, code points past
+// U+10FFFF, truncations, stray continuation bytes), and a check written from that
+// enumeration would be the oracle mistaken for the objective function: it would
+// pass the vectors while remaining wrong about the byte sequences the suite has no
+// vector for. The stdlib predicate was measured against all 528 executable vectors
+// as *evidence it is implemented correctly*, not as the source of the rule.
+//
+// Returns only an error, unlike byteVec. The bytes are consumed *here*, by the
+// predicate — which is the whole difference between the two methods — so there is
+// nothing speculative left to hand back. This is the same classification question
+// the //nolint:unparam on byteVec answered the other way, and the answer differs
+// because the facts do: byteVec's return had a named future consumer (this check),
+// where name's would have none until the module structure retains names. Declared
+// and tracked beats suppressed; nothing beats not needing either.
+func (r *reader) name() error {
+	b, err := r.byteVec()
+	if err != nil {
+		return err
+	}
+	if !utf8.Valid(b) {
+		return fmt.Errorf("%w: % x", ErrMalformedUTF8, b)
+	}
+	return nil
 }
 
 // uleb reads an unsigned LEB128 integer of the given bit width.

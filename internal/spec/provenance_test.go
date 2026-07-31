@@ -149,10 +149,7 @@ func TestEveryFixtureFileIsChecked(t *testing.T) {
 // "file:line", so citations resolve in both directions.
 func suiteImages(t *testing.T) map[string][]string {
 	t.Helper()
-	paths, err := filepath.Glob(filepath.Join(suiteDir, "*.wast"))
-	if err != nil || len(paths) == 0 {
-		t.Skip("no .wast files found")
-	}
+	paths := suitePaths(t)
 	idx := map[string][]string{}
 	for _, p := range paths {
 		s, err := ParseFile(p)

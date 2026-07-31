@@ -3,9 +3,10 @@ package binary
 import (
 	"errors"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/scttfrdmn/burroughs/internal/testenv"
 )
 
 // Native Go fuzzing over the decoder. The invariant a decoder fuzz target
@@ -49,6 +50,9 @@ var declaredErrors = []error{
 	ErrMalformedMutability,
 	ErrMalformedImportKind,
 	ErrMalformedExportKind,
+
+	// The name grammar (#26): a name's bytes must be well-formed UTF-8.
+	ErrMalformedUTF8,
 
 	// ErrFeatureDisabled is a declared error but not a malformed-verdict: it means
 	// the decoder declined to judge. Listed here because the fuzz target's question
@@ -166,17 +170,21 @@ func FuzzULEB(f *testing.F) {
 
 // seedFromSuite adds every module image in the vendored spec suite to the
 // corpus. When the suite is absent the target still runs — a fuzz target with no
-// seeds is weaker, not broken — so a fresh clone needs no fetch to fuzz.
+// seeds is weaker, not broken — so a fresh clone needs no fetch to fuzz. That
+// license is revoked by BURROUGHS_NO_SKIP=1, which CI sets: silently seeding from
+// two boundary literals instead of 809 suite images is a downgrade no exit code
+// reports.
 //
 // This deliberately does not import internal/spec: that package imports this
 // one for its board, and the cycle would be real. A minimal reader for the
-// `(module binary "...")` form is the cheaper of the two fixes.
+// `(module binary "...")` form is the cheaper of the two fixes. internal/testenv
+// is safe to import from both — it depends on neither.
 func seedFromSuite(f *testing.F) {
 	f.Helper()
 
 	const suiteDir = "../../testdata/spec"
-	paths, err := filepath.Glob(filepath.Join(suiteDir, "*.wast"))
-	if err != nil || len(paths) == 0 {
+	paths := testenv.SuiteFiles(f, suiteDir)
+	if len(paths) == 0 {
 		f.Log("spec suite not vendored; fuzzing with boundary seeds only (run: make spec-tests)")
 		f.Add([]byte{})
 		f.Add([]byte{0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00})

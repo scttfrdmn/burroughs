@@ -19,6 +19,24 @@ on:
 permissions:
   contents: read
 
+# Skip-forbidden mode, workflow-wide (grave #29, Scott's directive on #30).
+#
+# A skip is not a verdict: it reports that the question could not be asked, and
+# every board control in internal/spec declines that way when testdata/spec is
+# absent. CI ran the project's entire history without the oracle in the room, green
+# every time, because a job that asks nothing passes.
+#
+# Set here rather than per-job on purpose. Per-job is the instance fix; the class is
+# "a CI job that runs tests without the corpus it judges against," and a job added
+# next month would need someone to remember. Inheritance means the default is
+# strict and an exemption has to be written down. Jobs that run no tests (lint,
+# vuln) simply never read it.
+#
+# The consequence is deliberate: any job running `go test` must now vendor the
+# suite. That is the point — it is what makes the numbers in the log mean something.
+env:
+  BURROUGHS_NO_SKIP: '1'
+
 jobs:
   build:
     strategy:
@@ -49,12 +67,32 @@ jobs:
       - run: go build ./...
       - run: go vet ./...
 
+      - name: vendor the spec suite
+        # Required, not optional: BURROUGHS_NO_SKIP=1 is set workflow-wide, so the
+        # board controls below now *fail* on an unvendored corpus instead of
+        # skipping. This step is the grave's actual fix — the one line whose absence
+        # made every green in this job's history vacuous.
+        run: make spec-tests
+
       - name: test
         # -shuffle=on so test order is never load-bearing.
         run: go test -shuffle=on ./...
 
       - name: race
         run: go test -race -shuffle=on ./...
+
+      - name: no test declined to answer
+        # Suspenders to the harness's belt. The flag makes a skip impossible from
+        # inside; this makes it visible from outside, so the two would have to fail
+        # together for a skip to pass unnoticed. Reads the *output* channel, not the
+        # exit code — a skip does not fail a test run, which is the entire problem.
+        run: |
+          out="$(go test -v -shuffle=on ./... 2>&1)"
+          if printf '%s\n' "$out" | grep -E '^\s*(---\s*)?SKIP' ; then
+            echo "::error::a test skipped under BURROUGHS_NO_SKIP=1 — every skip must route through internal/testenv, where the flag revokes it"
+            exit 1
+          fi
+          echo "no SKIP lines"
 
       - name: go mod tidy is clean
         # The engine module only. `tidy` is NOT run on tools/go.mod: a tool
@@ -179,12 +217,54 @@ jobs:
     # a seed corpus that regressed, not enough to find deep bugs. The long runs
     # are scheduled — see nightly.yml.
     #
-    # NOTE (#28): the budgets here are wall-clock on a runner whose throughput
-    # varies ~6x from a dev box, which made this job timing-sensitive by
-    # construction — it flaked once on PR #27 with `context deadline exceeded` and
-    # no crasher. The fix is to budget by executions (-fuzztime Nx), since
-    # executions are what this job's purpose actually names. Tracked, not silent.
+    # Budgets are in executions (-fuzztime Nx), not wall clock (#28). The purpose
+    # above names *executions* — "did the target still build and still churn the
+    # corpus" — and the budget must be in the quantity the purpose names, or the
+    # job fails for reasons that are not findings. Wall clock was the wrong unit
+    # twice: `context deadline exceeded` with no crasher on PR #27 and again on
+    # PR #31, both after real progress (the second at ~70k execs/sec into a 20s
+    # wall), against 130k–670k/sec locally — a ~7x spread that is a property of
+    # shared runners, not of the code under test.
+    #
+    # Sizes are derived from the measured CI floor (~70k/sec, the rate on the run
+    # that failed), not from converting the old seconds at a dev box's rate, and
+    # they hold the old 2:1 ratio between targets.
+    #
+    # What the green runs under these budgets actually measure, because it is worse
+    # than the sizing assumed and the number must not be inherited from the
+    # estimate. Two independent runs, and the shape reproduces:
+    #
+    #   run       FuzzWastLexer 3M   step total   0/sec windows   peak burst
+    #   160c8a4   178s               3m26s        47              605k/sec
+    #   a4c0295   163s               3m08s        46              1.25M/sec
+    #
+    # So ~17-18k execs/sec effective, against ~70k assumed. Reported as a range and
+    # from two runs on purpose: a single run cannot distinguish a property of the
+    # environment from an accident of one scheduling, and the peak moving 605k ->
+    # 1.25M is exactly the spread that makes any single figure a fiction. Two
+    # witnesses agreeing on the *shape* (long stalls, faster-than-local bursts) is
+    # the claim; neither number alone is.
+    #
+    # That cost is the honest price of the unit change and is accepted: a job that
+    # takes three minutes and answers a fixed question beats one that takes one
+    # minute and sometimes answers none.
+    #
+    # The stalls themselves get no issue, deliberately (ruling: Scott) — an issue no
+    # work can close is a wish with a label, and GitHub's runners are not ours to
+    # fix. This comment *is* where the finding lives, because this is the one place
+    # it has consequences. If a stall ever breaks something actionable, that event
+    # files its own issue with a reproducer attached. Note what the finding implies
+    # if it worsens: a 4-worker runner pausing 18 consecutive seconds is contention
+    # or GC, not throughput variance, so the budget is not what would need adjusting.
+    #
+    # timeout-minutes is a failsafe, not a budget. An executions budget has no
+    # upper bound on duration, so a genuine hang would run until GitHub's default
+    # 6h cap. 15 minutes is ~4x the measured 3m26s: loose enough that stall
+    # variance cannot reach it, tight enough that a hang is caught. Naming it
+    # separately keeps the two concerns distinct — the budget asks a fixed number
+    # of questions, the timeout says something is structurally wrong.
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
@@ -199,13 +279,13 @@ jobs:
 
       - name: fuzz decoder
         run: |
-          go test ./internal/binary/ -run XXX -fuzz FuzzDecodeModule -fuzztime 45s
-          go test ./internal/binary/ -run XXX -fuzz FuzzULEB -fuzztime 20s
+          go test ./internal/binary/ -run XXX -fuzz FuzzDecodeModule -fuzztime 3000000x
+          go test ./internal/binary/ -run XXX -fuzz FuzzULEB -fuzztime 1500000x
 
       - name: fuzz wast lexer
         run: |
-          go test ./internal/spec/ -run XXX -fuzz FuzzWastLexer -fuzztime 45s
-          go test ./internal/spec/ -run XXX -fuzz FuzzParseNodeProgress -fuzztime 20s
+          go test ./internal/spec/ -run XXX -fuzz FuzzWastLexer -fuzztime 3000000x
+          go test ./internal/spec/ -run XXX -fuzz FuzzParseNodeProgress -fuzztime 1500000x
 
       - name: upload crashers
         if: failure()

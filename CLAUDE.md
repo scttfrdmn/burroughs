@@ -192,7 +192,30 @@ the choice, and consequences once Scott has called it.
   `fuzz-smoke` exists to catch a target that stopped building or a corpus that
   regressed — its purpose is *executions*, and it was budgeted in *seconds* on
   hardware whose throughput varies 6× from a dev box. Wall-clock budgets on
-  shared runners are timing-sensitive by construction.
+  shared runners are timing-sensitive by construction. Sharpened by measuring the
+  runner: it does not run *slowly*, it **stalls and sprints** — 47 dead
+  three-second windows, one 18s unbroken, against 605k/sec bursts faster than the
+  dev box. So the ~70k/sec "floor" was an average over a bimodal distribution,
+  describing neither mode, and *a wall-clock budget against a bimodal rate is a
+  coin flip on where the stalls land*. The unit fix cost 65s → 3m26s and the
+  budgets were **not** shrunk to buy it back, because the job's purpose is the
+  questions. The sweep's negative space is half the lesson: `make fuzz` and the
+  nightly runs stay wall-clock, their purposes being durations — same flag, three
+  purposes, two units, stated at each site. *A sweep that knows where the class
+  doesn't apply is a sweep that understood the class.* (#28.)
+- **A stateful instrument measures history until its state is controlled.**
+  *Fuzzing is stateful — a measurement that doesn't clear the corpus is measuring
+  the last run.* Adopting the executions budget needed proof a real crasher still
+  fails under it; the second reading was a `FAIL` in 0.175s that looked like a
+  spectacular find and was a **replay of a crasher the previous run had written
+  into `testdata/fuzz`** — an instrument contaminated by its own priors. Generalizes
+  past fuzzing: any instrument persisting state between measurements is reporting
+  history, not the present, until that state is cleared or asserted. The sibling
+  law is that **a fuzzer has two halves that fail independently, so certify them
+  independently**: seed-replay proven by reintroducing a *known* defect (grave
+  #18's zero-progress bug), exploration proven by a mutation-only needle *no seed
+  can reach*. A budget that passes the first and never exercised the second has
+  tested a corpus, not a fuzzer. (#28.)
 - **Gates.** Proposals land behind build tags / config gates; acceptance is
   the proposal's own suite green (contract §9). Nothing defaults on
   without it.
@@ -211,7 +234,26 @@ the choice, and consequences once Scott has called it.
   a green that has never once asserted a count. Any job whose verdict depends on
   a corpus asserts the corpus is present *before* trusting a number out of it.
   This is the identity-check law pointed at the oracle's inputs rather than at
-  the run: guard the guard, or the guard is decoration.
+  the run: guard the guard, or the guard is decoration. The general form: **a
+  precondition that excuses a gate is licensed at one place, or it is a hole.**
+  Every skip routes through `internal/testenv`, names what it licenses, and is
+  revoked by `BURROUGHS_NO_SKIP=1` — set workflow-wide in CI so strictness is
+  inherited rather than remembered. `TestEverySkipSiteIsLicensed` reads the AST,
+  because a rule requiring all skips go through one door needs something asserting
+  that they do; otherwise the mechanism has the shape it exists to forbid. And
+  *silent degradation is a skip one step quieter* — a fuzz seeder that falls back
+  to two literal seeds still passes, and only an `f.Log` says the corpus was
+  missing. (Directive: Scott, PR #30.)
+- **A control's green must be falsifiable, and the way to know is to break it.**
+  Write the test, then introduce the defect it names and watch it fail. A test
+  asserting a property of code that does not run yet passes for the wrong reason and
+  is indistinguishable, on the board, from one that passes for the right one — *a
+  green that survives the bug it names is a control in name only*. Found twice in
+  one session: a data-segment test that could never fail because the data section is
+  not descended into yet (#25), and a strictness helper reporting a fail *and* a
+  skip, because `Fatalf`-then-`Skip` leans on `runtime.Goexit` to not return. The
+  first was caught by probing, the second by a `testing.TB` fake. Neither was caught
+  by the suite, because the suite was never asked.
 - **Gates never manufacture malformedness.** *Malformed* is the spec's word: it
   belongs to the grammar, and the grammar here is the **union of the tracked
   set** (§9 G-2) — section id 13 is defined by Wasm 3.0 and so is well-formed,
@@ -239,6 +281,30 @@ the choice, and consequences once Scott has called it.
   *named at its definition site* and carries a tracking issue. A sweep that
   turns up a labelled placeholder has still done its job: it forced the
   classification question. (Ruling on `ErrTrailingData`, #6.)
+- **A design debt is discharged by a tripwire, never by an intention.** The same
+  manoeuvre as the declared-and-tracked ruling above, pointed at *architecture*
+  instead of at a constant. Declining to share a structure is legitimate when the
+  second consumer doesn't exist yet — building it early means shaping it from its
+  only consumer's requirements, in the load-bearing spot. What makes that decline
+  honest is that the risk it accepts (two places knowing the same fact, drifting
+  silently) is **pre-registered as a failing test in the other work's definition of
+  done**, filed and milestoned at the deciding ADR's acceptance. "Convertible into
+  a failing test" is a claim about an obligation, not a hope, and the conversion is
+  scoped to the *whole* space rather than the cases today's work needs — a
+  cross-check narrowed to those is the overfitting failure applied to a control.
+  So: *prefer the risk a control can catch, then file the control.* (Ruling: Scott,
+  decision 0006; the tripwire is #33.)
+- **A control scoped to the current sample inherits the current blind spot; scope
+  controls to the space.** The general form of #33's widening: the condition asked
+  for agreement over the const-legal *subset*, which would have cross-checked the
+  eight opcodes the reader needs today and stayed green while saying nothing about
+  whatever opcode either side adds next — a control that freezes at the moment of
+  authorship. Scoped to all 256 single-byte opcodes plus the tracked multi-byte
+  prefixes, the coverage grows with the thing controlled. Same move as reflecting
+  over `Features` rather than listing today's gates: *derive the domain, never
+  enumerate it*, because an enumeration is a sample and a sample has a blind spot
+  by construction. This is the overfitting law (§9 G-3) turned on the controls
+  themselves rather than on the engine. (Ruling: Scott, decision 0006 / #33.)
 - **No cgo. Pure Go.** `make check` clean at every commit (see Tooling gates).
 - **Parsers prove progress, they don't assume it.** A loop whose exit condition
   and error condition are the same predicate is the zero-progress bug; it
@@ -259,6 +325,26 @@ the choice, and consequences once Scott has called it.
   non-zero on findings is asked for its status, a tool that reports on stdout and
   exits 0 is asked for its output, and capturing `2>&1` to test for non-empty
   confuses a cold module cache with a defect (grave, PR #21).
+- **A ruling retroactively falsifies prose written before it, so accepting a ruling
+  includes sweeping for the sentences it orphaned.** *Truth has a maintenance cost.*
+  `ci.yml` said the runner stalls were "tracked in #28's thread"; the no-issue
+  ruling made that false the moment it was given, and the sentence would have sat
+  there citing a tracking location that does not exist — the drifted-fixture-citation
+  defect wearing different clothes, since a citation nobody re-checks is a claim.
+  So a ruling is not applied when the decision is recorded; it is applied when
+  everything the decision contradicts has been found. Grep for the old answer, not
+  just for the place you expect it. (Ruling: Scott, #28.)
+- **Second-order honesty: apply the discipline to its own output.** Catching a
+  figure as fiction earns nothing if its replacement is quoted with the same
+  overconfidence. The ~70k/sec average was correctly called an artefact of a
+  bimodal distribution — and then replaced with one run's numbers, one witness
+  dressed as an environmental fact. The re-measurement is what separated the two
+  claims: *the shape reproduces, the numbers don't* — dead windows and sprint
+  bursts in both runs, peaks differing 2× (605k → 1.25M). So the shape is the
+  finding and the numbers are the weather, and a two-run range is the honest
+  representation of exactly that much knowledge. The sibling of *benchstat or it
+  didn't happen*, pointed at environmental measurement: n=1 cannot separate a
+  property from an accident of one scheduling. (#28.)
 - **Honest boards.** The PR description and the issue tracker reflect
   reality, including what's red. Never quote a suite count that wasn't run.
 - **Bucketed failures are the work plan.** A suite Board line reports pass /
