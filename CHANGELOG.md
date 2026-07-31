@@ -69,6 +69,11 @@ weakly-ordered platform.
   `go mod tidy` jobs; a weekly `nightly.yml` runs 10-minute fuzz per target and
   re-runs `govulncheck` against moving vulnerability data.
 - `-shuffle=on` on all test runs: test order is never load-bearing.
+- Two disciplines from the section-order work: **the spec is the objective
+  function; the suite samples it** — the oracle answers what it is asked and does
+  not define correctness, so pass count is never bought with a check that is wrong
+  about inputs the suite has no vector for — and **a verdict without an identity
+  check is hearsay**, which is why CI results are bound to the SHA they judge.
 - Three disciplines added to `CLAUDE.md` from this work: *parsers prove progress,
   they don't assume it*, *fixtures cite the suite, and the citations are
   checked*, and *verdict channel and mechanism channel are different instruments*
@@ -78,6 +83,20 @@ weakly-ordered platform.
   suppression wearing a disguise), and fuzz crashers are committed — the
   never-commit rule was about provenance, and a crasher is a grave's reproducer
   this project authored.
+
+- Decoder: **section order and uniqueness enforced**, and `ErrTrailingData` is
+  reachable at last — it had been declared-and-tracked since the genesis commit.
+  Order and duplicates are one predicate: section ranks must strictly increase,
+  so a repeated section fails for the same reason a misordered one does. The rank
+  table is deliberately **not** section-id order — the data count section is id 12
+  but the grammar places it before code (id 10), so ranking by id accepts a module
+  `binary.wast:1194` says is malformed. `binary.wast` **49/127 → 84/127**.
+- Decoder: malformed section ids rejected. The lookup that ranks a section is the
+  lookup that validates it, so ordering and id-legality are one table.
+- Decoder: cross-section count agreements — function/code body counts, and the
+  data count section against the data section. An absent section counts as zero,
+  which is what makes "one present, one absent" fall out of the same comparison
+  rather than needing its own case.
 
 ### Fixed
 - `parseString` returned a nil slice for the empty literal `""`, entangling
