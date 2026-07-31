@@ -19,11 +19,13 @@ import "fmt"
 //
 // with the *constant*-ness of the instructions a side condition checked by
 // validation, not by the grammar. The suite is unambiguous about which layer owns
-// which: `constant expression required` appears 22 times across global/elem/data/
-// array/func_ptrs.wast and **every occurrence is `assert_invalid`, never
+// which: `constant expression required` appears 24 times across global/elem/data/
+// array/func_ptrs.wast (7/7/6/2/2) and **every occurrence is `assert_invalid`, never
 // `assert_malformed`** (checked, not assumed — `(global f32 (f32.neg (f32.const 0)))`
 // at global.wast:298 is invalid, and `(global i32 (i32.const 0) (nop))` at :313 is
-// too). So:
+// too). The reference interpreter agrees structurally: its `const s` is
+// `instr_block s; end_ s` — the *full* instruction grammar, const-ness nowhere in the
+// decoder (`interpreter/binary/decode.ml:983`). So:
 //
 //   - A byte that is not an opcode at all is *malformed*, and this reader's error.
 //     binary.wast:345 is the vector: `\f3` in an element segment is "illegal opcode".

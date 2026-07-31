@@ -276,6 +276,48 @@ weakly-ordered platform.
   caught a real defect in the strictness helper — it reported a fail *and* a skip,
   because `Fatalf`-then-`Skip` leans on `runtime.Goexit` to not return.
 
+- **Decision 0007 (proposed) and `make spec-ref`: the reference interpreter as the
+  opcode table's authority.** The table #39 needs is ~530 immediate-shape facts, and
+  every suite vector bearing on it is `assert_malformed` — so a table that wrongly
+  *rejects* a valid opcode is invisible on the board by construction (contract §9
+  G-3). The principle is stamped and normative: **the table is machine-derived from,
+  or machine-checked against, the reference; hand-trusted is not on the menu.** The
+  ADR argues only the mechanism, and recommends a pure-Go extraction of
+  `decode.ml`'s arms — measured as tractable (504 arms, 368 with no immediates, a
+  16-reader immediate vocabulary, 4 genuinely irregular arms) and preferred because
+  no OCaml toolchain exists on the dev box or is assumed on runners.
+  Mechanism endorsed with **four conditions**, inherited by #39 as definition-of-done:
+  the extractor is born falsified *including a vacuity control* — an extraction
+  finding zero arms must fail, since a silently broken parser otherwise emits an empty
+  table and a drift check comparing empty to empty agrees perfectly; the four
+  irregular arms are cited or derived, being few earning no exemption from provenance;
+  the committed table carries a generation header (reference SHA, extractor version);
+  and CI asserts table equality against the pinned source, which is affordable
+  *because* the mechanism needs no toolchain.
+- `scripts/fetch-spec-ref.sh` vendors `WebAssembly/spec` **pinned by SHA**, verifying
+  the pin and the presence of `decode.ml` after every path rather than trusting the
+  fetch. The contrast with the unpinned suite fetch is stated at the site: the suite
+  is the thing being *reported*, so its drift moves the board loudly, while the
+  reference is an *input* to a generated table, where drift would arrive as a diff
+  nobody ordered. Falsified on all four paths, and the missing-file probe found a
+  real defect — the already-at-the-right-rev path returned early and skipped both
+  assertions, the precondition excusing the check that polices it.
+
+### Fixed
+- `binary.wast:112` is settled by asking the authority instead of reasoning about
+  it: `decode.ml`'s `sized` runs a section's payload grammar **unbounded** and
+  reconciles the declared extent afterwards, which is Burroughs' existing doctrine
+  exactly — so the doctrine and the vector never conflicted. `0x0a` is `throw_ref`,
+  decoded as a real instruction, and reading continues into the next section until
+  EOS yields "unexpected end of section or function". The reference also shows
+  `const s` is the *full* instruction grammar with const-ness left to validation,
+  which is why that vector currently fails with `ErrNonConstantExpr` — an honest
+  fail, not `ErrFeatureDisabled`, so it cannot hide in `gated`.
+- `constexpr.go` said `constant expression required` appears 22 times in the suite;
+  it appears **24** (global 7, elem 7, data 6, array 2, func_ptrs 2). The
+  load-bearing half of the claim was re-checked and holds — 0 occurrences under
+  `assert_malformed`, and both cited lines resolve as described.
+
 ### Added
 - **`derived` accepted as the third provenance category** — cited, derived,
   synthetic. A derived fixture is one the suite *implies* but does not contain:
