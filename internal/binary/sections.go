@@ -120,10 +120,16 @@ func (d *Decoder) decodePayload(sid SectionID, size uint32, r *reader) (bool, er
 			return false, featureErr("exception handling")
 		}
 		return false, nil
+	case SectionGlobal:
+		return true, d.decodeVec(r, d.decodeGlobal)
+	case SectionElement:
+		return true, d.decodeVec(r, d.decodeElemSegment)
+	case SectionData:
+		return true, d.decodeVec(r, d.decodeDataSegment)
 	default:
-		// Global, element, code, data. Each needs either constant expressions or
-		// instruction decoding; they are their own issues, and their vectors stay
-		// on the board until then.
+		// The code section, which needs full instruction decoding rather than the
+		// constexpr subset (#7/#22). Declared-and-tracked, as above: its vectors stay
+		// on the board.
 		return false, nil
 	}
 }

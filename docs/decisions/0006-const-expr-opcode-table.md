@@ -238,3 +238,41 @@ Declined, with the reason recorded so it is not relitigated silently:
 - **Option C** — a third package holding one map, before a second consumer, is
   option A's speculative-structure cost in miniature. Revisit only if the
   agreement test starts failing for reasons that are not bugs.
+
+---
+
+## Postscript: two corrections to the measured facts (added after #35)
+
+An ADR is an accepted record, so the text above stands as written. These are the
+places the implementation measured something different, appended rather than
+edited — the same rule the issue tracker follows, for the same reason: a record
+that can be rewritten cannot be cited.
+
+**1. The nine-vector table omits `binary.wast:345`.** That line is a passive
+element segment containing `\f3`, expecting `illegal opcode` — squarely a #25
+grammar and reached by the element-segment reader. The count in *Accepted* should
+read **ten** vectors, and #35's measured board is `binary.wast` 104/127 → 114/127,
+exactly +10. The omission happened because the table was assembled from the two
+buckets #25's body named, and :345's bucket (`illegal opcode`) was not one of them —
+which is the enumeration failure this ADR's own §33 widening warns about, committed
+in the ADR that argued against it.
+
+**2. `section size mismatch` goes 5 → 1, not 5 → 0.** The remaining vector is
+`binary.wast:92`, correctly identified above as a code-section vector; it is in this
+bucket rather than the *unexpected end* bucket the table places it in. So both
+buckets #25 was said to close stay open, at 1 and 3, and the honest statement is
+that #25 drains them to their code-section residue.
+
+**3. `:345` stays failing after #35, deliberately.** Not a shortfall against this
+ADR — a consequence of it. The reader cannot distinguish "no such opcode"
+(malformed, `illegal opcode`) from "real opcode, not constant" (invalid, `constant
+expression required`, which the suite asserts 22 times and always as
+`assert_invalid`) without the existence question answered over the whole opcode
+space. That is #7's table, which is precisely what this ADR declined to build early.
+So `ErrNonConstantExpr` matches no spec string, :345 keeps failing, and #33 is what
+will let it pass. The ADR's debt and this board line are the same fact seen twice.
+
+**4. `binary.wast:714` is not the grammar-long size sign.** The table above labels it
+so, following #25's body. Measured, it is `declared 11, grammar consumed 6` — the
+same sign as the type-section vector at :469. No suite vector exercises the
+grammar-long direction, which is grave #34.

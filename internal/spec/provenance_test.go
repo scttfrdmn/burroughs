@@ -42,6 +42,7 @@ func TestFixtureProvenance(t *testing.T) {
 	files := []string{
 		"../binary/binary_test.go",
 		"../binary/sections_test.go",
+		"../binary/constexpr_test.go",
 	}
 
 	// A citation is a comment of the form `// <file>.wast:<line>` anywhere on the
@@ -50,7 +51,7 @@ func TestFixtureProvenance(t *testing.T) {
 	// A byte-slice literal: {0x00, 0x61, ...}. Braces, hex bytes, commas only.
 	lit := regexp.MustCompile(`\{((?:\s*0x[0-9a-fA-F]{2}\s*,?)*)\}`)
 
-	var checked, synthetic int
+	var checked, checkedFragments, synthetic int
 	for _, f := range files {
 		src, err := os.ReadFile(f)
 		if err != nil {
@@ -82,23 +83,96 @@ func TestFixtureProvenance(t *testing.T) {
 				continue // a citation in prose, not on a vector
 			}
 			want := parseHexBytes(lm[1])
-			got, ok := suiteLine(suite, m[1], m[2])
+			if got, ok := suiteLine(suite, m[1], m[2]); ok {
+				// A whole module image: the citation names the `(module binary ...)`
+				// command's line and the fixture is the assembled image.
+				if !bytes.Equal(want, got) {
+					t.Errorf("%s:%d: fixture disagrees with its citation %s:%s\n\tfixture: % x\n\tsuite:   % x",
+						f, lineNo, m[1], m[2], want, got)
+					continue
+				}
+				checked++
+				continue
+			}
+			// Not a module-image line. A fixture may also cite a *fragment* — one
+			// source line inside a `(module binary ...)`, e.g. the element-segment
+			// encoding on elem.wast:360 — which is what a reader-level test needs when
+			// the unit under test is a segment grammar rather than a whole module.
+			//
+			// This is checkable too, and checking it is not a formality: the .wast
+			// source line holds the bytes as `"\hh"` escapes, so the fixture can be
+			// compared against them directly. Two of #25's seven fragment citations
+			// were off by several lines when first written, and that is the drift this
+			// file exists to catch — marking them `synthetic` instead would have
+			// declared the transcription unverifiable while a transcription is exactly
+			// the hazard. The alternative was accepting a citation nobody could
+			// confirm, which is the defect, not the fix.
+			got, ok := suiteSourceLine(t, m[1], m[2])
 			if !ok {
-				t.Errorf("%s:%d: citation %s:%s names no module image in the suite", f, lineNo, m[1], m[2])
+				t.Errorf("%s:%d: citation %s:%s resolves to neither a module image nor a readable suite source line",
+					f, lineNo, m[1], m[2])
 				continue
 			}
 			if !bytes.Equal(want, got) {
-				t.Errorf("%s:%d: fixture disagrees with its citation %s:%s\n\tfixture: % x\n\tsuite:   % x",
+				t.Errorf("%s:%d: fixture disagrees with the fragment at its citation %s:%s\n\tfixture:     % x\n\tsuite line:  % x",
 					f, lineNo, m[1], m[2], want, got)
 				continue
 			}
-			checked++
+			checkedFragments++
 		}
 	}
 	if checked == 0 {
 		t.Fatal("no citations checked — the regexes have drifted from the fixtures")
 	}
-	t.Logf("verified %d cited vectors, %d declared synthetic", checked, synthetic)
+	if checkedFragments == 0 {
+		t.Fatal("no fragment citations checked — the fragment path is dead, so its own control is vacuous")
+	}
+	t.Logf("verified %d cited module images, %d cited fragments, %d declared synthetic",
+		checked, checkedFragments, synthetic)
+}
+
+// suiteSourceLine returns the bytes encoded by the `"\hh"` escapes on one line of a
+// .wast file, for citations that name a fragment inside a module rather than the
+// module itself.
+//
+// It reads the raw source rather than going through the parser on purpose: the
+// parser assembles a module from its escape strings and discards which line each
+// came from, so the line-level fact is only available here. A line with no escapes
+// at all returns false — that is a citation pointing at prose, which is a drifted
+// citation and must fail rather than vacuously pass.
+func suiteSourceLine(t *testing.T, file, line string) ([]byte, bool) {
+	t.Helper()
+	n, err := strconv.Atoi(line)
+	if err != nil || n < 1 {
+		return nil, false
+	}
+	src, err := os.ReadFile(filepath.Join(suiteDir, file))
+	if err != nil {
+		return nil, false
+	}
+	lines := strings.Split(string(src), "\n")
+	if n > len(lines) {
+		return nil, false
+	}
+	// Only the quoted part: a trailing `;; comment` may hold hex-looking text.
+	text := lines[n-1]
+	if i := strings.Index(text, ";;"); i >= 0 {
+		text = text[:i]
+	}
+	esc := regexp.MustCompile(`\\([0-9a-fA-F]{2})`)
+	ms := esc.FindAllStringSubmatch(text, -1)
+	if len(ms) == 0 {
+		return nil, false
+	}
+	out := make([]byte, 0, len(ms))
+	for _, m := range ms {
+		v, err := strconv.ParseUint(m[1], 16, 8)
+		if err != nil {
+			return nil, false
+		}
+		out = append(out, byte(v))
+	}
+	return out, true
 }
 
 // TestEveryFixtureFileIsChecked guards the guard.
@@ -112,8 +186,9 @@ func TestFixtureProvenance(t *testing.T) {
 // on someone remembering to register their work is not a control.
 func TestEveryFixtureFileIsChecked(t *testing.T) {
 	checked := map[string]bool{
-		"../binary/binary_test.go":   true,
-		"../binary/sections_test.go": true,
+		"../binary/binary_test.go":    true,
+		"../binary/sections_test.go":  true,
+		"../binary/constexpr_test.go": true,
 	}
 
 	paths, err := filepath.Glob("../*/*_test.go")
