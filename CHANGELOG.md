@@ -69,6 +69,11 @@ weakly-ordered platform.
   `go mod tidy` jobs; a weekly `nightly.yml` runs 10-minute fuzz per target and
   re-runs `govulncheck` against moving vulnerability data.
 - `-shuffle=on` on all test runs: test order is never load-bearing.
+- Two disciplines from the section-order work: **the spec is the objective
+  function; the suite samples it** — the oracle answers what it is asked and does
+  not define correctness, so pass count is never bought with a check that is wrong
+  about inputs the suite has no vector for — and **a verdict without an identity
+  check is hearsay**, which is why CI results are bound to the SHA they judge.
 - Three disciplines added to `CLAUDE.md` from this work: *parsers prove progress,
   they don't assume it*, *fixtures cite the suite, and the citations are
   checked*, and *verdict channel and mechanism channel are different instruments*

@@ -94,7 +94,9 @@ Three separate mistakes are being avoided, and they were made in that order:
 2. **`gh pr checks --watch` races the run's creation.** It watches whatever checks
    exist *now*, so seconds after a push it finds the previous commit's run,
    reports pass, and exits 0 — a stale green. Always resolve the run id from the
-   pushed SHA. `--exit-status` then makes failure non-zero.
+   pushed SHA. `--exit-status` then makes failure non-zero. This is *a verdict
+   without an identity check is hearsay*: binding the verdict to the SHA it
+   judges is the CI face of stamp-don't-deduce.
 3. **Blocking the tool call wastes the wait.** Watch with `run_in_background` and
    keep working; the completion arrives as a notification. A five-minute CI run
    should cost five minutes of *CI*, not five minutes of doing nothing.
@@ -163,6 +165,19 @@ the choice, and consequences once Scott has called it.
   Decisions Scott must make are flagged in reports, not made for him.
 - **The suite is the oracle.** A feature exists when its spec tests pass.
   Claims of correctness cite counts (`N/N green`), not impressions.
+- **The spec is the objective function; the suite samples it.** The oracle
+  answers the questions it is asked — it does not define correctness. So never
+  buy pass count with a check that is wrong about inputs the suite has no vector
+  for: that is overfitting to the oracle, and it is invisible on the board by
+  construction. A decoder that rejects valid modules is worse than one that
+  misses an invalid one. When the cheap check would pass the vectors and be
+  wrong in general, leave the bucket open and say why (contract §9 G-3; the
+  ruling on `data count section required`, #22).
+- **A verdict without an identity check is hearsay.** Bind a result to the thing
+  it judges: the question is never "is it green," it is "is *this commit*
+  green." A mechanism that cannot prove which run it is quoting is not a
+  witness. A wait that returns the wrong run's verdict is worse than one that is
+  merely slow — see *Waiting on CI* for the shape this took in practice.
 - **Gates.** Proposals land behind build tags / config gates; acceptance is
   the proposal's own suite green (contract §9). Nothing defaults on
   without it.
