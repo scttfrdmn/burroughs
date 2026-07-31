@@ -68,6 +68,27 @@ Whichever option is chosen, it pins its reference by SHA. Whether to retrofit
 pinning onto the suite fetch is a separate question, filed as #42 — noted here rather
 than fixed in passing, since it is not this ADR's subject.
 
+**Provenance of the error, since a correction with no owner teaches nothing.**
+chat-Claude claimed it: a reviewer's premise transcribed from *intention* rather than
+checked against the tree — the drifted-citation defect committed from the review chair
+rather than from the keyboard. Which is the useful part. This project's controls
+assume the reviewer is the check on the author, and this is the case where the
+review's own factual claim was the defect, invisible to a reviewer verifying code
+against claims because the claim was the thing that was wrong. The same camouflage as
+0003's *defect stated as the rule*, one seat over.
+
+The correction is also **not** "make the two match", and that distinction is the
+substance. Manufacturing the consistency the prose asserted would have satisfied the
+sentence and lost the reason; pinning the reference on its own correct ground and
+naming the asymmetry keeps both. A subsequent ruling (chat-Claude, on this PR) leans
+toward pinning the suite too, on a stronger argument than the original: a floating
+suite makes board drift *visible* but not *attributable* — when a count moves,
+"upstream added vectors" and "we regressed" are indistinguishable without knowing the
+corpus identity, and *measured-not-remembered requires knowing what was measured
+against*. That argument belongs to #42, where it is recorded; it is noted here only
+because it shows the corrected premise being replaced by a better one rather than by
+its negation.
+
 ### There is no OCaml toolchain, and assuming one is a real cost
 
     ocaml ocamlfind ocamlbuild dune opam ocamlc  →  all ABSENT
@@ -176,6 +197,39 @@ build instead of quietly shrinking the table. Second, the drift check makes the
 reference a *live* authority rather than a one-time influence, which is exactly the
 property hand-transcription lacks.
 
+### B's four conditions
+
+Endorsed by chat-Claude on the merits rather than as toolchain convenience, subject to
+four conditions. They are conditions on the *ADR*, so they are recorded here and
+inherited by #39 as definition-of-done rather than restated there.
+
+1. **The extractor is born falsified, including the vacuity control.** Every assertion
+   it makes gets the defect introduced and the failure watched, before the table is
+   trusted. The vacuity case is the one that would otherwise pass for the wrong
+   reason: **an extraction finding zero arms must fail.** A silently broken parser —
+   an upstream refactor, a changed indent, a moved file — otherwise emits an *empty*
+   table and a drift check comparing empty to empty agrees perfectly. That is a green
+   wearing the shape of a control while asserting nothing, which is the
+   `requireSuite` grave (#29) relocated into a code generator. A floor on the arm
+   count, per region, is the cheap form.
+2. **The four irregular arms get the provenance treatment.** `block`, `loop`,
+   `if`/`else`, and `try_table` are hand-written under any mechanism, which means they
+   are exactly the facts the extractor does not machine-check — so they are **cited**
+   to their `decode.ml` line numbers, or **derived** with premises stated, in the same
+   scheme `TestFixtureProvenance` already enforces for fixtures. Hand-written and
+   uncited is the category this ADR exists to abolish; the four arms do not get an
+   exemption for being few.
+3. **The committed table carries a generation header:** the reference SHA it was
+   extracted from and the extractor version. Stamp-don't-deduce, applied to a
+   generated artifact — a table whose provenance has to be reconstructed from git
+   archaeology is a table whose authority is hearsay. The header is what lets a reader
+   of the *file* answer "which authority, at which revision" without leaving it.
+4. **CI re-runs the extractor against the pinned vendored source and asserts table
+   equality.** Drift becomes a build failure rather than a diff nobody ordered. This
+   is cheap *precisely because* B needs no toolchain — the same property that
+   recommends B is what makes its continuous check affordable, where C pays a build
+   cost for a check that arrives late.
+
 ## Consequences
 
 - `third_party/spec` becomes a **pinned** fetch (`scripts/fetch-spec-ref.sh` +
@@ -192,13 +246,29 @@ property hand-transcription lacks.
   runs it, so it is not optional; it is the other half of the mirror. If the skip
   routes through Go at all it routes through `internal/testenv`, which is the one
   licensed door.
-- The extractor's unrecognized-arm error is load-bearing and gets its own test:
-  feed it a synthetic arm shape it should reject, and confirm it does. Per CLAUDE.md
-  — *a control's green must be falsifiable, and the way to know is to break it.*
+- The extractor's controls are subject to **condition 1** above, which subsumes what
+  this bullet said in an earlier draft (feed it a synthetic arm shape it should
+  reject). The unrecognized-arm error is still load-bearing and still gets that test —
+  but on its own it is insufficient, because it cannot fire on the failure mode where
+  the extractor recognizes *nothing*. The vacuity control is the addition, and the
+  narrower version is not the requirement.
 - Gated opcodes stay gated. The table says what shape a byte has; `Features` says
   whether it is accepted. A gate-off engine meeting a GC or SIMD opcode still
   reports a feature-named error, never a spoofed spec string.
-- #33's agreement test lands in the same PR as the table, per 0006.
+- **#33's agreement test lands in the same PR as the table (per 0006), and its scope
+  must note the dissolution.** The obligation was filed to catch two readers drifting
+  — `constExprOps` and #39's full table — but the postscript below changes what the
+  first one *is*: the reference defers const-ness to validation, so once the full table
+  exists `decodeConstExpr`'s narrow accept set **dissolves** rather than persisting as
+  a second opinion to be cross-checked. So the agreement test's subject is not "do the
+  two tables agree about the const-legal subset" — that is the version scoped to
+  today's sample, and 0006/#33 already widened it once for exactly this reason. It is
+  "does the *one* table, now the only opcode authority, agree with the reference across
+  all 256 single-byte opcodes and the tracked prefixes." A tripwire whose subject
+  disappeared is discharged by re-pointing it, not by closing it: the drift risk it
+  named is now the extractor-versus-reference risk, which is condition 4. Record that
+  on #33 when the table lands, so the obligation tracks the shape rather than the
+  filing.
 - **Not fixed here:** the suite fetch's own lack of pinning — #42.
 
 ## Postscript: what the authority already settled

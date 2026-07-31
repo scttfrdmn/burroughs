@@ -254,6 +254,30 @@ the choice, and consequences once Scott has called it.
   skip, because `Fatalf`-then-`Skip` leans on `runtime.Goexit` to not return. The
   first was caught by probing, the second by a `testing.TB` fake. Neither was caught
   by the suite, because the suite was never asked.
+- **A comparison against an empty set succeeds, so a control that compares needs a
+  vacuity check.** The falsifiability law's blind spot, and it is not covered by
+  breaking the assertion — you can introduce a defect, watch the control fail, and
+  still have a control that passes when it is fed *nothing*. A generated-table drift
+  check comparing extractor output to a committed table agrees perfectly when the
+  extractor finds zero arms, which is what a moved file or a changed indentation
+  produces: an empty table and a green board, the mechanism intact and asserting
+  nothing. So any control whose verdict is an agreement, a count, or a comparison
+  asserts its input is **non-empty and plausibly sized** — a per-region floor, not just
+  a non-nil check. This is *a skip is not a verdict* for code that never had a skip in
+  it: the degenerate case is the skip, one step quieter still, because nothing even
+  logs. Sibling of the early-return grave (#41's fetch script), where a fast path
+  skipped the assertions it existed to run. (Condition on decision 0007; chat-Claude,
+  #41.)
+- **A tripwire whose subject dissolves is re-pointed, never closed.** A pre-registered
+  control names a *risk*, not a code shape, so when the shape it was filed against
+  disappears the obligation survives its subject. #33 was filed to catch two opcode
+  readers drifting; the reference interpreter defers const-ness to validation, so the
+  narrow reader **dissolves** into the full table rather than persisting as a second
+  opinion — and the drift risk simply moved, to extractor-versus-reference. Closing it
+  as "no longer applicable" would retire a live risk on a technicality. The re-pointing
+  is also where scope creep back inward gets caught: the re-aimed control is scoped to
+  the *space* (all 256 single-byte opcodes and the tracked prefixes), never to the
+  subset today's code touches. (Directive: chat-Claude, #41.)
 - **A test named for a partition must be checked against the partition, not against
   its own case labels.** The coverage cousin of the rule above: there, a green
   survives the bug it names; here, a green covers less than its name claims, and the

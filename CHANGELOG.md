@@ -286,6 +286,14 @@ weakly-ordered platform.
   `decode.ml`'s arms — measured as tractable (504 arms, 368 with no immediates, a
   16-reader immediate vocabulary, 4 genuinely irregular arms) and preferred because
   no OCaml toolchain exists on the dev box or is assumed on runners.
+  Mechanism endorsed with **four conditions**, inherited by #39 as definition-of-done:
+  the extractor is born falsified *including a vacuity control* — an extraction
+  finding zero arms must fail, since a silently broken parser otherwise emits an empty
+  table and a drift check comparing empty to empty agrees perfectly; the four
+  irregular arms are cited or derived, being few earning no exemption from provenance;
+  the committed table carries a generation header (reference SHA, extractor version);
+  and CI asserts table equality against the pinned source, which is affordable
+  *because* the mechanism needs no toolchain.
 - `scripts/fetch-spec-ref.sh` vendors `WebAssembly/spec` **pinned by SHA**, verifying
   the pin and the presence of `decode.ml` after every path rather than trusting the
   fetch. The contrast with the unpinned suite fetch is stated at the site: the suite
