@@ -136,13 +136,45 @@ inside the bands) where in-place pays 14%.
   `require github.com/scttfrdmn/burroughs v0.0.1`. The project would depend on a
   published copy of itself to lint itself. `go get -tool` is what maintains that
   file; `tidy` damages it. Found by running it.
+
+  *For the future* (Scott, PR #21): a tools modfile that can see its own module
+  through the proxy is a **known sharp edge of the tool-directive pattern**, not
+  a local accident. `go mod tidy -diff` semantics differ between these two files
+  precisely because `go get -tool` owns the tools file and `tidy` owns the engine
+  file. The rule the gate encodes is **one file per authority** — if this bites
+  again, that is the question to ask first: which command owns this file?
 - **`deadcode` (x/tools)** — the unreachable-error grave promoted to a tool.
   A finding is a *classification question*, not automatically a bug: declared
   and tracked passes, silent fails. CI allowlists only `reader.u64` (#19).
+
+  *Allowlist form* (ruling: Scott, PR #21): inline with a comment while there
+  are one or two entries; **at the third it becomes `tools/deadcode-allow.txt`
+  with a reason per entry.** The threshold is not really the number — it is that
+  an inline allowlist cannot hold justifications, and an unexplained allowlist
+  entry is the unreachable-error pattern wearing a new disguise: a suppression
+  nobody has to defend. Same shape as `nolintlint`'s `require-explanation`.
 - Doc comments on all exported identifiers (`revive`'s `exported` rule).
 - `internal/` stays internal — which the toolchain enforced during this very
   change, refusing to let a throwaway verification script import
   `internal/spec`.
+
+### 8a. Read each channel for what it carries
+
+Two gates in this very change reported a violation that did not exist, because
+they captured `2>&1` and tested for non-empty output: `go: downloading ...` on a
+cold module cache is not a finding. The generalization, which is now a discipline
+in `CLAUDE.md`:
+
+> **Verdict channel and mechanism channel are different instruments.** *An exit
+> code is not a mechanism* — the verdict channel cannot tell you **why**. *Don't
+> infer a verdict from noise* — the output channel cannot tell you **whether**.
+
+So each tool is asked in its own language. `golangci-lint fmt --diff` exits
+non-zero when it would reformat, so the exit code *is* the verdict and capturing
+output is pure downside. `deadcode` reports on stdout and exits 0, so there the
+output *is* the verdict — and must be read as stdout only, `2>/dev/null`.
+Substituting one channel for the other is how a gate lies in both directions: a
+false finding from noise, or a missed finding from a status nobody checked.
 
 ### 9. Toolchain currency is a gated upgrade
 
@@ -195,9 +227,12 @@ version becomes invisible locally and local/CI verdicts drift. Rejected.
   wall-clock, run in parallel; the fuzz smoke test needs the suite vendored, so
   it fetches.
 - **Fuzz corpora live in `testdata/fuzz/` when a crasher is found** and *are*
-  committed — a crasher is a regression test, unlike the upstream corpora which
-  stay gitignored. The distinction: we authored the crasher, we vendored the
-  suite.
+  committed (ruling: Scott, PR #21). The never-commit rule was about
+  **provenance**, not test data as such: upstream material this project does not
+  own stays vendored and gitignored. A crasher is authored here, it is a grave's
+  reproducer, and Go's own convention (`testdata/fuzz/FuzzX/`) expects it
+  in-tree. Committing crashers makes `label:type:grave` executable — the
+  graveyard's annex.
 - **The tools found three real problems on adoption**, which is the argument for
   the whole exercise: an unused-and-untracked `u64` (#19), a nil-vs-empty
   ambiguity in `parseString` found by `FuzzWastLexer` on its first run, and — via

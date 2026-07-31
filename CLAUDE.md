@@ -153,6 +153,13 @@ the choice, and consequences once Scott has called it.
   verifies is a claim, not a citation — two vectors claiming to be "verbatim"
   had drifted, one truncated from 11 bytes to 8. Prefer deriving corpora from
   the suite at run time: no transcription step, no drift.
+- **Verdict channel and mechanism channel are different instruments.** *An exit
+  code is not a mechanism* — the verdict channel can't tell you why. *Don't infer
+  a verdict from noise* — the output channel can't tell you whether. Read each
+  for what it carries and never substitute one for the other: a tool that exits
+  non-zero on findings is asked for its status, a tool that reports on stdout and
+  exits 0 is asked for its output, and capturing `2>&1` to test for non-empty
+  confuses a cold module cache with a defect (grave, PR #21).
 - **Honest boards.** The PR description and the issue tracker reflect
   reality, including what's red. Never quote a suite count that wasn't run.
 - **Bucketed failures are the work plan.** A suite Board line reports pass /
@@ -187,12 +194,19 @@ remembering decays across session boundaries:
   This is the `ErrTrailingData` ruling applied to lint.
 - **Fuzzing is standard equipment.** Every decoder and reader gets a target;
   corpora seed **from the spec suite at run time**, never hand-typed. Short fuzz
-  per PR, 10-minute runs weekly. A crasher is committed to `testdata/fuzz/` —
-  it's a regression test we authored, unlike the gitignored upstream corpora.
+  per PR, 10-minute runs weekly. **Crashers are committed** to
+  `testdata/fuzz/FuzzX/` — the never-commit-corpora rule is about *provenance*,
+  not test data: upstream material we don't own stays vendored, but a crasher is
+  authored here, it's a grave's reproducer, and Go's own convention expects it
+  in-tree. It is the graveyard's executable annex. (Ruling: Scott, PR #21.)
 - **benchstat or it didn't happen.** Performance claims cite `make bench`
   (n≥10, with variance bands), never a single run.
 - **`deadcode` findings are classification questions**, not automatic bugs:
-  declared-and-tracked passes, silent fails.
+  declared-and-tracked passes, silent fails. The allowlist is inline while it has
+  one or two entries and **becomes `tools/deadcode-allow.txt`, reason per entry,
+  at the third** — the threshold isn't the count, it's that an inline allowlist
+  can't hold justifications, and an unexplained entry is the unreachable-error
+  pattern again: a suppression wearing a disguise. (Ruling: Scott, PR #21.)
 - **Toolchain currency is a gated upgrade** — Go 1.27 and future linter majors
   land as their own branch with both arches green and a changelog entry. Never a
   drive-by bump in a PR about something else.

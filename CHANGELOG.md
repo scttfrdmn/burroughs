@@ -69,9 +69,15 @@ weakly-ordered platform.
   `go mod tidy` jobs; a weekly `nightly.yml` runs 10-minute fuzz per target and
   re-runs `govulncheck` against moving vulnerability data.
 - `-shuffle=on` on all test runs: test order is never load-bearing.
-- Two disciplines added to `CLAUDE.md` from this work: *parsers prove progress,
-  they don't assume it*, and *fixtures cite the suite, and the citations are
-  checked*.
+- Three disciplines added to `CLAUDE.md` from this work: *parsers prove progress,
+  they don't assume it*, *fixtures cite the suite, and the citations are
+  checked*, and *verdict channel and mechanism channel are different instruments*
+  — an exit code can't tell you why, and output can't tell you whether.
+- Two rulings recorded in decision 0005: the `deadcode` allowlist becomes a file
+  with a reason per entry at its third entry (an unexplained allowlist entry is a
+  suppression wearing a disguise), and fuzz crashers are committed — the
+  never-commit rule was about provenance, and a crasher is a grave's reproducer
+  this project authored.
 
 ### Fixed
 - `parseString` returned a nil slice for the empty literal `""`, entangling
