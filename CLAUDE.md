@@ -76,7 +76,12 @@ session. Anything Scott must decide is *flagged*, never decided for him.
 pushing, resolve the run for `HEAD` and watch it detached:
 
 ```bash
-RUN=$(gh run list --commit "$(git rev-parse HEAD)" --limit 1 --json databaseId -q '.[0].databaseId')
+SHA=$(git rev-parse HEAD)
+for _ in $(seq 30); do   # the run takes a moment to appear; poll, don't guess
+  RUN=$(gh run list --commit "$SHA" --limit 1 --json databaseId -q '.[0].databaseId')
+  [ -n "$RUN" ] && break
+  sleep 2
+done
 gh run watch "$RUN" --compact --exit-status   # run this with run_in_background
 ```
 
@@ -97,6 +102,13 @@ Three separate mistakes are being avoided, and they were made in that order:
 The first two are *verdict channel and mechanism channel are different
 instruments* applied to time and to identity: ask the right channel, and ask it
 about the right run.
+
+The one honest timer is the `sleep 2` inside that loop: GitHub has no
+"run created" event to block on, so appearance genuinely has to be *polled*. Note
+the difference — the loop re-asks a real question until it gets an answer and
+gives up loudly after a bounded wait, where a bare `sleep` asserts an answer. When
+no completion signal exists, poll for the condition; never stand in for it with a
+duration.
 
 ## Versioning and the changelog
 
