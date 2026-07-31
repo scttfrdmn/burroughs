@@ -66,6 +66,31 @@ weakly-ordered platform.
   figure as fiction earns nothing if its replacement carries the same
   overconfidence; n=1 cannot separate a property of an environment from an accident
   of one scheduling.
+- `internal/binary`: the `constexpr` production and the three section grammars that
+  need it — global, element, and data (#25). A constant expression is not
+  length-prefixed; its extent is discovered by reading instructions to the END
+  opcode, which is why those sections could not be decoded until the decoder knew
+  opcodes at all. **`binary.wast` 104/127 → 114/127; `binary-leb128.wast` 57/91 →
+  73/91; phase 1 total 707 → 733 pass.** `section size mismatch` 5→1, `unexpected
+  end of section or function` 6→3, `integer too large` 22→12 in leb128.
+- A signed LEB128 reader (`sleb`/`s32`/`s64`), which is **not `uleb` with a cast**:
+  it sign-extends, and its range check is *two-sided* — the out-of-width bits of the
+  last byte must all match the sign rather than all be zero. That is the bulk of the
+  `binary-leb128.wast` gain, since the const-expr immediates are where signed values
+  first appear.
+- Element-segment flags decoded as a **bitfield**, with the type-field presence rule
+  (`flags&(passive|explicit) != 0`) derived from every element-segment encoding the
+  suite contains rather than patched per failing vector. Two cheaper rules each fit
+  all but one row; the table of six encodings and which row kills which rule is in
+  the code, and all six are pinned as fixtures.
+- `TestFixtureProvenance` now verifies **fragment citations** — a `<file>.wast:N`
+  naming one source line inside a `(module binary ...)`, which is what a
+  reader-level test needs when the unit under test is a segment grammar rather than
+  a whole module. The bytes are compared against the `"\hh"` escapes on that line.
+  It caught two of #25's seven fragment citations pointing several lines off the
+  moment it was written. The alternative — marking them `synthetic` — would have
+  declared a transcription unverifiable when a transcription is precisely the hazard
+  the file exists for.
 - Decision 0005: tooling gates. Quality is enforced by pinned tools wired into
   CI rather than left to habit, because a convention that depends on
   remembering decays across session boundaries.

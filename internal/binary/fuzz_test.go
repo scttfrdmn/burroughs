@@ -54,6 +54,17 @@ var declaredErrors = []error{
 	// The name grammar (#26): a name's bytes must be well-formed UTF-8.
 	ErrMalformedUTF8,
 
+	// The constexpr production and the three sections that need it (#25).
+	// ErrNonConstantExpr is the one that names the *reader's* limit rather than a
+	// spec verdict — it covers both "no such opcode" (malformed) and "real opcode,
+	// not constant" (invalid), which this layer cannot tell apart without #7's
+	// table. Declared here for the same reason as the rest: the question is what the
+	// decoder is allowed to return.
+	ErrMalformedElemFlags,
+	ErrMalformedElemKind,
+	ErrMalformedDataFlags,
+	ErrNonConstantExpr,
+
 	// ErrFeatureDisabled is a declared error but not a malformed-verdict: it means
 	// the decoder declined to judge. Listed here because the fuzz target's question
 	// is "is this error one the decoder is allowed to return", and it is.
@@ -165,6 +176,85 @@ func FuzzULEB(f *testing.F) {
 		if r.off < 1 || r.off > maxBytes {
 			t.Fatalf("uleb(%d) consumed %d bytes for % x, want 1..%d", bits, r.off, b, maxBytes)
 		}
+	})
+}
+
+// FuzzConstExprProgress drives the const-expression reader directly, because it is
+// the decoder's only *unbounded* loop and therefore the only place the zero-progress
+// shape (grave #18) can appear here.
+//
+// The loop's exit predicate (END) and its error predicate (byte not in the table)
+// are deliberately different expressions, so progress is structural — but "the code
+// looks right" is what grave #18 also looked like, and the discipline asks for a
+// target rather than an argument. Two properties, and the second is the one the
+// suite cannot ask about:
+//
+//  1. Termination and progress: return means at least one byte consumed. A reader
+//     that returns nil having consumed nothing would make the caller's vec loop spin.
+//  2. Declared errors only, and never a spec-string spoof. The const-expr reader is
+//     the site of the featureErr manoeuvre, so the *text* is load-bearing, not just
+//     the identity — an error text drifting into "illegal opcode" would silently
+//     convert a declined verdict into a claimed one.
+//
+// Seeded from valid encodings and from the two rejection classes. The corpus for
+// this target is small by construction: these are extracted expression bytes, not
+// module images, so there is nothing in the suite to derive them from — which is why
+// TestConstExprExtentIsDiscovered carries the width assertions instead.
+func FuzzConstExprProgress(f *testing.F) {
+	for _, s := range [][]byte{
+		{0x0B},             // bare end
+		{0x41, 0x00, 0x0B}, // i32.const 0
+		{0x41, 0x7F, 0x0B}, // i32.const -1
+		{0x42, 0x80, 0x80, 0x80, 0x80, 0x78, 0x0B}, // i64.const, multibyte sleb
+		{0x43, 0x00, 0x00, 0x80, 0x3F, 0x0B},       // f32.const
+		{0x44, 0, 0, 0, 0, 0, 0, 0xF0, 0x3F, 0x0B}, // f64.const
+		{0x23, 0x00, 0x0B},                         // global.get
+		{0xD0, 0x70, 0x0B},                         // ref.null funcref
+		{0xD2, 0x00, 0x0B},                         // ref.func
+		{0x41, 0x01, 0x41, 0x02, 0x0B},             // two instructions
+		{0x92, 0x0B},                               // f32.add: real opcode, not const
+		{0xF3, 0x0B},                               // no such opcode
+		{0x41},                                     // truncated immediate
+		{},                                         // empty: no END at all
+	} {
+		f.Add(s)
+	}
+
+	f.Fuzz(func(t *testing.T, b []byte) {
+		d := &Decoder{}
+		r := &reader{b: b, eof: ErrPayloadEnd}
+		err := d.decodeConstExpr(r)
+
+		if r.off == 0 {
+			// Zero bytes consumed is only defensible on an empty input, where there
+			// was nothing to consume. Anything else is the zero-progress bug.
+			if len(b) != 0 {
+				t.Fatalf("consumed 0 of %d bytes (err=%v) for % x — a reader that neither progresses nor fails is the shape of grave #18", len(b), err, b)
+			}
+			return
+		}
+
+		if err == nil {
+			// Success means an END was reached, so the last byte consumed is one.
+			if b[r.off-1] != opEnd {
+				t.Fatalf("accepted % x consuming %d bytes, but byte %d is %#02x, not END", b, r.off, r.off-1, b[r.off-1])
+			}
+			return
+		}
+
+		for _, want := range []error{ErrTruncated, ErrPayloadEnd, ErrLEBTooLong, ErrLEBOverflow, ErrMalformedRefType, ErrNonConstantExpr} {
+			if errors.Is(err, want) {
+				// The spoof check, on every input rather than the four in the unit
+				// test: this layer must never claim a verdict it did not compute.
+				for _, spoof := range []string{"illegal opcode", "constant expression required"} {
+					if strings.Contains(err.Error(), spoof) {
+						t.Fatalf("error %q for % x contains %q — the constexpr reader cannot distinguish malformed from invalid, so it must claim neither", err, b, spoof)
+					}
+				}
+				return
+			}
+		}
+		t.Fatalf("undeclared constexpr error %q for % x", err, b)
 	})
 }
 

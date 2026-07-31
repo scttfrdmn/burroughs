@@ -114,6 +114,29 @@ var (
 	// hold those bytes — a decoder rejecting valid modules is worse than one
 	// missing an invalid one. Reachable when function bodies are decoded (#22).
 	ErrDataCountRequired = errors.New("data count section required")
+
+	// The malformed-form errors of the const-expression grammars (#25).
+	ErrMalformedElemFlags = errors.New("malformed element segment flags")
+	ErrMalformedElemKind  = errors.New("malformed element kind")
+	ErrMalformedDataFlags = errors.New("malformed data segment flags")
+
+	// ErrNonConstantExpr is a byte inside a constant expression that the constexpr
+	// reader does not accept.
+	//
+	// Deliberately not a suite malformed-string, and the reason is the same shape as
+	// ErrFeatureDisabled's. Two cases reach it — a byte that is no opcode at all
+	// (malformed, "illegal opcode") and a real opcode that is not constant (invalid,
+	// "constant expression required", which the suite asserts 22 times and always as
+	// assert_invalid) — and distinguishing them needs the existence question answered
+	// over the whole opcode space, which is #7's table.
+	//
+	// So the module is rejected (accept-and-ignore would break the extent, and every
+	// size check downstream with it) while the error claims only what this layer
+	// knows. The consequence is on the board and stays there: binary.wast:345 wants
+	// "illegal opcode" and keeps failing until #7 lands. Spoofing the string would
+	// buy that vector and report malformed for `(global f32 (f32.neg (f32.const 0)))`
+	// — the accept direction the suite cannot catch. See #22's ruling and §9 G-3.
+	ErrNonConstantExpr = errors.New("constexpr: opcode not in the constant subset")
 )
 
 // SectionID identifies a module section (Wasm 3.0 numbering).
@@ -255,12 +278,32 @@ func (r *reader) byte() (byte, error) {
 // name is byteVec plus a predicate, and keeping them separate is what stops the
 // predicate from being applied to bytes that were never text.
 func (r *reader) byteVec() ([]byte, error) {
+	return r.byteVecErr(ErrSectionOverrun)
+}
+
+// byteVecErr is byteVec with the overrun error chosen by the caller, because the
+// suite gives the same shape two different strings and the field's role is what
+// decides which.
+//
+// Both vectors are a declared length exceeding the bytes left in the image:
+//
+//   - binary.wast:754 — an export *name* of 10 bytes with 8 left: "length out of
+//     bounds".
+//   - binary.wast:877 — a data segment's *contents* of 7 bytes with 6 left:
+//     "unexpected end of section or function".
+//
+// n=2, which is thin, so this is a parameter rather than a rule inferred from two
+// points: the difference tracks name-vs-vec(byte), the same seam the UTF-8 predicate
+// sits on (TestByteVecIsNotAName), and each call site states its own choice instead of
+// one branch here guessing from context. If a third vector contradicts the split, the
+// fix is at one call site rather than in a predicate that had over-generalised.
+func (r *reader) byteVecErr(overrun error) ([]byte, error) {
 	n, err := r.u32()
 	if err != nil {
 		return nil, err
 	}
 	if uint64(n) > uint64(r.remaining()) {
-		return nil, fmt.Errorf("%w: %d bytes declared, %d left", ErrSectionOverrun, n, r.remaining())
+		return nil, fmt.Errorf("%w: %d bytes declared, %d left", overrun, n, r.remaining())
 	}
 	return r.bytes(int(n))
 }
@@ -356,6 +399,78 @@ func (r *reader) u32() (uint32, error) {
 //
 //nolint:unused // tracked in #19; awaits i64 immediates (#7) / memory64 gate
 func (r *reader) u64() (uint64, error) { return r.uleb(64) }
+
+// sleb reads a signed LEB128 integer of the given bit width.
+//
+// Not uleb with a cast: the two differ in *both* halves of the malformed taxonomy,
+// which is the grave-0003 lesson (see uleb) restated for the signed case.
+//
+//   - Sign extension: the final byte's payload is extended from its high bit, so
+//     `\7f` is -1 at width 32, not 127.
+//   - The overflow check is two-sided. On the last permitted byte the unused high
+//     bits must be *all zero or all one*, matching the sign — where the unsigned
+//     check requires all zero. `\80\80\80\80\10` is the i32 vector at
+//     binary.wast:125 ("integer too large"): 0x10 has bit 4 set, which is neither a
+//     legal positive nor a legal negative extension at width 32. A reader that
+//     reused the unsigned rule would reject some valid negatives and accept that.
+//
+// Same ordering rule as uleb: the continuation bit is "representation too long" and
+// is tested before the range check, so the two malformed classes stay distinct.
+func (r *reader) sleb(bits uint) (int64, error) {
+	maxBytes := int((bits + 6) / 7)
+	var v int64
+	var shift uint
+	for i := range maxBytes {
+		c, err := r.byte()
+		if err != nil {
+			return 0, err
+		}
+		if i == maxBytes-1 {
+			if c&0x80 != 0 {
+				return 0, ErrLEBTooLong
+			}
+			// The payload bits of this byte that fall outside the width must all equal
+			// the sign bit that the width does reach — all zero for a positive value,
+			// all one for a correct negative sign extension.
+			//
+			// Both sides are compared in the same frame — shifted down to bit 0 —
+			// because the first version of this check masked the high bits in place
+			// and compared them against a constant shifted differently, which
+			// rejected min-int32 (`\80\80\80\80\78`, all three out-of-width bits set
+			// as a correct sign extension). Caught by the min/max int32 rows in
+			// TestSlebIsNotUlebWithACast, which is why they are there.
+			if used := bits - shift; used < 7 {
+				high := c & 0x7F >> used    // the out-of-width bits, at bit 0
+				sign := c >> (used - 1) & 1 // the sign bit the width reaches
+				all := byte(0x7F >> used)   // that many ones
+				if (sign == 0 && high != 0) || (sign == 1 && high != all) {
+					return 0, ErrLEBOverflow
+				}
+			}
+		}
+		v |= int64(c&0x7F) << shift
+		shift += 7
+		if c&0x80 == 0 {
+			// Sign-extend from the last payload bit consumed.
+			if shift < 64 && c&0x40 != 0 {
+				v |= -1 << shift
+			}
+			return v, nil
+		}
+	}
+	// Unreachable for the same reason as uleb's tail: the last-byte branch returns on
+	// every path. Kept as the same kind of guard.
+	return 0, ErrLEBTooLong
+}
+
+// s32 reads a signed LEB128-encoded 32-bit integer — an i32.const immediate.
+func (r *reader) s32() (int32, error) {
+	v, err := r.sleb(32)
+	return int32(v), err
+}
+
+// s64 reads a signed LEB128-encoded 64-bit integer — an i64.const immediate.
+func (r *reader) s64() (int64, error) { return r.sleb(64) }
 
 // DecodeModule decodes a complete module image under v0's default gate posture:
 // every 3.0 proposal gate present and off (contract §9).
