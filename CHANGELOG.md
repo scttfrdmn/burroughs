@@ -62,8 +62,11 @@ weakly-ordered platform.
   consumes ≥1 byte). Corpora seed from the spec suite at run time — 809 module
   images from 257 files, no transcription step.
 - `TestFixtureProvenance` machine-checks the `binary.wast:N` citations in
-  hand-written fixtures against the suite: 19 cited vectors verified, 2
-  declared synthetic.
+  hand-written fixtures against the suite: 62 cited vectors verified, 7
+  declared synthetic. `TestEveryFixtureFileIsChecked` guards the guard — the
+  file list it reads is hand-maintained, so a new fixture file nobody registers
+  would be silently unchecked; the set is now derived from disk and compared
+  both ways.
 - `make check` as the single local gate mirroring CI, plus `make fuzz`,
   `make bench`, `make vuln`, `make tidy`. CI gains lint, vuln, fuzz-smoke, and
   `go mod tidy` jobs; a weekly `nightly.yml` runs 10-minute fuzz per target and
@@ -98,6 +101,49 @@ weakly-ordered platform.
   which is what makes "one present, one absent" fall out of the same comparison
   rather than needing its own case.
 
+- Decoder: **section payload grammars** — the decoder stops taking a section's
+  declared size on trust and descends into type, import, function, table, memory,
+  export, start, data count, and custom sections. `binary.wast` **84/127 →
+  104/127**; phase 1 total **136 → 179 pass**. `binary0.wast` and `custom.wast`
+  reach **7/7** and **11/11**.
+- The declared-size check is **one comparison with two signs**, and the spec text
+  is selected by the direction of the inequality: grammar wanting more than
+  declared is *unexpected end of section or function*, grammar finishing with
+  declared bytes left over is *section size mismatch*. A sign error would swap the
+  two messages while keeping the pass count superficially plausible, so both
+  directions are pinned independently.
+- Payload grammars are bounded by the **image**, not the section. Over-reading
+  past a section boundary is required rather than tolerated: `binary.wast:754`
+  expects *length out of bounds* because the grammar reads the next section's id
+  byte as a name length, and `binary.wast:92`'s own comment documents the
+  reference interpreter consuming a data section's `\0b` as an END instruction.
+  The custom section is the sole exception — its tail is opaque bytes, so no later
+  grammar step exists to catch an over-read.
+- A `Features` config struct on `Decoder` gates per-section acceptance for
+  exception handling, SIMD, threads, and memory64. The zero value is v0's
+  posture: every 3.0 gate present and off (contract §9). The structural id-range
+  check stays gate-blind.
+- Harness: a **third verdict, `gated`**, for vectors the engine declined because a
+  feature gate is off. Its own board column, checked before the substring match so
+  a gate error containing the expected text cannot buy a pass, and pinned by
+  `TestGatedVectors` — an enumerated allowlist with a feature named per entry, since
+  a third verdict is otherwise a way to make a board look better by moving
+  failures into it. `TestVerdictsPartitionCommands` holds the arithmetic: every
+  command lands in exactly one verdict.
+- Doctrine ratified into `CLAUDE.md`: **gates never manufacture malformedness.**
+  *Malformed* belongs to the grammar of the tracked union (contract §9), so the
+  tag section (id 13) is well-formed and ≥14 is malformed regardless of any gate.
+  A gate-off engine must *reject* a gated construct — accept-and-ignore silently
+  changes the module's semantics — but with a feature-named error, never a spoofed
+  spec string. Asserted directly, because a gate that impersonated a spec string
+  would score itself green for rejecting a module the spec calls well-formed, and
+  no pass count can see that.
+- Buckets closed by this work: *malformed limits flags* 7 → 0, *malformed import
+  kind* 6 → 0, *length out of bounds* 1 → 0, and `custom.wast`'s *unexpected end*
+  2 → 0, all added to `TestClosedBuckets`. Two buckets drained without closing —
+  *unexpected end of section or function* 9 → 6 and *section size mismatch* 8 → 5 —
+  and earn no entry; their remainder needs the code, global, and element grammars.
+
 ### Fixed
 - `parseString` returned a nil slice for the empty literal `""`, entangling
   "is a string" with "has bytes" — so a reader checking `str != nil` would
@@ -116,6 +162,22 @@ weakly-ordered platform.
   257/257 after. Regression vector copied verbatim from `annotations.wast:14`.
 - CI used deprecated action versions (Node 20) and requested a Go module
   cache with no `go.sum` to key it on.
+- `binary_leb128_64.wast` had been scoring 1/2, and that pass was never earned:
+  both its vectors carry i64 memory limits flags, and the decoder was reading the
+  limits flags field without interpreting it, so it accepted a memory64 module
+  with the memory64 gate off. Honest scoring moves both vectors to `gated` and the
+  file to 0/0 — a board line that reads worse and means more. *An unearned pass is
+  a regression waiting to be misread*: the fix looks like a regression, which is
+  precisely why the third verdict had to exist before the grammar landed.
+- Limits flags and section ids are read as **single bytes, not LEBs**. Reading
+  either field with `u32` is the helpful mistake: `\81\00` genuinely does encode 1,
+  so a LEB read accepts all three of `binary.wast:632`, `:677`, and `:686`, whose
+  redundant encoding *is* the malformedness.
+- `TestMalformedSectionID` asserted that a tag section must be *accepted* with the
+  EH gate off — wrong in the accept-and-ignore direction, and written before the
+  gate doctrine was ruled. It now asserts only that the id is not reported as
+  malformed; both gate states are covered by
+  `TestTagSectionIsWellFormedButGated`.
 
 ## [0.0.1] - 2026-07-30
 

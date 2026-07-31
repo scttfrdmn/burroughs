@@ -270,11 +270,15 @@ func TestMalformedSectionID(t *testing.T) {
 			t.Errorf("DecodeModule(%x): got %v, want ErrMalformedSectionID", in, err)
 		}
 	}
-	// The tag section (id 13) is ranked, not rejected: the EH gate governs whether
-	// its contents are decoded, not whether the id exists.
+	// The tag section (id 13) is ranked, not rejected as a malformed id — but with
+	// the EH gate off it is still rejected, by the gate. This assertion used to
+	// require *acceptance*, which was wrong in the accept-and-ignore direction:
+	// a gate-off engine that decoded a tag section's neighbours and shrugged at the
+	// tag would silently change the module's semantics. See
+	// TestTagSectionIsWellFormedButGated (sections_test.go) for both gate states.
 	tagged := []byte{0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00, 0x0D, 0x01, 0x00} // synthetic: no suite vector asserts a verdict for id 13 alone
-	if _, err := DecodeModule(tagged); err != nil {
-		t.Errorf("tag section: got %v, want accept (gate governs contents, not id)", err)
+	if _, err := DecodeModule(tagged); errors.Is(err, ErrMalformedSectionID) {
+		t.Error("tag section reported as a malformed id: Wasm 3.0 defines id 13, so it is well-formed in the tracked union and the gate must not redraw the grammar")
 	}
 }
 

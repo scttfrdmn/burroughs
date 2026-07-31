@@ -34,8 +34,14 @@ func TestFixtureProvenance(t *testing.T) {
 	suite := suiteImages(t)
 
 	// Fixture files that carry citations, relative to this package.
+	//
+	// A file missing from this list is unchecked, which makes the list itself the
+	// weak point: adding a new fixture file and forgetting to register it restores
+	// exactly the drift this test was written to catch. TestEveryFixtureFileIsChecked
+	// closes that by deriving the set from disk and comparing.
 	files := []string{
 		"../binary/binary_test.go",
+		"../binary/sections_test.go",
 	}
 
 	// A citation is a comment of the form `// <file>.wast:<line>` anywhere on the
@@ -93,6 +99,50 @@ func TestFixtureProvenance(t *testing.T) {
 		t.Fatal("no citations checked — the regexes have drifted from the fixtures")
 	}
 	t.Logf("verified %d cited vectors, %d declared synthetic", checked, synthetic)
+}
+
+// TestEveryFixtureFileIsChecked guards the guard.
+//
+// TestFixtureProvenance reads a hand-maintained file list, so a new fixture file
+// that nobody adds to it is silently unchecked — the same failure mode as the
+// drifted citations, one level up. This derives the set of files that *contain*
+// citations from disk and requires the list to cover them.
+//
+// It is the fixture-provenance argument applied to itself: a control that depends
+// on someone remembering to register their work is not a control.
+func TestEveryFixtureFileIsChecked(t *testing.T) {
+	checked := map[string]bool{
+		"../binary/binary_test.go":   true,
+		"../binary/sections_test.go": true,
+	}
+
+	paths, err := filepath.Glob("../*/*_test.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cite := regexp.MustCompile(`//\s*[a-zA-Z0-9_.-]+\.wast:\d+`)
+	for _, p := range paths {
+		if strings.HasPrefix(p, "../spec/") {
+			continue // this package's own tests hold no engine fixtures
+		}
+		src, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		if !cite.Match(src) {
+			continue
+		}
+		if !checked[p] {
+			t.Errorf("%s carries suite citations but is not in TestFixtureProvenance's file list; its citations are unverified", p)
+		}
+	}
+	// And the reverse: a stale entry naming a file that no longer exists would make
+	// the list look more thorough than it is.
+	for p := range checked {
+		if _, err := os.Stat(p); err != nil {
+			t.Errorf("%s is in the file list but does not exist: %v", p, err)
+		}
+	}
 }
 
 // suiteImages indexes every module image in the suite by its bytes, and also by

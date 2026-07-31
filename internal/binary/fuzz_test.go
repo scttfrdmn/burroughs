@@ -37,6 +37,24 @@ var declaredErrors = []error{
 	ErrFuncCodeMismatch,
 	ErrDataCountMismatch,
 
+	// The payload grammars (#5). ErrPayloadEnd and ErrSectionSizeMismatch are the
+	// three faces of the size mechanism; the rest are the malformed-form errors of
+	// individual grammars.
+	ErrPayloadEnd,
+	ErrSectionSizeMismatch,
+	ErrMalformedFuncType,
+	ErrMalformedValType,
+	ErrMalformedRefType,
+	ErrMalformedLimits,
+	ErrMalformedMutability,
+	ErrMalformedImportKind,
+	ErrMalformedExportKind,
+
+	// ErrFeatureDisabled is a declared error but not a malformed-verdict: it means
+	// the decoder declined to judge. Listed here because the fuzz target's question
+	// is "is this error one the decoder is allowed to return", and it is.
+	ErrFeatureDisabled,
+
 	// ErrDataCountRequired is declared here though the decoder cannot yet reach
 	// it (#22). Listing it now is the honest order: the set is what the decoder is
 	// *allowed* to return, and an entry that becomes reachable later should not

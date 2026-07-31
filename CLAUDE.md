@@ -181,6 +181,19 @@ the choice, and consequences once Scott has called it.
 - **Gates.** Proposals land behind build tags / config gates; acceptance is
   the proposal's own suite green (contract §9). Nothing defaults on
   without it.
+- **Gates never manufacture malformedness.** *Malformed* is the spec's word: it
+  belongs to the grammar, and the grammar here is the **union of the tracked
+  set** (§9 G-2) — section id 13 is defined by Wasm 3.0 and so is well-formed,
+  while ≥14 is malformed because nothing tracked defines it. Gates partition
+  *acceptance* within that grammar; they do not redraw it. A gate-off engine
+  meeting a gated feature must still **reject** the module — accept-and-ignore
+  silently breaks semantics — but it reports a **feature-named error**
+  (*exception handling: gate disabled*), never a spoofed spec string. Reporting
+  "malformed" for a module the spec calls well-formed lies about the module to
+  conceal the engine's own configuration. So the structural layer (id range,
+  order, uniqueness) stays gate-blind, and the features set governs per-section
+  and per-opcode acceptance. (Ruling: Scott, #5; queued as a contract amendment
+  in #16.)
 - **Artifacts become oracles.** Bugs found by hand become regression tests
   in the same session. Graves get marked: a comment at the fix site naming
   the lesson and citing the issue.

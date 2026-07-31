@@ -137,6 +137,27 @@ type Result struct {
 	Fail        int
 	Unsupported int
 
+	// Gated counts vectors the engine declined because a feature gate is off.
+	//
+	// This is a third verdict, not a flavour of the other two, and it exists
+	// because gates partition *acceptance* (CLAUDE.md, "gates never manufacture
+	// malformedness"). A gate-off engine meeting a memory64 module must reject it,
+	// so scoring that rejection as a failure marks correct behaviour red — while
+	// scoring it as a pass would be worse, since the engine never answered the
+	// question the vector asks. Neither: it was not asked.
+	//
+	// binary_leb128_64.wast is the whole reason. Both its vectors carry i64 limits
+	// flags, and before the payload grammars existed the decoder ignored the flags
+	// and "passed" one of them. That pass was never earned — it accepted a
+	// memory64 module with the memory64 gate off — and this counter is what stops
+	// the honest fix from looking like a regression.
+	//
+	// The obvious abuse is returning a gate error for anything inconvenient, which
+	// would empty the board by fiat. Two things hold that line: gated is printed
+	// on its own board line, never folded into pass, and TestGatedVectors pins
+	// which vectors are allowed to land here.
+	Gated int
+
 	// Failures, bucketed by expected spec text. The bucket key names exactly
 	// which check is missing or wrong, which makes the board a priority queue:
 	// the biggest bucket is the next issue to take, and a bucket reaching zero
@@ -151,7 +172,14 @@ type Failure struct {
 	Got    string // the engine's error text, or "" if it accepted the module
 }
 
-// Total is the number of assertions actually executed.
+// Total is the number of assertions actually executed — the denominator of the
+// pass rate.
+//
+// Gated is excluded on purpose: the engine returned no verdict on those vectors,
+// so counting them would make the denominator claim coverage the run did not
+// have. Unsupported is excluded for the same reason. The three exclusions and the
+// two counted verdicts should always sum to the command count, which
+// TestVerdictsPartitionCommands pins.
 func (r *Result) Total() int { return r.Pass + r.Fail }
 
 // BucketsBySize returns bucket keys ordered largest first — the work plan.
@@ -179,6 +207,11 @@ func (r *Result) Board() string {
 	if r.Unsupported > 0 {
 		fmt.Fprintf(&b, ", %d unsupported", r.Unsupported)
 	}
+	// Its own column, never folded into pass: a vector the engine declined to
+	// judge is not a vector it judged correctly.
+	if r.Gated > 0 {
+		fmt.Fprintf(&b, ", %d gated", r.Gated)
+	}
 	if len(r.Buckets) > 0 {
 		b.WriteString("\n  failures bucketed by expected spec text (largest first):")
 		for _, k := range r.BucketsBySize() {
@@ -192,9 +225,36 @@ func (r *Result) Board() string {
 // engine produces for a module image, or nil if it accepts it.
 type DecodeFunc func(image []byte) error
 
-// Run executes a script's assertions against a decoder.
+// GatedFunc reports whether an engine error means "a feature gate is off"
+// rather than a verdict on the module. The harness must not sniff error text for
+// this — the engine names its own gate errors, and a substring test here would be
+// the harness guessing at the taxonomy it is supposed to be checking.
+type GatedFunc func(error) bool
+
+// gated is set by the caller via Script.RunGated. When nil, no error is gated
+// and the board behaves exactly as before.
+type runOpts struct {
+	isGated GatedFunc
+}
+
+// Run executes a script's assertions against a decoder, scoring every gate as
+// though it were on — no error is treated as a gate decline.
 func (s *Script) Run(decode DecodeFunc) *Result {
+	return s.run(decode, runOpts{})
+}
+
+// RunGated executes a script and separates gate declines from verdicts. isGated
+// reports whether an error means the engine refused to answer because a feature
+// gate is off; those vectors land in Result.Gated instead of Pass or Fail.
+func (s *Script) RunGated(decode DecodeFunc, isGated GatedFunc) *Result {
+	return s.run(decode, runOpts{isGated: isGated})
+}
+
+func (s *Script) run(decode DecodeFunc, opts runOpts) *Result {
 	r := &Result{Path: s.Path, Buckets: map[string][]Failure{}}
+	isGated := func(err error) bool {
+		return err != nil && opts.isGated != nil && opts.isGated(err)
+	}
 	for _, c := range s.Commands {
 		switch c.Kind {
 		case KindAssertMalformed:
@@ -202,6 +262,15 @@ func (s *Script) Run(decode DecodeFunc) *Result {
 			got := ""
 			if err != nil {
 				got = err.Error()
+			}
+			// A gate decline is checked before the substring match, deliberately.
+			// A gate error that happened to contain the expected text would
+			// otherwise score a pass the engine did not earn — and since gate
+			// errors are feature-named and spec strings are not, that collision is
+			// unlikely rather than impossible. Order makes it impossible.
+			if isGated(err) {
+				r.Gated++
+				continue
 			}
 			// Substring matching, per decision 0003.
 			if err != nil && strings.Contains(got, c.Expect) {
@@ -218,7 +287,12 @@ func (s *Script) Run(decode DecodeFunc) *Result {
 			// *valid*. Phase 1 only decodes, so this is a decode-must-succeed
 			// check — a weaker claim than the suite makes, and the honest thing
 			// is to score it rather than skip it.
-			if err := decode(c.Module); err != nil {
+			err := decode(c.Module)
+			if isGated(err) {
+				r.Gated++
+				continue
+			}
+			if err != nil {
 				r.Fail++
 				const key = "(module binary ...) must decode"
 				r.Buckets[key] = append(r.Buckets[key], Failure{
