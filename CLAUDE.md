@@ -368,6 +368,34 @@ the choice, and consequences once Scott has called it.
   decoder, by expected spec error string). The biggest bucket is the next
   issue to take; a bucket going to zero is a PR's measure of done. Failures
   are reported, never skipped — skipping hides the queue.
+- **Bucket size estimates the reward, not the job.** The board buckets by the
+  *expected spec string*, which is the right key for scheduling — it names what a
+  user would see — but a spec string cuts across mechanism, so one bucket is
+  usually several jobs. The LEB 18 partitioned into 13 blocked on the code-section
+  grammar (#7), 4 reachable immediately, and 1 unrelated question about the
+  functype tag; the four cost an afternoon and the thirteen are a milestone. So
+  take the biggest bucket, then **partition it by mechanism before estimating it**,
+  and say in the PR which members were reachable and which are waiting on what. A
+  bucket quoted as a single number is a plan that has not been made yet.
+- **An error from the wrong layer is evidence about where structure was lost.**
+  When a lower grammar is missing, its bytes do not vanish — they leak upward and
+  get misread by whatever grammar *is* running, so the error names a field the
+  input never contained. `malformed section id: 128` on eight LEB vectors was the
+  code section's immediates being read as section ids: a diagnosis, not a defect in
+  the section-id check. Read the mismatch between the error's layer and the
+  vector's layer as a pointer to the missing descent. The same tell has an
+  intra-layer form — an error message that reports a byte the image never held (the
+  functype tag reconstruction printing `0x5e` as `0xde`) is the engine lying about
+  its input, and no suite can see it, because the harness matches the sentinel and
+  never reads past the colon. (#36.)
+- **When two fields disagree about a value, the suite has handed you a
+  bidirectional control.** The width-parameterized design's dividend: identical
+  bytes `80 80 80 80 10` are *integer too large* as a data-segment memory index and
+  perfectly legal as a limits minimum, because one field is 32 bits and the other
+  64. Pin **both** directions in one test — a single width being wrong then fails
+  the two halves in opposite directions, where either half alone would look like a
+  plausible reading. Prefer such a pair over two independent assertions whenever a
+  value's verdict depends on the field rather than on the bytes. (#36.)
 
 ## Tooling gates
 

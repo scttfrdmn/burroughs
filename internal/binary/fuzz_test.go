@@ -119,9 +119,14 @@ func FuzzDecodeModule(f *testing.F) {
 }
 
 // FuzzULEB drives the width-parameterized reader directly at both widths. It
-// exists because uleb is where graves #2 and #3 lived, and because u64 has no
-// production caller yet (#19) — fuzzing is what keeps that width honest in the
-// meantime.
+// exists because uleb is where graves #2, #3 and #36 all lived — three defects in
+// one function, which is the argument for fuzzing it directly rather than only
+// through module images.
+//
+// It originally cited #19 as its reason for exercising the 64-bit width, u64 having
+// had no production caller. It has one now (limits min/max, #36), so the reason is
+// the stronger one: the two widths are different code paths through the same budget
+// arithmetic, and #36's defect was reachable at both.
 func FuzzULEB(f *testing.F) {
 	// Boundary seeds: the taxonomy's two failure classes at both widths, plus
 	// the legal maxima. These are extracted integer fields, not module images,

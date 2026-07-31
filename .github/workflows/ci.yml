@@ -133,8 +133,14 @@ jobs:
           # `go: downloading ...` on a cold cache, which would read as a finding.
           out="$(go tool -modfile=tools/go.mod deadcode -test ./... 2>/dev/null || true)"
           printf 'deadcode says:\n%s\n' "$out"
-          # reader.u64: tracked in #19, //nolint:unused with a reason at the site.
-          filtered="$(printf '%s\n' "$out" | grep -v 'reader\.u64' | grep -v '^$' || true)"
+          # The allowlist is empty. It held exactly one entry — reader.u64, tracked
+          # in #19 — until #36 gave limits min/max their true 64-bit width and made
+          # it reachable, which is the placeholder discipline's intended ending: a
+          # deferral retired by a production caller, not by a suppression outliving
+          # its reason. An entry left here after its subject became reachable would
+          # license the next regression silently. Mirrors the Makefile's deadcode
+          # target, which is the point of both existing.
+          filtered="$(printf '%s\n' "$out" | grep -v '^$' || true)"
           if [ -n "$filtered" ]; then
             echo "::error::unreachable code with no tracking issue — name it at its definition site and file an issue, or delete it:"
             printf '%s\n' "$filtered"

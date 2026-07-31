@@ -147,6 +147,12 @@ inside the bands) where in-place pays 14%.
   A finding is a *classification question*, not automatically a bug: declared
   and tracked passes, silent fails. CI allowlists only `reader.u64` (#19).
 
+  > Since superseded, and recorded here because this sentence was present-tense
+  > about CI rather than about the decision: the allowlist is **empty** as of #36,
+  > which gave limits min/max their true 64-bit width and so gave `u64` a
+  > production caller. #19 was discharged by code, not by an allowlist entry — the
+  > outcome this policy was written to prefer.
+
   *Allowlist form* (ruling: Scott, PR #21): inline with a comment while there
   are one or two entries; **at the third it becomes `tools/deadcode-allow.txt`
   with a reason per entry.** The threshold is not really the number — it is that
