@@ -180,8 +180,18 @@ property hand-transcription lacks.
 
 - `third_party/spec` becomes a **pinned** fetch (`scripts/fetch-spec-ref.sh` +
   `make spec-ref`), SHA recorded in the script, gitignored like the suite.
-- The generated table is committed. `make check` fails when the extraction disagrees
-  with it — so regenerating is a deliberate act with a reviewable diff.
+- The generated table is committed, which is what lets a fresh clone build with no
+  fetch.
+- **The drift check cannot live in `make check`**, and the reason is the existing
+  `conformance` split rather than a new principle. `check` must stay green on a fresh
+  clone (Makefile, and it is why `check` deliberately does not set `BURROUGHS_NO_SKIP`),
+  but the drift check needs `third_party/spec` vendored. Same shape as the board: it
+  gets its own target that **refuses to run without the reference** rather than
+  skipping — a skip is not a verdict, and a drift check that passes by asking nothing
+  is worse than none, since it reports agreement with an authority it never read. CI
+  runs it, so it is not optional; it is the other half of the mirror. If the skip
+  routes through Go at all it routes through `internal/testenv`, which is the one
+  licensed door.
 - The extractor's unrecognized-arm error is load-bearing and gets its own test:
   feed it a synthetic arm shape it should reject, and confirm it does. Per CLAUDE.md
   — *a control's green must be falsifiable, and the way to know is to break it.*
