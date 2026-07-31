@@ -276,7 +276,105 @@ weakly-ordered platform.
   caught a real defect in the strictness helper — it reported a fail *and* a skip,
   because `Fatalf`-then-`Skip` leans on `runtime.Goexit` to not return.
 
+### Added
+- **`derived` accepted as the third provenance category** — cited, derived,
+  synthetic. A derived fixture is one the suite *implies* but does not contain:
+  `TestLEBWidthIsPerField`'s accept half asserts a wide-but-legal limits minimum
+  decodes, which `binary-leb128.wast` cannot state because it only asserts
+  malformedness, and which `:529` and `:221` jointly **bracket** — ten bytes wants
+  *integer too large*, eleven wants *integer representation too long*, so the only
+  width satisfying both is 64. *Entailment from checked facts is legitimate
+  provenance; unstated entailment is just synthetic with better manners.* So the
+  category carries obligations and `TestDerivedFixturesStateResolvablePremises`
+  enforces the half a machine can: a derived row states its premises
+  (`derived from <file>.wast:N,M`) and every premise must **resolve** to a suite
+  line carrying content. The inference is reviewed by eyes; a premise pointing at
+  prose is caught by the same mechanism that catches a drifted transcription.
+  Falsified four ways before being trusted — premise pointing at prose, premise
+  past end of file, a `derived` marker with no premises at all (the laundering
+  channel), and the category going empty, which fails rather than passing
+  vacuously. (Ruling: Scott, PR #37.)
+
+### Changed
+- **Decision 0003 amended**: its LEB taxonomy prescribed the *wrong test order*,
+  and the implementation followed its documentation faithfully — so every reviewer
+  who checked the code against its claims found agreement. Appended, not edited: the
+  body stands as the record of what was believed and of why it survived review. The
+  authority for order-of-tests questions is the reference interpreter's `decode.ml`,
+  not a derivation from vectors that cannot distinguish the orderings. Also corrects
+  the ADR's `\ff\ff\ff\ff\ff\7f` witness, which is listed under the continuation-bit
+  bullet while being sourced from a *signed* field.
+- **LEB widths are per field, not one width for the whole decoder.** Limits
+  minimum and maximum are read at **64 bits**; indices and counts stay 32. The
+  suite brackets it from both sides: `binary-leb128.wast:525`'s ten-byte memory
+  minimum wants *integer too large* (ten bytes is legal width for a u64, so the
+  fault is the unused payload bits) while `:217`'s eleven-byte field wants
+  *integer representation too long*. A u32 read scores the first as "too long"
+  and gets the string wrong. The consequence is deliberate: a memory32 minimum
+  above 2^32 now **decodes** and is the validator's to reject, which is the
+  correct layering — reading the field narrowly to catch it in the decoder would
+  be borrowing the validator's job and getting the malformed string wrong to do
+  it. Pinned by a bidirectional control the suite supplies for free: the same
+  five bytes `80 80 80 80 10` are malformed as a data-segment memory index
+  (`:565`) and legal as a limits minimum, so one width being wrong fails the two
+  halves in opposite directions.
+- **The functype form tag is an `s7`, not a byte.** `0x60` *is* −32 read at
+  width 7 — the spec's type constructors live in negative s7 space, as `0x5e`
+  (array) is −34 — and `binary-leb128.wast:1067` is the vector that settles it:
+  `\e0\7f`, annotated by the suite itself as "−0x20 in signed LEB128 encoding",
+  must fail as *integer representation too long* rather than *malformed function
+  type*. This is the inverse of the limits-flags rule, where the field really is
+  a byte and a redundant encoding of a legal value is malformed limits.
+- `reader.u64` has a production caller and its `//nolint:unused` is gone, which
+  empties the `deadcode` allowlist to zero entries. This is the placeholder
+  discipline's intended ending — a deferral retired by a caller, not by a
+  suppression outliving its reason.
+  ([#19](https://github.com/scttfrdmn/burroughs/issues/19))
+
 ### Fixed
+- **Two correct predicates composed in the wrong order — `uleb` and `sleb`
+  tested the continuation bit before the range.** The reference interpreter's
+  `uN`/`sN` (`interpreter/binary/decode.ml`) check the unused-bits range
+  *before* consulting the continuation bit, and **order of tests is itself a
+  claim about the spec**: on the last permitted byte, bytes that are both
+  over-wide and continued must be reported *too large*, not *too long*.
+  Neither predicate was defective; only their composition. Found by a
+  **differential port of the reference's own `uN`/`sN`**, exhaustive over the
+  derived disagreement space (k all-continuation prefix bytes × all 256 final
+  bytes, k from 0 past the width budget): **112 disagreements at 32 bits, 126 at
+  64**, identically for both readers — one structural defect with two tenants.
+  Now 0 disagreements over 4096 verdicts at 32 bits and 6656 at 64, with a
+  vacuity control asserting the ported oracle actually produces all three
+  verdicts over that space. Each half was falsified on its own by reverting it
+  and recovering exactly its 112/126.
+  ([#36](https://github.com/scttfrdmn/burroughs/issues/36))
+- **A taxonomy vector was asserted against the wrong reader.**
+  `TestLEBTaxonomy`'s `ff ff ff ff ff 7f` row carried the suite's expectation
+  from `binary-leb128.wast:497` — an `i32.const` immediate, a *signed* field —
+  and read it with the *unsigned* reader. Both verdicts are correct and they
+  differ: `sN(32)` says *too long* (a legal sign extension one byte past the
+  budget), `uN(32)` says *too large* (the fifth byte's payload exceeds the
+  width). The signed vector moved to `TestSlebIsNotUlebWithACast` and the
+  unsigned reading of the same bytes is now pinned where it was, so the pair is
+  asserted from both sides. `TestLEBTaxonomy` stayed **green throughout** the
+  ordering defect above, because every row it held asked about inputs where the
+  two conditions do not overlap — and the overlap region *is* the bug. Grave
+  0003's width-parameterization lesson, applied to signedness.
+  ([#36](https://github.com/scttfrdmn/burroughs/issues/36))
+- **`ErrMalformedFuncType`'s message invented bits the input never had.** The
+  byte reconstruction or'd a high bit in for every negative form, reporting a
+  `0x5e` array tag as `0xde`. Nothing in the suite can see it — the harness
+  matches on the sentinel text and never reads past the colon — and it was found
+  by *printing what the expression returns for nine tags* rather than reading its
+  shape. Lesson: **an error message is testimony, and fabricated evidence is a
+  lying witness even when the verdict is right.** The oracle never reads past the
+  colon, which is exactly why everything after it is ours alone to keep honest.
+  ([#36](https://github.com/scttfrdmn/burroughs/issues/36))
+- **CI's `deadcode` allowlist still filtered `reader.u64`** while the Makefile's
+  comment already claimed the allowlist was empty — one truth, two authorities,
+  disagreeing. Found by the ruling-falsifies-prose sweep. A gate and its local
+  mirror disagreeing is each one's reason to exist, and a suppression outliving its
+  subject licenses the next regression silently.
 - **`TestSectionSizeBothSigns` was named for both signs and pinned one of them
   twice.** Its first case was labelled "grammar consumed MORE than declared" while
   its own prose said "3 bytes are left over", and the decoder reported `declared 7,

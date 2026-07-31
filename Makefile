@@ -89,13 +89,20 @@ lint:
 vuln:
 	$(TOOL) govulncheck ./...
 
-# The unreachable-error grave (#3) promoted to a tool. reader.u64 is expected
-# here: declared, tracked in #19, and suppressed at its definition site with a
-# reason. Anything else is a classification question to answer.
+# The unreachable-error grave (#3) promoted to a tool. Every finding is a
+# classification question to answer: declared-and-tracked passes, silent fails.
+#
+# The allowlist is empty, and that is a state worth naming. It held exactly one
+# entry — reader.u64, tracked in #19 — from the tooling-gates PR until #36 gave
+# limits min/max their true 64-bit width and made it reachable. That is the
+# placeholder discipline's intended ending: a deferral retired by a production
+# caller, not by an allowlist entry outliving the reason for it. An entry left here
+# after its subject became reachable would license the next regression silently,
+# which is the suppression-wearing-a-disguise shape the target exists to catch.
 deadcode:
 	@out="$$($(TOOL) deadcode -test ./... 2>/dev/null || true)"; \
 	printf '%s\n' "$$out"; \
-	filtered="$$(printf '%s\n' "$$out" | grep -v 'reader\.u64' | grep -v '^$$' || true)"; \
+	filtered="$$(printf '%s\n' "$$out" | grep -v '^$$' || true)"; \
 	if [ -n "$$filtered" ]; then \
 		echo "unreachable code with no tracking issue:"; printf '%s\n' "$$filtered"; exit 1; \
 	fi

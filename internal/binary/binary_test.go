@@ -140,7 +140,19 @@ func TestLEBTaxonomy(t *testing.T) {
 		// Continuation bit set on the last permitted byte.
 		{"u32 five 0x80 then 0", 32, []byte{0x80, 0x80, 0x80, 0x80, 0x80, 0x00}, ErrLEBTooLong, 0},
 		{"u32 min-2 one byte too many", 32, []byte{0x82, 0x80, 0x80, 0x80, 0x80, 0x00}, ErrLEBTooLong, 0},
-		{"u32 all-ff then 0x7f", 32, []byte{0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x7F}, ErrLEBTooLong, 0},
+		// GRAVE (#36): this row used to read `ff ff ff ff ff 7f` with *uleb* and expect
+		// "too long". The expectation is the suite's (binary-leb128.wast:497) but the
+		// reader was the wrong one — :497 is an `i32.const` immediate, a *signed*
+		// field, and the reference agrees with the suite only via sN: uN(32) calls
+		// these bytes "too large" (the 5th byte's payload exceeds the width) while
+		// sN(32) calls them "too long" (a legal sign extension running one byte past
+		// the budget). Same bytes, two readers, two correct-but-different verdicts —
+		// grave 0003's width-parameterization lesson applied to signedness.
+		//
+		// The vector moved to TestSlebIsNotUlebWithACast, where its own reader answers
+		// it. What belongs *here* is the unsigned reading of those bytes, asserted as
+		// "too large" so the pair is pinned from both sides.
+		{"u32 all-ff then 0x7f is too LARGE unsigned, not too long", 32, []byte{0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x7F}, ErrLEBOverflow, 0},
 		{"u32 section size 3 too long", 32, []byte{0x83, 0x80, 0x80, 0x80, 0x80, 0x00}, ErrLEBTooLong, 0},
 		{"u64 eleven bytes", 64, []byte{0x82, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x00}, ErrLEBTooLong, 0}, // synthetic: extracted field, one byte past the u64 limit
 

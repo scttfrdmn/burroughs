@@ -346,8 +346,7 @@ func (r *reader) name() error {
 // folded both malformed classes into one check (`i == 4 && c&0xF0 != 0`) inside a
 // u32-only method, so it could report neither correctly nor distinguish them:
 // - continuation bit set on the last permitted byte → representation too long
-// - continuation clear but bits beyond the width set → integer too large
-// The order matters: test the continuation bit first.
+// - payload bits beyond the width set → integer too large
 //
 // GRAVE (0003, grave 2): the predecessor's ErrLEBTooLong was unreachable — the
 // i==4 branch returned before the loop could fall through, so no input of any
@@ -355,6 +354,32 @@ func (r *reader) name() error {
 // lesson, for whoever adds the next error constant: an error with no reachable
 // path is a missing check wearing a disguise. The two bugs propped each other
 // up — the dead constant is why the conflation went unnoticed.
+//
+// GRAVE (#36): 0003's fix got the taxonomy right and *composed it in the wrong
+// order*. Its comment said "test the continuation bit first", which is the
+// defect stated as the rule — a byte that is both overlong-by-continuation and
+// out-of-range then scores as "too long" where the spec says "too large". The
+// authority is the reference interpreter's uN, which checks the range *before*
+// consulting the continuation bit:
+//
+//	let rec uN n s =
+//	  require (n > 0) s pos "integer representation too long";
+//	  let b = byte s in
+//	  require (n >= 7 || b land 0x7f < 1 lsl n) s pos "integer too large";
+//	  ... if b land 0x80 = 0 then x else ... uN (n - 7) s
+//
+// So the width budget is exhausted *before* a byte is read (too long), and the
+// range of a byte is judged *when* it is read (too large), independent of whether
+// it continues. Two correct predicates in the wrong order is still wrong, and
+// order of tests is itself a claim about the spec. Measured, not argued:
+// TestLEBMatchesReferenceUN is a differential port of uN/sN over the derived
+// disagreement space, and it found 112 disagreements at 32 bits and 126 at 64,
+// identically in uleb and sleb.
+//
+// The loop is structured to mirror uN's recursion rather than to read the last
+// byte specially: the "too long" case is now the loop *falling through* its width
+// budget, which is what makes ErrLEBTooLong reachable by the honest path instead
+// of by a special case.
 func (r *reader) uleb(bits uint) (uint64, error) {
 	maxBytes := int((bits + 6) / 7)
 	var v uint64
@@ -364,20 +389,21 @@ func (r *reader) uleb(bits uint) (uint64, error) {
 		if err != nil {
 			return 0, err
 		}
-		if i == maxBytes-1 {
-			// Last permitted byte: continuation bit first, then unused bits.
-			if c&0x80 != 0 {
-				return 0, ErrLEBTooLong
-			}
-			if used := bits - shift; used < 7 && c>>used != 0 {
-				return 0, ErrLEBOverflow
-			}
+		// Range first, exactly as uN does, and regardless of the continuation bit:
+		// on the last permitted byte the payload bits beyond the width must be zero.
+		if used := bits - shift; used < 7 && c&0x7F>>used != 0 {
+			return 0, ErrLEBOverflow
 		}
 		v |= uint64(c&0x7F) << shift
 		if c&0x80 == 0 {
 			return v, nil
 		}
 		shift += 7
+		if i == maxBytes-1 {
+			// Width budget exhausted with the continuation bit still set. uN's
+			// `require (n > 0)` on the next recursion, reached rather than special-cased.
+			return 0, ErrLEBTooLong
+		}
 	}
 	// Unreachable: the i == maxBytes-1 branch returns on every path. Kept as a
 	// guard so a future edit to the loop bound cannot silently accept a value.
@@ -392,12 +418,11 @@ func (r *reader) u32() (uint32, error) {
 
 // u64 reads an unsigned LEB128-encoded 64-bit integer (≤ 10 bytes).
 //
-// No caller yet: i64 immediates (#7) and memory64's 64-bit limits are what will
-// use it. Declared-and-tracked rather than silent, per the ruling in CLAUDE.md —
-// see #19 for why it is kept instead of deleted. FuzzULEB covers uleb(64)
-// directly, so the width is exercised even without a production caller.
-//
-//nolint:unused // tracked in #19; awaits i64 immediates (#7) / memory64 gate
+// Called by decodeLimits: limits min/max are 64-bit fields, which the suite settles
+// at binary-leb128.wast:525 (grave #36). This closes #19 — the reader was
+// declared-and-tracked with a //nolint:unused for two milestones, and the
+// placeholder discipline's intended ending is a production caller retiring the
+// suppression, not an allowlist entry outliving it.
 func (r *reader) u64() (uint64, error) { return r.uleb(64) }
 
 // sleb reads a signed LEB128 integer of the given bit width.
@@ -414,8 +439,15 @@ func (r *reader) u64() (uint64, error) { return r.uleb(64) }
 //     legal positive nor a legal negative extension at width 32. A reader that
 //     reused the unsigned rule would reject some valid negatives and accept that.
 //
-// Same ordering rule as uleb: the continuation bit is "representation too long" and
-// is tested before the range check, so the two malformed classes stay distinct.
+// Same ordering rule as uleb, and it is the reference interpreter's sN rather than
+// the guess uleb's comment used to record (grave #36): the range check runs *before*
+// the continuation bit is consulted, so a byte that is both out-of-range and
+// overlong is "integer too large". sN's mask form:
+//
+//	let mask = (-1 lsl (n - 1)) land 0x7f in
+//	require (n >= 7 || b land mask = 0 || b land mask = mask) ... "integer too large";
+//
+// which is this function's two-sided check written the other way round.
 func (r *reader) sleb(bits uint) (int64, error) {
 	maxBytes := int((bits + 6) / 7)
 	var v int64
@@ -425,27 +457,23 @@ func (r *reader) sleb(bits uint) (int64, error) {
 		if err != nil {
 			return 0, err
 		}
-		if i == maxBytes-1 {
-			if c&0x80 != 0 {
-				return 0, ErrLEBTooLong
-			}
-			// The payload bits of this byte that fall outside the width must all equal
-			// the sign bit that the width does reach — all zero for a positive value,
-			// all one for a correct negative sign extension.
-			//
-			// Both sides are compared in the same frame — shifted down to bit 0 —
-			// because the first version of this check masked the high bits in place
-			// and compared them against a constant shifted differently, which
-			// rejected min-int32 (`\80\80\80\80\78`, all three out-of-width bits set
-			// as a correct sign extension). Caught by the min/max int32 rows in
-			// TestSlebIsNotUlebWithACast, which is why they are there.
-			if used := bits - shift; used < 7 {
-				high := c & 0x7F >> used    // the out-of-width bits, at bit 0
-				sign := c >> (used - 1) & 1 // the sign bit the width reaches
-				all := byte(0x7F >> used)   // that many ones
-				if (sign == 0 && high != 0) || (sign == 1 && high != all) {
-					return 0, ErrLEBOverflow
-				}
+		// The payload bits of this byte that fall outside the width must all equal
+		// the sign bit that the width does reach — all zero for a positive value,
+		// all one for a correct negative sign extension. Checked before the
+		// continuation bit, per sN.
+		//
+		// Both sides are compared in the same frame — shifted down to bit 0 —
+		// because the first version of this check masked the high bits in place
+		// and compared them against a constant shifted differently, which
+		// rejected min-int32 (`\80\80\80\80\78`, all three out-of-width bits set
+		// as a correct sign extension). Caught by the min/max int32 rows in
+		// TestSlebIsNotUlebWithACast, which is why they are there.
+		if used := bits - shift; used < 7 {
+			high := c & 0x7F >> used    // the out-of-width bits, at bit 0
+			sign := c >> (used - 1) & 1 // the sign bit the width reaches
+			all := byte(0x7F >> used)   // that many ones
+			if (sign == 0 && high != 0) || (sign == 1 && high != all) {
+				return 0, ErrLEBOverflow
 			}
 		}
 		v |= int64(c&0x7F) << shift
@@ -456,6 +484,11 @@ func (r *reader) sleb(bits uint) (int64, error) {
 				v |= -1 << shift
 			}
 			return v, nil
+		}
+		if i == maxBytes-1 {
+			// Width budget exhausted with the continuation bit still set — sN's
+			// `require (n > 0)`, reached rather than special-cased.
+			return 0, ErrLEBTooLong
 		}
 	}
 	// Unreachable for the same reason as uleb's tail: the last-byte branch returns on

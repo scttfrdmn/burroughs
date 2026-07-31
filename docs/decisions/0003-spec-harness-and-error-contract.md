@@ -210,8 +210,90 @@ time of definition. The distinction that keeps it honest is whether the
 disguise was noticed and labelled. It ships with a tracking issue rather
 than a silent definition.
 
+## Correction — 2026-07-31, the LEB taxonomy's *order* was wrong (#36)
+
+Appended, not edited. The body above stands as the record of what was believed
+and — the part worth preserving — of **why it survived review**. (Directive:
+Scott, PR #37; same law as the #5 amendment.)
+
+The taxonomy section is right about *what* the two classes are and wrong about
+**when each is tested.** It says "the order matters" and then prescribes the
+wrong one: the two bullets are listed continuation-bit first, and the
+implementation followed the document faithfully. The reference interpreter's
+`uN` checks the unused-bits **range** before consulting the continuation bit —
+
+```ocaml
+let rec uN n s =
+  require (n > 0) s pos "integer representation too long";
+  let b = byte s in
+  require (n >= 7 || b land 0x7f < 1 lsl n) s pos "integer too large";
+  ... if b land 0x80 = 0 then x else ... uN (n - 7) s
+```
+
+— so the width budget is exhausted *before* a byte is read (too long) and a
+byte's range is judged *when* it is read (too large), independent of whether it
+continues. For an input that is **both** over-wide and continued, the spec says
+*integer too large*; this document's ordering says *too long*.
+
+**Why this is the correction worth appending rather than a footnote.** The
+prescription above is *the defect stated as the rule*, and that is the strongest
+camouflage a bug can wear: review verifies code against its claims, so every
+subsequent reader who checked `uleb` against this ADR and against its own
+comment found agreement. Both were wrong together. **Comments and ADRs are
+testimony, and where prose and the reference's executable disagree, the
+executable outranks.** Two correct predicates composed in the wrong order is
+still wrong, and *order of tests is itself a claim about the spec* — which means
+it is a claim that needs an authority, not a derivation from vectors that happen
+not to distinguish the orderings.
+
+That last clause is the mechanical failure. The section says "Derived from the
+actual vectors", and it was — but the vectors it was derived from are exactly
+those where the two conditions **do not overlap**, so they cannot distinguish
+the two orderings. `TestLEBTaxonomy`, built from those same vectors, was green
+through the entire life of the defect. The overlap region *is* the bug, and no
+row asked about it.
+
+Also corrected: the witness `\ff\ff\ff\ff\ff\7f` is listed under the
+continuation-bit bullet, sourced from an **i32 const** — a *signed* field. The
+verdict for those bytes depends on the reader: `sN(32)` says *too long* (a legal
+sign extension one byte past the budget), `uN(32)` says *too large* (the fifth
+byte's payload exceeds the width). Both are right. The taxonomy's own lesson
+extends one step further than it states — the verdict is a function of the
+field's width **and signedness**, so a fixture must be read by the reader the
+field it came from actually uses. In the code that row had been asserted against
+`uleb`, and it only surfaced *because* the ordering fix broke it: it had been
+green for the wrong reason.
+
+**Measured, not argued.** `TestLEBMatchesReferenceUN` is a differential port of
+`uN`/`sN` over the derived disagreement space — k all-continuation prefix bytes
+× all 256 final bytes, k from 0 past the width budget:
+
+| | before | after |
+|---|---|---|
+| `bits=32` | 112 disagreements | 4096 verdicts, 0 |
+| `bits=64` | 126 disagreements | 6656 verdicts, 0 |
+
+Identical counts for `uleb` and `sleb`, which is what established one structural
+defect with two tenants; each half was falsified independently by reverting it
+alone and recovering exactly its own count. The port carries a vacuity control,
+because "0 disagreements" is also what an oracle that answers nothing produces.
+
+**What the design decision above got right, and keeps:** "the check is a function
+of the target width and signedness, not a property of LEB128" is the load-bearing
+claim, and it is correct. It is also what made the fix cheap — #36's width
+corrections (limits min/max are u64, the functype form tag is an s7) were
+parameter changes, not rewrites, and the same design handed over a free
+bidirectional control: identical bytes `80 80 80 80 10` are *integer too large*
+as a data-segment memory index and legal as a limits minimum. The ADR's
+architecture survived; its prescribed test order did not.
+
 ## Status
 
 **Accepted** 2026-07-30. Phase 1 implementation may proceed. The two graves
 were fixed in the same session as bugs against the decoder's existing scope,
 with regression tests drawn from the vectors above.
+
+**Amended** 2026-07-31 — see the Correction above (#36). The decision stands;
+the taxonomy's prescribed test order is superseded by the reference
+interpreter's, and the authority for order-of-tests questions is `decode.ml`,
+not a derivation from vectors that do not distinguish the orderings.

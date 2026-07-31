@@ -131,6 +131,92 @@ func TestFixtureProvenance(t *testing.T) {
 		checked, checkedFragments, synthetic)
 }
 
+// derivedPremises is a regexp over a `derived from <file>.wast:N[,N...]` declaration.
+var derivedPremises = regexp.MustCompile(`derived from ([a-zA-Z0-9_.-]+\.wast):([\d,: ]+)`)
+
+// TestDerivedFixturesStateResolvablePremises machine-checks the third provenance
+// category (ruling: Scott, PR #37).
+//
+// A **derived** vector is one the suite *implies* but does not contain.
+// TestLEBWidthIsPerField's accept half is the first: it asserts a wide-but-legal
+// limits minimum decodes, which binary-leb128.wast cannot say because it only
+// asserts malformedness, and which :217 and :525 jointly *bracket* — ten bytes wants
+// "integer too large", eleven wants "integer representation too long", so the width
+// is exactly 64 and a five-byte 2^32 is fine.
+//
+// *Entailment from checked facts is legitimate provenance; unstated entailment is
+// just synthetic with better manners.* So the category carries two obligations, and
+// this test enforces the half a machine can:
+//
+//  1. the row states its premises — `derived from <file>.wast:N,M` — and its
+//     inference, in prose, for a reviewer;
+//  2. **every premise resolves**: the line exists and carries suite content.
+//
+// The inference is reviewed by eyes; a premise citing a line that says something
+// else is caught here, by the same mechanism that catches a drifted transcription.
+// Without (2) the category would be a laundering channel — "derived" would excuse a
+// vector from provenance entirely, which is the shape a suppression wears.
+//
+// Falsified before trusted: perturbing a premise line number to one holding prose
+// fails with "premise does not resolve".
+func TestDerivedFixturesStateResolvablePremises(t *testing.T) {
+	requireSuite(t)
+
+	files := []string{
+		"../binary/binary_test.go",
+		"../binary/sections_test.go",
+		"../binary/constexpr_test.go",
+	}
+
+	var declared, premises int
+	for _, f := range files {
+		src, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatalf("read %s: %v", f, err)
+		}
+		for i, line := range strings.Split(string(src), "\n") {
+			lineNo := i + 1
+			if !strings.Contains(line, "derived") {
+				continue
+			}
+			m := derivedPremises.FindStringSubmatch(line)
+			if m == nil {
+				// "derived" as an English word in prose is fine; a *declaration* is the
+				// word plus premises. Only flag the case that looks like a claim of
+				// provenance without any: the marker sitting on a byte literal.
+				if lit := regexp.MustCompile(`\{(?:\s*0x[0-9a-fA-F]{2}\s*,?)+\}`); lit.MatchString(line) {
+					t.Errorf("%s:%d: a vector marked `derived` must state its premises as "+
+						"`derived from <file>.wast:N,M`; a derivation with no premises is "+
+						"synthetic with better manners:\n\t%s", f, lineNo, strings.TrimSpace(line))
+				}
+				continue
+			}
+			declared++
+			for _, n := range strings.FieldsFunc(m[2], func(r rune) bool { return r == ',' || r == ' ' || r == ':' }) {
+				if n == "" {
+					continue
+				}
+				if _, ok := suiteSourceLine(t, m[1], n); !ok {
+					t.Errorf("%s:%d: premise does not resolve: %s:%s holds no suite content "+
+						"(prose, a blank line, or past end of file). A premise nobody can read "+
+						"is not a premise.", f, lineNo, m[1], n)
+					continue
+				}
+				premises++
+			}
+		}
+	}
+
+	// The category is new, so its own control must not be vacuous — the same reason
+	// TestFixtureProvenance fails when it checks zero citations. If the last derived
+	// fixture is ever removed, this fails and asks whether the category is still real.
+	if declared == 0 {
+		t.Fatal("no derived fixtures found — either the declaration syntax has drifted " +
+			"from the fixtures, or the category is unused and this control is vacuous")
+	}
+	t.Logf("verified %d derived fixtures citing %d resolvable premises", declared, premises)
+}
+
 // suiteSourceLine returns the bytes encoded by the `"\hh"` escapes on one line of a
 // .wast file, for citations that name a fragment inside a module rather than the
 // module itself.
