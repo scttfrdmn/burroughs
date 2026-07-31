@@ -400,18 +400,27 @@ the choice, and consequences once Scott has called it.
   intra-layer form — an error message that reports a byte the image never held (the
   functype tag reconstruction printing `0x5e` as `0xde`) is the engine lying about
   its input, and no suite can see it, because the harness matches the sentinel and
-  never reads past the colon. (#36.)
+  reads no further than the expected string does. (#36.)
 - **An error message is testimony, and fabricated evidence is a lying witness even
-  when the verdict is right.** The suite matches the sentinel and **never reads past
-  the colon** — which is exactly why everything after the colon is ours alone to keep
-  honest. `ErrMalformedFuncType`'s reconstruction or'd a high bit in for every
-  negative form and reported a `0x5e` array tag as `0xde`: the right verdict, quoting
-  a byte the image never held, and green on every board by construction. So a message
-  that names a value from the input gets *printed for real inputs* before it is
-  trusted — the print-don't-trust check applies to the half of the error the oracle
-  cannot see, and that is where it earns the most. Its sibling above is the
-  wrong-layer tell: both are the engine being wrong about its own input, one across
-  layers and one inside a format string. (Ruling: Scott, PR #37; grave #36.)
+  when the verdict is right.** The rule is **match what the suite's expected string
+  contains** — and for most vectors that string stops at the sentinel, which is
+  exactly why everything past it is ours alone to keep honest.
+  `ErrMalformedFuncType`'s reconstruction or'd a high bit in for every negative form
+  and reported a `0x5e` array tag as `0xde`: the right verdict, quoting a byte the
+  image never held, and green on every board by construction. So a message that names
+  a value from the input gets *printed for real inputs* before it is trusted — the
+  print-don't-trust check applies to the half of the error the oracle cannot see, and
+  that is where it earns the most. Its sibling above is the wrong-layer tell: both are
+  the engine being wrong about its own input, one across layers and one inside a
+  format string. (Ruling: Scott, PR #37; grave #36.)
+  **Refinement, not repeal (#38):** *some expected strings carry data.*
+  `binary.wast:1218` expects `illegal opcode ff` — the byte is *inside* the sentinel —
+  so for those vectors message rendering is **oracle-covered**, and the invented-bits
+  class has suite teeth in the one place vectors exist. The doctrine was never "ignore
+  message text"; it was "the oracle reads exactly as far as its expected string
+  does." Print-checks cover everywhere it stops short, which is nearly everywhere.
+  Read the vector to know which case you are in — and note the shape: the sibling of
+  the buried defect is the newly-checked case. (Ruling: chat-Claude, #38.)
 - **Comments and ADRs are testimony too, and where prose and the reference's
   executable disagree, the executable outranks.** 0003's LEB section said "the order
   matters" and then prescribed the wrong order, so the implementation followed its

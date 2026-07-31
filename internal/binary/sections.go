@@ -207,9 +207,11 @@ func (d *Decoder) decodeFuncType(r *reader) error {
 		// here (sleb(7) has already returned "too long"). The first version of this
 		// expression or'd a high bit in for every negative form and reported 0x5e
 		// (array) as 0xde: an error about the module lying about the module, which no
-		// suite can catch because the harness matches the sentinel and never reads past
-		// the colon. Found by *printing* the output for nine tags rather than reading
-		// the expression's shape. Pinned by TestFuncTypeFormIsASignedLEB.
+		// suite vector here can catch, this one's expected string being the bare
+		// sentinel — the harness reads exactly as far as the expected string does, and
+		// where a spec string embeds a value (`illegal opcode ff`) the rendering *is*
+		// oracle-covered (#38). Found by *printing* the output for nine tags rather than
+		// reading the expression's shape. Pinned by TestFuncTypeFormIsASignedLEB.
 		return fmt.Errorf("%w: %#02x", ErrMalformedFuncType, byte(form&0x7F))
 	}
 	for range 2 { // params, then results — same grammar, twice
