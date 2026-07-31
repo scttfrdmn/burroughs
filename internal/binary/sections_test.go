@@ -21,16 +21,38 @@ import (
 // suite's totals barely move and the *texts* go wrong silently. Pinning each
 // direction independently, with an explicit note of which sign it is, is what
 // makes that failure loud.
+//
+// GRAVE (#34): this test was named for both signs and pinned one of them
+// twice. Its first case was labelled "grammar consumed MORE than declared" while its
+// own prose said "3 bytes are left over" — and the decoder reported `declared 7,
+// grammar consumed 4`, the *short* sign. Its second case is face 1, a different
+// mechanism entirely. So the grammar-long direction, the one the test exists for,
+// had no assertion at all; the third case that was meant to carry it could not,
+// because the global grammar did not exist yet, and its `t.Log` deferral hid that
+// the *sign* was missing rather than just that one vector was.
+//
+// The lesson is the coverage cousin of "a green that survives the bug it names":
+// **a test named for a partition must be checked against the partition, not against
+// its own case labels.** Two cases whose labels say "more" and "less" can both
+// produce "less", and nothing on the board says so — the count is right and the
+// coverage is not. Verified by printing the decoder's actual message for each
+// vector rather than trusting the label, which is what turned this up.
 func TestSectionSizeBothSigns(t *testing.T) {
-	// Grammar consumed MORE than declared: a type section declaring 7 bytes and
-	// supplying two 3-byte functypes plus the count = 7 bytes of grammar... with
-	// the count saying 1, so the grammar stops after 4 and 3 bytes are left over.
+	// Face 3, grammar consumed LESS than declared: a type section declaring 7 bytes
+	// with a count of 1, so the grammar stops after 4 and 3 bytes are left over.
+	//
+	// The assertion checks the *message*, not just the identity. Both signs are the
+	// same error value, so `errors.Is` alone cannot tell them apart — which is how
+	// this test came to pin one sign twice while reading as though it covered both.
 	grammarShort := []byte{
 		0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00,
 		0x01, 0x07, 0x01, 0x60, 0x00, 0x00, 0x60, 0x00, 0x00,
 	} // binary.wast:469  1 type declared, 2 given
-	if _, err := DecodeModule(grammarShort); !errors.Is(err, ErrSectionSizeMismatch) {
+	_, err := DecodeModule(grammarShort)
+	if !errors.Is(err, ErrSectionSizeMismatch) {
 		t.Errorf("grammar-short-of-declared: got %v, want ErrSectionSizeMismatch", err)
+	} else if !contains(err.Error(), "declared 7 bytes, grammar consumed 4") {
+		t.Errorf("grammar-short-of-declared: message %q does not report declared 7 / consumed 4 — the sign is not being distinguished", err)
 	}
 
 	// The opposite sign: a type section declaring 7 bytes with a count of 2, so
@@ -46,24 +68,47 @@ func TestSectionSizeBothSigns(t *testing.T) {
 		0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00,
 		0x01, 0x07, 0x02, 0x60, 0x00, 0x00,
 	} // binary.wast:458  2 types declared, 1 given
-	if _, err := DecodeModule(declaredPastImage); !errors.Is(err, ErrSectionOverrun) {
+	if _, err = DecodeModule(declaredPastImage); !errors.Is(err, ErrSectionOverrun) {
 		t.Errorf("declared-past-image: got %v, want ErrSectionOverrun", err)
 	}
 
-	// And face 3 in the grammar-long direction, where the image *is* long enough
-	// because a later section supplies the bytes the grammar over-reads into. This
-	// is the sign that a section-bounded reader would never produce, and the one
-	// binary.wast:92 documents in its own comment.
-	grammarLong := []byte{
+	// binary.wast:714, which #25 named as this test's third case and which turns out
+	// to be the *same* sign as the first: 1 global declared with 2 given, so the
+	// grammar stops after one global (6 bytes) inside a declared 11. It asserts now
+	// that the global grammar exists — but it does not add a sign, which is the
+	// grave above.
+	oneGlobalDeclaredTwoGiven := []byte{
 		0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00,
 		0x06, 0x0B, 0x01, 0x7F, 0x00, 0x41, 0x00, 0x0B, 0x7F, 0x00, 0x41, 0x00, 0x0B,
 	} // binary.wast:714  1 global declared, 2 given
-	// The global section has no grammar yet (#25), so this vector is still on the
-	// board — asserting the error here would be asserting a check that does not
-	// exist. What is pinned is that it is *not* silently accepted for the wrong
-	// reason: it must fail, or be a declared gap.
-	if _, err := DecodeModule(grammarLong); err == nil {
-		t.Log("binary.wast:714 accepted — global section grammar is not implemented (#25); tracked, not silent")
+	_, err = DecodeModule(oneGlobalDeclaredTwoGiven)
+	if !errors.Is(err, ErrSectionSizeMismatch) {
+		t.Errorf("binary.wast:714: got %v, want ErrSectionSizeMismatch", err)
+	} else if !contains(err.Error(), "declared 11 bytes, grammar consumed 6") {
+		t.Errorf("binary.wast:714: message %q does not report declared 11 / consumed 6", err)
+	}
+
+	// Face 3 in the grammar-LONG direction — the sign this test was named for and
+	// never had. A global section declaring 3 bytes when one global needs 5, so the
+	// grammar reads past the declared end into bytes the image does supply (which is
+	// what distinguishes this from face 1: the declared extent is *inside* the image,
+	// the grammar simply disagrees with it).
+	//
+	// Synthetic, and it has to be: the suite's size-mismatch vectors are all the
+	// short sign, so this direction has no upstream vector. That is precisely the
+	// argument for asserting it here — a sign the suite never exercises is a sign a
+	// pass count cannot defend, and swapping the comparison would still leave the
+	// board green.
+	grammarLong := []byte{
+		0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00,
+		0x06, 0x03, 0x01, 0x7F, 0x00, // global section: declares 3, count + 2 bytes
+		0x41, 0x00, 0x0B, // the rest of global 0, past the declared extent
+	} // synthetic: the suite has no grammar-long size-mismatch vector
+	_, err = DecodeModule(grammarLong)
+	if !errors.Is(err, ErrSectionSizeMismatch) {
+		t.Errorf("grammar-long-of-declared: got %v, want ErrSectionSizeMismatch", err)
+	} else if !contains(err.Error(), "declared 3 bytes, grammar consumed 6") {
+		t.Errorf("grammar-long-of-declared: message %q does not report declared 3 / consumed 6 — a swapped comparison would read the same as the short sign", err)
 	}
 }
 

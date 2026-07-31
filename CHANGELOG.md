@@ -269,6 +269,20 @@ weakly-ordered platform.
   because `Fatalf`-then-`Skip` leans on `runtime.Goexit` to not return.
 
 ### Fixed
+- **`TestSectionSizeBothSigns` was named for both signs and pinned one of them
+  twice.** Its first case was labelled "grammar consumed MORE than declared" while
+  its own prose said "3 bytes are left over", and the decoder reported `declared 7,
+  grammar consumed 4` — the *short* sign. Its second case is face 1, a different
+  mechanism. So the grammar-long direction, the only reason the test exists, had no
+  assertion at all, and the `t.Log` deferral on its third case hid that a *sign* was
+  missing rather than just one vector. Both signs now assert on the error **message**
+  (`errors.Is` cannot tell them apart — they are the same error value), and a
+  synthetic grammar-long vector covers the direction the suite has no vector for.
+  Falsified by swapping the two operands in the message, which now fails three
+  assertions instead of none. Lesson: **a test named for a partition must be checked
+  against the partition, not against its own case labels** — the coverage cousin of
+  *a green that survives the bug it names.* Found while discharging the declared gap
+  #25 left in that test. ([#34](https://github.com/scttfrdmn/burroughs/issues/34))
 - **`fuzz-smoke` was budgeted in the wrong unit** (#28). The job exists to catch a
   target that stopped building or a corpus that regressed — its purpose names
   *executions* — but its budget was wall clock on a shared runner, making it
