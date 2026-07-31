@@ -2,7 +2,12 @@ package binary
 
 import (
 	"errors"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
+
+	"github.com/scttfrdmn/burroughs/internal/testenv"
 )
 
 // The agreement test decision 0006 pre-registered (#33), landing in the same PR as the
@@ -71,24 +76,110 @@ import (
 // the authority's vocabulary to this package's readers, so the differential is between
 // *sequences the table chose* and *sequences constExprOps chose*, which are independent.
 //
+// # Enrolled, not merely independent (ruling: Scott, PR #43)
+//
+// An independent hand-written copy of a duplicated fact is legitimate **only if it
+// testifies**. Three copies with only some checked is a drift farm, so the rule that
+// settles 0006's shape is: *every copy of a fact is either an enrolled witness or a
+// derived artifact.* immBytes is enrolled. Two obligations follow, and both are
+// discharged by tests below rather than by this comment:
+//
+//   - Every entry cites the authority's own definition (the `authority` field), and
+//     TestImmBytesCitationsResolve machine-checks that the cited line says what the
+//     citation claims — the fixture-provenance rule pointed at a reader table.
+//   - Every non-nil entry is measured *on its own*, not only in composition over the
+//     const set, by TestEveryReaderAgreesWithItsAuthorityDefinition. Composition-only
+//     coverage is what let two wrong entries sit here green: `laneidx` and `laneidx16`
+//     are unreachable from the const production, so the extent differential never once
+//     compared them. Both were wrong (grave #47).
+//
+// On disagreement the **reference-derived table is the presumptive authority** — that is
+// the whole content of 0007. A disagreement is a bug in this map until decode.ml is shown
+// to say otherwise.
+//
 // A nil reader means "no flat reader exists", which is a real category rather than a
 // gap: the four structural arms (block, loop, if, try_table) recurse through the
 // instruction grammar and cannot be expressed as a byte count. The const production
 // contains none of them, and TestConstSetUsesNoStructuralImmediate is what keeps that
 // from being an assumption.
-var immBytes = map[imm]func(*Decoder, *reader) error{
-	immS32:     func(_ *Decoder, r *reader) error { _, err := r.s32(); return err },
-	immS64:     func(_ *Decoder, r *reader) error { _, err := r.s64(); return err },
-	immF32:     func(_ *Decoder, r *reader) error { _, err := r.bytes(4); return err },
-	immF64:     func(_ *Decoder, r *reader) error { _, err := r.bytes(8); return err },
-	immV128:    func(_ *Decoder, r *reader) error { _, err := r.bytes(16); return err },
-	immIdx:     func(_ *Decoder, r *reader) error { return discardIndex(r) },
-	immU32:     func(_ *Decoder, r *reader) error { _, err := r.u32(); return err },
-	immByte:    func(_ *Decoder, r *reader) error { _, err := r.byte(); return err },
-	immLaneIdx: func(_ *Decoder, r *reader) error { _, err := r.byte(); return err },
-	immLane16:  func(_ *Decoder, r *reader) error { _, err := r.bytes(16); return err },
-	immHeapType: func(d *Decoder, r *reader) error {
-		return d.decodeRefType(r)
+var immBytes = map[imm]reader3{
+	// The LEB readers. Width matters and is the authority's, not a guess: idx is u32
+	// (decode.ml:151), and laneidx is *u8* (decode.ml:152) — `uN 8`, a one-to-two-byte
+	// LEB, not a raw byte. See ImmLaneIdx's entry for why that distinction cost a grave.
+	immS32: {
+		"decode.ml:107", "let s32 s = I32.of_int_s (I64.to_int_s (sN 32 s))",
+		func(_ *Decoder, r *reader) error { _, err := r.s32(); return err },
+	},
+	immS64: {
+		"decode.ml:109", "let s64 s = sN 64 s",
+		func(_ *Decoder, r *reader) error { _, err := r.s64(); return err },
+	},
+	immU32: {
+		"decode.ml:104", "let u32 s = I32.of_int_u (I64.to_int_u (uN 32 s))",
+		func(_ *Decoder, r *reader) error { _, err := r.u32(); return err },
+	},
+	immIdx: {
+		"decode.ml:151", "let idx s = u32 s",
+		func(_ *Decoder, r *reader) error { return discardIndex(r) },
+	},
+
+	// The fixed-width readers. word32/word64 are little-endian raw reads, not LEBs, and
+	// v128 is a flat 16-byte string — so a byte count is the honest reader here.
+	immF32: {
+		"decode.ml:110", "let f32 s = F32.of_bits (word32 s)",
+		func(_ *Decoder, r *reader) error { _, err := r.bytes(4); return err },
+	},
+	immF64: {
+		"decode.ml:111", "let f64 s = F64.of_bits (word64 s)",
+		func(_ *Decoder, r *reader) error { _, err := r.bytes(8); return err },
+	},
+	immV128: {
+		"decode.ml:112", "let v128 s = V128.of_bits (get_string 16 s)",
+		func(_ *Decoder, r *reader) error { _, err := r.bytes(16); return err },
+	},
+
+	// `op s = byte s` — the raw one-byte read, and the only immediate that genuinely is
+	// one. Everything that *looks* like a byte because its values are small is a LEB.
+	immByte: {
+		"decode.ml:67", "let byte s =",
+		func(_ *Decoder, r *reader) error { _, err := r.byte(); return err },
+	},
+
+	// GRAVE (#47): this was r.byte(). `laneidx s = u8 s` and `u8 s = ... (uN 8 s)`, so a
+	// lane index is a LEB whose canonical encoding is one byte and whose *legal* encoding
+	// runs to two (`81 01` is 129 in two bytes: uN 8 accepts it, byte() stops after one).
+	// Wrong by one byte on every non-canonical lane index, and invisible here for two
+	// compounding reasons — no lane instruction is const-legal, so composition never
+	// reached it, and "laneidx is small so it must be a byte" reads correctly.
+	immLaneIdx: {
+		"decode.ml:152", "let laneidx s = u8 s",
+		func(_ *Decoder, r *reader) error { _, err := r.uleb(8); return err },
+	},
+
+	// GRAVE (#47): this was r.bytes(16). `repeat 16 laneidx s` is sixteen *laneidx*
+	// reads, so its extent is 16..32 bytes, not 16. Same root as immLaneIdx and the same
+	// blind spot: i8x16_shuffle is not const-legal either. The extractor got the
+	// *count* right (that was #46) and this map got the *element* wrong.
+	immLane16: {
+		"decode.ml:699", "| 0x0dl -> let is = repeat 16 laneidx s in i8x16_shuffle is",
+		func(_ *Decoder, r *reader) error {
+			for range 16 {
+				if _, err := r.uleb(8); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+	},
+
+	// heaptype is `either [typeuse s33; s7 ...]` — a backtracking alternation, so its
+	// extent is input-dependent in general. decodeRefType covers the one-byte shorthand
+	// this decoder accepts today; the difference is bounded by
+	// TestEveryReaderAgreesWithItsAuthorityDefinition's declared-partial entry rather
+	// than left as a silent approximation.
+	immHeapType: {
+		"decode.ml:179", "let heaptype s =",
+		func(d *Decoder, r *reader) error { return d.decodeRefType(r) },
 	},
 
 	// Present in the vocabulary, no flat reader, and each absence is a claim:
@@ -102,14 +193,36 @@ var immBytes = map[imm]func(*Decoder, *reader) error{
 	//   immCatchVec    a vec of catch clauses (try_table).
 	//   immBlockType   a blocktype: an s33 that is either a valtype or a type index.
 	//   immBlock       structural — instr_block + end_, i.e. recursion.
-	immMemop:      nil,
-	immValType:    nil,
-	immVecValType: nil,
-	immVecIdx:     nil,
-	immCatchVec:   nil,
-	immBlockType:  nil,
-	immBlock:      nil,
+	immMemop:      {"decode.ml:324", "let memop s =", nil},
+	immValType:    {"decode.ml:220", "let valtype s =", nil},
+	immVecValType: {"decode.ml:123", "let vec f s = let n = len32 s in list f n s", nil},
+	immVecIdx:     {"decode.ml:123", "let vec f s = let n = len32 s in list f n s", nil},
+	immCatchVec:   {"decode.ml:123", "let vec f s = let n = len32 s in list f n s", nil},
+	immBlockType:  {"decode.ml:334", "let blocktype s =", nil},
+	immBlock:      {"decode.ml:967", "and instr_block' s es =", nil},
 }
+
+// reader3 is one enrolled entry: this package's reader for an immediate, plus the
+// citation that makes it a witness rather than a third opinion.
+//
+// The name is deliberate — it is the *third* copy of the fact (decoder readers, table,
+// this map), and naming it that is a standing reminder of why the citation fields are
+// not optional.
+type reader3 struct {
+	// authority is a `decode.ml:N` citation for the definition this reader mirrors.
+	authority string
+	// text is what that line says, checked verbatim against the vendored source by
+	// TestImmBytesCitationsResolve. A citation nobody verifies is a claim, not a
+	// citation — and a citation that has drifted to a *different* line is worse than
+	// absent, because it looks checked.
+	text string
+	// read is nil when no flat reader exists; see immBytes' comment for each case.
+	read func(*Decoder, *reader) error
+}
+
+// bytesFor is the accessor the extent comparisons use, so enrolling immBytes did not
+// change their shape: a nil reader is still "no flat reader exists".
+func bytesFor(im imm) func(*Decoder, *reader) error { return immBytes[im].read }
 
 // prefixRegions is every region of the generated table, derived from the generator's
 // own output rather than listed here.
@@ -122,6 +235,161 @@ var prefixRegions = map[byte]map[uint32]opInfo{
 	0xfb: opTableFB,
 	0xfc: opTableFC,
 	0xfd: opTableFD,
+}
+
+// refDecodeML is the vendored authority, reached through the licensed door.
+var refDecodeML = filepath.Join("..", "..", testenv.RefDecodeML)
+
+// TestImmBytesCitationsResolve is what makes immBytes an enrolled witness rather than a
+// third hand-written opinion (ruling: Scott, PR #43).
+//
+// Every entry claims a `decode.ml:N` definition and quotes it; this reads the vendored
+// source and checks the quote is what that line actually says. Exactly the
+// fixture-provenance mechanism (`TestFixtureProvenance`) pointed at a reader table: a
+// citation nobody verifies is a claim, and a citation that has drifted to a different
+// line is *worse* than an absent one, because it looks checked.
+//
+// The reader itself is reviewed by eyes against the cited text — that judgement is
+// allowed. What is machine-checked is that the premise resolves, which is the half a
+// mechanism can own.
+func TestImmBytesCitationsResolve(t *testing.T) {
+	src := testenv.RequireSpecRef(t, refDecodeML)
+	lines := strings.Split(src, "\n")
+
+	if len(immBytes) == 0 {
+		t.Fatal("immBytes is empty: a citation check over no entries resolves everything")
+	}
+	for im, e := range immBytes {
+		if e.authority == "" || e.text == "" {
+			t.Errorf("%q has no citation: an enrolled witness testifies or it is derived; "+
+				"there is no third option (PR #43)", im)
+			continue
+		}
+		prefix, num, ok := strings.Cut(e.authority, ":")
+		if !ok || prefix != "decode.ml" {
+			t.Errorf("%q: citation %q is not of the form decode.ml:N", im, e.authority)
+			continue
+		}
+		n, err := strconv.Atoi(num)
+		if err != nil || n < 1 || n > len(lines) {
+			t.Errorf("%q: citation %q does not resolve to a line in a %d-line file",
+				im, e.authority, len(lines))
+			continue
+		}
+		if got := strings.TrimSpace(lines[n-1]); got != strings.TrimSpace(e.text) {
+			t.Errorf("%q: %s says\n\t\tgot  %q\n\t\twant %q\n\t"+
+				"the citation has drifted: either upstream moved and the reader needs "+
+				"re-checking against the new definition, or the line was wrong when written",
+				im, e.authority, got, e.text)
+		}
+	}
+	t.Logf("%d immBytes citations resolve against %s", len(immBytes), refDecodeML)
+}
+
+// TestEveryReaderAgreesWithItsAuthorityDefinition measures each enrolled reader on its
+// own, which composition over the const set cannot do.
+//
+// This is the control that would have caught grave #47 and did not exist to. The extent
+// differential runs the *whole immediate sequence* of const-legal opcodes, so a reader
+// no const-legal opcode uses is never exercised — `laneidx` and `laneidx16` sat in
+// immBytes wrong, and green, for exactly that reason. Scoped to the space: every non-nil
+// entry, not the ones today's const set reaches.
+//
+// The vectors are **derived**, in the provenance sense (PR #37): the suite contains no
+// vector for a two-byte lane index, and `binary.wast` cannot supply one because a
+// non-canonical-but-legal LEB in a lane field is *well-formed* — the accept direction,
+// which is the blind spot 0007 exists for. Each case states the reference's rule and the
+// extent it entails.
+func TestEveryReaderAgreesWithItsAuthorityDefinition(t *testing.T) {
+	// A LEB whose canonical form is one byte, encoded in two: continuation bit set on
+	// the first, payload in the second. Legal for any width uN/sN accepts, and the
+	// discriminator between a LEB reader and a raw byte read.
+	const twoByteLEB = "\x81\x00"
+	// Sixteen of them, for repeat 16.
+	lane16Wide := strings.Repeat(twoByteLEB, 16)
+
+	cases := map[imm]struct {
+		in   string
+		want int    // bytes the authority's definition consumes
+		why  string // the rule that entails it
+	}{
+		immByte: {
+			"\x81\x00", 1,
+			"decode.ml:321 `op s = byte s` is a raw read: one byte, continuation bit or not",
+		},
+		immU32: {
+			twoByteLEB, 2,
+			"uN 32 consumes continuation bytes; a two-byte encoding of 1 is legal and consumed whole",
+		},
+		immIdx: {twoByteLEB, 2, "idx s = u32 s (decode.ml:151), so it is a LEB"},
+		immS32: {twoByteLEB, 2, "sN 32, same continuation rule"},
+		immS64: {twoByteLEB, 2, "sN 64, same continuation rule"},
+		immF32: {
+			"\x81\x00\x00\x00\x00", 4,
+			"word32 is four raw little-endian bytes: no continuation logic at all",
+		},
+		immF64: {"\x81\x00\x00\x00\x00\x00\x00\x00\x00", 8, "word64, eight raw bytes"},
+		immV128: {
+			strings.Repeat("\x81", 17), 16,
+			"v128 s = get_string 16 s: a flat sixteen-byte string",
+		},
+		immLaneIdx: {
+			twoByteLEB, 2,
+			"laneidx s = u8 s = uN 8 (decode.ml:152,103): a LEB, so a two-byte encoding " +
+				"consumes two — this is grave #47's exact vector",
+		},
+		immLane16: {
+			lane16Wide, 32,
+			"repeat 16 laneidx (decode.ml:699): sixteen laneidx reads, so 16..32 bytes, " +
+				"not a flat bytes(16)",
+		},
+		// heaptype is declared partial rather than omitted: decodeRefType covers the
+		// one-byte shorthand and the alternation's other branch (typeuse s33) is #7's.
+		// Stating the bound is what keeps a partial reader from being a silent one.
+		immHeapType: {
+			"\x70", 1,
+			"decodeRefType covers heaptype's single-byte shorthand branch; the typeuse s33 " +
+				"branch is not implemented and its coverage arrives with #7",
+		},
+	}
+
+	d := &Decoder{}
+	checked := 0
+	for im, e := range immBytes {
+		if e.read == nil {
+			continue
+		}
+		c, ok := cases[im]
+		if !ok {
+			t.Errorf("%q has a reader but no per-reader vector: composition over the const "+
+				"set does not reach every reader, so an unexercised entry is grave #47's "+
+				"shape waiting to happen", im)
+			continue
+		}
+		r := &reader{b: []byte(c.in)}
+		if err := e.read(d, r); err != nil {
+			t.Errorf("%q: reader failed on its own vector %x: %v", im, c.in, err)
+			continue
+		}
+		if r.off != c.want {
+			t.Errorf("%q (%s): consumed %d bytes on %x, the authority's definition entails %d\n\t%s",
+				im, e.authority, r.off, c.in, c.want, c.why)
+		}
+		checked++
+	}
+	// Vacuity: an agreement over zero readers agrees perfectly. The floor is the count
+	// of non-nil entries, derived rather than written down.
+	flat := 0
+	for _, e := range immBytes {
+		if e.read != nil {
+			flat++
+		}
+	}
+	if checked != flat || flat == 0 {
+		t.Errorf("measured %d of %d flat readers (flat must be >0): a per-reader claim must "+
+			"walk every reader it claims", checked, flat)
+	}
+	t.Logf("%d flat readers agree with their authority definitions", checked)
 }
 
 // TestEveryImmediateInTheTableHasABytesVerdict asserts totality of the seam.
@@ -170,7 +438,7 @@ func TestConstSetUsesNoStructuralImmediate(t *testing.T) {
 			continue // membership's problem, asserted separately
 		}
 		for _, im := range info.imms {
-			if immBytes[im] == nil {
+			if bytesFor(im) == nil {
 				t.Errorf("const-legal %#02x (%s) has structural immediate %q: the extent "+
 					"comparison cannot cover it, so it must not silently be excluded from one",
 					b, op.name, im)
@@ -253,7 +521,7 @@ func TestConstExprExtentMatchesTheAuthority(t *testing.T) {
 
 		theirs := &reader{b: []byte(input)}
 		for _, im := range info.imms {
-			read := immBytes[im]
+			read := bytesFor(im)
 			if read == nil {
 				t.Fatalf("%#02x (%s): structural immediate %q reached the extent comparison; "+
 					"TestConstSetUsesNoStructuralImmediate should have caught this first", b, op.name, im)
@@ -437,7 +705,7 @@ func TestAgreementHoldsUnderEveryFeatureConfiguration(t *testing.T) {
 			theirs := &reader{b: []byte(input)}
 			bad := false
 			for _, im := range info.imms {
-				if read := immBytes[im]; read != nil {
+				if read := bytesFor(im); read != nil {
 					if err := read(d, theirs); err != nil {
 						bad = true
 						break

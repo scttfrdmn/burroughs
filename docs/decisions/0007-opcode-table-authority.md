@@ -102,6 +102,12 @@ paid on every runner, every job, forever.
 
 ### The table's shape, counted (not estimated)
 
+> **Stale as written — see [Correction (2026-07-31, during #39)](#correction-2026-07-31-during-39-the-counted-shape-was-wrong).**
+> Every figure in this section is wrong, and the heading's claim about method is the
+> reason why. Body preserved per the 0003 precedent; the pointer is here because a
+> claim must not present itself as current while its correction lives three sections
+> away. (Ruling: Scott, PR #43.)
+
 `decode.ml`, 38042 bytes. The `instr` function:
 
 | region | arms |
@@ -161,7 +167,8 @@ A generator under `internal/binary/internal/opcodegen` (or `tools/`) parses the
 on any disagreement with the committed table.
 
 **For:** no OCaml anywhere. The measured regularity (504 arms, 368 immediate-free, a
-16-reader vocabulary) says the extraction is a small, testable pure-Go program. The
+16-reader vocabulary — figures corrected in the Correction section; the regularity
+claim survives, more strongly) says the extraction is a small, testable pure-Go program. The
 committed output means a fresh clone builds with no fetch, and the drift check means
 the reference stays the authority rather than becoming a historical influence. Same
 shape as every other control here: a human wrote it, a machine checks it.
@@ -189,7 +196,8 @@ satisfies the letter of "machine-checked" and misses the point of it.
 only option that puts one there without also putting an OCaml toolchain in the build.
 The measured shape is what makes it credible rather than optimistic: 368 of 504 arms
 carry no immediates, the remaining vocabulary is 16 readers, and the four irregular
-arms are hand-written under either option.
+arms are hand-written under either option. (Figures corrected below — 411 of 542, 17
+readers. The ratio, which is what this argument rests on, is unchanged.)
 
 B's weakness is real and worth stating plainly: it reads source text, and text can be
 misread. Two things bound it. First, the extractor errors on anything it does not
@@ -316,11 +324,18 @@ mechanism this ADR chose:
 
 | region | ADR said | actually | why the ADR was wrong |
 |---|---|---|---|
-| single-byte opcodes | 201 | **215** | counted arm *lines*, not arms |
-| `0xfb` prefix (GC) | 29 | **31** | same |
+| single-byte opcodes | 201 | **218** | counted arm *lines*, not arms; and omitted the 3 prefix escapes |
+| `0xfb` prefix (GC) | 29 | **31** | lines, not arms |
 | `0xfc` prefix (misc) | 18 | **18** | — |
 | `0xfd` prefix (SIMD) | 256 | **275** | assumed sub-opcodes are bytes |
-| **total** | **504** | **539** | |
+| **total** | **504** | **542** | |
+
+The single-byte figure moved twice, and the second move is worth naming because it
+happened *after* this section was first written, inside the same PR: 215 arms parse out
+of the source text, and `0xfb`/`0xfc`/`0xfd` are three further single-byte facts — an
+escape is neither absent nor illegal, and the first table omitted all three. Found from
+outside by #33, not by the extractor's own partition test, which enumerated the three
+prefixes as a literal and so could not miss them. Grave #45.
 
 **Error one — an arm is not a line.** A single `| 0x18l | 0x19l as opcode ->` head is
 one line and two opcodes, and a head can wrap across lines (`decode.ml:601` cost an

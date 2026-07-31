@@ -326,6 +326,18 @@ weakly-ordered platform.
   present / 8 const-legal = 256), dispatch coverage both ways, and invariance across
   all 16 tracked feature configurations. Each one falsified by inducing the defect it
   names.
+- **`immBytes` is an enrolled witness**, which is the ruling that settles decision
+  0006's shape once: *every copy of a fact is either an enrolled witness or a derived
+  artifact* — three copies with only some checked is a drift farm. So the seam between
+  the authority's vocabulary and this package's readers now testifies. Every entry
+  cites the `decode.ml:N` definition it mirrors and quotes it, machine-checked against
+  the vendored source (`TestImmBytesCitationsResolve` — the fixture-provenance
+  mechanism pointed at a reader table; it caught two drifted citations of its author's
+  on its first run). And every flat reader is measured **on its own** against a derived
+  vector stating the reference rule that entails its extent
+  (`TestEveryReaderAgreesWithItsAuthorityDefinition`), because composition over the
+  const set reaches eight opcodes out of a nineteen-entry vocabulary. On disagreement
+  the reference-derived table is the presumptive authority.
 
 ### Fixed
 - Four extractor defects found by printing what the code returned rather than by
@@ -355,6 +367,26 @@ weakly-ordered platform.
   `Code generated ... DO NOT EDIT.`, so the gap it controlled does not exist. Deleted,
   with the measurement recorded at the site — before controlling a gap, check the gap
   exists.
+- Two `immBytes` readers were wrong and **no test could reach them** (grave #47).
+  `laneidx` read a raw byte; `let laneidx s = u8 s` is `uN 8`, a LEB, so the legal
+  two-byte encoding `81 00` consumed one byte instead of two. `laneidx16` read a flat
+  `bytes(16)`; `repeat 16 laneidx s` is sixteen LEB reads, 16..32 bytes. Both invisible
+  for two compounding reasons: no lane instruction is const-legal, so the extent
+  differential never executed either entry, and "a lane index is 0..15, so it is a
+  byte" is true about the value and false about the encoding. The general form is
+  *a control that only exercises a fact in composition covers the compositions, not the
+  fact* — scope controls to the space the **map** spans, not the one its current callers
+  reach. Neither is suite-visible: a non-canonical-but-legal LEB is well-formed, which
+  is the accept direction 0007 exists to cover.
+- Two drifted citations in the same map, found by the citation check on its first run
+  (`blocktype` 230→334, `instr_block'` 612→967) — hand-written line numbers, exactly
+  the defect `TestFixtureProvenance` was built for, in a new place.
+- Decision 0007's stale figures wear a pointer at their point of reading, not just a
+  correction three sections away (ruling: Scott, PR #43). *Records are append-corrected;
+  stale claims wear a pointer* — the body is preserved per the 0003 precedent, and the
+  `counted (not estimated)` heading now forward-references the section that falsifies
+  it. The Correction's own single-byte figure was stale too (215, written before the
+  escape rows landed in the same PR) and is now 218.
 - CI's `build` job vendors the reference interpreter too, not only the suite. It runs
   `go test ./...`, which reaches the extractor's tests, which call `RequireSpecRef` —
   and under the workflow-wide `BURROUGHS_NO_SKIP=1` that is a **fail**, not a skip.
