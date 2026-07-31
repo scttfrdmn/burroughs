@@ -276,7 +276,34 @@ weakly-ordered platform.
   caught a real defect in the strictness helper — it reported a fail *and* a skip,
   because `Fatalf`-then-`Skip` leans on `runtime.Goexit` to not return.
 
+### Added
+- **`derived` accepted as the third provenance category** — cited, derived,
+  synthetic. A derived fixture is one the suite *implies* but does not contain:
+  `TestLEBWidthIsPerField`'s accept half asserts a wide-but-legal limits minimum
+  decodes, which `binary-leb128.wast` cannot state because it only asserts
+  malformedness, and which `:529` and `:221` jointly **bracket** — ten bytes wants
+  *integer too large*, eleven wants *integer representation too long*, so the only
+  width satisfying both is 64. *Entailment from checked facts is legitimate
+  provenance; unstated entailment is just synthetic with better manners.* So the
+  category carries obligations and `TestDerivedFixturesStateResolvablePremises`
+  enforces the half a machine can: a derived row states its premises
+  (`derived from <file>.wast:N,M`) and every premise must **resolve** to a suite
+  line carrying content. The inference is reviewed by eyes; a premise pointing at
+  prose is caught by the same mechanism that catches a drifted transcription.
+  Falsified four ways before being trusted — premise pointing at prose, premise
+  past end of file, a `derived` marker with no premises at all (the laundering
+  channel), and the category going empty, which fails rather than passing
+  vacuously. (Ruling: Scott, PR #37.)
+
 ### Changed
+- **Decision 0003 amended**: its LEB taxonomy prescribed the *wrong test order*,
+  and the implementation followed its documentation faithfully — so every reviewer
+  who checked the code against its claims found agreement. Appended, not edited: the
+  body stands as the record of what was believed and of why it survived review. The
+  authority for order-of-tests questions is the reference interpreter's `decode.ml`,
+  not a derivation from vectors that cannot distinguish the orderings. Also corrects
+  the ADR's `\ff\ff\ff\ff\ff\7f` witness, which is listed under the continuation-bit
+  bullet while being sourced from a *signed* field.
 - **LEB widths are per field, not one width for the whole decoder.** Limits
   minimum and maximum are read at **64 bits**; indices and counts stay 32. The
   suite brackets it from both sides: `binary-leb128.wast:525`'s ten-byte memory
@@ -339,9 +366,15 @@ weakly-ordered platform.
   `0x5e` array tag as `0xde`. Nothing in the suite can see it — the harness
   matches on the sentinel text and never reads past the colon — and it was found
   by *printing what the expression returns for nine tags* rather than reading its
-  shape. An error about the module that lies about the module is the
-  wrong-layer tell in miniature.
+  shape. Lesson: **an error message is testimony, and fabricated evidence is a
+  lying witness even when the verdict is right.** The oracle never reads past the
+  colon, which is exactly why everything after it is ours alone to keep honest.
   ([#36](https://github.com/scttfrdmn/burroughs/issues/36))
+- **CI's `deadcode` allowlist still filtered `reader.u64`** while the Makefile's
+  comment already claimed the allowlist was empty — one truth, two authorities,
+  disagreeing. Found by the ruling-falsifies-prose sweep. A gate and its local
+  mirror disagreeing is each one's reason to exist, and a suppression outliving its
+  subject licenses the next regression silently.
 - **`TestSectionSizeBothSigns` was named for both signs and pinned one of them
   twice.** Its first case was labelled "grammar consumed MORE than declared" while
   its own prose said "3 bytes are left over", and the decoder reported `declared 7,

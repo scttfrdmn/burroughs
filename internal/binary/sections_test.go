@@ -281,8 +281,16 @@ func TestLEBWidthIsPerField(t *testing.T) {
 		t.Errorf("memory index as %x: got %v, want ErrLEBOverflow — an index is a u32, so 2^32 does not fit", twoTo32, err)
 	}
 
-	// synthetic (derived; see the doc comment): the same fragment as a limits
-	// minimum, where the field is 64 bits wide and the value is representable.
+	// The same fragment as a limits minimum, where the field is 64 bits wide and the
+	// value is representable.
+	//
+	// Provenance: derived from binary-leb128.wast:529,221 — not cited, because the
+	// suite cannot state this. Those two lines are limits minima of ten and eleven
+	// bytes, wanting "integer too large" and "integer representation too long"
+	// respectively; the *only* width for which those two verdicts both hold is 64, so
+	// a five-byte 2^32 in that field is legal. That is the inference, and it is what
+	// `derived` means: entailment from checked facts. The premises are machine-checked
+	// by TestDerivedFixturesStateResolvablePremises; the inference is reviewed by eyes.
 	accepted := []byte{
 		0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00,
 		0x05, 0x07, 0x01, 0x00, // memory section, 7 bytes, 1 memory, no max

@@ -334,6 +334,19 @@ the choice, and consequences once Scott has called it.
   verifies is a claim, not a citation — two vectors claiming to be "verbatim"
   had drifted, one truncated from 11 bytes to 8. Prefer deriving corpora from
   the suite at run time: no transcription step, no drift.
+- **Three provenance categories: cited, derived, synthetic.** *Entailment from
+  checked facts is legitimate provenance; unstated entailment is just synthetic
+  with better manners.* A **derived** vector is one the suite implies but does not
+  contain — `TestLEBWidthIsPerField`'s accept half asserts a wide-but-legal limits
+  minimum is fine, which `binary-leb128.wast` cannot say because it only asserts
+  malformedness, and which `:525`/`:217` jointly *bracket* by wanting different
+  errors at ten and eleven bytes. What keeps the category from becoming a laundering
+  channel is that a derived row **states its premises and its inference**, and
+  `TestFixtureProvenance` machine-checks that the premises **resolve** — the
+  inference is reviewed by eyes, but a premise citing a line that says something else
+  is caught by the same mechanism that catches a drifted transcription. Same shape as
+  every other rule here: the human judgement is allowed, the checkable part is
+  checked, and silence is not an option. (Ruling: Scott, PR #37.)
 - **Verdict channel and mechanism channel are different instruments.** *An exit
   code is not a mechanism* — the verdict channel can't tell you why. *Don't infer
   a verdict from noise* — the output channel can't tell you whether. Read each
@@ -388,6 +401,31 @@ the choice, and consequences once Scott has called it.
   functype tag reconstruction printing `0x5e` as `0xde`) is the engine lying about
   its input, and no suite can see it, because the harness matches the sentinel and
   never reads past the colon. (#36.)
+- **An error message is testimony, and fabricated evidence is a lying witness even
+  when the verdict is right.** The suite matches the sentinel and **never reads past
+  the colon** — which is exactly why everything after the colon is ours alone to keep
+  honest. `ErrMalformedFuncType`'s reconstruction or'd a high bit in for every
+  negative form and reported a `0x5e` array tag as `0xde`: the right verdict, quoting
+  a byte the image never held, and green on every board by construction. So a message
+  that names a value from the input gets *printed for real inputs* before it is
+  trusted — the print-don't-trust check applies to the half of the error the oracle
+  cannot see, and that is where it earns the most. Its sibling above is the
+  wrong-layer tell: both are the engine being wrong about its own input, one across
+  layers and one inside a format string. (Ruling: Scott, PR #37; grave #36.)
+- **Comments and ADRs are testimony too, and where prose and the reference's
+  executable disagree, the executable outranks.** 0003's LEB section said "the order
+  matters" and then prescribed the wrong order, so the implementation followed its
+  documentation faithfully and every reviewer who checked code against claims found
+  agreement — *the defect stated as the rule*, which is the strongest camouflage a bug
+  can wear, because review verifies code against claims. The mechanical tell is in the
+  same sentence: the order was "derived from the actual vectors", and those vectors
+  were precisely the ones where the two conditions do not overlap, so they could not
+  distinguish the orderings. An order-of-tests claim needs an *authority*
+  (`interpreter/binary/decode.ml`), never a derivation from a sample that cannot
+  falsify it — the scope-controls-to-the-space law pointed at documentation. And a
+  ruling like this one is discharged by **appending** to the ADR, body preserved: the
+  record of what was believed, and of why it survived review, is the part worth
+  keeping. (Ruling: Scott, PR #37; the correction is in 0003.)
 - **When two fields disagree about a value, the suite has handed you a
   bidirectional control.** The width-parameterized design's dividend: identical
   bytes `80 80 80 80 10` are *integer too large* as a data-segment memory index and
