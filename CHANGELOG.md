@@ -79,6 +79,20 @@ weakly-ordered platform.
   never-commit rule was about provenance, and a crasher is a grave's reproducer
   this project authored.
 
+- Decoder: **section order and uniqueness enforced**, and `ErrTrailingData` is
+  reachable at last — it had been declared-and-tracked since the genesis commit.
+  Order and duplicates are one predicate: section ranks must strictly increase,
+  so a repeated section fails for the same reason a misordered one does. The rank
+  table is deliberately **not** section-id order — the data count section is id 12
+  but the grammar places it before code (id 10), so ranking by id accepts a module
+  `binary.wast:1194` says is malformed. `binary.wast` **49/127 → 84/127**.
+- Decoder: malformed section ids rejected. The lookup that ranks a section is the
+  lookup that validates it, so ordering and id-legality are one table.
+- Decoder: cross-section count agreements — function/code body counts, and the
+  data count section against the data section. An absent section counts as zero,
+  which is what makes "one present, one absent" fall out of the same comparison
+  rather than needing its own case.
+
 ### Fixed
 - `parseString` returned a nil slice for the empty literal `""`, entangling
   "is a string" with "has bytes" — so a reader checking `str != nil` would

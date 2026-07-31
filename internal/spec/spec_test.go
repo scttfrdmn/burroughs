@@ -47,11 +47,52 @@ func TestBinaryWast(t *testing.T) {
 	if r.Total() == 0 {
 		t.Fatal("no assertions executed — harness is not wired")
 	}
-	// Regression floor, set to the count measured when the harness first ran.
-	// Raise it as decoder work lands; never lower it.
-	const floor = 49
+	// Regression floor, raised as decoder work lands; never lowered. 49 when the
+	// harness first ran, 84 after section order and cross-section counts (#6).
+	const floor = 84
 	if r.Pass < floor {
 		t.Errorf("pass count %d fell below floor %d", r.Pass, floor)
+	}
+}
+
+// TestClosedBuckets pins buckets that have reached zero. A bucket going to zero
+// is a PR's measure of done (CLAUDE.md), and this is what stops it from quietly
+// refilling: the floor above catches a net regression, but a bucket can refill
+// while the total holds if another one drains at the same time.
+//
+// Entries are added only when the bucket is actually empty. "data count section
+// required" is deliberately absent — it needs function-body decoding (#22) and
+// is still 2, which is the honest state of #6.
+func TestClosedBuckets(t *testing.T) {
+	requireSuite(t)
+	closed := map[string][]string{
+		"binary.wast": {
+			"unexpected content after last section",                 // #6, was 23
+			"function and code section have inconsistent lengths",   // #6, was 4
+			"data count and data section have inconsistent lengths", // #6, was 3
+			"malformed section id",                                  // #6, was 5
+		},
+		"custom.wast": {
+			"function and code section have inconsistent lengths",
+			"data count and data section have inconsistent lengths",
+			"malformed section id",
+		},
+	}
+	for file, keys := range closed {
+		s, err := ParseFile(filepath.Join(suiteDir, file))
+		if err != nil {
+			t.Errorf("%s: parse: %v", file, err)
+			continue
+		}
+		r := s.Run(decode)
+		for _, k := range keys {
+			if got := len(r.Buckets[k]); got != 0 {
+				t.Errorf("%s: bucket %q refilled to %d; it was closed and must stay closed", file, k, got)
+				for _, f := range r.Buckets[k] {
+					t.Logf("  line %d: got %q", f.Line, f.Got)
+				}
+			}
+		}
 	}
 }
 

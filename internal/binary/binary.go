@@ -39,9 +39,37 @@ var (
 	// condition (duplicate/misordered sections) and is not what this reports.
 	ErrSectionOverrun = errors.New("length out of bounds")
 
-	// ErrTrailingData names the duplicate/misordered-section condition. Not yet
-	// enforced — section order and uniqueness land with the type section.
+	// ErrTrailingData names the duplicate/misordered-section condition. The
+	// suite's string reads oddly for a misordered section, but it is what the
+	// spec's own grammar implies: sections are matched in a fixed order, so a
+	// section out of place is unmatched *content* after the last section the
+	// grammar could consume. 23 vectors in binary.wast assert it (#6).
 	ErrTrailingData = errors.New("unexpected content after last section")
+
+	// ErrMalformedSectionID is a section id with no place in the grammar. Not
+	// separable from order enforcement: ranking sections requires knowing which
+	// ids have a rank, so the lookup that orders them is the lookup that
+	// validates them.
+	ErrMalformedSectionID = errors.New("malformed section id")
+
+	// ErrFuncCodeMismatch is a function section whose entry count disagrees with
+	// the code section's body count, in either direction, including one present
+	// and the other absent.
+	ErrFuncCodeMismatch = errors.New("function and code section have inconsistent lengths")
+
+	// ErrDataCountMismatch is a data count section disagreeing with the number of
+	// segments the data section actually carries.
+	ErrDataCountMismatch = errors.New("data count and data section have inconsistent lengths")
+
+	// ErrDataCountRequired is memory.init or data.drop appearing without a data
+	// count section.
+	//
+	// Declared and tracked, not silent (the ruling in CLAUDE.md): deciding this
+	// requires knowing whether those opcodes occur inside a function body, and a
+	// byte-scan for `fc 08` would false-positive on any immediate that happens to
+	// hold those bytes — a decoder rejecting valid modules is worse than one
+	// missing an invalid one. Reachable when function bodies are decoded (#22).
+	ErrDataCountRequired = errors.New("data count section required")
 )
 
 // SectionID identifies a module section (Wasm 3.0 numbering).
@@ -74,6 +102,41 @@ func (id SectionID) String() string {
 		return names[id]
 	}
 	return fmt.Sprintf("unknown(%d)", byte(id))
+}
+
+// sectionRank orders the non-custom sections as the spec's module grammar
+// matches them. Custom sections have no rank: they are permitted anywhere, any
+// number of times, so they never participate in the ordering check.
+//
+// This is deliberately *not* SectionID order, and the difference is the whole
+// reason it is a table. The data count section is id 12 but the grammar places
+// it between element (9) and code (10) — `binary.wast:1194` asserts that a code
+// section followed by a data count section is malformed, which a decoder ranking
+// by id would happily accept. Reading the ids as a rank is a plausible shortcut
+// that is wrong on exactly one pair, and the suite knows it.
+//
+// A section id absent from this table has no place in the grammar, which is why
+// the same lookup answers both questions: rank, and whether the id is legal at
+// all.
+var sectionRank = map[SectionID]int{
+	SectionType:     1,
+	SectionImport:   2,
+	SectionFunction: 3,
+	SectionTable:    4,
+	SectionMemory:   5,
+	// The tag section is exception handling (Wasm 3.0). It is ranked, not
+	// rejected: no suite vector asserts id 13 is a malformed id, and rejecting it
+	// here would be the gate leaking into the decoder's structural layer. What the
+	// EH gate governs is whether its *contents* are decoded (#8's family), not
+	// whether the id has a place in the order.
+	SectionTag:       6,
+	SectionGlobal:    7,
+	SectionExport:    8,
+	SectionStart:     9,
+	SectionElement:   10,
+	SectionDataCount: 11, // id 12, but ordered before code — the reason for this table
+	SectionCode:      12,
+	SectionData:      13,
 }
 
 // Section is one raw module section: identity plus opaque payload.
@@ -202,11 +265,30 @@ func DecodeModule(b []byte) (*Module, error) {
 	}
 
 	m := &Module{Version: ver}
+
+	// lastRank enforces order and uniqueness with one predicate: ranks must
+	// strictly increase. A duplicate section fails it for the same reason a
+	// misordered one does — "not greater than" covers both — which is why the two
+	// families in #6 are one check rather than a rank comparison plus a seen-set.
+	lastRank := 0
 	for r.remaining() > 0 {
 		id, err := r.byte()
 		if err != nil {
 			return nil, err
 		}
+		sid := SectionID(id)
+
+		if sid != SectionCustom {
+			rank, ok := sectionRank[sid]
+			if !ok {
+				return nil, fmt.Errorf("%w: %d", ErrMalformedSectionID, id)
+			}
+			if rank <= lastRank {
+				return nil, fmt.Errorf("%w: %s section", ErrTrailingData, sid)
+			}
+			lastRank = rank
+		}
+
 		size, err := r.u32()
 		if err != nil {
 			return nil, err
@@ -215,7 +297,69 @@ func DecodeModule(b []byte) (*Module, error) {
 		if err != nil {
 			return nil, ErrSectionOverrun
 		}
-		m.Sections = append(m.Sections, Section{ID: SectionID(id), Payload: payload})
+		m.Sections = append(m.Sections, Section{ID: sid, Payload: payload})
+	}
+
+	if err := m.checkCounts(); err != nil {
+		return nil, err
 	}
 	return m, nil
+}
+
+// vecCount reads the element count from the head of a vec-shaped section
+// payload.
+func vecCount(payload []byte) (uint32, error) {
+	r := &reader{b: payload}
+	return r.u32()
+}
+
+// checkCounts verifies the cross-section agreements the binary format requires:
+// the function and code sections must describe the same number of functions, and
+// a data count section must agree with the data section.
+//
+// These are structural, not semantic — they are decidable from section headers
+// alone, which is why they belong here and not in the validator. The
+// ErrDataCountRequired half of the data-count contract is *not* decidable here
+// (it needs function bodies) and is tracked in #22 rather than guessed at.
+func (m *Module) checkCounts() error {
+	var (
+		funcCount, codeCount uint32
+		dataCount            uint32
+		haveDataCount        bool
+		dataSegs             uint32
+	)
+	for _, s := range m.Sections {
+		var (
+			dst *uint32
+			err error
+		)
+		switch s.ID {
+		case SectionFunction:
+			dst = &funcCount
+		case SectionCode:
+			dst = &codeCount
+		case SectionData:
+			dst = &dataSegs
+		case SectionDataCount:
+			// The data count section is a bare u32, not a vec — but the encoding
+			// of "one LEB at the head of the payload" is the same read.
+			haveDataCount = true
+			dst = &dataCount
+		default:
+			continue
+		}
+		if *dst, err = vecCount(s.Payload); err != nil {
+			return err
+		}
+	}
+
+	// An absent section means zero, so one rule covers all four vectors in the
+	// bucket: both present and disagreeing, and either one present alone.
+	if funcCount != codeCount {
+		return fmt.Errorf("%w: %d and %d", ErrFuncCodeMismatch, funcCount, codeCount)
+	}
+	if haveDataCount && dataCount != dataSegs {
+		return fmt.Errorf("%w: %d and %d", ErrDataCountMismatch, dataCount, dataSegs)
+	}
+	return nil
 }

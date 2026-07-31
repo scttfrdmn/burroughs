@@ -33,6 +33,15 @@ var declaredErrors = []error{
 	ErrLEBOverflow,
 	ErrSectionOverrun,
 	ErrTrailingData,
+	ErrMalformedSectionID,
+	ErrFuncCodeMismatch,
+	ErrDataCountMismatch,
+
+	// ErrDataCountRequired is declared here though the decoder cannot yet reach
+	// it (#22). Listing it now is the honest order: the set is what the decoder is
+	// *allowed* to return, and an entry that becomes reachable later should not
+	// look like a fuzz find when it does.
+	ErrDataCountRequired,
 }
 
 func FuzzDecodeModule(f *testing.F) {
