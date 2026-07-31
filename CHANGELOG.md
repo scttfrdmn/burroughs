@@ -387,6 +387,14 @@ weakly-ordered platform.
   `counted (not estimated)` heading now forward-references the section that falsifies
   it. The Correction's own single-byte figure was stale too (215, written before the
   escape rows landed in the same PR) and is now 218.
+- CI's `conformance` job vendors the reference **before** the board step, not after it.
+  The reference-vendoring steps sat below the board on the reasoning that only
+  `make opcode-drift` reads decode.ml — then `internal/binary` grew a test that reads it
+  too, and the board step failed under `BURROUGHS_NO_SKIP=1` on a corpus the same job
+  fetches nine lines later. Reproduced by hiding `third_party/`, not guessed. The
+  corollary to the lesson below: a job's corpora are its **preconditions**, satisfied
+  before the first step that runs tests rather than next to the step whose name mentions
+  them — which package needs which corpus is not a fact a workflow file can track.
 - CI's `build` job vendors the reference interpreter too, not only the suite. It runs
   `go test ./...`, which reaches the extractor's tests, which call `RequireSpecRef` —
   and under the workflow-wide `BURROUGHS_NO_SKIP=1` that is a **fail**, not a skip.
