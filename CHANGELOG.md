@@ -241,12 +241,15 @@ weakly-ordered platform.
   ~7x spread that is a property of the runner and not of the code. Now
   `-fuzztime Nx`, sized from the measured CI floor rather than converted from a dev
   box's rate. Cost, measured on the first green run rather than estimated: the
-  `fuzz wast lexer` step went 65s nominal → **3m26s**, because the runner's real
-  floor is ~17k execs/sec, not the ~70k the sizing assumed — 47 three-second windows
-  reported `0/sec`, i.e. long stalls with 605k/sec recovery bursts rather than a slow
-  steady rate. Accepted: a job that takes three minutes and answers a fixed question
-  beats one that takes one and sometimes answers none. The stalls themselves are a
-  separate finding, tracked, not absorbed into the budget.
+  `fuzz wast lexer` step went 65s nominal → **3m08s–3m26s**, because the runner's real
+  floor is ~17–18k execs/sec, not the ~70k the sizing assumed. Measured across two
+  independent green runs, which is the point: 46–47 three-second windows reporting
+  `0/sec` against recovery bursts of 605k–**1.25M**/sec — long stalls, not a slow
+  steady rate, and a peak that doubles between runs is why no single figure was
+  trustworthy. Accepted: a job that takes three minutes and answers a fixed question
+  beats one that takes one and sometimes answers none. The stalls get no issue by
+  ruling — an issue no work can close is a wish with a label — so the finding lives in
+  the budget rationale, where it has consequences.
   `make fuzz` and the nightly 10-minute runs stay wall-clock *because
   their purposes are durations* — the units differ because the purposes do, and both
   sites now say so. Budget by the quantity the purpose names.

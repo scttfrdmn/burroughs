@@ -230,19 +230,32 @@ jobs:
     # that failed), not from converting the old seconds at a dev box's rate, and
     # they hold the old 2:1 ratio between targets.
     #
-    # What the first green run under these budgets actually measured, because it
-    # was worse than the sizing assumed and the number should not be inherited
-    # from the estimate: FuzzWastLexer's 3M execs took **178s**, spending 47 of its
-    # 3-second windows reporting `0/sec` — long stalls, not a slow steady rate,
-    # with recovery bursts up to 605k/sec. The effective floor is therefore ~17k
-    # execs/sec, not ~70k. The whole step ran 3m26s against the old nominal 65s.
+    # What the green runs under these budgets actually measure, because it is worse
+    # than the sizing assumed and the number must not be inherited from the
+    # estimate. Two independent runs, and the shape reproduces:
     #
-    # That cost is the honest price of the unit change and is accepted for now:
-    # a job that takes three minutes and answers a fixed question beats one that
-    # takes one minute and sometimes answers none. But the stalls are their own
-    # finding — a 4-worker runner pausing for 18 consecutive seconds is not
-    # throughput variance, it is contention or GC, and if it worsens the budget is
-    # not what needs adjusting. Tracked in #28's thread rather than absorbed here.
+    #   run       FuzzWastLexer 3M   step total   0/sec windows   peak burst
+    #   160c8a4   178s               3m26s        47              605k/sec
+    #   a4c0295   163s               3m08s        46              1.25M/sec
+    #
+    # So ~17-18k execs/sec effective, against ~70k assumed. Reported as a range and
+    # from two runs on purpose: a single run cannot distinguish a property of the
+    # environment from an accident of one scheduling, and the peak moving 605k ->
+    # 1.25M is exactly the spread that makes any single figure a fiction. Two
+    # witnesses agreeing on the *shape* (long stalls, faster-than-local bursts) is
+    # the claim; neither number alone is.
+    #
+    # That cost is the honest price of the unit change and is accepted: a job that
+    # takes three minutes and answers a fixed question beats one that takes one
+    # minute and sometimes answers none.
+    #
+    # The stalls themselves get no issue, deliberately (ruling: Scott) — an issue no
+    # work can close is a wish with a label, and GitHub's runners are not ours to
+    # fix. This comment *is* where the finding lives, because this is the one place
+    # it has consequences. If a stall ever breaks something actionable, that event
+    # files its own issue with a reproducer attached. Note what the finding implies
+    # if it worsens: a 4-worker runner pausing 18 consecutive seconds is contention
+    # or GC, not throughput variance, so the budget is not what would need adjusting.
     #
     # timeout-minutes is a failsafe, not a budget. An executions budget has no
     # upper bound on duration, so a genuine hang would run until GitHub's default
