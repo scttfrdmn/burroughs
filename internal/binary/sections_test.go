@@ -239,6 +239,131 @@ func TestLimitsFlagsIsAByteNotALEB(t *testing.T) {
 	}
 }
 
+// TestLEBWidthIsPerField is the bidirectional control the suite hands over for free:
+// the *same five bytes* are malformed in one field and legal in another, because the
+// fields have different widths. Grave #36 — a decoder with one width for every
+// integer cannot pass both halves, and it fails them in opposite directions, so
+// neither half alone would have caught the wrong choice.
+//
+//	80 80 80 80 10  =  2^32
+//
+//	as a data-segment memory index (u32)  → "integer too large"   binary-leb128.wast:565
+//	as a limits minimum         (u64)     → accepted, value 2^32   (derived, see below)
+//
+// The accept half is not a suite vector and cannot be: binary-leb128.wast only asserts
+// malformedness, so nothing there says a wide-but-legal limits field is *fine*. It is
+// derived instead from the reject half's neighbours — :529's ten-byte min is "integer
+// too large" (ten bytes is legal width for a u64, so the fault is the unused payload
+// bits) while :217's eleven-byte min is "integer representation too long" (eleven
+// overruns even a u64). Those two bracket the width at exactly 64, and this test's
+// accept row is what that bracket implies, asserted directly.
+//
+// It also pins the layering consequence on purpose: a memory32 whose minimum is 2^32
+// pages *decodes*. It is the validator's to reject ("memory size must be at most 65536
+// pages"), and catching it here by reading the field narrowly would be the decoder
+// borrowing the validator's job and getting the malformed string wrong to do it.
+func TestLEBWidthIsPerField(t *testing.T) {
+	// The one hand-typed vector, cited as a fragment so TestFixtureProvenance checks
+	// the transcription. Both modules below are assembled *around* it, which is the
+	// point: the bytes under test are literally identical, and only the field they
+	// land in differs.
+	twoTo32 := []byte{0x80, 0x80, 0x80, 0x80, 0x10} // binary-leb128.wast:565
+
+	// synthetic scaffolding around the cited fragment: a memory section so the data
+	// segment is well-formed, then the fragment in the memory-index position.
+	rejected := []byte{
+		0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00,
+		0x05, 0x03, 0x01, 0x00, 0x00, // memory: no max, min 0
+		0x0B, 0x0A, 0x01, // data section, 10 bytes, 1 segment
+	}
+	rejected = append(append(rejected, twoTo32...), 0x41, 0x00, 0x0B, 0x00) // (i32.const 0), contents ""
+	if _, err := DecodeModule(rejected); !errors.Is(err, ErrLEBOverflow) {
+		t.Errorf("memory index as %x: got %v, want ErrLEBOverflow — an index is a u32, so 2^32 does not fit", twoTo32, err)
+	}
+
+	// synthetic (derived; see the doc comment): the same fragment as a limits
+	// minimum, where the field is 64 bits wide and the value is representable.
+	accepted := []byte{
+		0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00,
+		0x05, 0x07, 0x01, 0x00, // memory section, 7 bytes, 1 memory, no max
+	}
+	accepted = append(accepted, twoTo32...)
+	if _, err := DecodeModule(accepted); err != nil {
+		t.Errorf("limits min as %x: got %v, want accept — limits are u64 fields, and whether 2^32 pages is *too many* is the validator's question", twoTo32, err)
+	}
+}
+
+// TestFuncTypeFormIsASignedLEB pins the functype tag as an s7, which is the
+// inverse of TestLimitsFlagsIsAByteNotALEB: there the field really is a byte, so a
+// multi-byte encoding of a legal value is malformed *limits*; here the field is a
+// signed LEB of width 7, so a multi-byte encoding of the legal value is "integer
+// representation too long" and not "malformed function type" at all.
+//
+// binary-leb128.wast:1067 is the vector that settles it (its tag fragment is on
+// :1073) — `\e0\7f`, which the suite itself annotates as "-0x20 in signed LEB128
+// encoding" and expects to fail as too long. 0x60 *is* -32 read as an s7 (the spec's type constructors live in negative
+// s7 space: 0x5e array is -34, 0x5f struct is -33), so a decoder reading the tag as
+// a plain byte gets the right answer for well-formed input and the wrong error
+// string for an overlong encoding of it. Grave #36.
+//
+// The error-message assertion is not decoration. The message must name the byte the
+// image actually held, and the first version of that reconstruction did not: it or'd
+// a high bit in for every negative form and reported 0x5e as 0xde — an error about
+// the module lying about the module, which is the wrong-layer tell in miniature.
+// Nothing in the suite can catch that, since the harness matches on the sentinel
+// text and never reads past the colon.
+func TestFuncTypeFormIsASignedLEB(t *testing.T) {
+	tag := []byte{0xE0, 0x7F} // binary-leb128.wast:1073 — -0x20 in two bytes
+
+	// synthetic scaffolding around the cited fragment: a type section holding one
+	// entry, whose form tag is the overlong encoding.
+	overlong := []byte{
+		0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00,
+		0x01, 0x05, 0x01, // type section, 5 bytes, 1 type
+	}
+	overlong = append(append(overlong, tag...), 0x00, 0x00) // empty params, empty results
+	if _, err := DecodeModule(overlong); !errors.Is(err, ErrLEBTooLong) {
+		t.Errorf("overlong functype tag: got %v, want ErrLEBTooLong — a redundant encoding of a legal tag is a LEB fault, not a functype fault", err)
+	}
+
+	// synthetic: the suite has no vector for a *wrong* single-byte tag, so the
+	// accept/reject boundary at width 7 and the message's byte are pinned here. The
+	// first four tags are negative as an s7, which is what makes the reconstruction
+	// easy to get wrong — the buggy version differed from the input only in the sign
+	// region. 0x00 is marked as the row that *cannot* discriminate that: it is
+	// non-negative, so both the right and the wrong reconstruction print 0x00, and it
+	// stays green under falsification. It is kept as the zero case for the sentinel
+	// claim and labelled so it is not mistaken for coverage of the message claim
+	// (grave #34: a partition's rows get checked against the partition).
+	for _, tc := range []struct{ name, want string }{
+		{"0x5e array", "0x5e"},
+		{"0x5f struct", "0x5f"},
+		{"0x7f i32 where a form goes", "0x7f"},
+		{"0x40 the s7 minimum", "0x40"},
+		{"0x00 zero — non-negative, so non-discriminating for the message byte", "0x00"},
+	} {
+		tag := map[string]byte{"0x5e": 0x5E, "0x5f": 0x5F, "0x7f": 0x7F, "0x40": 0x40, "0x00": 0x00}[tc.want]
+		r := &reader{b: []byte{tag, 0x00, 0x00}, eof: ErrPayloadEnd}
+		err := (&Decoder{}).decodeFuncType(r)
+		if !errors.Is(err, ErrMalformedFuncType) {
+			t.Errorf("%s: got %v, want ErrMalformedFuncType", tc.name, err)
+			continue
+		}
+		if !contains(err.Error(), tc.want) {
+			t.Errorf("%s: error %q does not name the byte the image held (%s) — the message must not invent bits the input never had", tc.name, err, tc.want)
+		}
+	}
+
+	// The accept path, since every case above is a rejection: 0x60 is the one tag
+	// that decodes to -0x20 and must still work as a plain byte in the stream.
+	r := &reader{b: []byte{0x60, 0x00, 0x00}, eof: ErrPayloadEnd}
+	if err := (&Decoder{}).decodeFuncType(r); err != nil {
+		t.Errorf("0x60 functype: got %v, want accept", err)
+	} else if r.off != 3 {
+		t.Errorf("0x60 functype consumed %d bytes, want 3 — the tag is one byte on the wire even though it is read as an s7", r.off)
+	}
+}
+
 // TestMalformedImportKind pins the import descriptor's kind byte.
 func TestMalformedImportKind(t *testing.T) {
 	for _, in := range [][]byte{

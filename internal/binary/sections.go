@@ -185,12 +185,29 @@ func (d *Decoder) decodeCustom(size uint32, r *reader) error {
 // decodeFuncType reads a functype: the 0x60 form byte, then param and result
 // vectors of value types.
 func (d *Decoder) decodeFuncType(r *reader) error {
-	form, err := r.byte()
+	// The form tag is a *signed* LEB of width 7, not a plain byte, and
+	// binary-leb128.wast:1067 is the vector that says so: `\e0\7f` is -0x20 encoded
+	// in two bytes, and the suite wants "integer representation too long" rather
+	// than "malformed function type". The spec's type constructors live in negative
+	// s7 space — 0x60 *is* -32 at width 7, as 0x5e (array) is -34 — so reading the
+	// tag as a byte gets the right answer for well-formed input and the wrong error
+	// for an overlong encoding of it.
+	//
+	// sleb(7) is exactly the right instrument: its width budget is one byte, so a
+	// continuation bit on the first byte exhausts it, which is what "too long" means
+	// here. Verified against the reference sN at width 7 (grave #36's port).
+	form, err := r.sleb(7)
 	if err != nil {
 		return err
 	}
-	if form != 0x60 {
-		return fmt.Errorf("%w: %#02x", ErrMalformedFuncType, form)
+	if form != -0x20 { // 0x60
+		// The message names the byte the image actually held, which at width 7 is the
+		// low seven bits of the decoded value: the range is -64..63, so form&0x7f is
+		// exactly the input byte, and a multi-byte encoding never reaches here (sleb(7)
+		// has already returned "too long"). Printed for nine tags before being trusted
+		// — the first attempt here or'd in a high bit for negative forms and reported
+		// 0x5e (array) as 0xde, an error message lying about its own input.
+		return fmt.Errorf("%w: %#02x", ErrMalformedFuncType, byte(form&0x7F))
 	}
 	for range 2 { // params, then results — same grammar, twice
 		if err := d.decodeVec(r, d.decodeValType); err != nil {
@@ -238,6 +255,22 @@ func (d *Decoder) decodeRefType(r *reader) error {
 // three suite vectors (binary.wast:632, :677, :686) that encode a *valid* flag
 // value 1 as the two-byte LEB `\81\00` and expect "malformed limits flags". A
 // decoder reading the flags with u32 would accept all three.
+//
+// min and max are read at **64 bits**, not 32, and the suite is unambiguous about
+// it (grave #36). binary-leb128.wast:525 is a memory32 section whose min is a
+// 10-byte LEB with unused bits set, and it wants "integer too large": ten bytes is
+// legal *width* for a u64 and one byte too many for a u32, so a u32 read reports
+// "integer representation too long" and scores the wrong string. The neighbouring
+// :217 and :225 (11-byte fields) want "too long" and still get it, since 11 bytes
+// overruns the u64 budget too — the two vectors bracket the width from both sides.
+//
+// The consequence is deliberate: a memory32 limit above 2^32 now decodes and is the
+// *validator's* to reject ("memory size must be at most 65536 pages"), which is the
+// correct layering. Reading the field narrowly to catch it here would be the decoder
+// borrowing the validator's job and getting the malformed string wrong to do it.
+//
+// This is reader.u64's first production caller, closing #19's declared-and-tracked
+// deferral by making it reachable rather than by allowlisting it.
 func (d *Decoder) decodeLimits(r *reader) error {
 	flags, err := r.byte()
 	if err != nil {
@@ -261,11 +294,11 @@ func (d *Decoder) decodeLimits(r *reader) error {
 	default:
 		return fmt.Errorf("%w: %#02x", ErrMalformedLimits, flags)
 	}
-	if _, err := r.u32(); err != nil {
+	if _, err := r.u64(); err != nil {
 		return err
 	}
 	if hasMax {
-		if _, err := r.u32(); err != nil {
+		if _, err := r.u64(); err != nil {
 			return err
 		}
 	}

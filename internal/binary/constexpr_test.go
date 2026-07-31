@@ -221,8 +221,8 @@ func TestSlebIsNotUlebWithACast(t *testing.T) {
 		}
 	}
 
-	// The two malformed classes stay distinct, and the order matters — continuation
-	// bit before range, same as uleb.
+	// The two malformed classes stay distinct, and the order is the reference's:
+	// range *before* the continuation bit (grave #36; see uleb's comment for sN).
 	for _, tc := range []struct {
 		name string
 		in   []byte
@@ -232,6 +232,17 @@ func TestSlebIsNotUlebWithACast(t *testing.T) {
 		// neither a legal positive value nor a legal sign extension at width 32.
 		{"0x100000000 as i32 — binary.wast:125", []byte{0x80, 0x80, 0x80, 0x80, 0x10}, ErrLEBOverflow},
 		{"continuation set on the last permitted byte", []byte{0x80, 0x80, 0x80, 0x80, 0x80}, ErrLEBTooLong},
+
+		// GRAVE (#36): this vector arrived here from TestLEBTaxonomy, where it was read
+		// with the *unsigned* reader and expected "too long". It is an i32.const
+		// immediate — binary-leb128.wast:497, "i32.const -1 with one byte too many" —
+		// so the signed reader is the one that answers it, and the two readers give
+		// different-but-correct verdicts on these exact bytes: sN(32) says too long (a
+		// legal sign extension one byte past the budget), uN(32) says too large (the
+		// fifth byte's payload exceeds the width). TestLEBTaxonomy pins the unsigned
+		// half; this pins the signed half. A vector asserted against the wrong reader
+		// is a citation to a question nobody asked.
+		{"-1 with one byte too many — binary-leb128.wast:497", []byte{0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x7F}, ErrLEBTooLong},
 	} {
 		r := &reader{b: tc.in}
 		if _, err := r.s32(); !errors.Is(err, tc.want) {
