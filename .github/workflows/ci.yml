@@ -113,10 +113,77 @@ jobs:
           cache-dependency-path: tools/go.sum
       - run: go tool -modfile=tools/go.mod govulncheck ./...
 
+  conformance:
+    # The suite is the oracle, so CI has to actually run it.
+    #
+    # The `build` job does not vendor the suite, which means every board control
+    # skips there — requireSuite() calls t.Skip when testdata/spec is absent, so
+    # the pass floor, the closed buckets, the fixture citations, and the gated
+    # allowlist have all been passing by not running. A skip is not a verdict, and
+    # a green board that never asked the question is the dishonest-board failure
+    # wearing CI's clothes. This job is where the numbers get asserted.
+    #
+    # Two lanes, because they check different things and only one of them can:
+    #
+    #  * default features (every 3.0 gate off, v0's posture) — the board numbers,
+    #    the regression floor, the closed buckets, and TestGatedVectors' per-vector
+    #    allowlist.
+    #  * all tracked gates on — TestAllGatesOnLeavesNothingGated, where the gated
+    #    count MUST be zero. This is the structural control on the third verdict
+    #    (Scott's condition on #27): the per-vector allowlist stops a vector from
+    #    hiding *unnoticed*, and this stops it from hiding at all. Under full
+    #    features every vector answers on the merits, so a vector parked in `gated`
+    #    on the default board is simultaneously being honestly *failed* here, and
+    #    stays failed until its feature actually works. `gated` becomes a deferral
+    #    that cannot become a disappearance.
+    #
+    # Both lanes live in one job on purpose: they share the suite fetch, and a lane
+    # that could be skipped independently of the other is a lane that will be.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26'
+          cache-dependency-path: tools/go.sum
+
+      - name: vendor the spec suite
+        run: make spec-tests
+
+      - name: the suite is vendored
+        # Guard the guard. Every board test calls requireSuite() and *skips* when
+        # the suite is missing, so a broken fetch would turn this whole job green
+        # by making it ask nothing — precisely the failure this job exists to end.
+        # Assert the corpus is present before trusting any count that comes out of
+        # it: a verdict without an identity check is hearsay.
+        run: |
+          n="$(ls testdata/spec/*.wast 2>/dev/null | wc -l | tr -d ' ')"
+          echo "vendored $n .wast files"
+          if [ "$n" -lt 250 ]; then
+            echo "::error::expected ≥250 .wast files, found $n — the suite fetch is broken and every board test would silently skip"
+            exit 1
+          fi
+
+      - name: conformance board (default features, all gates off)
+        # -v so the boards land in the log: the bucket counts are the work plan, and
+        # a PR reviewer should be able to read them without running anything.
+        run: go test -v -shuffle=on ./internal/spec/ ./internal/binary/
+
+      - name: no vector may hide in gated (all tracked gates on)
+        # Named as its own step so the log says which control failed. The test
+        # itself carries the argument; this is the CI face of it.
+        run: go test -v -run TestAllGatesOnLeavesNothingGated ./internal/spec/
+
   fuzz-smoke:
     # Short fuzz on every PR: enough to catch a target that stopped building or
     # a seed corpus that regressed, not enough to find deep bugs. The long runs
     # are scheduled — see nightly.yml.
+    #
+    # NOTE (#28): the budgets here are wall-clock on a runner whose throughput
+    # varies ~6x from a dev box, which made this job timing-sensitive by
+    # construction — it flaked once on PR #27 with `context deadline exceeded` and
+    # no crasher. The fix is to budget by executions (-fuzztime Nx), since
+    # executions are what this job's purpose actually names. Tracked, not silent.
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5

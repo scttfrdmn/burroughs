@@ -5,7 +5,7 @@ GO ?= go
 # anything globally.
 TOOL = $(GO) tool -modfile=tools/go.mod
 
-.PHONY: all build test vet fmt lint check vuln deadcode fuzz bench spec-tests tidy
+.PHONY: all build test vet fmt lint check vuln deadcode fuzz bench spec-tests tidy conformance
 
 # The default gate. `check` is what must be green before a report — it is the
 # local mirror of CI, so a surprise in CI means a bug in this line, not a bug in
@@ -13,6 +13,23 @@ TOOL = $(GO) tool -modfile=tools/go.mod
 all: check
 
 check: fmt-check build vet lint test deadcode
+
+# The board, asserted rather than skipped. Separate from `check` because it needs
+# the vendored suite and `check` must stay green on a fresh clone — but CI runs
+# both, so this is not optional, it is the other half of the mirror.
+#
+# Every board test calls requireSuite() and *skips* when testdata/spec is absent,
+# which is why this target refuses to run without it: a skip is not a verdict, and
+# a target that passes by asking nothing is the failure the board controls exist to
+# prevent. Includes the all-gates-on lane, where the gated count must be zero.
+conformance:
+	@n="$$(ls testdata/spec/*.wast 2>/dev/null | wc -l | tr -d ' ')"; \
+	if [ "$$n" -lt 250 ]; then \
+		echo "spec suite not vendored ($$n files); run: make spec-tests"; exit 1; \
+	fi; \
+	echo "vendored $$n .wast files"
+	$(GO) test -v -shuffle=on ./internal/spec/ ./internal/binary/
+	$(GO) test -v -run TestAllGatesOnLeavesNothingGated ./internal/spec/
 
 build:
 	$(GO) build -o bin/burroughs ./cmd/burroughs

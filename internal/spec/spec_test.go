@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/scttfrdmn/burroughs/internal/binary"
@@ -178,6 +179,90 @@ func TestGatedVectors(t *testing.T) {
 			}
 		}
 	}
+}
+
+// allFeaturesOn returns a Features with every gate the decoder knows about turned
+// on, discovered by reflection rather than by an enumerated literal.
+//
+// The enumerated version is a drift vector of exactly the shape
+// TestEveryFixtureFileIsChecked exists to close: adding a fifth gate and
+// forgetting to add it here would leave the all-on lane quietly running with that
+// gate off, so vectors could hide in `gated` in *both* lanes — the precise failure
+// the lane is built to prevent. A non-bool field fails loudly rather than being
+// skipped, because "I did not know how to turn this on" must not read as "it is on".
+func allFeaturesOn(t *testing.T) binary.Features {
+	t.Helper()
+	var f binary.Features
+	v := reflect.ValueOf(&f).Elem()
+	for i := range v.NumField() {
+		name := v.Type().Field(i).Name
+		fld := v.Field(i)
+		if fld.Kind() != reflect.Bool {
+			t.Fatalf("Features.%s is %s, not a bool: this test cannot turn it on, so the all-gates-on lane would silently run with it off",
+				name, fld.Kind())
+		}
+		fld.SetBool(true)
+	}
+	return f
+}
+
+// TestAllGatesOnLeavesNothingGated is the structural control on the third verdict
+// (Scott's condition on #27).
+//
+// TestGatedVectors bounds `gated` per vector, but per-vector allowlists are
+// vigilance: they stop a vector from hiding *unnoticed*, not from hiding. This
+// closes it structurally. Under every tracked gate on, no vector may be declined —
+// every one answers on the merits, pass or fail, with nowhere to park.
+//
+// That makes `gated` a **deferral that cannot become a disappearance**: a vector
+// sitting in `gated` on the default board is simultaneously being honestly *failed*
+// here, and stays failed until its feature actually works. The default lane says
+// "not asked"; this lane insists the question still exists.
+//
+// So this test is expected to be *red-ish* in aggregate — the fail counts below are
+// higher than the default board's, and that is the point. What must be zero is
+// Gated.
+func TestAllGatesOnLeavesNothingGated(t *testing.T) {
+	requireSuite(t)
+
+	d := &binary.Decoder{Features: allFeaturesOn(t)}
+	decodeAllOn := func(image []byte) error {
+		_, err := d.DecodeModule(image)
+		return err
+	}
+
+	files := []string{
+		"binary.wast", "binary-leb128.wast", "binary_leb128_64.wast",
+		"binary0.wast", "custom.wast",
+	}
+	var totalPass, totalFail, totalGated int
+	for _, f := range files {
+		s, err := ParseFile(filepath.Join(suiteDir, f))
+		if err != nil {
+			t.Errorf("%s: parse: %v", f, err)
+			continue
+		}
+		// Still RunGated, deliberately: the point is to *measure* Gated and require
+		// it to be zero. Using Run would fold declines into Fail and the requirement
+		// would be unfalsifiable — the counter it asserts on could not be nonzero.
+		r := s.RunGated(decodeAllOn, isGated)
+		t.Log("\n" + r.Board())
+		totalPass, totalFail, totalGated = totalPass+r.Pass, totalFail+r.Fail, totalGated+r.Gated
+
+		if r.Gated != 0 {
+			t.Errorf("%s: %d vectors declined with every gate on;\n"+
+				"\ta gate that still declines under full features is not a gate — it is a rejection wearing a feature name, and the vector has nowhere left to be honestly scored",
+				f, r.Gated)
+			// Naming them, because "3 gated" is not an actionable board line.
+			for _, c := range s.Commands {
+				if isGated(decodeAllOn(c.Module)) {
+					t.Errorf("  %s:%d still gated: %v", f, c.Line, decodeAllOn(c.Module))
+				}
+			}
+		}
+	}
+	t.Logf("all gates on: %d pass, %d fail, %d gated (Gated must be 0; fail is expected to exceed the default lane's)",
+		totalPass, totalFail, totalGated)
 }
 
 // TestVerdictsPartitionCommands checks the arithmetic the board depends on: every

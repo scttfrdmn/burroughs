@@ -178,9 +178,40 @@ the choice, and consequences once Scott has called it.
   green." A mechanism that cannot prove which run it is quoting is not a
   witness. A wait that returns the wrong run's verdict is worse than one that is
   merely slow — see *Waiting on CI* for the shape this took in practice.
+- **A re-run green doesn't refute a fail — explaining the fail does.** The
+  temporal cousin of the identity-check law: two runs are two witnesses, and the
+  favourable one does not impeach the unfavourable one merely by speaking second.
+  A flake is a *diagnosis*, not a default, and it is earned by bounding the cause
+  — `fuzz-smoke`'s `context deadline exceeded` was ruled flake only after the
+  interesting hypothesis (a pathological parser input) was measured and killed:
+  34ms worst case over adversarial shapes, 6× throughput margin, so wall-clock
+  starvation. Re-running until green, with nothing explained, is the same reflex
+  as scrolling past a warning. (Ruling: Scott, PR #27; the fix is #28.)
+- **Budget by the quantity the purpose names.** A gate whose budget unit differs
+  from its purpose unit will eventually fail for reasons that are not findings.
+  `fuzz-smoke` exists to catch a target that stopped building or a corpus that
+  regressed — its purpose is *executions*, and it was budgeted in *seconds* on
+  hardware whose throughput varies 6× from a dev box. Wall-clock budgets on
+  shared runners are timing-sensitive by construction.
 - **Gates.** Proposals land behind build tags / config gates; acceptance is
   the proposal's own suite green (contract §9). Nothing defaults on
   without it.
+- **A third verdict needs a structural bound, not just a watched one.** `gated`
+  is honest — a vector whose question presumes a declined feature was never
+  asked, so scoring it pass or fail both lie — but any verdict that is neither
+  pass nor fail is a lever for emptying a board by fiat. Per-vector allowlists
+  are vigilance: they stop a vector hiding *unnoticed*. The structural control is
+  a CI lane with **every tracked gate on, where the gated count must be zero** —
+  under full features every vector answers on the merits, so a vector parked in
+  `gated` on the default board is simultaneously being honestly *failed* in the
+  all-on lane, and stays failed until its feature actually works. That makes a
+  deferral something that cannot become a disappearance. (Ruling: Scott, PR #27.)
+- **A skip is not a verdict.** `requireSuite` skips when the corpus is absent, so
+  a board test in a job that never vendored the suite passes by asking nothing —
+  a green that has never once asserted a count. Any job whose verdict depends on
+  a corpus asserts the corpus is present *before* trusting a number out of it.
+  This is the identity-check law pointed at the oracle's inputs rather than at
+  the run: guard the guard, or the guard is decoration.
 - **Gates never manufacture malformedness.** *Malformed* is the spec's word: it
   belongs to the grammar, and the grammar here is the **union of the tracked
   set** (§9 G-2) — section id 13 is defined by Wasm 3.0 and so is well-formed,
