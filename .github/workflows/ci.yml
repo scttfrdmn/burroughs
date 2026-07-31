@@ -218,6 +218,32 @@ jobs:
         # itself carries the argument; this is the CI face of it.
         run: go test -v -run TestAllGatesOnLeavesNothingGated ./internal/spec/
 
+      - name: vendor the reference interpreter
+        # The *authority*, as distinct from the suite that samples it (decision 0007).
+        # A separate repo: WebAssembly/spec, pinned by SHA in the fetch script.
+        run: make spec-ref
+
+      - name: the reference is vendored
+        # Guard the guard, same as the suite step above and for the same reason: the
+        # drift check's Go-level door skips when decode.ml is absent, so a broken
+        # fetch would make the next step pass by asking nothing. Assert the input
+        # before trusting a verdict computed from it.
+        run: |
+          d=third_party/spec/interpreter/binary/decode.ml
+          n="$(wc -c <"$d" 2>/dev/null | tr -d ' ' || echo 0)"
+          echo "reference decode.ml: $n bytes"
+          if [ "${n:-0}" -lt 20000 ]; then
+            echo "::error::decode.ml is $n bytes (want ≥20000) — the reference fetch is broken and the drift check would skip"
+            exit 1
+          fi
+
+      - name: the opcode table still agrees with the reference (0007, condition 4)
+        # Condition 4 of decision 0007. The committed table is machine-derived from
+        # decode.ml; this re-runs the extraction and asserts equality, so reference
+        # drift is a build failure rather than a diff nobody ordered. Cheap precisely
+        # because mechanism B needs no OCaml toolchain.
+        run: make opcode-drift
+
   fuzz-smoke:
     # Short fuzz on every PR: enough to catch a target that stopped building or
     # a seed corpus that regressed, not enough to find deep bugs. The long runs

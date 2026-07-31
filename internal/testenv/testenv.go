@@ -115,6 +115,51 @@ func SuiteFiles(tb testing.TB, suiteDir string) []string {
 	return nil
 }
 
+// RefDecodeML is the reference interpreter's decoder, relative to the repo root.
+// The *authority* of decision 0007, as distinct from the suite, which samples it.
+const RefDecodeML = "third_party/spec/interpreter/binary/decode.ml"
+
+// MinRefDecodeBytes is the floor for the vendored reference to count as present.
+//
+// A size, not an existence check, for RequireSuite's reason one layer over: a
+// truncated decode.ml satisfies os.Stat and then yields an extraction with too few
+// arms — and the interesting half of that failure is that the extractor's own vacuity
+// floors would catch it, reporting "upstream refactored" for what is really "the fetch
+// was cut short". Two controls, two diagnoses; this one owns the input.
+// decode.ml is 38042 bytes at bdd7164.
+const MinRefDecodeBytes = 20000
+
+// RequireSpecRef is the licensed door for tests that read the reference interpreter.
+//
+// Same policy as RequireSuite and the same reason it exists: the drift check's whole
+// job is to compare the committed table against the authority, so a drift check that
+// skips because the authority is absent reports agreement with a file it never read.
+// That is worse than no check, being a green that has never once looked (#29).
+//
+// Returns the source so a caller cannot obtain the path without passing the gate.
+func RequireSpecRef(tb testing.TB, path string) string {
+	tb.Helper()
+
+	b, err := os.ReadFile(path)
+	if len(b) >= MinRefDecodeBytes {
+		return string(b)
+	}
+
+	reason := fmt.Sprintf("reference interpreter not vendored: %s is %d bytes, want >=%d (run: make spec-ref)",
+		path, len(b), MinRefDecodeBytes)
+	if err != nil {
+		reason = fmt.Sprintf("reference interpreter not vendored: %v (run: make spec-ref)", err)
+	}
+
+	if NoSkip() {
+		tb.Fatalf("%s\n\t%s=1 revokes skip licenses: a drift check that skips reports agreement with an authority it never read",
+			reason, NoSkipEnv)
+	} else {
+		tb.Skip(reason)
+	}
+	return ""
+}
+
 func countSuiteFiles(suiteDir string) (int, error) {
 	paths, err := filepath.Glob(filepath.Join(suiteDir, "*.wast"))
 	if err != nil {

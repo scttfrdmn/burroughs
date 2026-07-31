@@ -1,6 +1,7 @@
 # 0007 — The opcode table's authority, and how agreement with it is checked
 
-Date: 2026-07-31 · Status: **proposed** (principle stamped by Scott on #38; mechanism open)
+Date: 2026-07-31 · Status: **accepted** (Scott, 2026-07-31 — principle stamped on #38,
+mechanism **B** stamped with chat-Claude's four conditions)
 
 ## Decision
 
@@ -303,3 +304,72 @@ While verifying that, one figure in `constexpr.go` was found wrong and corrected
 `constant expression required` appears **24** times (global 7, elem 7, data 6, array
 2, func_ptrs 2), not 22. The load-bearing half of the claim held — 0 occurrences
 under `assert_malformed`, and both cited lines resolve as described.
+
+## Correction (2026-07-31, during #39): the counted shape was wrong
+
+Appended rather than edited in place, per the 0003 precedent: the record of what was
+believed at the deciding moment, and of why it survived review, is the part worth
+keeping. The **decision** is unaffected — B is more strongly supported by the true
+figures than by these — but "counted (not estimated)" was a claim about a method, and
+the method was flawed in two nameable ways. The measured table, extracted by the very
+mechanism this ADR chose:
+
+| region | ADR said | actually | why the ADR was wrong |
+|---|---|---|---|
+| single-byte opcodes | 201 | **215** | counted arm *lines*, not arms |
+| `0xfb` prefix (GC) | 29 | **31** | same |
+| `0xfc` prefix (misc) | 18 | **18** | — |
+| `0xfd` prefix (SIMD) | 256 | **275** | assumed sub-opcodes are bytes |
+| **total** | **504** | **539** | |
+
+**Error one — an arm is not a line.** A single `| 0x18l | 0x19l as opcode ->` head is
+one line and two opcodes, and a head can wrap across lines (`decode.ml:601` cost an
+afternoon before the extractor grew head-continuation joining). Lines are what a grep
+counts; arms are what a table has rows for.
+
+**Error two — the `0xfd` sub-opcode is a `u32` LEB, not a byte.** The ADR wrote 256
+because a prefix table "obviously" has at most 256 entries. `decode.ml` reads the SIMD
+sub-opcode with `match u32 s with`, and the arms run to **`0x113`** with a single hole
+at `0xbb`. Assuming the width was the tell that this figure was reasoned rather than
+counted, and it is exactly the class of mistake #36's width-parameterized design exists
+to catch — *when two fields disagree about a value, the suite has handed you a
+bidirectional control*, and here the ADR simply asserted one side.
+
+The prose figures need the same correction. **411** arms carry no immediates (not 368),
+there are **17** distinct readers (not 16), **20** distinct immediate shapes counting the
+empty one, and **40** arms are explicit `Illegal`. The reader histogram was worse than
+imprecise — it was a whole-file grep, so it counted occurrences *outside* `instr`
+entirely (`at idx s`: 78 file-wide, 63 within `instr`), and `grep 'idx s'` silently
+matched the tail of `laneidx s`. Reconciled per-reader against the real arms:
+
+    68  idx        45  memop      22  laneidx     9  heaptype    5  block
+     4  blocktype   2  byte       1 each: f32 f64 laneidx16 s32 s64 u32 v128
+                               vec_catch vec_idx vec_valtype
+
+Source occurrences and attributed immediates differ by design and the difference is
+itself checkable: `heaptype` appears 7 times and is attributed 9 because the
+`0x18l | 0x19l` arm emits two rows from one source line. That is the arithmetic of
+error one, running the other way.
+
+**The `laneidx16` entry is a defect the ADR's method could not have found.**
+`i8x16_shuffle` reads `repeat 16 laneidx s` — sixteen lane bytes. The first extractor
+recorded *one* `laneidx`, losing 15 bytes and shifting every subsequent instruction in
+a body. No spec vector can see it: every vector bearing on this table is
+`assert_malformed`, which is the whole reason this ADR exists (§9 G-3). It was found by
+printing what the extractor actually returned for each arm — *print-don't-trust* — and
+it is the strongest available argument for B over hand-transcription, since a human
+reading `repeat 16 laneidx s` into a table row is running exactly the same risk with no
+machine to object.
+
+Three of the four irregular arms are confirmed as described (`0x02` block, `0x03` loop,
+`0x1f` try_table). `0x04` if/else has a wrinkle the ADR did not record: its second
+`instr_block` is **conditional** on `peek = 0x05`, so `if` without `else` reads one
+block and `if`/`else` reads two. Cited in `TestIrregularArmsHaveCitedShapes` per
+condition 2 rather than left in prose here.
+
+**How this was allowed to happen, which is the reusable part.** The figures came from
+greps over the file, and each grep was checked for *plausibility* rather than against a
+second method. A count that nothing can contradict is an estimate wearing a count's
+clothes — the same defect as a derivation from a sample that cannot falsify it (0003's
+LEB ordering). The extractor is that second method, and it disagreed with the ADR on
+its first successful run. Which is the ADR being right about the mechanism it chose.
