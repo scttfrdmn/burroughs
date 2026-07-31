@@ -65,8 +65,8 @@ suite gets away with being unpinned because it is the thing being reported; the
 reference cannot, because it is an input to something reported.
 
 Whichever option is chosen, it pins its reference by SHA. Whether to retrofit
-pinning onto the suite fetch is a separate question and gets its own issue — noted
-here rather than fixed in passing, since it is not this ADR's subject.
+pinning onto the suite fetch is a separate question, filed as #42 — noted here rather
+than fixed in passing, since it is not this ADR's subject.
 
 ### There is no OCaml toolchain, and assuming one is a real cost
 
@@ -189,7 +189,7 @@ property hand-transcription lacks.
   whether it is accepted. A gate-off engine meeting a GC or SIMD opcode still
   reports a feature-named error, never a spoofed spec string.
 - #33's agreement test lands in the same PR as the table, per 0006.
-- **Not fixed here:** the suite fetch's own lack of pinning. Separate issue.
+- **Not fixed here:** the suite fetch's own lack of pinning — #42.
 
 ## Postscript: what the authority already settled
 

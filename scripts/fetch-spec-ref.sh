@@ -14,8 +14,8 @@
 # thing being *reported*: when it drifts, the board moves and CI says so, loudly. This
 # reference is an *input* to a generated table, so a silent drift here arrives as a
 # diff nobody ordered. An input to a report gets pinned; a report does not have to be.
-# (Whether the suite fetch should be pinned anyway is its own question, filed
-# separately — decision 0007 declines to fix it in passing.)
+# (Whether the suite fetch should be pinned anyway is its own question — #42.
+# Decision 0007 declines to fix it in passing.)
 set -e
 
 repo="https://github.com/WebAssembly/spec"
