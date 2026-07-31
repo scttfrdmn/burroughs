@@ -70,6 +70,34 @@ issue `type:contract`.
 Keep descriptions terse and factual — written for a reader who wasn't in the
 session. Anything Scott must decide is *flagged*, never decided for him.
 
+## Versioning and the changelog
+
+- **Semantic Versioning 2.0.0** (semver.org). Public API is everything
+  exported outside `internal/`. While the major version is `0`, the API is
+  unstable by definition — but MINOR still means "features added" and PATCH
+  "fixes only", so the phase ladder maps to minors: `v0.1.0` for the v0
+  interpreter, `v0.2.0` for threads, and so on. `v1.0.0` waits until the
+  contract itself is stable (§1 non-goal 4: harden when the contract is).
+  Pre-release and build metadata use semver's own syntax (`v0.2.0-rc.1`).
+  Go module rules ride on this: tags are `vX.Y.Z`, and a `v2+` major would
+  need a `/vN` module path suffix.
+- **Keep a Changelog 1.1.0** (keepachangelog.com). `CHANGELOG.md` is
+  maintained by hand, newest first, with an `## [Unreleased]` section at the
+  top and the standard groups — **Added · Changed · Deprecated · Removed ·
+  Fixed · Security**. Entries are written for humans reading the project, not
+  copied from `git log`.
+- **Every PR updates `[Unreleased]`** in the same PR as the change. Releasing
+  means renaming that section to `## [X.Y.Z] - YYYY-MM-DD`, opening a fresh
+  `[Unreleased]`, tagging `vX.Y.Z` signed, and letting the tag be the
+  release record.
+- Two project-specific groups by convention, because they are the things this
+  project actually ships: gate flips (a proposal's suite going green) are
+  **Added** with the `gate:` name, and graves are **Fixed** with the issue
+  link — so the changelog and `label:type:grave` agree.
+
+`CHANGELOG.md` is a standard repo file and therefore an allowed exception to
+the frozen-markdown rule above.
+
 ## Decision records
 
 `docs/decisions/NNNN-*.md` stays as files, but ADRs are **accepted records
