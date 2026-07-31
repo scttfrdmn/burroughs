@@ -21,6 +21,18 @@ weakly-ordered platform.
 *Implements contract v0.1.*
 
 ### Added
+- `internal/spec`: the `.wast` harness, phase 1 (decision 0003) — a pure-Go
+  s-expression reader, wast string-literal decoding, the `(module binary ...)`
+  form, and `assert_malformed` matched by substring. No wabt, no non-Go tool
+  in the conformance loop. **First suite numbers: `binary.wast` 49/127 pass,
+  78 fail, 0 unsupported.**
+- Boards bucket failures by expected spec error string, ordered largest first,
+  so the suite schedules the decoder work: the biggest bucket is the next
+  issue and a bucket reaching zero is a PR's measure of done. Pinned by a test
+  that asserts the ordering property, not just the counts.
+- Parser-robustness sweep: all 257 upstream `.wast` files must parse, even the
+  ones phase 1 cannot execute. A parse error and an unsupported command are
+  different numbers, and conflating them would hide the real unsupported count.
 - Semantic Versioning 2.0.0 and Keep a Changelog 1.1.0 adopted, recorded in
   `CLAUDE.md` so the convention survives session boundaries.
 - Decision 0004: engine SemVer and contract version are independent, joined
@@ -31,8 +43,15 @@ weakly-ordered platform.
   `docs/reports/` retired (archived in #1).
 - CI runs on x86-64 (TSO) and AArch64 (weakly ordered) — build, vet, test,
   `-race`, and `gofmt`. Green on both from the first push.
+- Two disciplines ratified into `CLAUDE.md`: *unreachability is a grave only
+  when it's silent — declared and tracked, it's a TODO with an audit trail*,
+  and *bucketed failures are the work plan*.
 
 ### Fixed
+- The s-expression reader could not traverse `annotations.wast`: a bare `;`
+  inside a custom annotation form is a delimiter, so the atom loop consumed
+  zero bytes and errored on its own delimiter. 256/257 files parsed before,
+  257/257 after. Regression vector copied verbatim from `annotations.wast:14`.
 - CI used deprecated action versions (Node 20) and requested a Go module
   cache with no `go.sum` to key it on.
 

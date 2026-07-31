@@ -134,10 +134,21 @@ the choice, and consequences once Scott has called it.
   same shape in the same session. *An error constant with no reachable path
   is a missing check wearing a disguise* (grave, 0003); its inverse face is
   the predicate-property rule, and disguises come in families.
+- **Unreachability is a grave only when it's silent.** Declared and tracked,
+  it's a TODO with an audit trail — scaffolding wearing a name tag, not a
+  missing check wearing a disguise. The test is whether the deferral was
+  *named at its definition site* and carries a tracking issue. A sweep that
+  turns up a labelled placeholder has still done its job: it forced the
+  classification question. (Ruling on `ErrTrailingData`, #6.)
 - **No cgo. Pure Go.** `go vet`, `go test ./...`, and `gofmt -l` clean at
   every commit.
 - **Honest boards.** The PR description and the issue tracker reflect
   reality, including what's red. Never quote a suite count that wasn't run.
+- **Bucketed failures are the work plan.** A suite Board line reports pass /
+  fail / unsupported, with failures bucketed by the missing feature (for the
+  decoder, by expected spec error string). The biggest bucket is the next
+  issue to take; a bucket going to zero is a PR's measure of done. Failures
+  are reported, never skipped — skipping hides the queue.
 
 ## Conventions
 
