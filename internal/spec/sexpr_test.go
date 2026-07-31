@@ -39,6 +39,50 @@ func TestParseStringEscapes(t *testing.T) {
 	}
 }
 
+// TestEmptyStringIsNotNil pins the nil-vs-empty distinction found by
+// FuzzWastLexer. `isS` reports "this node is a string"; `str` carries the bytes.
+// If `str` were nil for `""`, the two would be entangled and any reader checking
+// `str != nil` would misread `(module binary "")` — the empty image, which is
+// the "unexpected end" boundary and the single most-exercised vector in
+// binary.wast. Emptiness must be a length, never a nil.
+func TestEmptyStringIsNotNil(t *testing.T) {
+	for _, src := range []string{`""`, `(module binary "")`} {
+		nodes, err := newParser([]byte(src)).parseAll()
+		if err != nil {
+			t.Fatalf("%s: %v", src, err)
+		}
+		var found bool
+		var walk func(n node)
+		walk = func(n node) {
+			if n.isS {
+				found = true
+				if n.str == nil {
+					t.Errorf("%s: empty string literal has nil bytes; want non-nil len 0", src)
+				}
+			}
+			for _, c := range n.list {
+				walk(c)
+			}
+		}
+		for _, n := range nodes {
+			walk(n)
+		}
+		if !found {
+			t.Errorf("%s: no string literal parsed", src)
+		}
+	}
+	// The extracted image must be non-nil too, so a caller can distinguish
+	// "no binary form" (nil, false) from "the empty image" (non-nil, true).
+	n, err := newParser([]byte(`(module binary "")`)).parseNode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	img, ok := binaryModule(n)
+	if !ok || img == nil || len(img) != 0 {
+		t.Errorf("binaryModule of the empty image = %v, %v; want non-nil len 0, true", img, ok)
+	}
+}
+
 func TestParseStringRejects(t *testing.T) {
 	for _, src := range []string{
 		`"unterminated`,
@@ -118,11 +162,15 @@ func TestBinaryModuleForms(t *testing.T) {
 		want []byte
 	}{
 		// Concatenated string arguments, as binary.wast writes them.
-		{`(module binary "\00asm" "\01\00\00\00")`, true,
-			[]byte{0x00, 'a', 's', 'm', 0x01, 0x00, 0x00, 0x00}},
+		{
+			`(module binary "\00asm" "\01\00\00\00")`, true,
+			[]byte{0x00, 'a', 's', 'm', 0x01, 0x00, 0x00, 0x00},
+		},
 		// Single string form.
-		{`(module binary "\00asm\01\00\00\00")`, true,
-			[]byte{0x00, 'a', 's', 'm', 0x01, 0x00, 0x00, 0x00}},
+		{
+			`(module binary "\00asm\01\00\00\00")`, true,
+			[]byte{0x00, 'a', 's', 'm', 0x01, 0x00, 0x00, 0x00},
+		},
 		// Named module: (module $M1 binary ...)
 		{`(module $M1 binary "\00asm")`, true, []byte{0x00, 'a', 's', 'm'}},
 		// Empty image is legal to extract — "" is a real test case.

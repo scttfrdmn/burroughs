@@ -136,7 +136,7 @@ func (r *reader) uleb(bits uint) (uint64, error) {
 	maxBytes := int((bits + 6) / 7)
 	var v uint64
 	var shift uint
-	for i := 0; i < maxBytes; i++ {
+	for i := range maxBytes {
 		c, err := r.byte()
 		if err != nil {
 			return 0, err
@@ -168,6 +168,13 @@ func (r *reader) u32() (uint32, error) {
 }
 
 // u64 reads an unsigned LEB128-encoded 64-bit integer (≤ 10 bytes).
+//
+// No caller yet: i64 immediates (#7) and memory64's 64-bit limits are what will
+// use it. Declared-and-tracked rather than silent, per the ruling in CLAUDE.md —
+// see #19 for why it is kept instead of deleted. FuzzULEB covers uleb(64)
+// directly, so the width is exercised even without a production caller.
+//
+//nolint:unused // tracked in #19; awaits i64 immediates (#7) / memory64 gate
 func (r *reader) u64() (uint64, error) { return r.uleb(64) }
 
 // DecodeModule performs a section-level decode of a complete module image.

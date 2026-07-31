@@ -67,7 +67,7 @@ func buildInPlace() []byte {
 	return p
 }
 
-func runInPlace(code []byte, locals []int32, stack []int32) int32 {
+func runInPlace(code []byte, locals, stack []int32) int32 {
 	pc, sp := 0, 0
 	u32 := func() uint32 {
 		var v uint32
@@ -161,7 +161,7 @@ func buildRewrite(code []byte) []ins {
 	return out
 }
 
-func runRewrite(prog []ins, locals []int32, stack []int32) int32 {
+func runRewrite(prog []ins, locals, stack []int32) int32 {
 	pc, sp := 0, 0
 	for {
 		in := prog[pc]
@@ -247,7 +247,7 @@ func buildClosures(prog []ins) []step {
 	return out
 }
 
-func runClosures(steps []step, locals []int32, stack []int32) int32 {
+func runClosures(steps []step, locals, stack []int32) int32 {
 	f := &frame{locals: locals, stack: stack}
 	for f.pc >= 0 {
 		steps[f.pc](f)
@@ -277,19 +277,21 @@ func TestAllAgree(t *testing.T) {
 
 func BenchmarkInPlace(b *testing.B) {
 	st := make([]int32, 16)
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		runInPlace(code, []int32{0, 1}, st)
 	}
 }
+
 func BenchmarkRewrite(b *testing.B) {
 	st := make([]int32, 16)
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		runRewrite(prog, []int32{0, 1}, st)
 	}
 }
+
 func BenchmarkClosures(b *testing.B) {
 	st := make([]int32, 16)
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		runClosures(closures, []int32{0, 1}, st)
 	}
 }

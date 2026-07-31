@@ -5,6 +5,11 @@ name: ci
 # is arm64 — the weak side, which is the side that caught D20. The §4 litmus
 # battery is a v1 acceptance artifact, but the runners it needs exist from the
 # first push (decision: Scott, session 0002/0003).
+#
+# Every quality tool is pinned in tools/go.mod via `tool` directives, never in
+# this file: the linter version is repo state, so a green board on a laptop and
+# a green board here mean the same thing. They run as
+# `go tool -modfile=tools/go.mod <name>`.
 
 on:
   push:
@@ -26,17 +31,110 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version: '1.26'
-          # No dependencies yet, so there is no go.sum to key a cache on.
-          # Re-enable when the module gains its first requirement.
-          cache: false
-      - name: gofmt
+          cache-dependency-path: tools/go.sum
+
+      - name: gofumpt
+        # A diff check, not a suggestion. Formatting is never a review topic.
+        # --diff reports without rewriting, which is the same command `make
+        # fmt-check` runs, so local and CI verdicts cannot diverge.
         run: |
-          unformatted="$(gofmt -l .)"
-          if [ -n "$unformatted" ]; then
-            echo "gofmt needed on:"; echo "$unformatted"; exit 1
+          out="$(go tool -modfile=tools/go.mod golangci-lint fmt --diff ./... 2>&1)"
+          if [ -n "$out" ]; then
+            echo "::error::gofumpt would reformat the tree; run: make fmt"
+            printf '%s\n' "$out"
+            exit 1
           fi
+
       - run: go build ./...
       - run: go vet ./...
-      - run: go test ./...
+
+      - name: test
+        # -shuffle=on so test order is never load-bearing.
+        run: go test -shuffle=on ./...
+
       - name: race
-        run: go test -race ./...
+        run: go test -race -shuffle=on ./...
+
+      - name: go mod tidy is clean
+        run: |
+          go mod tidy
+          go mod tidy -modfile=tools/go.mod
+          if ! git diff --exit-code -- go.mod tools/go.mod tools/go.sum; then
+            echo "::error::go mod tidy changed a module file; commit the result"
+            exit 1
+          fi
+
+  lint:
+    # One arch is enough: these linters are not architecture-sensitive, and the
+    # matrix above is about memory ordering, not vet.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26'
+          cache-dependency-path: tools/go.sum
+
+      - name: golangci-lint
+        run: go tool -modfile=tools/go.mod golangci-lint run ./...
+
+      - name: deadcode
+        # The unreachable-error grave promoted to a tool (grave #3). A finding
+        # here is a classification question, not automatically a bug: declared
+        # and tracked is a TODO with an audit trail, silent is a grave. Anything
+        # not in the allowlist below has failed to answer that question.
+        run: |
+          out="$(go tool -modfile=tools/go.mod deadcode -test ./... || true)"
+          printf 'deadcode says:\n%s\n' "$out"
+          # reader.u64: tracked in #19, //nolint:unused with a reason at the site.
+          filtered="$(printf '%s\n' "$out" | grep -v 'reader\.u64' | grep -v '^$' || true)"
+          if [ -n "$filtered" ]; then
+            echo "::error::unreachable code with no tracking issue — name it at its definition site and file an issue, or delete it:"
+            printf '%s\n' "$filtered"
+            exit 1
+          fi
+
+  vuln:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26'
+          cache-dependency-path: tools/go.sum
+      - run: go tool -modfile=tools/go.mod govulncheck ./...
+
+  fuzz-smoke:
+    # Short fuzz on every PR: enough to catch a target that stopped building or
+    # a seed corpus that regressed, not enough to find deep bugs. The long runs
+    # are scheduled — see nightly.yml.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26'
+          cache-dependency-path: tools/go.sum
+
+      - name: vendor the spec suite
+        # Corpora are seeded from the suite, so the fetch is what makes this
+        # meaningful rather than boundary-seeds-only.
+        run: make spec-tests
+
+      - name: fuzz decoder
+        run: |
+          go test ./internal/binary/ -run XXX -fuzz FuzzDecodeModule -fuzztime 45s
+          go test ./internal/binary/ -run XXX -fuzz FuzzULEB -fuzztime 20s
+
+      - name: fuzz wast lexer
+        run: |
+          go test ./internal/spec/ -run XXX -fuzz FuzzWastLexer -fuzztime 45s
+          go test ./internal/spec/ -run XXX -fuzz FuzzParseNodeProgress -fuzztime 20s
+
+      - name: upload crashers
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crashers
+          path: internal/*/testdata/fuzz/**
+          if-no-files-found: ignore

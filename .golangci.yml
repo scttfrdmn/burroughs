@@ -1,0 +1,168 @@
+# golangci-lint v2 configuration.
+#
+# The version is pinned in golangci-lint/go.mod via a `tool` directive, not
+# here and not in CI YAML — the linter version is repo state, so a green board
+# on one machine means the same thing on another.
+#
+# Curated, never `enable-all`. Lint noise is its own kind of dishonest board:
+# a wall of findings nobody reads is indistinguishable from no linter at all,
+# and it teaches the reflex this project most needs to avoid — scrolling past a
+# warning. Every linter below has a reason. Any linter that starts fighting a
+# deliberate engine design gets a `//nolint` with the reason recorded, or gets
+# removed here with a commit message saying why. Never silently disabled.
+version: "2"
+
+linters:
+  # `standard` is errcheck, govet, ineffassign, staticcheck, unused.
+  default: standard
+
+  enable:
+    # --- Correctness, in a package that decodes untrusted bytes -------------
+    - bodyclose      # unclosed HTTP bodies (WASI 0.3 will grow these)
+    - durationcheck  # time.Duration multiplication mistakes
+    - errorlint      # %v vs %w, and errors.Is/As over == on wrapped errors;
+                     # the decoder's error contract is matched with errors.Is,
+                     # so a == comparison sneaking in is a real defect
+    - exhaustive     # unhandled enum cases — Kind, SectionID, and every opcode
+                     # switch the interpreter will grow. A missing case in a
+                     # dispatch switch is the interpreter's version of grave #3
+    - makezero       # append to a non-zero-length slice made with make
+    - nilerr         # `return nil` after checking err != nil
+    - nilnesserr     # nil-vs-error confusion
+    - reassign       # reassigning package-level vars from other packages
+    - rowserrcheck
+    - sqlclosecheck
+    - musttag
+
+    # --- The grave-hunters -------------------------------------------------
+    # These three are the sweep discipline promoted to tooling: an unused
+    # parameter, an always-nil error, or an unreachable constant is a missing
+    # check wearing a disguise (grave, decision 0003).
+    - unparam        # a parameter or result nothing varies — including the
+                     # always-nil error return that hid grave #3
+    - wastedassign
+    - unconvert      # redundant conversions; in a uint64-slot engine these
+                     # obscure where the real width changes happen
+
+    # --- Idiom and modernity ------------------------------------------------
+    - revive         # style + the exported-doc-comment rule (config below)
+    - staticcheck    # includes the `modernize` analyzers under v2; see the
+                     # staticcheck settings block for the explicit enable
+    - copyloopvar    # Go 1.22+ loop semantics: flags the obsolete `x := x`
+    - intrange       # range-over-int where a 3-clause for loop was habit
+    - usestdlibvars  # stdlib constants over literals
+    - perfsprint     # fmt.Sprintf where a cheaper conversion exists — this is
+                     # a performance-partisan engine (contract §0)
+    - gocritic
+
+    # --- Suppression discipline (directive item 4) --------------------------
+    - nolintlint     # a //nolint without a reason is not a suppression, it is
+                     # a silence. Configured below to require one.
+
+    # --- Testing ------------------------------------------------------------
+    - testifylint
+    - thelper
+    - tparallel
+
+  settings:
+    errcheck:
+      check-type-assertions: true
+      check-blank: true
+
+    exhaustive:
+      # A switch over an enum must handle every case or say why not. `default`
+      # counts as handling only when it is a real fallback, not a shrug.
+      default-signifies-exhaustive: true
+
+    govet:
+      enable-all: true
+      disable:
+        # fieldalignment fights deliberate struct layout. The engine's hot
+        # structs are ordered for cache behaviour and readability, not for the
+        # last few bytes of padding; when layout matters it will be measured
+        # and commented, which is stronger than an unexplained reorder.
+        - fieldalignment
+
+    staticcheck:
+      # Explicitly include the modernize analyzers (directive item 3): min/max
+      # builtins, slices/maps/cmp, range-over-int, iterators. The engine should
+      # read like 2026 Go, not 2019 Go with newer syntax available.
+      checks:
+        - all
+        - -ST1000  # package comment style — the package comments here are
+                   # deliberately long-form scope statements, not one-liners
+
+    revive:
+      rules:
+        - name: exported
+          # Doc comments on every exported identifier (directive item 8).
+          # internal/ stays internal, so this bites hardest on the eventual
+          # public API — which is exactly where it should bite.
+          arguments: [checkPrivateReceivers, sayRepetitiveInsteadOfStutters]
+        - name: package-comments
+        - name: error-strings
+        - name: error-naming
+        - name: indent-error-flow
+        - name: var-declaration
+        - name: receiver-naming
+        - name: unexported-return
+        - name: unreachable-code
+        - name: redefines-builtin-id
+
+    nolintlint:
+      require-explanation: true # `//nolint:x // reason` — the reason is the point
+      require-specific: true    # never a bare //nolint
+      allow-unused: false       # a suppression for a finding that no longer
+                                # fires is stale scaffolding; delete it
+
+    gocritic:
+      enabled-tags: [diagnostic, style, performance]
+      disabled-checks:
+        # The decoder deliberately takes and returns byte slices by value and
+        # aliases the input buffer rather than copying (decision 0002). These
+        # two checks argue with that on every function.
+        - hugeParam
+        - rangeValCopy
+
+    perfsprint:
+      # strconv over fmt where it is a plain conversion, but error construction
+      # stays readable — fmt.Errorf is the idiom and %w is load-bearing.
+      errorf: false
+
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - std-error-handling
+    rules:
+      # Tests may shadow, hand-roll fixtures, and be long. What they may not do
+      # is skip a failure — that is enforced by the boards, not by a linter.
+      - path: _test\.go
+        linters:
+          - errcheck
+          - gocritic
+          - unparam
+
+      # dispatchbench exists to compare four interpreter strategies over the
+      # same program. Its duplication is the experiment, not an accident, and
+      # deduplicating it would destroy the measurement (decision 0002).
+      - path: internal/interp/dispatchbench/
+        linters:
+          - gocritic
+          - dupl
+          - unparam
+
+formatters:
+  # gofumpt is a strict superset of gofmt (directive item 2). CI enforces it as
+  # a diff check, so formatting never becomes a review topic.
+  enable:
+    - gofumpt
+  settings:
+    gofumpt:
+      extra-rules: true
+
+issues:
+  # Report everything. Default limits truncate the list, which would hide the
+  # queue — the same objection as skipping a failing spec test.
+  max-issues-per-linter: 0
+  max-same-issues: 0

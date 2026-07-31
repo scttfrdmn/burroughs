@@ -74,23 +74,25 @@ func TestWideAgree(t *testing.T) {
 func BenchmarkWideInPlace(b *testing.B) {
 	st := make([]int32, 16)
 	l := wideLocals()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		l[128], l[129] = 0, 1
 		runInPlace(wideCode, l, st)
 	}
 }
+
 func BenchmarkWideRewrite(b *testing.B) {
 	st := make([]int32, 16)
 	l := wideLocals()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		l[128], l[129] = 0, 1
 		runRewrite(wideProg, l, st)
 	}
 }
+
 func BenchmarkWideSideTable(b *testing.B) {
 	st := make([]int32, 16)
 	l := wideLocals()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		l[128], l[129] = 0, 1
 		runSide(wideCode, wideSide, l, st)
 	}

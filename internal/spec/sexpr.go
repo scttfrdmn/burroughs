@@ -114,8 +114,8 @@ func (p *parser) parseNode() (node, error) {
 		return node{}, p.errf("unexpected end of input")
 	}
 	line := p.line
-	switch c := p.src[p.off]; {
-	case c == '(':
+	switch c := p.src[p.off]; c {
+	case '(':
 		p.off++
 		// A list is non-nil even when empty, which is how isList stays honest.
 		items := []node{}
@@ -134,15 +134,15 @@ func (p *parser) parseNode() (node, error) {
 			}
 			items = append(items, item)
 		}
-	case c == ')':
+	case ')':
 		return node{}, p.errf("unexpected )")
-	case c == '"':
+	case '"':
 		b, err := p.parseString()
 		if err != nil {
 			return node{}, err
 		}
 		return node{str: b, isS: true, line: line}, nil
-	case c == ';':
+	case ';':
 		// A lone ';' that skipSpace did not consume — it is neither ';;' nor
 		// part of '(;'. Illegal in wast proper, but the annotations proposal
 		// permits arbitrary token soup inside (@id ...), and annotations.wast
@@ -179,7 +179,12 @@ func (p *parser) parseString() ([]byte, error) {
 		return nil, p.errf("expected string")
 	}
 	p.off++
-	var out []byte
+	// Non-nil, deliberately: `(module binary "")` is a real suite vector and the
+	// empty image is the "unexpected end" boundary case. isS already carries
+	// "this is a string", so str must not double as the presence flag — a reader
+	// reaching for `str != nil` would get the wrong answer for exactly the one
+	// input that matters most. Found by FuzzWastLexer on its first run.
+	out := []byte{}
 	for {
 		if p.off >= len(p.src) {
 			return nil, p.errf("unterminated string")
