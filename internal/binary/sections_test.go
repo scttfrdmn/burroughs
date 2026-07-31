@@ -318,8 +318,11 @@ func TestLEBWidthIsPerField(t *testing.T) {
 // image actually held, and the first version of that reconstruction did not: it or'd
 // a high bit in for every negative form and reported 0x5e as 0xde — an error about
 // the module lying about the module, which is the wrong-layer tell in miniature.
-// Nothing in the suite can catch that, since the harness matches on the sentinel
-// text and never reads past the colon.
+// Nothing in the suite can catch that *for this vector*, since its expected string
+// is the bare sentinel and the harness reads no further than the expected string
+// does. Which is a property of the vector, not of the harness (#38): where a spec
+// string embeds data — `illegal opcode ff` — the rendered value is oracle-covered.
+// This assertion is what covers the case where it is not.
 func TestFuncTypeFormIsASignedLEB(t *testing.T) {
 	tag := []byte{0xE0, 0x7F} // binary-leb128.wast:1073 — -0x20 in two bytes
 

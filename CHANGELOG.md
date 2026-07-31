@@ -363,12 +363,15 @@ weakly-ordered platform.
   ([#36](https://github.com/scttfrdmn/burroughs/issues/36))
 - **`ErrMalformedFuncType`'s message invented bits the input never had.** The
   byte reconstruction or'd a high bit in for every negative form, reporting a
-  `0x5e` array tag as `0xde`. Nothing in the suite can see it — the harness
-  matches on the sentinel text and never reads past the colon — and it was found
-  by *printing what the expression returns for nine tags* rather than reading its
-  shape. Lesson: **an error message is testimony, and fabricated evidence is a
-  lying witness even when the verdict is right.** The oracle never reads past the
-  colon, which is exactly why everything after it is ours alone to keep honest.
+  `0x5e` array tag as `0xde`. Nothing in the suite can see it — that vector's
+  expected string is the bare sentinel, and the harness reads exactly as far as the
+  expected string does — and it was found by *printing what the expression returns
+  for nine tags* rather than reading its shape. Lesson: **an error message is
+  testimony, and fabricated evidence is a lying witness even when the verdict is
+  right.** Where the oracle stops short, everything past that point is ours alone to
+  keep honest — and per #38 it does *not* always stop at the sentinel: a spec string
+  such as `illegal opcode ff` embeds the byte, making the rendering oracle-covered
+  for exactly those vectors.
   ([#36](https://github.com/scttfrdmn/burroughs/issues/36))
 - **CI's `deadcode` allowlist still filtered `reader.u64`** while the Makefile's
   comment already claimed the allowlist was empty — one truth, two authorities,
