@@ -49,6 +49,12 @@ weakly-ordered platform.
 - Decision 0005: tooling gates. Quality is enforced by pinned tools wired into
   CI rather than left to habit, because a convention that depends on
   remembering decays across session boundaries.
+- Decision 0006 (**proposed**, awaiting Scott): where the const-expression opcode
+  table lives — shared with the interpreter from the start, or a `constexpr`
+  reader in `internal/binary` merged later. Blocks #25. Recommends the latter,
+  because its risk (silent drift between two tables) converts into a failing test
+  while the alternative's risk (a shared structure shaped by its only consumer,
+  before the second consumer exists) converts into nothing.
 - `tools/go.mod` pins every quality tool via `tool` directives —
   `golangci-lint` v2.12.2, `govulncheck`, `deadcode`, `benchstat` — so the
   versions are repo state and a green board means the same thing on a laptop
@@ -220,7 +226,14 @@ weakly-ordered platform.
   progress: the second at ~70k execs/sec against 130k–670k/sec measured locally, a
   ~7x spread that is a property of the runner and not of the code. Now
   `-fuzztime Nx`, sized from the measured CI floor rather than converted from a dev
-  box's rate. `make fuzz` and the nightly 10-minute runs stay wall-clock *because
+  box's rate. Cost, measured on the first green run rather than estimated: the
+  `fuzz wast lexer` step went 65s nominal → **3m26s**, because the runner's real
+  floor is ~17k execs/sec, not the ~70k the sizing assumed — 47 three-second windows
+  reported `0/sec`, i.e. long stalls with 605k/sec recovery bursts rather than a slow
+  steady rate. Accepted: a job that takes three minutes and answers a fixed question
+  beats one that takes one and sometimes answers none. The stalls themselves are a
+  separate finding, tracked, not absorbed into the budget.
+  `make fuzz` and the nightly 10-minute runs stay wall-clock *because
   their purposes are durations* — the units differ because the purposes do, and both
   sites now say so. Budget by the quantity the purpose names.
 - **CI board tests had been passing by not running.** The `build` job never

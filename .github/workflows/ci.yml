@@ -228,14 +228,26 @@ jobs:
     #
     # Sizes are derived from the measured CI floor (~70k/sec, the rate on the run
     # that failed), not from converting the old seconds at a dev box's rate, and
-    # they hold the old 2:1 ratio between targets. So the floor case costs about
-    # what the seconds budgets did and a fast runner simply finishes sooner —
-    # which is the point: the same number of questions get asked either way.
+    # they hold the old 2:1 ratio between targets.
+    #
+    # What the first green run under these budgets actually measured, because it
+    # was worse than the sizing assumed and the number should not be inherited
+    # from the estimate: FuzzWastLexer's 3M execs took **178s**, spending 47 of its
+    # 3-second windows reporting `0/sec` — long stalls, not a slow steady rate,
+    # with recovery bursts up to 605k/sec. The effective floor is therefore ~17k
+    # execs/sec, not ~70k. The whole step ran 3m26s against the old nominal 65s.
+    #
+    # That cost is the honest price of the unit change and is accepted for now:
+    # a job that takes three minutes and answers a fixed question beats one that
+    # takes one minute and sometimes answers none. But the stalls are their own
+    # finding — a 4-worker runner pausing for 18 consecutive seconds is not
+    # throughput variance, it is contention or GC, and if it worsens the budget is
+    # not what needs adjusting. Tracked in #28's thread rather than absorbed here.
     #
     # timeout-minutes is a failsafe, not a budget. An executions budget has no
     # upper bound on duration, so a genuine hang would run until GitHub's default
-    # 6h cap. 15 minutes is ~7x the floor-case cost: loose enough that throughput
-    # variance can never reach it, tight enough that a hang is caught. Naming it
+    # 6h cap. 15 minutes is ~4x the measured 3m26s: loose enough that stall
+    # variance cannot reach it, tight enough that a hang is caught. Naming it
     # separately keeps the two concerns distinct — the budget asks a fixed number
     # of questions, the timeout says something is structurally wrong.
     runs-on: ubuntu-24.04
