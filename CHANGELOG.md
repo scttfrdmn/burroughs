@@ -46,8 +46,51 @@ weakly-ordered platform.
 - Two disciplines ratified into `CLAUDE.md`: *unreachability is a grave only
   when it's silent — declared and tracked, it's a TODO with an audit trail*,
   and *bucketed failures are the work plan*.
+- Decision 0005: tooling gates. Quality is enforced by pinned tools wired into
+  CI rather than left to habit, because a convention that depends on
+  remembering decays across session boundaries.
+- `tools/go.mod` pins every quality tool via `tool` directives —
+  `golangci-lint` v2.12.2, `govulncheck`, `deadcode`, `benchstat` — so the
+  versions are repo state and a green board means the same thing on a laptop
+  and in CI. The engine's own `go.mod` stays dependency-free.
+- `.golangci.yml`: a curated linter set, each enable carrying its rationale,
+  with gofumpt as the formatter. Never `enable-all` — lint noise is its own
+  kind of dishonest board.
+- Four native fuzz targets: `FuzzDecodeModule` (total behaviour — a module or a
+  *declared* error, never a panic), `FuzzULEB` (width invariant at 32 and 64
+  bits), `FuzzWastLexer`, and `FuzzParseNodeProgress` (a successful parse
+  consumes ≥1 byte). Corpora seed from the spec suite at run time — 809 module
+  images from 257 files, no transcription step.
+- `TestFixtureProvenance` machine-checks the `binary.wast:N` citations in
+  hand-written fixtures against the suite: 19 cited vectors verified, 2
+  declared synthetic.
+- `make check` as the single local gate mirroring CI, plus `make fuzz`,
+  `make bench`, `make vuln`, `make tidy`. CI gains lint, vuln, fuzz-smoke, and
+  `go mod tidy` jobs; a weekly `nightly.yml` runs 10-minute fuzz per target and
+  re-runs `govulncheck` against moving vulnerability data.
+- `-shuffle=on` on all test runs: test order is never load-bearing.
+- Three disciplines added to `CLAUDE.md` from this work: *parsers prove progress,
+  they don't assume it*, *fixtures cite the suite, and the citations are
+  checked*, and *verdict channel and mechanism channel are different instruments*
+  — an exit code can't tell you why, and output can't tell you whether.
+- Two rulings recorded in decision 0005: the `deadcode` allowlist becomes a file
+  with a reason per entry at its third entry (an unexplained allowlist entry is a
+  suppression wearing a disguise), and fuzz crashers are committed — the
+  never-commit rule was about provenance, and a crasher is a grave's reproducer
+  this project authored.
 
 ### Fixed
+- `parseString` returned a nil slice for the empty literal `""`, entangling
+  "is a string" with "has bytes" — so a reader checking `str != nil` would
+  misread `(module binary "")`, the empty image, which is the *unexpected end*
+  boundary and the most-exercised vector in `binary.wast`. Emptiness is a
+  length, never a nil. Found by `FuzzWastLexer` on its first run.
+- Two hand-typed decoder fixtures had drifted from the suite lines they claimed
+  to copy: the UTF-8 BOM vector was truncated from 11 bytes to 8, and an
+  `"asm\00"` vector was a mutation of nothing in the suite — reintroducing grave
+  #2's own short-preamble-versus-wrong-magic distinction inside the test that
+  pins it. All citations now machine-checked, and the coverage widened to every
+  preamble vector in `binary.wast:5–45`.
 - The s-expression reader could not traverse `annotations.wast`: a bare `;`
   inside a custom annotation form is a delimiter, so the atom loop consumed
   zero bytes and errored on its own delimiter. 256/257 files parsed before,

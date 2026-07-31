@@ -140,8 +140,26 @@ the choice, and consequences once Scott has called it.
   *named at its definition site* and carries a tracking issue. A sweep that
   turns up a labelled placeholder has still done its job: it forced the
   classification question. (Ruling on `ErrTrailingData`, #6.)
-- **No cgo. Pure Go.** `go vet`, `go test ./...`, and `gofmt -l` clean at
-  every commit.
+- **No cgo. Pure Go.** `make check` clean at every commit (see Tooling gates).
+- **Parsers prove progress, they don't assume it.** A loop whose exit condition
+  and error condition are the same predicate is the zero-progress bug; it
+  surfaces as an error only when the offending byte happens to be a delimiter,
+  and hangs otherwise. Every reader gets a fuzz target asserting the offset
+  moved. *A delimiter set is a claim about what cannot start a token, and one
+  that's right for the grammar can still be wrong for the corpus* (grave, #18).
+- **Fixtures cite the suite, and the citations are checked.** A hand-typed test
+  vector carries a `<file>.wast:N` comment that `TestFixtureProvenance`
+  verifies, or it is marked `synthetic` with a reason. A citation nobody
+  verifies is a claim, not a citation — two vectors claiming to be "verbatim"
+  had drifted, one truncated from 11 bytes to 8. Prefer deriving corpora from
+  the suite at run time: no transcription step, no drift.
+- **Verdict channel and mechanism channel are different instruments.** *An exit
+  code is not a mechanism* — the verdict channel can't tell you why. *Don't infer
+  a verdict from noise* — the output channel can't tell you whether. Read each
+  for what it carries and never substitute one for the other: a tool that exits
+  non-zero on findings is asked for its status, a tool that reports on stdout and
+  exits 0 is asked for its output, and capturing `2>&1` to test for non-empty
+  confuses a cold module cache with a defect (grave, PR #21).
 - **Honest boards.** The PR description and the issue tracker reflect
   reality, including what's red. Never quote a suite count that wasn't run.
 - **Bucketed failures are the work plan.** A suite Board line reports pass /
@@ -150,11 +168,58 @@ the choice, and consequences once Scott has called it.
   issue to take; a bucket going to zero is a PR's measure of done. Failures
   are reported, never skipped — skipping hides the queue.
 
+## Tooling gates
+
+See **decision 0005** for the full policy and its rationale. The short version —
+**quality is a gate, not a habit**, because a convention that depends on
+remembering decays across session boundaries:
+
+- **Tools are pinned in `tools/go.mod`** via `tool` directives, never in CI
+  YAML: `golangci-lint` v2, `govulncheck`, `deadcode`, `benchstat`. Run them as
+  `go tool -modfile=tools/go.mod <name>`. A green board on a laptop and in CI
+  must mean the same thing. The engine's own `go.mod` stays dependency-free.
+- **`make check` is the gate** — fmt-check, build, vet, lint, test, deadcode. It
+  is the local mirror of CI, so a surprise in CI is a bug in the Makefile, not
+  in someone's habits. `make fuzz`, `make bench`, `make vuln` for the rest.
+- **Curated linters, never `enable-all`.** Each enable in `.golangci.yml`
+  carries a rationale comment. Lint noise is its own kind of dishonest board: a
+  wall of findings nobody reads trains the reflex of scrolling past a warning.
+- **gofumpt** (`extra-rules`) as a `--diff` check. Formatting is never a review
+  topic.
+- **`modernize` held at zero.** The engine reads like 2026 Go — `min`/`max`,
+  `slices`/`maps`/`cmp`, range-over-int, iterators where they clarify.
+- **Suppression discipline: noticed-and-named, or not at all.** Fix it, or
+  `//nolint:<linter> // reason` with a tracking issue, or remove the linter in
+  config with a commit message saying why. `nolintlint` requires the reason.
+  This is the `ErrTrailingData` ruling applied to lint.
+- **Fuzzing is standard equipment.** Every decoder and reader gets a target;
+  corpora seed **from the spec suite at run time**, never hand-typed. Short fuzz
+  per PR, 10-minute runs weekly. **Crashers are committed** to
+  `testdata/fuzz/FuzzX/` — the never-commit-corpora rule is about *provenance*,
+  not test data: upstream material we don't own stays vendored, but a crasher is
+  authored here, it's a grave's reproducer, and Go's own convention expects it
+  in-tree. It is the graveyard's executable annex. (Ruling: Scott, PR #21.)
+- **benchstat or it didn't happen.** Performance claims cite `make bench`
+  (n≥10, with variance bands), never a single run.
+- **`deadcode` findings are classification questions**, not automatic bugs:
+  declared-and-tracked passes, silent fails. The allowlist is inline while it has
+  one or two entries and **becomes `tools/deadcode-allow.txt`, reason per entry,
+  at the third** — the threshold isn't the count, it's that an inline allowlist
+  can't hold justifications, and an unexplained entry is the unreachable-error
+  pattern again: a suppression wearing a disguise. (Ruling: Scott, PR #21.)
+- **Toolchain currency is a gated upgrade** — Go 1.27 and future linter majors
+  land as their own branch with both arches green and a changelog entry. Never a
+  drive-by bump in a PR about something else.
+- **Spirit clause: linters serve the contract, not the reverse.** When a finding
+  fights a deliberate engine design (payload aliasing, `uint64` slots,
+  dispatchbench's intentional duplication), suppression-with-reason is the
+  *correct* outcome and the reason is the documentation.
+
 ## Conventions
 
 - Module: `github.com/scttfrdmn/burroughs` (vanity `burroughs.run` import
   path is a later decision — 0001 records this).
-- Go ≥ 1.26. `make build test vet` must be green before any report.
+- Go ≥ 1.26. `make check` must be green before any report.
 - License: **Apache 2.0**, © 2026 Scott Friedman. `LICENSE` is the verbatim
   upstream text; the copyright line lives in `NOTICE` (Apache 2.0 §4(d)).
 - Fetched/vendored material (spec suite) lives under gitignored paths;

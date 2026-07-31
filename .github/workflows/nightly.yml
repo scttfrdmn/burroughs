@@ -1,0 +1,64 @@
+name: nightly
+
+# The long-running checks, on a schedule rather than per-PR: a 45-second fuzz
+# smoke test proves the target builds, but finding a real decoder bug takes
+# minutes. Vulnerability data also changes without the code changing, which is
+# the whole argument for running govulncheck on a clock and not only on a diff.
+
+on:
+  schedule:
+    # 07:00 UTC Mondays — a weekly cadence for vuln data (directive item 5),
+    # with the fuzz budget attached to the same wake-up.
+    - cron: '0 7 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - pkg: ./internal/binary/
+            target: FuzzDecodeModule
+          - pkg: ./internal/binary/
+            target: FuzzULEB
+          - pkg: ./internal/spec/
+            target: FuzzWastLexer
+          - pkg: ./internal/spec/
+            target: FuzzParseNodeProgress
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26'
+          cache-dependency-path: tools/go.sum
+
+      - name: vendor the spec suite
+        run: make spec-tests
+
+      - name: fuzz ${{ matrix.target }}
+        run: go test ${{ matrix.pkg }} -run XXX -fuzz ${{ matrix.target }} -fuzztime 10m
+
+      - name: upload crashers
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crashers-${{ matrix.target }}
+          path: internal/*/testdata/fuzz/**
+          if-no-files-found: ignore
+
+  vuln:
+    # Vulnerability databases move without the code moving.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26'
+          cache-dependency-path: tools/go.sum
+      - run: go tool -modfile=tools/go.mod govulncheck ./...

@@ -42,7 +42,7 @@ func buildSide(code []byte) []sideEntry {
 	return tbl
 }
 
-func runSide(code []byte, tbl []sideEntry, locals []int32, stack []int32) int32 {
+func runSide(code []byte, tbl []sideEntry, locals, stack []int32) int32 {
 	pc, sp := 0, 0
 	for {
 		op := code[pc]
@@ -91,7 +91,7 @@ func TestSideAgrees(t *testing.T) {
 
 func BenchmarkInPlaceSideTable(b *testing.B) {
 	st := make([]int32, 16)
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		runSide(code, side, []int32{0, 1}, st)
 	}
 }

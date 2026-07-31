@@ -2,3 +2,13 @@
 /testdata/spec/
 /third_party/
 *.out
+
+# benchstat inputs from `make bench`.
+new.txt
+old.txt
+
+# Fuzz *cache* is machine-local and disposable. Note the deliberate asymmetry:
+# internal/*/testdata/fuzz/ crashers are COMMITTED — a crasher we found is a
+# regression test we authored, and it belongs in history (decision 0005). Only
+# the upstream spec corpora are gitignored, because we did not write those.
+/testdata/fuzz-cache/
