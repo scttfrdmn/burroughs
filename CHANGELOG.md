@@ -871,6 +871,76 @@ is a formatting pass of its own, not a drive-by inside a decoder PR.*
 - The GC gate's non-opcode constructs recorded in `gatedNonOpcodes` — the `0x40` table form
   and the twelve GC reftypes, with their check sites. A construct with no gate entry is the
   #48 defect, and silence is how it got there the first time.
+- **`internal/text/keywords.go` — the wat keyword table, machine-derived from the reference
+  interpreter's text lexer**: 589 keywords, 173 token kinds, at the same pin as
+  `optable.go`. Decision 0007's argument one grammar over (**decision 0009**), and the
+  asymmetry is starker here: every vector bearing on the table is `assert_malformed`, so a
+  table containing **nothing at all** passes all 566 `unknown operator` vectors while
+  failing every valid module. The extraction turned out *easier* than `decode.ml`'s — one
+  `match` block, 589 one-shape arms, no alternations, no wrapped heads — which is the recon
+  finding that let 8a stand alone instead of folding into
+  [#8](https://github.com/scttfrdmn/burroughs/issues/8).
+- **`internal/text/internal/keywordgen`** with 0007's four conditions discharged: an
+  unrecognized arm inside the block is a hard error rather than an omission, a `Floor = 400`
+  vacuity control against 589 measured, a generation header naming authority/revision/
+  extractor version, and `make keyword-drift` in CI. One floor rather than `opcodegen`'s
+  per-region map, because this grammar has one region and there is no analogous partition to
+  under-count independently.
+- **`checkShape` — the check with no counterpart in `opcodegen`.** `let keyword = ['a'-'z']
+  (letter | digit | '_' | '.' | ':')+` (lexer.mll:111) is what ocamllex matched *before* the
+  arm dispatch ran, so an arm head outside that charset is dead code upstream and would be a
+  row here no input can reach. Notably `/` is absent from it, which is the character that
+  routes `i32.wrap/i64` to the **second** `unknown operator` producer (`| reserved`, :839)
+  rather than the keyword fallthrough (:809) — and that split, 8 + 3 across the eleven
+  legacy mnemonics, is why the mnemonics need maximal munch and not a table lookup.
+- **`internal/text/keywords_test.go` — an integrity check distinct from the drift check**,
+  and the distinction is a finding rather than belt-and-braces. `keyword-drift` needs
+  `third_party/spec`, so it cannot live in `make check`; on a fresh clone `DO NOT EDIT` is a
+  *request*, and the row that could be hand-added is exactly `get_local`. So the committed
+  table is asserted with no corpus at all: a size floor, the eleven absences, the `keyword`
+  shape, and a content spot-check with its kinds. Each falsified by mutating the committed
+  file — the obsolete row, an unreachable row, an empty kind, an emptied table, and a wrong
+  kind, each firing only where named. Also measured, because the first draft of the
+  reasoning guessed: `exclusions.generated: lax` does suppress `unused` on the table, but it
+  is *not* why the linter is quiet today — these tests read the map, so `unused` is correct
+  to say nothing. The exclusion is the silence that would remain if the tests were deleted,
+  which is the change that would take the package from "table with a consumer" to "table
+  with none" with nothing objecting.
+- **`internal/gen` — decision 0006's condition discharged, not deferred again.** The second
+  consumer arrived (`keywordgen` reads the same pin from the same script and formats the same
+  way), so the pin reader and the formatter moved out of `opcodegen` and its shim layer was
+  deleted rather than kept: one vocabulary for one fact. What is deliberately *not* shared is
+  anything either generator's grammar knows — a shared `parseArm` would be the wrong seam.
+  With its own tests, because both drift checks need a vendored reference and so nothing in
+  the tree exercised this package on a fresh clone.
+- `testenv.RequireSuiteFile` — a fourth licensed door, and the first for the *same* corpus as
+  an existing one. The unit that earns a door is the **question**: `RequireSuite` asserts a
+  count over 257 files, and a citation check against one named vector needs that file, which
+  a full corpus missing it satisfies and a 249-file corpus does not. It exists because the
+  skip was first written inline and `TestEverySkipSiteIsLicensed` failed the build — twice
+  now that AST check has caught an author who knew the rule.
+- `testenv.refFloors` — the reference size floor keyed by path constant rather than passed at
+  the call site, since *a floor passed by a caller is a fact about a file typed somewhere
+  other than where the file is named*, and the failure mode is a caller passing 0 and
+  defeating the control it is calling. An unregistered path is a hard failure, never a
+  default floor. `MinRefLexerBytes` is its own constant even though 20000 holds for both
+  files at this revision: sharing it would make the two floors' agreement an accident a
+  future upstream edit silently ends.
+
+### Fixed
+
+- **A pre-registered claim, refuted by its own probe** — recorded here because the
+  pre-registration is what made it findable, and *honest boards* includes the claims that
+  did not survive. [#53](https://github.com/scttfrdmn/burroughs/issues/53) stated this
+  work's board movement before authorship as `unsupportedCeiling` **1345 → 1334**, eleven
+  vectors. Both halves are wrong: `obsolete-keywords.wast` was **never on the board** (the
+  derived corpus is 14 files and its 11 vectors were not among the 1345), and teaching
+  `classify` the `(module quote …)` form cannot be scoped to eleven — it widens
+  `scorableCommands` and pulls **53 additional files** on: 14 → **67** files, 2144 →
+  **28769** commands, unsupported 1345 → **26741** (+25396), with **1229** newly-scorable
+  quote vectors across 41 expected strings. Fourth consecutive time in #53's sequencing
+  that a step named "cheap" owed one more layer than its name; the countermeasure is the
+  one that caught it.
 
 ## [0.0.1] - 2026-07-30
 

@@ -50,6 +50,17 @@ var licensed = map[string]string{
 	// catching an unlicensed skip written by the author who knows the rule. That is the
 	// case for reading the AST instead of trusting the convention.
 	"internal/testenv/testenv.go:RequireProposalDoc": "local dev on a clone without `make spec-ref`, revoked by BURROUGHS_NO_SKIP=1",
+	// A fourth door, and the *same* corpus as the first — which is the one case the
+	// "one line per corpus" note above did not anticipate. The unit that earns a door
+	// is really the *question*: RequireSuite asserts a count over 257 files, and a
+	// citation check against one named vector needs that file to exist, which a full
+	// corpus with one file missing satisfies and a 249-file corpus does not. Two
+	// questions, two floors, two diagnoses.
+	//
+	// Its arrival repeated RequireProposalDoc's: the skip was first written inline in
+	// keywordgen's citation check and TestEverySkipSiteIsLicensed failed the build.
+	// Twice now the mechanism has caught an author who knew the rule.
+	"internal/testenv/testenv.go:RequireSuiteFile": "local dev on a clone without `make spec-tests`, revoked by BURROUGHS_NO_SKIP=1",
 }
 
 // skipCalls are the testing.TB methods that end a test without a verdict.

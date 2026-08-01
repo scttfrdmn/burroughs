@@ -5,7 +5,7 @@ GO ?= go
 # anything globally.
 TOOL = $(GO) tool -modfile=tools/go.mod
 
-.PHONY: all build test vet fmt lint check vuln deadcode fuzz bench spec-tests spec-ref tidy conformance strict opcodes opcode-drift
+.PHONY: all build test vet fmt lint check vuln deadcode fuzz bench spec-tests spec-ref tidy conformance strict opcodes opcode-drift keywords keyword-drift
 
 # The default gate. `check` is what must be green before a report — it is the
 # local mirror of CI, so a surprise in CI means a bug in this line, not a bug in
@@ -175,3 +175,37 @@ opcode-drift:
 		echo "reference not vendored; run: make spec-ref"; exit 1; \
 	fi
 	$(STRICT) $(GO) test -v -shuffle=on -count=1 ./internal/binary/internal/opcodegen/
+
+# Regenerate the wat keyword table from the same vendored reference, one grammar over
+# (decision 0009). Same shape as `opcodes` above and deliberately not folded into it:
+# two authorities (decode.ml, lexer.mll), two extractors, two committed tables, and a
+# single target would make "regenerate the binary table" and "regenerate the text table"
+# indistinguishable in a log and in a diff.
+keywords: spec-ref
+	$(GO) run ./internal/text/internal/keywordgen/cmd/keywordgen -o internal/text/keywords.go
+	@echo "regenerated internal/text/keywords.go"
+
+# The keyword table's drift check — 0007's condition 4 in the wat grammar, and the
+# reason the table is allowed to be a committed artifact at all.
+#
+# Two guards, not one, and the second is a finding rather than caution. keywordgen's
+# tests read *both* corpora: lexer.mll for the extraction, and one suite vector
+# (obsolete-keywords.wast) for the citation check that proves the eleven mnemonics this
+# table omits are the eleven the suite asks about. Under $(STRICT) a missing suite file
+# is a hard failure, so guarding only the reference would send a reader to `make
+# spec-ref` for an absence `make spec-tests` fixes. Same lesson as ci.yml's vendoring
+# order: which package needs which corpus is not a fact a recipe can infer, so each
+# recipe states its own preconditions.
+#
+# Whole package, -count=1, $(STRICT): see opcode-drift above for each. Scoped to the
+# generator package rather than ./internal/text/... for opcode-drift's symmetry — this
+# target owns the *table's* agreement with the authority, and widening it to every future
+# text package would make an unrelated failure read as reference drift.
+keyword-drift:
+	@if [ ! -f third_party/spec/interpreter/text/lexer.mll ]; then \
+		echo "reference not vendored; run: make spec-ref"; exit 1; \
+	fi
+	@if [ ! -f testdata/spec/obsolete-keywords.wast ]; then \
+		echo "spec suite not vendored; run: make spec-tests"; exit 1; \
+	fi
+	$(STRICT) $(GO) test -v -shuffle=on -count=1 ./internal/text/internal/keywordgen/
