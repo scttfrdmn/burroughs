@@ -122,6 +122,7 @@ fuzz:
 	$(GO) test ./internal/spec/ -run XXX -fuzz FuzzWastLexer -fuzztime $(FUZZTIME)
 	$(GO) test ./internal/spec/ -run XXX -fuzz FuzzParseNodeProgress -fuzztime $(FUZZTIME)
 	$(GO) test ./internal/binary/ -run XXX -fuzz FuzzConstExprProgress -fuzztime $(FUZZTIME)
+	$(GO) test ./internal/text/ -run XXX -fuzz FuzzLexerProgress -fuzztime $(FUZZTIME)
 
 # benchstat or it didn't happen (decision 0005). Any performance claim in a PR
 # cites this target's output, never a single -count=1 run: n=10 and a p-value,

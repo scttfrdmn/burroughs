@@ -338,8 +338,76 @@ weakly-ordered platform.
   (`TestEveryReaderAgreesWithItsAuthorityDefinition`), because composition over the
   const set reaches eight opcodes out of a nineteen-entry vocabulary. On disagreement
   the reference-derived table is the presumptive authority.
+- `internal/text`: the wat lexer, reject-direction first (#53) — a decoder for the
+  reference's `rule token` transcribed in source order, with ocamllex's two
+  disambiguation rules (longest match, then earliest arm) modelled rather than
+  approximated. Both are load-bearing and both have vectors: `i32.wrap/i64` needs the
+  longest match to report the whole lexeme, `offset=0` needs the earliest-arm
+  tie-break. Not yet wired to a board — this PR declares no capability, so the suite
+  counts do not move, and a board that didn't move is telling the truth.
+- `internal/text`: production-level controls scoped to the byte space rather than to
+  vectors, because **both `unknown operator` producers emit byte-identical text** — so
+  any defect in the `keyword` production is invisible to a test that reads a message,
+  including deleting the whole arm. All 256 bytes are checked in both positions; the
+  symbol class is independently retyped with a size floor; the accept direction is
+  derived from the generated table rather than enumerated.
+- `FuzzLexerProgress`, budgeted in **executions** (350k in CI, wall clock in
+  `make fuzz` and nightly, each unit stated at its site). The size comes from this
+  target's own measured throughput — ~5k/sec against `FuzzWastLexer`'s ~44k/sec on one
+  box, corpus cleared between runs — not from the 2:1 convention, which assumes a
+  comparable per-execution cost and would have bought ~27 minutes against a 15-minute
+  failsafe. Both halves certified separately (#28): seed-replay by reintroducing the
+  over-long-length defect, exploration by the measurement that every byte 0x00–0xf4
+  appears in the suite while **0xf5–0xff appears nowhere**, making the ill-formed lead
+  bytes mutation-only.
+- `TestTextFixtureProvenance`: the text arm of the citation checker. A wat fixture's
+  vector is source text plus an expected string, not a module image, so the
+  byte-literal checker cannot see one — and registering the files there would have
+  satisfied `TestEveryFixtureFileIsChecked` while checking nothing. *A registration is
+  not a check.* 24 cited fixtures verified.
 
 ### Fixed
+- Four graves in the lexer, all found by falsifying its own tests from a committed
+  baseline rather than by review. **`(; (; half closed ;)` lexed clean** — closedness is
+  the nesting depth, and the predecessor read the trailing two bytes; its own doc comment
+  claimed a "negative length convention" the code never implemented, which is *the defect
+  stated as the rule*. **Block and line comments skipped ill-formed bytes**, where the
+  reference's `comment` scanner has `| _ { error "malformed UTF-8 encoding" }` and
+  `utf8_no_nl` bounds the line-comment star; found by sweeping the sibling scanners after
+  the same permissive-default shape was fixed in `scanAnnotBody`. **`countNewlines`
+  counted `'\n'` bytes** rather than `newline` arm matches, so a bare CR advanced no
+  lines and `\r\n` counted as one instead of two — it passed every existing test because
+  `Line` is read by nothing yet, which is a green asserting a property of code that does
+  not run. And **`scanAnnotBody`'s string case had a dead branch**, both sides returning
+  the same message and conflating three distinct annot arms.
+- A grave in a control, and the most instructive one: `TestTextFixtureProvenance`'s
+  containment check searched for *whichever* row literal the cited command contained, and
+  every row's leading name field is a substring of its own source — `"current_memory"`
+  appears in `(drop (current_memory))`. So the **name** satisfied the check the **source**
+  existed to pass, and a probe corrupting only the source went green. *A control that
+  picks its own input by whichever candidate passes will always find one that passes.*
+  Both fields are now read positionally. Found by perturbing a different field than the
+  probe that had already succeeded: **a control falsified in one field is not falsified.**
+- `FuzzLexerProgress` caught its own harness defect on its first fuzz run: the EOF branch
+  compared `before` against `len(src)`, but `Next`'s skip path consumes bytes and loops
+  without returning, so `";;"` reported "EOF with 2 bytes remaining". Fixed to `after`.
+- The arm-length bounds check moved from the fuzz harness **into `Next`**, because an arm
+  reporting more than it read panicked at the slice *before* the harness could assert
+  anything — leaving `slice bounds out of range [:10] with capacity 5` as the only
+  witness, naming `Next`'s line and none of the two dozen arms that could have lied. *An
+  error from the wrong layer is evidence about where structure was lost*; here the wrong
+  layer held the entire diagnosis.
+- `make fmt` silently rewrote OCaml quotations in doc comments to typographic quotes.
+  The cause is **gofmt's** doc-comment canonicaliser, not gofumpt: it implements the TeX
+  convention where a pair of backticks opens and a pair of single quotes closes, so a
+  character class in running prose is transformed. Quotations moved into indented code
+  blocks — and the explanatory paragraph had to be rewritten to *name* the characters
+  rather than show them, because the first draft was canonicalised by the mechanism it
+  was describing.
+- A drifted citation, found by the new checker on its first run: `(@a \x7f)` cited
+  `annotations.wast:26`, which holds `(@a \03)`; the vector is at `:56`. Fixture and
+  suite were each internally consistent and their expected strings agreed, so only a
+  machine comparing source text could see it.
 - Four extractor defects found by printing what the code returned rather than by
   reading it, all invisible to the suite. `i8x16_shuffle` reads `repeat 16 laneidx s`
   and extracted as **one** lane byte instead of sixteen — 15 lost bytes that would

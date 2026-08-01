@@ -187,6 +187,7 @@ var gatedFuzzTargets = map[string]string{
 	"FuzzWastLexer":         "the harness's own parser — a lexer bug is a corpus bug, so it is budgeted like a decoder",
 	"FuzzParseNodeProgress": "the zero-progress property (grave #18), which needs mutation rather than seeds to falsify",
 	"FuzzConstExprProgress": "the instruction grammar's progress property, now over a recursive grammar (block -> instr -> structural -> block); the recursion is what makes a hang plausible rather than theoretical",
+	"FuzzLexerProgress":     "the wat lexer's arm-length invariant; sized by its own measured throughput (~9x the per-execution cost of the wast lexer, from large seeds and a full arm sweep per position) rather than by the 2:1 convention, because a ratio inherited from a cheaper target buys duration it cannot pay for",
 }
 
 // TestEveryFuzzTargetIsGated reads the tree for `func FuzzX(f *testing.F)` and requires

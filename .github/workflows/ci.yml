@@ -396,6 +396,25 @@ jobs:
           go test ./internal/spec/ -run XXX -fuzz FuzzWastLexer -fuzztime 3000000x
           go test ./internal/spec/ -run XXX -fuzz FuzzParseNodeProgress -fuzztime 1500000x
 
+      - name: fuzz wat lexer
+        # 350k, and deliberately not the 2:1-to-3M ratio the targets above use: that
+        # convention assumes comparable per-execution cost, and this target's is ~9x
+        # higher. Measured on one dev box, same command, corpus cleared between runs —
+        # FuzzWastLexer 300k in 6.8s (~44k/sec), FuzzLexerProgress 300k in 60s (~5k/sec).
+        # Two causes, both structural: the seeds are large (names.wast 56KB,
+        # utf8-custom-section-id.wast 46KB) and Next sweeps every arm at every position.
+        #
+        # So 3M here would be ~9x the wall clock of the 3M above, which measured 178s in
+        # CI — roughly 27 minutes, past this job's 15-minute failsafe. Budgeting by
+        # executions is still right (the purpose is "did the target still churn the
+        # corpus"), but the *size* has to come from this target's own throughput rather
+        # than from a sibling's number. 350k is ~3M scaled by the measured ratio.
+        #
+        # The rate is a dev-box figure and the runner is bimodal (see above), so treat it
+        # as an order of magnitude, not a constant. If this step's duration approaches the
+        # failsafe, the ratio is what to re-measure.
+        run: go test ./internal/text/ -run XXX -fuzz FuzzLexerProgress -fuzztime 350000x
+
       - name: upload crashers
         if: failure()
         uses: actions/upload-artifact@v4
