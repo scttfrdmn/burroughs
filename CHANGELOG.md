@@ -752,6 +752,34 @@ is a formatting pass of its own, not a drive-by inside a decoder PR.*
   fired; probing an illegal one did not, and only comparing the two showed the gap. *A
   control that passes the defect it was written for is a control in name only* — and
   injecting one defect is not enough when the predicate itself is what is wrong.
+- **The `0x40` table form is decoded, and declined by feature name when GC is off**
+  ([#51](https://github.com/scttfrdmn/burroughs/issues/51)). Function references adds a
+  second table encoding — `0x40`, a reserved zero byte, a tabletype, and a const-expr
+  initializer, `(table 1 (ref func) (ref.func 0))` in text. `decodeTable` had only the
+  plain form, so the `0x40` fell through to `decodeRefType` and came back **`malformed
+  reference type: 0x40`**: seven valid `elem.wast` modules rejected with the spec's own
+  word. An accept-direction defect, and *a decoder that rejects valid modules is worse
+  than one that misses an invalid one* (§9 G-3) — which is why it was taken ahead of
+  coverage growth. **Default board 783 pass / 1 fail / 1345 unsupported / 15 gated**
+  (from 8 fail / 8 gated); **all gates on 798 / 1 / 0** (from 791), so the seven are
+  *earned* in the all-on lane rather than parked. The remaining red is `binary-gc.wast:1`,
+  a different mechanism.
+- **`decodeRefType` reads the reference's fourteen forms, not two bytes.** It compared
+  `0x70`/`0x6F`; the reference reads an `sleb(7)` and ranks fourteen — the Wasm 2.0 two,
+  ten GC abstract heap types, and the two parameterized prefixes `-0x1c`/`-0x1d` that take
+  a following `heaptype` (new `decodeHeapType`). All twelve GC forms had been answering
+  *malformed*; they are defined by Wasm 3.0, so the engine's own configuration is what
+  declines them and it must say so. A signed LEB rather than a byte because the width
+  decides the error string for an overlong encoding (grave #36).
+- `decodeTable` is deliberately **not** an `either`, and the reason is a measurement. The
+  reference uses one; copying it would break the decline, since `either` lets the *last*
+  branch's error stand and a `\40` with GC off would be re-judged by the plain branch as
+  `malformed reference type` — the gate manufacturing malformedness, the exact defect
+  filed. The first draft did use one, with the gated branch first, and its comment gave
+  two reasons: ordering, and that the forms consume different extents. Probing all 256
+  first bytes killed the second — plain accepts 12, the `0x40` form accepts 1, **both
+  accept 0** — so the branches are disjoint, there is nothing to backtrack for, and the
+  extent claim was invented. *Second-order honesty applied to a comment.*
 
 ### Changed
 
@@ -810,6 +838,39 @@ is a formatting pass of its own, not a drive-by inside a decoder PR.*
   with a `v128` result, so a SIMD-off engine must decline. Verified by reading the vectors,
   not by assuming the new declines were over-gating — and each is simultaneously *failed* in
   the all-gates-on lane, where the gated count is zero.
+- **A pass floor on the all-gates-on lane**, closing a gap #51 made concrete.
+  `TestAllGatesOnLeavesNothingGated` asserted only `Gated == 0` and counted nothing, so the
+  one lane best placed to see a *gated feature breaking* was blind to it: with every gate
+  on, a broken feature turns a pass into a fail and leaves `Gated` at zero. Falsified by
+  breaking the heaptype descent — 798 → 791 pass, `Gated` still 0, and the old assertion
+  still green. The default lane cannot substitute, since there these vectors are honestly
+  `gated` and a floor excluding them says nothing about whether GC works.
+- **`TestRefTypeReadsTheReferencesFourteenForms`** — scoped to the space, not to the twelve
+  forms #51 needed: every `s7` value a single byte can encode (−64..63), partitioned into
+  ungated / feature-declined / malformed with the **counts** as the assertion (2 / 10 / 113)
+  plus three named exclusions that sum the partition to 128. It found all three exclusions
+  itself — the first draft asserted 2/10/114 over all 128 and failed, which is how `0x40`
+  turned out never to reach `decodeRefType` at all (`decodeTable` peeks it first) and how
+  `0x63`/`0x64` turned out to truncate rather than decide. *Measured, not predicted, and the
+  three are excluded by name rather than by shrinking a count until it matched.*
+- **`TestTableInitializerFormIsGatedNotMalformed`** and
+  **`TestHeapTypeFollowsTheParameterizedForms`**. The first is #51's vector both ways —
+  gate off declines by feature name and specifically *not* as `ErrMalformedRefType`, gate on
+  decodes through `decodeConstExpr` — **cited** to `elem.wast:453`, its 45-byte image
+  machine-compared by `TestFixtureProvenance` (falsified: one mutated byte fails the
+  citation). All seven declines carry the byte-identical table entry
+  `\40\00\64\70\00\01\d2\00\0b`, so one citation covers the class and the other six are
+  named in the `TestGatedVectors` allowlist. Every new control was falsified by
+  reintroducing the defect it names: removing the `0x40` branch restores #51 and fires
+  three assertions; removing the abstract-reftype gate turns 2/10/113 into 12/0/113.
+- `ErrMalformedRefType`, `ErrMalformedHeapType`, and `ErrZeroByteExpected`. The last is
+  declared-and-tracked rather than reachable: no suite vector asserts `zero byte expected`
+  today, because the sites calling it are gated constructs a gate-off engine declines
+  first. Named at its definition site with the reason, per the `ErrTrailingData` ruling
+  (#6).
+- The GC gate's non-opcode constructs recorded in `gatedNonOpcodes` — the `0x40` table form
+  and the twelve GC reftypes, with their check sites. A construct with no gate entry is the
+  #48 defect, and silence is how it got there the first time.
 
 ## [0.0.1] - 2026-07-30
 

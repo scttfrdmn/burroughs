@@ -284,16 +284,91 @@ func (d *Decoder) decodeValType(r *reader) error {
 	return fmt.Errorf("%w: %#02x", ErrMalformedValType, b)
 }
 
-// decodeRefType reads a reference type byte, as a table's element type.
+// decodeRefType reads a reference type, as a table's element type — `reftype`
+// (decode.ml:201-218).
+//
+// The reference reads a signed LEB at width 7 and accepts **fourteen** forms, of which
+// this engine's original two (0x70 funcref, 0x6F externref) are the Wasm 2.0 subset. The
+// other twelve are GC's — the abstract heap types (-0x0c..-0x0f, -0x12..-0x17) and the
+// two *parameterized* prefixes -0x1c (ref, non-null) and -0x1d (ref null), each of which
+// is followed by a `heaptype`. Reading them as `malformed reference type` was #51's
+// accept-direction defect: the spec defines them, so the engine's own configuration is
+// what declines them, and it must say so (*gates never manufacture malformedness*).
+//
+// A signed LEB, not a byte, and that is the reference's choice rather than a flourish:
+// grave #36's lesson is that the width decides the *error string* for an overlong
+// encoding, and `sleb(7)` reports "too long" where a byte read would report a bogus
+// form. The message names the input byte via form&0x7F, which at width 7 is exact for
+// the same reason decodeFuncType's does (range -64..63) — the reconstruction that grave
+// found lying is not repeated here.
 func (d *Decoder) decodeRefType(r *reader) error {
-	b, err := r.byte()
+	form, err := r.sleb(7)
 	if err != nil {
 		return err
 	}
-	if b != 0x70 && b != 0x6F {
-		return fmt.Errorf("%w: %#02x", ErrMalformedRefType, b)
+	switch form {
+	case -0x10, -0x11: // funcref (0x70), externref (0x6F) — Wasm 2.0, ungated
+		return nil
+
+	case -0x0C, -0x0D, -0x0E, -0x0F, // noexn, nofunc, noextern, none
+		-0x12, -0x13, -0x14, -0x15, -0x16, -0x17: // any, eq, i31, struct, array, exn
+		// GC's abstract heap types. Well-formed per Wasm 3.0, so the decline is
+		// feature-named (decision 0008 folds function references into the GC gate).
+		if !d.Features.GC {
+			return featureErr("gc")
+		}
+		return nil
+
+	case -0x1C, -0x1D: // (ref ht), (ref null ht)
+		// The parameterized forms, each followed by a heaptype. The gate is checked
+		// *before* descending, because the heaptype read would otherwise be the thing
+		// that reports the error and it would report the wrong layer.
+		if !d.Features.GC {
+			return featureErr("gc")
+		}
+		return d.decodeHeapType(r)
 	}
-	return nil
+	return fmt.Errorf("%w: %#02x", ErrMalformedRefType, byte(form&0x7F))
+}
+
+// decodeHeapType reads a heap type — `heaptype` (decode.ml:178-198).
+//
+// An `either` alternation in the reference: a type *index* (s33, so a plain funcidx-style
+// number) or one of the eleven abstract forms. Written as one here for the reason
+// decodeBlockType is: on an overlong LEB the first branch's error must not stand, since
+// the cursor rewinds and the bytes get judged again.
+//
+// Reached only with the GC gate on — decodeRefType checks the gate before descending — so
+// the abstract forms need no second gate check. That is deliberate rather than an
+// omission: two gate checks for one construct is the accept-and-ignore hazard's mirror,
+// where a reader disagrees with its caller about whether a feature is on.
+func (d *Decoder) decodeHeapType(r *reader) error {
+	return either(r,
+		func(r *reader) error {
+			// `UseHT (typeuse s33 s)` — a type index. Negative values are not indices,
+			// which is what sends the abstract forms to the next branch.
+			v, err := r.sleb(33)
+			if err != nil {
+				return err
+			}
+			if v < 0 {
+				return ErrMalformedTypeIndex
+			}
+			return nil
+		},
+		func(r *reader) error {
+			form, err := r.sleb(7)
+			if err != nil {
+				return err
+			}
+			switch form {
+			case -0x0C, -0x0D, -0x0E, -0x0F,
+				-0x10, -0x11, -0x12, -0x13, -0x14, -0x15, -0x16, -0x17:
+				return nil
+			}
+			return fmt.Errorf("%w: %#02x", ErrMalformedHeapType, byte(form&0x7F))
+		},
+	)
 }
 
 // decodeLimits reads a limits flags byte and its min, plus max when present.
@@ -352,7 +427,70 @@ func (d *Decoder) decodeLimits(r *reader) error {
 	return nil
 }
 
+// decodeTable reads one table — `table` (decode.ml:1049-1063).
+//
+// Two forms, and the second one is #51: function references adds a `0x40` prefix, a
+// reserved zero byte, a tabletype, and a const-expr **initializer** —
+// `(table 1 (ref func) (ref.func 0))` in text. Without this branch the 0x40 reached
+// decodeRefType and came back `malformed reference type: 0x40`, the decoder rejecting a
+// module the suite calls *valid*, seven times in elem.wast. A decoder that rejects valid
+// modules is worse than one that misses an invalid one.
+//
+// **This is deliberately not an `either`, and the reason is a measurement.** The
+// reference uses one, and copying that shape here would break the gate decline: `either`
+// lets the *last* branch's error stand, so a `\40` with GC off would be judged by the
+// plain branch and reported as `malformed reference type: 0x40` — the gate manufacturing
+// malformedness for a module Wasm 3.0 defines, which is the exact defect #51 filed. The
+// blocktype alternation solves the same problem by *ordering* (valtype last), and the
+// first draft of this function tried to, with the gated branch first; that ordering is
+// unreachable here, because the branch that must speak is the one the alternation is
+// structured to discard.
+//
+// A switch is sound where blocktype's could not be, and that difference is measured, not
+// assumed: over all 256 first bytes the two forms are **disjoint** — the plain branch
+// accepts 12, the 0x40 form accepts 1, and *zero* bytes are accepted by both. `0x40` is
+// not a legal reftype in any gate configuration. With no ambiguity there is nothing to
+// backtrack for, so the alternation's only remaining effect would be to lose the error
+// that matters. (The first version of this comment claimed the order also decides
+// *extent*, since the forms consume different byte counts — that was invented reasoning,
+// and the disjointness probe is what killed it. Extent cannot differ between branches
+// that never both apply.)
 func (d *Decoder) decodeTable(r *reader) error {
+	if b, ok := r.peek(); ok && b == 0x40 {
+		// `expect 0x40 s ""; zero s; tabletype s; const s`.
+		if _, err := r.byte(); err != nil {
+			return err
+		}
+		if !d.Features.GC {
+			// Function references, folded into the GC gate by decision 0008. Named
+			// before the zero byte is read, so the decline describes the construct
+			// rather than whatever byte happens to follow it.
+			return featureErr("gc")
+		}
+		z, err := r.byte()
+		if err != nil {
+			return err
+		}
+		if z != 0x00 {
+			return fmt.Errorf("%w: %#02x", ErrZeroByteExpected, z)
+		}
+		if err := d.decodeTableType(r); err != nil {
+			return err
+		}
+		// The initializer, through the existing const-expr grammar — which is why this
+		// is a small change rather than a new reader: #25's authority-derived table
+		// already knows every const instruction's immediate widths.
+		return d.decodeConstExpr(r)
+	}
+	return d.decodeTableType(r)
+}
+
+// decodeTableType reads a tabletype: element type then limits (decode.ml:301-304).
+//
+// Split out of decodeTable because the 0x40 form needs it too, and because the reference
+// has it as its own production. Both callers are in this file, so this is not the
+// premature-sharing case decision 0006 warns about — the second consumer exists now.
+func (d *Decoder) decodeTableType(r *reader) error {
 	if err := d.decodeRefType(r); err != nil {
 		return err
 	}

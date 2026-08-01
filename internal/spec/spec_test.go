@@ -318,6 +318,33 @@ func TestGatedVectors(t *testing.T) {
 			1638: "SIMD: v128 result in the type section",
 			1655: "SIMD: v128 result in the type section",
 		},
+
+		// Seven (module binary ...) forms carrying the function-references table form:
+		// `\40\00\64\70\00\01\d2\00\0b` — the 0x40 prefix, the reserved zero, tabletype
+		// `(ref func)` with limits [1..], and a `(ref.func 0)` initializer. Decision
+		// 0008 folds function references into the GC gate, so with GC off the decoder
+		// must decline, and the decline must be feature-named rather than
+		// `malformed reference type` (#51 was exactly that violation).
+		//
+		// Verified by reading all seven, not by trusting that seven declines in one
+		// bucket share one cause: each carries the byte-identical table entry. The gate
+		// is right, so these are allowlisted rather than treated as over-gating.
+		//
+		// **These lines were `fail` an hour ago**, which is the point of the entry. They
+		// were the board's accept-direction bucket — a valid module rejected — and the
+		// fix converts them to an honest decline. They are simultaneously *passing* in
+		// the all-gates-on lane (798, up from 791), so the parked verdict is earned
+		// there rather than deferred everywhere: a decline that cannot become a
+		// disappearance.
+		"elem.wast": {
+			453: "gc/function-references: the 0x40 table form with an initializer",
+			470: "gc/function-references: the 0x40 table form with an initializer",
+			487: "gc/function-references: the 0x40 table form with an initializer",
+			504: "gc/function-references: the 0x40 table form with an initializer",
+			544: "gc/function-references: the 0x40 table form with an initializer",
+			561: "gc/function-references: the 0x40 table form with an initializer",
+			578: "gc/function-references: the 0x40 table form with an initializer",
+		},
 	}
 
 	files := boardFiles(t)
@@ -436,6 +463,27 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	}
 	t.Logf("all gates on: %d pass, %d fail, %d gated (Gated must be 0; fail is expected to exceed the default lane's)",
 		totalPass, totalFail, totalGated)
+
+	// A pass floor for *this* lane too, and the gap it closes was found by landing #51.
+	//
+	// Asserting only Gated == 0 makes this lane blind to the thing it is otherwise best
+	// placed to see: a gated feature that *breaks*. Turn every gate on, decode a
+	// construct wrong, and Gated stays zero while a pass silently becomes a fail — the
+	// lane reports success because the one number it checks is unaffected. #51 moved this
+	// count 791 → 798, which is only visible because it was printed; nothing would have
+	// noticed it moving back.
+	//
+	// So: the same floor discipline as the default board, on the lane where gated
+	// features are the only place they can be measured at all. The default lane cannot
+	// substitute — there these seven vectors are honestly `gated`, and a floor over a
+	// number that excludes them says nothing about whether GC still works.
+	const allOnPassFloor = 798
+	if totalPass < allOnPassFloor {
+		t.Errorf("all-gates-on pass count %d fell below floor %d — a gated feature regressed, "+
+			"which the Gated==0 assertion above cannot see: with every gate on, a broken "+
+			"feature turns a pass into a fail and leaves Gated at zero",
+			totalPass, allOnPassFloor)
+	}
 }
 
 // TestVerdictsPartitionCommands checks the arithmetic the board depends on: every

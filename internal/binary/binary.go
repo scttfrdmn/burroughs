@@ -84,10 +84,22 @@ var (
 	ErrMalformedFuncType   = errors.New("malformed function type")
 	ErrMalformedValType    = errors.New("malformed value type")
 	ErrMalformedRefType    = errors.New("malformed reference type")
+	ErrMalformedHeapType   = errors.New("malformed heap type")
 	ErrMalformedLimits     = errors.New("malformed limits flags")
 	ErrMalformedMutability = errors.New("malformed mutability")
 	ErrMalformedImportKind = errors.New("malformed import kind")
 	ErrMalformedExportKind = errors.New("malformed export kind")
+
+	// ErrZeroByteExpected is a reserved byte that must be 0x00 and was not —
+	// `zero s = expect 0x00 s "zero byte expected"` (decode.ml:150).
+	//
+	// The reference's message text, verbatim, because it is the reference's
+	// production. No suite vector asserts this string today: the sites that call it
+	// (the 0x40 table form, #51) are all gated constructs, so a gate-off engine
+	// declines before reaching the zero byte. Named at its definition site rather
+	// than being reported as a generic malformedness — the ErrTrailingData ruling,
+	// applied to a string nothing yet reads.
+	ErrZeroByteExpected = errors.New("zero byte expected")
 
 	// ErrMalformedUTF8 is a name whose bytes are not well-formed UTF-8.
 	//
