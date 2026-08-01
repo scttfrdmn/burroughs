@@ -27,9 +27,15 @@ import (
 // themselves.
 //
 // Every entry is in this one file, which is the point: routing all skips through
-// testenv is what makes a single env var able to revoke them all. The inventory
-// grows one line per *corpus*, not one per test — a second corpus (the reference
+// testenv is what makes their licenses reviewable in one place. The inventory
+// grows one line per *question*, not one per test — a second corpus (the reference
 // interpreter, decision 0007) meant a second door, not a second convention.
+//
+// It used to say "a single env var able to revoke them all", and the fifth entry made that
+// false: SkipUntilImplemented is deliberately outside the flag's reach because its condition
+// is a missing subject rather than a missing input. The invariant that survives is the
+// weaker and truer one — **every license names its revoker, and every revoker exists**. One
+// flag was the mechanism while every condition was environmental; it was never the rule.
 var licensed = map[string]string{
 	"internal/testenv/testenv.go:RequireSuite": "local dev on a clone without `make spec-tests`, revoked by BURROUGHS_NO_SKIP=1",
 	// The 0007 authority is a separate corpus from the suite with a separate fetch
@@ -61,6 +67,25 @@ var licensed = map[string]string{
 	// keywordgen's citation check and TestEverySkipSiteIsLicensed failed the build.
 	// Twice now the mechanism has caught an author who knew the rule.
 	"internal/testenv/testenv.go:RequireSuiteFile": "local dev on a clone without `make spec-tests`, revoked by BURROUGHS_NO_SKIP=1",
+	// A fifth door, and the first whose condition is **not** environmental — which makes
+	// it the first entry the note above is wrong about in kind rather than in count. The
+	// four doors before it excuse a missing *input* and are revoked by the flag; this one
+	// excuses a missing *subject*, a control pre-registered against code not yet written
+	// (a design debt is discharged by a tripwire, never by an intention).
+	//
+	// **The flag does not revoke it, and that is the design rather than a gap.** The
+	// subject's absence is equally true in CI, so a flag-revoked door would turn every
+	// pre-registered control into a red board until its feature landed — and the
+	// predictable response to that is not writing the control, which costs more than the
+	// skip does.
+	//
+	// What keeps it from being the permanent excuse this file exists to forbid is that its
+	// condition is the subject's *own report of its absence*: the caller probes its entry
+	// point, and the skip fires only while a sentinel error comes back. The parser's
+	// arrival revokes the license with no edit at the call site — falsified by making the
+	// stub answer differently and watching all five rows of the control run and fail. A
+	// deferral that expires by mechanism rather than by memory.
+	"internal/testenv/testenv.go:SkipUntilImplemented": "a control pre-registered before its subject exists; NOT revoked by BURROUGHS_NO_SKIP=1 (the condition is not environmental), revoked instead by the subject answering — see the doc comment",
 }
 
 // skipCalls are the testing.TB methods that end a test without a verdict.
@@ -138,10 +163,21 @@ func TestEverySkipSiteIsLicensed(t *testing.T) {
 
 	for site, pos := range found {
 		if _, ok := licensed[site]; !ok {
+			// The advice names *a* revoker rather than the flag, and that is a correction:
+			// this message said "make sure BURROUGHS_NO_SKIP=1 revokes it" while every door
+			// was environmental, and SkipUntilImplemented's arrival made the sentence false
+			// advice — a pre-registered control's condition is equally true in CI, so
+			// honoring the flag there would red-board the feature rather than police it. A
+			// ruling retroactively falsifies the prose written before it. What the rule
+			// actually requires is that *something* can withdraw the license; the flag is
+			// the right revoker for a missing input, and the subject's own answer is the
+			// right one for a missing subject.
 			t.Errorf("unlicensed skip at %s (%s)\n\t"+
 				"a skip is not a verdict: a test that declines to answer must say why it is allowed to.\n\t"+
-				"Add %q to licensed in internal/testenv/inventory_test.go with its reason, and make sure\n\t"+
-				"BURROUGHS_NO_SKIP=1 revokes it — otherwise CI will pass by not asking.", pos, site, site)
+				"Add %q to licensed in internal/testenv/inventory_test.go with its reason, and name\n\t"+
+				"what revokes it — BURROUGHS_NO_SKIP=1 for a missing input, the subject answering for\n\t"+
+				"a missing subject. A license nothing can withdraw is how CI passes by not asking.",
+				pos, site, site)
 		}
 	}
 

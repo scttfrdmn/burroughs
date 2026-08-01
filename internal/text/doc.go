@@ -1,29 +1,34 @@
-// Package text will hold the wat text format's lexer and reader. Today it holds one
-// thing: the machine-derived keyword table (decision 0009).
+// Package text holds the wat text format's lexer and the machine-derived keyword table
+// (decision 0009) it lexes against. The parser is not here yet: it is #8, decomposed into
+// the strata of #62 (module-field skeleton), #63, and #64.
 //
-// # The table has no engine consumer yet, and that is declared rather than incidental
+// # The table's deferral, discharged
 //
-// keywords.go is generated, committed, and read by nothing but this package's own tests.
-// That is deliberate and it is Scott's sequencing: the table exists *before* the code
-// that consumes it, so the 555-vector `unknown operator` bucket has an authority to earn
-// against rather than a hand-written set to argue with. The consumer — maximal munch
-// across the `keyword` and `reserved` shapes, the two `unknown operator` producers, and
-// `'$'(id)` so identifiers are not mis-lexed — is #53's next increment.
+// This section used to declare a table with no engine consumer — generated, committed, and
+// read by nothing but this package's own tests, which is the classification question
+// *unreachability is a grave only when it's silent* (#6) asks about a constant, asked about
+// a table. It was declared and tracked at #53, and the discharge is what the section records
+// now: the lexer landed, #53 is closed, and `keywords` is read by lexing code rather than by
+// tests alone. The sequencing was Scott's and it paid — the table existed *before* its
+// consumer, so the `unknown operator` bucket was earned against an authority rather than
+// argued with against a hand-written set.
 //
-// This paragraph exists because *unreachability is a grave only when it's silent*
-// (ruling on ErrTrailingData, #6). A table nothing reads is the same classification
-// question as a constant nothing reads, and it gets the same answer only if the
-// deferral is named at the definition site with a tracking issue. So: declared, tracked
-// at #53, and the tripwire is keywords_test.go.
+// Kept rather than deleted because the deferral's *shape* is the reusable part, and this
+// package is now running the same play one layer up: TestUTF8DecodeSitedOnlyAtNameAndVar
+// (utf8position_test.go) is a control pre-registered against a parser that does not exist,
+// and it is honest for the same reason the table was — named at its site, tracked at #62,
+// and expiring by mechanism rather than by memory.
 //
 // # Why the linter is quiet about it, measured rather than assumed
 //
 // Two independent silences cover the `keywords` map, and the interesting one is not the
 // one this comment first claimed.
 //
-//   - **The tests read it.** keywords_test.go loops over `keywords`, so `unused` is
-//     *correct* to say nothing: the map genuinely has a consumer, just not one in the
-//     engine. This is not a suppression at all.
+//   - **The engine reads it**, at lexer.go:385, and the tests read it too. When this
+//     section was written only the second was true and it said so; the lexer's arrival made
+//     "read by nothing but this package's own tests" false, and a measurement left standing
+//     after its subject moved is a claim, not a measurement. Either way `unused` is
+//     *correct* to say nothing — the map has consumers. This is not a suppression at all.
 //   - **`.golangci.yml` sets `exclusions.generated: lax`**, which excludes files whose
 //     first line carries the `Code generated ... DO NOT EDIT.` marker. That silence is
 //     automatic, was not requested for this file, and is the one that would *remain* if
@@ -31,9 +36,12 @@
 //
 // Measured by stripping the marker and by removing the test file, in both combinations:
 // marker present → 0 issues either way; marker stripped with the tests gone → `var
-// keywords is unused`. So the deletion of keywords_test.go is a change that would silently
-// take this package from "table with a consumer" to "table with none", with nothing
-// objecting.
+// keywords is unused`. That measurement was taken when the tests were the only consumer, and
+// the conclusion it supported — that deleting keywords_test.go would silently take the
+// package from "table with a consumer" to "table with none" — **no longer holds**, because
+// the lexer is now a consumer the tests' deletion cannot remove. The generated-file exclusion
+// is still the silence that would remain, so the section's point about it stands; the risk it
+// was worried about is what the lexer's arrival retired.
 //
 // Naming that is *suppression discipline: noticed-and-named, or not at all* (decision
 // 0005) applied to a suppression nobody wrote. Removing the exclusion is not the fix — it

@@ -31,6 +31,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -135,6 +136,12 @@ const RefLexerMLL = "third_party/spec/interpreter/text/lexer.mll"
 // decode.ml is 38042 bytes at bdd7164.
 const MinRefDecodeBytes = 20000
 
+// RefParserMLY is the reference interpreter's text *parser*, relative to the repo root.
+// The authority for #62's stratum: where the lexer's rules say what a token is,
+// parser.mly's `name` (:46) and `var` (:49) say which token *positions* decode UTF-8 —
+// and that position, not the byte pattern, is what the verdict turns on.
+const RefParserMLY = "third_party/spec/interpreter/text/parser.mly"
+
 // MinRefLexerBytes is the same floor for lexer.mll, which is 36686 bytes at bdd7164.
 //
 // Its own constant rather than reusing MinRefDecodeBytes, even though 20000 happens to
@@ -143,6 +150,13 @@ const MinRefDecodeBytes = 20000
 // file's* plausible size, and a single number covering two files is right about neither
 // on purpose.
 const MinRefLexerBytes = 20000
+
+// MinRefParserBytes is the floor for parser.mly, which is 54523 bytes at bdd7164.
+//
+// Its own constant, per the argument above: three files, three claims about three
+// plausible sizes. That the number happens to match the other two at this revision is
+// exactly the accident the separate constants exist to keep from becoming load-bearing.
+const MinRefParserBytes = 20000
 
 // refFloors is the size floor per reference file, keyed by the path constants above.
 //
@@ -154,8 +168,23 @@ const MinRefLexerBytes = 20000
 // An unknown path is a hard failure below, never a default floor, because a default is
 // how a third reference file would arrive with no floor at all.
 var refFloors = map[string]int{
-	RefDecodeML: MinRefDecodeBytes,
-	RefLexerMLL: MinRefLexerBytes,
+	RefDecodeML:  MinRefDecodeBytes,
+	RefLexerMLL:  MinRefLexerBytes,
+	RefParserMLY: MinRefParserBytes,
+}
+
+// LicensedRefPaths returns every reference file this package licenses as an authority.
+//
+// Exported so the drift check between refFloors and scripts/fetch-spec-ref.sh can *derive*
+// the set rather than restate it. A test that listed the three paths itself would be a
+// third place knowing the fact, and the two-places problem is the thing being solved.
+func LicensedRefPaths() []string {
+	paths := make([]string, 0, len(refFloors))
+	for p := range refFloors {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+	return paths
 }
 
 // RequireSpecRef is the licensed door for tests that read the reference interpreter.
@@ -260,6 +289,62 @@ func RequireSuiteFile(tb testing.TB, path string) []byte {
 		tb.Skip(reason)
 	}
 	return nil
+}
+
+// SkipUntilImplemented is the licensed door for a control written *before* its subject, and
+// it is the only door here whose condition is not environmental.
+//
+// # Why this door exists at all
+//
+// The four doors above excuse a missing *input* — a corpus or an authority that a clone may
+// not have fetched — so `BURROUGHS_NO_SKIP=1` revokes them and CI sets it workflow-wide.
+// This one excuses a missing *subject*: a control pre-registered against code that has not
+// been written. That is a legitimate and required move (a design debt is discharged by a
+// tripwire, never by an intention), and it cannot use the same mechanism, because the
+// condition is equally true in CI. A door honoring NO_SKIP here would turn every
+// pre-registered control into a red board until its feature landed, and the predictable
+// response to that is not writing the control.
+//
+// # Why it is not therefore a hole
+//
+// An unrevocable skip *would* be the hole — a permanent excuse nobody can withdraw, which is
+// the shape this whole file exists to forbid. So the condition is neither a flag nor a date:
+// it is **the subject's own report of its absence**, and the skip expires the moment that
+// report stops arriving.
+//
+// The caller probes its entry point and hands over the error. If the error names the absent
+// subject (matching sentinel), the subject does not exist and the control skips. If the probe
+// returns anything else — including nil — the subject *does* exist, the license is spent, and
+// the test runs. Nobody has to remember to delete the skip; forgetting is impossible, because
+// the parser's arrival is what revokes it.
+//
+// That is stamp-don't-deduce pointed at a deferral: the excuse asserts the condition it
+// claims rather than asserting an intention to revisit. And it is why the placeholder the
+// caller probes must return a sentinel error rather than nil — a nil-returning stub would
+// read as "implemented" and run the control against nothing.
+//
+// issue is the tracking issue for the subject, so the skip line says where the obligation
+// lives. Unreachability is a grave only when it's silent.
+func SkipUntilImplemented(tb testing.TB, probe error, sentinel, issue, why string) {
+	tb.Helper()
+
+	if sentinel == "" || issue == "" {
+		tb.Fatalf("SkipUntilImplemented: sentinel=%q issue=%q — both are required; a deferral "+
+			"with no sentinel cannot expire and one with no issue has nowhere to be tracked",
+			sentinel, issue)
+		return
+	}
+
+	if probe == nil || !strings.Contains(probe.Error(), sentinel) {
+		// The subject answered. The license is spent — run the control.
+		return
+	}
+
+	tb.Skipf("subject not implemented (%s): %s\n\t"+
+		"%s=1 does NOT revoke this one, and that is deliberate: the condition is the "+
+		"subject's absence, not a missing fetch, so it is equally true in CI. It is revoked "+
+		"by the subject existing — when the probe stops reporting %q this test runs, with no "+
+		"edit here.", issue, why, NoSkipEnv, sentinel)
 }
 
 // ProposalDoc is a proposal overview under the vendored reference tree, relative to the

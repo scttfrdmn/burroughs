@@ -52,9 +52,19 @@ if [ "$got" != "$rev" ]; then
   exit 1
 fi
 
-d="$dest/interpreter/binary/decode.ml"
-if [ ! -f "$d" ]; then
-  echo "reference vendored at $got but $d is missing" >&2
-  exit 1
-fi
-echo "reference vendored at $dest ($got), decode.ml $(wc -c <"$d" | tr -d ' ') bytes"
+# Every file testenv licenses as an authority, not just the first one.
+#
+# It checked decode.ml alone while decode.ml was the only authority, and stayed that way
+# after lexer.mll became the second (0009) — a presence check that had silently narrowed
+# to a third of its subject, which is the same shape as the early-return defect above one
+# scope out. parser.mly is the third (#62's stratum). The list is here rather than derived
+# because a shell script cannot read Go constants; TestFetchScriptAssertsEveryAuthority
+# is what keeps the two agreeing.
+for f in interpreter/binary/decode.ml interpreter/text/lexer.mll interpreter/text/parser.mly; do
+  if [ ! -f "$dest/$f" ]; then
+    echo "reference vendored at $got but $dest/$f is missing" >&2
+    exit 1
+  fi
+  echo "  $f $(wc -c <"$dest/$f" | tr -d ' ') bytes"
+done
+echo "reference vendored at $dest ($got)"

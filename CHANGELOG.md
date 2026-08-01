@@ -400,10 +400,52 @@ weakly-ordered platform.
   clean-lexing form is an unnamed unearned pass, and a listed form now rejected is an
   accept-direction defect.
 
+- **The UTF-8 position partition, pre-registered as a control before the parser it
+  guards** (#62). `utf8-invalid-encoding.wast` is 176 vectors and the text column's
+  largest bucket, and it is the cheapest bucket to buy for the wrong reason: all 176
+  are `(func (export "<bad bytes>"))`, so rejecting any string token that is not valid
+  UTF-8 takes every one of them and is *wrong about the grammar*. Measured with the
+  lexer rather than a grep — 864 suite tokens decode to invalid UTF-8, 177 sit inside
+  quote forms, and the accept direction inside quote forms is **empty**, so the suite
+  cannot falsify the blanket check at all. Three grammar facts are pinned against
+  `parser.mly` instead: `name` (:46) and `var` (:49) decode and reject, and
+  `string_list` (:342) concatenates without decoding — the accept direction that data
+  segments and binary payloads route through. All four assertions falsified by editing
+  the vendored authority.
+- `testenv.SkipUntilImplemented` — the fifth licensed skip door and the first whose
+  condition is not environmental. A control written before its subject would otherwise
+  pass for want of one (*a green that survives the bug it names*), and `NO_SKIP=1`
+  cannot be its revoker because a missing subject is equally missing in CI. So the
+  condition is the subject's own report of its absence: the caller probes its entry
+  point and the skip fires only while a sentinel comes back, which makes the parser's
+  arrival revoke the license with no edit at the call site. *A deferral that expires by
+  mechanism rather than by memory.* Falsified by making the stub answer differently and
+  watching all five rows run and fail.
+- `TestFetchScriptAssertsEveryAuthority` — `fetch-spec-ref.sh` asserted the presence of
+  `decode.ml` alone, and had kept doing so after `lexer.mll` became a second authority:
+  a presence check silently narrowed to a third of its subject, the early-return defect
+  its own comment records, one scope out. The script now loops over all three and the
+  set is derived from `testenv.LicensedRefPaths()` rather than restated, with a vacuity
+  floor because a containment check over an empty set agrees with anything.
+
 ### Changed
 - `RunGated(decode, readText, isGated)` and `RunWith(decode, readText, isGated,
   have...)` take the text entry point; `Script.Run` now panics on a quote form,
   declaring nothing and supplying nothing.
+- The skip inventory's invariant weakened to the true one: **every license names its
+  revoker, and every revoker exists.** It read "a single env var able to revoke them
+  all", which `SkipUntilImplemented` made false — one flag was the mechanism while every
+  condition was environmental, never the rule. The guard's own failure message gave the
+  same false advice ("make sure `BURROUGHS_NO_SKIP=1` revokes it") and now names the
+  revoker appropriate to the condition. *A ruling retroactively falsifies the prose
+  written before it.*
+- `internal/text`'s package doc swept for what the lexer's landing orphaned: it said the
+  package "will hold" a lexer, that the keyword table was "read by nothing but this
+  package's own tests" (`lexer.go:385` reads it), and that the consumer was "#53's next
+  increment" (#53 is closed). The measurement in the linter-silence section was left in
+  place with its conclusion corrected rather than deleted — the risk it named is what the
+  lexer's arrival retired, and a measurement whose subject moved is a claim, not a
+  measurement.
 - **Three lifecycle controls re-pointed by the retirement, each narrower than its own
   name**, and the generalization is worth more than the fixes: *a lifecycle guard
   written while its subject has only ever been in one state will encode that state.*
