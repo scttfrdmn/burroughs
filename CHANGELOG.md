@@ -753,6 +753,64 @@ is a formatting pass of its own, not a drive-by inside a decoder PR.*
   control that passes the defect it was written for is a control in name only* — and
   injecting one defect is not enough when the predicate itself is what is wrong.
 
+### Changed
+
+- **The board's corpus is derived, not enumerated**
+  ([#52](https://github.com/scttfrdmn/burroughs/issues/52)). `phase1Files` was eight
+  hand-listed filenames — *the enumerated-literal defect living in the oracle's own input
+  selector*, so the board's coverage froze at the moment somebody typed the list and a new
+  upstream file with byte-string vectors would never be asked. `boardFiles(t)` now parses
+  every vendored `.wast` and selects the ones with at least one command the harness can
+  score, which finds **14 files** — six the list never held — and puts **19 more vectors**
+  on the board, 8 of them red, which is the point.
+- **The board is red by 8, deliberately.** **783 pass / 8 fail / 1345 unsupported / 8
+  gated** on the default board, **791 / 8 / 0** with every gate on. The 8 reds are all one
+  bucket, `(module binary ...) must decode` — accept-direction findings the byte-string
+  corpus could not reach, since a hand-listed corpus of malformed vectors samples only the
+  reject direction. One is already [#51](https://github.com/scttfrdmn/burroughs/issues/51).
+  *A red board that names its buckets outranks a green board that never asked.*
+- **Zero-unsupported was a property of the corpus, not a law of the board** (doctrine
+  adjustment, recorded on #52). While the corpus was eight byte-string files the unsupported
+  column was necessarily zero; running every file makes it 1345, and that column is the
+  honest board now — commands the engine cannot answer yet, counted and visible, shrinking
+  monotonically as components land. The underlying law is unchanged: nothing hides behind a
+  skip ([#29](https://github.com/scttfrdmn/burroughs/issues/29)).
+
+### Added
+
+- **`Result.UnsupportedByHead` — the unsupported column bucketed by command head**, printed
+  on its own board section largest-first, for the same reason failures bucket by expected
+  spec text: *1345 is not a work plan.* Keyed by the head atom as written rather than by
+  `Kind`, because every unsupported command shares `KindUnsupported` and keying by it would
+  yield one bucket of 1345 naming nothing. The breakdown names the components: **504
+  `assert_return`** is the interpreter, **398 `module`** and **308 `assert_malformed`** are
+  the text grammar ([#53](https://github.com/scttfrdmn/burroughs/issues/53),
+  [#8](https://github.com/scttfrdmn/burroughs/issues/8)), **110 `assert_invalid`** is the
+  validator. `Command.Head` is recorded for every command to make it possible: `Kind` says
+  what the harness can *do* with a command, `Head` says what the command *is*.
+- **`TestDenominatorExcludesUnaskedCommands`** — `Total()`'s exclusion of `Unsupported` and
+  `Gated` became load-bearing the moment the corpus was derived, and *a comment cannot
+  fail*. Folding `Unsupported` in would render this board as 783/2136 and, worse, make
+  the ratio improve when a *component* lands rather than when a *verdict* is earned. The
+  denominator is over what was **asked**; one table case asks nothing at all and expects
+  zero.
+- **`TestUnsupportedIsBucketedByCommand`** — the buckets sum to the scalar, are non-empty
+  whenever the scalar is, and carry no empty keys. The vacuity half is the point: a
+  breakdown map that silently stopped being populated would agree with an empty comparison
+  and print a board section with nothing under it.
+- A **vacuity floor** on the derived selector (`>= 12` files), which earned itself
+  immediately: the first draft said 20 on the strength of "27 files have no
+  interpreter-dependent command" — a different set — and the floor failed on my wrong
+  expectation rather than shipping it. *A comparison against an empty set succeeds, so the
+  control that compares gets a plausible-size floor.* The instructive miss is `data.wast`,
+  whose five `(module binary ...)` forms have non-string-literal elements and so are not
+  scorable.
+- Six `simd_const.wast` vectors added to `TestGatedVectors`' per-vector allowlist. They
+  arrived with the derived corpus and the gate is **right**: `\60\00\01\7b` is a functype
+  with a `v128` result, so a SIMD-off engine must decline. Verified by reading the vectors,
+  not by assuming the new declines were over-gating — and each is simultaneously *failed* in
+  the all-gates-on lane, where the gated count is zero.
+
 ## [0.0.1] - 2026-07-30
 
 *Implements contract v0.1. Scaffold state, recorded retroactively at the

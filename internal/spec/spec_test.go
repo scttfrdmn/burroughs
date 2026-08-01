@@ -4,6 +4,7 @@ import (
 	"errors"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"testing"
 
 	"github.com/scttfrdmn/burroughs/internal/binary"
@@ -19,31 +20,83 @@ import (
 // CI job that runs tests sets. See the package doc there for the grave (#29).
 const suiteDir = "../../testdata/spec"
 
-// phase1Files is every suite file phase 1 can meaningfully score: all-byte-string
-// corpora, no text-format modules.
+// boardFiles is the corpus the board scores: every vendored .wast file that holds at
+// least one command the engine can answer.
 //
-// One definition, because four tests need it and four copies of a list is the drift
-// vector TestEveryFixtureFileIsChecked exists to close. It had already started:
-// adding the utf8 files to the board list alone would have left the gated
-// allowlist, the verdict partition, and the priority-queue property checking a
-// narrower corpus than the board reports — three controls quietly scoped to less
-// than the number they sit beside.
+// **Derived, not enumerated (#52).** It used to be a hand-written list of eight
+// byte-string files, and that list was the enumerated-literal defect living in the
+// corpus selector itself — *derive the domain, never enumerate it*, unapplied to the
+// oracle's own inputs. Its blind spot was measured rather than argued — by the selector,
+// not by a grep, since a regex over `(module\s+binary` counts *text* while binaryModule
+// counts what the decoder will actually be handed: **six** files (align, binary-gc, elem,
+// float_literals, global, simd_const) hold commands the engine already answers and were
+// off the board because of their *neighbours* — an assert_return in the same file, not
+// anything the decoder could not do. The result was 19 passes, 8 fails, and 6 gated
+// vectors the board could not see, one of which (#51) is a live accept-direction defect:
+// a valid module rejected with the spec's own word for malformed.
 //
-// utf8-invalid-encoding.wast is deliberately absent. Its 176 forms are
-// `(module quote ...)` text-format modules rather than byte strings, so phase 1
-// cannot execute them; they belong to the text-format work (#8). Listing a file the
-// harness cannot read would inflate the unsupported count and call it coverage.
-var phase1Files = []string{
-	"binary.wast",
-	"binary-leb128.wast",
-	"binary_leb128_64.wast",
-	"binary0.wast",
-	"custom.wast",
+// The selection question changed with it. It was "which files did we list", and it is now
+// "which files contain a command whose Kind the run loop scores" — a capability question,
+// asked of the corpus rather than answered from memory. A file whose every command is
+// unsupported is excluded because scoring it would add unsupported lines and no verdicts;
+// a file with one answerable command is included, and its other commands are counted in
+// the unsupported column where they are visible.
+//
+// The consequence is deliberate and is the doctrine this change carries: the board's
+// unsupported count goes from zero to 1345. Zero-unsupported was a property of the
+// byte-string corpus, never a law of the board. What is honest is that nothing hides —
+// so the column is bucketed by command head, floored against growth, and expected to
+// shrink monotonically as components land.
+func boardFiles(t *testing.T) []string {
+	t.Helper()
+	var files []string
+	for _, p := range suitePaths(t) {
+		s, err := ParseFile(p)
+		if err != nil {
+			t.Errorf("%s: parse: %v", p, err)
+			continue
+		}
+		if scorableCommands(s) > 0 {
+			files = append(files, filepath.Base(p))
+		}
+	}
+	// Vacuity floor, per the comparisons-need-a-vacuity-check rule: a selector that
+	// finds nothing agrees with a board of nothing, and every assertion downstream
+	// would compare two empty sets and pass.
+	//
+	// **14 files, printed rather than reasoned.** The first draft of this floor said 20
+	// on the strength of "27 files have no interpreter-dependent command" — a different
+	// set, and the floor caught the error immediately by failing. Those 27 include files
+	// whose every command is a text-bodied module or an assert_invalid, all unsupported;
+	// what this selector wants is files with at least one *scorable* command, which is
+	// 14. (data.wast is the instructive miss: it has five (module binary ...) forms whose
+	// elements are not all string literals, so binaryModule rejects them and the file has
+	// nothing scorable.) 12 leaves room for upstream churn without leaving room for a
+	// selector that stopped selecting.
+	if len(files) < 12 {
+		t.Fatalf("boardFiles selected only %d files, want >=12 — the selector is not "+
+			"finding answerable commands, so every count below is over a corpus that "+
+			"is not there (#42 pins the suite by SHA)", len(files))
+	}
+	sort.Strings(files)
+	return files
+}
 
-	// The name grammar (#26): 176 vectors each, all "malformed UTF-8 encoding".
-	"utf8-import-module.wast",
-	"utf8-import-field.wast",
-	"utf8-custom-section-id.wast",
+// scorableCommands counts the commands in a script that the run loop scores — the
+// capability predicate, in one place.
+//
+// Derived from Kind rather than from a list of heads, and deliberately *not* a
+// hand-maintained set: when #53 teaches the harness `(module quote ...)`, a new Kind
+// appears and this predicate widens on its own. A head list would have to be edited,
+// and the edit is exactly what gets forgotten.
+func scorableCommands(s *Script) int {
+	n := 0
+	for _, c := range s.Commands {
+		if c.Kind != KindUnsupported {
+			n++
+		}
+	}
+	return n
 }
 
 func decode(image []byte) error {
@@ -191,16 +244,16 @@ func TestClosedBuckets(t *testing.T) {
 		"utf8-import-field.wast":      {"malformed UTF-8 encoding"},
 		"utf8-custom-section-id.wast": {"malformed UTF-8 encoding"},
 	}
-	// The keys are a fifth file list, so pin them against phase1Files. A closed
-	// bucket in a file the board does not score is a regression control watching a
-	// number nobody reports.
-	inPhase1 := make(map[string]bool, len(phase1Files))
-	for _, f := range phase1Files {
-		inPhase1[f] = true
+	// The keys are a fifth file list, so pin them against the derived board corpus. A
+	// closed bucket in a file the board does not score is a regression control
+	// watching a number nobody reports.
+	onBoard := make(map[string]bool)
+	for _, f := range boardFiles(t) {
+		onBoard[f] = true
 	}
 	for file := range closed {
-		if !inPhase1[file] {
-			t.Errorf("%s has closed buckets but is not in phase1Files; the board does not score it", file)
+		if !onBoard[file] {
+			t.Errorf("%s has closed buckets but is not on the board; nothing scores it", file)
 		}
 	}
 
@@ -244,9 +297,30 @@ func TestGatedVectors(t *testing.T) {
 			1:  "memory64: i64 limits flags on the memory section",
 			16: "memory64: i64 limits flags on the memory section",
 		},
+
+		// Six (module binary ...) forms whose type section declares a v128 result
+		// (`\60\00\01\7b` — functype, no params, one result, valtype 0x7b). v128 is
+		// SIMD's value type, so with the SIMD gate off the decoder must reject them
+		// and none of the six is asking a question the engine can answer in that
+		// state. Verified by reading the vectors rather than by trusting the count:
+		// the gate is right, so these are allowlisted rather than treated as
+		// over-gating.
+		//
+		// They arrived with the derived corpus (#52) — the file was off the board
+		// before, so its 6 declines were invisible along with its 752 unsupported
+		// commands. Note the shape: a wider corpus makes a *control* fire, which is
+		// what a control that was scoped to a sample looks like when the sample grows.
+		"simd_const.wast": {
+			1570: "SIMD: v128 result in the type section",
+			1587: "SIMD: v128 result in the type section",
+			1604: "SIMD: v128 result in the type section",
+			1621: "SIMD: v128 result in the type section",
+			1638: "SIMD: v128 result in the type section",
+			1655: "SIMD: v128 result in the type section",
+		},
 	}
 
-	files := phase1Files
+	files := boardFiles(t)
 	for _, f := range files {
 		s, err := ParseFile(filepath.Join(suiteDir, f))
 		if err != nil {
@@ -333,7 +407,7 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 		return err
 	}
 
-	files := phase1Files
+	files := boardFiles(t)
 	var totalPass, totalFail, totalGated int
 	for _, f := range files {
 		s, err := ParseFile(filepath.Join(suiteDir, f))
@@ -372,7 +446,7 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 // how a suite silently stops covering something.
 func TestVerdictsPartitionCommands(t *testing.T) {
 	requireSuite(t)
-	files := phase1Files
+	files := boardFiles(t)
 	for _, f := range files {
 		s, err := ParseFile(filepath.Join(suiteDir, f))
 		if err != nil {
@@ -391,8 +465,9 @@ func TestVerdictsPartitionCommands(t *testing.T) {
 // so the board covers the byte-string corpus rather than one file.
 func TestPhase1Files(t *testing.T) {
 	requireSuite(t)
-	files := phase1Files
+	files := boardFiles(t)
 	totalPass, totalFail, totalUnsup, totalGated := 0, 0, 0, 0
+	byHead := map[string]int{}
 	for _, f := range files {
 		s, err := ParseFile(filepath.Join(suiteDir, f))
 		if err != nil {
@@ -405,9 +480,124 @@ func TestPhase1Files(t *testing.T) {
 		totalFail += r.Fail
 		totalUnsup += r.Unsupported
 		totalGated += r.Gated
+		for h, n := range r.UnsupportedByHead {
+			byHead[h] += n
+		}
 	}
-	t.Logf("phase 1 total: %d pass, %d fail, %d unsupported, %d gated",
-		totalPass, totalFail, totalUnsup, totalGated)
+	t.Logf("board total over %d files: %d pass, %d fail, %d unsupported, %d gated",
+		len(files), totalPass, totalFail, totalUnsup, totalGated)
+
+	// The unsupported column as a work plan, not a number. Printed every run so the
+	// PR's Board line can quote which component each unrun vector waits on.
+	agg := &Result{UnsupportedByHead: byHead}
+	for _, h := range agg.UnsupportedByHeadBySize() {
+		t.Logf("  unsupported %5d  %s", byHead[h], h)
+	}
+
+	// Monotonicity ceiling on the unsupported column (#52).
+	//
+	// The column is honest only if it is *watched*: an unsupported count that grows
+	// means either the corpus moved or a capability regressed, and both want an
+	// alarm rather than a larger number nobody re-reads. This is the pass-count
+	// floor's mirror image — that one may only rise, this one may only fall — and
+	// the pair is what makes "shrinking monotonically as components land" a
+	// checkable claim instead of an intention.
+	//
+	// 1345 at the measured revision. Lowered as components land; never raised
+	// without saying what moved. #42 (SHA-pin the suite) is what keeps this number
+	// meaningful, since a corpus that drifts changes it for reasons that are not
+	// findings.
+	const unsupportedCeiling = 1345
+	if totalUnsup > unsupportedCeiling {
+		t.Errorf("unsupported rose to %d, ceiling %d — either a capability regressed or the "+
+			"corpus moved; both need an explanation rather than a raised ceiling",
+			totalUnsup, unsupportedCeiling)
+	}
+
+	// Pass floor over the whole board, the counterpart to TestBinaryWast's per-file
+	// floor. 783 at the measured revision: 764 from the byte-string corpus plus the
+	// 19 the derived selector newly reaches.
+	const passFloor = 783
+	if totalPass < passFloor {
+		t.Errorf("board pass count %d fell below floor %d", totalPass, passFloor)
+	}
+}
+
+// TestDenominatorExcludesUnaskedCommands pins Total()'s denominator: it counts what
+// was asked, never what was skipped or declined.
+//
+// This control exists because the choice became load-bearing the moment the corpus
+// was derived (#52). While the board ran eight byte-string files, Unsupported was
+// zero and Gated was two, so folding either into the denominator would have been
+// nearly invisible — the kind of decision a refactor makes silently because nothing
+// fails. With ~1345 unsupported commands the same slip renders a green board as
+// 783/2128 and reads as a collapse when nothing regressed, and worse, it makes the
+// ratio improve when a *component* lands rather than when a *verdict* is earned.
+//
+// A comment cannot fail, so the invariant gets a test. Falsified while writing it:
+// changing Total to Pass+Fail+Unsupported makes the second case below report 1/2.
+func TestDenominatorExcludesUnaskedCommands(t *testing.T) {
+	cases := []struct {
+		name string
+		r    Result
+		want int
+	}{
+		{"pass and fail are the denominator", Result{Pass: 3, Fail: 2}, 5},
+		{"unsupported is not asked, so not counted", Result{Pass: 1, Unsupported: 99}, 1},
+		{"gated is declined, so not counted", Result{Pass: 1, Gated: 99}, 1},
+		{"neither, together", Result{Pass: 2, Fail: 1, Unsupported: 40, Gated: 7}, 3},
+		// The degenerate case stated rather than implied: a board that asked nothing
+		// has a denominator of zero, which is why TestBinaryWast checks Total() != 0
+		// before trusting a ratio. A pass rate over an empty denominator is the
+		// vacuity failure wearing arithmetic.
+		{"nothing asked at all", Result{Unsupported: 500}, 0},
+	}
+	for _, c := range cases {
+		if got := c.r.Total(); got != c.want {
+			t.Errorf("%s: Total() = %d, want %d", c.name, got, c.want)
+		}
+	}
+}
+
+// TestUnsupportedIsBucketedByCommand checks that the unsupported column names what
+// each unrun vector waits on, rather than reporting a bare total.
+//
+// The scalar and the map are two records of the same fact, so they can drift — and a
+// map that silently stopped being populated would leave the board printing a large
+// number with no work plan beside it, which is the column reverting to exactly the
+// thing #52's doctrine forbids. Both directions: the sum must equal the scalar, and
+// the map must be non-empty when the scalar is.
+func TestUnsupportedIsBucketedByCommand(t *testing.T) {
+	requireSuite(t)
+	for _, f := range boardFiles(t) {
+		s, err := ParseFile(filepath.Join(suiteDir, f))
+		if err != nil {
+			t.Errorf("%s: parse: %v", f, err)
+			continue
+		}
+		r := run(s)
+		sum := 0
+		for _, n := range r.UnsupportedByHead {
+			sum += n
+		}
+		if sum != r.Unsupported {
+			t.Errorf("%s: UnsupportedByHead sums to %d but Unsupported is %d — the column and "+
+				"its breakdown disagree, so one of them is not being maintained", f, sum, r.Unsupported)
+		}
+		if r.Unsupported > 0 && len(r.UnsupportedByHead) == 0 {
+			t.Errorf("%s: %d unsupported commands and no breakdown; the board would print a "+
+				"number with no work plan beside it", f, r.Unsupported)
+		}
+		// Every key names a real command head, or the breakdown is decoration. An
+		// empty key would print as a blank row, which is the unlabelled-entry
+		// failure the "(no head atom)" placeholder exists to prevent.
+		for h := range r.UnsupportedByHead {
+			if h == "" {
+				t.Errorf("%s: UnsupportedByHead has an empty key; a blank row in a work-plan "+
+					"column is the entry nobody investigates", f)
+			}
+		}
+	}
 }
 
 // TestParseEverySuiteFile is a parser-robustness sweep: the s-expression reader
