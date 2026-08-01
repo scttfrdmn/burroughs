@@ -184,3 +184,65 @@ capability's *end* as well as its beginning.
 Four falsifications, each introduced and watched fail: declaring the capability while leaving
 the entry, a reader landing with 1236 still outstanding, the registry emptied without draining,
 and an entry written with no retirement condition.
+
+---
+
+## Postscript — the first retirement, executed (2026-08-01, PR #61)
+
+Appended rather than edited in place: the body above is the record of what was decided
+before the reader existed, and what the guards *predicted* is the part worth keeping
+alongside what they *did*.
+
+`CapWatReader`'s stated condition was met in one commit. `engineCapabilities` declares it,
+the `capabilityIssues` entry is deleted, and `unimplemented(wat-reader)` is **0** — 1236
+vectors converted, none left behind. The board moved 783/1 → **1419/601**, which is the
+largest single movement since the harness's genesis and every number in it was forecast
+before the code existed.
+
+**What the guards caught, which is the reason to record this at all.** Guard 6 was written
+as a claim about a future arrival, and three of the controls it names failed on the
+arrival — not because the retirement was wrong, but because *each of them had encoded the
+pre-retirement state as an invariant*:
+
+- `TestEveryNeededCapabilityIsRegistered` required every needed capability to hold a
+  registry entry. `wat-reader` is needed by 1236 commands, has no entry, and that is the
+  success condition. The invariant it *meant* was **accounted for — as a tracked debt or
+  as a declared component**, which is stronger than the old reading rather than looser,
+  because the two arms are exclusive. Before the retirement the two readings agreed on
+  every input, so nothing could distinguish them.
+- `TestNoCapabilityOutlivesItsComponent`'s vacuity floor read "the registry must be
+  non-empty, because the engine's set is empty by design." The retirement inverted both
+  clauses, and left as written the floor would have `Fatal`ed on the state it exists to
+  certify — *a control asserting the absence of its own success*. Re-floored on `engine`,
+  the set its two loops actually iterate.
+- The run loop's guard-2 message told an under-declaring caller to "register it in
+  `capabilityIssues`" — advice that would reinstate a debt that had just been paid. A
+  third case now names the retirement instead.
+
+That is *a ruling retroactively falsifies prose written before it* with a retirement in
+the role of the ruling, and it is the reason the sweep is part of accepting one. The
+generalization for the next capability: **a lifecycle guard written while its subject has
+only ever been in one state will encode that state**, and the arrival is when you find
+out. Not one of the three was wrong when written; all three were narrower than their own
+names.
+
+Guard 6's own verdict: it worked. Every one of the three was found by a *failing test* on
+the retirement commit, not by review.
+
+## The fail column's split, which the postscript above made necessary
+
+The retirement raised `fail` 1 → 601, and the body of this ADR forbids exactly that shape
+of number: a column of 601 in which 1 is a decoder defect cannot surface the 602nd.
+
+The resolution is not a fourth verdict for the text layer — the lexer *exists*, so its
+vectors have no excuse left, and parking them would be the disappearance guard 6 prevents
+one layer up. It is that **the ceiling is partitioned where the column is**:
+`Failure.Kind` splits `binaryFail` (ceiling 1, `binary-gc.wast:1`) from `textFail`
+(ceiling 600, the work plan for #8's parser and the validator). A new decoder defect
+arrives as `binaryFail 2 > 1` no matter what the text column does.
+
+The partition key is structural and not the bucket string, because the two layers **share
+strings** — `malformed UTF-8 encoding` is a bucket on both sides, 10 lexer vectors and 176
+parser ones. *When a partition's members share a value, an equality on that value is not a
+partition check* (grave #34). Falsified by swapping the arms: `binaryFail` reads 600,
+`textFail` reads 1, and both ceilings fail.

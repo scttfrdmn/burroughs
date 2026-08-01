@@ -365,6 +365,66 @@ weakly-ordered platform.
   byte-literal checker cannot see one — and registering the files there would have
   satisfied `TestEveryFixtureFileIsChecked` while checking nothing. *A registration is
   not a check.* 24 cited fixtures verified.
+- **The wat lexer wired to the board, and the fourth verdict drained to zero** (#53,
+  decision 0010's intended ending). `CapWatReader` moved from `capabilityIssues` to
+  `engineCapabilities` — declared, entry deleted, population to 0 — in one commit,
+  which is what guard 6 requires and what the entry's own `Retires` condition
+  demanded on the day it was written. **Board: 68 files — 1419 pass / 601 fail /
+  26742 unsupported / 15 gated / 0 unimplemented**, from 783 / 1 / 26742 / 15 / 1236.
+  The largest board movement since genesis, and every number in it was forecast
+  before the code existed.
+- `ReadTextFunc`, the wat entry point injected the way `DecodeFunc` is, so the
+  harness never imports the engine it scores (contract §0). It is a *required*
+  parameter of `RunGated`/`RunWith` rather than an option: a board runner callable
+  without the component it declares would score 1236 vectors against a nil pointer,
+  and the run loop panics on that combination, so the compiler and the loop between
+  them make the omission unshippable.
+- `Failure.Kind`, and with it **two fail ceilings over a structural partition**
+  instead of one number. The reader raised fail 1 → 601, and a single ceiling of 601
+  is precisely the invisibility decision 0010 was written to prevent: a new decoder
+  defect would arrive as 602 and read as text-layer noise. Now a decoder regression
+  fires as `binaryFail 2 > 1` no matter what the text column does. The partition is
+  on `Kind`, not on the bucket string, because **the two layers share strings** —
+  `malformed UTF-8 encoding` is 10 lexer vectors and 176 parser ones — and *when a
+  partition's members share a value, an equality on that value is not a partition
+  check* (grave #34). Falsified by swapping the arms: binaryFail reads 600, textFail
+  1, and both ceilings fire.
+- `TestBareQuoteFormsPassUnearned`: **seven passes reported as unearned rather than
+  as progress.** Seven bare `(module quote ...)` forms lex clean and therefore pass,
+  but six of them (annotations.wast 32/33/36/55/206/207) test annotation
+  *placement*, which a lexer has no notion of, and the seventh (comments.wast:83)
+  tests module validity through nested comments. They pass because nothing above the
+  lexer can disagree yet — overfitting arrived at by omission (§9 G-3), which is the
+  kind no board can see. The test enumerates all seven with what each actually
+  tests, floors the count at exactly 7, and fails in *both* directions: an unlisted
+  clean-lexing form is an unnamed unearned pass, and a listed form now rejected is an
+  accept-direction defect.
+
+### Changed
+- `RunGated(decode, readText, isGated)` and `RunWith(decode, readText, isGated,
+  have...)` take the text entry point; `Script.Run` now panics on a quote form,
+  declaring nothing and supplying nothing.
+- **Three lifecycle controls re-pointed by the retirement, each narrower than its own
+  name**, and the generalization is worth more than the fixes: *a lifecycle guard
+  written while its subject has only ever been in one state will encode that state.*
+  Guard 2 asserted "every needed capability has a registry entry", which was right
+  until a capability was retired and then reported 1236 errors on the success
+  condition; the invariant is now **accounted for — tracked debt XOR declared
+  component**, which is stronger than the old reading, not looser. Guard 6's vacuity
+  floor stood on the registry, so it would have `Fatal`ed on an empty one — *a control
+  asserting the absence of its own success* — and now stands on the declaration.
+  `TestQuoteFormsAwaitTheirReader`'s first half dissolved, so it was re-aimed at where
+  the risk moved (declared-without-supplied) rather than closed: *a tripwire whose
+  subject dissolves is re-pointed, never closed.*
+- The `unimplemented` ceiling lowered 1236 → **0**, its terminal value under decision
+  0004. Not bookkeeping: a ceiling of 1236 against an actual 0 would permit the entire
+  population to reappear in the fourth column without a word — the disappearance
+  guard 6 exists to prevent, wearing a ceiling's clothes. Falsified at -1 and watched
+  fire.
+- Guard 2's panic message named a registry a caller should add an entry to, which the
+  retirement had just made false advice. It now has a third case naming the
+  retirement and pointing at `RunGated`. *A ruling retroactively falsifies the prose
+  written before it* — and so does a retirement.
 
 ### Fixed
 - Four graves in the lexer, all found by falsifying its own tests from a committed

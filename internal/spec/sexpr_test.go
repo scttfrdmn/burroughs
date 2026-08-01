@@ -230,7 +230,9 @@ func TestClassifyAndRun(t *testing.T) {
 		}
 	}
 	// The capability is attached by the classifier, not by the run loop — the
-	// derived-gap mechanism starts here.
+	// derived-gap mechanism starts here, and it stays after the retirement: the
+	// classifier's job is to say what a command needs, whether or not the engine
+	// happens to have it.
 	if got := s.Commands[3].Needs; got != CapWatReader {
 		t.Errorf("quote command Needs = %q, want %q", got, CapWatReader)
 	}
@@ -238,8 +240,14 @@ func TestClassifyAndRun(t *testing.T) {
 		t.Error("quote command carried no Source; the run loop would have nothing to read")
 	}
 
-	// A decoder that satisfies both malformed assertions and the valid module.
-	r := s.Run(func(image []byte) error {
+	// A decoder that satisfies both malformed assertions and the valid module, and a
+	// reader that produces the expected text for the quote form.
+	//
+	// The reader is *supplied* here where the pre-retirement version of this test used
+	// the bare Run: a caller that declares CapWatReader and hands over nothing panics
+	// rather than scoring, which is the tripwire re-pointed at the case still available
+	// (TestQuoteFormsHaveTheirReader asserts that panic directly).
+	r := s.RunWith(func(image []byte) error {
 		if len(image) < 8 {
 			return errString("unexpected end")
 		}
@@ -247,16 +255,17 @@ func TestClassifyAndRun(t *testing.T) {
 			return errString("magic header not detected")
 		}
 		return nil
-	})
-	// 3 pass, 1 unsupported (assert_return), 1 unimplemented (the quote form). The
-	// quote vector is deliberately *not* a fail: no wat reader exists, and an unbuilt
-	// component must not read as a wrong answer.
-	if r.Pass != 3 || r.Fail != 0 || r.Unsupported != 1 || r.Unimplemented != 1 {
-		t.Errorf("got %d pass, %d fail, %d unsupported, %d unimplemented; want 3/0/1/1",
+	}, func([]byte) error { return errString("unexpected token") }, nil, CapWatReader)
+	// 4 pass, 1 unsupported (assert_return), 0 unimplemented. The quote vector's
+	// verdict is the retirement: it was `unimplemented` while no reader existed, and a
+	// component landing without draining its column is the disappearance guard 6 exists
+	// to prevent (decision 0010).
+	if r.Pass != 4 || r.Fail != 0 || r.Unsupported != 1 || r.Unimplemented != 0 {
+		t.Errorf("got %d pass, %d fail, %d unsupported, %d unimplemented; want 4/0/1/0",
 			r.Pass, r.Fail, r.Unsupported, r.Unimplemented)
 	}
-	if got := r.UnimplementedByCapability[CapWatReader]; got != 1 {
-		t.Errorf("unimplemented attributed to %s = %d, want 1", CapWatReader, got)
+	if len(r.UnimplementedByCapability) != 0 {
+		t.Errorf("fourth verdict populated after retirement: %v", r.UnimplementedByCapability)
 	}
 }
 
