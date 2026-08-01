@@ -114,6 +114,14 @@ var (
 	// both times. Every `name` use at bdd7164 is inside a parenthesized form, so LPAR is the
 	// discriminator the grammar actually offers.
 	reNameUse = regexp.MustCompile(`(?m)^  \| LPAR .*\bname\b.*$`)
+	// An arm invoking the `var` *helper* — `var $1 $sloc` — which is the second decode site.
+	//
+	// Matched on the call rather than on a nonterminal name, because `var` is an OCaml helper
+	// invoked from semantic actions, not a production: `idx` (:489) and `bindidx` (:508) call
+	// it, and so do `module_var` (:1387) and `script_var` (:1412) outside the module grammar.
+	// The word boundary and the `$1 $sloc` argument shape keep this off `VarMap`, `var_opt`,
+	// and the `%token VAR` declaration.
+	reVarUse = regexp.MustCompile(`(?m)^.*\bvar \$1 \$sloc\b.*$`)
 )
 
 // TestReferenceDecodesUTF8AtNameAndVarOnly pins the three grammar facts #62 is built on.
@@ -219,8 +227,72 @@ func TestReferenceDecodesUTF8AtNameAndVarOnly(t *testing.T) {
 			"nonterminal's reach substantially or this regex is over-matching; both need "+
 			"reading before #62's siting claim is quoted again", len(uses))
 	}
-	t.Logf("parser.mly at the pinned revision: `name` used by %d productions, "+
-		"`string_list` has 2 non-decoding arms, two decode sites (`name`, `var`)", len(uses))
+	// The `var` call sites, the same treatment for the second decode site. #62's DoD asked for
+	// the `name` reachability to be machine-checked and named five productions; it is seven,
+	// and the issue said nothing at all about `var` because the issue did not know `var`
+	// existed. So this half is the widening the re-measurement earned, and it is scoped to the
+	// *call*, which is the space, rather than to `idx` and `bindidx`, which are today's callers.
+	//
+	// Floor 2 and ceiling 8: `idx` (:489) and `bindidx` (:508) are the two inside the module
+	// grammar and are what #62 must site a check on; `module_var` (:1387), `script_var`
+	// (:1412) and `instance_var` (:1415) are script-level and outside this child. A floor of 2
+	// is the claim "both module positions are still there", not "exactly five call sites exist"
+	// — pinning the exact number would make an upstream sugar addition fail in this file
+	// instead of raising a review question in the parser's.
+	//
+	// The 5 is the grammar's count, and it corrected mine. Reading the file I predicted four
+	// and wrote that into this comment; the test printed five, and the extra was
+	// `instance_var` (:1415), a *third* script-level site sitting three lines below the one I
+	// had stopped reading at. Third time in this file that a hand count lost to a printed one,
+	// and the miss was in the same direction each time — toward the number that confirms the
+	// story already written down. Print what the code returns, then write the comment.
+	varUses := reVarUse.FindAllString(src, -1)
+	if len(varUses) < 2 {
+		t.Errorf("found %d `var $1 $sloc` call sites, want >=2 (5 at bdd7164: idx :489, "+
+			"bindidx :508, module_var :1387, script_var :1412, instance_var :1415).\n\t`var` is the second decode "+
+			"site and the one #62 originally missed; a regex finding too few here is how the "+
+			"widening would silently narrow back.\n\tmatches:\n%s",
+			len(varUses), strings.Join(varUses, "\n"))
+	}
+	if len(varUses) > 8 {
+		t.Errorf("found %d `var` call sites, want <=8 — either upstream widened the helper's "+
+			"reach or this regex is over-matching; both need reading before the two-site "+
+			"partition is quoted again:\n%s", len(varUses), strings.Join(varUses, "\n"))
+	}
+	// `var` must be reachable from the *index* grammar specifically, which is the fact that
+	// makes the second site this child's business rather than the script reader's: `heaptype`
+	// (:361-373) reaches `idx`, so the decode is live inside the type algebra #62 implements.
+	// Asserted by name because a count cannot distinguish "reached from idx" from "reached from
+	// four script productions" — and the count alone would be satisfied by the latter.
+	for _, prod := range []string{"idx :", "bindidx :"} {
+		i := strings.Index(src, "\n"+prod+"\n")
+		if i < 0 {
+			t.Errorf("parser.mly no longer has a `%s` production — #62 sites the second UTF-8 "+
+				"check on `var` being reached from the index grammar, and that reach is what "+
+				"puts it inside this child's stratum rather than the script reader's", prod)
+			continue
+		}
+		rest := src[i+1:]
+		if j := strings.Index(rest, "\n\n"); j >= 0 {
+			rest = rest[:j]
+		}
+		if !strings.Contains(rest, "var $1 $sloc") {
+			t.Errorf("`%s` no longer calls `var`:\n%s\n\tThe second decode site's reach into the "+
+				"index grammar is the reason it is in scope for #62. If this moved, re-derive the "+
+				"partition rather than relaxing the assertion.", prod, rest)
+		}
+	}
+
+	// Conditioned on Failed(), like the skip inventory's summary and for the reason found by
+	// falsifying case 2 above: with `bindidx`'s call removed, this line printed "idx and
+	// bindidx among them" three lines under an error saying `bindidx` no longer calls `var`.
+	// A summary that restates the claim the test is currently failing is a dishonest board in
+	// miniature, and the log line is the part a reviewer skims.
+	if !t.Failed() {
+		t.Logf("parser.mly at the pinned revision: `name` used by %d productions, `var` called at "+
+			"%d sites (idx and bindidx among them), `string_list` has 2 non-decoding arms",
+			len(uses), len(varUses))
+	}
 }
 
 // TestSuiteUTF8VectorsAreAllAtNamePositions is the suite half: the 176 are one shape, and
@@ -295,10 +367,30 @@ func TestSuiteUTF8VectorsAreAllAtNamePositions(t *testing.T) {
 // parser lands, nothing here needs editing — the probe stops reporting the sentinel and the
 // stricter branch takes over on its own. A deferral that expires by mechanism rather than by
 // memory, with no skip anywhere in it.
+//
+// # What landing #62 actually did to that design
+//
+// The probe's binary question — does the parser exist — turned out to have a third answer: it
+// exists and reaches four of the five rows. The `(data (i32.const 0) …)` row needs an offset,
+// which is #63/#64's, so its accept direction cannot be *reached* yet. Two dishonest exits were
+// available and both are refused. Weakening the row to a shape this stratum happens to reach
+// would let the author pick the vector after seeing which was inconvenient, which is the thing
+// the file's header forbids in so many words. Excusing it as a third verdict would empty a
+// control by fiat.
+//
+// So the row keeps asserting, at the strength that is honestly available: **the error must not
+// be a UTF-8 complaint, and it must be the boundary.** That is the control's actual purpose —
+// the defect it exists to catch is a decode where the grammar has none — and it is the *second*
+// half that makes the deferral expire by mechanism, exactly as the sentinel did: when the offset
+// grammar lands and the row starts being accepted, `wantBoundary` fails and the row must be
+// promoted to a plain accept. The obligation is a failing test in #63's path, not a note.
+//
+// The accept direction at `string_list` is not left resting on that, either: the passive row
+// reaches the same production with no offset in front of it, and answers on the merits today.
 func TestUTF8DecodeSitedOnlyAtNameAndVar(t *testing.T) {
 	// Stamped, not deduced: which subject is answering decides which assertions apply, so
 	// the branch is recorded in the log rather than left for a reader to infer from a green.
-	parserExists := !strings.Contains(fmt.Sprint(readModule(nil)), notImplemented)
+	parserExists := !strings.Contains(fmt.Sprint(ReadModule(nil)), notImplemented)
 	if parserExists {
 		t.Logf("the wat parser answers: asserting the full three-way partition")
 	} else {
@@ -309,10 +401,17 @@ func TestUTF8DecodeSitedOnlyAtNameAndVar(t *testing.T) {
 	// The partition, one row per position. Written now so that the parser's author does not
 	// get to choose the vectors after seeing which ones are inconvenient.
 	for _, tc := range []struct {
-		name   string
-		src    string
+		name string
+		src  string
+		// reject is the reference's verdict on this source: does the module get rejected for
+		// invalid UTF-8. It is the row's fixed content and never moves.
 		reject bool
-		why    string
+		// wantBoundary says the current stratum stops before reaching the position, so the
+		// verdict available today is "not a UTF-8 error, and named as unread". Only legal on
+		// accept rows — a reject row that stopped short would be scoring a right answer for the
+		// wrong reason.
+		wantBoundary bool
+		why          string
 	}{
 		{
 			name:   "export name",
@@ -333,16 +432,20 @@ func TestUTF8DecodeSitedOnlyAtNameAndVar(t *testing.T) {
 			why:    "parser.mly:49-52, the `var` site — id.wast:31",
 		},
 		{
-			name:   "data segment payload",
-			src:    `(module (memory 1) (data (i32.const 0) "\ef"))`,
-			reject: false,
-			why:    "parser.mly:1096 routes through string_list, which does not decode — the accept direction",
+			name:         "data segment payload",
+			src:          `(module (memory 1) (data (i32.const 0) "\ef"))`,
+			reject:       false,
+			wantBoundary: true,
+			why: "parser.mly:1096 routes through string_list, which does not decode — the " +
+				"accept direction. The offset is #63/#64's, so this row is asserted at the " +
+				"boundary today and the assertion fails the day the offset grammar lands",
 		},
 		{
 			name:   "passive data segment payload",
 			src:    `(module (data "\ef\ff\fe"))`,
 			reject: false,
-			why:    "same production, no offset — synthetic",
+			why: "same production, no offset in front of it — so this row reaches string_list " +
+				"today and carries the accept direction on the merits. Synthetic",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -363,7 +466,34 @@ func TestUTF8DecodeSitedOnlyAtNameAndVar(t *testing.T) {
 				return
 			}
 
-			err := readModule([]byte(tc.src))
+			err := ReadModule([]byte(tc.src))
+
+			// The half that applies to every row regardless of how far the parser reaches, and
+			// the one the control exists for: a decode where the grammar has none.
+			if !tc.reject && err != nil && strings.Contains(err.Error(), "malformed UTF-8") {
+				t.Fatalf("%s rejected with %v; it is LEGAL (%s).\n\t"+
+					"This is the failure a blanket string check produces, and the suite has no "+
+					"vector that catches it: 0 accept-direction sites in 1229 quote commands.",
+					tc.src, err, tc.why)
+			}
+
+			if tc.wantBoundary {
+				// Not a weakened assertion but a differently-aimed one, and it is what makes the
+				// deferral expire: when #63/#64 land the offset grammar this row is accepted, the
+				// boundary error disappears, and this fails until the row is promoted above.
+				if err == nil {
+					t.Fatalf("%s accepted; this stratum cannot reach the payload (%s), so an "+
+						"acceptance is a green for the wrong reason — promote this row to a "+
+						"plain accept now that the offset grammar exists", tc.src, tc.why)
+				}
+				if !strings.Contains(err.Error(), "unimplemented") {
+					t.Fatalf("%s gave %v; want the named boundary. A row this stratum stops "+
+						"short of must say so, not fail for some other reason (%s)",
+						tc.src, err, tc.why)
+				}
+				return
+			}
+
 			switch {
 			case tc.reject && err == nil:
 				t.Fatalf("%s accepted; want `malformed UTF-8 encoding` (%s)", tc.src, tc.why)
@@ -379,23 +509,20 @@ func TestUTF8DecodeSitedOnlyAtNameAndVar(t *testing.T) {
 	}
 }
 
-// notImplemented is the sentinel `parserExists` matches on, and the mechanism by which this
-// file's deferral expires without anyone remembering to expire it.
+// notImplemented was the sentinel `parserExists` matched on, and the mechanism by which this
+// file's deferral expired without anyone remembering to expire it.
 //
-// It must be a *sentinel error*, never nil: a stub returning nil reads as "the subject
+// It had to be a *sentinel error*, never nil: a stub returning nil reads as "the subject
 // exists", and the reject rows would then score their `err == nil` case as an acceptance
 // defect — a red for a subject that does not exist, which is the falsifiability law's failure
 // in the other direction. Absent must be *distinguishable* from wrong, and a sentinel is what
-// makes it so.
-const notImplemented = "wat parser not implemented"
-
-// readModule is the parser entry point the implementation half calls, standing in for
-// text.ReadModule until it exists.
+// made it so.
 //
-// The placeholder is what makes the pre-registered control *compile*, which is what makes it
-// impossible to forget: it is in the build, it is in `make check`, and the day ReadModule
-// lands this function is deleted and the call rewired — one edit, in a file whose assertions
-// were fixed before their author could see which vectors were inconvenient.
-func readModule([]byte) error {
-	return fmt.Errorf("%s (#62): the control above is pre-registered, not aspirational", notImplemented)
-}
+// The `readModule` stub it belonged to is gone: `ReadModule` exists (#62), so the probe calls the
+// real entry point and takes the stricter branch. The constant stays because the *probe* stays,
+// and the probe stays because it is the honest way to write "which subject answered" — deleting
+// it would replace a stamped branch with an assumption that the parser is present, which is the
+// deduce-don't-stamp mistake at the exact site that was built to avoid it. `ReadModule(nil)` on
+// empty input returns nil (the empty `inline_module`, parser.mly:1394), so the match is false and
+// the branch is recorded as taken.
+const notImplemented = "wat parser not implemented"

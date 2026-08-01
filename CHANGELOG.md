@@ -432,6 +432,70 @@ weakly-ordered platform.
   set is derived from `testenv.LicensedRefPaths()` rather than restated, with a vacuity
   floor because a containment check over an empty set agrees with anything.
 
+- **The wat parser's skeleton stratum** (#62): `internal/text.ReadModule`, recursive
+  descent over the reference's module-field grammar, returning an error and nothing else
+  (decision 0011). `cursor.go` (a fully-lexed token slice with two-token lookahead),
+  `types.go` (the type algebra in `parser.mly`'s own production order), `context.go` (the
+  nine index spaces and the three checks the grammar itself makes — `duplicate <category>
+  <name>`, `import after <kind> definition`, `multiple start sections`), `kinds.go` (the
+  keyword constants the parser matches on, checked against the generated table), and
+  `parser.go` (the module fields, stopping at a **named** `unimplemented: instruction body`
+  boundary that #63/#64 retire). **Board: 1419 → 1628 pass, 601 → 392 fail**; the text
+  fail ceiling moves 600 → 391 with a per-vector reconciliation of #62's forecast in the
+  test's own comment. The forecast was 221–225 and 209 landed net: seven vectors whose
+  checks this stratum implements sit behind an instruction body *in the same module*, so
+  the check is never reached — the classifier asked whether a *vector* was
+  instruction-bodied, and reachability turns on whether the *module* is. Named
+  individually rather than netted out.
+- Decision 0011: the parser's surface is error-only, and well-formed modules will be
+  emitted as binary bytes into the proven decoder rather than into a second module
+  representation. `binary.Module` stays the codebase's one module authority. The bridge's
+  faithfulness is a pre-registered tripwire, not an intention (#67).
+- The pre-registered UTF-8 siting control (#62) is now wired to the real `ReadModule`, and
+  it grew a **fourth verdict** rather than taking either dishonest exit: a `wantBoundary`
+  row is a vector whose site is correct and whose module reaches the instruction grammar,
+  so it must fail with the *named* boundary — and it fails the day the offset grammar
+  lands, forcing promotion. The `notImplemented` sentinel is kept, because deleting it
+  would replace a stamped branch with an assumption that the parser is present, which is
+  the deduce-don't-stamp mistake at the exact site built to avoid it.
+- `TestBareQuoteFormsPassUnearned` gained a third state: **retired**. A listed unearned
+  pass that stops passing may have been *regressed* (rejected on the merits — a defect) or
+  *retired* (the reader advanced and declared the boundary honestly — progress), and
+  collapsing them is dishonest whichever way it resolves. Discriminated on whether the
+  error names itself `unimplemented`, and the staleness floor is now the **sum**
+  (`want + wantRetired != 7`), because only the sum can distinguish progress from a stale
+  list.
+- **Four survivors of the falsification sweep, each closed with the control it exposed.**
+  Every named property in the new package was broken and watched to fail, per *a control's
+  green must be falsifiable*. Four mutations survived the entire board, and all four were
+  the same defect in the control rather than in the code — a test narrower than its name:
+  - `bindAbs` not advancing the index count. `TestBindAbsCountsAnonymousDefinitions` bound
+    anon-then-named and checked the named one landed at 1, which holds even when `bindAbs`
+    never increments, because `bindAnon` carries it. Now asserts the count after *every*
+    binding and in both orders.
+  - `atHeaptypeStart` dropping its `idx` arm. Both predicate-agreement sweeps ran over
+    `keywords` — but heaptype's thirteenth arm takes `NatTok`/`VarTok`, which are not
+    keywords, so the sweep was scoped to a space that *could not contain* the
+    disagreement. The scope-controls-to-the-space law failing not by enumerating the wrong
+    members but by picking a space one dimension too small. Widened to the whole token
+    vocabulary, with `TestNonKeywordSourcesCoverEveryTokenKind` deriving the domain from
+    `TokenKind`'s own extent.
+  - `rpar` accepting any token, which **accepted a truncated module**: at EOF the cursor
+    does not advance, so a permissive `rpar` consumes nothing, every production unwinds
+    successfully, and `ReadModule`'s closing `at(EOF)` check is satisfied by the EOF that
+    was never consumed. The suite cannot ask this — its `unexpected token` vectors are all
+    *surplus*, never truncated, because a `.wast` whose parens do not balance is not a
+    readable script. New `TestRparRejectsAndDoesNotConsume` and
+    `TestTruncatedModuleIsRejected`, the latter with its own accept-direction vacuity half.
+  - Error positions dropped from two of the three constructors. `TestErrorsCarryAPosition`
+    covered `errf` only, so blanking the position in `errAt` and in `unexpectedAt` — the
+    constructor behind the 152-vector `unexpected token` bucket — was invisible. Now
+    parametrized over the *constructors* rather than the messages, with
+    `TestErrorConstructorsAreAccountedFor` sweeping the package AST for `&Error{}` literals
+    so the coverage claim is checked against the real set. It immediately found a
+    **fourth** unlisted constructor (`bodyBoundary` composing the struct inline), which now
+    routes through `errf`.
+
 ### Changed
 - `RunGated(decode, readText, isGated)` and `RunWith(decode, readText, isGated,
   have...)` take the text entry point; `Script.Run` now panics on a quote form,
@@ -600,6 +664,35 @@ weakly-ordered platform.
   it appears **24** (global 7, elem 7, data 6, array 2, func_ptrs 2). The
   load-bearing half of the claim was re-checked and holds — 0 occurrences under
   `assert_malformed`, and both cited lines resolve as described.
+- Four graves in the new parser, three of them accept-direction — the direction no suite
+  vector covers (§9 G-3), and every one found by a sweep written to look there.
+  - **`instr_list` has an empty arm** (`parser.mly:546-550`), so `(func)`, `(global i32)`
+    and `(table funcref (elem))` are well-formed with nothing in them. The first draft
+    routed all of them at the body boundary and **rejected fourteen valid modules**. The
+    distinction a boundary must draw is *nothing there* versus *something we cannot read
+    yet*, and only the second is `unimplemented`. Its complement landed with it: a closing
+    paren at a *mandatory*-body site (`constexpr1` :951, `offset` :1091, the table sugar's
+    leading `elemexpr` :1205) is a syntax error, and reporting `unimplemented` there would
+    be the wrong-layer error **in the direction that flatters us** — parking a module the
+    reference rejects in the work-plan bucket, inflating what the board reads as remaining
+    work.
+  - **`decodedVar` validated `Token.Text`, the source spelling**, which for `$"\ef"` is
+    seven ASCII characters and therefore *always* valid UTF-8 — a production that could not
+    fire. The reference's `var` receives the *unescaped* string (`lexer.mll:816-818`), so
+    the check belongs on `Value`. Caught by the reject sweep on `id.wast:31`, the single
+    vector in the suite that reaches the site, and the reason a one-vector bucket is still
+    worth a case.
+  - **The test for that site shared its misconception**: it hand-built
+    `Token{Kind: VarTok, Text: string(bad)}`, so test and code agreed on the wrong field and
+    the assertion passed over dead code. *A hand-built token makes a test's premise about
+    the lexer unfalsifiable.* Rewritten to lex real source, which puts the field convention
+    where it belongs.
+  - **`TestCursorPeekAtEOFIsStable` asserted a premise about another function and got it
+    wrong**: `peek()` has no bounds branch, which is correct only while the lexing call
+    appends EOF — and `LexAll` stops at EOF and *drops* it. The test panicked with `index
+    out of range [3] with length 3` on its first execution. `lexToEOF` was carved out so the
+    promise lives in the name of the function keeping it. *A premise about another function
+    is checked by a test or it is a wish.*
 
 ### Added
 - **`derived` accepted as the third provenance category** — cited, derived,

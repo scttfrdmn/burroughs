@@ -119,20 +119,21 @@ func decode(image []byte) error {
 	return err
 }
 
-// readText is the wat entry point the board scores — the lexer, and only the lexer.
+// readText is the wat entry point the board scores: the lexer, and now the module-field
+// grammar above it (#62).
 //
-// **What this does not do is the whole reason the reject-direction column reads the way
-// it does.** `text.LexAll` runs to EOF and returns the first lex error; nothing above it
-// exists yet, so every vector whose malformedness lives in the grammar (`unexpected
-// token`), in a validator (`alignment`, `duplicate func`), or in the parser's UTF-8
-// decode of a name (176 of the 186 `malformed UTF-8 encoding` vectors) is a *fail*, in a
-// named bucket, and not a skip. That is the bucketed-failures discipline: the 600 are the
-// work plan for #8 and the parser, not a debt hidden behind a fourth verdict — the fourth
-// verdict was for a component that did not exist, and the lexer exists.
-func readText(src []byte) error {
-	_, err := text.LexAll(src)
-	return err
-}
+// **What this does not do is still the reason the reject-direction column reads the way it
+// does**, only one stratum further up. `text.ReadModule` lexes, then parses module fields
+// and the type algebra, and stops at the first instruction — so a vector whose
+// malformedness lives in an instruction body, in a validator (`alignment`, `type
+// mismatch`), or in name resolution (`unknown func`) is still a *fail*, in a named bucket,
+// and not a skip. That is the bucketed-failures discipline: what remains is the work plan
+// for #63/#64 and the validator, not a debt hidden behind a fourth verdict.
+//
+// It is called on the raw source and not on a pre-lexed token slice on purpose: ReadModule
+// owns the lex-then-parse ordering (see cursor's header for why the ordering is load-bearing),
+// and a harness that lexed first would be reimplementing that ordering in a second place.
+func readText(src []byte) error { return text.ReadModule(src) }
 
 // isGated asks the engine, rather than reading its error text. The taxonomy is
 // the engine's to define; a substring test here would be the harness guessing at
@@ -431,9 +432,33 @@ func TestGatedVectors(t *testing.T) {
 // before then is a vector claiming a pass nobody looked at.
 //
 // The reverse direction matters more than the forward one, which is why both are checked:
-// a listed vector that has started *failing* means the lexer regressed on something it
+// a listed vector that has started *failing* means the reader regressed on something it
 // used to accept — an accept-direction defect, the class no negative vector can falsify
 // (decision 0007) — and it would otherwise read as this list going stale.
+//
+// # Retirement is a third state, and it is not the same as either
+//
+// #62's parser turned one of the seven from unearned into a *named boundary*:
+// `comments.wast:83` is a quote form whose payload has instruction bodies, so ReadModule now
+// reaches it and stops with `unimplemented`. The reverse-direction arm caught that, which is
+// the arm working — but its diagnosis was wrong, and taking it at face value would have been
+// the worse outcome. It reads any error as an accept-direction defect, and there are now two
+// ways a listed vector can stop passing:
+//
+//   - the reader **regressed**: it rejects a module the reference accepts, for a reason it
+//     believes. That is the defect, and it stays a hard error.
+//   - the reader **advanced past the lexer and stopped short honestly**, declaring the
+//     stratum boundary. The pass was never earned; it is now not claimed at all, which is
+//     strictly better than an unopposed green and is exactly the shrink-to-zero this test
+//     was written to expect.
+//
+// Collapsing the two would be dishonest in whichever direction it resolved: treat retirement
+// as a defect and the board goes red for progress; treat any error as retirement and a real
+// accept-direction defect hides behind the same arm. So the two are separated by the one
+// thing that distinguishes them — whether the error *names itself as unread* — and the
+// boundary is not an excuse a vector can grow into, because a retired entry must be removed
+// from the list rather than annotated in it, and `retiredThisStratum` is floored and counted
+// like everything else here.
 func TestBareQuoteFormsPassUnearned(t *testing.T) {
 	requireSuite(t)
 
@@ -452,12 +477,21 @@ func TestBareQuoteFormsPassUnearned(t *testing.T) {
 			206: "annotation in a type position",
 			207: "annotation in an import position",
 		},
-		// Comment nesting and termination inside a module. scanBlockComment does decide
-		// closedness, so this one is the closest to earned of the seven — but what the
-		// vector asserts is that the *module* is valid with comments interleaved, and the
-		// module's validity is not a question the lexer is asked.
+	}
+
+	// retired lists the entries #62's parser took off the unearned list by reaching them and
+	// declaring the boundary — the shrink this test was written to expect, recorded rather
+	// than deleted so the arithmetic against the original seven stays checkable.
+	//
+	// `comments.wast:83`'s payload is `(func (export "f1") (result i32) (i32.const 1) ...)`:
+	// instruction bodies, which are #63/#64's. So the module is valid, the reader cannot say
+	// so yet, and it says *that* instead of claiming a pass. Each entry must still be *found*
+	// on the board and must still stop short with a named boundary — a retired entry that
+	// starts passing again, or that fails for some other reason, is caught below.
+	retired := map[string]map[int]string{
 		"comments.wast": {
-			83: "nested block comments interleaved with module fields",
+			83: "instruction bodies in the quoted payload (#63/#64); the lexer's silence " +
+				"was the pass, and the parser replaced it with a named boundary",
 		},
 	}
 
@@ -465,16 +499,24 @@ func TestBareQuoteFormsPassUnearned(t *testing.T) {
 	// from a board with none, and the second is the state this test exists to detect the
 	// arrival of. Floored at the list's own length rather than at 1, per *a floor below
 	// the list's own length is decoration*.
-	want := 0
+	want, wantRetired := 0, 0
 	for _, m := range unearned {
 		want += len(m)
 	}
-	if want != 7 {
-		t.Fatalf("the unearned list holds %d entries, want 7; the count is quoted in the "+
-			"pass floor's account and in PR #61, so the two must not drift", want)
+	for _, m := range retired {
+		wantRetired += len(m)
+	}
+	// The sum is what must hold at seven, not either part: an entry moving from unearned to
+	// retired is progress, an entry *vanishing* from both is the list going stale, and only
+	// the sum can tell those apart. Six-plus-one today.
+	if want+wantRetired != 7 {
+		t.Fatalf("the unearned and retired lists hold %d+%d entries, want 7 between them; "+
+			"the count is quoted in the pass floor's account and in PR #61, so the two must "+
+			"not drift — and an entry that left both lists left without an account",
+			want, wantRetired)
 	}
 
-	seen := 0
+	seen, seenRetired := 0, 0
 	for _, f := range boardFiles(t) {
 		s, err := ParseFile(filepath.Join(suiteDir, f))
 		if err != nil {
@@ -487,17 +529,47 @@ func TestBareQuoteFormsPassUnearned(t *testing.T) {
 			}
 			err := readText(c.Source)
 			_, listed := unearned[f][c.Line]
+			_, wasRetired := retired[f][c.Line]
 			switch {
-			case err == nil && !listed:
-				t.Errorf("%s:%d is a bare (module quote ...) that lexes clean and is not in "+
-					"the unearned list; it passes because nothing above the lexer can "+
-					"disagree with it, and a pass arrived at by omission has to be named",
+			case err == nil && !listed && !wasRetired:
+				t.Errorf("%s:%d is a bare (module quote ...) that the reader accepts and is "+
+					"not in either list; it passes because nothing above the parser's "+
+					"current stratum can disagree with it, and a pass arrived at by "+
+					"omission has to be named", f, c.Line)
+			case err == nil && wasRetired:
+				t.Errorf("%s:%d is listed as retired but the reader accepts it again; a "+
+					"retired entry is one whose pass was *withdrawn*, so an acceptance "+
+					"means either the boundary moved and the entry belongs back on the "+
+					"unearned list, or the pass is now earned and the entry goes away",
 					f, c.Line)
 			case err != nil && listed:
-				// The direction that is a defect rather than staleness.
-				t.Errorf("%s:%d is listed as an unearned pass but the reader now rejects it "+
-					"(%v); a valid module rejected is an accept-direction defect, which no "+
-					"negative vector in the suite can catch", f, c.Line, err)
+				// Two ways this happens and they are not the same finding. A named boundary
+				// is the reader declining to claim a pass it cannot earn; anything else is
+				// the reader rejecting a module the reference accepts.
+				if strings.Contains(err.Error(), "unimplemented") {
+					t.Errorf("%s:%d is on the unearned list but the reader now stops short "+
+						"of it with a named boundary (%v); that is progress, not a defect — "+
+						"move the entry to `retired` with the stratum that owns the rest",
+						f, c.Line, err)
+				} else {
+					t.Errorf("%s:%d is listed as an unearned pass but the reader now "+
+						"rejects it (%v); a valid module rejected is an accept-direction "+
+						"defect, which no negative vector in the suite can catch",
+						f, c.Line, err)
+				}
+			case err != nil && wasRetired:
+				// A retired entry must keep stopping short *honestly*. If it starts failing
+				// for a reason the reader believes, it is the accept-direction defect the
+				// unearned arm watches for, arriving one list over.
+				if !strings.Contains(err.Error(), "unimplemented") {
+					t.Errorf("%s:%d is retired behind a stratum boundary but now fails with "+
+						"%v; a retired entry that stops naming itself unread is a valid "+
+						"module being rejected on the merits — the accept-direction defect, "+
+						"hiding in the list that was supposed to account for its silence",
+						f, c.Line, err)
+					continue
+				}
+				seenRetired++
 			case err == nil && listed:
 				seen++
 			}
@@ -508,7 +580,13 @@ func TestBareQuoteFormsPassUnearned(t *testing.T) {
 			"reached means the file left the board and this list is watching nothing",
 			seen, want)
 	}
-	t.Logf("%d bare (module quote ...) forms pass unearned, pending #8's parser", seen)
+	if seenRetired != wantRetired {
+		t.Errorf("found %d of %d retired entries; a retired vector the loop never reached "+
+			"means the file left the board, and the account of the original seven no longer "+
+			"has anything behind it", seenRetired, wantRetired)
+	}
+	t.Logf("%d bare (module quote ...) forms pass unearned, %d retired behind a named "+
+		"stratum boundary (#63/#64); 7 originally", seen, seenRetired)
 }
 
 // allFeaturesOn returns a Features with every gate the decoder knows about turned
@@ -797,22 +875,42 @@ func TestPhase1Files(t *testing.T) {
 	}
 
 	// 1 at the measured revision: binary-gc.wast:1, "malformed function type: 0x5e"
-	// under an expected "malformed mutability". Unmoved by the wat reader — which is the
-	// point of splitting the column, and the claim the split makes checkable.
+	// under an expected "malformed mutability". Unmoved by the wat reader and unmoved
+	// again by #62's parser — which is the point of splitting the column, and the claim
+	// the split makes checkable. Measured both times, not assumed: the parser landing
+	// moved textFail 600 → 391 and left this at 1.
 	const binaryFailCeiling = 1
 	if binaryFail > binaryFailCeiling {
 		t.Errorf("decoder failures rose to %d, ceiling %d — a defect landed in the binary "+
 			"decoder; this ceiling is deliberately not shared with the text column so that "+
-			"a decoder regression cannot hide inside 600 unwritten grammars",
+			"a decoder regression cannot hide inside the text column's unwritten grammars",
 			binaryFail, binaryFailCeiling)
 	}
 
-	// 600 at the measured revision, and this one is a **work plan with a ceiling**
-	// rather than a defect count: every member is a vector the lexer reached and could
-	// not answer, bucketed by the spec string that names what is missing. It may only
-	// fall, and it falls as #8's parser and the validator land. The buckets printed
-	// above are the order to take them in.
-	const textFailCeiling = 600
+	// **391 at the measured revision, down from 600 when the module-field parser landed
+	// (#62).** This is a **work plan with a ceiling** rather than a defect count: every
+	// member is a vector the reader reached and could not answer, bucketed by the spec
+	// string that names what is missing. It may only fall, and it falls as the remaining
+	// strata land. The buckets printed above are the order to take them in.
+	//
+	// The fall is 209 vectors, itemized rather than absorbed: 176 `malformed UTF-8
+	// encoding` (the whole bucket, at the `name` production), 12 `import after
+	// {function,memory,table}`, 10 `duplicate {memory,local,table,func,global,field}`, 6
+	// `unexpected token`, 1 `malformed UTF-8` (id.wast:31, the `var` site) — 210 answered
+	// against 1 newly withdrawn, `comments.wast:83`, whose unearned pass the parser
+	// replaced with a named boundary (see TestBareQuoteFormsPassUnearned). Net 209.
+	//
+	// Against #62's pre-registered 221–225 that is an **under-delivery of 12–16**, and the
+	// cause is one shape rather than a spread: seven vectors whose check this stratum
+	// implements sit behind an instruction body in the *same module*, so the check is never
+	// reached — `imports.wast:692,696,700,704` (`import after global`, all four with a
+	// `(global i32 (i32.const 0))` initializer ahead of the import), `global.wast:685`
+	// (`duplicate global`), `start.wast:102` (`multiple start sections`), `func.wast:447`
+	// (`unknown type`). They arrive with #63/#64's instruction grammar at no extra cost to
+	// it, and they are the concrete form of the forecast's own caution — the classifier
+	// asked whether a *vector* was instruction-bodied, and the question that decides
+	// reachability is whether the *module* is.
+	const textFailCeiling = 391
 	if textFail > textFailCeiling {
 		t.Errorf("text failures rose to %d, ceiling %d — either the reader regressed on "+
 			"vectors it used to answer, or the corpus moved", textFail, textFailCeiling)
@@ -833,7 +931,16 @@ func TestPhase1Files(t *testing.T) {
 	// omission, and they will stop being free the moment #8 can disagree with them. They
 	// are pinned individually by TestBareQuoteFormsPassUnearned so the seven cannot grow
 	// quietly into a habit.
-	const passFloor = 1419
+	//
+	// **1628 = 1419 + 210 − 1 after #62's module-field parser**, and the arithmetic is the
+	// point: 210 vectors answered on the merits, and **one pass given back** —
+	// `comments.wast:83`, an unearned pass the parser retired by reaching it and declaring
+	// the boundary. A floor is normally raised by only counting what was won; this one
+	// records the withdrawal in the same expression, because netting it out would let a
+	// green claim credit for a vector the board no longer answers. The unearned six are
+	// still six, still named, and still not netted out. See textFailCeiling above for the
+	// itemized reconciliation against #62's 221–225 forecast.
+	const passFloor = 1628
 	if totalPass < passFloor {
 		t.Errorf("board pass count %d fell below floor %d", totalPass, passFloor)
 	}

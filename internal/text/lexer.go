@@ -201,8 +201,32 @@ func (l *Lexer) Next() (Token, error) {
 	}
 }
 
-// LexAll runs to EOF, returning the tokens or the first error.
+// LexAll runs to EOF, returning the tokens or the first error. The EOF token itself is not
+// among them; callers that want the sentinel use lexToEOF.
 func LexAll(src []byte) ([]Token, error) {
+	toks, err := lexToEOF(src)
+	if err != nil {
+		return toks, err
+	}
+	return toks[:len(toks)-1], nil
+}
+
+// lexToEOF lexes src and returns the tokens *including* the terminating EOF token.
+//
+// Split out from LexAll so there is one iteration site with two views rather than two loops.
+// The cursor wants the sentinel — a slice that always ends in EOF is what lets peek() have no
+// bounds branch — while LexAll's existing callers count tokens and would all shift by one.
+//
+// This split exists because the cursor originally called LexAll and *documented* that "LexAll
+// appends an EOF token". It does not; it stops at EOF and drops it. The comment was a claim
+// about a neighbouring function, written confidently and never checked, and
+// TestCursorPeekAtEOFIsStable — written precisely because peek() rests on another function's
+// promise — panicked on its first execution. The lesson is the one the falsifiability
+// discipline predicts from the other direction: *a premise about another function is checked
+// by a test or it is a wish*, and the test that names the premise is the cheapest place to
+// find out. The structural repair is that the invariant is now local: whoever wants EOF gets
+// it from the function whose name says so.
+func lexToEOF(src []byte) ([]Token, error) {
 	l := NewLexer(src)
 	var out []Token
 	for {
@@ -210,10 +234,10 @@ func LexAll(src []byte) ([]Token, error) {
 		if err != nil {
 			return out, err
 		}
+		out = append(out, t)
 		if t.Kind == EOF {
 			return out, nil
 		}
-		out = append(out, t)
 	}
 }
 
