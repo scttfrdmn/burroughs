@@ -57,45 +57,117 @@ func TestConstExprExtentIsDiscovered(t *testing.T) {
 	}
 }
 
-// TestConstExprRejectsWithoutSpoofingASpecString is the accept-direction control on
-// the ruling in ErrNonConstantExpr's comment.
+// TestConstExprSeparatesMalformedFromInvalid is the same four bytes as before and the
+// opposite assertion, which is what the dissolution changed (#43/#39).
 //
-// Two facts, and the second is the one the suite cannot check:
+// This test used to be named ...RejectsWithoutSpoofingASpecString and asserted the
+// error was **neither** "illegal opcode" nor "constant expression required", on the
+// stated grounds that the reader could not tell a nonexistent opcode from a
+// real-but-non-constant one. That was an accurate statement about a reader holding an
+// eight-entry accept set: claiming either string would have been a verdict it had not
+// computed, and the cheap version — ErrIllegalOpcode for everything — buys
+// binary.wast:345 and is wrong in general (§9 G-3).
 //
-//  1. A non-const byte is rejected. Accept-and-ignore would break the extent and
-//     every size check downstream.
-//  2. The error is NOT "illegal opcode" and NOT "constant expression required". This
-//     reader cannot tell a nonexistent opcode from a real-but-non-constant one — that
-//     needs #7's table — so claiming either would be a verdict it did not compute.
-//     `0x0a` is throw_ref and `0x92` is f32.add: both real opcodes, both non-const,
-//     and calling them malformed would slander a module the spec calls well-formed.
+// The authority-derived table computes the distinction, so the same four bytes now
+// partition, and each half is asserted rather than jointly excluded:
 //
-// Property 2 is why this test exists. The cheap version of the reader returns
-// ErrIllegalOpcode here, which buys binary.wast:345 and is wrong in general — the
-// overfitting failure, invisible on the board by construction (contract §9 G-3).
-func TestConstExprRejectsWithoutSpoofingASpecString(t *testing.T) {
+//   - 0x0A (throw_ref), 0x92 (f32.add), 0x01 (nop) exist in the reference's table and
+//     are simply not constant. *Invalid*, and calling them malformed would slander a
+//     module the spec calls well-formed.
+//   - 0xF3 has no arm at all: the catch-all's territory, so genuinely *malformed*.
+//
+// The inversion is the point. Keeping the old assertion would have kept a green that
+// certifies the absence of a verdict the engine now has — a control outliving the
+// uncertainty it was written for.
+func TestConstExprSeparatesMalformedFromInvalid(t *testing.T) {
 	d := &Decoder{}
 	for _, tc := range []struct {
 		name string
 		b    byte
+		want error
+		// deny is the string the *other* half of the partition would produce. Asserted
+		// per case rather than as a shared exclusion list, because the old test's
+		// exclusion of both is exactly the vagueness this replaces.
+		deny string
 	}{
-		{"throw_ref (real opcode, not const) — binary.wast:112's byte", 0x0A},
-		{"f32.add (real opcode, not const)", 0x92},
-		{"nop (real opcode, not const; global.wast:313 calls it invalid)", 0x01},
-		{"0xf3 (no such opcode) — binary.wast:345's byte", 0xF3},
+		{"throw_ref (real opcode, not const) — binary.wast:112's byte", 0x0A, ErrConstExprRequired, "illegal opcode"},
+		{"f32.add (real opcode, not const)", 0x92, ErrConstExprRequired, "illegal opcode"},
+		{"nop (real opcode, not const; global.wast:313 calls it invalid)", 0x01, ErrConstExprRequired, "illegal opcode"},
+		{"0xf3 (no such opcode) — binary.wast:345's byte", 0xF3, ErrIllegalOpcode, "constant expression required"},
 	} {
 		r := &reader{b: []byte{tc.b, 0x0B}, eof: ErrPayloadEnd}
 		err := d.decodeConstExpr(r)
-		if !errors.Is(err, ErrNonConstantExpr) {
-			t.Errorf("%s: got %v, want ErrNonConstantExpr", tc.name, err)
+		if !errors.Is(err, tc.want) {
+			t.Errorf("%s: got %v, want %v", tc.name, err, tc.want)
 			continue
 		}
-		// The spoofing check. Substring, because that is how the harness matches.
-		for _, spoof := range []string{"illegal opcode", "constant expression required", "malformed"} {
-			if contains(err.Error(), spoof) {
-				t.Errorf("%s: error %q contains %q — this layer cannot distinguish malformed from invalid, so it must claim neither", tc.name, err, spoof)
-			}
+		// Substring, because that is how the harness matches.
+		if contains(err.Error(), tc.deny) {
+			t.Errorf("%s: error %q contains %q — the other half of the partition, so the "+
+				"table's existence verdict was not consulted", tc.name, err, tc.deny)
 		}
+		// An invalid verdict must never wear a malformed string: that is the direction
+		// no assert_malformed vector can catch, since it concerns modules the spec
+		// accepts as well-formed.
+		// errors.Is on the *expectation*, not ==: the table's want is a bare sentinel
+		// today, and a `==` here would silently stop selecting this branch the moment one
+		// of them is wrapped at its declaration. The check would then pass by not running
+		// — a skip one step quieter, in a control whose whole subject is that an invalid
+		// verdict must not wear a malformed string.
+		if errors.Is(tc.want, ErrConstExprRequired) && contains(err.Error(), "malformed") {
+			t.Errorf("%s: error %q says malformed for a well-formed module", tc.name, err)
+		}
+	}
+}
+
+// TestConstExprDefersTheConstVerdict is the control on the layering binary.wast:112
+// forced, and it is the reason the const check records rather than returns.
+//
+// The vector: a global initialiser `\41\00` with no END, followed by the code section's
+// id byte `\0a` — which *is* an opcode, throw_ref. An aborting reader stops at the
+// non-const instruction and reports the const violation. The reference reads on, and
+// the expression runs off the end of the image, so the verdict is the *malformed* one.
+//
+// derived from binary.wast:117,119 — the two byte lines of the vector whose
+// assert_malformed opens at :112. :117 is the global section `\06\05\01\7f\00\41\00`,
+// whose initialiser ends `\41\00` with no END, and :119 is the code section
+// `\0a\04\01\02\00\0b` that follows it in the image. Jointly they say the byte after the
+// unterminated expression is `\0a` — throw_ref — and the suite's expected string for the
+// pair is `unexpected end of section or function`, not a const-expression verdict.
+//
+// The inference: since `const s = at instr_block s; end_ s` (decode.ml:983) contains no
+// const check, a truncation encountered *after* a non-const instruction is still a
+// truncation. The vectors below are the reader seam rather than the whole module, which
+// is why this is derived and not cited — the suite implies the reader's behaviour without
+// containing an expression-level vector for it.
+func TestConstExprDefersTheConstVerdict(t *testing.T) {
+	d := &Decoder{}
+
+	// Non-const instruction, then the image ends before any END. Malformed wins.
+	r := &reader{b: []byte{0x0A}, eof: ErrPayloadEnd}
+	if err := d.decodeConstExpr(r); !errors.Is(err, ErrPayloadEnd) {
+		t.Errorf("non-const then truncation: got %v, want ErrPayloadEnd — an invalid verdict "+
+			"that pre-empts a malformed one is reporting the wrong layer's answer", err)
+	}
+
+	// The same non-const instruction with a well-formed expression around it. Now the
+	// grammar completes, so the deferred verdict is released.
+	r = &reader{b: []byte{0x0A, 0x0B}, eof: ErrPayloadEnd}
+	if err := d.decodeConstExpr(r); !errors.Is(err, ErrConstExprRequired) {
+		t.Errorf("non-const then END: got %v, want ErrConstExprRequired — the deferred verdict "+
+			"must actually be released, or deferring it is just dropping it", err)
+	}
+
+	// And the *first* non-const instruction is the one reported, which is what a
+	// validator reading left to right would say. 0x01 is nop, 0x92 is f32.add.
+	r = &reader{b: []byte{0x01, 0x92, 0x0B}, eof: ErrPayloadEnd}
+	err := d.decodeConstExpr(r)
+	if !errors.Is(err, ErrConstExprRequired) {
+		t.Fatalf("two non-const instructions: got %v, want ErrConstExprRequired", err)
+	}
+	if !contains(err.Error(), "0x01") {
+		t.Errorf("two non-const instructions: error %q does not name the first one (0x01 nop); "+
+			"reporting the last is a different claim about the module", err)
 	}
 }
 

@@ -31,6 +31,8 @@ jobs:
             target: FuzzWastLexer
           - pkg: ./internal/spec/
             target: FuzzParseNodeProgress
+          - pkg: ./internal/binary/
+            target: FuzzConstExprProgress
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6

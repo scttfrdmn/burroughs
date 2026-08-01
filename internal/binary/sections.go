@@ -59,8 +59,17 @@ import "fmt"
 //
 // The zero value is v0's posture: every 3.0 gate present and off (contract §9).
 type Features struct {
-	ExceptionHandling bool // tag section (id 13), import/export kind 4
-	SIMD              bool // v128 value type
+	// The comments name every construct the gate governs, because a gate whose scope is
+	// only known at its check sites is a gate nobody can audit — and writing them out is
+	// how #48 was found. See that issue: the instruction grammar dispatches from the
+	// generated table with no feature check anywhere, so with these gates off the decoder
+	// *accepts* gated opcodes in function bodies, which is the accept-and-ignore the
+	// gates-never-manufacture-malformedness ruling forbids in its other direction.
+	//
+	// So these comments describe the gates as they *are*, and the missing opcode scope is
+	// tracked rather than described as present.
+	ExceptionHandling bool // tag section (id 13), import/export kind 4. NOT yet its opcodes — #48
+	SIMD              bool // v128 value type, including as a blocktype. NOT yet the 0xfd region — #48
 	Threads           bool // shared limits flags (2, 3)
 	Memory64          bool // 64-bit limits flags (4..7)
 }
@@ -71,6 +80,16 @@ type Features struct {
 // decoder, not an argument to one function.
 type Decoder struct {
 	Features Features
+
+	// sawDataRef records that a decoded function body used an opcode whose free
+	// variables include the data index space (see dataRefOps). It is per-decode state
+	// on the Decoder rather than a return value because the question it answers is
+	// asked at the *module* level — `require (data_count <> None || ... datas =
+	// Set.empty)` (decode.ml:1299) — and reset at the top of DecodeModule so a reused
+	// Decoder cannot carry one module's answer into the next. That reset is the
+	// stateful-instrument law (#28) applied to the decoder itself: state that survives
+	// a measurement reports history.
+	sawDataRef bool
 }
 
 // featureErr names the gate, never the grammar. The text deliberately does not
@@ -126,11 +145,21 @@ func (d *Decoder) decodePayload(sid SectionID, size uint32, r *reader) (bool, er
 		return true, d.decodeVec(r, d.decodeElemSegment)
 	case SectionData:
 		return true, d.decodeVec(r, d.decodeDataSegment)
+	case SectionCode:
+		// The last section to get a grammar (#39), and the one #22 was waiting on.
+		//
+		// Each body carries its own `sized` extent (decode.ml:1140), so the per-body
+		// mismatch is reported inside decodeFuncBody and the section-level extent check
+		// still runs on top — two levels of the same mechanism, which is why
+		// binary.wast:92 is a `section size mismatch` about a *function*.
+		return true, d.decodeVec(r, d.decodeFuncBody)
 	default:
-		// The code section, which needs full instruction decoding rather than the
-		// constexpr subset (#7/#22). Declared-and-tracked, as above: its vectors stay
-		// on the board.
-		return false, nil
+		// Unreachable: every id in sectionRank has a case above, and an id absent from
+		// sectionRank was rejected as malformed before the payload was reached.
+		// Declared rather than silent — a section added to the rank table without a
+		// grammar arrives here, and returning false would let it decode as an
+		// unchecked skip.
+		return false, fmt.Errorf("%w: %d has no payload grammar", ErrMalformedSectionID, byte(sid))
 	}
 }
 

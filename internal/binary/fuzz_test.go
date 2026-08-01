@@ -55,25 +55,47 @@ var declaredErrors = []error{
 	ErrMalformedUTF8,
 
 	// The constexpr production and the three sections that need it (#25).
-	// ErrNonConstantExpr is the one that names the *reader's* limit rather than a
-	// spec verdict — it covers both "no such opcode" (malformed) and "real opcode,
-	// not constant" (invalid), which this layer cannot tell apart without #7's
-	// table. Declared here for the same reason as the rest: the question is what the
-	// decoder is allowed to return.
 	ErrMalformedElemFlags,
 	ErrMalformedElemKind,
 	ErrMalformedDataFlags,
-	ErrNonConstantExpr,
+
+	// The instruction grammar (#43/#39). ErrNonConstantExpr used to stand here as the
+	// one error naming the *reader's* limit rather than a spec verdict, covering both
+	// "no such opcode" and "real opcode, not constant" because that reader could not
+	// tell them apart. The authority-derived table does, so the single entry became
+	// three verdicts:
+	//
+	//	ErrIllegalOpcode      malformed — no arm in decode.ml, or one that only rejects
+	//	ErrConstExprRequired  invalid   — a real instruction that is not constant
+	//	ErrEndExpected        malformed — `end_ s` found something that is not END
+	ErrIllegalOpcode,
+	ErrConstExprRequired,
+	ErrEndExpected,
+
+	// The rest of the instruction grammar's malformed forms.
+	ErrMalformedMemopFlags,
+	ErrMalformedCatch,
+	ErrMalformedTypeIndex,
+	ErrTooManyLocals,
+
+	// Declared and *unreachable at bdd7164*, which is a different claim from the rest
+	// of this list and is stated rather than hidden: both of the authority's reason
+	// arms are bytes `block` stops on, so the dispatch never sees them
+	// (TestEveryReasonRowIsABlockDelimiter is the tripwire). Listed for the same
+	// reason ErrDataCountRequired was listed before it was reachable — the set is what
+	// the decoder is *allowed* to return, and an entry becoming reachable should not
+	// look like a fuzz find when it does.
+	ErrMisplacedOpcode,
 
 	// ErrFeatureDisabled is a declared error but not a malformed-verdict: it means
 	// the decoder declined to judge. Listed here because the fuzz target's question
 	// is "is this error one the decoder is allowed to return", and it is.
 	ErrFeatureDisabled,
 
-	// ErrDataCountRequired is declared here though the decoder cannot yet reach
-	// it (#22). Listing it now is the honest order: the set is what the decoder is
-	// *allowed* to return, and an entry that becomes reachable later should not
-	// look like a fuzz find when it does.
+	// ErrDataCountRequired became reachable with the code section's grammar (#22,
+	// closed inside #39): a body using one of the four data-referencing opcodes in a
+	// module with no data count section. It was declared here while unreachable, which
+	// is what kept its arrival from looking like a fuzz find.
 	ErrDataCountRequired,
 }
 
@@ -196,15 +218,22 @@ func FuzzULEB(f *testing.F) {
 //
 //  1. Termination and progress: return means at least one byte consumed. A reader
 //     that returns nil having consumed nothing would make the caller's vec loop spin.
-//  2. Declared errors only, and never a spec-string spoof. The const-expr reader is
-//     the site of the featureErr manoeuvre, so the *text* is load-bearing, not just
-//     the identity — an error text drifting into "illegal opcode" would silently
-//     convert a declined verdict into a claimed one.
+//     Sharper now that the grammar recurses: `block` calls `instr` calls `structural`
+//     calls `block`, so an arm consuming nothing before it recurses would not merely
+//     spin the caller's vec loop, it would recurse until the stack ran out.
+//  2. Declared errors only, and the invalid verdict never wearing a malformed string.
+//     This half **inverted** with the dissolution (#43/#39). It used to assert the
+//     error contained *neither* "illegal opcode" *nor* "constant expression required",
+//     on the grounds that the reader could not distinguish malformed from invalid and
+//     so must claim neither. It can now, so both strings are legitimate — and what is
+//     left to police is the direction no suite vector can reach: an *invalid* verdict
+//     must not say "malformed", because that slanders a module the spec accepts.
 //
-// Seeded from valid encodings and from the two rejection classes. The corpus for
-// this target is small by construction: these are extracted expression bytes, not
-// module images, so there is nothing in the suite to derive them from — which is why
-// TestConstExprExtentIsDiscovered carries the width assertions instead.
+// Seeded from valid encodings and from every rejection class, including the ones the
+// dissolution made reachable. The corpus for this target is small by construction:
+// these are extracted expression bytes, not module images, so there is nothing in the
+// suite to derive them from — which is why TestConstExprExtentIsDiscovered carries the
+// width assertions instead.
 func FuzzConstExprProgress(f *testing.F) {
 	for _, s := range [][]byte{
 		{0x0B},             // bare end
@@ -221,6 +250,23 @@ func FuzzConstExprProgress(f *testing.F) {
 		{0xF3, 0x0B},                               // no such opcode
 		{0x41},                                     // truncated immediate
 		{},                                         // empty: no END at all
+
+		// The structural arms, which are what the progress property is really about now.
+		// A mutator reaches these from the flat seeds only by inventing a matching END,
+		// so they are seeded rather than hoped for.
+		{0x02, 0x40, 0x0B, 0x0B},             // block (empty result), empty body
+		{0x03, 0x40, 0x0B, 0x0B},             // loop
+		{0x04, 0x40, 0x0B, 0x0B},             // if with no else
+		{0x04, 0x40, 0x05, 0x0B, 0x0B},       // if with an else arm
+		{0x02, 0x02, 0x40, 0x0B, 0x0B, 0x0B}, // nested block
+		{0x02, 0x40},                         // block with no END at all
+		{0x1F, 0x40, 0x00, 0x0B},             // try_table, empty handler vec
+
+		// The prefix escapes: a u32 sub-opcode, not a byte.
+		{0xFC, 0x08, 0x00, 0x00, 0x0B},                   // memory.init — sets sawDataRef
+		{0xFC, 0x87, 0x80, 0x80, 0x80, 0x80, 0x00, 0x0B}, // over-wide sub-opcode LEB
+		{0xFD, 0x0C, 0x00, 0x0B},                         // the SIMD region
+		{0xFB, 0x00, 0x00, 0x0B},                         // the GC region
 	} {
 		f.Add(s)
 	}
@@ -247,17 +293,41 @@ func FuzzConstExprProgress(f *testing.F) {
 			return
 		}
 
-		for _, want := range []error{ErrTruncated, ErrPayloadEnd, ErrLEBTooLong, ErrLEBOverflow, ErrMalformedRefType, ErrNonConstantExpr} {
-			if errors.Is(err, want) {
-				// The spoof check, on every input rather than the four in the unit
-				// test: this layer must never claim a verdict it did not compute.
-				for _, spoof := range []string{"illegal opcode", "constant expression required"} {
-					if strings.Contains(err.Error(), spoof) {
-						t.Fatalf("error %q for % x contains %q — the constexpr reader cannot distinguish malformed from invalid, so it must claim neither", err, b, spoof)
-					}
-				}
-				return
+		// Every error the instruction grammar is allowed to produce. The list grew
+		// fivefold with the dissolution, and the reasons are worth the space:
+		//
+		//	reader errors          truncation and the two LEB budget failures
+		//	ErrIllegalOpcode       no arm in the authority, or one that only rejects
+		//	ErrConstExprRequired   a real instruction that is not constant (invalid)
+		//	ErrEndExpected         `end_ s` found a byte that is not END
+		//	ErrMisplacedOpcode     unreachable; listed so its arrival is not a fuzz find
+		//	valtype / reftype      blocktype's last `either` branch; ref.null's heaptype
+		//	ErrMalformedTypeIndex  blocktype's negative-s33 branch
+		//	ErrMalformedCatch      try_table's handler kind byte
+		//	ErrMalformedMemopFlags a memarg whose flags field is >= 0x80
+		for _, want := range []error{
+			ErrTruncated, ErrPayloadEnd, ErrLEBTooLong, ErrLEBOverflow,
+			ErrIllegalOpcode, ErrConstExprRequired, ErrEndExpected, ErrMisplacedOpcode,
+			ErrMalformedValType, ErrMalformedRefType, ErrMalformedTypeIndex,
+			ErrMalformedCatch, ErrMalformedMemopFlags, ErrFeatureDisabled,
+		} {
+			if !errors.Is(err, want) {
+				continue
 			}
+			// The inverted spoof check, on every input rather than the four in the unit
+			// test. An invalid verdict must not claim the module is malformed: the
+			// accept-direction failure §9 G-3 names, which no assert_malformed vector can
+			// see, the modules in question being well-formed.
+			if errors.Is(err, ErrConstExprRequired) && strings.Contains(err.Error(), "malformed") {
+				t.Fatalf("error %q for % x is the invalid verdict wearing a malformed string — "+
+					"the module is well-formed and the engine is calling it broken", err, b)
+			}
+			// And the malformed verdict must not borrow the invalid one's string, which
+			// is the same confusion pointed the other way.
+			if errors.Is(err, ErrIllegalOpcode) && strings.Contains(err.Error(), "constant expression required") {
+				t.Fatalf("error %q for % x claims both verdicts at once", err, b)
+			}
+			return
 		}
 		t.Fatalf("undeclared constexpr error %q for % x", err, b)
 	})

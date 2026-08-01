@@ -388,3 +388,64 @@ second method. A count that nothing can contradict is an estimate wearing a coun
 clothes — the same defect as a derivation from a sample that cannot falsify it (0003's
 LEB ordering). The extractor is that second method, and it disagreed with the ADR on
 its first successful run. Which is the ADR being right about the mechanism it chose.
+
+## Postscript (2026-07-31, #43/#39): what the implementation settled, and one thing it broke
+
+Appended, body preserved. The **decision** is unaffected — every claim below is the
+authority principle working — but two passages above are now false and one condition
+turned out to be unenforced.
+
+**The `ErrNonConstantExpr` passage is orphaned.** The layering-finding paragraph says
+Burroughs "restricts opcodes at decode time and returns `ErrNonConstantExpr`, which is
+why `:112` currently reports `constexpr: opcode not in the constant subset: 0x0a`."
+That sentinel no longer exists. `:112` now passes, and the fix is the shape this ADR
+predicted: the const check moved out of the reader's dispatch. It did not move to the
+validator, though — it moved to a *deferred* position inside the same reader, and the
+distinction is the finding.
+
+**The deferred verdict is the implementation's one genuine surprise.** The ADR
+correctly read `const s = instr_block s; end_ s` as containing no const check, and
+inferred that const-ness belongs to #9's validator. True, and insufficient: reading the
+full grammar means a truncation encountered *after* a non-const instruction is still a
+truncation, and `:112` is exactly that module. An aborting reader reports `constant
+expression required`; the reference reads on and reports `unexpected end of section or
+function`. So `instrCtx` records the first non-const opcode and `decodeConstExpr`
+releases it **only if the grammar completed**. *An invalid verdict that pre-empts a
+malformed one is reporting the wrong layer's answer* — the wrong-layer tell (#36)
+pointed the other way. The ADR's own postscript walked `:112` byte by byte and did not
+notice this, because it was tracing why the *reference* says what it says rather than
+what an implementation must do to agree with it.
+
+**"Gated opcodes stay gated" is a condition, and it is not met — #48.** The bullet above
+states it as settled: "A gate-off engine meeting a GC or SIMD opcode still reports a
+feature-named error, never a spoofed spec string." The second half holds. The first does
+not: the table-driven dispatch consults `Features` nowhere, so with every gate off the
+decoder **accepts** `throw_ref`, `try_table`, `v128.const`, and `ref.eq` in a function
+body. Measured, all six probes returning `<nil>`; filed as #48 with the fix sketch.
+
+Two things worth extracting, because the failure is structural rather than careless:
+
+1. **The bullet reads like a consequence of the table and is actually a requirement on
+   its consumers.** The table's job ends at shape; nothing in it can make a dispatch ask
+   about features. Stating that as a property of the design, in a list of design
+   properties, is how it acquired the appearance of being implemented by the design.
+   *A condition phrased as a consequence has no owner.* This ADR's other conditions
+   became named tests; this one became a sentence.
+2. **Neither board could catch it, and the all-gates-on lane could not by
+   construction.** `TestAllGatesOnLeavesNothingGated` requires `Gated == 0` under full
+   features — a control on gates *hiding* vectors. A gate that never fires trivially
+   passes it. So the third-verdict machinery bounds over-gating and nothing bounded
+   under-gating, which is the asymmetry #48's control closes by reflecting over
+   `Features` and requiring each gate, off, to decline *something*.
+
+**And the method held where it was actually used.** Condition 4's agreement test found
+grave #47 (`immBytes` reading a lane index as a raw byte) and the three probe survivors
+in #43's falsification pass were all found by *printing what the code returns* — the
+same instrument that found `laneidx16` above. One of those three, the blocktype branch
+order, falsified a claim in this ADR's neighbourhood too: `either` backtracks, so branch
+order does not affect the accept set at all. 427 of 768 measured rows differ between the
+two orders and every difference is the error message alone. What the order decides is
+which branch's error survives — load-bearing for exactly one reason, that a gated
+branch's decline must be last or the alternation overwrites it with a spec
+malformed-string. Recorded in `TestBlockTypeAlternationIsTheAuthority`, whose doc keeps
+the wrong reason alongside the right one.

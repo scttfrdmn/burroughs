@@ -74,7 +74,13 @@ import (
 // two places knowing one fact, and immBytes is a third place — if it were generated from
 // the table, the extent comparison would be comparing the table against itself. It maps
 // the authority's vocabulary to this package's readers, so the differential is between
-// *sequences the table chose* and *sequences constExprOps chose*, which are independent.
+// *the sequence the table chose* and *the reader immBytes chose*, which are independent.
+//
+// The dissolution (#43/#39) made that independence load-bearing rather than incidental.
+// The differential used to have `constExprOps`' hand-written readers on one side; those
+// are gone, and the production path now reads immediates *through* the table — so
+// immBytes is the only remaining independent witness to what each immediate's extent is.
+// Deriving it from the table would leave the extent fact with no witness at all.
 //
 // # Enrolled, not merely independent (ruling: Scott, PR #43)
 //
@@ -223,19 +229,6 @@ type reader3 struct {
 // bytesFor is the accessor the extent comparisons use, so enrolling immBytes did not
 // change their shape: a nil reader is still "no flat reader exists".
 func bytesFor(im imm) func(*Decoder, *reader) error { return immBytes[im].read }
-
-// prefixRegions is every region of the generated table, derived from the generator's
-// own output rather than listed here.
-//
-// Keyed by the prefix byte, 0x00 meaning "no prefix". Walked so a region added upstream
-// (a new proposal's prefix) cannot be silently uncovered — the totality test below
-// fails until this map names it, which is a build-time question rather than a hole.
-var prefixRegions = map[byte]map[uint32]opInfo{
-	0x00: opTable,
-	0xfb: opTableFB,
-	0xfc: opTableFC,
-	0xfd: opTableFD,
-}
 
 // refDecodeML is the vendored authority, reached through the licensed door.
 var refDecodeML = filepath.Join("..", "..", testenv.RefDecodeML)
@@ -432,7 +425,7 @@ func TestEveryImmediateInTheTableHasABytesVerdict(t *testing.T) {
 // opcode and stay green. That is the failure this test exists to convert into a red:
 // the *reason* the extent check is total is recorded as its own assertion.
 func TestConstSetUsesNoStructuralImmediate(t *testing.T) {
-	for b, op := range constExprOps {
+	for b := range constOps {
 		info, ok := opTable[uint32(b)]
 		if !ok {
 			continue // membership's problem, asserted separately
@@ -441,7 +434,7 @@ func TestConstSetUsesNoStructuralImmediate(t *testing.T) {
 			if bytesFor(im) == nil {
 				t.Errorf("const-legal %#02x (%s) has structural immediate %q: the extent "+
 					"comparison cannot cover it, so it must not silently be excluded from one",
-					b, op.name, im)
+					b, info.mnemonic, im)
 			}
 		}
 	}
@@ -454,68 +447,80 @@ func TestConstSetUsesNoStructuralImmediate(t *testing.T) {
 // not assertable, because the authority does not record const-legality (decode.ml
 // checks it nowhere; it is a validation fact). Saying so is the point: this control
 // covers one direction and names the other rather than implying both.
+//
+// END dropped out of the set the dissolution shrank: it was in `constExprOps` because
+// that map carried immediate shapes and the terminator needed one, and it needed a
+// documented layering exception here because the authority's `instr` calls a bare 0x0b
+// `misplaced END opcode`. Now that the const set is a *predicate* rather than a
+// dispatch table, END is not in it at all — it is a delimiter, handled by `block` and
+// `expectEnd` — so the exception is gone rather than suppressed. The fact it stood on
+// is still checked, by TestEveryReasonRowIsABlockDelimiter.
 func TestConstSetIsASubsetOfTheAuthority(t *testing.T) {
-	if len(constExprOps) == 0 {
-		t.Fatal("constExprOps is empty: a subset check over an empty set passes vacuously")
+	if len(constOps) == 0 {
+		t.Fatal("constOps is empty: a subset check over an empty set passes vacuously")
 	}
-	for b, op := range constExprOps {
+	for b := range constOps {
 		info, ok := opTable[uint32(b)]
 		if !ok {
-			t.Errorf("const-legal %#02x (%s) does not exist in the reference's table "+
+			t.Errorf("const-legal %#02x does not exist in the reference's table "+
 				"(decode.ml has no arm for it): the decoder accepts a byte the authority does "+
-				"not define, which no assert_malformed vector can catch", b, op.name)
-			continue
-		}
-		// END is the documented exception, and it is a layering fact rather than a
-		// disagreement. decode.ml's `instr` rejects a bare 0x0b as "misplaced END
-		// opcode" because at that position it is one; `instr_block'` stops on it as a
-		// terminator (decode.ml:612). The const production ends with END, so this
-		// reader is the instr_block caller, not the instr caller.
-		if b == opEnd {
-			if info.reason == "" {
-				t.Errorf("expected the authority to record a reason for %#02x; the layering "+
-					"exception below is written against `misplaced END opcode` and this row no "+
-					"longer carries it", b)
-			}
+				"not define, which no assert_malformed vector can catch", b)
 			continue
 		}
 		if info.illegal {
 			t.Errorf("const-legal %#02x (%s) is marked illegal by the authority "+
 				"(decode.ml:%d): the decoder accepts what the reference rejects outright",
-				b, op.name, info.refLine)
+				b, info.mnemonic, info.refLine)
+		}
+		if info.reason != "" {
+			t.Errorf("const-legal %#02x (%s) is a reason arm in the authority (decode.ml:%d): "+
+				"the reference defines it only to reject", b, info.mnemonic, info.refLine)
+		}
+		if info.escape {
+			t.Errorf("const-legal %#02x is a prefix escape (decode.ml:%d), not an instruction",
+				b, info.refLine)
 		}
 	}
 }
 
-// TestConstExprExtentMatchesTheAuthority is #33's property 2 — the duplicated fact.
+// TestConstExprExtentMatchesTheAuthority is #33's property 2 — and the dissolution
+// changed what it proves, so it is worth being exact about what it now covers.
 //
-// Differential rather than declarative: both sides read the *same bytes* and their
-// cursors are compared. A test asserting "0x41 consumes 1 byte" would be a third copy
-// of the fact under test, and three copies of a fact agreeing proves only that someone
-// typed it three times.
+// It *was* a differential between two independent copies of the immediate shapes:
+// `constExprOps`' hand-written readers against the generated table's `imms`. The
+// dissolution deleted one side. The decoder now reads immediates *through* the table,
+// so a differential between the two would compare the table with itself — which is the
+// vacuity failure wearing the previous version's clothes.
+//
+// What is left is genuinely independent and is the half that matters: `immBytes` is a
+// third, hand-written, individually-cited set of readers (see its comment on being an
+// enrolled witness), so this compares **the production path** against **the enrolled
+// witness** over the same bytes. A wrong reader in instr.go's `imm` switch — the new
+// place the fact lives — fails here.
 //
 // The input is sixteen 0x70 bytes, which is deliberate rather than arbitrary. 0x70 has
 // its continuation bit clear, so it is a complete one-byte LEB in every width; it is a
 // valid heaptype (funcref); and it is enough bytes for the widest fixed-size read
-// (f64's eight, v128's sixteen). One input that every const-legal reader accepts is
-// what lets the comparison be over consumed extent rather than over error behaviour.
+// (f64's eight, v128's sixteen). One input every const-legal reader accepts is what
+// lets the comparison be over consumed extent rather than over error behaviour.
 func TestConstExprExtentMatchesTheAuthority(t *testing.T) {
 	const input = "\x70\x70\x70\x70\x70\x70\x70\x70\x70\x70\x70\x70\x70\x70\x70\x70"
 
-	if len(constExprOps) == 0 {
-		t.Fatal("constExprOps is empty: an extent comparison over no opcodes compares nothing")
+	if len(constOps) == 0 {
+		t.Fatal("constOps is empty: an extent comparison over no opcodes compares nothing")
 	}
 	d := &Decoder{}
+	c := &instrCtx{d: d, nonConst: -1}
 	checked := 0
-	for b, op := range constExprOps {
+	for b := range constOps {
 		info, ok := opTable[uint32(b)]
 		if !ok {
 			continue // membership's problem
 		}
 
 		mine := &reader{b: []byte(input)}
-		if err := op.imm(d, mine); err != nil {
-			t.Errorf("%#02x (%s): this package's reader failed on the shared input: %v", b, op.name, err)
+		if err := c.imms(mine, info.imms); err != nil {
+			t.Errorf("%#02x (%s): the production reader failed on the shared input: %v", b, info.mnemonic, err)
 			continue
 		}
 
@@ -524,100 +529,609 @@ func TestConstExprExtentMatchesTheAuthority(t *testing.T) {
 			read := bytesFor(im)
 			if read == nil {
 				t.Fatalf("%#02x (%s): structural immediate %q reached the extent comparison; "+
-					"TestConstSetUsesNoStructuralImmediate should have caught this first", b, op.name, im)
+					"TestConstSetUsesNoStructuralImmediate should have caught this first", b, info.mnemonic, im)
 			}
 			if err := read(d, theirs); err != nil {
-				t.Errorf("%#02x (%s): the authority's shape %v failed on the shared input at %q: %v",
-					b, op.name, info.imms, im, err)
+				t.Errorf("%#02x (%s): the enrolled witness's shape %v failed on the shared input at %q: %v",
+					b, info.mnemonic, info.imms, im, err)
 				break
 			}
 		}
 
 		if mine.off != theirs.off {
-			t.Errorf("%#02x (%s): extent disagreement — this package consumed %d bytes, "+
-				"the authority's shape %v (decode.ml:%d) consumed %d\n\t"+
+			t.Errorf("%#02x (%s): extent disagreement — the production reader consumed %d bytes, "+
+				"the enrolled witness for %v (decode.ml:%d) consumed %d\n\t"+
 				"a wrong extent does not fail loudly: it shifts every subsequent byte, and the "+
 				"error surfaces somewhere else entirely (#33, property 2)",
-				b, op.name, mine.off, info.imms, info.refLine, theirs.off)
+				b, info.mnemonic, mine.off, info.imms, info.refLine, theirs.off)
 		}
 		checked++
 	}
-	if checked != len(constExprOps) {
+	if checked != len(constOps) {
 		t.Errorf("compared %d of %d const-legal opcodes: an extent check that quietly skips "+
-			"is a coverage claim it cannot support", checked, len(constExprOps))
+			"is a coverage claim it cannot support", checked, len(constOps))
 	}
 	t.Logf("%d const-legal opcodes agree on immediate extent", checked)
 }
 
-// TestEveryNonConstByteIsRejected is #33's property 3, the decoder half, walked over
-// the whole single-byte space.
+// TestEveryImmediateHasAProductionReader is the totality control on the new place the
+// immediate fact lives.
 //
-// Exhaustive by construction rather than by a list: all 256 bytes, partitioned by what
-// the *authority* says about each, so the classification decodeConstExpr's comment says
-// it cannot currently make is at least pinned as a measured partition. When the const
-// check moves to the validator, this partition is the work list — the `present` bucket
-// is exactly the set that should report "constant expression required" from a layer
-// above, and the `absent`/`illegal` buckets are the ones that are genuinely malformed.
-func TestEveryNonConstByteIsRejected(t *testing.T) {
+// The dissolution moved immediate *reading* into instr.go's `imm` switch, whose default
+// arm is an error rather than a skip — but a default nobody reaches proves nothing, and
+// a switch missing an arm is only loud if something asks. This asks, over every
+// immediate in the vocabulary rather than every immediate today's const set reaches:
+// that is the same widening #33 forced on the rest of this file (*scope controls to the
+// space*), and it is the control the old `constExprOps` era could not have, because
+// eight opcodes never mentioned sixteen immediates.
+//
+// It asserts *dispatch and progress*, not extent — extent is the differential above.
+//
+// Two inputs, because no single one is benign for the whole vocabulary and pretending
+// otherwise is how a totality check becomes a coverage claim it cannot support. All-0x70
+// is a valid valtype/heaptype and a complete one-byte LEB; all-0x00 is what the four
+// `vec` immediates need, since 0x70 as a vec *length* asks for 112 elements. Each
+// immediate must succeed on at least one — which is a real claim (every immediate has
+// *some* legal encoding) rather than a hedge, and it fails loudly if a reader rejects
+// both.
+//
+// The first draft used one all-0x70 input and reported the three vec immediates as
+// failures. The finding was the test's, not the decoder's — but it is the reason this
+// comment names its inputs' properties instead of calling them "benign bytes".
+func TestEveryImmediateHasAProductionReader(t *testing.T) {
+	// Long enough for immLane16's worst case (32 bytes) with room to spare.
+	inputs := []string{strings.Repeat("\x70", 64), strings.Repeat("\x00", 64)}
+
+	vocab := map[imm]bool{}
+	for _, region := range prefixRegions {
+		for _, info := range region {
+			for _, im := range info.imms {
+				vocab[im] = true
+			}
+		}
+	}
+	if len(vocab) == 0 {
+		t.Fatal("no immediates found in the generated table: a totality check over an empty " +
+			"domain is total over nothing (the vacuity class, #29)")
+	}
+
+	c := &instrCtx{d: &Decoder{}, nonConst: -1}
+	checked := 0
+	for im := range vocab {
+		if im == immBlock {
+			// Structural: routed through instrCtx.structural, which needs a terminator no
+			// flat input supplies. Covered by TestStructuralArmsAreExactlyTheBlockRows and
+			// by the body-grammar tests, and excluded here *by name* rather than by the
+			// reader happening to fail.
+			continue
+		}
+		ok := false
+		var errs []error
+		for _, in := range inputs {
+			r := &reader{b: []byte(in), eof: ErrPayloadEnd}
+			err := c.imm(r, im)
+			if errors.Is(err, errNoImmReader) {
+				// The failure this test exists for, and it is distinguishable from a
+				// reader that ran and rejected precisely because errNoImmReader is its own
+				// sentinel rather than a shared one.
+				t.Errorf("immediate %q has no arm in instrCtx.imm: %v\n\t"+
+					"the generated table names a reader the production path cannot dispatch, so "+
+					"an opcode carrying it is read with the wrong extent", im, err)
+				ok = true // reported; do not double-report below
+				break
+			}
+			if err != nil {
+				errs = append(errs, err)
+				continue
+			}
+			if r.off == 0 {
+				t.Errorf("immediate %q consumed zero bytes: every immediate in the vocabulary "+
+					"has a non-empty encoding, so a zero-width read is an arm that does nothing", im)
+			}
+			ok = true
+			break
+		}
+		if !ok {
+			t.Errorf("immediate %q rejected every input: %v\n\tone of all-0x70 or all-0x00 must "+
+				"be a legal encoding, or this reader accepts nothing at all", im, errs)
+		}
+		checked++
+	}
+	if checked == 0 {
+		t.Error("no immediates checked: see the vacuity note above")
+	}
+	t.Logf("%d immediates in the table, %d dispatched by the production reader", len(vocab), checked)
+}
+
+// TestStructuralArmsAreExactlyTheBlockRows is the tripwire on instr.go's one
+// hand-written departure from the table.
+//
+// Four arms cannot be table-driven — block, loop, if, try_table recurse and then
+// consume an END — and instr.go detects them by the presence of `immBlock` in a row's
+// immediates rather than by an opcode list. This asserts that marker is exactly right:
+// the set of rows carrying immBlock is the set of arms whose reference source contains
+// both `instr_block s` and `end_ s`, derived from decode.ml rather than enumerated.
+//
+// A fifth structural arm upstream then fails *here*, loudly, instead of being read flat
+// — which is the difference between a marker and a guess. Scoped to the space: every
+// region, not just the single-byte table.
+func TestStructuralArmsAreExactlyTheBlockRows(t *testing.T) {
+	src := testenv.RequireSpecRef(t, refDecodeML)
+	lines := strings.Split(src, "\n")
+
+	marked, matched := 0, 0
+	for prefix, region := range prefixRegions {
+		for code, info := range region {
+			hasBlock := false
+			for _, im := range info.imms {
+				if im == immBlock {
+					hasBlock = true
+				}
+			}
+			if hasBlock {
+				marked++
+			}
+			// The arm's source text, from its cited line to the next arm head. The
+			// citation is the table's own refLine, which TestImmBytesCitationsResolve's
+			// sibling mechanism keeps honest for the immediates.
+			if info.refLine < 1 || info.refLine > len(lines) {
+				t.Errorf("%#02x %#x: refLine %d does not resolve in a %d-line file",
+					prefix, code, info.refLine, len(lines))
+				continue
+			}
+			arm := armText(lines, info.refLine-1)
+			// An arm that recurses *and* terminates is structural. `instr_block` alone
+			// is not enough and neither is `end_` alone — it is the pair that makes the
+			// shape unreadable from a flat immediate list.
+			isStructural := strings.Contains(arm, "instr_block s") && strings.Contains(arm, "end_ s")
+			if isStructural {
+				matched++
+			}
+			if isStructural != hasBlock {
+				t.Errorf("%#02x %#x (%s, decode.ml:%d): the authority's arm is structural=%v "+
+					"but the table's immBlock marker says %v\n\tarm: %s\n\t"+
+					"instr.go keys its hand-written recursion off immBlock, so a disagreement "+
+					"here means an arm is read with the wrong shape",
+					prefix, code, info.mnemonic, info.refLine, isStructural, hasBlock, arm)
+			}
+		}
+	}
+	// Vacuity, both halves: a comparison that found no structural arms at all would
+	// agree perfectly with a table that marked none (#29, and the empty-set law).
+	if marked == 0 || matched == 0 {
+		t.Errorf("found %d immBlock rows and %d structural arms in the authority; both must be "+
+			">0 or this agreement is between two empty sets", marked, matched)
+	}
+	t.Logf("%d structural arms, agreed between the table's immBlock marker and decode.ml", marked)
+}
+
+// armText returns the reference arm beginning at lines[i], joined to the next arm head.
+//
+// A multi-line RHS is the norm for exactly the arms this file cares about, so reading
+// one line would find `instr_block` in none of them.
+func armText(lines []string, i int) string {
+	var b strings.Builder
+	b.WriteString(strings.TrimSpace(lines[i]))
+	for j := i + 1; j < len(lines); j++ {
+		t := strings.TrimSpace(lines[j])
+		if t == "" || strings.HasPrefix(t, "| ") || strings.HasPrefix(t, ")") {
+			break
+		}
+		b.WriteString(" ")
+		b.WriteString(t)
+	}
+	return b.String()
+}
+
+// TestEveryReasonRowIsABlockDelimiter is the tripwire ErrMisplacedOpcode's doc names.
+//
+// The two `error s pos "..."` arms at bdd7164 are 0x05 and 0x0b — precisely the two
+// bytes `instr_block'` stops on without consuming (decode.ml:969) — so neither ever
+// reaches the dispatch, and instr.go's reason branch is unreachable. That is a
+// declared-and-tracked deferral rather than a silent one (the ErrTrailingData ruling),
+// and this is what keeps the declaration true: a third reason arm upstream, on a byte
+// that is *not* a delimiter, would be genuinely reachable and would need a real
+// verdict rather than the placeholder.
+//
+// Derived from the table rather than asserted about 0x05 and 0x0b, so the control grows
+// with the thing controlled.
+func TestEveryReasonRowIsABlockDelimiter(t *testing.T) {
+	delimiters := map[uint32]bool{opElse: true, opEnd: true}
+	found := 0
+	for prefix, region := range prefixRegions {
+		for code, info := range region {
+			if info.reason == "" {
+				continue
+			}
+			found++
+			if prefix != 0x00 || !delimiters[code] {
+				t.Errorf("%#02x %#x (decode.ml:%d) reports %q and is not a block delimiter\n\t"+
+					"instr.go's reason branch is declared unreachable on the grounds that every "+
+					"such arm is a byte `block` stops on; this one is reachable and needs a real "+
+					"verdict, not ErrMisplacedOpcode",
+					prefix, code, info.refLine, info.reason)
+			}
+		}
+	}
+	// Vacuity: zero reason rows would make the claim above true by asking nothing, and
+	// would itself be a sign the extractor stopped recognising the arms.
+	if found != 2 {
+		t.Errorf("found %d reason rows, want 2 (0x05 misplaced ELSE, 0x0b misplaced END at "+
+			"bdd7164): a change here is a real change in the authority, not a nit", found)
+	}
+}
+
+// TestEveryNonConstByteGetsTheRightVerdict is #33's property 3, and it is the
+// dissolution's measure of done.
+//
+// The previous version of this test asserted every one of the 248 non-const bytes
+// produced `ErrNonConstantExpr` — one error for four different situations — and pinned
+// the partition as a *comment on future work*: `present` was the bucket that should
+// report `constant expression required` from a layer above, `absent`+`illegal` the
+// genuinely malformed ones, `escape` the ones needing a sub-table walk.
+//
+// That work is this change, so the partition stops being a promise and becomes the
+// assertion. The counts are unchanged and still stamped — they are a claim about the
+// authority at the pinned revision — but each bucket now asserts its own *verdict*,
+// which is what makes this a partition check rather than `errors.Is` 248 times (#34:
+// when a partition's members share an error value, errors.Is is not a partition check).
+//
+// The two reason rows are not in any bucket, and that is the fifth verdict the previous
+// count folded into `present`: 0x05 and 0x0b are delimiters, so `decodeConstExpr`
+// *accepts* a bare one — as an empty expression — rather than rejecting it. See
+// TestEveryReasonRowIsABlockDelimiter.
+func TestEveryNonConstByteGetsTheRightVerdict(t *testing.T) {
 	d := &Decoder{}
-	var absent, escape, illegal, present int
+	c := &instrCtx{d: d, nonConst: -1}
+	var absent, escape, illegal, present, delimiter, released int
 	for b := range 256 {
-		if _, isConst := constExprOps[byte(b)]; isConst {
+		if constOps[byte(b)] {
 			continue
 		}
 
-		// A one-byte image holding just this opcode. Rejection must come from the
-		// opcode itself, so the input carries nothing that could truncate first.
+		// A one-byte image holding just this opcode, then nothing. The verdict must come
+		// from the opcode itself — but note that a real instruction *with* immediates
+		// runs out of bytes, so the expected error depends on the bucket and the test
+		// says which rather than accepting any error.
 		r := &reader{b: []byte{byte(b)}, eof: ErrPayloadEnd}
 		err := d.decodeConstExpr(r)
-		if err == nil {
-			t.Errorf("%#02x is not const-legal but decodeConstExpr accepted it", b)
-			continue
-		}
-		if !errors.Is(err, ErrNonConstantExpr) {
-			t.Errorf("%#02x: want %v, got %v", b, ErrNonConstantExpr, err)
-			continue
-		}
 
 		info, ok := opTable[uint32(b)]
 		switch {
-		case !ok:
-			absent++
+		case !ok, ok && info.illegal:
+			// Genuinely malformed: no arm at all, or an arm that exists to reject.
+			// Rendered as the reference renders it, lowercase two-digit hex.
+			if !errors.Is(err, ErrIllegalOpcode) {
+				t.Errorf("%#02x: want ErrIllegalOpcode, got %v", b, err)
+			}
+			if want := "illegal opcode " + hex2(byte(b)); err != nil && !strings.Contains(err.Error(), want) {
+				t.Errorf("%#02x: error %q does not contain %q — `string_of_byte` is %%02x "+
+					"(decode.ml:35) and binary.wast:1218 puts the byte inside the expected "+
+					"string, so the rendering is oracle-covered (#38)", b, err, want)
+			}
+			if ok {
+				illegal++
+			} else {
+				absent++
+			}
+
+		case info.reason != "":
+			// A delimiter: `block` stops without consuming and `expectEnd` judges it.
+			// 0x0b is a well-formed empty expression; 0x05 is not END, so it is
+			// `END opcode expected`.
+			switch b {
+			case opEnd:
+				if err != nil {
+					t.Errorf("%#02x: a bare END is an empty constant expression, got %v", b, err)
+				}
+			default:
+				if !errors.Is(err, ErrEndExpected) {
+					t.Errorf("%#02x: `block` stops on it without consuming, so `end_` judges it; "+
+						"want ErrEndExpected, got %v", b, err)
+				}
+			}
+			delimiter++
+
 		case info.escape:
+			// The prefix reads a u32 sub-opcode and the one-byte image has none, so the
+			// honest verdict is the truncation, not a guess at the sub-opcode. The
+			// sub-table walk itself is TestPrefixedOpcodeVerdicts'.
+			if !errors.Is(err, ErrPayloadEnd) {
+				t.Errorf("%#02x is a prefix escape with no sub-opcode in the image; want "+
+					"ErrPayloadEnd, got %v", b, err)
+			}
 			escape++
-		case info.illegal:
-			illegal++
+
 		default:
+			// A real instruction that is simply not constant — and the *interesting*
+			// bucket, because the const verdict is deferred. On this one-byte image the
+			// grammar never completes: `block` peeks past the opcode, finds nothing, and
+			// `end_` reports the truncation. So the answer here is ErrPayloadEnd for every
+			// member, and that is not an evasion — it is binary.wast:112's rule, asserted
+			// on 185 bytes instead of one. A reader that aborted at the non-const
+			// instruction would report ErrConstExprRequired here and fail this half.
+			if !errors.Is(err, ErrPayloadEnd) {
+				t.Errorf("%#02x (%s): a bare non-const opcode leaves the expression unterminated, "+
+					"so the malformed verdict wins; want ErrPayloadEnd, got %v\n\t"+
+					"an invalid verdict that pre-empts a malformed one is reporting the wrong "+
+					"layer's answer (binary.wast:112)", b, info.mnemonic, err)
+			}
+
+			// The other half: terminate the expression properly and the deferred verdict
+			// is released. Without this, the assertion above is satisfied by a reader that
+			// *never* reports non-constness at all.
+			if img, ok := wellFormedExpr(c, byte(b), info); ok {
+				err := d.decodeConstExpr(&reader{b: img, eof: ErrPayloadEnd})
+				if !errors.Is(err, ErrConstExprRequired) {
+					t.Errorf("%#02x (%s): % x is a well-formed expression containing a non-const "+
+						"instruction; want ErrConstExprRequired, got %v", b, info.mnemonic, img, err)
+				}
+				if err != nil && strings.Contains(err.Error(), "malformed") {
+					t.Errorf("%#02x (%s): error %q says malformed for a module the spec calls "+
+						"well-formed — the accept-direction failure §9 G-3 names", b, info.mnemonic, err)
+				}
+				released++
+			}
 			present++
 		}
 	}
 
+	// Vacuity on the released half specifically. `wellFormedExpr` declines when neither
+	// fill byte makes a legal immediate, and a decline is invisible: if it declined for
+	// every opcode, the loop above would assert only the truncation half and this test
+	// would certify a reader that never releases the deferred verdict at all. The floor
+	// is a fraction of the bucket rather than a count, so it survives the table growing.
+	if released*2 < present {
+		t.Errorf("released the deferred verdict for only %d of %d non-const instructions: "+
+			"wellFormedExpr declined too often for this to be a claim about the bucket", released, present)
+	}
+	t.Logf("%d non-const instructions, %d with a well-formed expression built for them", present, released)
+
 	// Stamped, not deduced. The numbers are a claim about the authority at the pinned
-	// revision, and they are what makes this a partition check rather than a loop that
-	// asserts "some error happened" 248 times — the #34 lesson: when a partition's
-	// members share an error value, errors.Is is not a partition check.
-	// Measured against the table at the pinned revision, then written down — the
-	// figures here were first *reasoned* (40 illegal, 170 present) and both were wrong,
+	// revision — first *reasoned* as 40 illegal and 170 present, and both were wrong,
 	// 40 being the illegal count across all four regions rather than the single-byte
 	// one. Printed, not deduced.
+	//
+	// `present` moved from 186 to 185 and `delimiter` is new: the previous partition
+	// counted 0x05 in `present` (the loop skipped only the eight members of the old
+	// const set, which included 0x0b but not 0x05) and had no bucket for a byte that
+	// is neither instruction nor rejection. Same 256 bytes, one more honest column.
 	const (
-		wantAbsent  = 38  // no arm in decode.ml: the catch-all's territory
-		wantEscape  = 3   // 0xfb, 0xfc, 0xfd: dispatch to a sub-table
-		wantIllegal = 21  // an arm that explicitly rejects
-		wantPresent = 186 // a real instruction that is simply not constant
+		wantAbsent    = 38  // no arm in decode.ml: the catch-all's territory
+		wantEscape    = 3   // 0xfb, 0xfc, 0xfd: dispatch to a sub-table
+		wantIllegal   = 21  // an arm that explicitly rejects
+		wantPresent   = 185 // a real instruction that is simply not constant
+		wantDelimiter = 2   // 0x05, 0x0b: `block` stops on them
 	)
-	if absent != wantAbsent || escape != wantEscape || illegal != wantIllegal || present != wantPresent {
-		t.Errorf("rejection partition changed: absent=%d escape=%d illegal=%d present=%d, "+
-			"want %d/%d/%d/%d (sum %d must be 256 minus %d const-legal)\n\t"+
-			"these buckets are the work list for moving const-legality to the validator: "+
-			"`present` is the set that should report `constant expression required` from the "+
-			"layer above, `escape` needs the sub-table walked, and `absent`+`illegal` are the "+
-			"genuinely malformed ones",
-			absent, escape, illegal, present, wantAbsent, wantEscape, wantIllegal, wantPresent,
-			absent+escape+illegal+present, len(constExprOps))
+	if absent != wantAbsent || escape != wantEscape || illegal != wantIllegal ||
+		present != wantPresent || delimiter != wantDelimiter {
+		t.Errorf("verdict partition changed: absent=%d escape=%d illegal=%d present=%d "+
+			"delimiter=%d, want %d/%d/%d/%d/%d",
+			absent, escape, illegal, present, delimiter,
+			wantAbsent, wantEscape, wantIllegal, wantPresent, wantDelimiter)
 	}
-	if got := absent + escape + illegal + present + len(constExprOps); got != 256 {
+	if got := absent + escape + illegal + present + delimiter + len(constOps); got != 256 {
 		t.Errorf("partition does not cover the space: %d of 256 bytes classified", got)
+	}
+}
+
+// wellFormedExpr builds `<opcode> <immediates> 0x0B` for one opcode, or declines.
+//
+// The immediates are produced by *measuring* the production reader against a fill of
+// identical bytes and keeping exactly what it consumed — not by knowing each
+// immediate's width. That direction matters: a helper that encoded widths itself would
+// be a fourth copy of the fact this whole file exists to keep from being duplicated, and
+// it would agree with a wrong reader by construction. Measuring instead means this
+// helper is correct whenever the reader is self-consistent, and the reader's correctness
+// is the differential's job, not this one's.
+//
+// It declines — rather than guessing — when neither fill byte yields a complete read
+// (structural arms, and any immediate for which 0x70 and 0x00 are both illegal). The
+// decline is counted by the caller, because a helper that silently declines everywhere
+// would empty the assertion it feeds.
+func wellFormedExpr(c *instrCtx, op byte, info opInfo) ([]byte, bool) {
+	for _, fill := range []byte{0x00, 0x70} {
+		buf := make([]byte, 64)
+		for i := range buf {
+			buf[i] = fill
+		}
+		r := &reader{b: buf, eof: ErrPayloadEnd}
+		if err := c.imms(r, info.imms); err != nil {
+			continue
+		}
+		img := append([]byte{op}, buf[:r.off]...)
+		return append(img, opEnd), true
+	}
+	return nil, false
+}
+
+// hex2 renders a byte as the reference's `string_of_byte` does: `Printf.sprintf "%02x"`
+// (decode.ml:35). Written out rather than reusing the production formatter, because a
+// test that formats with the code under test cannot catch the code under test.
+func hex2(b byte) string {
+	const digits = "0123456789abcdef"
+	return string([]byte{digits[b>>4], digits[b&0x0F]})
+}
+
+// TestPrefixedOpcodeVerdicts walks the sub-tables, which the single-byte sweep above
+// reaches only as far as the escape.
+//
+// Three regions, three renderings, and they do **not** agree: 0xfb and 0xfc fall
+// through to `illegal2` (prefix *and* sub-opcode), 0xfd to plain `illegal` (sub-opcode
+// alone). No vector in the phase-1 corpus reaches any of it — the corpus contains no
+// `\fb` or `\fd` byte at all — so this is print-check territory, which is precisely
+// where the invented-bits class (grave #36) hides.
+//
+// Scoped to the space: every region in prefixRegions, and for each one both a known
+// arm and a sub-opcode above its maximum.
+func TestPrefixedOpcodeVerdicts(t *testing.T) {
+	d := &Decoder{}
+	for prefix, region := range prefixRegions {
+		if prefix == 0x00 {
+			continue
+		}
+		// A sub-opcode past every arm in this region: unknown, so the fallthrough.
+		var highest uint32
+		for code := range region {
+			highest = maxU32(highest, code)
+		}
+		unknown := highest + 1
+
+		var img []byte
+		img = append(img, prefix)
+		img = append(img, ulebBytes(unknown)...)
+		r := &reader{b: img, eof: ErrPayloadEnd}
+		err := d.decodeConstExpr(r)
+		if !errors.Is(err, ErrIllegalOpcode) {
+			t.Errorf("%#02x %#x (unknown sub-opcode): want ErrIllegalOpcode, got %v", prefix, unknown, err)
+			continue
+		}
+		want := "illegal opcode " + hex2(prefix) + " " + hex2x(unknown)
+		if !twoFieldIllegal[prefix] {
+			want = "illegal opcode " + hex2x(unknown)
+		}
+		if got := err.Error(); !strings.Contains(got, want) {
+			t.Errorf("%#02x %#x: error %q does not contain %q\n\t"+
+				"0xfb/0xfc fall through to illegal2 (prefix and sub-opcode, decode.ml:655,681) "+
+				"and 0xfd to plain illegal (sub-opcode alone, :961) — the three regions disagree "+
+				"and no suite vector covers any of them", prefix, unknown, got, want)
+		}
+	}
+}
+
+// TestIllegalOpcodeRenderings is the print-check, and it is written against **literal
+// strings** on purpose.
+//
+// Every other rendering assertion in this file builds its expectation with hex2/hex2x,
+// which are this package's reimplementations of the reference's `string_of_byte` and
+// `string_of_multi`. Those helpers are independent of the production formatter, which is
+// what makes those assertions worth making — but they are not independent of *each
+// other's idea of hex*, and a shared misunderstanding (uppercase, a `0x` prefix, a wrong
+// minimum width) would be invisible to all of them at once.
+//
+// So these five expectations are typed out. One of them, `illegal opcode ff`, is
+// verbatim from binary.wast:1218 and therefore oracle-covered; the other four are the
+// shapes the oracle never sees, which per #38 is where a print-check earns the most. The
+// t.Log is not decoration: grave #36 was found by printing what the formatter returned,
+// not by reading the expression, and the renderings that no vector reaches deserve to be
+// visible in the log for the same reason.
+func TestIllegalOpcodeRenderings(t *testing.T) {
+	for _, tc := range []struct {
+		what string
+		got  error
+		want string
+	}{
+		// cited binary.wast:1218 — `illegal opcode ff`, the byte inside the sentinel.
+		{"the one oracle-covered rendering", illegalOpcode(0xFF), "illegal opcode ff"},
+		// synthetic: the low boundary, where a %02x that lost its zero-padding would
+		// print `illegal opcode 0` and no vector would notice.
+		{"a byte needing zero-padding", illegalOpcode(0x00), "illegal opcode 00"},
+		{"a byte whose hex has a letter", illegalOpcode(0x0F), "illegal opcode 0f"},
+		// synthetic: illegal2's two fields, which no phase-1 vector reaches — the corpus
+		// contains no \fb byte at all.
+		{"illegal2, two fields (0xfb region)", illegalPrefixed(0xFB, 0x20), "illegal opcode fb 20"},
+		// synthetic: 0xfd falls through to plain illegal, printing the sub-opcode alone.
+		{"plain illegal from a prefix region (0xfd)", illegalPrefixed(0xFD, 0x9A), "illegal opcode 9a"},
+	} {
+		got := tc.got.Error()
+		t.Logf("%-42s %q", tc.what, got)
+		if got != tc.want {
+			t.Errorf("%s: rendered %q, want %q\n\t"+
+				"the reference's formatters are `%%02x` for a byte (decode.ml:35) and `%%02lx` "+
+				"for a multi-byte opcode (:36) — lowercase, no prefix, minimum two digits",
+				tc.what, got, tc.want)
+		}
+	}
+}
+
+// TestPrefixIllegalRenderingMatchesTheAuthority derives twoFieldIllegal from decode.ml
+// instead of trusting the map.
+//
+// twoFieldIllegal is hand-written — it has to be, because the extractor deliberately
+// skips fallthrough arms (they bind a variable, not an opcode), so the fact is not in
+// the generated table. That makes it an enrolled witness, and this is the enrolment: the
+// authority's own text decides, and the map is checked against it over every region in
+// prefixRegions rather than over the entries the map happens to have.
+func TestPrefixIllegalRenderingMatchesTheAuthority(t *testing.T) {
+	src := testenv.RequireSpecRef(t, refDecodeML)
+	lines := strings.Split(src, "\n")
+
+	checked := 0
+	for prefix, region := range prefixRegions {
+		if prefix == 0x00 {
+			continue
+		}
+		// The region's extent: from its escape row's line to the last arm's, then on to
+		// the fallthrough that closes the nested match.
+		info, ok := opTable[uint32(prefix)]
+		if !ok || !info.escape {
+			t.Errorf("%#02x has a region but no escape row in the single-byte table", prefix)
+			continue
+		}
+		var last int
+		for _, sub := range region {
+			last = max(last, sub.refLine)
+		}
+		want, found := false, false
+		for i := last; i < len(lines) && i < last+40; i++ {
+			l := strings.TrimSpace(lines[i])
+			if !strings.HasPrefix(l, "| n ->") && !strings.HasPrefix(l, "| b ->") {
+				continue
+			}
+			found = true
+			want = strings.Contains(l, "illegal2")
+			break
+		}
+		if !found {
+			t.Errorf("%#02x: no fallthrough arm found in decode.ml after line %d; the region's "+
+				"rejection shape cannot be derived, so twoFieldIllegal[%#02x] is unchecked",
+				prefix, last, prefix)
+			continue
+		}
+		if got := twoFieldIllegal[prefix]; got != want {
+			t.Errorf("%#02x: twoFieldIllegal says %v, decode.ml's fallthrough after line %d says "+
+				"%v (illegal2 prints prefix and sub-opcode; illegal prints the sub-opcode alone)",
+				prefix, got, last, want)
+		}
+		checked++
+	}
+	if checked == 0 {
+		t.Error("no prefix regions checked: a derivation over no regions derives nothing")
+	}
+	t.Logf("%d prefix regions' rejection renderings agree with decode.ml", checked)
+}
+
+func maxU32(a, b uint32) uint32 { return max(a, b) }
+
+// hex2x renders a u32 as the reference's `string_of_multi` does: `"%02lx"`
+// (decode.ml:36) — at least two digits, more when the value needs them.
+func hex2x(v uint32) string {
+	const digits = "0123456789abcdef"
+	var out []byte
+	for v > 0 {
+		out = append([]byte{digits[v&0x0F]}, out...)
+		v >>= 4
+	}
+	for len(out) < 2 {
+		out = append([]byte{'0'}, out...)
+	}
+	return string(out)
+}
+
+// ulebBytes encodes v as an unsigned LEB128. A test helper, kept minimal: the readers
+// are what is under test, so the writer must not share code with them.
+func ulebBytes(v uint32) []byte {
+	var out []byte
+	for {
+		b := byte(v & 0x7F)
+		v >>= 7
+		if v != 0 {
+			b |= 0x80
+		}
+		out = append(out, b)
+		if v == 0 {
+			return out
+		}
 	}
 }
 
@@ -692,14 +1206,15 @@ func TestAgreementHoldsUnderEveryFeatureConfiguration(t *testing.T) {
 			Memory64:          mask&8 != 0,
 		}
 		d := &Decoder{Features: f}
-		for b, op := range constExprOps {
+		c := &instrCtx{d: d, nonConst: -1}
+		for b := range constOps {
 			info, ok := opTable[uint32(b)]
 			if !ok {
 				continue
 			}
 			mine := &reader{b: []byte(input)}
-			if err := op.imm(d, mine); err != nil {
-				t.Errorf("%+v: %#02x (%s) failed: %v", f, b, op.name, err)
+			if err := c.imms(mine, info.imms); err != nil {
+				t.Errorf("%+v: %#02x (%s) failed: %v", f, b, info.mnemonic, err)
 				continue
 			}
 			theirs := &reader{b: []byte(input)}
@@ -714,7 +1229,7 @@ func TestAgreementHoldsUnderEveryFeatureConfiguration(t *testing.T) {
 			}
 			if !bad && mine.off != theirs.off {
 				t.Errorf("%+v: %#02x (%s) extent disagreement: %d vs %d",
-					f, b, op.name, mine.off, theirs.off)
+					f, b, info.mnemonic, mine.off, theirs.off)
 			}
 		}
 		configs++

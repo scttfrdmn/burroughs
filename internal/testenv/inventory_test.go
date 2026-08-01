@@ -5,6 +5,7 @@ import (
 	"go/parser"
 	"go/token"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -137,4 +138,147 @@ func TestEverySkipSiteIsLicensed(t *testing.T) {
 	if !t.Failed() {
 		t.Logf("%d skip sites, all licensed", len(found))
 	}
+}
+
+// gatedFuzzTargets is where each fuzz target is *run under a budget* — the Makefile's
+// `fuzz` recipe and the CI `fuzz-smoke` job — with the reason for its budget size.
+//
+// The sibling of licensed above, and it exists because the same defect was found in the
+// same tree: a fuzz target is only equipment if something runs it. FuzzConstExprProgress
+// was written with the instruction grammar (#43/#39), landed with eleven seeds and a
+// fourteen-sentinel allowed-error list, and was gated in **neither** the Makefile nor
+// either workflow. It ran only under `go test` as an ordinary seed-corpus test, so its
+// exploration half — the part that finds what no seed reaches — had never once executed.
+//
+// Three enumerations of the same set (Makefile, ci.yml, nightly.yml) and no control over
+// any of them, which is *derive the domain, never enumerate it* broken three times over.
+// This test derives the domain from the tree and requires each member to be gated
+// somewhere, so writing a target without budgeting it is a build failure rather than a
+// target that quietly never runs.
+//
+// The values are not budgets — a size lives in the Makefile and the workflow, and copying
+// it here would be a fourth place to drift. They are *reasons*, which is the part a
+// reviewer needs and the part no recipe can hold.
+var gatedFuzzTargets = map[string]string{
+	"FuzzDecodeModule":      "the whole-module entry point; the largest budget (3M in CI) because every other target is a subset of its surface",
+	"FuzzULEB":              "the LEB readers, where the malformed taxonomy is width-parameterized; 2:1 smaller than the module target",
+	"FuzzWastLexer":         "the harness's own parser — a lexer bug is a corpus bug, so it is budgeted like a decoder",
+	"FuzzParseNodeProgress": "the zero-progress property (grave #18), which needs mutation rather than seeds to falsify",
+	"FuzzConstExprProgress": "the instruction grammar's progress property, now over a recursive grammar (block -> instr -> structural -> block); the recursion is what makes a hang plausible rather than theoretical",
+}
+
+// TestEveryFuzzTargetIsGated reads the tree for `func FuzzX(f *testing.F)` and requires
+// every one to appear in gatedFuzzTargets, in the Makefile's fuzz recipe, and in the CI
+// smoke job.
+//
+// Both directions, as with licensed: a stale entry claims coverage that has moved. And the
+// three run-sites are checked *separately* rather than as one "is it gated anywhere",
+// because they answer different questions — `make fuzz` is the local mirror, `fuzz-smoke`
+// is the per-PR gate, and a target in one but not the other is exactly the surprise the
+// Makefile exists to prevent (decision 0005).
+func TestEveryFuzzTargetIsGated(t *testing.T) {
+	root := "../.."
+
+	found := map[string]string{} // target -> position
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			switch d.Name() {
+			case "testdata", "bin", ".git", "tools":
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		fset := token.NewFileSet()
+		f, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			return err
+		}
+		for _, decl := range f.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Recv != nil || !strings.HasPrefix(fn.Name.Name, "Fuzz") {
+				continue
+			}
+			// Signature check rather than name check: `func FuzzyMatch(s string)` is not
+			// a fuzz target, and Go's own rule is the parameter type. Matching on the
+			// name alone would put a helper in the inventory and send a reader looking
+			// for a budget that should not exist.
+			if fn.Type.Params == nil || len(fn.Type.Params.List) != 1 {
+				continue
+			}
+			star, ok := fn.Type.Params.List[0].Type.(*ast.StarExpr)
+			if !ok {
+				continue
+			}
+			sel, ok := star.X.(*ast.SelectorExpr)
+			if !ok || sel.Sel.Name != "F" {
+				continue
+			}
+			found[fn.Name.Name] = fset.Position(fn.Pos()).String()
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk: %v", err)
+	}
+
+	// The vacuity check: an empty walk agrees with an empty inventory, and a moved file
+	// or a changed signature convention produces exactly that. A floor rather than a
+	// non-nil check, because the failure this guards is "found nothing", not "found nil".
+	if len(found) < 4 {
+		t.Fatalf("found only %d fuzz targets in the tree; the walk is not finding them, so every "+
+			"assertion below is comparing two nearly-empty sets and agreeing", len(found))
+	}
+
+	sites := map[string]string{
+		"Makefile":                      readFile(t, filepath.Join(root, "Makefile")),
+		".github/workflows/ci.yml":      readFile(t, filepath.Join(root, ".github/workflows/ci.yml")),
+		".github/workflows/nightly.yml": readFile(t, filepath.Join(root, ".github/workflows/nightly.yml")),
+	}
+
+	for target, pos := range found {
+		if _, ok := gatedFuzzTargets[target]; !ok {
+			t.Errorf("%s has no entry in gatedFuzzTargets (%s)\n\t"+
+				"a fuzz target nothing runs under a budget is not equipment — it is a file. Add it to\n\t"+
+				"the inventory with the reason for its budget size, and to the Makefile and both workflows.",
+				target, pos)
+		}
+		for name, body := range sites {
+			if !strings.Contains(body, target) {
+				t.Errorf("%s is not run in %s (%s)\n\t"+
+					"defined but never budgeted: its exploration half never executes, so it has tested a\n\t"+
+					"corpus rather than a grammar. This is how FuzzConstExprProgress shipped ungated.",
+					target, name, pos)
+			}
+		}
+	}
+
+	for target := range gatedFuzzTargets {
+		if _, ok := found[target]; !ok {
+			t.Errorf("gatedFuzzTargets lists %q, which no longer exists in the tree; remove the entry "+
+				"and its budget lines", target)
+		}
+	}
+
+	if !t.Failed() {
+		t.Logf("%d fuzz targets, all budgeted in the Makefile and both workflows", len(found))
+	}
+}
+
+// readFile is a Fatal-on-error read: a missing Makefile or workflow means the control
+// cannot answer, and answering anyway would be a comparison against an empty string —
+// which every Contains check below would fail loudly rather than silently, but the
+// diagnosis would name the wrong thing.
+func readFile(t *testing.T, path string) string {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v — the control's own input is missing", path, err)
+	}
+	return string(b)
 }

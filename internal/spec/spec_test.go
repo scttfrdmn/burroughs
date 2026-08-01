@@ -110,10 +110,27 @@ func TestBinaryWast(t *testing.T) {
 	}
 	// Regression floor, raised as decoder work lands; never lowered. 49 when the
 	// harness first ran, 84 after section order and cross-section counts (#6), 104
-	// after the section payload grammars (#5).
-	const floor = 104
+	// after the section payload grammars (#5), 114 after the opcode table (#41), and
+	// 127 — the whole file — after the instruction and function-body grammars
+	// (#43/#39, with #22 closing inside).
+	//
+	// At the file's total the floor and the total coincide, so the inequality below can
+	// no longer distinguish "held" from "improved". That is fine for a *floor*, and the
+	// equality is asserted separately rather than left implied: a file that is fully
+	// green has a stronger property than a floor, and stating the weaker one only would
+	// let a vector go missing from the file unnoticed.
+	const floor = 127
 	if r.Pass < floor {
 		t.Errorf("pass count %d fell below floor %d", r.Pass, floor)
+	}
+	if r.Fail != 0 {
+		t.Errorf("binary.wast is fully green at %d/%d and must stay so; %d failing:\n%s",
+			floor, r.Total(), r.Fail, r.Board())
+	}
+	if r.Total() != floor {
+		t.Errorf("binary.wast scored %d vectors, want %d — the floor is the file's total, so a "+
+			"changed count means the corpus moved and the floor is measuring a different file "+
+			"than the one it was set against (#42 pins the suite by SHA)", r.Total(), floor)
 	}
 }
 
@@ -122,9 +139,13 @@ func TestBinaryWast(t *testing.T) {
 // refilling: the floor above catches a net regression, but a bucket can refill
 // while the total holds if another one drains at the same time.
 //
-// Entries are added only when the bucket is actually empty. "data count section
-// required" is deliberately absent — it needs function-body decoding (#22) and
-// is still 2, which is the honest state of #6.
+// Entries are added only when the bucket is actually empty, and *because the grammar
+// answers them* — a bucket emptied by declining to score its vectors is not closed, it
+// is hidden. binary_leb128_64.wast is the live example and has no entry here: its one
+// "integer too large" vector is `gated` under the default lane (memory64 off), so the
+// bucket reads zero on a board that never asked the question. TestGatedVectors and the
+// all-gates-on lane are what own that case; a closed-bucket entry would be the third
+// verdict laundering itself into a green.
 //
 // Note what is *not* here from #5: "unexpected end of section or function" and
 // "section size mismatch" both drained substantially (9 → 6, 8 → 5) without
@@ -142,6 +163,18 @@ func TestClosedBuckets(t *testing.T) {
 			"malformed limits flags",                                // #5, was 7
 			"malformed import kind",                                 // #5, was 6
 			"length out of bounds",                                  // #5, was 1
+
+			// The instruction and function-body grammars (#43/#39), which took the file
+			// to 127/127. Every one of these is a *mechanism* that landed, not a vector
+			// that was argued away, and the counts are the base measured at 9569cb7:
+			"illegal opcode ff",                     // #43, was 1 — the one oracle-covered rendering
+			"illegal opcode",                        // #43, was 1 — binary.wast:345, the elem-segment byte
+			"data count section required",           // #22, was 2 — closed inside #39, four opcodes from free.ml
+			"too many locals",                       // #39, was 2 — the sum, checked at 64 bits
+			"END opcode expected",                   // #39, was 1 — `end_ s` on a byte that is not END
+			"unexpected end of section or function", // #39, was 3 — the deferred const verdict's half
+			"section size mismatch",                 // #39, was 1 — `sized` wraps each *body*
+			"integer too large",                     // #39, was 2 — a locals count's own LEB width
 		},
 		"custom.wast": {
 			"function and code section have inconsistent lengths",
