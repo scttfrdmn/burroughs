@@ -160,6 +160,54 @@ func RequireSpecRef(tb testing.TB, path string) string {
 	return ""
 }
 
+// ProposalDoc is a proposal overview under the vendored reference tree, relative to the
+// repo root. The *citation targets* of the gate mapping (decision 0008): each mapped
+// construct names a line in one of these, and a machine checks that the line resolves.
+func ProposalDoc(rel string) string {
+	return filepath.Join("third_party", "spec", rel)
+}
+
+// MinProposalDocBytes is the floor for a proposal document to count as present.
+//
+// A size rather than existence, for RequireSpecRef's reason: a truncated document
+// satisfies os.Stat and then makes every citation into it unresolvable, which the
+// citation check would report as "the document moved under the citation" — the right
+// alarm with the wrong diagnosis. The smallest document the mapping cites is
+// tail-call/Overview.md at ~6KB; 1000 bytes leaves room for upstream editing without
+// leaving room for a broken fetch.
+const MinProposalDocBytes = 1000
+
+// RequireProposalDoc is the licensed door for tests that read a vendored proposal
+// document.
+//
+// Same policy and same reason as RequireSpecRef, one input over: a citation check that
+// skips when the cited documents are absent reports agreement with files it never read,
+// and *fixtures cite the suite, and the citations are checked* is worth nothing if the
+// checking silently stops happening. Returns the contents so a caller cannot read the
+// file without passing the gate.
+func RequireProposalDoc(tb testing.TB, path string) string {
+	tb.Helper()
+
+	b, err := os.ReadFile(path)
+	if len(b) >= MinProposalDocBytes {
+		return string(b)
+	}
+
+	reason := fmt.Sprintf("proposal documents not vendored: %s is %d bytes, want >=%d (run: make spec-ref)",
+		path, len(b), MinProposalDocBytes)
+	if err != nil {
+		reason = fmt.Sprintf("proposal documents not vendored: %v (run: make spec-ref)", err)
+	}
+
+	if NoSkip() {
+		tb.Fatalf("%s\n\t%s=1 revokes skip licenses: a citation check that skips is a citation nobody verified",
+			reason, NoSkipEnv)
+	} else {
+		tb.Skip(reason)
+	}
+	return ""
+}
+
 func countSuiteFiles(suiteDir string) (int, error) {
 	paths, err := filepath.Glob(filepath.Join(suiteDir, "*.wast"))
 	if err != nil {

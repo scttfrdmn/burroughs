@@ -68,10 +68,23 @@ type Features struct {
 	//
 	// So these comments describe the gates as they *are*, and the missing opcode scope is
 	// tracked rather than described as present.
-	ExceptionHandling bool // tag section (id 13), import/export kind 4. NOT yet its opcodes — #48
-	SIMD              bool // v128 value type, including as a blocktype. NOT yet the 0xfd region — #48
+	// The opcode half of every scope below is now real, and it lives in gatemap.go
+	// rather than here: the mapping is hand-authored testimony with a citation per
+	// entry, and this struct is where the gates are *declared*, not where their scope is
+	// enumerated. Decision 0008.
+	ExceptionHandling bool // tag section (id 13), import/export kind 4; throw, throw_ref, try_table
+	SIMD              bool // v128 value type, including as a blocktype; the 0xfd region
 	Threads           bool // shared limits flags (2, 3)
 	Memory64          bool // 64-bit limits flags (4..7)
+
+	// The four gates #48 found missing. A *tracked* proposal (contract §9 G-2) with no
+	// bool here is worse than a gate that never fires, because the reflection-derived
+	// lanes cannot exercise a gate that is not there to reflect over — the
+	// forgotten-fifth-gate scenario existing in the wild, four times.
+	GC          bool // the 0xfb region; ref.eq, and the function-references five (0008)
+	TailCall    bool // return_call, return_call_indirect
+	RelaxedSIMD bool // the fd 0x100..0x12f window, inside SIMD's region
+	MultiMemory bool // memarg flags bit 6: an explicit memory index on loads and stores
 }
 
 // Decoder holds the configuration one decode runs under. A config struct rather

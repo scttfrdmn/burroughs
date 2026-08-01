@@ -698,6 +698,61 @@ is a formatting pass of its own, not a drive-by inside a decoder PR.*
   alternation overwrites `ErrFeatureDisabled` with `malformed value type` — a gate
   manufacturing malformedness. The control keeps the wrong reason beside the right one.
 
+### Added
+
+- **Phase 1 of the decoder is done.** The byte-string corpus has nothing left to teach it:
+  **764 pass / 0 fail / 0 unsupported / 2 gated** on the default board, **766 / 0 / 0** with
+  every gate on, and `binary.wast` **127/127**. The two gated vectors are
+  `binary_leb128_64.wast:1,16`, honestly parked on memory64 and simultaneously *failed* in
+  the all-gates-on lane until that gate works. No version bump — `v0.1.0` is the full MVP
+  core suite, and the remaining ~250 `.wast` files need the wat parser
+  ([#8](https://github.com/scttfrdmn/burroughs/issues/8)) before that number means anything.
+- **Gates now govern opcodes, not just sections**
+  ([#48](https://github.com/scttfrdmn/burroughs/issues/48), decision 0008). The
+  table-driven instruction dispatch consulted `Features` nowhere, so with every gate off the
+  decoder accepted `throw_ref`, `try_table`, `v128.const`, and `ref.eq` in a function body —
+  the accept-and-ignore half of the gate ruling. A hand-authored proposal→opcode mapping
+  (`internal/binary/gatemap.go`) now covers **318 accepted opcodes** across 11 entries, and a
+  gate-off engine declines them with a feature-named error.
+- **Four gates that did not exist**: `Features.GC`, `TailCall`, `RelaxedSIMD`, and
+  `MultiMemory`. Each is a *tracked* proposal (contract §9 G-2) with constructs in the table
+  and no bool to gate them — the forgotten-fifth-gate scenario existing in the wild, four
+  times over, and invisible to the reflection-derived lanes precisely because a gate that is
+  not there cannot be reflected over. #48 named GC; reading the table's mnemonics against
+  G-2 found the other three.
+- **The inverse gate control**, `TestEveryGateOffDeclinesSomething`, landed in the same
+  change as its subject rather than parked red — *a debt is discharged by a tripwire, never
+  an intention*. `TestAllGatesOnLeavesNothingGated` bounds over-gating; this bounds
+  under-gating, requiring every gate, turned off with all others on, to decline at least one
+  construct. It carries a second obligation: its SIMD probe is a **blocktype**, so it
+  permanently pins `decodeBlockType`'s branch order — move the valtype branch off last and
+  the decline is overwritten with `malformed value type`, and the control goes red. One
+  control, two obligations.
+- The mapping is **cited** per entry to the proposal document that enumerates the opcode
+  (`gc/MVP.md:809`, `tail-call/Overview.md:139`, …) and machine-checked two ways: every
+  opcode it names exists in the table and is not an arm the reference defines in order to
+  *reject*, and every gate governs at least one construct. `RequireProposalDoc` is the third
+  licensed skip door, so a citation check cannot silently stop checking.
+
+### Fixed
+
+- **The gate decline is deferred, not returned on sight** — the same layering
+  `binary.wast:112` forced on the const verdict, and it would have been wrong on a green
+  board. That vector's unterminated initialiser over-reads into the code section's id byte
+  `\0a`, which *is* `throw_ref`; an engine that declined immediately would report a gate
+  decline for a module the spec calls malformed **and** park the vector in `gated`, where the
+  allowlist would then have to license a decline that is pure artifact. Order, decided in
+  0008 since the reference has neither verdict: malformed, then the feature decline, then
+  the const verdict.
+- `TestEveryMappedOpcodeExistsInTheTable` asked the wrong question in its first draft, and
+  the falsification pass is what found it: re-pointing an entry at `0xc6` — present in the
+  table with `illegal: true` — left it **green**, because presence was the predicate and
+  "exists" is not "is accepted". A gate governing a byte the reference rejects anyway is a
+  gate governing nothing, which is the exact defect the test names. Probing an *absent* byte
+  fired; probing an illegal one did not, and only comparing the two showed the gap. *A
+  control that passes the defect it was written for is a control in name only* — and
+  injecting one defect is not enough when the predicate itself is what is wrong.
+
 ## [0.0.1] - 2026-07-30
 
 *Implements contract v0.1. Scaffold state, recorded retroactively at the

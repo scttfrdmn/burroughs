@@ -39,6 +39,17 @@ var licensed = map[string]string{
 	// suite: `make opcode-drift` refuses to run at all without the reference, so
 	// this license only ever fires under a bare `go test ./...`.
 	"internal/testenv/testenv.go:RequireSpecRef": "local dev on a clone without `make spec-ref`, revoked by BURROUGHS_NO_SKIP=1",
+	// The gate mapping's citations (decision 0008) point at proposal *documents*, not
+	// at decode.ml, so they are a third input under the same fetch as the second. A
+	// third door rather than a widened RequireSpecRef for the reason above — the size
+	// floor and the diagnosis differ, and RequireSpecRef's message would send a reader
+	// looking for a truncated decode.ml when a proposal overview is what is missing.
+	//
+	// Worth noting how this line came to exist: the citation check was first written with
+	// a bare t.Skipf, and TestEverySkipSiteIsLicensed failed the build — the mechanism
+	// catching an unlicensed skip written by the author who knows the rule. That is the
+	// case for reading the AST instead of trusting the convention.
+	"internal/testenv/testenv.go:RequireProposalDoc": "local dev on a clone without `make spec-ref`, revoked by BURROUGHS_NO_SKIP=1",
 }
 
 // skipCalls are the testing.TB methods that end a test without a verdict.

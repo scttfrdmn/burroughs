@@ -123,6 +123,62 @@ type instrCtx struct {
 	// nonConst is the first non-const instruction seen, or -1. Recorded rather than
 	// returned, so a malformed verdict from further along still wins.
 	nonConst int
+	// declined is the first gated construct met with its gate off, or nil.
+	//
+	// Deferred for the same reason nonConst is, and binary.wast:112 is the vector that
+	// proves it rather than a symmetry argument: that global initialiser ends `\41\00`
+	// with no END and the next byte is the code section's id `\0a`, which *is*
+	// throw_ref. A reader that returns ErrFeatureDisabled on sight reports a gate
+	// decline for a module the suite calls malformed — the wrong layer's answer, and
+	// worse than the const case, because it also parks the vector in `gated` where
+	// TestGatedVectors demands an allowlist entry for a decline that is pure artifact.
+	//
+	// So: malformed wins over both deferred verdicts; then the feature decline; then the
+	// const verdict. That last order is decided in 0008 and not by the reference, which
+	// has neither — the engine's configuration is a more fundamental "no" than a
+	// validation rule about a construct it does not implement.
+	declined error
+}
+
+// decline records a gated construct without returning it. First one wins, matching
+// nonConst: it is the one a left-to-right reader would report.
+func (c *instrCtx) decline(err error) {
+	if c.declined == nil {
+		c.declined = err
+	}
+}
+
+// release returns the deferred feature decline, now that the grammar has completed.
+//
+// Its own method with a name, rather than an `if c.declined != nil` at each of the two
+// call sites, because the *timing* is the whole content of this mechanism: called too
+// early it reports a gate decline for a malformed module. A named release point is
+// somewhere the rule can be stated once and somewhere a third caller has to think about.
+func (c *instrCtx) release() error { return c.declined }
+
+// gateCheck records a decline if the opcode is gated and its gate is off.
+//
+// Called from both dispatch paths — single-byte and prefixed — because both read opcodes
+// and the mapping covers both. A check on one path only would leave 0xfb and 0xfd, which
+// is 306 of the 337 gated arms, accepted with their gates off.
+func (c *instrCtx) gateCheck(prefix byte, sub uint32) {
+	g, ok := gateFor(prefix, sub)
+	if !ok {
+		return
+	}
+	on, known := c.d.Features.enabled(g.gate)
+	if !known {
+		// A mapping entry naming a gate the Features switch does not handle. Loud
+		// rather than treated as off: an unknown gate silently declining everything
+		// would look like a working gate, and TestEveryFeatureFieldIsReadableByName
+		// exists so this cannot ship — reaching it means the two halves disagree at
+		// run time.
+		c.decline(fmt.Errorf("%w: unmapped gate %q", errNoImmReader, g.gate))
+		return
+	}
+	if !on {
+		c.decline(featureErr(g.what))
+	}
 }
 
 // decodeConstExpr reads a constant expression up to and including its END.
@@ -140,10 +196,16 @@ func (d *Decoder) decodeConstExpr(r *reader) error {
 	if err := expectEnd(r); err != nil {
 		return err
 	}
-	// The deferred verdict, released only now that the grammar has agreed the bytes
-	// are a well-formed expression. `constant expression required` is an *invalid*
-	// string and the suite asserts it 24 times, always as assert_invalid — so this is
-	// a declared layering debt that moves to #9's validator, not a malformed claim.
+	// The deferred verdicts, released only now that the grammar has agreed the bytes are
+	// a well-formed expression, and in 0008's order: the feature decline outranks the
+	// const verdict, because the engine's configuration is a more fundamental "no" than
+	// a validation rule about a construct it does not implement.
+	if err := c.release(); err != nil {
+		return err
+	}
+	// `constant expression required` is an *invalid* string and the suite asserts it 24
+	// times, always as assert_invalid — so this is a declared layering debt that moves
+	// to #9's validator, not a malformed claim.
 	if c.nonConst >= 0 {
 		return fmt.Errorf("%w: %#02x", ErrConstExprRequired, c.nonConst)
 	}
@@ -192,6 +254,10 @@ func (c *instrCtx) instr(r *reader) error {
 	case info.escape:
 		return c.prefixed(r, b)
 	}
+	// After the malformed verdicts and before the immediates: a gated opcode's
+	// immediates are still read, because the grammar has to finish for a malformed
+	// verdict further along to win. See instrCtx.declined.
+	c.gateCheck(0x00, uint32(b))
 	if !c.constOnly || constOps[b] {
 		return c.imms(r, info.imms)
 	}
@@ -231,6 +297,9 @@ func (c *instrCtx) prefixed(r *reader, prefix byte) error {
 		// need its own sub-table, which prefixRegion does not model.
 		return illegalPrefixed(prefix, sub)
 	}
+	// The region gates — 306 of the 337 mapped arms are here, so a gate check on the
+	// single-byte path alone would have covered 31 of them.
+	c.gateCheck(prefix, sub)
 	if err := c.imms(r, info.imms); err != nil {
 		return err
 	}
@@ -379,7 +448,7 @@ func (c *instrCtx) imm(r *reader, im imm) error {
 	case immCatchVec:
 		return c.d.decodeVec(r, decodeCatch)
 	case immMemop:
-		return decodeMemop(r)
+		return c.decodeMemop(r)
 	case immBlock:
 		// Routed through structural, which is the only caller that can supply the
 		// terminator. Reaching here would mean imms did not notice the marker.
@@ -418,7 +487,12 @@ var errNoImmReader = errors.New("internal: no reader for immediate")
 // `integer representation too long`, which is one byte past a u64's budget and *two*
 // past a u32's — so a u32 read gets the right verdict there and the wrong one at
 // :730, where a ten-byte offset with unused bits set wants `integer too large`.
-func decodeMemop(r *reader) error {
+// Bit 6 is multi-memory's, and it is the one gated construct in this file that is not an
+// opcode: `if bit 6 (the MSB of the first LEB byte) is set, then an i32 memory index
+// follows` (proposals/multi-memory/Overview.md:65). So the decline is recorded on the ctx
+// like every other, rather than returned here — a memarg is read mid-body and a malformed
+// verdict further along still outranks it.
+func (c *instrCtx) decodeMemop(r *reader) error {
 	flags, err := r.u32()
 	if err != nil {
 		return err
@@ -427,6 +501,9 @@ func decodeMemop(r *reader) error {
 		return fmt.Errorf("%w: %#02x", ErrMalformedMemopFlags, flags)
 	}
 	if flags&0x40 != 0 { // bit 6 selects an explicit memory index
+		if !c.d.Features.MultiMemory {
+			c.decline(featureErr(gatedNonOpcodes[gateMultiMemory]))
+		}
 		if err := discardIndex(r); err != nil {
 			return err
 		}
@@ -642,7 +719,15 @@ func (d *Decoder) decodeFuncBody(r *reader) error {
 		return fmt.Errorf("%w: function body declared %d bytes, grammar consumed %d",
 			ErrSectionSizeMismatch, size, used)
 	}
-	return nil
+	// The deferred decline, released *after* the size reconciliation and not before.
+	// Malformed outranks a feature decline, and the size mismatch is this layer's
+	// malformed verdict — so a body that is both gated and mis-sized reports the size,
+	// which is the answer that does not depend on the engine's configuration. Releasing
+	// one line earlier would still be right for binary.wast:112 (the decline there is in
+	// a *global* initialiser, a different call path) and wrong here, which is the shape
+	// of ordering bug the suite would not catch: TestGateDeclineYieldsToMalformed is the
+	// control, because no vector exercises it.
+	return c.release()
 }
 
 // decodeLocals reads a body's local declarations (decode.ml:341-351).
