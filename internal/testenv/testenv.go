@@ -291,62 +291,6 @@ func RequireSuiteFile(tb testing.TB, path string) []byte {
 	return nil
 }
 
-// SkipUntilImplemented is the licensed door for a control written *before* its subject, and
-// it is the only door here whose condition is not environmental.
-//
-// # Why this door exists at all
-//
-// The four doors above excuse a missing *input* — a corpus or an authority that a clone may
-// not have fetched — so `BURROUGHS_NO_SKIP=1` revokes them and CI sets it workflow-wide.
-// This one excuses a missing *subject*: a control pre-registered against code that has not
-// been written. That is a legitimate and required move (a design debt is discharged by a
-// tripwire, never by an intention), and it cannot use the same mechanism, because the
-// condition is equally true in CI. A door honoring NO_SKIP here would turn every
-// pre-registered control into a red board until its feature landed, and the predictable
-// response to that is not writing the control.
-//
-// # Why it is not therefore a hole
-//
-// An unrevocable skip *would* be the hole — a permanent excuse nobody can withdraw, which is
-// the shape this whole file exists to forbid. So the condition is neither a flag nor a date:
-// it is **the subject's own report of its absence**, and the skip expires the moment that
-// report stops arriving.
-//
-// The caller probes its entry point and hands over the error. If the error names the absent
-// subject (matching sentinel), the subject does not exist and the control skips. If the probe
-// returns anything else — including nil — the subject *does* exist, the license is spent, and
-// the test runs. Nobody has to remember to delete the skip; forgetting is impossible, because
-// the parser's arrival is what revokes it.
-//
-// That is stamp-don't-deduce pointed at a deferral: the excuse asserts the condition it
-// claims rather than asserting an intention to revisit. And it is why the placeholder the
-// caller probes must return a sentinel error rather than nil — a nil-returning stub would
-// read as "implemented" and run the control against nothing.
-//
-// issue is the tracking issue for the subject, so the skip line says where the obligation
-// lives. Unreachability is a grave only when it's silent.
-func SkipUntilImplemented(tb testing.TB, probe error, sentinel, issue, why string) {
-	tb.Helper()
-
-	if sentinel == "" || issue == "" {
-		tb.Fatalf("SkipUntilImplemented: sentinel=%q issue=%q — both are required; a deferral "+
-			"with no sentinel cannot expire and one with no issue has nowhere to be tracked",
-			sentinel, issue)
-		return
-	}
-
-	if probe == nil || !strings.Contains(probe.Error(), sentinel) {
-		// The subject answered. The license is spent — run the control.
-		return
-	}
-
-	tb.Skipf("subject not implemented (%s): %s\n\t"+
-		"%s=1 does NOT revoke this one, and that is deliberate: the condition is the "+
-		"subject's absence, not a missing fetch, so it is equally true in CI. It is revoked "+
-		"by the subject existing — when the probe stops reporting %q this test runs, with no "+
-		"edit here.", issue, why, NoSkipEnv, sentinel)
-}
-
 // ProposalDoc is a proposal overview under the vendored reference tree, relative to the
 // repo root. The *citation targets* of the gate mapping (decision 0008): each mapped
 // construct names a line in one of these, and a machine checks that the line resolves.

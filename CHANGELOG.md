@@ -412,15 +412,19 @@ weakly-ordered platform.
   `string_list` (:342) concatenates without decoding — the accept direction that data
   segments and binary payloads route through. All four assertions falsified by editing
   the vendored authority.
-- `testenv.SkipUntilImplemented` — the fifth licensed skip door and the first whose
-  condition is not environmental. A control written before its subject would otherwise
-  pass for want of one (*a green that survives the bug it names*), and `NO_SKIP=1`
-  cannot be its revoker because a missing subject is equally missing in CI. So the
-  condition is the subject's own report of its absence: the caller probes its entry
-  point and the skip fires only while a sentinel comes back, which makes the parser's
-  arrival revoke the license with no edit at the call site. *A deferral that expires by
-  mechanism rather than by memory.* Falsified by making the stub answer differently and
-  watching all five rows run and fail.
+
+  The implementation half **asserts in both states and never skips**: every row of the
+  five-row partition requires the source to *lex clean* whether or not a parser exists,
+  and the three-way verdict is checked once the probe stops returning its sentinel. That
+  design was the second attempt. The first licensed a skip that expired when the parser
+  arrived, and CI rejected it — the *no test declined to answer* step forbids a SKIP line
+  under `NO_SKIP=1` outright, which is the ruling this repo's skip policy already implied.
+  The rejection was right twice, because the accept direction was checkable today at a
+  layer that does exist: the wrong fix (a blanket UTF-8 check in `emitVarString`, attempted
+  in #60) is reachable in the lexer now. Hence the lesson, recorded in the skip inventory:
+  **a pre-registered control that wants a skip has usually not found the layer where its
+  property is already checkable.** Falsified by reintroducing #60's defect and watching
+  `(func $"\ef")` fail the lex-clean assertion.
 - `TestFetchScriptAssertsEveryAuthority` — `fetch-spec-ref.sh` asserted the presence of
   `decode.ml` alone, and had kept doing so after `lexer.mll` became a second authority:
   a presence check silently narrowed to a third of its subject, the early-return defect
@@ -432,13 +436,14 @@ weakly-ordered platform.
 - `RunGated(decode, readText, isGated)` and `RunWith(decode, readText, isGated,
   have...)` take the text entry point; `Script.Run` now panics on a quote form,
   declaring nothing and supplying nothing.
-- The skip inventory's invariant weakened to the true one: **every license names its
-  revoker, and every revoker exists.** It read "a single env var able to revoke them
-  all", which `SkipUntilImplemented` made false — one flag was the mechanism while every
-  condition was environmental, never the rule. The guard's own failure message gave the
-  same false advice ("make sure `BURROUGHS_NO_SKIP=1` revokes it") and now names the
-  revoker appropriate to the condition. *A ruling retroactively falsifies the prose
-  written before it.*
+- The skip inventory keeps its four doors and its invariant — **one env var revokes them
+  all** — and now records the fifth door that was written and withdrawn, with why. The
+  header had been edited to weaken the invariant to "every license names its revoker",
+  which the withdrawal made unnecessary; both the doc and the guard's failure message are
+  back as they were, plus a note on what the message deliberately does *not* offer (a skip
+  whose condition the flag cannot revoke). Kept rather than deleted because the near-miss
+  is the lesson, and a policy that only records the rules nobody tried to bend has lost
+  the interesting half of its history.
 - `internal/text`'s package doc swept for what the lexer's landing orphaned: it said the
   package "will hold" a lexer, that the keyword table was "read by nothing but this
   package's own tests" (`lexer.go:385` reads it), and that the consumer was "#53's next

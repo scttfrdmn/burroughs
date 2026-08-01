@@ -1,4 +1,4 @@
-package text_test
+package text
 
 import (
 	"fmt"
@@ -61,10 +61,14 @@ import (
 // what makes this a control rather than an aspiration. The suite half — that the 177 sit in
 // exactly the positions the grammar says — is falsifiable today too.
 //
-// When the parser lands, TestUTF8DecodeSitedOnlyAtNameAndVar (this file, below) starts
-// asserting the implementation against the same derived sets. Until then it is skipped with
-// a stated reason rather than passing vacuously, because *a skip is not a verdict* and the
-// alternative is worse than a skip: a pass.
+// The implementation half, TestUTF8DecodeSitedOnlyAtNameAndVar below, resolves the same trap
+// differently and better: **it asserts the accept direction at the lexer**, which exists. The
+// first draft skipped until the parser arrived, and CI's *no test declined to answer* step
+// rejected it — correctly, and the rejection produced the sharper design. The property worth
+// pinning today is not "the parser rejects at `name`" but "this package does *not* reject in
+// the lexer", and the second is checkable now, at the layer where the wrong fix is actually
+// reachable (`emitVarString`, attempted once in PR #60). *A pre-registered control that wants
+// a skip has usually not found the layer where its property is already checkable.*
 //
 // # Why this file and not internal/spec
 //
@@ -259,23 +263,48 @@ func TestSuiteUTF8VectorsAreAllAtNamePositions(t *testing.T) {
 	t.Logf("utf8-invalid-encoding.wast: %d/%d vectors at an export-name position", exportShaped, vectors)
 }
 
-// TestUTF8DecodeSitedOnlyAtNameAndVar is the implementation half, and it is **skipped until
-// the parser exists** rather than passing.
+// TestUTF8DecodeSitedOnlyAtNameAndVar is the implementation half, and it **asserts in both
+// states** rather than skipping in one of them.
 //
-// This is the trap named in this file's header, handled explicitly. The assertions below
-// would all pass today — nothing decodes UTF-8 at a parser position, so "does not reject a
-// legal string" holds trivially and "rejects at name" would be the only failure. Letting the
-// accept half pass while the reject half fails would put a green beside a red and invite
-// exactly the fix that buys the 176 wrongly.
+// # Why not a skip, which is what this was first written as
 //
-// So it skips, through the licensed door, with the reason stated: the subject does not exist.
-// When ReadModule lands, delete the skip and the assertions become the real control — the
-// same vectors, the same three positions, no rewriting.
+// The obvious shape for a control that precedes its subject is "skip until the subject
+// exists", and that is what the first draft did, through a new licensed door. CI rejected
+// it, correctly: `.github/workflows/ci.yml`'s **no test declined to answer** step greps the
+// output channel for SKIP lines under `BURROUGHS_NO_SKIP=1` and fails the build on any of
+// them — belt and suspenders, because a skip does not fail a test run, which is the entire
+// problem. The ruling I was about to ask for had already been made and gated.
+//
+// It is also the better answer, and the reason is worth keeping: **there is something real to
+// assert today.** The trap named in this file's header is that "the parser rejects at `name`"
+// cannot be asserted before the parser — but the accept direction can, at the layer that
+// exists. All five sources below must **lex clean**, and that is exactly the property a
+// blanket byte check would destroy: the wrong fix for the 176 is `validUTF8` inside
+// `emitVarString` or `scanAnnotBody`, this package's own code, and it has been attempted
+// once already (PR #60). So the lexer-layer assertion is not a placeholder for the real
+// control, it is the control aimed at the layer where the mistake is actually reachable.
+//
+// The probe therefore chooses *which layer's verdict* to assert, and both branches assert:
+//
+//   - parser absent → all five must lex clean. The accept direction, pinned where the
+//     defect is reachable today.
+//   - parser present → the full three-way partition, `name` and `var` rejecting and
+//     `string_list` accepting.
+//
+// The rows never move between states; only which layer answers them does. And when the
+// parser lands, nothing here needs editing — the probe stops reporting the sentinel and the
+// stricter branch takes over on its own. A deferral that expires by mechanism rather than by
+// memory, with no skip anywhere in it.
 func TestUTF8DecodeSitedOnlyAtNameAndVar(t *testing.T) {
-	testenv.SkipUntilImplemented(t, readModule(nil), notImplemented, "#62",
-		"every assertion below would pass for want of a subject: nothing decodes UTF-8 at a "+
-			"parser position yet, so the accept half holds trivially and only the reject half "+
-			"can fail — a green beside a red that invites buying the 176 with a blanket check")
+	// Stamped, not deduced: which subject is answering decides which assertions apply, so
+	// the branch is recorded in the log rather than left for a reader to infer from a green.
+	parserExists := !strings.Contains(fmt.Sprint(readModule(nil)), notImplemented)
+	if parserExists {
+		t.Logf("the wat parser answers: asserting the full three-way partition")
+	} else {
+		t.Logf("the wat parser does not exist yet (#62): asserting the accept direction at the " +
+			"lexer, which is the layer where a blanket UTF-8 check is reachable today")
+	}
 
 	// The partition, one row per position. Written now so that the parser's author does not
 	// get to choose the vectors after seeing which ones are inconvenient.
@@ -317,6 +346,23 @@ func TestUTF8DecodeSitedOnlyAtNameAndVar(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			// The lexer-layer assertion, and it applies in *both* states: every one of these
+			// sources is all-ASCII wat text whose high bytes arrive via `\ef` escapes, so
+			// none of them is a lexical error in the reference either way. A rejection here
+			// is this package claiming a verdict that is not its layer's to give — the
+			// inverse wrong-layer tell, and the shape of the mistake a blanket check makes.
+			if _, err := LexAll([]byte(tc.src)); err != nil {
+				t.Fatalf("%s must LEX clean, got %v\n\t"+
+					"%s.\n\tRejecting it in the lexer answers a parser-layer vector from the "+
+					"wrong stratum — right on the 176, wrong in general, and invisible on the "+
+					"board by construction. The suite cannot catch it: 0 accept-direction "+
+					"sites in 1229 quote commands.", tc.src, err, tc.why)
+			}
+
+			if !parserExists {
+				return
+			}
+
 			err := readModule([]byte(tc.src))
 			switch {
 			case tc.reject && err == nil:
@@ -333,11 +379,14 @@ func TestUTF8DecodeSitedOnlyAtNameAndVar(t *testing.T) {
 	}
 }
 
-// notImplemented is the sentinel SkipUntilImplemented matches on, and the mechanism by which
-// this file's deferral expires without anyone remembering to expire it.
+// notImplemented is the sentinel `parserExists` matches on, and the mechanism by which this
+// file's deferral expires without anyone remembering to expire it.
 //
-// It must be a *sentinel error*, never nil: a stub returning nil reads to the door as "the
-// subject exists", and the control would then run its accept half against nothing and pass.
+// It must be a *sentinel error*, never nil: a stub returning nil reads as "the subject
+// exists", and the reject rows would then score their `err == nil` case as an acceptance
+// defect — a red for a subject that does not exist, which is the falsifiability law's failure
+// in the other direction. Absent must be *distinguishable* from wrong, and a sentinel is what
+// makes it so.
 const notImplemented = "wat parser not implemented"
 
 // readModule is the parser entry point the implementation half calls, standing in for
