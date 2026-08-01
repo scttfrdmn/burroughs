@@ -781,7 +781,12 @@ func TestEveryReasonRowIsABlockDelimiter(t *testing.T) {
 // *accepts* a bare one — as an empty expression — rather than rejecting it. See
 // TestEveryReasonRowIsABlockDelimiter.
 func TestEveryNonConstByteGetsTheRightVerdict(t *testing.T) {
-	d := &Decoder{}
+	// Every gate on. Ten of the 185 non-const bytes are *also* gated — throw, throw_ref,
+	// the tail calls, the function-references five, ref.eq — so on v0's gates-off posture
+	// the feature decline outranks the const verdict (0008) and this walk would score ten
+	// members against the wrong question. The gated verdict has its own controls in
+	// gatemap_test.go; this one is about const-ness over the whole space.
+	d := constVerdictDecoder(t)
 	c := &instrCtx{d: d, nonConst: -1}
 	var absent, escape, illegal, present, delimiter, released int
 	for b := range 256 {

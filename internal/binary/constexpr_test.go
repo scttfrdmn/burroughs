@@ -80,7 +80,10 @@ func TestConstExprExtentIsDiscovered(t *testing.T) {
 // certifies the absence of a verdict the engine now has — a control outliving the
 // uncertainty it was written for.
 func TestConstExprSeparatesMalformedFromInvalid(t *testing.T) {
-	d := &Decoder{}
+	// Every gate on: throw_ref is *also* exception handling's, and with the gates off the
+	// feature decline outranks the const verdict (0008), which would answer a different
+	// question than this test asks. See constVerdictDecoder.
+	d := constVerdictDecoder(t)
 	for _, tc := range []struct {
 		name string
 		b    byte
@@ -141,7 +144,9 @@ func TestConstExprSeparatesMalformedFromInvalid(t *testing.T) {
 // is why this is derived and not cited — the suite implies the reader's behaviour without
 // containing an expression-level vector for it.
 func TestConstExprDefersTheConstVerdict(t *testing.T) {
-	d := &Decoder{}
+	// Every gate on — throw_ref is exception handling's, and this test's subject is the
+	// *const* deferral. The gate deferral's own ordering is TestGateDeclineYieldsToMalformed.
+	d := constVerdictDecoder(t)
 
 	// Non-const instruction, then the image ends before any END. Malformed wins.
 	r := &reader{b: []byte{0x0A}, eof: ErrPayloadEnd}
