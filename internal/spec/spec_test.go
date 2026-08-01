@@ -47,6 +47,14 @@ const suiteDir = "../../testdata/spec"
 // byte-string corpus, never a law of the board. What is honest is that nothing hides —
 // so the column is bucketed by command head, floored against growth, and expected to
 // shrink monotonically as components land.
+//
+// **Admitting (module quote ...) widened it again, 14 files to 68 (decision 0010).** The
+// selector did not change: it still asks which files hold a command whose Kind the run
+// loop scores, and two new Kinds made 54 more files answer yes. That is the derived
+// selector working as designed — a capability question re-asked when capability moves,
+// rather than a list re-edited — and it is why the admission could not be scoped to the
+// eleven vectors that prompted it. The unsupported ceiling rose 1345 → 26742 in the same
+// motion, which is *corpus admitted*, not regression.
 func boardFiles(t *testing.T) []string {
 	t.Helper()
 	var files []string
@@ -64,17 +72,21 @@ func boardFiles(t *testing.T) []string {
 	// finds nothing agrees with a board of nothing, and every assertion downstream
 	// would compare two empty sets and pass.
 	//
-	// **14 files, printed rather than reasoned.** The first draft of this floor said 20
+	// **68 files, printed rather than reasoned.** The first draft of this floor said 20
 	// on the strength of "27 files have no interpreter-dependent command" — a different
 	// set, and the floor caught the error immediately by failing. Those 27 include files
 	// whose every command is a text-bodied module or an assert_invalid, all unsupported;
-	// what this selector wants is files with at least one *scorable* command, which is
-	// 14. (data.wast is the instructive miss: it has five (module binary ...) forms whose
-	// elements are not all string literals, so binaryModule rejects them and the file has
-	// nothing scorable.) 12 leaves room for upstream churn without leaving room for a
-	// selector that stopped selecting.
-	if len(files) < 12 {
-		t.Fatalf("boardFiles selected only %d files, want >=12 — the selector is not "+
+	// what this selector wants is files with at least one *scorable* command, which was
+	// 14 before the quote admission and is 68 after it. (data.wast is the instructive
+	// miss: it has five (module binary ...) forms whose elements are not all string
+	// literals, so binaryModule rejects them and the file has nothing scorable.)
+	//
+	// The floor tracks the measurement rather than staying at its historical value: a
+	// floor of 12 against 68 selected files would tolerate the selector losing 56 files
+	// silently, which is the vacuity hole one step short of empty. 60 leaves room for
+	// upstream churn without leaving room for a selector that mostly stopped selecting.
+	if len(files) < 60 {
+		t.Fatalf("boardFiles selected only %d files, want >=60 — the selector is not "+
 			"finding answerable commands, so every count below is over a corpus that "+
 			"is not there (#42 pins the suite by SHA)", len(files))
 	}
@@ -487,11 +499,13 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 }
 
 // TestVerdictsPartitionCommands checks the arithmetic the board depends on: every
-// command lands in exactly one of pass, fail, unsupported, or gated.
+// command lands in exactly one of pass, fail, unsupported, gated, or unimplemented.
 //
 // Without this, adding a verdict is a chance to lose vectors — a command that
 // falls through every branch simply vanishes, and a board that does not sum is
-// how a suite silently stops covering something.
+// how a suite silently stops covering something. Decision 0010 added the fifth
+// term, which is precisely the event this test was written in advance of: the
+// arithmetic was asserted before there was a fourth verdict to lose vectors to.
 func TestVerdictsPartitionCommands(t *testing.T) {
 	requireSuite(t)
 	files := boardFiles(t)
@@ -502,7 +516,7 @@ func TestVerdictsPartitionCommands(t *testing.T) {
 			continue
 		}
 		r := run(s)
-		if got, want := r.Pass+r.Fail+r.Unsupported+r.Gated, len(s.Commands); got != want {
+		if got, want := r.Pass+r.Fail+r.Unsupported+r.Gated+r.Unimplemented, len(s.Commands); got != want {
 			t.Errorf("%s: verdicts sum to %d but the script has %d commands; %d vectors are unaccounted for",
 				f, got, want, want-got)
 		}
@@ -514,8 +528,9 @@ func TestVerdictsPartitionCommands(t *testing.T) {
 func TestPhase1Files(t *testing.T) {
 	requireSuite(t)
 	files := boardFiles(t)
-	totalPass, totalFail, totalUnsup, totalGated := 0, 0, 0, 0
+	totalPass, totalFail, totalUnsup, totalGated, totalUnimpl := 0, 0, 0, 0, 0
 	byHead := map[string]int{}
+	byCap := map[Capability]int{}
 	for _, f := range files {
 		s, err := ParseFile(filepath.Join(suiteDir, f))
 		if err != nil {
@@ -528,12 +543,16 @@ func TestPhase1Files(t *testing.T) {
 		totalFail += r.Fail
 		totalUnsup += r.Unsupported
 		totalGated += r.Gated
+		totalUnimpl += r.Unimplemented
 		for h, n := range r.UnsupportedByHead {
 			byHead[h] += n
 		}
+		for c, n := range r.UnimplementedByCapability {
+			byCap[c] += n
+		}
 	}
-	t.Logf("board total over %d files: %d pass, %d fail, %d unsupported, %d gated",
-		len(files), totalPass, totalFail, totalUnsup, totalGated)
+	t.Logf("board total over %d files: %d pass, %d fail, %d unsupported, %d gated, %d unimplemented",
+		len(files), totalPass, totalFail, totalUnsup, totalGated, totalUnimpl)
 
 	// The unsupported column as a work plan, not a number. Printed every run so the
 	// PR's Board line can quote which component each unrun vector waits on.
@@ -551,20 +570,76 @@ func TestPhase1Files(t *testing.T) {
 	// the pair is what makes "shrinking monotonically as components land" a
 	// checkable claim instead of an intention.
 	//
-	// 1345 at the measured revision. Lowered as components land; never raised
-	// without saying what moved. #42 (SHA-pin the suite) is what keeps this number
+	// **26742 after the quote admission (decision 0010), was 1345.** Raised exactly
+	// once, with the reason stated: admitting (module quote ...) put 54 more files on
+	// the derived board, and their commands are overwhelmingly forms the harness still
+	// cannot ask about. That is the one licensed reason to raise this number — the
+	// corpus grew — and it is why the rule is "never raised *without saying what
+	// moved*" rather than "never raised".
+	//
+	// Lowered as components land. #42 (SHA-pin the suite) is what keeps this number
 	// meaningful, since a corpus that drifts changes it for reasons that are not
 	// findings.
-	const unsupportedCeiling = 1345
+	const unsupportedCeiling = 26742
 	if totalUnsup > unsupportedCeiling {
 		t.Errorf("unsupported rose to %d, ceiling %d — either a capability regressed or the "+
 			"corpus moved; both need an explanation rather than a raised ceiling",
 			totalUnsup, unsupportedCeiling)
 	}
 
+	// The fourth verdict's ceiling, and its purpose is the *drain* (decision 0010).
+	//
+	// 1236 at the measured revision, all of them waiting on the wat reader (#53). This
+	// may only fall, and unlike the unsupported ceiling it has a terminal value that is
+	// not a matter of taste: decision 0004's rule is that no minor version is cut while
+	// its milestone's unimplemented is nonzero, and v0.1.0 requires zero. So this
+	// number is a countdown to a release gate rather than a column to live with.
+	//
+	// A ceiling and not an equality, for the same reason the pass floor is a floor: the
+	// wat reader will convert these in batches, and a test that had to be edited on
+	// every batch would be edited without being read.
+	const unimplementedCeiling = 1236
+	if totalUnimpl > unimplementedCeiling {
+		t.Errorf("unimplemented rose to %d, ceiling %d — a new capability gap appeared or "+
+			"one widened; the column exists to drain, so growth needs an explanation",
+			totalUnimpl, unimplementedCeiling)
+	}
+
+	// Every unimplemented vector is attributed, or the column is a bare number again.
+	attributed := 0
+	for _, n := range byCap {
+		attributed += n
+	}
+	if attributed != totalUnimpl {
+		t.Errorf("unimplemented totals %d but attribution sums to %d; the column and its "+
+			"work plan disagree", totalUnimpl, attributed)
+	}
+	for _, c := range (&Result{UnimplementedByCapability: byCap}).UnimplementedByCapabilityBySize() {
+		issue, _ := CapabilityIssue(c)
+		t.Logf("  unimplemented %5d  %s (%s)", byCap[c], c, issue)
+	}
+
+	// **The fail column is the board's instrument, and this is what keeps it one.**
+	//
+	// This assertion is the reason decision 0010 exists. Reading A of the admission
+	// would have scored the 1236 quote vectors as failures, taking fail from 1 to 1237
+	// — and a genuine regression landing tomorrow would arrive as 1238, invisible. A
+	// ceiling on fail is only meaningful while fail means *defect*, so the two changes
+	// are one change: admit the corpus, and keep the column that says what is broken.
+	//
+	// 1 at the measured revision: binary-gc.wast:1, "malformed function type: 0x5e"
+	// under an expected "malformed mutability".
+	const failCeiling = 1
+	if totalFail > failCeiling {
+		t.Errorf("fail rose to %d, ceiling %d — a defect landed, or an unbuilt component is "+
+			"being scored as a wrong answer; the second would mean the fourth verdict is "+
+			"not catching what it was built for", totalFail, failCeiling)
+	}
+
 	// Pass floor over the whole board, the counterpart to TestBinaryWast's per-file
 	// floor. 783 at the measured revision: 764 from the byte-string corpus plus the
-	// 19 the derived selector newly reaches.
+	// 19 the derived selector newly reaches. Unmoved by the quote admission, which is
+	// the honest reading — admitting a corpus earns no verdicts.
 	const passFloor = 783
 	if totalPass < passFloor {
 		t.Errorf("board pass count %d fell below floor %d", totalPass, passFloor)
@@ -594,6 +669,12 @@ func TestDenominatorExcludesUnaskedCommands(t *testing.T) {
 		{"unsupported is not asked, so not counted", Result{Pass: 1, Unsupported: 99}, 1},
 		{"gated is declined, so not counted", Result{Pass: 1, Gated: 99}, 1},
 		{"neither, together", Result{Pass: 2, Fail: 1, Unsupported: 40, Gated: 7}, 3},
+		// The fourth verdict is excluded for the same reason as the other two, and at
+		// 1236 vectors this is the largest of the three exclusions by far: folding it in
+		// would render a 783/784 board as 783/2020 and read as a collapse on the day the
+		// corpus was admitted.
+		{"unimplemented is unanswered, so not counted", Result{Pass: 1, Unimplemented: 1236}, 1},
+		{"all three exclusions at once", Result{Pass: 5, Fail: 2, Unsupported: 30, Gated: 4, Unimplemented: 99}, 7},
 		// The degenerate case stated rather than implied: a board that asked nothing
 		// has a denominator of zero, which is why TestBinaryWast checks Total() != 0
 		// before trusting a ratio. A pass rate over an empty denominator is the
@@ -662,4 +743,113 @@ func TestParseEverySuiteFile(t *testing.T) {
 		}
 	}
 	t.Logf("parsed %d/%d .wast files", len(paths)-broken, len(paths))
+}
+
+// TestEveryNeededCapabilityIsRegistered is guard 2 of decision 0010: a vector may
+// reach the fourth verdict only via a registered capability.
+//
+// The abuse the fourth verdict invites is the one the third verdict already had to be
+// defended against (#27): a category that is neither pass nor fail is a lever for
+// emptying a board by fiat. `gated` was fenced with a per-vector allowlist plus an
+// all-on lane, and neither transfers here — 1236 vectors cannot be allowlisted
+// individually, and "turn the capability on" is not a configuration change when the
+// component does not exist.
+//
+// So the fence is the registry: classify may only ask for a capability that has an
+// entry, and the entry carries the issue that closes it. This test reads the whole
+// corpus rather than the board, because an unregistered capability on an unadmitted
+// file is still a classification defect.
+func TestEveryNeededCapabilityIsRegistered(t *testing.T) {
+	requireSuite(t)
+	seen := map[Capability]int{}
+	for _, p := range suitePaths(t) {
+		s, err := ParseFile(p)
+		if err != nil {
+			t.Errorf("%s: parse: %v", p, err)
+			continue
+		}
+		for _, c := range s.Commands {
+			if c.Needs == CapNone {
+				continue
+			}
+			seen[c.Needs]++
+			issue, ok := CapabilityIssue(c.Needs)
+			if !ok {
+				t.Errorf("%s:%d needs capability %q, which is not in the registry; an "+
+					"unregistered capability is a fourth-verdict column with no owner",
+					filepath.Base(p), c.Line, c.Needs)
+				continue
+			}
+			if issue == "" {
+				t.Errorf("capability %q is registered with an empty issue; the tracking "+
+					"number is what makes it a debt rather than an intention", c.Needs)
+			}
+		}
+	}
+
+	// Vacuity floor. A classifier that stopped setting Needs would leave this test
+	// comparing an empty set against a registry and agreeing perfectly — the
+	// comparisons-need-a-vacuity-check rule, and the exact shape that let an empty
+	// keyword extraction drift-check clean (0009).
+	if len(seen) == 0 {
+		t.Fatal("no command in the corpus needs any capability, so this test asserted " +
+			"nothing; classify has stopped setting Needs and the fourth verdict is dead code")
+	}
+	// And the registry's own members must be *used*, or an entry is a debt nobody owes:
+	// a stale capability overstates what the engine is waiting on.
+	for _, c := range RegisteredCapabilities() {
+		if seen[c] == 0 {
+			t.Errorf("capability %q is registered but no command needs it; remove the "+
+				"entry or the registry overstates the engine's outstanding work", c)
+		}
+	}
+	for c, n := range seen {
+		t.Logf("capability %s: %d commands", c, n)
+	}
+}
+
+// TestQuoteFormsAwaitTheirReader is the drain tripwire (decision 0010).
+//
+// Two properties, and the second is the one that matters. First: with no capability
+// declared, every quote command is scored `unimplemented` — the derived-gap mechanism
+// working. Second: the run loop's KindModuleQuote branch panics if a caller declares
+// CapWatReader while no reader is wired, so the registry cannot get ahead of the
+// engine silently.
+//
+// That second half is a pre-registered failing test in #53's definition of done, which
+// is what makes deferring the reader honest rather than an intention (0006). When the
+// reader lands, this test is the one that must be *changed* — and changing it is how
+// the board's 1236 convert to verdicts.
+func TestQuoteFormsAwaitTheirReader(t *testing.T) {
+	requireSuite(t)
+	s, err := ParseFile(filepath.Join(suiteDir, "obsolete-keywords.wast"))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	r := run(s)
+	if r.Unimplemented == 0 {
+		t.Fatal("obsolete-keywords.wast scored nothing unimplemented; it is 11 quote " +
+			"vectors and the capability gap should have caught every one")
+	}
+	if r.Fail != 0 {
+		t.Errorf("%d quote vectors scored as failures; the fourth verdict exists so that "+
+			"an unbuilt component does not read as a defect", r.Fail)
+	}
+	if got := r.UnimplementedByCapability[CapWatReader]; got != r.Unimplemented {
+		t.Errorf("%d unimplemented but only %d attributed to %s; an unattributed vector "+
+			"is a column with no work plan", r.Unimplemented, got, CapWatReader)
+	}
+
+	// Declaring a capability the engine does not have must fail loudly rather than
+	// score. Recovered deliberately: the panic *is* the assertion.
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Error("declaring CapWatReader with no reader wired did not panic; the " +
+					"registry is allowed to run ahead of the engine, so a vector could be " +
+					"scored by a component that does not exist")
+			}
+		}()
+		_ = s.RunWith(decode, isGated, CapWatReader)
+	}()
 }

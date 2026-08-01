@@ -927,6 +927,49 @@ is a formatting pass of its own, not a drive-by inside a decoder PR.*
   files at this revision: sharing it would make the two floors' agreement an accident a
   future upstream edit silently ends.
 
+- **The `(module quote …)` corpus admitted, and the board's fourth verdict** (decision 0010,
+  Scott's ruling on [#53](https://github.com/scttfrdmn/burroughs/issues/53)). Two changes in
+  one entry because neither is honest alone.
+
+  **The admission.** `classify` now recognizes `(module quote "…")` — bare and under
+  `assert_malformed` — so the derived corpus (#52) admits the **54 files that hold nothing
+  else scorable**. The board goes 14 → **68 files**, 2144 → **28777 commands**, and the
+  unsupported ceiling **1345 → 26742**. *That rise is corpus admitted, never regression*: the
+  selector did not change, it still asks which files hold a command whose `Kind` the run loop
+  scores, and two new Kinds made 54 more files answer yes. The alternative — enumerating the
+  quote files a lexer could already answer — is the `phase1Files` defect #52 removed, wearing
+  a new name.
+
+  **The fourth verdict, `unimplemented`.** The 1236 admitted vectors could not go in `fail`.
+  Today that column means **defect** — the board's lone failure (`binary-gc.wast:1`) is
+  visible *because* the column discriminates wrong-answer from not-built — and scoring 1236
+  unread quote vectors as failures takes it 1 → 1237, so a genuine regression tomorrow
+  arrives as 1238, invisible. A column that cannot surface a new defect has stopped being an
+  instrument. So: **`unsupported` = the harness cannot ask; `unimplemented` = the harness
+  asked and the engine lacks a named component to answer.** `gated` is the architectural
+  precedent rather than the argument — absence-by-configuration there, absence-by-construction
+  here.
+
+  Guarded so it cannot become a dumping ground, which is the same risk the third verdict had
+  to be fenced against (#27) with mechanisms that do not transfer at this scale:
+  **capability-derived, never hand-assigned** (`classify` computes `Needs`, the run loop asks
+  what the engine has, the gap is the verdict — no per-vector allowlist, because 1236 vectors
+  cannot have one); a **closed registry where each entry carries its tracking issue**, and an
+  unregistered capability panics rather than growing the column; the **partition asserts the
+  fifth term**; and **guard 4 is a release gate** — no minor version while its milestone's
+  `unimplemented` is nonzero, `v0.1.0` requires zero (appended to decision 0004, so the rule
+  lives where releases are cut). The category exists to **drain**, and the version scheme is
+  what enforces the draining rather than trusting it.
+
+  Every control falsified by introducing the defect it names and watching it fail — eight of
+  them, including Reading A itself (folding the column into `fail` fires the fail ceiling at
+  1237), a classifier that stops setting `Needs` (the vacuity floor), an invented capability,
+  a lost partition term, and a registry allowed to run ahead of the engine.
+
+  **Board: 68 files — 783 pass / 1 fail / 26742 unsupported / 15 gated / 1236 unimplemented**,
+  all 1236 attributed to `wat-reader` (#53). Pass and fail are unmoved, which is the honest
+  reading: admitting a corpus earns no verdicts.
+
 ### Fixed
 
 - **A pre-registered claim, refuted by its own probe** — recorded here because the
@@ -936,11 +979,16 @@ is a formatting pass of its own, not a drive-by inside a decoder PR.*
   vectors. Both halves are wrong: `obsolete-keywords.wast` was **never on the board** (the
   derived corpus is 14 files and its 11 vectors were not among the 1345), and teaching
   `classify` the `(module quote …)` form cannot be scoped to eleven — it widens
-  `scorableCommands` and pulls **53 additional files** on: 14 → **67** files, 2144 →
-  **28769** commands, unsupported 1345 → **26741** (+25396), with **1229** newly-scorable
+  `scorableCommands` and pulls **54 additional files** on: 14 → **68** files, 2144 →
+  **28777** commands, unsupported 1345 → **26742** (+25397), with **1236** newly-scorable
   quote vectors across 41 expected strings. Fourth consecutive time in #53's sequencing
   that a step named "cheap" owed one more layer than its name; the countermeasure is the
   one that caught it.
+  **And the refutation's own figures needed correcting**, which is the discipline applied to
+  its own output: the first reading said 67 files / 1229 vectors / 26741, missing the **7
+  bare top-level `(module quote …)` forms** that are not wrapped in an assertion. Re-measured
+  with the classifier itself: 68 / 1236 / 26742. A figure quoted to refute a figure is still
+  a figure.
 
 ## [0.0.1] - 2026-07-30
 

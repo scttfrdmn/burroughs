@@ -30,6 +30,20 @@ type Command struct {
 	// quoted byte strings concatenated.
 	Module []byte
 
+	// Source is the wat source text for a (module quote ...) form, with the quoted
+	// strings concatenated. Distinct from Module because the two are different
+	// languages: one is a byte image the decoder eats, the other is text a lexer must
+	// read first. A single field would make the harness's own type system unable to
+	// say which.
+	Source []byte
+
+	// Needs names the engine capability this command requires, or "" when the
+	// command needs nothing beyond the decoder. It is what makes the fourth verdict
+	// *derived* rather than assigned (decision 0010, guard 1): classify computes what
+	// a command needs, the run loop asks what the engine has, and the gap is the
+	// verdict. No per-vector allowlist — at 1236 vectors there could not be one.
+	Needs Capability
+
 	// Expect is the expected failure text for an assertion, e.g.
 	// "integer too large". Matched by substring (decision 0003) — upstream
 	// runners do the same, and it lets "alignment" work as a prefix of
@@ -43,9 +57,11 @@ type Command struct {
 type Kind int
 
 const (
-	KindModuleBinary    Kind = iota // (module binary "...")
-	KindAssertMalformed             // (assert_malformed (module binary ...) "text")
-	KindUnsupported                 // anything phase 1 cannot execute
+	KindModuleBinary        Kind = iota // (module binary "...")
+	KindAssertMalformed                 // (assert_malformed (module binary ...) "text")
+	KindModuleQuote                     // (module quote "...")
+	KindAssertMalformedText             // (assert_malformed (module quote ...) "text")
+	KindUnsupported                     // anything phase 1 cannot execute
 )
 
 func (k Kind) String() string {
@@ -54,9 +70,60 @@ func (k Kind) String() string {
 		return "module"
 	case KindAssertMalformed:
 		return "assert_malformed"
+	case KindModuleQuote:
+		return "module quote"
+	case KindAssertMalformedText:
+		return "assert_malformed (quote)"
 	default:
 		return "unsupported"
 	}
+}
+
+// Capability is an engine component a command may require before it can be
+// answered. The registry is closed: a command may only be scored `unimplemented`
+// via a registered capability, so a gap the harness invented is a loud
+// classification failure rather than a quietly larger column (decision 0010,
+// guard 2).
+type Capability string
+
+const (
+	// CapNone means the command needs nothing beyond the binary decoder.
+	CapNone Capability = ""
+
+	// CapWatReader is the wat text-format reader — the lexer and parser that turn
+	// (module quote "...") source into a module. Tracked at #53; the keyword table it
+	// will read is already in the tree (decision 0009).
+	CapWatReader Capability = "wat-reader"
+)
+
+// capabilityIssues is the registry, and the tracking issue is part of the entry
+// rather than a comment beside it.
+//
+// An entry bearing its issue is the design-debt-needs-a-tripwire rule (0006)
+// applied to a verdict: `unimplemented` is a debt, and a debt with no tracking
+// number is an intention. The map is what TestEveryNeededCapabilityIsRegistered
+// reads, so an unregistered capability cannot reach the board.
+var capabilityIssues = map[Capability]string{
+	CapWatReader: "#53",
+}
+
+// RegisteredCapabilities returns the registry's members, sorted. Derived from the
+// map rather than listed, for the reason every domain in this package is derived:
+// an enumeration is a sample, and a sample has a blind spot by construction.
+func RegisteredCapabilities() []Capability {
+	caps := make([]Capability, 0, len(capabilityIssues))
+	for c := range capabilityIssues {
+		caps = append(caps, c)
+	}
+	sort.Slice(caps, func(i, j int) bool { return caps[i] < caps[j] })
+	return caps
+}
+
+// CapabilityIssue returns the tracking issue for a capability, and false if it is
+// not registered.
+func CapabilityIssue(c Capability) (string, bool) {
+	s, ok := capabilityIssues[c]
+	return s, ok
 }
 
 // Script is a parsed .wast file.
@@ -97,7 +164,17 @@ func classify(n node) Command {
 		if img, ok := binaryModule(n); ok {
 			return Command{Kind: KindModuleBinary, Line: n.line, Head: head, Module: img}
 		}
-		// (module ...) with a wat body, or (module quote ...) — #53 and #8.
+		if src, ok := quoteModule(n); ok {
+			return Command{
+				Kind: KindModuleQuote, Line: n.line, Head: head,
+				Source: src, Needs: CapWatReader,
+			}
+		}
+		// (module ...) with a bare wat body — #8. Still unsupported rather than
+		// unimplemented, and the difference is the one decision 0010 turns on: the
+		// harness cannot *ask* about a wat body, because the s-expression reader has
+		// parsed it into nodes rather than holding its source text. A quote form hands
+		// over its source as a string literal; a bare body does not.
 		return Command{Kind: KindUnsupported, Line: n.line, Head: head}
 
 	case "assert_malformed":
@@ -112,6 +189,16 @@ func classify(n node) Command {
 					Expect: string(n.list[2].str),
 				}
 			}
+			if src, ok := quoteModule(n.list[1]); ok {
+				return Command{
+					Kind:   KindAssertMalformedText,
+					Line:   n.line,
+					Head:   head,
+					Source: src,
+					Expect: string(n.list[2].str),
+					Needs:  CapWatReader,
+				}
+			}
 		}
 		return Command{Kind: KindUnsupported, Line: n.line, Head: head}
 	}
@@ -121,7 +208,24 @@ func classify(n node) Command {
 // binaryModule extracts the image from (module [$name] binary "..." "..."),
 // concatenating the byte strings. It reports false for any other module form,
 // including (module quote ...) and wat bodies.
-func binaryModule(n node) ([]byte, bool) {
+func binaryModule(n node) ([]byte, bool) { return stringModule(n, "binary") }
+
+// quoteModule extracts the wat source from (module [$name] quote "..." "..."),
+// concatenating the strings. It reports false for any other module form.
+//
+// The suite's quote forms carry one source line per string literal with no
+// separator, e.g. (module quote "(func (nop)" "(nop))") — concatenation is what the
+// reference does, and the newlines the vectors rely on are inside the literals.
+func quoteModule(n node) ([]byte, bool) { return stringModule(n, "quote") }
+
+// stringModule reads the (module [$name] <keyword> "..." "...") shape shared by the
+// binary and quote forms, which differ only in that keyword.
+//
+// Factored on arrival of the second caller rather than in advance — 0006's rule, and
+// the seam is cut where the fact actually is. What the two forms do *not* share is
+// what happens to the bytes afterwards, which is why Command keeps Module and Source
+// as separate fields: the shape is common, the language is not.
+func stringModule(n node, keyword string) ([]byte, bool) {
 	if n.head() != "module" {
 		return nil, false
 	}
@@ -130,19 +234,19 @@ func binaryModule(n node) ([]byte, bool) {
 	if i < len(n.list) && !n.list[i].isList() && !n.list[i].isS && strings.HasPrefix(n.list[i].atom, "$") {
 		i++
 	}
-	if i >= len(n.list) || n.list[i].isList() || n.list[i].isS || n.list[i].atom != "binary" {
+	if i >= len(n.list) || n.list[i].isList() || n.list[i].isS || n.list[i].atom != keyword {
 		return nil, false
 	}
 	i++
-	// Everything after `binary` must be a string literal.
-	img := []byte{}
+	// Everything after the keyword must be a string literal.
+	out := []byte{}
 	for ; i < len(n.list); i++ {
 		if !n.list[i].isS {
 			return nil, false
 		}
-		img = append(img, n.list[i].str...)
+		out = append(out, n.list[i].str...)
 	}
-	return img, true
+	return out, true
 }
 
 // Result is the outcome of running one script.
@@ -152,6 +256,40 @@ type Result struct {
 	Pass        int
 	Fail        int
 	Unsupported int
+
+	// Unimplemented counts commands the harness asked and the engine has no
+	// registered component to answer — the fourth verdict (decision 0010).
+	//
+	// The distinction from Unsupported is the whole reason this field exists, and it
+	// is stated here because if the sentence blurs the two categories merge back into
+	// mush: **Unsupported means the harness cannot ask** — no Kind recognizes the
+	// form, so there is no question. **Unimplemented means the harness asked and the
+	// engine lacks a named capability to answer**, so the question exists, is
+	// well-formed, and has a registered debt standing between it and a verdict.
+	//
+	// Why not Fail, which is where these 1236 vectors would otherwise land: today the
+	// fail column means *defect*. The board's lone failure (binary-gc.wast:1) is
+	// visible precisely because the column discriminates wrong-answer from not-built.
+	// Scoring 1236 unread quote vectors as failures takes it to 1237, and a genuine
+	// regression tomorrow arrives as 1238 — invisible. A column that cannot surface a
+	// new defect has stopped being an instrument, which is the lint-wall failure
+	// (decision 0005) wearing a board's clothes.
+	//
+	// Gated is the architectural precedent rather than the argument: it exists because
+	// scoring an unanswered question as a failure marks correct behaviour red. Gated is
+	// absence-by-configuration; this is absence-by-construction.
+	//
+	// The category exists to **drain**. When the wat reader lands these convert to
+	// pass/fail in a movement the board shows, and decision 0004's version rule is what
+	// enforces the draining: no minor bump while its milestone's Unimplemented is
+	// nonzero, and v0.1.0 requires zero.
+	Unimplemented int
+
+	// UnimplementedByCapability counts the fourth verdict by the capability each
+	// command waited on, so the column is a work plan for the same reason
+	// UnsupportedByHead is: "1236 unimplemented" names nothing, while
+	// "1236 wat-reader (#53)" names an issue.
+	UnimplementedByCapability map[Capability]int
 
 	// UnsupportedByHead counts unsupported commands by their head atom, so the
 	// column is diagnosable rather than merely large.
@@ -211,9 +349,10 @@ type Failure struct {
 //
 // Gated is excluded on purpose: the engine returned no verdict on those vectors,
 // so counting them would make the denominator claim coverage the run did not
-// have. Unsupported is excluded for the same reason. The three exclusions and the
-// two counted verdicts should always sum to the command count, which
-// TestVerdictsPartitionCommands pins.
+// have. Unsupported and Unimplemented are excluded for the same reason — the
+// question was never asked, or was asked of a component that does not exist. The
+// three exclusions and the two counted verdicts should always sum to the command
+// count, which TestVerdictsPartitionCommands pins.
 //
 // **This exclusion is load-bearing, not cosmetic** (#52, ruling recorded there).
 // While the corpus was hand-listed byte-string files, Unsupported was zero and the
@@ -224,6 +363,22 @@ type Failure struct {
 // denominator is over what was asked. TestDenominatorExcludesUnaskedCommands is
 // the control that says so, because a comment cannot fail.
 func (r *Result) Total() int { return r.Pass + r.Fail }
+
+// UnimplementedByCapabilityBySize returns the capabilities blocking the fourth
+// verdict, largest first — the same work-plan ordering as the other two columns.
+func (r *Result) UnimplementedByCapabilityBySize() []Capability {
+	keys := make([]Capability, 0, len(r.UnimplementedByCapability))
+	for k := range r.UnimplementedByCapability {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if r.UnimplementedByCapability[keys[i]] != r.UnimplementedByCapability[keys[j]] {
+			return r.UnimplementedByCapability[keys[i]] > r.UnimplementedByCapability[keys[j]]
+		}
+		return keys[i] < keys[j]
+	})
+	return keys
+}
 
 // UnsupportedByHeadBySize returns unsupported head atoms ordered largest first —
 // the component work plan, as BucketsBySize is the decoder's.
@@ -271,10 +426,30 @@ func (r *Result) Board() string {
 	if r.Gated > 0 {
 		fmt.Fprintf(&b, ", %d gated", r.Gated)
 	}
+	// Likewise its own column, and specifically not folded into fail — that is the
+	// whole point of decision 0010.
+	if r.Unimplemented > 0 {
+		fmt.Fprintf(&b, ", %d unimplemented", r.Unimplemented)
+	}
 	if len(r.Buckets) > 0 {
 		b.WriteString("\n  failures bucketed by expected spec text (largest first):")
 		for _, k := range r.BucketsBySize() {
 			fmt.Fprintf(&b, "\n    %3d  %s", len(r.Buckets[k]), k)
+		}
+	}
+	// The fourth verdict's work plan, keyed by capability and carrying the tracking
+	// issue: a column that names an issue is a column someone can close.
+	if len(r.UnimplementedByCapability) > 0 {
+		b.WriteString("\n  unimplemented by capability (largest first):")
+		for _, c := range r.UnimplementedByCapabilityBySize() {
+			issue, ok := CapabilityIssue(c)
+			if !ok {
+				// Unreachable via the run loop, which rejects unregistered capabilities
+				// before counting them — printed rather than hidden so that if it ever
+				// happens the board says so instead of showing a bare name.
+				issue = "UNREGISTERED"
+			}
+			fmt.Fprintf(&b, "\n    %5d  %s (%s)", r.UnimplementedByCapability[c], c, issue)
 		}
 	}
 	// The unsupported column's own work plan, printed for the same reason the
@@ -301,8 +476,14 @@ type GatedFunc func(error) bool
 
 // gated is set by the caller via Script.RunGated. When nil, no error is gated
 // and the board behaves exactly as before.
+// has is the set of capabilities the engine declares. Empty is the honest default:
+// a caller that says nothing about its components has none beyond the decoder, so a
+// command needing one is scored `unimplemented` rather than silently attempted. The
+// failure mode this avoids is a new run entry point forgetting to declare and
+// thereby converting the fourth verdict into a fail.
 type runOpts struct {
 	isGated GatedFunc
+	has     map[Capability]bool
 }
 
 // Run executes a script's assertions against a decoder, scoring every gate as
@@ -318,12 +499,50 @@ func (s *Script) RunGated(decode DecodeFunc, isGated GatedFunc) *Result {
 	return s.run(decode, runOpts{isGated: isGated})
 }
 
+// RunWith executes a script with an explicit set of engine capabilities. A command
+// whose Needs is not in have is scored Unimplemented (decision 0010).
+//
+// This is the seam the wat reader will arrive through: when it exists, its runner
+// passes CapWatReader and 1236 vectors move out of the fourth column into pass or
+// fail. Until then no caller declares it, which is why the default is empty rather
+// than "everything the harness knows about" — the latter would score vectors against
+// components that do not exist.
+func (s *Script) RunWith(decode DecodeFunc, isGated GatedFunc, have ...Capability) *Result {
+	set := make(map[Capability]bool, len(have))
+	for _, c := range have {
+		set[c] = true
+	}
+	return s.run(decode, runOpts{isGated: isGated, has: set})
+}
+
 func (s *Script) run(decode DecodeFunc, opts runOpts) *Result {
-	r := &Result{Path: s.Path, Buckets: map[string][]Failure{}, UnsupportedByHead: map[string]int{}}
+	r := &Result{
+		Path: s.Path, Buckets: map[string][]Failure{},
+		UnsupportedByHead:         map[string]int{},
+		UnimplementedByCapability: map[Capability]int{},
+	}
 	isGated := func(err error) bool {
 		return err != nil && opts.isGated != nil && opts.isGated(err)
 	}
 	for _, c := range s.Commands {
+		// The capability gap, computed before the verdict switch and ahead of every
+		// Kind: a command needing a component the engine lacks gets no verdict at all,
+		// so asking the decoder about it would be asking the wrong question. Derived
+		// from c.Needs rather than from the Kind, so a future Kind that needs the same
+		// component inherits this for free (decision 0010, guard 1).
+		if c.Needs != CapNone && !opts.has[c.Needs] {
+			if _, ok := capabilityIssues[c.Needs]; !ok {
+				// A capability the classifier invented. Counting it would let the fourth
+				// verdict grow by fiat, which is the abuse guard 2 exists to make
+				// impossible — so it is a hard stop, not a larger column.
+				panic(fmt.Sprintf("%s:%d needs unregistered capability %q; "+
+					"register it in capabilityIssues with a tracking issue or the fourth "+
+					"verdict grows without an owner", s.Path, c.Line, c.Needs))
+			}
+			r.Unimplemented++
+			r.UnimplementedByCapability[c.Needs]++
+			continue
+		}
 		switch c.Kind {
 		case KindAssertMalformed:
 			err := decode(c.Module)
@@ -369,6 +588,20 @@ func (s *Script) run(decode DecodeFunc, opts runOpts) *Result {
 				continue
 			}
 			r.Pass++
+
+		case KindModuleQuote, KindAssertMalformedText:
+			// Reachable only when a caller declares CapWatReader, since the capability
+			// gap above catches every other path. No reader exists yet, so there is
+			// nothing honest to do here: scoring would invent a verdict and falling
+			// through to `unsupported` would contradict the classification that just
+			// said the harness *can* ask.
+			//
+			// Declared rather than silent (#6): the deferral is named at its site with
+			// the issue that closes it. When #53's reader lands, this is where it is
+			// called, and TestQuoteFormsAwaitTheirReader is the tripwire that fails if a
+			// caller declares the capability before this branch can honour it.
+			panic(fmt.Sprintf("%s:%d: CapWatReader declared but no wat reader is wired "+
+				"(#53); the capability registry is ahead of the engine", s.Path, c.Line))
 
 		default:
 			r.Unsupported++
