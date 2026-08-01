@@ -1,7 +1,8 @@
 # 0010 — `unimplemented` as a fourth verdict, and the `(module quote …)` admission
 
 Date: 2026-08-01 · Status: **accepted** (Scott, 2026-08-01 — option (a) for the admission
-scope, then option 2 for the verdict question the admission's probe surfaced)
+scope, then option 2 for the verdict question the admission's probe surfaced); **amended
+2026-08-01** (chat-Claude, PR #58 — guard 6, the retirement condition)
 
 ## Decision
 
@@ -116,9 +117,70 @@ movement the board *shows*, which is what a board is for.
   `unimplemented`. There is deliberately **no** all-capabilities-on lane analogous to
   `TestAllGatesOnLeavesNothingGated`: turning on a component that does not exist is not a
   configuration change, so the structural control cannot be a lane. Guard 4 is its
-  replacement — the version scheme, not a second board.
+  replacement — the version scheme, not a second board. *(Amended: guard 4 is not the only
+  replacement. See the amendment below — a second control exists, and it is temporal rather
+  than spatial.)*
 - **My pre-registered `1345 → 1334` claim was refuted**, and separately, my own refutation
   figures were themselves off: 67 files not 68, 1229 newly-scorable not 1236 (I missed the
   7 bare `(module quote …)` forms), 26741 not 26742. Second-order honesty is a live
   discipline and not a slogan; the probe that corrected me is in this PR's history, not in
   its tree.
+
+## Amendment, 2026-08-01 — guard 6: entries are born with their retirement conditions
+
+Appended rather than rewritten, per *a ruling is discharged by appending to the ADR, body
+preserved*. One sentence above is amended in place with a forward pointer, because leaving it
+unqualified would be the orphaned-prose defect: the consequence list said guard 4 was the
+replacement for the missing lane, and the ruling below makes that only half true.
+
+### What the original guards missed
+
+Guard 2 fences the registry's *membership* — a capability must be registered, and its entry
+must bear an issue. Nothing fenced its *lifetime*. An entry could be correct on the day it was
+written, the component could land, and the entry could simply stay: a capability with no
+population and no retirement, which is a squatter. Worse, the component could land while
+leaving some of its vectors in the fourth column, and no control would have said so — the
+deferral would have become the disappearance the whole ruling exists to prevent.
+
+`gated`'s guarantee comes from a lane (#27): every gate on, gated count zero, so a vector
+parked in the third verdict is simultaneously being failed somewhere. The consequence list was
+right that this cannot transfer — you cannot enable a component that has not been written —
+but wrong to conclude that the only substitute was the version scheme. **The guarantee can be
+delivered temporally instead of spatially:** where `gated`'s control asks *what happens under a
+different configuration*, this one asks *what must be true when the thing arrives*.
+
+### Guard 6
+
+> **A registry entry states, at birth, the condition under which it must be deleted.** An
+> entry may not outlive its component. A capability the engine declares must no longer be
+> registered **and** must have drained its population to exactly zero; each half alone is a
+> defect. An entry with no retirement condition is refused.
+
+Mechanically: `capEntry` carries `Retires` beside `Issue`; `engineCapabilities` declares what
+the engine has, explicitly rather than by omission, because guard 1 makes the engine's half a
+*declaration* and an absence cannot be read as a claim; `RunGated` derives from that
+declaration, so the board cannot drift from it; and
+`TestNoCapabilityOutlivesItsComponent` fails in both directions, with a vacuity floor on the
+registry — the control compares two sets and one of them is empty by design today, so the
+registry is what must be non-empty for the comparison to assert anything.
+
+The run loop refuses an entry with an empty `Retires`, panicking rather than counting. That is
+the same shape as guard 2's refusal of an unregistered capability, and for the same reason: a
+column that grows by omission grows without a decision.
+
+### Why this is the right shape for this category
+
+The category describes components that do not exist yet, so every guard on it is necessarily a
+claim about the future. Guard 4 constrains *releases* (no minor while the count is nonzero),
+guard 6 constrains *arrivals* (nothing lands leaving its column populated). Together they close
+both ends: the debt cannot be released around, and it cannot be abandoned mid-payment.
+
+`CapWatReader`'s condition, recorded on the day the entry was created: retire when a wat reader
+is wired and `engineCapabilities` declares it, in the same commit, with
+`unimplemented(wat-reader)` at 0. This makes #53's definition of done machine-checked rather
+than reviewer-checked — the pre-registered-failing-test discipline (0006) applied to the
+capability's *end* as well as its beginning.
+
+Four falsifications, each introduced and watched fail: declaring the capability while leaving
+the entry, a reader landing with 1236 still outstanding, the registry emptied without draining,
+and an entry written with no retirement condition.

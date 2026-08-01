@@ -756,9 +756,11 @@ func TestParseEverySuiteFile(t *testing.T) {
 // component does not exist.
 //
 // So the fence is the registry: classify may only ask for a capability that has an
-// entry, and the entry carries the issue that closes it. This test reads the whole
-// corpus rather than the board, because an unregistered capability on an unadmitted
-// file is still a classification defect.
+// entry, and the entry carries the issue that closes it — plus, per guard 6, the
+// condition under which it must be deleted. This test reads the whole corpus rather
+// than the board, because an unregistered capability on an unadmitted file is still a
+// classification defect. TestNoCapabilityOutlivesItsComponent is the other half: this
+// one guards the entry's birth, that one its death.
 func TestEveryNeededCapabilityIsRegistered(t *testing.T) {
 	requireSuite(t)
 	seen := map[Capability]int{}
