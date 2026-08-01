@@ -358,6 +358,11 @@ jobs:
         run: |
           go test ./internal/binary/ -run XXX -fuzz FuzzDecodeModule -fuzztime 3000000x
           go test ./internal/binary/ -run XXX -fuzz FuzzULEB -fuzztime 1500000x
+          # The instruction grammar's progress property (#43/#39). 1.5M, the same as
+          # FuzzULEB: both are single-reader properties inside the module target's
+          # surface, so the 2:1 ratio to FuzzDecodeModule is the reason, not the count.
+          # It shipped ungated and is now held by TestEveryFuzzTargetIsGated.
+          go test ./internal/binary/ -run XXX -fuzz FuzzConstExprProgress -fuzztime 1500000x
 
       - name: fuzz wast lexer
         run: |

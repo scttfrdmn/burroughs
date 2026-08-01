@@ -276,3 +276,39 @@ will let it pass. The ADR's debt and this board line are the same fact seen twic
 so, following #25's body. Measured, it is `declared 11, grammar consumed 6` — the
 same sign as the type-section vector at :469. No suite vector exercises the
 grammar-long direction, which is grave #34.
+
+## Postscript (2026-07-31, #43/#39): the debt was discharged by dissolution
+
+Appended, body preserved, per the 0003 precedent — including item 3 above, which is
+now false and is the most useful sentence in the file.
+
+That item said `:345` "keeps failing" and that #33 "is what will let it pass." Both
+halves were right about the mechanism and wrong about the shape. `:345` and `:1218`
+fell out **on contact** with the table, before any of #39's grammar work: once the
+existence question is answered over all 256 bytes, `0xf3` is simply absent and
+`illegal opcode f3` is the verdict. Two vectors were not a milestone's work, they were
+a lookup.
+
+The ADR's declined-for-now structure — `constExprOps`, the eight-entry accept set —
+did not get *cross-checked* against the full table as #33 was filed to do. It
+**dissolved**. The reference defers const-ness to validation (`const s = at
+instr_block s; end_ s`, decode.ml:983), so the full table left nothing for a narrow
+accept set to be a second opinion about; only `constOps`, a set of seven bytes
+carrying the one predicate the authority does not encode, remains. #33 was re-pointed
+at extractor-versus-reference rather than closed, which is the ruling recorded on that
+issue.
+
+**What this ADR got right, and it is the load-bearing part.** The reason given for
+declining to build the table early was that building it from its only consumer's
+requirements would shape it wrong. That held exactly: the table as built is shaped by
+the *reference's* arms, not by the const-expr reader's needs, and the difference is
+why `decodeConstExpr` shrank to nine lines instead of growing a second table. A design
+debt discharged by a tripwire rather than an intention was the right call; the
+tripwire's subject moving is a normal outcome of that discipline, not a failure of it.
+
+**What it got wrong is a scheduling claim, not a design one.** "Keeps failing" and "#33
+will let it pass" were estimates of *when*, stated with the confidence of facts about
+*whether*. The tell is the same one the 0007 correction names: a figure nothing could
+contradict. Nobody could have falsified "keeps failing" at the time it was written,
+because the table did not exist — so the honest form was "fails until the table lands,
+and I have not measured how much of the bucket the table alone closes."

@@ -605,6 +605,99 @@ weakly-ordered platform.
   malformed; both gate states are covered by
   `TestTagSectionIsWellFormedButGated`.
 
+---
+
+*The entries below land with the instruction and function-body grammars
+([#43](https://github.com/scttfrdmn/burroughs/issues/43),
+[#39](https://github.com/scttfrdmn/burroughs/issues/39)). `[Unreleased]` now carries
+duplicate `Added`/`Fixed` headings from successive PRs appending to it; consolidating them
+is a formatting pass of its own, not a drive-by inside a decoder PR.*
+
+### Added
+
+- **The instruction grammar, table-driven — `binary.wast` is 127/127 and the phase-1
+  corpus is 764 pass / 0 fail / 0 unsupported / 2 gated.** All 26 previously-failing
+  vectors drained. `decodeConstExpr`'s eight-entry accept set **dissolved**: the
+  generated `opTable` answers existence, illegality, escape, and immediate shape over
+  the whole opcode space, leaving `constOps` — seven bytes carrying the const-legality
+  predicate the reference does not encode — as the only opcode fact this engine states
+  on its own authority.
+- Function-body grammar: `locals` (per-group count a u32 LEB, the *sum* checked at 64
+  bits, so `integer too large` and `too many locals` are different fields), `memop`
+  (flags bound checked *after* the LEB read, a u64 offset), `catch` clauses, blocktypes,
+  and `sized` per body.
+- **Gate flips closed as buckets, with their base counts:** `illegal opcode ff` (1),
+  `illegal opcode` (1), `data count section required` (2 — this is
+  [#22](https://github.com/scttfrdmn/burroughs/issues/22), closed inside #39 from
+  `syntax/free.ml`'s four data-referencing opcodes rather than from a byte scan),
+  `too many locals` (2), `END opcode expected` (1), `unexpected end of section or
+  function` (3), `section size mismatch` (1), `integer too large` (2).
+- `binary.wast:345` and `:1218` fell out **on contact** with the table, before any
+  body-grammar work — 0007's postscript predicted them as a milestone and they were a
+  lookup. Recorded because the mis-estimate is the transferable part.
+- **The nine-defect falsification pass.** Each mechanism was broken on purpose and the
+  board re-read, because *a green that survives the bug it names is a control in name
+  only* and a 26-vector drain is the shape that most deserves the suspicion. Six defects
+  refilled exactly the buckets they claim. **Three survived the entire suite** and are
+  now `internal/binary/instr_probe_test.go`: per-body extent distinguishability, lane
+  index width at the production reader, and the blocktype alternation's branch order.
+  Each control was itself falsified before being committed.
+
+### Fixed
+
+- **`decodeConstExpr` defers the const verdict rather than aborting on it.**
+  `binary.wast:112` is the vector that forces it: a global initialiser ending `\41\00`
+  with no END, followed by the code section's id byte `\0a` — which *is* `throw_ref`.
+  An aborting reader reports `constant expression required`; the reference reads on and
+  the expression runs off the image, so the answer is `unexpected end of section or
+  function`. *An invalid verdict that pre-empts a malformed one is reporting the wrong
+  layer's answer.* `ErrNonConstantExpr` is gone; `ErrConstExprRequired` is recorded and
+  released only if the grammar completed.
+- **Grave [#47](https://github.com/scttfrdmn/burroughs/issues/47) reached a second
+  site.** The same raw-byte lane-index read, in `instr.go`'s production `imm` switch
+  rather than the test's `immBytes`, survives the whole corpus for the same reason
+  (`\fd` appears in no phase-1 vector). *A grave whose lesson was applied to one copy
+  of a fact and not the other is half-buried.*
+- The changelog's own `binary.wast:112` entry above, which described the vector as
+  "currently fail[ing] with `ErrNonConstantExpr`". That sentinel no longer exists and
+  the vector passes — the ruling-falsifies-prose sweep applied to this file. ADRs 0006
+  and 0007 got the same sweep, by append with bodies preserved.
+
+- **`TestEveryFuzzTargetIsGated`** — the AST-reading sibling of
+  `TestEverySkipSiteIsLicensed`, and it was written because it had a live subject.
+  `FuzzConstExprProgress` landed with the instruction grammar carrying eleven seeds and a
+  fourteen-sentinel allowed-error list, and was budgeted in **neither** the Makefile nor
+  either workflow — so it ran only as an ordinary seed-corpus test and its *exploration*
+  half had never once executed. Three enumerations of the target set (`Makefile`,
+  `ci.yml`, `nightly.yml`) with no control over any: *derive the domain, never enumerate
+  it*, broken three times in the same tree. The control now derives the set from
+  `func FuzzX(f *testing.F)` declarations, requires each to appear at all three run
+  sites, checks both directions, and carries a size floor so an empty walk cannot agree
+  with an empty inventory. Newly gated at 1.5M execs, it immediately found **129 new
+  interesting inputs** — the measure of what "defined but never budgeted" costs. *A
+  fuzzer has two halves that fail independently; a target nothing runs under a budget is
+  a file, not equipment.*
+
+### Changed
+
+- **`Features.ExceptionHandling` and `Features.SIMD` doc comments now say what the gates
+  do *not* yet cover.** Writing out an opcode scope for them is what found
+  [#48](https://github.com/scttfrdmn/burroughs/issues/48): the table-driven dispatch
+  consults `Features` nowhere, so with every gate off the decoder **accepts**
+  `throw_ref`, `try_table`, `v128.const`, and `ref.eq` in a function body — the
+  accept-and-ignore half of the gate ruling, unnoticed because every prior gate
+  discussion was about not over-*rejecting*. The comment I first wrote asserted check
+  sites that do not exist: grave #36's fabricated-evidence shape, moved from a format
+  string into a comment, where nothing reads it. *Writing down what a flag governs is a
+  check on whether it governs it.*
+- `decodeBlockType`'s comment gave the wrong reason for its branch order. `either`
+  backtracks, so the order affects neither the accept set nor any extent — measured over
+  all 256 first bytes in both orders, 427 of 768 rows differ and **every** difference is
+  the error message alone. What the order decides is which branch's error survives, and
+  that is load-bearing in exactly one place: the gated branch must be last, or the
+  alternation overwrites `ErrFeatureDisabled` with `malformed value type` — a gate
+  manufacturing malformedness. The control keeps the wrong reason beside the right one.
+
 ## [0.0.1] - 2026-07-30
 
 *Implements contract v0.1. Scaffold state, recorded retroactively at the

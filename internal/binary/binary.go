@@ -120,23 +120,83 @@ var (
 	ErrMalformedElemKind  = errors.New("malformed element kind")
 	ErrMalformedDataFlags = errors.New("malformed data segment flags")
 
-	// ErrNonConstantExpr is a byte inside a constant expression that the constexpr
-	// reader does not accept.
+	// The malformed-form errors of the instruction grammar.
 	//
-	// Deliberately not a suite malformed-string, and the reason is the same shape as
-	// ErrFeatureDisabled's. Two cases reach it — a byte that is no opcode at all
-	// (malformed, "illegal opcode") and a real opcode that is not constant (invalid,
-	// "constant expression required", which the suite asserts 22 times and always as
-	// assert_invalid) — and distinguishing them needs the existence question answered
-	// over the whole opcode space, which is #7's table.
+	// ErrMalformedMemopFlags is `require (I32.lt_u flags 0x80l) ... "malformed memop
+	// flags"` (decode.ml:327), and the *order* is the fact worth recording: the
+	// require fires after the flags LEB has been read, so an overlong or oversized
+	// flags encoding reports the LEB error and never reaches here. Four
+	// binary-leb128.wast vectors turn on that ordering.
+	ErrMalformedMemopFlags = errors.New("malformed memop flags")
+	ErrMalformedCatch      = errors.New("malformed catch clause")
+	ErrMalformedTypeIndex  = errors.New("malformed type index")
+
+	// ErrTooManyLocals is a function body whose local declarations sum to 2^32 or
+	// more (decode.ml:347-348).
 	//
-	// So the module is rejected (accept-and-ignore would break the extent, and every
-	// size check downstream with it) while the error claims only what this layer
-	// knows. The consequence is on the board and stays there: binary.wast:345 wants
-	// "illegal opcode" and keeps failing until #7 lands. Spoofing the string would
-	// buy that vector and report malformed for `(global f32 (f32.neg (f32.const 0)))`
-	// — the accept direction the suite cannot catch. See #22's ruling and §9 G-3.
-	ErrNonConstantExpr = errors.New("constexpr: opcode not in the constant subset")
+	// The check is on the *sum*, at 64 bits, which is the fact two vectors turn on:
+	// binary.wast:159 declares 0xFFFFFFFF and 2, and :175 declares four groups of
+	// 0x40000000, so a total accumulated at 32 bits would wrap and accept both while
+	// each individual count stays legal.
+	ErrTooManyLocals = errors.New("too many locals")
+
+	// ErrIllegalOpcode is a byte (or prefix and sub-opcode) the reference's
+	// instruction grammar does not define, or defines only to reject.
+	//
+	// The text is the reference's own and the *rendering* is load-bearing:
+	// `illegal s pos b = error s pos ("illegal opcode " ^ string_of_byte b)` with
+	// `string_of_byte = "%02x"` (decode.ml:35, 52). binary.wast:1218 expects
+	// `illegal opcode ff` — the byte is *inside* the expected string — so for that
+	// vector the rendering is oracle-covered, which is the one place the
+	// invented-bits class (grave #36) has suite teeth (#38). Everywhere else the
+	// harness stops at the sentinel and print-checks are the only cover.
+	//
+	// This sentinel replaces ErrNonConstantExpr, which existed because the constexpr
+	// reader could not tell a nonexistent opcode from a real-but-non-constant one and
+	// therefore claimed neither. The generated table (0007) answers the existence
+	// question over the whole space, so the verdict is computed rather than declined.
+	ErrIllegalOpcode = errors.New("illegal opcode")
+
+	// ErrConstExprRequired is a real instruction, in a constant expression, that is
+	// not one of the constant forms.
+	//
+	// The verdict belongs to *validation*, not to the grammar: the suite asserts
+	// `constant expression required` 24 times and every one is assert_invalid, and the
+	// reference's `const s` is `instr_block s; end_ s` with const-ness checked nowhere
+	// in the decoder (decode.ml:983). Reporting it here is therefore a **layering
+	// debt, declared not silent**: the decoder must reject (accept-and-ignore would
+	// break the extent and every size check after it) and it now knows enough to name
+	// the right verdict, but the layer that ought to own the string is #9's validator.
+	// It moves there when the full instruction grammar makes reading-without-judging
+	// possible (#39, then #9).
+	//
+	// What matters for §9 G-3 is the direction: this is an *invalid* string, never a
+	// malformed one, so a well-formed module is no longer slandered as malformed —
+	// which is precisely what the old blanket rejection risked buying.
+	ErrConstExprRequired = errors.New("constant expression required")
+
+	// ErrEndExpected is `end_ s = expect 0x0b s "END opcode expected"`
+	// (decode.ml:322) — the terminator a block or expression demanded and did not
+	// get.
+	//
+	// Reachable from a constant expression today by exactly one byte, and the trace
+	// is worth stating because the obvious answer is wrong: `instr_block'` *peeks* and
+	// stops on 0x05 as well as 0x0b (decode.ml:969), so a bare ELSE never reaches
+	// `instr` and never produces the `misplaced ELSE opcode` its arm carries. It
+	// reaches `end_`, which wants 0x0b and reports this.
+	ErrEndExpected = errors.New("END opcode expected")
+
+	// ErrMisplacedOpcode is a reference `error s pos "..."` arm — an opcode the
+	// authority's `instr` defines only in order to reject with its own message.
+	//
+	// Declared and tracked, not silent (the ErrTrailingData ruling, #6): at bdd7164
+	// both such arms are 0x05 and 0x0b, which are exactly the two bytes
+	// `instr_block'` stops on, so neither reaches `instr` from a constant expression
+	// and this error is unreachable. TestEveryReasonRowIsABlockDelimiter is the
+	// tripwire: a third reason arm upstream turns the build red here rather than
+	// producing a quietly wrong verdict. The reference's text is carried verbatim
+	// after the colon, so the harness's substring match would find it.
+	ErrMisplacedOpcode = errors.New("misplaced opcode")
 )
 
 // SectionID identifies a module section (Wasm 3.0 numbering).
@@ -262,6 +322,21 @@ func (r *reader) byte() (byte, error) {
 	c := r.b[r.off]
 	r.off++
 	return c, nil
+}
+
+// peek returns the next byte without consuming it, and false at the end of the image
+// — `peek s = if eos s then None else Some (read s)` (decode.ml:23).
+//
+// The distinction from byte() is the whole reason `instr_block'` can stop on a
+// delimiter without eating it: END belongs to the *enclosing* production, so a
+// consuming look would leave `end_` nothing to check. It returns a bool rather than an
+// error because "no more bytes" is not a failure here — it is one of the two ways an
+// instruction sequence legitimately ends.
+func (r *reader) peek() (byte, bool) {
+	if r.remaining() < 1 {
+		return 0, false
+	}
+	return r.b[r.off], true
 }
 
 // byteVec reads a length-prefixed byte sequence — the encoding of a name, and of
@@ -515,6 +590,11 @@ func DecodeModule(b []byte) (*Module, error) {
 func (d *Decoder) DecodeModule(b []byte) (*Module, error) {
 	r := &reader{b: b}
 
+	// Per-decode state, cleared at the start rather than at the end: a reused Decoder
+	// that carried the previous module's answer would be an instrument measuring
+	// history (#28), and clearing on exit leaves the zero-value path uncovered.
+	d.sawDataRef = false
+
 	// A *short* preamble is "unexpected end"; a full-width but wrong one is
 	// "magic header not detected" / "unknown binary version". binary.wast
 	// distinguishes these: "" / "\01" / "\00as" are unexpected end, while
@@ -600,7 +680,24 @@ func (d *Decoder) DecodeModule(b []byte) (*Module, error) {
 	if err := m.checkCounts(); err != nil {
 		return nil, err
 	}
+	// #22, closed. The check needs both halves of a fact neither section knows alone:
+	// whether any body referenced the data index space (decodeFuncBody's business) and
+	// whether a data count section is present (the module's). Its order is the
+	// reference's — after the two count agreements (decode.ml:1295-1301) — because a
+	// module can fail more than one of the three and the suite expects the first.
+	if d.sawDataRef && !m.hasSection(SectionDataCount) {
+		return nil, ErrDataCountRequired
+	}
 	return m, nil
+}
+
+func (m *Module) hasSection(id SectionID) bool {
+	for _, s := range m.Sections {
+		if s.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 // vecCount reads the element count from the head of a vec-shaped section
