@@ -12,6 +12,20 @@ type Command struct {
 	Kind Kind
 	Line int
 
+	// Head is the directive's head atom as written — "assert_return", "module",
+	// "invoke". Recorded for *every* command including unsupported ones, which is
+	// the point: with per-command corpus selection (#52) the unsupported column is
+	// 1345 lines rather than zero, and a bare total is a number nobody can act on.
+	// Bucketed by head it is a work plan — "504 assert_return" names the
+	// interpreter, "110 assert_invalid" names the validator.
+	//
+	// Kind says what the harness can *do* with a command; Head says what the
+	// command *is*. Deriving one from the other in either direction loses
+	// information: several heads map to KindUnsupported today and will map
+	// elsewhere as components land, which is exactly the movement the column
+	// exists to show.
+	Head string
+
 	// Module is the raw module image for a (module binary ...) form, with the
 	// quoted byte strings concatenated.
 	Module []byte
@@ -77,13 +91,14 @@ func Parse(path string, src []byte) (*Script, error) {
 }
 
 func classify(n node) Command {
-	switch n.head() {
+	head := n.head()
+	switch head {
 	case "module":
 		if img, ok := binaryModule(n); ok {
-			return Command{Kind: KindModuleBinary, Line: n.line, Module: img}
+			return Command{Kind: KindModuleBinary, Line: n.line, Head: head, Module: img}
 		}
-		// (module ...) with a wat body, or (module quote ...) — phase 2.
-		return Command{Kind: KindUnsupported, Line: n.line}
+		// (module ...) with a wat body, or (module quote ...) — #53 and #8.
+		return Command{Kind: KindUnsupported, Line: n.line, Head: head}
 
 	case "assert_malformed":
 		// (assert_malformed <module> "expected text")
@@ -92,14 +107,15 @@ func classify(n node) Command {
 				return Command{
 					Kind:   KindAssertMalformed,
 					Line:   n.line,
+					Head:   head,
 					Module: img,
 					Expect: string(n.list[2].str),
 				}
 			}
 		}
-		return Command{Kind: KindUnsupported, Line: n.line}
+		return Command{Kind: KindUnsupported, Line: n.line, Head: head}
 	}
-	return Command{Kind: KindUnsupported, Line: n.line}
+	return Command{Kind: KindUnsupported, Line: n.line, Head: head}
 }
 
 // binaryModule extracts the image from (module [$name] binary "..." "..."),
@@ -136,6 +152,24 @@ type Result struct {
 	Pass        int
 	Fail        int
 	Unsupported int
+
+	// UnsupportedByHead counts unsupported commands by their head atom, so the
+	// column is diagnosable rather than merely large.
+	//
+	// Before per-command corpus selection (#52) the board's unsupported count was
+	// zero, and that zero was a *property of the byte-string corpus* — not a law of
+	// the board. Deriving the corpus makes it 1345, and the doctrine is that this is
+	// the honest board now: commands the engine cannot answer yet, counted and
+	// visible, shrinking monotonically as components land. The law was always the
+	// underlying one — nothing hides behind a skip (#29).
+	//
+	// A bare total would satisfy that letter and miss its point: 1345 is not a work
+	// plan, while "504 assert_return, 398 module, 110 assert_invalid" names the
+	// interpreter, the text grammar, and the validator. Same reason failures are
+	// bucketed by expected spec text rather than counted — a number you cannot act
+	// on is a number nobody reads, and a column nobody reads is where a regression
+	// goes to hide.
+	UnsupportedByHead map[string]int
 
 	// Gated counts vectors the engine declined because a feature gate is off.
 	//
@@ -180,7 +214,32 @@ type Failure struct {
 // have. Unsupported is excluded for the same reason. The three exclusions and the
 // two counted verdicts should always sum to the command count, which
 // TestVerdictsPartitionCommands pins.
+//
+// **This exclusion is load-bearing, not cosmetic** (#52, ruling recorded there).
+// While the corpus was hand-listed byte-string files, Unsupported was zero and the
+// choice of denominator could not be observed. Per-command selection makes it 1345,
+// so folding Unsupported in would render a 783/791 board as 783/2136 and read as a
+// collapse when nothing regressed — and, worse, would make the ratio improve
+// whenever a *component* lands rather than when a *verdict* is earned. The
+// denominator is over what was asked. TestDenominatorExcludesUnaskedCommands is
+// the control that says so, because a comment cannot fail.
 func (r *Result) Total() int { return r.Pass + r.Fail }
+
+// UnsupportedByHeadBySize returns unsupported head atoms ordered largest first —
+// the component work plan, as BucketsBySize is the decoder's.
+func (r *Result) UnsupportedByHeadBySize() []string {
+	keys := make([]string, 0, len(r.UnsupportedByHead))
+	for k := range r.UnsupportedByHead {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if r.UnsupportedByHead[keys[i]] != r.UnsupportedByHead[keys[j]] {
+			return r.UnsupportedByHead[keys[i]] > r.UnsupportedByHead[keys[j]]
+		}
+		return keys[i] < keys[j]
+	})
+	return keys
+}
 
 // BucketsBySize returns bucket keys ordered largest first — the work plan.
 func (r *Result) BucketsBySize() []string {
@@ -218,6 +277,15 @@ func (r *Result) Board() string {
 			fmt.Fprintf(&b, "\n    %3d  %s", len(r.Buckets[k]), k)
 		}
 	}
+	// The unsupported column's own work plan, printed for the same reason the
+	// failure buckets are: it names which component each unrun vector is waiting
+	// on, so the number is actionable rather than merely honest.
+	if len(r.UnsupportedByHead) > 0 {
+		b.WriteString("\n  unsupported by command (largest first):")
+		for _, k := range r.UnsupportedByHeadBySize() {
+			fmt.Fprintf(&b, "\n    %5d  %s", r.UnsupportedByHead[k], k)
+		}
+	}
 	return b.String()
 }
 
@@ -251,7 +319,7 @@ func (s *Script) RunGated(decode DecodeFunc, isGated GatedFunc) *Result {
 }
 
 func (s *Script) run(decode DecodeFunc, opts runOpts) *Result {
-	r := &Result{Path: s.Path, Buckets: map[string][]Failure{}}
+	r := &Result{Path: s.Path, Buckets: map[string][]Failure{}, UnsupportedByHead: map[string]int{}}
 	isGated := func(err error) bool {
 		return err != nil && opts.isGated != nil && opts.isGated(err)
 	}
@@ -304,6 +372,24 @@ func (s *Script) run(decode DecodeFunc, opts runOpts) *Result {
 
 		default:
 			r.Unsupported++
+			// Keyed by head rather than by Kind: every unsupported command has
+			// KindUnsupported, so keying by Kind would produce one bucket of 1345 and
+			// name nothing. The head is what says whether the vector waits on the
+			// interpreter, the validator, or the text grammar.
+			head := c.Head
+			if head == "" {
+				// A command with no head atom — a list whose first element is itself a
+				// list or a string, as in annotations.wast's `(@custom ...)` forms.
+				// Measured, not assumed: three such commands across the vendored suite,
+				// all in annotations.wast, which the derived selector does not currently
+				// put on the board. So this branch is live-but-unexercised by today's
+				// corpus and stays because the corpus moves — TestUnsupportedIsBucketed-
+				// ByCommand pins that no key is ever empty, which is the failure this
+				// placeholder prevents: an unlabelled entry in a work-plan column is the
+				// one nobody investigates.
+				head = "(no head atom)"
+			}
+			r.UnsupportedByHead[head]++
 		}
 	}
 	return r
