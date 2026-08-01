@@ -182,3 +182,55 @@ func TestNoSkipIsExactlyOne(t *testing.T) {
 		}
 	}
 }
+
+// TestFetchScriptAssertsEveryAuthority pins the fetch script's presence loop to the set of
+// files testenv licenses, because they are two places that know one fact.
+//
+// The fact is "these are the reference files the project treats as authorities". `refFloors`
+// holds it in Go; `fetch-spec-ref.sh` holds it in a shell `for` list, and cannot read the
+// Go one. When decode.ml was the only authority the two agreed trivially; lexer.mll's
+// arrival (0009) made the script's check cover a third of its subject with nothing saying
+// so, and it stayed that way until parser.mly was the third. That is the narrowing an
+// unpoliced duplicate produces — not a wrong assertion, a shrinking one.
+//
+// So the control is the drift check 0006 calls for, and its direction matters: the *script*
+// must cover everything Go licenses. A file the script checks and Go does not is harmless
+// (an extra assertion); a file Go licenses and the script does not is a fetch that reports
+// success with an authority missing, which is precisely the early-return defect the script's
+// own comment records.
+func TestFetchScriptAssertsEveryAuthority(t *testing.T) {
+	const script = "../../scripts/fetch-spec-ref.sh"
+	b, err := os.ReadFile(script)
+	if err != nil {
+		t.Fatalf("read %s: %v", script, err)
+	}
+	src := string(b)
+
+	licensed := testenv.LicensedRefPaths()
+
+	// Vacuity floor. An empty licensed set makes every containment check below pass by
+	// asking nothing, which is the comparison-against-an-empty-set defect: mechanism
+	// intact, asserting nothing, green. Three is the count at this revision and a floor
+	// rather than an equality, so adding a fourth authority does not fail here — it
+	// fails in the loop, which is the assertion that should catch it.
+	if len(licensed) < 3 {
+		t.Fatalf("LicensedRefPaths returned %d paths, want >=3 (decode.ml, lexer.mll, "+
+			"parser.mly) — a containment check over an empty set agrees with anything",
+			len(licensed))
+	}
+
+	for _, p := range licensed {
+		// The script's paths are relative to `$dest`, testenv's include it.
+		rel := strings.TrimPrefix(p, "third_party/spec/")
+		if rel == p {
+			t.Errorf("licensed path %q does not start with third_party/spec/ — the script's "+
+				"loop is written relative to $dest and cannot check it", p)
+			continue
+		}
+		if !strings.Contains(src, rel) {
+			t.Errorf("%s does not assert the presence of %q, which testenv licenses as an "+
+				"authority.\n\tA fetch that reports success with an authority missing is the "+
+				"precondition excusing the check that polices it — add it to the loop.", script, rel)
+		}
+	}
+}

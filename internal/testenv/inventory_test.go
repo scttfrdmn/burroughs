@@ -28,8 +28,19 @@ import (
 //
 // Every entry is in this one file, which is the point: routing all skips through
 // testenv is what makes a single env var able to revoke them all. The inventory
-// grows one line per *corpus*, not one per test — a second corpus (the reference
+// grows one line per *question*, not one per test — a second corpus (the reference
 // interpreter, decision 0007) meant a second door, not a second convention.
+//
+// **Four doors, and a fifth that was written and withdrawn.** A control pre-registered
+// against code not yet written wants to skip until its subject exists, and the obvious
+// door for it — condition "the subject is absent", revoked by the subject answering rather
+// than by the flag — was drafted here and rejected by CI's *no test declined to answer*
+// step, which greps the output channel for SKIP lines under the flag and fails on any of
+// them. The rejection was right twice over: it is the ruling this file's policy already
+// implies, and the control turned out to have something to assert today after all (the
+// accept direction, at the lexer). Recorded because the near-miss is the lesson: **a
+// pre-registered control that wants a skip has usually not found the layer where its
+// property is already checkable.** Look for that layer before asking for a license.
 var licensed = map[string]string{
 	"internal/testenv/testenv.go:RequireSuite": "local dev on a clone without `make spec-tests`, revoked by BURROUGHS_NO_SKIP=1",
 	// The 0007 authority is a separate corpus from the suite with a separate fetch
@@ -138,6 +149,10 @@ func TestEverySkipSiteIsLicensed(t *testing.T) {
 
 	for site, pos := range found {
 		if _, ok := licensed[site]; !ok {
+			// Note what this message does *not* offer: a way to add a skip whose condition
+			// the flag cannot revoke. That was drafted (see the header) and withdrawn,
+			// because CI's no-SKIP step forbids it and because the control that wanted it
+			// had a checkable property at a lower layer. The advice stays as it was.
 			t.Errorf("unlicensed skip at %s (%s)\n\t"+
 				"a skip is not a verdict: a test that declines to answer must say why it is allowed to.\n\t"+
 				"Add %q to licensed in internal/testenv/inventory_test.go with its reason, and make sure\n\t"+

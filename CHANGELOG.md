@@ -400,10 +400,57 @@ weakly-ordered platform.
   clean-lexing form is an unnamed unearned pass, and a listed form now rejected is an
   accept-direction defect.
 
+- **The UTF-8 position partition, pre-registered as a control before the parser it
+  guards** (#62). `utf8-invalid-encoding.wast` is 176 vectors and the text column's
+  largest bucket, and it is the cheapest bucket to buy for the wrong reason: all 176
+  are `(func (export "<bad bytes>"))`, so rejecting any string token that is not valid
+  UTF-8 takes every one of them and is *wrong about the grammar*. Measured with the
+  lexer rather than a grep — 864 suite tokens decode to invalid UTF-8, 177 sit inside
+  quote forms, and the accept direction inside quote forms is **empty**, so the suite
+  cannot falsify the blanket check at all. Three grammar facts are pinned against
+  `parser.mly` instead: `name` (:46) and `var` (:49) decode and reject, and
+  `string_list` (:342) concatenates without decoding — the accept direction that data
+  segments and binary payloads route through. All four assertions falsified by editing
+  the vendored authority.
+
+  The implementation half **asserts in both states and never skips**: every row of the
+  five-row partition requires the source to *lex clean* whether or not a parser exists,
+  and the three-way verdict is checked once the probe stops returning its sentinel. That
+  design was the second attempt. The first licensed a skip that expired when the parser
+  arrived, and CI rejected it — the *no test declined to answer* step forbids a SKIP line
+  under `NO_SKIP=1` outright, which is the ruling this repo's skip policy already implied.
+  The rejection was right twice, because the accept direction was checkable today at a
+  layer that does exist: the wrong fix (a blanket UTF-8 check in `emitVarString`, attempted
+  in #60) is reachable in the lexer now. Hence the lesson, recorded in the skip inventory:
+  **a pre-registered control that wants a skip has usually not found the layer where its
+  property is already checkable.** Falsified by reintroducing #60's defect and watching
+  `(func $"\ef")` fail the lex-clean assertion.
+- `TestFetchScriptAssertsEveryAuthority` — `fetch-spec-ref.sh` asserted the presence of
+  `decode.ml` alone, and had kept doing so after `lexer.mll` became a second authority:
+  a presence check silently narrowed to a third of its subject, the early-return defect
+  its own comment records, one scope out. The script now loops over all three and the
+  set is derived from `testenv.LicensedRefPaths()` rather than restated, with a vacuity
+  floor because a containment check over an empty set agrees with anything.
+
 ### Changed
 - `RunGated(decode, readText, isGated)` and `RunWith(decode, readText, isGated,
   have...)` take the text entry point; `Script.Run` now panics on a quote form,
   declaring nothing and supplying nothing.
+- The skip inventory keeps its four doors and its invariant — **one env var revokes them
+  all** — and now records the fifth door that was written and withdrawn, with why. The
+  header had been edited to weaken the invariant to "every license names its revoker",
+  which the withdrawal made unnecessary; both the doc and the guard's failure message are
+  back as they were, plus a note on what the message deliberately does *not* offer (a skip
+  whose condition the flag cannot revoke). Kept rather than deleted because the near-miss
+  is the lesson, and a policy that only records the rules nobody tried to bend has lost
+  the interesting half of its history.
+- `internal/text`'s package doc swept for what the lexer's landing orphaned: it said the
+  package "will hold" a lexer, that the keyword table was "read by nothing but this
+  package's own tests" (`lexer.go:385` reads it), and that the consumer was "#53's next
+  increment" (#53 is closed). The measurement in the linter-silence section was left in
+  place with its conclusion corrected rather than deleted — the risk it named is what the
+  lexer's arrival retired, and a measurement whose subject moved is a claim, not a
+  measurement.
 - **Three lifecycle controls re-pointed by the retirement, each narrower than its own
   name**, and the generalization is worth more than the fixes: *a lifecycle guard
   written while its subject has only ever been in one state will encode that state.*

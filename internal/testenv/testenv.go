@@ -31,6 +31,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -135,6 +136,12 @@ const RefLexerMLL = "third_party/spec/interpreter/text/lexer.mll"
 // decode.ml is 38042 bytes at bdd7164.
 const MinRefDecodeBytes = 20000
 
+// RefParserMLY is the reference interpreter's text *parser*, relative to the repo root.
+// The authority for #62's stratum: where the lexer's rules say what a token is,
+// parser.mly's `name` (:46) and `var` (:49) say which token *positions* decode UTF-8 —
+// and that position, not the byte pattern, is what the verdict turns on.
+const RefParserMLY = "third_party/spec/interpreter/text/parser.mly"
+
 // MinRefLexerBytes is the same floor for lexer.mll, which is 36686 bytes at bdd7164.
 //
 // Its own constant rather than reusing MinRefDecodeBytes, even though 20000 happens to
@@ -143,6 +150,13 @@ const MinRefDecodeBytes = 20000
 // file's* plausible size, and a single number covering two files is right about neither
 // on purpose.
 const MinRefLexerBytes = 20000
+
+// MinRefParserBytes is the floor for parser.mly, which is 54523 bytes at bdd7164.
+//
+// Its own constant, per the argument above: three files, three claims about three
+// plausible sizes. That the number happens to match the other two at this revision is
+// exactly the accident the separate constants exist to keep from becoming load-bearing.
+const MinRefParserBytes = 20000
 
 // refFloors is the size floor per reference file, keyed by the path constants above.
 //
@@ -154,8 +168,23 @@ const MinRefLexerBytes = 20000
 // An unknown path is a hard failure below, never a default floor, because a default is
 // how a third reference file would arrive with no floor at all.
 var refFloors = map[string]int{
-	RefDecodeML: MinRefDecodeBytes,
-	RefLexerMLL: MinRefLexerBytes,
+	RefDecodeML:  MinRefDecodeBytes,
+	RefLexerMLL:  MinRefLexerBytes,
+	RefParserMLY: MinRefParserBytes,
+}
+
+// LicensedRefPaths returns every reference file this package licenses as an authority.
+//
+// Exported so the drift check between refFloors and scripts/fetch-spec-ref.sh can *derive*
+// the set rather than restate it. A test that listed the three paths itself would be a
+// third place knowing the fact, and the two-places problem is the thing being solved.
+func LicensedRefPaths() []string {
+	paths := make([]string, 0, len(refFloors))
+	for p := range refFloors {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+	return paths
 }
 
 // RequireSpecRef is the licensed door for tests that read the reference interpreter.
