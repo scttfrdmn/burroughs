@@ -473,6 +473,187 @@ func TestTagSectionIsWellFormedButGated(t *testing.T) {
 	}
 }
 
+// TestTableInitializerFormIsGatedNotMalformed is #51's accept-direction defect pinned
+// from both sides, on the vector that exposed it.
+//
+// The bug: `(table 1 (ref func) (ref.func 0))` encodes as the `0x40` table form, the
+// `0x40` reached decodeRefType, and the decoder answered `malformed reference type: 0x40`
+// — a valid module rejected with the spec's own word, seven times in elem.wast. Two
+// failures in one, which is why two assertions:
+//
+//  1. **Gate off**: rejected, but feature-named. The construct is defined by Wasm 3.0, so
+//     the thing declining it is the engine's configuration, and it must say so. Asserted
+//     negatively as well — `ErrMalformedRefType` specifically, since that is the string
+//     the defect produced and a regression would produce it again.
+//  2. **Gate on**: accepted. This is the half that proves the fix is a decode and not a
+//     relabelled rejection. It also reaches the initializer through decodeConstExpr, so a
+//     pass here says the const-expr descent works, not merely that the prefix was
+//     recognised.
+//
+// The vector is **cited**, not transcribed: the literal below is the assembled image of
+// elem.wast:453, and TestFixtureProvenance compares it against what the parser builds
+// from that line. All seven of the elem.wast declines carry the byte-identical table
+// entry `\40\00\64\70\00\01\d2\00\0b`, so one citation covers the class; the other six
+// are named in internal/spec's TestGatedVectors allowlist, where they are honestly
+// `gated` on the default board and *passing* in the all-gates-on lane.
+func TestTableInitializerFormIsGatedNotMalformed(t *testing.T) {
+	img := []byte{0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00, 0x01, 0x04, 0x01, 0x60, 0x00, 0x00, 0x03, 0x02, 0x01, 0x00, 0x04, 0x0A, 0x01, 0x40, 0x00, 0x64, 0x70, 0x00, 0x01, 0xD2, 0x00, 0x0B, 0x09, 0x07, 0x01, 0x00, 0x41, 0x00, 0x0B, 0x01, 0x00, 0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B} // elem.wast:453
+
+	_, err := DecodeModule(img)
+	if !errors.Is(err, ErrFeatureDisabled) {
+		t.Errorf("0x40 table form, GC gate off: got %v, want ErrFeatureDisabled", err)
+	}
+	if errors.Is(err, ErrMalformedRefType) {
+		t.Error("0x40 table form reported as a malformed reference type: this is #51's defect — " +
+			"the form is defined by Wasm 3.0, so a gate-off engine declines it by feature name")
+	}
+	if got := err.Error(); !contains(got, "gc") {
+		t.Errorf("0x40 table form, GC gate off: error %q does not name the gate to flip", got)
+	}
+
+	on := &Decoder{Features: Features{GC: true}}
+	if _, err := on.DecodeModule(img); err != nil {
+		t.Errorf("0x40 table form, GC gate on: got %v, want accept", err)
+	}
+}
+
+// TestRefTypeReadsTheReferencesFourteenForms scopes the control to the *space* rather
+// than to the forms #51 needed (CLAUDE.md: a control scoped to the current sample
+// inherits the current blind spot).
+//
+// decodeRefType previously compared two bytes; it now reads an s7 and ranks fourteen
+// forms. Checking only the twelve that were wrong would leave the next added form
+// unmeasured, so the domain here is **every s7 value a single byte can encode** —
+// -64..63 — partitioned three ways: ungated accept, feature-named decline, malformed.
+// The partition is asserted rather than the members enumerated, so a form moving between
+// classes fails loudly and a form *added* to the reference shows up as a malformed byte
+// the count no longer matches.
+//
+// synthetic: a one-byte reftype in a table section, constructed per form. The suite has
+// vectors for a handful of these and none for most, which is the reason the sweep exists.
+func TestRefTypeReadsTheReferencesFourteenForms(t *testing.T) {
+	// The table section's element type is the byte under test; limits `\00\01` follow.
+	image := func(form byte) []byte {
+		return []byte{
+			0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00,
+			0x04, 0x04, 0x01, form, 0x00, 0x01,
+		}
+	}
+	on := &Decoder{Features: Features{GC: true}}
+
+	// Three bytes are not one-byte reftypes through this entry point, and each is
+	// excluded for a *named* reason rather than by shrinking a count until it matched.
+	// Measured, not predicted — the first draft of this test asserted 2/10/114 over all
+	// 128 forms and found all three:
+	//
+	//	0x40  never reaches decodeRefType at all. decodeTable peeks it and takes the
+	//	      initializer form, so with GC on the `\00\01` limits are re-read as a zero
+	//	      byte plus a reftype and the error names `0x01`. The enclosing grammar owns
+	//	      the byte; TestTableInitializerFormIsGatedNotMalformed is its control.
+	//	0x63  -0x1d, `(ref null ht)` — takes a following heaptype, so a one-byte image
+	//	0x64  -0x1c, `(ref ht)`      — truncates instead of deciding. Both are covered by
+	//	      TestHeapTypeFollowsTheParameterizedForms, which supplies the second byte.
+	//
+	// Asserted as a set, so a form leaving or joining this list is a failure rather than
+	// a silently absorbed difference.
+	excluded := map[byte]string{0x40: "table initializer prefix", 0x63: "(ref null ht)", 0x64: "(ref ht)"}
+
+	var ungated, gatedOff, malformed int
+	seenExcluded := map[byte]bool{}
+	for v := -64; v < 64; v++ {
+		form := byte(v & 0x7F)
+		img := image(form)
+
+		_, off := DecodeModule(img)
+		_, all := on.DecodeModule(img)
+
+		switch {
+		case off == nil && all == nil:
+			ungated++
+		case errors.Is(off, ErrFeatureDisabled) && all == nil:
+			gatedOff++
+		case errors.Is(off, ErrMalformedRefType) && errors.Is(all, ErrMalformedRefType):
+			malformed++
+		case excluded[form] != "":
+			seenExcluded[form] = true
+		default:
+			t.Errorf("s7 form %d (byte %#02x) is in no class: gate off %v, all gates on %v",
+				v, form, off, all)
+		}
+	}
+
+	// The counts are the assertion: two ungated (funcref 0x70, externref 0x6F — the Wasm
+	// 2.0 subset), ten gated abstract forms (-0x0c..-0x0f, -0x12..-0x17), and the
+	// remaining 113 malformed. 2+10+113+3 = 128, which is the whole s7 space.
+	if ungated != 2 || gatedOff != 10 || malformed != 113 {
+		t.Errorf("reftype partition over s7: %d ungated, %d gated-off, %d malformed; "+
+			"want 2/10/113 (funcref+externref, ten GC abstract forms, the rest malformed)",
+			ungated, gatedOff, malformed)
+	}
+	// Vacuity floor: an all-zero tally satisfies a comparison against zeros, so the sweep
+	// asserts it actually classified the space rather than merely finishing the loop.
+	if n := ungated + gatedOff + malformed + len(seenExcluded); n != 128 {
+		t.Errorf("classified %d of 128 s7 forms; the sweep is not covering the space", n)
+	}
+	for form, why := range excluded {
+		if !seenExcluded[form] {
+			t.Errorf("byte %#02x (%s) no longer lands outside the one-byte partition; "+
+				"either its grammar moved or this exclusion is stale", form, why)
+		}
+	}
+}
+
+// TestHeapTypeFollowsTheParameterizedForms covers the two reftype forms the sweep above
+// deliberately cannot: -0x1c and -0x1d each take a heaptype, so they are two bytes.
+//
+// Both directions of the heaptype alternation, because it is an `either` and an `either`
+// is where a specific error goes to die: a type *index* (s33, non-negative) and an
+// abstract form. A one-byte image for these forms truncates rather than deciding, which
+// is what keeps them out of the single-byte partition.
+//
+// synthetic: no phase-1 vector encodes a parameterized reftype outside elem.wast's table
+// form, and there the heaptype is `\70` (func) only.
+func TestHeapTypeFollowsTheParameterizedForms(t *testing.T) {
+	// The declared section size is computed, not written by hand: one byte of vec count,
+	// the reftype tail, and two bytes of limits. The first draft hard-coded the wrong sum
+	// and every case failed with `declared 4, grammar consumed 5` — the size check doing
+	// its job on the test rather than on the engine.
+	image := func(tail ...byte) []byte {
+		img := []byte{0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00, 0x04, byte(3 + len(tail)), 0x01}
+		return append(append(img, tail...), 0x00, 0x01)
+	}
+	on := &Decoder{Features: Features{GC: true}}
+
+	cases := []struct {
+		name string
+		tail []byte
+		ok   bool
+	}{
+		{"(ref func): abstract heaptype", []byte{0x64, 0x70}, true},
+		{"(ref null func): abstract heaptype", []byte{0x63, 0x70}, true},
+		{"(ref 0): a type index", []byte{0x64, 0x00}, true},
+		{"(ref null 3): a type index", []byte{0x63, 0x03}, true},
+		{"(ref 0x40): neither an index nor an abstract form", []byte{0x64, 0x40}, false},
+	}
+	for _, c := range cases {
+		img := image(c.tail...)
+		_, err := on.DecodeModule(img)
+		if c.ok && err != nil {
+			t.Errorf("%s: got %v, want accept with GC on", c.name, err)
+		}
+		if !c.ok && !errors.Is(err, ErrMalformedHeapType) {
+			t.Errorf("%s: got %v, want ErrMalformedHeapType", c.name, err)
+		}
+		// The gate governs the prefix, so every one of these declines by feature name
+		// with GC off — including the malformed heaptype, which never gets read. That
+		// ordering is the point: decodeRefType checks the gate *before* descending, so
+		// the error names the layer the user can act on.
+		if _, off := DecodeModule(img); !errors.Is(off, ErrFeatureDisabled) {
+			t.Errorf("%s, GC gate off: got %v, want ErrFeatureDisabled", c.name, off)
+		}
+	}
+}
+
 func contains(s, sub string) bool {
 	for i := 0; i+len(sub) <= len(s); i++ {
 		if s[i:i+len(sub)] == sub {

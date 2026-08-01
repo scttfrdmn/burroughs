@@ -195,6 +195,8 @@ var gatedNonOpcodes = map[gateID]string{
 	gateMultiMemory:       "memarg flags bit 6, an explicit memory index — decodeMemop",
 	gateExceptionHandling: "tag section (id 13), import/export kind 4 — sections.go",
 	gateSIMD:              "the v128 value type, including as a blocktype — decodeValType",
+	gateGC: "the 0x40 table form with an initializer (function-references), and the twelve " +
+		"GC reftypes — sections.go decodeTable, decodeRefType (#51)",
 }
 
 // gateFor returns the gate governing one opcode, and whether one exists.
