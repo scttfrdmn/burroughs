@@ -96,25 +96,74 @@ const (
 	CapWatReader Capability = "wat-reader"
 )
 
-// capabilityIssues is the registry, and the tracking issue is part of the entry
-// rather than a comment beside it.
+// capEntry is a registry entry: what tracks the gap, and what ends it.
+//
+// Retires is the entry's own death certificate, written on the day it is born.
+// `unimplemented` describes components that do not exist yet, so its guards cannot
+// be spatial the way `gated`'s all-on lane is — there is nothing to switch on. They
+// have to be temporal instead: an entry states the condition under which it must be
+// deleted, and a test enforces that the condition, once met, was acted on. An entry
+// may not outlive its component (ruling: chat-Claude, PR #58).
+type capEntry struct {
+	Issue   string
+	Retires string
+}
+
+// capabilityIssues is the registry, and both the tracking issue and the retirement
+// condition are part of the entry rather than comments beside it.
 //
 // An entry bearing its issue is the design-debt-needs-a-tripwire rule (0006)
 // applied to a verdict: `unimplemented` is a debt, and a debt with no tracking
 // number is an intention. The map is what TestEveryNeededCapabilityIsRegistered
 // reads, so an unregistered capability cannot reach the board.
-var capabilityIssues = map[Capability]string{
-	CapWatReader: "#53",
+var capabilityIssues = map[Capability]capEntry{
+	CapWatReader: {
+		Issue: "#53",
+		Retires: "when a wat reader is wired and engineCapabilities declares CapWatReader: " +
+			"this entry is deleted in the same commit, and unimplemented(wat-reader) must " +
+			"be 0 — every one of its vectors converted to pass or fail, none left behind",
+	},
 }
+
+// engineCapabilities is what the engine actually has. Empty today, and stated
+// explicitly rather than left to omission: guard 1 of decision 0010 says the
+// classifier computes what a command needs and the engine declares what it has, so
+// the engine's half has to be a declaration. Silence would be the same fact carried
+// by an absence, and an absence cannot be read as a claim.
+//
+// Adding a member here is half of a retirement: the other half is deleting the
+// matching capabilityIssues entry, and TestNoCapabilityOutlivesItsComponent fails if
+// only one of the two happens.
+var engineCapabilities = map[Capability]bool{}
+
+// EngineCapabilities returns the capabilities the engine has, sorted. Board runners
+// pass this rather than nothing, so what the board scores is derived from a
+// declaration instead of from a forgotten argument.
+func EngineCapabilities() []Capability {
+	return sortedCaps(len(engineCapabilities), func(yield func(Capability)) {
+		for c := range engineCapabilities {
+			yield(c)
+		}
+	})
+}
+
+// EngineHas reports whether the engine declares a capability.
+func EngineHas(c Capability) bool { return engineCapabilities[c] }
 
 // RegisteredCapabilities returns the registry's members, sorted. Derived from the
 // map rather than listed, for the reason every domain in this package is derived:
 // an enumeration is a sample, and a sample has a blind spot by construction.
 func RegisteredCapabilities() []Capability {
-	caps := make([]Capability, 0, len(capabilityIssues))
-	for c := range capabilityIssues {
-		caps = append(caps, c)
-	}
+	return sortedCaps(len(capabilityIssues), func(yield func(Capability)) {
+		for c := range capabilityIssues {
+			yield(c)
+		}
+	})
+}
+
+func sortedCaps(n int, each func(func(Capability))) []Capability {
+	caps := make([]Capability, 0, n)
+	each(func(c Capability) { caps = append(caps, c) })
 	sort.Slice(caps, func(i, j int) bool { return caps[i] < caps[j] })
 	return caps
 }
@@ -122,8 +171,15 @@ func RegisteredCapabilities() []Capability {
 // CapabilityIssue returns the tracking issue for a capability, and false if it is
 // not registered.
 func CapabilityIssue(c Capability) (string, bool) {
-	s, ok := capabilityIssues[c]
-	return s, ok
+	e, ok := capabilityIssues[c]
+	return e.Issue, ok
+}
+
+// CapabilityRetirement returns the condition under which a capability's registry
+// entry must be deleted, and false if it is not registered.
+func CapabilityRetirement(c Capability) (string, bool) {
+	e, ok := capabilityIssues[c]
+	return e.Retires, ok
 }
 
 // Script is a parsed .wast file.
@@ -495,18 +551,26 @@ func (s *Script) Run(decode DecodeFunc) *Result {
 // RunGated executes a script and separates gate declines from verdicts. isGated
 // reports whether an error means the engine refused to answer because a feature
 // gate is off; those vectors land in Result.Gated instead of Pass or Fail.
+//
+// Capabilities come from engineCapabilities, not from the caller: this is the board's
+// runner, and the board must score against what the engine declares rather than
+// against what a call site remembered to pass. When the wat reader lands, adding it
+// to that declaration moves the board without touching this function.
 func (s *Script) RunGated(decode DecodeFunc, isGated GatedFunc) *Result {
-	return s.run(decode, runOpts{isGated: isGated})
+	return s.RunWith(decode, isGated, EngineCapabilities()...)
 }
 
 // RunWith executes a script with an explicit set of engine capabilities. A command
 // whose Needs is not in have is scored Unimplemented (decision 0010).
 //
-// This is the seam the wat reader will arrive through: when it exists, its runner
-// passes CapWatReader and 1236 vectors move out of the fourth column into pass or
-// fail. Until then no caller declares it, which is why the default is empty rather
+// This is the seam the wat reader will arrive through: when it exists, it joins
+// engineCapabilities and 1236 vectors move out of the fourth column into pass or
+// fail. Until then nothing declares it, which is why the default is empty rather
 // than "everything the harness knows about" — the latter would score vectors against
 // components that do not exist.
+//
+// The explicit-argument form stays for tests that need to declare a capability the
+// engine does not have, which must panic rather than score.
 func (s *Script) RunWith(decode DecodeFunc, isGated GatedFunc, have ...Capability) *Result {
 	set := make(map[Capability]bool, len(have))
 	for _, c := range have {
@@ -531,7 +595,15 @@ func (s *Script) run(decode DecodeFunc, opts runOpts) *Result {
 		// from c.Needs rather than from the Kind, so a future Kind that needs the same
 		// component inherits this for free (decision 0010, guard 1).
 		if c.Needs != CapNone && !opts.has[c.Needs] {
-			if _, ok := capabilityIssues[c.Needs]; !ok {
+			if e, ok := capabilityIssues[c.Needs]; !ok || e.Retires == "" {
+				if ok {
+					// Registered, but with no retirement condition — an entry with no way to
+					// die is a squatter, and the column it feeds would be permanent by
+					// omission rather than by decision.
+					panic(fmt.Sprintf("%s:%d needs capability %q, whose registry entry states "+
+						"no retirement condition; an entry that cannot die outlives its "+
+						"component", s.Path, c.Line, c.Needs))
+				}
 				// A capability the classifier invented. Counting it would let the fourth
 				// verdict grow by fiat, which is the abuse guard 2 exists to make
 				// impossible — so it is a hard stop, not a larger column.

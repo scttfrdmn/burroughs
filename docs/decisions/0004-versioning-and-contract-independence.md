@@ -96,8 +96,18 @@ it.
 Board at the time of this amendment: 1236 unimplemented, all of them waiting on the
 wat reader (#53), which is therefore a `v0.1.0` blocker by this rule.
 
+**Addendum, same day (PR #58):** this rule is one of two ends, not the whole
+mechanism. 0010 gained a **guard 6** — a registry entry states at birth the condition
+under which it must be deleted, and a capability the engine declares must have drained
+its population to exactly zero. Guard 4 here constrains *releases*: the debt cannot be
+released around. Guard 6 constrains *arrivals*: it cannot be abandoned mid-payment by a
+component that lands and leaves vectors behind. Recorded here because a reader arriving
+at this section to cut a release should know the count they are checking is also
+defended at the other end, and not conclude that the version gate is the only thing
+standing between the column and permanence.
+
 ## Status
 
-Accepted 2026-07-30; amended 2026-08-01 (decision 0010, guard 4).
+Accepted 2026-07-30; amended 2026-08-01 (decision 0010, guard 4; addendum for guard 6).
 Contract §10.7 is resolved by this doc; §10 open
 questions remaining: 1 (resolved by 0002), 2, 3, 4, 5, 6.

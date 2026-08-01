@@ -756,9 +756,11 @@ func TestParseEverySuiteFile(t *testing.T) {
 // component does not exist.
 //
 // So the fence is the registry: classify may only ask for a capability that has an
-// entry, and the entry carries the issue that closes it. This test reads the whole
-// corpus rather than the board, because an unregistered capability on an unadmitted
-// file is still a classification defect.
+// entry, and the entry carries the issue that closes it — plus, per guard 6, the
+// condition under which it must be deleted. This test reads the whole corpus rather
+// than the board, because an unregistered capability on an unadmitted file is still a
+// classification defect. TestNoCapabilityOutlivesItsComponent is the other half: this
+// one guards the entry's birth, that one its death.
 func TestEveryNeededCapabilityIsRegistered(t *testing.T) {
 	requireSuite(t)
 	seen := map[Capability]int{}
@@ -783,6 +785,11 @@ func TestEveryNeededCapabilityIsRegistered(t *testing.T) {
 			if issue == "" {
 				t.Errorf("capability %q is registered with an empty issue; the tracking "+
 					"number is what makes it a debt rather than an intention", c.Needs)
+			}
+			if ret, _ := CapabilityRetirement(c.Needs); ret == "" {
+				t.Errorf("capability %q is registered with no retirement condition; an entry "+
+					"born without a death certificate is a squatter, and its column becomes "+
+					"permanent by omission rather than by decision", c.Needs)
 			}
 		}
 	}
@@ -852,4 +859,82 @@ func TestQuoteFormsAwaitTheirReader(t *testing.T) {
 		}()
 		_ = s.RunWith(decode, isGated, CapWatReader)
 	}()
+}
+
+// TestNoCapabilityOutlivesItsComponent is the second structural control on the fourth
+// verdict (ruling: chat-Claude, PR #58), and it is temporal where `gated`'s is spatial.
+//
+// `gated` gets its anti-dumping-ground guarantee from a lane: turn every gate on, and
+// the gated count must be zero, so a vector parked in the third verdict is
+// simultaneously being failed somewhere. That does not transfer, and the reason is
+// exactly why this category exists — absence-by-construction has nothing to switch on.
+// You cannot enable a component that has not been written.
+//
+// So the guarantee is delivered as a tripwire on the registry's *lifecycle* instead.
+// Two directions, and both are failures:
+//
+//   - A capability the engine declares must not still be registered as missing. The
+//     registry would be claiming the engine is waiting on something it has.
+//   - A capability the engine declares must have drained its population to exactly
+//     zero. Landing a component that leaves some of its vectors in the fourth column
+//     is the disappearance the whole ruling exists to prevent: the component exists,
+//     so those vectors have no excuse left, and they must be pass or fail.
+//
+// The two together are why retirement is a single motion — declare the capability,
+// delete the entry, and the population is zero because nothing can produce it. Doing
+// half of it fails here rather than being noticed at review time, which is what makes
+// the entry's stated Retires condition an assertion rather than a promise.
+func TestNoCapabilityOutlivesItsComponent(t *testing.T) {
+	requireSuite(t)
+
+	engine := EngineCapabilities()
+	registered := RegisteredCapabilities()
+
+	// Vacuity: the control compares two sets, and today one of them is empty by
+	// design, so the *registry* is what must be non-empty for this test to be
+	// asserting anything at all. A comparison against two empty sets agrees
+	// perfectly (the rule that let an empty keyword extraction drift-check clean).
+	if len(registered) == 0 {
+		t.Fatal("the capability registry is empty, so this test compared nothing against " +
+			"nothing; either the fourth verdict has been removed — in which case delete this " +
+			"control deliberately — or the registry was emptied without draining it")
+	}
+
+	for _, c := range engine {
+		if _, stillRegistered := CapabilityIssue(c); stillRegistered {
+			ret, _ := CapabilityRetirement(c)
+			t.Errorf("the engine declares %q but it is still in capabilityIssues; retirement "+
+				"is one motion, and this is the half that was skipped.\n  its stated condition: %s",
+				c, ret)
+		}
+	}
+
+	// The population check, over the whole corpus rather than the board: a declared
+	// capability leaving vectors behind on an unadmitted file is the same defect.
+	pop := map[Capability]int{}
+	for _, p := range suitePaths(t) {
+		s, err := ParseFile(p)
+		if err != nil {
+			t.Errorf("%s: parse: %v", p, err)
+			continue
+		}
+		r := run(s)
+		for c, n := range r.UnimplementedByCapability {
+			pop[c] += n
+		}
+	}
+	for _, c := range engine {
+		if n := pop[c]; n != 0 {
+			t.Errorf("the engine declares %q, yet %d vectors are still scored unimplemented "+
+				"against it; a component that lands without draining its column to zero has "+
+				"converted a deferral into a disappearance", c, n)
+		}
+	}
+
+	// And the corpus's own report of what it is waiting on, logged so the retirement
+	// condition's number is visible rather than recomputed by hand at closing time.
+	for _, c := range registered {
+		issue, _ := CapabilityIssue(c)
+		t.Logf("%s (%s): %d vectors outstanding, engine has it: %v", c, issue, pop[c], EngineHas(c))
+	}
 }

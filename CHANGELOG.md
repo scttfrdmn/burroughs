@@ -970,6 +970,39 @@ is a formatting pass of its own, not a drive-by inside a decoder PR.*
   all 1236 attributed to `wat-reader` (#53). Pass and fail are unmoved, which is the honest
   reading: admitting a corpus earns no verdicts.
 
+- **Capability registry entries are born with their retirement conditions** — the fourth
+  verdict's second structural control, added on review of the above
+  ([#58](https://github.com/scttfrdmn/burroughs/pull/58)) and **temporal where `gated`'s is
+  spatial**. `gated` gets its anti-dumping-ground guarantee from a lane: turn every gate on
+  and the count must be zero. That does not transfer, for the reason the category exists —
+  absence-by-construction has nothing to switch on, so there is no lane to build.
+
+  So a registry entry now states, the day it is written, the condition under which it must be
+  **deleted**, and `engineCapabilities` states what the engine actually has rather than
+  leaving it to omission (an absence cannot be read as a claim, and guard 1 makes the
+  engine's half a declaration). `RunGated` derives from that declaration, so the board scores
+  against what the engine says it has rather than what a call site remembered to pass — when
+  the wat reader lands, one line moves the board.
+
+  `TestNoCapabilityOutlivesItsComponent` enforces both directions: a capability the engine
+  declares must no longer be registered, **and** must have drained its population to exactly
+  zero. Retirement is one motion, and each half alone is a defect — a landed component that
+  leaves vectors in the fourth column has converted a deferral into a disappearance, which is
+  precisely what the ruling exists to prevent. An entry with no retirement condition panics in
+  the run loop: an entry that cannot die makes its column permanent by omission rather than by
+  decision. **An entry may not outlive its component; a capability with no population and no
+  retirement is a squatter.**
+
+  Four more falsifications, all fired where named: declaring the capability while leaving the
+  entry (`retirement is one motion, and this is the half that was skipped`), a reader that
+  lands leaving 1236 behind (`converted a deferral into a disappearance`), the registry
+  emptied without draining (the vacuity floor — `compared nothing against nothing`), and an
+  entry born without a death certificate (`an entry that cannot die outlives its component`).
+
+  `CapWatReader`'s condition, from day one: retire when the reader is wired and
+  `unimplemented(wat-reader)` is 0 — every vector converted to pass or fail, **none left
+  behind**. That makes #53's done-when checkable by CI instead of by a reviewer.
+
 ### Fixed
 
 - **A pre-registered claim, refuted by its own probe** — recorded here because the
