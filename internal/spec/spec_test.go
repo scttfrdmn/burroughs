@@ -2,13 +2,16 @@ package spec
 
 import (
 	"errors"
+	"fmt"
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/scttfrdmn/burroughs/internal/binary"
 	"github.com/scttfrdmn/burroughs/internal/testenv"
+	"github.com/scttfrdmn/burroughs/internal/text"
 )
 
 // suiteDir is where make spec-tests vendors the upstream suite. Gitignored;
@@ -116,13 +119,28 @@ func decode(image []byte) error {
 	return err
 }
 
+// readText is the wat entry point the board scores — the lexer, and only the lexer.
+//
+// **What this does not do is the whole reason the reject-direction column reads the way
+// it does.** `text.LexAll` runs to EOF and returns the first lex error; nothing above it
+// exists yet, so every vector whose malformedness lives in the grammar (`unexpected
+// token`), in a validator (`alignment`, `duplicate func`), or in the parser's UTF-8
+// decode of a name (176 of the 186 `malformed UTF-8 encoding` vectors) is a *fail*, in a
+// named bucket, and not a skip. That is the bucketed-failures discipline: the 600 are the
+// work plan for #8 and the parser, not a debt hidden behind a fourth verdict — the fourth
+// verdict was for a component that did not exist, and the lexer exists.
+func readText(src []byte) error {
+	_, err := text.LexAll(src)
+	return err
+}
+
 // isGated asks the engine, rather than reading its error text. The taxonomy is
 // the engine's to define; a substring test here would be the harness guessing at
 // the thing it exists to check.
 func isGated(err error) bool { return errors.Is(err, binary.ErrFeatureDisabled) }
 
 // run scores a script with gate declines separated from verdicts.
-func run(s *Script) *Result { return s.RunGated(decode, isGated) }
+func run(s *Script) *Result { return s.RunGated(decode, readText, isGated) }
 
 // requireSuite gates every board test on the corpus actually being there.
 //
@@ -396,6 +414,103 @@ func TestGatedVectors(t *testing.T) {
 	}
 }
 
+// TestBareQuoteFormsPassUnearned names the seven passes the reader did not earn.
+//
+// A bare `(module quote "...")` asserts its source is *valid* wat. The engine's answer is
+// `text.LexAll`, which asserts only that the source lexes — so a vector passes here by the
+// absence of everything above the lexer, not by anything the lexer decided. That is
+// **overfitting arrived at by omission** (§9 G-3): pass count bought by a check that is
+// right on the vectors and wrong in general, and invisible on the board by construction
+// because the board cannot tell an earned pass from an unopposed one.
+//
+// So it is reported rather than netted out. The seven are enumerated with what each one
+// actually turns on, in the shape TestGatedVectors uses for the third verdict and for the
+// same reason — an unexplained entry is a suppression wearing a disguise, and a category
+// that can grow silently is a lever. When #8's parser lands, these seven become genuine
+// verdicts and this test's job is to *shrink to zero*; a new bare form appearing here
+// before then is a vector claiming a pass nobody looked at.
+//
+// The reverse direction matters more than the forward one, which is why both are checked:
+// a listed vector that has started *failing* means the lexer regressed on something it
+// used to accept — an accept-direction defect, the class no negative vector can falsify
+// (decision 0007) — and it would otherwise read as this list going stale.
+func TestBareQuoteFormsPassUnearned(t *testing.T) {
+	requireSuite(t)
+
+	// file → line → what the vector actually tests, i.e. what the lexer is silent about.
+	unearned := map[string]map[int]string{
+		// Annotation *placement* and shape: the spec says an unrecognized annotation is
+		// ignored wherever it may appear, and these assert it in six positions. The lexer
+		// skips annotation bodies (they produce no token), so it agrees for the wrong
+		// reason — it cannot tell a well-placed annotation from a misplaced one, because
+		// it has no notion of position at all.
+		"annotations.wast": {
+			32:  "annotation before a module field — placement is the parser's judgement",
+			33:  "annotation inside a func body — same",
+			36:  "annotation with a nested s-expression body",
+			55:  "annotation containing string and id atoms",
+			206: "annotation in a type position",
+			207: "annotation in an import position",
+		},
+		// Comment nesting and termination inside a module. scanBlockComment does decide
+		// closedness, so this one is the closest to earned of the seven — but what the
+		// vector asserts is that the *module* is valid with comments interleaved, and the
+		// module's validity is not a question the lexer is asked.
+		"comments.wast": {
+			83: "nested block comments interleaved with module fields",
+		},
+	}
+
+	// Vacuity floor. A list of unearned passes that finds nothing is indistinguishable
+	// from a board with none, and the second is the state this test exists to detect the
+	// arrival of. Floored at the list's own length rather than at 1, per *a floor below
+	// the list's own length is decoration*.
+	want := 0
+	for _, m := range unearned {
+		want += len(m)
+	}
+	if want != 7 {
+		t.Fatalf("the unearned list holds %d entries, want 7; the count is quoted in the "+
+			"pass floor's account and in PR #61, so the two must not drift", want)
+	}
+
+	seen := 0
+	for _, f := range boardFiles(t) {
+		s, err := ParseFile(filepath.Join(suiteDir, f))
+		if err != nil {
+			t.Errorf("%s: parse: %v", f, err)
+			continue
+		}
+		for _, c := range s.Commands {
+			if c.Kind != KindModuleQuote {
+				continue
+			}
+			err := readText(c.Source)
+			_, listed := unearned[f][c.Line]
+			switch {
+			case err == nil && !listed:
+				t.Errorf("%s:%d is a bare (module quote ...) that lexes clean and is not in "+
+					"the unearned list; it passes because nothing above the lexer can "+
+					"disagree with it, and a pass arrived at by omission has to be named",
+					f, c.Line)
+			case err != nil && listed:
+				// The direction that is a defect rather than staleness.
+				t.Errorf("%s:%d is listed as an unearned pass but the reader now rejects it "+
+					"(%v); a valid module rejected is an accept-direction defect, which no "+
+					"negative vector in the suite can catch", f, c.Line, err)
+			case err == nil && listed:
+				seen++
+			}
+		}
+	}
+	if seen != want {
+		t.Errorf("found %d of %d listed unearned passes; a listed vector the loop never "+
+			"reached means the file left the board and this list is watching nothing",
+			seen, want)
+	}
+	t.Logf("%d bare (module quote ...) forms pass unearned, pending #8's parser", seen)
+}
+
 // allFeaturesOn returns a Features with every gate the decoder knows about turned
 // on, discovered by reflection rather than by an enumerated literal.
 //
@@ -457,7 +572,7 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 		// Still RunGated, deliberately: the point is to *measure* Gated and require
 		// it to be zero. Using Run would fold declines into Fail and the requirement
 		// would be unfalsifiable — the counter it asserts on could not be nonzero.
-		r := s.RunGated(decodeAllOn, isGated)
+		r := s.RunGated(decodeAllOn, readText, isGated)
 		t.Log("\n" + r.Board())
 		totalPass, totalFail, totalGated = totalPass+r.Pass, totalFail+r.Fail, totalGated+r.Gated
 
@@ -531,6 +646,7 @@ func TestPhase1Files(t *testing.T) {
 	totalPass, totalFail, totalUnsup, totalGated, totalUnimpl := 0, 0, 0, 0, 0
 	byHead := map[string]int{}
 	byCap := map[Capability]int{}
+	aggBuckets := map[string][]Failure{}
 	for _, f := range files {
 		s, err := ParseFile(filepath.Join(suiteDir, f))
 		if err != nil {
@@ -550,9 +666,18 @@ func TestPhase1Files(t *testing.T) {
 		for c, n := range r.UnimplementedByCapability {
 			byCap[c] += n
 		}
+		for k, fs := range r.Buckets {
+			aggBuckets[k] = append(aggBuckets[k], fs...)
+		}
 	}
 	t.Logf("board total over %d files: %d pass, %d fail, %d unsupported, %d gated, %d unimplemented",
 		len(files), totalPass, totalFail, totalUnsup, totalGated, totalUnimpl)
+
+	// The fail column as a work plan across the whole board, not per file. Printed every
+	// run so the PR's Board line quotes measured buckets rather than a recollection.
+	for _, k := range (&Result{Buckets: aggBuckets}).BucketsBySize() {
+		t.Logf("  fail %5d  %s", len(aggBuckets[k]), k)
+	}
 
 	// The unsupported column as a work plan, not a number. Printed every run so the
 	// PR's Board line can quote which component each unrun vector waits on.
@@ -589,16 +714,22 @@ func TestPhase1Files(t *testing.T) {
 
 	// The fourth verdict's ceiling, and its purpose is the *drain* (decision 0010).
 	//
-	// 1236 at the measured revision, all of them waiting on the wat reader (#53). This
-	// may only fall, and unlike the unsupported ceiling it has a terminal value that is
-	// not a matter of taste: decision 0004's rule is that no minor version is cut while
-	// its milestone's unimplemented is nonzero, and v0.1.0 requires zero. So this
-	// number is a countdown to a release gate rather than a column to live with.
+	// **At its terminal value, which is the only value that makes it an assertion.** It
+	// was 1236 from the column's creation until the wat reader landed, all of them
+	// waiting on it (#53); the retirement converted every one, so the ceiling is 0.
 	//
-	// A ceiling and not an equality, for the same reason the pass floor is a floor: the
-	// wat reader will convert these in batches, and a test that had to be edited on
-	// every batch would be edited without being read.
-	const unimplementedCeiling = 1236
+	// Lowering it is not bookkeeping. A ceiling of 1236 against an actual 0 permits 1236
+	// vectors to reappear in the fourth column without a word — the *whole* population,
+	// and precisely the disappearance guard 6 exists to prevent, wearing a ceiling's
+	// clothes. A bound that no longer binds anything is a control asserting nothing while
+	// looking like one, and this drain had a terminal value fixed by decision 0004 rather
+	// than by taste: no minor version is cut while its milestone's unimplemented is
+	// nonzero, and v0.1.0 requires zero.
+	//
+	// Still a ceiling rather than an equality, because at zero the two coincide and the
+	// ceiling generalizes: the next capability admitted raises it with an account, and
+	// drains it back down.
+	const unimplementedCeiling = 0
 	if totalUnimpl > unimplementedCeiling {
 		t.Errorf("unimplemented rose to %d, ceiling %d — a new capability gap appeared or "+
 			"one widened; the column exists to drain, so growth needs an explanation",
@@ -627,20 +758,82 @@ func TestPhase1Files(t *testing.T) {
 	// ceiling on fail is only meaningful while fail means *defect*, so the two changes
 	// are one change: admit the corpus, and keep the column that says what is broken.
 	//
+	// **The wat reader raised this 1 → 601, and the account is why that is not the
+	// invisibility the paragraph above forbids.** 600 of the 601 are text-layer vectors
+	// whose grammar is not written: the lexer answers 636 of the 1236 quote vectors and
+	// the other 600 need the parser (#8), the validator, or the name decoder. Every one
+	// of them is a *fail*, in a named bucket, and not a fourth-verdict entry — the
+	// fourth verdict was for a component that did not exist, and the lexer exists, so a
+	// vector it can be asked about has no excuse left. Reporting them as unimplemented
+	// would be the disappearance guard 6 exists to prevent, one layer up.
+	//
+	// What would have been invisible is a single ceiling of 601, which is why the
+	// ceiling is now **two ceilings over a structural partition**: a new decoder defect
+	// arrives as `binaryFail 2 > 1` regardless of what the text column is doing. The
+	// partition is on Failure.Kind rather than on the bucket string because the two
+	// layers share strings — `malformed UTF-8 encoding` is a bucket on both sides — and
+	// *when a partition's members share a value, an equality on that value is not a
+	// partition check*.
+	//
+	// Falsified in both directions before being trusted, per the print-don't-trust rule:
+	// with the operands of the Kind test swapped, binaryFail reads 600 and textFail 1,
+	// and both arms fail. That is the check TestSectionSizeBothSigns's grave (#34) asks
+	// for — a partition test verified against the partition, not against its labels.
+	binaryFail, textFail := 0, 0
+	for _, fs := range aggBuckets {
+		for _, f := range fs {
+			switch f.Kind {
+			case KindModuleQuote, KindAssertMalformedText:
+				textFail++
+			default:
+				binaryFail++
+			}
+		}
+	}
+	if binaryFail+textFail != totalFail {
+		t.Errorf("fail partition sums to %d but the column is %d; a failure escaped both "+
+			"arms, so one of the two ceilings below is watching a subset it cannot name",
+			binaryFail+textFail, totalFail)
+	}
+
 	// 1 at the measured revision: binary-gc.wast:1, "malformed function type: 0x5e"
-	// under an expected "malformed mutability".
-	const failCeiling = 1
-	if totalFail > failCeiling {
-		t.Errorf("fail rose to %d, ceiling %d — a defect landed, or an unbuilt component is "+
-			"being scored as a wrong answer; the second would mean the fourth verdict is "+
-			"not catching what it was built for", totalFail, failCeiling)
+	// under an expected "malformed mutability". Unmoved by the wat reader — which is the
+	// point of splitting the column, and the claim the split makes checkable.
+	const binaryFailCeiling = 1
+	if binaryFail > binaryFailCeiling {
+		t.Errorf("decoder failures rose to %d, ceiling %d — a defect landed in the binary "+
+			"decoder; this ceiling is deliberately not shared with the text column so that "+
+			"a decoder regression cannot hide inside 600 unwritten grammars",
+			binaryFail, binaryFailCeiling)
+	}
+
+	// 600 at the measured revision, and this one is a **work plan with a ceiling**
+	// rather than a defect count: every member is a vector the lexer reached and could
+	// not answer, bucketed by the spec string that names what is missing. It may only
+	// fall, and it falls as #8's parser and the validator land. The buckets printed
+	// above are the order to take them in.
+	const textFailCeiling = 600
+	if textFail > textFailCeiling {
+		t.Errorf("text failures rose to %d, ceiling %d — either the reader regressed on "+
+			"vectors it used to answer, or the corpus moved", textFail, textFailCeiling)
 	}
 
 	// Pass floor over the whole board, the counterpart to TestBinaryWast's per-file
-	// floor. 783 at the measured revision: 764 from the byte-string corpus plus the
-	// 19 the derived selector newly reaches. Unmoved by the quote admission, which is
-	// the honest reading — admitting a corpus earns no verdicts.
-	const passFloor = 783
+	// floor.
+	//
+	// **1419 = 783 + 636, and the 636 is the forecast reconciled rather than absorbed.**
+	// 783 is the pre-reader board: 764 from the byte-string corpus plus the 19 the
+	// derived selector newly reaches, unmoved by the quote admission because admitting a
+	// corpus earns no verdicts. The 636 the reader earns is 629 vectors answered through
+	// an error whose text matches, plus **7 bare `(module quote ...)` forms that lex
+	// clean and are unearned** — six in annotations.wast, one in comments.wast. None of
+	// the seven turns on lexing; they are valid modules whose validity the lexer cannot
+	// assess, and they pass because the parser's absence means nothing contradicts them.
+	// Named here rather than netted out of the total: they are overfitting arrived at by
+	// omission, and they will stop being free the moment #8 can disagree with them. They
+	// are pinned individually by TestBareQuoteFormsPassUnearned so the seven cannot grow
+	// quietly into a habit.
+	const passFloor = 1419
 	if totalPass < passFloor {
 		t.Errorf("board pass count %d fell below floor %d", totalPass, passFloor)
 	}
@@ -761,6 +954,18 @@ func TestParseEverySuiteFile(t *testing.T) {
 // than the board, because an unregistered capability on an unadmitted file is still a
 // classification defect. TestNoCapabilityOutlivesItsComponent is the other half: this
 // one guards the entry's birth, that one its death.
+//
+// **What "registered" means was refined by the first retirement, not weakened.** The
+// original invariant read *every needed capability has a registry entry*, which was
+// exactly right while no capability had ever been retired and became false the moment
+// one was: `wat-reader` is needed by 1236 commands, has no entry, and that is the
+// *success* condition, not a hole. The real invariant is the one the entry existed to
+// serve — **every needed capability is accounted for, as a tracked debt or as a
+// declared component** — and it is stronger than the old reading rather than looser,
+// because the two arms are exclusive: a capability both registered and declared is
+// guard 6's other-half failure, and one that is neither is guard 2's. The retirement
+// is what made the distinction observable; before it, the two readings agreed on every
+// input.
 func TestEveryNeededCapabilityIsRegistered(t *testing.T) {
 	requireSuite(t)
 	seen := map[Capability]int{}
@@ -775,21 +980,34 @@ func TestEveryNeededCapabilityIsRegistered(t *testing.T) {
 				continue
 			}
 			seen[c.Needs]++
-			issue, ok := CapabilityIssue(c.Needs)
-			if !ok {
-				t.Errorf("%s:%d needs capability %q, which is not in the registry; an "+
-					"unregistered capability is a fourth-verdict column with no owner",
-					filepath.Base(p), c.Line, c.Needs)
-				continue
-			}
-			if issue == "" {
-				t.Errorf("capability %q is registered with an empty issue; the tracking "+
-					"number is what makes it a debt rather than an intention", c.Needs)
-			}
-			if ret, _ := CapabilityRetirement(c.Needs); ret == "" {
-				t.Errorf("capability %q is registered with no retirement condition; an entry "+
-					"born without a death certificate is a squatter, and its column becomes "+
-					"permanent by omission rather than by decision", c.Needs)
+			issue, registered := CapabilityIssue(c.Needs)
+			declared := EngineHas(c.Needs)
+			switch {
+			case registered && declared:
+				// Guard 6's first arm, and it is asserted here as well as in the death
+				// test so that the birth guard cannot report "accounted for" on a
+				// capability that is accounted for twice.
+				t.Errorf("%s:%d needs capability %q, which is both registered as missing and "+
+					"declared by the engine; retirement is one motion and this is the half "+
+					"that was skipped", filepath.Base(p), c.Line, c.Needs)
+			case declared:
+				// Retired: the engine has it, so there is no debt to track. Nothing to
+				// check here — TestNoCapabilityOutlivesItsComponent is what proves the
+				// population drained, which is the claim this arm is standing on.
+			case !registered:
+				t.Errorf("%s:%d needs capability %q, which is neither registered nor declared "+
+					"by the engine; an unaccounted capability is a fourth-verdict column with "+
+					"no owner", filepath.Base(p), c.Line, c.Needs)
+			default:
+				if issue == "" {
+					t.Errorf("capability %q is registered with an empty issue; the tracking "+
+						"number is what makes it a debt rather than an intention", c.Needs)
+				}
+				if ret, _ := CapabilityRetirement(c.Needs); ret == "" {
+					t.Errorf("capability %q is registered with no retirement condition; an entry "+
+						"born without a death certificate is a squatter, and its column becomes "+
+						"permanent by omission rather than by decision", c.Needs)
+				}
 			}
 		}
 	}
@@ -798,9 +1016,21 @@ func TestEveryNeededCapabilityIsRegistered(t *testing.T) {
 	// comparing an empty set against a registry and agreeing perfectly — the
 	// comparisons-need-a-vacuity-check rule, and the exact shape that let an empty
 	// keyword extraction drift-check clean (0009).
+	//
+	// The floor is now the *only* thing keeping this test non-vacuous, which the
+	// retirement is what changed: while the registry was non-empty, an emptied `seen`
+	// would also have tripped the used-members loop below. With the registry empty that
+	// loop iterates zero times and asserts nothing, so a count floor is load-bearing
+	// where it used to be belt-and-braces — and *a floor below the list's own length is
+	// decoration*, so it is the measured 1236 rather than a token 1.
 	if len(seen) == 0 {
 		t.Fatal("no command in the corpus needs any capability, so this test asserted " +
 			"nothing; classify has stopped setting Needs and the fourth verdict is dead code")
+	}
+	if n := seen[CapWatReader]; n < 1200 {
+		t.Errorf("only %d commands need %s, want >=1200; the classifier has stopped "+
+			"recognizing quote forms, and every arm above would then be agreeing about "+
+			"almost nothing", n, CapWatReader)
 	}
 	// And the registry's own members must be *used*, or an entry is a debt nobody owes:
 	// a stale capability overstates what the engine is waiting on.
@@ -815,49 +1045,64 @@ func TestEveryNeededCapabilityIsRegistered(t *testing.T) {
 	}
 }
 
-// TestQuoteFormsAwaitTheirReader is the drain tripwire (decision 0010).
+// TestQuoteFormsHaveTheirReader is the drain tripwire (decision 0010), re-pointed at the
+// case that is still wrong now that the reader has landed.
 //
-// Two properties, and the second is the one that matters. First: with no capability
-// declared, every quote command is scored `unimplemented` — the derived-gap mechanism
-// working. Second: the run loop's KindModuleQuote branch panics if a caller declares
-// CapWatReader while no reader is wired, so the registry cannot get ahead of the
-// engine silently.
+// It was TestQuoteFormsAwaitTheirReader, and it asserted two things: that an undeclared
+// capability scored `unimplemented`, and that declaring CapWatReader with no reader wired
+// panicked. The first half's subject **dissolved** — the capability is declared, so the
+// gap it measured cannot exist for wat-reader any more — and the second half's *risk* did
+// not: a caller can still declare the capability and hand the run loop a nil ReadTextFunc,
+// which is the registry running ahead of the engine in the only form still available. *A
+// tripwire whose subject dissolves is re-pointed, never closed* — closing this as "no
+// longer applicable" would retire a live risk on a technicality.
 //
-// That second half is a pre-registered failing test in #53's definition of done, which
-// is what makes deferring the reader honest rather than an intention (0006). When the
-// reader lands, this test is the one that must be *changed* — and changing it is how
-// the board's 1236 convert to verdicts.
-func TestQuoteFormsAwaitTheirReader(t *testing.T) {
+// So the three properties below are the same obligation aimed at what exists now: the
+// eleven vectors score, they score as *verdicts* rather than as the fourth column, and
+// the declared-without-supplied combination still panics.
+func TestQuoteFormsHaveTheirReader(t *testing.T) {
 	requireSuite(t)
 	s, err := ParseFile(filepath.Join(suiteDir, "obsolete-keywords.wast"))
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
 	r := run(s)
-	if r.Unimplemented == 0 {
-		t.Fatal("obsolete-keywords.wast scored nothing unimplemented; it is 11 quote " +
-			"vectors and the capability gap should have caught every one")
+	// The drain, at the file that prompted the capability. Eleven quote vectors, each
+	// naming a mnemonic the keyword table omits, and each one now answered.
+	if r.Unimplemented != 0 {
+		t.Errorf("%d vectors still unimplemented in obsolete-keywords.wast; the reader is "+
+			"declared, so nothing in this file has an excuse left", r.Unimplemented)
+	}
+	if r.Pass != 11 {
+		t.Errorf("obsolete-keywords.wast scored %d pass, want 11 — this is the file whose "+
+			"eleven `unknown operator` vectors are the reject-direction contract (0009), and "+
+			"a count below 11 means the keyword table is admitting a mnemonic the spec does "+
+			"not\n%s", r.Pass, r.Board())
 	}
 	if r.Fail != 0 {
-		t.Errorf("%d quote vectors scored as failures; the fourth verdict exists so that "+
-			"an unbuilt component does not read as a defect", r.Fail)
-	}
-	if got := r.UnimplementedByCapability[CapWatReader]; got != r.Unimplemented {
-		t.Errorf("%d unimplemented but only %d attributed to %s; an unattributed vector "+
-			"is a column with no work plan", r.Unimplemented, got, CapWatReader)
+		t.Errorf("%d fail in obsolete-keywords.wast:\n%s", r.Fail, r.Board())
 	}
 
-	// Declaring a capability the engine does not have must fail loudly rather than
-	// score. Recovered deliberately: the panic *is* the assertion.
+	// The re-pointed half. Declaring a capability whose component was not supplied must
+	// fail loudly rather than score against a nil entry point. Recovered deliberately:
+	// the panic *is* the assertion.
+	//
+	// Falsified while re-pointing it, per *break the control to know its green is
+	// falsifiable*: with the nil check removed the run loop dereferences nil and panics
+	// anyway, which would have made this pass for the wrong reason — a nil-map read, not
+	// a diagnosis. So the message is asserted, not merely the panic.
 	func() {
 		defer func() {
-			if recover() == nil {
-				t.Error("declaring CapWatReader with no reader wired did not panic; the " +
+			switch v := recover(); {
+			case v == nil:
+				t.Error("declaring CapWatReader with no ReadTextFunc did not panic; the " +
 					"registry is allowed to run ahead of the engine, so a vector could be " +
-					"scored by a component that does not exist")
+					"scored against a component that was never handed over")
+			case !strings.Contains(fmt.Sprint(v), "no ReadTextFunc was supplied"):
+				t.Errorf("panic does not name the missing component: %v", v)
 			}
 		}()
-		_ = s.RunWith(decode, isGated, CapWatReader)
+		_ = s.RunWith(decode, nil, isGated, CapWatReader)
 	}()
 }
 
@@ -888,16 +1133,22 @@ func TestNoCapabilityOutlivesItsComponent(t *testing.T) {
 	requireSuite(t)
 
 	engine := EngineCapabilities()
-	registered := RegisteredCapabilities()
 
-	// Vacuity: the control compares two sets, and today one of them is empty by
-	// design, so the *registry* is what must be non-empty for this test to be
-	// asserting anything at all. A comparison against two empty sets agrees
-	// perfectly (the rule that let an empty keyword extraction drift-check clean).
-	if len(registered) == 0 {
-		t.Fatal("the capability registry is empty, so this test compared nothing against " +
-			"nothing; either the fourth verdict has been removed — in which case delete this " +
-			"control deliberately — or the registry was emptied without draining it")
+	// Vacuity, and **the retirement moved which set has to be non-empty** — which is the
+	// finding this floor recorded by failing. It read "the registry must be non-empty,
+	// because the engine's set is empty by design", and after the first retirement both
+	// halves of that sentence are false: the registry is empty by design and the engine's
+	// set is what carries the content. Left as written it would have Fataled on the state
+	// it exists to certify, which is a control asserting the absence of its own success.
+	//
+	// The invariant that survives the swap is the one to floor: **the control's two loops
+	// iterate over `engine`, so `engine` is what must be non-empty.** A capability
+	// registry emptied without any component landing would leave both sets empty, and
+	// this catches it from the side that will keep being true as capabilities are added.
+	if len(engine) == 0 {
+		t.Fatal("the engine declares no capabilities, so both loops below iterate zero " +
+			"times and this test asserted nothing; either the registry was emptied without a " +
+			"component landing, or engineCapabilities lost a declaration")
 	}
 
 	for _, c := range engine {
@@ -931,10 +1182,16 @@ func TestNoCapabilityOutlivesItsComponent(t *testing.T) {
 		}
 	}
 
-	// And the corpus's own report of what it is waiting on, logged so the retirement
-	// condition's number is visible rather than recomputed by hand at closing time.
-	for _, c := range registered {
+	// And the corpus's own report, over the union rather than over the registry: after a
+	// retirement the registry is the *shorter* list, and logging only its members would
+	// stop reporting exactly the capability whose drain this test just certified.
+	for _, c := range RegisteredCapabilities() {
 		issue, _ := CapabilityIssue(c)
-		t.Logf("%s (%s): %d vectors outstanding, engine has it: %v", c, issue, pop[c], EngineHas(c))
+		t.Logf("registered %s (%s): %d vectors outstanding, engine has it: %v",
+			c, issue, pop[c], EngineHas(c))
+	}
+	for _, c := range engine {
+		t.Logf("declared %s: %d vectors outstanding (must be 0), still registered: %v",
+			c, pop[c], func() bool { _, ok := CapabilityIssue(c); return ok }())
 	}
 }

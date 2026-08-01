@@ -41,7 +41,8 @@ type Command struct {
 	// command needs nothing beyond the decoder. It is what makes the fourth verdict
 	// *derived* rather than assigned (decision 0010, guard 1): classify computes what
 	// a command needs, the run loop asks what the engine has, and the gap is the
-	// verdict. No per-vector allowlist — at 1236 vectors there could not be one.
+	// verdict. No per-vector allowlist — the fourth verdict's one citizen was needed
+	// by 1236 commands at its creation, and there could not have been one.
 	Needs Capability
 
 	// Expect is the expected failure text for an assertion, e.g.
@@ -91,8 +92,12 @@ const (
 	CapNone Capability = ""
 
 	// CapWatReader is the wat text-format reader — the lexer and parser that turn
-	// (module quote "...") source into a module. Tracked at #53; the keyword table it
-	// will read is already in the tree (decision 0009).
+	// (module quote "...") source into a module. **Declared** (engineCapabilities) since
+	// the lexer was wired, and therefore no longer in capabilityIssues: the constant
+	// outlives its registry entry because classify still has to say what a command needs,
+	// whether or not the engine has it. The parser half is #8; a quote vector whose
+	// verdict waits on it fails with a bucket, which is the work plan, not a fourth
+	// column.
 	CapWatReader Capability = "wat-reader"
 )
 
@@ -116,25 +121,38 @@ type capEntry struct {
 // applied to a verdict: `unimplemented` is a debt, and a debt with no tracking
 // number is an intention. The map is what TestEveryNeededCapabilityIsRegistered
 // reads, so an unregistered capability cannot reach the board.
-var capabilityIssues = map[Capability]capEntry{
-	CapWatReader: {
-		Issue: "#53",
-		Retires: "when a wat reader is wired and engineCapabilities declares CapWatReader: " +
-			"this entry is deleted in the same commit, and unimplemented(wat-reader) must " +
-			"be 0 — every one of its vectors converted to pass or fail, none left behind",
-	},
-}
-
-// engineCapabilities is what the engine actually has. Empty today, and stated
-// explicitly rather than left to omission: guard 1 of decision 0010 says the
-// classifier computes what a command needs and the engine declares what it has, so
-// the engine's half has to be a declaration. Silence would be the same fact carried
-// by an absence, and an absence cannot be read as a claim.
 //
-// Adding a member here is half of a retirement: the other half is deleting the
-// matching capabilityIssues entry, and TestNoCapabilityOutlivesItsComponent fails if
-// only one of the two happens.
-var engineCapabilities = map[Capability]bool{}
+// **Empty, and that emptiness is a retirement rather than an absence.** It held exactly
+// one entry — CapWatReader, #53 — from the fourth verdict's creation (0010) until the wat
+// reader landed. Its stated condition was "when a wat reader is wired and
+// engineCapabilities declares CapWatReader: this entry is deleted in the same commit, and
+// unimplemented(wat-reader) must be 0 — every one of its vectors converted to pass or
+// fail, none left behind". That is what happened, in one commit, and guard 6's control
+// (TestNoCapabilityOutlivesItsComponent) is what makes the claim checkable rather than
+// asserted here: it fails if a declared capability is still registered, and it fails if a
+// declared capability left any of its population behind.
+//
+// This is the intended ending, and it is the same shape as the deadcode allowlist's:
+// a deferral retired by a component landing, not by an entry outliving the reason for it.
+var capabilityIssues = map[Capability]capEntry{}
+
+// engineCapabilities is what the engine actually has, stated explicitly rather than left
+// to omission: guard 1 of decision 0010 says the classifier computes what a command needs
+// and the engine declares what it has, so the engine's half has to be a declaration.
+// Silence would be the same fact carried by an absence, and an absence cannot be read as
+// a claim.
+//
+// Adding a member here is half of a retirement: the other half is deleting the matching
+// capabilityIssues entry, and TestNoCapabilityOutlivesItsComponent fails if only one of
+// the two happens. CapWatReader arrived by exactly that motion.
+//
+// A declaration here is a claim about the *engine*, and the run loop refuses to honour a
+// claim with nothing behind it: a declared capability whose component is not wired into
+// the run panics rather than scoring, which is where TestQuoteFormsAwaitTheirReader's
+// tripwire was re-pointed when its original subject dissolved.
+var engineCapabilities = map[Capability]bool{
+	CapWatReader: true,
+}
 
 // EngineCapabilities returns the capabilities the engine has, sorted. Board runners
 // pass this rather than nothing, so what the board scores is derived from a
@@ -323,28 +341,38 @@ type Result struct {
 	// engine lacks a named capability to answer**, so the question exists, is
 	// well-formed, and has a registered debt standing between it and a verdict.
 	//
-	// Why not Fail, which is where these 1236 vectors would otherwise land: today the
-	// fail column means *defect*. The board's lone failure (binary-gc.wast:1) is
-	// visible precisely because the column discriminates wrong-answer from not-built.
-	// Scoring 1236 unread quote vectors as failures takes it to 1237, and a genuine
-	// regression tomorrow arrives as 1238 — invisible. A column that cannot surface a
-	// new defect has stopped being an instrument, which is the lint-wall failure
-	// (decision 0005) wearing a board's clothes.
+	// Why not Fail, argued when the column was born and 1236 quote vectors would
+	// otherwise have landed there: the fail column means *defect*, and the board's lone
+	// failure (binary-gc.wast:1) was visible precisely because the column discriminates
+	// wrong-answer from not-built. Scoring 1236 unread vectors as failures took it to
+	// 1237, and a genuine regression tomorrow arrives as 1238 — invisible. A column that
+	// cannot surface a new defect has stopped being an instrument, which is the lint-wall
+	// failure (decision 0005) wearing a board's clothes.
 	//
 	// Gated is the architectural precedent rather than the argument: it exists because
 	// scoring an unanswered question as a failure marks correct behaviour red. Gated is
 	// absence-by-configuration; this is absence-by-construction.
 	//
-	// The category exists to **drain**. When the wat reader lands these convert to
-	// pass/fail in a movement the board shows, and decision 0004's version rule is what
-	// enforces the draining: no minor bump while its milestone's Unimplemented is
-	// nonzero, and v0.1.0 requires zero.
+	// The category exists to **drain**, and it has: the wat reader's arrival converted
+	// all 1236 in one commit, leaving this field at 0 board-wide. Note *how* they
+	// converted, because the distinction above is what made it legible — 636 to pass and
+	// 600 to fail, and those 600 are a fail column that means "the parser is not written"
+	// rather than a fourth column that means the same thing. Once a component exists, its
+	// gaps are buckets: a named expected string per vector, ordered largest first, which
+	// is a work plan the fourth verdict could not produce. So the drain is not just this
+	// field reaching zero, it is the queue moving to the instrument that can schedule it.
+	// Decision 0004's version rule enforced the draining: no minor bump while a
+	// milestone's Unimplemented is nonzero, and v0.1.0 requires zero.
 	Unimplemented int
 
 	// UnimplementedByCapability counts the fourth verdict by the capability each
 	// command waited on, so the column is a work plan for the same reason
-	// UnsupportedByHead is: "1236 unimplemented" names nothing, while
-	// "1236 wat-reader (#53)" names an issue.
+	// UnsupportedByHead is: "1236 unimplemented" named nothing, while
+	// "1236 wat-reader (#53)" named an issue.
+	//
+	// Empty board-wide since the retirement, and the map stays because the mechanism is
+	// the general one, not wat-reader's: the next capability admitted will populate it
+	// from classify without this type changing.
 	UnimplementedByCapability map[Capability]int
 
 	// UnsupportedByHead counts unsupported commands by their head atom, so the
@@ -398,6 +426,22 @@ type Failure struct {
 	Line   int
 	Expect string
 	Got    string // the engine's error text, or "" if it accepted the module
+
+	// Kind is the command's Kind, and it is here because the fail column now spans two
+	// languages. Before the wat reader every failure came from the decoder, so "601
+	// fail" and "601 decoder defects" were the same sentence; after it, 600 of them are
+	// text-layer vectors whose grammar is not written yet and 1 is a genuine decoder
+	// defect (binary-gc.wast:1). A ceiling that cannot tell those apart lets the
+	// decoder's column stop being an instrument — a new decoder defect would arrive as
+	// 602 among 601, which is the invisibility decision 0010 was written to prevent,
+	// one layer over.
+	//
+	// Bucketing by expected spec text is the right *work-plan* key and the wrong
+	// *partition* key here: the two layers share strings (`malformed UTF-8 encoding`
+	// appears on both sides), so a string test would score members of one partition as
+	// the other. **When a partition's members share a value, discriminate on the field
+	// that partitions** — the Kind, which is structural and cannot collide.
+	Kind Kind
 }
 
 // Total is the number of assertions actually executed — the denominator of the
@@ -524,6 +568,20 @@ func (r *Result) Board() string {
 // engine produces for a module image, or nil if it accepts it.
 type DecodeFunc func(image []byte) error
 
+// ReadTextFunc is the engine's wat entry point. It returns the error the engine
+// produces for wat source text, or nil if it accepts it.
+//
+// Injected rather than called directly, for the reason DecodeFunc is: this package is
+// the oracle, and an oracle that imports the engine it scores can no longer be read as
+// neutral (contract §0). The harness holds `[]byte` of source and asks; what answers is
+// the caller's business.
+//
+// Distinct from DecodeFunc because the two eat different languages — a byte image and a
+// text source. One func with a flag would make the harness's own type system unable to
+// say which question it asked, the same argument that separated Command.Module from
+// Command.Source.
+type ReadTextFunc func(src []byte) error
+
 // GatedFunc reports whether an engine error means "a feature gate is off"
 // rather than a verdict on the module. The harness must not sniff error text for
 // this — the engine names its own gate errors, and a substring test here would be
@@ -537,13 +595,25 @@ type GatedFunc func(error) bool
 // command needing one is scored `unimplemented` rather than silently attempted. The
 // failure mode this avoids is a new run entry point forgetting to declare and
 // thereby converting the fourth verdict into a fail.
+// readText is the wat entry point. Nil means the caller declared no reader, which is
+// only consistent with not declaring CapWatReader — the run loop panics on the
+// combination rather than scoring, because a declared capability with no component
+// behind it is the registry running ahead of the engine.
 type runOpts struct {
-	isGated GatedFunc
-	has     map[Capability]bool
+	isGated  GatedFunc
+	readText ReadTextFunc
+	has      map[Capability]bool
 }
 
 // Run executes a script's assertions against a decoder, scoring every gate as
 // though it were on — no error is treated as a gate decline.
+//
+// It declares no capabilities and supplies no wat reader, so a script containing a
+// quote form panics: the engine has CapWatReader, and a caller that neither declares
+// it nor hands over a reader is asking the loop to score a vector against nothing. That
+// is deliberate rather than a limitation — this is the minimal form for unit tests over
+// synthetic byte-string scripts, and silently scoring such a vector `unimplemented`
+// would resurrect a drained column from a forgotten argument.
 func (s *Script) Run(decode DecodeFunc) *Result {
 	return s.run(decode, runOpts{})
 }
@@ -554,29 +624,37 @@ func (s *Script) Run(decode DecodeFunc) *Result {
 //
 // Capabilities come from engineCapabilities, not from the caller: this is the board's
 // runner, and the board must score against what the engine declares rather than
-// against what a call site remembered to pass. When the wat reader lands, adding it
-// to that declaration moves the board without touching this function.
-func (s *Script) RunGated(decode DecodeFunc, isGated GatedFunc) *Result {
-	return s.RunWith(decode, isGated, EngineCapabilities()...)
+// against what a call site remembered to pass. Adding the wat reader to that
+// declaration moved the board without touching this function, which was the claim
+// this comment made before it happened.
+//
+// readText joined the signature when CapWatReader was declared, and it is a required
+// parameter rather than an option for the same reason the capability set is derived:
+// a board runner that can be called without the component it declares would score
+// 1236 vectors against a nil entry point. The run loop panics on that combination, so
+// the compiler and the loop between them make the omission impossible to ship.
+func (s *Script) RunGated(decode DecodeFunc, readText ReadTextFunc, isGated GatedFunc) *Result {
+	return s.RunWith(decode, readText, isGated, EngineCapabilities()...)
 }
 
 // RunWith executes a script with an explicit set of engine capabilities. A command
 // whose Needs is not in have is scored Unimplemented (decision 0010).
 //
-// This is the seam the wat reader will arrive through: when it exists, it joins
-// engineCapabilities and 1236 vectors move out of the fourth column into pass or
-// fail. Until then nothing declares it, which is why the default is empty rather
-// than "everything the harness knows about" — the latter would score vectors against
-// components that do not exist.
+// This was the seam the wat reader arrived through: it joined engineCapabilities and
+// 1236 vectors moved out of the fourth column. The default stays empty rather than
+// "everything the harness knows about" — the latter would score vectors against
+// components that do not exist, and the next capability will be in exactly the
+// position wat-reader was.
 //
 // The explicit-argument form stays for tests that need to declare a capability the
-// engine does not have, which must panic rather than score.
-func (s *Script) RunWith(decode DecodeFunc, isGated GatedFunc, have ...Capability) *Result {
+// engine cannot honour — a capability with no registered entry, or one whose component
+// was not passed in — which must panic rather than score.
+func (s *Script) RunWith(decode DecodeFunc, readText ReadTextFunc, isGated GatedFunc, have ...Capability) *Result {
 	set := make(map[Capability]bool, len(have))
 	for _, c := range have {
 		set[c] = true
 	}
-	return s.run(decode, runOpts{isGated: isGated, has: set})
+	return s.run(decode, runOpts{isGated: isGated, readText: readText, has: set})
 }
 
 func (s *Script) run(decode DecodeFunc, opts runOpts) *Result {
@@ -603,6 +681,19 @@ func (s *Script) run(decode DecodeFunc, opts runOpts) *Result {
 					panic(fmt.Sprintf("%s:%d needs capability %q, whose registry entry states "+
 						"no retirement condition; an entry that cannot die outlives its "+
 						"component", s.Path, c.Line, c.Needs))
+				}
+				// Not registered — and there are now *two* ways to be unregistered, which the
+				// first retirement is what discovered. Guard 2's message was written when the
+				// only way was a classifier inventing a capability, and it told the reader to
+				// register it; said to a caller under-declaring a capability the engine
+				// **has**, that advice would reinstate a debt that was just paid. *A ruling
+				// retroactively falsifies prose written before it* — here the ruling is a
+				// retirement, and the orphaned sentence was three lines below it.
+				if engineCapabilities[c.Needs] {
+					panic(fmt.Sprintf("%s:%d needs capability %q, which the engine declares but "+
+						"this caller did not: it was retired from the registry, so there is no "+
+						"fourth-verdict entry left to score it against. Use RunGated, which "+
+						"derives from the declaration", s.Path, c.Line, c.Needs))
 				}
 				// A capability the classifier invented. Counting it would let the fourth
 				// verdict grow by fiat, which is the abuse guard 2 exists to make
@@ -638,7 +729,7 @@ func (s *Script) run(decode DecodeFunc, opts runOpts) *Result {
 			}
 			r.Fail++
 			r.Buckets[c.Expect] = append(r.Buckets[c.Expect], Failure{
-				Line: c.Line, Expect: c.Expect, Got: got,
+				Line: c.Line, Expect: c.Expect, Got: got, Kind: c.Kind,
 			})
 
 		case KindModuleBinary:
@@ -655,25 +746,67 @@ func (s *Script) run(decode DecodeFunc, opts runOpts) *Result {
 				r.Fail++
 				const key = "(module binary ...) must decode"
 				r.Buckets[key] = append(r.Buckets[key], Failure{
-					Line: c.Line, Expect: key, Got: err.Error(),
+					Line: c.Line, Expect: key, Got: err.Error(), Kind: c.Kind,
 				})
 				continue
 			}
 			r.Pass++
 
 		case KindModuleQuote, KindAssertMalformedText:
-			// Reachable only when a caller declares CapWatReader, since the capability
-			// gap above catches every other path. No reader exists yet, so there is
-			// nothing honest to do here: scoring would invent a verdict and falling
-			// through to `unsupported` would contradict the classification that just
-			// said the harness *can* ask.
+			// Reachable only when a caller declares CapWatReader, since the capability gap
+			// above catches every other path.
 			//
-			// Declared rather than silent (#6): the deferral is named at its site with
-			// the issue that closes it. When #53's reader lands, this is where it is
-			// called, and TestQuoteFormsAwaitTheirReader is the tripwire that fails if a
-			// caller declares the capability before this branch can honour it.
-			panic(fmt.Sprintf("%s:%d: CapWatReader declared but no wat reader is wired "+
-				"(#53); the capability registry is ahead of the engine", s.Path, c.Line))
+			// The tripwire that used to live here — panic, because no reader existed — has
+			// not been deleted, it has been *narrowed to the case that is still wrong*: a
+			// caller declaring the capability without supplying the component. The risk the
+			// original named (the registry running ahead of the engine) survives its
+			// original subject, so the control is re-pointed rather than retired.
+			if opts.readText == nil {
+				panic(fmt.Sprintf("%s:%d: CapWatReader declared but no ReadTextFunc was "+
+					"supplied; the capability registry is ahead of the engine", s.Path, c.Line))
+			}
+			err := opts.readText(c.Source)
+			if isGated(err) {
+				r.Gated++
+				continue
+			}
+			if c.Kind == KindModuleQuote {
+				// A bare (module quote ...) asserts the source is *valid* wat. The reader
+				// only lexes, so this is a must-lex-clean check — weaker than the suite's
+				// claim, and scored rather than skipped for the same reason
+				// KindModuleBinary is: an unrun vector is invisible, and a weaker question
+				// honestly answered is worth more than no question.
+				//
+				// Seven of these lex clean today, and they are named as *unearned* rather
+				// than reported as progress: none of the seven turns on lexing, so the
+				// pass is arrived at by the parser's absence. See PR #61.
+				if err != nil {
+					r.Fail++
+					const key = "(module quote ...) must read"
+					r.Buckets[key] = append(r.Buckets[key], Failure{
+						Line: c.Line, Expect: key, Got: err.Error(), Kind: c.Kind,
+					})
+					continue
+				}
+				r.Pass++
+				continue
+			}
+			got := ""
+			if err != nil {
+				got = err.Error()
+			}
+			// Substring matching, per decision 0003 — the same rule the binary side uses,
+			// and here it is load-bearing in a way it is not there: eleven vectors read
+			// the *lexeme* back out of the message (`unknown operator i32.wrap/i64`), so
+			// for those the rendering is oracle-covered rather than ours alone (#38).
+			if err != nil && strings.Contains(got, c.Expect) {
+				r.Pass++
+				continue
+			}
+			r.Fail++
+			r.Buckets[c.Expect] = append(r.Buckets[c.Expect], Failure{
+				Line: c.Line, Expect: c.Expect, Got: got, Kind: c.Kind,
+			})
 
 		default:
 			r.Unsupported++
