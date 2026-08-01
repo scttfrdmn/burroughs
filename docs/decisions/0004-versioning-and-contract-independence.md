@@ -65,7 +65,39 @@ no-markdown-proliferation rule. The mechanism:
    that claims a gate is green when its suite was not run is the same class
    of dishonesty as an unreachable error constant (see #3).
 
+## Amendment, 2026-08-01 — the fourth verdict is a release gate
+
+Appended rather than rewritten, per *a ruling is discharged by appending to the ADR,
+body preserved*. Nothing above is retracted; this adds a term the table could not
+have named because the verdict did not exist.
+
+Decision 0010 carves `unimplemented` — a command the harness *asked* and the engine
+has no registered component to answer. It is the fourth verdict, and unlike `gated` it
+has no configuration that makes it go away: the component either exists or does not.
+
+**Guard 4 of that ruling is a versioning rule, so it is recorded here:**
+
+> No minor version is cut while its milestone's `unimplemented` count is nonzero, and
+> **`v0.1.0` requires it to be zero.**
+
+The reason is the row already in the table above. `v0.1.0` means *the MVP core suite
+goes green*, and a release claiming that with 1236 questions unanswered would be a
+mood — precisely what "the version number is a conformance statement" forbids. The
+same reasoning as consequence 3: a number claiming a gate is green when its suite was
+not run is dishonest, and a number claiming a suite is green when 1236 of its vectors
+were never asked is the identical error one column over.
+
+This is also what stops the new verdict becoming permanent. `unsupported` may sit at
+26742 indefinitely — it is a corpus fact, not a debt. `unimplemented` is a debt, so it
+gets a mechanism that will not let a release paper over it: the category exists to
+**drain**, and the version scheme is what enforces the draining rather than trusting
+it.
+
+Board at the time of this amendment: 1236 unimplemented, all of them waiting on the
+wat reader (#53), which is therefore a `v0.1.0` blocker by this rule.
+
 ## Status
 
-Accepted 2026-07-30. Contract §10.7 is resolved by this doc; §10 open
+Accepted 2026-07-30; amended 2026-08-01 (decision 0010, guard 4).
+Contract §10.7 is resolved by this doc; §10 open
 questions remaining: 1 (resolved by 0002), 2, 3, 4, 5, 6.
