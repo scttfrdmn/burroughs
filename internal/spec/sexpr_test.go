@@ -216,13 +216,26 @@ func TestClassifyAndRun(t *testing.T) {
 		KindModuleBinary,
 		KindAssertMalformed,
 		KindAssertMalformed,
-		KindUnsupported, // (module quote ...) is phase 2
+		// The quote form is *recognized* now (decision 0010) and carries
+		// Needs: CapWatReader. It was KindUnsupported until the admission, and the
+		// change of expectation here is the point rather than a repair: the harness
+		// can now ask this question, which is exactly what separates the fourth
+		// verdict from the third.
+		KindAssertMalformedText,
 		KindUnsupported, // assert_return is phase 2
 	}
 	for i, k := range want {
 		if s.Commands[i].Kind != k {
 			t.Errorf("command %d: got %v, want %v", i, s.Commands[i].Kind, k)
 		}
+	}
+	// The capability is attached by the classifier, not by the run loop — the
+	// derived-gap mechanism starts here.
+	if got := s.Commands[3].Needs; got != CapWatReader {
+		t.Errorf("quote command Needs = %q, want %q", got, CapWatReader)
+	}
+	if len(s.Commands[3].Source) == 0 {
+		t.Error("quote command carried no Source; the run loop would have nothing to read")
 	}
 
 	// A decoder that satisfies both malformed assertions and the valid module.
@@ -235,8 +248,15 @@ func TestClassifyAndRun(t *testing.T) {
 		}
 		return nil
 	})
-	if r.Pass != 3 || r.Fail != 0 || r.Unsupported != 2 {
-		t.Errorf("got %d pass, %d fail, %d unsupported; want 3/0/2", r.Pass, r.Fail, r.Unsupported)
+	// 3 pass, 1 unsupported (assert_return), 1 unimplemented (the quote form). The
+	// quote vector is deliberately *not* a fail: no wat reader exists, and an unbuilt
+	// component must not read as a wrong answer.
+	if r.Pass != 3 || r.Fail != 0 || r.Unsupported != 1 || r.Unimplemented != 1 {
+		t.Errorf("got %d pass, %d fail, %d unsupported, %d unimplemented; want 3/0/1/1",
+			r.Pass, r.Fail, r.Unsupported, r.Unimplemented)
+	}
+	if got := r.UnimplementedByCapability[CapWatReader]; got != 1 {
+		t.Errorf("unimplemented attributed to %s = %d, want 1", CapWatReader, got)
 	}
 }
 
