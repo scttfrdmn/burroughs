@@ -181,10 +181,17 @@ says which table drifted.
 **And one addition, because condition 4 has a gap this table widens.** `keyword-drift`
 needs `third_party/spec`, so it cannot live in `make check` — which means on a fresh
 clone, `DO NOT EDIT` is a *request*. A hand edit adding `get_local` to `keywords.go`
-builds, lints, and passes `make check`; `unused` will not object to the map being unread
-either, because `.golangci.yml` sets `exclusions.generated: lax`. Two automatic silences
-over one file, and the row whose absence three oracle-covered vectors score against is
-exactly the row that could be added.
+builds, lints, and passes `make check`, and the row whose absence three oracle-covered
+vectors score against is exactly the row that could be added.
+
+The linter is no help, and the measurement is worth recording because the first reading of
+it was wrong. `.golangci.yml`'s `exclusions.generated: lax` *does* suppress `unused` on any
+file carrying the `Code generated ... DO NOT EDIT.` marker — but that is not why the linter
+is quiet here: the integrity tests read the map, so `unused` is correct to say nothing.
+Checked in all four combinations of marker-present and tests-present; only marker-stripped
+*and* tests-absent reports `var keywords is unused`. Which relocates the risk rather than
+removing it: deleting keywords_test.go would take this package from "table with a consumer"
+to "table with none", with the exclusion ensuring nothing objects.
 
 So `internal/text/keywords_test.go` asserts the **committed file's** properties with no
 corpus at all: a size floor, the eleven absences, the `keyword` shape, and a

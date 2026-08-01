@@ -896,13 +896,16 @@ is a formatting pass of its own, not a drive-by inside a decoder PR.*
 - **`internal/text/keywords_test.go` — an integrity check distinct from the drift check**,
   and the distinction is a finding rather than belt-and-braces. `keyword-drift` needs
   `third_party/spec`, so it cannot live in `make check`; on a fresh clone `DO NOT EDIT` is a
-  *request*, and `unused` will not object to an unread generated map either
-  (`exclusions.generated: lax`). Two automatic silences over one file, and the row that
-  could be hand-added is exactly `get_local`. So the committed table is asserted with no
-  corpus at all: a size floor, the eleven absences, the `keyword` shape, and a content
-  spot-check with its kinds. Each falsified by mutating the committed file — the obsolete
-  row, an unreachable row, an empty kind, an emptied table, and a wrong kind, each firing
-  only where named.
+  *request*, and the row that could be hand-added is exactly `get_local`. So the committed
+  table is asserted with no corpus at all: a size floor, the eleven absences, the `keyword`
+  shape, and a content spot-check with its kinds. Each falsified by mutating the committed
+  file — the obsolete row, an unreachable row, an empty kind, an emptied table, and a wrong
+  kind, each firing only where named. Also measured, because the first draft of the
+  reasoning guessed: `exclusions.generated: lax` does suppress `unused` on the table, but it
+  is *not* why the linter is quiet today — these tests read the map, so `unused` is correct
+  to say nothing. The exclusion is the silence that would remain if the tests were deleted,
+  which is the change that would take the package from "table with a consumer" to "table
+  with none" with nothing objecting.
 - **`internal/gen` — decision 0006's condition discharged, not deferred again.** The second
   consumer arrived (`keywordgen` reads the same pin from the same script and formats the same
   way), so the pin reader and the formatter moved out of `opcodegen` and its shim layer was
