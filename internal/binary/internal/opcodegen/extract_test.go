@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/scttfrdmn/burroughs/internal/gen"
 	"github.com/scttfrdmn/burroughs/internal/testenv"
 )
 
@@ -541,7 +542,7 @@ func TestEmitRejectsAnImmediateWithNoIdentifier(t *testing.T) {
 // with an authority it never read.
 func TestCommittedTableMatchesTheReference(t *testing.T) {
 	src := refSource(t)
-	sha, err := pinnedRevFromScript(filepath.Join("..", "..", "..", "..", "scripts", "fetch-spec-ref.sh"))
+	sha, err := gen.PinnedRev(filepath.Join("..", "..", "..", "..", "scripts", "fetch-spec-ref.sh"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -559,7 +560,7 @@ func TestCommittedTableMatchesTheReference(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Compare against gofmt'd output, since the committed file is formatted.
-	wantFmt, err := gofmtSource(want)
+	wantFmt, err := gen.GofmtSource(want)
 	if err != nil {
 		t.Fatal(err)
 	}

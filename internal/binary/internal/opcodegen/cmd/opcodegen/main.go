@@ -18,6 +18,7 @@ import (
 	"os"
 
 	"github.com/scttfrdmn/burroughs/internal/binary/internal/opcodegen"
+	"github.com/scttfrdmn/burroughs/internal/gen"
 	"github.com/scttfrdmn/burroughs/internal/testenv"
 )
 
@@ -32,7 +33,7 @@ func main() {
 }
 
 func run(out string) error {
-	sha, err := opcodegen.PinnedRev("scripts/fetch-spec-ref.sh")
+	sha, err := gen.PinnedRev("scripts/fetch-spec-ref.sh")
 	if err != nil {
 		return err
 	}
@@ -48,7 +49,7 @@ func run(out string) error {
 	if err != nil {
 		return err
 	}
-	formatted, err := opcodegen.GofmtSource(code)
+	formatted, err := gen.GofmtSource(code)
 	if err != nil {
 		return err
 	}

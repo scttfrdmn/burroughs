@@ -31,6 +31,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -119,7 +120,12 @@ func SuiteFiles(tb testing.TB, suiteDir string) []string {
 // The *authority* of decision 0007, as distinct from the suite, which samples it.
 const RefDecodeML = "third_party/spec/interpreter/binary/decode.ml"
 
-// MinRefDecodeBytes is the floor for the vendored reference to count as present.
+// RefLexerMLL is the reference interpreter's text lexer, relative to the repo root.
+// The *authority* of decision 0009, and the same corpus as RefDecodeML: one fetch, one
+// pin, two grammars.
+const RefLexerMLL = "third_party/spec/interpreter/text/lexer.mll"
+
+// MinRefDecodeBytes is the floor for the vendored decoder to count as present.
 //
 // A size, not an existence check, for RequireSuite's reason one layer over: a
 // truncated decode.ml satisfies os.Stat and then yields an extraction with too few
@@ -129,24 +135,71 @@ const RefDecodeML = "third_party/spec/interpreter/binary/decode.ml"
 // decode.ml is 38042 bytes at bdd7164.
 const MinRefDecodeBytes = 20000
 
+// MinRefLexerBytes is the same floor for lexer.mll, which is 36686 bytes at bdd7164.
+//
+// Its own constant rather than reusing MinRefDecodeBytes, even though 20000 happens to
+// hold for both files at this revision. Sharing it would make the two floors' agreement
+// an accident that a future upstream edit silently ends — a floor is a claim about *one
+// file's* plausible size, and a single number covering two files is right about neither
+// on purpose.
+const MinRefLexerBytes = 20000
+
+// refFloors is the size floor per reference file, keyed by the path constants above.
+//
+// A map rather than a parameter on RequireSpecRef, deliberately: a floor passed at the
+// call site is a fact about a file, typed somewhere other than where the file is named,
+// and the failure mode is a caller passing 0 and defeating the control it is calling. Same
+// argument as reading the SHA from the pin script instead of taking it as a flag — *a
+// number typed at a second site is a claim that can drift from the thing it describes*.
+// An unknown path is a hard failure below, never a default floor, because a default is
+// how a third reference file would arrive with no floor at all.
+var refFloors = map[string]int{
+	RefDecodeML: MinRefDecodeBytes,
+	RefLexerMLL: MinRefLexerBytes,
+}
+
 // RequireSpecRef is the licensed door for tests that read the reference interpreter.
 //
-// Same policy as RequireSuite and the same reason it exists: the drift check's whole
-// job is to compare the committed table against the authority, so a drift check that
-// skips because the authority is absent reports agreement with a file it never read.
-// That is worse than no check, being a green that has never once looked (#29).
+// Same policy as RequireSuite and the same reason it exists: a drift check's whole job is
+// to compare a committed table against the authority, so a drift check that skips because
+// the authority is absent reports agreement with a file it never read. That is worse than
+// no check, being a green that has never once looked (#29).
+//
+// One door for both reference files rather than a fourth door beside it, because the
+// inventory's unit is the *corpus*: decode.ml and lexer.mll arrive from one `make
+// spec-ref`, at one pin, and a reader sent to that target is sent to the right place
+// whichever file is missing. The size floor is what differs per file, and it is looked up
+// rather than passed.
 //
 // Returns the source so a caller cannot obtain the path without passing the gate.
 func RequireSpecRef(tb testing.TB, path string) string {
 	tb.Helper()
 
+	// The path is resolved from the repo root by the constants, but callers reach it
+	// through filepath.Join with `..` prefixes, so match on the suffix. An unrecognized
+	// path fails rather than skipping: a door that licenses a path it does not know is a
+	// door with no floor, which is this function's entire subject.
+	floor, known := 0, false
+	for p, f := range refFloors {
+		if strings.HasSuffix(filepath.ToSlash(path), p) {
+			floor, known = f, true
+			break
+		}
+	}
+	if !known {
+		tb.Fatalf("RequireSpecRef: no size floor registered for %q — add it to refFloors "+
+			"beside its path constant; a reference file with no floor is a presence check "+
+			"that cannot tell a truncated fetch from a complete one", path)
+		return ""
+	}
+
 	b, err := os.ReadFile(path)
-	if len(b) >= MinRefDecodeBytes {
+	if len(b) >= floor {
 		return string(b)
 	}
 
 	reason := fmt.Sprintf("reference interpreter not vendored: %s is %d bytes, want >=%d (run: make spec-ref)",
-		path, len(b), MinRefDecodeBytes)
+		path, len(b), floor)
 	if err != nil {
 		reason = fmt.Sprintf("reference interpreter not vendored: %v (run: make spec-ref)", err)
 	}
@@ -158,6 +211,55 @@ func RequireSpecRef(tb testing.TB, path string) string {
 		tb.Skip(reason)
 	}
 	return ""
+}
+
+// MinSuiteFileBytes is the floor for a single vendored .wast file to count as present.
+//
+// A size rather than existence, for the same reason every other floor here is one, and set
+// low because the files this door serves are *individual vectors* rather than a corpus:
+// obsolete-keywords.wast is 1147 bytes at the vendored revision, and the suite holds
+// smaller files still. 200 bytes is below any real vector and above a truncated fetch or an
+// empty placeholder.
+const MinSuiteFileBytes = 200
+
+// RequireSuiteFile is the licensed door for a test that reads *one* named suite file rather
+// than the whole corpus.
+//
+// A fourth door rather than a call to RequireSuite, because the two ask different questions
+// and a reader deserves the one that was actually asked. RequireSuite asserts a *count* —
+// "is the corpus here" — which is right for a board over 257 files and wrong for a citation
+// check against one vector: a full corpus with the cited file missing passes RequireSuite
+// and then fails inside the test with a bare read error, and a corpus of 249 files fails
+// RequireSuite for a reason that has nothing to do with the file the caller wanted.
+//
+// It exists because writing this test's skip inline failed TestEverySkipSiteIsLicensed —
+// the second time that AST check has caught an unlicensed skip written by an author who
+// knows the rule, which is the case for reading the AST instead of trusting the convention
+// (the first was RequireProposalDoc's own arrival). *A precondition that excuses a gate is
+// licensed at one place, or it is a hole.*
+//
+// Returns the contents so a caller cannot read the file without passing the gate.
+func RequireSuiteFile(tb testing.TB, path string) []byte {
+	tb.Helper()
+
+	b, err := os.ReadFile(path)
+	if len(b) >= MinSuiteFileBytes {
+		return b
+	}
+
+	reason := fmt.Sprintf("spec suite not vendored: %s is %d bytes, want >=%d (run: make spec-tests)",
+		path, len(b), MinSuiteFileBytes)
+	if err != nil {
+		reason = fmt.Sprintf("spec suite not vendored: %v (run: make spec-tests)", err)
+	}
+
+	if NoSkip() {
+		tb.Fatalf("%s\n\t%s=1 revokes skip licenses: a citation check that skips is a citation nobody verified",
+			reason, NoSkipEnv)
+	} else {
+		tb.Skip(reason)
+	}
+	return nil
 }
 
 // ProposalDoc is a proposal overview under the vendored reference tree, relative to the
