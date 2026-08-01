@@ -101,6 +101,14 @@ func TestParserKindsListsEveryConstant(t *testing.T) {
 //
 // Kept honest by TestNonKeywordSourcesCoverEveryTokenKind below, which derives the domain from
 // TokenKind's own extent rather than trusting this list to be complete.
+//
+// **Guarded rather than derived, and that is a limit rather than a preference.** The obvious
+// derivation would read the lexer's `arms` table, which already pairs every token shape with its
+// kind — but an arm holds a *matcher*, and a matcher recognizes rather than generates: there is no
+// way to ask `matchFloat` for a float. Examples cannot be derived from acceptors. So the list is
+// authored and its *completeness* is what gets derived, which is the strongest available form of
+// the rule here: the enumeration is allowed, and the thing an enumeration gets wrong — going stale
+// against the space — is machine-checked.
 var nonKeywordSources = []string{
 	"(", ")", "0", "-1", "1.5", `"s"`, "$v", "offset=0", "align=1", "",
 }
