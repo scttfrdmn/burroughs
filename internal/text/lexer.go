@@ -428,21 +428,15 @@ func emitBlockComment(l *Lexer, s []byte) (*Token, error) {
 // a *different* rule from `token` — notably its `reserved` arm produces an atom rather
 // than an error. Annotations record and produce no token.
 func emitAnnot(l *Lexer, s []byte) (*Token, error) {
-	// The string form's id goes through `annot_id` (lexer.mll:51–54), which decodes it
-	// and rejects an *empty* result — `(@"")` is `empty annotation id`, not an
-	// annotation named "". Matching the string shape is not the same as validating the
-	// id, and conflating them accepted one vector the spec calls malformed.
+	// The string form's id goes through `annot_id` (lexer.mll:51–54, called from the
+	// token-level arm at :828), which decodes it and rejects an *empty* result — `(@"")`
+	// is `empty annotation id`, not an annotation named "". Matching the string shape is
+	// not the same as validating the id, and conflating them accepted one vector the
+	// spec calls malformed. The `annot` rule calls the same function at :858, so the
+	// check lives in annotIDError and both call sites read it.
 	if len(s) > 2 && s[2] == '"' {
-		v, ok := decodeString(s[2:])
-		if !ok {
-			return nil, l.errAt(l.pos-len(s), "malformed string literal")
-		}
-		if len(v) == 0 {
-			return nil, l.errAt(l.pos-len(s), "empty annotation id")
-		}
-		if !validUTF8(v) {
-			// `(@"\ef")` — annotations.wast:79, expecting "malformed UTF-8".
-			return nil, l.errAt(l.pos-len(s), "malformed UTF-8 encoding")
+		if msg := annotIDError(s[2:]); msg != "" {
+			return nil, l.errAt(l.pos-len(s), msg)
 		}
 	}
 	// Scan the body from the current position, which is just past "(@id".

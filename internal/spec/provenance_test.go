@@ -182,6 +182,7 @@ func TestDerivedFixturesStateResolvablePremises(t *testing.T) {
 		"../text/parser_test.go",
 		"../text/instr_test.go",
 		"../text/label_test.go",
+		"../text/annot_test.go",
 	}
 
 	var declared, premises int
@@ -453,6 +454,7 @@ func TestEveryFixtureFileIsChecked(t *testing.T) {
 		"../text/parser_test.go": true,
 		"../text/instr_test.go":  true,
 		"../text/label_test.go":  true,
+		"../text/annot_test.go":  true,
 	}
 
 	paths, err := filepath.Glob("../*/*_test.go")
@@ -581,6 +583,7 @@ func TestTextFixtureProvenance(t *testing.T) {
 		"../text/parser_test.go",
 		"../text/instr_test.go",
 		"../text/label_test.go",
+		"../text/annot_test.go",
 	}
 
 	type qcmd struct {

@@ -1222,7 +1222,7 @@ func TestPhase1Files(t *testing.T) {
 	//	                                  a `(ref …)` is an offset and shadows the `reftype
 	//	                                  elemexpr_list` arm entirely.
 	//	 1  annotations.wast:1            `empty annotation id` — the lexer's, on a module
-	//	   (#55)                          whose first field is `(@a …)`.
+	//	   (#83)                          whose first field is `(@a …)`.
 	//
 	// The two grammar defects are engine fixes and are **not** in this PR: #69 is
 	// board-shape work and travels alone, per *board-shape changes travel as their own
@@ -1267,7 +1267,7 @@ func TestPhase1Files(t *testing.T) {
 	//
 	// **The residue is 13 + 2 + 1 and none of it is this mechanism's**: 13 in `(module <wat
 	// body>) must read` (#75's 3 `elem_list` and #76's 9 `lane_imms`, plus annotations.wast:1
-	// which is #55's lexer), 2 `unknown label` (token.wast:101/:117 — `enter_block` and scoped
+	// which is #83's, the annotation lexer's), 2 `unknown label` (token.wast:101/:117 — `enter_block` and scoped
 	// labels, parser.mly:132-134, deliberately its own PR), 1 `malformed mutability`
 	// (binary-gc.wast, the decoder's). So the pre-registration two blocks up — "the next PR takes
 	// this to 3" — is met on its own terms: the 24 + 2 + 1 it named as one job turned out to be
@@ -1309,7 +1309,7 @@ func TestPhase1Files(t *testing.T) {
 	// settled the count. A forecast that names its own oracle is falsifiable by consulting it.
 	//
 	// Residue 7 = 4 `(module <wat body>) must read` + 2 `unknown label` + 1 `malformed
-	// mutability`. The 4 are `annotations.wast:1` (#55's lexer), `array.wast` 1 and `elem.wast` 2
+	// mutability`. The 4 are `annotations.wast:1` (#83's), `array.wast` 1 and `elem.wast` 2
 	// (#75's `elem_list` reftype arm) — so #75 is the whole remainder of that bucket, and the
 	// bucket falls to 1 when it lands, exactly as #76's definition of done predicted.
 	//
@@ -1323,7 +1323,7 @@ func TestPhase1Files(t *testing.T) {
 	// the reward, not the job*, and this is the same lesson from the other side — a partition can
 	// be finer than the issue that named it, not just coarser.
 	//
-	// The bucket is now **1** (`annotations.wast:1`, #55's lexer), which is what #75's and #76's
+	// The bucket is now **1** (`annotations.wast:1`, #83's), which is what #75's and #76's
 	// definitions of done both predicted, from opposite ends of the same 13.
 	//
 	// Residue 4 = 1 `(module <wat body>) must read` + 2 `unknown label` + 1 `malformed mutability`.
@@ -1350,10 +1350,31 @@ func TestPhase1Files(t *testing.T) {
 	// *lexical*, so they resolve where they are read. Splitting at that seam is what made the
 	// reachable half reachable now.
 	//
-	// Residue **2** = 1 `(module <wat body>) must read` (`annotations.wast:1`, #55's lexer) + 1
-	// `malformed mutability` (`binary-gc.wast`, the decoder's). **Neither is the text parser's**, so
-	// this ceiling cannot fall further from work on internal/text — #64 is finished.
-	const textFailCeiling = 2
+	// **The residue is zero, and this ceiling is now the assertion that it stays there.** The
+	// board's remaining fail is `malformed mutability` in `binary-gc.wast`, which is a
+	// `(module binary ...)` vector and therefore charged to `binaryFail` — so *no* failing
+	// vector on the board is a text-kind command any more.
+	//
+	// The ceiling was first written as 1 here, reasoning from the board's total of one fail.
+	// That is the wrong quantity: this ceiling counts the *text* partition, and the one
+	// survivor is in the other one. Caught by the falsification pass rather than by reading —
+	// reverting #83's fix left `textFail` at exactly 1, so a ceiling of 1 sat green over the
+	// defect it was being lowered to catch. **A ceiling is a claim about a partition, so it is
+	// read off the partition, not off the total** — the same error as scoping a control to the
+	// sample instead of the space, one aggregation level up. Printed, not deduced: `textFail=0
+	// binaryFail=1` with the fix, `1` and `1` without it.
+	//
+	// **The residue was 2, and the second one was ours after all.** `annotations.wast:1` was
+	// attributed to the lexer and dismissed as somebody else's for three PRs — the sentence above
+	// said "neither is the text parser's" and it was half wrong, because the vector *is* this
+	// package's and the attribution was to an issue number about the CHANGELOG. Grave #83. The
+	// number was never checkable: this file's provenance guards resolve a `.wast:N` citation
+	// against the suite, and nothing resolves an issue number to its subject, so a bare `#NN` in
+	// prose is exactly the drifted-citation defect with the machine-checked half removed. It got
+	// quoted forward five times here and three times in the changelog because quoting is cheaper
+	// than checking. **A ceiling that names the residue is asserting a diagnosis, and a diagnosis
+	// is falsifiable** — this one was falsified by running the vector, which took one probe.
+	const textFailCeiling = 0
 	if textFail > textFailCeiling {
 		t.Errorf("text failures rose to %d, ceiling %d — either the reader regressed on "+
 			"vectors it used to answer, or the corpus moved", textFail, textFailCeiling)
@@ -1500,7 +1521,14 @@ func TestPhase1Files(t *testing.T) {
 	// the definition site, because a floor that claims to be the evidence for four facts is
 	// overclaiming when it is the evidence for one; the argument for keeping the unfalsifiable two is
 	// in `funcField`'s header, where it can be read next to the lines it defends.
-	const passFloor = 4161
+	//
+	// **4161 → 4162 with grave #83**, and the one vector it adds is the whole `annotations.wast:1`
+	// module: `scanAnnotBody` carried `token`'s bare-`(@` error arm (lexer.mll:829), which the
+	// `annot` rule does not have (:850 and :855 are its only two), so `(@)` nested in a body was
+	// rejected and the file's leading must-succeed module went with it. Same over-rejection shape
+	// as the `foldedBlock` measurement two paragraphs up, and the same reason it is visible here:
+	// one rejected legal module is one pass, and rejecting legal input is what this floor watches.
+	const passFloor = 4162
 	if totalPass < passFloor {
 		t.Errorf("board pass count %d fell below floor %d", totalPass, passFloor)
 	}
