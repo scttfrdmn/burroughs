@@ -62,6 +62,7 @@ const (
 	KindAssertMalformed                 // (assert_malformed (module binary ...) "text")
 	KindModuleQuote                     // (module quote "...")
 	KindAssertMalformedText             // (assert_malformed (module quote ...) "text")
+	KindModuleText                      // (module <wat body>) — source retained, #69
 	KindUnsupported                     // anything phase 1 cannot execute
 )
 
@@ -75,6 +76,8 @@ func (k Kind) String() string {
 		return "module quote"
 	case KindAssertMalformedText:
 		return "assert_malformed (quote)"
+	case KindModuleText:
+		return "module text"
 	default:
 		return "unsupported"
 	}
@@ -226,30 +229,77 @@ func Parse(path string, src []byte) (*Script, error) {
 		if !n.isList() {
 			return nil, fmt.Errorf("%s:%d: top-level atom %q", path, n.line, n.atom)
 		}
-		s.Commands = append(s.Commands, classify(n))
+		s.Commands = append(s.Commands, classify(n, src))
 	}
 	return s, nil
 }
 
-func classify(n node) Command {
+// classify turns one top-level form into a Command.
+//
+// src is the source the nodes were parsed from, needed for the one kind whose payload is
+// *text the reader consumed* rather than a string literal it carried: a bare
+// `(module <wat body>)`, whose extent is n.start:n.end (#69).
+func classify(n node, src []byte) Command {
 	head := n.head()
 	switch head {
 	case "module":
 		if img, ok := binaryModule(n); ok {
 			return Command{Kind: KindModuleBinary, Line: n.line, Head: head, Module: img}
 		}
-		if src, ok := quoteModule(n); ok {
+		// Named `quoted`, not `src`: the parameter above is the *script's* bytes and this is
+		// the *module's*, and letting the second shadow the first would put two different
+		// sources under one name in the one function that has to keep them apart.
+		if quoted, ok := quoteModule(n); ok {
 			return Command{
 				Kind: KindModuleQuote, Line: n.line, Head: head,
-				Source: src, Needs: CapWatReader,
+				Source: quoted, Needs: CapWatReader,
 			}
 		}
-		// (module ...) with a bare wat body — #8. Still unsupported rather than
-		// unimplemented, and the difference is the one decision 0010 turns on: the
-		// harness cannot *ask* about a wat body, because the s-expression reader has
-		// parsed it into nodes rather than holding its source text. A quote form hands
-		// over its source as a string literal; a bare body does not.
-		return Command{Kind: KindUnsupported, Line: n.line, Head: head}
+		// (module ...) with a bare wat body. **Askable since #69**, and the sentence that
+		// used to stand here is the reason it was not:
+		//
+		//	the harness cannot *ask* about a wat body, because the s-expression reader has
+		//	parsed it into nodes rather than holding its source text. A quote form hands
+		//	over its source as a string literal; a bare body does not.
+		//
+		// True when written, and it named a *harness* defect rather than an engine gap —
+		// which is why the fix is a span on node, not a fourth-verdict entry. The form's
+		// own extent is its source: n.span is the `(module …)` text verbatim, the exact
+		// shape the reader's `module_` production takes (parser.mly:1389), so no
+		// reconstruction is involved and nothing is re-lexed to find the closing paren.
+		//
+		// Scored, not skipped: a bare module form asserts its source is *valid* wat, so a
+		// reader rejecting one is a fail in a named bucket. That is the largest silent
+		// population on the board becoming a work plan — 1119 commands across 57 files at
+		// #69's measurement, against the 7 reachable quote modules that were the whole
+		// accept-direction oracle until now. *A parser that rejects valid modules is worse
+		// than one that misses an invalid one*, and the reason that was hard to act on is
+		// that 1119 valid modules could not say so.
+		// **`definition` and `instance` are script-grammar forms, not wat bodies**, and
+		// handing them to the wat reader manufactures a failure out of a classification
+		// error. `script_module` is `LPAR MODULE definition_opt option(module_var)
+		// module_fields RPAR` (parser.mly:1422) — `definition` sits *outside* `module_`,
+		// which is the production `text.ReadModule` implements (:1389) — and `instance`
+		// (:1439-1444) is a different production altogether, referencing a module by name
+		// with no fields at all.
+		//
+		// Caught by measuring the reds rather than by reading the grammar first: 9 of the
+		// first 22 failures were these, clustered so tightly (10 SIMD files at the same
+		// line, 5 in instance.wast) that the shape was the tell. *Gates never manufacture
+		// malformedness* generalizes past gates — a **harness** that asks the wrong reader
+		// invents a red the same way, and it would have been indistinguishable on the
+		// board from an engine defect. The wat reader is right to reject `(module
+		// definition …)`; it was never asked a fair question.
+		//
+		// They stay `unsupported` with the head recorded, so the column names them. Phase
+		// v3 (component model) is where `definition`/`instance` become answerable.
+		if kw := moduleFormKeyword(n); kw == "definition" || kw == "instance" {
+			return Command{Kind: KindUnsupported, Line: n.line, Head: head}
+		}
+		return Command{
+			Kind: KindModuleText, Line: n.line, Head: head,
+			Source: n.span(src), Needs: CapWatReader,
+		}
 
 	case "assert_malformed":
 		// (assert_malformed <module> "expected text")
@@ -291,6 +341,29 @@ func binaryModule(n node) ([]byte, bool) { return stringModule(n, "binary") }
 // separator, e.g. (module quote "(func (nop)" "(nop))") — concatenation is what the
 // reference does, and the newlines the vectors rely on are inside the literals.
 func quoteModule(n node) ([]byte, bool) { return stringModule(n, "quote") }
+
+// moduleFormKeyword returns the bare keyword that follows `module` and an optional `$name`,
+// or "" when the next element is a list, a string, or absent.
+//
+// It is how the script grammar's `definition_opt` (parser.mly:1417) and the `instance` form
+// (:1439) are told apart from a wat body, whose next element is always a `(field …)` list.
+// Deliberately *not* a keyword allowlist: it reports whatever atom is there, so the caller
+// names the forms it knows and an unrecognized one falls through to the wat reader rather
+// than being silently reclassified. An allowlist here would be a second place that has to
+// learn every script-level keyword upstream adds.
+func moduleFormKeyword(n node) string {
+	if n.head() != "module" {
+		return ""
+	}
+	i := 1
+	if i < len(n.list) && !n.list[i].isList() && !n.list[i].isS && strings.HasPrefix(n.list[i].atom, "$") {
+		i++
+	}
+	if i >= len(n.list) || n.list[i].isList() || n.list[i].isS {
+		return ""
+	}
+	return n.list[i].atom
+}
 
 // stringModule reads the (module [$name] <keyword> "..." "...") shape shared by the
 // binary and quote forms, which differ only in that keyword.
@@ -752,7 +825,7 @@ func (s *Script) run(decode DecodeFunc, opts runOpts) *Result {
 			}
 			r.Pass++
 
-		case KindModuleQuote, KindAssertMalformedText:
+		case KindModuleQuote, KindModuleText, KindAssertMalformedText:
 			// Reachable only when a caller declares CapWatReader, since the capability gap
 			// above catches every other path.
 			//
@@ -770,19 +843,30 @@ func (s *Script) run(decode DecodeFunc, opts runOpts) *Result {
 				r.Gated++
 				continue
 			}
-			if c.Kind == KindModuleQuote {
-				// A bare (module quote ...) asserts the source is *valid* wat. The reader
-				// only lexes, so this is a must-lex-clean check — weaker than the suite's
-				// claim, and scored rather than skipped for the same reason
-				// KindModuleBinary is: an unrun vector is invisible, and a weaker question
-				// honestly answered is worth more than no question.
+			if c.Kind == KindModuleQuote || c.Kind == KindModuleText {
+				// Both forms assert the source is *valid* wat, so both are must-read: an
+				// error is a fail, no error is a pass. Scored rather than skipped for the
+				// same reason KindModuleBinary is — an unrun vector is invisible.
 				//
-				// Seven of these lex clean today, and they are named as *unearned* rather
-				// than reported as progress: none of the seven turns on lexing, so the
-				// pass is arrived at by the parser's absence. See PR #61.
+				// The sentence that used to qualify this as "the reader only lexes, so
+				// this is a must-lex-clean check" is gone, and its removal is a fact
+				// rather than an edit: the parser landed across #62/#63/#64, so a bare
+				// module form that reads clean now has been through the whole module
+				// grammar. The seven quote modules that used to be named *unearned* on
+				// that ground (PR #61) are earned now for the same reason.
+				//
+				// **Two keys, not one**, and the split is the point. These are separate
+				// populations with separate histories — 7 quote forms, 1119 bare bodies —
+				// and merging them would put #69's admission into a bucket that already
+				// had a number, making the new reds indistinguishable from a regression in
+				// the old ones. *Bucketed failures are the work plan*, and a plan needs to
+				// name which population it is about.
 				if err != nil {
 					r.Fail++
-					const key = "(module quote ...) must read"
+					key := "(module quote ...) must read"
+					if c.Kind == KindModuleText {
+						key = "(module <wat body>) must read"
+					}
 					r.Buckets[key] = append(r.Buckets[key], Failure{
 						Line: c.Line, Expect: key, Got: err.Error(), Kind: c.Kind,
 					})

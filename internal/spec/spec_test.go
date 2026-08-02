@@ -58,6 +58,28 @@ const suiteDir = "../../testdata/spec"
 // rather than a list re-edited — and it is why the admission could not be scoped to the
 // eleven vectors that prompted it. The unsupported ceiling rose 1345 → 26742 in the same
 // motion, which is *corpus admitted*, not regression.
+//
+// **And again, 68 files to 253, when the bare `(module <wat body>)` form became scorable
+// (#69).** Same sentence as the paragraph above, and that repetition is the finding: this
+// is the third time a capability landing has moved the *file set* rather than the command
+// mix inside a fixed set, because the selector's question is "does this file hold one
+// scorable command". 253 of 257 vendored files now do, and the four that do not were
+// *printed*, not predicted — three are the interpreter's and one is a real gap:
+//
+//	data1.wast              14 assert_trap        the interpreter's
+//	memory_size3.wast        2 assert_invalid     the validator's
+//	unreached-invalid.wast 121 assert_invalid     the validator's
+//	inline-module.wast       3 bare fields        **not** a later stratum's — see below
+//
+// `inline-module.wast` is the honest miss. Its commands are `(func)`, `(func)`, `(memory
+// 1)` at top level: the reference's `inline_module` production (parser.mly:1447), where a
+// script's module wrapper is elided and bare fields *are* the module. The classifier keys
+// on the `module` head, so it sees three unrelated forms rather than one module and calls
+// each unsupported. That is a harness gap of the same species #69 just closed, and it is
+// left open deliberately — recognizing it means the classifier must fold a run of adjacent
+// field forms into one synthetic module, which is a classification decision and not a span
+// one. Named here rather than folded in, because a file excluded for a reason nobody wrote
+// down is indistinguishable from one excluded correctly.
 func boardFiles(t *testing.T) []string {
 	t.Helper()
 	var files []string
@@ -86,10 +108,20 @@ func boardFiles(t *testing.T) []string {
 	//
 	// The floor tracks the measurement rather than staying at its historical value: a
 	// floor of 12 against 68 selected files would tolerate the selector losing 56 files
-	// silently, which is the vacuity hole one step short of empty. 60 leaves room for
+	// silently, which is the vacuity hole one step short of empty. 60 left room for
 	// upstream churn without leaving room for a selector that mostly stopped selecting.
-	if len(files) < 60 {
-		t.Fatalf("boardFiles selected only %d files, want >=60 — the selector is not "+
+	//
+	// **Raised 60 → 240 by #69**, and the raise is the rule applied to itself. A floor of
+	// 60 against 253 selected files is the same defect it was written to prevent, one
+	// magnitude up: the selector could lose 193 files — every file the bare-module
+	// admission just brought in, and therefore every vector the 4122 pass floor rests on
+	// — and this guard would still report success. *A floor left at its historical value
+	// is a floor that stopped bounding anything*, so it moves with the measurement or it
+	// is decoration. 240 of 253, the 13-file margin being upstream churn room; the four
+	// legitimately-excluded files are itemized at the top of this function, so a fifth
+	// appearing is a fact somebody has to write down.
+	if len(files) < 240 {
+		t.Fatalf("boardFiles selected only %d files, want >=240 — the selector is not "+
 			"finding answerable commands, so every count below is over a corpus that "+
 			"is not there (#42 pins the suite by SHA)", len(files))
 	}
@@ -818,7 +850,35 @@ func TestPhase1Files(t *testing.T) {
 	// Lowered as components land. #42 (SHA-pin the suite) is what keeps this number
 	// meaningful, since a corpus that drifts changes it for reasons that are not
 	// findings.
-	const unsupportedCeiling = 26742
+	//
+	// # 60872 after the bare-module admission (#69), was 26742
+	//
+	// Raised a second time, same licensed reason — the corpus grew — but the *shape* of the
+	// growth is different from the quote admission's and the difference is the whole
+	// account. Retaining a source span made `(module <wat body>)` askable, and that changed
+	// two things at once:
+	//
+	//   - **Within the 68 files already on the board**, the column *fell* by exactly the
+	//     bare-module count: 26742 → 25623, −1119, with pass +1114 and fail +5. Net zero on
+	//     the total, which is the identity #69's definition of done asked for.
+	//   - **185 further files entered the board**, because boardFiles selects on "has at
+	//     least one scorable command" and these files had none until now. They bring 1016
+	//     pass, 17 fail — and 35240 unsupported, since a file admitted for its module forms
+	//     also brings its assert_return/assert_invalid population with it.
+	//
+	// So 60872 = 25623 + 35240 + 9, and the +9 is the `(module definition …)` /
+	// `(module instance …)` forms newly *classified* as unsupported rather than handed to
+	// the wat reader (see classify — asking the wrong reader manufactured 9 of the first 22
+	// reds). Both movements are stated because reporting only the first would be the
+	// invisibility decision 0010 exists to prevent: the honest sentence is "the column grew
+	// by 34130 while the population it was measuring shrank by 1119", and a single number
+	// cannot say that.
+	//
+	// The ceiling is deliberately *not* split per-population, though the temptation is
+	// real. A per-file or per-cohort ceiling would bind tighter, and it is the right next
+	// move if this number is raised again — noted rather than done, because #69 is
+	// board-shape work and a ceiling redesign is its own decision.
+	const unsupportedCeiling = 60872
 	if totalUnsup > unsupportedCeiling {
 		t.Errorf("unsupported rose to %d, ceiling %d — either a capability regressed or the "+
 			"corpus moved; both need an explanation rather than a raised ceiling",
@@ -892,14 +952,36 @@ func TestPhase1Files(t *testing.T) {
 	// with the operands of the Kind test swapped, binaryFail reads 600 and textFail 1,
 	// and both arms fail. That is the check TestSectionSizeBothSigns's grave (#34) asks
 	// for — a partition test verified against the partition, not against its labels.
+	// **Both arms are named, and neither is a `default`.** This switch used to send the
+	// text kinds one way and everything else to `default`, and #69 broke it in the one run
+	// before this rewrite: KindModuleText landed in `default`, so 13 *text* reds were
+	// reported as **decoder** failures and tripped binaryFailCeiling at 14. The instrument
+	// whose entire purpose is keeping the two layers apart mixed them — *an error from the
+	// wrong layer is evidence about where structure was lost*, pointed at a test rather
+	// than at the engine.
+	//
+	// A `default` arm is what made that silent: it absorbs every Kind added later and
+	// assigns it a layer by omission. So both arms are explicit and an unrecognized kind is
+	// a **loud failure** rather than a decoder failure. That is the same move as the
+	// unregistered-capability panic — a classification the harness did not decide is a stop,
+	// not a quietly larger number.
 	binaryFail, textFail := 0, 0
 	for _, fs := range aggBuckets {
 		for _, f := range fs {
 			switch f.Kind {
-			case KindModuleQuote, KindAssertMalformedText:
+			case KindModuleQuote, KindModuleText, KindAssertMalformedText:
 				textFail++
-			default:
+			case KindModuleBinary, KindAssertMalformed:
 				binaryFail++
+			case KindUnsupported:
+				t.Errorf("a KindUnsupported command produced a failure bucket entry at "+
+					"line %d (%q); unsupported commands are not scored, so this is the "+
+					"run loop losing track of a verdict", f.Line, f.Expect)
+			default:
+				t.Errorf("failure of unhandled kind %v at line %d (%q) — a new Kind was "+
+					"added without assigning it to the binary or text arm, so its "+
+					"failures would have been charged to whichever ceiling this switch "+
+					"defaulted to", f.Kind, f.Line, f.Expect)
 			}
 		}
 	}
@@ -1101,7 +1183,67 @@ func TestPhase1Files(t *testing.T) {
 	// **Pre-registered: the next PR takes this to 3.** The 24 plus the 2 plus the 1 are one job —
 	// `typeuse` resolution — leaving only binary-gc.wast:1, which is the decoder's. Stated here so
 	// the claim is falsifiable before the work rather than after it.
-	const textFailCeiling = 28
+	//
+	// (That pre-registration is **unmet and deferred, not missed**: #69 came first, for the
+	// reason in the next block — resolution is a *rejector*, and installing one under a
+	// 7-vector accept oracle is the overfitting risk in its purest form. The 27 named above
+	// are all still here, unmoved, and the forecast stands for #64's second half.)
+	//
+	// # 41 after the bare-module admission (#69), was 28
+	//
+	// **+13, and the forecast was wrong by an order of magnitude in the pessimistic
+	// direction.** Pre-registered at 150–400 fails of the then-known 1119, centred near 250,
+	// on the reasoning that a parser built against reject vectors plus *seven* accept vectors
+	// would over-reject badly — grave #63 (flat `select`, every module containing one
+	// rejected, invisible to the board) being exactly what that produces. The measurement is
+	// **13 of 2152**. The parser accepts 2130 valid modules it had never been scored against.
+	//
+	// Recording the miss rather than quietly enjoying it, because the *reasoning* was sound
+	// and the conclusion was still wrong: reject-direction construction predicts
+	// over-rejection, and the honest lesson is that #62/#63/#64 tracked the reference's arm
+	// lists closely enough that following the grammar bought the accept direction too. Also
+	// note 1119 → 2152: #69's figure counted bare modules in *board* files, and the corpus
+	// holds 2152 once the newly-admitted files are included.
+	//
+	// **The 13, partitioned by mechanism rather than quoted as one number** — two v0
+	// grammar defects and one phase-v3 form, all accept-direction, none of them visible
+	// before this admission:
+	//
+	//	 9  `lane_imms`, parser.mly:661   simd_{load,store}{8,16,32,64}_lane.wast:4 and
+	//	   (#76)                          simd_memory-multi.wast:5. `v128.load8_lane 0 (…)` —
+	//	                                  our memarg reads the leading `0` as a memory index,
+	//	                                  but it is the bare `| laneidx` arm (:673). The
+	//	                                  reference multiplies the production out into five
+	//	                                  arms "to avoid spurious conflicts"; telling them
+	//	                                  apart needs lookahead for a *second* nat.
+	//	 3  `elem_list`, parser.mly:1155  elem.wast:539/:573 and array.wast:219. `(elem (ref
+	//	   (#75)                          $b) …)` — the offset-sugar branch tests
+	//	                                  `at(LParen) && !peek2Keyword(kwItem)`, which claims
+	//	                                  a `(ref …)` is an offset and shadows the `reftype
+	//	                                  elemexpr_list` arm entirely.
+	//	 1  annotations.wast:1            `empty annotation id` — the lexer's, on a module
+	//	   (#55)                          whose first field is `(@a …)`.
+	//
+	// The two grammar defects are engine fixes and are **not** in this PR: #69 is
+	// board-shape work and travels alone, per *board-shape changes travel as their own
+	// decisions*. They are the work plan this admission exists to produce, and each is
+	// filed with the arm it misreads.
+	//
+	// **The partition above is the corrected one, and the correction is the lesson.** It
+	// first read 10 / 2 / 1, with the tenth lane vector hedged as "one further `simd_*_lane`
+	// file". There is no tenth: the vector is `array.wast:219`, a `(elem $e (ref $bvec) …)`
+	// in a GC module, and it belongs to `elem_list`. Confirmed by running the reader —
+	// `(module (type $b (array i8)) (elem $e (ref $b) (ref.null $b)))` errors while `(elem $e
+	// func)` returns nil — after *printing the bucket's members*, which is what should have
+	// produced the partition in the first place.
+	//
+	// *Bucket size estimates the reward, not the job* says partition by mechanism before
+	// estimating. The failure here was one level in: the partition was made by mechanism, but
+	// the file set for each mechanism came from memory of where the defect lived rather than
+	// from the board. That is *derive the domain, never enumerate it* applied to the work plan
+	// instead of to the engine — and an enumerated file set has a blind spot exactly the shape
+	// of the defect one did not know was shared. Print the bucket; do not recall it.
+	const textFailCeiling = 41
 	if textFail > textFailCeiling {
 		t.Errorf("text failures rose to %d, ceiling %d — either the reader regressed on "+
 			"vectors it used to answer, or the corpus moved", textFail, textFailCeiling)
@@ -1175,7 +1317,23 @@ func TestPhase1Files(t *testing.T) {
 	// existing reader rather than new rules. That is why the fall is one PR rather than three, and
 	// why the controls that matter here are agreement controls (TestFoldedAndFlatSignaturesAgree)
 	// rather than verdict controls: the risk was a second implementation, not a wrong one.
-	const passFloor = 1992
+	// **4122 = 1992 + 2130 after the bare-module admission (#69).** The largest single move
+	// this floor has made, and it is *earned coverage rather than earned correctness*: not
+	// one line of the reader changed: 2130 modules the parser already accepted became
+	// *scored* instead of invisible. The board did not get better, it got honest.
+	//
+	// Decomposed, because a floor is only an assertion if it knows what it is bounding:
+	// within the 68 files already on the board, pass rose 1992 → 3106 (+1114 of the 1119
+	// bare modules there, the other 5 failing); the 185 newly-admitted files bring 1016 more.
+	// 1114 + 1016 = 2130.
+	//
+	// This is the number the #64-second-half work will be measured against, and that is the
+	// point of doing #69 first. Resolution is a **rejector**: it can only turn passes into
+	// fails. Installing one while the accept oracle was 7 vectors would have made
+	// over-rejection invisible by construction — the overfitting law (§9 G-3) at its purest,
+	// since the cheap wrong check and the correct one score identically on a corpus that
+	// asks nothing. Against 2130 must-succeed modules, an over-eager resolver fails loudly.
+	const passFloor = 4122
 	if totalPass < passFloor {
 		t.Errorf("board pass count %d fell below floor %d", totalPass, passFloor)
 	}
@@ -1535,5 +1693,104 @@ func TestNoCapabilityOutlivesItsComponent(t *testing.T) {
 	for _, c := range engine {
 		t.Logf("declared %s: %d vectors outstanding (must be 0), still registered: %v",
 			c, pop[c], func() bool { _, ok := CapabilityIssue(c); return ok }())
+	}
+}
+
+// TestBareModuleSpansAreNonEmptyAndPlausible is #69's vacuity floor over the real corpus, and
+// it is deliberately three assertions rather than one, because "the span mechanism works" can
+// fail in three independent ways that a single count cannot separate.
+//
+// The rule being applied is *comparisons need a vacuity check*, at the scale that matters: the
+// pass floor of 4122 rests on 2130 newly-scored bare modules, and a span mechanism that
+// silently found **zero** of them would leave the harness classifying nothing as
+// KindModuleText, every one of those commands back in `unsupported`, and this file's floors
+// failing with a number that says "the reader regressed" — which would be a lie about which
+// stratum broke. A global `> 0` is not enough either: `const.wast` alone holds 402, so a bug
+// that lost every file but one would still be comfortably non-zero.
+//
+// So the three assertions are:
+//
+//  1. **A corpus total floor** — 2000 against 2143 measured. Bounds a wholesale loss.
+//  2. **A file-count floor** — 230 against 242 files holding at least one. This is the one a
+//     total cannot give: it bounds the *distribution*. Not asserted but measured — dropping
+//     the 13 smallest files trips this floor at 229 while the total sits at **2130**, still
+//     1.06× above (1). So (2) is not a weaker restatement of (1); there is a real regression
+//     shape that only it sees, and the gap is 130 vectors wide rather than the "200 small
+//     files" this comment first guessed at.
+//  3. **A per-span emptiness check** — every retained span is non-empty and starts with `(`.
+//     A `start == end` span is what an off-by-one in the wrong direction produces, and it
+//     reaches the reader as an empty module rather than as a missing one.
+//
+// The 11 board files with zero bare modules are the byte-string corpus (binary*.wast,
+// utf8-*.wast, custom.wast, obsolete-keywords.wast) — files whose every module is a
+// `(module binary ...)` form, so zero is correct there and a floor demanding one per file
+// would be wrong. That is why (2) floors the *count of files* rather than asserting a
+// per-file minimum: the honest invariant is "most files have some", not "all do".
+//
+// Falsified three ways while writing it, each by introducing the defect it names and running
+// the suite — and the third falsification corrected this comment rather than confirming it:
+//
+//   - `end: start` in parseNode's list arm → (3) fires, 2149 lines of it, first at
+//     address.wast:3: "KindModuleText with an empty Source".
+//   - `end: p.off - 1` (drop the closing paren) → TestNodeSpanIsExactSource fails on all four
+//     spans and TestBareModuleSourceRoundTrips reports `unclosed list` on the re-parse. Not
+//     caught here, and that is the right division of labour: this test bounds *how many*
+//     spans exist, the sexpr tests bound *what they contain*.
+//   - Classification loss — replacing the KindModuleText arm with KindUnsupported, which is
+//     what a mis-scoped moduleFormKeyword would do — trips **boardFiles' own 240-file floor
+//     first**, at 68. I had written that (1) and (2) catch this; they do, at 0 and 0, but only
+//     once the outer floor is lowered out of the way. Recorded as measured rather than as
+//     predicted, because "two floors catch it" and "one floor catches it and the other would
+//     have" are different facts about the mechanism.
+func TestBareModuleSpansAreNonEmptyAndPlausible(t *testing.T) {
+	requireSuite(t)
+
+	const (
+		totalFloor = 2000 // measured 2143
+		filesFloor = 230  // measured 242 of 253 board files
+	)
+
+	total, withAny := 0, 0
+	for _, f := range boardFiles(t) {
+		s, err := ParseFile(filepath.Join(suiteDir, f))
+		if err != nil {
+			t.Errorf("%s: parse: %v", f, err)
+			continue
+		}
+		n := 0
+		for _, c := range s.Commands {
+			if c.Kind != KindModuleText {
+				continue
+			}
+			n++
+			// (3): the span is a real extent, not a degenerate one. Checked per command
+			// rather than sampled — an empty span reaches text.ReadModule as a syntax
+			// error attributed to the reader, so this is the assertion that keeps a
+			// harness bug from being read as an engine bug.
+			if len(c.Source) == 0 {
+				t.Errorf("%s:%d: KindModuleText with an empty Source — a degenerate span",
+					f, c.Line)
+				continue
+			}
+			if c.Source[0] != '(' {
+				t.Errorf("%s:%d: span starts with %q, want '(' — the extent is off its "+
+					"opening paren", f, c.Line, c.Source[0])
+			}
+		}
+		total += n
+		if n > 0 {
+			withAny++
+		}
+	}
+
+	if total < totalFloor {
+		t.Errorf("found %d bare module spans across the board, floor %d — the span "+
+			"mechanism is not retaining source, so %d commands the pass floor counts on "+
+			"are back in the unsupported column", total, totalFloor, totalFloor-total)
+	}
+	if withAny < filesFloor {
+		t.Errorf("only %d files hold a bare module span, floor %d — a total floor cannot "+
+			"catch this: const.wast alone holds 402, so the distribution needs its own "+
+			"bound", withAny, filesFloor)
 	}
 }

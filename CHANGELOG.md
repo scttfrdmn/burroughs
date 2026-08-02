@@ -432,6 +432,49 @@ weakly-ordered platform.
   set is derived from `testenv.LicensedRefPaths()` rather than restated, with a vacuity
   floor because a containment check over an empty set agrees with anything.
 
+- **The bare `(module <wat body>)` form is scored** (#69), which is the accept-direction
+  oracle the wat parser had been developed without. Every node the s-expression reader
+  produces now retains its byte extent (`start`/`end`, `node.span`), so a module written as
+  wat text — rather than as a `(module quote "…")` string — can be handed to `text.ReadModule`
+  as source. New `KindModuleText`, its own bucket key, and a classifier guard.
+
+  **Not one line of the reader changed. Board 1992 → 4122 pass, 253 files (was 68).** The
+  admission is *coverage*, not correctness: 2130 modules the parser already accepted stopped
+  being invisible. Decomposed, because a floor that does not know what it bounds is not an
+  assertion — inside the 68 files already on the board, pass rose 1992 → 3106 while
+  unsupported fell 1119; the other 1016 come from **185 files that enter the board**, because
+  `boardFiles` selects on "holds one scorable command" and a new Kind moves the *file set*.
+  Unsupported rises 26742 → 60872 in the same motion, which is corpus admitted.
+
+  **Why this precedes #64's second half, and the reason is a measurement.** Typeuse
+  resolution is a **rejector** — it can only turn passes into fails — and the board's entire
+  accept-direction oracle for it was **7** must-succeed modules out of 1126. Installing a
+  rejector against 7 vectors makes over-rejection invisible by construction, which is the
+  overfitting law (§9 G-3) at its purest: the cheap wrong check and the correct one score
+  identically on a corpus that asks nothing. Against 2130, an over-eager resolver fails loudly.
+
+  **The classifier guard is the sharp edge, and it manufactured 9 of the first 22 failures.**
+  `definition` and `instance` are *script* grammar — `script_module` is `LPAR MODULE
+  definition_opt …` (parser.mly:1422), `definition` sits outside `module_` (:1389), and
+  `instance` (:1439) names a module with no fields at all — so handing either to the wat
+  reader invents a red indistinguishable on the board from an engine defect. Caught by the
+  *clustering* of the reds, not by their count. *Gates never manufacture malformedness*,
+  generalized: a harness that asks the wrong reader is the same offence one layer out.
+
+  Two real accept-direction defects were found *by* the admission and are deliberately not
+  fixed here, board-shape work travelling alone: `elem_list`'s `reftype elemexpr_list` arm
+  shadowed by the offset-sugar lookahead (parser.mly:1155, **3** vectors — #75), and
+  `lane_imms`' bare `| laneidx` arm eaten by `memarg`'s greedy memory index (:661–673, **9**
+  vectors — #76). They are the work plan this admission exists to produce, and the 9/3/1 split
+  is the *corrected* one: it first read 10/2/1 because each mechanism's file set came from
+  memory rather than from the board, which put `array.wast:219` — an `elem_list` vector — in the
+  lane bucket as a hedged tenth. *Derive the domain, never enumerate it*, applied to the work
+  plan instead of to the engine.
+
+  The forecast was **150–400 fails centred near 250, and 13 landed** — wrong by an order of
+  magnitude, in the direction of expecting a reject-direction-built reader to over-reject
+  valid input. Recorded rather than rounded: the reasoning was sound and the conclusion was
+  still wrong, which is the only kind of forecast error worth writing down.
 - **The flat instruction grammar** (#63): `internal/text/instr.go` and the immediate readers
   in `num.go`. The dispatch is **derived, not enumerated** — `plaininstr`'s 83 arms collapse
   to 16 immediate shapes, and the generated keyword table (decision 0009) already maps all
