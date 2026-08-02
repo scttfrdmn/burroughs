@@ -179,13 +179,21 @@ var immBytes = map[imm]reader3{
 	},
 
 	// heaptype is `either [typeuse s33; s7 ...]` — a backtracking alternation, so its
-	// extent is input-dependent in general. decodeRefType covers the one-byte shorthand
-	// this decoder accepts today; the difference is bounded by
-	// TestEveryReaderAgreesWithItsAuthorityDefinition's declared-partial entry rather
-	// than left as a silent approximation.
+	// extent is input-dependent in general, and both branches now exist: the reader is
+	// `decodeHeapType`, complete, where it was `decodeRefType` and **partial in both
+	// directions** (#88). The declared-partial entry in
+	// TestEveryReaderAgreesWithItsAuthorityDefinition retired with the partiality — a
+	// bound stated for a difference that no longer exists is a claim about code that
+	// is not there.
+	//
+	// The extent claim below is the one this map is for, and it is the half the wrong
+	// reader got wrong quietly: `typeuse s33` is a LEB, so a two-byte index encoding
+	// consumes two, where decodeRefType's `sleb(7)` would stop after one and leave the
+	// second byte to be read as the next opcode. That is the grave #47 shape at a third
+	// site, and it never fired because the type-index branch was unreachable.
 	immHeapType: {
 		"decode.ml:179", "let heaptype s =",
-		func(d *Decoder, r *reader) error { return d.decodeRefType(r) },
+		func(d *Decoder, r *reader) error { return d.decodeHeapType(r) },
 	},
 
 	// Present in the vocabulary, no flat reader, and each absence is a claim:
@@ -336,17 +344,32 @@ func TestEveryReaderAgreesWithItsAuthorityDefinition(t *testing.T) {
 			"repeat 16 laneidx (decode.ml:699): sixteen laneidx reads, so 16..32 bytes, " +
 				"not a flat bytes(16)",
 		},
-		// heaptype is declared partial rather than omitted: decodeRefType covers the
-		// one-byte shorthand and the alternation's other branch (typeuse s33) is #7's.
-		// Stating the bound is what keeps a partial reader from being a silent one.
+		// heaptype's **type-index** branch, which is the one no vector reaches and the one
+		// the wrong reader could not read at all (#88). A two-byte encoding of index 1 is
+		// legal `s33`, so the authority consumes both; decodeRefType's sleb(7) reported
+		// `integer representation too long` on these same bytes — measured, and the reason
+		// the vector here is the wide encoding rather than the one-byte shorthand that
+		// would have agreed with either reader.
 		immHeapType: {
-			"\x70", 1,
-			"decodeRefType covers heaptype's single-byte shorthand branch; the typeuse s33 " +
-				"branch is not implemented and its coverage arrives with #7",
+			twoByteLEB, 2,
+			"heaptype = either [typeuse s33; s7 ...] (decode.ml:178-198); typeuse s33 is a " +
+				"LEB, so a two-byte index encoding consumes two — a one-byte reader leaves " +
+				"0x00 to be read as the next opcode",
 		},
 	}
 
-	d := &Decoder{}
+	// **Every gate on**, and that is not a convenience: this test measures *extent*, which
+	// is a property of the grammar and not of the configuration, so a reader whose vector
+	// sits behind a gate would otherwise fail here for a reason that has nothing to do with
+	// how many bytes the authority consumes. It came up the moment an enrolled reader
+	// acquired a gate — `heaptype`'s type-index branch is function-references, so with the
+	// zero-value Decoder this test read `gc: feature gate disabled` and reported a
+	// disagreement about bytes. The gate-off behaviour is TestHeapTypeGatesFormsNotThePosition's
+	// subject; the extent is this test's, and one instrument per question.
+	d := &Decoder{Features: Features{
+		ExceptionHandling: true, SIMD: true, Threads: true, Memory64: true,
+		GC: true, TailCall: true, RelaxedSIMD: true, MultiMemory: true,
+	}}
 	checked := 0
 	for im, e := range immBytes {
 		if e.read == nil {

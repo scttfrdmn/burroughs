@@ -97,7 +97,25 @@ var (
 	// first. Named at its definition site per the ErrTrailingData ruling (#6).
 	ErrMalformedStorageType = errors.New("malformed storage type")
 
-	ErrMalformedValType    = errors.New("malformed value type")
+	// ErrMalformedNumType and ErrMalformedVecType are `numtype`'s and `vectype`'s
+	// fallthroughs (decode.ml:172, :177), and they replaced a single
+	// `malformed value type` — a **third invented sentinel**, found by the same widened
+	// control that caught ErrMalformedFuncType (#88).
+	//
+	// The reference has no `valtype` message at all: `valtype` is
+	// `either [numtype; vectype; reftype]` (:220-225), a *pure* alternation whose every
+	// branch has its own text, so the string a bad value-type byte gets is always one of
+	// the three below. This engine had a flat switch over seven bytes with a message of
+	// its own invention — which was also the accept-direction half of #88, since the
+	// reference's third branch accepts fourteen forms and the switch accepted two.
+	//
+	// `either` returns the *last* branch's error, so the message a byte that is no
+	// valtype at all receives is `malformed reference type`. That is the reference's
+	// answer and it is not intuitive; it is pinned by
+	// TestValTypeAlternationIsTheReference rather than left to be re-derived.
+	ErrMalformedNumType = errors.New("malformed number type")
+	ErrMalformedVecType = errors.New("malformed vector type")
+
 	ErrMalformedRefType    = errors.New("malformed reference type")
 	ErrMalformedHeapType   = errors.New("malformed heap type")
 	ErrMalformedLimits     = errors.New("malformed limits flags")
@@ -143,9 +161,30 @@ var (
 	ErrDataCountRequired = errors.New("data count section required")
 
 	// The malformed-form errors of the const-expression grammars (#25).
-	ErrMalformedElemFlags = errors.New("malformed element segment flags")
-	ErrMalformedElemKind  = errors.New("malformed element kind")
-	ErrMalformedDataFlags = errors.New("malformed data segment flags")
+	//
+	// The elem and data ones say **kind**, not flags, and that is the reference's word:
+	// `malformed elements segment kind` (decode.ml:1201) and `malformed data segment
+	// kind` (:1223). This engine said "flags" at both, which was #88's second and third
+	// invented sentinels — and unlike the valtype one they were pure renames, because
+	// the *grammar* was already right: the reference dispatches on the same `u32` this
+	// decoder reads, and its own accept sets (0..7 for elem, 0..2 for data) are what
+	// constexpr.go enforces. Checked against :1159-1201 and :1208-1223 before the
+	// strings moved, since a message from the wrong layer is evidence about a missing
+	// descent rather than about a spelling (#36's tell).
+	//
+	// The engine's "flags" reading is not thereby wrong about the *field* — the elem
+	// value is genuinely a bitfield and constexpr.go decodes it bit by bit, which the
+	// reference's eight-arm switch only expresses positionally. But the spec's word for
+	// the malformedness is `kind`, and the sentinel is testimony about the spec.
+	//
+	// Note the two elem entries are **different productions with confusably similar
+	// text**: `elements segment kind` is the segment's leading u32 (:1201), while
+	// `element kind` is the one-byte `elem_kind` inside it (:1157). The reference draws
+	// that distinction and so must this, which is why the names are Seg/nothing rather
+	// than a shared prefix a reader could conflate.
+	ErrMalformedElemSegKind = errors.New("malformed elements segment kind")
+	ErrMalformedElemKind    = errors.New("malformed element kind")
+	ErrMalformedDataSegKind = errors.New("malformed data segment kind")
 
 	// The malformed-form errors of the instruction grammar.
 	//

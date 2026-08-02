@@ -282,19 +282,18 @@ func TestEverySentinelIsTheReferencesOrIsDeclared(t *testing.T) {
 		"constant expression required": "valid.ml's, not decode.ml's — a validation verdict " +
 			"this decoder can reach from a const-expr position",
 
-		// The three found by widening this test. Each is a **real** finding filed as #88,
-		// not a justification: the entries record why they are not being fixed here.
-		"malformed value type": "**NOT ours — #88.** The reference's `valtype` is " +
-			"either(numtype, vectype, reftype) (decode.ml:220-225) and has no such message; " +
-			"the three real ones are `malformed number type`, `malformed vector type`, and " +
-			"`malformed reference type`. Fixing it means routing decodeValType through " +
-			"decodeRefType, which widens the accept set from 7 bytes to 14 — a behaviour " +
-			"change with its own gate placement, so it is #88 and not a rider on #86",
-		"malformed element segment flags": "**NOT ours — #88.** decode.ml:1200 calls it " +
-			"`malformed elements segment kind`; the flags-versus-kind distinction is this " +
-			"engine's reading, not the spec's word",
-		"malformed data segment flags": "**NOT ours — #88.** decode.ml:1223 calls it " +
-			"`malformed data segment kind`, same shape as the element one",
+		// **The three #88 entries that used to sit here are gone, and their absence is this
+		// map's most load-bearing property.** They were `malformed value type`,
+		// `malformed element segment flags`, and `malformed data segment flags` — real
+		// findings parked here as failing prose, with the issue's definition of done written
+		// as "these three entries disappear". They disappeared by the engine adopting the
+		// reference's strings, not by the reasons being improved (#88).
+		//
+		// Nothing marks the absence except this comment, which is the honest situation: a
+		// map cannot assert what is not in it. What *does* assert it is the loop below,
+		// which now has to find all three strings in decode.ml for the test to pass — so
+		// re-introducing any of the invented spellings fails here rather than needing anyone
+		// to remember the entries were removed.
 	}
 
 	// The domain: every sentinel binary.go declares. Derived, so a sentinel added tomorrow
@@ -308,12 +307,19 @@ func TestEverySentinelIsTheReferencesOrIsDeclared(t *testing.T) {
 
 	// Second vacuity floor, on the *other* input. A moved var block or a changed
 	// declaration style yields zero sentinels and a green board asserting nothing at all —
-	// the empty-set agreement, which breaking any assertion above would never reveal. 30 at
-	// the pinned revision; floored at 25.
-	if len(decls) < 25 {
-		t.Fatalf("found only %d sentinel declarations in binary.go, want >=25 (30 at the "+
-			"pinned revision) — the extractor is reading past the declarations, so every "+
-			"assertion below is vacuous", len(decls))
+	// the empty-set agreement, which breaking any assertion above would never reveal.
+	//
+	// **37**, measured by running this regexp and printing the count. This paragraph said
+	// "30 at the pinned revision" when #86 wrote it, and 30 was wrong on the day: the real
+	// figure was 36, and #88's two new sentinels make it 37. A third fabricated number in
+	// the file whose subject is fabricated testimony, in the sentence next to the one about
+	// measuring — *second-order honesty* is expensive precisely because the discipline does
+	// not exempt its own prose. Floored at 30, below the measurement rather than at it, so
+	// upstream trimming a sentinel is not a failure.
+	if len(decls) < 30 {
+		t.Fatalf("found only %d sentinel declarations in binary.go, want >=30 (37 measured) — "+
+			"the extractor is reading past the declarations, so every assertion below is "+
+			"vacuous", len(decls))
 	}
 
 	for _, d := range decls {

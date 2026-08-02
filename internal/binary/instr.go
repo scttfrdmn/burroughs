@@ -434,11 +434,22 @@ func (c *instrCtx) imm(r *reader, im imm) error {
 	case immValType:
 		return c.d.decodeValType(r)
 	case immHeapType:
-		// Partial, and declared so: `heaptype` is `either [typeuse s33; s7 ...]` over
-		// twelve shorthands, where decodeRefType covers the two this decoder accepts.
-		// Widening it is the GC gate's business, not this PR's — see the immHeapType
-		// entry in immBytes, which carries the same bound.
-		return c.d.decodeRefType(r)
+		// `let ht = heaptype s` (decode.ml:603, :636-639) — `heaptype`, not `reftype`.
+		//
+		// This read `decodeRefType`, and the two productions disagree in **both**
+		// directions: `heaptype`'s first branch is a type index, which `reftype` has no
+		// arm for, so `ref.null 0` was rejected `malformed reference type: 0x00`; and
+		// `reftype` has the `-0x1c`/`-0x1d` parameterized prefixes, which `heaptype` has
+		// no arm for, so `ref.null (ref null extern)` was *accepted* — the same wrong
+		// reader over-accepting at one end while under-accepting at the other. The
+		// over-accept half is not in #88's original diagnosis; it turned up when the
+		// probe was pointed at the fix rather than at the defect (#88).
+		//
+		// The comment this replaces declared the reader partial and deferred widening to
+		// "the GC gate's business" — declared-and-tracked, so not a grave (#6), except
+		// that the tracking pointed at gate work while the fix was substituting a reader
+		// this file already had. *A deferral outlives its reason silently.*
+		return c.d.decodeHeapType(r)
 	case immBlockType:
 		return c.d.decodeBlockType(r)
 	case immVecValType:
@@ -473,6 +484,19 @@ func (c *instrCtx) imm(r *reader, im imm) error {
 // inverse of the ErrDataCountRequired listing: declare an error that is unreachable but
 // legitimate, and leave undeclared an error that would only ever be a defect.
 var errNoImmReader = errors.New("internal: no reader for immediate")
+
+// errNotEmptyBlockType is the blocktype alternation's middle branch declining, and it is
+// deliberately not a spec sentinel: the reference's own text there is the **empty string**
+// (`expect 0x40 s ""`, decode.ml:337), because that branch's failure is never reported —
+// `either` is going to try the next one.
+//
+// It previously reused ErrMalformedValType, which was harmless while that string existed and
+// became a lie when #88 established that the reference has no `valtype` message at all: the
+// branch would have been reporting a *neighbouring production's* invented sentinel for a
+// condition the reference declines to name. Undeclared in declaredErrors and unreachable by
+// construction — the last branch always overwrites it — so its arrival at the surface is a
+// fuzz find rather than a verdict, the same posture as errNoImmReader above (#88).
+var errNotEmptyBlockType = errors.New("internal: blocktype is not the empty result type")
 
 // decodeMemop reads a memarg: flags, an optional memory index, and an offset
 // (decode.ml:324-332).
@@ -561,9 +585,13 @@ func decodeCatch(r *reader) error {
 // is which branch's error survives, and that is load-bearing in one place the suite cannot
 // reach: **valtype must be last so a feature decline stands.** 0x7b with SIMD off is
 // ErrFeatureDisabled from this branch; move it earlier and the alternation overwrites that
-// with `malformed value type` — a gate manufacturing malformedness for a construct Wasm
-// 3.0 defines. Pinned by TestBlockTypeAlternationIsTheAuthority, whose doc records the
+// with valtype's spec malformed-string — a gate manufacturing malformedness for a construct
+// Wasm 3.0 defines. Pinned by TestBlockTypeAlternationIsTheAuthority, whose doc records the
 // wrong reason this comment used to give.
+//
+// (Since #88, valtype is itself an `either` whose last branch is `reftype`, so the surviving
+// string for a byte that is no blocktype at all is `malformed reference type`. The ordering
+// fact is unchanged; the *name* of the message it selects moved one production deeper.)
 func (d *Decoder) decodeBlockType(r *reader) error {
 	return either(r,
 		func(r *reader) error {
@@ -587,7 +615,7 @@ func (d *Decoder) decodeBlockType(r *reader) error {
 				return err
 			}
 			if b != 0x40 {
-				return ErrMalformedValType
+				return errNotEmptyBlockType
 			}
 			return nil
 		},

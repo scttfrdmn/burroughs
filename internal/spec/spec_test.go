@@ -1037,7 +1037,7 @@ func TestPhase1Files(t *testing.T) {
 	// asserts nothing (which is how this ceiling was briefly wrong at 1 in #83).
 	//
 	// The vector itself is now a *gated* verdict on the default board, allowlisted in
-	// TestNoGatedVectorIsUnlisted with the feature named, and **passed** in the
+	// TestGatedVectors with the feature named, and **passed** in the
 	// all-gates-on lane, where 4178 pass / 0 fail / 0 gated.
 	const binaryFailCeiling = 0
 	if binaryFail > binaryFailCeiling {

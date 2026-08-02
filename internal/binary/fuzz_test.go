@@ -45,7 +45,8 @@ var declaredErrors = []error{
 	ErrSectionSizeMismatch,
 	ErrMalformedDefType,
 	ErrMalformedStorageType,
-	ErrMalformedValType,
+	ErrMalformedNumType,
+	ErrMalformedVecType,
 	ErrMalformedRefType,
 	ErrMalformedLimits,
 	ErrMalformedMutability,
@@ -56,9 +57,9 @@ var declaredErrors = []error{
 	ErrMalformedUTF8,
 
 	// The constexpr production and the three sections that need it (#25).
-	ErrMalformedElemFlags,
+	ErrMalformedElemSegKind,
 	ErrMalformedElemKind,
-	ErrMalformedDataFlags,
+	ErrMalformedDataSegKind,
 
 	// The instruction grammar (#43/#39). ErrNonConstantExpr used to stand here as the
 	// one error naming the *reader's* limit rather than a spec verdict, covering both
@@ -74,9 +75,15 @@ var declaredErrors = []error{
 	ErrEndExpected,
 
 	// The rest of the instruction grammar's malformed forms.
+	//
+	// ErrMalformedHeapType moved here from unreachability with #88: `immHeapType` reads
+	// `heaptype` rather than `reftype`, so ref.null/ref.test/ref.cast can now surface it.
+	// It was previously reachable only through reftype's parameterized prefixes, which no
+	// section grammar the decoder descends into reaches.
 	ErrMalformedMemopFlags,
 	ErrMalformedCatch,
 	ErrMalformedTypeIndex,
+	ErrMalformedHeapType,
 	ErrTooManyLocals,
 
 	// Declared and *unreachable at bdd7164*, which is a different claim from the rest
@@ -302,14 +309,18 @@ func FuzzConstExprProgress(f *testing.F) {
 		//	ErrConstExprRequired   a real instruction that is not constant (invalid)
 		//	ErrEndExpected         `end_ s` found a byte that is not END
 		//	ErrMisplacedOpcode     unreachable; listed so its arrival is not a fuzz find
-		//	valtype / reftype      blocktype's last `either` branch; ref.null's heaptype
-		//	ErrMalformedTypeIndex  blocktype's negative-s33 branch
+		//	numtype/vectype        valtype's first two `either` branches
+		//	reftype                valtype's last branch, so the message a byte that is no
+		//	                       valtype at all receives — including at a blocktype
+		//	heaptype               ref.null / ref.test / ref.cast's immediate (#88)
+		//	ErrMalformedTypeIndex  blocktype's and heaptype's negative-s33 branches
 		//	ErrMalformedCatch      try_table's handler kind byte
 		//	ErrMalformedMemopFlags a memarg whose flags field is >= 0x80
 		for _, want := range []error{
 			ErrTruncated, ErrPayloadEnd, ErrLEBTooLong, ErrLEBOverflow,
 			ErrIllegalOpcode, ErrConstExprRequired, ErrEndExpected, ErrMisplacedOpcode,
-			ErrMalformedValType, ErrMalformedRefType, ErrMalformedTypeIndex,
+			ErrMalformedNumType, ErrMalformedVecType, ErrMalformedRefType,
+			ErrMalformedHeapType, ErrMalformedTypeIndex,
 			ErrMalformedCatch, ErrMalformedMemopFlags, ErrFeatureDisabled,
 		} {
 			if !errors.Is(err, want) {
