@@ -848,13 +848,25 @@ func (p *parser) startField() error {
 // syntax error rather than an empty list.
 //
 // **#63 makes the flat arm reachable.** `instr_list` is now a loop over `instr1`, and `instr1` is
-// `plaininstr | blockinstr | expr` (:552-554) of which this stratum owns the first and the
-// minimal case of the third. What is left unread stops at bodyBoundary as before, so the bucket
-// shrinks rather than moving.
+// `plaininstr | blockinstr | expr` (:552-554) of which this stratum owns the first, the flat form
+// of the second, and the minimal case of the third. What is left unread stops at bodyBoundary as
+// before, so the bucket shrinks rather than moving.
+//
+// **The terminator set is larger than `)` and EOF, and that is a `blockinstr` consequence.** An
+// `instr_list` nested in a block ends at the token that closes the *block*, which menhir gets from
+// the follow set and a recursive-descent reader has to name: `end`, `else`, and `try_table`'s
+// `(catch …)` clauses. Missing them does not accept anything wrong — it reports the *boundary* at
+// an `end` this stratum can read perfectly well, which is the unimplemented bucket claiming work
+// that is finished. Found by probing `(func block end $l)` after blockinstr landed: the boundary
+// moved from `"block"` to `"end"` and the board did not budge, which is the tell that a reader was
+// reached and then blocked by its own caller.
 func (p *parser) instrList() error {
 	for {
 		if p.c.at(RParen) || p.c.at(EOF) {
 			return nil // the empty arm, parser.mly:547 — reached at the end of every list too
+		}
+		if p.atBlockTerminator() {
+			return nil // the enclosing blockinstr's terminator; its own reader consumes it
 		}
 		read, err := p.instr1()
 		if err != nil {
@@ -954,10 +966,11 @@ func (p *parser) elemexprList() error {
 
 // instr1 parses one instruction (parser.mly:552-554), reporting whether it read one.
 //
-// Three arms, and #63 owns one and a half of them: `plaininstr`, and the `plaininstr expr_list`
-// arm of `expr1` reached through `expr`. `blockinstr` and `expr1`'s other nine arms are #64's, so
-// this returns false for them and the caller falls through to bodyBoundary — which keeps the
-// board's unread work in one legible bucket instead of scattering it across arms.
+// Three arms, and #63 owns two and a half of them: `plaininstr`, `blockinstr` in its **flat**
+// form, and the `plaininstr expr_list` arm of `expr1` reached through `expr`. `expr1`'s other
+// nine arms are #64's, so this returns false for them and the caller falls through to
+// bodyBoundary — which keeps the board's unread work in one legible bucket instead of scattering
+// it across arms.
 //
 // The false return must leave the cursor untouched, since bodyBoundary reports the token it stops
 // on and a half-consumed lookahead would name the wrong one.
@@ -965,7 +978,284 @@ func (p *parser) instr1() (bool, error) {
 	if read, err := p.plaininstr(); read || err != nil {
 		return read, err
 	}
+	if read, err := p.blockinstr(); read || err != nil {
+		return read, err
+	}
 	return p.expr()
+}
+
+// blockinstr parses the flat block family (parser.mly:726-738): `block`, `loop`, `if`/`else` and
+// `try_table`, each `KEYWORD labeling_opt … END labeling_end_opt`.
+//
+// **In scope for #63 by the issue's own Scope list** (`blockinstr` :726 and the block family
+// :740-:792, plus `labeling_opt` :510 and `labeling_end_opt` :521), and the seam ruling did not
+// move it — the ruling moved `expr1`'s minimal arm *in*, it did not move anything out. The 17
+// vectors the forecast called "flat: block/loop/if in folded-free form — no `expr` needed at all"
+// are exactly these, and they were still failing as `unimplemented` when the rest of the stratum
+// landed. Measured, not assumed: 17 unanswered vectors stop at a boundary whose token is a
+// block-family keyword rather than a `(`, in block.wast, loop.wast and if.wast only.
+//
+// What stays #64's is the *folded* form — `expr1`'s BLOCK/LOOP/IF/TRY_TABLE arms (:826-:834),
+// which take `block` without an `END` and get their extent from the closing paren. Same
+// keywords, different production, and the difference is real rather than cosmetic: `if_block`
+// (:891) and `try_block` (:901) are desugaring families, which is precisely the line the ruling
+// drew for #64 — "what the reference itself distinguishes: the desugaring families".
+func (p *parser) blockinstr() (bool, error) {
+	t := p.c.peek()
+	if t.Kind != KeywordTok {
+		return false, nil
+	}
+	switch t.Keyword {
+	case kwBlock, kwLoop, kwIf, kwTryTable:
+	default:
+		return false, nil
+	}
+	p.c.next()
+
+	label, err := p.labelingOpt()
+	if err != nil {
+		return true, err
+	}
+	if t.Keyword == kwTryTable {
+		if err := p.handlerBlock(); err != nil {
+			return true, err
+		}
+	} else if err := p.block(); err != nil {
+		return true, err
+	}
+
+	// `if … else …` is a fifth arm rather than an option on the third (:732-:735), and it carries
+	// its *own* `labeling_end_opt` — so `if $a else $a end $a` has two end-labels to check, and
+	// the reference checks them against the same opener by concatenating them (`$5 @ $8`).
+	if t.Keyword == kwIf && p.c.atKeyword(kwElse) {
+		p.c.next()
+		if err := p.labelingEndOpt(label); err != nil {
+			return true, err
+		}
+		if err := p.instrList(); err != nil {
+			return true, err
+		}
+	}
+	if !p.c.atKeyword(kwEnd) {
+		// Not the boundary: `END` is a required token of every arm, so its absence is this
+		// stratum's own syntax error. `(func block)` is malformed on the merits.
+		return true, p.unexpected()
+	}
+	p.c.next()
+	return true, p.labelingEndOpt(label)
+}
+
+// atBlockTerminator reports whether the cursor is on a token that ends an enclosing block's
+// `instr_list` rather than starting another instruction.
+//
+// `END` and `ELSE` are `blockinstr`'s own terminators (:728-:738). The `(catch …)` clauses are
+// subtler: they are *not* terminators of the body, they *precede* it (`handler_block_body`,
+// :792-:806), so an `instr_list` never has one after it — but `handlerBlock` reads the clauses
+// before calling instrList, so by then a `(catch …)` cannot legally appear and treating it as a
+// stop point would mask a syntax error. Deliberately excluded for that reason; only the two real
+// terminators are here.
+//
+// **The exclusion is necessary and was not sufficient**, which is what the control found. Leaving
+// the clauses out is right, and it left a stray `(catch …)` falling through to bodyBoundary to be
+// reported as *unimplemented* — a rejection with the wrong layer's name on it. The clause set is
+// now named at bodyBoundary, where the false claim was, rather than here, where it would have
+// bought a masked syntax error. See that function's header for the measurement.
+//
+// Named as a predicate rather than inlined because it is a *claim about the grammar* — the follow
+// set of `instr_list` — and a claim gets a name and a control (TestBlockTerminatorsEndTheList).
+func (p *parser) atBlockTerminator() bool {
+	return p.c.atKeyword(kwEnd) || p.c.atKeyword(kwElse)
+}
+
+// labelingOpt parses `labeling_opt` (parser.mly:510-519) and returns the bound label's *decoded*
+// name, or "" for the anonymous arm.
+//
+// The two arms differ only in whether a `$name` follows, and the label is returned rather than
+// checked here because the comparison happens at the matching `end` — which is why this reads as
+// a getter and labelingEndOpt carries the check.
+//
+// **The label is decoded, not read raw, and that is this function's whole content.** The named arm
+// is `| bindidx`, and `bindidx` is `| VAR { var $1 $sloc }` (:507-508) — the same `var` helper
+// (:48-51) every other binding occurrence goes through, and it decodes:
+//
+//	let var s loc = ... try ignore (Utf8.decode s); Source.(s @@ r)
+//	  with Utf8.Utf8 -> error r "malformed UTF-8 encoding"
+//
+// So `block $"\ff" end` is malformed for exactly the reason `(func $"\ff")` is (id.wast:31), one
+// production away. This read `p.c.next()` and returned the Token, skipping the helper — see the
+// grave in labelingEndOpt's header, where the same shortcut cost two more defects.
+//
+// "" is unambiguously the anonymous arm rather than a name: a VarTok's decoded value is never
+// empty, because both spellings reject that at the lexer (`empty identifier`, lexer.mll:817/:819).
+// Pinned by TestEmptyIdentifierHasNoSpelling rather than assumed — a cross-layer invariant read
+// off another file is a claim.
+func (p *parser) labelingOpt() (string, error) {
+	if !p.c.at(VarTok) {
+		return "", nil
+	}
+	return decodedVar(p.c.next())
+}
+
+// labelingEndOpt parses `labeling_end_opt` (:521-523) and makes the `mismatching label` check.
+//
+// **The empty opener rejects *any* end-label, which is the arm that is easy to get wrong.** The
+// reference's anonymous arm is `List.iter (fun x -> error x.at "mismatching label") xs` (:512-513)
+// — an unconditional error over the end-labels, so `(func block end $l)` is a mismatch against
+// nothing rather than an unknown label. The named arm compares textually (`x.it <> $1.it`, :518).
+// Both are the same message, and 14 of the suite's `mismatching label` vectors are these two arms:
+// `block.wast:1484` (`block end $l`, empty opener) and `:1488` (`block $a end $l`, named opener
+// disagreeing).
+//
+// Reported at the *end*-label rather than at the opener, per `error x.at` — the offence is the
+// label that does not match, not the block that named one.
+//
+// **Grave: this pair compared raw lexemes.** `labeling_end_opt` is `| bindidx { [$1] }` and
+// `labeling_opt`'s named arm is `| bindidx`, so *both* labels are `var`-decoded (parser.mly:48-51)
+// before either is compared — and the comparison the reference makes is `x.it <> $1.it` on the
+// decoded strings. Reading `Token.Text` instead skipped the decode and compared the *spelling*,
+// which is three defects, not one:
+//
+//   - `block $"\ff" end` was accepted. The opener never decoded. So were the loop, if and
+//     try_table spellings — four arms, one missing call.
+//   - `block $"\ff" end $"\ff"` was accepted, because two identical bad spellings compare equal.
+//   - `block $a end $"a"` was a `mismatching label`, where the reference makes it a *match*:
+//     `$a` and `$"a"` are two spellings of the same name (lexer.mll:815 vs :816), so
+//     `Text` differs while `Value` agrees. The mirror, `block $"a" end $a`, likewise.
+//
+// The first two are accept-direction — no assert_malformed can see a module wrongly *accepted*,
+// and the third is the same rejection wearing a wrong reason. What surfaced it was `unparam`
+// reporting `labelingOpt`'s error result as always nil: the finding was true, and the reason it
+// was true is that the decode which would have made it non-nil had been left out. A dead error
+// return as a *missing check wearing a disguise* is grave 0003's shape exactly, and here the
+// linter found it one layer earlier than the sweep would have. Sweep for siblings: every other
+// `p.c.at(VarTok)` site routes through `bindidx`/`decodedVar` — these two were the only raw
+// readers, so the family is closed.
+//
+// The decode precedes the mismatch check, and that order is the reference's rather than a
+// preference: `bindidx` is reduced when its VAR is *read*, so `var`'s decode has already run by
+// the time blockinstr's action applies the `labeling_opt` closure that iterates and errors. Hence
+// `block $a end $"\ff"` is malformed UTF-8, not a mismatch — the end-label is not well-formed
+// enough to disagree. See TestLabelDecodePrecedesComparison.
+func (p *parser) labelingEndOpt(label string) error {
+	if !p.c.at(VarTok) {
+		return nil // the empty arm, which is always legal
+	}
+	tok := p.c.peek()
+	end, err := p.labelingOpt()
+	if err != nil {
+		return err
+	}
+	if label != end {
+		return errAt(tok, "mismatching label")
+	}
+	return nil
+}
+
+// block parses `block` (parser.mly:740-752): an optional typeuse, then `(param …)`/`(result …)`
+// lists, then the instruction sequence.
+//
+// The three are ordered and each is optional, which `block_param_body` (:754) and
+// `block_result_body` (:760) express as right-recursive lists — `(param)` may repeat, then
+// `(result)` may repeat, then `instr_list`. A `(param)` *after* a `(result)` is not in the
+// grammar, so it falls out of the loops and is reported by instrList's fallthrough.
+func (p *parser) block() error {
+	if err := p.blockSignature(); err != nil {
+		return err
+	}
+	return p.instrList()
+}
+
+// blockSignature reads the part `block` and `handler_block` have in common: `typeuse?` then the
+// `(param …)*` and `(result …)*` lists, stopping before the body.
+//
+// Shared rather than written twice because the reference's two chains are the same shape — compare
+// `block_param_body`/`block_result_body` (:754-:764) with
+// `handler_block_param_body`/`handler_block_result_body` (:780-:790): four productions differing
+// only in the threaded context, which is a semantic-action concern this stratum has no
+// representation for. Two copies would be two places to fix the param/result ordering.
+//
+// **A block's parameter list is NOT `functype`, and delegating to it was a grave (#63).** The first
+// draft of this function called `p.functype()`, on the stated reasoning that a block's prefix and a
+// functype's are the same production shape. They are not: `functype` has *three* arms (:430-:438)
+// and the third is the named sugar `LPAR PARAM bindidx valtype RPAR` (:436), which
+// `block_param_body` (:756) does not have — one arm, `LPAR PARAM valtype_list RPAR`, no bindidx.
+// So `block (param $x i32) end` is malformed and this reader accepted it.
+//
+// The suite says so directly, which is the part worth recording: `block.wast:1475`,
+// `loop.wast:783` and `if.wast:1513` are `(module quote …)` vectors expecting `unexpected token`
+// on exactly this spelling, and three more (`:1479`, `:787`, `if.wast:1517`) expect it on the
+// folded form, which is #64's. The vectors existed the whole time; the defect was **stated as the
+// rule** in this comment, so a reviewer checking the code against its documentation would have
+// found agreement. Caught by #63's own definition of done — *each immediate reader measured against
+// the reference production defining its extent, on its own* — which is the discipline finding
+// something a shared-prefix argument had talked past. Comments are testimony, and the executable
+// grammar outranks them.
+//
+// `(result …)` has no named form in either chain (compare :762 with `functype_result` :443), so
+// that half really is shared and `(result $x i32)` was already rejected.
+func (p *parser) blockSignature() error {
+	if p.atTypeuse() {
+		if err := p.typeuse(); err != nil {
+			return err
+		}
+	}
+	// `block_param_body` then `block_result_body`, in that order and each its own loop: a
+	// `(param)` may not follow a `(result)`, and one loop accepting either would admit a form the
+	// reference rejects. The `valtype_list` is unnamed — see the header.
+	for p.c.at(LParen) && p.c.peek2Keyword(kwParam) {
+		if err := p.lpar(kwParam); err != nil {
+			return err
+		}
+		if _, err := p.valtypeList(); err != nil {
+			return err
+		}
+		if err := p.rpar(); err != nil {
+			return err
+		}
+	}
+	return p.functypeResult()
+}
+
+// handlerBlock parses `handler_block` (:853-:864) — `try_table`'s block, whose body is preceded by
+// zero or more `(catch …)` clauses.
+//
+// Four handler arms (:874-:806), and all four are read even though no vector reaches the last
+// two: a handler set missing an arm rejects a legal module, and that is the accept-direction class
+// decision 0007 says the suite cannot falsify.
+func (p *parser) handlerBlock() error {
+	if err := p.blockSignature(); err != nil {
+		return err
+	}
+	for p.c.at(LParen) {
+		t := p.c.peek2()
+		if t.Kind != KeywordTok {
+			break
+		}
+		var idxs int
+		switch t.Keyword {
+		case kwCatch, kwCatchRef:
+			idxs = 2 // `(catch $tag $label)` — a tag and a label
+		case kwCatchAll:
+			idxs = 1 // `(catch_all $label)`
+		case kwCatchAllRef:
+			idxs = 1
+		default:
+			// Not a handler clause: a folded instruction opening the body, which instrList
+			// handles (or reports as the boundary).
+			return p.instrList()
+		}
+		p.c.next() // the LPAR
+		p.c.next() // the keyword
+		for range idxs {
+			if err := p.idx(); err != nil {
+				return err
+			}
+		}
+		if err := p.rpar(); err != nil {
+			return err
+		}
+	}
+	return p.instrList()
 }
 
 // expr parses `LPAR expr1 RPAR` (parser.mly:809), the folded form — restricted to `expr1`'s
@@ -1043,9 +1333,51 @@ func (p *parser) expr() (bool, error) {
 // three. TestErrorConstructorsAreAccountedFor found it by sweeping the AST for `&Error{}` literals
 // — a control derived from the source rather than from the list it checks, which is the only reason
 // an unlisted site was findable at all.
+// **A handler clause in instruction position is malformed in every production, so it is not a
+// boundary either.** `(catch …)`, `(catch_ref …)`, `(catch_all …)` and `(catch_all_ref …)` appear in
+// exactly two places in the whole grammar — `handler_block_body` (:792-:806) and
+// `try_block_handler_body` (:929) — and both consume their clauses *before* the `instr_list`. They
+// are not arms of `expr1` (:813-:834), so no folded form can start with one, and #64 will never
+// grow a reader for `(module (func (catch_all)))`. Claiming `unimplemented` for it promises work
+// that does not exist: `try_table.wast:366` and `:371` are `unexpected token` vectors on precisely
+// those two spellings, and they would sit in #64's inventory forever, unanswerable by finishing it.
+//
+// **The two candidate fixes are distinguished by one input, and finding it took a falsification run
+// that did not fail.** TestBlockTerminatorsEndTheList caught `try_table nop (catch 0 0) end`
+// reporting the boundary; the reflex repair was to add the clauses to atBlockTerminator instead. The
+// falsification pass for *that* variant — clauses in the terminator set, this check removed — was
+// expected to fail the control and **passed**, which is the same class as the three-deep precedence
+// claim earlier in this PR: a structural argument, stated as a rule, that no assertion held.
+//
+// Probing rather than arguing produced the discriminator: `(module (func (drop (catch_all))))`. The
+// variant reports it *unimplemented*, because a folded operand reaches this function through
+// `expr`'s operand loop (:1254) rather than through `instrList`, and a terminator set cannot see
+// that path. On every other row the two variants agree — same verdict, and positions differing only
+// by the paren each blames. So the check belongs here, at the one place all three routes to a
+// stray clause converge, and the reason is a measured input rather than a layering preference. The
+// masked-syntax-error worry about widening the terminator set is real but was not what settled it.
+//
+// **This check is a named member of a set that should be derived, and #70 tracks the derivation.**
+// The clauses are not special: they are the *sample* of instruction-position tokens no stratum will
+// ever read, and `(memory 1)`, `(then …)`, `(else …)`, `(global i32)` and a flat
+// `block (result i32) (param i32)` all still report `unimplemented` here while being unreachable in
+// every production. Fixing a set by listing its members is the shape *scope controls to the space*
+// forbids, so this is declared-and-tracked rather than left silent: the two vectors that exist are
+// answered now, the general predicate wants `expr1`'s arms to exist as code (#64), and #70 deletes
+// this list when it lands. Zero vectors turn on the rest, which is why it needs an issue and not a
+// bucket.
+var handlerClauseKinds = []keywordKind{kwCatch, kwCatchRef, kwCatchAll, kwCatchAllRef}
+
 func (p *parser) bodyBoundary() error {
 	if p.c.at(RParen) {
 		return p.unexpected()
+	}
+	if p.c.at(LParen) {
+		for _, k := range handlerClauseKinds {
+			if p.c.peek2Keyword(k) {
+				return p.unexpectedAt(p.c.peek2())
+			}
+		}
 	}
 	t := p.c.peek()
 	return errf(t, "unimplemented: instruction body at %q", t.Text)

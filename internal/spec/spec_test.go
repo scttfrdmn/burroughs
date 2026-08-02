@@ -986,7 +986,47 @@ func TestPhase1Files(t *testing.T) {
 	// *reachability* wrongly, in the same direction #62's did and for a differently-shaped
 	// reason. Recorded rather than smoothed: the 92 are #64's inventory, and #64's own forecast
 	// starts from them rather than from a fresh classification.
-	const textFailCeiling = 97
+	//
+	// # 79 after the flat block family, and the "92 are #64's" above is corrected
+	//
+	// **97 → 79, the fall being 18 more vectors and the account correcting the one above.** The
+	// paragraph naming 92 as #64's inventory was wrong, and it was wrong in the way a reconciliation
+	// most easily goes wrong: it read the *surface* of the unanswered vectors instead of checking
+	// them against the owning issue's Scope list. #63's Scope names `blockinstr` (parser.mly:726),
+	// the block family (:740-:792), `labeling_opt` (:510) and `labeling_end_opt` (:521), and the
+	// seam ruling moved the `expr1` minimal arm *in* — it moved nothing out. So the **flat** block
+	// forms were always #63's, and the forecast's own table said so: it has a "17 flat" row.
+	// Measured rather than re-argued, by classifying each unanswered vector on whether its boundary
+	// token is a block keyword or a `(`:
+	//
+	//	flat boundary    17     #63's, and they were still red
+	//	folded boundary  75     #64's, genuinely
+	//
+	// Landing `blockinstr` answered the 17 exactly, in two buckets:
+	//
+	//	14  mismatching label   → 0   labeling_end_opt, both arms (block.wast:1484/:1488 et al)
+	//	 3  unexpected token    56 → 53  block/loop/if `(param $x …)`, the named-form grave
+	//
+	// Plus **1 more the controls found rather than the board**: `try_table.wast:366` and `:371`
+	// (`(func (catch_all))`, `(func (catch $e))`) were reporting the *boundary* for a clause no
+	// production admits in instruction position — 51 rather than 53 in the `unexpected token`
+	// bucket, and the general form of that defect is #70.
+	//
+	// **The corrected partition of what remains, itemized from the engine's own error text:**
+	//
+	//	75  unimplemented: instruction body   #64's folded arms — the real inventory
+	//	 5  accepted (no error at all)         the type context, neither stratum's
+	//	 1  malformed function type: 0x5e      binary-gc.wast:1, the decoder's
+	//	--
+	//	81  … then 79 after the two try_table vectors
+	//
+	// **Against the 353 the shortfall is now 42, not 59**, and the whole difference is the 17 this
+	// paragraph reassigns. The lesson is the one the seam ruling already stated and the
+	// reconciliation then ignored: *seams follow defect ownership, not surface form*. Reading a
+	// bucket's members off their spelling is the same manoeuvre as reading a test's coverage off its
+	// case labels, and it produced a number that was wrong by exactly the vectors the issue was
+	// chartered to fix. Check the Scope list, not the mnemonics.
+	const textFailCeiling = 79
 	if textFail > textFailCeiling {
 		t.Errorf("text failures rose to %d, ceiling %d — either the reader regressed on "+
 			"vectors it used to answer, or the corpus moved", textFail, textFailCeiling)
@@ -1028,7 +1068,19 @@ func TestPhase1Files(t *testing.T) {
 	// wants a typechecker. So the pass is unearned once more rather than earned, the withdrawal
 	// recorded in #62's `− 1` is handed back, and the 294 is a gross figure that needs no
 	// netting. TestBareQuoteFormsPassUnearned holds the sum at seven and has the argument.
-	const passFloor = 1922
+	//
+	// **1941 = 1922 + 17 + 2 after the flat block family**, and the split matters more than the sum:
+	//
+	//	17  blockinstr and the block family — #63's own Scope, mis-assigned to #64 in the
+	//	    reconciliation above until the flat/folded classification was measured
+	//	 2  try_table.wast:366/:371, found by a control rather than by the board — the boundary
+	//	    was claiming a handler clause in instruction position, which #70 generalizes
+	//
+	// Nothing withdrawn either time, so this is gross like the 294. The two-from-a-control rows are
+	// worth naming separately: they are vectors the *suite* had all along and the *board* could not
+	// point at, because a bucket keyed on the expected string cannot distinguish "we have not
+	// written that reader" from "we are wrong about which reader would answer it".
+	const passFloor = 1941
 	if totalPass < passFloor {
 		t.Errorf("board pass count %d fell below floor %d", totalPass, passFloor)
 	}

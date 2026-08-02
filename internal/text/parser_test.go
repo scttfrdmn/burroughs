@@ -556,14 +556,29 @@ func TestGlobalIsNotADefinitionWhenImported(t *testing.T) {
 // which is also the stronger test: the boundary is now hit mid-parse, after a mnemonic has been
 // consumed, where before it was hit on the first token of the body. A `block` inside a folded
 // expr operand is the case that would most plausibly leak an `unexpected token`.
+//
+// **Re-pointed a second time, inside the same PR, and the second move is the instructive one.**
+// The four flat block forms above were filed here as "#64's" on the strength of their *surface*
+// — a `block` is a block — and the seam ruling had already said the opposite: seams follow defect
+// ownership, not surface form. #63's Scope list names `blockinstr` (:726) and the block family
+// (:740–:792), so `(func block end)` was always this issue's, and the measurement that settled it
+// (flat=17, folded=75) is in the changelog. They now parse on the merits, and what replaces them
+// is the *folded* spelling of each — `expr1`'s BLOCK/LOOP/IF/TRY_TABLE arms (:826–:834), which
+// really are #64's, and which reach the boundary one paren deeper than the flat forms ever did.
+//
+// The lesson is that a tripwire's case list can be mis-assigned even while the tripwire itself is
+// correct: this test never stopped asserting the right property, it just asserted it about four
+// vectors that belonged to the PR it was riding in. A control's *scope* is as falsifiable as its
+// predicate, and the way to check it is the same — measure which reader answers the case, don't
+// read the mnemonic.
 func TestBodyBoundaryIsNamed(t *testing.T) {
 	for _, src := range []string{
-		// blockinstr (parser.mly:553) — #64's, flat and folded.
-		`(module (func block end))`,
+		// expr1's folded block arms (parser.mly:826-834) — #64's. The flat spellings
+		// (`(func block end)` and siblings) were #63's and now parse; see the header.
 		`(module (func (block)))`,
-		`(module (func loop end))`,
-		`(module (func if end))`,
-		`(module (func try_table end))`,
+		`(module (func (loop)))`,
+		`(module (func (if)))`,
+		`(module (func (try_table)))`,
 		// expr1's non-plaininstr arms (:815-829) — #64's.
 		`(module (func (select)))`,
 		`(module (func (call_indirect (type 0))))`,
@@ -1133,6 +1148,460 @@ func TestParamsMayNotFollowResults(t *testing.T) {
 		t.Error("`(result i32) (param i32)` accepted; functype:1433 must be exhausted before " +
 			"functype_result:1441 begins, so a result cannot precede a param")
 	}
+}
+
+// TestBlockParamHasNoNamedForm is the grave's control, and it is the *sibling* of
+// TestNamedParamTakesExactlyOneType rather than a copy of it.
+//
+// A block's parameter list is `block_param_body` (parser.mly:754-758), whose param arm is
+// `LPAR PARAM valtype_list RPAR` — **one arm, no bindidx**. A function's is `functype`
+// (:430-:438), which has *two* param arms, the second being the named sugar `LPAR PARAM bindidx
+// valtype RPAR` (:436). So `(param $x i32)` is legal in a `(func …)` signature and malformed in a
+// `block`, and the same two lines of grammar decide both.
+//
+// `blockSignature` delegated to `functype` and so accepted the block form — and the comment on it
+// asserted the two prefixes were the same production shape, which is the defect stated as the rule.
+// Six vectors cover it and three of them are this stratum's; the other three are the folded
+// spelling, which is #64's and still red.
+//
+// Falsified by restoring `return p.functype()`: the three flat rows below go from `unexpected
+// token` to accepted, and block.wast:1475 / loop.wast:783 / if.wast:1513 come back red.
+func TestBlockParamHasNoNamedForm(t *testing.T) {
+	// The reject direction, one row per blockinstr arm — scoped to the family rather than to the
+	// three keywords the vectors happen to use, since all four share blockSignature.
+	for _, tc := range []struct{ src, why string }{
+		{`(module (func (param i32) (result i32) block (param $x i32) end))`, "block.wast:1475"},
+		{`(module (func (param i32) (result i32) loop (param $x i32) end))`, "loop.wast:783"},
+		{`(module (func (param i32) (result i32) if (param $x i32) end))`, "if.wast:1513"},
+		{
+			`(module (func try_table (param $x i32) end))`,
+			"synthetic: try_table reaches the same blockSignature via handler_block_param_body " +
+				"(parser.mly:780-784), which likewise has no bindidx arm; no vector writes it",
+		},
+	} {
+		err := ReadModule([]byte(tc.src))
+		if err == nil {
+			t.Errorf("ReadModule(%q) accepted; a block's param list has no named form "+
+				"(block_param_body, parser.mly:756) — [%s]", tc.src, tc.why)
+			continue
+		}
+		if !strings.Contains(err.Error(), "unexpected token") {
+			t.Errorf("ReadModule(%q) = %q, want `unexpected token` — [%s]", tc.src, err, tc.why)
+		}
+	}
+
+	// The accept direction, which is the half that catches over-correction: narrowing the param
+	// arm too far, or copying the narrowing into the *result* chain, where it does not belong.
+	// `block_result_body` (:762) and `functype_result` (:443) really are the same shape.
+	for _, tc := range []struct{ src, why string }{
+		{
+			`(module (func block (param i32 i64) (param f32) (result i32) i32.const 0 end drop))`,
+			"synthetic: the unnamed arm repeats and precedes the results, per :756/:762",
+		},
+		{
+			`(module (func (param $x i32) block end))`,
+			"synthetic: the *function's* named param is still legal — the narrowing is the " +
+				"block's alone (:436 versus :756)",
+		},
+		{
+			`(module (type (func (result i32))) (func block (type 0) i32.const 0 end drop))`,
+			"synthetic: block's first arm is `typeuse block_param_body` (:741)",
+		},
+	} {
+		if err := ReadModule([]byte(tc.src)); err != nil {
+			t.Errorf("ReadModule(%q) = %v; want accepted — [%s]", tc.src, err, tc.why)
+		}
+	}
+
+	// And the asymmetry's other half, so the two chains are pinned against each other rather than
+	// each against a recollection: `(result $x …)` is illegal in *both*.
+	for _, src := range []string{
+		`(module (func block (result $x i32) end))`,
+		`(module (type (func (result $x i32))))`,
+	} {
+		if err := ReadModule([]byte(src)); err == nil {
+			t.Errorf("ReadModule(%q) accepted; neither result chain has a bindidx arm "+
+				"(parser.mly:762, :443)", src)
+		}
+	}
+}
+
+// TestBlockTerminatorsEndTheList is atBlockTerminator's control, named in that function's comment.
+//
+// `instr_list`'s follow set inside a block is `END` and `ELSE` (parser.mly:727-738), which menhir
+// derives and a recursive-descent reader must state. Getting it wrong does not accept anything
+// wrong — it reports the *boundary* at a token this stratum reads perfectly well, which is the
+// unimplemented bucket claiming finished work. That is why the reject rows below assert the
+// message and not merely the verdict.
+//
+// The `(catch …)` clauses are deliberately **not** terminators: they precede the body
+// (`handler_block_body`, :792-:806), so `handlerBlock` has already consumed them by the time
+// instrList runs, and a `(catch …)` appearing after an instruction is a syntax error the grammar
+// wants reported. A reader that stopped on them would accept `try_table nop (catch 0 0) end`.
+//
+// Falsified three ways: dropping `kwEnd` makes every accept row below report the boundary at
+// `"end"`; dropping `kwElse` does the same for the else row only; *adding* kwCatch makes the last
+// reject row accept.
+func TestBlockTerminatorsEndTheList(t *testing.T) {
+	for _, tc := range []struct{ src, why string }{
+		{`(module (func block nop end))`, "END ends the nested list"},
+		{`(module (func i32.const 0 if nop else nop end))`, "ELSE ends the then-list"},
+		{`(module (func block block nop end nop end))`, "two levels, the inner END is the inner list's"},
+		{`(module (func try_table (catch 0 0) nop end))`, "the clauses precede the body"},
+	} {
+		if err := ReadModule([]byte(tc.src)); err != nil {
+			t.Errorf("ReadModule(%q) = %v; want accepted — %s", tc.src, err, tc.why)
+		}
+	}
+	// A handler clause out of position, which must be `unexpected token` and not the boundary:
+	// the clauses are in no `expr1` arm, so #64 will never grow a reader for one, and filing it as
+	// unimplemented promises work that cannot arrive.
+	//
+	// Scoped to all four clause keywords, not the two the vectors write — the fault is that a
+	// clause appears where no production admits one, and that is true of the whole set.
+	//
+	// **The last row is the discriminating one and it was found by a falsification run that did not
+	// fail.** The rejected alternative fix — put the clauses in atBlockTerminator instead of in
+	// bodyBoundary — passes every other row here, so this control as first written could not tell
+	// the two apart while its comment claimed it could. A folded *operand* reaches bodyBoundary
+	// through `expr`'s operand loop (parser.go, expr:1254) rather than through instrList, which a
+	// terminator set cannot see: under that variant `(func (drop (catch_all)))` reports
+	// `unimplemented`. Same class as the three-deep precedence claim this PR also retracted — a
+	// structural argument no assertion held. Print the verdicts for both candidates before writing
+	// down which layer owns a fault.
+	for _, tc := range []struct{ src, why string }{
+		{`(module (func try_table nop (catch 0 0) end))`, "synthetic: after the body has begun"},
+		{`(module (func (catch_all)))`, "try_table.wast:366"},
+		{`(module (tag $e) (func (catch $e)))`, "try_table.wast:371"},
+		{
+			`(module (func (catch_ref 0 0)))`,
+			"synthetic: catch_ref is in no expr1 arm either; no vector writes it",
+		},
+		{
+			`(module (func (catch_all_ref 0)))`,
+			"synthetic: the fourth clause, likewise unreachable in instruction position",
+		},
+		{
+			`(module (func (drop (catch_all))))`,
+			"synthetic, and the only row that separates the two candidate fixes: a folded " +
+				"operand reaches bodyBoundary through expr's loop, not through instrList",
+		},
+	} {
+		err := ReadModule([]byte(tc.src))
+		if err == nil {
+			t.Errorf("ReadModule(%q) accepted; handler clauses appear only in "+
+				"handler_block_body (parser.mly:792-806) and try_block_handler_body (:929), "+
+				"both of which consume them before the instr_list — [%s]", tc.src, tc.why)
+			continue
+		}
+		if !strings.Contains(err.Error(), "unexpected token") {
+			t.Errorf("ReadModule(%q) = %q, want `unexpected token`; a clause out of position is "+
+				"malformed on the merits and is in no expr1 arm, so filing it as unimplemented "+
+				"would park it in #64's bucket where finishing #64 cannot answer it — [%s]",
+				tc.src, err, tc.why)
+		}
+	}
+}
+
+// TestBlockEndIsRequired pins the one place a missing token is *not* the boundary.
+//
+// `END` is a required terminal of all five blockinstr arms (parser.mly:727-738), so `(func block)`
+// is malformed on the merits and this stratum can say so. Reporting `unimplemented` there would
+// be the wrong-layer error in the flattering direction — a module the reference rejects, parked in
+// the work plan as though finishing #64 would one day make it legal. Sibling of
+// TestMissingMandatoryBodyIsNotABoundary above, and the same argument.
+// **The first five rows below cannot falsify the claim, and saying so is the point.** They all put
+// a `)` where the END should be, and bodyBoundary *already* answers a closing paren with
+// `unexpected token` (see its header) — so `return p.unexpected()` and `return p.bodyBoundary()`
+// return the identical error on every one of them. Swapping the two passed the whole table, which
+// is a green surviving the bug it names for the second time in this PR, and the cause is the same
+// each time: a partition asserted from case labels rather than checked against what the code
+// returns.
+//
+// The rows that *do* discriminate were found by printing both variants: a token that is neither
+// `)` nor `end`. `else` after a non-`if` block and a truncated source are the two shapes — under
+// the variant they read `unimplemented: instruction body at "else"` and `… at ""`, the second being
+// the engine claiming that finishing #64 would make an unterminated file legal. The five paren rows
+// are kept, because they are the spellings the reference's own vectors would use and a future
+// change to bodyBoundary's paren handling would make them live.
+func TestBlockEndIsRequired(t *testing.T) {
+	for _, tc := range []struct{ src, why string }{
+		// The paren rows: correct, and *not* discriminating — see the header.
+		{`(module (func block))`, "the plainest form"},
+		{`(module (func loop nop))`, "with a body"},
+		{`(module (func i32.const 0 if nop else nop))`, "the else arm's END is missing too"},
+		{`(module (func try_table (catch 0 0)))`, "try_table's arm, :736"},
+		{`(module (func block block end))`, "the *outer* END is missing"},
+		// The discriminating rows: the token in END's place is neither `)` nor `end`.
+		{
+			`(module (func block nop else nop end))`,
+			"discriminating: `else` belongs only to the IF arms (:733), so on a block it is a " +
+				"token in END's position that bodyBoundary would call unimplemented",
+		},
+		{`(module (func loop else end))`, "discriminating: the same on loop"},
+		{
+			`(module (func block nop`,
+			"discriminating: EOF in END's place — the variant reports `unimplemented … at \"\"`, " +
+				"which claims a truncated file becomes legal once #64 lands",
+		},
+	} {
+		err := ReadModule([]byte(tc.src))
+		if err == nil {
+			t.Errorf("ReadModule(%q) accepted; END is a required terminal of every "+
+				"blockinstr arm (parser.mly:727-738) — %s", tc.src, tc.why)
+			continue
+		}
+		if !strings.Contains(err.Error(), "unexpected token") {
+			t.Errorf("ReadModule(%q) = %q, want `unexpected token` — a missing required "+
+				"terminal is this stratum's own syntax error, not a boundary — %s",
+				tc.src, err, tc.why)
+		}
+	}
+}
+
+// TestEmptyOpenerRejectsAnyEndLabel pins labeling_end_opt's harder arm.
+//
+// The anonymous `labeling_opt` arm is `List.iter (fun x -> error x.at "mismatching label") xs`
+// (parser.mly:512-513) — an *unconditional* error over the end-labels. So `block end $l` is a
+// mismatch against nothing rather than an unknown label, and a reader that only compared when the
+// opener had a name would accept it. The named arm compares textually (`x.it <> $1.it`, :518).
+//
+// `if … else … end` is the case with two end-labels, and the reference checks both against the one
+// opener by concatenating them (`$5 @ $8`, :734) — so `if $a else $b end $a` is a mismatch at
+// `$b` even though the final label agrees.
+func TestEmptyOpenerRejectsAnyEndLabel(t *testing.T) {
+	for _, tc := range []struct{ src, why string }{
+		{`(module (func block end $l))`, "block.wast:1484, the empty-opener arm"},
+		{`(module (func block $a end $l))`, "block.wast:1488, the named arm disagreeing"},
+		{`(module (func loop end $l))`, "loop.wast:791"},
+		{`(module (func i32.const 0 if end $l))`, "if.wast:1521"},
+		{
+			`(module (func i32.const 0 if $a else $b end $a))`,
+			"synthetic: the else-clause's own labeling_end_opt is checked against the same " +
+				"opener (`$5 @ $8`, parser.mly:734), so $b fails though $a agrees",
+		},
+		{
+			`(module (func try_table end $l))`,
+			"synthetic: try_table's arm (:736) carries labeling_end_opt like the rest; no " +
+				"vector writes a mismatched try_table label",
+		},
+	} {
+		err := ReadModule([]byte(tc.src))
+		if err == nil {
+			t.Errorf("ReadModule(%q) accepted; want `mismatching label` — [%s]", tc.src, tc.why)
+			continue
+		}
+		if !strings.Contains(err.Error(), "mismatching label") {
+			t.Errorf("ReadModule(%q) = %q, want `mismatching label` — [%s]", tc.src, err, tc.why)
+		}
+	}
+
+	// The accept rows, which is where an over-eager check shows up: an *absent* end-label is
+	// always legal (`labeling_end_opt`'s empty arm, :522), whatever the opener.
+	for _, tc := range []struct{ src, why string }{
+		{`(module (func block end))`, "empty opener, empty end — the common case"},
+		{`(module (func block $a end))`, "named opener, empty end: :522's empty arm"},
+		{`(module (func block $a end $a))`, "named opener agreeing textually, :518"},
+		{
+			`(module (func i32.const 0 if $a else $a end $a))`,
+			"both end-labels agree with the opener",
+		},
+		{`(module (func i32.const 0 if $a else end))`, "the else's end-label is optional too"},
+	} {
+		if err := ReadModule([]byte(tc.src)); err != nil {
+			t.Errorf("ReadModule(%q) = %v; want accepted — %s", tc.src, err, tc.why)
+		}
+	}
+}
+
+// TestEndLabelFaultsAtTheEndLabel pins *where* the mismatch is reported.
+//
+// `error x.at` (parser.mly:513/:518) points at the end-label — the offending token — not at the
+// opener that named something else. Position is not covered by any expected string, so this is the
+// half of the message the oracle cannot see, and print-don't-trust applies: the column is checked
+// against the source rather than reasoned about.
+// The position is read off the *Error struct*, not the message: `Error()` returns Msg alone
+// (lexer.go:120), so a control matching the rendered text would be asserting nothing about the
+// offset. Same mechanism TestErrorsCarryAPosition uses, and for the same reason — it is the only
+// channel the position is actually on.
+func TestEndLabelFaultsAtTheEndLabel(t *testing.T) {
+	for _, tc := range []struct{ src, wantAt, why string }{
+		{`(module (func block $a end $b))`, "$b", "the named arm, `error x.at` at :518"},
+		{`(module (func block end $b))`, "$b", "the empty arm, `error x.at` at :513"},
+		{
+			`(module (func i32.const 0 if $a else $b end $a))`,
+			"$b",
+			"the else-clause's label is the offender; the final $a agrees",
+		},
+	} {
+		err := ReadModule([]byte(tc.src))
+		if err == nil {
+			t.Errorf("ReadModule(%q) accepted", tc.src)
+			continue
+		}
+		var e *Error
+		if !errors.As(err, &e) {
+			t.Errorf("ReadModule(%q) = %v, not a *text.Error, so it carries no position",
+				tc.src, err)
+			continue
+		}
+		want := strings.Index(tc.src, tc.wantAt)
+		if want < 0 {
+			t.Fatalf("test bug: %q not in %q", tc.wantAt, tc.src)
+		}
+		if e.Offset != want {
+			t.Errorf("ReadModule(%q) faulted at offset %d (%q), want %d (%q) — %s; reporting "+
+				"the opener's position instead would be testimony about the wrong token",
+				tc.src, e.Offset, at(tc.src, e.Offset), want, tc.wantAt, tc.why)
+		}
+	}
+}
+
+// TestLabelsCompareDecodedNames pins that both label readers go through `bindidx`, which decodes.
+//
+// The grave this was written against compared `Token.Text` — the raw lexeme — where the reference
+// compares `x.it <> $1.it` on values that `var` (parser.mly:48-51) has already `Utf8.decode`d.
+// A spelling comparison is wrong in *both* directions at once, which is why the two halves below
+// are one control rather than two: it accepts a label whose bytes are not UTF-8, and it rejects a
+// pair of labels that are the same name spelled two ways.
+//
+// The second half is the direction with no vector and the one a spelling comparison passes by
+// accident on every vector that exists: `$a` (lexer.mll:815, the `id` arm) and `$"a"` (:816, the
+// `string` arm) are two spellings of the *same* name, so `Text` differs while the decoded value
+// agrees. `id.wast` proves the two spellings are interchangeable as *bindings* (:8-:11 bind
+// `$"^"`-style names and use them); that they are interchangeable across an opener/end-label pair
+// is the entailment, and it is derived rather than cited for that reason.
+func TestLabelsCompareDecodedNames(t *testing.T) {
+	// Reject: a label whose decoded bytes are not UTF-8. One row per blockinstr arm, because the
+	// grave was a *missing call* and a missing call is per-arm — four arms, and `labelingOpt` is
+	// reached from all of them. The end-label position too, which is labelingEndOpt's own read.
+	for _, tc := range []struct{ src, why string }{
+		{
+			`(module (func block $"\ff" end))`,
+			"the opener's label. id.wast:31 is the same escape in a func's binding position; " +
+				"the entailment is that `labeling_opt`'s named arm is the same `bindidx` " +
+				"production (:515), so the same bytes are malformed one production away",
+		},
+		{`(module (func loop $"\ff" end))`, "derived, the LOOP arm (:727)"},
+		{`(module (func i32.const 0 if $"\ff" else end))`, "derived, the IF arm (:729)"},
+		{`(module (func try_table $"\ff" end))`, "derived, the TRY_TABLE arm (:735)"},
+		{
+			`(module (func block end $"\ff"))`,
+			"the *end*-label, `labeling_end_opt` = `| bindidx` (:523) — labelingEndOpt's own " +
+				"read, which the opener's fix does not cover",
+		},
+		{
+			`(module (func block $"\ff" end $"\ff"))`,
+			"both labels bad and identical. A spelling comparison finds them equal and " +
+				"accepts, which is why this row exists separately from the two above",
+		},
+	} {
+		err := ReadModule([]byte(tc.src))
+		if err == nil {
+			t.Errorf("ReadModule(%q) accepted; want `malformed UTF-8 encoding` — [%s]", tc.src, tc.why)
+			continue
+		}
+		if !strings.Contains(err.Error(), "malformed UTF-8 encoding") {
+			t.Errorf("ReadModule(%q) = %q, want `malformed UTF-8 encoding` — [%s]", tc.src, err, tc.why)
+		}
+	}
+
+	// Accept: the same name in two spellings. This is the half that a raw-lexeme comparison
+	// *rejects*, and no assert_malformed can ever notice a wrongly-rejected module.
+	for _, tc := range []struct{ src, why string }{
+		{
+			`(module (func block $a end $"a"))`,
+			`derived: id.wast establishes $"..." as a spelling of a name; $a and $"a" decode ` +
+				"to the same bytes, so :518's `x.it <> $1.it` is false and this matches",
+		},
+		{`(module (func block $"a" end $a))`, "the mirror, so a one-sided decode fails one row"},
+		{`(module (func block $"a" end $"a"))`, "both in the string spelling"},
+		{
+			`(module (func i32.const 0 if $a else $"a" end $a))`,
+			"the else-clause's end-label goes through the same reader (`$5 @ $8`, :734)",
+		},
+	} {
+		if err := ReadModule([]byte(tc.src)); err != nil {
+			t.Errorf("ReadModule(%q) = %v; want accepted — %s", tc.src, err, tc.why)
+		}
+	}
+}
+
+// TestLabelDecodePrecedesComparison pins the *order* of the two checks, which is the reference's
+// rather than a preference.
+//
+// `bindidx` is reduced when its VAR is read, so `var`'s decode has already errored by the time
+// blockinstr's action applies the `labeling_opt` closure that iterates `xs` and reports the
+// mismatch. So an end-label that is *both* malformed and mismatched is reported as malformed: it
+// is not well-formed enough to disagree. The reverse order is a plausible reading — check the
+// cheap textual comparison first — and it is wrong, so it gets an assertion rather than a comment.
+//
+// Synthetic: no vector writes a label that is simultaneously bad UTF-8 and a mismatch, because
+// each of the two facts alone is enough for the malformedness the vector is asserting. Authority
+// is the grammar's reduction order, not a wast line.
+func TestLabelDecodePrecedesComparison(t *testing.T) {
+	for _, tc := range []struct{ src, why string }{
+		{
+			`(module (func block $a end $"\ff"))`,
+			"named opener, malformed end-label: the names also differ, so a comparison-first " +
+				"reader says `mismatching label`",
+		},
+		{
+			`(module (func block end $"\ff"))`,
+			"empty opener, malformed end-label: :512-513's arm errors on *any* end-label " +
+				"unconditionally, so a comparison-first reader says `mismatching label` here too",
+		},
+	} {
+		err := ReadModule([]byte(tc.src))
+		if err == nil {
+			t.Errorf("ReadModule(%q) accepted — [%s]", tc.src, tc.why)
+			continue
+		}
+		if !strings.Contains(err.Error(), "malformed UTF-8 encoding") {
+			t.Errorf("ReadModule(%q) = %q, want `malformed UTF-8 encoding` — [%s]", tc.src, err, tc.why)
+		}
+	}
+}
+
+// TestEmptyIdentifierHasNoSpelling pins the premise labelingOpt's "" sentinel rests on.
+//
+// labelingOpt returns "" for the anonymous arm and a decoded name otherwise, which is only
+// unambiguous because no VarTok decodes to the empty string. That is true, and it is true in
+// *another file*: both `$`-forms reject it at the lexer (`empty identifier`, lexer.mll:817 for
+// `$""` and :819 for a bare `$`). An invariant a function depends on and does not enforce is a
+// claim about code it does not contain, so it is asserted here rather than trusted — if the lexer
+// ever admitted an empty identifier, `block $"" end` would silently read as an anonymous opener
+// and `block $"" end $""` would be a mismatch against nothing.
+func TestEmptyIdentifierHasNoSpelling(t *testing.T) {
+	for _, tc := range []struct{ src, why string }{
+		{`(module (func block $"" end))`, `lexer.mll:817, the string spelling decoding to ""`},
+		{`(module (func block $ end))`, "lexer.mll:819, a bare `$`"},
+	} {
+		err := ReadModule([]byte(tc.src))
+		if err == nil {
+			t.Errorf("ReadModule(%q) accepted; want `empty identifier` — [%s]. labelingOpt's \"\" "+
+				"sentinel is ambiguous if this ever parses", tc.src, tc.why)
+			continue
+		}
+		if !strings.Contains(err.Error(), "empty identifier") {
+			t.Errorf("ReadModule(%q) = %q, want `empty identifier` — [%s]", tc.src, err, tc.why)
+		}
+	}
+}
+
+// at renders the token-ish text at an offset, for the message above.
+func at(src string, off int) string {
+	if off < 0 || off > len(src) {
+		return "<out of range>"
+	}
+	end := off
+	for end < len(src) && src[end] != ' ' && src[end] != ')' {
+		end++
+	}
+	if end == off && end < len(src) {
+		end++
+	}
+	return src[off:end]
 }
 
 // reKindDecl matches a `kwFoo keywordKind = "BAR"` declaration in kinds.go.

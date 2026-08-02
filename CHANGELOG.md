@@ -444,6 +444,23 @@ weakly-ordered platform.
   wired too, so `(data (offset ...) ...)` and `(elem (item ...) ...)` are read rather than
   deferred. **Board: 1628 → 1922 pass, 392 → 98 fail**; the text fail ceiling moves 391 → 97
   with a per-bucket reconciliation in the test's own comment.
+- **The flat block family** (#63, same issue, second pass): `blockinstr` and its five arms
+  (`block`, `loop`, `if`, `if … else`, `try_table`), `labeling_opt` / `labeling_end_opt` with the
+  `mismatching label` check, `block`, `handlerBlock` with all four `(catch …)` clause forms, and
+  `atBlockTerminator` — because `instr_list`'s follow set inside a block is larger than `)`/EOF
+  once blocks exist, and menhir derives from the grammar what a recursive-descent reader must
+  state. The handler clauses are deliberately **not** terminators: they precede the body, so
+  treating them as stops would mask a syntax error. **Board: 1922 → 1941 pass, 98 → 79 fail**;
+  ceiling 97 → 79, floor 1922 → 1941.
+- **The reconciliation above is corrected in the same PR that made it wrong.** It attributed all
+  92 unanswered vectors to #64 by reading their *surface* — a `block` is a block — when #63's own
+  Scope list names `blockinstr` (parser.mly:726) and the block family (:740–:792), and the seam
+  ruling moved the `expr1` arm *in* without moving anything out. Measured by classifying each
+  vector on whether its boundary token is a block keyword or a `(`: **17 flat (#63's) and 75
+  folded (#64's)**, matching the forecast's own "17 flat" row exactly. So the shortfall against
+  353 is **42, not 59**, #64's inventory is 75 rather than 92, and the lesson is the seam ruling
+  restated: *seams follow defect ownership, not surface form* — reading a bucket's members off
+  their spelling is the same manoeuvre as reading a test's coverage off its case labels.
 - #63's forecast was 353 and 294 landed, an **under-delivery of 59 that is not one shape** —
   and the partition is by the engine's error text, because the failure buckets name what the
   *suite* wanted and that is the wrong key for asking why we fell short. 92 are
@@ -559,6 +576,67 @@ weakly-ordered platform.
   written before it* — and so does a retirement.
 
 ### Fixed
+- **A grave: the block label readers compared raw lexemes, and `unparam` was the thing that found
+  it.** `labeling_opt`'s named arm and `labeling_end_opt` are both `| bindidx` (parser.mly:515/:523),
+  which is `| VAR { var $1 $sloc }` — the same `var` helper (:48–51) that `Utf8.decode`s every other
+  binding occurrence. Reading `Token.Text` instead skipped the decode and compared the *spelling*,
+  which is three defects at once: `block $"\ff" end` was accepted (four arms, one missing call);
+  `block $"\ff" end $"\ff"` was accepted, two identical bad spellings comparing equal; and
+  `block $a end $"a"` was rejected as a `mismatching label` where the reference calls it a *match*,
+  `$a` and `$"a"` being two spellings of one name (lexer.mll:815 vs :816). **Board unchanged at
+  1941/79 — all three are invisible to the suite**, two being accept-direction and the third the
+  right verdict with the wrong reason. What surfaced it was a lint finding, `labelingOpt - result 1
+  (error) is always nil`: the finding was true, and the reason it was true is that the decode which
+  would have made it non-nil was missing. *An error constant with no reachable path is a missing
+  check wearing a disguise* (grave 0003) — and here the linter reached the disguise one layer before
+  the sweep would have, so the honest reading of a dead error return is a question about the check,
+  not an invitation to delete the signature. Sweep for siblings: every other `p.c.at(VarTok)` site
+  routes through `bindidx`/`decodedVar`; these two were the only raw readers, so the family is
+  closed. Fixed with `labelingOpt` returning a decoded name, the decode ordered *before* the
+  comparison because `bindidx` reduces at token-read time — so `block $a end $"\ff"` is malformed
+  UTF-8, not a mismatch. Three controls, each falsified against its own mechanism:
+  `TestLabelsCompareDecodedNames` (both directions in one test, since a spelling comparison is wrong
+  both ways at once), `TestLabelDecodePrecedesComparison`, and
+  `TestEmptyIdentifierHasNoSpelling` — the last pinning the cross-file premise `labelingOpt`'s `""`
+  sentinel rests on, and it needed **two** falsifications because `$""` and a bare `$` are rejected
+  at two independent lexer sites (:817, :819); breaking one left the other row green, which is what
+  proved the rows were not measuring the same thing.
+- **A grave: a block's parameter list is not a `functype`, and the comment asserting otherwise was
+  the camouflage.** `blockSignature` delegated to `p.functype()`, so `block (param $x i32) end` was
+  accepted — but `block_param_body` (parser.mly:756) has **one** param arm where `functype`
+  (:430–:438) has two, the second being the named sugar `LPAR PARAM bindidx valtype RPAR` (:436).
+  Six vectors cover it (`block.wast:1475`/`:1479`, `loop.wast:783`/`:787`, `if.wast:1513`/`:1517`)
+  and three are this stratum's. *The defect stated as the rule* — the function's own header claimed
+  the two prefixes were the same production shape, so a reviewer checking code against its
+  documentation found agreement. Caught by #63's definition of done, which requires each reader be
+  measured against the reference production defining its extent *on its own*: the discipline found
+  what a shared-prefix argument had talked past. Sweep for siblings came back clean —
+  `func_fields_import` (:995), `func_fields_body` (:1008) and `tag_fields` (:1047) all legitimately
+  carry the named arm, and `blockSignature` was the only site whose reference production lacks it.
+- **The boundary was claiming a handler clause in instruction position.** `(module (func
+  (catch_all)))` reported `unimplemented: instruction body` — `try_table.wast:366` and `:371` want
+  `unexpected token`. The clauses appear in exactly two productions (`handler_block_body` :792–806,
+  `try_block_handler_body` :929) and both consume them *before* the `instr_list`, so they are in no
+  `expr1` arm and no later stratum will grow a reader for one: the report promised work that cannot
+  arrive. **The falsification run for the rejected alternative fix passed, which is what found the
+  right one.** Adding the clauses to `atBlockTerminator` instead was expected to fail the control
+  and did not — the same class as the three-deep claim below, a structural argument no assertion
+  held. Probing produced the single discriminating input, `(func (drop (catch_all)))`: a folded
+  operand reaches the boundary through `expr`'s operand loop rather than through `instrList`, which
+  a terminator set cannot see. On every other input the two variants agree. The general form —
+  `(memory 1)`, `(then …)`, `(else …)` and a flat `block (result …) (param …)` all still claim the
+  boundary, with **zero vectors** turning on any of them — is #70, and the by-name clause list is
+  declared-and-tracked at its definition site pending that derivation.
+- **`TestBlockEndIsRequired` was a green surviving the bug it names, the second time this PR.** All
+  five of its rows put a `)` where the `END` should be, and `bodyBoundary` already answers a closing
+  paren with `unexpected token` — so swapping `p.unexpected()` for `p.bodyBoundary()` returned the
+  identical error on every one and the table passed. A partition asserted from case labels rather
+  than checked against what the code returns, exactly as `TestSectionSizeBothSigns` was (#34). Fixed
+  by printing both variants and adding the rows that discriminate: `else` after a non-`if` block, and
+  a truncated source, where the broken version reads `unimplemented … at "else"` and `… at ""` — the
+  engine claiming an unterminated file becomes legal once #64 lands. The paren rows are kept and
+  **labelled non-discriminating**, since silence about which rows carry the assertion is how the
+  first version passed review.
 - **A grave in #63's own lane-immediate readers: the lane count preempted a syntax error.**
   `i8x16.shuffle 0 … 14 -1` reported `wrong number of lane indices` where the reference says
   `unexpected token`, on six vectors. The cause is LR reduction order — `error (at $sloc)` at
