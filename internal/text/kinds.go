@@ -50,6 +50,10 @@ const (
 	kwVectype  keywordKind = "VECTYPE"
 	kwPacktype keywordKind = "PACKTYPE"
 
+	// VECSHAPE is the lane layout `v128.const` and `i8x16.shuffle` take (lexer.mll:152-157):
+	// another class, six lexemes, and the shape is what decides the lane count.
+	kwVecshape keywordKind = "VECSHAPE"
+
 	// Type structure (parser.mly:400-458).
 	kwNull   keywordKind = "NULL"
 	kwRef    keywordKind = "REF"
@@ -77,6 +81,26 @@ const (
 	kwOffset  keywordKind = "OFFSET"
 	kwItem    keywordKind = "ITEM"
 	kwDeclare keywordKind = "DECLARE"
+
+	// The block family (parser.mly:726-738). These are `blockinstr`'s leaders and terminators,
+	// and they are here rather than in plaininstrShapes because `blockinstr` is a separate
+	// production from `plaininstr` — the mnemonic does not determine an immediate shape, it
+	// opens a nested instruction sequence with its own label scope.
+	kwBlock    keywordKind = "BLOCK"
+	kwLoop     keywordKind = "LOOP"
+	kwIf       keywordKind = "IF"
+	kwElse     keywordKind = "ELSE"
+	kwEnd      keywordKind = "END"
+	kwTryTable keywordKind = "TRY_TABLE"
+	kwCatch    keywordKind = "CATCH"
+	kwCatchRef keywordKind = "CATCH_REF"
+	kwCatchAll keywordKind = "CATCH_ALL"
+
+	// CATCH_ALL_REF is the fourth handler arm (:805). Named for completeness of the
+	// `handler_block_body` production rather than because a vector reaches it — a handler set
+	// missing one arm rejects a legal module, which is the accept-direction class no
+	// assert_malformed can catch.
+	kwCatchAllRef keywordKind = "CATCH_ALL_REF"
 )
 
 // parserKinds is every constant above, for the table-membership control.
@@ -90,8 +114,10 @@ var parserKinds = []keywordKind{
 	kwExtern, kwNoextern,
 	kwAnyref, kwNullref, kwEqref, kwI31ref, kwStructref, kwArrayref, kwFuncref,
 	kwNullfuncref, kwExnref, kwNullexnref, kwExternref, kwNullexternref,
-	kwNumtype, kwVectype, kwPacktype,
+	kwNumtype, kwVectype, kwPacktype, kwVecshape,
 	kwNull, kwRef, kwMut, kwField, kwParam, kwResult, kwSub, kwFinal, kwRec, kwType,
 	kwModule, kwImport, kwExport, kwGlobal, kwMemory, kwTable, kwElem, kwData, kwStart,
 	kwTag, kwLocal, kwOffset, kwItem, kwDeclare,
+	kwBlock, kwLoop, kwIf, kwElse, kwEnd, kwTryTable,
+	kwCatch, kwCatchRef, kwCatchAll, kwCatchAllRef,
 }
