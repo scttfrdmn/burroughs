@@ -1666,11 +1666,21 @@ func (p *parser) ifBody() error {
 // `callexpr_params` (:851) and `callexpr_results` (:858).
 //
 // Structurally the same ordered chain as `blockSignature` — optional `typeuse`, then `(param …)*`,
-// then `(result …)*` — and *not* shared with it, because the chains bottom out differently:
-// `callexpr_results` ends in `expr_list` (:860), the folded operands, where `block_result_body` ends
-// in `instr_list`. Sharing would mean parameterizing the tail, which is a knob for one caller each.
-// Recorded rather than left implicit: this is the second place the param/result ordering is written,
-// and TestOrderedTypeUseChainsAgree is what stops the two from drifting.
+// then `(result …)*` — and **shared with it**, through `orderedTypeUse`, with the tail passed as a
+// parameter: `callexpr_results` ends in `expr_list` (:860), the folded operands, where
+// `block_result_body` ends in `instr_list`.
+//
+// That was not always so, and the correction is the point. This comment used to say the chains were
+// *not* shared, "because they bottom out differently", and cited TestOrderedTypeUseChainsAgree as
+// what stops two copies of the param/result ordering from drifting. Sharing then landed — which is
+// the *right* outcome, since the design debt's remedy was taken rather than merely tripwired — and
+// **neither half of the sentence was swept**: the prose kept describing two copies, and the citation
+// kept naming a test that has never existed. So a reader chasing the drift risk found a claim with
+// nothing behind it. Both faces of one law: *a ruling retroactively falsifies prose written before
+// it*, and a tripwire whose subject dissolves is re-pointed or discharged, never left cited. It is
+// discharged here — one function cannot drift from itself — and the ordering it enforces is pinned
+// by TestFoldedAndFlatSignaturesAgree. Swept with #88 by comparing every `Test*` cited in the tree
+// against every `Test*` defined.
 //
 // The 30 field-ordering vectors split across both readers — block.wast/loop.wast/if.wast reach
 // `blockSignature`, call_indirect.wast/return_call_indirect.wast reach this one — so a drift between

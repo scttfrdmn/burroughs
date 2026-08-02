@@ -126,9 +126,19 @@ var gatedOpcodes = []gatedOpcode{
 	// --- GC: a whole region, plus single-byte opcodes ------------------------------
 	//
 	// 0xfb is entirely GC at bdd7164 — 31 arms, struct/array/i31/cast — so the region
-	// is one entry. TestEveryTableOpcodeIsClassified is what makes that safe: a
-	// non-GC arm arriving in 0xfb upstream does not silently inherit this gate,
-	// because the classification test walks the table rather than this file.
+	// is one entry, and a non-GC arm arriving in 0xfb upstream would silently inherit
+	// this gate.
+	//
+	// **That risk is open, and this comment used to deny it.** It cited
+	// TestEveryTableOpcodeIsClassified as "what makes that safe, because the
+	// classification test walks the table rather than this file" — and no such test
+	// exists. What does exist is TestEveryMappedOpcodeExistsInTheTable, which walks
+	// **this file** and checks each range covers something real: the opposite
+	// direction, and blind by construction to an arm the table gained. So the
+	// citation did not merely name the wrong test, it asserted the one direction
+	// nothing asserts. Tracked as #91; a whole-region entry is a claim about every
+	// arm the region will ever hold, which is *scope controls to the space* pointed
+	// at a range bound. Found by sweeping cited-versus-defined test names (#88).
 	{
 		prefix: 0xfb, lo: 0x00, hi: 0xff, gate: gateGC,
 		cite: "proposals/gc/MVP.md:809", what: "the 0xfb region (struct, array, i31, cast)",

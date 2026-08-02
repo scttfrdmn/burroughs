@@ -142,7 +142,10 @@ func TestParseComments(t *testing.T) {
 //
 // It runs through RunWith rather than Run: the form needs CapWatReader now, and Run declares
 // nothing, so Run would panic here by design. That panic is guard 1 doing its job and is
-// asserted directly in TestBareModuleNeedsWatReader.
+// asserted directly in TestQuoteFormsHaveTheirReader, whose recovered panic *is* the
+// assertion. (It said TestBareModuleNeedsWatReader, which has never existed — a citation
+// nobody re-checks is a claim, and a test name is as checkable as a `.wast:N`. Swept with
+// #88 by comparing every `Test*` mentioned in the tree against every `Test*` defined.)
 func TestParseAnnotationTokenSoup(t *testing.T) {
 	src := `
 (module

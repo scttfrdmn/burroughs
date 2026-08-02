@@ -151,8 +151,11 @@ var capabilityIssues = map[Capability]capEntry{}
 //
 // A declaration here is a claim about the *engine*, and the run loop refuses to honour a
 // claim with nothing behind it: a declared capability whose component is not wired into
-// the run panics rather than scoring, which is where TestQuoteFormsAwaitTheirReader's
-// tripwire was re-pointed when its original subject dissolved.
+// the run panics rather than scoring, which is where TestQuoteFormsHaveTheirReader's
+// tripwire was re-pointed when its original subject dissolved. (The rename *was* the
+// re-pointing — it was TestQuoteFormsAwaitTheirReader — and this citation kept the old
+// name, which is the drift a stale test-name citation causes: it reads as a second,
+// missing control. Swept with #88.)
 var engineCapabilities = map[Capability]bool{
 	CapWatReader: true,
 }
