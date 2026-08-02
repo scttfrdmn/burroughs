@@ -459,6 +459,34 @@ func (p *parser) funcField() error {
 		return err
 	}
 	p.ctx.markDefined(importFunc)
+	// `enter_func` clears the label space (parser.mly:134: `{(enter_let c loc) with labels = empty ()}`)
+	// and `func_body` then binds an anonymous one (:1020), so a func's body is itself a label scope
+	// with nothing inherited.
+	//
+	// **Neither line is falsifiable by any wat input today, and both are here anyway.** The first
+	// draft of this comment claimed they were, and named the defects: "without the reset a label leaks
+	// out of one func into the next (over-acceptance, invisible to the suite); without the anonymous
+	// push the depth invariant breaks." Both were probed. Dropping the reset/restore pair for a plain
+	// push/pop leaves the board at 4161/2 and `./internal/text/` green; dropping the anonymous push
+	// entirely does the same. The reason is structural rather than lucky: every other push site pops
+	// under `defer`, so the stack is *already* empty when a func body ends, and a func is a module
+	// field with no enclosing label scope to inherit from or leak into. There is no wat text that can
+	// tell the three spellings apart — a control asserting otherwise would be one that cannot fail,
+	// which is exactly what `labelPushAnon`'s header was rewritten for.
+	//
+	// So they are kept as **agreement with the reference, stated as such**: two lines transcribed from
+	// two cited productions, mirroring a structure whose *point* is that a func body inherits nothing.
+	// What makes that honest instead of decorative is that the agreement is machine-checked in the one
+	// direction available — `TestLabelStackIsBalancedOnEveryExitPath` pins depth 0 on every exit path
+	// including error returns, so the pairing cannot rot silently even though its absence is currently
+	// unobservable. The reset becomes load-bearing the moment a label scope can enclose a func (a
+	// folded `(func)` inside a block body is not legal wat, but 0011's second half computes indices,
+	// and an index read across a func boundary is the defect this forbids). Written down rather than
+	// deleted: a line kept for a reason no test can reach is a declared-and-tracked deferral, and the
+	// declaration is the part that has to be here.
+	saved := p.ctx.labels.labelReset()
+	defer p.ctx.labels.labelRestore(saved)
+	p.ctx.labels.labelPushAnon()
 	// func_body is instr_list (parser.mly:1019), whose empty arm makes `(func)` well-formed.
 	if err := p.instrList(); err != nil {
 		return err
@@ -1206,6 +1234,16 @@ func (p *parser) blockinstr() (bool, error) {
 	if err != nil {
 		return true, err
 	}
+	// `let c' = $2 c $5 in let bt, es = $3 c' in` (:727) — the label is in scope over the *body*
+	// and not over the opener's own signature, and the pop is deferred so every error path below
+	// leaves the stack as it found it. See labelSpace for why a push/pop pair stands in for the
+	// reference's `{c with labels = ...}`.
+	//
+	// `try_table` is the one arm whose body reads two contexts: the clauses resolve their labels in
+	// the *outer* one (`$4 c label`, :797-806) while the body reads `c'`. handlerClauses is what
+	// carries that, and the push here is still the body's — see its header.
+	p.ctx.pushLabel(label)
+	defer p.ctx.labels.labelPop()
 	if t.Keyword == kwTryTable {
 		if err := p.handlerBlock(); err != nil {
 			return true, err
@@ -1546,9 +1584,16 @@ func (p *parser) handlerBlock() error {
 // over the body for `br`), and the *comparison* has no second operand.
 func (p *parser) foldedBlock(leader keywordKind) error {
 	p.c.next() // the keyword
-	if _, err := p.labelingOpt(); err != nil {
+	label, err := p.labelingOpt()
+	if err != nil {
 		return err
 	}
+	// The binding happens here even though the *comparison* has no second operand: a folded
+	// `(block $l …)` scopes `$l` over its body exactly as the flat form does, and the label was
+	// discarded before #80 because nothing consulted it. `(block $l (br $l))` folded is legal, and
+	// a reader that skipped the push would reject it — accept-direction, so no vector reports it.
+	p.ctx.pushLabel(label)
+	defer p.ctx.labels.labelPop()
 	var body func() error
 	switch leader {
 	case kwIf:
@@ -1657,7 +1702,35 @@ func (p *parser) selectResults(tail func() error) error {
 // terminated by `end`, the folded path the same minus the terminator. All four arms are read though
 // no vector reaches the last two: a handler set missing an arm rejects a legal module, which is the
 // accept-direction class decision 0007 says the suite cannot falsify.
+//
+// **A clause's label resolves in the ENCLOSING scope, not the try_table's own** (#80), and this is
+// the one label fact the grammar states twice and no vector can check. All four arms read
+// `($4 c label)` — `c`, where the body reads `c'` (:797-806, :934-943). The suite's own use is
+// `try_table.wast:30`:
+//
+//	(block $h (try_table (result i32) (catch $e0 $h) …))
+//
+// `$h` is the enclosing block's, and a handler that branched to the try_table itself would be a
+// loop. Resolving in `c'` would still *find* `$h` — it is on the stack either way — and would
+// merely compute an index one too large, which is invisible at this stratum and wrong at the next.
+// What it would also do is accept `(try_table $t (catch $e $t) …)`, a clause naming the try_table's
+// own label, which the reference rejects as unknown. That spelling is nowhere in the suite, so the
+// control is the oracle here.
 func (p *parser) handlerClauses() error {
+	// The try_table's own label is already pushed by the caller (blockinstr/foldedBlock), so the
+	// enclosing scope is one level down. Popped for the clauses and restored before the body, which
+	// is the mutable-context spelling of the reference passing `c` to the clauses and `c'` to
+	// `instr_list`.
+	own := p.ctx.labels.labelReset()
+	p.ctx.labels.labelRestore(own[:len(own)-1])
+	restored := false
+	restoreOwn := func() {
+		if !restored {
+			p.ctx.labels.labelRestore(own)
+			restored = true
+		}
+	}
+	defer restoreOwn()
 	for p.c.at(LParen) {
 		t := p.c.peek2()
 		if t.Kind != KeywordTok {
@@ -1670,12 +1743,25 @@ func (p *parser) handlerClauses() error {
 		case kwCatchAll, kwCatchAllRef:
 			idxs = 1 // `(catch_all $label)`
 		default:
-			// Not a handler clause: a folded instruction opening the body.
+			// Not a handler clause: a folded instruction opening the body, which reads `c'` — so the
+			// try_table's own label goes back before the body is read.
+			restoreOwn()
 			return p.instrList()
 		}
 		p.c.next() // the LPAR
 		p.c.next() // the keyword
-		for range idxs {
+		// The **last** index of every arm is the label; `catch`/`catch_ref`'s first is a tag, which
+		// this stratum does not resolve (tags need the deferred phase — a `(tag $e)` may be defined
+		// after the func that catches it). Written as "all but the last are unresolved" rather than
+		// per-arm because that is what the four arms have in common: `($3 c tag) ($4 c label)` and
+		// `($3 c label)`, the label always final.
+		for i := range idxs {
+			if i == idxs-1 {
+				if err := p.labelIdx(); err != nil {
+					return err
+				}
+				continue
+			}
 			if err := p.idx(); err != nil {
 				return err
 			}
@@ -1684,6 +1770,7 @@ func (p *parser) handlerClauses() error {
 			return err
 		}
 	}
+	restoreOwn() // the body reads `c'`
 	return p.instrList()
 }
 
