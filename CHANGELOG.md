@@ -619,6 +619,95 @@ weakly-ordered platform.
   written before it* — and so does a retirement.
 
 ### Fixed
+- **The fixture-provenance guard was checking 118 of 244 citations, and vouching for a file its
+  checker read past** ([#78](https://github.com/scttfrdmn/burroughs/issues/78)).
+  `TestEveryFixtureFileIsChecked` triggered on `//\s*<file>.wast:\d+` — a citation had to *open* a
+  comment — but the wat-fixture style puts the citation in a **row field**, so **17 cited fixture
+  rows in `parser_test.go` (9) and `instr_test.go` (8) were unregistered while the guard said
+  nothing**. A regexp that under-matches produces no finding rather than a wrong one, which is why
+  it sat green: *a guard's trigger predicate is itself a claim about the space, and an
+  under-matching one fails silently by construction*. Breaking the assertion could never have found
+  it — what did was measuring the trigger's **coverage** against the population it claims. Coverage
+  is to a trigger what a vacuity floor is to a comparison.
+
+  Two more defects came out with it. `match_test.go` had been registered with the text checker
+  since that checker was written, and **the checker verified nothing in it** — every citation it
+  carries is prose or a `derived` declaration, so the row filter skipped all of them; a
+  registration made an unchecked file look checked, which is worse than unlisted, and only the new
+  `withRows` floor said so (6 files with rows against 7 registered). And I was one sentence away
+  from committing "its `derived` premises are checked elsewhere" when a probe showed
+  `TestDerivedFixturesStateResolvablePremises` read **three binary files only**: 2 derived
+  fixtures, 4 premises. Widened to 8 files, with a grammar-aware `premiseResolves` replacing the
+  `\hh`-only `suiteSourceLine`.
+
+  **Scope settled by measurement, not by preference.** A prose citation has no transcription and so
+  no drift, and the strongest machine check available for one is "the line falls inside some
+  command's extent" — a next-command span index covers **169427 of the suite's 178222 lines
+  (95%)**, a whole-file index 177983. A check that passes on nearly any integer is not a check, so
+  prose citations stay reviewed by eyes and the guard is scoped to what a machine can verify.
+
+  The trigger is now `citedRow`, **shared** with the text checker rather than spelled twice — two
+  regexps for one concept is how a file comes to be registered with a mechanism that reads past it,
+  so the `match_test.go` defect was downstream of the duplication. `TestTextFixtureProvenance` also
+  gained a per-command **extent** index (a command occupies *lines*, and a citation naming the
+  `(module quote …)` line inside an `assert_malformed` is the *more precise* citation, naming the
+  vector rather than the assertion wrapping it), verbatim bidirectional containment, and
+  shape-based layout detection with a counted-and-ceilinged `computed` category for rows whose
+  vector is spliced from Go constants. **41 cited text fixtures checked, up from 24; 9 derived
+  fixtures over 15 premises, up from 2 over 4.** Two mechanisms written during the repair proved
+  unreachable under a `panic()` probe and were deleted rather than left as untested scaffolding.
+- **The wat parser's type-resolution family** (#64, second half): `typeuse` resolution and functype
+  equality — `inline_functype_explicit` (parser.mly:237) and `inline_functype` (:222) at all ten of
+  their reference call sites, over a deferred phase that runs once the field list is complete.
+  **Board 4122 → 4147 pass, 41 → 16 fail**, six files moved and none withdrew (block 12/16→16/16,
+  call_indirect 10/14→14/14, func 22/27→27/27, if 21/25→25/25, loop 12/16→16/16,
+  return_call_indirect 10/14→14/14), summing to 25, diffed per file. Residue: 13 in `(module <wat
+  body>) must read` (#75, #76, #55), 2 `unknown label` (its own PR — `enter_block` and scoped
+  labels), 1 the decoder's.
+
+  **Resolution has to be deferred, and one suite vector says so.** `imports.wast:62-64` uses `(type
+  $forward)` in two fields *before* defining it, and `module_` applies its field list to two `()`
+  arguments (:1389-1392) — three stages, where every *name* binds at stage 0 and the type-using arms
+  run at stage 2. A resolver that looked names up where they are used would reject that module:
+  accept-direction, so no `assert_malformed` can see it, and it is the one place on the board where
+  the design is visible at all (introducing the defect costs imports.wast one pass).
+
+  **The two lookups a typeuse performs are separately timed, and only one is deferred.** `func.wast`
+  pins it in both directions on one module — `:442`'s `(func (type 2))` is `assert_invalid`, the
+  parser's business being to *accept* it, while `:454`'s `(func (type 2) (param i32))` is
+  `assert_malformed` on the same index. What the empty-signature branch defers is `func_type`'s range
+  check; `typeuse`'s own name resolution (:471 → :489) runs regardless, so `(func (type $undefined))`
+  is malformed with or without an inline signature.
+
+  **`non-function type <n>` is implemented and corpus-unreachable** — zero vectors, measured — because
+  omitting one of `func_type`'s three outcomes would report `unknown type` for an index that resolves.
+  Pinned by a print check, not by the board.
+
+  Eleven controls, each falsified by introducing the defect it names, and **nine of the eleven defects
+  leave the board unchanged**: the index arithmetic, the block sugar's two no-intern cases, the
+  equality's five axes, the nesting order, and the error precedence are all invisible to the suite.
+  The two that aren't are an over-rejecting resolver and the block arms wired to the create-helper.
+  The table is in `internal/text/typetable_test.go`'s header, and that ratio — not the 25 — is what
+  the phase's evidence actually rests on.
+
+  Forecast met exactly (41 → 16, pre-registered on #64), and discounted in the same breath: it was
+  made after the bucket had been printed and partitioned, so it predicted the size of an already-known
+  set. The two forecasts over *unlisted* spaces were both wrong — the nesting order and `externtype`'s
+  arms — and both were corrected by printing what the code returns rather than by reasoning about it.
+- **Implicit block types were interned outer-before-inner, the reverse of the grammar (#64).**
+  `blockSignature` took no tail, so its three callers — `block`, `handlerBlock`, `foldedBlock` — read
+  the body *after* the signature's operation was recorded, putting the enclosing construct's implicit
+  type in the space ahead of the nested one's. Every arm of the reference's block family reads `let
+  ft, es = $2 c in` and only *then* calls its helper (:741, :769, :866, :902), and `$2 c` forces the
+  chain whose innermost production is the body. Measured, not argued: index 1 outer and index 2 inner,
+  against index 1 inner and index 2 outer now. **Invisible on the board in both configurations** — an
+  index shift only becomes a verdict when a numeric typeuse names a shifted index, which no vector
+  does. The comment on `orderedTypeUse` asserted the correct order the whole time and was true of that
+  function while false of the family it was written for: a nil tail one level up defeated it, which is
+  *the defect stated as the rule* with the rule accidentally right. The control is
+  `TestNestedBlockTypeInternsBeforeItsEnclosingOne`, and falsifying it exposed a second gap — its
+  first version was spelled folded throughout, so re-breaking the *flat* caller left it green. Now one
+  nesting per call site.
 - **The wat parser's folded/sugar stratum** (#64, first half): `expr`/`expr1` in full — all ten arms
   (parser.mly:813–834) — plus `exprList`, `foldedBlock`, `ifBody`, and the shared handler-clause
   reader. **Board 1953 → 1992 pass, 67 → 28 fail**, and the whole fall is the folded spellings of a

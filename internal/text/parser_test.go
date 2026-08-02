@@ -179,7 +179,8 @@ func TestHeaptypeStartAgreesWithHeaptype(t *testing.T) {
 		want := pred.atHeaptypeStart()
 
 		cons := &parser{c: &cursor{toks: toks}}
-		got := cons.heaptype() == nil
+		_, consErr := cons.heaptype()
+		got := consErr == nil
 
 		if want != got {
 			t.Errorf("source %q: atHeaptypeStart=%v but heaptype succeeded=%v — the "+
@@ -208,7 +209,8 @@ func TestValtypeStartAgreesWithValtype(t *testing.T) {
 		checked++
 		pred := &parser{c: &cursor{toks: toks}}
 		cons := &parser{c: &cursor{toks: toks}}
-		if want, got := pred.atValtypeStart(), cons.valtype() == nil; want != got {
+		_, consErr := cons.valtype()
+		if want, got := pred.atValtypeStart(), consErr == nil; want != got {
 			t.Errorf("source %q: atValtypeStart=%v but valtype succeeded=%v", src, want, got)
 		}
 	}
@@ -237,11 +239,12 @@ func TestValtypeListTerminates(t *testing.T) {
 		}
 		p := &parser{c: &cursor{toks: toks}}
 		before := p.c.pos
-		n, err := p.valtypeList()
+		vs, err := p.valtypeList()
 		if err != nil {
 			t.Errorf("valtypeList(%q) = %v", src, err)
 			continue
 		}
+		n := len(vs)
 		if n > 0 && p.c.pos == before {
 			t.Errorf("valtypeList(%q) reported %d types and consumed nothing", src, n)
 		}
@@ -283,12 +286,12 @@ func TestValtypeListCount(t *testing.T) {
 			t.Fatalf("lex %q: %v", tc.src, err)
 		}
 		p := &parser{c: &cursor{toks: toks}}
-		n, err := p.valtypeList()
+		vs, err := p.valtypeList()
 		if err != nil {
 			t.Errorf("valtypeList(%q) = %v", tc.src, err)
 			continue
 		}
-		if n != tc.want {
+		if n := len(vs); n != tc.want {
 			t.Errorf("valtypeList(%q) = %d, want %d", tc.src, n, tc.want)
 		}
 	}
@@ -337,7 +340,20 @@ func TestModuleAcceptDirection(t *testing.T) {
 		{`(module (type (func (param (ref struct) (ref array) (ref func)))))`, "heaptype:1366-1368"},
 		{`(module (type (func (param (ref nofunc) (ref exn) (ref noexn)))))`, "heaptype:1369-1371"},
 		{`(module (type (func (param (ref extern) (ref noextern)))))`, "heaptype:1372-1373"},
-		{`(module (type (func (param (ref 0) (ref $t)))))`, "heaptype:1374, the idx arm"},
+		// **The two `idx` arms differ and this row was wrong until #64 made it checkable.** It
+		// read `(ref 0) (ref $t)` in a module defining neither, on the reasoning that a heaptype
+		// index is read and discarded — true of the reader, false of the reference. `heaptype`'s
+		// idx arm is `UseHT (Idx ($1 c type_).it)` (:374), and `idx`'s VAR arm is `lookup c (var
+		// $1)` (:489): so a *symbolic* heaptype resolves at parse time and `$t` unbound is
+		// `unknown type $t`, while a *numeric* one is `nat32 $1` with no lookup and `(ref 0)` in
+		// an empty module is the validator's `unknown type 0` — which is what ref.wast:27-33
+		// asserts, as `assert_invalid`. The row passed for as long as neither half was
+		// implemented, then failed the moment the resolution phase existed. A green that survives
+		// the bug it names, and the bug's arrival is what named it.
+		{`(module (type (func (param (ref 0)))))`, "heaptype:1374's NAT arm — no lookup, so an " +
+			"out-of-range index is validation's (ref.wast:27, assert_invalid)"},
+		{`(module (type $t (func (param (ref $t)))))`, "heaptype:1374's VAR arm, which resolves " +
+			"at parse time — so the name must be bound, and self-reference is legal"},
 
 		// Imports.
 		{`(module (import "" "" (func)))`, "import:1250 + externtype:1228, and the empty name"},

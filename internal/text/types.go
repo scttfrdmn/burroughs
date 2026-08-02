@@ -2,13 +2,22 @@ package text
 
 // The type algebra, in the reference's production order (parser.mly:357-473).
 //
-// Every function here returns only an error, per decision 0011: the parser's job in #62 is to
-// say whether the text is well-formed, and nothing constructs a type value. What that costs is
-// visible in these bodies — `heaptype` consumes a token and discards which one it was — and
-// what it buys is that no type representation gets designed from the requirements of reject
-// vectors. When #7's era needs well-formed modules, these productions gain returns or the
-// bytes go straight to the encoder (0011's second half); the shape of the recursion does not
-// change either way.
+// **The valtype family returns values now (#64), and the rest of the file still returns only an
+// error.** The split is not a halfway migration; it is where the reference's own returns are
+// needed. `inline_functype_explicit` (parser.mly:245) compares an inline signature against an
+// explicit `(type n)` **structurally**, so `functype` and everything it recurses into must yield
+// content — mirroring the reference's `fun c -> NumT $1` / `RefT ($1 c)` shapes (:391-394). A
+// `globaltype` or `memorytype` is compared with nothing, so it stays error-only.
+//
+// That is within decision 0011 rather than an exception to it: 0011 governs the parser's *surface*
+// — error-only, no module value out of ReadModule — and these values never leave the package. See
+// typetable.go's header for the deferred phase that consumes them, and for why resolution cannot
+// happen where a type name is used.
+//
+// The paragraph that stood here said every function returns only an error and that heaptype
+// "consumes a token and discards which one it was". That was true for #62 and #63 and is now
+// false; it is replaced rather than qualified, because a scope claim describing the previous
+// stratum is the drifted-citation defect wearing prose.
 //
 // Naming follows the reference's productions exactly, so a reader can diff this file against
 // parser.mly line by line. Where a production is pure sugar the comment says so and cites the
@@ -20,17 +29,36 @@ package text
 // Twelve keyword arms plus `idx`. The idx arm is why this is not a simple keyword set: a type
 // index is a legal heap type, so `(ref $t)` and `(ref func)` are both well-formed and the
 // error for neither is "expected a keyword".
-func (p *parser) heaptype() error {
-	switch {
-	case p.c.atKeyword(kwAny), p.c.atKeyword(kwNone), p.c.atKeyword(kwEq),
-		p.c.atKeyword(kwI31), p.c.atKeyword(kwStruct), p.c.atKeyword(kwArray),
-		p.c.atKeyword(kwFunc), p.c.atKeyword(kwNofunc), p.c.atKeyword(kwExn),
-		p.c.atKeyword(kwNoexn), p.c.atKeyword(kwExtern), p.c.atKeyword(kwNoextern):
-		p.c.next()
-		return nil
-	default:
-		return p.idx()
+//
+// The idx arm's token is returned **unresolved** — `UseHT (Idx ($1 c type_).it)` in the reference
+// does resolve it, but that arm runs inside a `fun c ->` the enclosing type definition's stage-1
+// thunk invokes, by which time every name is bound. Resolving at the cursor would reject
+// `(type $a (struct (field (ref $b)))) (type $b (struct))`, a mutually-recursive pair the GC
+// proposal makes legal. See typetable.go's header.
+func (p *parser) heaptype() (heapRef, error) {
+	for _, k := range absoluteHeaptypes {
+		if p.c.atKeyword(k) {
+			p.c.next()
+			return heapRef{abs: k}, nil
+		}
 	}
+	tok := p.c.peek()
+	if err := p.idx(); err != nil {
+		return heapRef{}, err
+	}
+	return heapRef{tok: tok}, nil
+}
+
+// absoluteHeaptypes are heaptype's twelve keyword arms (parser.mly:361-372) — every heap type
+// that is not a type index.
+//
+// A table rather than a switch for the same reason abbreviatedReftypes is one, plus a second:
+// atHeaptypeStart is a predicate over exactly this set, and two lists would be two places to
+// forget an arm. TestHeaptypeStartAgreesWithHeaptype holds them together, derived from the
+// keyword table rather than from either list.
+var absoluteHeaptypes = []keywordKind{
+	kwAny, kwNone, kwEq, kwI31, kwStruct, kwArray,
+	kwFunc, kwNofunc, kwExn, kwNoexn, kwExtern, kwNoextern,
 }
 
 // atHeaptypeStart reports whether the cursor is at something heaptype can begin with.
@@ -42,15 +70,12 @@ func (p *parser) heaptype() error {
 // accept exactly the same tokens, derived by enumerating the table rather than by listing
 // these arms again.
 func (p *parser) atHeaptypeStart() bool {
-	switch {
-	case p.c.atKeyword(kwAny), p.c.atKeyword(kwNone), p.c.atKeyword(kwEq),
-		p.c.atKeyword(kwI31), p.c.atKeyword(kwStruct), p.c.atKeyword(kwArray),
-		p.c.atKeyword(kwFunc), p.c.atKeyword(kwNofunc), p.c.atKeyword(kwExn),
-		p.c.atKeyword(kwNoexn), p.c.atKeyword(kwExtern), p.c.atKeyword(kwNoextern):
-		return true
-	default:
-		return p.c.at(NatTok) || p.c.at(VarTok)
+	for _, k := range absoluteHeaptypes {
+		if p.c.atKeyword(k) {
+			return true
+		}
 	}
+	return p.c.at(NatTok) || p.c.at(VarTok)
 }
 
 // abbreviatedReftypes are the twelve sugar arms of reftype (parser.mly:377-389) — `anyref` for
@@ -59,29 +84,52 @@ func (p *parser) atHeaptypeStart() bool {
 // A table rather than a switch because the arms differ only in which keyword they match, and
 // because the abbreviations are exactly the risk the accept direction runs: an omission here
 // rejects a module the spec calls well-formed, and no vector says otherwise.
-var abbreviatedReftypes = []keywordKind{
-	kwAnyref, kwNullref, kwEqref, kwI31ref, kwStructref, kwArrayref,
-	kwFuncref, kwNullfuncref, kwExnref, kwNullexnref, kwExternref, kwNullexternref,
+// Each abbreviation's expansion is beside it, from the arm's own semantic action: every one is
+// `(Null, <heaptype>)`, so all twelve are nullable and they differ only in the heap type. The
+// pairing is written out because a wrong expansion is a *comparison* defect now, not just an
+// acceptance one — `funcref` versus `(ref func)` decides whether an inline signature matches.
+var abbreviatedReftypes = []struct {
+	kw   keywordKind
+	heap keywordKind
+}{
+	{kwAnyref, kwAny},             // :378  (Null, AnyHT)
+	{kwNullref, kwNone},           // :379  (Null, NoneHT)
+	{kwEqref, kwEq},               // :380  (Null, EqHT)
+	{kwI31ref, kwI31},             // :381  (Null, I31HT)
+	{kwStructref, kwStruct},       // :382  (Null, StructHT)
+	{kwArrayref, kwArray},         // :383  (Null, ArrayHT)
+	{kwFuncref, kwFunc},           // :384  (Null, FuncHT)
+	{kwNullfuncref, kwNofunc},     // :385  (Null, NoFuncHT)
+	{kwExnref, kwExn},             // :386  (Null, ExnHT)
+	{kwNullexnref, kwNoexn},       // :387  (Null, NoExnHT)
+	{kwExternref, kwExtern},       // :388  (Null, ExternHT)
+	{kwNullexternref, kwNoextern}, // :389  (Null, NoExternHT)
 }
 
 // reftype parses a reference type (parser.mly:376-389).
-func (p *parser) reftype() error {
-	for _, k := range abbreviatedReftypes {
-		if p.c.atKeyword(k) {
+func (p *parser) reftype() (valType, error) {
+	for _, a := range abbreviatedReftypes {
+		if p.c.atKeyword(a.kw) {
 			p.c.next()
-			return nil
+			return valType{null: true, heap: heapRef{abs: a.heap}}, nil
 		}
 	}
 	if err := p.lpar(kwRef); err != nil {
-		return err
+		return valType{}, err
 	}
+	var null bool
 	if p.c.atKeyword(kwNull) { // null_opt, parser.mly:357-359
 		p.c.next()
+		null = true
 	}
-	if err := p.heaptype(); err != nil {
-		return err
+	h, err := p.heaptype()
+	if err != nil {
+		return valType{}, err
 	}
-	return p.rpar()
+	if err := p.rpar(); err != nil {
+		return valType{}, err
+	}
+	return valType{null: null, heap: h}, nil
 }
 
 // atReftypeStart reports whether the cursor is at a reference type.
@@ -90,8 +138,8 @@ func (p *parser) reftype() error {
 // `(param …)` — which is why the cursor is a slice rather than a stream. peek2 is the only
 // place that second token is used and it exists for exactly this production.
 func (p *parser) atReftypeStart() bool {
-	for _, k := range abbreviatedReftypes {
-		if p.c.atKeyword(k) {
+	for _, a := range abbreviatedReftypes {
+		if p.c.atKeyword(a.kw) {
 			return true
 		}
 	}
@@ -108,13 +156,16 @@ func (p *parser) atReftypeStart() bool {
 // an enumeration of it, so no switch here could ever be exhaustive and suppressing the linter
 // per-site would be defending the wrong construct. A disjunction says what is meant: these two
 // keywords, and everything else falls through.
-func (p *parser) valtype() error {
+// **The spelling is the value**, not a proxy for it: the reference's `NumT $1` keeps the lexer's
+// NUMTYPE payload, and `i32` versus `f64` is that payload. So `t.Text` here is the same
+// information `NumT` carries, and comparing two valTypes compares the same thing the reference's
+// structural equality does.
+func (p *parser) valtype() (valType, error) {
 	if p.c.atKeyword(kwNumtype) || p.c.atKeyword(kwVectype) {
-		p.c.next()
-		return nil
+		return valType{num: p.c.next().Text}, nil
 	}
 	if !p.atReftypeStart() {
-		return p.unexpected()
+		return valType{}, p.unexpected()
 	}
 	return p.reftype()
 }
@@ -124,36 +175,44 @@ func (p *parser) atValtypeStart() bool {
 	return p.c.atKeyword(kwNumtype) || p.c.atKeyword(kwVectype) || p.atReftypeStart()
 }
 
-// valtypeList parses `list(valtype)` (parser.mly:396-398), returning how many it consumed.
+// valtypeList parses `list(valtype)` (parser.mly:396-398), returning the types it consumed.
 //
-// The count is the one piece of information the reject direction genuinely needs from this
-// production: `anon_locals c (fst $3)` in func_fields_body (parser.mly:1006) advances the local
-// index space by the number of params, and a wrong count shifts every subsequent binding. That
-// is a *silent* wrongness under 0011 — no error message mentions an index — so it is pinned by
-// test rather than trusted, and it is why this returns an int against 0011's error-only rule.
-func (p *parser) valtypeList() (int, error) {
-	n := 0
+// The reference's arm returns the pair `Lib.List32.length $1, fun c -> List.map …` — a count *and*
+// the types — and both halves are read: the count advances the local index space
+// (`anon_locals c (fst $3)`, :1007) and the types feed the functype comparison. It used to return
+// only the count, which was right while nothing compared anything; `len` of the slice is that
+// count, so no caller lost information.
+func (p *parser) valtypeList() ([]valType, error) {
+	var out []valType
 	for p.atValtypeStart() {
-		if err := p.valtype(); err != nil {
-			return n, err
+		v, err := p.valtype()
+		if err != nil {
+			return out, err
 		}
-		n++
+		out = append(out, v)
 	}
-	return n, nil
+	return out, nil
 }
 
 // globaltype parses a global type (parser.mly:400-402): a value type, or `(mut valtype)`.
+//
+// **Error-only, deliberately, and this is the line the value-returning half stops at.** A global's
+// type is never compared against anything — `inline_functype_explicit` is a functype comparison —
+// so returning a value here would be designing a representation for a consumer that does not
+// exist, which is what 0011 declined for the module type. The valtype it reads *does* return one;
+// it is discarded here, and that is the honest place for the discard.
 func (p *parser) globaltype() error {
 	if p.c.at(LParen) && p.c.peek2Keyword(kwMut) {
 		if err := p.lpar(kwMut); err != nil {
 			return err
 		}
-		if err := p.valtype(); err != nil {
+		if _, err := p.valtype(); err != nil {
 			return err
 		}
 		return p.rpar()
 	}
-	return p.valtype()
+	_, err := p.valtype()
+	return err
 }
 
 // storagetype parses a storage type (parser.mly:404-406): a value type or a packed type.
@@ -162,7 +221,8 @@ func (p *parser) storagetype() error {
 		p.c.next()
 		return nil
 	}
-	return p.valtype()
+	_, err := p.valtype()
+	return err
 }
 
 // fieldtype parses a field type (parser.mly:408-410): a storage type, or `(mut storagetype)`.
@@ -193,7 +253,9 @@ func (p *parser) atFieldtypeStart() bool {
 // fieldtypeList parses `fieldtype_list` (parser.mly:412-414), returning the count.
 //
 // The count feeds `anon_fields c x (Lib.List32.length fts)` (parser.mly:420) — the field index
-// space, same silent-index argument as valtypeList's.
+// space, same silent-index argument valtypeList's count had. It stays a count rather than becoming
+// a list because a struct's fields are never compared: `expand_deftype` on a StructT reaches
+// `non-function type`, and nothing looks inside.
 func (p *parser) fieldtypeList() (int, error) {
 	n := 0
 	for p.atFieldtypeStart() {
@@ -262,97 +324,126 @@ func (p *parser) arraytype() error { return p.fieldtype() }
 // parse; that ordering is load-bearing and is preserved here as two loops rather than one,
 // because a single loop accepting either in any order would admit `(result i32) (param i32)`,
 // which the reference rejects and no vector tests.
-func (p *parser) functype() error {
+func (p *parser) functype() (funcType, error) {
+	var ft funcType
 	for p.c.at(LParen) && p.c.peek2Keyword(kwParam) {
 		if err := p.lpar(kwParam); err != nil {
-			return err
+			return ft, err
 		}
 		if p.c.at(VarTok) { // sugar: `(param $x valtype)`, exactly one type
 			if _, err := p.bindidx(); err != nil {
-				return err
+				return ft, err
 			}
-			if err := p.valtype(); err != nil {
-				return err
+			v, err := p.valtype()
+			if err != nil {
+				return ft, err
 			}
-		} else if _, err := p.valtypeList(); err != nil {
-			return err
+			ft.params = append(ft.params, v)
+		} else {
+			vs, err := p.valtypeList()
+			if err != nil {
+				return ft, err
+			}
+			ft.params = append(ft.params, vs...)
 		}
 		if err := p.rpar(); err != nil {
-			return err
+			return ft, err
 		}
 	}
-	return p.functypeResult()
+	rs, err := p.functypeResult()
+	ft.results = rs
+	return ft, err
 }
 
 // functypeResult parses `functype_result` (parser.mly:440-444): zero or more `(result …)`.
 //
 // No named form — `(result $x i32)` is not legal, unlike `(param $x i32)`. The asymmetry is the
 // reference's (compare :436 with :443) and is easy to "fix" into a bug.
-func (p *parser) functypeResult() error {
+//
+// Concatenation across repeats, not one list per `(result)`: `(result i32) (result f64)` is the
+// two-result signature `snd $3 c @ $5 c` builds, so it must compare equal to `(result i32 f64)`.
+// The suite has that spelling at func.wast:50 in the *accept* direction — `(type $sig-4) (param
+// i32) (param f64 i32) (result i32)` against a type declared as one `(param i32 f64 i32)` — so a
+// per-group representation would reject a valid module and no reject vector would say so.
+func (p *parser) functypeResult() ([]valType, error) {
+	var out []valType
 	for p.c.at(LParen) && p.c.peek2Keyword(kwResult) {
 		if err := p.lpar(kwResult); err != nil {
-			return err
+			return out, err
 		}
-		if _, err := p.valtypeList(); err != nil {
-			return err
+		vs, err := p.valtypeList()
+		if err != nil {
+			return out, err
 		}
+		out = append(out, vs...)
 		if err := p.rpar(); err != nil {
-			return err
+			return out, err
 		}
 	}
-	return nil
+	return out, nil
 }
 
 // comptype parses a composite type (parser.mly:446-449): `(struct …)`, `(array …)`, `(func …)`.
-func (p *parser) comptype() error {
+//
+// Only the func arm's content is returned. A struct or array reaches `expand_deftype` as a
+// `non-function type` and nothing reads its fields, so `isFunc: false` is everything a consumer
+// here can use — see funcTypeAt.
+func (p *parser) comptype() (compType, error) {
 	switch {
 	case p.c.at(LParen) && p.c.peek2Keyword(kwStruct):
 		if err := p.lpar(kwStruct); err != nil {
-			return err
+			return compType{}, err
 		}
 		if err := p.structtype(); err != nil {
-			return err
+			return compType{}, err
 		}
-		return p.rpar()
+		return compType{}, p.rpar()
 	case p.c.at(LParen) && p.c.peek2Keyword(kwArray):
 		if err := p.lpar(kwArray); err != nil {
-			return err
+			return compType{}, err
 		}
 		if err := p.arraytype(); err != nil {
-			return err
+			return compType{}, err
 		}
-		return p.rpar()
+		return compType{}, p.rpar()
 	case p.c.at(LParen) && p.c.peek2Keyword(kwFunc):
 		if err := p.lpar(kwFunc); err != nil {
-			return err
+			return compType{}, err
 		}
-		if err := p.functype(); err != nil {
-			return err
+		ft, err := p.functype()
+		if err != nil {
+			return compType{}, err
 		}
-		return p.rpar()
+		return compType{isFunc: true, ft: ft}, p.rpar()
 	default:
-		return p.unexpected()
+		return compType{}, p.unexpected()
 	}
 }
 
 // subtype parses a sub type (parser.mly:451-458): a bare comptype, or `(sub [final] idx* comptype)`.
-func (p *parser) subtype() error {
+//
+// The supertype list is read and discarded: `func_type` calls `expand_deftype`, which unrolls to
+// the subtype's own comptype (`SubT (_, _, st) -> st`, types.ml:282-284) without consulting the
+// parents. So a subtype's inline-signature comparison is against its *own* functype, and
+// inheritance is validation's business.
+func (p *parser) subtype() (compType, error) {
 	if !p.c.at(LParen) || !p.c.peek2Keyword(kwSub) {
 		return p.comptype()
 	}
 	if err := p.lpar(kwSub); err != nil {
-		return err
+		return compType{}, err
 	}
 	if p.c.atKeyword(kwFinal) {
 		p.c.next()
 	}
 	if err := p.idxList(); err != nil {
-		return err
+		return compType{}, err
 	}
-	if err := p.comptype(); err != nil {
-		return err
+	ct, err := p.comptype()
+	if err != nil {
+		return compType{}, err
 	}
-	return p.rpar()
+	return ct, p.rpar()
 }
 
 // addrtype parses the optional address type (parser.mly:346-355).
@@ -396,7 +487,8 @@ func (p *parser) tabletype() error {
 	if err := p.limits(); err != nil {
 		return err
 	}
-	return p.reftype()
+	_, err := p.reftype()
+	return err
 }
 
 // memorytype parses a memory type (parser.mly:463-464): `addrtype limits`.
@@ -407,15 +499,21 @@ func (p *parser) memorytype() error {
 	return p.limits()
 }
 
-// typeuse parses `(type idx)` (parser.mly:470-471).
-func (p *parser) typeuse() error {
+// typeuse parses `(type idx)` (parser.mly:470-471) and returns the reference, unresolved.
+//
+// The reference's arm *is* `lookup c (var …)` — resolution at the production — but it runs inside a
+// `fun c ->` whose caller is a stage-2 thunk, after every name is bound. Returning the reference
+// and resolving in `runDeferred` reproduces that; resolving here would reject `imports.wast:62`'s
+// forward reference, a valid module. See typetable.go's header.
+func (p *parser) typeuse() (typeRef, error) {
 	if err := p.lpar(kwType); err != nil {
-		return err
+		return typeRef{}, err
 	}
-	if err := p.idx(); err != nil {
-		return err
+	r, err := p.typeIdx()
+	if err != nil {
+		return typeRef{}, err
 	}
-	return p.rpar()
+	return r, p.rpar()
 }
 
 // atTypeuse reports whether the cursor is at `(type …)`.
@@ -435,20 +533,39 @@ func (p *parser) atTypeuse() bool { return p.c.at(LParen) && p.c.peek2Keyword(kw
 // in the same module. The check is the production's, so it belongs on the production, not on the
 // instruction reader that finally made it reachable.
 func (p *parser) idx() error {
+	_, err := p.typeIdx()
+	return err
+}
+
+// typeIdx is `idx` returning what it read, for the positions whose index is resolved later.
+//
+// Not named `idxValue`, because the *only* index space this stratum resolves is the type space:
+// funcs, tables, labels and locals are `unknown <category>` errors from validation, and #64's own
+// board carries two `unknown label` vectors that are deliberately not this PR's. A helper named
+// for indices generally would invite exactly the scope creep the two-vector deferral avoids.
+//
+// **Both arms of the reference's `idx` are here and they fail differently** (parser.mly:487-489).
+// The NAT arm is `nat32 $1` — a width check, no lookup, so a numeric index is never
+// `unknown type $name`. The VAR arm is `lookup c (var …)`, the second UTF-8 decode site, and the
+// resolution it performs is what typeRef defers.
+func (p *parser) typeIdx() (typeRef, error) {
 	switch {
 	case p.c.at(NatTok):
 		t := p.c.next()
-		if _, ok := parseNat(t.Text, 32); !ok {
-			return errAt(t, "i32 constant out of range")
+		n, ok := parseNat(t.Text, 32)
+		if !ok {
+			return typeRef{}, errAt(t, "i32 constant out of range")
 		}
-		return nil
+		return typeRef{tok: t, idx: uint32(n)}, nil
 	case p.c.at(VarTok):
-		if _, err := decodedVar(p.c.next()); err != nil {
-			return err
+		t := p.c.peek()
+		name, err := decodedVar(p.c.next())
+		if err != nil {
+			return typeRef{}, err
 		}
-		return nil
+		return typeRef{tok: t, isVar: true, name: name}, nil
 	default:
-		return p.unexpected()
+		return typeRef{}, p.unexpected()
 	}
 }
 

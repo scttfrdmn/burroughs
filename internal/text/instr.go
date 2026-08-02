@@ -233,7 +233,12 @@ func (p *parser) immediates(shape immShape, mnemonic Token) error {
 	case immLaneIdx:
 		return p.laneidx()
 	case immReftype:
-		return p.reftype()
+		// The four value-returning readers are called for their errors here and their results
+		// discarded: an instruction's immediate is never a comparison operand — only a functype's
+		// value types reach `inline_functype_explicit`. Named once for the whole switch rather than
+		// at each of the four sites.
+		_, err := p.reftype()
+		return err
 	case immIdxIdxList:
 		// `br_table` takes one idx then `idx_list` (:497), whose empty arm is why the loop's
 		// exit is "no idx here" rather than an error. idxList is #62's and already loops on
@@ -246,12 +251,14 @@ func (p *parser) immediates(shape immShape, mnemonic Token) error {
 		if err := p.idx(); err != nil {
 			return err
 		}
-		if err := p.reftype(); err != nil {
+		if _, err := p.reftype(); err != nil {
 			return err
 		}
-		return p.reftype()
+		_, err := p.reftype()
+		return err
 	case immHeaptype:
-		return p.heaptype()
+		_, err := p.heaptype()
+		return err
 	case immIdxNat32:
 		if err := p.idx(); err != nil {
 			return err

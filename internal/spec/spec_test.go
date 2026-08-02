@@ -1243,7 +1243,62 @@ func TestPhase1Files(t *testing.T) {
 	// from the board. That is *derive the domain, never enumerate it* applied to the work plan
 	// instead of to the engine — and an enumerated file set has a blind spot exactly the shape
 	// of the defect one did not know was shared. Print the bucket; do not recall it.
-	const textFailCeiling = 41
+	//
+	// # 16 after typeuse resolution and functype equality (#64, second half), was 41
+	//
+	// **−25, and the forecast was met exactly** — pre-registered on #64 as 41 → 16 before the
+	// work, itemized as 24 `inline function type does not match explicit type` plus 1 `unknown
+	// type`, with the 2 `unknown label` vectors excluded as a separate mechanism. Both numbers
+	// landed on the nose, which is worth stating plainly *and* discounting: the forecast was
+	// made after the bucket had been printed and partitioned, so it predicted the size of a set
+	// whose members were already known. An exact hit there is bookkeeping, not foresight. The
+	// forecasts worth crediting are the ones over unlisted spaces, and this PR's two of those
+	// were both wrong (see below).
+	//
+	// The 25, by file, from a per-file diff against the pre-change board — six files moved, all
+	// upward, none losing a pass:
+	//
+	//	block.wast                12/16 → 16/16   +4
+	//	call_indirect.wast        10/14 → 14/14   +4
+	//	func.wast                 22/27 → 27/27   +5
+	//	if.wast                   21/25 → 25/25   +4
+	//	loop.wast                 12/16 → 16/16   +4
+	//	return_call_indirect.wast 10/14 → 14/14   +4
+	//
+	// **The residue is 13 + 2 + 1 and none of it is this mechanism's**: 13 in `(module <wat
+	// body>) must read` (#75's 3 `elem_list` and #76's 9 `lane_imms`, plus annotations.wast:1
+	// which is #55's lexer), 2 `unknown label` (token.wast:101/:117 — `enter_block` and scoped
+	// labels, parser.mly:132-134, deliberately its own PR), 1 `malformed mutability`
+	// (binary-gc.wast, the decoder's). So the pre-registration two blocks up — "the next PR takes
+	// this to 3" — is met on its own terms: the 24 + 2 + 1 it named as one job turned out to be
+	// 25 + 2, the two labels being a different mechanism, and the 13 arrived in between from #69's
+	// admission. The 3 it forecast is now 3 = 2 labels + 1 decoder, with #75/#76's 13 alongside.
+	//
+	// **`non-function type <n>` is implemented and corpus-unreachable.** Zero vectors: measured
+	// across the whole corpus, no `assert_malformed` names it, because reaching it needs a struct
+	// or array type used as a typeuse with an inline signature and the GC files' subtyping
+	// vectors are all `assert_invalid`. It is implemented anyway — it is one of `func_type`'s
+	// three outcomes (parser.mly:164-168) and omitting it would report `unknown type` for an
+	// index that resolves perfectly well, which is the engine lying about its input. Pinned by a
+	// print check (TestNonFunctionTypeMessage) rather than by the board, per *the oracle reads
+	// exactly as far as its expected string does*.
+	//
+	// **Two forecasts over unlisted spaces, both wrong, both in the same direction.** (1) The
+	// nesting order of implicitly-interned block types was written into a comment on
+	// `orderedTypeUse` as inner-before-outer, correctly, and the code did outer-before-inner —
+	// `blockSignature` passed a nil tail so its three callers read the body *after* the signature
+	// op was recorded. Caught by a synthetic control, and the board is identical either way. (2)
+	// `externtype` was assumed to compare an inline signature against its typeuse; its arms are
+	// `typeuse` XOR `functype` (parser.mly:1226-1248), so two test rows asserting a mismatch
+	// error there failed against a parser that was right. Both were found by *printing what the
+	// code returns* rather than by reasoning, which is the same instrument that found #70's 12.
+	//
+	// Eleven controls in internal/text/typetable_test.go, each falsified by introducing the
+	// defect it names; **nine of the eleven defects leave this board unchanged**, the two
+	// exceptions being an over-rejecting resolver (4147 → 4145, imports.wast) and the block arms
+	// wired to the create-helper (4147 → 4135). The table is in that file's header. That ratio is
+	// the honest measure of what this bucket's fall is evidence for.
+	const textFailCeiling = 16
 	if textFail > textFailCeiling {
 		t.Errorf("text failures rose to %d, ceiling %d — either the reader regressed on "+
 			"vectors it used to answer, or the corpus moved", textFail, textFailCeiling)
@@ -1333,7 +1388,20 @@ func TestPhase1Files(t *testing.T) {
 	// over-rejection invisible by construction — the overfitting law (§9 G-3) at its purest,
 	// since the cheap wrong check and the correct one score identically on a corpus that
 	// asks nothing. Against 2130 must-succeed modules, an over-eager resolver fails loudly.
-	const passFloor = 4122
+	//
+	// **4147 = 4122 + 25 after typeuse resolution and functype equality (#64, second half)**,
+	// gross — nothing withdrawn, checked file by file: six files moved, all upward, summing to
+	// 25, and the per-file decomposition is at textFailCeiling above.
+	//
+	// **The floor is where #69's argument gets paid off, and it did its job.** Resolution is a
+	// rejector, so the interesting column here was never the 25 — it was the 2130 bare modules
+	// that had to keep passing. They did, and the falsification pass proves the check has teeth:
+	// making `resolveTypeIdx` run at the typeuse instead of in `runDeferred` — the single most
+	// natural way to write this wrong, and the way that reads more simply — drops this count to
+	// 4145 on `imports.wast:62`'s forward reference. Under the 7-vector accept oracle that
+	// preceded #69 the same defect would have been a silent green. One vector of 2130 is a thin
+	// margin, and it is a real one.
+	const passFloor = 4147
 	if totalPass < passFloor {
 		t.Errorf("board pass count %d fell below floor %d", totalPass, passFloor)
 	}

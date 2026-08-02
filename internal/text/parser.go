@@ -8,9 +8,18 @@ package text
 // readers. The three strata landed in that order and the sentence that used to stand here said
 // "does not descend into instruction bodies", naming a boundary error that had already been
 // renamed twice; it is replaced rather than amended, because a scope paragraph describing two of
-// three strata is the drifted-citation defect wearing prose. What remains unread is *above* the
-// grammar, not inside it: `typeuse` resolution and functype equality
-// (`inline_functype_explicit`, parser.mly:238), which is validation's question.
+// three strata is the drifted-citation defect wearing prose.
+//
+// **And the type-resolution family is now in too**, which retires the rest of that sentence: it
+// said `typeuse` resolution and functype equality were "validation's question", and they are not —
+// `inline_functype_explicit` (parser.mly:237) is a helper the *grammar* calls, so its three errors
+// are `assert_malformed`'s and belong here. Rewritten rather than deleted because the mistake is
+// the interesting part: the errors *sound* semantic ("inline function type does not match explicit
+// type" is a type mismatch), and the reference's own placement is what settles which layer owns
+// them. See typetable.go, which owns the deferred phase and the argument for its shape.
+//
+// What is genuinely still outside: name resolution for spaces other than types (labels, locals,
+// funcs), the two `unknown label` vectors among them.
 //
 // Which stratum owned which was settled by **defect ownership, not surface form** (Scott's
 // ruling on #63's forecast): `expr`/`expr1`'s minimal arm (parser.mly:809/:814) was #63's, since
@@ -96,11 +105,25 @@ func (p *parser) module() error {
 // qualifies depends on what follows it, so no import can be judged when it is read. The other
 // two grammar checks (duplicates, multiple start) are immediate, because both are about
 // something already seen.
+//
+// **runDeferred is the same manoeuvre for the type-resolution family and it runs first**, which is
+// an ordering claim the reference decides rather than a preference. Both of these errors are
+// raised inside `module_fields1`'s arms — `import after <kind>` at :1321 et al, and the two helpers
+// through `func`/`tag`/… at :968 et al — and every one of those arms is reached from a *stage-2*
+// thunk. `import after` is checked by the arm for the *definition*, after that arm's own `mf ()`
+// forced the whole suffix, so the deepest arm raises first; the type-resolution helpers are called
+// as their arm's body runs. So on a module with both defects the resolution error is the one the
+// reference reports, and this order is what makes that true. No suite vector has both — measured —
+// so this is the ours-alone-to-keep-honest half again, and it is a *print* check rather than a
+// board one (TestResolutionErrorPrecedesImportOrder).
 func (p *parser) moduleFields() error {
 	for p.c.at(LParen) {
 		if err := p.moduleField(); err != nil {
 			return err
 		}
+	}
+	if err := p.ctx.runDeferred(); err != nil {
+		return err
 	}
 	return p.ctx.importOrderErr()
 }
@@ -167,6 +190,12 @@ func (p *parser) typeField() error {
 }
 
 // typeDef parses `type_def` (parser.mly:1276-1280).
+//
+// bindidxOpt binds the *name* — the reference's stage 0 — and defineType records the *content*,
+// which is stage 1. Doing both here is sound because stage 1 walks the same field list in the same
+// order doing nothing but this, so a single pass over the text produces the identical table. What
+// cannot be collapsed into this pass is stage 2, and typetable.go's header has the corpus vector
+// that proves it.
 func (p *parser) typeDef() error {
 	if err := p.lpar(kwType); err != nil {
 		return err
@@ -174,9 +203,11 @@ func (p *parser) typeDef() error {
 	if err := p.bindidxOpt(&p.ctx.types, "type"); err != nil {
 		return err
 	}
-	if err := p.subtype(); err != nil {
+	ct, err := p.subtype()
+	if err != nil {
 		return err
 	}
+	p.ctx.defineType(ct)
 	return p.rpar()
 }
 
@@ -220,34 +251,38 @@ func (p *parser) externtype() error {
 		return p.unexpectedAt(kw)
 	}
 	switch kw.Keyword {
-	case kwFunc:
-		if err := p.lpar(kwFunc); err != nil {
+	case kwFunc, kwTag:
+		// One arm for two kinds, because the reference's four arms (:1227-:1236 for the typeuse
+		// forms, :1234/:1246 for the functype sugar) differ only in which index space the name
+		// binds into. The *type* halves are identical, and this is the place a divergence between
+		// them would be invisible: an imported tag and an imported func carry the same signature
+		// grammar.
+		space, category := &p.ctx.funcs, "func"
+		if kw.Keyword == kwTag {
+			space, category = &p.ctx.tags, "tag"
+		}
+		if err := p.lpar(kw.Keyword); err != nil {
 			return err
 		}
-		if err := p.bindidxOpt(&p.ctx.funcs, "func"); err != nil {
+		if err := p.bindidxOpt(space, category); err != nil {
 			return err
 		}
+		// **No typeuse arm here takes an inline signature**, so neither helper is reached: the
+		// reference's arms are `typeuse` alone or `functype` alone (compare with `func_fields`
+		// :963, where both may appear). An `inline_functype` call on the sugar arm would be the
+		// reference's (:1236/:1248) and its only effect is the implicit type's index, which
+		// nothing here reads — but it *does* move `len(typeCtx)`, so it is recorded rather than
+		// skipped. See the deferOp below.
 		if p.atTypeuse() {
-			if err := p.typeuse(); err != nil {
+			if _, err := p.typeuse(); err != nil {
 				return err
 			}
-		} else if err := p.functype(); err != nil { // sugar, parser.mly:1246
-			return err
-		}
-		return p.rpar()
-	case kwTag:
-		if err := p.lpar(kwTag); err != nil {
-			return err
-		}
-		if err := p.bindidxOpt(&p.ctx.tags, "tag"); err != nil {
-			return err
-		}
-		if p.atTypeuse() {
-			if err := p.typeuse(); err != nil {
+		} else {
+			ft, err := p.functype() // sugar, parser.mly:1234/:1246
+			if err != nil {
 				return err
 			}
-		} else if err := p.functype(); err != nil { // sugar, parser.mly:1234
-			return err
+			p.ctx.deferOp(func() error { return p.ctx.declareImplicit(ft) })
 		}
 		return p.rpar()
 	case kwGlobal:
@@ -377,7 +412,13 @@ func (p *parser) inlineExports() error {
 	return nil
 }
 
-// funcField parses `func` (parser.mly:959-962) down to its body, where this stratum stops.
+// funcField parses `func` (parser.mly:959-962) down to its body.
+//
+// **All four `func_fields` arms reach one of the two type helpers** (:963-:985), and which one is
+// decided by whether a `typeuse` was written — so the branch below is the reference's arm choice,
+// not a shortcut. With a typeuse it is `inline_functype_explicit` and the inline signature is
+// *compared*; without one it is `inline_functype` and the signature *creates* a type. Four of the
+// 24 `inline function type` vectors land here (func.wast:600-627).
 func (p *parser) funcField() error {
 	if err := p.lpar(kwFunc); err != nil {
 		return err
@@ -388,25 +429,32 @@ func (p *parser) funcField() error {
 	if err := p.inlineExports(); err != nil {
 		return err
 	}
-	imported, err := p.inlineImport()
-	if err != nil {
-		return err
+	imported, impErr := p.inlineImport()
+	if impErr != nil {
+		return impErr
 	}
+	use, haveUse := typeRef{}, false
 	if p.atTypeuse() {
-		if err := p.typeuse(); err != nil {
+		u, err := p.typeuse()
+		if err != nil {
 			return err
 		}
+		use, haveUse = u, true
 	}
 	if imported {
 		// func_fields_import (parser.mly:991-1001): params and results, no body, no locals.
-		if err := p.functype(); err != nil {
+		ft, err := p.functype()
+		if err != nil {
 			return err
 		}
+		p.deferSignature(use, haveUse, ft)
 		return p.rpar()
 	}
-	if err := p.markFuncSignature(); err != nil {
+	ft, err := p.funcSignature()
+	if err != nil {
 		return err
 	}
+	p.deferSignature(use, haveUse, ft)
 	if err := p.locals(); err != nil {
 		return err
 	}
@@ -418,46 +466,79 @@ func (p *parser) funcField() error {
 	return p.rpar()
 }
 
-// markFuncSignature parses func_fields_body's params and results (parser.mly:1003-1016) and
-// binds the params into the local index space.
+// deferSignature records the stage-2 operation a `typeuse?` plus inline signature implies.
+//
+// The two helpers are one call site here because the reference's arms pair them that way at every
+// one of the ten places they appear: a typeuse present means compare (`inline_functype_explicit`),
+// absent means create (`inline_functype`). Writing the pairing once is what stops a site from
+// getting the *wrong helper*, which would be a silently missing check rather than a wrong error —
+// `inline_functype` never fails, so a site that called it where the reference compares would accept
+// every mismatched module and no board would move.
+//
+// **Recorded in parse order, executed in stage 2.** The order is load-bearing: `inline_functype`
+// appends, so it decides the index an implicit type gets and therefore what `unknown type <n>`
+// means for a later numeric typeuse. See typetable.go's header for why parse order *is* stage-2
+// order.
+func (p *parser) deferSignature(use typeRef, haveUse bool, ft funcType) {
+	if haveUse {
+		p.ctx.deferOp(func() error { return p.ctx.inlineFuncTypeExplicit(use, ft) })
+		return
+	}
+	p.ctx.deferOp(func() error { return p.ctx.declareImplicit(ft) })
+}
+
+// funcSignature parses func_fields_body's params and results (parser.mly:1003-1016), binds the
+// params into the local index space, and returns the signature.
 //
 // Params bind as locals — `anon_locals c (fst $3)` at :1006 and `bind_local c $3` at :1009 — so
 // `(func (param $x i32) (local $x i32))` is `duplicate local $x`. That is one of #62's 13
 // duplicate-binding vectors and it only works if params and locals share one space.
 //
 // The locals space is reset per function, since it is `enter_func`'s (parser.mly:965).
-func (p *parser) markFuncSignature() error {
+//
+// It was `markFuncSignature` while the binding was its whole purpose; it returns the type now
+// because `func_fields`'s arms pass `fst $2 c'` — this signature — to whichever helper applies.
+// Renamed rather than given a second name: two functions reading the same production is the drift
+// shape, and the *reason* the name changed is that the production always returned this and the
+// previous stratum had nothing to do with it.
+func (p *parser) funcSignature() (funcType, error) {
 	p.ctx.locals = space{}
+	var ft funcType
 	for p.c.at(LParen) && p.c.peek2Keyword(kwParam) {
 		if err := p.lpar(kwParam); err != nil {
-			return err
+			return ft, err
 		}
 		if p.c.at(VarTok) {
 			tok := p.c.peek()
-			name, err := p.bindidx()
-			if err != nil {
-				return err
+			name, nameErr := p.bindidx()
+			if nameErr != nil {
+				return ft, nameErr
 			}
 			if err := p.ctx.locals.bindAbs("local", tok, name); err != nil {
-				return err
+				return ft, err
 			}
-			if err := p.valtype(); err != nil {
-				return err
-			}
-		} else {
-			n, err := p.valtypeList()
+			v, err := p.valtype()
 			if err != nil {
-				return err
+				return ft, err
 			}
-			for range n {
+			ft.params = append(ft.params, v)
+		} else {
+			vs, err := p.valtypeList()
+			if err != nil {
+				return ft, err
+			}
+			ft.params = append(ft.params, vs...)
+			for range vs {
 				p.ctx.locals.bindAnon()
 			}
 		}
 		if err := p.rpar(); err != nil {
-			return err
+			return ft, err
 		}
 	}
-	return p.functypeResult()
+	rs, err := p.functypeResult()
+	ft.results = rs
+	return ft, err
 }
 
 // locals parses `func_body`'s local declarations (parser.mly:1023-1029).
@@ -478,15 +559,17 @@ func (p *parser) locals() error {
 			if err := p.ctx.locals.bindAbs("local", tok, name); err != nil {
 				return err
 			}
-			if err := p.valtype(); err != nil {
+			// The valtype is read and discarded: a local's type is nothing the grammar
+			// compares. Only a functype's value types reach `inline_functype_explicit`.
+			if _, err := p.valtype(); err != nil {
 				return err
 			}
 		} else {
-			n, err := p.valtypeList()
+			vs, err := p.valtypeList()
 			if err != nil {
 				return err
 			}
-			for range n {
+			for range vs {
 				p.ctx.locals.bindAnon()
 			}
 		}
@@ -498,6 +581,12 @@ func (p *parser) locals() error {
 }
 
 // tagField parses `tag` (parser.mly:1042-1072).
+//
+// Its four non-export arms (:1047-1067) pair the two helpers exactly as `func_fields` does — a
+// typeuse present means `inline_functype_explicit`, absent means `inline_functype` — and unlike
+// `func` there is no body arm, so the `functype` is always present in the source. Note the
+// signature is read by `functype` in *both* arms, import or not: a tag has no locals, so nothing
+// here binds.
 func (p *parser) tagField() error {
 	if err := p.lpar(kwTag); err != nil {
 		return err
@@ -512,14 +601,19 @@ func (p *parser) tagField() error {
 	if err != nil {
 		return err
 	}
+	use, haveUse := typeRef{}, false
 	if p.atTypeuse() {
-		if err := p.typeuse(); err != nil {
+		use, err = p.typeuse()
+		if err != nil {
 			return err
 		}
+		haveUse = true
 	}
-	if err := p.functype(); err != nil {
+	ft, err := p.functype()
+	if err != nil {
 		return err
 	}
+	p.deferSignature(use, haveUse, ft)
 	if !imported {
 		p.ctx.markDefined(importTag)
 	}
@@ -645,7 +739,9 @@ func (p *parser) tableField() error {
 	// `addrtype reftype (elem …)` sugar (parser.mly:1205/1216) versus `addrtype limits
 	// reftype`: the sugar has no limits, so a reftype where a nat would be is the tell.
 	if p.atReftypeStart() {
-		if err := p.reftype(); err != nil {
+		// Discarded: a table's element type is never a comparison operand. See types.go's
+		// header for where the value-returning half of the type algebra stops.
+		if _, err := p.reftype(); err != nil {
 			return err
 		}
 		if err := p.lpar(kwElem); err != nil {
@@ -679,7 +775,7 @@ func (p *parser) tableField() error {
 	if err := p.limits(); err != nil {
 		return err
 	}
-	if err := p.reftype(); err != nil {
+	if _, err := p.reftype(); err != nil {
 		return err
 	}
 	p.ctx.markDefined(importTable)
@@ -809,7 +905,7 @@ func (p *parser) elemList() error {
 		return p.idxList()
 	}
 	if p.atReftypeStart() {
-		if err := p.reftype(); err != nil {
+		if _, err := p.reftype(); err != nil {
 			return err
 		}
 		return p.elemexprList()
@@ -929,7 +1025,9 @@ func (p *parser) flatSelectOrCall() (bool, error) {
 				return true, err
 			}
 		}
-		return true, p.orderedTypeUse(p.instrList)
+		// callchain: `callinstr_type_instr_list`'s sugar arm interns unconditionally (:709),
+		// as `callexpr_type`'s does.
+		return true, p.orderedTypeUse(callchain, p.instrList)
 	default:
 		// Every other keyword is `instr1`'s, which the caller tries next. Named as a default
 		// rather than left to fall through so `exhaustive` sees a real fallback: this switch
@@ -1220,14 +1318,11 @@ func (p *parser) labelingEndOpt(label string) error {
 // `(result)` may repeat, then `instr_list`. A `(param)` *after* a `(result)` is not in the
 // grammar, so it falls out of the loops and is reported by instrList's fallthrough.
 func (p *parser) block() error {
-	if err := p.blockSignature(); err != nil {
-		return err
-	}
-	return p.instrList()
+	return p.blockSignature(p.instrList)
 }
 
 // blockSignature reads the part `block` and `handler_block` have in common: `typeuse?` then the
-// `(param …)*` and `(result …)*` lists, stopping before the body.
+// `(param …)*` and `(result …)*` lists, and **then the body, through the tail it is handed**.
 //
 // Shared rather than written twice because the reference's two chains are the same shape — compare
 // `block_param_body`/`block_result_body` (:754-:764) with
@@ -1254,9 +1349,35 @@ func (p *parser) block() error {
 //
 // `(result …)` has no named form in either chain (compare :762 with `functype_result` :443), so
 // that half really is shared and `(result $x i32)` was already rejected.
-func (p *parser) blockSignature() error {
-	return p.orderedTypeUse(nil)
+//
+// **The body is a tail parameter and not the caller's business, because the interning order depends
+// on it.** The first version took no tail and let each caller read its own body afterwards, which
+// put the enclosing block's implicit type in the space *before* the nested one's — measured, index 1
+// outer and index 2 inner, for `(func (block (result i32 i32) (block (param i32) drop) unreachable))`.
+// The reference is the other way round: every arm reads `let ft, es = $2 c in` and only *then* calls
+// its helper (:741-:744, :769-:776, :866-:877, :902-:915), and `$2 c` forces the right-recursive
+// chain whose innermost production is the body. So the nested type interns first. No vector sees the
+// difference — an index shift is invisible until a numeric typeuse names a shifted index — which is
+// exactly why the order is taken from the grammar rather than from the board.
+func (p *parser) blockSignature(tail func() error) error {
+	return p.orderedTypeUse(blockchain, tail)
 }
+
+// signatureKind says how a shared-chain site interns an inline signature when no typeuse was
+// written — which is the one thing the ten productions do *not* share.
+//
+// Two values, and the partition is the reference's: `block`/`if_block`/`try_block`/`handler_block`
+// match on `([], [])` and `([], [t])` before reaching `inline_functype` (:746-751 and its three
+// copies), while `callexpr_type`/`callinstr_type_instr_list` intern unconditionally (:846/:709).
+// Passed as a parameter rather than inferred from the tail, because the tail is about what *follows*
+// the signature and this is about what the signature *means* — two facts that happen to correlate
+// across today's five families and have no reason to keep doing so.
+type signatureKind int
+
+const (
+	blockchain signatureKind = iota // conditional: no params and ≤1 result interns nothing
+	callchain                       // unconditional, like func's sugar arm
+)
 
 // orderedTypeUse reads the chain five production families in the reference share: an optional
 // `typeuse`, then `(param …)*`, then `(result …)*`, then a tail.
@@ -1278,8 +1399,10 @@ func (p *parser) blockSignature() error {
 // others: the failure mode is a partial red, which reads as a missing feature rather than as a
 // disagreement.
 //
-// A nil tail means "whatever follows is the caller's business" — used by blockSignature, whose
-// callers read the body themselves.
+// **Every caller passes a tail**, which is not an accident of today's five: the tail is the body, and
+// the body must be read before the signature's operation is recorded (below). A nil tail would mean a
+// site whose interning order is decided by its caller instead of here, and that is the shape the
+// measurement caught.
 //
 // **The `(param)` arm takes a `valtype_list`, with no `bindidx`** (:756), which is the asymmetry
 // #63's grave was made of: `functype`'s third arm (:436) *is* the named sugar `LPAR PARAM bindidx
@@ -1287,12 +1410,32 @@ func (p *parser) blockSignature() error {
 // turn on it and all eight are folded, so the flat half of the family was the only half the suite
 // could see until #64. `(result …)` has no named form in any of the ten (compare :762 with :443),
 // so that half really is uniform.
-func (p *parser) orderedTypeUse(tail func() error) error {
+// **The signature's operation is recorded *after* the tail runs**, and that is the reference's
+// evaluation order rather than a convenience. Every arm of the family reads `let ft, es = $2 c in`
+// and *then* calls a helper: `$2 c` forces the whole right-recursive chain, whose innermost
+// production is the body (`instr_list`/`expr_list`/`if_`/`handler_block_body`), so a nested block's
+// implicit type is interned before the enclosing block's. The opposite of `func_fields`, where the
+// signature is `fst $2 c'` and the body `snd $2 c'`, evaluated in that order (:966-967). Both orders
+// are in the grammar and the difference decides the indices, so the tail is called before deferring
+// here and after it in funcField.
+//
+// The first draft of this function had the deferral in the right place and was defeated anyway,
+// because `blockSignature` passed a nil tail and its three callers read the body after returning —
+// so the sentence above was true of this function and false of the block family it was written for.
+// A comment describing an intent the code does not implement, which is the shape the grave-#63 note
+// upstairs calls *the defect stated as the rule*: print it, don't reason about it. See
+// TestNestedBlockTypeInternsBeforeItsEnclosingOne.
+func (p *parser) orderedTypeUse(kind signatureKind, tail func() error) error {
+	use, haveUse := typeRef{}, false
 	if p.atTypeuse() {
-		if err := p.typeuse(); err != nil {
+		var err error
+		use, err = p.typeuse()
+		if err != nil {
 			return err
 		}
+		haveUse = true
 	}
+	var ft funcType
 	// Two loops in this order, never one loop accepting either: the chains are right-recursive and
 	// a `(param)` may not follow a `(result)`. One loop taking both would admit a form the
 	// reference rejects, which is the accept-direction defect these vectors exist to catch.
@@ -1300,20 +1443,38 @@ func (p *parser) orderedTypeUse(tail func() error) error {
 		if err := p.lpar(kwParam); err != nil {
 			return err
 		}
-		if _, err := p.valtypeList(); err != nil {
+		vs, err := p.valtypeList()
+		if err != nil {
 			return err
 		}
+		ft.params = append(ft.params, vs...)
 		if err := p.rpar(); err != nil {
 			return err
 		}
 	}
-	if err := p.functypeResult(); err != nil {
+	rs, err := p.functypeResult()
+	if err != nil {
 		return err
 	}
-	if tail == nil {
-		return nil
+	ft.results = rs
+	if err := tail(); err != nil {
+		return err
 	}
-	return tail()
+	p.deferBlockSignature(kind, use, haveUse, ft)
+	return nil
+}
+
+// deferBlockSignature is deferSignature for the shared chain, differing only in the sugar arm's
+// conditional interning. See signatureKind, and declareBlockImplicit for why the condition exists.
+func (p *parser) deferBlockSignature(kind signatureKind, use typeRef, haveUse bool, ft funcType) {
+	switch {
+	case haveUse:
+		p.ctx.deferOp(func() error { return p.ctx.inlineFuncTypeExplicit(use, ft) })
+	case kind == blockchain:
+		p.ctx.deferOp(func() error { return p.ctx.declareBlockImplicit(ft) })
+	default:
+		p.ctx.deferOp(func() error { return p.ctx.declareImplicit(ft) })
+	}
 }
 
 // handlerBlock parses `handler_block` (:853-:864) — `try_table`'s block, whose body is preceded by
@@ -1323,13 +1484,12 @@ func (p *parser) orderedTypeUse(tail func() error) error {
 // two: a handler set missing an arm rejects a legal module, and that is the accept-direction class
 // decision 0007 says the suite cannot falsify.
 func (p *parser) handlerBlock() error {
-	if err := p.blockSignature(); err != nil {
-		return err
-	}
 	// The clause reader is shared with the folded arm (#64) — see handlerClauses. It was inline
 	// here while there was one caller; the folded `try_table` is the second, and two copies of a
-	// four-arm set is two places to lose an arm.
-	return p.handlerClauses()
+	// four-arm set is two places to lose an arm. It is passed *in* rather than called after, because
+	// `handler_block_body` is the innermost production of the chain `$2 c` forces (:792-:806) — see
+	// blockSignature for what depends on that.
+	return p.blockSignature(p.handlerClauses)
 }
 
 // foldedBlock parses `expr1`'s four block arms (parser.mly:826-834): `BLOCK`/`LOOP` over `block`,
@@ -1357,20 +1517,19 @@ func (p *parser) foldedBlock(leader keywordKind) error {
 	if _, err := p.labelingOpt(); err != nil {
 		return err
 	}
-	if err := p.blockSignature(); err != nil {
-		return err
-	}
+	var body func() error
 	switch leader {
 	case kwIf:
-		return p.ifBody()
+		body = p.ifBody
 	case kwTryTable:
-		return p.handlerClauses()
+		body = p.handlerClauses
 	default:
 		// `block` and `loop`, whose tail is a plain `instr_list` (:741/:748). Unreachable for
 		// anything else — expr1 dispatched here on exactly these four leaders — and a default
 		// rather than a fifth case because the caller owns the domain.
-		return p.instrList()
+		body = p.instrList
 	}
+	return p.blockSignature(body)
 }
 
 // ifBody parses `if_` (parser.mly:891-898), the folded `if`'s tail: any number of folded operands
@@ -1429,8 +1588,12 @@ func (p *parser) ifBody() error {
 // The 30 field-ordering vectors split across both readers — block.wast/loop.wast/if.wast reach
 // `blockSignature`, call_indirect.wast/return_call_indirect.wast reach this one — so a drift between
 // them is a drift the board would show only in one of two files.
+// **Its sugar arm interns unconditionally** (:847: `inline_functype c ft $loc($1)`), with no
+// `([], [t])` case — so `(call_indirect (result i32) …)` creates a type where `(block (result i32))`
+// does not. Hence callchain rather than blockchain, and see signatureKind for why that is a
+// parameter and not read off the tail.
 func (p *parser) callexprType() error {
-	return p.orderedTypeUse(p.exprList)
+	return p.orderedTypeUse(callchain, p.exprList)
 }
 
 // selectResults parses the `(result …)*` chain both `select` forms carry, then the given tail:
@@ -1442,9 +1605,13 @@ func (p *parser) callexprType() error {
 // written (the `b` in `true, snd $3 c @ ts, es`) because `select` unannotated is a different
 // instruction from `select (result t)` at validation time. This stratum reads both and distinguishes
 // neither — arity and typing are validation's.
+// **Nothing is interned here**, which is the other half of the arm's peculiarity and worth stating
+// beside the missing `(param)`: the results go into `select (Some ts)` directly (:678), never through
+// `inline_functype`. So `select` is the one member of the extended family that leaves the type space
+// alone entirely — not blockchain with an empty param list, and not a conditional intern either.
 func (p *parser) selectResults(tail func() error) error {
 	p.c.next() // SELECT
-	if err := p.functypeResult(); err != nil {
+	if _, err := p.functypeResult(); err != nil {
 		return err
 	}
 	return tail()
