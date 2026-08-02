@@ -120,6 +120,56 @@ func shapeOf(k keywordKind) (immShape, bool) {
 	return s, ok
 }
 
+// expr1NonPlainLeaders are `expr1`'s arms whose leader is *not* a `plaininstr` mnemonic
+// (parser.mly:813-834).
+//
+// `expr1` has ten arms. The first is `plaininstr expr_list`, whose leaders are the 589 mnemonics
+// the generated table already knows and `shapeOf` already answers. The other nine lead with one of
+// these seven tokens — SELECT, CALL_INDIRECT and RETURN_CALL_INDIRECT each having a sugar arm that
+// shares its leader. So `plaininstr`'s domain plus these seven **is** the set of keywords a folded
+// instruction can begin with, which is exactly what startsInstruction needs.
+//
+// Enumerated here, and the enumeration is legitimate for once: *the reference enumerates it*. This
+// is not a sample of a set whose membership is computed — it is seven arm heads written literally
+// in the grammar, transcribed. What makes the transcription trustworthy is that
+// TestExpr1LeadersMatchTheReference re-extracts the same arms from `parser.mly` and fails on drift,
+// per the authority-for-accept-direction-facts rule: an upstream arm added or a leader renamed
+// makes this list wrong in the direction no vector can see, so a machine re-reads the authority
+// rather than a reviewer re-reading my list.
+//
+// BLOCK, LOOP, IF and TRY_TABLE appear here *and* in `blockinstr` (:726-738). Not a duplicate: the
+// flat form ends at END and the folded form ends at the closing paren, two productions sharing a
+// keyword. Both start an instruction, which is the only question this set answers.
+var expr1NonPlainLeaders = map[keywordKind]bool{
+	kwSelect:             true, // :815, with selectexpr_results
+	kwCallIndirect:       true, // :817 and :819, the second defaulting the table index
+	kwReturnCallIndirect: true, // :821 and :823, likewise
+	kwBlock:              true, // :826
+	kwLoop:               true, // :828
+	kwIf:                 true, // :830, with if_block rather than block
+	kwTryTable:           true, // :833
+}
+
+// startsInstruction reports whether a keyword can begin an instruction — flat or folded.
+//
+// **The set is derived, not listed:** `shapeOf`'s domain is `plaininstr`'s 83 arms via the
+// generated keyword table, and expr1NonPlainLeaders is the reference's own seven-arm remainder. So
+// the predicate grows when the grammar does, rather than freezing at the moment of authorship —
+// *scope controls to the space*, and the space here is "every leader `instr1` has".
+//
+// Its purpose is the boundary's honesty. `bodyBoundary` reports *unimplemented* to mean "a later
+// stratum will read this", and that claim is only true for a token some production can actually
+// start with. `(func (local i32) (param i32))` contains no instructions at all, so promising an
+// instruction-body reader for its `(param` was the wrong-layer error in the flattering direction:
+// a module the reference rejects on the merits, parked in #64's bucket as though finishing #64
+// would make it legal. Twelve `func.wast` field-ordering vectors turned on exactly that (#70).
+func startsInstruction(k keywordKind) bool {
+	if _, ok := shapeOf(k); ok {
+		return true
+	}
+	return expr1NonPlainLeaders[k]
+}
+
 // plaininstr parses one flat instruction: a mnemonic and its immediates (parser.mly:556-654).
 //
 // Returns false without consuming anything when the cursor is not on a mnemonic this table

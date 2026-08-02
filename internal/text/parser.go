@@ -1357,26 +1357,44 @@ func (p *parser) expr() (bool, error) {
 // stray clause converge, and the reason is a measured input rather than a layering preference. The
 // masked-syntax-error worry about widening the terminator set is real but was not what settled it.
 //
-// **This check is a named member of a set that should be derived, and #70 tracks the derivation.**
-// The clauses are not special: they are the *sample* of instruction-position tokens no stratum will
-// ever read, and `(memory 1)`, `(then …)`, `(else …)`, `(global i32)` and a flat
-// `block (result i32) (param i32)` all still report `unimplemented` here while being unreachable in
-// every production. Fixing a set by listing its members is the shape *scope controls to the space*
-// forbids, so this is declared-and-tracked rather than left silent: the two vectors that exist are
-// answered now, the general predicate wants `expr1`'s arms to exist as code (#64), and #70 deletes
-// this list when it lands. Zero vectors turn on the rest, which is why it needs an issue and not a
-// bucket.
-var handlerClauseKinds = []keywordKind{kwCatch, kwCatchRef, kwCatchAll, kwCatchAllRef}
-
+// **The set is now derived rather than listed, which is #70, and the "zero vectors" claim that
+// filed it was wrong by twelve.** The handler clauses were only a *sample* of the
+// instruction-position tokens no stratum will ever read; the general predicate is
+// startsInstruction, `shapeOf`'s domain plus `expr1`'s seven non-plaininstr leaders. A `(` whose
+// keyword cannot start any instruction is `unexpected token` on the merits, and the clauses fall
+// out of that without being named.
+//
+// I filed #70 asserting no vector turned on the generalization, having probed five spellings I
+// thought of — `(memory 1)`, `(then …)`, `(else …)`, `(global i32)`, a flat
+// `block (result i32) (param i32)` — and found none in the corpus. Measured by patching this
+// function and reading the board instead: **1941 → 1953 pass, 79 → 67 fail.** The twelve are
+// `func.wast`'s field-ordering vectors — six type-use permutations at :559 :566 :573 :580 :587
+// :594 and six field-after-body forms at :937 :941 :945 :949 :953 :957, all `unexpected token`,
+// itemized by line at spec_test.go's textFailCeiling. They are the class the five probes
+// could not reach, because I was looking for *unreachable keywords* and these are **reachable
+// keywords in an unreachable position**: `(func (result i32) (param i32) …)`,
+// `(func (local i32) (param i32))`, `(func (nop) (local i32))`. `func_body` is `instr_list`
+// (:1017), which cannot begin with `(param`/`(local`/`(result`/`(type`, so each is a plain syntax
+// error — and `(func (local i32) (param i32))` contains no instructions at all, so promising an
+// instruction-body reader for it was the wrong-layer error with a board cost.
+//
+// The lesson is the second-order one, and it was already in CLAUDE.md when I broke it: a
+// "zero vectors" figure is exactly as falsifiable as any other board claim, and *the board is the
+// instrument*. I measured with my imagination and quoted the result as a finding.
+//
+// Position-dependence comes free and is worth naming, because it is what makes the check narrow
+// enough to be safe: this function only runs where an instruction was required, so
+// `(func (param i32))` still parses — a lone `(param …)` is legal in `func_fields`, and only after
+// a result/local/body does it become misplaced. Nothing here knows about field ordering; the
+// caller's position does.
 func (p *parser) bodyBoundary() error {
 	if p.c.at(RParen) {
 		return p.unexpected()
 	}
 	if p.c.at(LParen) {
-		for _, k := range handlerClauseKinds {
-			if p.c.peek2Keyword(k) {
-				return p.unexpectedAt(p.c.peek2())
-			}
+		kw := p.c.peek2()
+		if kw.Kind != KeywordTok || !startsInstruction(kw.Keyword) {
+			return p.unexpectedAt(kw)
 		}
 	}
 	t := p.c.peek()
