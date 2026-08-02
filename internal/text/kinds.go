@@ -96,6 +96,14 @@ const (
 	kwCatchRef keywordKind = "CATCH_REF"
 	kwCatchAll keywordKind = "CATCH_ALL"
 
+	// `expr1`'s non-plaininstr leaders (parser.mly:815-823) that are not already above.
+	// BLOCK/LOOP/IF/TRY_TABLE are shared with `blockinstr` and declared with the block family;
+	// these three are folded-only, and they are named here rather than at their use site because
+	// a keyword kind mistyped as a string literal is a branch that is silently never taken.
+	kwSelect             keywordKind = "SELECT"
+	kwCallIndirect       keywordKind = "CALL_INDIRECT"
+	kwReturnCallIndirect keywordKind = "RETURN_CALL_INDIRECT"
+
 	// CATCH_ALL_REF is the fourth handler arm (:805). Named for completeness of the
 	// `handler_block_body` production rather than because a vector reaches it — a handler set
 	// missing one arm rejects a legal module, which is the accept-direction class no
@@ -120,4 +128,5 @@ var parserKinds = []keywordKind{
 	kwTag, kwLocal, kwOffset, kwItem, kwDeclare,
 	kwBlock, kwLoop, kwIf, kwElse, kwEnd, kwTryTable,
 	kwCatch, kwCatchRef, kwCatchAll, kwCatchAllRef,
+	kwSelect, kwCallIndirect, kwReturnCallIndirect,
 }

@@ -9,11 +9,23 @@ import (
 )
 
 // reProductionHead matches a menhir production's header line: a nonterminal at column 0
-// followed by ` :`. Used to bound one production's arms without relying on how many blank
-// lines happen to separate it from the next — `plaininstr` is followed by *two* at bdd7164
-// and a single-blank-line bound would have read into `laneidx`, which is the unbounded-search
-// defect utf8position_test.go's letBody was written to avoid.
-var reProductionHead = regexp.MustCompile(`(?m)^[a-z_][a-z_0-9]* :$`)
+// followed by ` :`, and optionally a trailing comment. Used to bound one production's arms
+// without relying on how many blank lines happen to separate it from the next — `plaininstr` is
+// followed by *two* at bdd7164 and a single-blank-line bound would have read into `laneidx`,
+// which is the unbounded-search defect utf8position_test.go's letBody was written to avoid.
+//
+// **The trailing-comment alternative is a fix, not decoration.** This was `^[a-z_][a-z_0-9]* :$`,
+// which misses all six headers the reference annotates — `expr`, `expr1`, `func_fields_import`,
+// `func_fields_import_result`, `inline_module`, `inline_module1`, each written
+// `name :  /* Sugar */`. Two consequences, and the second is the one worth naming: a *lookup* of a
+// commented production found nothing, and a *bound* on the production before one ran straight
+// through it. The existing caller was unaffected only by luck — `plaininstr` happens to be followed
+// by `laneidx :`, uncommented — so the reader has been carrying a hole that no control could see
+// until `expr1` became the first caller to land on it. Found by the vacuity floor in
+// TestExpr1LeadersMatchTheReference firing on its first run, which is the floor doing precisely the
+// job *a comparison against an empty set succeeds* describes: without it the new control would have
+// extracted zero arms and agreed with everything.
+var reProductionHead = regexp.MustCompile(`(?m)^[a-z_][a-z_0-9]* :(\s*/\*.*\*/)?$`)
 
 // reMenhirComment strips `/* Sugar */` and its siblings from an arm's head.
 var reMenhirComment = regexp.MustCompile(`/\*.*?\*/`)
@@ -26,15 +38,17 @@ var reMenhirComment = regexp.MustCompile(`/\*.*?\*/`)
 // that is really the reader's.
 func productionArms(t *testing.T, src, nonterminal string) []string {
 	t.Helper()
-	head := "\n" + nonterminal + " :\n"
-	i := strings.Index(src, head)
-	if i < 0 {
+	// The header may carry a trailing comment, so it is matched rather than string-searched — see
+	// reProductionHead for the hole this closed.
+	reHead := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(nonterminal) + ` :(\s*/\*.*\*/)?$`)
+	loc := reHead.FindStringIndex(src)
+	if loc == nil {
 		t.Fatalf("parser.mly no longer defines the `%s` production; every comparison below "+
 			"would be over an empty set, which agrees with anything", nonterminal)
 	}
-	rest := src[i+len(head):]
-	if loc := reProductionHead.FindStringIndex(rest); loc != nil {
-		rest = rest[:loc[0]]
+	rest := src[loc[1]:]
+	if next := reProductionHead.FindStringIndex(rest); next != nil {
+		rest = rest[:next[0]]
 	}
 
 	var arms []string
@@ -202,6 +216,125 @@ func TestPlaininstrShapesMatchTheReference(t *testing.T) {
 		if !set["idx idx"] || !set["idx"] {
 			t.Errorf("%s's two arms are %q, want one `idx idx` and one `idx`", kind, seqs)
 		}
+	}
+}
+
+// TestExpr1LeadersMatchTheReference re-extracts `expr1`'s arms and checks expr1NonPlainLeaders
+// against them, in both directions.
+//
+// The list is a transcription of seven arm heads (parser.mly:813-834), and a transcription is a
+// claim. This repo's measured hand-transcription error rate is seven wrong citations in twelve
+// items, so the list is machine-checked against the same authority it came from rather than
+// reviewed. Both directions matter and they fail differently:
+//
+//   - a leader the reference has and the list lacks makes `startsInstruction` too *narrow*, so
+//     `bodyBoundary` rejects a legal folded form as `unexpected token` — accept-direction, and no
+//     assert_malformed can ever see it;
+//   - a leader the list has and the reference lacks makes it too *wide*, so a malformed module gets
+//     `unimplemented` and parks in #64's bucket unanswerable — which is the defect #70 fixed, and
+//     it would be a regression wearing the shape of the fix.
+//
+// Vacuity: `expr1` has ten arms at bdd7164, and a comparison against an empty set agrees perfectly.
+// A reader that stopped working — a renamed production, a changed indentation — yields no arms, and
+// every loop below then passes by asking nothing. The floor is the control on the control.
+func TestExpr1LeadersMatchTheReference(t *testing.T) {
+	src := testenv.RequireSpecRef(t, refPath(testenv.RefParserMLY))
+	arms := productionArms(t, src, "expr1")
+
+	// 10 arms at bdd7164: `plaininstr expr_list`, SELECT, CALL_INDIRECT ×2, RETURN_CALL_INDIRECT ×2,
+	// BLOCK, LOOP, IF, TRY_TABLE. A floor rather than an equality, so an arm added upstream fails
+	// the direction checks below with a real message instead of failing here with a count.
+	if len(arms) < 8 {
+		t.Fatalf("extracted %d expr1 arms, want >=8 (10 at bdd7164); the extractor is not reading "+
+			"the production and every check below would agree with an empty set", len(arms))
+	}
+
+	// The reference's leaders, minus the one lowercase (nonterminal) arm — `plaininstr expr_list`,
+	// whose leaders are the mnemonics shapeOf already answers.
+	refLeaders := map[keywordKind]bool{}
+	sawPlaininstr := false
+	for _, arm := range arms {
+		leader := strings.Fields(arm)[0]
+		if leader == "plaininstr" {
+			sawPlaininstr = true
+			continue
+		}
+		if leader != strings.ToUpper(leader) {
+			t.Errorf("expr1 has an arm led by the nonterminal %q, which this control does not "+
+				"model; startsInstruction cannot answer for a production it has not read", leader)
+			continue
+		}
+		refLeaders[keywordKind(leader)] = true
+	}
+	if !sawPlaininstr {
+		t.Error("expr1 no longer has a `plaininstr expr_list` arm; startsInstruction's whole " +
+			"first branch — shapeOf's domain — rests on that arm existing")
+	}
+	if len(refLeaders) < 5 {
+		t.Fatalf("only %d non-plaininstr leaders extracted, want >=5 (7 at bdd7164)", len(refLeaders))
+	}
+
+	for kind := range refLeaders {
+		if !expr1NonPlainLeaders[kind] {
+			t.Errorf("the reference gives expr1 an arm led by %s and expr1NonPlainLeaders omits "+
+				"it; startsInstruction is too narrow, so bodyBoundary rejects a legal folded "+
+				"`(%s …)` as `unexpected token` — an accept-direction defect no vector can catch",
+				kind, strings.ToLower(string(kind)))
+		}
+	}
+	for kind := range expr1NonPlainLeaders {
+		if !refLeaders[kind] {
+			t.Errorf("expr1NonPlainLeaders names %s, which leads no expr1 arm in the reference; "+
+				"startsInstruction is too wide, so a malformed `(%s …)` gets `unimplemented` and "+
+				"parks in #64's bucket unanswerable — the defect #70 fixed, regrown",
+				kind, strings.ToLower(string(kind)))
+		}
+	}
+}
+
+// TestStartsInstructionIsTheUnionOfBothArms pins startsInstruction against its two sources
+// directly, which is the half the drift control above cannot reach.
+//
+// The control above checks the *list*. This checks the *predicate*, and they are not the same
+// assertion: a correct list wired into a predicate that ignored it would pass the first and fail
+// here. Scoped to the space on the plaininstr side by reflecting over the generated keyword table's
+// kinds rather than naming mnemonics — the domain is derived, per decision 0006's ruling.
+func TestStartsInstructionIsTheUnionOfBothArms(t *testing.T) {
+	kinds := map[keywordKind]bool{}
+	for _, kind := range keywords {
+		kinds[kind] = true
+	}
+	if len(kinds) < 100 {
+		t.Fatalf("only %d kinds in the generated table, want >=100 (173 at bdd7164); the sweep "+
+			"below would be over almost nothing", len(kinds))
+	}
+
+	plain, folded, neither := 0, 0, 0
+	for kind := range kinds {
+		_, isPlain := shapeOf(kind)
+		want := isPlain || expr1NonPlainLeaders[kind]
+		if got := startsInstruction(kind); got != want {
+			t.Errorf("startsInstruction(%s) = %v, want %v (shapeOf %v, expr1 leader %v)",
+				kind, got, want, isPlain, expr1NonPlainLeaders[kind])
+		}
+		switch {
+		case isPlain:
+			plain++
+		case expr1NonPlainLeaders[kind]:
+			folded++
+		default:
+			neither++
+		}
+	}
+
+	// Every region non-empty and plausibly sized, per the vacuity rule: a predicate that answered
+	// `true` for everything, or `false` for everything, would satisfy the loop above only if one of
+	// these is zero — and a per-region floor is what a plain non-nil check misses. 81 plain / 7
+	// folded / 85 neither at bdd7164, printed rather than hand-counted.
+	if plain < 70 || folded < 5 || neither < 50 {
+		t.Errorf("partition is %d plain / %d folded-only / %d neither, want >=70/>=5/>=50 "+
+			"(81/7/85 at bdd7164); a region at zero means the predicate is constant over the "+
+			"table and the comparison above is vacuous on that side", plain, folded, neither)
 	}
 }
 

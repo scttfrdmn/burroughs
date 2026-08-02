@@ -576,6 +576,45 @@ weakly-ordered platform.
   written before it* — and so does a retirement.
 
 ### Fixed
+- **The instruction boundary now derives what may start an instruction, instead of enumerating one
+  arm of it (#70) — and the "zero vectors turn on this" forecast was wrong by 12.** `bodyBoundary`
+  admitted a `(` only when the keyword after it was a `try_table` handler clause, and answered
+  `unimplemented: instruction body` to every other folded form. That is a scoping decision made
+  from the one production the author happened to be reading: the space is `expr1`
+  (parser.mly:813–834), whose 10 arms are `plaininstr expr_list` plus nine folded leaders across
+  seven tokens. Replaced by `startsInstruction`, the union of `shapeOf`'s domain and
+  `expr1NonPlainLeaders`. **Board 1941 → 1953 pass, 79 → 67 fail**, all 12 being `func.wast`
+  field-ordering vectors — six type-use permutations (`:559`–`:594`) and six field-after-body
+  forms (`:937`–`:957`) — which answer because `func_body` is `instr_list` (:1017) and cannot begin
+  with `(param`/`(local`/`(result`/`(type`. Nothing withdrawn, no bucket grown, checked per file.
+  Position-dependence comes free: the boundary only runs where an instruction was *required*, so
+  `(func (param i32))` still parses.
+
+  The forecast is the lesson. #70 said "board effect: none" on the strength of five spellings tried
+  at a Go prompt, and *cheap is a grammar claim* — a board figure is as falsifiable as any other and
+  this one was asserted without the board. The class the probes could not reach is **reachable
+  keywords in an unreachable position**: every one of the 12 leads with a keyword the parser knows,
+  so the interesting inputs are ordinary tokens where no instruction may start, and you do not
+  stumble onto those by inventing spellings. Corrected on the issue before landing, measured by
+  patching the boundary and reading the board.
+
+  Two controls, each falsified separately because they assert different things:
+  `TestExpr1LeadersMatchTheReference` checks the *list* against `parser.mly` in both directions
+  (too narrow is an accept-direction defect no `assert_malformed` can catch; too wide regrows #70),
+  and `TestStartsInstructionIsTheUnionOfBothArms` checks the *predicate* is wired to it, reflecting
+  over the generated keyword table rather than naming mnemonics. Dropping `TRY_TABLE` fails only the
+  first; making the predicate ignore a correct list fails only the second.
+- **A latent hole in the shared production extractor, found by a vacuity floor rather than by a
+  failing assertion.** `reProductionHead` was `^[a-z_][a-z_0-9]* :$`, which misses all six headers
+  the reference annotates — `expr`, `expr1`, `func_fields_import`, `func_fields_import_result`,
+  `inline_module`, `inline_module1`, each written `name :  /* Sugar */`. So a *lookup* of a commented
+  production found nothing and a *bound* on the production before one ran straight through it. The
+  one pre-existing caller was unaffected purely by luck: `plaininstr` is followed by an uncommented
+  `laneidx :`. `TestPlaininstrShapesMatchTheReference` stays green with the narrow regex restored,
+  which is the proof the hole was invisible. What caught it was `TestExpr1LeadersMatchTheReference`'s
+  non-empty floor firing on its first run — *a comparison against an empty set succeeds*, and
+  without the floor the new control would have extracted zero arms and agreed with everything,
+  green and asserting nothing.
 - **A grave: the block label readers compared raw lexemes, and `unparam` was the thing that found
   it.** `labeling_opt`'s named arm and `labeling_end_opt` are both `| bindidx` (parser.mly:515/:523),
   which is `| VAR { var $1 $sloc }` — the same `var` helper (:48–51) that `Utf8.decode`s every other

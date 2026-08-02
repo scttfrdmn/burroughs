@@ -1026,7 +1026,39 @@ func TestPhase1Files(t *testing.T) {
 	// bucket's members off their spelling is the same manoeuvre as reading a test's coverage off its
 	// case labels, and it produced a number that was wrong by exactly the vectors the issue was
 	// chartered to fix. Check the Scope list, not the mnemonics.
-	const textFailCeiling = 79
+	// # 67 after the derived instruction boundary (#70)
+	//
+	// **79 → 67, and the 12 are the correction of a "zero vectors" claim I made from five
+	// hand-picked probes.** #70's issue said "board effect: none" on the strength of trying five
+	// spellings at a Go prompt and generalizing; the figure was wrong by 12, and it was wrong in
+	// the way the *cheap-is-a-grammar-claim* rule names: a board figure asserted without the
+	// board. What the five probes could not reach is the class itself — **reachable keywords in
+	// an unreachable position**. Every one of the 12 leads with a keyword the parser knows
+	// (`type`, `param`, `result`, `local`), which is exactly why hand-picking failed: the
+	// interesting inputs are not exotic tokens, they are ordinary ones where no instruction may
+	// start, and you do not stumble onto those by inventing spellings.
+	//
+	// The 12, all `unexpected token`, all in func.wast, itemized from the engine's own text:
+	//
+	//	 6  :559 :566 :573 :580 :587 :594   type-use ordering — `(func (type $sig) (result i32)
+	//	                                    (param i32) …)` and its five permutations
+	//	 6  :937 :941 :945 :949 :953 :957   field-after-body and misordered fields — `(func (nop)
+	//	                                    (local i32))`, `(func (local i32) (param i32))`, …
+	//
+	// They answer because `func_body` is `instr_list` (parser.mly:1017), which cannot begin with
+	// `(param`/`(local`/`(result`/`(type`. The old boundary asked "is this `(` followed by a
+	// handler clause?" and said `unimplemented` to everything else; the derived boundary asks
+	// "can an instruction start here?" — `startsInstruction`, the union of `plaininstr`'s
+	// mnemonics and `expr1`'s nine non-plain arms — and a `(param` in instruction position is
+	// now `unexpected token` on the merits. Position-dependence comes free: the boundary only
+	// runs where an instruction was *required*, so `(func (param i32))` still parses.
+	//
+	// **Nothing was withdrawn and no bucket grew**, checked per file rather than on the total:
+	// the only line that moved was `func.wast: 6/23 → 18/23`. `unexpected token` 51 → 39;
+	// `inline function type` 24, `unknown label` 2, `malformed mutability` 1, `unknown type` 1
+	// all unmoved. What remains in func.wast is 4 `inline function type` and 1 `unknown type`,
+	// both #64's.
+	const textFailCeiling = 67
 	if textFail > textFailCeiling {
 		t.Errorf("text failures rose to %d, ceiling %d — either the reader regressed on "+
 			"vectors it used to answer, or the corpus moved", textFail, textFailCeiling)
@@ -1080,7 +1112,15 @@ func TestPhase1Files(t *testing.T) {
 	// worth naming separately: they are vectors the *suite* had all along and the *board* could not
 	// point at, because a bucket keyed on the expected string cannot distinguish "we have not
 	// written that reader" from "we are wrong about which reader would answer it".
-	const passFloor = 1941
+	// **1953 = 1941 + 12 after the derived instruction boundary (#70)**, gross again — nothing
+	// withdrawn, checked per file. All 12 are func.wast field-ordering vectors, itemized by line
+	// at textFailCeiling above along with why the "zero vectors" forecast was wrong.
+	//
+	// Worth recording as a *measurement* rather than as a sum: the 12 were found by patching the
+	// boundary and reading the board, after a hand-probe of five spellings said none existed.
+	// Two claims of mine were falsified by running the check instead of reasoning about it, and
+	// this is the second — the first was in #63's label readers. The board is the instrument.
+	const passFloor = 1953
 	if totalPass < passFloor {
 		t.Errorf("board pass count %d fell below floor %d", totalPass, passFloor)
 	}
