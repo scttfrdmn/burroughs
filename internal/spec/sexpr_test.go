@@ -128,9 +128,21 @@ func TestParseComments(t *testing.T) {
 // could not traverse. ';' is a delimiter, so the atom loop consumed zero bytes
 // and errored on its own delimiter.
 //
-// This file is unsupported for *execution* — nothing here classifies to a
-// runnable command — but it must parse, because a parse error and an
-// unsupported command are different numbers on the board.
+// The grave's own assertion is that this **parses**, because a parse error and a scored
+// command are different numbers on the board and the reader must be able to traverse a file
+// it does not interpret.
+//
+// **The verdict half was re-pointed by #69, not patched.** It used to read `r.Unsupported !=
+// 1 || r.Total() != 0` — "nothing here classifies to a runnable command" — which was true
+// while a bare `(module <wat body>)` had no retrievable source. It is now a scored
+// KindModuleText, so the old assertion would have been a test asserting the absence of a
+// feature that had arrived. The grave's subject (';' inside an annotation) is untouched; only
+// what the harness *does* with the form afterwards changed, so the parse assertion stays
+// verbatim and the verdict assertion follows the form's new kind.
+//
+// It runs through RunWith rather than Run: the form needs CapWatReader now, and Run declares
+// nothing, so Run would panic here by design. That panic is guard 1 doing its job and is
+// asserted directly in TestBareModuleNeedsWatReader.
 func TestParseAnnotationTokenSoup(t *testing.T) {
 	src := `
 (module
@@ -149,9 +161,15 @@ func TestParseAnnotationTokenSoup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-	r := s.Run(func([]byte) error { return nil })
-	if r.Unsupported != 1 || r.Total() != 0 {
-		t.Errorf("got %d unsupported, %d executed; want 1/0", r.Unsupported, r.Total())
+	r := s.RunWith(
+		func([]byte) error { return nil },
+		func([]byte) error { return nil },
+		func(error) bool { return false },
+		CapWatReader,
+	)
+	if r.Pass != 1 || r.Unsupported != 0 {
+		t.Errorf("got %d pass, %d unsupported; want 1/0 — the bare module form is scored "+
+			"since #69", r.Pass, r.Unsupported)
 	}
 }
 
@@ -316,3 +334,119 @@ func TestSubstringMatching(t *testing.T) {
 type errString string
 
 func (e errString) Error() string { return string(e) }
+
+// TestNodeSpanIsExactSource pins the span retention that made bare module forms askable
+// (#69), and it pins it as an **equality against the source text**, not as a non-empty check.
+//
+// The distinction is the vacuity rule. A span that is merely non-empty, or merely contains the
+// form, would satisfy a looser assertion while handing the wat reader a truncated module or one
+// with a neighbour's trailing bytes — and the reader would then report a *syntax* error for a
+// module the suite calls valid, which reads on the board as an engine defect. So each case
+// states the exact bytes expected, and nested forms are checked too: a list's span has to close
+// on its own paren rather than on the outermost one.
+func TestNodeSpanIsExactSource(t *testing.T) {
+	src := []byte("(module (func $f) (memory 1))\n(assert_return (invoke \"f\"))")
+	nodes, err := newParser(src).parseAll()
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(nodes) != 2 {
+		t.Fatalf("got %d top-level forms, want 2", len(nodes))
+	}
+	if got, want := string(nodes[0].span(src)), "(module (func $f) (memory 1))"; got != want {
+		t.Errorf("top-level span = %q, want %q", got, want)
+	}
+	if got, want := string(nodes[1].span(src)), `(assert_return (invoke "f"))`; got != want {
+		t.Errorf("second form span = %q, want %q", got, want)
+	}
+	// Nested: each child closes on its own paren. This is the half a "span contains the
+	// form" assertion would miss.
+	kids := nodes[0].list
+	if len(kids) != 3 {
+		t.Fatalf("got %d children, want 3 (module, func, memory)", len(kids))
+	}
+	for i, want := range []string{"module", "(func $f)", "(memory 1)"} {
+		if got := string(kids[i].span(src)); got != want {
+			t.Errorf("child %d span = %q, want %q", i, got, want)
+		}
+	}
+}
+
+// TestBareModuleSourceRoundTrips is the control that matters for the board: the span handed to
+// the wat reader must be a module the reader can actually read.
+//
+// A span off by one byte in either direction still *looks* like a module — `(module (func)` and
+// `(module (func))` differ by one character — and the failure would surface as a syntax error
+// attributed to the engine. So this asserts the retained source parses as wat, which is the
+// property the 2130 newly-scored passes depend on.
+func TestBareModuleSourceRoundTrips(t *testing.T) {
+	src := []byte("(module (func $f (param i32) (result i32) (local.get 0)))\n(module (memory 1))")
+	s, err := Parse("t.wast", src)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(s.Commands) != 2 {
+		t.Fatalf("got %d commands, want 2", len(s.Commands))
+	}
+	for i, c := range s.Commands {
+		if c.Kind != KindModuleText {
+			t.Errorf("command %d kind = %v, want KindModuleText", i, c.Kind)
+			continue
+		}
+		if c.Needs != CapWatReader {
+			t.Errorf("command %d needs %q, want %q", i, c.Needs, CapWatReader)
+		}
+		// Re-read the retained source as an s-expression. A truncated or over-long span
+		// fails here, where a length check would not.
+		re, err := newParser(c.Source).parseAll()
+		if err != nil {
+			t.Errorf("command %d source %q does not re-parse: %v", i, c.Source, err)
+			continue
+		}
+		if len(re) != 1 || re[0].head() != "module" {
+			t.Errorf("command %d source %q re-parsed to %d forms, want one module",
+				i, c.Source, len(re))
+		}
+	}
+}
+
+// TestScriptModuleFormsAreNotWatBodies pins the classification error that manufactured 9 of
+// #69's first 22 failures.
+//
+// `definition` and `instance` are *script* grammar (parser.mly:1417/:1439) — `definition` sits
+// outside `module_`, and `instance` has no fields at all — so handing either to the wat reader
+// invents a red out of a harness mistake. The reader is right to reject them; it was never
+// asked a fair question. *Gates never manufacture malformedness* generalizes past gates.
+//
+// Scoped to both forms *and* to the plain body, because the risk runs both ways: a predicate
+// that excluded too much would silently drop real modules back into `unsupported`, which is
+// the invisibility this whole issue exists to end.
+func TestScriptModuleFormsAreNotWatBodies(t *testing.T) {
+	cases := []struct {
+		src  string
+		want Kind
+	}{
+		{"(module definition (memory 65536))", KindUnsupported},
+		{"(module definition $M (global (export \"g\") (mut i32) (i32.const 0)))", KindUnsupported},
+		{"(module instance $I1 $M)", KindUnsupported},
+		{"(module instance)", KindUnsupported},
+		// The accept direction: an ordinary body, and one with a $name, stay scorable.
+		{"(module (memory 1))", KindModuleText},
+		{"(module $M (memory 1))", KindModuleText},
+		// A quote form is still a quote form — the new keyword check must not shadow it.
+		{`(module quote "(func)")`, KindModuleQuote},
+		{`(module binary "\00asm")`, KindModuleBinary},
+	}
+	for _, c := range cases {
+		s, err := Parse("t.wast", []byte(c.src))
+		if err != nil {
+			t.Fatalf("Parse(%q): %v", c.src, err)
+		}
+		if len(s.Commands) != 1 {
+			t.Fatalf("Parse(%q) gave %d commands, want 1", c.src, len(s.Commands))
+		}
+		if got := s.Commands[0].Kind; got != c.want {
+			t.Errorf("%s\n  classified %v, want %v", c.src, got, c.want)
+		}
+	}
+}

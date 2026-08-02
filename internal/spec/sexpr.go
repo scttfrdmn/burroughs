@@ -26,7 +26,31 @@ type node struct {
 	str  []byte // set for string literals
 	isS  bool   // true if this node is a string literal (str may be empty)
 	line int    // 1-based source line, for diagnostics that name a test
+
+	// start and end are the node's byte extent in the source: start at its first byte,
+	// end one past its last. For a list that is the `(` and the byte after the `)`.
+	//
+	// **This is what makes a bare `(module <wat body>)` askable at all** (#69). A quote
+	// form hands its source over as a string literal; a bare body does not, and until
+	// this field existed the s-expression reader had *consumed* the text into nodes with
+	// no way back — so 1119 must-succeed modules across 57 files were recorded
+	// `KindUnsupported`, against 7 reachable quote modules. The wat reader was being
+	// scored for the accept direction against 7 vectors out of 1126.
+	//
+	// Retained on every node rather than on module forms only. Deriving the span at the
+	// one call site that needs it would mean re-lexing to find the matching paren — a
+	// second reader of the same grammar, which is the drift shape #33 was filed about.
+	// The extent is known exactly once, while the node is being read, and it is recorded
+	// there.
+	start, end int
 }
+
+// span returns the node's source text, given the source it was parsed from.
+//
+// Callers pass the same src the parser was built on; the node does not retain it, because a
+// node holding a slice of the whole file would make every node a reason to keep the file
+// alive. Script.src is the one retention point (see Parse).
+func (n node) span(src []byte) []byte { return src[n.start:n.end] }
 
 func (n node) isList() bool { return n.list != nil }
 
@@ -114,6 +138,10 @@ func (p *parser) parseNode() (node, error) {
 		return node{}, p.errf("unexpected end of input")
 	}
 	line := p.line
+	// The node's first byte, captured before any of the arms advance. Every return below
+	// pairs it with p.off, which is one past the node's last byte at that point — so the
+	// extent comes from the reader's own position rather than from a second scan.
+	start := p.off
 	switch c := p.src[p.off]; c {
 	case '(':
 		p.off++
@@ -126,7 +154,7 @@ func (p *parser) parseNode() (node, error) {
 			}
 			if p.src[p.off] == ')' {
 				p.off++
-				return node{list: items, line: line}, nil
+				return node{list: items, line: line, start: start, end: p.off}, nil
 			}
 			item, err := p.parseNode()
 			if err != nil {
@@ -141,7 +169,7 @@ func (p *parser) parseNode() (node, error) {
 		if err != nil {
 			return node{}, err
 		}
-		return node{str: b, isS: true, line: line}, nil
+		return node{str: b, isS: true, line: line, start: start, end: p.off}, nil
 	case ';':
 		// A lone ';' that skipSpace did not consume — it is neither ';;' nor
 		// part of '(;'. Illegal in wast proper, but the annotations proposal
@@ -150,16 +178,15 @@ func (p *parser) parseNode() (node, error) {
 		// one-byte atom so the reader can traverse files it does not interpret;
 		// parsing and understanding are separate concerns here.
 		p.off++
-		return node{atom: ";", line: line}, nil
+		return node{atom: ";", line: line, start: start, end: p.off}, nil
 	default:
-		start := p.off
 		for p.off < len(p.src) && !isDelim(p.src[p.off]) {
 			p.off++
 		}
 		if p.off == start {
 			return node{}, p.errf("unexpected byte %#x", c)
 		}
-		return node{atom: string(p.src[start:p.off]), line: line}, nil
+		return node{atom: string(p.src[start:p.off]), line: line, start: start, end: p.off}, nil
 	}
 }
 
