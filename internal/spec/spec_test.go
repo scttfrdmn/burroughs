@@ -1209,26 +1209,40 @@ func TestPhase1Files(t *testing.T) {
 	// grammar defects and one phase-v3 form, all accept-direction, none of them visible
 	// before this admission:
 	//
-	//	10  `lane_imms`, parser.mly:661   simd_{load,store}{8,16,32,64}_lane.wast and
-	//	                                  simd_memory-multi.wast. `v128.load8_lane 0 (…)` —
+	//	 9  `lane_imms`, parser.mly:661   simd_{load,store}{8,16,32,64}_lane.wast:4 and
+	//	   (#76)                          simd_memory-multi.wast:5. `v128.load8_lane 0 (…)` —
 	//	                                  our memarg reads the leading `0` as a memory index,
 	//	                                  but it is the bare `| laneidx` arm (:673). The
 	//	                                  reference multiplies the production out into five
 	//	                                  arms "to avoid spurious conflicts"; telling them
 	//	                                  apart needs lookahead for a *second* nat.
-	//	 2  `elem_list`, parser.mly:1155  elem.wast:539/:573. `(elem (ref func) …)` — the
-	//	                                  offset-sugar branch tests `at(LParen) &&
-	//	                                  !peek2Keyword(kwItem)`, which claims a `(ref …)` is
-	//	                                  an offset and shadows the `reftype elemexpr_list`
-	//	                                  arm entirely.
+	//	 3  `elem_list`, parser.mly:1155  elem.wast:539/:573 and array.wast:219. `(elem (ref
+	//	   (#75)                          $b) …)` — the offset-sugar branch tests
+	//	                                  `at(LParen) && !peek2Keyword(kwItem)`, which claims
+	//	                                  a `(ref …)` is an offset and shadows the `reftype
+	//	                                  elemexpr_list` arm entirely.
 	//	 1  annotations.wast:1            `empty annotation id` — the lexer's, on a module
-	//	                                  whose first field is `(@a …)`. Annotations are
-	//	                                  #55's.
+	//	   (#55)                          whose first field is `(@a …)`.
 	//
 	// The two grammar defects are engine fixes and are **not** in this PR: #69 is
 	// board-shape work and travels alone, per *board-shape changes travel as their own
 	// decisions*. They are the work plan this admission exists to produce, and each is
 	// filed with the arm it misreads.
+	//
+	// **The partition above is the corrected one, and the correction is the lesson.** It
+	// first read 10 / 2 / 1, with the tenth lane vector hedged as "one further `simd_*_lane`
+	// file". There is no tenth: the vector is `array.wast:219`, a `(elem $e (ref $bvec) …)`
+	// in a GC module, and it belongs to `elem_list`. Confirmed by running the reader —
+	// `(module (type $b (array i8)) (elem $e (ref $b) (ref.null $b)))` errors while `(elem $e
+	// func)` returns nil — after *printing the bucket's members*, which is what should have
+	// produced the partition in the first place.
+	//
+	// *Bucket size estimates the reward, not the job* says partition by mechanism before
+	// estimating. The failure here was one level in: the partition was made by mechanism, but
+	// the file set for each mechanism came from memory of where the defect lived rather than
+	// from the board. That is *derive the domain, never enumerate it* applied to the work plan
+	// instead of to the engine — and an enumerated file set has a blind spot exactly the shape
+	// of the defect one did not know was shared. Print the bucket; do not recall it.
 	const textFailCeiling = 41
 	if textFail > textFailCeiling {
 		t.Errorf("text failures rose to %d, ceiling %d — either the reader regressed on "+
