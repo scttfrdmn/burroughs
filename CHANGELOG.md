@@ -20,6 +20,50 @@ weakly-ordered platform.
 
 *Implements contract v0.1.*
 
+### Fixed
+- **`scanAnnotBody` had an arm the reference's `annot` rule does not have, and lacked one it does**
+  ([#83](https://github.com/scttfrdmn/burroughs/issues/83)). `annotations.wast:1` — a **must-succeed**
+  module — was rejected with `empty annotation id`, taking the whole file's leading vector with it.
+  **Board 4161 → 4162 pass, 2 → 1 fail**; `annotations.wast` 70/71 → **71/71**. The remaining board
+  failure is `malformed mutability` in `binary-gc.wast`, a `(module binary ...)` vector, so the *text*
+  partition of the fail count is now **0** and `textFailCeiling` asserts it.
+
+  `token` has **three** `"(@"` arms (lexer.mll:821, :825, :829); `annot` has **two** (:850, :855).
+  There is no bare-`(@` error arm inside an annotation body, so `(@)` nested in one is not malformed
+  — it takes `| "("` and the `@` becomes a `reserved` atom, which is exactly why
+  `annotations.wast:16` writes `(@a @ @x (@x) (@x y) (@) (@ x) (@(@(@(@)))))` *inside* a module the
+  suite expects to read. We had transcribed the arm from the wrong rule. Every arm we *did* copy was
+  right, which is the lesson: **a missing arm is invisible to a diff of the arms you copied**, so two
+  rules sharing most of their arms are read arm-by-arm or not at all.
+
+  The sibling defect, found by the same sweep: the nested `"(@"(string)` arm calls `annot_id` in the
+  reference (:858) exactly as the token-level arm does (:828), and ours matched the *shape* while
+  validating nothing — `(@a (@""))` was accepted. **No vector can score it**: every string-id vector
+  in the file (:76–:79) is top-level, so the oracle never asks about the nested position. Fixed by
+  factoring `annot_id` into one `annotIDError` both call sites read, the duplication having been what
+  let one copy drift.
+
+  New controls in `internal/text/annot_test.go`, each falsified by introducing the defect it names:
+  the `"(@"` arm *sets* of both rules compared against `lexer.mll` with a per-rule vacuity floor (a
+  tab-anchored arm regexp yields 0 vs 0 and the floor catches it), the top-level-vs-nested verdict
+  asserted as a **bidirectional** pair over the same three bytes, `annot_id`'s two messages pinned in
+  both positions, and `annotations.wast:1` read end-to-end through `ReadModule` from the vendored
+  suite rather than transcribed.
+
+### Changed
+- **The `annotations.wast:1` residue was attributed to #55 for three PRs, and #55 is a changelog
+  issue** ([#83](https://github.com/scttfrdmn/burroughs/issues/83)). Re-pointed at 5 sites in
+  `internal/spec/spec_test.go` and 3 here, including in a merged PR body and commit message. The
+  attribution was never checkable: `TestFixtureProvenance` machine-checks that a `.wast:N` citation
+  resolves, and nothing resolves an issue *number* to its subject — so a bare `#NN` in prose is the
+  drifted-citation defect with the machine-checked half removed, and this one was quoted forward
+  eight times because quoting is cheaper than checking.
+- **`textFailCeiling` 2 → 0, and it was briefly wrong at 1.** Written from the board's *total* of one
+  remaining fail, where the ceiling counts the *text* partition and the survivor is in the binary
+  one. Reverting #83's fix left `textFail` at exactly 1, so a ceiling of 1 sat green over the defect
+  it was being lowered to catch — found by the falsification pass, not by reading. **A ceiling is a
+  claim about a partition, so it is read off the partition, not off the total.**
+
 ### Added
 - **Symbolic label resolution, which closes the `unknown label` bucket and finishes #64**
   ([#80](https://github.com/scttfrdmn/burroughs/issues/80)). `labelSpace` in `context.go` — a stack
@@ -27,8 +71,9 @@ weakly-ordered platform.
   (two spaces, reproducing the reference's `lookup "label "` at parser.mly:161 rather than tidying
   it), wired at the five `plaininstr` arms that take one (`br`, `br_if`, `br_table`, `br_on_null`,
   `br_on_cast`) and at both handler productions. **Board 4159 → 4161 pass, 4 → 2 fail**;
-  `token.wast` 59/61 → 61/61. The ceiling's residue is 1 lexer vector (#55) and 1 decoder vector,
-  **neither of them the text parser's**, so it cannot fall further from work on `internal/text`.
+  `token.wast` 59/61 → 61/61. The residue was quoted here as 1 lexer vector and 1 decoder vector,
+  **neither of them the text parser's** — half wrong, and the correction is
+  [#83](https://github.com/scttfrdmn/burroughs/issues/83) below.
 
   **The scope was decided by a measurement, and the measurement is what kept the change small.**
   Read literally the reference resolves *every* symbolic index in the parser — the lookup category
@@ -721,7 +766,7 @@ weakly-ordered platform.
   `reftype elemexpr_list` (parser.mly:1155) and a reftype has a parenthesized spelling — `(ref
   func)`, `(ref null func)`, `(ref $t)` — led by neither `item` nor an instruction. **Board 4156 →
   4159 pass, 7 → 4 fail**, and the `(module <wat body>) must read` bucket falls to **1**
-  (`annotations.wast:1`, #55's lexer).
+  (`annotations.wast:1`, #83's — the number was corrected there; see [Unreleased]).
 
   **Three vectors, where the issue forecast two.** `array.wast:219` — `(elem $e (ref $bvec) …)`, a
   reftype naming a defined type rather than `func` — was in the bucket all along and unlisted,
@@ -790,7 +835,7 @@ weakly-ordered platform.
   **Board 4122 → 4147 pass, 41 → 16 fail**, six files moved and none withdrew (block 12/16→16/16,
   call_indirect 10/14→14/14, func 22/27→27/27, if 21/25→25/25, loop 12/16→16/16,
   return_call_indirect 10/14→14/14), summing to 25, diffed per file. Residue: 13 in `(module <wat
-  body>) must read` (#75, #76, #55), 2 `unknown label` (its own PR — `enter_block` and scoped
+  body>) must read` (#75, #76, #83), 2 `unknown label` (its own PR — `enter_block` and scoped
   labels), 1 the decoder's.
 
   **Resolution has to be deferred, and one suite vector says so.** `imports.wast:62-64` uses `(type

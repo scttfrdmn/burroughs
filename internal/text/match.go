@@ -613,6 +613,29 @@ func matchAnnotStart(b []byte, str bool) int {
 	return i
 }
 
+// annotIDError applies `annot_id` (lexer.mll:51–54) to a `(@"..."` id's string literal,
+// quotes included. Returns "" if the id is legal.
+//
+// It is a function rather than two copies because the reference calls it from *both* its
+// `"(@"(string)` arms — the token-level one at :828 and the `annot`-level one at :858 —
+// and the copy that existed only at the token level is the shape a shared helper forbids
+// by construction. `(@a (@""))` was accepted, and no vector says otherwise: every
+// string-id vector in `annotations.wast` (:76–:79) is top-level, so the oracle cannot see
+// the nested half. Agreement with the reference is the whole warrant here.
+func annotIDError(lit []byte) string {
+	v, ok := decodeString(lit)
+	if !ok {
+		return "malformed string literal"
+	}
+	if len(v) == 0 {
+		return "empty annotation id" // `(@"")` — annotations.wast:76
+	}
+	if !validUTF8(v) {
+		return "malformed UTF-8 encoding" // `(@"\ef")` — annotations.wast:79
+	}
+	return ""
+}
+
 // scanAnnotBody consumes an annotation body up to its balancing ')' , per the reference's
 // `annot` rule (lexer.mll:857–900). Returns the length consumed and "" , or 0 and an
 // error message.
@@ -628,6 +651,15 @@ func matchAnnotStart(b []byte, str bool) int {
 // skips an unrecognized byte lexes `(@a \00)` cleanly and silently converts 35 vectors
 // the spec calls malformed into accepted input — measured, and it is what refuted this
 // work's own forecast of 627. An annotation body is not a region where bytes are ignored.
+//
+// **The arm this rule does NOT have is the one that mattered.** `token` has three `"(@"`
+// arms (:821, :825, :829); `annot` has *two* (:850, :855) — there is no bare-`(@` error
+// arm inside a body. So `(@)` nested in an annotation is not malformed: it falls through
+// to `| "("` (:846) and the `@` becomes a `reserved` atom, which is why
+// `annotations.wast:16` puts `(@) (@ x) (@(@(@(@))))` inside a module the suite expects to
+// *succeed*. This function had that arm, transcribed from the wrong rule, and rejected the
+// whole file. Two rules that share most of their arms are read arm-by-arm or not at all —
+// a missing arm is invisible to a diff of the arms you did copy.
 func scanAnnotBody(b []byte) (length int, errMsg string) {
 	depth, i := 1, 0
 	for i < len(b) {
@@ -638,19 +670,19 @@ func scanAnnotBody(b []byte) (length int, errMsg string) {
 			if depth == 0 {
 				return i, ""
 			}
-		case hasPrefix(b[i:], "(@"):
-			// A nested annotation: its id must still be well-formed.
-			if n := matchAnnotStart(b[i:], false); n > 0 {
-				i += n
-				depth++
-				continue
+		case matchAnnotStart(b[i:], false) > 0:
+			i += matchAnnotStart(b[i:], false)
+			depth++
+		case matchAnnotStart(b[i:], true) > 0:
+			// A nested annotation with a string id runs `annot_id` (lexer.mll:858),
+			// exactly as the token-level arm does (:828) — matching the *shape* is not
+			// validating the id, and this arm matched the shape and validated nothing.
+			n := matchAnnotStart(b[i:], true)
+			if msg := annotIDError(b[i:][2:n]); msg != "" {
+				return 0, msg
 			}
-			if n := matchAnnotStart(b[i:], true); n > 0 {
-				i += n
-				depth++
-				continue
-			}
-			return 0, "empty annotation id"
+			i += n
+			depth++
 		case hasPrefix(b[i:], "(;"):
 			n, msg := scanBlockComment(b[i:])
 			if msg != "" {
