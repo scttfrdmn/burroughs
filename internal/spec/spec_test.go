@@ -1298,7 +1298,39 @@ func TestPhase1Files(t *testing.T) {
 	// exceptions being an over-rejecting resolver (4147 → 4145, imports.wast) and the block arms
 	// wired to the create-helper (4147 → 4135). The table is in that file's header. That ratio is
 	// the honest measure of what this bucket's fall is evidence for.
-	const textFailCeiling = 16
+	//
+	// # 7 after lane_imms' bare laneidx arm (#76), was 16
+	//
+	// **−9, and the forecast said 10.** #76 named eight `simd_{load,store}{8,16,32,64}_lane.wast`
+	// files plus `simd_memory-multi.wast` — nine — and then hedged with "(one further `simd_*_lane`
+	// file; the exact set is printed by the bucket)". There is no tenth: the per-file diff shows
+	// exactly those nine going 0/1 → 1/1 and nothing else moving. The hedge was the error, and it
+	// is the honest kind — the issue said the set was to be *printed*, and printing it is what
+	// settled the count. A forecast that names its own oracle is falsifiable by consulting it.
+	//
+	// Residue 7 = 4 `(module <wat body>) must read` + 2 `unknown label` + 1 `malformed
+	// mutability`. The 4 are `annotations.wast:1` (#55's lexer), `array.wast` 1 and `elem.wast` 2
+	// (#75's `elem_list` reftype arm) — so #75 is the whole remainder of that bucket, and the
+	// bucket falls to 1 when it lands, exactly as #76's definition of done predicted.
+	//
+	// # 4 after elem_list's shadowed reftype arm (#75), was 7
+	//
+	// **−3, and the forecast said 2.** #75 named `elem.wast:539` and `:573`. The third,
+	// `array.wast:219` — `(elem $e (ref $bvec) …)`, a reftype naming a *defined* type rather than
+	// `func` — was in the same bucket the whole time and was not listed, because the bucket key is
+	// the expected spec string and the string says nothing about which arm broke. Found by printing
+	// every failing module's error rather than by trusting the issue's list: *bucket size estimates
+	// the reward, not the job*, and this is the same lesson from the other side — a partition can
+	// be finer than the issue that named it, not just coarser.
+	//
+	// The bucket is now **1** (`annotations.wast:1`, #55's lexer), which is what #75's and #76's
+	// definitions of done both predicted, from opposite ends of the same 13.
+	//
+	// Residue 4 = 1 `(module <wat body>) must read` + 2 `unknown label` + 1 `malformed mutability`.
+	// **Nothing left in the text bucket is a typeuse, lane or elem question**: the labels are
+	// `enter_block` and scoped labels (parser.mly:132-134), the mutability one is the decoder's, and
+	// annotations is the lexer's.
+	const textFailCeiling = 4
 	if textFail > textFailCeiling {
 		t.Errorf("text failures rose to %d, ceiling %d — either the reader regressed on "+
 			"vectors it used to answer, or the corpus moved", textFail, textFailCeiling)
@@ -1401,7 +1433,21 @@ func TestPhase1Files(t *testing.T) {
 	// 4145 on `imports.wast:62`'s forward reference. Under the 7-vector accept oracle that
 	// preceded #69 the same defect would have been a silent green. One vector of 2130 is a thin
 	// margin, and it is a real one.
-	const passFloor = 4147
+	//
+	// **4156 = 4147 + 9 after lane_imms (#76)**, and this floor is where that fix is *certified*
+	// rather than merely observed: all nine vectors are must-succeed, so the entire finding lives
+	// in this column and none of it in the fail bucket's key. The board cannot distinguish a
+	// correct `lane_imms` from one that stopped reading a memory index altogether — eight of the
+	// nine files write only the bare arm — which is why the arm-by-arm control in
+	// `internal/text/instr_test.go` is the actual evidence and this number is the receipt that it
+	// did not cost anything elsewhere.
+	//
+	// **4159 = 4156 + 3 after elem_list (#75)**, and all three are must-succeed modules, so — as
+	// with #76 — the whole finding lives in this column. The pattern across both graves is worth
+	// naming: **every defect #69's admission surfaced is an over-rejection**, which is the class a
+	// reject-direction corpus is structurally blind to. Two graves, twelve vectors, and not one of
+	// them would have been visible on the 7-module accept oracle that preceded it.
+	const passFloor = 4159
 	if totalPass < passFloor {
 		t.Errorf("board pass count %d fell below floor %d", totalPass, passFloor)
 	}

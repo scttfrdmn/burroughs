@@ -619,6 +619,59 @@ weakly-ordered platform.
   written before it* — and so does a retirement.
 
 ### Fixed
+- **`lane_imms`' bare-laneidx arm was eaten by `memarg`'s greedy memory index**
+  ([#76](https://github.com/scttfrdmn/burroughs/issues/76)). `lane_imms` (parser.mly:661-673) was
+  implemented as `memarg laneidx`, so `idx_opt` consumed the lone NAT of `v128.load8_lane 0 (…)` as
+  a *memory* index and the mandatory laneidx then found a paren. The reference multiplies the
+  production into five arms with a comment saying why — *"Need to multiply out options and indices
+  to avoid spurious conflicts"* — and the fifth is the one a composition cannot express. **Board
+  4147 → 4156 pass, 16 → 7 fail**: nine files 0/1 → 1/1
+  (`simd_{load,store}{8,16,32,64}_lane.wast` and `simd_memory-multi.wast`), per-file diffed.
+
+  The forecast said ten and hedged — *"one further `simd_*_lane` file; the exact set is printed by
+  the bucket"*. There is no tenth, and printing the set is what settled it. A forecast that names
+  its own oracle is falsifiable by consulting it.
+
+  **The nine vectors cannot certify the fix**, which is why the control is one row per arm: eight of
+  the nine files write only the bare arm, so a fix that merely stopped reading a memory index would
+  take all nine green and break arm 1. `simd_memory-multi.wast` is the one file writing every arm,
+  and it hands over a **bidirectional control** — `:12`'s lone `1` is a lane index while `:22`'s
+  identical leading `1` is a memory index, so one wrong answer in the lookahead fails the two halves
+  in opposite directions. Five defects run, each failing the arms predicted; the store-family
+  sharing check was corrected *by* its own falsification, which showed the bare spelling is the one
+  that does **not** catch a mis-wired shape table.
+- **`elem_list`'s reftype arm was shadowed by the offset-sugar lookahead**
+  ([#75](https://github.com/scttfrdmn/burroughs/issues/75)). `elemField` tested
+  `at(LParen) && !peek2Keyword(kwItem)` and concluded "an offset", but `elem_list`'s second arm is
+  `reftype elemexpr_list` (parser.mly:1155) and a reftype has a parenthesized spelling — `(ref
+  func)`, `(ref null func)`, `(ref $t)` — led by neither `item` nor an instruction. **Board 4156 →
+  4159 pass, 7 → 4 fail**, and the `(module <wat body>) must read` bucket falls to **1**
+  (`annotations.wast:1`, #55's lexer).
+
+  **Three vectors, where the issue forecast two.** `array.wast:219` — `(elem $e (ref $bvec) …)`, a
+  reftype naming a defined type rather than `func` — was in the bucket all along and unlisted,
+  because the bucket key is the expected spec string and that string says nothing about which arm
+  broke. Found by printing every failing module's error instead of trusting the list: a partition can
+  be *finer* than the issue that named it, not only coarser.
+
+  The control is a **product** — both `elem_list` arms × three offset spellings (none, `(offset …)`,
+  bare expr) — because all three vectors write the reftype arm with no offset, so a fix that stopped
+  treating any paren as an offset would pass them and lose the sugar arm. The bare-expr column is
+  what makes the lookahead a partition rather than a priority: an offset may be any folded
+  instruction (:1091-1093), and what separates the cases is that `REF` is its own token (lexer.mll:180)
+  while `ref.func`/`ref.null` are others, so `(ref …)` cannot begin an expr at all.
+
+  **Falsification found something the fix did not need: the third lookahead discriminates nothing.**
+  Deleting `!peek2Keyword(kwItem)` fails no row, and a `panic()` in its complementary branch never
+  fired across the suite — `elemexpr_list` follows a *mandatory* reftype, so `(item …)` can never be
+  the first thing after `elem`, and both readings reject `(elem (item …))` with the same message.
+  Kept, with the measurement recorded at the site rather than an argument, and flagged rather than
+  decided: deleting a condition because nothing reaches it today is precisely the move #75's own
+  shadowing counsels against.
+
+  **Both graves are over-rejections**, which is the class a reject-direction corpus is structurally
+  blind to. Twelve vectors across the two, and not one would have been visible on the 7-module accept
+  oracle that preceded #69.
 - **The fixture-provenance guard was checking 118 of 244 citations, and vouching for a file its
   checker read past** ([#78](https://github.com/scttfrdmn/burroughs/issues/78)).
   `TestEveryFixtureFileIsChecked` triggered on `//\s*<file>.wast:\d+` — a citation had to *open* a

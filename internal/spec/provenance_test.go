@@ -814,10 +814,21 @@ func TestTextFixtureProvenance(t *testing.T) {
 	// weakening and so is bounded rather than merely counted: if this grows, the fixture style
 	// is drifting away from literal vectors and the source half of the rule is quietly
 	// shrinking. *A precondition that excuses a gate is licensed at one place, or it is a hole.*
-	if computed > 8 {
+	//
+	// **8 → 20 (#76), raised deliberately and itemized.** Both tables in the count are
+	// `instr_test.go`'s, and both are one production read through a *shared prefix* rather than
+	// per-row modules: 8 rows of `i8x16.shuffle` immediates (`sixteen + " 16"`) and 12 rows of
+	// `lane_imms` arms (`"1 offset=0 align=1 1"`). The field is a literal in the second table —
+	// what makes the vector uncomputable is that no single literal holds it, since the module is
+	// `prefix + field + suffix`. Spelling those 12 as whole modules would mean 12 copies of a
+	// 110-character wrapper differing in one immediate, which buys the source check by making the
+	// table stop reading as "five arms of one production". The trade is stated rather than taken
+	// silently: these 20 rows are checked on their expectation and on nothing else.
+	if computed > 20 {
 		t.Errorf("%d cited rows build their vector from Go expressions, so only their "+
-			"expectation is checked; the ceiling is 8 (instr_test.go's lane-immediate table). "+
-			"Spell new vectors as literals, or raise this deliberately", computed)
+			"expectation is checked; the ceiling is 20 (instr_test.go's two immediate tables: "+
+			"8 shuffle rows and 12 lane_imms rows). Spell new vectors as literals, or raise "+
+			"this deliberately", computed)
 	}
 	t.Logf("verified %d cited text fixtures (%d sources, %d expectations, %d expectation-only "+
 		"because the vector is computed), %d exempt as synthetic or derived",

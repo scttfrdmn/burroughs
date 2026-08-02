@@ -556,3 +556,130 @@ func TestVecConstFollowerPrecedesTheCount(t *testing.T) {
 		})
 	}
 }
+
+// TestLaneImmsCoversAllFiveArms is grave #76's control, and it is **scoped to the production, not
+// to the nine vectors that fell**.
+//
+// The defect: `lane_imms` was implemented as `memarg laneidx`, so `idx_opt`'s greedy NAT ate the
+// bare lane index of `v128.load8_lane 0 (…)` and the mandatory laneidx then found a paren. Nine
+// must-succeed files — `simd_{load,store}{8,16,32,64}_lane.wast` and `simd_memory-multi.wast` —
+// were at 0/1. Accept-direction, so *no `assert_malformed` could see it*; invisible until #69
+// raised the accept oracle from 7 modules to 2130.
+//
+// **The nine vectors cannot certify the fix.** Eight of the nine files write only the bare arm, so
+// a "fix" that simply stopped reading a memory index would take all nine to 1/1 and break arm 1 —
+// scoring identically on the board while being wrong in general (§9 G-3, on a control instead of
+// on the engine). Hence one row per arm, and the falsification below is the *two-NAT* case rather
+// than the bare one.
+//
+// `simd_memory-multi.wast` is the one file that writes every arm, and it hands over a
+// **bidirectional control**: `:12` is `v128.load8_lane 1 (i32.const 0)` where the lone `1` is a
+// *lane* index, and `:22` is `v128.load8_lane 1 1` where the identical leading `1` is a *memory*
+// index. Same token, opposite meanings, decided entirely by the follower — so a single wrong
+// answer in `natContinuesMemarg` fails the two halves in opposite directions, where either half
+// alone would look like a plausible reading. *When two fields disagree about a value, the suite has
+// handed you a bidirectional control.*
+//
+// Falsified by running each defect, not by reasoning about it:
+//   - Reverting to `memarg` then `laneidx`: the four bare-arm rows fail with `unexpected token`
+//     and the board's nine files return to 0/1 — the grave, reproduced.
+//   - Dropping `NatTok` from natContinuesMemarg: `two nats` and `nat lane, memory index` fail,
+//     the bare rows stay green. This is the over-eager fix the nine vectors would have licensed.
+//   - Dropping `OffsetEqNat`/`AlignEqNat`: `nat offset lane` and `nat align lane` fail, and the
+//     board is unchanged — `simd_memory-multi.wast` writes those spellings but reports one verdict
+//     for the whole module, so it cannot say *which* arm broke.
+//   - Making natContinuesMemarg return true always: the bare rows fail, i.e. the original grave.
+//   - Making it return false always: the memory-index rows fail. The pair is what makes this a
+//     lookahead rather than a preference.
+func TestLaneImmsCoversAllFiveArms(t *testing.T) {
+	// One memory named and one anonymous, so both the NAT and the VAR memory-index arms have a
+	// real target. Every row is spelled for `v128.load8_lane`, whose laneidx is `nat8` and whose
+	// arms are shared with `v128.store8_lane` through one `immLaneImms` entry — the store rows
+	// below are the check on that sharing rather than a repetition of it.
+	const prefix = "(module (memory 1) (memory $m 1) (func (local $v v128) (drop (v128.load8_lane "
+	cases := []struct {
+		name, imms, want, why string
+	}{
+		// Arm 5 (parser.mly:673) — the one that was eaten. One NAT, and it is the lane index.
+		{"bare laneidx", "0", "", "simd_load8_lane.wast:9"},
+		{"bare laneidx, nonzero", "1", "", "simd_memory-multi.wast:12"},
+
+		// Arm 1 (:663) — two NATs, the first a memory index. The other half of the pair.
+		{"two nats", "1 1", "", "simd_memory-multi.wast:22"},
+		{"nat offset lane", "1 offset=0 1", "", "simd_memory-multi.wast:13"},
+		{"nat offset align lane", "1 offset=0 align=1 1", "", "simd_memory-multi.wast:14"},
+		{"nat align lane", "1 align=1 1", "", "simd_memory-multi.wast:15"},
+
+		// Arm 2 (:666) — a VAR is always a memory index, since laneidx is nat8 and has no
+		// symbolic spelling.
+		{"var lane", "$m 1", "", "simd_memory-multi.wast:17"},
+		{"var offset lane", "$m offset=0 1", "", "simd_memory-multi.wast:18"},
+		{"var offset align lane", "$m offset=0 align=1 1", "", "simd_memory-multi.wast:19"},
+		{"var align lane", "$m align=1 1", "", "simd_memory-multi.wast:20"},
+
+		// Arms 3 and 4 (:669, :671) — no leading idx at all, so nothing to disambiguate. Green
+		// before the fix too, and here because the control is scoped to the production.
+		{"offset lane", "offset=0 1", "", "simd_memory-multi.wast:28"},
+		{"align lane", "align=1 1", "", "simd_memory-multi.wast:30"},
+
+		// The laneidx is *mandatory* in all five arms, and this is the row that says the fix did
+		// not make it optional — the natural way to over-correct. Synthetic: the suite writes no
+		// malformed lane_imms at all, so every reject-direction row here is ours.
+		{
+			"memarg with no laneidx", "offset=0", "unexpected token",
+			"synthetic: laneidx is mandatory in every arm (parser.mly:663-673); the suite has no " +
+				"malformed lane_imms vector, so this direction is unsampled",
+		},
+		{
+			"nothing at all", "", "unexpected token",
+			"synthetic: arm 5 is `laneidx`, not `laneidx_opt` — the empty form matches no arm",
+		},
+		// And the width still belongs to laneidx rather than to idx: 256 is a legal *memory*
+		// index and an illegal lane index, so this row would pass if the bare NAT were still
+		// being read as an idx. The reject-direction face of the bidirectional control above.
+		{
+			"bare lane out of range", "256", "i8 constant out of range",
+			"synthetic: laneidx is nat8 (:658) while idx is nat32 (:478) — 256 is legal as one " +
+				"and not the other, so this pins which reader saw the token",
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			src := prefix + c.imms + " (i32.const 0) (local.get $v)))))"
+			err := ReadModule([]byte(src))
+			switch {
+			case c.want == "" && err != nil:
+				t.Errorf("v128.load8_lane %s: %v; want accepted (%s)", c.imms, err, c.why)
+			case c.want == "":
+				return
+			case err == nil:
+				t.Errorf("v128.load8_lane %s: accepted; want %q (%s)", c.imms, c.want, c.why)
+			case !strings.Contains(err.Error(), c.want):
+				t.Errorf("v128.load8_lane %s: got %q, want it to contain %q (%s)",
+					c.imms, err, c.want, c.why)
+			}
+		})
+	}
+
+	// `VEC_STORE_LANE` shares `immLaneImms` with `VEC_LOAD_LANE` (parser.mly:600-601), and the
+	// shape table is the only thing that says so. If the store arm were wired to `immMemarg` — the
+	// entry directly above it in the table, and a plausible slip — every row above would stay
+	// green, since they are all spelled for the load family.
+	//
+	// **Three spellings, and the falsification is why it is not one.** The bare form was the
+	// obvious choice and it is the one that does *not* catch this: under `immMemarg`,
+	// `v128.store8_lane 1 (…)` is accepted, because `memarg` reads the lone NAT as a memory index
+	// and then wants no laneidx at all. The two-NAT and full forms are what fail. Printed, not
+	// predicted — the comment here first claimed the opposite. (`TestPlaininstrShapesMatchTheReference`
+	// also fails on that mutation, from the other direction: it compares the table to the extracted
+	// grammar. Two independent witnesses, which is the point of having both.)
+	for _, imms := range []string{"1", "1 1", "$m offset=0 align=1 1"} {
+		src := "(module (memory 1) (memory $m 1) (func (local $v v128) " +
+			"(v128.store8_lane " + imms + " (i32.const 0) (local.get $v))))"
+		if err := ReadModule([]byte(src)); err != nil {
+			t.Errorf("v128.store8_lane %s: %v; want accepted "+
+				"(simd_memory-multi.wast:27, :37, :34 — the store family shares lane_imms)", imms, err)
+		}
+	}
+}

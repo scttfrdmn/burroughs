@@ -866,11 +866,43 @@ func (p *parser) elemField() error {
 		}
 		return p.rpar()
 	}
-	if p.c.at(LParen) && !p.c.peek2Keyword(kwItem) {
+	if p.c.at(LParen) && !p.c.peek2Keyword(kwItem) && !p.atReftypeStart() {
 		// The offset sugar (parser.mly:1171/:1175): `offset elem_list` or `offset elemidx_list`.
 		// An `(item …)` here is an elemexpr in the *passive* arm's elem_list instead, which is
 		// what the lookahead separates — the two arms start with the same paren and only the
 		// keyword after it decides, so this is peek2 rather than a trial parse.
+		//
+		// **`atReftypeStart` is the third condition and grave #75 is its absence.** `elem_list`'s
+		// second arm is `reftype elemexpr_list` (:1155), and a reftype has a *parenthesized*
+		// spelling — `(ref func)`, `(ref null func)`, `(ref $t)` — led by neither `item` nor an
+		// instruction. With two conditions this branch claimed `(elem (ref func) (ref.func 0))`'s
+		// reftype was an offset and shadowed the arm entirely, rejecting three valid modules
+		// (`elem.wast:539`, `:573`, `array.wast:219`). Accept-direction, so no `assert_malformed`
+		// could report it; it surfaced when #69 raised the accept oracle from 7 modules to 2130.
+		//
+		// Three conditions rather than a trial parse because each names a different arm, and the
+		// paren alone names none of them: `offset` is `LPAR OFFSET constexpr RPAR | expr`
+		// (:1091-1093), so an offset may be *any* folded instruction, and no `(`-based test can
+		// separate "an offset written as a bare expr" from "a reftype written as `(ref …)`". What
+		// makes the keyword sufficient is that `ref` is not an instruction mnemonic — `ref.func`
+		// and `ref.null` are distinct tokens (lexer.mll), so `(ref …)` cannot begin an expr at
+		// all, and the three lookaheads partition rather than merely prioritize.
+		//
+		// **`!peek2Keyword(kwItem)` is measured to discriminate nothing, and is kept anyway —
+		// with the measurement, not with an argument.** Falsifying #75's control found this: of
+		// the three conditions, deleting the other two each fails named rows, and deleting this
+		// one fails none. A `panic()` in the complementary branch (`at(LParen) &&
+		// peek2Keyword(kwItem) && !atReftypeStart()`) never fired across the whole suite or the
+		// unit tests, and the reason is grammatical rather than accidental: `elemexpr_list` is
+		// reachable only *after* a mandatory reftype (parser.mly:1155), so `(item …)` can never
+		// be the first thing after `elem`/`bindidx_opt`. Both readings reject
+		// `(elem (item (ref.func 0)))`, and a print check says they reject it with the same
+		// message. So this is not a check that fires — it is a *statement of which arm an `item`
+		// belongs to*, load-bearing only if a future arm makes the position reachable. Named here
+		// rather than deleted or left silent, per *unreachability is a grave only when it's
+		// silent*; whether to keep it is flagged for Scott in #79's successor rather than decided
+		// here, because deleting a condition on the strength of "nothing reaches it today" is the
+		// move that the elemexpr arm's own shadowing (#75) should make one cautious about.
 		if err := p.offset(); err != nil {
 			return err
 		}

@@ -1850,6 +1850,154 @@ func TestEmptyIdentifierHasNoSpelling(t *testing.T) {
 	}
 }
 
+// TestElemListArmsAreNotShadowedByTheOffsetSugar is grave #75's control, and it is a **product** —
+// both arms of `elem_list` crossed with both spellings of an offset — rather than the three
+// vectors that fell.
+//
+// The defect: `elemField`'s offset branch tested `at(LParen) && !peek2Keyword(kwItem)` and
+// concluded "an offset". But `elem_list`'s second arm is `reftype elemexpr_list` (parser.mly:1155),
+// and a reftype has a parenthesized spelling — `(ref func)`, `(ref null func)`, `(ref $t)` — led by
+// neither `item` nor an instruction. So the reftype was read as an offset and the arm was shadowed
+// entirely, rejecting `elem.wast:539`, `:573` and `array.wast:219`. All three must-succeed, so
+// **no `assert_malformed` could see it**; it surfaced only when #69 raised the accept oracle from
+// 7 modules to 2130.
+//
+// **Three vectors cannot certify the fix, and the product is why.** All three write the reftype
+// arm with *no* offset, so a "fix" that stopped treating any paren as an offset would pass all
+// three and lose the offset-sugar arm — which the corpus does exercise, and which is the arm the
+// original lookahead existed to reach. The rows below therefore cross:
+//
+//	elem_list arm            offset spelling        row
+//	elemkind elemidx_list    none (passive)         `(elem func $f)`
+//	elemkind elemidx_list    (offset …)             `(elem (offset (i32.const 0)) func $f)`
+//	elemkind elemidx_list    bare expr              `(elem (i32.const 0) func $f)`
+//	reftype elemexpr_list    none (passive)         `(elem (ref func) (ref.func 0))`
+//	reftype elemexpr_list    (offset …)             `(elem (offset (i32.const 0)) (ref func) …)`
+//	reftype elemexpr_list    bare expr              `(elem (i32.const 0) (ref func) …)`
+//
+// The bare-expr column is the one that makes the lookahead a *partition* rather than a priority
+// ordering: `offset` is `LPAR OFFSET constexpr RPAR | expr` (:1091-1093), so an offset may be any
+// folded instruction, and `(i32.const 0) (ref func)` has a paren in both positions. What separates
+// them is that `ref` is not an instruction mnemonic — `REF` is its own token (lexer.mll:180) while
+// `ref.func`/`ref.null` are others (:326-327) — so `(ref …)` cannot begin an expr at all. That
+// premise is a fact about the *keyword table*, and `TestEveryPlaininstrKindIsInTheKeywordTable`
+// already machine-checks the table against lexer.mll, so it is cited rather than re-asserted here.
+//
+// Falsified by running each defect:
+//   - Restoring the two-condition test (dropping `!p.atReftypeStart()`): the three reftype rows
+//     fail with `unexpected token` — the grave, reproduced, and the board's three vectors return.
+//   - Dropping the `at(LParen)` test so the offset branch never runs: the four offset rows fail.
+//     This is the over-correction the three vectors would have licensed.
+//   - Dropping `!peek2Keyword(kwItem)`: **nothing fails, and that is a finding rather than a gap
+//     in this table.** The condition predates #75 and is in the product because a control scoped to
+//     one lookahead in a three-way decision inherits the blind spot of the other two — so running
+//     the defect is what discovered that this third lookahead discriminates nothing. A `panic()` in
+//     its complementary branch never fired across the suite: `elemexpr_list` follows a *mandatory*
+//     reftype (parser.mly:1155), so `(item …)` cannot be the first thing after `elem`. Both
+//     readings reject `(elem (item …))` with the same message, printed. The `item` rows below are
+//     therefore honest about what they pin — the elemexpr arm in its legal position — and no row
+//     here claims to falsify a condition that cannot be falsified. See the note at the call site.
+//
+// *A control falsified in one field is not falsified* — and running the third defect is the only
+// reason this is known rather than assumed.
+func TestElemListArmsAreNotShadowedByTheOffsetSugar(t *testing.T) {
+	// One table so the active arms have a target, one func so `ref.func 0` resolves, and the table
+	// typed `(ref func)` because that is how the cited vectors write it.
+	const prefix = "(module (func) (table 1 (ref func) (ref.func 0)) "
+	cases := []struct {
+		name, field, why string
+	}{
+		// Arm 1 — `elemkind elemidx_list`. The arm that worked, kept because a control scoped to
+		// the broken arm cannot see a fix that breaks the working one.
+		{
+			"elemkind, passive", "(elem func 0)",
+			"elem.wast:12 — `(elem func)`, the passive elemkind arm, unaffected by #75",
+		},
+		{
+			"elemkind, (offset ...)", "(elem (offset (i32.const 0)) func 0)",
+			"elem.wast:37 — the explicit offset spelling with the elemkind arm",
+		},
+		{
+			"elemkind, bare expr offset", "(elem (i32.const 0) func 0)",
+			"elem.wast:41 — offset as a bare expr (parser.mly:1093), the spelling that makes the " +
+				"paren uninformative",
+		},
+
+		// Arm 2 — `reftype elemexpr_list`, the shadowed one. Three spellings of the reftype,
+		// because `atReftypeStart` admits an abbreviated keyword as well as `(ref …)` and only the
+		// parenthesized spellings were ever at risk.
+		{
+			"reftype (ref func), passive", "(elem (ref func) (ref.func 0))",
+			"elem.wast:539 — the vector the grave was filed on",
+		},
+		{
+			"reftype (ref null func), passive", "(elem (ref null func) (ref.func 0))",
+			"synthetic: `(ref null func)` is the three-token spelling of the same arm; the suite " +
+				"writes it in table types but not in an elem, so this direction is unsampled",
+		},
+		{
+			"reftype funcref, passive", "(elem funcref (ref.func 0))",
+			"synthetic: the abbreviated reftype needs no paren, so it never reached the offset " +
+				"branch — here to show the fix did not narrow the arm to its parenthesized forms",
+		},
+		{
+			"reftype, declare", "(elem declare (ref func) (ref.func 0))",
+			"elem.wast:573 — the declarative arm (parser.mly:1167), which reaches elem_list past " +
+				"a keyword rather than past the offset lookahead",
+		},
+		{
+			"reftype, (offset ...)", "(elem (offset (i32.const 0)) (ref func) (ref.func 0))",
+			"synthetic: the crossing the suite does not write — offset sugar *and* the reftype " +
+				"arm, which is the row a fix that dropped the offset branch would fail",
+		},
+		{
+			"reftype, bare expr offset", "(elem (i32.const 0) (ref func) (ref.func 0))",
+			"synthetic: two parens in a row, the first an offset and the second a reftype — the " +
+				"case that shows this is a partition and not a priority",
+		},
+
+		// The `(item …)` elemexpr, whose lookahead predates #75 and is now one of three.
+		{
+			"item elemexpr", "(elem (ref func) (item (ref.func 0)))",
+			"elem.wast:43 — `(item …)` is an elemexpr (parser.mly:1140), not an offset",
+		},
+		{
+			"item elemexpr after an offset", "(elem (offset (i32.const 0)) func 0)",
+			"elem.wast:37 — kept adjacent to the row above so the two `(`-led forms after `elem` " +
+				"are both present in the table",
+		},
+
+		// The empty elem_list, which is well-formed because `reftype elemexpr_list` reaches an
+		// empty list — the vacuity row: if `(elem)` did not parse, several rows above would be
+		// asserting something narrower than they claim.
+		{
+			"empty elem_list", "(elem)",
+			"synthetic: `(elem)` is well-formed — `elemkind` has no empty arm but `reftype elemexpr_list` reaches an empty list (parser.mly:1144). elem.wast:10 writes `(elem funcref)`, the nearest spelling, but never the bare form",
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			src := prefix + c.field + ")"
+			if err := ReadModule([]byte(src)); err != nil {
+				t.Errorf("ReadModule(%s) = %v; want accepted — [%s]", c.field, err, c.why)
+			}
+		})
+	}
+
+	// The `array.wast:219` shape: a reftype naming a *defined* type rather than `func`. Separate
+	// from the table because it needs its own type section, and worth its own case — `(ref $t)`
+	// exercises `atReftypeStart`'s peek2 on a VAR-led reftype, where the two above are keyword-led.
+	const named = `(module
+		(type $bvec (array i8))
+		(elem $e (ref $bvec) (array.new_fixed $bvec 2 (i32.const 1) (i32.const 2))))`
+	if err := ReadModule([]byte(named)); err != nil {
+		t.Errorf("ReadModule(named reftype elem) = %v; want accepted "+
+			"(array.wast:219 — `(elem $e (ref $bvec) …)`, the third vector #75 rejected and the "+
+			"one its issue did not list)", err)
+	}
+}
+
 // at renders the token-ish text at an offset, for the message above.
 func at(src string, off int) string {
 	if off < 0 || off > len(src) {

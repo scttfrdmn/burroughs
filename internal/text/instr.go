@@ -225,11 +225,9 @@ func (p *parser) immediates(shape immShape, mnemonic Token) error {
 		return p.memarg()
 	case immLaneImms:
 		// `lane_imms` (:661) is the memarg shape with a mandatory trailing laneidx, spelled out
-		// upstream as four arms "to avoid spurious conflicts" rather than as a composition.
-		if err := p.memarg(); err != nil {
-			return err
-		}
-		return p.laneidx()
+		// upstream as five arms "to avoid spurious conflicts" rather than as a composition,
+		// and the fifth is why this cannot *be* a composition: see laneImms.
+		return p.laneImms()
 	case immLaneIdx:
 		return p.laneidx()
 	case immReftype:
@@ -328,6 +326,73 @@ func (p *parser) memarg() error {
 		}
 	}
 	return nil
+}
+
+// laneImms parses `lane_imms` (parser.mly:661-673) — and it is **not** `memarg laneidx`, which is
+// the whole content of grave #76.
+//
+// The reference multiplies the production out into five arms, with a comment saying why: *"Need to
+// multiply out options and indices to avoid spurious conflicts"*. Written as a composition, the
+// first NAT is ambiguous — `v128.load8_lane 0` has one NAT and it is the **lane index**, while
+// `v128.load8_lane 1 0` has two and the first is the *memory* index. `idx_opt` is greedy, so
+// composing `memarg` with `laneidx` eats the lone lane index as a memory index and then finds
+// nothing where the mandatory laneidx should be:
+//
+//	v128.load8_lane 0 (i32.const 0) (v128.const i32x4 0 0 0 0)   →  unexpected token
+//
+// Ten must-succeed vectors, one per `simd_{load,store}{8,16,32,64}_lane.wast` plus
+// `simd_memory-multi.wast` — accept-direction, so **no `assert_malformed` can see this**, and it
+// was invisible until #69 raised the accept oracle from 7 modules to 2130.
+//
+// The five arms, and what distinguishes them here:
+//
+//	NAT offset_opt align_opt laneidx  :663   two NATs — the first is a memory index
+//	VAR offset_opt align_opt laneidx  :666   a VAR can only be a memory index
+//	offset_ align_opt laneidx         :669   no leading idx at all
+//	align laneidx                     :671   ditto
+//	laneidx                           :673   one NAT — the lane index (the arm that was eaten)
+//
+// So the decision is *whether a leading NAT is followed by something that can continue the
+// memarg*, and it needs exactly two tokens of lookahead — the bound `peek2` already documents. A
+// leading NAT is a memory index iff another NAT, `offset=` or `align=` follows it; a VAR is
+// always one, since `laneidx` is `nat8` and admits no symbolic spelling. Everything after that
+// first decision is the memarg reader unchanged, which is why this delegates rather than
+// reimplements: the `offset=`-before-`align=` ordering and the two width checks stay in one place.
+//
+// **Scoped to all five arms, not to the spellings the corpus contains** (#76's definition of
+// done). A fix that merely stopped reading a memory index would pass the same ten vectors and
+// break arm 1, and only `simd_memory-multi.wast` writes a two-NAT form — so the control pins each
+// arm by hand and the falsification is the two-NAT case, not the bare one.
+func (p *parser) laneImms() error {
+	if p.c.at(NatTok) && !p.natContinuesMemarg() {
+		// Arm 5: the lone NAT is the laneidx. Nothing for memarg to read, and calling it anyway
+		// would consume the token as `idx_opt`.
+		return p.laneidx()
+	}
+	if err := p.memarg(); err != nil {
+		return err
+	}
+	return p.laneidx()
+}
+
+// natContinuesMemarg reports whether the NAT under the cursor is a *memory index* rather than a
+// lane index, by looking at what follows it.
+//
+// Split out of laneImms and named for the question rather than inlined as a `||` chain, because
+// the three kinds here are a claim about `lane_imms`' first four arms: a memory index is followed
+// by the laneidx (arm 1's second NAT), or by `offset=`/`align=` before it. Anything else — RPAR,
+// a folded `(`, EOF — means the NAT was the last immediate, so it was the lane index.
+//
+// Over-answering here rejects a valid module and under-answering accepts an invalid one, and
+// **the corpus only has vectors for the second**, so the first is stated as the risk and pinned
+// synthetically.
+func (p *parser) natContinuesMemarg() bool {
+	switch p.c.peek2().Kind {
+	case NatTok, OffsetEqNat, AlignEqNat:
+		return true
+	default:
+		return false
+	}
 }
 
 // laneidx parses `laneidx` (:658), which is `nat8` — the 15 `i8 constant out of range` vectors.
