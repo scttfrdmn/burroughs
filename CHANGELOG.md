@@ -463,9 +463,13 @@ weakly-ordered platform.
 
   Two real accept-direction defects were found *by* the admission and are deliberately not
   fixed here, board-shape work travelling alone: `elem_list`'s `reftype elemexpr_list` arm
-  shadowed by the offset-sugar lookahead (parser.mly:1155, 2 vectors), and `lane_imms`' bare
-  `| laneidx` arm eaten by `memarg`'s greedy memory index (:661–673, 10 vectors). They are the
-  work plan this admission exists to produce.
+  shadowed by the offset-sugar lookahead (parser.mly:1155, **3** vectors — #75), and
+  `lane_imms`' bare `| laneidx` arm eaten by `memarg`'s greedy memory index (:661–673, **9**
+  vectors — #76). They are the work plan this admission exists to produce, and the 9/3/1 split
+  is the *corrected* one: it first read 10/2/1 because each mechanism's file set came from
+  memory rather than from the board, which put `array.wast:219` — an `elem_list` vector — in the
+  lane bucket as a hedged tenth. *Derive the domain, never enumerate it*, applied to the work
+  plan instead of to the engine.
 
   The forecast was **150–400 fails centred near 250, and 13 landed** — wrong by an order of
   magnitude, in the direction of expecting a reject-direction-built reader to over-reject
