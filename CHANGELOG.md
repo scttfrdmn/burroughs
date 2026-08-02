@@ -21,6 +21,32 @@ weakly-ordered platform.
 
 ### Added
 
+- **A cited test name must resolve, and the sweep is now a control rather than a habit**
+  ([#93](https://github.com/scttfrdmn/burroughs/issues/93), ruling on
+  [#91](https://github.com/scttfrdmn/burroughs/issues/91)).
+  `TestFixtureProvenance` machine-checks `<file>.wast:N` citations; a comment claiming "pinned by
+  <some test>" was the same kind of claim one class over with nothing checking it, and #88's hand
+  sweep found five stale ones. `TestEveryCitedTestNameResolves` reads every comment in the tree and
+  requires each cited test, fuzz, or benchmark name to name a function that exists — **476
+  citations, 257 distinct names, against 277 definitions** — unless the sentence marks it as
+  historical.
+
+  **Made a control on measured evidence, not on principle.** Effectiveness was measured against
+  `e4bfd62^` — the tree immediately *before* that hand sweep, where all five defects were live —
+  rather than the repaired tree: **5/5 caught, 0 missed, 1 structurally-excludable false positive**,
+  and 5/5 correctly exempted once fixed. Recall measured against history is what made the
+  measurement worth anything: the first exemption draft passed flawlessly on `main` while *excusing
+  two of the five real defects* on the pre-sweep tree, because a control with nothing left to catch
+  cannot distinguish a working exemption from a leaking one.
+
+  The exemption for historical references ("it was …", "previously cited …") is scoped
+  **per-sentence**, since the block-scoped version excused live present-tense claims sitting in long
+  comments that happened to contain a past-tense word elsewhere: *an exemption scoped more widely
+  than the claim it excuses will excuse claims it never examined.* The one false positive is
+  excluded by **declaration shape** (`func Name(` is a code sample, not a reference) rather than by
+  ignoring backticks, because seven real citations live inside backticks and discarding a whole
+  citation style to kill one false positive is the overfitting failure pointed at a control.
+
 - **A gate census: every accepted opcode-table arm and the gate governing it, checked arm by arm**
   ([#91](https://github.com/scttfrdmn/burroughs/issues/91), decision 0012). `gatedOpcodes` holds
   whole-region entries — `{prefix: 0xfb, lo: 0x00, hi: 0xff, gate: gateGC}` — which is a claim about
