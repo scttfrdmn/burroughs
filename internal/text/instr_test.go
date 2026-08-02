@@ -30,13 +30,14 @@ var reProductionHead = regexp.MustCompile(`(?m)^[a-z_][a-z_0-9]* :(\s*/\*.*\*/)?
 // reMenhirComment strips `/* Sugar */` and its siblings from an arm's head.
 var reMenhirComment = regexp.MustCompile(`/\*.*?\*/`)
 
-// productionArms returns one menhir production's arms with semantic actions and comments
-// stripped, bounded at the next production header.
+// productionBody returns one menhir production's text, bounded at the next production header —
+// arms *and* semantic actions, unstripped.
 //
-// The bound is the point, per letBody's grave: a search for arms "after this header" finds
-// the *next* production's arms too, and a table check that reads extra arms reports drift
-// that is really the reader's.
-func productionArms(t *testing.T, src, nonterminal string) []string {
+// Carved out of productionArms because a control on the reference's **lookup categories** needs the
+// actions: the category is not in the grammar at all, it is the argument the action passes
+// (`$2 c label` against `$2 c func`), so a reader that strips actions cannot see it. Two callers,
+// one bound, and the bound is the part worth sharing — see productionArms for the grave.
+func productionBody(t *testing.T, src, nonterminal string) string {
 	t.Helper()
 	// The header may carry a trailing comment, so it is matched rather than string-searched — see
 	// reProductionHead for the hole this closed.
@@ -50,6 +51,18 @@ func productionArms(t *testing.T, src, nonterminal string) []string {
 	if next := reProductionHead.FindStringIndex(rest); next != nil {
 		rest = rest[:next[0]]
 	}
+	return rest
+}
+
+// productionArms returns one menhir production's arms with semantic actions and comments
+// stripped, bounded at the next production header.
+//
+// The bound is the point, per letBody's grave: a search for arms "after this header" finds
+// the *next* production's arms too, and a table check that reads extra arms reports drift
+// that is really the reader's.
+func productionArms(t *testing.T, src, nonterminal string) []string {
+	t.Helper()
+	rest := productionBody(t, src, nonterminal)
 
 	var arms []string
 	for chunk := range strings.SplitSeq(rest, "\n  | ") {

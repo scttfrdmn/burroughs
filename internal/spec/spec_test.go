@@ -1330,7 +1330,30 @@ func TestPhase1Files(t *testing.T) {
 	// **Nothing left in the text bucket is a typeuse, lane or elem question**: the labels are
 	// `enter_block` and scoped labels (parser.mly:132-134), the mutability one is the decoder's, and
 	// annotations is the lexer's.
-	const textFailCeiling = 4
+	//
+	// # 2 after symbolic label resolution (#80), was 4
+	//
+	// **−2, forecast 2, and this one was made against a printed set rather than a guessed one.**
+	// `token.wast` 59/61 → 61/61 and the `unknown label` bucket closes. What made the forecast safe
+	// is the measurement in #80: matching every `unknown *` vector's module body for a symbolic name
+	// in a use position the same module never binds returns **exactly two rows across all 253
+	// files**, both of them these. So the fix's reach was known before it was written, and the two
+	// vectors are the whole population rather than a sample of it.
+	//
+	// That measurement is also what kept the change small. Read literally the reference resolves
+	// *every* symbolic index in the parser — the lookup category is a parameter of `idx`
+	// (parser.mly:487-489) and all 83 `plaininstr` arms supply one — which would have made this a
+	// job spanning nine index spaces. The suite says only labels are reachable: numeric indices are
+	// `nat32 $1` with no lookup, so all 13 `assert_invalid "unknown label"` vectors are `(br 1)`-
+	// shaped and validation's, and the remaining names (`global.wast:668`'s forward `$g2`) are bound
+	// later in the module and need #64's deferred phase. Labels are the one space whose scope is
+	// *lexical*, so they resolve where they are read. Splitting at that seam is what made the
+	// reachable half reachable now.
+	//
+	// Residue **2** = 1 `(module <wat body>) must read` (`annotations.wast:1`, #55's lexer) + 1
+	// `malformed mutability` (`binary-gc.wast`, the decoder's). **Neither is the text parser's**, so
+	// this ceiling cannot fall further from work on internal/text — #64 is finished.
+	const textFailCeiling = 2
 	if textFail > textFailCeiling {
 		t.Errorf("text failures rose to %d, ceiling %d — either the reader regressed on "+
 			"vectors it used to answer, or the corpus moved", textFail, textFailCeiling)
@@ -1447,7 +1470,37 @@ func TestPhase1Files(t *testing.T) {
 	// naming: **every defect #69's admission surfaced is an over-rejection**, which is the class a
 	// reject-direction corpus is structurally blind to. Two graves, twelve vectors, and not one of
 	// them would have been visible on the 7-module accept oracle that preceded it.
-	const passFloor = 4159
+	//
+	// **4161 = 4159 + 2 after symbolic label resolution (#80)**, and this is the *third* rejector
+	// installed against this floor, so #69's argument earns its keep once more: the two vectors that
+	// move are must-fail, and everything the change could break is must-succeed. It broke none.
+	//
+	// The accept direction is where the label work is actually at risk, and the floor is most of the
+	// evidence: the reference binds a label at four sites this parser has to mirror (an anonymous one
+	// at each unnamed block, one at every `func`, a *cleared* space at `enter_func`, and `catch`'s
+	// target resolved in the **outer** context), and getting any of them wrong rejects legal modules
+	// while still scoring 2/2 on the vectors that named the feature. Which is why the mechanism
+	// controls in `internal/text/label_test.go` are scoped to those four facts and not to the two
+	// vectors: the two vectors are the reward, the 2130 bare modules are the job.
+	//
+	// **How sharp each of the four is was measured, and the first draft of this paragraph got it
+	// wrong.** It said `foldedBlock`'s push was the sharpest case because dropping it "costs nothing
+	// in the fail bucket and shows up here" — an inference from the two vectors' spelling, not a
+	// reading. Dropping it moves this count 4161 → 4077 and the *fail* bucket 2 → 86, all 84 landing
+	// in `(module <wat body>) must read`: a rejector that over-rejects turns must-succeed modules into
+	// failures, so it is loud in **both** columns, and the "invisible in the fail bucket" half was
+	// simply false. The board is the instrument, again — the third time on this floor that reasoning
+	// about a check was corrected by running it.
+	//
+	// The probe's other three arms are the finding worth keeping. `catch`-in-the-outer-context is
+	// package-visible only (6 reject rows in label_test.go, nothing on the board). And **two of the
+	// four are not falsifiable at all**: `funcField`'s label reset and its anonymous push can each be
+	// dropped with the board at 4161/2 and `./internal/text/` green, because every push site pops
+	// under `defer` and a func has no enclosing scope to leak into. Recorded here rather than only at
+	// the definition site, because a floor that claims to be the evidence for four facts is
+	// overclaiming when it is the evidence for one; the argument for keeping the unfalsifiable two is
+	// in `funcField`'s header, where it can be read next to the lines it defends.
+	const passFloor = 4161
 	if totalPass < passFloor {
 		t.Errorf("board pass count %d fell below floor %d", totalPass, passFloor)
 	}

@@ -579,6 +579,50 @@ func (p *parser) idxList() error {
 	return nil
 }
 
+// labelIdx parses an `idx` in a label position, resolving it (#80).
+//
+// The reference's `idx` with `label` as its lookup argument: `lookup c (var $1 $sloc)`. Both arms
+// are here and, as everywhere else, **they fail differently** — the NAT arm is `nat32 $1`, a width
+// check with *no lookup*, so `(br 1)` in a func with no block is not the parser's error at all. That
+// is not a shortcut: all 13 `assert_invalid "unknown label"` vectors are numeric, and reporting them
+// here would be the overfitting failure in its purest form — buying pass count by moving
+// validation's verdict into the parser, where it would also reject `(br 1)` inside legal code that
+// validation accepts.
+//
+// So the two arms are typeIdx's, and only the symbolic one resolves. Delegating to typeIdx rather
+// than re-reading the token keeps the NAT width check and the UTF-8 decode in one place; the name
+// `typeIdx` is about which space *defers*, and a label neither defers nor is a type.
+func (p *parser) labelIdx() error {
+	r, err := p.typeIdx()
+	if err != nil {
+		return err
+	}
+	if !r.isVar {
+		return nil // the NAT arm: a width check, already made, and no lookup
+	}
+	return p.ctx.labels.lookupLabel(r.tok, r.name)
+}
+
+// labelIdxList parses an `idx_list` whose members are all labels — `br_table`'s tail.
+//
+// `br_table idx idx_list` resolves **every** member against the label space:
+// `Lib.List.split_last ($2 c label :: $3 c label)` (:563-565), the last being the default target.
+// Separate from idxList rather than a parameter on it because idxList's other callers are not label
+// positions, and a category parameter defaulting to "don't resolve" is the kind of knob that gets
+// passed wrongly once and never noticed — over-acceptance being invisible to the suite.
+//
+// **Both vectors that fall to #80 are `br_table`, and both name the label in the *first* position**
+// — so a reader that resolved only the first index would score 2/2 here and silently accept
+// `(block $l (br_table $l $nope))`. The control has a row for the tail for exactly that reason.
+func (p *parser) labelIdxList() error {
+	for p.c.at(NatTok) || p.c.at(VarTok) {
+		if err := p.labelIdx(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // bindidx parses a binding occurrence of an identifier (parser.mly:507-508) and returns its
 // text.
 //
