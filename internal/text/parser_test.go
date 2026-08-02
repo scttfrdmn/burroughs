@@ -434,6 +434,44 @@ func TestModuleAcceptDirection(t *testing.T) {
 
 		// A bare field list, the inline_module sugar.
 		{`(func) (memory 1)`, "inline_module1:1401"},
+
+		// `instr_list`'s third and fourth arms (:549/:550), the flat `select` and `call_indirect`
+		// family. **These are the grave.** Nothing read them, so every module containing a flat
+		// `select` was rejected — accept-direction, therefore invisible to every
+		// `assert_malformed` vector in the corpus, which is exactly what this table exists for.
+		{`(module (func select))`, "selectinstr_instr_list:549 → :677, no result annotation"},
+		{`(module (func select (result i32)))`, "selectexpr_results:677's annotated arm"},
+		{`(module (func nop select nop))`, "the chain absorbs the list's tail, so a select may " +
+			"sit mid-sequence"},
+		{`(module (table 0 funcref) (func call_indirect))`, "callinstr_instr_list:550 → :689"},
+		{
+			`(module (type (func)) (table 0 funcref) (func call_indirect (type 0)))`,
+			"callinstr's typeuse arm",
+		},
+		{
+			`(module (table 0 funcref) (func call_indirect (param i32) (result i32)))`,
+			"callinstr_params_instr_list:712, the ordered chain",
+		},
+		{
+			`(module (type (func)) (table 0 funcref) (func return_call_indirect (type 0)))`,
+			"the return_ variant, :699",
+		},
+
+		// `expr1`'s ten arms (:813-834), the folded forms. Carried over from the retired
+		// TestBodyBoundaryIsNamed, whose ten cases were the only assertion that these *parse*
+		// — the re-pointed tripwire asserts nothing reports `unimplemented`, which is a
+		// different claim. A control's replacement inherits its obligations, not just its name.
+		{`(module (func (block)))`, "expr1:826, the folded block — no END, extent from the paren"},
+		{`(module (func (loop)))`, "expr1:828"},
+		{`(module (func (if (then))))`, "expr1:830 + if_:896, the one-armed sugar"},
+		{`(module (func (try_table)))`, "expr1:833"},
+		{`(module (func (select)))`, "expr1:815 → selectexpr_results"},
+		{`(module (type (func)) (table 0 funcref) (func (call_indirect (type 0))))`, "expr1:817"},
+		{`(module (func (i32.eqz (block))))`, "a folded block as a folded operand — expr_list:946 " +
+			"nested one deep, which is where a boundary was most easily leaked"},
+		{`(module (func (drop (select))))`, "the same, through select"},
+		{`(module (memory 1) (data (offset (block)) "abc"))`, "offset:1091 descending into expr1"},
+		{`(module (table 1 funcref) (elem (table 0) (offset (block)) func))`, "elem's offset"},
 	} {
 		if err := ReadModule([]byte(tc.src)); err != nil {
 			t.Errorf("ReadModule(%q) = %v\n\tthis module is ACCEPTED by the reference "+
@@ -537,7 +575,8 @@ func TestGlobalIsNotADefinitionWhenImported(t *testing.T) {
 	}
 }
 
-// TestBodyBoundaryIsNamed pins that stopping short is reported as stopping short.
+// TestNoInstructionLeaderIsUnread began as TestBodyBoundaryIsNamed, which pinned that stopping
+// short is reported as stopping short.
 //
 // A module whose only unmet requirement is an instruction body must say `unimplemented`, not
 // `unexpected token`: the board buckets by expected string, and a boundary masquerading as a
@@ -571,37 +610,87 @@ func TestGlobalIsNotADefinitionWhenImported(t *testing.T) {
 // vectors that belonged to the PR it was riding in. A control's *scope* is as falsifiable as its
 // predicate, and the way to check it is the same — measure which reader answers the case, don't
 // read the mnemonic.
-func TestBodyBoundaryIsNamed(t *testing.T) {
-	for _, src := range []string{
-		// expr1's folded block arms (parser.mly:826-834) — #64's. The flat spellings
-		// (`(func block end)` and siblings) were #63's and now parse; see the header.
-		`(module (func (block)))`,
-		`(module (func (loop)))`,
-		`(module (func (if)))`,
-		`(module (func (try_table)))`,
-		// expr1's non-plaininstr arms (:815-829) — #64's.
-		`(module (func (select)))`,
-		`(module (func (call_indirect (type 0))))`,
-		// Reached through a #63 reader: the mnemonic and its immediates parse, and the boundary
-		// is struck on a folded *operand*. The cursor is mid-instruction here, which is where a
-		// syntax error would most easily be substituted for the boundary.
-		`(module (func (i32.eqz (block))))`,
-		`(module (func (drop (select)))) `,
-		// And through the offset/elemexpr productions #63 just wired, whose contents can still be
-		// #64's: the boundary has to survive one level of descent.
-		`(module (memory 1) (data (offset (block)) "abc"))`,
-		`(module (table 1 funcref) (elem (table 0) (offset (block)) func))`,
-	} {
-		err := ReadModule([]byte(src))
-		if err == nil {
-			t.Errorf("ReadModule(%q) accepted; this stratum does not parse instruction "+
-				"bodies, so accepting is a false green", src)
+//
+// # Re-pointed a third time by #64, and this time the *risk* inverts rather than moving
+//
+// All ten cases above now parse or are correctly rejected, because the folded arms landed and there
+// is no later stratum left: all four `instr_list` arms (parser.mly:546-550) and all three `instr1`
+// arms (:552-554) have readers. So the risk this tripwire was filed against — a deferral reported
+// as a syntax error — has no subject, and the *opposite* risk is now the live one: a **syntax error
+// reported as a deferral**, `unimplemented` promising a reader nobody will ever write. That is the
+// same wrong-layer defect with its sign flipped, and it is the flattering direction, because it
+// parks a module the reference rejects in a bucket the board reads as remaining work.
+//
+// Which is exactly the defect #70 fixed for parenthesized forms and did not fix for bare ones: with
+// #70's boundary in place, `(module (func param))` still answered `unimplemented: instruction body
+// at "param"`, because the derived check only looked past a `(`. The rule says a dissolved subject
+// is re-pointed, never closed, and the re-pointing here is a *sign change* rather than a new case
+// list — which is why it also comes with the case list being thrown away.
+//
+// **Scoped to the space, not to cases.** The two halves below sweep the generated keyword table
+// rather than enumerating spellings, per *derive the domain, never enumerate it*: an enumeration
+// would freeze at the moment of authorship and is precisely what let three re-pointings all be
+// about which examples belonged in a list. The premise the sweep needs — that no reader is owed —
+// is checkable, and half one is the check.
+func TestNoInstructionLeaderIsUnread(t *testing.T) {
+	// Half one, the accept direction: every keyword startsInstruction admits must be *consumed*
+	// by some reader. This is the premise half two rests on — the `unimplemented` arm is only safe
+	// to delete if nothing admitted is still owed a reader — and it is the direction no
+	// `assert_malformed` can see, since a leader nobody reads makes a legal module fail.
+	//
+	// The discriminator is the error's own offset. A reader that claims a mnemonic and then dislikes
+	// its immediates reports at the *immediate*; only a cursor nobody advanced is still sitting on
+	// the leader. So `unexpected token` blamed at the leader's own offset means unread — and the one
+	// keyword that errors at its own offset for a reader-internal reason, `i8x16.shuffle` with
+	// `wrong number of lane indices`, is distinguished by its message rather than excused by name.
+	const prefix = "(module (func "
+	admitted := 0
+	for text, kind := range keywords {
+		if !startsInstruction(kind) {
 			continue
 		}
-		if !strings.Contains(err.Error(), "unimplemented") {
-			t.Errorf("ReadModule(%q) = %q, want an `unimplemented` boundary error — a "+
-				"body this stratum cannot read must not be filed as a syntax error",
-				src, err.Error())
+		admitted++
+		src := prefix + text + "))"
+		var e *Error
+		if err := ReadModule([]byte(src)); err == nil || !errors.As(err, &e) {
+			continue
+		}
+		if e.Offset == len(prefix) && e.Msg == "unexpected token" {
+			t.Errorf("ReadModule(%q) = %q blamed at the leader's own offset %d: no reader "+
+				"consumed %q, so a keyword startsInstruction admits is unread — a legal "+
+				"module rejected, which no assert_malformed vector can catch",
+				src, e.Msg, e.Offset, text)
+		}
+	}
+	// The vacuity check, because half one's verdict is "no counterexample found" and an empty
+	// domain finds none: a `startsInstruction` that returned false for everything, or a `keywords`
+	// table the generator emptied, would pass silently. 494 today; the floor is deliberately loose
+	// because the count grows with the proposal gates.
+	if admitted < 400 {
+		t.Fatalf("only %d keywords start an instruction; the sweep above asserted almost "+
+			"nothing (expected ~494 — plaininstr's mnemonics plus expr1's seven leaders)", admitted)
+	}
+
+	// Half two, the re-pointed tripwire: nothing may report `unimplemented` any more. Swept over
+	// the same table plus the token classes that are not keywords at all — a bare NAT, string, VAR
+	// or float in instruction position, which are what the old arm actually still reached.
+	nonKeyword := []string{`5`, `1.5`, `"abc"`, `$x`, `0x10`, `-3`}
+	probes := make([]string, 0, len(keywords)+len(nonKeyword))
+	for text := range keywords {
+		probes = append(probes, text)
+	}
+	probes = append(probes, nonKeyword...)
+	for _, tok := range probes {
+		// Both positions, since #70's fix covered the parenthesized one and left the bare one:
+		// `(func (param i32))` was answered and `(func param)` was not.
+		for _, src := range []string{prefix + tok + "))", prefix + "(" + tok + ")))"} {
+			err := ReadModule([]byte(src))
+			if err != nil && strings.Contains(err.Error(), "unimplemented") {
+				t.Errorf("ReadModule(%q) = %q; every instruction production has a reader, so "+
+					"an `unimplemented` here promises work that does not exist and parks a "+
+					"module the reference rejects in the board's remaining-work bucket",
+					src, err.Error())
+			}
 		}
 	}
 }
@@ -1222,6 +1311,162 @@ func TestBlockParamHasNoNamedForm(t *testing.T) {
 		if err := ReadModule([]byte(src)); err == nil {
 			t.Errorf("ReadModule(%q) accepted; neither result chain has a bindidx arm "+
 				"(parser.mly:762, :443)", src)
+		}
+	}
+}
+
+// TestFoldedAndFlatSignaturesAgree pins that the folded family *reaches* orderedTypeUse rather than
+// reimplementing it.
+//
+// **Five production families share one ordered chain** — optional `typeuse`, then `(param …)*`, then
+// `(result …)*`, then a tail that differs per family:
+//
+//	block_param_body / block_result_body                :754 / :760   tail instr_list
+//	handler_block_param_body / handler_block_result_body :780 / :786   tail handler clauses
+//	if_block_param_body / if_block_result_body           :879 / :885   tail if_
+//	callexpr_params / callexpr_results                   :851 / :858   tail expr_list
+//	callinstr_params_instr_list / …_results_instr_list   :712 / :720   tail instr_list
+//
+// Ten productions, one shape. orderedTypeUse is the one reader, parameterized by tail — and the
+// risk that creates is the one 0006 names: **two places knowing the same fact**. A folded reader
+// that read its own params-then-results chain would agree with the flat one on every case anyone
+// thought to write, and diverge on the case nobody did. Board counts cannot see it: both spellings
+// would still be accepted or rejected, just for parallel reasons.
+//
+// So the assertion is *agreement between the two spellings*, not a verdict on either. Each row is
+// one signature written twice — flat with `end`, folded in parens — and the control fails when the
+// two disagree, whichever way. That makes it blind to which verdict is right and sensitive to
+// exactly the thing being claimed, which is the point: TestBlockParamHasNoNamedForm already pins
+// the verdicts.
+//
+// Scoped to the shape rather than to a family, since all four block-ish leaders (`block`, `loop`,
+// `if`, `try_table`) route through the same reader — a fifth added upstream would need a row here,
+// and TestExpr1LeadersMatchTheReference is what catches its arrival.
+//
+// Falsified twice, and **the first attempt at the second falsification is the instructive part**.
+// Pointing foldedBlock at `functype` — the delegation that was grave #63 — fails eleven rows in
+// *both* directions: `(param $x i32)` flat-rejects and folded-accepts, `(type 0)` does the reverse,
+// because functype has the named arm and no typeuse prefix. Good.
+//
+// The second was meant to be "drop the `(param …)*` loop", and I first dropped it from
+// orderedTypeUse itself. **That passed**, and it had to: mutating the *shared* reader moves both
+// spellings together, which is precisely the property this control asserts. It also broke four
+// other tests and cost the board 4 vectors, so it was not a silent pass — but as a falsification of
+// *this* control it proves nothing, and reading a green there as "the control is weak" would have
+// been the wrong lesson. An agreement control is falsified by making the two paths **diverge**, not
+// by breaking the thing they share; a mutation that keeps them equal is outside its charter and a
+// different control's business. Redone as a divergent copy — `foldedSigCopy` with the typeuse arm
+// and the results chain but no param loop — it fails the six param rows, folded rejecting where
+// flat accepts.
+//
+// Which is the shape of an agreement control generally: it is blind by design to anything that
+// moves both operands, so it must be *paired* with a control that pins one of them. That pairing is
+// TestBlockParamHasNoNamedForm, and the four tests the bad mutation broke are what caught it.
+func TestFoldedAndFlatSignaturesAgree(t *testing.T) {
+	// Signature bodies, each legal-or-not on its own merits — the control does not care which,
+	// only that both spellings say the same thing. The mix is deliberate: the named-param and
+	// result-before-param rows are the *reject* side, the rest the accept side, so a copy that
+	// diverged in either direction is caught.
+	sigs := []struct{ sig, why string }{
+		{``, "the empty signature, both bodies' base case"},
+		{`(param i32)`, "one unnamed param"},
+		{`(param i32 i64)`, "valtype_list, more than one type in one clause"},
+		{`(param i32) (param i64)`, "the clause repeats — :756 is a list, not one arm"},
+		{`(result i32)`, "one result"},
+		{`(result i32) (result i64)`, "the result clause repeats too"},
+		{`(param i32) (result i64)`, "the ordered case, params before results"},
+		{`(result i64) (param i32)`, "the *disordered* case — reject, :760 follows :754"},
+		{`(param $x i32)`, "the named form — reject, block_param_body has no bindidx arm (#63)"},
+		{`(result $x i32)`, "no result chain has a bindidx arm"},
+		{`(type 0)`, "the typeuse arm, which precedes both clauses"},
+		{`(type 0) (param i32) (result i64)`, "typeuse and both clauses, the full chain"},
+		{`(type 0) (result i64) (param i32)`, "typeuse present and the clauses disordered"},
+	}
+	// One row per leader, flat and folded. `try_table` reaches the same reader through
+	// handler_block_*, `if` through if_block_* — different tails, same prefix, which is the whole
+	// claim.
+	forms := []struct {
+		leader     string
+		flat, fold string
+	}{
+		{"block", `(module (type (func)) (func block %s end))`, `(module (type (func)) (func (block %s)))`},
+		{"loop", `(module (type (func)) (func loop %s end))`, `(module (type (func)) (func (loop %s)))`},
+		{
+			"if",
+			`(module (type (func)) (func if %s end))`,
+			`(module (type (func)) (func (if %s (then))))`,
+		},
+		{
+			"try_table",
+			`(module (type (func)) (func try_table %s end))`,
+			`(module (type (func)) (func (try_table %s)))`,
+		},
+	}
+	checked := 0
+	for _, f := range forms {
+		for _, s := range sigs {
+			flatSrc := strings.Replace(f.flat, "%s", s.sig, 1)
+			foldSrc := strings.Replace(f.fold, "%s", s.sig, 1)
+			flatErr := ReadModule([]byte(flatSrc)) != nil
+			foldErr := ReadModule([]byte(foldSrc)) != nil
+			checked++
+			if flatErr != foldErr {
+				t.Errorf("%s signature %q: flat rejected=%v, folded rejected=%v — the two "+
+					"spellings share one signature reader (orderedTypeUse), so a disagreement "+
+					"means the folded path reimplemented the chain [%s]\n  flat:   %s\n  folded: %s",
+					f.leader, s.sig, flatErr, foldErr, s.why, flatSrc, foldSrc)
+			}
+		}
+	}
+	// Vacuity check: an agreement over zero comparisons agrees perfectly.
+	if want := len(forms) * len(sigs); checked != want {
+		t.Fatalf("compared %d signature pairs, want %d — the loop above skipped rows and an "+
+			"agreement over the ones it kept says nothing about the ones it dropped", checked, want)
+	}
+}
+
+// TestFoldedIfRequiresThen pins `if_`'s mandatory arm (parser.mly:891-898).
+//
+// Both sugar arms of `if_` require `(then …)`: `LPAR THEN instr_list RPAR` alone (:896) or followed
+// by `LPAR ELSE instr_list RPAR` (:893). There is no arm without it, and the first arm `expr if_`
+// (:891) is right-recursive over *operands*, so a folded `if`'s condition must itself be folded.
+//
+// `if.wast:1561` is the vector for the operand half — `(if (i32.const 0) (then))` is legal and a
+// bare `i32.const 0` before the `(then)` is not, because `expr` requires the paren. The rest is
+// synthetic: the suite has no vector for a `(if)` with no arms at all, which is exactly the kind of
+// hole a reader written from the vectors would leave open.
+func TestFoldedIfRequiresThen(t *testing.T) {
+	for _, tc := range []struct{ src, why string }{
+		{`(module (func (if (then))))`, "the one-armed sugar arm, :896"},
+		{`(module (func (if (then) (else))))`, "the two-armed arm, :893"},
+		{`(module (func (if (then (nop)) (else (nop)))))`, "both arms with bodies"},
+		{
+			`(module (func (if (i32.const 0) (then))))`,
+			"if.wast:1561 — the `expr if_` arm (:891), condition folded",
+		},
+		{
+			`(module (func (if (result i32) (then (i32.const 0)) (else (i32.const 1)))))`,
+			"synthetic: the signature precedes the arms, if_block_result_body :885",
+		},
+	} {
+		if err := ReadModule([]byte(tc.src)); err != nil {
+			t.Errorf("ReadModule(%q) = %v; want accepted — [%s]", tc.src, err, tc.why)
+		}
+	}
+	for _, tc := range []struct{ src, why string }{
+		{`(module (func (if)))`, "synthetic: no arm of if_ is empty — `(then …)` is mandatory"},
+		{`(module (func (if (else))))`, "synthetic: `(else …)` cannot appear without `(then …)`"},
+		{
+			`(module (func (if i32.const 0 (then))))`,
+			"synthetic: `expr if_` takes an *expr*, and a bare mnemonic is not one (:891)",
+		},
+		{
+			`(module (func (if (then) (else) (then))))`,
+			"synthetic: if_ has no third arm, so the list ends after the else",
+		},
+	} {
+		if err := ReadModule([]byte(tc.src)); err == nil {
+			t.Errorf("ReadModule(%q) accepted — [%s]", tc.src, tc.why)
 		}
 	}
 }

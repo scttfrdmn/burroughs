@@ -1058,7 +1058,50 @@ func TestPhase1Files(t *testing.T) {
 	// `inline function type` 24, `unknown label` 2, `malformed mutability` 1, `unknown type` 1
 	// all unmoved. What remains in func.wast is 4 `inline function type` and 1 `unknown type`,
 	// both #64's.
-	const textFailCeiling = 67
+	// # 28 after the folded/sugar stratum (#64, first half)
+	//
+	// **67 → 28, and the 39 that fell are the folded spellings of a grammar that was already
+	// right.** Every `unexpected token` in block/loop/if/call_indirect/return_call_indirect went to
+	// zero; the five files moved 3/15→11/15, 3/15→11/15, 11/24→20/24, 0/11→7/11, 0/11→7/11.
+	// Nothing withdrawn, checked per file rather than on the total — the only lines that moved are
+	// those five, all upward.
+	//
+	// The sequencing forecast I posted on #64 said **41** and the measurement says 39. The two
+	// missing are `token.wast:101` and `:117` (`$l0`, `$l$l` in a `br_table`), which the folded
+	// reader now *reaches* and which turn on name **resolution** rather than grammar — they are
+	// `unknown label`, and they belong with the 24 below rather than here. A forecast wrong by two
+	// in the direction of "I mistook a resolution question for a syntax one" is the same error the
+	// #64 partition made twice at larger scale; recorded rather than rounded.
+	//
+	// **The residue is 28 and every one of them is a semantic question, not a grammatical one:**
+	//
+	//	24  inline function type   exactly 4 each in block, loop, if, call_indirect,
+	//	                           return_call_indirect and func — a six-file × four grid, which is
+	//	                           the tell that one production is responsible:
+	//	                           `inline_functype_explicit` (parser.mly:238) compares an inline
+	//	                           signature against the explicit `(type n)` and needs the type
+	//	                           section resolved plus functype equality. #64's second half.
+	//	 2  unknown label          token.wast:101/:117 — `$l0` and `$l$l` lex as one VAR, so the
+	//	                           label does not resolve. Name resolution, same stratum as above.
+	//	 1  unknown type           func.wast:456 — `(func (type 2) (param i32))` where the module
+	//	                           defines fewer types. The file holds four `unknown type` vectors
+	//	                           and this is the only one in a `(module quote …)`; the other three
+	//	                           (:444, :632, :640) are `assert_invalid` on real modules, which
+	//	                           the text reader is never handed. Read from the file rather than
+	//	                           from the bucket, because a bucket count of 1 against a grep count
+	//	                           of 4 is exactly where a citation goes wrong.
+	//	 1  malformed mutability   binary-gc.wast:1 — the *decoder's*, not the parser's.
+	//
+	// The `unimplemented: instruction body` bucket is at **zero**, and that is what retired the
+	// boundary itself: with all four `instr_list` arms and all three `instr1` arms read, an
+	// `unimplemented` promises a reader nobody will write. See internal/text's expectedInstr for
+	// the sweep (493 of 494 admitted leaders consumed) and TestNoInstructionLeaderIsUnread for the
+	// re-pointed tripwire.
+	//
+	// **Pre-registered: the next PR takes this to 3.** The 24 plus the 2 plus the 1 are one job —
+	// `typeuse` resolution — leaving only binary-gc.wast:1, which is the decoder's. Stated here so
+	// the claim is falsifiable before the work rather than after it.
+	const textFailCeiling = 28
 	if textFail > textFailCeiling {
 		t.Errorf("text failures rose to %d, ceiling %d — either the reader regressed on "+
 			"vectors it used to answer, or the corpus moved", textFail, textFailCeiling)
@@ -1120,7 +1163,19 @@ func TestPhase1Files(t *testing.T) {
 	// boundary and reading the board, after a hand-probe of five spellings said none existed.
 	// Two claims of mine were falsified by running the check instead of reasoning about it, and
 	// this is the second — the first was in #63's label readers. The board is the instrument.
-	const passFloor = 1953
+	// **1992 = 1953 + 39 after the folded/sugar stratum (#64, first half)**, gross again — nothing
+	// withdrawn, and this time the per-file check is the *whole* evidence rather than a footnote,
+	// because a stratum that touches five files at once is exactly where a quiet withdrawal in a
+	// sixth would hide. Diffed file by file against the pre-change board: five lines moved, all
+	// upward, summing to 39. The itemization and the forecast's two-vector error are at
+	// textFailCeiling above.
+	//
+	// The 39 are the folded spellings of a grammar #63 had already made correct — `blockSignature`
+	// and its bindidx rejection were landed then, so the folded arms mostly needed *routing* to the
+	// existing reader rather than new rules. That is why the fall is one PR rather than three, and
+	// why the controls that matter here are agreement controls (TestFoldedAndFlatSignaturesAgree)
+	// rather than verdict controls: the risk was a second implementation, not a wrong one.
+	const passFloor = 1992
 	if totalPass < passFloor {
 		t.Errorf("board pass count %d fell below floor %d", totalPass, passFloor)
 	}

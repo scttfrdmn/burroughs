@@ -576,6 +576,69 @@ weakly-ordered platform.
   written before it* — and so does a retirement.
 
 ### Fixed
+- **The wat parser's folded/sugar stratum** (#64, first half): `expr`/`expr1` in full — all ten arms
+  (parser.mly:813–834) — plus `exprList`, `foldedBlock`, `ifBody`, and the shared handler-clause
+  reader. **Board 1953 → 1992 pass, 67 → 28 fail**, and the whole fall is the folded spellings of a
+  grammar #63 had already made correct: five files moved (block 3/15→11/15, loop 3/15→11/15, if
+  11/24→20/24, call_indirect 0/11→7/11, return_call_indirect 0/11→7/11), summing to 39 with nothing
+  withdrawn, diffed per file. `unimplemented: instruction body` is at **zero** — every remaining
+  failure is a semantic question, 24 `inline function type` in a six-file × four grid, 2 `unknown
+  label`, 1 `unknown type`, 1 the decoder's.
+
+  **Ten productions share one reader.** Five reference families have the same ordered prefix —
+  optional `typeuse`, `(param …)*`, `(result …)*` — differing only in tail: `block_param_body`
+  (:754/:760, tail `instr_list`), `handler_block_*` (:780/:786, handler clauses), `if_block_*`
+  (:879/:885, `if_`), `callexpr_*` (:851/:858, `expr_list`), `callinstr_*_instr_list` (:712/:720,
+  `instr_list`). `orderedTypeUse(tail)` is the one reader, and the risk that creates — two places
+  knowing that params precede results — is held by `TestFoldedAndFlatSignaturesAgree`, which
+  compares 52 flat/folded signature pairs and fails on *disagreement* rather than on a verdict.
+
+  The forecast said 41 vectors and 39 landed. `token.wast:101`/`:117` (`$l0`, `$l$l`) are reached by
+  the folded reader and turn on name **resolution**, not grammar; a forecast wrong by two in the
+  direction of mistaking a resolution question for a syntactic one, recorded rather than rounded.
+- **Every module containing a flat `select` or `call_indirect` was rejected (grave, #64).**
+  `instr_list` has **four** arms (parser.mly:546–550), not three: `selectinstr_instr_list` (:549)
+  and `callinstr_instr_list` (:550) are arms of the *list* rather than of `instr1`, because they
+  absorb the list's tail — a flat `select` is followed by a `(result …)*` chain that bottoms out in
+  `instr_list` itself. Nothing read them, so `(func select)`, `(func nop select nop)` and
+  `(func call_indirect (type 0))` all failed with `unimplemented: instruction body at "select"`.
+  Accept-direction, therefore invisible to the board by construction: no `assert_malformed` vector
+  can complain that a legal module was refused. Found by enumerating the reference's arms after the
+  folded work rather than by any suite signal — *scope controls to the space*, applied to a
+  production I had treated as three arms because three is what I had implemented. The control is
+  `TestNoInstructionLeaderIsUnread`'s accept half, which sweeps all 494 instruction-starting
+  keywords and reproduces exactly this defect when `flatSelectOrCall` is unwired.
+- **The instruction boundary is retired, and what retires it is a sweep rather than an impression
+  that the grammar looks finished (#64).** `unimplemented` promises a later stratum will read the
+  token; with all four `instr_list` arms and all three `instr1` arms read, that promise is
+  undischargeable, and the arm was still making it — `(module (func param))` answered
+  `unimplemented: instruction body at "param"`, which is **#70's defect on the unparenthesized
+  side**, since #70's derived check only looked past a `(`. 93 keywords reached the arm and
+  `startsInstruction` admits none of them. Measured before deleting: of the 494 keywords it does
+  admit, **493 are consumed by a reader**, the one exception being `i8x16.shuffle` blaming its own
+  offset for `wrong number of lane indices` — a reader claiming the mnemonic, not declining it.
+  `bodyBoundary` becomes `expectedInstr`, a plain syntax error in every case; board effect none,
+  read rather than forecast.
+
+  The tripwire is **re-pointed a third time, and this time the risk inverts rather than moves.**
+  `TestBodyBoundaryIsNamed` guarded against a deferral reported as a syntax error; with no deferral
+  left, the live risk is the reverse — a syntax error reported as a deferral, which is the
+  flattering direction, since it parks a module the reference rejects in the board's remaining-work
+  bucket. Renamed `TestNoInstructionLeaderIsUnread` and re-scoped from a case list to the whole
+  keyword table plus the non-keyword token classes, because three successive re-pointings were all
+  arguments about which examples belonged in a list. A dissolved subject is re-pointed, never
+  closed — and a sign change is a re-pointing.
+- **An agreement control is falsified by making its two paths diverge, not by breaking what they
+  share** (#64). `TestFoldedAndFlatSignaturesAgree`'s second falsification was meant to be "drop the
+  `(param …)*` loop", and dropping it from the *shared* `orderedTypeUse` **passed** — as it had to,
+  since mutating one reader moves both spellings together, which is the property the control
+  asserts. It was not a silent pass (four other tests failed and the board lost 4 vectors), but as a
+  falsification of *this* control it proved nothing, and reading the green as "the control is weak"
+  would have been the wrong lesson. Redone as a divergent copy with no param loop: six rows fail,
+  folded rejecting where flat accepts. The general shape — an agreement control is blind by design
+  to anything that moves both operands, so it must be **paired** with a control that pins one of
+  them, here `TestBlockParamHasNoNamedForm`. Recorded because the *first* falsification attempt is
+  where the discipline nearly mis-read its own instrument.
 - **The instruction boundary now derives what may start an instruction, instead of enumerating one
   arm of it (#70) — and the "zero vectors turn on this" forecast was wrong by 12.** `bodyBoundary`
   admitted a `(` only when the keyword after it was a `try_table` handler clause, and answered
