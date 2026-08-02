@@ -196,6 +196,22 @@ type context struct {
 	// sawStart is `multiple start sections`. A bool, not a count, because the message is
 	// about the second one existing.
 	sawStart bool
+
+	// The type index space's *content*, and the operations that read it — the reference's
+	// `c.types.list`/`c.types.ctx` (parser.mly:120) and its `deferred` thunks. See
+	// typetable.go, which owns all four fields and the phase that runs them; they live in this
+	// struct because they are context state, and they are documented there because the
+	// evaluation-order argument is the whole design.
+	//
+	// A fourth family joins the three above, and it is the last one the grammar owns:
+	//
+	//   - `inline function type does not match explicit type` — inline_functype_explicit,
+	//     parser.mly:245 (24 suite vectors)
+	//   - `unknown type <n>` / `unknown type $name` — func_type and lookup, :165/:152
+	//   - `non-function type <n>` — func_type's StructT/ArrayT case, :167
+	typeDefs []compType     // explicit definitions, in source order
+	typeCtx  []resolvedComp // the resolved table, built by runDeferred and extended by implicit types
+	deferred []func() error // stage-2 operations, in parse order
 }
 
 // importKind is the definition kind an `import after …` message names.

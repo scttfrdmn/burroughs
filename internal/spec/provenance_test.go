@@ -162,10 +162,25 @@ var derivedPremises = regexp.MustCompile(`derived from ([a-zA-Z0-9_.-]+\.wast):(
 func TestDerivedFixturesStateResolvablePremises(t *testing.T) {
 	requireSuite(t)
 
+	// **Every file that writes a `derived from` declaration**, not just the binary ones.
+	// The list was the three binary files while the category was binary-only, and the text
+	// fixtures then adopted the syntax — eight declarations across four files, none of them
+	// checked, because nobody widened the list. Found while ruling that `match_test.go`'s
+	// provenance is entailment rather than transcription: the sentence "its premises are
+	// checked here" was about to be written, and it was false. *A ruling retroactively
+	// falsifies prose written before it* — including prose you are in the middle of writing.
+	//
+	// Widening this list is the second half of that ruling, and it is what makes the
+	// three-category rule true for the text grammar rather than merely stated for it.
 	files := []string{
 		"../binary/binary_test.go",
 		"../binary/sections_test.go",
 		"../binary/constexpr_test.go",
+		"../text/lexer_test.go",
+		"../text/match_test.go",
+		"../text/num_test.go",
+		"../text/parser_test.go",
+		"../text/instr_test.go",
 	}
 
 	var declared, premises int
@@ -196,7 +211,19 @@ func TestDerivedFixturesStateResolvablePremises(t *testing.T) {
 				if n == "" {
 					continue
 				}
-				if _, ok := suiteSourceLine(t, m[1], n); !ok {
+				// **What counts as suite content depends on the grammar, not on the checker.**
+				// The first version asked `suiteSourceLine`, which returns false unless the
+				// line holds `\hh` byte escapes — the right question for a binary premise and
+				// the wrong one for every text premise, all seven of which failed on the widened
+				// list. `annotations.wast:72` is
+				// `(assert_malformed (module quote "(@)") "empty annotation id")`: as clear a
+				// premise as the suite contains, and invisible to a resolver looking for hex.
+				//
+				// So a premise resolves if it holds *either* — escapes for a binary vector, or
+				// non-comment source for a text one. Not relaxed to "the line exists": a
+				// premise pointing at a blank line or a bare `;;` comment is still a citation
+				// nobody can read, and that is the case the original was written to catch.
+				if !premiseResolves(t, m[1], n) {
 					t.Errorf("%s:%d: premise does not resolve: %s:%s holds no suite content "+
 						"(prose, a blank line, or past end of file). A premise nobody can read "+
 						"is not a premise.", f, lineNo, m[1], n)
@@ -215,6 +242,37 @@ func TestDerivedFixturesStateResolvablePremises(t *testing.T) {
 			"from the fixtures, or the category is unused and this control is vacuous")
 	}
 	t.Logf("verified %d derived fixtures citing %d resolvable premises", declared, premises)
+}
+
+// premiseResolves reports whether one cited line of the suite holds content a premise could
+// rest on, in either grammar: byte escapes for a binary vector, or non-comment wat/script
+// source for a text one.
+//
+// It is deliberately not "the line exists". A premise naming a blank line or a bare `;;`
+// comment is a citation nobody can read, which is the whole class this control was built for,
+// and accepting one would make the check pass on any integer in range.
+func premiseResolves(t *testing.T, file, line string) bool {
+	t.Helper()
+	if _, ok := suiteSourceLine(t, file, line); ok {
+		return true
+	}
+	n, err := strconv.Atoi(line)
+	if err != nil || n < 1 {
+		return false
+	}
+	src, err := os.ReadFile(filepath.Join(suiteDir, file))
+	if err != nil {
+		return false
+	}
+	lines := strings.Split(string(src), "\n")
+	if n > len(lines) {
+		return false
+	}
+	text := lines[n-1]
+	if i := strings.Index(text, ";;"); i >= 0 {
+		text = text[:i]
+	}
+	return strings.TrimSpace(text) != ""
 }
 
 // suiteSourceLine returns the bytes encoded by the `"\hh"` escapes on one line of a
@@ -261,7 +319,59 @@ func suiteSourceLine(t *testing.T, file, line string) ([]byte, bool) {
 	return out, true
 }
 
+// citedRow decides whether one line of Go source is a *cited fixture row*, and returns the
+// citation it carries. It is the single definition of the population the provenance rule
+// covers, shared by the guard and by the text checker on purpose: two regexps for one
+// concept is how a file comes to be registered with a checker that reads past it.
+//
+// A cited row is a fixture vector — a composite literal holding string literals, or a
+// byte-slice literal — carrying a citation in one of two positions:
+//
+//  1. a **citation field**: a string literal that *begins* with `<file>.wast:N`, optionally
+//     followed by explanatory prose. This is the text fixtures' style.
+//  2. a **trailing comment**: `// <file>.wast:N`, the byte-literal fixtures' style.
+//
+// The `^` anchor in (1) is load-bearing. Without it a citation *mentioned* inside a row
+// field is swept in, and a mention is not a transcription: `utf8position_test.go:162` is a
+// row about a *grammar site* (`parser.mly:49-52`) whose prose ends "it answers id.wast:31",
+// and there is nothing in it copied from the suite that could drift. Anchoring is what
+// separates "this row is the vector at X" from "this row relates to X".
+func citedRow(line string) (file, lineNo string, ok bool) {
+	if !fixtureRow.MatchString(line) && !fixtureByteLit.MatchString(line) {
+		return "", "", false
+	}
+	if m := citeComment.FindStringSubmatch(line); m != nil {
+		return m[1], m[2], true
+	}
+	for _, s := range goStringLiterals(line) {
+		if m := citeField.FindStringSubmatch(strings.TrimSpace(s)); m != nil {
+			return m[1], m[2], true
+		}
+	}
+	return "", "", false
+}
+
+var (
+	// A fixture row: a composite literal holding at least one interpreted string.
+	fixtureRow = regexp.MustCompile(`\{.*".*".*\}`)
+	// A byte-slice literal: {0x00, 0x61, ...}.
+	fixtureByteLit = regexp.MustCompile(`\{(?:\s*0x[0-9a-fA-F]{2}\s*,?)+\}`)
+	// A citation opening a comment.
+	citeComment = regexp.MustCompile(`//\s*([a-zA-Z0-9_.-]+\.wast):(\d+)`)
+	// A citation opening a row field. Anchored: see citedRow.
+	citeField = regexp.MustCompile(`^([a-zA-Z0-9_.-]+\.wast):(\d+)`)
+)
+
 // TestEveryFixtureFileIsChecked guards the guard.
+//
+// Grave [#78](https://github.com/scttfrdmn/burroughs/issues/78) lives here: this guard's
+// trigger regexp under-matched, so it ran green while 17 checkable fixture rows were
+// unregistered, and it vouched for a file whose checker read past every line in it. The
+// lesson is **a guard's trigger predicate is itself a claim about the space, and an
+// under-matching one fails silently by construction** — breaking the assertion never finds
+// a trigger that never fires, so the trigger's *coverage* over the population it claims
+// gets measured (118 of 244 citations). Coverage is to a trigger what a vacuity floor is
+// to a comparison. The three sections below are the full account.
 //
 // TestFixtureProvenance reads a hand-maintained file list, so a new fixture file
 // that nobody adds to it is silently unchecked — the same failure mode as the
@@ -273,6 +383,52 @@ func suiteSourceLine(t *testing.T, file, line string) ([]byte, bool) {
 // Two checkers, two fixture shapes, and the guard has to know which owns which — a file
 // registered with the wrong one is unchecked while looking checked, which is worse than
 // being unlisted, because the guard then vouches for it.
+//
+// # What triggers registration is a *fixture row*, not a citation
+//
+// The first version asked whether a file held a citation at all, with the citation
+// regexp shared with the two checkers: `//\s*<file>.wast:\d+`, anchored at a comment's
+// opening. That was the wrong question asked with a regexp that could not ask it, and the
+// two defects hid each other.
+//
+// Wrong question: a *prose* citation — "imports.wast:62-64 uses `(type $forward)` before
+// defining it" — has nothing for either checker to verify. There is no transcription, so
+// there is no drift to catch; both checkers skip such lines explicitly (`a citation in
+// prose, not on a vector`). Requiring registration for one means registering a file into
+// a list whose mechanism reads past it, which is exactly the vouching-for-nothing failure
+// the paragraph above forbids. Measured before choosing: the strongest machine check
+// available for a prose citation is "the line falls inside some command's extent", and a
+// span index over the whole suite covers **169427 of 178222 lines, 95%** — a check that
+// passes on nearly any integer is not a check. So prose citations are reviewed by eyes,
+// and this guard is scoped to what a machine can actually verify.
+//
+// Defective regexp: requiring `//` immediately before the citation means a citation held
+// in a row *field* is invisible, and the whole text-fixture style puts it there. Measured
+// across the engine's tests: 244 citations, 118 of them opening a comment, and **17 cited
+// fixture rows in two files were unregistered while this guard said nothing** —
+// `parser_test.go`'s nine (the block/loop/if `(param $x i32)` rows citing
+// `block.wast:1475`, `loop.wast:783`, `if.wast:1513`; the `catch`/`catch_all` rows; the
+// four `mismatching label` rows) and `instr_test.go`'s eight `i8x16.shuffle` lane rows.
+// Every one carries a source, an expectation and a citation: the checkable shape. That is
+// this guard failing at its whole job — *guard the guard, or the guard is decoration* —
+// and it failed silently, because a regexp that under-matches produces no finding rather
+// than a wrong one.
+//
+// So the trigger is a **citation field on a fixture row**: a string literal that *begins*
+// with `<file>.wast:N`, or the trailing-comment form the byte-literal fixtures use. The
+// anchor is what keeps it a citation rather than a mention — `utf8position_test.go:162`
+// ends its `why` with "it answers id.wast:31 — `(func $\"\\ef\")`", which is prose about a
+// vector inside a row about a *grammar site*, and there is no transcription in it to drift.
+// Scoped to the shape the checkers can verify, not to a substring match.
+//
+// The definition lives in `citedRow`, shared with the text checker rather than spelled twice:
+// two regexps for one concept is how a file comes to be registered with a mechanism that
+// reads past it, which is what the `match_test.go` note below records happening.
+//
+// Falsified before trusted: dropping a registered file from `checked` fails with its exact
+// row count (8 and 9); dropping the `^` anchor pulls `utf8position_test.go` in and fails;
+// matching any line at all fails on the prose-only files; matching nothing trips the vacuity
+// floors rather than passing green.
 func TestEveryFixtureFileIsChecked(t *testing.T) {
 	checked := map[string]bool{
 		// Byte-literal fixtures: TestFixtureProvenance.
@@ -283,15 +439,26 @@ func TestEveryFixtureFileIsChecked(t *testing.T) {
 		// plus an expected string, not a byte literal, so the image-shaped checker cannot
 		// verify one — listing these there would have satisfied this guard and checked
 		// nothing. **A registration is not a check.**
-		"../text/lexer_test.go": true,
-		"../text/match_test.go": true,
+		//
+		// `match_test.go` is *not* here, and its absence is a finding rather than an
+		// oversight. It was registered from the day the text checker was written, and the
+		// checker verified nothing in it: every citation it carries is prose or a `derived`
+		// declaration, so the row filter skipped all of them. The registration vouched for a
+		// file the mechanism read past — the exact failure this guard's own comment names —
+		// and it took the `withRows` floor below to say so. Its `derived` premises *are*
+		// checked, by TestDerivedFixturesStateResolvablePremises, which is where a file whose
+		// provenance is entailment rather than transcription belongs.
+		"../text/lexer_test.go":  true,
+		"../text/parser_test.go": true,
+		"../text/instr_test.go":  true,
 	}
 
 	paths, err := filepath.Glob("../*/*_test.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	cite := regexp.MustCompile(`//\s*[a-zA-Z0-9_.-]+\.wast:\d+`)
+
+	var scanned, withRows int
 	for _, p := range paths {
 		if strings.HasPrefix(p, "../spec/") {
 			continue // this package's own tests hold no engine fixtures
@@ -300,12 +467,35 @@ func TestEveryFixtureFileIsChecked(t *testing.T) {
 		if err != nil {
 			continue
 		}
-		if !cite.Match(src) {
+		scanned++
+		var rows []string
+		for i, line := range strings.Split(string(src), "\n") {
+			if _, _, ok := citedRow(line); !ok {
+				continue
+			}
+			rows = append(rows, fmt.Sprintf("%s:%d: %s", p, i+1, strings.TrimSpace(line)))
+		}
+		if len(rows) == 0 {
 			continue
 		}
+		withRows++
 		if !checked[p] {
-			t.Errorf("%s carries suite citations but is not in TestFixtureProvenance's file list; its citations are unverified", p)
+			t.Errorf("%s carries %d cited fixture row(s) but is in no provenance checker's "+
+				"file list; its citations are unverified. First: %s",
+				p, len(rows), rows[0])
 		}
+	}
+	// Vacuity floors, because *a comparison against an empty set succeeds*: a glob that
+	// stopped matching, or a row regexp that drifted from the fixtures, would leave this
+	// loop finding nothing and reporting green while asserting nothing at all.
+	if scanned < 10 {
+		t.Fatalf("scanned only %d test files; the glob is not reaching the engine's packages",
+			scanned)
+	}
+	if withRows < len(checked) {
+		t.Errorf("found cited fixture rows in only %d files but %d are registered; the row "+
+			"regexps have drifted from the fixtures, so this guard is asserting less than "+
+			"its list claims", withRows, len(checked))
 	}
 	// And the reverse: a stale entry naming a file that no longer exists would make
 	// the list look more thorough than it is.
@@ -329,10 +519,12 @@ func TestEveryFixtureFileIsChecked(t *testing.T) {
 //  2. the fixture's expected substring and the command's own `Expect` string agree — a
 //     fixture claiming a different error than the suite asserts at that line is a drifted
 //     citation even when fixture and suite are each internally consistent;
-//  3. the fixture's `src` is *contained in* the command's assembled source. Containment
-//     rather than equality, because a lexer fixture is legitimately a fragment: a row
-//     pinning one lexeme need not carry the whole module. A fragment appearing nowhere in
-//     the cited command is a transcription error.
+//  3. the fixture's `src` and the command's assembled source contain one another *in either
+//     direction*. Containment rather than equality, because a lexer fixture is legitimately
+//     a fragment (a row pinning one lexeme need not carry the whole module) and a parser
+//     fixture is legitimately a *wrapper* (a quote module's body is bare `(func …)`, while a
+//     vector handed to ReadModule needs `(module (func …))`). Text appearing in neither
+//     relation to the cited command is a transcription error.
 //
 // It earned its keep on the first run: `(@a \x7f)` cited `annotations.wast:26`, which holds
 // `(@a \03)`. Both the fixture and the suite were internally consistent — the fixture's
@@ -343,15 +535,49 @@ func TestEveryFixtureFileIsChecked(t *testing.T) {
 // Rows marked `synthetic` or `derived` are exempt from (2) and (3) and counted separately,
 // same as the binary side.
 //
-// Falsified before trusted: perturbing a cited line number fails (1) and (3); swapping a
-// row's expected string for a neighbour's fails (2); blanking the row regex or the quote
-// index trips the vacuity floors rather than passing green.
+// # Two row layouts, because the fixtures have two
+//
+// The lexer fixtures put the citation in a *trailing comment* and the expectation last:
+// `{"name", "<src>", "<expect>"}, // obsolete-keywords.wast:2`. The parser and instruction
+// fixtures put it in a *field*, which shifts everything, and the two field-style widths are
+// not even the same shape: `{"<src>", "block.wast:1475"}` carries no expectation at all (its
+// table asserts one shared error in the loop body), while
+// `{"name", <computed>, "<expect>", "simd_lane.wast:519"}` carries an expectation and no
+// source literal, its immediate list spliced from Go constants. Reading any of the three with
+// another's positional convention compares the wrong strings — and it does not fail loudly:
+// reading `instr_test.go` by the comment-style offsets compared "unexpected token", as though
+// it were a module, against an `i8x16.shuffle` vector.
+//
+// So the layout is *detected*, and the two checks apply **independently, each when its field
+// is present**, rather than as a pair. A row with a source and no expectation is still checked
+// on its source, which is the direction that catches transcription drift; requiring both would
+// have silently exempted the nine `parser_test.go` rows, and an exemption granted by a layout
+// mismatch is the worst kind, because nothing reports it. `sourcesChecked` and `expectsChecked`
+// are floored separately for exactly that reason: one number cannot show that half the
+// mechanism went dead. Rows with no source literal are counted in `computed` and **ceilinged**,
+// so the weaker treatment cannot spread quietly.
+//
+// Falsified before trusted, each probe run rather than argued: perturbing a citation to the
+// neighbouring command fails (3) — and note the discrimination, since `block.wast:1475` and
+// `:1479` differ by one paren; corrupting only the source text fails (3) with the citation
+// intact; swapping an expectation on a computed-vector row fails (2), which is the half with
+// no source to fall back on; de-registering a file makes the guard report its 8 and 9 rows;
+// dropping the citation anchor pulls in `utf8position_test.go`; and disabling the source scan
+// turns all 17 field-style rows into `computed` and trips the ceiling rather than passing.
+//
+// Two mechanisms were **removed** because a `panic()` proved nothing reached them: an arm for
+// a `{name, src, expect, cite}` width no fixture has, and whitespace-insensitive containment
+// (the bidirectional test already covers every current row exactly). *A green that survives
+// the bug it names is a control in name only* — and an arm no probe reaches has never been
+// asked anything at all.
 func TestTextFixtureProvenance(t *testing.T) {
 	requireSuite(t)
 
 	files := []string{
 		"../text/lexer_test.go",
 		"../text/match_test.go",
+		"../text/parser_test.go",
+		"../text/instr_test.go",
 	}
 
 	type qcmd struct {
@@ -365,11 +591,40 @@ func TestTextFixtureProvenance(t *testing.T) {
 			continue
 		}
 		base := filepath.Base(p)
-		for _, c := range s.Commands {
+		raw, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		nlines := strings.Count(string(raw), "\n") + 1
+		for i, c := range s.Commands {
 			if c.Source == nil {
 				continue
 			}
-			quotes[fmt.Sprintf("%s:%d", base, c.Line)] = qcmd{src: string(c.Source), expect: c.Expect}
+			// **A command occupies lines, and a citation may name any of them.** Keyed on
+			// `c.Line` alone, seven of the newly-registered rows resolved to nothing — and not
+			// because they had drifted: they cite the `(module quote …)` line *inside* an
+			// `(assert_malformed` form, which is the more precise of the two citations,
+			// naming the vector rather than the assertion wrapping it. A checker accepting
+			// only the head line would have taught the fixtures to cite less precisely.
+			//
+			// The extent runs to the line before the next command, and only unclaimed lines
+			// are filled, so a citation inside command N resolves to N and never to N-1's
+			// tail. Bounding it by the command is what keeps it a check: an index over whole
+			// files resolves nearly any integer — 169427 of the suite's 178222 lines fall
+			// inside some command — and a lookup that always succeeds verifies nothing. The
+			// verification is the source and expectation agreement below; the extent only
+			// decides *which* command a row is claiming to be.
+			end := nlines
+			if i+1 < len(s.Commands) {
+				end = s.Commands[i+1].Line - 1
+			}
+			q := qcmd{src: string(c.Source), expect: c.Expect}
+			for n := c.Line; n <= end; n++ {
+				k := fmt.Sprintf("%s:%d", base, n)
+				if _, taken := quotes[k]; !taken {
+					quotes[k] = q
+				}
+			}
 		}
 	}
 	// A vacuity floor, not a non-nil check: an empty index makes every lookup below fail
@@ -380,11 +635,7 @@ func TestTextFixtureProvenance(t *testing.T) {
 			len(quotes))
 	}
 
-	cite := regexp.MustCompile(`//\s*([a-zA-Z0-9_.-]+\.wast):(\d+)`)
-	// A fixture row is a composite literal holding at least one interpreted string.
-	row := regexp.MustCompile(`\{.*".*".*\}`)
-
-	var cited, exempt int
+	var cited, exempt, sourcesChecked, expectsChecked, computed int
 	for _, f := range files {
 		src, err := os.ReadFile(f)
 		if err != nil {
@@ -392,18 +643,15 @@ func TestTextFixtureProvenance(t *testing.T) {
 		}
 		for i, line := range strings.Split(string(src), "\n") {
 			lineNo := i + 1
-			m := cite.FindStringSubmatch(line)
-			if m == nil {
-				continue
-			}
-			if !row.MatchString(line) {
-				continue // a citation in prose, not on a fixture row
+			file, cl, ok := citedRow(line)
+			if !ok {
+				continue // prose, or a row with no citation
 			}
 			if strings.Contains(line, "synthetic") || strings.Contains(line, "derived") {
 				exempt++
 				continue
 			}
-			loc := m[1] + ":" + m[2]
+			loc := file + ":" + cl
 			cmd, ok := quotes[loc]
 			if !ok {
 				t.Errorf("%s:%d: citation %s resolves to no quote-form command; a citation "+
@@ -412,51 +660,140 @@ func TestTextFixtureProvenance(t *testing.T) {
 				continue
 			}
 			strs := goStringLiterals(line)
-			if len(strs) < 2 {
-				t.Errorf("%s:%d: cited row holds %d string literals, want at least a source "+
-					"and an expectation\n\t%s", f, lineNo, len(strs), strings.TrimSpace(line))
-				continue
-			}
-			// Both fields are read *positionally* — the expectation is the row's last
-			// literal, the source the one before it. The first draft searched for
-			// "whichever earlier literal the command contains", and a control that picks
-			// its own input by whichever candidate passes will always find one that
-			// passes: every row's leading name field is a substring of its own source
-			// (`"current_memory"` in `(drop (current_memory))`), so the *name* satisfied
-			// the containment check and the source was never compared at all. A probe
-			// that corrupted only the source went green. Caught by perturbing a different
-			// field than the probe that had already succeeded — a control falsified in
-			// one field is not falsified.
-			want, src := strs[len(strs)-1], strs[len(strs)-2]
-			switch {
-			case want == "":
-				// An empty expectation is the row asserting the vector lexes clean, so the
-				// cited command must not be asserting an error. Checked explicitly because
-				// strings.Contains(anything, "") is true: leaving this to the substring
-				// comparison below would make every clean-lexing row agree with every
-				// assert_malformed in the suite.
-				if cmd.expect != "" {
-					t.Errorf("%s:%d: row expects the vector to lex clean but %s asserts %q",
-						f, lineNo, loc, cmd.expect)
+			// **The layout is detected, not assumed.** In the trailing-comment style the
+			// citation is outside the literals, so the expectation is last and the source
+			// second-from-last. In the field style the citation *is* the last literal, so
+			// everything shifts by one — and a row may carry no expectation at all, its
+			// table asserting one shared error in the loop body.
+			//
+			// Read positionally within each layout, never by search. The first draft of this
+			// function searched for "whichever earlier literal the command contains", and a
+			// control that picks its own input by whichever candidate passes will always find
+			// one that passes: every row's leading name field is a substring of its own
+			// source (`"current_memory"` in `(drop (current_memory))`), so the *name*
+			// satisfied the containment check and the source was never compared at all. A
+			// probe that corrupted only the source went green. Caught by perturbing a
+			// different field than the probe that had already succeeded — *a control
+			// falsified in one field is not falsified*.
+			var want, vec string
+			var haveWant, haveVec bool
+			if citeComment.MatchString(line) {
+				if len(strs) < 2 {
+					t.Errorf("%s:%d: cited row holds %d string literals, want at least a "+
+						"source and an expectation\n\t%s",
+						f, lineNo, len(strs), strings.TrimSpace(line))
+					continue
 				}
-			case cmd.expect == "":
-				t.Errorf("%s:%d: row expects %q but %s asserts nothing",
-					f, lineNo, want, loc)
-			case !strings.Contains(cmd.expect, want) && !strings.Contains(want, cmd.expect):
-				t.Errorf("%s:%d: row expects %q but %s asserts %q — the fixture and its "+
-					"citation disagree about which error the suite wants",
-					f, lineNo, want, loc, cmd.expect)
+				want, vec = strs[len(strs)-1], strs[len(strs)-2]
+				haveWant, haveVec = true, true
+			} else {
+				// Field style: the citation is the last literal, so drop it and read the rest
+				// by *shape* rather than by offset. These tables come in three widths —
+				// `{src, cite}`, `{name, src, expect, cite}`, and `{name, <computed>, expect,
+				// cite}`, where the immediate list is spliced from Go constants
+				// (`sixteen + " 16"`) and no literal holds the vector at all. One fixed offset
+				// cannot serve three widths: reading `instr_test.go` by offset put the
+				// *expectation* in the source slot and compared "unexpected token" against an
+				// `i8x16.shuffle` module, which is what the eight errors on the first run were.
+				//
+				// The rule is: **a wat source begins with `(`; the field after it, if any, is
+				// the expectation.** That is a test on the field's shape, not on whether a
+				// reading happens to pass — the distinction that matters, because the first
+				// draft of the comment-style branch searched for "whichever earlier literal the
+				// command contains" and a control choosing its own input by what passes will
+				// always find something that passes. There, every row's name field was a
+				// substring of its own source (`"current_memory"` in `(drop (current_memory))`),
+				// so the name satisfied containment and the source was never compared; a probe
+				// corrupting only the source went green. *A control falsified in one field is
+				// not falsified.*
+				//
+				// **Only what a probe reaches.** Two earlier versions of this branch carried
+				// machinery for widths no fixture has: first a `case` for
+				// `{name, src, expect, cite}`, then a scan that also read the field *after* the
+				// source as an expectation. A `panic()` in each proved both unreachable — every
+				// field-style row today is either `{src, cite}` (source, table-shared
+				// expectation) or `{name, <computed>, expect, cite}` (no source literal). An
+				// unexercised arm inside a control is scaffolding indistinguishable, on the
+				// board, from a check, so it is not kept against a future fixture that may never
+				// arrive; the width is covered by the ceiling below noticing it, which is a
+				// mechanism that *does* run. *Unreachability is a grave only when it's silent* —
+				// this is the note.
+				fields := strs[:len(strs)-1]
+				if len(fields) == 0 {
+					t.Errorf("%s:%d: cited row holds nothing but its citation\n\t%s",
+						f, lineNo, strings.TrimSpace(line))
+					continue
+				}
+				for _, s := range fields {
+					if strings.HasPrefix(strings.TrimSpace(s), "(") {
+						vec, haveVec = s, true
+						break
+					}
+				}
+				if !haveVec {
+					// **The vector is computed, so only its expectation is checkable.** There
+					// is no literal to compare, and inventing one means re-assembling the
+					// fixture's own arithmetic here — a second implementation of the thing
+					// under test. Counted and ceilinged, not silently skipped: see below.
+					want, haveWant = fields[len(fields)-1], true
+					computed++
+				}
 			}
-			if src == "" {
-				t.Errorf("%s:%d: cited row's source field is empty; there is nothing to "+
-					"compare against %s", f, lineNo, loc)
-				continue
+			// The two checks are independent and each runs when its field is present. A row
+			// with a source and no expectation is still checked on its source — requiring the
+			// pair would have silently exempted every row whose table shares one error, and an
+			// exemption granted by a layout mismatch is invisible.
+			if haveWant {
+				switch {
+				case want == "":
+					// An empty expectation is the row asserting the vector lexes clean, so the
+					// cited command must not be asserting an error. Checked explicitly because
+					// strings.Contains(anything, "") is true: leaving this to the substring
+					// comparison below would make every clean-lexing row agree with every
+					// assert_malformed in the suite.
+					if cmd.expect != "" {
+						t.Errorf("%s:%d: row expects the vector to lex clean but %s asserts %q",
+							f, lineNo, loc, cmd.expect)
+					}
+				case cmd.expect == "":
+					t.Errorf("%s:%d: row expects %q but %s asserts nothing",
+						f, lineNo, want, loc)
+				case !strings.Contains(cmd.expect, want) && !strings.Contains(want, cmd.expect):
+					t.Errorf("%s:%d: row expects %q but %s asserts %q — the fixture and its "+
+						"citation disagree about which error the suite wants",
+						f, lineNo, want, loc, cmd.expect)
+				}
+				expectsChecked++
 			}
-			if !strings.Contains(cmd.src, src) {
-				t.Errorf("%s:%d: row source %q does not appear in %s; the vector was "+
-					"transcribed from somewhere else, or the citation drifted\n\tsuite source: %q",
-					f, lineNo, src, loc, cmd.src)
-				continue
+			if haveVec {
+				if vec == "" {
+					t.Errorf("%s:%d: cited row's source field is empty; there is nothing to "+
+						"compare against %s", f, lineNo, loc)
+					continue
+				}
+				// **Containment in either direction.** A fixture is legitimately a fragment of
+				// its cited command — a lexer row pinning one lexeme — and legitimately a
+				// *wrapper* around it, because a quote module's body is bare (`(func …)`) while
+				// a fixture handed to ReadModule needs `(module (func …))`. Nine of
+				// parser_test.go's rows are the second shape, and requiring one direction
+				// failed all nine on the first run. Neither direction is the weaker check: what
+				// is asserted is that one text appears verbatim inside the other, so a changed
+				// token, index or escape still fails.
+				//
+				// Verbatim, with no whitespace normalization. A draft stripped spaces on both
+				// sides, reasoning that a quote module concatenated from string literals has no
+				// space at the seams while a fixture on one line does — plausible, and a probe
+				// showed **no row needs it**: the bidirectional test already covers every
+				// current fixture exactly. A relaxation nothing reaches only weakens the next
+				// comparison, so it is not carried on the strength of an argument. *Print it,
+				// don't reason about it.*
+				if !strings.Contains(cmd.src, vec) && !strings.Contains(vec, cmd.src) {
+					t.Errorf("%s:%d: row source %q neither appears in nor contains %s; the "+
+						"vector was transcribed from somewhere else, or the citation "+
+						"drifted\n\tsuite source: %q", f, lineNo, vec, loc, cmd.src)
+					continue
+				}
+				sourcesChecked++
 			}
 			cited++
 		}
@@ -465,7 +802,37 @@ func TestTextFixtureProvenance(t *testing.T) {
 		t.Fatal("no text citations checked — the row regex has drifted from the fixtures, " +
 			"and a comparison against an empty set succeeds")
 	}
-	t.Logf("verified %d cited text fixtures, %d exempt as synthetic or derived", cited, exempt)
+	// Floored separately, because one number cannot show that half the mechanism went dead:
+	// a layout-detection bug that read every row as source-only would leave `cited` healthy
+	// while `expectsChecked` collapsed, and the reverse for a `vec` that stopped resolving.
+	if sourcesChecked < 20 || expectsChecked < 20 {
+		t.Errorf("checked %d sources and %d expectations across %d cited rows; both halves of "+
+			"the comparison must stay live, and a collapse in one is invisible in the total",
+			sourcesChecked, expectsChecked, cited)
+	}
+	// A row whose vector is computed is checked on its expectation only, which is a real
+	// weakening and so is bounded rather than merely counted: if this grows, the fixture style
+	// is drifting away from literal vectors and the source half of the rule is quietly
+	// shrinking. *A precondition that excuses a gate is licensed at one place, or it is a hole.*
+	//
+	// **8 → 20 (#76), raised deliberately and itemized.** Both tables in the count are
+	// `instr_test.go`'s, and both are one production read through a *shared prefix* rather than
+	// per-row modules: 8 rows of `i8x16.shuffle` immediates (`sixteen + " 16"`) and 12 rows of
+	// `lane_imms` arms (`"1 offset=0 align=1 1"`). The field is a literal in the second table —
+	// what makes the vector uncomputable is that no single literal holds it, since the module is
+	// `prefix + field + suffix`. Spelling those 12 as whole modules would mean 12 copies of a
+	// 110-character wrapper differing in one immediate, which buys the source check by making the
+	// table stop reading as "five arms of one production". The trade is stated rather than taken
+	// silently: these 20 rows are checked on their expectation and on nothing else.
+	if computed > 20 {
+		t.Errorf("%d cited rows build their vector from Go expressions, so only their "+
+			"expectation is checked; the ceiling is 20 (instr_test.go's two immediate tables: "+
+			"8 shuffle rows and 12 lane_imms rows). Spell new vectors as literals, or raise "+
+			"this deliberately", computed)
+	}
+	t.Logf("verified %d cited text fixtures (%d sources, %d expectations, %d expectation-only "+
+		"because the vector is computed), %d exempt as synthetic or derived",
+		cited, sourcesChecked, expectsChecked, computed, exempt)
 }
 
 // goStringLiterals extracts the interpreted string literals from one line of Go source,
