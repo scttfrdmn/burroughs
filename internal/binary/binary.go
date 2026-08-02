@@ -81,7 +81,22 @@ var (
 
 	// The malformed-form errors of the payload grammars. Each names the byte it
 	// rejected, because "malformed limits flags" alone does not say which flags.
-	ErrMalformedFuncType   = errors.New("malformed function type")
+
+	// ErrMalformedDefType is `comptype`'s fallthrough (decode.ml:259). It replaced
+	// ErrMalformedFuncType at that site, which was a **sentinel the reference never
+	// emits**: `grep -r 'malformed function type' third_party/spec/interpreter/` finds
+	// nothing, and no suite vector asserts either string, so the board could not tell the
+	// invented one from the real one. Grave #36's class one layer out — a fabricated
+	// sentinel rather than a fabricated byte (#86).
+	ErrMalformedDefType = errors.New("malformed definition type")
+
+	// ErrMalformedStorageType is `packtype`'s fallthrough (decode.ml:234), reached as the
+	// last branch of `storagetype`'s `either` — so it is the message a field type's first
+	// byte gets when it is neither a valtype nor i8/i16. No suite vector asserts it: every
+	// storage-type position is inside a GC construct, which a gate-off engine declines
+	// first. Named at its definition site per the ErrTrailingData ruling (#6).
+	ErrMalformedStorageType = errors.New("malformed storage type")
+
 	ErrMalformedValType    = errors.New("malformed value type")
 	ErrMalformedRefType    = errors.New("malformed reference type")
 	ErrMalformedHeapType   = errors.New("malformed heap type")
@@ -349,6 +364,26 @@ func (r *reader) peek() (byte, bool) {
 		return 0, false
 	}
 	return r.b[r.off], true
+}
+
+// skip advances past a byte a caller has already peeked — `skip n s` (decode.ml:20), used
+// as `skip 1 s` after a successful `peek` at :264, :268, :275, and :1014.
+//
+// It exists because the reference has it, and the alternative was worse in a way a linter
+// caught: transcribing `peek`-then-`skip 1` as `peek`-then-`_, _ = r.byte()` discards an
+// error return that genuinely cannot fire (the peek proved the byte is there), and errcheck
+// is right to object — *a discarded error is a claim about reachability that the code does
+// not state*. Naming the operation states it: this consumes a byte whose presence is
+// already established, so there is no error to handle rather than an error being ignored.
+//
+// Deliberately no bounds check and no return value. A skip past the end would be a caller
+// that skipped without peeking, which is a bug in the caller rather than a malformed
+// module — and clamping it would convert that bug into a silent misparse of the next field,
+// the failure mode the `either` cursor-reset comment describes. The reference raises EOS;
+// here the slice bound is the equivalent backstop, since every read after an over-skip
+// finds `remaining() < 1`. (#86.)
+func (r *reader) skip(n int) {
+	r.off += n
 }
 
 // byteVec reads a length-prefixed byte sequence — the encoding of a name, and of

@@ -43,7 +43,8 @@ var declaredErrors = []error{
 	// individual grammars.
 	ErrPayloadEnd,
 	ErrSectionSizeMismatch,
-	ErrMalformedFuncType,
+	ErrMalformedDefType,
+	ErrMalformedStorageType,
 	ErrMalformedValType,
 	ErrMalformedRefType,
 	ErrMalformedLimits,

@@ -885,6 +885,24 @@ weakly-ordered platform.
 
 ### Changed
 
+- **The all-gates-on pass floor was stale by 3380** ([#87](https://github.com/scttfrdmn/burroughs/issues/87)).
+  `allOnPassFloor` was **798 against an actual 4178** — set in [#56](https://github.com/scttfrdmn/burroughs/issues/56),
+  15 commits back, and left behind by every text-side landing since. It could not have caught a
+  regression that erased four fifths of the lane. Raised to the measured value, with #86's +1.
+  Found by *reading the printed total next to the constant*, not by any control: nothing asserts
+  that a floor is near what it floors, so a floor left behind by a large jump degrades silently
+  into decoration — the same defect class as a vacuity floor that passes on an empty set. Whether
+  staleness should itself be *checked* is #87, flagged rather than decided here. The default lane's
+  `binaryFailCeiling` also moves **1 → 0**, so with both columns at zero any new fail is a
+  regression by definition.
+- **`reader.skip` exists, because `peek`-then-discard-the-error does not state what it knows**
+  ([#86](https://github.com/scttfrdmn/burroughs/issues/86)). The reference has `skip n s`
+  (`decode.ml:20`) and uses `peek` + `skip 1` at four sites; transcribing that as
+  `_, _ = r.byte()` discards an error that provably cannot fire, and `errcheck` was right to object
+  — *a discarded error is a claim about reachability the code does not make*. The named primitive
+  makes the claim. Deliberately unchecked and returning nothing: an over-skip is a caller that
+  skipped without peeking, and clamping it would convert that bug into a silent misparse of the
+  next field.
 - **`[Unreleased]`'s 16 group headings consolidated to 3, and the structure is now a gate**
   ([#55](https://github.com/scttfrdmn/burroughs/issues/55)). Keep a Changelog 1.1.0 has one group per
   type per release; this file had reached 5 `### Added`, 5 `### Changed`, and 6 `### Fixed`, because
@@ -1049,6 +1067,43 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **The type section decoded `functype` where the reference decodes `rectype`, four levels up**
+  ([#86](https://github.com/scttfrdmn/burroughs/issues/86)). `decodeFuncType` was the whole section
+  grammar; the reference's is `rectype` → `subtype` → `comptype` → `fieldtype`
+  (`decode.ml:243-276`), and `functype` is *one arm of the third level*. Six functions now, one per
+  production, so `rec` groups (`0x4e`), both `sub` forms (`0x50`, `0x4f`), `structtype` (`0x5f`) and
+  `arraytype` (`0x5e`) are decoded rather than reported as malformed forms — and `mutability`
+  (`decode.ml:154-158`) becomes **one function with two call sites**, `fieldtype`'s and
+  `globaltype`'s, where the engine had transcribed it at the global position only. That missing
+  second call site was grave [#83](https://github.com/scttfrdmn/burroughs/issues/83)'s shape exactly:
+  eight `global.wast` vectors scored the path that worked, which is the configuration that makes the
+  other one invisible. **Board 4162 pass / 0 fail on the default lane and 4178 / 0 / 0 with every
+  gate on — zero fails on both lanes for the first time**; `binary-gc.wast:1` moves `fail → gated`
+  (not `fail → pass`: an array type is GC's, so with the gate off the module is honestly declined
+  *for the feature*, and the +1 shows in the all-on lane).
+- **`ErrMalformedFuncType` was a string the reference never emits, anywhere**
+  ([#86](https://github.com/scttfrdmn/burroughs/issues/86)). `comptype`'s fallthrough is `malformed
+  definition type` (`decode.ml:259`); the engine said `malformed function type`, which
+  `grep -r` finds **zero** times in the whole interpreter. **No suite vector asserts either string**,
+  so the board was blind to it by construction — grave
+  [#36](https://github.com/scttfrdmn/burroughs/issues/36)'s class one layer out, a fabricated
+  *sentinel* rather than a fabricated byte. Replaced, along with a new `malformed storage type`
+  (`:234`) for `packtype`'s fallthrough. The control that pins it reads `decode.ml` and is scoped to
+  **every sentinel `binary.go` declares**, not to the strings this fix touched — which is how three
+  more were found, now [#88](https://github.com/scttfrdmn/burroughs/issues/88).
+- **`either` backtracked feature declines, so a gate could manufacture malformedness at an
+  alternation** ([#86](https://github.com/scttfrdmn/burroughs/issues/86)). A v128 array field with
+  SIMD off reported `malformed storage type: 0x7b`: the alternation rewound past a *configuration*
+  answer and let the last branch's *grammar* answer stand, which the
+  [#5](https://github.com/scttfrdmn/burroughs/issues/5) ruling forbids in those words. The remedy
+  used at `decodeBlockType` — put the gated branch last — is unavailable here, because the reference
+  puts `valtype` **first** in `storagetype` and that order decides the neither-case message. So
+  `either` propagates `ErrFeatureDisabled` instead of treating it as "these bytes are not this
+  production". Accept sets measured **identical** over all 256 first bytes at both alternation sites
+  in three lanes; the only rows that change are ones the engine was answering with a spec
+  malformed-string where its own configuration was the reason. Found by probing the gate/`either`
+  interaction in code this same PR had just added, and **reverting it leaves the entire package
+  green** — no vector reaches a v128 storage type, so its control is the only cover.
 - **`scanAnnotBody` had an arm the reference's `annot` rule does not have, and lacked one it does**
   ([#83](https://github.com/scttfrdmn/burroughs/issues/83)). `annotations.wast:1` — a **must-succeed**
   module — was rejected with `empty annotation id`, taking the whole file's leading vector with it.
