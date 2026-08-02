@@ -147,7 +147,13 @@ func (d *Decoder) decodePayload(sid SectionID, size uint32, r *reader) (bool, er
 		return true, err
 	case SectionTag:
 		// Ranked by the structural layer (it is well-formed), accepted only by
-		// the gate. Its payload grammar arrives with the EH gate (#8).
+		// the gate. Its payload grammar arrives with the EH gate (#95).
+		//
+		// The citation was `(#8)` until the deferral sweep that followed #22: #8 is the
+		// wat-harness issue and owns none of this, so the deferral was declared but in
+		// substance *untracked* — a tracking number that cannot be followed to the work,
+		// which is the gap the `ErrTrailingData` ruling's declared-and-tracked test exists
+		// to close rather than a grave.
 		if !d.Features.ExceptionHandling {
 			return false, featureErr("exception handling")
 		}

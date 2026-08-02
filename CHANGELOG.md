@@ -1148,6 +1148,19 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **Two deferral citations that no longer led to the work they deferred**
+  ([#22](https://github.com/scttfrdmn/burroughs/issues/22),
+  [#95](https://github.com/scttfrdmn/burroughs/issues/95)). Found by sweeping every `#NN` cited in a
+  Go comment against its issue state, after the board reached 0 fail and the next work had to be
+  read off deferrals rather than off buckets. `checkCounts` still said the
+  `ErrDataCountRequired` half was "tracked in #22 rather than guessed at", which #39's code-section
+  grammar had made false — the check is reachable at `binary.go:775` and both vectors
+  (`binary.wast:302`, `:325`) pass inside 127/127. And the tag section's missing payload grammar was
+  deferred to **#8**, the wat-harness issue, which owns none of it: no EH-gate issue existed at all,
+  so a declared deferral was in substance *untracked*. Now #95, with the gate-census row
+  (`gatemap.go:211`) as its drift check. Neither is a grave — *unreachability is a grave only when
+  it's silent* — but a tracking number that cannot be followed to the work is the declared-and-tracked
+  test failing on its second half, and **a citation nobody re-checks is a claim**.
 - **`valtype` was a flat switch over seven bytes where the reference reads a three-way alternation**
   ([#88](https://github.com/scttfrdmn/burroughs/issues/88)). `valtype` is `either [numtype; vectype;
   reftype]` (`decode.ml:220-225`) and `reftype` alone has fourteen forms, so the switch reported

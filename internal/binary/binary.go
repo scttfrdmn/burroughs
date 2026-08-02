@@ -801,7 +801,12 @@ func vecCount(payload []byte) (uint32, error) {
 // These are structural, not semantic — they are decidable from section headers
 // alone, which is why they belong here and not in the validator. The
 // ErrDataCountRequired half of the data-count contract is *not* decidable here
-// (it needs function bodies) and is tracked in #22 rather than guessed at.
+// (it needs function bodies), and it is decided by the caller once the bodies have
+// been read — see the `sawDataRef` check in DecodeModule. This sentence used to say
+// the half was "tracked in #22 rather than guessed at", which stopped being true when
+// #39's code-section grammar made it reachable: *a ruling retroactively falsifies
+// prose written before it*, and a deferral's citation is exactly the kind of sentence
+// that outlives its subject.
 func (m *Module) checkCounts() error {
 	var (
 		funcCount, codeCount uint32
