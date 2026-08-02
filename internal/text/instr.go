@@ -107,6 +107,39 @@ var initSugarKinds = map[keywordKind]bool{
 	"TABLE_INIT":  true,
 }
 
+// labelTakingKinds are the `plaininstr` mnemonics whose **first** index is a label — the arms
+// that pass `label` as `idx`'s lookup function (#80).
+//
+// The reference makes the lookup category a *parameter* of `idx` (parser.mly:487-489):
+//
+//	idx :
+//	  | NAT { fun c lookup -> nat32 $1 $sloc @@ $sloc }
+//	  | VAR { fun c lookup -> lookup c (var $1 $sloc) @@ $sloc }
+//
+// and each arm supplies one — `br ($2 c label)`, `call ($2 c func)`, `local_get ($2 c local)`
+// (:561-620). So a faithful reader threads a category through every index. **Only labels are here,
+// and the reason is a measurement rather than a preference:** across all 253 suite files exactly two
+// vectors name an unbound symbolic index, and both are `unknown label` (token.wast:105, :121). Every
+// other `unknown *` vector is either numeric — the NAT arm is `nat32 $1`, a width check with no
+// lookup, so all 13 `assert_invalid "unknown label"` are `(br 1)`-shaped and validation's — or names
+// something the module does bind later (`global.wast:668`'s forward `$g2`), which needs #64's
+// deferred phase. Labels are separable precisely because their scope is *lexical*: there is no
+// forward reference to wait for, so resolution can happen where the name is read. See #80.
+//
+// **Derived from the reference, not enumerated by hand**: TestLabelTakingArmsMatchTheReference
+// extracts the arms passing `label` out of `plaininstr` and requires this set to equal them, so an
+// upstream arm gaining or losing a label index fails the board rather than sitting unnoticed. All
+// five take the label as their first index (`$2 c label`), which is why this is a set of kinds and
+// not a set of positions — `BR_TABLE`'s *rest* are labels too, which idxList handles, and
+// `BR_ON_CAST`'s later immediates are reftypes.
+var labelTakingKinds = map[keywordKind]bool{
+	"BR":         true,
+	"BR_IF":      true,
+	"BR_TABLE":   true,
+	"BR_ON_NULL": true,
+	"BR_ON_CAST": true,
+}
+
 // shapeOf resolves a keyword token to its immediate shape.
 //
 // The optional-first-index kinds are answered here rather than from the map, because their two
@@ -196,6 +229,43 @@ func (p *parser) plaininstr() (bool, error) {
 // `offset=` and `align=` distinct token kinds — so a module writing them backwards is a syntax
 // error the reference reports, not a set to be matched in any order.
 func (p *parser) immediates(shape immShape, mnemonic Token) error {
+	// The label-taking arms, whose first index resolves against the label space instead of being
+	// deferred (#80). Handled before the switch rather than as extra shapes because a label is a
+	// property of the *arm's lookup function*, not of its immediate shape: `BR` and `CALL` are both
+	// `immIdx` and differ only in category, and `BR_TABLE` shares `immIdxIdxList` with nothing while
+	// `BR_ON_CAST` shares `immIdxReftype2` with nothing — splitting the shape enum by category would
+	// double three arms to encode one bit.
+	if labelTakingKinds[mnemonic.Keyword] {
+		if err := p.labelIdx(); err != nil {
+			return err
+		}
+		switch shape {
+		case immIdx: // BR, BR_IF, BR_ON_NULL — the label was the whole immediate
+			return nil
+		case immIdxIdxList: // BR_TABLE: `idx idx_list`, and *every* member is a label (:563-565)
+			return p.labelIdxList()
+		case immIdxReftype2: // BR_ON_CAST: `idx reftype reftype`, the label then two types (:567)
+			if _, err := p.reftype(); err != nil {
+				return err
+			}
+			_, err := p.reftype()
+			return err
+		default:
+			// Unreachable while labelTakingKinds and the shape table agree, and a panic because
+			// falling through to the main switch would read the label's immediates a second time.
+			// TestLabelTakingArmsMatchTheReference pins the set; this pins the *pairing* — a new
+			// label-taking arm upstream whose shape is not one of the three arrives here.
+			//
+			// Written as `default` rather than as a statement after the switch so that `exhaustive`
+			// reads it: the linter's `default-signifies-exhaustive` makes a real fallback count as
+			// handling the enum, and a bare panic below the switch is the same code the linter cannot
+			// see. Three shapes named, not thirteen, because the other ten are the *main* switch's —
+			// listing them here to satisfy a linter would claim this branch handles shapes no
+			// label-taking mnemonic can have.
+			panic("burroughs: label-taking mnemonic " + string(mnemonic.Keyword) +
+				" has an unhandled immediate shape")
+		}
+	}
 	switch shape {
 	case immNone:
 		return nil

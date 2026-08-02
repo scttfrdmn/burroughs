@@ -21,6 +21,34 @@ weakly-ordered platform.
 *Implements contract v0.1.*
 
 ### Added
+- **Symbolic label resolution, which closes the `unknown label` bucket and finishes #64**
+  ([#80](https://github.com/scttfrdmn/burroughs/issues/80)). `labelSpace` in `context.go` — a stack
+  of the enclosing blocks' names, innermost last — with `lookupLabel` reporting `unknown label  $l`
+  (two spaces, reproducing the reference's `lookup "label "` at parser.mly:161 rather than tidying
+  it), wired at the five `plaininstr` arms that take one (`br`, `br_if`, `br_table`, `br_on_null`,
+  `br_on_cast`) and at both handler productions. **Board 4159 → 4161 pass, 4 → 2 fail**;
+  `token.wast` 59/61 → 61/61. The ceiling's residue is 1 lexer vector (#55) and 1 decoder vector,
+  **neither of them the text parser's**, so it cannot fall further from work on `internal/text`.
+
+  **The scope was decided by a measurement, and the measurement is what kept the change small.**
+  Read literally the reference resolves *every* symbolic index in the parser — the lookup category
+  is a parameter of `idx` (:487-489), supplied by all 83 `plaininstr` arms — which would have made
+  this a job spanning nine index spaces. Matching every `unknown *` vector's module body for a
+  symbolic name in a use position its own module never binds returns **exactly two rows across all
+  253 files**, both labels. Labels are the one space whose scope is *lexical*, so they resolve where
+  they are read; the other spaces need #64's deferred phase, and the 13 `assert_invalid "unknown
+  label"` vectors are `(br 1)`-shaped — `idx`'s NAT arm is `nat32 $1`, a width check with no lookup,
+  so they are **validation's** and answering them here would be overfitting to the oracle (§9 G-3).
+
+  **The controls are scoped to the mechanism, because the two vectors are the same shape.** Both are
+  a `br_table` whose first index is unbound inside a func holding one named block, so a fix that
+  resolved nothing and errored on any `$name` reaching `br_table` scores 2/2. `label_test.go` pins
+  the four facts no `assert_malformed` states — the cleared space at `enter_func`, the anonymous
+  level every unnamed block occupies, `catch`'s target resolving in the **outer** context (`$4 c
+  label`, `c` not `c'`, identical in both handler productions), and `br_table` resolving every
+  member of its tail — with three drift controls read from `parser.mly`'s semantic *actions*: the
+  category is not in the grammar at all. Census: 14 label lookups in 3 of 137 productions.
+  `productionBody` was carved out of `productionArms` to make the actions readable.
 - `internal/spec`: the `.wast` harness, phase 1 (decision 0003) — a pure-Go
   s-expression reader, wast string-literal decoding, the `(module binary ...)`
   form, and `assert_malformed` matched by substring. No wabt, no non-Go tool
@@ -578,6 +606,23 @@ weakly-ordered platform.
     routes through `errf`.
 
 ### Changed
+- **#78's lesson ratified into `CLAUDE.md`** (ruling: Scott, #82): *a guard's trigger predicate is
+  itself a claim about the space, and an under-matching one fails silently by construction.* The
+  falsifiability law does not reach it — you can break a guard's assertion, watch it fail, and still
+  have a guard that never fires on most of its population, because an under-matching regexp produces
+  **no finding rather than a wrong one**. Measuring the trigger's *coverage against the population it
+  claims* is what finds it: coverage is to a trigger what a vacuity check is to a comparison. Two
+  corollaries recorded with it — **registration is not verification**, and **one concept, one
+  trigger**. Ratified rather than left in the changelog because the class **recurred one PR later**,
+  inside the guard repaired for it: a citation row split across two lines is invisible to a
+  line-oriented trigger, so the file registers and contributes zero verified rows (#80).
+- **The CI-wait recipe's bounded wait now says *which* negative it hit** (ruling: Scott, #82).
+  `ci.yml` triggers on `push` to `main` plus `pull_request`, so a topic-branch push creates no run
+  until its PR exists — and the poll loop reported that identically to "the run has not appeared
+  yet", two conditions with different remedies. The loop's failure branch now asks whether an open
+  PR exists and names the remedy. *A bounded wait that cannot distinguish its own failure modes is a
+  timer with better manners.* Found by firing for real on #80, where the first reading was "flake in
+  the poll"; both branches of the new discriminator were exercised before it was written down.
 - `RunGated(decode, readText, isGated)` and `RunWith(decode, readText, isGated,
   have...)` take the text entry point; `Script.Run` now panics on a quote form,
   declaring nothing and supplying nothing.
@@ -619,6 +664,36 @@ weakly-ordered platform.
   written before it* — and so does a retirement.
 
 ### Fixed
+- **Two comments claimed a falsifiability their own probe refuted, in opposite directions**
+  ([#80](https://github.com/scttfrdmn/burroughs/issues/80)). The falsification pass over the label
+  work broke each of the four facts and read the board, and two of the four sentences written *about*
+  those facts were wrong:
+
+  `passFloor`'s new paragraph said `foldedBlock`'s label push was the sharpest case because dropping
+  it "costs nothing in the fail bucket and shows up here" — inferred from the two vectors' spelling
+  rather than read. Dropping it moves the board **4161 → 4077 and the fail bucket 2 → 86**, all 84
+  landing in `(module <wat body>) must read`: an over-rejecting rejector turns must-succeed modules
+  into failures, so it is loud in *both* columns. Third time on that floor that reasoning about a
+  check was corrected by running it.
+
+  `funcField`'s comment claimed the opposite, that its `enter_func` reset and anonymous push each
+  fail in a named way ("a label leaks out of one func into the next … the depth invariant breaks").
+  Neither is falsifiable by any wat input: dropping either leaves the board at 4161/2 and
+  `./internal/text/` green, because every push site pops under `defer` — so the stack is *already*
+  empty when a func body ends — and a func is a module field with no enclosing label scope to inherit
+  from or leak into. The lines are kept as **cited agreement with the reference, stated as such**,
+  with the probe's numbers at the definition site and the pairing machine-checked in the one
+  direction available (`TestLabelStackIsBalancedOnEveryExitPath`, depth 0 on every exit path
+  including error returns). A line kept for a reason no test can reach is a declared-and-tracked
+  deferral; what makes it honest is the declaration.
+
+  Both are the same offence as `labelPushAnon`'s earlier draft and are recorded the same way: *a
+  green that survives the bug it names is a control in name only* has a prose face — **a comment
+  naming a defect nobody tried to introduce is a claim, and half the time it is wrong.** The
+  generalization the pair supplies is that a *set* of facts asserted together needs the reading done
+  per member: this file's header and that floor's paragraph both claimed to be the evidence for four
+  facts while being the evidence for one and two respectively, and only the arm-by-arm probe
+  separated them.
 - **`lane_imms`' bare-laneidx arm was eaten by `memarg`'s greedy memory index**
   ([#76](https://github.com/scttfrdmn/burroughs/issues/76)). `lane_imms` (parser.mly:661-673) was
   implemented as `memarg laneidx`, so `idx_opt` consumed the lone NAT of `v128.load8_lane 0 (…)` as
@@ -665,9 +740,9 @@ weakly-ordered platform.
   Deleting `!peek2Keyword(kwItem)` fails no row, and a `panic()` in its complementary branch never
   fired across the suite — `elemexpr_list` follows a *mandatory* reftype, so `(item …)` can never be
   the first thing after `elem`, and both readings reject `(elem (item …))` with the same message.
-  Kept, with the measurement recorded at the site rather than an argument, and flagged rather than
-  decided: deleting a condition because nothing reaches it today is precisely the move #75's own
-  shadowing counsels against.
+  Kept, with the measurement recorded at the site rather than an argument. **Ruled on in #82
+  (Scott): kept** — deleting a condition because nothing reaches it today is precisely the move #75's
+  own shadowing counsels against, and the measurement stands as the record of what it does *not* do.
 
   **Both graves are over-rejections**, which is the class a reject-direction corpus is structurally
   blind to. Twelve vectors across the two, and not one would have been visible on the 7-module accept

@@ -117,6 +117,109 @@ func (s *space) bindAbs(category string, t Token, name string) error {
 // reference splits these the same way: `bind` for anonymous, `bind_abs` for named.
 func (s *space) bindAnon() { s.count++ }
 
+// labelSpace is the label index space, which is **relative** where every other space is absolute
+// — so it is its own type rather than a `space` field.
+//
+// The reference's label space is a `space` like the rest, but the three helpers that touch it all
+// do something no other space does (parser.mly:132, :196, :106):
+//
+//	let enter_block c loc = {c with labels = scoped "label" 1l c.labels (at loc)}
+//	let bind_label c x = ignore (bind "label" c.labels 1l x.at); space.map <- VarMap.add x.it 0l space.map; 0l
+//	let scoped category n space at = {map = VarMap.map (shift category at n) space.map; count = space.count}
+//
+// `enter_block` shifts **every existing binding up by one** and returns a *new* context, so the
+// innermost label is always 0 and scope exit is structural: OCaml's old context is still there
+// when the block's arm returns, and nothing pops. A Go parser holding one mutable context cannot
+// get that for free, and the two obvious translations are both wrong in ways no vector shows:
+// re-shifting a map on entry is O(depth) per block and mutates state the caller still needs, while
+// a plain name→index map records absolute depths that are wrong the moment a block is entered.
+//
+// So: a **stack of the enclosing blocks' labels, innermost last**. An entry's index is its
+// distance from the top, which is what `scoped`'s repeated shift computes, and popping is what
+// `{c with labels = ...}` gets from immutability. Anonymous blocks push an empty name — they still
+// occupy a level (see labelPushAnon) — and `lookupLabel` scans from the top so an inner `$l`
+// shadows an outer `$l`, which is `VarMap.add`'s overwrite.
+//
+// Empty string is safe as the anonymous marker here, unlike in `space.bindAbs` where it would
+// collide: `(block $)` is `empty identifier` from the lexer, so no *named* level can be "", and
+// the scan skips empties explicitly rather than relying on that.
+type labelSpace struct {
+	names []string
+}
+
+// labelPush enters a named block's scope: `enter_block` then `bind_label` (parser.mly:519).
+func (l *labelSpace) labelPush(name string) { l.names = append(l.names, name) }
+
+// labelPushAnon enters an unnamed block's scope: `enter_block` then `anon_label` (parser.mly:514).
+//
+// **The anonymous level changes no lookup's answer, and saying otherwise would be a control that
+// cannot fail.** `labeling_opt`'s empty arm calls `anon_label`, which in the reference shifts the
+// enclosing names — so `(block $l (block (br $l)))` resolves `$l` to *1* upstream, where a reader
+// that skipped the level would say 0. That difference is an **index**, and per decision 0011 this
+// stratum computes no indices: `lookupLabel` answers bound-or-not by name, and an empty name is
+// unmatchable (`(block $)` is `empty identifier` from the lexer). A first draft of this comment
+// claimed the anonymous push was load-bearing for nesting and offered `(block $l (block (br $l)))`
+// as its control — the row passes with the push *and* without it, because both spellings resolve
+// by name. Written down because a claim that no probe can kill is exactly what the falsifiability
+// rule is for, and this one nearly shipped as a comment asserting a property of code that does not
+// run yet.
+//
+// What it *is* for is the invariant that stack depth equals block nesting depth, which is what
+// keeps labelPop unconditional — every push site pops, named or not, so no caller has to remember
+// which kind it made. When indices are needed (0011's second half, the binary bridge #67), the
+// depth is already right and the shift falls out of the position in the slice.
+func (l *labelSpace) labelPushAnon() { l.names = append(l.names, "") }
+
+// labelPop leaves a block's scope, restoring the enclosing bindings.
+//
+// The reference has no `pop`: `{c with labels = ...}` builds a new context and the caller's own
+// `c` is untouched. A mutable context has to undo the push explicitly, and the pairing is the
+// invariant this type rests on — every push site pops on *every* exit path, including error
+// returns, which is why the callers use `defer`.
+func (l *labelSpace) labelPop() { l.names = l.names[:len(l.names)-1] }
+
+// labelDepth is the number of enclosing label scopes, for save/restore across a func boundary.
+func (l *labelSpace) labelDepth() int { return len(l.names) }
+
+// labelReset clears the space and returns what it held, for `enter_func` (parser.mly:134).
+//
+// `let enter_func c loc = {(enter_let c loc) with labels = empty ()}` — a func body starts with
+// **no** labels, so nothing leaks from one func into the next, or from a func into a global's
+// constexpr. Returning the old contents rather than dropping them keeps the mutable context
+// restorable, which the reference gets from `c` still being in scope.
+func (l *labelSpace) labelReset() []string {
+	old := l.names
+	l.names = nil
+	return old
+}
+
+// labelRestore puts back what labelReset took.
+func (l *labelSpace) labelRestore(old []string) { l.names = old }
+
+// lookupLabel resolves a symbolic label, or reports `unknown label`.
+//
+// The reference's `label` is `lookup "label " c.labels x` (parser.mly:161) — note the category's
+// **trailing space**, so the rendered message is `unknown label  $l` with two spaces, from
+// `"unknown " ^ category ^ " " ^ print x`. That is reproduced rather than tidied: the suite reads
+// only as far as `unknown label`, so the tail is ours alone to keep honest (grave #36), and
+// "improving" it would make this the one message in the package that does not match upstream.
+//
+// The name is printed from the token's own text for the same reason bindAbs does it: the
+// reference's `print` re-quotes a name whose decoded form differs from its spelling, and
+// reconstructing that rendering from a decoded value is how an error comes to quote a byte the
+// input never held.
+//
+// Scans from the top so the innermost binding wins, and skips anonymous levels — they occupy a
+// level but bind no name.
+func (l *labelSpace) lookupLabel(t Token, name string) error {
+	for i := len(l.names) - 1; i >= 0; i-- {
+		if l.names[i] != "" && l.names[i] == name {
+			return nil
+		}
+	}
+	return errf(t, "unknown label  %s", t.Text)
+}
+
 // context is the parser's accumulated state: the index spaces, and the module-level facts
 // the grammar's own checks read.
 //
@@ -142,6 +245,16 @@ type context struct {
 	datas    space
 	elems    space
 	locals   space
+
+	// The label space, resolved *here* rather than deferred — the one index space that can be
+	// (#80). A label's binding is lexically scoped, so there is no forward reference to wait
+	// for: `(block $l (br $l))` has `$l` in scope at the `br`, and a `$name` not on the stack
+	// cannot become bound by anything later in the module. Every other space needs #64's
+	// deferred phase, because `imports.wast:62` uses `(type $forward)` before defining it and
+	// `global.wast:668` names a global defined below.
+	//
+	// Its own type, because it is relative where the others are absolute: see labelSpace.
+	labels labelSpace
 
 	// The `import after <kind> definition` check, which needs three fields because the
 	// message's *kind* and the error's *position* come from different places in the field
@@ -296,6 +409,20 @@ func (c *context) importOrderErr() error {
 		return nil
 	}
 	return errf(c.badTok, "import after %s definition", c.badKind)
+}
+
+// pushLabel enters a block's label scope, named or anonymous.
+//
+// The two arms of `labeling_opt` (parser.mly:510-519) differ only in whether a `$name` follows, and
+// both enter a scope — so the caller passes labelingOpt's result straight through and this picks the
+// arm. Written here rather than at each block site because there are two of them (flat and folded)
+// and the anonymous arm is the one easy to forget; see labelPushAnon for what the level is for.
+func (c *context) pushLabel(name string) {
+	if name == "" {
+		c.labels.labelPushAnon()
+		return
+	}
+	c.labels.labelPush(name)
 }
 
 // checkStart rejects a second `(start …)`.
