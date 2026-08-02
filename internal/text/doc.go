@@ -1,6 +1,13 @@
-// Package text holds the wat text format's lexer and the machine-derived keyword table
-// (decision 0009) it lexes against. The parser is not here yet: it is #8, decomposed into
-// the strata of #62 (module-field skeleton), #63, and #64.
+// Package text holds the wat text format's lexer, the machine-derived keyword table
+// (decision 0009) it lexes against, and the parser — #8, decomposed into the strata of
+// #62 (module-field skeleton, landed), #63, and #64.
+//
+// The 2/3 seam is drawn at **defect ownership, not surface form** (Scott's ruling on #63's
+// pre-registered forecast). Measuring the landed parser against the board found 336 of 390
+// non-passing text vectors *folded in form and flat in defect* — `expr1: plaininstr
+// expr_list` (parser.mly:814) merely transports the token stream to a defect that lives in
+// an immediate reader — so that minimal arm is #63's, giving 353/37, and #64 keeps the
+// desugaring families the reference itself marks `/* Sugar */`.
 //
 // # The table's deferral, discharged
 //

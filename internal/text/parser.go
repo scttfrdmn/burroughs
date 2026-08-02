@@ -6,7 +6,17 @@ package text
 // **Scope, stated as a boundary rather than as a to-do.** This stratum parses module *fields*
 // and the type algebra. It does not descend into instruction bodies — `plaininstr`,
 // `blockinstr`, `expr`, `constexpr`, and the folded forms are #63/#64's, and a `(func …)` whose
-// body holds instructions stops here with `unexpectedTokenAtInstruction`. The boundary is a
+// body holds instructions stops here with `unexpectedTokenAtInstruction`.
+//
+// Which of those two owns which is settled by **defect ownership, not surface form** (Scott's
+// ruling on #63's forecast): `expr`/`expr1`'s minimal arm (parser.mly:809/:814) is #63's, since
+// it only transports the token stream to a defect in an immediate reader, and #64 owns the
+// desugaring *families* — `callexpr_*`/`selectexpr_*` (:836–:865), `if_`/`try_block`
+// (:891/:901). `constexpr` (:950) is listed above as a boundary this stratum does not cross,
+// which it is, but it is **not sugar**: the reference marks `expr`/`expr1` `/* Sugar */` and
+// `constexpr` not at all — it is a plain alias for `instr_list`.
+//
+// The boundary is a
 // named error rather than a silent accept because *an error from the wrong layer is evidence
 // about where structure was lost*: a module rejected for having a body should say so, not
 // produce a spurious complaint about a parenthesis.
@@ -638,7 +648,8 @@ func (p *parser) tableField() error {
 		}
 		p.ctx.elems.bindAnon() // the sugar's implicit elem segment
 		// Both sugar arms' contents are instruction-level: elemexpr_list or elemidx_list. The
-		// idx list is reachable here; an `(item …)` or folded expr is #63's.
+		// idx list is reachable here; an `(item …)` or folded expr is #63's — the folded arm
+		// by the defect-ownership ruling on #63, which put `expr1`'s minimal arm there.
 		if p.c.at(NatTok) || p.c.at(VarTok) || p.c.at(RParen) {
 			// elemidx_list (parser.mly:1147), whose idx_list has an empty arm — so
 			// `(table funcref (elem))` is well-formed.
