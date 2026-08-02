@@ -104,6 +104,10 @@ const (
 	kwCallIndirect       keywordKind = "CALL_INDIRECT"
 	kwReturnCallIndirect keywordKind = "RETURN_CALL_INDIRECT"
 
+	// THEN is the folded `if`'s mandatory arm (`if_`, :893/:896). ELSE is shared with the flat
+	// family above — the folded form reuses the keyword, not the production.
+	kwThen keywordKind = "THEN"
+
 	// CATCH_ALL_REF is the fourth handler arm (:805). Named for completeness of the
 	// `handler_block_body` production rather than because a vector reaches it — a handler set
 	// missing one arm rejects a legal module, which is the accept-direction class no
@@ -128,5 +132,5 @@ var parserKinds = []keywordKind{
 	kwTag, kwLocal, kwOffset, kwItem, kwDeclare,
 	kwBlock, kwLoop, kwIf, kwElse, kwEnd, kwTryTable,
 	kwCatch, kwCatchRef, kwCatchAll, kwCatchAllRef,
-	kwSelect, kwCallIndirect, kwReturnCallIndirect,
+	kwSelect, kwCallIndirect, kwReturnCallIndirect, kwThen,
 }

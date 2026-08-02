@@ -3,23 +3,27 @@ package text
 // The wat parser: recursive descent over the reference's grammar, returning an error and
 // nothing else (decision 0011).
 //
-// **Scope, stated as a boundary rather than as a to-do.** This stratum parses module *fields*
-// and the type algebra. It does not descend into instruction bodies — `plaininstr`,
-// `blockinstr`, `expr`, `constexpr`, and the folded forms are #63/#64's, and a `(func …)` whose
-// body holds instructions stops here with `unexpectedTokenAtInstruction`.
+// **Scope: the whole module grammar, and there is no longer a stratum boundary inside it.** Module
+// fields, the type algebra, and instruction bodies — flat (#63) and folded (#64) — all have
+// readers. The three strata landed in that order and the sentence that used to stand here said
+// "does not descend into instruction bodies", naming a boundary error that had already been
+// renamed twice; it is replaced rather than amended, because a scope paragraph describing two of
+// three strata is the drifted-citation defect wearing prose. What remains unread is *above* the
+// grammar, not inside it: `typeuse` resolution and functype equality
+// (`inline_functype_explicit`, parser.mly:238), which is validation's question.
 //
-// Which of those two owns which is settled by **defect ownership, not surface form** (Scott's
-// ruling on #63's forecast): `expr`/`expr1`'s minimal arm (parser.mly:809/:814) is #63's, since
-// it only transports the token stream to a defect in an immediate reader, and #64 owns the
+// Which stratum owned which was settled by **defect ownership, not surface form** (Scott's
+// ruling on #63's forecast): `expr`/`expr1`'s minimal arm (parser.mly:809/:814) was #63's, since
+// it only transports the token stream to a defect in an immediate reader, and #64 owned the
 // desugaring *families* — `callexpr_*`/`selectexpr_*` (:836–:865), `if_`/`try_block`
-// (:891/:901). `constexpr` (:950) is listed above as a boundary this stratum does not cross,
-// which it is, but it is **not sugar**: the reference marks `expr`/`expr1` `/* Sugar */` and
-// `constexpr` not at all — it is a plain alias for `instr_list`.
+// (:891/:901). `constexpr` (:950) is not sugar despite reaching the same readers: the reference
+// marks `expr`/`expr1` `/* Sugar */` and `constexpr` not at all — it is a plain alias for
+// `instr_list`.
 //
-// The boundary is a
-// named error rather than a silent accept because *an error from the wrong layer is evidence
-// about where structure was lost*: a module rejected for having a body should say so, not
-// produce a spurious complaint about a parenthesis.
+// The error where an instruction was required and absent is `expectedInstr`, and it is a plain
+// syntax error in every case. It was `bodyBoundary` and reported `unimplemented` while a later
+// stratum was owed; that promise is discharged, and the arm is gone — see expectedInstr for the
+// sweep that retired it rather than the impression that it looked finished.
 //
 // The three checks that live in the grammar rather than in validation — duplicate bindings,
 // import ordering, multiple start sections — are context's, and they are the reason a
@@ -524,9 +528,10 @@ func (p *parser) tagField() error {
 
 // globalField parses `global` (parser.mly:1074-1089).
 //
-// The non-import arm is `globaltype constexpr`, and constexpr is an instruction sequence — so
-// this is the second place the stratum's boundary shows. `(global i32 (i32.const 0))` reaches
-// bodyBoundary; `(global (import "m" "g") i32)` completes.
+// The non-import arm is `globaltype constexpr`, and constexpr is an instruction sequence — so this
+// was the second place the old stratum boundary showed. Both arms now complete: measured, not
+// assumed, since a sentence about which of two spellings parses is the kind that goes stale
+// silently.
 func (p *parser) globalField() error {
 	if err := p.lpar(kwGlobal); err != nil {
 		return err
@@ -812,7 +817,7 @@ func (p *parser) elemList() error {
 	if p.c.at(RParen) {
 		return nil
 	}
-	return p.bodyBoundary()
+	return p.expectedInstr()
 }
 
 // startField parses `start` (parser.mly:1304-1306) and applies the multiple-start check.
@@ -849,8 +854,9 @@ func (p *parser) startField() error {
 //
 // **#63 makes the flat arm reachable.** `instr_list` is now a loop over `instr1`, and `instr1` is
 // `plaininstr | blockinstr | expr` (:552-554) of which this stratum owns the first, the flat form
-// of the second, and the minimal case of the third. What is left unread stops at bodyBoundary as
-// before, so the bucket shrinks rather than moving.
+// of the second, and the minimal case of the third. What was left unread stopped at the boundary as
+// before, so the bucket shrank rather than moving — and #64 then read the rest, which is why the
+// boundary's `unimplemented` arm no longer exists (see expectedInstr).
 //
 // **The terminator set is larger than `)` and EOF, and that is a `blockinstr` consequence.** An
 // `instr_list` nested in a block ends at the token that closes the *block*, which menhir gets from
@@ -868,30 +874,84 @@ func (p *parser) instrList() error {
 		if p.atBlockTerminator() {
 			return nil // the enclosing blockinstr's terminator; its own reader consumes it
 		}
+		// `instr_list`'s third and fourth arms (:549-550), and they are arms of the *list* rather
+		// than of `instr1` because they swallow its tail: `selectinstr_instr_list` (:677) is
+		// `SELECT` followed by a `(result …)*` chain that bottoms out in `instr_list` itself, so a
+		// flat `select` consumes everything after it. That is why they cannot be arms of instr1 —
+		// an `instr1` returns one instruction and these return the whole remainder — and it is why
+		// they were missed: `select` and `call_indirect` look like plaininstrs and are not.
+		if read, err := p.flatSelectOrCall(); read || err != nil {
+			return err
+		}
 		read, err := p.instr1()
 		if err != nil {
 			return err
 		}
 		if !read {
-			return p.bodyBoundary()
+			return p.expectedInstr()
 		}
+	}
+}
+
+// flatSelectOrCall reads `selectinstr_instr_list` (parser.mly:677-680) and `callinstr_instr_list`
+// (:689-701): the unfolded `select`, `call_indirect` and `return_call_indirect`, whose type
+// annotations are parenthesized even though the instruction is not.
+//
+// **These are the two `instr_list` arms that are not `instr1`, and nothing read them until #64.**
+// `select`, `call_indirect` and `return_call_indirect` are not in `plaininstr` — the reference gives
+// each two productions, one folded (`expr1`, :815-:823) and one flat (here), because the flat form's
+// `(result …)`/`(param …)` chain would otherwise be ambiguous with a following folded instruction.
+// Both were reported as `unimplemented: instruction body at "select"`, which is to say **every
+// module containing a flat `select` or `call_indirect` was rejected**: `(func select)`,
+// `(func nop select nop)`, `(func call_indirect (type 0))`. Accept-direction, so no
+// `assert_malformed` can catch it and the board was silent — found by reading `instr_list`'s arms
+// after the folded work, which is *scope controls to the space* applied to a production I had
+// treated as three arms because three is what I had implemented.
+//
+// The chain absorbs the rest of the list, hence the `true` return: the caller's loop must not run
+// again, because there is nothing left for it. `(func select nop)` is a select whose `instr_list`
+// tail is `nop`, not a select followed by a nop at the same level — a distinction with no
+// consequence for a reject-only stratum and a real one once instructions are built.
+func (p *parser) flatSelectOrCall() (bool, error) {
+	t := p.c.peek()
+	if t.Kind != KeywordTok {
+		return false, nil
+	}
+	switch t.Keyword {
+	case kwSelect:
+		return true, p.selectResults(p.instrList)
+	case kwCallIndirect, kwReturnCallIndirect:
+		p.c.next() // the keyword
+		// The table index is a sugar arm (:693/:699), not an `idx_opt`: a NAT or VAR here is the
+		// index, and anything else starts the type chain.
+		if p.c.at(NatTok) || p.c.at(VarTok) {
+			if err := p.idx(); err != nil {
+				return true, err
+			}
+		}
+		return true, p.orderedTypeUse(p.instrList)
+	default:
+		// Every other keyword is `instr1`'s, which the caller tries next. Named as a default
+		// rather than left to fall through so `exhaustive` sees a real fallback: this switch
+		// dispatches two arms out of 173 kinds, it does not enumerate an enum.
+		return false, nil
 	}
 }
 
 // constexpr1 parses `instr1 instr_list` (parser.mly:953): at least one instruction.
 //
-// The distinction from instrList is the whole reason bodyBoundary rejects a closing paren: for
-// these callers an empty sequence is a *syntax error*, so `(data (memory 0))` with no offset is
-// malformed on the merits rather than unimplemented. Both halves of that ruling now have code:
-// the empty case is `unexpected token` from bodyBoundary, and a non-empty one this stratum can
-// read completes.
+// The distinction from instrList is the whole reason a closing paren here is a syntax error: for
+// these callers an empty sequence is malformed, so `(data (memory 0))` with no offset is malformed
+// on the merits. That was the first half of the boundary's ruling and it is now the whole of it —
+// expectedInstr reports `unexpected token` for every input, the `unimplemented` half having been
+// discharged by the grammar completing.
 func (p *parser) constexpr1() error {
 	read, err := p.instr1()
 	if err != nil {
 		return err
 	}
 	if !read {
-		return p.bodyBoundary()
+		return p.expectedInstr()
 	}
 	return p.instrList()
 }
@@ -919,7 +979,7 @@ func (p *parser) offset() error {
 		return err
 	}
 	if !read {
-		return p.bodyBoundary()
+		return p.expectedInstr()
 	}
 	return nil
 }
@@ -959,7 +1019,7 @@ func (p *parser) elemexprList() error {
 	if !p.c.at(RParen) {
 		// A `(` this stratum could not read as an elemexpr: #64's, and reported as the boundary
 		// rather than as a syntax error.
-		return p.bodyBoundary()
+		return p.expectedInstr()
 	}
 	return nil
 }
@@ -968,11 +1028,11 @@ func (p *parser) elemexprList() error {
 //
 // Three arms, and #63 owns two and a half of them: `plaininstr`, `blockinstr` in its **flat**
 // form, and the `plaininstr expr_list` arm of `expr1` reached through `expr`. `expr1`'s other
-// nine arms are #64's, so this returns false for them and the caller falls through to
-// bodyBoundary — which keeps the board's unread work in one legible bucket instead of scattering
-// it across arms.
+// nine arms were #64's, and `expr` now reads all of them — so a false return here means *no*
+// instruction starts at the cursor, and the caller's expectedInstr is a syntax error rather than a
+// deferral.
 //
-// The false return must leave the cursor untouched, since bodyBoundary reports the token it stops
+// The false return must leave the cursor untouched, since expectedInstr reports the token it stops
 // on and a half-consumed lookahead would name the wrong one.
 func (p *parser) instr1() (bool, error) {
 	if read, err := p.plaininstr(); read || err != nil {
@@ -1056,10 +1116,11 @@ func (p *parser) blockinstr() (bool, error) {
 // terminators are here.
 //
 // **The exclusion is necessary and was not sufficient**, which is what the control found. Leaving
-// the clauses out is right, and it left a stray `(catch …)` falling through to bodyBoundary to be
-// reported as *unimplemented* — a rejection with the wrong layer's name on it. The clause set is
-// now named at bodyBoundary, where the false claim was, rather than here, where it would have
-// bought a masked syntax error. See that function's header for the measurement.
+// the clauses out is right, and it left a stray `(catch …)` falling through to the boundary to be
+// reported as *unimplemented* — a rejection with the wrong layer's name on it. The fix went to the
+// boundary, where the false claim was, rather than here, where it would have bought a masked
+// syntax error; #70 then derived the clause set from `startsInstruction` rather than listing it,
+// and #64 retired the `unimplemented` arm entirely. See expectedInstr for both measurements.
 //
 // Named as a predicate rather than inlined because it is a *claim about the grammar* — the follow
 // set of `instr_list` — and a claim gets a name and a control (TestBlockTerminatorsEndTheList).
@@ -1194,14 +1255,47 @@ func (p *parser) block() error {
 // `(result …)` has no named form in either chain (compare :762 with `functype_result` :443), so
 // that half really is shared and `(result $x i32)` was already rejected.
 func (p *parser) blockSignature() error {
+	return p.orderedTypeUse(nil)
+}
+
+// orderedTypeUse reads the chain five production families in the reference share: an optional
+// `typeuse`, then `(param …)*`, then `(result …)*`, then a tail.
+//
+// **The families and their line numbers, because the sharing is a claim about the grammar and not a
+// refactor:**
+//
+//	block_param_body / block_result_body                  :754 :760   tail instr_list
+//	handler_block_param_body / handler_block_result_body   :780 :786   tail handler clauses
+//	if_block_param_body / if_block_result_body             :879 :885   tail if_
+//	callexpr_params / callexpr_results                     :851 :858   tail expr_list
+//	callinstr_params_instr_list / callinstr_results_…      :712 :720   tail instr_list
+//
+// Ten productions, one shape, differing only in the tail and in the threaded context — and the
+// context is a semantic-action concern this stratum has no representation for. Writing them
+// separately means the param/result *ordering* is decided in five places, and the ordering is
+// precisely what the 30 field-ordering vectors test. They land in two files under one reader and
+// three under another, so a drift between copies would show on the board in some files and not
+// others: the failure mode is a partial red, which reads as a missing feature rather than as a
+// disagreement.
+//
+// A nil tail means "whatever follows is the caller's business" — used by blockSignature, whose
+// callers read the body themselves.
+//
+// **The `(param)` arm takes a `valtype_list`, with no `bindidx`** (:756), which is the asymmetry
+// #63's grave was made of: `functype`'s third arm (:436) *is* the named sugar `LPAR PARAM bindidx
+// valtype RPAR`, so delegating here to functype accepted `(block (param $x i32))`. Eight vectors
+// turn on it and all eight are folded, so the flat half of the family was the only half the suite
+// could see until #64. `(result …)` has no named form in any of the ten (compare :762 with :443),
+// so that half really is uniform.
+func (p *parser) orderedTypeUse(tail func() error) error {
 	if p.atTypeuse() {
 		if err := p.typeuse(); err != nil {
 			return err
 		}
 	}
-	// `block_param_body` then `block_result_body`, in that order and each its own loop: a
-	// `(param)` may not follow a `(result)`, and one loop accepting either would admit a form the
-	// reference rejects. The `valtype_list` is unnamed — see the header.
+	// Two loops in this order, never one loop accepting either: the chains are right-recursive and
+	// a `(param)` may not follow a `(result)`. One loop taking both would admit a form the
+	// reference rejects, which is the accept-direction defect these vectors exist to catch.
 	for p.c.at(LParen) && p.c.peek2Keyword(kwParam) {
 		if err := p.lpar(kwParam); err != nil {
 			return err
@@ -1213,7 +1307,13 @@ func (p *parser) blockSignature() error {
 			return err
 		}
 	}
-	return p.functypeResult()
+	if err := p.functypeResult(); err != nil {
+		return err
+	}
+	if tail == nil {
+		return nil
+	}
+	return tail()
 }
 
 // handlerBlock parses `handler_block` (:853-:864) — `try_table`'s block, whose body is preceded by
@@ -1226,6 +1326,139 @@ func (p *parser) handlerBlock() error {
 	if err := p.blockSignature(); err != nil {
 		return err
 	}
+	// The clause reader is shared with the folded arm (#64) — see handlerClauses. It was inline
+	// here while there was one caller; the folded `try_table` is the second, and two copies of a
+	// four-arm set is two places to lose an arm.
+	return p.handlerClauses()
+}
+
+// foldedBlock parses `expr1`'s four block arms (parser.mly:826-834): `BLOCK`/`LOOP` over `block`,
+// `IF` over `if_block`, `TRY_TABLE` over `try_block`. The leader is unconsumed on entry.
+//
+// **The signature half is the flat family's reader, called rather than copied.** `if_block`
+// (:865-:877) and `try_block` (:901-:915) have the same shape as `block` (:740) — an optional
+// `typeuse`, then `(param …)*`, then `(result …)*` — differing only in what terminates the chain:
+// `block_result_body` bottoms out in `instr_list` (:761), `if_block_result_body` in `if_` (:886),
+// `try_block_result_body` in `try_block_handler_body` (:923). So the ordered param/result chain is
+// one production wearing three names, and `blockSignature` is it.
+//
+// That reuse is load-bearing rather than tidy. `block_param_body` takes `LPAR PARAM valtype_list
+// RPAR` (:756) — a `valtype_list`, with **no** `bindidx` — and a second folded implementation is a
+// second place for `(block (param $x i32))` to be wrongly admitted. It was wrongly admitted once,
+// by delegating to `functype`, whose third arm *is* the named sugar (grave, #63). The eight vectors
+// that turn on it are all folded, so until now the suite could only see the flat half.
+//
+// **No `END`, therefore no `labeling_end_opt`.** Extent comes from the closing paren, so a folded
+// block cannot mismatch its own end label — it has none. That is why this takes the label and
+// discards it where `blockinstr` threads it through: the binding still happens (a `$l` here scopes
+// over the body for `br`), and the *comparison* has no second operand.
+func (p *parser) foldedBlock(leader keywordKind) error {
+	p.c.next() // the keyword
+	if _, err := p.labelingOpt(); err != nil {
+		return err
+	}
+	if err := p.blockSignature(); err != nil {
+		return err
+	}
+	switch leader {
+	case kwIf:
+		return p.ifBody()
+	case kwTryTable:
+		return p.handlerClauses()
+	default:
+		// `block` and `loop`, whose tail is a plain `instr_list` (:741/:748). Unreachable for
+		// anything else — expr1 dispatched here on exactly these four leaders — and a default
+		// rather than a fifth case because the caller owns the domain.
+		return p.instrList()
+	}
+}
+
+// ifBody parses `if_` (parser.mly:891-898), the folded `if`'s tail: any number of folded operands
+// pushing the condition, then `(then …)` and optionally `(else …)`.
+//
+// **`(then …)` is mandatory and that is the whole reason this is not `instrList`.** The production's
+// two sugar arms both require it (:893/:896), and its first arm `expr if_` (:891) is right-recursive
+// over operands — so `(if (then))` is legal, `(if)` is not, and `(if i32.const 0 (then))` is not
+// either, because a bare `i32.const` outside a fold is not an `expr`. That last spelling is
+// if.wast:1561, which the suite has and the flat reader could never be asked about.
+//
+// The operand loop must stop at `(then`, not consume it: `then` is a keyword that starts no
+// instruction, so `expr` declines it and leaves the paren — the same peek2-without-consuming
+// contract that lets `(func (param i32))` survive.
+func (p *parser) ifBody() error {
+	for {
+		read, err := p.expr()
+		if err != nil {
+			return err
+		}
+		if !read {
+			break
+		}
+	}
+	if err := p.lpar(kwThen); err != nil {
+		return err
+	}
+	if err := p.instrList(); err != nil {
+		return err
+	}
+	if err := p.rpar(); err != nil {
+		return err
+	}
+	if !p.c.at(LParen) || !p.c.peek2Keyword(kwElse) {
+		return nil // the one-armed sugar arm, :896
+	}
+	if err := p.lpar(kwElse); err != nil {
+		return err
+	}
+	if err := p.instrList(); err != nil {
+		return err
+	}
+	return p.rpar()
+}
+
+// callexprType parses `callexpr_type` (parser.mly:842-848) and the two chains under it,
+// `callexpr_params` (:851) and `callexpr_results` (:858).
+//
+// Structurally the same ordered chain as `blockSignature` — optional `typeuse`, then `(param …)*`,
+// then `(result …)*` — and *not* shared with it, because the chains bottom out differently:
+// `callexpr_results` ends in `expr_list` (:860), the folded operands, where `block_result_body` ends
+// in `instr_list`. Sharing would mean parameterizing the tail, which is a knob for one caller each.
+// Recorded rather than left implicit: this is the second place the param/result ordering is written,
+// and TestOrderedTypeUseChainsAgree is what stops the two from drifting.
+//
+// The 30 field-ordering vectors split across both readers — block.wast/loop.wast/if.wast reach
+// `blockSignature`, call_indirect.wast/return_call_indirect.wast reach this one — so a drift between
+// them is a drift the board would show only in one of two files.
+func (p *parser) callexprType() error {
+	return p.orderedTypeUse(p.exprList)
+}
+
+// selectResults parses the `(result …)*` chain both `select` forms carry, then the given tail:
+// `selectexpr_results` (parser.mly:836-840) for the folded arm, `selectinstr_results_instr_list`
+// (:682-686) for the flat one. The two differ only in that tail — `expr_list` against `instr_list`.
+//
+// No `(param)` half, which is the arm's peculiarity, so this is not orderedTypeUse with an empty
+// loop: `select` takes no type use and no params at all. The reference tracks *whether* a result was
+// written (the `b` in `true, snd $3 c @ ts, es`) because `select` unannotated is a different
+// instruction from `select (result t)` at validation time. This stratum reads both and distinguishes
+// neither — arity and typing are validation's.
+func (p *parser) selectResults(tail func() error) error {
+	p.c.next() // SELECT
+	if err := p.functypeResult(); err != nil {
+		return err
+	}
+	return tail()
+}
+
+// handlerClauses parses `try_block_handler_body` (parser.mly:917-929): the `(catch …)` clauses that
+// precede a folded `try_table`'s body.
+//
+// The same four arms `handlerBlock` reads for the flat form, and split out of it so both callers
+// share one clause reader — the flat path reads a signature then clauses then an `instr_list`
+// terminated by `end`, the folded path the same minus the terminator. All four arms are read though
+// no vector reaches the last two: a handler set missing an arm rejects a legal module, which is the
+// accept-direction class decision 0007 says the suite cannot falsify.
+func (p *parser) handlerClauses() error {
 	for p.c.at(LParen) {
 		t := p.c.peek2()
 		if t.Kind != KeywordTok {
@@ -1235,13 +1468,10 @@ func (p *parser) handlerBlock() error {
 		switch t.Keyword {
 		case kwCatch, kwCatchRef:
 			idxs = 2 // `(catch $tag $label)` — a tag and a label
-		case kwCatchAll:
+		case kwCatchAll, kwCatchAllRef:
 			idxs = 1 // `(catch_all $label)`
-		case kwCatchAllRef:
-			idxs = 1
 		default:
-			// Not a handler clause: a folded instruction opening the body, which instrList
-			// handles (or reports as the boundary).
+			// Not a handler clause: a folded instruction opening the body.
 			return p.instrList()
 		}
 		p.c.next() // the LPAR
@@ -1269,55 +1499,112 @@ func (p *parser) handlerBlock() error {
 // have parked those 353 behind a sugar rewrite they do not need. (Ruling: Scott — children exist
 // to earn buckets, and a bucket belongs to the production that must be fixed.)
 //
-// `expr1`'s other arms — SELECT, CALL_INDIRECT, BLOCK, LOOP, IF, TRY_TABLE and their sugar — are
-// #64's and return false here, unconsumed.
+// **All ten arms are now read (#64).** The other nine were #64's, and the paragraph above described
+// the seam while it was live; it is kept because it records *why* the split fell where it did.
 func (p *parser) expr() (bool, error) {
 	if !p.c.at(LParen) {
 		return false, nil
 	}
-	// The mnemonic decides whether this fold is ours, and it is two tokens away — so the check is
-	// peek2 rather than a consume-and-backtrack. A `(` whose keyword is a blockinstr or one of
-	// expr1's own arms belongs to #64, and this must not have eaten the paren by the time
-	// bodyBoundary reports it.
+	// The mnemonic decides whether this is a fold at all, and it is two tokens away — so the check
+	// is peek2 rather than a consume-and-backtrack. A `(` whose keyword starts no instruction is
+	// not an `expr`, and this must not have eaten the paren by the time the caller reports it:
+	// `(func (param i32))` reaches here through funcField and the `(param` must survive.
 	t := p.c.peek2()
-	if t.Kind != KeywordTok {
-		return false, nil
-	}
-	if _, ok := shapeOf(t.Keyword); !ok {
+	if t.Kind != KeywordTok || !startsInstruction(t.Keyword) {
 		return false, nil
 	}
 	p.c.next() // the LPAR
-	if _, err := p.plaininstr(); err != nil {
+	if err := p.expr1(t.Keyword); err != nil {
 		return true, err
 	}
-	// `expr_list` (:946-948): zero or more folded operands, each itself an `expr`. Its empty arm
-	// is why `(i32.const 0)` needs no operands and `(i32.add (i32.const 1) (i32.const 2))` needs
-	// two — the *arity* is validation's business, not this stratum's, so nothing here counts them.
+	return true, p.rpar()
+}
+
+// expr1 parses one folded instruction's interior — everything between the `(` and the matching `)`
+// (parser.mly:813-834). The leader has been peeked but not consumed.
+//
+// **Ten arms, and they divide by what follows the leader rather than by what the leader is.** Six
+// of the nine non-plain arms are two productions wearing an optional index:
+// `CALL_INDIRECT idx callexpr_type` and `CALL_INDIRECT callexpr_type` (:817/:819) differ only in
+// whether the table index is written, and `RETURN_CALL_INDIRECT` (:821/:823) repeats that exactly.
+// Menhir needs them as separate arms because it decides by lookahead; a recursive-descent reader
+// asks "is the next token an idx?" and has one arm.
+//
+// The block arms delegate to readers the flat family already built (#63): `block` for BLOCK/LOOP,
+// `handlerBlock`'s signature half for TRY_TABLE. That reuse is the point rather than a convenience
+// — `blockSignature` is where the param/result ordering and the *absence* of a `bindidx` in
+// `block_param_body` (:756) are decided, and a second folded implementation would be a second place
+// for `(block (param $x i32))` to be wrongly admitted. It was wrongly admitted once already, by
+// delegating to `functype` (grave, #63), and TestFoldedAndFlatSignaturesAgree is what holds the
+// two paths to one answer.
+//
+// What the folded forms do *not* have is an `END`, so extent comes from the closing paren and there
+// is no `labeling_end_opt`: `(block $a … )` cannot mismatch its own end label because it has none.
+func (p *parser) expr1(leader keywordKind) error {
+	switch leader {
+	case kwBlock, kwLoop, kwIf, kwTryTable:
+		return p.foldedBlock(leader)
+	case kwSelect:
+		return p.selectResults(p.exprList)
+	case kwCallIndirect, kwReturnCallIndirect:
+		p.c.next() // the keyword
+		// `idx` is optional here as a *sugar arm* (:819/:823), not as an `idx_opt`: the table
+		// index may be a NAT or a VAR, and anything else starts `callexpr_type`.
+		if p.c.at(NatTok) || p.c.at(VarTok) {
+			if err := p.idx(); err != nil {
+				return err
+			}
+		}
+		return p.callexprType()
+	default:
+		// Falls out of the switch to the first arm below. Written as an empty default rather than
+		// left implicit because `exhaustive` reads a bare fall-through as an unhandled enum, and
+		// the honest statement is that this switch dispatches nine arms out of 173 keyword kinds
+		// and hands everything else to `plaininstr` — which is a fallback, not an omission.
+	}
+	// `plaininstr expr_list` (:814), the arm #63 owned.
+	if _, err := p.plaininstr(); err != nil {
+		return err
+	}
+	return p.exprList()
+}
+
+// exprList parses `expr_list` (:946-948): zero or more folded operands, each itself an `expr`.
+//
+// Its empty arm is why `(i32.const 0)` needs no operands and `(i32.add (i32.const 1) (i32.const 2))`
+// takes two — the *arity* is validation's business, not this stratum's, so nothing here counts them.
+//
+// A `(` that is not an `expr` ends the list rather than erroring, because several callers have
+// something legal after the operands: `callexpr_results` (:858) reaches `expr_list` with `(param`
+// and `(result` already excluded by the loops above it, and a stray one there is the enclosing
+// production's error to report, at its own position.
+func (p *parser) exprList() error {
 	for {
 		read, err := p.expr()
 		if err != nil {
-			return true, err
+			return err
 		}
 		if !read {
 			break
 		}
 	}
-	// A folded operand this stratum cannot read is still an unread body, and it must be reported
-	// as one rather than as a syntax error: the cursor is on a `(` that #64 will handle, and
-	// `unexpected token` here would be the wrong-layer error in the direction that flatters us.
 	if !p.c.at(RParen) {
-		return true, p.bodyBoundary()
+		return p.unexpected()
 	}
-	return true, p.rpar()
+	return nil
 }
 
-// bodyBoundary is where this stratum stops: a non-empty instruction sequence, which #63/#64 own.
+// expectedInstr reports that an instruction was required here and none starts.
 //
-// A named error rather than a silent accept or a generic complaint, because the board buckets by
-// expected string and this bucket *is* the work plan — a module rejected here is a module whose
-// only defect is that the parser is unfinished, and it must be legible as that rather than
-// masquerading as a syntax error. Under the harness this scores as a fail against whatever the
-// vector expected, which is honest: the vector's question has not been answered.
+// **It was `bodyBoundary`, and the history is the documentation** — the boundary was where the
+// module stratum stopped, and its whole design problem was telling *this parser is unfinished*
+// apart from *this module is malformed*. Three rulings narrowed the first claim until it was empty,
+// and the sections below are those rulings in the order they landed; the arm they governed is gone,
+// but the reasoning is what stops it being reinvented.
+//
+// It was a named error rather than a silent accept or a generic complaint, because the board buckets
+// by expected string and that bucket *was* the work plan — a module rejected for an unwritten reader
+// had to be legible as that rather than masquerading as a syntax error.
 //
 // **A closing paren here is a syntax error, not a boundary.** Every caller that reaches this
 // rather than instrList has a grammar requiring at least one instruction — `constexpr1` (:951),
@@ -1387,18 +1674,43 @@ func (p *parser) expr() (bool, error) {
 // `(func (param i32))` still parses — a lone `(param …)` is legal in `func_fields`, and only after
 // a result/local/body does it become misplaced. Nothing here knows about field ordering; the
 // caller's position does.
-func (p *parser) bodyBoundary() error {
-	if p.c.at(RParen) {
-		return p.unexpected()
-	}
+//
+// # The boundary has no subject left, so it is a syntax error in every case (#64)
+//
+// **The `unimplemented` arm is gone, and what retires it is a measurement of the space rather than
+// a feeling that the grammar looks finished.** `unimplemented` is a promise that a later stratum
+// will read the token, and the folded work is the last stratum: all four `instr_list` arms
+// (parser.mly:546-550) and all three `instr1` arms (:552-554) now have readers. So the claim to
+// check is that no token this function can see is one a future reader would claim — and the
+// checkable form of that is *every leader `startsInstruction` admits is consumed by some reader*.
+//
+// Measured by asking, for each of the 494 keywords the generated table maps to an
+// instruction-starting kind, whether `ReadModule("(module (func <kw>))")` blames an offset **at**
+// the keyword — no reader claimed it — or past it. **493 of 494 are consumed.** The single
+// exception is `i8x16.shuffle`, which blames its own offset for `wrong number of lane indices`:
+// that *is* a reader claiming the mnemonic and then rejecting its immediates, which is the
+// opposite of unread. So nothing admitted is unread, and by construction nothing unadmitted can
+// ever become readable — `startsInstruction` is the union of the readers' own domains.
+//
+// The inverse sweep is the half that found a defect. 93 keywords reached the `unimplemented` arm,
+// and `startsInstruction` says no to every one of them: `(func param)`, `(func local)`,
+// `(func mut)`, `(func i32)`, plus a bare NAT, string or VAR (`(func 5)`, `(func "abc")`). Those
+// are **#70's defect on the unparenthesized side** — the derived check only looked past a `(`, so a
+// bare structural keyword in instruction position still got the boundary's promise. `func_body` is
+// `instr_list` and a bare `param` cannot begin one, so each is a plain syntax error and no reader
+// will ever be written for it. Same wrong-layer error in the same flattering direction, one paren
+// shallower, and it survived #70 because #70's own probes all had parens in them.
+//
+// Board effect: **none**, and this time that is a reading rather than a forecast — 1992/28 before
+// and after, per file. The class is real and the corpus has no vector for it, which is exactly the
+// case the overfitting rule says to fix anyway: a spec string nobody expects is still a lie about
+// the module. The board's `unimplemented` column was already 0 before this change, because the
+// vectors that reached the arm were the ones the folded readers had just answered.
+func (p *parser) expectedInstr() error {
 	if p.c.at(LParen) {
-		kw := p.c.peek2()
-		if kw.Kind != KeywordTok || !startsInstruction(kw.Keyword) {
-			return p.unexpectedAt(kw)
-		}
+		return p.unexpectedAt(p.c.peek2())
 	}
-	t := p.c.peek()
-	return errf(t, "unimplemented: instruction body at %q", t.Text)
+	return p.unexpected()
 }
 
 // lpar consumes `( keyword`, the opening of a parenthesized form.
