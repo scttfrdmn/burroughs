@@ -82,8 +82,24 @@ for _ in $(seq 30); do   # the run takes a moment to appear; poll, don't guess
   [ -n "$RUN" ] && break
   sleep 2
 done
+if [ -z "$RUN" ]; then   # no run — say WHICH no, don't just time out
+  gh pr list --head "$(git branch --show-current)" --state open --json number \
+    -q 'if length == 0 then "no open PR for this branch: ci.yml is `push: branches: [main]` plus `pull_request`, so a topic-branch push creates no run until its PR exists. Open the PR, then resolve the run." else "PR exists and no run appeared in 60s — that is a real anomaly, not a wait." end'
+  exit 1
+fi
 gh run watch "$RUN" --compact --exit-status   # run this with run_in_background
 ```
+
+**The loop's negative has two meanings and must say which.** `ci.yml` triggers on
+`push` to `main` only, plus `pull_request` — so a push to a topic branch produces
+**no run at all** until its PR is opened, and `gh run watch ""` then 404s on
+`/actions/runs/`. That is the mechanism behaving correctly, but the bare loop
+reports it identically to "the run has not appeared yet", which is a different
+condition with a different remedy (open the PR versus wait longer). *A bounded
+wait that cannot distinguish its own failure modes is a timer with better
+manners* — the branch above asks the question that separates them. Found the way
+these things are always found: it fired for real, on #80, and the first reading
+was "flake in the poll". (Directive: Scott, PR #82.)
 
 Three separate mistakes are being avoided, and they were made in that order:
 
@@ -371,6 +387,25 @@ the choice, and consequences once Scott has called it.
   is caught by the same mechanism that catches a drifted transcription. Same shape as
   every other rule here: the human judgement is allowed, the checkable part is
   checked, and silence is not an option. (Ruling: Scott, PR #37.)
+- **A guard's trigger predicate is itself a claim about the space, and an
+  under-matching one fails silently by construction.** The falsifiability law does
+  not reach this: you can break a guard's *assertion*, watch it fail, and still have
+  a guard that never fires on most of its population — because a regexp that
+  under-matches produces **no finding rather than a wrong one**.
+  `TestEveryFixtureFileIsChecked` triggered on `//\s*<file>.wast:\d+`, requiring a
+  citation to *open* a comment, while the wat-fixture style puts it in a row field:
+  **17 cited rows in two files went unregistered and the board said nothing.** What
+  found it was measuring the trigger's **coverage against the population it claims**
+  — *coverage is to a trigger what a vacuity check is to a comparison*, and both are
+  the same defect class as the empty-set agreement. Two corollaries, both paid for:
+  **registration is not verification** (a file registered with a checker that reads
+  past everything in it looks checked and is worse than unlisted — only a
+  `withRows` floor said so), and **one concept, one trigger** (the duplicated
+  regexp is *how* a file came to be registered with a mechanism that could not read
+  it). The recurrence proves it is a class, not an incident: a citation row **split
+  across two lines** is invisible to a line-oriented trigger, so the file registers
+  and contributes zero verified rows — the same defect, one PR later, in the guard
+  repaired for it (#80). (Ruling: Scott, #82; grave #78.)
 - **Verdict channel and mechanism channel are different instruments.** *An exit
   code is not a mechanism* — the verdict channel can't tell you why. *Don't infer
   a verdict from noise* — the output channel can't tell you whether. Read each

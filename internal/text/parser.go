@@ -484,6 +484,12 @@ func (p *parser) funcField() error {
 	// and an index read across a func boundary is the defect this forbids). Written down rather than
 	// deleted: a line kept for a reason no test can reach is a declared-and-tracked deferral, and the
 	// declaration is the part that has to be here.
+	//
+	// **Kept, by ruling** (Scott, #82), on the same reading that kept `elemField`'s third lookahead:
+	// two lines transcribed from two cited productions are a claim about the reference, and the probe
+	// above is the honest account of what no test can check. Deleting them because nothing reaches
+	// them today is the move #75's shadowing counsels against, one layer out — from a grammar
+	// condition into a scope discipline.
 	saved := p.ctx.labels.labelReset()
 	defer p.ctx.labels.labelRestore(saved)
 	p.ctx.labels.labelPushAnon()
@@ -928,9 +934,13 @@ func (p *parser) elemField() error {
 		// message. So this is not a check that fires — it is a *statement of which arm an `item`
 		// belongs to*, load-bearing only if a future arm makes the position reachable. Named here
 		// rather than deleted or left silent, per *unreachability is a grave only when it's
-		// silent*; whether to keep it is flagged for Scott in #79's successor rather than decided
-		// here, because deleting a condition on the strength of "nothing reaches it today" is the
-		// move that the elemexpr arm's own shadowing (#75) should make one cautious about.
+		// silent*.
+		//
+		// **Kept, by ruling** (Scott, #82). Deleting a condition on the strength of "nothing reaches
+		// it today" is precisely the move the elemexpr arm's own shadowing (#75) counsels against: a
+		// future arm could make the position reachable, and the deletion would be invisible until it
+		// did. The measurement above stays as the record of what this condition does *not* do, which
+		// is what makes keeping it a statement rather than a habit.
 		if err := p.offset(); err != nil {
 			return err
 		}

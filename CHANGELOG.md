@@ -606,6 +606,23 @@ weakly-ordered platform.
     routes through `errf`.
 
 ### Changed
+- **#78's lesson ratified into `CLAUDE.md`** (ruling: Scott, #82): *a guard's trigger predicate is
+  itself a claim about the space, and an under-matching one fails silently by construction.* The
+  falsifiability law does not reach it — you can break a guard's assertion, watch it fail, and still
+  have a guard that never fires on most of its population, because an under-matching regexp produces
+  **no finding rather than a wrong one**. Measuring the trigger's *coverage against the population it
+  claims* is what finds it: coverage is to a trigger what a vacuity check is to a comparison. Two
+  corollaries recorded with it — **registration is not verification**, and **one concept, one
+  trigger**. Ratified rather than left in the changelog because the class **recurred one PR later**,
+  inside the guard repaired for it: a citation row split across two lines is invisible to a
+  line-oriented trigger, so the file registers and contributes zero verified rows (#80).
+- **The CI-wait recipe's bounded wait now says *which* negative it hit** (ruling: Scott, #82).
+  `ci.yml` triggers on `push` to `main` plus `pull_request`, so a topic-branch push creates no run
+  until its PR exists — and the poll loop reported that identically to "the run has not appeared
+  yet", two conditions with different remedies. The loop's failure branch now asks whether an open
+  PR exists and names the remedy. *A bounded wait that cannot distinguish its own failure modes is a
+  timer with better manners.* Found by firing for real on #80, where the first reading was "flake in
+  the poll"; both branches of the new discriminator were exercised before it was written down.
 - `RunGated(decode, readText, isGated)` and `RunWith(decode, readText, isGated,
   have...)` take the text entry point; `Script.Run` now panics on a quote form,
   declaring nothing and supplying nothing.
@@ -723,9 +740,9 @@ weakly-ordered platform.
   Deleting `!peek2Keyword(kwItem)` fails no row, and a `panic()` in its complementary branch never
   fired across the suite — `elemexpr_list` follows a *mandatory* reftype, so `(item …)` can never be
   the first thing after `elem`, and both readings reject `(elem (item …))` with the same message.
-  Kept, with the measurement recorded at the site rather than an argument, and flagged rather than
-  decided: deleting a condition because nothing reaches it today is precisely the move #75's own
-  shadowing counsels against.
+  Kept, with the measurement recorded at the site rather than an argument. **Ruled on in #82
+  (Scott): kept** — deleting a condition because nothing reaches it today is precisely the move #75's
+  own shadowing counsels against, and the measurement stands as the record of what it does *not* do.
 
   **Both graves are over-rejections**, which is the class a reject-direction corpus is structurally
   blind to. Twelve vectors across the two, and not one would have been visible on the 7-module accept
