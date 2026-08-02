@@ -17,54 +17,10 @@ milestone landing with the §4 litmus battery passing on both a TSO and a
 weakly-ordered platform.
 
 ## [Unreleased]
-
 *Implements contract v0.1.*
 
-### Fixed
-- **`scanAnnotBody` had an arm the reference's `annot` rule does not have, and lacked one it does**
-  ([#83](https://github.com/scttfrdmn/burroughs/issues/83)). `annotations.wast:1` — a **must-succeed**
-  module — was rejected with `empty annotation id`, taking the whole file's leading vector with it.
-  **Board 4161 → 4162 pass, 2 → 1 fail**; `annotations.wast` 70/71 → **71/71**. The remaining board
-  failure is `malformed mutability` in `binary-gc.wast`, a `(module binary ...)` vector, so the *text*
-  partition of the fail count is now **0** and `textFailCeiling` asserts it.
-
-  `token` has **three** `"(@"` arms (lexer.mll:821, :825, :829); `annot` has **two** (:850, :855).
-  There is no bare-`(@` error arm inside an annotation body, so `(@)` nested in one is not malformed
-  — it takes `| "("` and the `@` becomes a `reserved` atom, which is exactly why
-  `annotations.wast:16` writes `(@a @ @x (@x) (@x y) (@) (@ x) (@(@(@(@)))))` *inside* a module the
-  suite expects to read. We had transcribed the arm from the wrong rule. Every arm we *did* copy was
-  right, which is the lesson: **a missing arm is invisible to a diff of the arms you copied**, so two
-  rules sharing most of their arms are read arm-by-arm or not at all.
-
-  The sibling defect, found by the same sweep: the nested `"(@"(string)` arm calls `annot_id` in the
-  reference (:858) exactly as the token-level arm does (:828), and ours matched the *shape* while
-  validating nothing — `(@a (@""))` was accepted. **No vector can score it**: every string-id vector
-  in the file (:76–:79) is top-level, so the oracle never asks about the nested position. Fixed by
-  factoring `annot_id` into one `annotIDError` both call sites read, the duplication having been what
-  let one copy drift.
-
-  New controls in `internal/text/annot_test.go`, each falsified by introducing the defect it names:
-  the `"(@"` arm *sets* of both rules compared against `lexer.mll` with a per-rule vacuity floor (a
-  tab-anchored arm regexp yields 0 vs 0 and the floor catches it), the top-level-vs-nested verdict
-  asserted as a **bidirectional** pair over the same three bytes, `annot_id`'s two messages pinned in
-  both positions, and `annotations.wast:1` read end-to-end through `ReadModule` from the vendored
-  suite rather than transcribed.
-
-### Changed
-- **The `annotations.wast:1` residue was attributed to #55 for three PRs, and #55 is a changelog
-  issue** ([#83](https://github.com/scttfrdmn/burroughs/issues/83)). Re-pointed at 5 sites in
-  `internal/spec/spec_test.go` and 3 here, including in a merged PR body and commit message. The
-  attribution was never checkable: `TestFixtureProvenance` machine-checks that a `.wast:N` citation
-  resolves, and nothing resolves an issue *number* to its subject — so a bare `#NN` in prose is the
-  drifted-citation defect with the machine-checked half removed, and this one was quoted forward
-  eight times because quoting is cheaper than checking.
-- **`textFailCeiling` 2 → 0, and it was briefly wrong at 1.** Written from the board's *total* of one
-  remaining fail, where the ceiling counts the *text* partition and the survivor is in the binary
-  one. Reverting #83's fix left `textFail` at exactly 1, so a ceiling of 1 sat green over the defect
-  it was being lowered to catch — found by the falsification pass, not by reading. **A ceiling is a
-  claim about a partition, so it is read off the partition, not off the total.**
-
 ### Added
+
 - **Symbolic label resolution, which closes the `unknown label` bucket and finishes #64**
   ([#80](https://github.com/scttfrdmn/burroughs/issues/80)). `labelSpace` in `context.go` — a stack
   of the enclosing blocks' names, innermost last — with `lookupLabel` reporting `unknown label  $l`
@@ -650,7 +606,316 @@ weakly-ordered platform.
     **fourth** unlisted constructor (`bodyBoundary` composing the struct inline), which now
     routes through `errf`.
 
+- **`derived` accepted as the third provenance category** — cited, derived,
+  synthetic. A derived fixture is one the suite *implies* but does not contain:
+  `TestLEBWidthIsPerField`'s accept half asserts a wide-but-legal limits minimum
+  decodes, which `binary-leb128.wast` cannot state because it only asserts
+  malformedness, and which `:529` and `:221` jointly **bracket** — ten bytes wants
+  *integer too large*, eleven wants *integer representation too long*, so the only
+  width satisfying both is 64. *Entailment from checked facts is legitimate
+  provenance; unstated entailment is just synthetic with better manners.* So the
+  category carries obligations and `TestDerivedFixturesStateResolvablePremises`
+  enforces the half a machine can: a derived row states its premises
+  (`derived from <file>.wast:N,M`) and every premise must **resolve** to a suite
+  line carrying content. The inference is reviewed by eyes; a premise pointing at
+  prose is caught by the same mechanism that catches a drifted transcription.
+  Falsified four ways before being trusted — premise pointing at prose, premise
+  past end of file, a `derived` marker with no premises at all (the laundering
+  channel), and the category going empty, which fails rather than passing
+  vacuously. (Ruling: Scott, PR #37.)
+
+- **The instruction grammar, table-driven — `binary.wast` is 127/127 and the phase-1
+  corpus is 764 pass / 0 fail / 0 unsupported / 2 gated.** All 26 previously-failing
+  vectors drained. `decodeConstExpr`'s eight-entry accept set **dissolved**: the
+  generated `opTable` answers existence, illegality, escape, and immediate shape over
+  the whole opcode space, leaving `constOps` — seven bytes carrying the const-legality
+  predicate the reference does not encode — as the only opcode fact this engine states
+  on its own authority.
+- Function-body grammar: `locals` (per-group count a u32 LEB, the *sum* checked at 64
+  bits, so `integer too large` and `too many locals` are different fields), `memop`
+  (flags bound checked *after* the LEB read, a u64 offset), `catch` clauses, blocktypes,
+  and `sized` per body.
+- **Gate flips closed as buckets, with their base counts:** `illegal opcode ff` (1),
+  `illegal opcode` (1), `data count section required` (2 — this is
+  [#22](https://github.com/scttfrdmn/burroughs/issues/22), closed inside #39 from
+  `syntax/free.ml`'s four data-referencing opcodes rather than from a byte scan),
+  `too many locals` (2), `END opcode expected` (1), `unexpected end of section or
+  function` (3), `section size mismatch` (1), `integer too large` (2).
+- `binary.wast:345` and `:1218` fell out **on contact** with the table, before any
+  body-grammar work — 0007's postscript predicted them as a milestone and they were a
+  lookup. Recorded because the mis-estimate is the transferable part.
+- **The nine-defect falsification pass.** Each mechanism was broken on purpose and the
+  board re-read, because *a green that survives the bug it names is a control in name
+  only* and a 26-vector drain is the shape that most deserves the suspicion. Six defects
+  refilled exactly the buckets they claim. **Three survived the entire suite** and are
+  now `internal/binary/instr_probe_test.go`: per-body extent distinguishability, lane
+  index width at the production reader, and the blocktype alternation's branch order.
+  Each control was itself falsified before being committed.
+
+- **Phase 1 of the decoder is done.** The byte-string corpus has nothing left to teach it:
+  **764 pass / 0 fail / 0 unsupported / 2 gated** on the default board, **766 / 0 / 0** with
+  every gate on, and `binary.wast` **127/127**. The two gated vectors are
+  `binary_leb128_64.wast:1,16`, honestly parked on memory64 and simultaneously *failed* in
+  the all-gates-on lane until that gate works. No version bump — `v0.1.0` is the full MVP
+  core suite, and the remaining ~250 `.wast` files need the wat parser
+  ([#8](https://github.com/scttfrdmn/burroughs/issues/8)) before that number means anything.
+- **Gates now govern opcodes, not just sections**
+  ([#48](https://github.com/scttfrdmn/burroughs/issues/48), decision 0008). The
+  table-driven instruction dispatch consulted `Features` nowhere, so with every gate off the
+  decoder accepted `throw_ref`, `try_table`, `v128.const`, and `ref.eq` in a function body —
+  the accept-and-ignore half of the gate ruling. A hand-authored proposal→opcode mapping
+  (`internal/binary/gatemap.go`) now covers **318 accepted opcodes** across 11 entries, and a
+  gate-off engine declines them with a feature-named error.
+- **Four gates that did not exist**: `Features.GC`, `TailCall`, `RelaxedSIMD`, and
+  `MultiMemory`. Each is a *tracked* proposal (contract §9 G-2) with constructs in the table
+  and no bool to gate them — the forgotten-fifth-gate scenario existing in the wild, four
+  times over, and invisible to the reflection-derived lanes precisely because a gate that is
+  not there cannot be reflected over. #48 named GC; reading the table's mnemonics against
+  G-2 found the other three.
+- **The inverse gate control**, `TestEveryGateOffDeclinesSomething`, landed in the same
+  change as its subject rather than parked red — *a debt is discharged by a tripwire, never
+  an intention*. `TestAllGatesOnLeavesNothingGated` bounds over-gating; this bounds
+  under-gating, requiring every gate, turned off with all others on, to decline at least one
+  construct. It carries a second obligation: its SIMD probe is a **blocktype**, so it
+  permanently pins `decodeBlockType`'s branch order — move the valtype branch off last and
+  the decline is overwritten with `malformed value type`, and the control goes red. One
+  control, two obligations.
+- The mapping is **cited** per entry to the proposal document that enumerates the opcode
+  (`gc/MVP.md:809`, `tail-call/Overview.md:139`, …) and machine-checked two ways: every
+  opcode it names exists in the table and is not an arm the reference defines in order to
+  *reject*, and every gate governs at least one construct. `RequireProposalDoc` is the third
+  licensed skip door, so a citation check cannot silently stop checking.
+
+- **`Result.UnsupportedByHead` — the unsupported column bucketed by command head**, printed
+  on its own board section largest-first, for the same reason failures bucket by expected
+  spec text: *1345 is not a work plan.* Keyed by the head atom as written rather than by
+  `Kind`, because every unsupported command shares `KindUnsupported` and keying by it would
+  yield one bucket of 1345 naming nothing. The breakdown names the components: **504
+  `assert_return`** is the interpreter, **398 `module`** and **308 `assert_malformed`** are
+  the text grammar ([#53](https://github.com/scttfrdmn/burroughs/issues/53),
+  [#8](https://github.com/scttfrdmn/burroughs/issues/8)), **110 `assert_invalid`** is the
+  validator. `Command.Head` is recorded for every command to make it possible: `Kind` says
+  what the harness can *do* with a command, `Head` says what the command *is*.
+- **`TestDenominatorExcludesUnaskedCommands`** — `Total()`'s exclusion of `Unsupported` and
+  `Gated` became load-bearing the moment the corpus was derived, and *a comment cannot
+  fail*. Folding `Unsupported` in would render this board as 783/2136 and, worse, make
+  the ratio improve when a *component* lands rather than when a *verdict* is earned. The
+  denominator is over what was **asked**; one table case asks nothing at all and expects
+  zero.
+- **`TestUnsupportedIsBucketedByCommand`** — the buckets sum to the scalar, are non-empty
+  whenever the scalar is, and carry no empty keys. The vacuity half is the point: a
+  breakdown map that silently stopped being populated would agree with an empty comparison
+  and print a board section with nothing under it.
+- A **vacuity floor** on the derived selector (`>= 12` files), which earned itself
+  immediately: the first draft said 20 on the strength of "27 files have no
+  interpreter-dependent command" — a different set — and the floor failed on my wrong
+  expectation rather than shipping it. *A comparison against an empty set succeeds, so the
+  control that compares gets a plausible-size floor.* The instructive miss is `data.wast`,
+  whose five `(module binary ...)` forms have non-string-literal elements and so are not
+  scorable.
+- Six `simd_const.wast` vectors added to `TestGatedVectors`' per-vector allowlist. They
+  arrived with the derived corpus and the gate is **right**: `\60\00\01\7b` is a functype
+  with a `v128` result, so a SIMD-off engine must decline. Verified by reading the vectors,
+  not by assuming the new declines were over-gating — and each is simultaneously *failed* in
+  the all-gates-on lane, where the gated count is zero.
+- **A pass floor on the all-gates-on lane**, closing a gap #51 made concrete.
+  `TestAllGatesOnLeavesNothingGated` asserted only `Gated == 0` and counted nothing, so the
+  one lane best placed to see a *gated feature breaking* was blind to it: with every gate
+  on, a broken feature turns a pass into a fail and leaves `Gated` at zero. Falsified by
+  breaking the heaptype descent — 798 → 791 pass, `Gated` still 0, and the old assertion
+  still green. The default lane cannot substitute, since there these vectors are honestly
+  `gated` and a floor excluding them says nothing about whether GC works.
+- **`TestRefTypeReadsTheReferencesFourteenForms`** — scoped to the space, not to the twelve
+  forms #51 needed: every `s7` value a single byte can encode (−64..63), partitioned into
+  ungated / feature-declined / malformed with the **counts** as the assertion (2 / 10 / 113)
+  plus three named exclusions that sum the partition to 128. It found all three exclusions
+  itself — the first draft asserted 2/10/114 over all 128 and failed, which is how `0x40`
+  turned out never to reach `decodeRefType` at all (`decodeTable` peeks it first) and how
+  `0x63`/`0x64` turned out to truncate rather than decide. *Measured, not predicted, and the
+  three are excluded by name rather than by shrinking a count until it matched.*
+- **`TestTableInitializerFormIsGatedNotMalformed`** and
+  **`TestHeapTypeFollowsTheParameterizedForms`**. The first is #51's vector both ways —
+  gate off declines by feature name and specifically *not* as `ErrMalformedRefType`, gate on
+  decodes through `decodeConstExpr` — **cited** to `elem.wast:453`, its 45-byte image
+  machine-compared by `TestFixtureProvenance` (falsified: one mutated byte fails the
+  citation). All seven declines carry the byte-identical table entry
+  `\40\00\64\70\00\01\d2\00\0b`, so one citation covers the class and the other six are
+  named in the `TestGatedVectors` allowlist. Every new control was falsified by
+  reintroducing the defect it names: removing the `0x40` branch restores #51 and fires
+  three assertions; removing the abstract-reftype gate turns 2/10/113 into 12/0/113.
+- `ErrMalformedRefType`, `ErrMalformedHeapType`, and `ErrZeroByteExpected`. The last is
+  declared-and-tracked rather than reachable: no suite vector asserts `zero byte expected`
+  today, because the sites calling it are gated constructs a gate-off engine declines
+  first. Named at its definition site with the reason, per the `ErrTrailingData` ruling
+  (#6).
+- The GC gate's non-opcode constructs recorded in `gatedNonOpcodes` — the `0x40` table form
+  and the twelve GC reftypes, with their check sites. A construct with no gate entry is the
+  #48 defect, and silence is how it got there the first time.
+- **`internal/text/keywords.go` — the wat keyword table, machine-derived from the reference
+  interpreter's text lexer**: 589 keywords, 173 token kinds, at the same pin as
+  `optable.go`. Decision 0007's argument one grammar over (**decision 0009**), and the
+  asymmetry is starker here: every vector bearing on the table is `assert_malformed`, so a
+  table containing **nothing at all** passes all 566 `unknown operator` vectors while
+  failing every valid module. The extraction turned out *easier* than `decode.ml`'s — one
+  `match` block, 589 one-shape arms, no alternations, no wrapped heads — which is the recon
+  finding that let 8a stand alone instead of folding into
+  [#8](https://github.com/scttfrdmn/burroughs/issues/8).
+- **`internal/text/internal/keywordgen`** with 0007's four conditions discharged: an
+  unrecognized arm inside the block is a hard error rather than an omission, a `Floor = 400`
+  vacuity control against 589 measured, a generation header naming authority/revision/
+  extractor version, and `make keyword-drift` in CI. One floor rather than `opcodegen`'s
+  per-region map, because this grammar has one region and there is no analogous partition to
+  under-count independently.
+- **`checkShape` — the check with no counterpart in `opcodegen`.** `let keyword = ['a'-'z']
+  (letter | digit | '_' | '.' | ':')+` (lexer.mll:111) is what ocamllex matched *before* the
+  arm dispatch ran, so an arm head outside that charset is dead code upstream and would be a
+  row here no input can reach. Notably `/` is absent from it, which is the character that
+  routes `i32.wrap/i64` to the **second** `unknown operator` producer (`| reserved`, :839)
+  rather than the keyword fallthrough (:809) — and that split, 8 + 3 across the eleven
+  legacy mnemonics, is why the mnemonics need maximal munch and not a table lookup.
+- **`internal/text/keywords_test.go` — an integrity check distinct from the drift check**,
+  and the distinction is a finding rather than belt-and-braces. `keyword-drift` needs
+  `third_party/spec`, so it cannot live in `make check`; on a fresh clone `DO NOT EDIT` is a
+  *request*, and the row that could be hand-added is exactly `get_local`. So the committed
+  table is asserted with no corpus at all: a size floor, the eleven absences, the `keyword`
+  shape, and a content spot-check with its kinds. Each falsified by mutating the committed
+  file — the obsolete row, an unreachable row, an empty kind, an emptied table, and a wrong
+  kind, each firing only where named. Also measured, because the first draft of the
+  reasoning guessed: `exclusions.generated: lax` does suppress `unused` on the table, but it
+  is *not* why the linter is quiet today — these tests read the map, so `unused` is correct
+  to say nothing. The exclusion is the silence that would remain if the tests were deleted,
+  which is the change that would take the package from "table with a consumer" to "table
+  with none" with nothing objecting.
+- **`internal/gen` — decision 0006's condition discharged, not deferred again.** The second
+  consumer arrived (`keywordgen` reads the same pin from the same script and formats the same
+  way), so the pin reader and the formatter moved out of `opcodegen` and its shim layer was
+  deleted rather than kept: one vocabulary for one fact. What is deliberately *not* shared is
+  anything either generator's grammar knows — a shared `parseArm` would be the wrong seam.
+  With its own tests, because both drift checks need a vendored reference and so nothing in
+  the tree exercised this package on a fresh clone.
+- `testenv.RequireSuiteFile` — a fourth licensed door, and the first for the *same* corpus as
+  an existing one. The unit that earns a door is the **question**: `RequireSuite` asserts a
+  count over 257 files, and a citation check against one named vector needs that file, which
+  a full corpus missing it satisfies and a 249-file corpus does not. It exists because the
+  skip was first written inline and `TestEverySkipSiteIsLicensed` failed the build — twice
+  now that AST check has caught an author who knew the rule.
+- `testenv.refFloors` — the reference size floor keyed by path constant rather than passed at
+  the call site, since *a floor passed by a caller is a fact about a file typed somewhere
+  other than where the file is named*, and the failure mode is a caller passing 0 and
+  defeating the control it is calling. An unregistered path is a hard failure, never a
+  default floor. `MinRefLexerBytes` is its own constant even though 20000 holds for both
+  files at this revision: sharing it would make the two floors' agreement an accident a
+  future upstream edit silently ends.
+
+- **The `(module quote …)` corpus admitted, and the board's fourth verdict** (decision 0010,
+  Scott's ruling on [#53](https://github.com/scttfrdmn/burroughs/issues/53)). Two changes in
+  one entry because neither is honest alone.
+
+  **The admission.** `classify` now recognizes `(module quote "…")` — bare and under
+  `assert_malformed` — so the derived corpus (#52) admits the **54 files that hold nothing
+  else scorable**. The board goes 14 → **68 files**, 2144 → **28777 commands**, and the
+  unsupported ceiling **1345 → 26742**. *That rise is corpus admitted, never regression*: the
+  selector did not change, it still asks which files hold a command whose `Kind` the run loop
+  scores, and two new Kinds made 54 more files answer yes. The alternative — enumerating the
+  quote files a lexer could already answer — is the `phase1Files` defect #52 removed, wearing
+  a new name.
+
+  **The fourth verdict, `unimplemented`.** The 1236 admitted vectors could not go in `fail`.
+  Today that column means **defect** — the board's lone failure (`binary-gc.wast:1`) is
+  visible *because* the column discriminates wrong-answer from not-built — and scoring 1236
+  unread quote vectors as failures takes it 1 → 1237, so a genuine regression tomorrow
+  arrives as 1238, invisible. A column that cannot surface a new defect has stopped being an
+  instrument. So: **`unsupported` = the harness cannot ask; `unimplemented` = the harness
+  asked and the engine lacks a named component to answer.** `gated` is the architectural
+  precedent rather than the argument — absence-by-configuration there, absence-by-construction
+  here.
+
+  Guarded so it cannot become a dumping ground, which is the same risk the third verdict had
+  to be fenced against (#27) with mechanisms that do not transfer at this scale:
+  **capability-derived, never hand-assigned** (`classify` computes `Needs`, the run loop asks
+  what the engine has, the gap is the verdict — no per-vector allowlist, because 1236 vectors
+  cannot have one); a **closed registry where each entry carries its tracking issue**, and an
+  unregistered capability panics rather than growing the column; the **partition asserts the
+  fifth term**; and **guard 4 is a release gate** — no minor version while its milestone's
+  `unimplemented` is nonzero, `v0.1.0` requires zero (appended to decision 0004, so the rule
+  lives where releases are cut). The category exists to **drain**, and the version scheme is
+  what enforces the draining rather than trusting it.
+
+  Every control falsified by introducing the defect it names and watching it fail — eight of
+  them, including Reading A itself (folding the column into `fail` fires the fail ceiling at
+  1237), a classifier that stops setting `Needs` (the vacuity floor), an invented capability,
+  a lost partition term, and a registry allowed to run ahead of the engine.
+
+  **Board: 68 files — 783 pass / 1 fail / 26742 unsupported / 15 gated / 1236 unimplemented**,
+  all 1236 attributed to `wat-reader` (#53). Pass and fail are unmoved, which is the honest
+  reading: admitting a corpus earns no verdicts.
+
+- **Capability registry entries are born with their retirement conditions** — the fourth
+  verdict's second structural control, added on review of the above
+  ([#58](https://github.com/scttfrdmn/burroughs/pull/58)) and **temporal where `gated`'s is
+  spatial**. `gated` gets its anti-dumping-ground guarantee from a lane: turn every gate on
+  and the count must be zero. That does not transfer, for the reason the category exists —
+  absence-by-construction has nothing to switch on, so there is no lane to build.
+
+  So a registry entry now states, the day it is written, the condition under which it must be
+  **deleted**, and `engineCapabilities` states what the engine actually has rather than
+  leaving it to omission (an absence cannot be read as a claim, and guard 1 makes the
+  engine's half a declaration). `RunGated` derives from that declaration, so the board scores
+  against what the engine says it has rather than what a call site remembered to pass — when
+  the wat reader lands, one line moves the board.
+
+  `TestNoCapabilityOutlivesItsComponent` enforces both directions: a capability the engine
+  declares must no longer be registered, **and** must have drained its population to exactly
+  zero. Retirement is one motion, and each half alone is a defect — a landed component that
+  leaves vectors in the fourth column has converted a deferral into a disappearance, which is
+  precisely what the ruling exists to prevent. An entry with no retirement condition panics in
+  the run loop: an entry that cannot die makes its column permanent by omission rather than by
+  decision. **An entry may not outlive its component; a capability with no population and no
+  retirement is a squatter.**
+
+  Four more falsifications, all fired where named: declaring the capability while leaving the
+  entry (`retirement is one motion, and this is the half that was skipped`), a reader that
+  lands leaving 1236 behind (`converted a deferral into a disappearance`), the registry
+  emptied without draining (the vacuity floor — `compared nothing against nothing`), and an
+  entry born without a death certificate (`an entry that cannot die outlives its component`).
+
+  `CapWatReader`'s condition, from day one: retire when the reader is wired and
+  `unimplemented(wat-reader)` is 0 — every vector converted to pass or fail, **none left
+  behind**. That makes #53's done-when checkable by CI instead of by a reviewer.
+
 ### Changed
+
+- **`[Unreleased]`'s 16 group headings consolidated to 3, and the structure is now a gate**
+  ([#55](https://github.com/scttfrdmn/burroughs/issues/55)). Keep a Changelog 1.1.0 has one group per
+  type per release; this file had reached 5 `### Added`, 5 `### Changed`, and 6 `### Fixed`, because
+  each PR appended its own heading rather than merging into the existing one. The consolidation is
+  **pure movement** — verified by comparing the multiset *and the sequence* of non-heading content
+  lines before and after: 1706 lines, identical, nothing dropped, reworded, or reordered. The
+  `[0.0.1]` section and the file's preamble are byte-identical, per the issue's out-of-scope line.
+
+  The gate is `internal/testenv/changelog_test.go`, in Go rather than as a `make check` shell step
+  because *a shell pipeline that reports "no matches" is indistinguishable from one that agrees* —
+  the vacuity floor and the distinguishable messages are the whole argument against a two-line grep,
+  and they apply to the check's own reading of the file. It makes three claims and each is falsified
+  separately, because **members of a partition that share an error value all score as each other**
+  (grave #34): a duplicated heading fails for repetition, a seventh group name (`### Improved`) fails
+  for vocabulary, and a Changed-before-Added swap with no duplication fails for order. A fourth
+  injection broke the heading regexp itself and tripped the floor at *0 headings across 2 sections*
+  — the degenerate agreement the floor exists for. Scoped to every release section, not just
+  `[Unreleased]`: released sections are out of scope for *editing*, not for *reading*.
+- **The `annotations.wast:1` residue was attributed to #55 for three PRs, and #55 is a changelog
+  issue** ([#83](https://github.com/scttfrdmn/burroughs/issues/83)). Re-pointed at 5 sites in
+  `internal/spec/spec_test.go` and 3 here, including in a merged PR body and commit message. The
+  attribution was never checkable: `TestFixtureProvenance` machine-checks that a `.wast:N` citation
+  resolves, and nothing resolves an issue *number* to its subject — so a bare `#NN` in prose is the
+  drifted-citation defect with the machine-checked half removed, and this one was quoted forward
+  eight times because quoting is cheaper than checking.
+- **`textFailCeiling` 2 → 0, and it was briefly wrong at 1.** Written from the board's *total* of one
+  remaining fail, where the ceiling counts the *text* partition and the survivor is in the binary
+  one. Reverting #83's fix left `textFail` at exactly 1, so a ceiling of 1 sat green over the defect
+  it was being lowered to catch — found by the falsification pass, not by reading. **A ceiling is a
+  claim about a partition, so it is read off the partition, not off the total.**
+
 - **#78's lesson ratified into `CLAUDE.md`** (ruling: Scott, #82): *a guard's trigger predicate is
   itself a claim about the space, and an under-matching one fails silently by construction.* The
   falsifiability law does not reach it — you can break a guard's assertion, watch it fail, and still
@@ -708,7 +973,111 @@ weakly-ordered platform.
   retirement and pointing at `RunGated`. *A ruling retroactively falsifies the prose
   written before it* — and so does a retirement.
 
+- **Decision 0003 amended**: its LEB taxonomy prescribed the *wrong test order*,
+  and the implementation followed its documentation faithfully — so every reviewer
+  who checked the code against its claims found agreement. Appended, not edited: the
+  body stands as the record of what was believed and of why it survived review. The
+  authority for order-of-tests questions is the reference interpreter's `decode.ml`,
+  not a derivation from vectors that cannot distinguish the orderings. Also corrects
+  the ADR's `\ff\ff\ff\ff\ff\7f` witness, which is listed under the continuation-bit
+  bullet while being sourced from a *signed* field.
+- **LEB widths are per field, not one width for the whole decoder.** Limits
+  minimum and maximum are read at **64 bits**; indices and counts stay 32. The
+  suite brackets it from both sides: `binary-leb128.wast:525`'s ten-byte memory
+  minimum wants *integer too large* (ten bytes is legal width for a u64, so the
+  fault is the unused payload bits) while `:217`'s eleven-byte field wants
+  *integer representation too long*. A u32 read scores the first as "too long"
+  and gets the string wrong. The consequence is deliberate: a memory32 minimum
+  above 2^32 now **decodes** and is the validator's to reject, which is the
+  correct layering — reading the field narrowly to catch it in the decoder would
+  be borrowing the validator's job and getting the malformed string wrong to do
+  it. Pinned by a bidirectional control the suite supplies for free: the same
+  five bytes `80 80 80 80 10` are malformed as a data-segment memory index
+  (`:565`) and legal as a limits minimum, so one width being wrong fails the two
+  halves in opposite directions.
+- **The functype form tag is an `s7`, not a byte.** `0x60` *is* −32 read at
+  width 7 — the spec's type constructors live in negative s7 space, as `0x5e`
+  (array) is −34 — and `binary-leb128.wast:1067` is the vector that settles it:
+  `\e0\7f`, annotated by the suite itself as "−0x20 in signed LEB128 encoding",
+  must fail as *integer representation too long* rather than *malformed function
+  type*. This is the inverse of the limits-flags rule, where the field really is
+  a byte and a redundant encoding of a legal value is malformed limits.
+- `reader.u64` has a production caller and its `//nolint:unused` is gone, which
+  empties the `deadcode` allowlist to zero entries. This is the placeholder
+  discipline's intended ending — a deferral retired by a caller, not by a
+  suppression outliving its reason.
+  ([#19](https://github.com/scttfrdmn/burroughs/issues/19))
+
+- **`Features.ExceptionHandling` and `Features.SIMD` doc comments now say what the gates
+  do *not* yet cover.** Writing out an opcode scope for them is what found
+  [#48](https://github.com/scttfrdmn/burroughs/issues/48): the table-driven dispatch
+  consults `Features` nowhere, so with every gate off the decoder **accepts**
+  `throw_ref`, `try_table`, `v128.const`, and `ref.eq` in a function body — the
+  accept-and-ignore half of the gate ruling, unnoticed because every prior gate
+  discussion was about not over-*rejecting*. The comment I first wrote asserted check
+  sites that do not exist: grave #36's fabricated-evidence shape, moved from a format
+  string into a comment, where nothing reads it. *Writing down what a flag governs is a
+  check on whether it governs it.*
+- `decodeBlockType`'s comment gave the wrong reason for its branch order. `either`
+  backtracks, so the order affects neither the accept set nor any extent — measured over
+  all 256 first bytes in both orders, 427 of 768 rows differ and **every** difference is
+  the error message alone. What the order decides is which branch's error survives, and
+  that is load-bearing in exactly one place: the gated branch must be last, or the
+  alternation overwrites `ErrFeatureDisabled` with `malformed value type` — a gate
+  manufacturing malformedness. The control keeps the wrong reason beside the right one.
+
+- **The board's corpus is derived, not enumerated**
+  ([#52](https://github.com/scttfrdmn/burroughs/issues/52)). `phase1Files` was eight
+  hand-listed filenames — *the enumerated-literal defect living in the oracle's own input
+  selector*, so the board's coverage froze at the moment somebody typed the list and a new
+  upstream file with byte-string vectors would never be asked. `boardFiles(t)` now parses
+  every vendored `.wast` and selects the ones with at least one command the harness can
+  score, which finds **14 files** — six the list never held — and puts **19 more vectors**
+  on the board, 8 of them red, which is the point.
+- **The board is red by 8, deliberately.** **783 pass / 8 fail / 1345 unsupported / 8
+  gated** on the default board, **791 / 8 / 0** with every gate on. The 8 reds are all one
+  bucket, `(module binary ...) must decode` — accept-direction findings the byte-string
+  corpus could not reach, since a hand-listed corpus of malformed vectors samples only the
+  reject direction. One is already [#51](https://github.com/scttfrdmn/burroughs/issues/51).
+  *A red board that names its buckets outranks a green board that never asked.*
+- **Zero-unsupported was a property of the corpus, not a law of the board** (doctrine
+  adjustment, recorded on #52). While the corpus was eight byte-string files the unsupported
+  column was necessarily zero; running every file makes it 1345, and that column is the
+  honest board now — commands the engine cannot answer yet, counted and visible, shrinking
+  monotonically as components land. The underlying law is unchanged: nothing hides behind a
+  skip ([#29](https://github.com/scttfrdmn/burroughs/issues/29)).
+
 ### Fixed
+
+- **`scanAnnotBody` had an arm the reference's `annot` rule does not have, and lacked one it does**
+  ([#83](https://github.com/scttfrdmn/burroughs/issues/83)). `annotations.wast:1` — a **must-succeed**
+  module — was rejected with `empty annotation id`, taking the whole file's leading vector with it.
+  **Board 4161 → 4162 pass, 2 → 1 fail**; `annotations.wast` 70/71 → **71/71**. The remaining board
+  failure is `malformed mutability` in `binary-gc.wast`, a `(module binary ...)` vector, so the *text*
+  partition of the fail count is now **0** and `textFailCeiling` asserts it.
+
+  `token` has **three** `"(@"` arms (lexer.mll:821, :825, :829); `annot` has **two** (:850, :855).
+  There is no bare-`(@` error arm inside an annotation body, so `(@)` nested in one is not malformed
+  — it takes `| "("` and the `@` becomes a `reserved` atom, which is exactly why
+  `annotations.wast:16` writes `(@a @ @x (@x) (@x y) (@) (@ x) (@(@(@(@)))))` *inside* a module the
+  suite expects to read. We had transcribed the arm from the wrong rule. Every arm we *did* copy was
+  right, which is the lesson: **a missing arm is invisible to a diff of the arms you copied**, so two
+  rules sharing most of their arms are read arm-by-arm or not at all.
+
+  The sibling defect, found by the same sweep: the nested `"(@"(string)` arm calls `annot_id` in the
+  reference (:858) exactly as the token-level arm does (:828), and ours matched the *shape* while
+  validating nothing — `(@a (@""))` was accepted. **No vector can score it**: every string-id vector
+  in the file (:76–:79) is top-level, so the oracle never asks about the nested position. Fixed by
+  factoring `annot_id` into one `annotIDError` both call sites read, the duplication having been what
+  let one copy drift.
+
+  New controls in `internal/text/annot_test.go`, each falsified by introducing the defect it names:
+  the `"(@"` arm *sets* of both rules compared against `lexer.mll` with a per-rule vacuity floor (a
+  tab-anchored arm regexp yields 0 vs 0 and the floor catches it), the top-level-vs-nested verdict
+  asserted as a **bidirectional** pair over the same three bytes, `annot_id`'s two messages pinned in
+  both positions, and `annotations.wast:1` read end-to-end through `ReadModule` from the vendored
+  suite rather than transcribed.
+
 - **Two comments claimed a falsifiability their own probe refuted, in opposite directions**
   ([#80](https://github.com/scttfrdmn/burroughs/issues/80)). The falsification pass over the label
   work broke each of the four facts and read the board, and two of the four sentences written *about*
@@ -1223,62 +1592,6 @@ weakly-ordered platform.
     promise lives in the name of the function keeping it. *A premise about another function
     is checked by a test or it is a wish.*
 
-### Added
-- **`derived` accepted as the third provenance category** — cited, derived,
-  synthetic. A derived fixture is one the suite *implies* but does not contain:
-  `TestLEBWidthIsPerField`'s accept half asserts a wide-but-legal limits minimum
-  decodes, which `binary-leb128.wast` cannot state because it only asserts
-  malformedness, and which `:529` and `:221` jointly **bracket** — ten bytes wants
-  *integer too large*, eleven wants *integer representation too long*, so the only
-  width satisfying both is 64. *Entailment from checked facts is legitimate
-  provenance; unstated entailment is just synthetic with better manners.* So the
-  category carries obligations and `TestDerivedFixturesStateResolvablePremises`
-  enforces the half a machine can: a derived row states its premises
-  (`derived from <file>.wast:N,M`) and every premise must **resolve** to a suite
-  line carrying content. The inference is reviewed by eyes; a premise pointing at
-  prose is caught by the same mechanism that catches a drifted transcription.
-  Falsified four ways before being trusted — premise pointing at prose, premise
-  past end of file, a `derived` marker with no premises at all (the laundering
-  channel), and the category going empty, which fails rather than passing
-  vacuously. (Ruling: Scott, PR #37.)
-
-### Changed
-- **Decision 0003 amended**: its LEB taxonomy prescribed the *wrong test order*,
-  and the implementation followed its documentation faithfully — so every reviewer
-  who checked the code against its claims found agreement. Appended, not edited: the
-  body stands as the record of what was believed and of why it survived review. The
-  authority for order-of-tests questions is the reference interpreter's `decode.ml`,
-  not a derivation from vectors that cannot distinguish the orderings. Also corrects
-  the ADR's `\ff\ff\ff\ff\ff\7f` witness, which is listed under the continuation-bit
-  bullet while being sourced from a *signed* field.
-- **LEB widths are per field, not one width for the whole decoder.** Limits
-  minimum and maximum are read at **64 bits**; indices and counts stay 32. The
-  suite brackets it from both sides: `binary-leb128.wast:525`'s ten-byte memory
-  minimum wants *integer too large* (ten bytes is legal width for a u64, so the
-  fault is the unused payload bits) while `:217`'s eleven-byte field wants
-  *integer representation too long*. A u32 read scores the first as "too long"
-  and gets the string wrong. The consequence is deliberate: a memory32 minimum
-  above 2^32 now **decodes** and is the validator's to reject, which is the
-  correct layering — reading the field narrowly to catch it in the decoder would
-  be borrowing the validator's job and getting the malformed string wrong to do
-  it. Pinned by a bidirectional control the suite supplies for free: the same
-  five bytes `80 80 80 80 10` are malformed as a data-segment memory index
-  (`:565`) and legal as a limits minimum, so one width being wrong fails the two
-  halves in opposite directions.
-- **The functype form tag is an `s7`, not a byte.** `0x60` *is* −32 read at
-  width 7 — the spec's type constructors live in negative s7 space, as `0x5e`
-  (array) is −34 — and `binary-leb128.wast:1067` is the vector that settles it:
-  `\e0\7f`, annotated by the suite itself as "−0x20 in signed LEB128 encoding",
-  must fail as *integer representation too long* rather than *malformed function
-  type*. This is the inverse of the limits-flags rule, where the field really is
-  a byte and a redundant encoding of a legal value is malformed limits.
-- `reader.u64` has a production caller and its `//nolint:unused` is gone, which
-  empties the `deadcode` allowlist to zero entries. This is the placeholder
-  discipline's intended ending — a deferral retired by a caller, not by a
-  suppression outliving its reason.
-  ([#19](https://github.com/scttfrdmn/burroughs/issues/19))
-
-### Fixed
 - **Two correct predicates composed in the wrong order — `uleb` and `sleb`
   tested the continuation bit before the range.** The reference interpreter's
   `uN`/`sN` (`interpreter/binary/decode.ml`) check the unused-bits range
@@ -1410,38 +1723,6 @@ weakly-ordered platform.
 duplicate `Added`/`Fixed` headings from successive PRs appending to it; consolidating them
 is a formatting pass of its own, not a drive-by inside a decoder PR.*
 
-### Added
-
-- **The instruction grammar, table-driven — `binary.wast` is 127/127 and the phase-1
-  corpus is 764 pass / 0 fail / 0 unsupported / 2 gated.** All 26 previously-failing
-  vectors drained. `decodeConstExpr`'s eight-entry accept set **dissolved**: the
-  generated `opTable` answers existence, illegality, escape, and immediate shape over
-  the whole opcode space, leaving `constOps` — seven bytes carrying the const-legality
-  predicate the reference does not encode — as the only opcode fact this engine states
-  on its own authority.
-- Function-body grammar: `locals` (per-group count a u32 LEB, the *sum* checked at 64
-  bits, so `integer too large` and `too many locals` are different fields), `memop`
-  (flags bound checked *after* the LEB read, a u64 offset), `catch` clauses, blocktypes,
-  and `sized` per body.
-- **Gate flips closed as buckets, with their base counts:** `illegal opcode ff` (1),
-  `illegal opcode` (1), `data count section required` (2 — this is
-  [#22](https://github.com/scttfrdmn/burroughs/issues/22), closed inside #39 from
-  `syntax/free.ml`'s four data-referencing opcodes rather than from a byte scan),
-  `too many locals` (2), `END opcode expected` (1), `unexpected end of section or
-  function` (3), `section size mismatch` (1), `integer too large` (2).
-- `binary.wast:345` and `:1218` fell out **on contact** with the table, before any
-  body-grammar work — 0007's postscript predicted them as a milestone and they were a
-  lookup. Recorded because the mis-estimate is the transferable part.
-- **The nine-defect falsification pass.** Each mechanism was broken on purpose and the
-  board re-read, because *a green that survives the bug it names is a control in name
-  only* and a 26-vector drain is the shape that most deserves the suspicion. Six defects
-  refilled exactly the buckets they claim. **Three survived the entire suite** and are
-  now `internal/binary/instr_probe_test.go`: per-body extent distinguishability, lane
-  index width at the production reader, and the blocktype alternation's branch order.
-  Each control was itself falsified before being committed.
-
-### Fixed
-
 - **`decodeConstExpr` defers the const verdict rather than aborting on it.**
   `binary.wast:112` is the vector that forces it: a global initialiser ending `\41\00`
   with no END, followed by the code section's id byte `\0a` — which *is* `throw_ref`.
@@ -1474,64 +1755,6 @@ is a formatting pass of its own, not a drive-by inside a decoder PR.*
   interesting inputs** — the measure of what "defined but never budgeted" costs. *A
   fuzzer has two halves that fail independently; a target nothing runs under a budget is
   a file, not equipment.*
-
-### Changed
-
-- **`Features.ExceptionHandling` and `Features.SIMD` doc comments now say what the gates
-  do *not* yet cover.** Writing out an opcode scope for them is what found
-  [#48](https://github.com/scttfrdmn/burroughs/issues/48): the table-driven dispatch
-  consults `Features` nowhere, so with every gate off the decoder **accepts**
-  `throw_ref`, `try_table`, `v128.const`, and `ref.eq` in a function body — the
-  accept-and-ignore half of the gate ruling, unnoticed because every prior gate
-  discussion was about not over-*rejecting*. The comment I first wrote asserted check
-  sites that do not exist: grave #36's fabricated-evidence shape, moved from a format
-  string into a comment, where nothing reads it. *Writing down what a flag governs is a
-  check on whether it governs it.*
-- `decodeBlockType`'s comment gave the wrong reason for its branch order. `either`
-  backtracks, so the order affects neither the accept set nor any extent — measured over
-  all 256 first bytes in both orders, 427 of 768 rows differ and **every** difference is
-  the error message alone. What the order decides is which branch's error survives, and
-  that is load-bearing in exactly one place: the gated branch must be last, or the
-  alternation overwrites `ErrFeatureDisabled` with `malformed value type` — a gate
-  manufacturing malformedness. The control keeps the wrong reason beside the right one.
-
-### Added
-
-- **Phase 1 of the decoder is done.** The byte-string corpus has nothing left to teach it:
-  **764 pass / 0 fail / 0 unsupported / 2 gated** on the default board, **766 / 0 / 0** with
-  every gate on, and `binary.wast` **127/127**. The two gated vectors are
-  `binary_leb128_64.wast:1,16`, honestly parked on memory64 and simultaneously *failed* in
-  the all-gates-on lane until that gate works. No version bump — `v0.1.0` is the full MVP
-  core suite, and the remaining ~250 `.wast` files need the wat parser
-  ([#8](https://github.com/scttfrdmn/burroughs/issues/8)) before that number means anything.
-- **Gates now govern opcodes, not just sections**
-  ([#48](https://github.com/scttfrdmn/burroughs/issues/48), decision 0008). The
-  table-driven instruction dispatch consulted `Features` nowhere, so with every gate off the
-  decoder accepted `throw_ref`, `try_table`, `v128.const`, and `ref.eq` in a function body —
-  the accept-and-ignore half of the gate ruling. A hand-authored proposal→opcode mapping
-  (`internal/binary/gatemap.go`) now covers **318 accepted opcodes** across 11 entries, and a
-  gate-off engine declines them with a feature-named error.
-- **Four gates that did not exist**: `Features.GC`, `TailCall`, `RelaxedSIMD`, and
-  `MultiMemory`. Each is a *tracked* proposal (contract §9 G-2) with constructs in the table
-  and no bool to gate them — the forgotten-fifth-gate scenario existing in the wild, four
-  times over, and invisible to the reflection-derived lanes precisely because a gate that is
-  not there cannot be reflected over. #48 named GC; reading the table's mnemonics against
-  G-2 found the other three.
-- **The inverse gate control**, `TestEveryGateOffDeclinesSomething`, landed in the same
-  change as its subject rather than parked red — *a debt is discharged by a tripwire, never
-  an intention*. `TestAllGatesOnLeavesNothingGated` bounds over-gating; this bounds
-  under-gating, requiring every gate, turned off with all others on, to decline at least one
-  construct. It carries a second obligation: its SIMD probe is a **blocktype**, so it
-  permanently pins `decodeBlockType`'s branch order — move the valtype branch off last and
-  the decline is overwritten with `malformed value type`, and the control goes red. One
-  control, two obligations.
-- The mapping is **cited** per entry to the proposal document that enumerates the opcode
-  (`gc/MVP.md:809`, `tail-call/Overview.md:139`, …) and machine-checked two ways: every
-  opcode it names exists in the table and is not an arm the reference defines in order to
-  *reject*, and every gate governs at least one construct. `RequireProposalDoc` is the third
-  licensed skip door, so a citation check cannot silently stop checking.
-
-### Fixed
 
 - **The gate decline is deferred, not returned on sight** — the same layering
   `binary.wast:112` forced on the const verdict, and it would have been wrong on a green
@@ -1577,230 +1800,6 @@ is a formatting pass of its own, not a drive-by inside a decoder PR.*
   first bytes killed the second — plain accepts 12, the `0x40` form accepts 1, **both
   accept 0** — so the branches are disjoint, there is nothing to backtrack for, and the
   extent claim was invented. *Second-order honesty applied to a comment.*
-
-### Changed
-
-- **The board's corpus is derived, not enumerated**
-  ([#52](https://github.com/scttfrdmn/burroughs/issues/52)). `phase1Files` was eight
-  hand-listed filenames — *the enumerated-literal defect living in the oracle's own input
-  selector*, so the board's coverage froze at the moment somebody typed the list and a new
-  upstream file with byte-string vectors would never be asked. `boardFiles(t)` now parses
-  every vendored `.wast` and selects the ones with at least one command the harness can
-  score, which finds **14 files** — six the list never held — and puts **19 more vectors**
-  on the board, 8 of them red, which is the point.
-- **The board is red by 8, deliberately.** **783 pass / 8 fail / 1345 unsupported / 8
-  gated** on the default board, **791 / 8 / 0** with every gate on. The 8 reds are all one
-  bucket, `(module binary ...) must decode` — accept-direction findings the byte-string
-  corpus could not reach, since a hand-listed corpus of malformed vectors samples only the
-  reject direction. One is already [#51](https://github.com/scttfrdmn/burroughs/issues/51).
-  *A red board that names its buckets outranks a green board that never asked.*
-- **Zero-unsupported was a property of the corpus, not a law of the board** (doctrine
-  adjustment, recorded on #52). While the corpus was eight byte-string files the unsupported
-  column was necessarily zero; running every file makes it 1345, and that column is the
-  honest board now — commands the engine cannot answer yet, counted and visible, shrinking
-  monotonically as components land. The underlying law is unchanged: nothing hides behind a
-  skip ([#29](https://github.com/scttfrdmn/burroughs/issues/29)).
-
-### Added
-
-- **`Result.UnsupportedByHead` — the unsupported column bucketed by command head**, printed
-  on its own board section largest-first, for the same reason failures bucket by expected
-  spec text: *1345 is not a work plan.* Keyed by the head atom as written rather than by
-  `Kind`, because every unsupported command shares `KindUnsupported` and keying by it would
-  yield one bucket of 1345 naming nothing. The breakdown names the components: **504
-  `assert_return`** is the interpreter, **398 `module`** and **308 `assert_malformed`** are
-  the text grammar ([#53](https://github.com/scttfrdmn/burroughs/issues/53),
-  [#8](https://github.com/scttfrdmn/burroughs/issues/8)), **110 `assert_invalid`** is the
-  validator. `Command.Head` is recorded for every command to make it possible: `Kind` says
-  what the harness can *do* with a command, `Head` says what the command *is*.
-- **`TestDenominatorExcludesUnaskedCommands`** — `Total()`'s exclusion of `Unsupported` and
-  `Gated` became load-bearing the moment the corpus was derived, and *a comment cannot
-  fail*. Folding `Unsupported` in would render this board as 783/2136 and, worse, make
-  the ratio improve when a *component* lands rather than when a *verdict* is earned. The
-  denominator is over what was **asked**; one table case asks nothing at all and expects
-  zero.
-- **`TestUnsupportedIsBucketedByCommand`** — the buckets sum to the scalar, are non-empty
-  whenever the scalar is, and carry no empty keys. The vacuity half is the point: a
-  breakdown map that silently stopped being populated would agree with an empty comparison
-  and print a board section with nothing under it.
-- A **vacuity floor** on the derived selector (`>= 12` files), which earned itself
-  immediately: the first draft said 20 on the strength of "27 files have no
-  interpreter-dependent command" — a different set — and the floor failed on my wrong
-  expectation rather than shipping it. *A comparison against an empty set succeeds, so the
-  control that compares gets a plausible-size floor.* The instructive miss is `data.wast`,
-  whose five `(module binary ...)` forms have non-string-literal elements and so are not
-  scorable.
-- Six `simd_const.wast` vectors added to `TestGatedVectors`' per-vector allowlist. They
-  arrived with the derived corpus and the gate is **right**: `\60\00\01\7b` is a functype
-  with a `v128` result, so a SIMD-off engine must decline. Verified by reading the vectors,
-  not by assuming the new declines were over-gating — and each is simultaneously *failed* in
-  the all-gates-on lane, where the gated count is zero.
-- **A pass floor on the all-gates-on lane**, closing a gap #51 made concrete.
-  `TestAllGatesOnLeavesNothingGated` asserted only `Gated == 0` and counted nothing, so the
-  one lane best placed to see a *gated feature breaking* was blind to it: with every gate
-  on, a broken feature turns a pass into a fail and leaves `Gated` at zero. Falsified by
-  breaking the heaptype descent — 798 → 791 pass, `Gated` still 0, and the old assertion
-  still green. The default lane cannot substitute, since there these vectors are honestly
-  `gated` and a floor excluding them says nothing about whether GC works.
-- **`TestRefTypeReadsTheReferencesFourteenForms`** — scoped to the space, not to the twelve
-  forms #51 needed: every `s7` value a single byte can encode (−64..63), partitioned into
-  ungated / feature-declined / malformed with the **counts** as the assertion (2 / 10 / 113)
-  plus three named exclusions that sum the partition to 128. It found all three exclusions
-  itself — the first draft asserted 2/10/114 over all 128 and failed, which is how `0x40`
-  turned out never to reach `decodeRefType` at all (`decodeTable` peeks it first) and how
-  `0x63`/`0x64` turned out to truncate rather than decide. *Measured, not predicted, and the
-  three are excluded by name rather than by shrinking a count until it matched.*
-- **`TestTableInitializerFormIsGatedNotMalformed`** and
-  **`TestHeapTypeFollowsTheParameterizedForms`**. The first is #51's vector both ways —
-  gate off declines by feature name and specifically *not* as `ErrMalformedRefType`, gate on
-  decodes through `decodeConstExpr` — **cited** to `elem.wast:453`, its 45-byte image
-  machine-compared by `TestFixtureProvenance` (falsified: one mutated byte fails the
-  citation). All seven declines carry the byte-identical table entry
-  `\40\00\64\70\00\01\d2\00\0b`, so one citation covers the class and the other six are
-  named in the `TestGatedVectors` allowlist. Every new control was falsified by
-  reintroducing the defect it names: removing the `0x40` branch restores #51 and fires
-  three assertions; removing the abstract-reftype gate turns 2/10/113 into 12/0/113.
-- `ErrMalformedRefType`, `ErrMalformedHeapType`, and `ErrZeroByteExpected`. The last is
-  declared-and-tracked rather than reachable: no suite vector asserts `zero byte expected`
-  today, because the sites calling it are gated constructs a gate-off engine declines
-  first. Named at its definition site with the reason, per the `ErrTrailingData` ruling
-  (#6).
-- The GC gate's non-opcode constructs recorded in `gatedNonOpcodes` — the `0x40` table form
-  and the twelve GC reftypes, with their check sites. A construct with no gate entry is the
-  #48 defect, and silence is how it got there the first time.
-- **`internal/text/keywords.go` — the wat keyword table, machine-derived from the reference
-  interpreter's text lexer**: 589 keywords, 173 token kinds, at the same pin as
-  `optable.go`. Decision 0007's argument one grammar over (**decision 0009**), and the
-  asymmetry is starker here: every vector bearing on the table is `assert_malformed`, so a
-  table containing **nothing at all** passes all 566 `unknown operator` vectors while
-  failing every valid module. The extraction turned out *easier* than `decode.ml`'s — one
-  `match` block, 589 one-shape arms, no alternations, no wrapped heads — which is the recon
-  finding that let 8a stand alone instead of folding into
-  [#8](https://github.com/scttfrdmn/burroughs/issues/8).
-- **`internal/text/internal/keywordgen`** with 0007's four conditions discharged: an
-  unrecognized arm inside the block is a hard error rather than an omission, a `Floor = 400`
-  vacuity control against 589 measured, a generation header naming authority/revision/
-  extractor version, and `make keyword-drift` in CI. One floor rather than `opcodegen`'s
-  per-region map, because this grammar has one region and there is no analogous partition to
-  under-count independently.
-- **`checkShape` — the check with no counterpart in `opcodegen`.** `let keyword = ['a'-'z']
-  (letter | digit | '_' | '.' | ':')+` (lexer.mll:111) is what ocamllex matched *before* the
-  arm dispatch ran, so an arm head outside that charset is dead code upstream and would be a
-  row here no input can reach. Notably `/` is absent from it, which is the character that
-  routes `i32.wrap/i64` to the **second** `unknown operator` producer (`| reserved`, :839)
-  rather than the keyword fallthrough (:809) — and that split, 8 + 3 across the eleven
-  legacy mnemonics, is why the mnemonics need maximal munch and not a table lookup.
-- **`internal/text/keywords_test.go` — an integrity check distinct from the drift check**,
-  and the distinction is a finding rather than belt-and-braces. `keyword-drift` needs
-  `third_party/spec`, so it cannot live in `make check`; on a fresh clone `DO NOT EDIT` is a
-  *request*, and the row that could be hand-added is exactly `get_local`. So the committed
-  table is asserted with no corpus at all: a size floor, the eleven absences, the `keyword`
-  shape, and a content spot-check with its kinds. Each falsified by mutating the committed
-  file — the obsolete row, an unreachable row, an empty kind, an emptied table, and a wrong
-  kind, each firing only where named. Also measured, because the first draft of the
-  reasoning guessed: `exclusions.generated: lax` does suppress `unused` on the table, but it
-  is *not* why the linter is quiet today — these tests read the map, so `unused` is correct
-  to say nothing. The exclusion is the silence that would remain if the tests were deleted,
-  which is the change that would take the package from "table with a consumer" to "table
-  with none" with nothing objecting.
-- **`internal/gen` — decision 0006's condition discharged, not deferred again.** The second
-  consumer arrived (`keywordgen` reads the same pin from the same script and formats the same
-  way), so the pin reader and the formatter moved out of `opcodegen` and its shim layer was
-  deleted rather than kept: one vocabulary for one fact. What is deliberately *not* shared is
-  anything either generator's grammar knows — a shared `parseArm` would be the wrong seam.
-  With its own tests, because both drift checks need a vendored reference and so nothing in
-  the tree exercised this package on a fresh clone.
-- `testenv.RequireSuiteFile` — a fourth licensed door, and the first for the *same* corpus as
-  an existing one. The unit that earns a door is the **question**: `RequireSuite` asserts a
-  count over 257 files, and a citation check against one named vector needs that file, which
-  a full corpus missing it satisfies and a 249-file corpus does not. It exists because the
-  skip was first written inline and `TestEverySkipSiteIsLicensed` failed the build — twice
-  now that AST check has caught an author who knew the rule.
-- `testenv.refFloors` — the reference size floor keyed by path constant rather than passed at
-  the call site, since *a floor passed by a caller is a fact about a file typed somewhere
-  other than where the file is named*, and the failure mode is a caller passing 0 and
-  defeating the control it is calling. An unregistered path is a hard failure, never a
-  default floor. `MinRefLexerBytes` is its own constant even though 20000 holds for both
-  files at this revision: sharing it would make the two floors' agreement an accident a
-  future upstream edit silently ends.
-
-- **The `(module quote …)` corpus admitted, and the board's fourth verdict** (decision 0010,
-  Scott's ruling on [#53](https://github.com/scttfrdmn/burroughs/issues/53)). Two changes in
-  one entry because neither is honest alone.
-
-  **The admission.** `classify` now recognizes `(module quote "…")` — bare and under
-  `assert_malformed` — so the derived corpus (#52) admits the **54 files that hold nothing
-  else scorable**. The board goes 14 → **68 files**, 2144 → **28777 commands**, and the
-  unsupported ceiling **1345 → 26742**. *That rise is corpus admitted, never regression*: the
-  selector did not change, it still asks which files hold a command whose `Kind` the run loop
-  scores, and two new Kinds made 54 more files answer yes. The alternative — enumerating the
-  quote files a lexer could already answer — is the `phase1Files` defect #52 removed, wearing
-  a new name.
-
-  **The fourth verdict, `unimplemented`.** The 1236 admitted vectors could not go in `fail`.
-  Today that column means **defect** — the board's lone failure (`binary-gc.wast:1`) is
-  visible *because* the column discriminates wrong-answer from not-built — and scoring 1236
-  unread quote vectors as failures takes it 1 → 1237, so a genuine regression tomorrow
-  arrives as 1238, invisible. A column that cannot surface a new defect has stopped being an
-  instrument. So: **`unsupported` = the harness cannot ask; `unimplemented` = the harness
-  asked and the engine lacks a named component to answer.** `gated` is the architectural
-  precedent rather than the argument — absence-by-configuration there, absence-by-construction
-  here.
-
-  Guarded so it cannot become a dumping ground, which is the same risk the third verdict had
-  to be fenced against (#27) with mechanisms that do not transfer at this scale:
-  **capability-derived, never hand-assigned** (`classify` computes `Needs`, the run loop asks
-  what the engine has, the gap is the verdict — no per-vector allowlist, because 1236 vectors
-  cannot have one); a **closed registry where each entry carries its tracking issue**, and an
-  unregistered capability panics rather than growing the column; the **partition asserts the
-  fifth term**; and **guard 4 is a release gate** — no minor version while its milestone's
-  `unimplemented` is nonzero, `v0.1.0` requires zero (appended to decision 0004, so the rule
-  lives where releases are cut). The category exists to **drain**, and the version scheme is
-  what enforces the draining rather than trusting it.
-
-  Every control falsified by introducing the defect it names and watching it fail — eight of
-  them, including Reading A itself (folding the column into `fail` fires the fail ceiling at
-  1237), a classifier that stops setting `Needs` (the vacuity floor), an invented capability,
-  a lost partition term, and a registry allowed to run ahead of the engine.
-
-  **Board: 68 files — 783 pass / 1 fail / 26742 unsupported / 15 gated / 1236 unimplemented**,
-  all 1236 attributed to `wat-reader` (#53). Pass and fail are unmoved, which is the honest
-  reading: admitting a corpus earns no verdicts.
-
-- **Capability registry entries are born with their retirement conditions** — the fourth
-  verdict's second structural control, added on review of the above
-  ([#58](https://github.com/scttfrdmn/burroughs/pull/58)) and **temporal where `gated`'s is
-  spatial**. `gated` gets its anti-dumping-ground guarantee from a lane: turn every gate on
-  and the count must be zero. That does not transfer, for the reason the category exists —
-  absence-by-construction has nothing to switch on, so there is no lane to build.
-
-  So a registry entry now states, the day it is written, the condition under which it must be
-  **deleted**, and `engineCapabilities` states what the engine actually has rather than
-  leaving it to omission (an absence cannot be read as a claim, and guard 1 makes the
-  engine's half a declaration). `RunGated` derives from that declaration, so the board scores
-  against what the engine says it has rather than what a call site remembered to pass — when
-  the wat reader lands, one line moves the board.
-
-  `TestNoCapabilityOutlivesItsComponent` enforces both directions: a capability the engine
-  declares must no longer be registered, **and** must have drained its population to exactly
-  zero. Retirement is one motion, and each half alone is a defect — a landed component that
-  leaves vectors in the fourth column has converted a deferral into a disappearance, which is
-  precisely what the ruling exists to prevent. An entry with no retirement condition panics in
-  the run loop: an entry that cannot die makes its column permanent by omission rather than by
-  decision. **An entry may not outlive its component; a capability with no population and no
-  retirement is a squatter.**
-
-  Four more falsifications, all fired where named: declaring the capability while leaving the
-  entry (`retirement is one motion, and this is the half that was skipped`), a reader that
-  lands leaving 1236 behind (`converted a deferral into a disappearance`), the registry
-  emptied without draining (the vacuity floor — `compared nothing against nothing`), and an
-  entry born without a death certificate (`an entry that cannot die outlives its component`).
-
-  `CapWatReader`'s condition, from day one: retire when the reader is wired and
-  `unimplemented(wat-reader)` is 0 — every vector converted to pass or fail, **none left
-  behind**. That makes #53's done-when checkable by CI instead of by a reviewer.
-
-### Fixed
 
 - **A pre-registered claim, refuted by its own probe** — recorded here because the
   pre-registration is what made it findable, and *honest boards* includes the claims that
