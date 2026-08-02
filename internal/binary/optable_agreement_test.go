@@ -436,7 +436,14 @@ func TestEveryImmediateInTheTableHasABytesVerdict(t *testing.T) {
 				"gap wearing the same face as a deliberate decline", im)
 		}
 	}
-	t.Logf("%d distinct immediates in the table, all accounted for", len(seen))
+	// Guarded: on failure the loop above has just named an immediate that is *not*
+	// accounted for, and an unconditional "all accounted for" is a summary contradicting
+	// the testimony above it — the log line being the thing a reviewer skims. Found by
+	// sweeping for siblings after the same defect appeared in gatecensus_test.go;
+	// inventory_test.go had already established the guard and the reasoning.
+	if !t.Failed() {
+		t.Logf("%d distinct immediates in the table, all accounted for", len(seen))
+	}
 }
 
 // TestConstSetUsesNoStructuralImmediate keeps immBytes' nil entries from being an

@@ -780,13 +780,13 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	// unasserted distance is where the assertion leaks out.** Raised to the measured
 	// value here, with #86's +1; whether it should be *checked* for staleness is **#87**,
 	// filed rather than decided in a PR about the type section.
+	// **Now slack-checked** (decision 0013): a floor that drifts 3380 behind its
+	// measurement is a failure, not a habit lapse. boardBound asserts both directions, and
+	// the error it raises on the upper side names the raise it wants.
 	const allOnPassFloor = 4178
-	if totalPass < allOnPassFloor {
-		t.Errorf("all-gates-on pass count %d fell below floor %d — a gated feature regressed, "+
-			"which the Gated==0 assertion above cannot see: with every gate on, a broken "+
-			"feature turns a pass into a fail and leaves Gated at zero",
-			totalPass, allOnPassFloor)
-	}
+	boardBound(t, "allOnPassFloor", totalPass, allOnPassFloor, boardBoundSlack, floorBound,
+		"a gated feature regressed, which the Gated==0 assertion above cannot see: with every "+
+			"gate on, a broken feature turns a pass into a fail and leaves Gated at zero")
 }
 
 // TestVerdictsPartitionCommands checks the arithmetic the board depends on: every
@@ -909,12 +909,14 @@ func TestPhase1Files(t *testing.T) {
 	// real. A per-file or per-cohort ceiling would bind tighter, and it is the right next
 	// move if this number is raised again — noted rather than done, because #69 is
 	// board-shape work and a ceiling redesign is its own decision.
+	// Slack-checked (0013), and this is the bound where staleness runs *downward*: every
+	// capability that lands moves the actual further below the ceiling, so the gap grows on
+	// exactly the schedule of ordinary progress. boardBound measures the distance in the
+	// direction that applies to a ceiling.
 	const unsupportedCeiling = 60872
-	if totalUnsup > unsupportedCeiling {
-		t.Errorf("unsupported rose to %d, ceiling %d — either a capability regressed or the "+
-			"corpus moved; both need an explanation rather than a raised ceiling",
-			totalUnsup, unsupportedCeiling)
-	}
+	boardBound(t, "unsupportedCeiling", totalUnsup, unsupportedCeiling, boardBoundSlack, ceilingBound,
+		"either a capability regressed or the corpus moved; both need an explanation rather "+
+			"than a raised ceiling")
 
 	// The fourth verdict's ceiling, and its purpose is the *drain* (decision 0010).
 	//
@@ -933,12 +935,13 @@ func TestPhase1Files(t *testing.T) {
 	// Still a ceiling rather than an equality, because at zero the two coincide and the
 	// ceiling generalizes: the next capability admitted raises it with an account, and
 	// drains it back down.
+	// Slack 0: at its terminal value, where the distance to the actual is not a quantity
+	// that can grow. 0004 fixes the terminal at zero, so this one cannot go stale even in
+	// principle — unlike unsupportedCeiling above, which drains without a floor under it.
 	const unimplementedCeiling = 0
-	if totalUnimpl > unimplementedCeiling {
-		t.Errorf("unimplemented rose to %d, ceiling %d — a new capability gap appeared or "+
-			"one widened; the column exists to drain, so growth needs an explanation",
-			totalUnimpl, unimplementedCeiling)
-	}
+	boardBound(t, "unimplementedCeiling", totalUnimpl, unimplementedCeiling, 0, ceilingBound,
+		"a new capability gap appeared or one widened; the column exists to drain, so growth "+
+			"needs an explanation")
 
 	// Every unimplemented vector is attributed, or the column is a bare number again.
 	attributed := 0
@@ -1039,13 +1042,15 @@ func TestPhase1Files(t *testing.T) {
 	// The vector itself is now a *gated* verdict on the default board, allowlisted in
 	// TestGatedVectors with the feature named, and **passed** in the
 	// all-gates-on lane, where 4178 pass / 0 fail / 0 gated.
+	// Slack 0, and deliberately: a ceiling *at* zero cannot go stale, because the distance
+	// between "at most 0" and "0" is not a quantity that can silently grow. That is not an
+	// omission to be repaired by a future reader — see 0013 — and it is stated because
+	// silence about a member of the space is how #48 happened.
 	const binaryFailCeiling = 0
-	if binaryFail > binaryFailCeiling {
-		t.Errorf("decoder failures rose to %d, ceiling %d — a defect landed in the binary "+
-			"decoder; this ceiling is deliberately not shared with the text column so that "+
-			"a decoder regression cannot hide inside the text column's unwritten grammars",
-			binaryFail, binaryFailCeiling)
-	}
+	boardBound(t, "binaryFailCeiling", binaryFail, binaryFailCeiling, 0, ceilingBound,
+		"a defect landed in the binary decoder; this ceiling is deliberately not shared with "+
+			"the text column so that a decoder regression cannot hide inside the text column's "+
+			"unwritten grammars")
 
 	// **391 at the measured revision, down from 600 when the module-field parser landed
 	// (#62).** This is a **work plan with a ceiling** rather than a defect count: every
@@ -1417,11 +1422,10 @@ func TestPhase1Files(t *testing.T) {
 	// quoted forward five times here and three times in the changelog because quoting is cheaper
 	// than checking. **A ceiling that names the residue is asserting a diagnosis, and a diagnosis
 	// is falsifiable** — this one was falsified by running the vector, which took one probe.
+	// Slack 0 for the same structural reason as binaryFailCeiling above.
 	const textFailCeiling = 0
-	if textFail > textFailCeiling {
-		t.Errorf("text failures rose to %d, ceiling %d — either the reader regressed on "+
-			"vectors it used to answer, or the corpus moved", textFail, textFailCeiling)
-	}
+	boardBound(t, "textFailCeiling", textFail, textFailCeiling, 0, ceilingBound,
+		"either the reader regressed on vectors it used to answer, or the corpus moved")
 
 	// Pass floor over the whole board, the counterpart to TestBinaryWast's per-file
 	// floor.
@@ -1572,9 +1576,8 @@ func TestPhase1Files(t *testing.T) {
 	// as the `foldedBlock` measurement two paragraphs up, and the same reason it is visible here:
 	// one rejected legal module is one pass, and rejecting legal input is what this floor watches.
 	const passFloor = 4162
-	if totalPass < passFloor {
-		t.Errorf("board pass count %d fell below floor %d", totalPass, passFloor)
-	}
+	boardBound(t, "passFloor", totalPass, passFloor, boardBoundSlack, floorBound,
+		"a regression in a grammar that used to answer, or the corpus moved")
 }
 
 // TestDenominatorExcludesUnaskedCommands pins Total()'s denominator: it counts what
@@ -2021,14 +2024,17 @@ func TestBareModuleSpansAreNonEmptyAndPlausible(t *testing.T) {
 		}
 	}
 
-	if total < totalFloor {
-		t.Errorf("found %d bare module spans across the board, floor %d — the span "+
-			"mechanism is not retaining source, so %d commands the pass floor counts on "+
-			"are back in the unsupported column", total, totalFloor, totalFloor-total)
-	}
-	if withAny < filesFloor {
-		t.Errorf("only %d files hold a bare module span, floor %d — a total floor cannot "+
-			"catch this: const.wast alone holds 402, so the distribution needs its own "+
-			"bound", withAny, filesFloor)
-	}
+	// vacuityBound, not floorBound: these two are *plausibility* bounds and their looseness
+	// is the design (2000 against 2143, 230 against 242). Slack-checking them would fire on
+	// a control working exactly as intended, and a gate that fires for reasons which are not
+	// findings trains the reflex of scrolling past it. Routed through boardBound anyway, so
+	// the exemption is named at one place rather than being an absence — TestEveryBoardBound-
+	// IsChecked reads this call, and *a precondition that excuses a gate is licensed at one
+	// place, or it is a hole*. (0013.)
+	boardBound(t, "totalFloor", total, totalFloor, 0, vacuityBound,
+		"the span mechanism is not retaining source, so commands the pass floor counts on are "+
+			"back in the unsupported column")
+	boardBound(t, "filesFloor", withAny, filesFloor, 0, vacuityBound,
+		"a total floor cannot catch this: const.wast alone holds 402, so the distribution needs "+
+			"its own bound")
 }

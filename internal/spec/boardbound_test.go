@@ -1,0 +1,281 @@
+package spec
+
+import (
+	"go/ast"
+	goparser "go/parser" // aliased: this package already has a `parser` of its own (sexpr.go)
+	"go/token"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// The board's bounds, and the control that keeps a bound near the thing it bounds
+// (decision 0013, #87).
+//
+// # The defect this exists for
+//
+// `allOnPassFloor` was **798 against an actual 4178** and had been since #56, fifteen
+// commits back. It could not have caught a regression erasing four fifths of the
+// all-gates-on lane. Found by reading the printed total next to the constant while raising
+// it for #86 — by eye, not by any control.
+//
+// The floor was falsifiable in the ordinary sense: drop the count below 798 and it fires.
+// So *break the thing it names and watch it fail* was satisfied and the floor was still
+// decoration, because the defect is not in the assertion — it is in the **distance between
+// the assertion and the measurement**. That distance was unasserted, so it grew every time
+// a PR moved the count and left the constant alone.
+//
+// This is the vacuity class with the vacuum somewhere new. A comparison against an empty
+// set agrees perfectly; so does a comparison against a set that is merely far away. Same
+// signature: the mechanism runs, agrees, and says nothing.
+//
+// # The shape, and why ceilings differ from floors
+//
+// A tracked bound asserts two things now — `bound ≤ actual ≤ bound + slack` for a floor,
+// mirrored for a ceiling — so a board that jumps past its window forces the constant forward
+// *in the PR that moved it*, the same rule as updating `[Unreleased]` in the PR that earns
+// the entry.
+//
+// # The space is eight bounds, not four, and the control is what said so
+//
+// Decision 0013 was written claiming four (`passFloor`, `allOnPassFloor`,
+// `binaryFailCeiling`, `textFailCeiling`) and this test's first run named four more. The ADR
+// was corrected rather than the trigger narrowed, which is the point of scoping a trigger to
+// the *convention* instead of to the names you had in mind: an enumeration would have agreed
+// with the wrong count, silently, and *a control scoped to the current sample inherits the
+// current blind spot*.
+//
+// They partition into three kinds, and the kind decides whether slack applies:
+//
+//	bound                  actual   kind          slack   why
+//	passFloor              4162     board count   250     moves in strata; can go stale
+//	allOnPassFloor         4178     board count   250     same board plus gated vectors
+//	unsupportedCeiling     60872    board count   250     shrinks as capabilities land
+//	binaryFailCeiling      0        at terminal   —       0 cannot drift from 0
+//	textFailCeiling        0        at terminal   —       0 cannot drift from 0
+//	unimplementedCeiling   0        at terminal   —       0, and 0004 fixes it there
+//	totalFloor             2143     vacuity       —       deliberately loose by design
+//	filesFloor             242      vacuity       —       deliberately loose by design
+//
+// **At terminal**: a bound already at the value it is draining toward cannot go stale,
+// because the distance between "at most 0" and "0" is not a quantity that can grow. A slack
+// term there is a mechanism with no risk to catch, which is the very thing #87 is about.
+//
+// **Vacuity floors are exempt on purpose, and this is the distinction that matters most.**
+// `totalFloor`/`filesFloor` in TestBareModuleSpansAreNonEmptyAndPlausible are *plausibility*
+// bounds — 2000 against 2143, 230 against 242 — and looseness is their function: they exist
+// to catch a walk that found nothing, so they must sit far enough below the real figure to
+// survive ordinary corpus movement. Slack-checking them would fire on a control that is
+// working exactly as designed, and "fires for reasons that are not findings" is how a gate
+// trains the reflex of scrolling past it. So they route through boardBound with slack 0 and
+// `vacuityBound`, which *names* the exemption instead of leaving them outside the door — the
+// licensed-skip pattern: an exemption granted at one place, in the open.
+
+// boardBound checks one bound in the direction it constrains **and** the distance between
+// the bound and the measurement.
+//
+// `why` is the site's own diagnosis of what a violation means — kept at the call site
+// because each of these bounds fails for a different reason, and a generic message would
+// throw away the part a reader needs. It is a parameter rather than a second inline
+// comparison so that **one concept has one trigger** (#78): the first draft left the
+// original `if` in place next to the helper call, which double-reports on a real regression
+// and leaves two comparisons to keep in agreement.
+//
+// slack ≤ 0 means "this bound cannot go stale" — the zero ceilings — and the distance check
+// is skipped with that stated at the call site rather than inferred here.
+func boardBound(tb testing.TB, name string, actual, bound, slack int, kind boundKind, why string) {
+	tb.Helper()
+
+	distance := 0
+	switch kind {
+	case floorBound, vacuityBound:
+		if actual < bound {
+			tb.Errorf("%s: board count %d fell below floor %d — %s", name, actual, bound, why)
+			return
+		}
+		distance = actual - bound
+	case ceilingBound:
+		if actual > bound {
+			tb.Errorf("%s: count %d rose above ceiling %d — %s", name, actual, bound, why)
+			return
+		}
+		// Mirrored: a ceiling goes stale by the actual falling *away below* it, which is
+		// what unsupportedCeiling does every time a capability lands. The direction of
+		// staleness is opposite to the direction of the constraint — worth stating, because
+		// getting it backwards yields a check that never fires and looks identical to one
+		// that does (the #34 partition lesson: assert the discriminating direction).
+		distance = bound - actual
+	}
+
+	if kind == vacuityBound || slack <= 0 {
+		return // exempt by kind or at terminal; see the package comment's table
+	}
+	if distance > slack {
+		tb.Errorf("%s is stale: %d against an actual %d, a distance of %d with a slack of %d.\n\t"+
+			"Move it to %d in this PR. A bound left behind by a large jump degrades into "+
+			"decoration — it stops being able to catch anything smaller than the gap, which is "+
+			"how allOnPassFloor came to sit at 798 against 4178 for fifteen commits (#87).",
+			name, bound, actual, distance, slack, actual)
+	}
+}
+
+type boundKind int
+
+const (
+	floorBound boundKind = iota
+	ceilingBound
+	// vacuityBound is a floor whose looseness is its function: a plausibility bound
+	// asserting a walk found something, not a regression bound tracking a number. It
+	// constrains the low side like floorBound and is never slack-checked, no matter what
+	// slack is passed — so the exemption is a property of the *kind*, not of a caller
+	// remembering to pass 0.
+	vacuityBound
+)
+
+// boardBoundSlack is the slack for the three tracked board counts — `passFloor`,
+// `allOnPassFloor`, `unsupportedCeiling`.
+//
+// **250, and what it is actually absorbing is not what the first draft claimed.** That draft
+// reasoned "large enough not to fire on ordinary progress", measured `passFloor` across
+// fifteen commits (783 → 1419 → 1628 → 1941 → 1953 → 1992 → 4122 → 4159 → 4161 → 4162), and
+// quoted two steps over 250. Recomputing the steps says **+636, +209, +313, +12, +39, +2130,
+// +37, +2, +1** — *three* over 250, not two, and one of them (+313) is a middling stratum
+// rather than a landmark. The figure was quoted from memory of the shape instead of from the
+// subtraction, which is the sin this ADR is about, committed in its own justification.
+//
+// The recomputation also shows the reasoning was aimed at the wrong quantity. **A PR that
+// moves the board and raises the bound in the same PR leaves a distance of zero**, so no
+// step size, however large, trips this — that is the rule (0013), the same rule as updating
+// `[Unreleased]` in the PR that earns the entry. The step distribution is therefore almost
+// irrelevant to the size.
+//
+// What the slack must genuinely absorb is **corpus drift between fetches**: the suite is not
+// SHA-pinned (#42 — `git clone --depth 1` of the default branch), so upstream adding vectors
+// moves the actual with no local change and nobody to raise the bound. 250 is roughly 6% of
+// a 4162 board, comfortably more than upstream's observed churn and far less than any real
+// regression. When #42 lands this constant should shrink hard or disappear in favour of an
+// exact count.
+//
+// So: still weather rather than a principle, but now weather about the right thing. The
+// second-order honesty point stands — if this fires on a PR that is genuinely routine, widen
+// it here **with the new observation recorded**, rather than raising the bound and moving on.
+// A slack quietly widened is the staleness defect one level up.
+//
+// It would not be needed at all if the corpus were pinned: an exact expected count is
+// strictly stronger, and #42 (the suite fetch is `git clone --depth 1` of the default
+// branch, not a SHA) is what makes an exact count fire on upstream's schedule rather than
+// ours. Contrast decision 0012's census, whose inputs are both committed and which
+// therefore gets the exact golden file this could not have. *The strongest control the
+// inputs admit, at each site.*
+const boardBoundSlack = 250
+
+// TestEveryBoardBoundIsChecked reads this package's AST and requires every board bound to
+// route through boardBound.
+//
+// #87 recommended scoping this "by reflection over the constants rather than a list", and
+// that is not buildable: all four bounds are **function-local** `const` declarations, which
+// reflection cannot see. The instinct was right — *derive the domain, never enumerate it* —
+// and the mechanism had to change to the AST, which is the same move
+// TestEverySkipSiteIsLicensed makes. A rule saying "all of these go through one door" needs
+// something asserting that they do, or the mechanism has the shape it exists to forbid.
+func TestEveryBoardBoundIsChecked(t *testing.T) {
+	// ParseFile per file rather than ParseDir: the latter is deprecated as of Go 1.25 in
+	// favour of golang.org/x/tools/go/packages, and the engine's go.mod is dependency-free
+	// (0005) — so a lint suppression would be the wrong answer to a real deprecation when a
+	// dependency-free alternative exists. Same shape as internal/testenv's two AST controls,
+	// which is the established pattern here.
+	paths, err := filepath.Glob("*_test.go")
+	if err != nil {
+		t.Fatalf("globbing this package: %v", err)
+	}
+	if len(paths) < 2 {
+		t.Fatalf("found %d _test.go files in this package; a walk over almost no files agrees "+
+			"with any set of boardBound calls", len(paths))
+	}
+
+	fset := token.NewFileSet()
+	type site struct{ name, pos string }
+	var bounds, checked []site
+
+	for _, path := range paths {
+		file, err := goparser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			t.Fatalf("parsing %s: %v", path, err)
+		}
+		ast.Inspect(file, func(n ast.Node) bool {
+			switch v := n.(type) {
+			case *ast.ValueSpec:
+				// A const named *Floor or *Ceiling is a board bound by construction of
+				// the naming convention, and the convention is the trigger. Keyed on the
+				// name rather than on the comparison, because a bound that is declared
+				// and *never compared at all* must also be a finding — that is the
+				// unreachable-constant shape (grave 0003).
+				for _, id := range v.Names {
+					if isBoundName(id.Name) {
+						bounds = append(bounds, site{id.Name, fset.Position(id.Pos()).String()})
+					}
+				}
+			case *ast.CallExpr:
+				fn, ok := v.Fun.(*ast.Ident)
+				if !ok || fn.Name != "boardBound" {
+					return true
+				}
+				// arg 1 is the name string; record what it claims to bound.
+				if len(v.Args) > 1 {
+					if lit, ok := v.Args[1].(*ast.BasicLit); ok {
+						checked = append(checked, site{
+							strings.Trim(lit.Value, `"`), fset.Position(v.Pos()).String(),
+						})
+					}
+				}
+			}
+			return true
+		})
+	}
+
+	// Vacuity, and it is the whole reason this test can be trusted: a walk that finds zero
+	// bounds agrees with any set of boardBound calls, and a moved file or a renamed
+	// convention produces exactly that. Asserted as a minimum so a ninth bound is covered
+	// rather than ignored.
+	//
+	// Eight, not the four 0013 was drafted claiming: this walk is what corrected the ADR,
+	// and the floor quotes the measured population rather than the remembered one.
+	const boundPopulation = 8
+	if len(bounds) < boundPopulation {
+		t.Fatalf("found %d board bounds in this package's AST; there were %d when 0013 was "+
+			"written (passFloor, allOnPassFloor, unsupportedCeiling, unimplementedCeiling, "+
+			"binaryFailCeiling, textFailCeiling, totalFloor, filesFloor), and a population "+
+			"this small means the trigger stopped matching — *coverage is to a trigger what a "+
+			"vacuity check is to a comparison* (#82)", len(bounds), boundPopulation)
+	}
+	if len(checked) < boundPopulation {
+		t.Fatalf("found %d boardBound calls; want one per bound (%d found). A bound compared "+
+			"inline bypasses the staleness check entirely, which is the #87 defect surviving "+
+			"the control written for it", len(checked), len(bounds))
+	}
+
+	byName := map[string]bool{}
+	for _, c := range checked {
+		byName[c.name] = true
+	}
+	for _, b := range bounds {
+		if !byName[b.name] {
+			t.Errorf("%s (%s) is a board bound with no boardBound call naming it: it is either "+
+				"compared inline — bypassing the staleness check — or never compared at all, "+
+				"which is a constant with no reachable path (grave 0003)", b.name, b.pos)
+		}
+	}
+	if !t.Failed() {
+		t.Logf("%d board bounds, all routed through boardBound", len(bounds))
+	}
+}
+
+// isBoundName is the trigger predicate, and it is deliberately broader than the four names.
+//
+// *A guard's trigger predicate is itself a claim about the space, and an under-matching one
+// fails silently by construction* (#82, grave #78): a trigger listing today's four names
+// would go green on a fifth bound called `simdPassFloor`, producing no finding rather than
+// a wrong one. The convention is the domain.
+func isBoundName(name string) bool {
+	return strings.HasSuffix(name, "Floor") || strings.HasSuffix(name, "Ceiling")
+}
