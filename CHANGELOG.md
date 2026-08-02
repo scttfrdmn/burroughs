@@ -1067,6 +1067,44 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **`valtype` was a flat switch over seven bytes where the reference reads a three-way alternation**
+  ([#88](https://github.com/scttfrdmn/burroughs/issues/88)). `valtype` is `either [numtype; vectype;
+  reftype]` (`decode.ml:220-225`) and `reftype` alone has fourteen forms, so the switch reported
+  `malformed value type` for ten GC value types and both parameterized `(ref ht)` prefixes —
+  **twelve wrongly-rejected constructs**, at every functype parameter, global type, and array or
+  struct field in the format. Three functions now, one per branch, and accept at that position goes
+  **7 → 17** with every gate on. The invented sentinel is gone with it: there is **no `malformed
+  value type` string anywhere in the interpreter**, and because `either` returns the *last* branch's
+  error, a byte that is no value type at all is reported as `malformed reference type` — the
+  reference's answer, counter-intuitive enough that it is pinned rather than left to be re-derived.
+- **`ref.null`'s immediate was read as a `reftype` where the reference reads a `heaptype`, and the
+  wrong reader was wrong in both directions** ([#88](https://github.com/scttfrdmn/burroughs/issues/88)).
+  The two productions are not nested — each has an arm the other lacks — so one substitution
+  under-accepted and over-accepted at once: `heaptype`'s first branch is a **type index**
+  (`decode.ml:182`), which `reftype` has no arm for, so `ref.null 0` was rejected `malformed
+  reference type: 0x00`; and `reftype`'s `-0x1c`/`-0x1d` prefixes are absent from `heaptype`, so
+  `ref.null (ref null extern)` **decoded**. Accept at that position goes **12 → 76**. Only the
+  under-accept was in the diagnosis; the over-accept turned up from pointing the probe at the *fix*
+  rather than at the defect, which is the argument for doing that. `decodeHeapType` gains its own
+  gate checks, because the premise that let it skip them — "reached only from `decodeRefType`,
+  which gates first" — died the moment `immHeapType` began calling it from a Wasm 2.0 opcode: *a
+  deferral outlives its reason silently*. The type-index gate sits **after** the negativity check,
+  since `either` propagates declines without backtracking and a check ahead of the discriminator
+  would decline `ref.null extern` as a GC construct.
+- **Two segment sentinels named a field the format does not have**
+  ([#88](https://github.com/scttfrdmn/burroughs/issues/88)). `ErrMalformedElemFlags` and
+  `ErrMalformedDataFlags` said "flags" where the reference says `malformed elements segment kind`
+  (`decode.ml:1201`) and `malformed data segment kind` (`:1223`). The *grammar* was already right, so
+  this is message-direction only — and it is pinned at the raise sites rather than by the sentinel
+  inventory, because `malformed element kind` (`:1157`, the one-byte `elem_kind` nested inside the
+  segment) is confusably similar and an existence check upstream stays green with the two swapped.
+
+  **All four members are accept- or message-direction, so the board did not move: 4162 / 0 before
+  and after**, 4178 / 0 / 0 all-on. The controls were falsified by re-introducing each defect, and
+  the measurement worth keeping is what *else* fired — **four of six had no other witness in the
+  package, and five of six left the spec board entirely green**. The two exceptions prove the shape:
+  a defect in the reject direction gets noticed by five tests and turns the board red, one in the
+  accept direction is alone with whatever control was written for it.
 - **The type section decoded `functype` where the reference decodes `rectype`, four levels up**
   ([#86](https://github.com/scttfrdmn/burroughs/issues/86)). `decodeFuncType` was the whole section
   grammar; the reference's is `rectype` → `subtype` → `comptype` → `fieldtype`

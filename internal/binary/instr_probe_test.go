@@ -257,14 +257,30 @@ func TestBlockTypeAlternationIsTheAuthority(t *testing.T) {
 	// wrong order does not fabricate a byte, it *drops* one, leaving a bare sentinel that
 	// still matches the harness's expected string. Invisible on the board by construction,
 	// which is why it is pinned by content and not by identity.
+	//
+	// The sentinel is **reftype's**, and that is a fact about `valtype` rather than about
+	// this alternation: since #88, `valtype` is itself `either [numtype; vectype; reftype]`
+	// (decode.ml:220-225), so the error that reaches here has already survived two nested
+	// last-branch selections. `\xff` at width 7 is an overlong LEB in every branch, which is
+	// why the byte-naming assertion below uses `\x66` — a byte that reaches a form
+	// fallthrough rather than the LEB budget. The first draft of this edit kept `\xff` and
+	// asserted the byte was named, which fails for a reason that has nothing to do with
+	// branch order.
 	r := &reader{b: []byte{0xFF}, eof: ErrPayloadEnd}
 	err := d.decodeBlockType(r)
-	if !errors.Is(err, ErrMalformedValType) {
-		t.Errorf("unknown blocktype byte: got %v, want ErrMalformedValType — either returns the "+
-			"last branch's error (decode.ml:126-131), and valtype is last", err)
+	if !errors.Is(err, ErrLEBTooLong) {
+		t.Errorf("0xff blocktype: got %v, want ErrLEBTooLong — 0xff sets the continuation bit, "+
+			"so every branch reads past the byte and exhausts its width budget", err)
 	}
-	if err != nil && !contains(err.Error(), "0xff") {
-		t.Errorf("unknown blocktype byte: error %q does not name the byte; the valtype branch's "+
+	r = &reader{b: []byte{0x66}, eof: ErrPayloadEnd}
+	err = d.decodeBlockType(r)
+	if !errors.Is(err, ErrMalformedRefType) {
+		t.Errorf("unknown blocktype byte: got %v, want ErrMalformedRefType — either returns the "+
+			"last branch's error (decode.ml:126-131), valtype is last here, and reftype is last "+
+			"*inside* valtype, so the surviving message is two nested selections deep", err)
+	}
+	if err != nil && !contains(err.Error(), "0x66") {
+		t.Errorf("unknown blocktype byte: error %q does not name the byte; the innermost branch's "+
 			"detail is lost, which happens when it is not the last branch", err)
 	}
 
@@ -274,8 +290,7 @@ func TestBlockTypeAlternationIsTheAuthority(t *testing.T) {
 	// 0x7b is v128. With SIMD off, decodeValType declines it with ErrFeatureDisabled — and
 	// with the reference's order that is the final branch's error, so it stands. Move
 	// valtype anywhere earlier and the alternation overwrites it with whatever the last
-	// branch says: measured as `malformed value type`, a spec malformed-string for a
-	// construct Wasm 3.0 defines. That is precisely the thing gates may not do, and it is
+	// branch says: a spec malformed-string for a construct Wasm 3.0 defines. That is precisely the thing gates may not do, and it is
 	// a *configuration* fact, so no assert_malformed vector can ever catch it.
 	//
 	// This is the assertion that actually failed when the order was reversed. The five

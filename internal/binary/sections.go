@@ -385,24 +385,66 @@ func (d *Decoder) decodeMutability(r *reader) error {
 	return nil
 }
 
-// decodeValType reads one value type byte.
+// decodeValType reads a value type — `valtype` (decode.ml:220-225).
+//
+// `either [numtype; vectype; reftype]`, and the third branch is why this is a three-way
+// alternation rather than the flat seven-byte switch it was. **The engine had two readers
+// for one production and the second was narrower**: `reftype` accepts fourteen forms and
+// the switch accepted `0x70`/`0x6F`, so `anyref`, `eqref`, `i31ref`, `structref`,
+// `arrayref`, the four `null*ref`s, `exnref` and both parameterized `(ref ht)` forms were
+// all reported `malformed value type` — an accept-direction defect, invisible to a board
+// whose vectors are all `assert_malformed` (#88, grave #83's shape at a third site).
+//
+// Three properties of the reference's shape are load-bearing and none of them is obvious:
+//
+//   - **The message for a byte that is no valtype is `malformed reference type`**, because
+//     `either` returns the last branch's error and `reftype` is last. Not "value type",
+//     which the reference never emits, and not "number type", which is the *first*
+//     branch's. Pinned by TestValTypeAlternationIsTheReference.
+//   - **numtype/vectype read `s7`, not a byte** (:167-177), so `\ff\7f` is
+//     `integer representation too long` from whichever branch runs, and the flat switch's
+//     `r.byte()` would have called it a bogus form. Same width lesson as grave #36.
+//   - **The gate lives in `vectype`'s branch, and `either` must not swallow it.** With
+//     SIMD off, `0x7b` is a decline this alternation would previously have overwritten
+//     with the reftype branch's malformed-string; `either` propagates `ErrFeatureDisabled`
+//     as of #86, which is what makes this decomposition safe at all. The order is *not*
+//     available as the remedy here, because the reference fixes it and the last branch is
+//     the one whose message must stand.
 func (d *Decoder) decodeValType(r *reader) error {
-	b, err := r.byte()
+	return either(r, d.decodeNumType, d.decodeVecType, d.decodeRefType)
+}
+
+// decodeNumType reads a number type — `numtype` (decode.ml:167-172).
+func (d *Decoder) decodeNumType(r *reader) error {
+	form, err := r.sleb(7)
 	if err != nil {
 		return err
 	}
-	switch b {
-	case 0x7F, 0x7E, 0x7D, 0x7C: // i32 i64 f32 f64
-		return nil
-	case 0x7B: // v128
-		if !d.Features.SIMD {
-			return featureErr("simd")
-		}
-		return nil
-	case 0x70, 0x6F: // funcref externref
+	switch form {
+	case -0x01, -0x02, -0x03, -0x04: // i32 i64 f32 f64
 		return nil
 	}
-	return fmt.Errorf("%w: %#02x", ErrMalformedValType, b)
+	return fmt.Errorf("%w: %#02x", ErrMalformedNumType, byte(form&0x7F))
+}
+
+// decodeVecType reads a vector type — `vectype` (decode.ml:174-177).
+//
+// One form, and the SIMD gate. The gate is *here* rather than at the alternation because
+// the reference puts the form here: a v128 with SIMD off is a well-formed Wasm 3.0
+// construct this configuration declines, so it is feature-named, and the enclosing
+// `either` propagates rather than backtracks that (#5, #86).
+func (d *Decoder) decodeVecType(r *reader) error {
+	form, err := r.sleb(7)
+	if err != nil {
+		return err
+	}
+	if form != -0x05 { // v128
+		return fmt.Errorf("%w: %#02x", ErrMalformedVecType, byte(form&0x7F))
+	}
+	if !d.Features.SIMD {
+		return featureErr("simd")
+	}
+	return nil
 }
 
 // decodeRefType reads a reference type, as a table's element type — `reftype`
@@ -459,10 +501,29 @@ func (d *Decoder) decodeRefType(r *reader) error {
 // decodeBlockType is: on an overlong LEB the first branch's error must not stand, since
 // the cursor rewinds and the bytes get judged again.
 //
-// Reached only with the GC gate on — decodeRefType checks the gate before descending — so
-// the abstract forms need no second gate check. That is deliberate rather than an
-// omission: two gate checks for one construct is the accept-and-ignore hazard's mirror,
-// where a reader disagrees with its caller about whether a feature is on.
+// **It carries its own gate checks, and that changed with #88.** The previous comment here
+// said the function is "reached only with the GC gate on — decodeRefType checks the gate
+// before descending", and declined a second check on the reasoning that two checks for one
+// construct is the accept-and-ignore hazard's mirror. That reasoning was sound and its
+// premise stopped being true: `immHeapType` now reads this function directly (instr.go),
+// from `ref.null`/`ref.test`/`ref.cast`, and `ref.null` is a Wasm 2.0 opcode with no gate of
+// its own — so the gate state at entry is no longer known.
+//
+// The two checks are not the same fact checked twice, which is what makes keeping both
+// honest. decodeRefType gates the `-0x1c`/`-0x1d` **prefix**, a construct GC introduces
+// whatever heaptype follows it; the checks below gate the *forms*, per decision 0008's
+// folding of function-references into the GC gate:
+//
+//   - the **type index** branch is function-references — `ref.null 0` is not Wasm 2.0
+//   - `-0x10`/`-0x11` (func, extern) are Wasm 2.0's two, ungated, and `ref.null extern`
+//     must decode with every gate off or the corpus breaks
+//   - the other ten abstract forms are GC's
+//
+// The type-index gate sits *after* the negativity check, not before, and the order is
+// load-bearing: `either` propagates `ErrFeatureDisabled` without backtracking (#86), so a
+// gate check ahead of the discriminator would decline `ref.null extern` — whose byte is
+// negative at s33 and belongs to the next branch — as a GC construct. Pinned by
+// TestHeapTypeGatesFormsNotThePosition.
 func (d *Decoder) decodeHeapType(r *reader) error {
 	return either(r,
 		func(r *reader) error {
@@ -475,6 +536,9 @@ func (d *Decoder) decodeHeapType(r *reader) error {
 			if v < 0 {
 				return ErrMalformedTypeIndex
 			}
+			if !d.Features.GC {
+				return featureErr("gc")
+			}
 			return nil
 		},
 		func(r *reader) error {
@@ -483,8 +547,13 @@ func (d *Decoder) decodeHeapType(r *reader) error {
 				return err
 			}
 			switch form {
-			case -0x0C, -0x0D, -0x0E, -0x0F,
-				-0x10, -0x11, -0x12, -0x13, -0x14, -0x15, -0x16, -0x17:
+			case -0x10, -0x11: // func, extern — Wasm 2.0, ungated
+				return nil
+			case -0x0C, -0x0D, -0x0E, -0x0F, // noexn, nofunc, noextern, none
+				-0x12, -0x13, -0x14, -0x15, -0x16, -0x17: // any, eq, i31, struct, array, exn
+				if !d.Features.GC {
+					return featureErr("gc")
+				}
 				return nil
 			}
 			return fmt.Errorf("%w: %#02x", ErrMalformedHeapType, byte(form&0x7F))

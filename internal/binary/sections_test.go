@@ -437,7 +437,8 @@ func TestGatesRejectWithFeatureNames(t *testing.T) {
 		// Claim 3: no spec malformed-string is impersonated.
 		for _, spec := range []error{
 			ErrTruncated, ErrPayloadEnd, ErrSectionSizeMismatch, ErrSectionOverrun,
-			ErrMalformedSectionID, ErrMalformedLimits, ErrMalformedValType,
+			ErrMalformedSectionID, ErrMalformedLimits,
+			ErrMalformedNumType, ErrMalformedVecType, ErrMalformedRefType,
 			ErrTrailingData,
 		} {
 			if errors.Is(err, spec) {

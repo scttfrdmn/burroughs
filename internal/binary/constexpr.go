@@ -44,7 +44,7 @@ func (d *Decoder) decodeElemSegment(r *reader) error {
 		return err
 	}
 	if flags > 7 {
-		return fmt.Errorf("%w: %#02x", ErrMalformedElemFlags, flags)
+		return fmt.Errorf("%w: %#02x", ErrMalformedElemSegKind, flags)
 	}
 	const (
 		passive  = 1 << 0 // no table index, no offset — or declarative
@@ -151,6 +151,6 @@ func (d *Decoder) decodeDataSegmentMode(r *reader) error {
 		}
 		return d.decodeConstExpr(r) // offset
 	default:
-		return fmt.Errorf("%w: %#02x", ErrMalformedDataFlags, flags)
+		return fmt.Errorf("%w: %#02x", ErrMalformedDataSegKind, flags)
 	}
 }
