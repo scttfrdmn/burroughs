@@ -432,6 +432,27 @@ weakly-ordered platform.
   set is derived from `testenv.LicensedRefPaths()` rather than restated, with a vacuity
   floor because a containment check over an empty set agrees with anything.
 
+- **The flat instruction grammar** (#63): `internal/text/instr.go` and the immediate readers
+  in `num.go`. The dispatch is **derived, not enumerated** — `plaininstr`'s 83 arms collapse
+  to 16 immediate shapes, and the generated keyword table (decision 0009) already maps all
+  589 mnemonics to the reference's own token kinds, so the only hand-written fact is 16
+  kind→shape rows, re-derived from `parser.mly` at test time. The readers: `memarg`
+  (`offset=`/`align=`, ordered as the production writes them), `constImm` at four widths,
+  `vecConst`, `laneIdxList`, `laneidx`, `br_table`'s idx list, and the `expr1` minimal arm —
+  which is here, not in #64, because **seams follow defect ownership, not surface form**
+  (ruling: Scott). `offset`, `elemexpr`, `elemexpr_list`, `elem_list` and `constexpr1` are
+  wired too, so `(data (offset ...) ...)` and `(elem (item ...) ...)` are read rather than
+  deferred. **Board: 1628 → 1922 pass, 392 → 98 fail**; the text fail ceiling moves 391 → 97
+  with a per-bucket reconciliation in the test's own comment.
+- #63's forecast was 353 and 294 landed, an **under-delivery of 59 that is not one shape** —
+  and the partition is by the engine's error text, because the failure buckets name what the
+  *suite* wanted and that is the wrong key for asking why we fell short. 92 are
+  `unimplemented: instruction body`: vectors whose fault is in one of #63's readers but
+  reachable only through a `block`/`loop`/`if`/`try_table`, so the seam ruling was right
+  about ownership and the forecast was wrong about *extent*. They are #64's inventory, and
+  #64's forecast starts from them rather than from a fresh classification. Five more want a
+  **type context** — `(type $sig)` against inline params/results, and a type index space —
+  which is neither stratum's and is the whole accept-direction remainder of the column.
 - **The wat parser's skeleton stratum** (#62): `internal/text.ReadModule`, recursive
   descent over the reference's module-field grammar, returning an error and nothing else
   (decision 0011). `cursor.go` (a fully-lexed token slice with two-token lookahead),
@@ -538,6 +559,29 @@ weakly-ordered platform.
   written before it* — and so does a retirement.
 
 ### Fixed
+- **A grave in #63's own lane-immediate readers: the lane count preempted a syntax error.**
+  `i8x16.shuffle 0 … 14 -1` reported `wrong number of lane indices` where the reference says
+  `unexpected token`, on six vectors. The cause is LR reduction order — `error (at $sloc)` at
+  `parser.mly:653` is a *semantic action*, so it cannot run until the production reduces, and a
+  lookahead outside the follow set is a syntax error raised in the automaton first. The count is
+  genuinely outside; the fix is a follower arm before it.
+- **The three-deep claim that fix arrived with was wrong, and the falsification pass is what
+  killed it.** The first comment and test asserted a precedence — range, then syntax, then count
+  — and hoisting the follower check above the loop changed *nothing*, which a real precedence
+  would have made visible. Printed rather than reasoned about: `256 … -1` is a range error and
+  `-1 … 256` is a syntax error, same two faults, verdict decided by *position*. Both are raised
+  during a left-to-right scan, so between them the leftmost wins and neither kind outranks the
+  other; only the count is a true outer layer. The claim survived because every vector in the
+  suite has exactly one fault per index list, so **no vector could distinguish a precedence from
+  a scan order** — the current-sample blind spot with the whole corpus as the sample. The two
+  two-fault rows that separate them are synthetic and say so.
+- **A sibling of the same shape in `vecConst`, found by the post-grave sweep and invisible to the
+  board.** `v128.const i8x16 0 … 14 $x` reported `wrong number of lane literals`: a VAR is not a
+  `num` (`parser.mly:476-478`), so the reference cannot reduce `VECSHAPE list(num)` and never
+  reaches `vec`'s length test. No vector covers it — `simd_const.wast` writes wrong lengths and
+  out-of-range literals but never an illegal follower after a short list — so the board reads
+  green on both readings and the sweep is the only thing that could have found it. The control is
+  marked synthetic with the `num` production as its premise.
 - Four graves in the lexer, all found by falsifying its own tests from a committed
   baseline rather than by review. **`(; (; half closed ;)` lexed clean** — closedness is
   the nesting depth, and the predecessor read the trailing two bytes; its own doc comment

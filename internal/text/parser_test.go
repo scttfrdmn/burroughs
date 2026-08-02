@@ -543,19 +543,39 @@ func TestGlobalIsNotADefinitionWhenImported(t *testing.T) {
 // `unexpected token`: the board buckets by expected string, and a boundary masquerading as a
 // syntax error is a work item filed under the wrong heading. *An error from the wrong layer is
 // evidence about where structure was lost* — so the layer that is missing names itself.
+//
+// **Re-pointed by #63, not closed.** Every case this test was written with — `(func nop)`,
+// `(global i32 (i32.const 0))`, all six data/elem/table offset forms — now parses, so the test
+// failed with eleven "accepted; this stratum does not parse instruction bodies" errors. That is
+// the tripwire-whose-subject-dissolves shape: the control names the *risk* that a boundary gets
+// reported as a syntax error, and the risk did not go away when the flat grammar landed, it moved
+// to #64's arms. Deleting the test as "no longer applicable" would retire a live risk on a
+// technicality; relaxing it to accept the eleven would leave nothing asserting the property.
+//
+// So the cases are now #64's productions, one per family, each reached *through* #63's readers —
+// which is also the stronger test: the boundary is now hit mid-parse, after a mnemonic has been
+// consumed, where before it was hit on the first token of the body. A `block` inside a folded
+// expr operand is the case that would most plausibly leak an `unexpected token`.
 func TestBodyBoundaryIsNamed(t *testing.T) {
 	for _, src := range []string{
-		`(module (func nop))`,
-		`(module (func (i32.const 0)))`,
-		`(module (global i32 (i32.const 0)))`,
-		`(module (data (i32.const 0) "abc"))`,
-		`(module (data (offset (i32.const 0)) "abc"))`,
-		`(module (data (memory 0) (i32.const 0) "abc"))`,
-		`(module (elem (i32.const 0) func))`,
-		`(module (elem (table 0) (i32.const 0) func))`,
-		`(module (elem funcref (item (ref.null func))))`,
-		`(module (table 1 funcref (ref.null func)))`,
-		`(module (table funcref (elem (ref.null func))))`,
+		// blockinstr (parser.mly:553) — #64's, flat and folded.
+		`(module (func block end))`,
+		`(module (func (block)))`,
+		`(module (func loop end))`,
+		`(module (func if end))`,
+		`(module (func try_table end))`,
+		// expr1's non-plaininstr arms (:815-829) — #64's.
+		`(module (func (select)))`,
+		`(module (func (call_indirect (type 0))))`,
+		// Reached through a #63 reader: the mnemonic and its immediates parse, and the boundary
+		// is struck on a folded *operand*. The cursor is mid-instruction here, which is where a
+		// syntax error would most easily be substituted for the boundary.
+		`(module (func (i32.eqz (block))))`,
+		`(module (func (drop (select)))) `,
+		// And through the offset/elemexpr productions #63 just wired, whose contents can still be
+		// #64's: the boundary has to survive one level of descent.
+		`(module (memory 1) (data (offset (block)) "abc"))`,
+		`(module (table 1 funcref) (elem (table 0) (offset (block)) func))`,
 	} {
 		err := ReadModule([]byte(src))
 		if err == nil {

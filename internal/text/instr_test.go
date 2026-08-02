@@ -240,3 +240,186 @@ func TestEveryPlaininstrKindIsInTheKeywordTable(t *testing.T) {
 			"the tables shrank and this control is agreeing about almost nothing", checked)
 	}
 }
+
+// TestLaneImmediateFaultOrdering pins the grave in #63's laneIdxList: for `i8x16.shuffle`, three
+// different checks can fire on one index list, and which one wins is a property of *where the
+// reference puts each check* rather than of which is cheapest to run.
+//
+// **The count is outside the other two, and the other two are not ordered against each other.**
+// A per-index range error comes from `nat8` reducing inside the grammar and a syntax error comes
+// from the automaton refusing to reduce on an illegal lookahead — both raised at a token position
+// during a left-to-right scan, so between those two the *leftmost fault* wins. The count is the
+// semantic action at parser.mly:653 and runs only once the list has reduced. The first draft of
+// laneIdxList had the range check and the count but no follower arm, so every illegal follower was
+// reported as a count error — right verdict, wrong message, on six vectors.
+//
+// This test's own first draft was named `…IsThreeDeep` and asserted a three-way precedence. That
+// was wrong, and it is worth recording *how* it was wrong, because the error was invisible to the
+// suite by construction: every cited vector below has exactly one fault, so nothing in the corpus
+// can distinguish a precedence from a scan order. The two-fault rows are what separate them, and
+// they had to be synthesised — see `range before syntax, by position` and its mirror.
+//
+// Written as a table over one shared prefix so the cases differ only in the faulting token and its
+// position. Each row cites the vector that pins it, or says why it is synthetic.
+//
+// Falsified by running each defect, not by reasoning about it:
+//   - Deleting the IntTok/FloatTok arm turns the four follower rows from `unexpected token` into
+//     `wrong number of lane indices` — the grave, reproduced.
+//   - Hoisting that arm above the loop changes *nothing*, which is how the three-deep claim died:
+//     a real precedence would have been visible here. The two position rows are what fail if the
+//     scan is replaced by a check that prefers one fault kind over the other.
+//   - Moving the count check above the loop turns every single-fault row into a count error.
+func TestLaneImmediateFaultOrdering(t *testing.T) {
+	const (
+		// Fifteen legal indices. Every case below appends its own sixteenth-position token, so
+		// the count is one short until a row supplies a legal one.
+		fifteen = "0 1 2 3 4 5 6 7 8 9 10 11 12 13 14"
+		sixteen = fifteen + " 15"
+	)
+	cases := []struct {
+		name string
+		imms string
+		want string
+		why  string // the vector, or the reason it is synthetic
+	}{
+		// The count, when nothing else is wrong: seventeen legal indices reduce, the follower is
+		// the closing paren, and only then does the action count them.
+		{"seventeen legal", sixteen + " 16", "wrong number of lane indices", "simd_lane.wast:519"},
+		{"fifteen legal", fifteen, "wrong number of lane indices", "simd_lane.wast:516"},
+
+		// A range error, from inside the grammar. Sixteen tokens, the last out of nat8's range —
+		// so the count is *right* and the earlier check still wins.
+		{"sixteen with a bad index", fifteen + " 256", "i8 constant out of range", "simd_lane.wast:526"},
+
+		// The follower, which is the layer the first draft was missing. Each of these leaves the
+		// list at fifteen, so a count-first reader reports the count and is wrong.
+		{"int follower", fifteen + " -1", "unexpected token", "simd_lane.wast:522"},
+		{"float follower", fifteen + " 15.0", "unexpected token", "simd_lane.wast:604"},
+		{"leading float", "0.5 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15", "unexpected token", "simd_lane.wast:608"},
+		{"neg inf follower", "-inf " + fifteen, "unexpected token", "simd_lane.wast:612"},
+		{"inf follower", fifteen + " inf", "unexpected token", "simd_lane.wast:616"},
+
+		// Synthetic, and each names a reader the cited rows above cannot distinguish from the
+		// real one. The suite never writes two faults into one index list, so every claim about
+		// how two faults *interact* is unsampled — which is exactly where the three-deep error
+		// lived.
+		//
+		// `short with a bad index`: fourteen legal, then an out-of-range one, then nothing. Both
+		// the range check and the count are unsatisfied, and the range check wins because it is
+		// reached during the scan. Fails if the count check is hoisted above the loop.
+		{
+			"short with a bad index", "0 1 2 3 4 5 6 7 8 9 10 11 12 13 256", "i8 constant out of range",
+			"synthetic: pins range-before-count when both are violated, which no vector does",
+		},
+		// The pair that killed the precedence claim. Same two faults, opposite order in the
+		// source, opposite verdicts — so range and syntax are ordered by *position*, and neither
+		// kind outranks the other. A reader that preferred one kind would fail exactly one of
+		// these two rows whichever kind it preferred, which is why they are written as a pair
+		// rather than as one case.
+		{
+			"range before syntax, by position", "0 1 256 4 -1 6 7 8 9 10 11 12 13 14 15 16",
+			"i8 constant out of range",
+			"synthetic: bad nat at index 2, illegal follower at 4 — leftmost wins",
+		},
+		{
+			"syntax before range, by position", "0 1 -1 4 256 6 7 8 9 10 11 12 13 14 15 16",
+			"unexpected token",
+			"synthetic: the mirror of the row above, and the two together are the only evidence " +
+				"that this is a scan order and not a precedence",
+		},
+		// The all-legal case, which is the vacuity guard: if the sixteen-index form did not
+		// parse, every row above would pass for the wrong reason and the table would be
+		// asserting that shuffle is unreadable rather than that its errors are ordered.
+		{
+			"sixteen legal is accepted", sixteen, "",
+			"synthetic: vacuity — an accept-direction row, which no assert_malformed can carry",
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			src := "(module (func (result v128) (i8x16.shuffle " + c.imms + ")))"
+			err := ReadModule([]byte(src))
+			switch {
+			case c.want == "" && err != nil:
+				t.Errorf("i8x16.shuffle with %s: %v; want accepted (%s)", c.imms, err, c.why)
+			case c.want == "":
+				return
+			case err == nil:
+				t.Errorf("i8x16.shuffle with %s: accepted; want %q (%s)", c.imms, c.want, c.why)
+			case !strings.Contains(err.Error(), c.want):
+				// The message is the finding, not the verdict: every row here is a module both
+				// readers reject, so a wrong message is invisible on the board and this is the
+				// only thing that looks at it.
+				t.Errorf("i8x16.shuffle with %s: got %q, want it to contain %q (%s)",
+					c.imms, err, c.want, c.why)
+			}
+		})
+	}
+}
+
+// TestVecConstFollowerPrecedesTheCount is the sweep's dividend, and it is entirely synthetic.
+//
+// laneIdxList's grave was "the count preempted a syntax error". Sweeping for siblings of that
+// shape found vecConst holding it too — `v128.const i8x16 0 … 14 $x` reported `wrong number of
+// lane literals`, where the reference cannot reduce `VECSHAPE list(num)` with a VAR in the
+// lookahead and so never reaches `vec`'s length test at all.
+//
+// **No vector in the suite covers this**, which is why the sweep found it and the board did not.
+// `simd_const.wast` writes wrong-length lists and out-of-range literals but never an illegal
+// follower after a short list, so the board reads green on both readings. Marked synthetic per the
+// provenance rule; the premise is the `num` production (parser.mly:476-478, NAT | INT | FLOAT),
+// which is machine-checkable and is what makes VAR an illegal follower rather than a guess.
+//
+// Falsified by deleting the VarTok arm from vecConst: `short list then a var` reverts to `wrong
+// number of lane literals`. Run, not assumed.
+func TestVecConstFollowerPrecedesTheCount(t *testing.T) {
+	const fifteen = "0 1 2 3 4 5 6 7 8 9 10 11 12 13 14"
+	cases := []struct {
+		name, imms, want, why string
+	}{
+		// The sibling defect. Fifteen literals where sixteen are wanted *and* an illegal
+		// follower: the follower wins, because the production cannot reduce.
+		{
+			"short list then a var", "i8x16 " + fifteen + " $x", "unexpected token",
+			"synthetic: a VAR is not a `num` (parser.mly:476-478), so the automaton errors " +
+				"before `vec` runs; the suite never writes an illegal follower after a short list",
+		},
+		// The count still wins when the list is merely the wrong length, which is the half the
+		// suite does cover — kept here so the fix cannot be "always report the follower".
+		{
+			"short list, legal follower", "i8x16 " + fifteen, "wrong number of lane literals",
+			"simd_const.wast:130",
+		},
+		// And the count still beats the range check, which is the ordering the header derives
+		// from `of_strings` and the one an over-eager fix would invert.
+		{
+			"wrong length and out of range", "i32x4 0x10000000000000000 0x10000000000000000",
+			"wrong number of lane literals", "simd_const.wast:480",
+		},
+		// Vacuity: if the legal form did not parse, every row above could pass while saying
+		// nothing about ordering.
+		{
+			"sixteen legal is accepted", "i8x16 " + fifteen + " 15", "",
+			"synthetic: vacuity — an accept-direction row, which no assert_malformed can carry",
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			src := "(module (func (result v128) (v128.const " + c.imms + ")))"
+			err := ReadModule([]byte(src))
+			switch {
+			case c.want == "" && err != nil:
+				t.Errorf("v128.const %s: %v; want accepted (%s)", c.imms, err, c.why)
+			case c.want == "":
+				return
+			case err == nil:
+				t.Errorf("v128.const %s: accepted; want %q (%s)", c.imms, c.want, c.why)
+			case !strings.Contains(err.Error(), c.want):
+				t.Errorf("v128.const %s: got %q, want it to contain %q (%s)",
+					c.imms, err, c.want, c.why)
+			}
+		})
+	}
+}

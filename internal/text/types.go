@@ -427,10 +427,20 @@ func (p *parser) atTypeuse() bool { return p.c.at(LParen) && p.c.peek2Keyword(kw
 // only one reachable from an identifier — see decodedVar. The resolution `lookup c (var …)`
 // performs is validation's business, not this stratum's: an index naming an unbound identifier
 // is an *unknown* error the reference raises from `lookup`, and #62 does not descend there.
+//
+// **The NAT arm's width check arrived with #63**, and its absence until then was a real gap
+// rather than a deferral: the reference's arm is `nat32 $1 $sloc`, so a 33-bit index is
+// `i32 constant out of range` *from the parser*. #62 could not observe it — every idx it reached
+// sat in a module field, and no vector puts an over-wide index there without an instruction body
+// in the same module. The check is the production's, so it belongs on the production, not on the
+// instruction reader that finally made it reachable.
 func (p *parser) idx() error {
 	switch {
 	case p.c.at(NatTok):
-		p.c.next()
+		t := p.c.next()
+		if _, ok := parseNat(t.Text, 32); !ok {
+			return errAt(t, "i32 constant out of range")
+		}
 		return nil
 	case p.c.at(VarTok):
 		if _, err := decodedVar(p.c.next()); err != nil {

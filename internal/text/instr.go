@@ -106,3 +106,424 @@ var initSugarKinds = map[keywordKind]bool{
 	"MEMORY_INIT": true,
 	"TABLE_INIT":  true,
 }
+
+// shapeOf resolves a keyword token to its immediate shape.
+//
+// The optional-first-index kinds are answered here rather than from the map, because their two
+// arms are a *choice* the map cannot hold: `memory.init x y` and `memory.init y`. The caller
+// reads one idx and then another only if one is there, which is what `idx idx | idx` means.
+func shapeOf(k keywordKind) (immShape, bool) {
+	if initSugarKinds[k] {
+		return immIdxIdxOpt, true
+	}
+	s, ok := plaininstrShapes[k]
+	return s, ok
+}
+
+// plaininstr parses one flat instruction: a mnemonic and its immediates (parser.mly:556-654).
+//
+// Returns false without consuming anything when the cursor is not on a mnemonic this table
+// knows, so `instr1` can try `blockinstr` and `expr` instead. A production that reports "not
+// mine" must leave the cursor where it found it, or the caller's alternative starts mid-token.
+func (p *parser) plaininstr() (bool, error) {
+	t := p.c.peek()
+	if t.Kind != KeywordTok {
+		return false, nil
+	}
+	shape, ok := shapeOf(t.Keyword)
+	if !ok {
+		return false, nil
+	}
+	p.c.next()
+	return true, p.immediates(shape, t)
+}
+
+// immediates reads the immediate sequence for one shape.
+//
+// Each arm is the reference's production read literally, and the *order* of the reads is
+// load-bearing where a shape has two of them: `align` runs after `offset`, because
+// `idx_opt offset_opt align_opt` (parser.mly:596) is written that way and the lexer gives
+// `offset=` and `align=` distinct token kinds — so a module writing them backwards is a syntax
+// error the reference reports, not a set to be matched in any order.
+func (p *parser) immediates(shape immShape, mnemonic Token) error {
+	switch shape {
+	case immNone:
+		return nil
+	case immIdx:
+		return p.idx()
+	case immIdxIdx:
+		if err := p.idx(); err != nil {
+			return err
+		}
+		return p.idx()
+	case immIdxOpt:
+		_, err := p.idxOpt()
+		return err
+	case immIdxIdxOpt:
+		// `idx_idx_opt` (:494) is empty-or-two, and the `memory.init`/`table.init` sugar arms
+		// are one-or-two. Both are served by "read as many as are there", which is why the
+		// second read is conditional rather than required after the first.
+		present, err := p.idxOpt()
+		if err != nil {
+			return err
+		}
+		if present {
+			_, err = p.idxOpt()
+		}
+		return err
+	case immMemarg:
+		return p.memarg()
+	case immLaneImms:
+		// `lane_imms` (:661) is the memarg shape with a mandatory trailing laneidx, spelled out
+		// upstream as four arms "to avoid spurious conflicts" rather than as a composition.
+		if err := p.memarg(); err != nil {
+			return err
+		}
+		return p.laneidx()
+	case immLaneIdx:
+		return p.laneidx()
+	case immReftype:
+		return p.reftype()
+	case immIdxIdxList:
+		// `br_table` takes one idx then `idx_list` (:497), whose empty arm is why the loop's
+		// exit is "no idx here" rather than an error. idxList is #62's and already loops on
+		// exactly that lookahead.
+		if err := p.idx(); err != nil {
+			return err
+		}
+		return p.idxList()
+	case immIdxReftype2:
+		if err := p.idx(); err != nil {
+			return err
+		}
+		if err := p.reftype(); err != nil {
+			return err
+		}
+		return p.reftype()
+	case immHeaptype:
+		return p.heaptype()
+	case immIdxNat32:
+		if err := p.idx(); err != nil {
+			return err
+		}
+		return p.nat32()
+	case immNum:
+		return p.constImm(mnemonic)
+	case immVecConst:
+		return p.vecConst(mnemonic)
+	case immLaneIdxList:
+		return p.laneIdxList(mnemonic)
+	}
+	// Unreachable while shapeOf only returns the constants above, and a panic rather than a
+	// silent nil because the alternative is an instruction accepting no immediates by falling
+	// through — an accept-direction defect no vector can see. *An error constant with no
+	// reachable path is a missing check wearing a disguise*; so is a default case that shrugs.
+	panic("text: unhandled immShape — a shape was added without a reader")
+}
+
+// atIdx reports whether the cursor is on something that can start an `idx` (parser.mly:487).
+//
+// The lookahead that makes every `_opt` arm above a decision rather than a parse: only NAT and
+// VAR begin an idx, so anything else is the empty arm and the cursor must not move.
+func (p *parser) atIdx() bool { return p.c.at(NatTok) || p.c.at(VarTok) }
+
+// idxOpt parses `idx_opt` (:491): an idx if one is there, otherwise the empty arm.
+//
+// Returns whether one was present *and* any error from parsing it, rather than folding the two
+// into one value. The first draft stashed the error on the parser and returned only the bool,
+// which is a second channel for a verdict that already has one — and worse, a caller that
+// ignored the bool would silently drop a width error. Two return values make dropping one a
+// compile error at the call site.
+func (p *parser) idxOpt() (bool, error) {
+	if !p.atIdx() {
+		return false, nil
+	}
+	return true, p.idx()
+}
+
+// memarg parses `idx_opt offset_opt align_opt` (:596), the load/store immediates.
+//
+// The three are separately optional and *ordered*: `offset=` before `align=`, because that is
+// how the production is written and the lexer hands back distinct kinds for the two. So
+// `i32.load align=4 offset=0` is malformed, and this reports it by leaving `offset=` unconsumed
+// for the caller's `unexpected token`.
+func (p *parser) memarg() error {
+	if _, err := p.idxOpt(); err != nil {
+		return err
+	}
+	if p.c.at(OffsetEqNat) {
+		t := p.c.next()
+		// `offset_` is `nat64` (:526) — 64 bits regardless of the memory's address type, which
+		// is the width the *field* declares rather than the width the module uses. *When two
+		// fields disagree about a value, the suite has handed you a bidirectional control.*
+		if _, ok := parseNat(offsetEqValue(t.Text), 64); !ok {
+			return errAt(t, "i64 constant out of range")
+		}
+	}
+	if p.c.at(AlignEqNat) {
+		t := p.c.next()
+		pow2, isNat := parseAlign(t.Text)
+		if !isNat {
+			return errAt(t, "i64 constant out of range")
+		}
+		if !pow2 {
+			return errAt(t, "alignment must be a power of two")
+		}
+	}
+	return nil
+}
+
+// laneidx parses `laneidx` (:658), which is `nat8` — the 15 `i8 constant out of range` vectors.
+func (p *parser) laneidx() error {
+	t := p.c.peek()
+	if t.Kind != NatTok {
+		return p.unexpected()
+	}
+	p.c.next()
+	if _, ok := parseNat(t.Text, 8); !ok {
+		return errAt(t, "i8 constant out of range")
+	}
+	return nil
+}
+
+// nat32 parses `nat32` (parser.mly:478), a bare NAT range-checked at 32 bits.
+//
+// Distinct from idx even though both are `nat32`-checked: idx also admits a VAR, and
+// `array.new_fixed`'s second immediate is a *count*, which has no symbolic spelling.
+func (p *parser) nat32() error {
+	t := p.c.peek()
+	if t.Kind != NatTok {
+		return p.unexpected()
+	}
+	p.c.next()
+	if _, ok := parseNat(t.Text, 32); !ok {
+		return errAt(t, "i32 constant out of range")
+	}
+	return nil
+}
+
+// constImm parses `CONST num` (:636) — and the *width is the mnemonic's*, not the token's.
+//
+// `i32.const`, `i64.const`, `f32.const` and `f64.const` all lex to one CONST kind carrying a
+// conversion closure (lexer.mll:308-319), so the reference recovers the width from which arm
+// built the token. This reader has the mnemonic's text instead, which is the same information
+// spelled differently — and it is the reason immNum's arm is passed the mnemonic token at all.
+//
+// Being wrong here is invisible in one direction: reading i64.const at 32 bits would reject
+// valid modules, and reading i32.const at 64 bits would accept 33-bit constants the reference
+// refuses. Only the second has vectors, which is why the first is stated as the risk.
+func (p *parser) constImm(mnemonic Token) error {
+	bits, isFloat := constWidth(mnemonic.Text)
+	if bits == 0 {
+		// A CONST mnemonic the width table does not know. Not reachable from the generated
+		// keyword table's four `*.const` spellings, and a hard error rather than a default width
+		// because a default is how a fifth spelling would arrive silently parsed at the wrong
+		// width — the accept-direction failure no vector reports.
+		return errAt(mnemonic, "unexpected token")
+	}
+	t := p.c.peek()
+	if t.Kind != NatTok && t.Kind != IntTok && t.Kind != FloatTok {
+		// `num` is exactly those three arms (parser.mly:482-485), so anything else is a syntax
+		// error from the *production*, not a range failure. `i32.const nan:arithmetic`
+		// (i32.wast:979) is the vector: `nan:arithmetic` lexes to NAN (lexer.mll:804), which no
+		// `num` arm admits, and the expected string is `unexpected token` rather than `constant
+		// out of range`. Two error strings that would otherwise be easy to conflate, and the
+		// suite distinguishes them.
+		return p.unexpected()
+	}
+	p.c.next()
+	return p.checkNumRange(t, bits, isFloat)
+}
+
+// checkNumRange applies the width check for one `num` token at a known width.
+//
+// Split out of constImm because vecConst needs the identical check at a width that comes from
+// the *shape* instead of the mnemonic, and both call sites answer with the same string. Sharing
+// the check rather than the caller is what keeps the two width *sources* distinct while the
+// range rule stays one thing.
+func (p *parser) checkNumRange(t Token, bits uint, isFloat bool) error {
+	if isFloat {
+		// **A float const accepts all three `num` arms**, and the range check is the same for
+		// each: `f32.const 1` is legal (`align64.wast:282` writes exactly that), and so is
+		// `f32.const -1`. The first draft returned nil for NatTok/IntTok on the grounds that "an
+		// integer literal cannot overflow a float", which is false — `f32.const
+		// 340282356779733661637539395458142568448` is a NAT, and `const.wast:349` expects it
+		// rejected. `is_inf` (fxx.ml:323) does not care which arm produced the digits.
+		if !fitsAsFloatConst(t.Text, bits) {
+			return errAt(t, "constant out of range")
+		}
+		return nil
+	}
+	if t.Kind == FloatTok {
+		// `i32.const 1.5` — the reference fails in `I32.of_string`'s `dec_digit` on the `.` and
+		// reports it through `num f s` (parser.mly:53) as this string, not as a syntax error.
+		// The token *is* a legal `num`, so the production accepts it and the conversion refuses
+		// it: which is why this is a range error and the NAN case above is a syntax error.
+		return errAt(t, "constant out of range")
+	}
+	if !fitsAsIntConst(t.Text, bits) {
+		return errAt(t, "constant out of range")
+	}
+	return nil
+}
+
+// vecConst parses `VECSHAPE list(num)` (:642), the `v128.const` immediates.
+//
+// Two error strings come out of one production, from the two exception arms of `vec`
+// (parser.mly:57-59): `Invalid_argument` → `wrong number of lane literals`, raised by
+// `of_strings`' own `if List.length ss <> num_lanes shape then invalid_arg` (v128.ml:500-501),
+// and `Failure` → `constant out of range`, raised by the per-lane converter.
+//
+// **The count is checked first, and that ordering is the reference's, read off `of_strings`
+// rather than guessed.** The length test is the function's first statement, *before* the
+// `List.iteri` that converts any lane — so a list that is both the wrong length and full of
+// out-of-range literals reports the length. `simd_const.wast:480` is precisely that vector:
+// `v128.const i32x4 0x10000000000000000 0x10000000000000000` — two literals where four are
+// wanted, each far past 32 bits — and it expects `wrong number of lane literals`. An
+// implementation converting as it reads reports `constant out of range` and fails it.
+//
+// The first draft of this function had the comment above stating the opposite ordering, with a
+// rationale ("the reference reads all of them, then constructs the vector") that was a plausible
+// reading of the *grammar* and wrong about the *function*. `list(num)` does collect the tokens
+// first; the conversion those tokens feed is what carries both checks, and it length-tests
+// first. That is the 0003 LEB shape again — the defect stated as the rule, and refuted here by
+// an oracle-covered vector rather than by review.
+//
+// **But "first" means first among `vec`'s two arms, not first of everything — a syntax error on an
+// illegal follower still precedes both.** Found by sweeping laneIdxList's grave for siblings of the
+// same shape rather than by a vector, because the suite has none: `v128.const i8x16 0 … 14 $x`
+// reported `wrong number of lane literals`, and a VAR is not a `num` (:476-478), so the reference
+// cannot reduce `VECSHAPE list(num)` with `$x` in the lookahead and never reaches `vec` at all.
+// The asymmetry that made laneIdxList's fix insufficient here is exactly the one this comment
+// already noted from the other side: `num` admits NAT, INT and FLOAT, so the *only* illegal
+// followers are the kinds outside all three, and VAR is the reachable one.
+//
+// Scoped like laneIdxList's arm and with the same caveat: VarTok is the follower a `list(num)` can
+// meet in practice, and the honest general fix is Follow(instr), which waits on #64. Anything else
+// illegal here is still misreported as a count error — a wrong message on a module both readers
+// reject, never an acceptance.
+func (p *parser) vecConst(mnemonic Token) error {
+	t := p.c.peek()
+	if t.Kind != KeywordTok || t.Keyword != kwVecshape {
+		// `v128.const 0 0 0 0` (simd_const.wast:236) and bare `v128.const` (:231) both expect
+		// `unexpected token`: the shape is a required token of the production, so its absence is
+		// the parser's failure and never a lane-count one.
+		return p.unexpected()
+	}
+	shape := p.c.next()
+	lanes, bits, isFloat, ok := vecShapeLanes(shape.Text)
+	if !ok {
+		// Unreachable from the generated table's six VECSHAPE spellings, and an error rather
+		// than a default shape because a default is how a seventh would arrive silently read at
+		// the wrong lane width.
+		return p.unexpectedAt(shape)
+	}
+
+	// Collected before any conversion, because the length test comes first. The tokens are kept
+	// rather than counted so the per-lane errors can still be reported *at the offending lane* —
+	// the count check needs all of them, the range check needs each of them, and only one of
+	// those two orders is the reference's.
+	var lits []Token
+	for p.c.at(NatTok) || p.c.at(IntTok) || p.c.at(FloatTok) {
+		lits = append(lits, p.c.next())
+	}
+	// The follower, before the count — see the header. `vec`'s length test is first among *its*
+	// two arms, and both of them are downstream of the automaton reducing the production at all.
+	if p.c.at(VarTok) {
+		return p.unexpected()
+	}
+	if len(lits) != lanes {
+		// Reported at the mnemonic because `vec`'s arm is `error (at $sloc)` (parser.mly:59) and
+		// `$sloc` spans the whole production — the offence is the list's length, which is not
+		// located at any one token.
+		return errAt(mnemonic, "wrong number of lane literals")
+	}
+	for _, lit := range lits {
+		if err := p.checkNumRange(lit, bits, isFloat); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// laneIdxList parses `list(laneidx)` (:651), `i8x16.shuffle`'s sixteen indices.
+//
+// Sixteen exactly, and the message is `wrong number of lane indices` — a *different* string from
+// vecConst's `…lane literals`, and the suite has both. Reported at the mnemonic because the
+// reference's arm is `error (at $sloc)` (parser.mly:653), spanning the production.
+//
+// **Here the count is checked *last*, which is the opposite of vecConst — and the difference is
+// the reference's structure, not an inconsistency.** `laneidx` is `nat8` (:658), so each index's
+// range check happens *inside the grammar* as menhir reduces it, and the length test is a
+// semantic action running after the whole list reduces (:652). vecConst's length test lives in
+// `of_strings`, ahead of its converter. Same two questions, opposite orders, because they sit in
+// different layers of the reference.
+//
+// The suite pins the difference rather than leaving it to reading: `simd_lane.wast:526` writes
+// sixteen indices with the last one `256` — correct count, one bad index — and expects `i8
+// constant out of range`; `:519` writes seventeen good ones and expects `wrong number of lane
+// indices`. What makes this a real distinction from vecConst is `:522`, sixteen with `-1` last:
+// `-1` is an IntTok, not a NAT, so it does not match `laneidx` *at all*, the list stops at
+// fifteen, and the expected string is **`unexpected token`** — the trailing token is what fails,
+// not the count. So the loop's lookahead must be NAT-only: an IntTok arm here would turn that
+// vector's verdict into a count error.
+//
+// # The count is outside; range and syntax are both positional (grave, #63)
+//
+// NAT-only lookahead was necessary and not sufficient, and the first draft stopped there: it left
+// the list at fifteen as intended and then *reported the count*, because `n != 16` was the next
+// statement. Six vectors say otherwise — `:522` (`-1`), `:604`/`:608`/`:612`/`:616` (`15.0`,
+// `0.5`, `-inf`, `inf`) all expect `unexpected token` and got `wrong number of lane indices`.
+//
+// The cause is LR reduction order, which is the part of "the reference's structure" the comment
+// above had only half of. `error (at $sloc)` at :653 is a **semantic action**, so it cannot run
+// until the parser *reduces* `VEC_SHUFFLE list(laneidx)` — and the state after the list can still
+// shift a NAT, so it has no default reduction and must consult the lookahead first. A lookahead
+// outside the follow set is a syntax error raised in the automaton, before any action of the
+// production it would have completed. So the count is genuinely *outside* both other checks.
+//
+// **The other two are not ordered with respect to each other, and the first version of this
+// comment claimed they were.** It called the structure "three-deep — range, then syntax, then
+// count", which reads as a precedence and is not one: `nat8`'s range error and the automaton's
+// syntax error are both raised *at a token position* as the input is consumed left to right, so
+// whichever fault comes first in the source wins. Printed rather than reasoned about, which is
+// what caught it: `256 … -1` is a range error and `-1 … 256` is a syntax error, same two faults,
+// order decided by position alone. The claim survived because every cited vector has exactly one
+// fault, so no vector could distinguish a precedence from a scan order — *a control scoped to the
+// current sample inherits the current blind spot*, and here the sample was the whole suite.
+//
+// So the real shape is two layers, not three: **positional faults (range or syntax, leftmost
+// first) → the count (the action, after the list reduces)**. The loop below gets that for free by
+// being a left-to-right scan; the only thing it must not do is check the count first.
+//
+// This is the *deferred* cousin of vecConst's ordering, and worth stating because the two
+// productions differ for two independent reasons. vecConst's count lives in `of_strings`, reached
+// through `fun c -> fst (vec …)` (:642) — a closure applied after parsing, so its count is later
+// still. It escapes this defect only because `list(num)` admits INT and FLOAT, so the tokens that
+// are illegal followers here are legal *members* there. Same asymmetry read from the other side:
+// `num` ⊃ `laneidx`, and the difference lands in the follow position.
+//
+// Scoped to the certain subset rather than to a guessed follow set. IntTok and FloatTok are
+// exactly the `num` kinds `laneidx` rejects, and no production admits a bare int or float in
+// instruction position — `num` occurs only *inside* `CONST num` and `VEC_CONST VECSHAPE
+// list(num)`, both of which consume it within their own plaininstr. Other illegal followers
+// (a stray VAR, a misplaced `end`) would still be reported as count errors here; that is a
+// wrong *message* on a module both readers reject, never an acceptance, and no vector covers it.
+// Named rather than fixed by enumeration, because the honest fix is Follow(instr), which needs
+// #64's blockinstr arms to exist before it can be written down.
+func (p *parser) laneIdxList(mnemonic Token) error {
+	n := 0
+	for p.c.at(NatTok) {
+		if err := p.laneidx(); err != nil {
+			return err
+		}
+		n++
+	}
+	if p.c.at(IntTok) || p.c.at(FloatTok) {
+		return p.unexpected()
+	}
+	if n != 16 {
+		return errAt(mnemonic, "wrong number of lane indices")
+	}
+	return nil
+}

@@ -662,7 +662,14 @@ func (p *parser) tableField() error {
 			p.ctx.markDefined(importTable)
 			return p.rpar()
 		}
-		return p.bodyBoundary() // elemexpr_list, parser.mly:1205
+		if err := p.elemexprList(); err != nil { // parser.mly:1205
+			return err
+		}
+		if err := p.rpar(); err != nil {
+			return err
+		}
+		p.ctx.markDefined(importTable)
+		return p.rpar()
 	}
 	if err := p.limits(); err != nil {
 		return err
@@ -674,7 +681,10 @@ func (p *parser) tableField() error {
 	if p.c.at(RParen) { // the bare-tabletype arm, parser.mly:1192
 		return p.rpar()
 	}
-	return p.bodyBoundary() // tabletype constexpr1
+	if err := p.constexpr1(); err != nil { // tabletype constexpr1
+		return err
+	}
+	return p.rpar()
 }
 
 // dataField parses `data` (parser.mly:1095-1107).
@@ -699,10 +709,23 @@ func (p *parser) dataField() error {
 		if err := p.rpar(); err != nil {
 			return err
 		}
-		return p.bodyBoundary() // offset
+		if err := p.offset(); err != nil {
+			return err
+		}
+		if err := p.stringList(); err != nil {
+			return err
+		}
+		return p.rpar()
 	}
 	if p.c.at(LParen) {
-		return p.bodyBoundary() // the offset sugar: `(offset …)` or a folded expr
+		// The offset sugar: `(offset …)` or a folded expr (parser.mly:1105).
+		if err := p.offset(); err != nil {
+			return err
+		}
+		if err := p.stringList(); err != nil {
+			return err
+		}
+		return p.rpar()
 	}
 	if err := p.stringList(); err != nil {
 		return err
@@ -734,29 +757,62 @@ func (p *parser) elemField() error {
 		if err := p.rpar(); err != nil {
 			return err
 		}
-		return p.bodyBoundary() // offset
-	}
-	// elem_list (parser.mly:1152-1156): `elemkind elemidx_list` or `reftype elemexpr_list`.
-	if p.c.atKeyword(kwFunc) { // elemkind, parser.mly:1136
-		p.c.next()
-		if err := p.idxList(); err != nil {
+		if err := p.offset(); err != nil { // parser.mly:1164
+			return err
+		}
+		if err := p.elemList(); err != nil {
 			return err
 		}
 		return p.rpar()
+	}
+	if p.c.at(LParen) && !p.c.peek2Keyword(kwItem) {
+		// The offset sugar (parser.mly:1171/:1175): `offset elem_list` or `offset elemidx_list`.
+		// An `(item …)` here is an elemexpr in the *passive* arm's elem_list instead, which is
+		// what the lookahead separates — the two arms start with the same paren and only the
+		// keyword after it decides, so this is peek2 rather than a trial parse.
+		if err := p.offset(); err != nil {
+			return err
+		}
+		// `elemidx_list` (:1147) is the second sugar arm and is just `idx_list`, so a bare index
+		// list after the offset is legal and needs no elemkind.
+		if p.c.at(NatTok) || p.c.at(VarTok) {
+			if err := p.idxList(); err != nil {
+				return err
+			}
+			return p.rpar()
+		}
+		if err := p.elemList(); err != nil {
+			return err
+		}
+		return p.rpar()
+	}
+	if err := p.elemList(); err != nil {
+		return err
+	}
+	return p.rpar()
+}
+
+// elemList parses `elem_list` (parser.mly:1152-1156): `elemkind elemidx_list`, or
+// `reftype elemexpr_list`.
+//
+// Split out of elemField because four of the five `elem` arms end with one, and inlining it four
+// times is how the arms drift apart. The empty case is real — `(elem)` is well-formed, since
+// `elemkind` has no empty arm but `reftype elemexpr_list` reaches an empty list.
+func (p *parser) elemList() error {
+	if p.c.atKeyword(kwFunc) { // elemkind, parser.mly:1136
+		p.c.next()
+		return p.idxList()
 	}
 	if p.atReftypeStart() {
 		if err := p.reftype(); err != nil {
 			return err
 		}
-		if p.c.at(RParen) { // an empty elemexpr_list
-			return p.rpar()
-		}
-		return p.bodyBoundary() // elemexpr_list
+		return p.elemexprList()
 	}
 	if p.c.at(RParen) {
-		return p.rpar()
+		return nil
 	}
-	return p.bodyBoundary() // the offset sugar
+	return p.bodyBoundary()
 }
 
 // startField parses `start` (parser.mly:1304-1306) and applies the multiple-start check.
@@ -790,11 +846,179 @@ func (p *parser) startField() error {
 // Callers whose grammar is `constexpr1` (parser.mly:953 — `instr1 instr_list`, at least one
 // instruction) check for the closing paren themselves, because for them an empty sequence is a
 // syntax error rather than an empty list.
+//
+// **#63 makes the flat arm reachable.** `instr_list` is now a loop over `instr1`, and `instr1` is
+// `plaininstr | blockinstr | expr` (:552-554) of which this stratum owns the first and the
+// minimal case of the third. What is left unread stops at bodyBoundary as before, so the bucket
+// shrinks rather than moving.
 func (p *parser) instrList() error {
-	if p.c.at(RParen) {
-		return nil // the empty arm, parser.mly:547
+	for {
+		if p.c.at(RParen) || p.c.at(EOF) {
+			return nil // the empty arm, parser.mly:547 — reached at the end of every list too
+		}
+		read, err := p.instr1()
+		if err != nil {
+			return err
+		}
+		if !read {
+			return p.bodyBoundary()
+		}
 	}
-	return p.bodyBoundary()
+}
+
+// constexpr1 parses `instr1 instr_list` (parser.mly:953): at least one instruction.
+//
+// The distinction from instrList is the whole reason bodyBoundary rejects a closing paren: for
+// these callers an empty sequence is a *syntax error*, so `(data (memory 0))` with no offset is
+// malformed on the merits rather than unimplemented. Both halves of that ruling now have code:
+// the empty case is `unexpected token` from bodyBoundary, and a non-empty one this stratum can
+// read completes.
+func (p *parser) constexpr1() error {
+	read, err := p.instr1()
+	if err != nil {
+		return err
+	}
+	if !read {
+		return p.bodyBoundary()
+	}
+	return p.instrList()
+}
+
+// offset parses `offset` (parser.mly:1091-1093): `(offset constexpr)` or a folded expr.
+//
+// The second arm is `expr` — the same sugar arm #63 owns in instr1 — which is why a data segment
+// writing `(data (i32.const 0) "abc")` is readable here while `(data (offset …))` needs the
+// explicit form. Both land in the same readers.
+func (p *parser) offset() error {
+	if p.c.at(LParen) && p.c.peek2Keyword(kwOffset) {
+		if err := p.lpar(kwOffset); err != nil {
+			return err
+		}
+		// `constexpr` is `instr_list` (:950), *not* `constexpr1` — so `(offset)` is well-formed
+		// with an empty sequence. Easy to conflate with the `constexpr1` callers above and the
+		// reference is explicit about which each one takes.
+		if err := p.instrList(); err != nil {
+			return err
+		}
+		return p.rpar()
+	}
+	read, err := p.expr()
+	if err != nil {
+		return err
+	}
+	if !read {
+		return p.bodyBoundary()
+	}
+	return nil
+}
+
+// elemexpr parses `elemexpr` (parser.mly:1139-1141): `(item constexpr)` or a folded expr,
+// reporting whether it read one.
+//
+// The bool is what makes `elemexpr_list`'s empty arm (:1144) expressible: an `elem` field's list
+// ends at the closing paren, and a `(` that starts something else is #64's rather than an error.
+func (p *parser) elemexpr() (bool, error) {
+	if !p.c.at(LParen) {
+		return false, nil
+	}
+	if p.c.peek2Keyword(kwItem) {
+		if err := p.lpar(kwItem); err != nil {
+			return true, err
+		}
+		if err := p.instrList(); err != nil { // constexpr, :1140
+			return true, err
+		}
+		return true, p.rpar()
+	}
+	return p.expr()
+}
+
+// elemexprList parses `elemexpr_list` (parser.mly:1143-1145): zero or more elemexprs.
+func (p *parser) elemexprList() error {
+	for {
+		read, err := p.elemexpr()
+		if err != nil {
+			return err
+		}
+		if !read {
+			break
+		}
+	}
+	if !p.c.at(RParen) {
+		// A `(` this stratum could not read as an elemexpr: #64's, and reported as the boundary
+		// rather than as a syntax error.
+		return p.bodyBoundary()
+	}
+	return nil
+}
+
+// instr1 parses one instruction (parser.mly:552-554), reporting whether it read one.
+//
+// Three arms, and #63 owns one and a half of them: `plaininstr`, and the `plaininstr expr_list`
+// arm of `expr1` reached through `expr`. `blockinstr` and `expr1`'s other nine arms are #64's, so
+// this returns false for them and the caller falls through to bodyBoundary — which keeps the
+// board's unread work in one legible bucket instead of scattering it across arms.
+//
+// The false return must leave the cursor untouched, since bodyBoundary reports the token it stops
+// on and a half-consumed lookahead would name the wrong one.
+func (p *parser) instr1() (bool, error) {
+	if read, err := p.plaininstr(); read || err != nil {
+		return read, err
+	}
+	return p.expr()
+}
+
+// expr parses `LPAR expr1 RPAR` (parser.mly:809), the folded form — restricted to `expr1`'s
+// first arm, `plaininstr expr_list` (:813).
+//
+// **This is #63's, not #64's, and the seam is defect ownership rather than surface form.** The
+// arm is pure sugar and transports its token stream to a defect that lives in one of #63's
+// immediate readers: `(i32.const 0x100000000)` is a `constant out of range` from constImm no
+// matter which spelling delivered it, and 353 of the 390 reachable vectors write their
+// instructions folded because that is how a `(func …)` body reads. Leaving the arm to #64 would
+// have parked those 353 behind a sugar rewrite they do not need. (Ruling: Scott — children exist
+// to earn buckets, and a bucket belongs to the production that must be fixed.)
+//
+// `expr1`'s other arms — SELECT, CALL_INDIRECT, BLOCK, LOOP, IF, TRY_TABLE and their sugar — are
+// #64's and return false here, unconsumed.
+func (p *parser) expr() (bool, error) {
+	if !p.c.at(LParen) {
+		return false, nil
+	}
+	// The mnemonic decides whether this fold is ours, and it is two tokens away — so the check is
+	// peek2 rather than a consume-and-backtrack. A `(` whose keyword is a blockinstr or one of
+	// expr1's own arms belongs to #64, and this must not have eaten the paren by the time
+	// bodyBoundary reports it.
+	t := p.c.peek2()
+	if t.Kind != KeywordTok {
+		return false, nil
+	}
+	if _, ok := shapeOf(t.Keyword); !ok {
+		return false, nil
+	}
+	p.c.next() // the LPAR
+	if _, err := p.plaininstr(); err != nil {
+		return true, err
+	}
+	// `expr_list` (:946-948): zero or more folded operands, each itself an `expr`. Its empty arm
+	// is why `(i32.const 0)` needs no operands and `(i32.add (i32.const 1) (i32.const 2))` needs
+	// two — the *arity* is validation's business, not this stratum's, so nothing here counts them.
+	for {
+		read, err := p.expr()
+		if err != nil {
+			return true, err
+		}
+		if !read {
+			break
+		}
+	}
+	// A folded operand this stratum cannot read is still an unread body, and it must be reported
+	// as one rather than as a syntax error: the cursor is on a `(` that #64 will handle, and
+	// `unexpected token` here would be the wrong-layer error in the direction that flatters us.
+	if !p.c.at(RParen) {
+		return true, p.bodyBoundary()
+	}
+	return true, p.rpar()
 }
 
 // bodyBoundary is where this stratum stops: a non-empty instruction sequence, which #63/#64 own.

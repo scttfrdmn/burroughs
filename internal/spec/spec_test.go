@@ -459,6 +459,22 @@ func TestGatedVectors(t *testing.T) {
 // boundary is not an excuse a vector can grow into, because a retired entry must be removed
 // from the list rather than annotated in it, and `retiredThisStratum` is floored and counted
 // like everything else here.
+//
+// # Retirement is reversible, and #63 reversed it
+//
+// `comments.wast:83` went back to `unearned` when #63's instruction grammar read the payload
+// #62 had stopped at. The switch's retired arm offers two dispositions for an entry that
+// starts passing again — the boundary moved, or the pass is now earned — and the choice
+// between them is not "did the reader get further", it is **what does the vector assert**. A
+// bare `(module quote ...)` asserts *validity*, so the only stratum that can earn its pass is
+// the one that can disagree about types; a parser that reads the payload and says nothing is a
+// better-informed silence, not a verdict. Retiring it a second time on the strength of the
+// parser alone would have been the omission-pass laundered through a list built to expose it.
+//
+// The general shape, since this is the second control in the project to hit it: **a state a
+// mechanism was built to drain can refill, so its account is kept on the sum and its list is
+// not deleted when it empties.** Sibling of the re-pointed tripwire (#33) — there an
+// obligation outlived its subject, here a state outlived its emptying.
 func TestBareQuoteFormsPassUnearned(t *testing.T) {
 	requireSuite(t)
 
@@ -477,23 +493,40 @@ func TestBareQuoteFormsPassUnearned(t *testing.T) {
 			206: "annotation in a type position",
 			207: "annotation in an import position",
 		},
+		// Returned to this list by #63, and the round trip is the finding. #62 retired it by
+		// reaching the payload's instruction bodies and stopping short; #63's flat instruction
+		// grammar reads them, so the vector is accepted again — which is the retired arm's
+		// *first* named outcome, "the boundary moved and the entry belongs back on the
+		// unearned list", not its second.
+		//
+		// It is the first and not the second because a bare `(module quote ...)` asserts its
+		// source is **valid**, and validity is the validator's word. #63 raised the answer from
+		// "it lexes" to "it parses", which is a better reason to be silent and still not the
+		// question the vector asks: `(func (export "f1") (result i32) (i32.const 1) (return
+		// (i32.const 2)))` has a result type to agree with and a return to typecheck, and
+		// nothing in the engine yet does either. The stratum that owns it is the validator.
+		//
+		// So the pass is unearned again rather than earned, and the reason it was ever retired
+		// was the shape of #62's boundary, not the vector's difficulty. That is worth keeping:
+		// an entry can leave `retired` in either direction, and only naming which one keeps the
+		// list from reading as monotone progress.
+		"comments.wast": {
+			83: "instruction bodies now parse, but the vector asserts *validity* — the result " +
+				"type and the return want a typechecker (the validator's stratum)",
+		},
 	}
 
-	// retired lists the entries #62's parser took off the unearned list by reaching them and
+	// retired lists the entries a parser took off the unearned list by reaching them and
 	// declaring the boundary — the shrink this test was written to expect, recorded rather
 	// than deleted so the arithmetic against the original seven stays checkable.
 	//
-	// `comments.wast:83`'s payload is `(func (export "f1") (result i32) (i32.const 1) ...)`:
-	// instruction bodies, which are #63/#64's. So the module is valid, the reader cannot say
-	// so yet, and it says *that* instead of claiming a pass. Each entry must still be *found*
-	// on the board and must still stop short with a named boundary — a retired entry that
-	// starts passing again, or that fails for some other reason, is caught below.
-	retired := map[string]map[int]string{
-		"comments.wast": {
-			83: "instruction bodies in the quoted payload (#63/#64); the lexer's silence " +
-				"was the pass, and the parser replaced it with a named boundary",
-		},
-	}
+	// **Empty as of #63**, and empty is not the same as finished. Its one entry,
+	// `comments.wast:83`, went back to `unearned` rather than away: see the note there. The
+	// map stays, and stays in the arithmetic, because retirement is a state vectors will keep
+	// entering as strata land — #64's folded forms and the validator both have candidates —
+	// and a list deleted the first time it empties is a mechanism that has to be re-derived
+	// by whoever needs it next.
+	retired := map[string]map[int]string{}
 
 	// Vacuity floor. A list of unearned passes that finds nothing is indistinguishable
 	// from a board with none, and the second is the state this test exists to detect the
@@ -508,7 +541,9 @@ func TestBareQuoteFormsPassUnearned(t *testing.T) {
 	}
 	// The sum is what must hold at seven, not either part: an entry moving from unearned to
 	// retired is progress, an entry *vanishing* from both is the list going stale, and only
-	// the sum can tell those apart. Six-plus-one today.
+	// the sum can tell those apart. Seven-plus-zero today — and it was six-plus-one under
+	// #62, which is the clearest demonstration of why the invariant is on the sum: the
+	// entry has now crossed in both directions and the guard never moved.
 	if want+wantRetired != 7 {
 		t.Fatalf("the unearned and retired lists hold %d+%d entries, want 7 between them; "+
 			"the count is quoted in the pass floor's account and in PR #61, so the two must "+
@@ -910,7 +945,48 @@ func TestPhase1Files(t *testing.T) {
 	// it, and they are the concrete form of the forecast's own caution — the classifier
 	// asked whether a *vector* was instruction-bodied, and the question that decides
 	// reachability is whether the *module* is.
-	const textFailCeiling = 391
+	//
+	// # 97 after #63's flat instruction grammar, and the 294 itemized
+	//
+	// **391 → 97 text, the fall being 294 vectors.** Six buckets emptied and one shrank, and the
+	// account is per-bucket rather than net, measured by re-running the board at 1f86fa1 and
+	// diffing the bucket tables:
+	//
+	//	92  alignment                          → 0   memarg's `align=`, the largest single win
+	//	84  unexpected token                   146 → 62
+	//	55  constant out of range              → 0   constImm at all four widths
+	//	22  alignment must be a power of two   → 0
+	//	15  i8 constant out of range           → 0   laneidx, nat8-reduced
+	//	 8  wrong number of lane literals      → 0   vecConst
+	//	 5  wrong number of lane indices       → 0   laneIdxList
+	//	 4  import after global                → 0   ┐ four of the seven #62 predicted would
+	//	 1  multiple start sections            → 0   │ arrive here free; `func.wast:447`
+	//	 1  duplicate global                   → 0   ┘ (`unknown type`) is the one that did not
+	//	 1  (module quote ...) must read        → 0   comments.wast:83, the retired pass returning
+	//
+	// **Against #63's pre-registered 353 that is an under-delivery of 59**, and unlike #62's it
+	// is *not* one shape. Partitioned by mechanism from the engine's own error text — the failure
+	// bucket keys name what the suite wanted, which is the wrong key for asking why we did not
+	// deliver:
+	//
+	//   - **92 are `unimplemented: instruction body`, i.e. #64's**, and they are the forecast's
+	//     real error. The 353 was a count of vectors whose *fault* lives in one of #63's readers;
+	//     92 of them reach that fault only through a `block`/`loop`/`if`/`try_table` this stratum
+	//     does not read. Same defect ownership, unreachable extent — the seam ruling put the
+	//     `expr1` minimal arm here for exactly this reason, and it was not enough because folded
+	//     *plain* instructions are #63's while folded *block* instructions are #64's.
+	//   - **5 need a type context**, which is neither stratum's: `func.wast:601,608,615` and
+	//     `:447` want `(type $sig)` compared against inline params/results
+	//     (`inline_functype_explicit`, parser.mly:246) and a type index space to resolve `(type 2)`
+	//     against. These are the five accept-direction members of the column — we accept modules
+	//     the reference rejects — and they are the reason the fall is 294 and not 299.
+	//   - **1 is the decoder's**, `binary-gc.wast:1`, held by binaryFailCeiling above.
+	//
+	// So the honest reading is that #63's forecast measured its own extent correctly and its
+	// *reachability* wrongly, in the same direction #62's did and for a differently-shaped
+	// reason. Recorded rather than smoothed: the 92 are #64's inventory, and #64's own forecast
+	// starts from them rather than from a fresh classification.
+	const textFailCeiling = 97
 	if textFail > textFailCeiling {
 		t.Errorf("text failures rose to %d, ceiling %d — either the reader regressed on "+
 			"vectors it used to answer, or the corpus moved", textFail, textFailCeiling)
@@ -940,7 +1016,19 @@ func TestPhase1Files(t *testing.T) {
 	// green claim credit for a vector the board no longer answers. The unearned six are
 	// still six, still named, and still not netted out. See textFailCeiling above for the
 	// itemized reconciliation against #62's 221–225 forecast.
-	const passFloor = 1628
+	//
+	// **1922 = 1628 + 294 after #63's flat instruction grammar**, and this time the two columns
+	// move by the same number in opposite directions: 294 answered, nothing withdrawn. The
+	// per-bucket account is at textFailCeiling above.
+	//
+	// The seven unearned quote forms are **seven again, not six**, and that is a real change
+	// rather than a rounding of the sentence above. `comments.wast:83` went back onto the
+	// unearned list: #62 retired it by stopping at the instruction body, #63 reads that body, so
+	// the vector is accepted again — and a bare `(module quote ...)` asserts *validity*, which
+	// wants a typechecker. So the pass is unearned once more rather than earned, the withdrawal
+	// recorded in #62's `− 1` is handed back, and the 294 is a gross figure that needs no
+	// netting. TestBareQuoteFormsPassUnearned holds the sum at seven and has the argument.
+	const passFloor = 1922
 	if totalPass < passFloor {
 		t.Errorf("board pass count %d fell below floor %d", totalPass, passFloor)
 	}

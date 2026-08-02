@@ -432,13 +432,16 @@ func TestUTF8DecodeSitedOnlyAtNameAndVar(t *testing.T) {
 			why:    "parser.mly:49-52, the `var` site — id.wast:31",
 		},
 		{
-			name:         "data segment payload",
-			src:          `(module (memory 1) (data (i32.const 0) "\ef"))`,
-			reject:       false,
-			wantBoundary: true,
-			why: "parser.mly:1096 routes through string_list, which does not decode — the " +
-				"accept direction. The offset is #63/#64's, so this row is asserted at the " +
-				"boundary today and the assertion fails the day the offset grammar lands",
+			name:   "active data segment payload",
+			src:    `(module (memory 1) (data (i32.const 0) "\ef"))`,
+			reject: false,
+			why: "parser.mly:1099 routes through string_list, which does not decode — the " +
+				"accept direction. **Promoted from wantBoundary by #63**, on this control's own " +
+				"instruction: the row was asserted at the boundary because the offset grammar " +
+				"did not exist, with the deferral written to *fail* the day it did. It did, and " +
+				"the row now carries the accept direction on the merits — an active segment " +
+				"whose offset parses and whose `\\ef` payload is legal, which is the pair the " +
+				"passive row below could not supply alone. Synthetic",
 		},
 		{
 			name:   "passive data segment payload",
