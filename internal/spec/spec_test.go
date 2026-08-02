@@ -408,6 +408,21 @@ func TestGatedVectors(t *testing.T) {
 			561: "gc/function-references: the 0x40 table form with an initializer",
 			578: "gc/function-references: the 0x40 table form with an initializer",
 		},
+
+		// The board's last `fail` became a `gated`, which is the gates doctrine working
+		// rather than a deferral bought cheaply: the vector is an `assert_malformed` on an
+		// **array type's** field mutability byte, and an array type is GC's. With the gate
+		// off the module is declined for the feature before the mutability byte is read,
+		// so the engine never gets to the question the vector asks (#86).
+		//
+		// This is exactly the entry the all-gates-on lane exists to keep honest: with
+		// `GC: true` the decline does not happen, the mutability check runs, and
+		// `malformed mutability` is reported — so the vector is *passed* there, not parked.
+		// TestAllGatesOnLeavesNothingGated is what proves that, and it is why a gated
+		// verdict here cannot become a disappearance.
+		"binary-gc.wast": {
+			1: "gc: an array type's fieldtype, whose mutability byte is what the vector asserts",
+		},
 	}
 
 	files := boardFiles(t)
@@ -749,7 +764,23 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	// features are the only place they can be measured at all. The default lane cannot
 	// substitute — there these seven vectors are honestly `gated`, and a floor over a
 	// number that excludes them says nothing about whether GC still works.
-	const allOnPassFloor = 798
+	// **This floor was 798 against an actual 4178** — stale by 3380, which means it could
+	// not have caught a regression that erased four fifths of the lane. It was set in #56
+	// (`git log -S`), 15 commits back, and the text strata that landed since moved the
+	// count past it without anything noticing. Found by *reading the printed total next to the constant* while raising it
+	// for #86, not by any control: nothing asserts that a floor is close to what it
+	// floors, so a floor left behind by a large jump degrades silently into decoration.
+	// The same defect class as a vacuity floor that passes on an empty set — the
+	// comparison runs, agrees, and says nothing — and the reason the discipline says a
+	// control's green must be falsifiable: this one was green at 798 whether the engine
+	// worked or not.
+	//
+	// The general form, worth stating because it is not the same as "keep numbers
+	// current": **a floor's distance from its measurement is itself a claim, and an
+	// unasserted distance is where the assertion leaks out.** Raised to the measured
+	// value here, with #86's +1; whether it should be *checked* for staleness is **#87**,
+	// filed rather than decided in a PR about the type section.
+	const allOnPassFloor = 4178
 	if totalPass < allOnPassFloor {
 		t.Errorf("all-gates-on pass count %d fell below floor %d — a gated feature regressed, "+
 			"which the Gated==0 assertion above cannot see: with every gate on, a broken "+
@@ -991,12 +1022,24 @@ func TestPhase1Files(t *testing.T) {
 			binaryFail+textFail, totalFail)
 	}
 
-	// 1 at the measured revision: binary-gc.wast:1, "malformed function type: 0x5e"
-	// under an expected "malformed mutability". Unmoved by the wat reader and unmoved
-	// again by #62's parser — which is the point of splitting the column, and the claim
-	// the split makes checkable. Measured both times, not assumed: the parser landing
-	// moved textFail 600 → 391 and left this at 1.
-	const binaryFailCeiling = 1
+	// **0 at the measured revision, and it was 1 for the whole life of this ceiling.**
+	// The one member was binary-gc.wast:1, reported as "malformed function type: 0x5e"
+	// under an expected "malformed mutability" — an *array* type read as a malformed
+	// functype, because the type section decoded `functype` where the reference decodes
+	// `rectype` (#86). Unmoved by the wat reader and unmoved again by #62's parser, which
+	// is what the split column was for and what made this one durable enough to diagnose.
+	//
+	// It is 0 rather than gone because the ceiling's job is now the other direction:
+	// **both columns are zero, so any new fail in either is a regression by definition**,
+	// and a ceiling at 0 is the strongest form of that claim. Printed, not deduced:
+	// `binaryFail=0 textFail=0` with the fix, `1` and `0` without it — the falsification
+	// pass ran both ways, because a ceiling lowered to a number the code already meets
+	// asserts nothing (which is how this ceiling was briefly wrong at 1 in #83).
+	//
+	// The vector itself is now a *gated* verdict on the default board, allowlisted in
+	// TestNoGatedVectorIsUnlisted with the feature named, and **passed** in the
+	// all-gates-on lane, where 4178 pass / 0 fail / 0 gated.
+	const binaryFailCeiling = 0
 	if binaryFail > binaryFailCeiling {
 		t.Errorf("decoder failures rose to %d, ceiling %d — a defect landed in the binary "+
 			"decoder; this ceiling is deliberately not shared with the text column so that "+

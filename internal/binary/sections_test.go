@@ -346,18 +346,29 @@ func TestFuncTypeFormIsASignedLEB(t *testing.T) {
 	// stays green under falsification. It is kept as the zero case for the sentinel
 	// claim and labelled so it is not mistaken for coverage of the message claim
 	// (grave #34: a partition's rows get checked against the partition).
+	// **Two rows were removed here when #86 landed, and that is the finding, not the
+	// edit.** `0x5e` and `0x5f` sat in this malformedness partition as "array" and
+	// "struct" — named for what they *are* in the spec while being asserted as forms with
+	// no grammar. They are `comptype`'s second and third arms (decode.ml:250-259), so they
+	// are now legal with the GC gate on and feature-declined with it off, and neither
+	// verdict is a malformed-form error. A row whose label contradicts its assertion is
+	// the partition defect (grave #34) with the label telling the truth: the case names
+	// said array and struct, and only the reference said whether that mattered. They move
+	// to TestCompTypeFormsAreDecoded, which asserts both directions.
+	//
+	// What remains is the set that really has no arm: non-negative bytes where an s7 form
+	// goes, and the tags between the defined constructors.
 	for _, tc := range []struct{ name, want string }{
-		{"0x5e array", "0x5e"},
-		{"0x5f struct", "0x5f"},
 		{"0x7f i32 where a form goes", "0x7f"},
 		{"0x40 the s7 minimum", "0x40"},
+		{"0x5d no such constructor", "0x5d"},
 		{"0x00 zero — non-negative, so non-discriminating for the message byte", "0x00"},
 	} {
-		tag := map[string]byte{"0x5e": 0x5E, "0x5f": 0x5F, "0x7f": 0x7F, "0x40": 0x40, "0x00": 0x00}[tc.want]
+		tag := map[string]byte{"0x7f": 0x7F, "0x40": 0x40, "0x5d": 0x5D, "0x00": 0x00}[tc.want]
 		r := &reader{b: []byte{tag, 0x00, 0x00}, eof: ErrPayloadEnd}
-		err := (&Decoder{}).decodeFuncType(r)
-		if !errors.Is(err, ErrMalformedFuncType) {
-			t.Errorf("%s: got %v, want ErrMalformedFuncType", tc.name, err)
+		err := (&Decoder{Features: Features{GC: true}}).decodeCompType(r)
+		if !errors.Is(err, ErrMalformedDefType) {
+			t.Errorf("%s: got %v, want ErrMalformedDefType", tc.name, err)
 			continue
 		}
 		if !contains(err.Error(), tc.want) {
@@ -366,9 +377,10 @@ func TestFuncTypeFormIsASignedLEB(t *testing.T) {
 	}
 
 	// The accept path, since every case above is a rejection: 0x60 is the one tag
-	// that decodes to -0x20 and must still work as a plain byte in the stream.
+	// that decodes to -0x20 and must still work as a plain byte in the stream. Ungated,
+	// unlike its two siblings — functype is Wasm 1.0.
 	r := &reader{b: []byte{0x60, 0x00, 0x00}, eof: ErrPayloadEnd}
-	if err := (&Decoder{}).decodeFuncType(r); err != nil {
+	if err := (&Decoder{}).decodeCompType(r); err != nil {
 		t.Errorf("0x60 functype: got %v, want accept", err)
 	} else if r.off != 3 {
 		t.Errorf("0x60 functype consumed %d bytes, want 3 — the tag is one byte on the wire even though it is read as an s7", r.off)

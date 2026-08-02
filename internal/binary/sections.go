@@ -126,7 +126,7 @@ func (d *Decoder) decodePayload(sid SectionID, size uint32, r *reader) (bool, er
 	case SectionCustom:
 		return true, d.decodeCustom(size, r)
 	case SectionType:
-		return true, d.decodeVec(r, d.decodeFuncType)
+		return true, d.decodeVec(r, d.decodeRecType)
 	case SectionImport:
 		return true, d.decodeVec(r, d.decodeImport)
 	case SectionFunction:
@@ -224,42 +224,163 @@ func (d *Decoder) decodeCustom(size uint32, r *reader) error {
 	return err
 }
 
-// decodeFuncType reads a functype: the 0x60 form byte, then param and result
-// vectors of value types.
-func (d *Decoder) decodeFuncType(r *reader) error {
-	// The form tag is a *signed* LEB of width 7, not a plain byte, and
-	// binary-leb128.wast:1067 is the vector that says so: `\e0\7f` is -0x20 encoded
-	// in two bytes, and the suite wants "integer representation too long" rather
-	// than "malformed function type". The spec's type constructors live in negative
-	// s7 space — 0x60 *is* -32 at width 7, as 0x5e (array) is -34 — so reading the
-	// tag as a byte gets the right answer for well-formed input and the wrong error
-	// for an overlong encoding of it.
-	//
-	// sleb(7) is exactly the right instrument: its width budget is one byte, so a
-	// continuation bit on the first byte exhausts it, which is what "too long" means
-	// here. Verified against the reference sN at width 7 (grave #36's port).
+// decodeRecType reads a rectype — the type section's actual element (decode.ml:273-276,
+// reached from `type_` at :1023).
+//
+// **This engine decoded `functype` here and called it the section** (#86). The reference's
+// grammar is four levels deep, and only `comptype`'s first arm existed:
+//
+//	rectype   →  0x4e vec(subtype)  |  subtype                        :273-276
+//	subtype   →  0x50 | 0x4f  vec(typeuse) comptype  |  comptype       :262-271
+//	comptype  →  -0x20 functype | -0x21 struct | -0x22 array          :250-259
+//	fieldtype →  storagetype mutability                               :243-246
+//
+// The five missing forms were reported as `malformed function type: 0x5f` and friends —
+// which is the #51 class twice over. They are Wasm 3.0 constructs, so they belong to the
+// tracked union's grammar (§9 G-2) and the engine's own configuration is what declines
+// them: *gates never manufacture malformedness*. And `malformed function type` is a string
+// the reference **never produces** (0 hits in `third_party/spec/interpreter/`), so the
+// fallthrough was an invented sentinel, not merely a mis-scoped one.
+//
+// `peek` rather than `either` for the 0x4e discriminator, matching the reference: it uses
+// `peek` + `skip 1` (:274) precisely because a rectype group's *contents* must not be
+// re-judged as a bare subtype when a nested read fails. An `either` here would rewind and
+// report the second branch's error for a well-formed group with a bad member.
+func (d *Decoder) decodeRecType(r *reader) error {
+	if b, ok := r.peek(); ok && b == -0x32&0x7F { // 0x4e — `rec`
+		// A recursive type group is GC's, and the gate is checked before descending for
+		// decodeRefType's reason: otherwise the member read reports the error and it
+		// reports the wrong layer.
+		if !d.Features.GC {
+			return featureErr("gc")
+		}
+		r.skip(1) // the peeked discriminator — `skip 1 s` (decode.ml:275)
+		return d.decodeVec(r, d.decodeSubType)
+	}
+	return d.decodeSubType(r)
+}
+
+// decodeSubType reads a subtype: an optional supertype list, then a comptype
+// (decode.ml:262-271).
+//
+// Both explicit forms carry `vec(typeuse u32)` — the declared supertypes — and differ only
+// in finality, which decoding does not observe. Peeked for decodeRecType's reason.
+func (d *Decoder) decodeSubType(r *reader) error {
+	if b, ok := r.peek(); ok && (b == -0x30&0x7F || b == -0x31&0x7F) { // 0x50, 0x4f
+		if !d.Features.GC {
+			return featureErr("gc")
+		}
+		r.skip(1) // `skip 1 s` (decode.ml:264, :268)
+		// `vec (typeuse u32) s` — the supertypes, as plain type indices.
+		if err := d.decodeVec(r, discardIndex); err != nil {
+			return err
+		}
+	}
+	return d.decodeCompType(r)
+}
+
+// decodeCompType reads a comptype: functype, structtype, or arraytype (decode.ml:250-259).
+//
+// The form tag is a *signed* LEB of width 7, not a plain byte, and
+// binary-leb128.wast:1067 is the vector that says so: `\e0\7f` is -0x20 encoded
+// in two bytes, and the suite wants "integer representation too long" rather
+// than a malformed-form error. The spec's type constructors live in negative
+// s7 space — 0x60 *is* -32 at width 7, as 0x5e (array) is -34 — so reading the
+// tag as a byte gets the right answer for well-formed input and the wrong error
+// for an overlong encoding of it.
+//
+// sleb(7) is exactly the right instrument: its width budget is one byte, so a
+// continuation bit on the first byte exhausts it, which is what "too long" means
+// here. Verified against the reference sN at width 7 (grave #36's port).
+func (d *Decoder) decodeCompType(r *reader) error {
 	form, err := r.sleb(7)
 	if err != nil {
 		return err
 	}
-	if form != -0x20 { // 0x60
-		// GRAVE (#36): the message names the byte the image actually held, which at
-		// width 7 is the low seven bits of the decoded value — the range is -64..63, so
-		// form&0x7f is exactly the input byte, and a multi-byte encoding never reaches
-		// here (sleb(7) has already returned "too long"). The first version of this
-		// expression or'd a high bit in for every negative form and reported 0x5e
-		// (array) as 0xde: an error about the module lying about the module, which no
-		// suite vector here can catch, this one's expected string being the bare
-		// sentinel — the harness reads exactly as far as the expected string does, and
-		// where a spec string embeds a value (`illegal opcode ff`) the rendering *is*
-		// oracle-covered (#38). Found by *printing* the output for nine tags rather than
-		// reading the expression's shape. Pinned by TestFuncTypeFormIsASignedLEB.
-		return fmt.Errorf("%w: %#02x", ErrMalformedFuncType, byte(form&0x7F))
+	switch form {
+	case -0x20: // 0x60 — functype
+		for range 2 { // params, then results — same grammar, twice
+			if err := d.decodeVec(r, d.decodeValType); err != nil {
+				return err
+			}
+		}
+		return nil
+
+	case -0x21: // 0x5f — structtype: a vector of fieldtypes
+		if !d.Features.GC {
+			return featureErr("gc")
+		}
+		return d.decodeVec(r, d.decodeFieldType)
+
+	case -0x22: // 0x5e — arraytype: exactly one fieldtype
+		if !d.Features.GC {
+			return featureErr("gc")
+		}
+		return d.decodeFieldType(r)
 	}
-	for range 2 { // params, then results — same grammar, twice
-		if err := d.decodeVec(r, d.decodeValType); err != nil {
+	// GRAVE (#36): the message names the byte the image actually held, which at
+	// width 7 is the low seven bits of the decoded value — the range is -64..63, so
+	// form&0x7f is exactly the input byte, and a multi-byte encoding never reaches
+	// here (sleb(7) has already returned "too long"). The first version of this
+	// expression or'd a high bit in for every negative form and reported 0x5e
+	// (array) as 0xde: an error about the module lying about the module, which no
+	// suite vector here can catch, this one's expected string being the bare
+	// sentinel — the harness reads exactly as far as the expected string does, and
+	// where a spec string embeds a value (`illegal opcode ff`) the rendering *is*
+	// oracle-covered (#38). Found by *printing* the output for nine tags rather than
+	// reading the expression's shape. Pinned by TestCompTypeFormIsASignedLEB.
+	//
+	// The sentinel is `malformed definition type` (:259) and **was** `malformed function
+	// type`, which the reference never emits anywhere — a fabricated sentinel where #36
+	// was a fabricated byte, invisible for the same reason: no vector asserts either
+	// string, so the board could not tell them apart (#86).
+	return fmt.Errorf("%w: %#02x", ErrMalformedDefType, byte(form&0x7F))
+}
+
+// decodeFieldType reads a fieldtype: storage type then mutability (decode.ml:243-246).
+func (d *Decoder) decodeFieldType(r *reader) error {
+	if err := d.decodeStorageType(r); err != nil {
+		return err
+	}
+	return d.decodeMutability(r)
+}
+
+// decodeStorageType reads a storagetype: a valtype or a packed type (decode.ml:236-241).
+//
+// `either`, as the reference has it, and the ordering matters for the same reason
+// decodeBlockType's does: the valtype branch runs first and its failure must not stand,
+// since the cursor rewinds and the bytes get judged again as a packtype. The packtype
+// branch is last, so its message — `malformed storage type` (:234) — is the one `either`
+// returns for a byte that is neither.
+func (d *Decoder) decodeStorageType(r *reader) error {
+	return either(r, d.decodeValType, func(r *reader) error {
+		form, err := r.sleb(7)
+		if err != nil {
 			return err
 		}
+		if form != -0x08 && form != -0x09 { // i8, i16
+			return fmt.Errorf("%w: %#02x", ErrMalformedStorageType, byte(form&0x7F))
+		}
+		return nil
+	})
+}
+
+// decodeMutability reads the mutability byte — `mutability` (decode.ml:154-158).
+//
+// **One function with two call sites, which is the whole point.** The reference calls it
+// from `fieldtype` (:244) and from `globaltype` (:294), and this engine had transcribed it
+// at the global position only — so `binary-gc.wast`'s array-field mutability byte was never
+// read, and that vector was the board's last remaining fail. Grave #83's shape exactly: one
+// production in the reference, called from two arms, copied at one of them. Written as a
+// shared function *before* the second copy could exist rather than factored out after
+// (#86).
+func (d *Decoder) decodeMutability(r *reader) error {
+	mut, err := r.byte()
+	if err != nil {
+		return err
+	}
+	if mut > 0x01 {
+		return fmt.Errorf("%w: %#02x", ErrMalformedMutability, mut)
 	}
 	return nil
 }
@@ -501,19 +622,18 @@ func (d *Decoder) decodeMemory(r *reader) error {
 	return d.decodeLimits(r)
 }
 
-// decodeGlobalType reads a global's value type and mutability byte.
+// decodeGlobalType reads a global's value type and mutability byte — `globaltype`
+// (decode.ml:292-295).
+//
+// The mutability read is decodeMutability's, shared with `fieldtype`'s call site, because
+// the reference shares it. The eight `malformed mutability` vectors in `global.wast` score
+// this path and the one in `binary-gc.wast` scores the other; a second copy here would be
+// green on both and drift on the next change to either.
 func (d *Decoder) decodeGlobalType(r *reader) error {
 	if err := d.decodeValType(r); err != nil {
 		return err
 	}
-	mut, err := r.byte()
-	if err != nil {
-		return err
-	}
-	if mut > 0x01 {
-		return fmt.Errorf("%w: %#02x", ErrMalformedMutability, mut)
-	}
-	return nil
+	return d.decodeMutability(r)
 }
 
 // decodeImport reads module name, field name, and the kind-specific descriptor.

@@ -601,15 +601,49 @@ func (d *Decoder) decodeBlockType(r *reader) error {
 // The reset is the point. Without it a failed branch leaves the cursor mid-field and
 // the next branch reads the wrong bytes — which does not fail loudly, it shifts
 // everything after.
+//
+// **A feature decline is not a failure to match, so it is not backtracked.** The
+// reference has no gates and therefore no equivalent of this branch, which is precisely
+// why the divergence has to be reasoned rather than transcribed: `ErrFeatureDisabled`
+// says "this engine declines a construct the grammar defines", where every other error
+// here says "these bytes are not this production". Backtracking the first swaps a
+// *configuration* answer for a *grammar* answer, and the grammar answer is the last
+// branch's malformed-string — a gate manufacturing malformedness, which the #5 ruling
+// forbids in exactly those words.
+//
+// Two sites, and the difference between them is why this lives here rather than being
+// fixed by ordering at each one:
+//
+//   - `decodeBlockType` (instr.go) and `decodeHeapType` put the gated branch last, so
+//     its decline already survived, and TestBlockTypeAlternationIsTheAuthority pins
+//     that. Ordering was a sufficient remedy there because the reference's own order
+//     happens to agree.
+//   - `decodeStorageType` (#86) cannot use it. The reference puts `valtype` **first**
+//     (decode.ml:236-241), and that order is load-bearing for a different reason — it
+//     decides that a byte which is neither reports `malformed storage type` rather than
+//     the valtype branch's message. So the two obligations pull opposite ways at one
+//     site, and only propagation satisfies both.
+//
+// Measured over all 256 first bytes at both alternation sites in three lanes: the accept
+// sets are **identical** before and after, and the only rows that change are ones this
+// engine was answering with a spec malformed-string where its own configuration was the
+// actual reason. A v128 array field with SIMD off reported `malformed storage type: 0x7b`
+// and now reports `simd: feature gate disabled`.
+//
+// Found by probing the gate/either interaction while writing #86's print-checks, in code
+// #86 itself had just added — the hazard the blocktype comment describes, at a site whose
+// ordering could not be the answer. (#86.)
 func either(r *reader, branches ...func(*reader) error) error {
 	start := r.off
 	var err error
-	for i, f := range branches {
+	for _, f := range branches {
 		r.off = start
 		if err = f(r); err == nil {
 			return nil
 		}
-		_ = i
+		if errors.Is(err, ErrFeatureDisabled) {
+			return err
+		}
 	}
 	return err
 }
