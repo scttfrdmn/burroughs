@@ -142,6 +142,10 @@ func TestEveryFeatureFieldIsReadableByName(t *testing.T) {
 // this test names, so presence was the wrong predicate and the control could not see the
 // bug it was written for. Probing an *absent* byte (0xe0) did fire, which is what made the
 // gap visible rather than the injection simply looking successful.
+// Its complement is TestGateCensusIsClassifiedArmByArm (gatecensus_test.go, decision 0012):
+// this walks the *mapping* and asks whether each entry covers a real arm; that walks the
+// *table* and asks whether each arm's gate was classified rather than inherited from a
+// range. Neither subsumes the other, and #91 was the direction this one cannot see.
 func TestEveryMappedOpcodeExistsInTheTable(t *testing.T) {
 	if len(gatedOpcodes) == 0 {
 		t.Fatal("gatedOpcodes is empty: a walk over no entries agrees with any table")

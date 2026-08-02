@@ -125,20 +125,25 @@ var gatedOpcodes = []gatedOpcode{
 
 	// --- GC: a whole region, plus single-byte opcodes ------------------------------
 	//
-	// 0xfb is entirely GC at bdd7164 — 31 arms, struct/array/i31/cast — so the region
-	// is one entry, and a non-GC arm arriving in 0xfb upstream would silently inherit
-	// this gate.
+	// 0xfb is entirely GC at bdd7164 — 37 accepted arms, struct/array/i31/cast — so the
+	// region is one entry, and a non-GC arm arriving in 0xfb upstream would otherwise
+	// silently inherit this gate.
 	//
-	// **That risk is open, and this comment used to deny it.** It cited
-	// TestEveryTableOpcodeIsClassified as "what makes that safe, because the
-	// classification test walks the table rather than this file" — and no such test
-	// exists. What does exist is TestEveryMappedOpcodeExistsInTheTable, which walks
-	// **this file** and checks each range covers something real: the opposite
-	// direction, and blind by construction to an arm the table gained. So the
-	// citation did not merely name the wrong test, it asserted the one direction
-	// nothing asserts. Tracked as #91; a whole-region entry is a claim about every
-	// arm the region will ever hold, which is *scope controls to the space* pointed
-	// at a range bound. Found by sweeping cited-versus-defined test names (#88).
+	// **The control for that is TestGateCensusIsClassifiedArmByArm** (decision 0012):
+	// a committed census of all 499 accepted arms and their gates, recomputed from this
+	// file composed with the table, exact-compared. An arm arriving upstream inside this
+	// range is a build failure demanding classification rather than a silent inheritance.
+	// The census covers the *ungated* arms too — an arm arriving with no gate is #48
+	// itself, not a cousin — which is why it is 499 rows and not 298.
+	//
+	// This comment previously cited `TestEveryTableOpcodeIsClassified` for that job, and
+	// no such test had ever existed: it asserted the one direction nothing asserted, so
+	// the gap was documented as closed. The nearby
+	// TestEveryMappedOpcodeExistsInTheTable walks **this file** (does each range cover
+	// something real?) — the opposite direction, blind by construction to an arm the
+	// table *gained*. The two are complements; deleting either leaves a direction
+	// unasserted. Found by sweeping cited-versus-defined test names (#88), fixed in #91:
+	// *a test name is as checkable as a `.wast:N`.*
 	{
 		prefix: 0xfb, lo: 0x00, hi: 0xff, gate: gateGC,
 		cite: "proposals/gc/MVP.md:809", what: "the 0xfb region (struct, array, i31, cast)",

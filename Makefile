@@ -5,7 +5,7 @@ GO ?= go
 # anything globally.
 TOOL = $(GO) tool -modfile=tools/go.mod
 
-.PHONY: all build test vet fmt lint check vuln deadcode fuzz bench spec-tests spec-ref tidy conformance strict opcodes opcode-drift keywords keyword-drift
+.PHONY: all build test vet fmt lint check vuln deadcode fuzz bench spec-tests spec-ref tidy conformance strict opcodes opcode-drift keywords keyword-drift gate-census
 
 # The default gate. `check` is what must be green before a report — it is the
 # local mirror of CI, so a surprise in CI means a bug in this line, not a bug in
@@ -176,6 +176,24 @@ opcode-drift:
 		echo "reference not vendored; run: make spec-ref"; exit 1; \
 	fi
 	$(STRICT) $(GO) test -v -shuffle=on -count=1 ./internal/binary/internal/opcodegen/
+
+# Regenerate the gate census: every accepted arm of the opcode table with the gate
+# governing it (decision 0012, #91).
+#
+# **No corpus dependency, and that is the interesting part.** Unlike `opcodes` and
+# `keywords`, both inputs are already committed — optable.go (generated) and gatemap.go
+# (hand-authored) — so this runs on a fresh clone with nothing vendored, and its drift
+# check is therefore part of `check` rather than a separate `conformance`-style target.
+# A control whose inputs are in the tree should gate every commit; one whose inputs are
+# fetched cannot.
+#
+# The flip side of the same coin: `make opcodes` can now move the census, so the two are
+# run together when the pin moves. That coupling is intended — an arm arriving upstream
+# inside a whole-region gate range is exactly the event #91 filed, and a census the
+# regeneration does not touch would be the staleness defect of #87 in a golden file.
+gate-census:
+	$(GO) test ./internal/binary/ -run TestGateCensusIsClassifiedArmByArm -update-census -count=1
+	@echo "regenerated internal/binary/testdata/gate-census.txt"
 
 # Regenerate the wat keyword table from the same vendored reference, one grammar over
 # (decision 0009). Same shape as `opcodes` above and deliberately not folded into it:
