@@ -3,9 +3,12 @@ package testenv_test
 import (
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/scttfrdmn/burroughs/internal/gen"
 	"github.com/scttfrdmn/burroughs/internal/testenv"
 )
 
@@ -232,5 +235,82 @@ func TestFetchScriptAssertsEveryAuthority(t *testing.T) {
 				"authority.\n\tA fetch that reports success with an authority missing is the "+
 				"precondition excusing the check that polices it — add it to the loop.", script, rel)
 		}
+	}
+}
+
+// TestSuitePinIsAssertedByTheFetchScript pins the suite fetch script's two duplicated facts
+// to the Go constants that hold them, because they are two places knowing one thing each.
+//
+// #42 pinned the suite by SHA, and pinning created two duplications the reference pin did not
+// have:
+//
+//   - the **file-count floor**. `testenv.MinSuiteFiles` holds it in Go; the script holds it as
+//     `min=250` and cannot read a Go constant. Its purpose there is the vacuity law — a
+//     checkout that yields one .wast file passes any `> 0` test while making every board count
+//     meaningless — so a floor that drifted *below* the Go one would let a corpus through that
+//     Go then treats as absent, which is the skip-is-not-a-verdict hole re-opened at the fetch
+//     layer.
+//   - the **pin's shape**. `gen.PinnedRev` reads `^rev="<40 hex>"`, and the suite script was
+//     written to that shape deliberately so one reader serves both pins. If the script renamed
+//     the field, `PinnedRev` would stop finding it — and per *one concept, one trigger* (#82)
+//     the failure would be silent in exactly the way a duplicated regexp is.
+//
+// Direction, as in TestFetchScriptAssertsEveryAuthority above: the *script's* floor must be at
+// least Go's. A script floor higher than Go's is harmless (a stricter fetch); lower is a
+// corpus the fetch blesses and the tests disown.
+func TestSuitePinIsAssertedByTheFetchScript(t *testing.T) {
+	const script = "../../scripts/fetch-spec-tests.sh"
+	b, err := os.ReadFile(script)
+	if err != nil {
+		t.Fatalf("read %s: %v", script, err)
+	}
+	src := string(b)
+
+	// The pin itself, read by the *same* reader the generators use rather than by a second
+	// regexp written here — the duplication this control exists to forbid would otherwise be
+	// committed by the control forbidding it.
+	rev, err := gen.PinnedRev(script)
+	if err != nil {
+		t.Fatalf("gen.PinnedRev(%s): %v\n\tThe suite pin is written as `rev=\"<40 hex>\"` so "+
+			"one reader serves both pins; if the field was renamed, PinnedRev stops finding "+
+			"it and every provenance stamp silently loses its subject.", script, err)
+	}
+	if len(rev) != 40 {
+		t.Errorf("suite pin %q is %d chars, want 40", rev, len(rev))
+	}
+
+	// The floor. Matched as an assignment so a `min=` inside prose cannot satisfy it.
+	m := regexp.MustCompile(`(?m)^min=([0-9]+)`).FindStringSubmatch(src)
+	if m == nil {
+		t.Fatalf("%s has no `min=<n>` floor assignment.\n\tWithout it the file-count check is "+
+			"a presence check, and a one-file checkout passes it (the vacuity law).", script)
+	}
+	got, err := strconv.Atoi(m[1])
+	if err != nil {
+		t.Fatalf("floor %q is not a number: %v", m[1], err)
+	}
+	if got < testenv.MinSuiteFiles {
+		t.Errorf("%s floors the corpus at %d but testenv.MinSuiteFiles is %d.\n\tA fetch that "+
+			"blesses a corpus the tests treat as absent is the skip-is-not-a-verdict hole at "+
+			"the fetch layer: the fetch says success, RequireSuite then skips, and the board "+
+			"passes by asking nothing.", script, got, testenv.MinSuiteFiles)
+	}
+
+	// The post-conditions must not sit behind the already-at-the-right-rev branch. This is
+	// fetch-spec-ref.sh's grave (*an early return can skip its own guard*), and a copied
+	// script inherits the bug it already paid for unless something says otherwise. Checked
+	// structurally: the pin assertion has to appear *after* the if/else closes.
+	ifEnd := strings.Index(src, "\nfi\n")
+	pinCheck := strings.Index(src, `if [ "$got" != "$rev" ]`)
+	switch {
+	case ifEnd < 0:
+		t.Errorf("%s has no `fi` closing its fetch branch — the structure this checks is gone", script)
+	case pinCheck < 0:
+		t.Errorf("%s never compares $got to $rev; the pin is a comment, not an assertion", script)
+	case pinCheck < ifEnd:
+		t.Errorf("%s asserts the pin *inside* its fetch branch (offset %d < %d).\n\tThe "+
+			"already-at-the-right-rev path then skips its own post-conditions, so a correct "+
+			"SHA with a deleted corpus reports success — fetch-spec-ref.sh's grave, inherited.",
+			script, pinCheck, ifEnd)
 	}
 }
