@@ -1004,6 +1004,22 @@ weakly-ordered platform.
 
 ### Changed
 
+- **0011's bridge veto is lifted, and the text→binary comparator is ruled** (decision 0011,
+  appended; [#67](https://github.com/scttfrdmn/burroughs/issues/67)). The veto's precondition
+  was the sequencing correction recorded in 0011's first appendix — the internal form before
+  the encoder — and the internal form has now landed, so the bridge proceeds as originally
+  ruled: the parser emits binary bytes into the decoder, and the decoder stays the sole module
+  authority. The comparator is **wabt as a one-time generator of a committed cross-check
+  corpus with a provenance header, never a gate in the verdict path**: self-agreement stays
+  inadmissible (our encoder agreeing with our decoder is one witness talking to itself), but a
+  *generated* external witness puts no non-Go binary in CI — the same shape as `optable.go`
+  (0007) and `keywords.go` (0009), and the **no cgo** gate is untouched. #67 stays a
+  pre-registered tripwire in #8's definition of done, closing by falsification in both halves
+  rather than by the encoder landing. Consequence for
+  [#63](https://github.com/scttfrdmn/burroughs/issues/63): the `plaininstr` scope statement it
+  was holding as a decision is now *derived* from what #8's accept grammar requires, so it
+  stops being a design call.
+
 - **The rules now govern work *selection*, because the board reached 0 fail and the project
   kept building instruments.** *Bucketed failures are the work plan* presumes buckets; when
   fail hit zero that rule lost its subject and the fallback — deferral citations, controls,
