@@ -453,7 +453,11 @@ func (p *parser) importedMemory() (func() (importDesc, error), error) {
 // The fix is not scoped here: #111 stays open for the remaining six and holds the
 // scope-to-the-space requirement for its control. Saying the count moved, and by how much, is the
 // drifted-citation discipline rather than bookkeeping — a comment citing an issue's figures is a
-// citation, and #111's table is now stale in four rows.
+// citation, and this sentence read "#111's table is now stale in four rows" until the export section
+// PR re-ran the probe and posted the corrected table to the issue. Which is the half of that
+// discipline easy to miss: noticing the staleness discharges nothing, and a comment reporting that a
+// cited table is wrong is a citation pointing at a known error. The four rows are the two
+// `importedTable` spellings and `importedGlobal`'s two.
 func (p *parser) importedTable() (func() (importDesc, error), error) {
 	tt, err := p.tabletype()
 	if err != nil {
@@ -1192,8 +1196,9 @@ func (p *parser) tableField() error {
 // Declared and tracked as **#111**, which measures every accepting site and holds the
 // scope-to-the-space requirement for the control: fixed here, it would be one site of one shape
 // repaired inside a PR about section emitters, with the rest left silently green. The issue's table
-// is stale by four rows as of the import section — `importedGlobal` and `importedTable` now resolve,
-// across both spellings each — and this arm is one of the six that still accept.
+// was stale by four rows from the import section until the export section PR re-ran the probe and
+// corrected it there — `importedGlobal` and `importedTable` resolve, across both spellings each — and
+// this arm is one of the six that still accept.
 func (p *parser) tableElemSugar() error {
 	if _, err := p.reftype(); err != nil {
 		return err
