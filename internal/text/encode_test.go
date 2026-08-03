@@ -30,9 +30,18 @@ import (
 // there is nothing for the gate to admit. The distinction is worth keeping: SIMD and Memory64 are on
 // because the encoder *can* emit them, GC is off because it cannot yet, and Threads is off because
 // no input can ask for it.
+//
+// **ExceptionHandling is on by that rule rather than by a new decision**, and the derivation is worth
+// showing because it is the rule doing work rather than being restated. The text grammar has a `tag`
+// arm in `externtype` (parser.mly:1230-1236) with no gate on it, so wat source *can* ask for a tag
+// import; the emitter writes its kind byte 0x04 and attribute (encode.ml:191); and `decodeImport`
+// declines 0x04 with the gate off. That is the SIMD case exactly — a construct the encoder emits
+// meeting a decoder configured not to read it — so the row would fail for the decoder's configuration
+// and say nothing about the encoder. It is *not* the GC case, which is a frontier the encoder refuses
+// at, and not the Threads case, which no input can reach.
 func decodeForTest(t *testing.T, b []byte) *binary.Module {
 	t.Helper()
-	d := &binary.Decoder{Features: binary.Features{SIMD: true, Memory64: true}}
+	d := &binary.Decoder{Features: binary.Features{SIMD: true, Memory64: true, ExceptionHandling: true}}
 	m, err := d.DecodeModule(b)
 	if err != nil {
 		t.Fatalf("the encoder produced % x, which the decoder rejects: %v", b, err)
@@ -57,10 +66,11 @@ func decodeForTest(t *testing.T, b []byte) *binary.Module {
 // have none is a failure rather than an unchecked case. A per-section table would have no row saying
 // `(module (type (func)))` has *no* memory section.
 var encodableModules = []struct {
-	src      string
-	want     []binary.CompType
-	wantTabs []binary.Table
-	wantMems []binary.Memory
+	src         string
+	want        []binary.CompType
+	wantTabs    []binary.Table
+	wantMems    []binary.Memory
+	wantImports []binary.Import
 }{
 	{src: `(module)`},
 	{src: `(module (type (func)))`, want: []binary.CompType{
@@ -199,18 +209,243 @@ var encodableModules = []struct {
 		{ElemType: binary.ExternRef, Limits: binary.Limits{Min: 2}},
 	}},
 
-	// # The three sections together, so section *order* is asserted
+	// # Imports (#8)
+	//
+	// **What the want column can and cannot state here is set by `binary.Import`, and the gap is
+	// where the kind-byte assertion lives.** The decoder retains `{Module, Name, Kind, Index}` and
+	// reads the non-func descriptors for well-formedness only (`decodeImport`'s closing comment), so a
+	// row cannot state an imported memory's limits — but it *can* state the `Kind`, and that is the
+	// field `externKindByte` would get wrong under a cast, since `importKind`'s order and the binary
+	// kind bytes agree on nothing. A transposed kind byte decodes clean and lands in this column.
+	//
+	// Every row is the `(import …)` field spelling; the sugar spellings are below, paired with these.
+	//
+	// `(func)` with an empty signature interns type 0 — so the type section is present and the import
+	// names index 0. Both halves are stated, because an emitter that wrote the import without the
+	// implicit type would produce a module whose import names a type that does not exist.
+	{
+		src:  `(module (import "m" "f" (func)))`,
+		want: []binary.CompType{{Kind: binary.CompFunc}},
+		wantImports: []binary.Import{
+			{Module: "m", Name: "f", Kind: binary.ExternFunc, Index: 0},
+		},
+	},
+	// A func import with a signature, so the interned type is not the empty one and `Index` still
+	// points at it.
+	{
+		src: `(module (import "m" "f" (func (param i32) (result f64))))`,
+		want: []binary.CompType{{Kind: binary.CompFunc, Func: binary.FuncType{
+			Params:  []binary.ValType{binary.I32},
+			Results: []binary.ValType{binary.F64},
+		}}},
+		wantImports: []binary.Import{
+			{Module: "m", Name: "f", Kind: binary.ExternFunc, Index: 0},
+		},
+	},
+	// The **typeuse** spelling, forward-referencing a type defined after it: `imports.wast:62`'s own
+	// shape, and the vector the whole deferred phase exists for. A resolver that looked `$forward` up
+	// where it is used would reject this module.
+	{
+		src: `(module (import "m" "f" (func (type $forward))) (type $forward (func (param i32))))`,
+		want: []binary.CompType{
+			{Kind: binary.CompFunc, Func: binary.FuncType{Params: []binary.ValType{binary.I32}}},
+		},
+		wantImports: []binary.Import{
+			{Module: "m", Name: "f", Kind: binary.ExternFunc, Index: 0},
+		},
+	},
+	// A numeric typeuse naming the *second* type, so `Index` is 1 and a hardcoded zero fails. The two
+	// types are distinct signatures, so interning cannot collapse them.
+	{
+		src: `(module (type (func)) (type (func (param i64))) (import "m" "f" (func (type 1))))`,
+		want: []binary.CompType{
+			{Kind: binary.CompFunc},
+			{Kind: binary.CompFunc, Func: binary.FuncType{Params: []binary.ValType{binary.I64}}},
+		},
+		wantImports: []binary.Import{
+			{Module: "m", Name: "f", Kind: binary.ExternFunc, Index: 1},
+		},
+	},
+	// The typeuse-with-matching-inline-signature spelling, which reaches `checkExplicit`'s comparing
+	// branch rather than its deferred one — and must still yield the *named* index rather than a fresh
+	// intern. One type in the image is the assertion: an emitter that interned instead of comparing
+	// would produce two.
+	//
+	// **It is written in the inline-import spelling because the `(import …)` field cannot express it**,
+	// and that is the grammar rather than a workaround: `externtype`'s func arms are `typeuse` alone or
+	// `functype` alone (:1227/:1246), never both, while `func_fields`'s inline-import arm is
+	// `inline_import typeuse func_fields_import` (:975) — a typeuse *and* a signature. The first draft
+	// of this row put it in the field spelling and the parser rejected it with `unexpected token`,
+	// correctly; `externtype`'s own comment in parser.go says as much and the row was written without
+	// reading it.
+	{
+		src: `(module (type $t (func (param i32))) (func (import "m" "f") (type $t) (param i32)))`,
+		want: []binary.CompType{
+			{Kind: binary.CompFunc, Func: binary.FuncType{Params: []binary.ValType{binary.I32}}},
+		},
+		wantImports: []binary.Import{
+			{Module: "m", Name: "f", Kind: binary.ExternFunc, Index: 0},
+		},
+	},
+	// The four non-func kinds, each in the `(import …)` field spelling. The `Kind` column is the
+	// assertion; the descriptors are read and dropped by the decoder.
+	{
+		src:         `(module (import "m" "x" (memory 1)))`,
+		wantImports: []binary.Import{{Module: "m", Name: "x", Kind: binary.ExternMemory}},
+	},
+	{
+		src:         `(module (import "m" "x" (table 1 funcref)))`,
+		wantImports: []binary.Import{{Module: "m", Name: "x", Kind: binary.ExternTable}},
+	},
+	// Both mutabilities, because the byte is one bit of difference and `(global i32)` versus
+	// `(global (mut i32))` are different modules. The decoder drops the mutability, so these two rows
+	// assert only that both *decode* — the byte itself is pinned by the byte-level probe below, which
+	// is the same division of labour as the address-type flag bit.
+	{
+		src:         `(module (import "m" "g" (global i32)))`,
+		wantImports: []binary.Import{{Module: "m", Name: "g", Kind: binary.ExternGlobal}},
+	},
+	{
+		src:         `(module (import "m" "g" (global (mut i64))))`,
+		wantImports: []binary.Import{{Module: "m", Name: "g", Kind: binary.ExternGlobal}},
+	},
+	// A tag import: kind 0x04, an attribute byte, and a type index. Its signature interns a type, so
+	// the type section is asserted too — and `ExceptionHandling` is on in decodeForTest for exactly
+	// this row, per the derivation in its comment.
+	{
+		src: `(module (import "m" "t" (tag (param i32))))`,
+		want: []binary.CompType{{Kind: binary.CompFunc, Func: binary.FuncType{
+			Params: []binary.ValType{binary.I32},
+		}}},
+		wantImports: []binary.Import{{Module: "m", Name: "t", Kind: binary.ExternTag, Index: 0}},
+	},
+	// Import *order*, with two different kinds, so a transposed pair fails on the Kind column rather
+	// than passing as a reordering.
+	{
+		src: `(module (import "a" "1" (memory 1)) (import "b" "2" (table 1 funcref)))`,
+		wantImports: []binary.Import{
+			{Module: "a", Name: "1", Kind: binary.ExternMemory},
+			{Module: "b", Name: "2", Kind: binary.ExternTable},
+		},
+	},
+	// Empty names, which are legal and are the suite's own shape at imports.wast:677. A `name` writer
+	// that omitted a zero-length vector's length byte would produce a shorter image that decodes as
+	// something else entirely.
+	{
+		src:         `(module (import "" "" (memory 1)))`,
+		wantImports: []binary.Import{{Module: "", Name: "", Kind: binary.ExternMemory}},
+	},
+	// An escaped name, so the *decoded* bytes reach the image rather than the source spelling — the
+	// same assertion decodedName's accept half makes at the unit level, here end to end.
+	{
+		src:         `(module (import "\41" "\42" (memory 1)))`,
+		wantImports: []binary.Import{{Module: "A", Name: "B", Kind: binary.ExternMemory}},
+	},
+	// A UTF-8 name past ASCII: `name` writes a byte count, not a character count, so a rune-counted
+	// length would produce a truncated vector here and decode as garbage.
+	//
+	// The escapes are wat's, which is `\` followed by **exactly two hex digits** (lexer.mll's `hexdigit
+	// hexdigit` arm) — no `\x` prefix. The first draft wrote `\xa9` in C/Python spelling and the lexer
+	// rejected it with `illegal escape`, which is the lexer being right about a syntax I invented.
+	{
+		src:         `(module (import "m\c3\a9" "\e2\82\ac" (memory 1)))`,
+		wantImports: []binary.Import{{Module: "mé", Name: "€", Kind: binary.ExternMemory}},
+	},
+
+	// # The inline-import sugar spellings, paired with the field spellings above
+	//
+	// **Each of the five denotes the same import as its `(import …)` twin, and that is the assertion
+	// the pairing makes.** The reference produces an `Import` from both (`inline_import` appears in the
+	// arm that would otherwise produce a definition), so a row here disagreeing with its twin means
+	// one spelling is retained wrongly — the failure `importedGlobal`/`importedMemory`/`importedTable`
+	// exist as shared functions to prevent. They are the only reason the withdrawal check has a
+	// population to run on, too.
+	{
+		src:  `(module (func (import "m" "f")))`,
+		want: []binary.CompType{{Kind: binary.CompFunc}},
+		wantImports: []binary.Import{
+			{Module: "m", Name: "f", Kind: binary.ExternFunc, Index: 0},
+		},
+	},
+	// The inline spelling with a typeuse, which is `func_fields`'s :975 arm — `checkExplicit` with an
+	// empty inline signature, so the deferred branch, so the *named* index.
+	{
+		src: `(module (type $t (func (param f32))) (func (import "m" "f") (type $t)))`,
+		want: []binary.CompType{
+			{Kind: binary.CompFunc, Func: binary.FuncType{Params: []binary.ValType{binary.F32}}},
+		},
+		wantImports: []binary.Import{
+			{Module: "m", Name: "f", Kind: binary.ExternFunc, Index: 0},
+		},
+	},
+	{
+		src: `(module (tag (import "m" "t") (param i32)))`,
+		want: []binary.CompType{{Kind: binary.CompFunc, Func: binary.FuncType{
+			Params: []binary.ValType{binary.I32},
+		}}},
+		wantImports: []binary.Import{{Module: "m", Name: "t", Kind: binary.ExternTag, Index: 0}},
+	},
+	{
+		src:         `(module (global (import "m" "g") i32))`,
+		wantImports: []binary.Import{{Module: "m", Name: "g", Kind: binary.ExternGlobal}},
+	},
+	{
+		src:         `(module (memory (import "m" "x") 1))`,
+		wantImports: []binary.Import{{Module: "m", Name: "x", Kind: binary.ExternMemory}},
+	},
+	{
+		src:         `(module (table (import "m" "x") 1 funcref))`,
+		wantImports: []binary.Import{{Module: "m", Name: "x", Kind: binary.ExternTable}},
+	},
+	// A named inline import: the identifier binds a parse-time name into the index space and must
+	// leave no trace in the image, exactly as on a definition.
+	{
+		src:         `(module (memory $m (import "m" "x") 1))`,
+		wantImports: []binary.Import{{Module: "m", Name: "x", Kind: binary.ExternMemory}},
+	},
+
+	// # An import and a definition of the same kind, which is where index spaces are load-bearing
+	//
+	// The import occupies memory index 0 and the definition memory index 1 — but the *memory section*
+	// holds only the definition, so this row asserts the split `defineMemory`'s comment names: one
+	// import, one memory, and an emitter that put the imported memory in section 5 would produce two
+	// memories here.
+	{
+		src:         `(module (import "m" "x" (memory 1)) (memory 2 3))`,
+		wantMems:    []binary.Memory{{Limits: binary.Limits{Min: 2, Max: 3, HasMax: true}}},
+		wantImports: []binary.Import{{Module: "m", Name: "x", Kind: binary.ExternMemory}},
+	},
+	// The same for tables, in both spellings at once, so the two sugar arms and the definition arm are
+	// distinguished in one module.
+	{
+		src:         `(module (table (import "m" "x") 1 funcref) (table 2 externref))`,
+		wantTabs:    []binary.Table{{ElemType: binary.ExternRef, Limits: binary.Limits{Min: 2}}},
+		wantImports: []binary.Import{{Module: "m", Name: "x", Kind: binary.ExternTable}},
+	},
+
+	// # The four sections together, so section *order* is asserted
 	//
 	// `checkSectionOrder` rejects an image whose ids do not ascend, and the text field order here is
 	// deliberately the reverse of the binary section order (memory before table, table id 4 before
 	// memory id 5) — so an emitter that wrote sections in field order rather than id order fails.
+	//
+	// The import is **first** in the text and its section is **second** in the image (id 2, between
+	// type and table) — the position a `w.section` call appended after the existing ones would get
+	// wrong. It has to be first in the text: the reference requires every import to precede every
+	// definition (parser.mly:1349-1354, and `TestImportAfterDefinitionNamesTheNearestDefinition` is
+	// this project's reading of that arm), so the first draft of this row put it last and was rejected
+	// with `import after table definition`. The ordering assertion survives the move intact, because
+	// what it needs is a text order that is not the section order: the `(type …)` field is last in the
+	// text and its section is first in the image, and memory-before-table in the text is
+	// table-before-memory (id 4 before id 5) in the image.
 	{
-		src: `(module (memory 1) (table 1 funcref) (type (func (param i32))))`,
+		src: `(module (import "m" "x" (memory 2)) (memory 1) (table 1 funcref) (type (func (param i32))))`,
 		want: []binary.CompType{
 			{Kind: binary.CompFunc, Func: binary.FuncType{Params: []binary.ValType{binary.I32}}},
 		},
-		wantTabs: []binary.Table{{ElemType: binary.FuncRef, Limits: binary.Limits{Min: 1}}},
-		wantMems: []binary.Memory{{Limits: binary.Limits{Min: 1}}},
+		wantTabs:    []binary.Table{{ElemType: binary.FuncRef, Limits: binary.Limits{Min: 1}}},
+		wantMems:    []binary.Memory{{Limits: binary.Limits{Min: 1}}},
+		wantImports: []binary.Import{{Module: "m", Name: "x", Kind: binary.ExternMemory}},
 	},
 }
 
@@ -262,6 +497,15 @@ func TestEncodeRoundTripsThroughTheDecoder(t *testing.T) {
 			for i, want := range tc.wantTabs {
 				if got := m.Tables[i]; got != want {
 					t.Errorf("table %d is %+v, want %+v", i, got, want)
+				}
+			}
+			if len(m.Imports) != len(tc.wantImports) {
+				t.Fatalf("encoded % x, which decodes to %d imports, want %d: %v",
+					b, len(m.Imports), len(tc.wantImports), m.Imports)
+			}
+			for i, want := range tc.wantImports {
+				if got := m.Imports[i]; got != want {
+					t.Errorf("import %d is %+v, want %+v", i, got, want)
 				}
 			}
 
@@ -516,7 +760,6 @@ func TestEncodeDoesNotRerunTheDeferredPhase(t *testing.T) {
 func TestEncodeRefusesWhatItCannotWrite(t *testing.T) {
 	for _, tc := range []struct{ src, contains string }{
 		{`(module (func))`, "(func …) field"},
-		{`(module (import "m" "f" (func)))`, "(import …) field"},
 		{`(module (export "a" (func 0)) (func))`, "(export …) field"},
 		{`(module (global i32 (i32.const 0)))`, "(global …) field"},
 		{`(module (start 0) (func))`, "(start …) field"},
@@ -539,14 +782,28 @@ func TestEncodeRefusesWhatItCannotWrite(t *testing.T) {
 		// keyed on the field kind would have accepted every one of these and emitted a module with
 		// the sugar's data or elem segment silently dropped.
 		//
-		// The inline-import rows are the population split: an imported memory belongs to the import
-		// section, so emitting it as a memory section entry would declare it twice.
-		{`(module (memory (data "abc")))`, "(memory …) field"},       // + an implicit data segment
-		{`(module (memory i64 (data "")))`, "(memory …) field"},      // the sugar's addrtype arm
-		{`(module (memory (import "m" "x") 1))`, "(memory …) field"}, // an import, not a definition
-		{`(module (memory (export "a") 1))`, "(memory …) field"},     // + an export section
-		{`(module (table (import "m" "x") 1 funcref))`, "(table …) field"},
+		// **The inline-import rows moved to `encodableModules` in this PR, and the move is the point of
+		// it.** They were here because an imported memory belongs to the import section and there was no
+		// import section — the population split `defineMemory` names — so the only honest thing to do
+		// with one was refuse it. Now both spellings retain, and the pairs in `encodableModules` assert
+		// the two denote the same import. What stays here is every arm that retains something *no*
+		// section exists for.
+		{`(module (memory (data "abc")))`, "(memory …) field"},   // + an implicit data segment
+		{`(module (memory i64 (data "")))`, "(memory …) field"},  // the sugar's addrtype arm
+		{`(module (memory (export "a") 1))`, "(memory …) field"}, // + an export section
 		{`(module (table (export "a") 1 funcref))`, "(table …) field"},
+		// An inline import *with* an inline export, which is the one arm where the two interact: the
+		// export comes first in the recursion (`inline_export func_fields`, :986), so this parses — and
+		// it must still refuse, because the export section does not exist. This is what the `exported`
+		// lookahead in each field buys, and without it the withdrawal would fire and drop the export.
+		{`(module (memory (export "a") (import "m" "x") 1))`, "(memory …) field"},
+		{`(module (table (export "a") (import "m" "x") 1 funcref))`, "(table …) field"},
+		{`(module (global (export "a") (import "m" "g") i32))`, "(global …) field"},
+		{`(module (func (export "a") (import "m" "f")))`, "(func …) field"},
+		{`(module (tag (export "a") (import "m" "t")))`, "(tag …) field"},
+		// And the `(import …)` field has no inline-export arm at all (:1250), so there is no such row
+		// for it — the asymmetry is the grammar's, and `importField`'s unconditional withdrawal is why
+		// it needs no lookahead.
 		{`(module (table funcref (elem)))`, "(table …) field"}, // + an implicit elem segment
 		{`(module (table i64 funcref (elem)))`, "(table …) field"},
 		{`(module (func $f) (table 1 funcref (ref.func $f)))`, "(func …) field"}, // an initializer expr

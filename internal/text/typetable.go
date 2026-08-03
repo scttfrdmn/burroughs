@@ -149,6 +149,56 @@ type tabType struct {
 	elem   valType
 }
 
+// globalType is a `globaltype` (parser.mly:400-402), value type **unresolved**.
+//
+// The mutability is a bool because the binary form is one byte with two values (encode.ml:104-106,
+// `Cons -> byte 0 | Var -> byte 1`) and the text grammar has exactly the two arms — the same
+// argument `memType.addr64` records for the address type. A `keywordKind` here would be a wider
+// domain than either grammar has.
+type globalType struct {
+	val valType
+	mut bool
+}
+
+// resolvedGlobal is a globalType whose value type has been resolved.
+type resolvedGlobal struct {
+	val resolvedVal
+	mut bool
+}
+
+// importDesc is one import's descriptor: the kind, and whichever of the five payloads that kind
+// carries. What `externtype` retained, after the deferred phase resolved it.
+//
+// **A tagged union spelled as a struct with one live field per kind, rather than five parallel
+// slices or an interface.** The reason is the *vector*: the import section is `vec(import)` in
+// source order (encode.ml:938-943), so every import must sit in one ordered list regardless of
+// kind — five slices would need a sixth list to record the interleaving, which is the same fact
+// stored twice. An interface would put a method on each payload, and the payloads are three
+// existing structs plus two indices; the switch that would dispatch it lives in one place
+// (`encodeImports`) and reads better as a switch than as five one-line methods.
+//
+// `typeIdx` covers **both** the func and tag kinds. That is the reference's own shape rather than a
+// merge: `ExternFuncT ut` and `ExternTagT (TagT ut)` both carry a typeuse (parser.mly:1229/:1232),
+// and the binary forms differ only in the tag's extra attribute byte (`u32 0x00l`, encode.ml:191).
+// Two fields would be two names for one number, and the kind already discriminates.
+type importDesc struct {
+	kind    importKind
+	typeIdx uint32        // func and tag: the resolved type index
+	table   resolvedTable // table
+	mem     memType       // memory
+	global  resolvedGlobal
+}
+
+// textImport is one retained import: two names and a descriptor, in source order.
+//
+// The names are `string` rather than `[]byte` — `decodedName`'s comment has the copy argument, which
+// is `decodeImport`'s on the other side of the round trip.
+type textImport struct {
+	module string
+	name   string
+	desc   importDesc
+}
+
 // resolvedTable is a table definition whose element type has been resolved — what the encoder writes.
 //
 // Distinct from `tabType` for exactly the reason `resolvedComp` is distinct from `compType`: one is
@@ -282,6 +332,32 @@ func (c *context) defineTable(tt tabType) {
 	})
 }
 
+// defineImport records one import, deferring whatever inside it needs the complete type table (#8).
+//
+// **The slot is appended at the parse position and filled by a thunk**, which is `defineTable`'s
+// shape and is here for a stronger reason than there. An import's descriptor can contain a *type
+// index* — `(import "a" "b" (func (type $t)))` — and a type index is the one thing in a module that
+// forward-references by design (`imports.wast:62`, the vector typetable.go's header is built on). So
+// resolving at the cursor would reject valid modules, and appending inside the thunk would make the
+// import's position in the section depend on stage-2 order rather than on source order. Neither is
+// acceptable; splitting them gets both.
+//
+// The caller passes a `fill` that runs in stage 2 and returns the descriptor. It receives no index:
+// an import's descriptor never depends on which import it is, and passing the index would invite a
+// thunk that reads a *later* import's slot — the ordering trap this split exists to close.
+func (c *context) defineImport(module, name string, fill func() (importDesc, error)) {
+	i := len(c.imports)
+	c.imports = append(c.imports, textImport{module: module, name: name})
+	c.deferOp(func() error {
+		d, err := fill()
+		if err != nil {
+			return err
+		}
+		c.imports[i].desc = d
+		return nil
+	})
+}
+
 // deferOp records one stage-2 operation. See the file header for why parse order is stage-2 order.
 func (c *context) deferOp(f func() error) { c.deferred = append(c.deferred, f) }
 
@@ -394,11 +470,17 @@ func (c *context) funcTypeAt(tok Token, idx uint32) (resolvedFunc, error) {
 // inlineFuncType is the reference's `inline_functype` (parser.mly:222-235): the index of an
 // implicit type with this signature, reusing a structurally equal existing one or appending.
 //
-// The return value is discarded by every caller here, because nothing in a reject-only parser
-// reads a type index. It is *not* dropped from the signature, because the number is the whole
-// observable effect: appending shifts `len(typeCtx)`, and that length is what decides
-// `unknown type <n>` for a numeric typeuse. A helper whose only purpose is a side effect on a
-// length would hide exactly that.
+// **The return value used to be discarded by every caller, and the comment here argued for keeping
+// it anyway**: "nothing in a reject-only parser reads a type index… It is *not* dropped from the
+// signature, because the number is the whole observable effect: appending shifts `len(typeCtx)`, and
+// that length is what decides `unknown type <n>` for a numeric typeuse. A helper whose only purpose
+// is a side effect on a length would hide exactly that."
+//
+// The import section (#8) is the consumer that argument was holding the door open for — an imported
+// func's descriptor *is* a type index (encode.ml:203) — so the number is now read as well as
+// depended upon. Quoted rather than deleted because the reasoning is the same reasoning that keeps
+// `p.name`'s string and `globaltype`'s value: a signature shaped by what the code observably does,
+// not by what today's callers happen to use.
 func (c *context) inlineFuncType(ft resolvedFunc) uint32 {
 	for i, e := range c.typeCtx {
 		if e.isFunc && e.ft.equal(ft) {
@@ -416,12 +498,23 @@ func (c *context) inlineFuncType(ft resolvedFunc) uint32 {
 // which is what makes "reuse a structurally equal existing one" answerable at all. The index is
 // discarded for the reason inlineFuncType's comment gives; the *length* change is the effect.
 func (c *context) declareImplicit(ft funcType) error {
+	_, err := c.internImplicit(ft)
+	return err
+}
+
+// internImplicit is declareImplicit for the one caller that needs the number.
+//
+// An imported func or tag's descriptor **is** a type index (encode.ml:203/191), so the sugar arm
+// `(import "a" "b" (func (param i32)))` has to know which slot `inline_functype` produced. Two
+// functions rather than one returning value, because every other caller genuinely discards and
+// `declareImplicit`'s comment is the record of why — turning them all into `_, err :=` would spread
+// a fact about one call site across five.
+func (c *context) internImplicit(ft funcType) (uint32, error) {
 	rf, err := c.resolveFunc(ft)
 	if err != nil {
-		return err
+		return 0, err
 	}
-	c.inlineFuncType(rf)
-	return nil
+	return c.inlineFuncType(rf), nil
 }
 
 // inlineFuncTypeExplicit is the reference's `inline_functype_explicit` (parser.mly:237-247).
@@ -442,25 +535,43 @@ func (c *context) declareImplicit(ft funcType) error {
 // See funcType.isEmpty for the two vectors that pin the deferral of the range check in both
 // directions on one module.
 func (c *context) inlineFuncTypeExplicit(r typeRef, ft funcType) error {
+	_, err := c.checkExplicit(r, ft)
+	return err
+}
+
+// checkExplicit is inlineFuncTypeExplicit for the caller that needs the index.
+//
+// The same split as declareImplicit/internImplicit and for the same reason on the same field: the
+// reference's `inline_functype_explicit` **returns `x`** (parser.mly:247, the bare `x` after the
+// conditional), and `func_fields`'s inline-import arm spends it — `ExternFuncT (Idx y.it)` at :979.
+// So an imported func's descriptor is this index, in both the typeuse and the sugar spelling, which
+// is why both halves of the pairing now have a value-returning face.
+//
+// The index is `r`'s resolved value and is returned **even when the comparison is deferred**, which
+// is the reference's shape exactly: the early return skips `func_type c x`, not the identity of the
+// type being named. An import whose typeuse is `(type $t)` with no inline signature still imports
+// type `$t` — returning 0 on that path would be a silently wrong descriptor on the commonest
+// spelling in the corpus, and no error anywhere.
+func (c *context) checkExplicit(r typeRef, ft funcType) (uint32, error) {
 	idx, err := c.resolveTypeIdx(r)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if ft.isEmpty() {
-		return nil
+		return idx, nil
 	}
 	want, err := c.funcTypeAt(r.tok, idx)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	got, err := c.resolveFunc(ft)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if !got.equal(want) {
-		return errAt(r.tok, "inline function type does not match explicit type")
+		return 0, errAt(r.tok, "inline function type does not match explicit type")
 	}
-	return nil
+	return idx, nil
 }
 
 // declareBlockImplicit is the block family's sugar arm, which interns *conditionally*

@@ -48,6 +48,55 @@ weakly-ordered platform.
   #109 was made by hand and then discarded; this is the *artifacts become oracles* rule applied one
   step later than it should have been.
 
+- **`internal/text/encode.go`: the import section emitter, both spellings**
+  ([#8](https://github.com/scttfrdmn/burroughs/issues/8), 0011 part 2). Section 2 joins 1, 4 and 5 in
+  id order, and all five external kinds encode — func, table, memory, global, tag. The suite's
+  encodable population goes **51 → 141** of 2150 parser-accepted text modules, and the encoder's
+  largest frontier bucket, `import` at 177, goes to **zero**.
+
+  **The wat grammar spells an import two ways and the reference builds one thing from both**, so the
+  section is emitted from a single retained list: the `(import …)` field, and the inline-import sugar
+  inside `func`/`tag`/`global`/`memory`/`table`. A section fed by one spelling would be short by every
+  occurrence of the other. The three payload readers (`importedGlobal`, `importedMemory`,
+  `importedTable`) are therefore shared *across* spellings rather than per-field — #82's one concept,
+  one trigger — because the failure that matters is silent: a kind byte or a mutability flag right in
+  one spelling and wrong in the other round-trips green for every vector that happens to use the
+  spelling that works.
+
+  **The kind byte is a mapping and not a cast, and probing it was worth more than asserting it.**
+  `importKind` is ordered by the reference's *message* table (tag, global, memory, table, function)
+  and the binary kind bytes run the other way (func 0x00 … tag 0x04) — exact reversals, so a
+  `byte(kind)` writes a *legal* byte for every kind and the wrong one for four of five. Substituting
+  the cast gives 16 fails and 8 passes, and the passes are **every memory row and only those**:
+  memory is the fixed point of a five-element reversal. All 16 failures are the decoder rejecting a
+  mismatched *payload*, not the want column disagreeing — so today's round trip catches this through
+  the payload grammars happening to differ, which is a property rather than a guard. Two kinds with
+  the same payload shape would swap silently. Recorded at the site, because the first draft of that
+  comment claimed the accept-direction failure and the probe says otherwise.
+
+  **The withdrawal check fires, and this is the arm the memory/table PR said did not exist yet.**
+  That PR kept its retention-count check as a labelled tripwire it could not make fire, the frontier
+  refusing every offending module before the loop was reached. The sugar spellings are the population
+  it was waiting for: deleting `defineImport` from `inlineImportTail` now fails nine rows with `0
+  imports retained, 1 parsed`. A declared-and-tracked deferral discharged by the work that gave it a
+  subject.
+
+  **An import descriptor can name a type index that does not exist yet** (`imports.wast:62`), so it
+  is retained as a stage-2 thunk — the reference's own arm has the same shape, an outer function that
+  binds at reduction and an inner one that produces the descriptor. `inline_functype_explicit` split
+  into a value-returning `checkExplicit` for this, and its deferred path returns the **named index**
+  rather than 0: 0 is a plausible wrong descriptor on the commonest corpus spelling, and no oracle
+  reads it.
+
+  **The independent witness is no longer near-vacuous: 101 joined against wabt's corpus, 101 agree
+  byte for byte, 0 disagree — and 92 are longer than a bare preamble**, against 10 joined and one
+  non-trivial agreement when the type section landed. Two thirds of the joined population are import
+  modules, so the agreement is a claim about *this* section. The zero was earned twice: an interim
+  reading of 99-agree-1-disagree was a probe whose ordinal counted `assert_malformed`'s inner quote
+  modules, and before that 0-of-141 was a probe joining on `token.wast` where the corpus keys
+  `token`. *Exactly zero on a join that used to work* is the same tell as exactly zero on an
+  agreement, and neither reading was a finding about the encoder.
+
 - **`internal/text/encode.go`: the memory and table section emitters, and a frontier that is now
   per-arm rather than per-field** ([#8](https://github.com/scttfrdmn/burroughs/issues/8), 0011 part
   2). `(memory i64 1 4)` and `(table 1 funcref)` encode; sections 4 and 5 join section 1 in id order,
@@ -66,7 +115,8 @@ weakly-ordered platform.
   of **nine sites of one shape** — every valtype position that discards its type accepts an unknown
   one — and is filed as [#111](https://github.com/scttfrdmn/burroughs/issues/111) rather than swept
   in, because a nine-site shape is not an encoder's business. Neither has a suite vector: the accept
-  direction §9 G-3 names.
+  direction §9 G-3 names. (The import section closed four more of #111's rows the same way, for the
+  same reason; #111 stays open on the remaining six.)
 
   **The frontier is now per-arm, and the asymmetry is deliberate.** `(memory 1)` encodes while
   `(memory (data "abc"))` does not, though both dispatch on `memory` — so the record is made at the

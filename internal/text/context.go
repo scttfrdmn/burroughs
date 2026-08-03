@@ -22,24 +22,32 @@ import "unicode/utf8"
 // So: the decode goes *here*, at the two positions, and not in the lexer. The wrong fix was
 // attempted once already in the lexer's `emitVarString` (PR #60).
 
-// decodedName validates a `name` position — an import/export name.
+// decodedName validates a `name` position — an import/export name — and returns its bytes.
 //
-// Named for the reference's helper. It returns **only an error**, which is decision 0011 applied
-// to a helper rather than to a production: the first draft returned `([]byte, error)` reasoning
-// that a wat name is a byte sequence and the eventual binary encoder wants the bytes, and
-// `unparam` pointed out that no caller reads them. The lint is right and the reasoning was
-// speculative — designing the return from a consumer that does not exist is the same move 0011
-// declined for the module type, one scale down. When 0011's second half arrives the bytes come
-// back, from `t.Value`, which is where they already live.
+// Named for the reference's helper. **It used to return only an error, and the paragraph that
+// explained why is kept because the prediction in it came true rather than because it is still
+// the rule.** The first draft returned `([]byte, error)` reasoning that a wat name is a byte
+// sequence and the eventual binary encoder wants the bytes; `unparam` pointed out that no caller
+// read them, and the lint was right — designing a return from a consumer that does not exist is
+// the move 0011 declined for the module type, one scale down. The paragraph then said: *"When
+// 0011's second half arrives the bytes come back, from `t.Value`, which is where they already
+// live."* That is this change (#8's import section): the consumer exists, it is `encodeImports`,
+// and the value comes from exactly the field named.
+//
+// A `string` rather than `[]byte`, and that is the encoder's requirement rather than a
+// preference: `writer.name` takes a string, `binary.Import` holds strings, and the conversion is
+// the **copy** that `decodeImport`'s comment argues for on the other side — a name outlives the
+// token slice it was lexed from, so a view would make a module's identity depend on the source
+// buffer not being reused.
 //
 // It checks t.Value, the *decoded* bytes, for the reason spelled out on decodedVar below: the
 // reference's `name` receives the unescaped string, and Text would be the source spelling with
 // its escapes intact and therefore always valid.
-func decodedName(t Token) error {
+func decodedName(t Token) (string, error) {
 	if !utf8.Valid(t.Value) {
-		return errAt(t, "malformed UTF-8 encoding")
+		return "", errAt(t, "malformed UTF-8 encoding")
 	}
-	return nil
+	return string(t.Value), nil
 }
 
 // decodedVar validates a `var` position — an identifier, including the quoted `$"..."`
@@ -365,6 +373,30 @@ type context struct {
 	memDefs []memType
 	tabDefs []resolvedTable
 
+	// The retained imports, in source order — the emitter's input for section 2 (#8). Both
+	// spellings land here: the `(import …)` field and the five inline-import sugar arms, because
+	// the reference makes no distinction either (`inline_import` produces an `Import` in the very
+	// arm that would otherwise produce a definition, parser.mly:1082-1085 et al) and a section that
+	// held one spelling would be short by every occurrence of the other.
+	//
+	// Written by `defineImport`, whose comment owns the argument for why the slot is appended during
+	// the parse and filled by a thunk.
+	imports []textImport
+
+	// importsSeen counts every import the *grammar* saw, for the withdrawal check.
+	//
+	// Incremented in `noteImport`, which is the one place both spellings already pass through —
+	// so the count is the grammar's and `len(imports)` is the emitter's, and the whole value of the
+	// check is that the two are produced by different code. Counting inside `defineImport` would
+	// compare a number against itself.
+	//
+	// It increments *before* the import's names are read, unlike `noteDefined`, which
+	// `memoryField` deliberately calls after the closing paren. The asymmetry is safe rather than
+	// sloppy: a malformed import returns an error out of `moduleFields`, so `encodableOrErr` is
+	// never reached and no count is ever compared on a module that failed to parse. Stated because
+	// the ordering rule next door is load-bearing and this looks like a violation of it.
+	importsSeen int
+
 	// defCount counts *defined* (non-imported) entries per kind, for the withdrawal check in
 	// `encodableOrErr`.
 	//
@@ -513,7 +545,12 @@ func (c *context) markDefined(k importKind) {
 // The `!c.sinceDefined` guard is what makes the position the *first* import rather than the
 // last: only the earliest import after the current definition is recorded, and a later
 // definition reopens the candidacy via markDefined.
+// It also counts, for the encoder's withdrawal check — see `importsSeen`. Both spellings of an
+// import already reach here, which is what makes this the right place: a second call site added at
+// each spelling would be two places to forget one, and the omission would be a *silently short
+// import section* rather than a compile error.
 func (c *context) noteImport(t Token) {
+	c.importsSeen++
 	if c.haveDefined && !c.sinceDefined {
 		c.badKind, c.badTok, c.haveBad = c.curDefined, t, true
 		c.sinceDefined = true

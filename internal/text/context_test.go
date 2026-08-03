@@ -341,7 +341,7 @@ func TestDecodeSitesRejectInvalidUTF8(t *testing.T) {
 		return toks[0]
 	}
 
-	if err := decodedName(lexOne(`"\ef"`)); err == nil {
+	if _, err := decodedName(lexOne(`"\ef"`)); err == nil {
 		t.Error("decodedName accepted invalid UTF-8; parser.mly:46-47 rejects")
 	} else if err.Error() != "malformed UTF-8 encoding" {
 		t.Errorf("decodedName error = %q, want %q", err.Error(), "malformed UTF-8 encoding")
@@ -359,18 +359,48 @@ func TestDecodeSitesRejectInvalidUTF8(t *testing.T) {
 	// satisfied by a function that rejects everything. Both spellings of an identifier, because
 	// `$f` and `$"f"` take different lexer arms (lexer.mll:815 vs :816) and only the second
 	// unescapes — a decode reading the wrong field passes one and not the other.
-	if err := decodedName(lexOne(`"ok"`)); err != nil {
-		t.Errorf("decodedName rejected valid UTF-8: %v", err)
+	//
+	// **The name's accept half asserts the decoded *value*, which it could not before #8**: the
+	// function returned only an error, so the strongest available assertion was "did not reject" —
+	// a check that a function returning nil unconditionally would pass. Now that the import section
+	// spends the string, the escape's decoding is checkable, and `"\41"` is the case that
+	// distinguishes a real decode from `t.Text`: the token's text is six characters of source and
+	// the name is one byte, `A`. Without an escape in it, a function returning the raw spelling
+	// would pass.
+	//
+	// The empty row was its own assertion before this table and keeps its citation: empty is valid
+	// UTF-8 and a legal name — `(import "" "" (func))` is the suite's own shape at
+	// imports.wast:677 — so a check written as `utf8.Valid(v) && len(v) > 0` would reject it, and
+	// the vector that would catch that expects a *different* error.
+	//
+	// **That citation stays in this prose and must not be moved onto the row**, which is a ruling
+	// this table earned by breaking: with the citation written as a trailing comment on the empty
+	// row, it matched `citedRow` and `TestEveryFixtureFileIsChecked` failed, correctly, because
+	// this file is in no provenance checker's list. Registering it would have been the worse
+	// repair — these rows are
+	// *(source, decoded value)*, so the text checker's layout would read `""` as an expected *error
+	// string*, which is the positional-convention confusion its own comment warns about, and an
+	// empty expect agrees with every command by containment. A registration that vouches for
+	// nothing is worse than an absence. The citation is an argument about legality, not a
+	// transcription of the vector's bytes, so it lives where prose citations live and is reviewed
+	// by eyes.
+	for _, tc := range []struct{ src, want string }{
+		{`"ok"`, "ok"},
+		{`"\41"`, "A"},
+		{`""`, ""},
+	} {
+		got, err := decodedName(lexOne(tc.src))
+		if err != nil {
+			t.Errorf("decodedName(%s) rejected valid UTF-8: %v", tc.src, err)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("decodedName(%s) = %q, want %q", tc.src, got, tc.want)
+		}
 	}
 	for _, src := range []string{`$f`, `$"f"`, `$"\41"`} {
 		if _, err := decodedVar(lexOne(src)); err != nil {
 			t.Errorf("decodedVar(%s) rejected valid UTF-8: %v", src, err)
 		}
-	}
-	// Empty is valid UTF-8 and a legal name: `(import "" "" (func))` is the suite's own
-	// shape at imports.wast:677. A check written as `utf8.Valid(v) && len(v) > 0` would
-	// reject it, and the vector that would catch it expects a *different* error.
-	if err := decodedName(lexOne(`""`)); err != nil {
-		t.Errorf("decodedName rejected the empty name: %v — imports.wast:677 uses it", err)
 	}
 }

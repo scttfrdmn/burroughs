@@ -202,25 +202,33 @@ func (p *parser) valtypeList() ([]valType, error) {
 	return out, nil
 }
 
-// globaltype parses a global type (parser.mly:400-402): a value type, or `(mut valtype)`.
+// globaltype parses a global type (parser.mly:400-402): a value type, or `(mut valtype)`, and
+// returns both halves unresolved.
 //
-// **Error-only, deliberately, and this is the line the value-returning half stops at.** A global's
-// type is never compared against anything — `inline_functype_explicit` is a functype comparison —
-// so returning a value here would be designing a representation for a consumer that does not
-// exist, which is what 0011 declined for the module type. The valtype it reads *does* return one;
-// it is discarded here, and that is the honest place for the discard.
-func (p *parser) globaltype() error {
+// **It was error-only until #8's import section, and the comment saying so is quoted rather than
+// deleted, because the reason it gave was right and the fact it asserted has changed.** It read:
+// *"A global's type is never compared against anything — `inline_functype_explicit` is a functype
+// comparison — so returning a value here would be designing a representation for a consumer that
+// does not exist, which is what 0011 declined for the module type."* Both clauses still hold. What
+// arrived is the consumer: `encodeImports` writes `valtype mutability` (encode.ml:194) for an
+// imported global, so the value is read by the grammar's own emitter and not by a hypothesis.
+//
+// The valtype comes back **unresolved**, as a `valType`, because a global's type may name a type
+// index that forward-references — the same reason `defineTable` defers, and the same reason the
+// whole stage-2 phase exists. `resolveVal` runs in the deferred phase where the table is complete.
+func (p *parser) globaltype() (globalType, error) {
 	if p.c.at(LParen) && p.c.peek2Keyword(kwMut) {
 		if err := p.lpar(kwMut); err != nil {
-			return err
+			return globalType{}, err
 		}
-		if _, err := p.valtype(); err != nil {
-			return err
+		v, err := p.valtype()
+		if err != nil {
+			return globalType{}, err
 		}
-		return p.rpar()
+		return globalType{val: v, mut: true}, p.rpar()
 	}
-	_, err := p.valtype()
-	return err
+	v, err := p.valtype()
+	return globalType{val: v}, err
 }
 
 // storagetype parses a storage type (parser.mly:404-406): a value type or a packed type.
@@ -532,41 +540,58 @@ func (p *parser) nat64() (uint64, error) {
 	return v, nil
 }
 
-// tabletype parses a table type (parser.mly:460-461): `addrtype limits reftype`, and stays
-// **error-only** while every caller discards.
+// tabletype parses a table type (parser.mly:460-461): `addrtype limits reftype`, and returns it.
 //
-// **The retaining version of this function was written, and `unparam` deleted it.** It returned a
-// `tabType` that no caller read: both call sites are inline-import arms, and an imported table's type
-// belongs to the import section — which this emitter does not write. The *defining* arms cannot call
-// it either, because the sugar branch (`addrtype reftype (elem …)`, parser.mly:1205) needs a lookahead
-// *between* `addrtype` and `limits`, so `tableField` interleaves the three productions itself. A
-// composed `tabletype` therefore has no consumer in either direction, and a return value nobody reads
-// is retention built for a hypothetical consumer — the generality-without-a-Go-shaped-consumer
-// non-goal, arriving in the smallest possible costume. 0006's rule is that retention grows out of what
-// the grammar needs at a *load-bearing* spot; this spot bears nothing.
+// **The retaining version of this function was written once and `unparam` deleted it; this is that
+// version, restored by the arrival of the caller it was missing.** The deleted comment's argument
+// is preserved because it was correct and is worth reading beside the change: *"both call sites are
+// inline-import arms, and an imported table's type belongs to the import section — which this
+// emitter does not write … a return value nobody reads is retention built for a hypothetical
+// consumer."* The import section is now written (#8), so the same two call sites read the value, and
+// the retention grows out of the grammar at a load-bearing spot exactly as 0006 requires.
 //
-// The field order against the binary format's is recorded at `encodeTables` instead, where the
-// reordering actually happens: text is `addrtype limits reftype`, binary is `reftype limits`
-// (encode.ml:200).
-func (p *parser) tabletype() error {
-	if _, err := p.addrtype(); err != nil {
-		return err
+// The *defining* arms still cannot call this, and that has not changed: the sugar branch (`addrtype
+// reftype (elem …)`, parser.mly:1205) needs a lookahead *between* `addrtype` and `limits`, so
+// `tableField` interleaves the three productions itself. So this function's whole population is
+// imports, which is why its return is a `tabType` (element type unresolved) rather than a
+// `resolvedTable` — the resolution happens in the deferred phase at the import's own position.
+//
+// The field order against the binary format's is recorded at `encodeTables`, where the reordering
+// happens for a *defined* table: text is `addrtype limits reftype`, binary is `reftype limits`
+// (encode.ml:200). The import path reorders identically, through the same `w.valType`/`w.limits`
+// pair, because `externtype`'s table arm is `tabletype tt` — one encoder, both populations.
+func (p *parser) tabletype() (tabType, error) {
+	addr64, err := p.addrtype()
+	if err != nil {
+		return tabType{}, err
 	}
-	if _, err := p.limits(); err != nil {
-		return err
+	lim, err := p.limits()
+	if err != nil {
+		return tabType{}, err
 	}
-	_, err := p.reftype()
-	return err
+	elem, err := p.reftype()
+	if err != nil {
+		return tabType{}, err
+	}
+	return tabType{addr64: addr64, lim: lim, elem: elem}, nil
 }
 
-// memorytype parses a memory type (parser.mly:463-464): `addrtype limits`. Error-only, for the reason
-// `tabletype` above records — its one caller is an inline import, whose type this emitter never writes.
-func (p *parser) memorytype() error {
-	if _, err := p.addrtype(); err != nil {
-		return err
+// memorytype parses a memory type (parser.mly:463-464): `addrtype limits`, and returns it.
+//
+// Value-returning for the reason `tabletype` above records at length: its one caller is an inline
+// import, and an imported memory's type is now written by the import section (#8). Nothing here is
+// deferred, because a `memorytype` has no name in it to resolve — the same grammar fact
+// `defineMemory` states for the defining side.
+func (p *parser) memorytype() (memType, error) {
+	addr64, err := p.addrtype()
+	if err != nil {
+		return memType{}, err
 	}
-	_, err := p.limits()
-	return err
+	lim, err := p.limits()
+	if err != nil {
+		return memType{}, err
+	}
+	return memType{addr64: addr64, lim: lim}, nil
 }
 
 // typeuse parses `(type idx)` (parser.mly:470-471) and returns the reference, unresolved.
@@ -732,13 +757,18 @@ func (p *parser) bindidxOpt(s *space, category string) error {
 	return s.bindAbs(category, tok, name)
 }
 
-// name parses a `name` (parser.mly:339-340): a string token, UTF-8 validated.
+// name parses a `name` (parser.mly:339-340): a string token, UTF-8 validated, and returns it.
 //
 // The **first** UTF-8 decode site, and where 176 of #62's vectors land. Every one of them is a
 // string token that lexes cleanly and fails here.
-func (p *parser) name() error {
+//
+// The value is returned because the import section's two names are the emitter's input (#8); the
+// export field and the inline-export sugar still discard it, and that discard is honest for the
+// same reason the pre-#8 discard here was — the export section has no emitter yet, so retaining
+// its name would be retention shaped by a consumer that does not exist (0006).
+func (p *parser) name() (string, error) {
 	if !p.c.at(StringTok) {
-		return p.unexpected()
+		return "", p.unexpected()
 	}
 	return decodedName(p.c.next())
 }

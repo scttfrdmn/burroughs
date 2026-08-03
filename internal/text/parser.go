@@ -223,38 +223,80 @@ func (p *parser) typeDef() error {
 //
 // noteImport is called with the LPAR's token so the recorded position is the import's own start,
 // matching `(List.hd m.imports).at`.
+//
+// **The retention is `defineImport`'s, and the split matches the reference's arm exactly**:
+// `fun c -> let df = $5 c in fun () -> Import ($3, $4, df ())` (:1251-1252) — the names and the
+// slot at reduction, the descriptor in stage 2. That is not a coincidence to note in passing; it is
+// why an import naming a forward-referenced type works, and it is the same three-stage structure
+// typetable.go's header derives.
 func (p *parser) importField() error {
+	kw := p.c.peek2()
 	tok := p.c.peek()
 	if err := p.lpar(kwImport); err != nil {
 		return err
 	}
 	p.ctx.noteImport(tok)
-	if err := p.name(); err != nil {
+	module, err := p.name()
+	if err != nil {
 		return err
 	}
-	if err := p.name(); err != nil {
+	name, err := p.name()
+	if err != nil {
 		return err
 	}
-	if err := p.externtype(); err != nil {
+	fill, err := p.externtype()
+	if err != nil {
 		return err
 	}
-	return p.rpar()
+	// **Every arm of this field is encodable, so the withdrawal is unconditional** — the only field
+	// kind of which that is true. There is no inline-export lookahead because `import` has no
+	// inline-export arm (compare :1250 with :1084): the grammar, not a simplification.
+	//
+	// `inlineImportTail`'s shape rather than the helper itself, because the names come from this
+	// production and not from an `inline_import`. The order is the same and for the same reason: paren
+	// first, retention second, so a field that errors out mid-way leaves no trace.
+	if err := p.rpar(); err != nil {
+		return err
+	}
+	p.ctx.defineImport(module, name, fill)
+	p.ctx.clearNonTypeField(kw)
+	return nil
 }
 
-// externtype parses `externtype` (parser.mly:1227-1248).
+// externtype parses `externtype` (parser.mly:1227-1248) and returns a stage-2 thunk for its
+// descriptor.
 //
 // Six kinds, and two of them have a sugar arm: `(func … typeuse)` versus `(func … functype)`,
 // and the same for tag. Each binds into its own index space *before* the type is read, which is
 // why an imported func shifts the func index even though it is not a definition — the fact that
 // makes a count-based import-ordering check wrong.
-func (p *parser) externtype() error {
+//
+// **The return is a thunk rather than a value, and the reference's own arm is written the same
+// way** — `fun c -> ignore ($3 c anon_func bind_func); fun () -> ExternFuncT (Idx ($4 c).it)`
+// (:1228-1229). The outer function binds the name at reduction; the inner one produces the
+// descriptor in stage 2. Only the func and tag arms genuinely need the deferral, because only they
+// hold a type index — but all five return thunks, because a signature that is a thunk for three
+// arms and a value for two would push the branch into every caller, and there is a caller per
+// spelling of an import.
+//
+// The closing paren is consumed **after** the switch rather than in each arm: every arm ends with one
+// (all six productions are `LPAR … RPAR`), and six copies of a `return fill, p.rpar()` is six places
+// to drop the paren check on the arm nobody re-reads. One arm forgetting it would accept
+// `(import "m" "f" (memory 1)` — a missing paren — and the suite has no vector spelling that, because
+// a malformed-paren wat is not what `assert_malformed` is usually written to catch.
+func (p *parser) externtype() (func() (importDesc, error), error) {
 	if !p.c.at(LParen) {
-		return p.unexpected()
+		return nil, p.unexpected()
 	}
 	kw := p.c.peek2()
 	if kw.Kind != KeywordTok {
-		return p.unexpectedAt(kw)
+		return nil, p.unexpectedAt(kw)
 	}
+	// Only `fill` is hoisted. The first draft hoisted an `err` too, so the three payload arms could
+	// write `if fill, err = …`, and every `if err := …` in the function then shadowed it — ten `govet`
+	// shadow findings, and the fix is to make the arms uniform rather than to suppress them: each arm
+	// takes its own `err` in its own scope, exactly as the func/tag arm already did.
+	var fill func() (importDesc, error)
 	switch kw.Keyword {
 	case kwFunc, kwTag:
 		// One arm for two kinds, because the reference's four arms (:1227-:1236 for the typeuse
@@ -262,75 +304,171 @@ func (p *parser) externtype() error {
 		// binds into. The *type* halves are identical, and this is the place a divergence between
 		// them would be invisible: an imported tag and an imported func carry the same signature
 		// grammar.
-		space, category := &p.ctx.funcs, "func"
+		//
+		// They differ by **one byte** in the binary form — a tag writes an attribute `00` before the
+		// index (encode.ml:191) — and that is the emitter's business, keyed on `desc.kind`, so the
+		// two still share this arm. The kind is what the descriptor carries out of here.
+		space, category, kind := &p.ctx.funcs, "func", importFunc
 		if kw.Keyword == kwTag {
-			space, category = &p.ctx.tags, "tag"
+			space, category, kind = &p.ctx.tags, "tag", importTag
 		}
 		if err := p.lpar(kw.Keyword); err != nil {
-			return err
+			return nil, err
 		}
 		if err := p.bindidxOpt(space, category); err != nil {
-			return err
+			return nil, err
 		}
 		// **No typeuse arm here takes an inline signature**, so neither helper is reached: the
 		// reference's arms are `typeuse` alone or `functype` alone (compare with `func_fields`
-		// :963, where both may appear). An `inline_functype` call on the sugar arm would be the
-		// reference's (:1236/:1248) and its only effect is the implicit type's index, which
-		// nothing here reads — but it *does* move `len(typeCtx)`, so it is recorded rather than
-		// skipped. See the deferOp below.
+		// :963, where both may appear). The sugar arm's `inline_functype` (:1236/:1248) is what
+		// this calls, and its index used to be discarded — the interning's effect on
+		// `len(typeCtx)` being the only part anything read. The index is now the descriptor.
 		if p.atTypeuse() {
-			if _, err := p.typeuse(); err != nil {
-				return err
+			use, err := p.typeuse()
+			if err != nil {
+				return nil, err
 			}
+			fill = p.externFuncDesc(kind, func() (uint32, error) { return p.ctx.resolveTypeIdx(use) })
 		} else {
 			ft, err := p.functype() // sugar, parser.mly:1234/:1246
 			if err != nil {
-				return err
+				return nil, err
 			}
-			p.ctx.deferOp(func() error { return p.ctx.declareImplicit(ft) })
+			fill = p.externFuncDesc(kind, func() (uint32, error) { return p.ctx.internImplicit(ft) })
 		}
-		return p.rpar()
 	case kwGlobal:
 		if err := p.lpar(kwGlobal); err != nil {
-			return err
+			return nil, err
 		}
 		if err := p.bindidxOpt(&p.ctx.globals, "global"); err != nil {
-			return err
+			return nil, err
 		}
-		if err := p.globaltype(); err != nil {
-			return err
+		f, err := p.importedGlobal()
+		if err != nil {
+			return nil, err
 		}
-		return p.rpar()
+		fill = f
 	case kwMemory:
 		if err := p.lpar(kwMemory); err != nil {
-			return err
+			return nil, err
 		}
 		if err := p.bindidxOpt(&p.ctx.memories, "memory"); err != nil {
-			return err
+			return nil, err
 		}
-		// Nothing retained, and this is the import section's business rather than a gap: an imported
-		// memory is an `Import`, not a `Memory`, so its type belongs to a section this emitter does
-		// not write. The `(import …)` field is refused wholesale at the dispatch. This call site is
-		// why `memorytype` stays error-only — see its doc comment for what happened to the version
-		// that returned a value.
-		if err := p.memorytype(); err != nil {
-			return err
+		f, err := p.importedMemory()
+		if err != nil {
+			return nil, err
 		}
-		return p.rpar()
+		fill = f
 	case kwTable:
 		if err := p.lpar(kwTable); err != nil {
-			return err
+			return nil, err
 		}
 		if err := p.bindidxOpt(&p.ctx.tables, "table"); err != nil {
-			return err
+			return nil, err
 		}
-		if err := p.tabletype(); err != nil {
-			return err
+		f, err := p.importedTable()
+		if err != nil {
+			return nil, err
 		}
-		return p.rpar()
+		fill = f
 	default:
-		return p.unexpectedAt(kw)
+		return nil, p.unexpectedAt(kw)
 	}
+	if err := p.rpar(); err != nil {
+		return nil, err
+	}
+	return fill, nil
+}
+
+// externFuncDesc wraps a stage-2 type-index producer as a func-or-tag descriptor.
+//
+// Its own function so the two arms above read as one shape, and because the *kind* is the only
+// difference between them at this point — a reader comparing the func and tag paths should find
+// nothing else to compare.
+func (p *parser) externFuncDesc(kind importKind, idx func() (uint32, error)) func() (importDesc, error) {
+	return func() (importDesc, error) {
+		i, err := idx()
+		if err != nil {
+			return importDesc{}, err
+		}
+		return importDesc{kind: kind, typeIdx: i}, nil
+	}
+}
+
+// importedGlobal, importedMemory and importedTable parse one non-func externtype's payload and
+// return its stage-2 descriptor thunk.
+//
+// **Three functions rather than three inline arms because each has two call sites, one per import
+// spelling.** `(import "m" "g" (global i32))` and `(global (import "m" "g") i32)` are the same
+// import — the reference reaches `ExternGlobalT ($4 c)` from `externtype` :1240 and from
+// `global_fields`'s inline-import arm :1085 — and a descriptor built at two sites is one fact stored
+// twice, which is the shape #82's *one concept, one trigger* names. The failure it forbids here is
+// specific and silent: a kind byte or a mutability flag written correctly in one spelling and wrongly
+// in the other would still round-trip through the decoder for every vector that uses the spelling
+// that works.
+//
+// It closes the other two of #111's four newly-rejecting modules, for the same reason
+// `importedTable` closes its two — see that comment for the measurement and for why the count moved
+// by four rather than by the two a per-site reading predicts.
+func (p *parser) importedGlobal() (func() (importDesc, error), error) {
+	gt, err := p.globaltype()
+	if err != nil {
+		return nil, err
+	}
+	return func() (importDesc, error) {
+		rv, err := p.ctx.resolveVal(gt.val)
+		if err != nil {
+			return importDesc{}, err
+		}
+		return importDesc{kind: importGlobal, global: resolvedGlobal{val: rv, mut: gt.mut}}, nil
+	}, nil
+}
+
+// importedMemory is the one arm with nothing to resolve — a `memorytype` is two numbers and a flag,
+// and `defineMemory`'s comment has the grammar fact for why that needs no lookup. The thunk is still
+// a thunk: see `externtype`'s signature comment for why uniformity beats a caller-side branch.
+func (p *parser) importedMemory() (func() (importDesc, error), error) {
+	mt, err := p.memorytype()
+	if err != nil {
+		return nil, err
+	}
+	return func() (importDesc, error) { return importDesc{kind: importMemory, mem: mt}, nil }, nil
+}
+
+// importedTable resolves an imported table's element type in stage 2.
+//
+// **This closes two of #111's ten accepting modules as a side effect of needing the value**, which is
+// exactly how `defineTable` closed `(table 1 (ref null $u))`: the reftype's resolution was discarded
+// along with its value, so an unknown type went unreported.
+//
+// **Two, not one, and the number was measured rather than counted** — the first draft of this comment
+// said one, reasoning from the `(import …)` field spelling alone and forgetting that this helper is
+// shared with the inline arm, which is the whole point of it being a helper. Re-running #111's own
+// ten-row probe against `ReadModule` says four now reject: this helper's two table spellings and
+// `importedGlobal`'s two global spellings. Six still accept. That is #111's own mechanical rule
+// working as stated — *a site that threads the reftype into `resolveVal` rejects; a site that
+// discards it accepts* — and it is why the issue counts **code sites** rather than modules.
+//
+// The fix is not scoped here: #111 stays open for the remaining six and holds the
+// scope-to-the-space requirement for its control. Saying the count moved, and by how much, is the
+// drifted-citation discipline rather than bookkeeping — a comment citing an issue's figures is a
+// citation, and #111's table is now stale in four rows.
+func (p *parser) importedTable() (func() (importDesc, error), error) {
+	tt, err := p.tabletype()
+	if err != nil {
+		return nil, err
+	}
+	return func() (importDesc, error) {
+		rv, err := p.ctx.resolveVal(tt.elem)
+		if err != nil {
+			return importDesc{}, err
+		}
+		return importDesc{
+			kind:  importTable,
+			table: resolvedTable{addr64: tt.addr64, lim: tt.lim, elem: rv},
+		}, nil
+	}, nil
 }
 
 // exportField parses `export` (parser.mly:1265-1267): `(export name externidx)`.
@@ -342,7 +480,9 @@ func (p *parser) exportField() error {
 	if err := p.lpar(kwExport); err != nil {
 		return err
 	}
-	if err := p.name(); err != nil {
+	// Discarded, and honestly so: there is no export section emitter, so the name has no consumer.
+	// `p.name`'s doc comment carries the same note and the reason it is not a gap.
+	if _, err := p.name(); err != nil {
 		return err
 	}
 	if err := p.externidx(); err != nil {
@@ -382,22 +522,38 @@ func (p *parser) externidx() error {
 // does **not** count as a definition for ordering purposes, which is the reference's `funcs <>
 // []` being empty on those arms — a subtlety worth stating because "an inline import is still a
 // func field" is the plausible wrong reading.
-func (p *parser) inlineImport() (bool, error) {
+//
+// **It returns the names too, and that is what makes the five sugar arms encodable (#8).** The
+// reference's arm is `{ $3, $4 }` — a bare pair, no context function — precisely because the names
+// are all it carries; the *descriptor* comes from the enclosing field's own grammar, which is why
+// `(func (import "m" "f") (param i32))` and `(import "m" "f" (func (param i32)))` produce the same
+// `Import`. A version of this that kept discarding the names would leave the section short by every
+// inline-import occurrence in the corpus — 9 of the 143 modules the forecast measures, and silently,
+// since a short vector is not a decode error.
+type inlineImportNames struct {
+	module string
+	name   string
+	have   bool
+}
+
+func (p *parser) inlineImport() (inlineImportNames, error) {
 	if !p.c.at(LParen) || !p.c.peek2Keyword(kwImport) {
-		return false, nil
+		return inlineImportNames{}, nil
 	}
 	tok := p.c.peek()
 	if err := p.lpar(kwImport); err != nil {
-		return false, err
+		return inlineImportNames{}, err
 	}
 	p.ctx.noteImport(tok)
-	if err := p.name(); err != nil {
-		return false, err
+	module, err := p.name()
+	if err != nil {
+		return inlineImportNames{}, err
 	}
-	if err := p.name(); err != nil {
-		return false, err
+	name, err := p.name()
+	if err != nil {
+		return inlineImportNames{}, err
 	}
-	return true, p.rpar()
+	return inlineImportNames{module: module, name: name, have: true}, p.rpar()
 }
 
 // inlineExports parses zero or more `inline_export` (parser.mly:1269-1274): `(export name)`
@@ -412,7 +568,7 @@ func (p *parser) inlineExports() error {
 		if err := p.lpar(kwExport); err != nil {
 			return err
 		}
-		if err := p.name(); err != nil {
+		if _, err := p.name(); err != nil { // discarded: no export section emitter, see p.name
 			return err
 		}
 		if err := p.rpar(); err != nil {
@@ -430,16 +586,18 @@ func (p *parser) inlineExports() error {
 // *compared*; without one it is `inline_functype` and the signature *creates* a type. Four of the
 // 24 `inline function type` vectors land here (func.wast:600-627).
 func (p *parser) funcField() error {
+	kw := p.c.peek2()
 	if err := p.lpar(kwFunc); err != nil {
 		return err
 	}
 	if err := p.bindidxOpt(&p.ctx.funcs, "func"); err != nil {
 		return err
 	}
+	exported := p.c.at(LParen) && p.c.peek2Keyword(kwExport)
 	if err := p.inlineExports(); err != nil {
 		return err
 	}
-	imported, impErr := p.inlineImport()
+	imp, impErr := p.inlineImport()
 	if impErr != nil {
 		return impErr
 	}
@@ -451,14 +609,20 @@ func (p *parser) funcField() error {
 		}
 		use, haveUse = u, true
 	}
-	if imported {
+	if imp.have {
 		// func_fields_import (parser.mly:991-1001): params and results, no body, no locals.
 		ft, err := p.functype()
 		if err != nil {
 			return err
 		}
-		p.deferSignature(use, haveUse, ft)
-		return p.rpar()
+		// **`defineImport` replaces the `deferSignature` call rather than joining it**, because the
+		// signature work *is* the descriptor: the reference's arms are `ExternFuncT (Idx y.it)` where
+		// `y` is whichever helper ran (:975-:983). Calling both would run the helper twice, and for the
+		// sugar arm that is not merely wasteful — `inline_functype` appends, so a second call finds its
+		// own first result and returns the same index, meaning the defect would be *invisible* here and
+		// would surface only as a type-section count. Exactly the class `declareBlockImplicit`'s comment
+		// warns about, reached from the other direction.
+		return p.inlineImportTail(imp, exported, kw, p.importedFuncDesc(importFunc, use, haveUse, ft))
 	}
 	ft, err := p.funcSignature()
 	if err != nil {
@@ -529,6 +693,27 @@ func (p *parser) deferSignature(use typeRef, haveUse bool, ft funcType) {
 		return
 	}
 	p.ctx.deferOp(func() error { return p.ctx.declareImplicit(ft) })
+}
+
+// importedFuncDesc is deferSignature for an inline-imported func or tag: same pairing, and the index
+// it produces is the descriptor.
+//
+// **The pairing is written once more, not twice, and this function is the once.** Both inline-import
+// arms of `func_fields` (:975-:983) and both of `tag_fields` (:1053-:1065) spend the helper's result
+// as `ExternFuncT (Idx y.it)` / `ExternTagT (TagT (Idx y.it))`, and the branch on `haveUse` is
+// identical in all four — so the alternative to this function is four sites each choosing a helper,
+// which is precisely the failure deferSignature's comment describes: `inline_functype` never fails, so
+// a site that interned where the reference compares accepts every mismatched module in silence.
+//
+// It does **not** call deferSignature. It cannot: deferSignature records a thunk on the deferred list
+// itself, whereas this returns a thunk for `defineImport` to record, so that the descriptor lands in
+// the import slot. Two functions that look alike because they share a rule, differing in who owns the
+// deferral — and the rule they share is in one place, which is the point.
+func (p *parser) importedFuncDesc(kind importKind, use typeRef, haveUse bool, ft funcType) func() (importDesc, error) {
+	if haveUse {
+		return p.externFuncDesc(kind, func() (uint32, error) { return p.ctx.checkExplicit(use, ft) })
+	}
+	return p.externFuncDesc(kind, func() (uint32, error) { return p.ctx.internImplicit(ft) })
 }
 
 // funcSignature parses func_fields_body's params and results (parser.mly:1003-1016), binds the
@@ -632,16 +817,18 @@ func (p *parser) locals() error {
 // signature is read by `functype` in *both* arms, import or not: a tag has no locals, so nothing
 // here binds.
 func (p *parser) tagField() error {
+	kw := p.c.peek2()
 	if err := p.lpar(kwTag); err != nil {
 		return err
 	}
 	if err := p.bindidxOpt(&p.ctx.tags, "tag"); err != nil {
 		return err
 	}
+	exported := p.c.at(LParen) && p.c.peek2Keyword(kwExport)
 	if err := p.inlineExports(); err != nil {
 		return err
 	}
-	imported, err := p.inlineImport()
+	imp, err := p.inlineImport()
 	if err != nil {
 		return err
 	}
@@ -657,10 +844,12 @@ func (p *parser) tagField() error {
 	if err != nil {
 		return err
 	}
-	p.deferSignature(use, haveUse, ft)
-	if !imported {
-		p.ctx.markDefined(importTag)
+	if imp.have {
+		// See funcField's arm for why this *replaces* deferSignature rather than joining it.
+		return p.inlineImportTail(imp, exported, kw, p.importedFuncDesc(importTag, use, haveUse, ft))
 	}
+	p.deferSignature(use, haveUse, ft)
+	p.ctx.markDefined(importTag)
 	return p.rpar()
 }
 
@@ -671,25 +860,34 @@ func (p *parser) tagField() error {
 // assumed, since a sentence about which of two spellings parses is the kind that goes stale
 // silently.
 func (p *parser) globalField() error {
+	kw := p.c.peek2()
 	if err := p.lpar(kwGlobal); err != nil {
 		return err
 	}
 	if err := p.bindidxOpt(&p.ctx.globals, "global"); err != nil {
 		return err
 	}
+	// Read before the arms, as in memoryField: an inline export makes the field unencodable whichever
+	// arm follows, and the way to say so is to leave the dispatch's frontier note standing.
+	exported := p.c.at(LParen) && p.c.peek2Keyword(kwExport)
 	if err := p.inlineExports(); err != nil {
 		return err
 	}
-	imported, err := p.inlineImport()
+	imp, err := p.inlineImport()
 	if err != nil {
 		return err
 	}
-	if err := p.globaltype(); err != nil {
+	fill, err := p.importedGlobal()
+	if err != nil {
 		return err
 	}
-	if imported {
-		return p.rpar()
+	if imp.have {
+		return p.inlineImportTail(imp, exported, kw, fill)
 	}
+	// The defining arm keeps parsing and stays unencodable: a defined global needs a global section
+	// and an initializer expression, and neither exists (#8's remaining arms). The thunk goes unused
+	// here — the *type* was still parsed by the same helper both arms use, which is the reference's
+	// shape too (`globaltype` appears in both :1080 and :1082).
 	p.ctx.markDefined(importGlobal)
 	// constexpr is instr_list (parser.mly:951), so `(global i32)` with no initializer is
 	// well-formed *grammatically* — the arity is validation's complaint, not the parser's.
@@ -718,11 +916,27 @@ func (p *parser) globalField() error {
 // `err =`, and asserted in a comment that `sloppyReassign` "does not fire on this one because the
 // variable genuinely is reused". It fires. The claim was checked by running the linter rather than by
 // reading it, which is the only reason it did not ship as a comment stating the opposite of the truth.
-func (p *parser) importedExternType(parse func() error) error {
-	if err := parse(); err != nil {
+//
+// **It retains now, and its old comment's own words are why the change is more than a signature.**
+// Two paragraphs up: "an imported memory or table is an `Import`, not a definition, so its type
+// belongs to a section this emitter does not write and nothing here retains it." That section is what
+// this PR writes, so the second clause is what expired — the first is as true as ever, and is exactly
+// what makes the import list the right home for these two.
+//
+// The four steps are in this order at all three call sites and the order is load-bearing at two of
+// them: the paren is consumed **before** the retention, so a field that errors out mid-way leaves no
+// trace and `encodableOrErr`'s count check cannot disagree with the sections on a module that never
+// finished parsing. That is memoryField's tail's rule, and having one helper is how the third site
+// gets it without anyone having to remember.
+func (p *parser) inlineImportTail(imp inlineImportNames, exported bool, kw Token, fill func() (importDesc, error)) error {
+	if err := p.rpar(); err != nil {
 		return err
 	}
-	return p.rpar()
+	p.ctx.defineImport(imp.module, imp.name, fill)
+	if !exported {
+		p.ctx.clearNonTypeField(kw)
+	}
+	return nil
 }
 
 // memoryField parses `memory` (parser.mly:1112-1134).
@@ -751,12 +965,16 @@ func (p *parser) memoryField() error {
 	if err := p.inlineExports(); err != nil {
 		return err
 	}
-	imported, err := p.inlineImport()
+	imp, err := p.inlineImport()
 	if err != nil {
 		return err
 	}
-	if imported {
-		return p.importedExternType(p.memorytype)
+	if imp.have {
+		fill, ftErr := p.importedMemory()
+		if ftErr != nil {
+			return ftErr
+		}
+		return p.inlineImportTail(imp, exported, kw, fill)
 	}
 	// The `addrtype LPAR DATA string_list RPAR` sugar (parser.mly:1129), distinguished from
 	// `memorytype` by an LPAR where a nat would be. addrtype is optional in both, so it is
@@ -836,12 +1054,16 @@ func (p *parser) tableField() error {
 	if err := p.inlineExports(); err != nil {
 		return err
 	}
-	imported, err := p.inlineImport()
+	imp, err := p.inlineImport()
 	if err != nil {
 		return err
 	}
-	if imported {
-		return p.importedExternType(p.tabletype)
+	if imp.have {
+		fill, ttErr := p.importedTable()
+		if ttErr != nil {
+			return ttErr
+		}
+		return p.inlineImportTail(imp, exported, kw, fill)
 	}
 	addr64, err := p.addrtype()
 	if err != nil {
@@ -890,9 +1112,11 @@ func (p *parser) tableField() error {
 // Nothing retained: this arm's table is sized from an elem segment the emitter cannot write, so there
 // is nothing to retain it for. **The reference resolves the reftype here too** — the arm is `$2 c`, a
 // lookup — so `(table (ref null $undefined) (elem))` is a module we accept and upstream rejects.
-// Declared and tracked as **#111**, which measures all nine accepting sites and holds the
+// Declared and tracked as **#111**, which measures every accepting site and holds the
 // scope-to-the-space requirement for the control: fixed here, it would be one site of one shape
-// repaired inside a PR about section emitters, with the other eight left silently green.
+// repaired inside a PR about section emitters, with the rest left silently green. The issue's table
+// is stale by four rows as of the import section — `importedGlobal` and `importedTable` now resolve,
+// across both spellings each — and this arm is one of the six that still accept.
 func (p *parser) tableElemSugar() error {
 	if _, err := p.reftype(); err != nil {
 		return err
