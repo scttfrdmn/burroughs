@@ -21,6 +21,33 @@ weakly-ordered platform.
 
 ### Added
 
+- **`gate:extended-const` — the ninth `Features` gate, and the first one that governs a *position*
+  rather than a byte** ([#109](https://github.com/scttfrdmn/burroughs/issues/109)). The six
+  instructions the proposal adds (`i32.add`/`sub`/`mul` = 0x6a/0x6b/0x6c, `i64` = 0x7c/0x7d/0x7e) are
+  MVP opcodes that stay ungated in function bodies and become admissible inside a constant
+  expression, so nothing in the image distinguishes the gated construct from the ungated one. That
+  ruled out a `gatedOpcodes` row: `gateCheck` dispatches on the opcode alone, so an entry there would
+  decline `i32.add` in every function body — reintroducing, as its own fix, the accept-direction
+  defect #109 was filed for. The gate lives in `gatedNonOpcodes` and is checked in `constLegal`,
+  where the position is known.
+
+  **Contract §9 G-2 was amended to say extended-const is tracked** (Scott's stamp on #109; the
+  amendment cites it in its provenance line, and G-2's parenthetical was swept against the 3.0 merged
+  list once, completely, so the enumeration is auditable rather than illustrative). The nine
+  extended-const modules therefore move to gated-by-default in v0's posture and are **earned in the
+  all-on lane**, where `gated` must be 0 — the structural bound that keeps a deferral from becoming a
+  disappearance.
+
+- **`internal/gen/xcorpus/accept_test.go`: the permanent accept-direction control** (contract §9 G-3,
+  and product work under the standing rule for exactly that reason). Two walks over the 1954
+  committed corpus images: under the tracked union the decoder must accept **every one, zero
+  rejections exactly** — an equality rather than a ratchet, because every module here is one a
+  conforming producer emitted from a must-succeed suite module and there is no honest nonzero value —
+  and in v0's default posture every rejection must be an `errors.Is` feature decline that does not say
+  *malformed* (#5, pinned over 692 modules rather than over one probe). The measurement that found
+  #109 was made by hand and then discarded; this is the *artifacts become oracles* rule applied one
+  step later than it should have been.
+
 - **`internal/text/encode.go`: the memory and table section emitters, and a frontier that is now
   per-arm rather than per-field** ([#8](https://github.com/scttfrdmn/burroughs/issues/8), 0011 part
   2). `(memory i64 1 4)` and `(table 1 funcref)` encode; sections 4 and 5 join section 1 in id order,
@@ -1555,6 +1582,36 @@ weakly-ordered platform.
   skip ([#29](https://github.com/scttfrdmn/burroughs/issues/29)).
 
 ### Fixed
+
+- **Nine valid modules were rejected, and the comment above the bug asserted the rule it broke**
+  ([grave #109](https://github.com/scttfrdmn/burroughs/issues/109)). `constOps`' comment said
+  extended-const "arrives with its gate" while no such gate existed and `constLegal`'s predecessor
+  returned false for all six opcodes, so `(data (i32.add (i32.const 0) (i32.const 42)))` and its
+  siblings in `data.wast`, `elem.wast`, and `global.wast` failed with `constant expression required:
+  0x6a/0x6b/0x6c`. **Invisible on both boards by construction**: all 4162 green vectors are
+  rejections, so a decoder that wrongly rejects scores full marks (§9 G-3), and the all-on lane
+  scores the same. Found by the corpus simply trying to read the images; reproduced from a clean tree
+  by reverting `constLegal` to `return false`, which yields exactly those nine. *The defect stated as
+  the rule* is the shape — review verifies code against claims, and here the claim was the bug.
+
+  Three collateral repairs of the same shape, each a green test whose comment described something the
+  code did not do. `TestAgreementHoldsUnderEveryFeatureConfiguration` claimed its four booleans were
+  "the same derivation without a dependency" while walking **4 of 8** gates, pinning the other four
+  off in all 16 configurations — it now reflects over `Features` (2^9 = 512).
+  `TestEveryGateOffDeclinesSomething`'s probe struct documented a `body`/`constExpr` selector that was
+  not a field, which is why no probe could reach a const position. And three comments cited
+  `constWalk`, a function that has
+  never existed in the package through three PRs — *a citation to a symbol is as checkable as a
+  `.wast:N`*, and nothing was checking these.
+
+  **The new control was itself born stillborn, which is the part worth keeping.**
+  `TestEveryCorpusModuleDecodesUnderFullFeatures`' floors measured `len(m.Modules)` — the population —
+  and said nothing about whether the loop consumed it, so `range m.Modules[:0]` left it **green**.
+  Found by writing the falsification and watching it *not* fire (*a control isn't born until it has
+  been watched die*), fixed with a `walked` counter, and re-falsified: the injection now reports
+  `walked 0 of 1954`. The sweep to its sibling came back **negative and is recorded as such** — that
+  walk's floor is on *declines*, which can only accrue from iterations that happened, so a second
+  counter there would be one concept with two triggers.
 
 - **`limits`' nats were never read, so a 2^64 bound was accepted**
   ([grave #112](https://github.com/scttfrdmn/burroughs/issues/112)). Both arms are `nat64`

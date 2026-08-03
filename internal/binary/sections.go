@@ -85,6 +85,21 @@ type Features struct {
 	TailCall    bool // return_call, return_call_indirect
 	RelaxedSIMD bool // the fd 0x100..0x12f window, inside SIMD's region
 	MultiMemory bool // memarg flags bit 6: an explicit memory index on loads and stores
+
+	// ExtendedConst governs no opcode of its own, and that is the whole shape of it: the six
+	// instructions it admits — i32/i64 add, sub, mul — are MVP instructions that are *ungated
+	// everywhere else*. What the proposal widens is a **position**, the set of instructions legal
+	// in a constant expression, so this gate lives in `gatedNonOpcodes` and governs `constOps`.
+	// A `gatedOpcodes` entry would be read by `gateCheck` on every dispatch path and would
+	// decline `i32.add` inside ordinary function bodies, which is a valid module rejected.
+	//
+	// The gate this file forgot, and #109 is why it is a nine rather than an eight: G-2's
+	// parenthetical named six of Wasm 3.0's ten features and extended-const was not among them,
+	// so `constOps`' comment could assert these arrived "with their gates" and be believed. They
+	// had no gate. Nine suite modules the spec requires accepted were rejected with `constant
+	// expression required`, and no board could see it — every one of the 4162 green vectors is a
+	// rejection (§9 G-3). Found by #67's cross-check corpus.
+	ExtendedConst bool // i32/i64 add, sub, mul in a constant expression — a position, not an opcode
 }
 
 // Decoder holds the configuration one decode runs under. A config struct rather

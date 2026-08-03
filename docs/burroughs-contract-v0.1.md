@@ -190,9 +190,22 @@ commits to that reading.*
   platform, before default-on.
   *Experiment-gated, decision-doc-then-land — the discipline that carried
   the Go-side work is the engine's release discipline too.*
-- **G-2.** Tracked set at v0.1: Wasm 3.0 core (GC, exception handling,
-  tail calls, memory64, multi-memory, relaxed SIMD); threads;
+- **G-2.** Tracked set at v0.1: **all of Wasm 3.0 core**; threads;
   stack switching (pre-phase-4, tracked); component model + WASI 0.3.
+  Wasm 3.0 core is the ten features the spec's own release appendix lists
+  (`document/core/appendix/changes.rst`, "Release 3.0"): extended
+  constant expressions, tail calls, exception handling, multiple memories,
+  64-bit address space, typeful references, garbage collection, relaxed
+  vector instructions, profiles, custom annotations.
+  *Amended by Scott's stamp on #109. The clause previously named six of
+  the ten in a parenthetical, and the enumeration was load-bearing:
+  extended-const was absent, so a decoder that rejected nine valid suite
+  modules read as tracking the set correctly. An enumeration is a sample
+  and a sample has a blind spot by construction, so the normative fact is
+  now "all of 3.0 core" and the list is a derivation from the appendix,
+  auditable rather than illustrative. Two of the ten are not gates and
+  say so where gates are declared: profiles is an execution mode, and
+  custom annotations is a text-format rule the lexer already implements.*
 - **G-3.** **The neutrality guarantee is G-1.** Partisanship lives only in
   §§2–8's API surface and in optimization priorities — never in
   conformance. No guest may be broken to make Go faster.

@@ -230,15 +230,28 @@ func Generate(suiteDir, workDir, suiteRev string) (*Manifest, error) {
 // So the rule is contract §9 G-2: the grammar this project recognizes is the union of the
 // tracked set, and the corpus records that union's encodings. Every flag below is a proposal
 // `Features` declares a gate for; every flag omitted is one it does not track. What that costs
-// is measurable and small — the six omitted flags (annotations, code-metadata, extended-const,
-// custom-page-sizes, compact-imports, wide-arithmetic) buy **one** additional module between
-// them, against the 47 spurious re-encodings the last two produce.
+// is measurable and small — the omitted flags (annotations, code-metadata, custom-page-sizes,
+// compact-imports, wide-arithmetic) buy **one** additional module between them, against the 47
+// spurious re-encodings the last two produce.
+//
+// **Extended-const left that list when #109 was stamped**, and the sweep is why it is called out
+// rather than quietly edited: a ruling retroactively falsifies the prose written before it, and
+// this paragraph said "six omitted flags" naming extended-const among proposals the project "does
+// not track" at the moment the contract began tracking it. G-2 now reads "all of Wasm 3.0 core",
+// derived from the spec's own release appendix, and extended-const is one of the ten — so the
+// clause that licensed the omission is gone even though the omission itself is unchanged. It
+// stays omitted because wabt does not gate it and the flag is measurably inert, which is a
+// statement about the *producer*; it was previously omitted because we did not track the
+// proposal, which was a statement about the *contract*. Same argv, different reason, and the
+// reason is the part a reader is relying on.
 //
 // Note what the criterion does *not* do: omitting `--enable-extended-const` does not keep
 // extended-const out of the corpus, because wabt does not gate it. A flag list controls what the
 // producer accepts, never what the suite contains — so the omissions above are about **encoding
 // fidelity**, and the question of which proposals our decoder must accept is settled by the
-// corpus's contents, not by this list.
+// corpus's contents, not by this list. That sentence was load-bearing and is now demonstrated:
+// the nine modules our decoder wrongly rejected were in the corpus with the flag off, which is
+// exactly what it predicted.
 //
 // # Enumerated, and this is the one place that is right
 //
@@ -270,6 +283,18 @@ var featureFlag = map[string]string{
 	"TailCall":          "--enable-tail-call",
 	"RelaxedSIMD":       "--enable-relaxed-simd",
 	"MultiMemory":       "--enable-multi-memory",
+	// Empty for the same reason SIMD is, and the reason is *already measured above*: wabt
+	// compiles `(data (i32.add (i32.const 0) (i32.const 42)))` without being asked, and
+	// `--enable-extended-const` was measured inert here — 0 modules gained, 0 bytes changed.
+	// The flag exists in wabt's vocabulary, unlike SIMD's, so the entry says "passing it would
+	// change nothing" rather than "there is nothing to pass"; both are honest `""`s and the
+	// distinction is why each carries its own reason instead of sharing one.
+	//
+	// This entry arrived with the gate (#109) and did **not** require re-cutting the corpus,
+	// which is the unusual case worth naming: the nine extended-const modules were in the
+	// snapshot all along — that is how the corpus found the decoder rejecting them — so unlike
+	// every other gate here, the flag list and the corpus contents were never out of step.
+	"ExtendedConst": "",
 }
 
 // extraFlags are tracked-union flags with no `Features` field of their own.

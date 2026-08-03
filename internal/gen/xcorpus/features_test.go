@@ -93,13 +93,25 @@ func TestFeatureFlagsCoverTheTrackedGates(t *testing.T) {
 		}
 	}
 
-	// The omissions are the measured part of the criterion, so they are pinned: these six flags
+	// The omissions are the measured part of the criterion, so they are pinned: these flags
 	// exist in wabt and are deliberately off, because they are not in the tracked union and
 	// three of them re-encode modules the baseline grammar already describes. If one is ever
 	// added, it should be because a gate for it was added above — not by drifting back toward
 	// `--enable-all`, which is what this file was written after.
+	//
+	// **`--enable-extended-const` was removed from this list by #109**, and the removal is the
+	// sweep rather than a convenience: the list's stated criterion is "not in the tracked union",
+	// and the stamped amendment to G-2 put extended-const in it. Leaving the entry would have
+	// made this control assert the *opposite* of the contract while passing — the flag is still
+	// not passed, so the assertion holds on the argv and lies about the reason. That is the
+	// orphaned-prose failure with teeth, because a test is prose a machine agrees with.
+	//
+	// Its gate's entry in `featureFlag` is `""` (wabt does not gate the proposal, and the flag
+	// measured inert), so the argv is byte-identical either way and no regeneration was needed.
+	// A control whose subject moved between categories without changing its output is precisely
+	// the one that goes unswept.
 	for _, off := range []string{
-		"--enable-annotations", "--enable-code-metadata", "--enable-extended-const",
+		"--enable-annotations", "--enable-code-metadata",
 		"--enable-custom-page-sizes", "--enable-compact-imports", "--enable-wide-arithmetic",
 	} {
 		for _, got := range features {
