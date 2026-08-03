@@ -14,7 +14,9 @@ import (
 )
 
 // refPath is the vendored authority, from this package's directory.
-var refPath = filepath.Join("..", "..", "..", "..", testenv.RefLexerMLL)
+// refPath names the vendored authority; see opcodegen's copy for why it is a name and not
+// a path.
+var refPath = testenv.RefLexerMLL
 
 func refSource(tb testing.TB) string {
 	tb.Helper()
@@ -114,7 +116,7 @@ func TestTheElevenObsoleteMnemonicsAreAbsent(t *testing.T) {
 // compared — which also makes the list self-maintaining if upstream adds a twelfth.
 func TestObsoleteMnemonicsMatchTheVector(t *testing.T) {
 	const rel = "testdata/spec/obsolete-keywords.wast"
-	b := testenv.RequireSuiteFile(t, filepath.Join("..", "..", "..", "..", rel))
+	b := testenv.RequireSuiteFile(t, filepath.Base(rel))
 	re := regexp.MustCompile(`"unknown operator ([^"]+)"`)
 	ms := re.FindAllStringSubmatch(string(b), -1)
 	if len(ms) != 11 {
@@ -433,7 +435,7 @@ func TestEmitRejectsAKeywordWithNoKind(t *testing.T) {
 // skips reports agreement with an authority it never read.
 func TestCommittedTableMatchesTheReference(t *testing.T) {
 	src := refSource(t)
-	sha, err := gen.PinnedRev(filepath.Join("..", "..", "..", "..", "scripts", "fetch-spec-ref.sh"))
+	sha, err := gen.PinnedRefRev()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -445,7 +447,10 @@ func TestCommittedTableMatchesTheReference(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Emit: %v", err)
 	}
-	path := filepath.Join("..", "..", "keywords.go")
+	path, err := gen.FromRoot(Output)
+	if err != nil {
+		t.Fatal(err)
+	}
 	gotB, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)

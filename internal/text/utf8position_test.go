@@ -2,7 +2,6 @@ package text
 
 import (
 	"fmt"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -75,9 +74,6 @@ import (
 // The grammar facts are the text package's subject. The board's counts are internal/spec's.
 // Splitting them puts each assertion where its authority is.
 
-// refPath resolves a vendored authority from this package's directory.
-func refPath(rel string) string { return filepath.Join("..", "..", rel) }
-
 // letBody returns the text of an OCaml `let <helper> s loc =` binding, bounded at the next
 // top-level `let`, and reports whether the binding was found.
 //
@@ -131,7 +127,7 @@ var (
 // does — its subject is the authority, which is present, not the implementation, which is
 // not.
 func TestReferenceDecodesUTF8AtNameAndVarOnly(t *testing.T) {
-	src := testenv.RequireSpecRef(t, refPath(testenv.RefParserMLY))
+	src := testenv.RequireSpecRef(t, testenv.RefParserMLY)
 
 	// Vacuity floor before any containment or count. parser.mly is 54523 bytes at bdd7164;
 	// RequireSpecRef's own floor covers truncation, and this covers the narrower failure
@@ -304,7 +300,7 @@ func TestReferenceDecodesUTF8AtNameAndVarOnly(t *testing.T) {
 // same bucket silently and make the siting claim false while the count stayed put — bucket
 // size estimates the reward, not the job.
 func TestSuiteUTF8VectorsAreAllAtNamePositions(t *testing.T) {
-	src := testenv.RequireSuiteFile(t, filepath.Join("..", "..", "testdata", "spec", "utf8-invalid-encoding.wast"))
+	src := testenv.RequireSuiteFile(t, "utf8-invalid-encoding.wast")
 
 	lines := strings.Split(string(src), "\n")
 	var vectors, exportShaped int

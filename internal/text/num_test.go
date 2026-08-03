@@ -226,7 +226,7 @@ func TestUnderscorePlacementIsTheLexersJob(t *testing.T) {
 
 	// End 3: the authority still writes the rule the premise quotes. Without this, the two ends
 	// above could agree with each other while both diverging from upstream.
-	src := testenv.RequireSpecRef(t, refPath(testenv.RefLexerMLL))
+	src := testenv.RequireSpecRef(t, testenv.RefLexerMLL)
 	for _, rule := range []string{
 		"let num = digit ('_'? digit)*",
 		"let hexnum = hexdigit ('_'? hexdigit)*",
@@ -290,7 +290,7 @@ func TestParseAlignAppliesThePowerOfTwoCheck(t *testing.T) {
 // the layer assignment is true. If upstream moved either check, the reconciliation's excuse
 // would be wrong and nothing else would notice.
 func TestAlignmentCheckIsTheParsersAndNaturalIsTheValidators(t *testing.T) {
-	parser := testenv.RequireSpecRef(t, refPath(testenv.RefParserMLY))
+	parser := testenv.RequireSpecRef(t, testenv.RefParserMLY)
 
 	if !strings.Contains(parser, `"alignment must be a power of two"`) {
 		t.Error(`parser.mly no longer errors "alignment must be a power of two"; parseAlign's ` +

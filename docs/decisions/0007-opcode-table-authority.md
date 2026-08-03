@@ -161,7 +161,7 @@ Circular at the margin.
 
 ### B — Extract the table from `decode.ml`'s text, in pure Go; commit the output; drift-check it
 
-A generator under `internal/binary/internal/opcodegen` (or `tools/`) parses the
+A generator under `internal/gen/opcodegen` (or `tools/`) parses the
 `| 0xNN ->` arms and their RHS immediate calls, emits a Go table, and the table is
 **committed**. A test re-runs the extraction against the vendored reference and fails
 on any disagreement with the committed table.

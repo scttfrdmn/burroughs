@@ -34,6 +34,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/scttfrdmn/burroughs/internal/gen"
 )
 
 // NoSkipEnv is the environment variable that revokes every skip license. CI sets
@@ -51,6 +53,16 @@ const NoSkipEnv = "BURROUGHS_NO_SKIP"
 // 257 .wast files; 250 leaves room for upstream churn without leaving room for a
 // broken fetch.
 const MinSuiteFiles = 250
+
+// SuiteDir is where the vendored suite lives, relative to the repo root.
+//
+// Used by RequireSuiteFile, which resolves from the root rather than taking a path. Not
+// used by RequireSuite or SuiteFiles, which take the directory as a parameter on purpose:
+// their falsification tests point them at empty temp dirs, so a door that resolved its own
+// location could not be shown to fail. Two doors, two shapes, and the difference is which
+// question each was written to answer — the same argument that made RequireSuiteFile a
+// fourth door instead of a call to RequireSuite.
+const SuiteDir = "testdata/spec"
 
 // NoSkip reports whether skip licenses are revoked in this run.
 func NoSkip() bool { return os.Getenv(NoSkipEnv) == "1" }
@@ -208,10 +220,10 @@ func RequireSpecRef(tb testing.TB, path string) string {
 	// through filepath.Join with `..` prefixes, so match on the suffix. An unrecognized
 	// path fails rather than skipping: a door that licenses a path it does not know is a
 	// door with no floor, which is this function's entire subject.
-	floor, known := 0, false
+	floor, known, canon := 0, false, ""
 	for p, f := range refFloors {
 		if strings.HasSuffix(filepath.ToSlash(path), p) {
-			floor, known = f, true
+			floor, known, canon = f, true, p
 			break
 		}
 	}
@@ -222,7 +234,27 @@ func RequireSpecRef(tb testing.TB, path string) string {
 		return ""
 	}
 
-	b, err := os.ReadFile(path)
+	// **The caller's `..` prefix selects the floor; it does not locate the file.** The path
+	// is re-resolved from the repo root, and the reason is a defect this door had rather
+	// than a tidiness: every caller spelled its own distance to the root as a literal
+	// (`"..", "..", "..", ".."`), which is a claim about where the package sits, and moving
+	// a package falsifies it. Promoting the generators to `internal/gen/` for 0014's join
+	// did exactly that — and the wrong path did not fail, it made a *vendored* reference
+	// look absent, so this function licensed a skip and every generator drift check passed
+	// by asking nothing. Only `BURROUGHS_NO_SKIP=1` turned it into the failure that found
+	// it: *a skip is not a verdict*, catching, one level up from the corpus it was written
+	// about, the case where the question could have been asked and the path said otherwise.
+	//
+	// Deriving the root removes the class instead of correcting five literals, which would
+	// leave the trap armed for the next move (*derive the domain, never enumerate it*).
+	resolved, err := gen.FromRoot(canon)
+	if err != nil {
+		tb.Fatalf("RequireSpecRef: %v", err)
+		return ""
+	}
+
+	b, err := os.ReadFile(resolved)
+	path = resolved
 	if len(b) >= floor {
 		return string(b)
 	}
@@ -267,9 +299,21 @@ const MinSuiteFileBytes = 200
 // (the first was RequireProposalDoc's own arrival). *A precondition that excuses a gate is
 // licensed at one place, or it is a hole.*
 //
+// The parameter is the file's name *within* the vendored suite ("annotations.wast"), not a
+// path — deliberately, so a caller cannot express its distance to the repo root and
+// therefore cannot get it wrong. See RequireSpecRef for the defect that motivates this: a
+// caller-supplied `..` depth is a claim about where a package lives, it is falsified by
+// moving the package, and it fails as a *skip* rather than as an error.
+//
 // Returns the contents so a caller cannot read the file without passing the gate.
-func RequireSuiteFile(tb testing.TB, path string) []byte {
+func RequireSuiteFile(tb testing.TB, name string) []byte {
 	tb.Helper()
+
+	path, err := gen.FromRoot(SuiteDir, name)
+	if err != nil {
+		tb.Fatalf("RequireSuiteFile: %v", err)
+		return nil
+	}
 
 	b, err := os.ReadFile(path)
 	if len(b) >= MinSuiteFileBytes {

@@ -1,7 +1,6 @@
 package text
 
 import (
-	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -42,7 +41,7 @@ var annotArmRE = regexp.MustCompile(`(?m)^\s*\|\s*"\(@"(.*)$`)
 // The assertion is on the count and the shapes *per rule*, so either rule gaining or losing
 // an arm upstream fails here rather than silently.
 func TestAnnotRuleArmsAgreeWithTheReference(t *testing.T) {
-	src := testenv.RequireSpecRef(t, refPath(testenv.RefLexerMLL))
+	src := testenv.RequireSpecRef(t, testenv.RefLexerMLL)
 
 	tokenRule, annotRule := splitAtAnnotRule(t, src)
 
@@ -276,7 +275,7 @@ func TestNestedAnnotStringIDRunsAnnotID(t *testing.T) {
 // from the vendored suite rather than transcribing it: *prefer deriving corpora from the
 // suite at run time — no transcription step, no drift*.
 func TestAnnotationsWastFirstModuleReads(t *testing.T) {
-	src := testenv.RequireSuiteFile(t, filepath.Join("..", "..", "testdata", "spec", "annotations.wast"))
+	src := testenv.RequireSuiteFile(t, "annotations.wast")
 
 	// The first module is the file's leading `(module ... )` form, ending at the first
 	// line that is exactly `)`. Bounded rather than searched, for splitAtAnnotRule's

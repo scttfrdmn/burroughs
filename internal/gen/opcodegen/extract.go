@@ -74,8 +74,18 @@ type Arm struct {
 	// when Code is a u32 sub-opcode read after it.
 	Prefix byte
 	Code   uint32
-	// Mnemonic is the reference's own constructor name, kept for the generated
-	// table's readability and for error messages. Not load-bearing.
+	// Mnemonic is the reference's own constructor name — `i32_add`, `local_get`.
+	//
+	// **Load-bearing as of decision 0014**, and this comment used to say the opposite
+	// ("kept for the generated table's readability and for error messages. Not
+	// load-bearing"). It was true when written and stopped being true when `opgen` made it
+	// the **join key** between this table and the wat keyword table: a mnemonic is now what
+	// says `i32.add` encodes to 0x6a, so an upstream constructor rename silently moves an
+	// opcode instead of changing a string nobody reads.
+	//
+	// Corrected here rather than in a follow-up because *a ruling retroactively falsifies
+	// the prose written before it*, and a field documented as decorative is exactly the
+	// field a future change will treat as safe to rename.
 	Mnemonic string
 	// Imms is the immediate sequence, in the order the reference reads them. Order is
 	// the point: a wrong order shifts every subsequent byte.

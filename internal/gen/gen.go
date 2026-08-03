@@ -24,12 +24,55 @@ import (
 	"fmt"
 	"go/format"
 	"os"
+	"path/filepath"
 	"regexp"
 )
 
 // rePin matches the reference pin in scripts/fetch-spec-ref.sh, which is the *one* place
 // the revision is declared.
 var rePin = regexp.MustCompile(`(?m)^rev="([0-9a-f]{40})"`)
+
+// FromRoot resolves a repo-root-relative path from wherever the caller is running, by
+// walking up to the directory holding go.mod.
+//
+// **This exists because a hardcoded `..` depth is a claim about a package's location, and
+// a claim that only a *skip* can falsify.** Every generator test spelled
+// `filepath.Join("..", "..", "..", "..", …)` — correct at
+// `internal/binary/internal/opcodegen`, wrong by one level the moment the generators were
+// promoted to `internal/gen/opcodegen` for 0014's join. The wrong path did not fail: it
+// made the vendored reference *look absent*, so `RequireSpecRef` licensed a skip and the
+// whole drift check passed by asking nothing. It surfaced only under
+// `BURROUGHS_NO_SKIP=1` — *a skip is not a verdict*, earning its keep on the exact defect
+// it was written for, one level up from the corpus it was written about.
+//
+// So the fix is not five corrected literals, which would re-arm the same trap for the next
+// move. It is deriving the root instead of enumerating the distance to it — *derive the
+// domain, never enumerate it* (0006/#33), where the domain here is "where the repo
+// starts". A file at the root is the only landmark that does not move when a package does.
+//
+// Fails loudly rather than returning a wrong path: a resolver that silently yields
+// something plausible-but-wrong reproduces the defect it replaces.
+func FromRoot(rel ...string) (string, error) {
+	dir, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return filepath.Join(append([]string{dir}, rel...)...), nil
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", fmt.Errorf("no go.mod found above %s: cannot resolve repo-root path %s",
+				must(os.Getwd()), filepath.Join(rel...))
+		}
+		dir = parent
+	}
+}
+
+// must is used only for the error message above, where a second failure of the call that
+// already succeeded once has nothing useful to report.
+func must(s string, _ error) string { return s }
 
 // PinnedRev reads the reference SHA out of the fetch script.
 //
@@ -46,6 +89,25 @@ func PinnedRev(script string) (string, error) {
 		return "", fmt.Errorf(`no rev="<40 hex>" pin found in %s`, script)
 	}
 	return string(m[1]), nil
+}
+
+// RefPinScript is where the reference revision is declared, relative to the repo root —
+// the *one* place, per the fetch script's own comment.
+const RefPinScript = "scripts/fetch-spec-ref.sh"
+
+// PinnedRefRev reads the reference SHA from RefPinScript, resolved from the repo root.
+//
+// The location-free form of PinnedRev, and every caller that wants "the reference pin"
+// rather than "the pin in this named file" should use it: the three existing callers each
+// spelled the path with their own `..` depth, which is the claim FromRoot exists to stop
+// anyone making. PinnedRev keeps its path parameter because gen_test.go points it at
+// temp-file scripts to falsify it — the same split as SuiteDir versus RequireSuite.
+func PinnedRefRev() (string, error) {
+	script, err := FromRoot(RefPinScript)
+	if err != nil {
+		return "", err
+	}
+	return PinnedRev(script)
 }
 
 // GofmtSource formats generated source with go/format — gofmt's rules, in process.

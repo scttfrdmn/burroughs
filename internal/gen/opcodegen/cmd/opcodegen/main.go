@@ -3,7 +3,7 @@
 //
 // Usage:
 //
-//	go run ./internal/binary/internal/opcodegen/cmd/opcodegen -o internal/binary/optable.go
+//	go run ./internal/gen/opcodegen/cmd/opcodegen -o internal/binary/optable.go
 //
 // or, normally, 'make opcodes'. The output is committed, so a fresh clone builds with
 // no fetch; 'make opcode-drift' asserts the committed file still agrees with the
@@ -17,8 +17,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/scttfrdmn/burroughs/internal/binary/internal/opcodegen"
 	"github.com/scttfrdmn/burroughs/internal/gen"
+	"github.com/scttfrdmn/burroughs/internal/gen/opcodegen"
 	"github.com/scttfrdmn/burroughs/internal/testenv"
 )
 
@@ -33,7 +33,7 @@ func main() {
 }
 
 func run(out string) error {
-	sha, err := gen.PinnedRev("scripts/fetch-spec-ref.sh")
+	sha, err := gen.PinnedRefRev()
 	if err != nil {
 		return err
 	}
