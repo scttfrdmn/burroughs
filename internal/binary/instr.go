@@ -209,7 +209,8 @@ func (c *instrCtx) stage(v uint64) {
 // stageLaneIdx records a lane index, packing it above a memarg's memory index when the two
 // staging words are already spoken for.
 //
-// **This exists because eight rows carry three values and the first draft dropped one.**
+// **This exists because eight rows carry three values and the first draft dropped one**
+// (grave #100).
 // `v128.load8_lane` and its seven siblings are `memop` followed by `laneidx`
 // (optable.go:433-440), and `memop` stages two words of its own — offset then memory index
 // — so the lane index arrived as a third and `stage`'s switch discarded it. A shuffle
@@ -528,6 +529,13 @@ func (c *instrCtx) structural(r *reader, op byte, ims []imm) error {
 	//
 	// Its own terminator is emitted by the `endTerminator` call below — see there for why
 	// the delimiters are retained rather than dropped once they have been judged.
+	//
+	// **Grave #99, and the sentence that used to be here is the grave.** It read "its own
+	// terminator is emitted by the recursive `block`/`expectEnd` pair below, which is why
+	// END appears in the retained sequence at all" — and nothing emitted it. The defect
+	// stated as the rule: a reviewer checking the code against that claim finds a `block`
+	// call and an `expectEnd` call sitting exactly where the sentence says they are, so
+	// review confirms it. What found it was an assertion over the accept population.
 	c.emit(0x00, uint32(op))
 	if err := c.block(r); err != nil {
 		return err
@@ -1046,6 +1054,12 @@ func expectEnd(r *reader) error {
 
 // endTerminator is expectEnd plus the retention: the verdict is the free function above,
 // and this is the accepting path that keeps the byte.
+//
+// **Grave #99.** The first version of the retention had no such function: `expectEnd` read
+// the terminator, judged it, and dropped it at all three call sites, so 23 of the 27 bound
+// functions in the accept population decoded to a *zero-length body* — and `structural`'s
+// comment claimed the opposite in so many words, which is why review did not find it. The
+// lesson is at that comment's replacement; this is the mechanism.
 //
 // **The split is deliberate and the merged version was the bug.** `expectEnd` is a grammar
 // check with two error vectors behind it and no business knowing about a retained

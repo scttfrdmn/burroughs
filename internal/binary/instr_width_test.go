@@ -241,6 +241,9 @@ func TestInstrImmediateWidthCoversTheTable(t *testing.T) {
 }
 
 // bitsOf returns a value's width in bits, without a literal anywhere.
+//
+// Graves #100 (the dropped lane index) and #101 (Op as a byte) are what this file's two
+// controls were written against; both are accept-direction, so neither had any other witness.
 func bitsOf(v uint64) int {
 	n := 0
 	for x := ^v & (v | ^v); x != 0; x >>= 1 { // all-ones, shifted down to zero

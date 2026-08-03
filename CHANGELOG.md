@@ -1236,7 +1236,8 @@ weakly-ordered platform.
 ### Fixed
 
 - **The retained sequence dropped every block terminator, so `(func)` decoded to nothing at
-  all** ([#7](https://github.com/scttfrdmn/burroughs/issues/7)). `expectEnd` read END, judged
+  all** ([grave #99](https://github.com/scttfrdmn/burroughs/issues/99),
+  [#7](https://github.com/scttfrdmn/burroughs/issues/7)). `expectEnd` read END, judged
   it, and discarded it at all three call sites — while `structural`'s comment claimed the
   opposite in so many words: *"its own terminator is emitted by the recursive
   `block`/`expectEnd` pair below, which is why END appears in the retained sequence at all"*.
@@ -1260,7 +1261,8 @@ weakly-ordered platform.
   population, not a reading.
 
 - **Eight SIMD lane instructions were decoded as different instructions than the module
-  contains** ([#7](https://github.com/scttfrdmn/burroughs/issues/7)). `v128.load8_lane` and
+  contains** ([grave #100](https://github.com/scttfrdmn/burroughs/issues/100),
+  [#7](https://github.com/scttfrdmn/burroughs/issues/7)). `v128.load8_lane` and
   its seven siblings are `memop` followed by `laneidx`, and `memop` stages two words of its
   own — so the lane index arrived as a third and `stage`'s two-slot switch discarded it. A
   shuffle operating on the wrong lane, silently, on valid input.
@@ -1278,7 +1280,8 @@ weakly-ordered platform.
   real declared immediates, it fails correctly.
 
 - **`Instr.Op` was a byte, which truncated the 0xfd region's high opcodes into other
-  instructions** ([#7](https://github.com/scttfrdmn/burroughs/issues/7)). An opcode is one
+  instructions** ([grave #101](https://github.com/scttfrdmn/burroughs/issues/101),
+  [#7](https://github.com/scttfrdmn/burroughs/issues/7)). An opcode is one
   byte, which is the reasonable-sounding ground the first version stood on — and the 0xfd
   sub-table reaches **0x113 (275)**. Found by printing the sub-tables' maxima (`opTableFB`
   0x1e, `opTableFC` 0x11, `opTableFD` **0x113**) instead of trusting the word "opcode".

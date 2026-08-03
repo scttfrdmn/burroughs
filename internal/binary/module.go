@@ -216,7 +216,8 @@ type Instr struct {
 	// Op is the opcode, or the sub-opcode for a prefixed instruction. Prefix carries
 	// the prefix byte; a single-byte instruction leaves it zero.
 	//
-	// **A uint32, not a byte, and that was a measurement rather than a preference.** The
+	// **A uint32, not a byte, and that was a measurement rather than a preference**
+	// (grave #101). The
 	// first version of this field was a byte, on the reasonable-sounding ground that an
 	// opcode is one — and the 0xfd sub-table reaches **0x113 (275)**, because SIMD has
 	// more than 256 instructions. A byte would have truncated `v128.load32_zero` and

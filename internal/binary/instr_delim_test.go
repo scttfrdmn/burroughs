@@ -7,7 +7,7 @@ import (
 
 // TestDelimitersAreRetained asserts END and ELSE appear in the retained sequence.
 //
-// # The defect this was written for
+// # The defect this was written for (grave #99)
 //
 // `expectEnd` read the terminator, judged it, and dropped it — at all three call sites —
 // while `structural`'s comment claimed the opposite in so many words: "its own terminator is
