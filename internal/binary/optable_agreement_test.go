@@ -1290,6 +1290,10 @@ func TestPrefixRegionsCoverTheTable(t *testing.T) {
 // sample has a blind spot by construction; here the blind spot was half the struct, and
 // the comment asserting otherwise is why nobody looked. Reflection makes a ninth gate widen
 // the walk to 512 rather than leaving it at 16 with one more field silently held low.
+//
+// Grave #114. The lesson is that an enumeration wearing a *derivation's* description is
+// worse than a bare enumeration, because the description defeats the review that would have
+// caught it: print the domain's size, never read the sentence claiming it was derived.
 func TestAgreementHoldsUnderEveryFeatureConfiguration(t *testing.T) {
 	const input = "\x70\x70\x70\x70\x70\x70\x70\x70\x70\x70\x70\x70\x70\x70\x70\x70"
 

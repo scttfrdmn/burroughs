@@ -387,6 +387,11 @@ func TestEveryGateOffDeclinesSomething(t *testing.T) {
 	// agreement). It went unnoticed because no gate needed the other form. Extended-const is
 	// the first that does: its whole content is *position*, so a function-body probe cannot
 	// exercise it at all, and the field the comment promised is the field the probe needs.
+	//
+	// Grave #115. The tell was *tense*: a capability the code does not have gets written in
+	// the future, or filed, or not written at all — a present-tense comment about a missing
+	// field is a plan that reads as documentation, and nothing distinguishes the two until
+	// something needs the field.
 	probes := map[gateID]struct {
 		instrs    []byte
 		constOnly bool

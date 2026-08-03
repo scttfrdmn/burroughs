@@ -50,6 +50,13 @@ import (
 // symbol is as checkable as a `.wast:N`, and this one resolved to nothing through three
 // PRs (#109 swept it).
 //
+// Grave #116, and it is the one of that family with work still open. Identifiers in prose
+// were left unchecked on the criterion *convention until first drift*; `constWalk` is the
+// first measured drift — not renamed or moved but **fiction from the first keystroke** — so
+// the criterion has fired and the resolving check `TestEveryCitedTestNameResolves` performs
+// for test names is owed to identifiers generally. Until it exists, this class is convention
+// again, which is the state that produced this comment.
+//
 // # What the table drives and what it cannot
 //
 // Dispatch, existence, illegality, escape, and immediate *shape* are all read from the

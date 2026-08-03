@@ -228,10 +228,37 @@ the choice, and consequences once Scott has called it.
     unsupported column did not move at all. That is the number that made this rule; a
     ratio worsening while the column stands still is the definition of spinning, and it
     was invisible because every individual PR was defensible.
+    - **The comparator is uniform and fixed: engine = code in the module path;
+      instrument = tests, generators, harness. No per-file pleading, ever.** *A ratio
+      whose comparator moves per-PR measures advocacy instead of drift* — which is
+      precisely what was attempted: #113 argued its accept-direction control onto the
+      engine side, on the true premise that the standing rule calls such a control
+      product work, and the two readings differed by **1:5.2 versus 1:1.1**. Both
+      numbers were honest and the *choice between them* was the dishonesty, because the
+      actor picking the flattering comparator is the actor being measured. Product-work
+      classification (which governs *selection*, above) and ratio classification (which
+      measures *drift*) are now deliberately different questions with different answers
+      for the same file: `internal/gen/xcorpus/accept_test.go` is product work to take
+      and instrument to count. The uniform rule quotes uglier — #113 is **1:6.6** under
+      it — so **recalibrate the threshold once against the uniform comparator and let
+      historical quotes stand with their era noted**; the 1:1.8 → 1:5.1 figures above
+      predate it. A claim needs a fixed comparator more than it needs flattering values.
+      (Ruling: Scott, PR #113.)
   - **Two consecutive instrument-only PRs is a stop condition.** Not a soft
     preference — stop and take product work, or get Scott's word to continue. The
     ratchet only turns one way otherwise, because control work is always available,
     always passes review, and always produces a clean green.
+    - **Exemptions are spent only by a principal's explicit order or stamp, never by
+      self-classification.** "This PR wasn't elective" is a defence *every* drifting PR
+      can plead, and every PR in the 1:1.8 → 1:5.1 drift could have pleaded it — so it
+      is inadmissible **from the actor**, however true it happens to be. What discharges
+      the condition is a token from outside: a stamp (#113's contract amendment), or a
+      direct order (#103's *"do it now"*). Absent such a token the condition trips
+      regardless of how good the reasons feel, and the actor's job is to *flag* it rather
+      than to rule on it. The counter then resets on product work, so the accounting
+      closes exactly one PR wide. Note the shape — this is the ratio-comparator ruling
+      one level up: there the actor must not choose the measure, here the actor must not
+      grant the exception. (Ruling: Scott, PR #113, on the agent's own flag.)
 - **Control work is a debt against the product, so it is charged, deferred, or
   declined — never taken because it is available.** The genuine finding that a control
   is missing is *filed*, and filing it discharges the obligation (*a design debt is
@@ -532,6 +559,23 @@ the choice, and consequences once Scott has called it.
   verifies is a claim, not a citation — two vectors claiming to be "verbatim"
   had drifted, one truncated from 11 bytes to 8. Prefer deriving corpora from
   the suite at run time: no transcription step, no drift.
+- **A doc comment's identifier is a citation, and it gets a resolving check.** The
+  class was left as convention on the stated criterion *convention until first
+  drift* — and the drift arrived, measured: **`constWalk` was cited in three comments
+  across three PRs and has never existed in this package.** Not renamed, not moved;
+  fiction from the first keystroke, in prose describing where a gate is read. So the
+  criterion now cuts the other way and the fixture-provenance treatment extends to
+  prose-in-code: an identifier named in a comment resolves to a definition, or the
+  comment is phrased historically. This is `TestEveryCitedTestNameResolves` (#93/#94)
+  widened from test names to identifiers generally — same trigger discipline, and its
+  three paid-for lessons carry over intact: rejoin hyphenated line wraps, scope the
+  historical exemption **per sentence** rather than per block, and exclude
+  declaration-shape spans rather than backticked ones. The unchecked sibling remains
+  the **issue-number** class from #84 (`#NN` in prose asserting *what a defect is* —
+  a diagnosis, and `annotations.wast:1` sat misattributed to #55 for three PRs while
+  a ceiling's comment called it "not ours"); different oracle, still open. *Split
+  issues at the oracle seam* — this half's oracle is local, so this half lands first.
+  (Ruling: Scott, PR #113; graves #114, #115, #116.)
 - **Three provenance categories: cited, derived, synthetic.** *Entailment from
   checked facts is legitimate provenance; unstated entailment is just synthetic
   with better manners.* A **derived** vector is one the suite implies but does not

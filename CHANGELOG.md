@@ -1282,6 +1282,33 @@ weakly-ordered platform.
 
 ### Changed
 
+- **The instrument-to-engine ratio has a fixed comparator, and stop-condition exemptions can no longer
+  be granted by the actor** (rulings: Scott, PR #113). Two process laws, and both take the same shape —
+  *the actor being measured does not choose the measure, and does not grant its own exception*.
+  **Engine = code in the module path; instrument = tests, generators, harness — no per-file pleading.**
+  #113 quoted 1:5.2 and argued its accept-direction control onto the engine side on the true premise
+  that the standing rule calls such a control product work; the two readings differed by **1:5.2 versus
+  1:1.1**, and the choice between two honest numbers was the dishonesty. Product-work classification
+  (which governs *selection*) and ratio classification (which measures *drift*) are now deliberately
+  different questions with different answers for the same file. The uniform rule quotes uglier — #113
+  is **1:6.6** — so the threshold is recalibrated once against it and historical quotes stand with
+  their era noted. And **stop-condition exemptions are spent only by a principal's order or stamp**:
+  "this PR wasn't elective" is a plea every drifting PR can make, so it is inadmissible from the actor
+  however true it is. The actor flags; the principal rules.
+
+- **Identifiers in doc comments are citations now, and the class is un-frozen**
+  ([#116](https://github.com/scttfrdmn/burroughs/issues/116)). The class was left as convention on the
+  explicit criterion *convention until first drift*, recorded in #93's scope note. The drift arrived
+  and was measured: `constWalk` was cited in three comments across three PRs and has **never existed**
+  — not renamed, not moved, fiction from the first keystroke, in prose describing where a gate is read.
+  So the criterion has fired and the fixture-provenance treatment extends to prose-in-code: an
+  identifier named in a comment resolves to a definition, or the comment is phrased historically.
+  The control is `TestEveryCitedTestNameResolves` widened from test names to identifiers generally, and
+  its three paid-for trigger lessons are recorded to be **copied rather than re-derived** (#105):
+  rejoin hyphenated line wraps, scope the historical exemption **per sentence** not per block, and
+  exclude declaration-shape spans rather than backticked ones. The still-unchecked sibling is the
+  **issue-number** class from #84 — different oracle, so it stays split at the seam.
+
 - **The three code generators live in `internal/gen/`, and a repo-relative path is now
   *derived* rather than counted** (decision 0014). `opcodegen` was
   `internal/binary/internal/opcodegen` and `keywordgen` was `internal/text/internal/...`,
@@ -1594,15 +1621,20 @@ weakly-ordered platform.
   by reverting `constLegal` to `return false`, which yields exactly those nine. *The defect stated as
   the rule* is the shape — review verifies code against claims, and here the claim was the bug.
 
-  Three collateral repairs of the same shape, each a green test whose comment described something the
-  code did not do. `TestAgreementHoldsUnderEveryFeatureConfiguration` claimed its four booleans were
-  "the same derivation without a dependency" while walking **4 of 8** gates, pinning the other four
-  off in all 16 configurations — it now reflects over `Features` (2^9 = 512).
-  `TestEveryGateOffDeclinesSomething`'s probe struct documented a `body`/`constExpr` selector that was
-  not a field, which is why no probe could reach a const position. And three comments cited
-  `constWalk`, a function that has
-  never existed in the package through three PRs — *a citation to a symbol is as checkable as a
-  `.wast:N`*, and nothing was checking these.
+  Three collateral repairs of the same shape — greens whose subjects were fiction — each ruled a grave
+  in its own right ([#114](https://github.com/scttfrdmn/burroughs/issues/114),
+  [#115](https://github.com/scttfrdmn/burroughs/issues/115),
+  [#116](https://github.com/scttfrdmn/burroughs/issues/116)) with a comment at each fix site.
+  `TestAgreementHoldsUnderEveryFeatureConfiguration` claimed its four booleans were "the same
+  derivation without a dependency" while walking **4 of 8** gates, pinning the other four off in all 16
+  configurations — it now reflects over `Features` (2^9 = 512), and the lesson is that an enumeration
+  wearing a *derivation's* description is worse than a bare enumeration, because the description
+  defeats the review that would have caught it. `TestEveryGateOffDeclinesSomething`'s probe struct
+  documented a `body`/`constExpr` selector that was **not a field**, which is why no probe could reach
+  a const position; the tell was *tense* — a capability the code lacks belongs in the future tense, or
+  in an issue, or nowhere. And three comments cited `constWalk`, a function that has never existed in
+  the package through three PRs — *a citation to a symbol is as checkable as a `.wast:N`*, and nothing
+  was checking these.
 
   **The new control was itself born stillborn, which is the part worth keeping.**
   `TestEveryCorpusModuleDecodesUnderFullFeatures`' floors measured `len(m.Modules)` — the population —
