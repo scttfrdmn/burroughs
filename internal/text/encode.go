@@ -24,11 +24,16 @@ import (
 //
 // # Growing one section at a time, and stating the frontier
 //
-// This lands the **type section** and nothing else, which is a vertical slice rather than a stub:
-// the type space is the one part of a module that is fully retained on the parse side and fully
-// represented on the decode side today, so it round-trips end to end and can be checked against the
-// cross-check corpus. A wider surface would need retention that does not exist yet, and building
-// that retention *and* its consumer in one motion shapes a representation in the load-bearing spot.
+// Sections arrive **one at a time, each a vertical slice rather than a stub** — a section is emitted
+// only when the parse side retains its content in full and the decode side represents it in full, so
+// every one round-trips end to end and can be checked against the cross-check corpus. A wider surface
+// would need retention that does not exist yet, and building that retention *and* its consumer in one
+// motion shapes a representation in the load-bearing spot.
+//
+// Landed so far: **type (1), import (2), table (4), memory (5)**, written in id order. This paragraph
+// said "the type section and nothing else" for two PRs after that stopped being true, which is the
+// drifted-citation defect wearing a scope note — so it now names the set rather than the moment, and
+// `secType`'s const block below is the enumeration a reader can check it against.
 //
 // So `EncodeModule` **refuses** every module it cannot fully encode, naming what stopped it.
 // Emitting a module while silently dropping its function section would produce bytes that decode
@@ -43,16 +48,30 @@ import (
 // # What an independent witness says so far
 //
 // Measured against #67's wabt corpus, joined on (file, ordinal): of the suite's 2150
-// parser-accepted text modules this encodes **15** in full, 10 of which the corpus can be joined to
-// — and those 10 agree **byte for byte**, 0 disagreements. The 5 unjoined all live in
-// `annotations.wast`, which the manifest names as skipped with its reason, so the gap is accounted
-// for rather than merely stated.
+// parser-accepted text modules this encodes **141** in full, **101** of which the corpus can be
+// joined to — and those 101 agree **byte for byte**, 0 disagreements. The 40 unjoined fall in exactly
+// six files, `annotations`, `memory`, `memory64`, `table`, `table64` and `tag`, and every one of the
+// six is in the manifest's `skipped_files` with wabt's own reason, so the gap is accounted for rather
+// than merely stated.
 //
-// That figure is quoted with its own vacuity check attached, because *exactly zero* on an agreement
-// is the tell grave #106 was filed for. Nine of the ten are 8-byte bare preambles and prove nothing
-// about the type section. The witness is the tenth: `type.wast#0`, 23 type definitions and 148
-// bytes, identical to an image produced by a toolchain that has never seen this parser. One real
-// agreement is the honest claim here — not ten.
+// The figure carries its vacuity check, because *exactly zero* on an agreement is the tell grave #106
+// was filed for, and at the type section's landing it was the right question to press: 9 of 10
+// agreements were 8-byte bare preambles and the whole witness was one module. It is no longer close
+// to vacuous — **92 of the 101 are longer than a bare preamble**, led by `type#0` at 148 bytes and 23
+// type definitions, `imports2#4` at 129, and the memory64 import files at ~50 each. A hundred
+// agreements against a toolchain that has never seen this parser is a claim about the import section
+// specifically, since two thirds of the joined population are import modules.
+//
+// **And the zero was earned twice, which is the part worth recording.** The first re-measurement
+// reported 99 agreements and **one disagreement**, `token#11` — ours 34 bytes, wabt 25 — and the
+// diff was the tell rather than the count: wabt's image had a *function and code* section for a
+// module whose text is one import and no functions, so it was not the same module. The probe's
+// ordinal counted every command carrying a `Source`, which includes `assert_malformed`'s inner quote
+// modules, and the key had shifted. Two probe defects in a row, in fact: before that it reported
+// **0 joined of 141** with `type#0` among the misses, which is *exactly zero on a join that used to
+// work* — the same tell in its cleanest form, and the cause was `File` being the base name without
+// its `.wast`. Neither figure was a finding about the encoder. An agreement measured through a
+// mis-keyed join is not evidence, in either direction.
 //
 // Byte equality is *evidence*, deliberately not the criterion: the corpus is an authority on which
 // module the text denotes, not on encoding style, which is why #67's comparator compares `[]Instr`.
@@ -64,6 +83,7 @@ import (
 // version of "later" here is an empty line rather than a tracked stub.
 const (
 	secType   byte = 1
+	secImport byte = 2
 	secTable  byte = 4
 	secMemory byte = 5
 )
@@ -157,6 +177,9 @@ func (p *parser) encode() ([]byte, error) {
 	if len(p.ctx.typeCtx) > 0 {
 		w.section(secType, p.encodeTypes)
 	}
+	if len(p.ctx.imports) > 0 {
+		w.section(secImport, p.encodeImports)
+	}
 	if len(p.ctx.tabDefs) > 0 {
 		w.section(secTable, p.encodeTables)
 	}
@@ -238,10 +261,50 @@ func (p *parser) encodableOrErr() error {
 				"withdrew the encoder's frontier without recording its content (#8)", got, k.kind, want)
 		}
 	}
+	// **The import withdrawal check, and unlike the loop above it can fire.** The two counts come from
+	// different code — `importsSeen` from `noteImport`, which every import spelling passes through in
+	// the grammar, and `len(imports)` from `defineImport`, which the emitter reads — so a sixth import
+	// spelling added to the grammar without a `defineImport` call fails here rather than emitting a
+	// section short by one.
+	//
+	// That is not hypothetical the way the memory/table version is. Six arms produce an import today
+	// (the field plus five sugars), all six were unretained before this PR, and the population this
+	// runs on is every module the frontier admits — which now *includes* imports, so an arm that
+	// withdraws and forgets is reachable. Falsified by deleting the `defineImport` call from
+	// `inlineImportTail`: `(module (memory (import "m" "x") 1))` then emits an 8-byte bare preamble,
+	// and this fires. Both directions, because a doubled `defineImport` would emit the import twice.
+	if got, want := len(p.ctx.imports), p.ctx.importsSeen; got != want {
+		return fmt.Errorf("text: internal: %d imports retained, %d parsed — a spelling withdrew the "+
+			"encoder's frontier without recording its content (#8)", got, want)
+	}
 	for i, t := range p.ctx.tabDefs {
 		if _, ok := valTypeByte(t.elem); !ok {
 			return fmt.Errorf("cannot yet encode table %d: element type %s needs a parameterized "+
 				"reference encoding, which arrives with the GC gate (#8)", i, t.elem)
+		}
+	}
+	// An import's descriptor can hold a valtype in two of its five forms, and both are the same
+	// frontier as a table definition's element type: `(import "m" "t" (table 1 (ref func)))` needs
+	// GC's 0x64 prefix. Asked through `valTypeByte`, the one predicate, so this cannot disagree with
+	// what `encodeImports` will write.
+	//
+	// Refused per *import* rather than folded into the loops above, because the position a reader
+	// needs is the import's index in section 2 — a table refusal quoting `table 0` when the module has
+	// no table section would be an error naming a thing the image does not contain, which is the
+	// wrong-layer tell #36 records in message form.
+	for i, im := range p.ctx.imports {
+		var v resolvedVal
+		switch im.desc.kind {
+		case importTable:
+			v = im.desc.table.elem
+		case importGlobal:
+			v = im.desc.global.val
+		case importFunc, importMemory, importTag:
+			continue // no valtype in the descriptor: a type index, a limits, or both
+		}
+		if _, ok := valTypeByte(v); !ok {
+			return fmt.Errorf("cannot yet encode import %d: %s needs a parameterized reference "+
+				"encoding, which arrives with the GC gate (#8)", i, v)
 		}
 	}
 	// The type-space refusals carry no offset, and that is deliberate rather than a shortcut. A
@@ -283,6 +346,103 @@ func (p *parser) encodeTypes(w *writer) {
 		w.vec(len(ft.params), func(w *writer, j int) { w.valType(ft.params[j]) })
 		w.vec(len(ft.results), func(w *writer, j int) { w.valType(ft.results[j]) })
 	})
+}
+
+// encodeImports writes the import section from the retained imports (encode.ml:938-943).
+//
+// Each entry is `name name externtype`, and the descriptor's five forms are encode.ml:202-208 — a
+// kind byte then that kind's own payload. Nothing here branches on *spelling*: an inline-imported
+// memory and an `(import … (memory …))` are the same `textImport` by the time they arrive, which is
+// the point of both arms calling `defineImport`.
+func (p *parser) encodeImports(w *writer) {
+	w.vec(len(p.ctx.imports), func(w *writer, i int) {
+		im := p.ctx.imports[i]
+		w.name(im.module)
+		w.name(im.name)
+		w.byte1(externKindByte(im.desc.kind))
+		switch im.desc.kind {
+		case importFunc:
+			w.u32(im.desc.typeIdx)
+		case importTag:
+			// The attribute byte, `u32 0x00l` at encode.ml:191 — a *zero LEB*, not a raw byte, and
+			// the decoder reads it as one (sections.go's tag arm). One value is legal today
+			// (`exnref`'s attribute), so writing 0 is the whole domain rather than a default.
+			w.u32(0)
+			w.u32(im.desc.typeIdx)
+		case importTable:
+			t := im.desc.table
+			w.valType(t.elem)
+			w.limits(t.addr64, t.lim)
+		case importMemory:
+			w.limits(im.desc.mem.addr64, im.desc.mem.lim)
+		case importGlobal:
+			g := im.desc.global
+			w.valType(g.val)
+			w.mutability(g.mut)
+		}
+	})
+}
+
+// externKindByte maps a retained import's kind to its binary kind byte.
+//
+// **A mapping and not a cast, and no arm of it is an identity.** `importKind`'s values are ordered by
+// the reference's *message* table — tag, global, memory, table, function (context.go:493,
+// parser.mly:1322-1354) — while the binary kind bytes are func 0x00, table 0x01, memory 0x02, global
+// 0x03, tag 0x04 (encode.ml:202-208). Those two orders are exact reversals, so a `byte(kind)` would
+// write 0x00 for a tag and 0x04 for a func, and every byte it writes is a *legal* kind byte.
+//
+// **What the cast actually does was probed rather than asserted, and the first draft of this comment
+// was wrong about it.** The draft claimed the image would "decode clean as a different module" — the
+// accept-direction class. Substituting `byte(im.desc.kind)` and running the round trip gives 16 fails
+// and 8 passes, and the numbers are the interesting part:
+//
+//   - all 16 failures are the *decoder* rejecting, not the want column disagreeing. A kind byte is
+//     followed by that kind's payload, so a wrong byte points the decoder at the wrong payload grammar
+//     and it usually notices: `malformed reference type: 0x7f` for a global written as a table,
+//     `unexpected end of section` for a func written as a tag.
+//   - the 8 passes are **every memory row and only the memory rows**, because memory is the fixed
+//     point of a five-element reversal. The cast writes 0x02 for it and 0x02 is right.
+//   - the near miss is a table written as a global: `03 70 00 01` reads as a perfectly plausible
+//     `funcref` const global, and what caught it was the **section size mismatch** on the leftover
+//     byte, not the payload grammar.
+//
+// So the round trip does catch this, but it catches it through the payloads, which is a property of
+// today's five payload grammars happening to differ — not a structural guard. Two kinds with the same
+// payload shape would swap silently. The mapping is the guard; the round trip is the witness that it
+// is installed.
+//
+// It reads `binary`'s own constants rather than literals, so the two sides of the round trip cannot
+// disagree about a number: this is the same one-concept-one-trigger argument `valTypeByte` makes.
+func externKindByte(k importKind) byte {
+	switch k {
+	case importFunc:
+		return byte(binary.ExternFunc)
+	case importTable:
+		return byte(binary.ExternTable)
+	case importMemory:
+		return byte(binary.ExternMemory)
+	case importGlobal:
+		return byte(binary.ExternGlobal)
+	case importTag:
+		return byte(binary.ExternTag)
+	}
+	// Unreachable: importKind has five values and all five are above. A panic rather than a zero,
+	// because a zero is `ExternFunc` — a plausible wrong byte, which is grave #36's class moved into
+	// an image where no oracle reads it. `valType`'s panic carries the same argument at more length.
+	panic(fmt.Sprintf("text: unencodable import kind %d reached the emitter", int(k)))
+}
+
+// mutability writes a globaltype's mutability byte: `Cons -> 0 | Var -> 1` (encode.ml:104-106).
+//
+// On `writer` for the reason `limits` is: it is a byte-layer fact, and the reader it inverts is
+// `decodeGlobalType`'s. One byte, and the direction matters — writing 1 for immutable would make
+// every `(import "m" "g" (global i32))` in the corpus a mutable global, which decodes clean.
+func (w *writer) mutability(mut bool) {
+	if mut {
+		w.byte1(1)
+		return
+	}
+	w.byte1(0)
 }
 
 // encodeTables writes the table section from the retained definitions.
