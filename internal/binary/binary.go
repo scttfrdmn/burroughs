@@ -338,10 +338,87 @@ type Section struct {
 	Payload []byte // aliases the input buffer; not copied
 }
 
-// Module is the section-level view of a decoded module.
+// Module is a decoded module: the section-level view, plus the internal form the
+// descent retained while recognizing it.
+//
+// The two coexist rather than one replacing the other, and that is not a transitional
+// state. Sections carries the *raw* extents and is what checkCounts and the data-count
+// cross-check read — questions about the image, answered on the image. The retained
+// fields below are questions about the program. Collapsing them would make the
+// count-agreement checks re-derive from a structure built by the very grammar they are
+// meant to cross-check.
+//
+// Retention is partial and every gap is named. The sections whose grammars exist but
+// whose contents are not yet kept — element and data segments, tags — say so at their
+// decode sites and cite #7, which is the declared-and-tracked form of "not done" (#6
+// ruling) rather than a silent omission. Nothing reads a field that is never written,
+// which is the property `deadcode` is checking.
 type Module struct {
 	Version  uint32
 	Sections []Section
+
+	// Types is the type index space, in index order — every accepted comptype, not just
+	// the functypes. See CompType on why the struct and array forms take slots they do
+	// not fill: skipping them would shift every later index in the all-gates-on lane
+	// only, which is a defect the default board cannot see by construction.
+	Types []CompType
+
+	// Funcs is one entry per *defined* function — the function section's type indices
+	// zipped with the code section's bodies. They are separate sections that
+	// checkCounts already requires to agree in length, so zipping them here cannot
+	// silently mismatch: a module reaching this point has passed that check.
+	//
+	// Imported functions are *not* here. They occupy the low function indices, and
+	// FuncIndex is what maps an index to one or the other — see its comment for why
+	// that is a method rather than a merged slice.
+	Funcs []Func
+
+	Imports  []Import
+	Exports  []Export
+	Tables   []Table
+	Memories []Memory
+	Globals  []Global
+
+	// Start is the start section's function index, valid only when HasStart.
+	Start    uint32
+	HasStart bool
+}
+
+// ImportedFuncs counts the function imports, which is the offset defined functions
+// start at in the function index space.
+//
+// Computed rather than stored, because a stored count is a second place knowing a fact
+// Imports already holds — and the two would drift exactly when a new import kind
+// arrives. The loop is over a slice that is empty for most modules.
+func (m *Module) ImportedFuncs() int {
+	n := 0
+	for _, im := range m.Imports {
+		if im.Kind == ExternFunc {
+			n++
+		}
+	}
+	return n
+}
+
+// DefinedFunc maps a function index to the defined function it names, reporting false
+// when the index falls in the imported range or past the end.
+//
+// A method rather than a merged `[]Func` with placeholder entries for imports, and the
+// reason is that an import has no body: a placeholder would be a Func whose Body is nil
+// and whose nil is meaningful, which is the shape that makes a nil-deref look like a
+// module property. Whether an index is *in range at all* is #9's question — this
+// reports what it can find, and the caller decides whether not-found is a validation
+// failure or a call into an unlinked import.
+func (m *Module) DefinedFunc(idx uint32) (*Func, bool) {
+	off := m.ImportedFuncs()
+	if idx < uint32(off) {
+		return nil, false
+	}
+	i := int(idx) - off
+	if i >= len(m.Funcs) {
+		return nil, false
+	}
+	return &m.Funcs[i], true
 }
 
 // reader is a cursor over the input. In-place posture: no copying,
@@ -486,17 +563,38 @@ func (r *reader) byteVecErr(overrun error) ([]byte, error) {
 // nothing speculative left to hand back. This is the same classification question
 // the //nolint:unparam on byteVec answered the other way, and the answer differs
 // because the facts do: byteVec's return had a named future consumer (this check),
-// where name's would have none until the module structure retains names. Declared
-// and tracked beats suppressed; nothing beats not needing either.
+// where name's would have none until the module structure retains names.
+//
+// **That condition has now been met** (#7), and it is discharged by nameString below
+// rather than by widening this signature. The paragraph above stays because it is the
+// record of what was believed and why — and because the split it describes is still
+// live: `name` has callers that only check, and giving them a value to ignore would
+// invert the classification it just settled.
 func (r *reader) name() error {
+	_, err := r.nameString()
+	return err
+}
+
+// nameString reads a name and returns it as a Go string — the retaining form of `name`.
+//
+// A `string`, which is a **copy**, and deliberately against this reader's in-place
+// posture. Everywhere else a payload aliases the caller's buffer, which is right for
+// bytes the engine only compares; a name is a linker key that outlives the decode, so an
+// aliased one would make a module's identity depend on the caller not reusing its image.
+// The conversion is the copy and it is the cheapest correct thing available in pure Go.
+//
+// The two methods share one body, so the UTF-8 rule has one definition site. A second
+// copy of `utf8.Valid` here is exactly the shape grave #83 keeps taking — one production
+// in the reference, transcribed at two call sites, drifting at one.
+func (r *reader) nameString() (string, error) {
 	b, err := r.byteVec()
 	if err != nil {
-		return err
+		return "", err
 	}
 	if !utf8.Valid(b) {
-		return fmt.Errorf("%w: % x", ErrMalformedUTF8, b)
+		return "", fmt.Errorf("%w: % x", ErrMalformedUTF8, b)
 	}
-	return nil
+	return string(b), nil
 }
 
 // uleb reads an unsigned LEB128 integer of the given bit width.
@@ -680,6 +778,8 @@ func (d *Decoder) DecodeModule(b []byte) (*Module, error) {
 	// that carried the previous module's answer would be an instrument measuring
 	// history (#28), and clearing on exit leaves the zero-value path uncovered.
 	d.sawDataRef = false
+	d.funcTypeIdx = nil
+	d.valType, d.blockType = NoValType, 0
 
 	// A *short* preamble is "unexpected end"; a full-width but wrong one is
 	// "magic header not detected" / "unknown binary version". binary.wast
@@ -702,6 +802,10 @@ func (d *Decoder) DecodeModule(b []byte) (*Module, error) {
 	}
 
 	m := &Module{Version: ver}
+	// The descent writes retained fields here as it recognizes — see Decoder.m for why
+	// the producer is the descent rather than a second pass. Set after the preamble, so a
+	// module rejected on its magic or version never gets one.
+	d.m = m
 
 	// lastRank enforces order and uniqueness with one predicate: ranks must
 	// strictly increase. A duplicate section fails it for the same reason a
@@ -774,7 +878,35 @@ func (d *Decoder) DecodeModule(b []byte) (*Module, error) {
 	if d.sawDataRef && !m.hasSection(SectionDataCount) {
 		return nil, ErrDataCountRequired
 	}
+	// The two halves of every Func meet here and nowhere earlier, because the function
+	// and code sections are separate grammars and the *function* section comes first.
+	// Placed after every verdict above for decodeFuncBody's reason: a module rejected by
+	// checkCounts must not leave a zipped form behind.
+	d.finishFuncs()
 	return m, nil
+}
+
+// finishFuncs attaches the function section's type indices to the code section's bodies.
+//
+// checkCounts has already required the two counts to agree by the time this runs, so the
+// pairing cannot silently mismatch — but it is written to survive disagreement anyway,
+// pairing only as far as the shorter half. That is not defensive padding: `finishFuncs`
+// is called from one place today and the cost of the alternative is a panic on a module
+// the decoder has already decided about, which is the worst possible place to learn that
+// an ordering assumption moved.
+//
+// A type index with no body, or a body with no index, is dropped rather than paired with
+// a zero. A zero is a *legal* type index, so a fabricated one would be indistinguishable
+// from a real one — the invented-evidence class (grave #36) in a field.
+func (d *Decoder) finishFuncs() {
+	m := d.mod()
+	n := min(len(d.funcTypeIdx), len(m.Funcs))
+	for i := range n {
+		m.Funcs[i].TypeIndex = d.funcTypeIdx[i]
+	}
+	if len(m.Funcs) > n {
+		m.Funcs = m.Funcs[:n]
+	}
 }
 
 func (m *Module) hasSection(id SectionID) bool {

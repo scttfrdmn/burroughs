@@ -549,7 +549,7 @@ func TestConstExprExtentMatchesTheAuthority(t *testing.T) {
 		}
 
 		mine := &reader{b: []byte(input)}
-		if err := c.imms(mine, info.imms); err != nil {
+		if err := c.imms(mine, b, info.imms); err != nil {
 			t.Errorf("%#02x (%s): the production reader failed on the shared input: %v", b, info.mnemonic, err)
 			continue
 		}
@@ -971,7 +971,7 @@ func wellFormedExpr(c *instrCtx, op byte, info opInfo) ([]byte, bool) {
 			buf[i] = fill
 		}
 		r := &reader{b: buf, eof: ErrPayloadEnd}
-		if err := c.imms(r, info.imms); err != nil {
+		if err := c.imms(r, op, info.imms); err != nil {
 			continue
 		}
 		img := append([]byte{op}, buf[:r.off]...)
@@ -1248,7 +1248,7 @@ func TestAgreementHoldsUnderEveryFeatureConfiguration(t *testing.T) {
 				continue
 			}
 			mine := &reader{b: []byte(input)}
-			if err := c.imms(mine, info.imms); err != nil {
+			if err := c.imms(mine, b, info.imms); err != nil {
 				t.Errorf("%+v: %#02x (%s) failed: %v", f, b, info.mnemonic, err)
 				continue
 			}

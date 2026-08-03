@@ -21,6 +21,44 @@ weakly-ordered platform.
 
 ### Added
 
+- **The internal form: the decoder now retains modules instead of only judging them**
+  ([#7](https://github.com/scttfrdmn/burroughs/issues/7), decision 0002). Before this,
+  nothing in the codebase could represent a module — 28 of the 29 `decode*` functions
+  returned a bare `error`, and `Module` was `{Version, Sections}` of payloads aliasing the
+  input image, which is a verdict about bytes rather than a program. That single missing
+  artifact was behind 93.6% of the board: #7 execution, #9 validation, #67's half-2
+  comparator, and the text encoder's target all waited on it.
+
+  `internal/binary/module.go` is 0002's `[]Instr` form — fixed-width instructions with
+  pre-decoded immediates in two 64-bit words, plus types, functions, globals, imports,
+  exports, tables and memories. It is grown out of the **decoder**, which has a 4162-vector
+  conformance record, rather than out of the text parser, which has never accepted a module
+  (0006's load-bearing-spot rule; 0011's appended ruling sequences the form before the
+  encoder).
+
+  **The producer seam 0002 left open is resolved to the descent**, on `sawDataRef`'s
+  precedent: one grammar, one traversal, state on the `Decoder`. A second pass would be a
+  second grammar over the same bytes. The cost is stated rather than hidden — `decode*`
+  signatures stay error-only, so the shape those 4162 rejection vectors are proven against
+  does not change, and retention lands on the decoder's in-progress module. Retention is
+  per-decode state, reset at `DecodeModule`'s top rather than its bottom so the zero-value
+  path is covered, and `mod()` creates the module lazily so a production driven below
+  `DecodeModule` — every unit test does this — cannot make its own correctness depend on its
+  caller.
+
+- **Three accept-direction controls, because the suite scores this whole direction green by
+  construction** ([#7](https://github.com/scttfrdmn/burroughs/issues/7)). Every one of the
+  decoder's 4162 green vectors is a *rejection*, so a decoder that recognizes every malformed
+  module correctly and retains **nothing** scores 4162 too. That is contract §9 G-3 in its
+  purest form, and it is why these are product work rather than overhead.
+  `internal/spec/retention_test.go` asserts the form over the real accept population — **74
+  accepted modules, 218 sections, 27 bound functions, 47 instructions**, measured and printed
+  every run, with four vacuity floors because the interesting assertions have much smaller
+  populations than the outer loop. `TestIsRefPartitionsTheValTypeSpace` pins 0002's
+  reference/numeric split, whose failure mode is a pointer the Go collector cannot trace.
+  Domains are derived by AST walk over the declared constants, never enumerated, so a form
+  added upstream fails rather than defaulting.
+
 - **A cited test name must resolve, and the sweep is now a control rather than a habit**
   ([#93](https://github.com/scttfrdmn/burroughs/issues/93), ruling on
   [#91](https://github.com/scttfrdmn/burroughs/issues/91)).
@@ -1196,6 +1234,56 @@ weakly-ordered platform.
   skip ([#29](https://github.com/scttfrdmn/burroughs/issues/29)).
 
 ### Fixed
+
+- **The retained sequence dropped every block terminator, so `(func)` decoded to nothing at
+  all** ([#7](https://github.com/scttfrdmn/burroughs/issues/7)). `expectEnd` read END, judged
+  it, and discarded it at all three call sites — while `structural`'s comment claimed the
+  opposite in so many words: *"its own terminator is emitted by the recursive
+  `block`/`expectEnd` pair below, which is why END appears in the retained sequence at all"*.
+  Nothing emitted it. **23 of 27 bound functions decoded to a zero-length body**, and a
+  block's extent is not derivable from its header, so the interpreter would have had to
+  recompute extents by re-walking — a second opinion about the program's structure.
+
+  The same read found ELSE dropped one instruction over, which is worse: an `if`'s two arms
+  have no declared lengths, so without the delimiter they are one undifferentiated run and
+  nothing downstream can recover the split. An `if` whose arms cannot be told apart executes
+  the wrong one, on valid input.
+
+  `endTerminator` keeps the split that made the merged version a bug — the verdict stays in
+  the free function, the emit sits past it — so a rejected terminator cannot leave a
+  fabricated END behind. Both directions of the ELSE fact are pinned, since emitting one
+  unconditionally is as wrong as dropping it.
+
+  **The defect stated as the rule, which is the strongest camouflage a bug can wear**: every
+  reviewer checking the code against the claim finds a `block` call and an `expectEnd` call
+  exactly where the sentence says they are. What found it was an assertion over the accept
+  population, not a reading.
+
+- **Eight SIMD lane instructions were decoded as different instructions than the module
+  contains** ([#7](https://github.com/scttfrdmn/burroughs/issues/7)). `v128.load8_lane` and
+  its seven siblings are `memop` followed by `laneidx`, and `memop` stages two words of its
+  own — so the lane index arrived as a third and `stage`'s two-slot switch discarded it. A
+  shuffle operating on the wrong lane, silently, on valid input.
+
+  Found by *printing* each row's staged-word demand rather than by trusting the sentence "no
+  arm stages more than two", which was a comment I had written and which was false.
+  `stageLaneIdx` packs the index above the memory index — offset u64, memory index u32,
+  laneidx u8 is 104 bits of the available 128 — so 0002's two-word form stays sufficient for
+  the whole table. `TestInstrImmediateWidthCoversTheTable` counts **bits, not slots**, because
+  a slot count would reject this correct reader.
+
+  **The control was vacuous on the defect it named, and only falsification found that.**
+  Reverting the fix left it green: the packing assertions called the helper directly, proving
+  the helper packs while the defect was that *nothing called it*. Re-pointed at the reader's
+  real declared immediates, it fails correctly.
+
+- **`Instr.Op` was a byte, which truncated the 0xfd region's high opcodes into other
+  instructions** ([#7](https://github.com/scttfrdmn/burroughs/issues/7)). An opcode is one
+  byte, which is the reasonable-sounding ground the first version stood on — and the 0xfd
+  sub-table reaches **0x113 (275)**. Found by printing the sub-tables' maxima (`opTableFB`
+  0x1e, `opTableFC` 0x11, `opTableFD` **0x113**) instead of trusting the word "opcode".
+  `TestPrefixedSubOpcodesFitOp` reads the capacity off the field rather than restating it,
+  and is scoped to every row of every region rather than to the one that overflowed.
 
 - **Two deferral citations that no longer led to the work they deferred**
   ([#22](https://github.com/scttfrdmn/burroughs/issues/22),
