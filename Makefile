@@ -5,7 +5,7 @@ GO ?= go
 # anything globally.
 TOOL = $(GO) tool -modfile=tools/go.mod
 
-.PHONY: all build test vet fmt lint check vuln deadcode fuzz bench spec-tests spec-ref tidy conformance strict opcodes opcode-drift keywords keyword-drift opcodes-text opcodes-text-drift gate-census
+.PHONY: all build test vet fmt lint check vuln deadcode fuzz bench spec-tests spec-ref tidy conformance strict opcodes opcode-drift keywords keyword-drift opcodes-text opcodes-text-drift gate-census xcorpus
 
 # The default gate. `check` is what must be green before a report — it is the
 # local mirror of CI, so a surprise in CI means a bug in this line, not a bug in
@@ -263,3 +263,29 @@ opcodes-text-drift:
 		echo "reference not vendored; run: make spec-ref"; exit 1; \
 	fi
 	$(STRICT) $(GO) test -v -shuffle=on -count=1 ./internal/gen/opgen/
+
+# Regenerate the #67 cross-check corpus: independently produced binary images of the suite's
+# must-succeed text modules (0011's second appendix, #67 half 2).
+#
+# **This is the one target that needs a tool the project does not pin, and that is why its
+# output is committed.** wabt supplies a statement of what a text module denotes that does not
+# come from Burroughs — comparing our encoder to our decoder is one witness talking to itself,
+# which 0011 rules inadmissible. So wabt runs *here*, once, and the images plus a provenance
+# manifest go into the tree; no test invokes it, CI never sees it, and a fresh clone gets the
+# control with nothing fetched and nothing installed. Same posture the generated tables have
+# toward the reference interpreter, for the reason #8 states: a non-Go binary in the
+# conformance loop is reproducibility debt where the project can least afford it.
+#
+# No `-drift` sibling, and the asymmetry is deliberate rather than an omission. The other
+# generated artifacts are drift-checked because their input is *vendored at a pin a fetch can
+# move*, so a committed table can silently stop agreeing with the reference in the tree. This
+# corpus's inputs are the suite pin (asserted by the package's own test against
+# `gen.PinnedSuiteRev`, so a bump fails the board) and a wabt version the manifest records.
+# A drift check would have to install wabt in CI, which is exactly the dependency the
+# committed artifact exists to avoid — the check would reintroduce the thing it verifies the
+# absence of.
+xcorpus: spec-tests
+	@command -v wast2json >/dev/null 2>&1 || { \
+		echo "wast2json not found; install wabt (brew install wabt)"; exit 1; }
+	$(GO) run ./internal/gen/xcorpus/cmd/xcorpus
+	@echo "regenerated testdata/xcorpus/ (manifest.json, images.bin)"

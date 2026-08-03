@@ -110,6 +110,30 @@ func PinnedRefRev() (string, error) {
 	return PinnedRev(script)
 }
 
+// SuitePinScript is where the *suite* revision is declared, relative to the repo root.
+//
+// A second pin, not a second reader: `rePin` matches both scripts because `fetch-spec-tests.sh`
+// deliberately spells its pin in the same `rev="<40 hex>"` shape for exactly this reason (its
+// own comment says so, citing *one concept, one trigger*). What was missing is the *name* — the
+// suite path was spelled as a `../..`-relative literal at its one call site, which is the claim
+// FromRoot exists to stop anyone making, and the second caller is what turns that from a
+// latent risk into a duplicated fact.
+const SuitePinScript = "scripts/fetch-spec-tests.sh"
+
+// PinnedSuiteRev reads the suite SHA from SuitePinScript, resolved from the repo root.
+//
+// The pair of PinnedRefRev, and the pairing is the point: a caller wanting "the corpus this
+// was cut from" must not reach for the reference pin, which is a different artifact at a
+// different revision. Both resolve, so a mix-up produces a provenance header that is stamped,
+// plausible, and about the wrong thing.
+func PinnedSuiteRev() (string, error) {
+	script, err := FromRoot(SuitePinScript)
+	if err != nil {
+		return "", err
+	}
+	return PinnedRev(script)
+}
+
 // GofmtSource formats generated source with go/format — gofmt's rules, in process.
 //
 // Not the repo's formatting gate (gofumpt with extra-rules), and the reason it does not

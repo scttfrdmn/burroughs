@@ -21,6 +21,44 @@ weakly-ordered platform.
 
 ### Added
 
+- **`testdata/xcorpus`: an independently produced binary image of every suite text module that
+  must succeed** ([#67](https://github.com/scttfrdmn/burroughs/issues/67),
+  [#8](https://github.com/scttfrdmn/burroughs/issues/8)). #67's second half asks whether the
+  encoder emits *the right module*, not merely a well-formed one, and our encoder compared
+  against our decoder is one witness talking to itself — inadmissible per 0011's second
+  appendix. So `wast2json` supplies the second opinion: **1954 modules, 312866 image bytes, cut
+  from suite `de54fd27` by wabt 1.0.41**, committed with a provenance manifest. wabt touches the
+  repo once as a generator and is never invoked by a test, never in CI, and never in the verdict
+  path — the same posture the generated tables hold toward the reference interpreter.
+
+  **`wast2json` is a second *splitter*, not just a second compiler**, which is why it is
+  stronger evidence than compiling text we ourselves parsed: the two command sequences are
+  independently derived and have to be joined. **The join is an ordinal, not a line, and that
+  was measured rather than assumed** — in `comments.wast` we report the opening `(`'s line and
+  wabt reports the `module` keyword's, one apart, and both readings are defensible. A key two
+  readers legitimately disagree on is not a key. Line is retained as a *corroborating* signal
+  precisely because it is unfit to key on (0014's correction, grave #106): 1953 of our 2238
+  module commands join, one pair exceeds a ±2 window, and **every unjoined command lives in a
+  file the manifest names as skipped** — the gap is accounted for, not merely stated.
+
+  **The corpus raises the accept population from 74 modules / 18 instructions to 1262 accepted
+  modules**, which is the oracle the accept direction has never had: all 4162 green vectors are
+  rejections, so contract §9 G-3 defects score green by construction. It paid for itself on the
+  first run — see #109 under Fixed.
+
+  **Flags are the tracked union, enumerated to match `Features`, and this replaced
+  `--enable-all`.** A feature flag does not only decide what wabt accepts; measured over the
+  whole suite, three flags *re-encode* modules the standard grammar already describes —
+  `function-references` 105 (element segments in expression form), `compact-imports` 45 (an
+  import as `00 7f`), `multi-memory` 2. Under `--enable-all` the corpus disagreed with our
+  decoder in 58 × `malformed import kind: 0x7f`, which was the **generator** handing over a
+  proposal encoding: a cross-check corpus that quietly re-encodes its subject is the
+  wrong-module failure #67 exists to detect, arriving through the instrument. The criterion is
+  not "does it re-encode" — `function-references` re-encodes the most and *is* tracked (0008
+  folds it into the GC gate) — it is contract §9 G-2, and the six omitted flags buy **one**
+  module between them. `TestFeatureFlagsCoverTheTrackedGates` reflects over `Features` so a
+  ninth gate fails there rather than silently narrowing the corpus.
+
 - **`internal/text/opcodes.go`: the mnemonic→opcode table, generated as a *join* of the two
   tables that already exist** ([#8](https://github.com/scttfrdmn/burroughs/issues/8),
   decision 0014). #8's encoder must answer "which byte does `i32.add` emit?" 494 times.
@@ -1361,6 +1399,24 @@ weakly-ordered platform.
   skip ([#29](https://github.com/scttfrdmn/burroughs/issues/29)).
 
 ### Fixed
+
+- **A comment asserting extended-const "arrives with its gate" when there is no such gate**
+  ([#109](https://github.com/scttfrdmn/burroughs/issues/109)). `constOps`' comment said
+  extended-const and WasmGC both "are gated, so they arrive with their gates"; `Features` has
+  eight fields and none is extended-const, so `i32.add` in a constexpr is rejected outright with
+  `constant expression required` on **nine modules the suite requires accepted**
+  (`data.wast:178`, `elem.wast:1057`, `global.wast:3`, and six more). The claim read as
+  *declared and tracked* and licensed the omission — the defect stated as the rule, since review
+  verifies code against claims. The comment is corrected here and the remedy is flagged for
+  Scott, because G-2 does not name extended-const though it is Wasm 3.0 core; either way the
+  string is wrong, a declined feature reporting a spec `invalid` string (#5).
+
+  **This is what the cross-check corpus was built to find, and it found it on the first run.**
+  Also a second-order lesson: 58 compact-import rejections and these 9 appeared together under
+  one flag change and were attributed to one cause. The first bucket vanished when the flags were
+  corrected and this one *survived* — `--enable-extended-const` is measurably inert in wabt (0
+  modules, 0 bytes), so these are baseline corpus content. Only re-measuring after the fix
+  separated the two causes.
 
 - **Three accept-direction defects in 0014's join, none of them findable from the board**
   ([grave #105](https://github.com/scttfrdmn/burroughs/issues/105),
