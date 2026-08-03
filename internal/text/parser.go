@@ -889,9 +889,10 @@ func (p *parser) tableField() error {
 //
 // Nothing retained: this arm's table is sized from an elem segment the emitter cannot write, so there
 // is nothing to retain it for. **The reference resolves the reftype here too** — the arm is `$2 c`, a
-// lookup — so `(table (ref null $undefined) (elem))` is a module we accept and upstream rejects. Not
-// fixed here: it is one of nine sites of one shape, filed as its own issue rather than swept into an
-// encoder PR (see types.go's header).
+// lookup — so `(table (ref null $undefined) (elem))` is a module we accept and upstream rejects.
+// Declared and tracked as **#111**, which measures all nine accepting sites and holds the
+// scope-to-the-space requirement for the control: fixed here, it would be one site of one shape
+// repaired inside a PR about section emitters, with the other eight left silently green.
 func (p *parser) tableElemSugar() error {
 	if _, err := p.reftype(); err != nil {
 		return err

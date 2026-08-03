@@ -88,6 +88,14 @@ func (p *parser) atHeaptypeStart() bool {
 // `(Null, <heaptype>)`, so all twelve are nullable and they differ only in the heap type. The
 // pairing is written out because a wrong expansion is a *comparison* defect now, not just an
 // acceptance one — `funcref` versus `(ref func)` decides whether an inline signature matches.
+//
+// **The pairing is checked now, and it was prose until the emitter existed** —
+// TestEveryAbbreviatedReftypeExpandsAsItsTableClaims iterates this table, judging the ten refused
+// element types by the heap type their refusal names and `funcref`/`externref` by the 0x70/0x6F
+// encode.ml writes. Found by grave #112's sweep: a swapped pairing here used to parse identically
+// and no spelling of a test could see it, because every caller of `reftype` discarded the value.
+// That is #112's method restated — *a reader that discards cannot be audited by any suite we have*,
+// and the repair is to give the value a consumer, not to write a better comment.
 var abbreviatedReftypes = []struct {
 	kw   keywordKind
 	heap keywordKind
@@ -472,12 +480,16 @@ func (p *parser) addrtype() (bool, error) {
 
 // limits parses `limits` (parser.mly:466-468): one nat, or two.
 //
-// **Both nats are `nat64`, and reading them is what closes a missing reject.** The reference's arms
-// are `{min = nat64 $1 …; max = Some (nat64 $2 …)}`, so a minimum that does not fit 64 bits is
-// `i64 constant out of range` *from the parser*. This function previously advanced the cursor and
-// read nothing, so `(memory 18446744073709551616)` was accepted — measured before this change, and
-// the suite has **no vector** for it: the accept direction §9 G-3 names, found only because the
-// encoder needed the value and asking what a nat is worth forced the width question.
+// **Both nats are `nat64`, and reading them is what closes a missing reject** — grave #112. The
+// reference's arms are `{min = nat64 $1 …; max = Some (nat64 $2 …)}`, so a minimum that does not fit
+// 64 bits is `i64 constant out of range` *from the parser*. This function previously advanced the
+// cursor and read nothing, so `(memory 18446744073709551616)` was accepted — measured before this
+// change, and the suite has **no vector** for it: the accept direction §9 G-3 names, found only
+// because the encoder needed the value and asking what a nat is worth forced the width question.
+// The lesson is indexed by shape: *a reject-only reader that advances past a literal cannot enforce
+// the literal's width*, and where the production's action **is** the conversion, skipping the token
+// skips the production. The control is `TestLimitsNatsAreCheckedAtSixtyFourBits`, scoped to all four
+// call sites because a fix applied only to the two inline ones passes every row about `(memory N)`.
 //
 // Not a decoder-side check in disguise. `binary.decodeLimits` reads its own u64 budget and reports
 // `integer too large`, which is the *binary* grammar's complaint about a LEB; this is the text
@@ -509,6 +521,8 @@ func (p *parser) limits() (limits, error) {
 // two carry *different messages* — `i64 constant out of range` against `i32 constant out of range` —
 // and a shared helper taking a width would have to take the message too, at which point the two
 // callers are the two functions with extra steps. The width and the message are one fact.
+//
+// This function is grave #112's fix: `limits` used to have no width at all.
 func (p *parser) nat64() (uint64, error) {
 	t := p.c.next()
 	v, ok := parseNat(t.Text, 64)
@@ -588,6 +602,13 @@ func (p *parser) atTypeuse() bool { return p.c.at(LParen) && p.c.peek2Keyword(kw
 // sat in a module field, and no vector puts an over-wide index there without an instruction body
 // in the same module. The check is the production's, so it belongs on the production, not on the
 // instruction reader that finally made it reachable.
+//
+// **And the module-field positions are asserted now** — TestModuleFieldIdxIsCheckedAtThirtyTwoBits,
+// eleven of them, reject at 2^32 and accept at 2^32-1. The sentence above named an oracle gap and
+// then left the property untested for as long as it was true, which is grave #112's class exactly:
+// a width the code gets right, a comment saying no vector covers it, and nothing standing in for
+// the vector. The instruction and label positions were already covered; these were the ones the
+// sentence was about.
 func (p *parser) idx() error {
 	_, err := p.typeIdx()
 	return err

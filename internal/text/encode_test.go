@@ -710,3 +710,120 @@ func TestResolvedValStringNamesTheTypeItDenotes(t *testing.T) {
 		}
 	}
 }
+
+// TestEveryAbbreviatedReftypeExpandsAsItsTableClaims checks the twelve-row pairing in
+// abbreviatedReftypes (types.go) against the reader's *observable output*, which grave #112's
+// method made possible: the pairing used to be prose beside a table that nothing consumed.
+//
+// The table asserts that `anyref` is `(Null, AnyHT)`, `nullfuncref` is `(Null, NoFuncHT)`, and so on
+// for twelve arms of parser.mly:378-389 — every one nullable, differing only in the heap type. Until
+// the encoder existed, none of that was checkable from outside: `reftype` returned a `valType` every
+// caller discarded, so a swapped pairing (`structref` → `ArrayHT`) parsed identically and *no*
+// spelling of a test could tell the difference. It is checkable now for exactly the reason #112's
+// defect became visible — something consumes the value — which is the general method that grave
+// records: **a reader that discards cannot be audited by any suite we have.**
+//
+// Two channels, because two things can be wrong and they fail in different places:
+//   - the ten that the emitter refuses quote the resolved heap type in the refusal, so the *message*
+//     carries the pairing (grave #36's print-don't-trust: this text is invisible to the suite);
+//   - the two the emitter writes (`funcref`, `externref`) reach real bytes, so their pairing is
+//     checked against the binary encoding rather than against our own rendering — 0x70 and 0x6F from
+//     encode.ml, the one place in this test the authority is not a string we produced.
+//
+// Scoped to `len(abbreviatedReftypes)` by *iterating the table*, not by listing twelve cases: a
+// thirteenth abbreviation added to the table with no expectation here fails the exhaustiveness check
+// below rather than being silently unexercised. Derive the domain, never enumerate it.
+func TestEveryAbbreviatedReftypeExpandsAsItsTableClaims(t *testing.T) {
+	// The spelling and the type it must denote, read off parser.mly:378-389's semantic actions — not
+	// off abbreviatedReftypes, which is the thing under test. `(Null, AnyHT)` renders as
+	// `(ref null any)` per resolvedVal.String, pinned by the test above.
+	wantDenotes := map[string]string{
+		"anyref":        "(ref null any)",      // :378  (Null, AnyHT)
+		"nullref":       "(ref null none)",     // :379  (Null, NoneHT)
+		"eqref":         "(ref null eq)",       // :380  (Null, EqHT)
+		"i31ref":        "(ref null i31)",      // :381  (Null, I31HT)
+		"structref":     "(ref null struct)",   // :382  (Null, StructHT)
+		"arrayref":      "(ref null array)",    // :383  (Null, ArrayHT)
+		"funcref":       "(ref null func)",     // :384  (Null, FuncHT)
+		"nullfuncref":   "(ref null nofunc)",   // :385  (Null, NoFuncHT)
+		"exnref":        "(ref null exn)",      // :386  (Null, ExnHT)
+		"nullexnref":    "(ref null noexn)",    // :387  (Null, NoExnHT)
+		"externref":     "(ref null extern)",   // :388  (Null, ExternHT)
+		"nullexternref": "(ref null noextern)", // :389  (Null, NoExternHT)
+	}
+	// The two the emitter can write, with the byte encode.ml gives each: `funcref` 0x70 and
+	// `externref` 0x6F (encode.ml's reftype cases). These are the rows whose pairing is judged
+	// against the binary format rather than against our own String.
+	wantByte := map[string]byte{"funcref": 0x70, "externref": 0x6F}
+
+	// Vacuity floor: every assertion below is inside a loop over the table, so an emptied or
+	// truncated table would pass them all by iterating nothing.
+	if len(abbreviatedReftypes) != len(wantDenotes) {
+		t.Fatalf("abbreviatedReftypes has %d entries, expectations cover %d — parser.mly:378-389 is "+
+			"twelve arms; a mismatch means the table gained or lost an abbreviation and this "+
+			"control was not updated with it", len(abbreviatedReftypes), len(wantDenotes))
+	}
+
+	seen := map[string]bool{}
+	for _, a := range abbreviatedReftypes {
+		// The spelling is recovered from keywords.go rather than typed here, so this control cannot
+		// disagree with the generated table about what lexes to the kind: `a.kw` is a *kind*
+		// (`ANYREF`), and the source text is the keyword that produces it.
+		var spelling string
+		for kw, kind := range keywords {
+			if kind == a.kw {
+				spelling = kw
+				break
+			}
+		}
+		if spelling == "" {
+			t.Errorf("no keyword in keywords.go lexes to %s — the table names a kind the lexer "+
+				"cannot produce, so the arm is unreachable", a.kw)
+			continue
+		}
+		want, ok := wantDenotes[spelling]
+		if !ok {
+			t.Errorf("abbreviatedReftypes has %s (%s) with no expectation here — a new arm must "+
+				"cite its parser.mly line and the type it denotes", a.kw, spelling)
+			continue
+		}
+		seen[spelling] = true
+
+		b, err := EncodeModule([]byte("(module (table 1 " + spelling + "))"))
+		if wb, encodable := wantByte[spelling]; encodable {
+			if err != nil {
+				t.Errorf("EncodeModule(table 1 %s) = %v; this element type is encodable today",
+					spelling, err)
+				continue
+			}
+			// Section 4 is the table section; its payload is count, reftype, then limits.
+			i := bytesIndex(b, 4)
+			if i < 0 {
+				t.Errorf("no table section in the encoding of `(table 1 %s)`", spelling)
+				continue
+			}
+			// i, size, count, then the reftype byte.
+			if got := b[i+3]; got != wb {
+				t.Errorf("`(table 1 %s)` encodes element type %#02x, want %#02x — the pairing "+
+					"reaches the binary format here, and this byte is encode.ml's, not ours",
+					spelling, got, wb)
+			}
+			continue
+		}
+		// The refused ten: the refusal quotes the resolved type, which is where the pairing shows.
+		if err == nil {
+			t.Errorf("EncodeModule(table 1 %s) succeeded; only funcref and externref have an "+
+				"unparameterized encoding today", spelling)
+			continue
+		}
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("EncodeModule(table 1 %s) = %q, want it to name %q — a wrong pairing in "+
+				"abbreviatedReftypes shows up exactly here, in a message no vector reads",
+				spelling, err, want)
+		}
+	}
+	if len(seen) != len(wantDenotes) {
+		t.Errorf("exercised %d of %d abbreviations; the loop is over the table, so a spelling "+
+			"missing from it is an arm nothing tested", len(seen), len(wantDenotes))
+	}
+}

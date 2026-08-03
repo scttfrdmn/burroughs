@@ -35,10 +35,11 @@ weakly-ordered platform.
   `(memory 18446744073709551616)` is `i64 constant out of range` *from the parser* and we accepted
   it; and a table's element type resolves in the reference's stage 2 (parser.mly:1341-1347), so
   `(table 1 (ref null $undefined))` is rejected upstream and accepted here. The first is fixed with
-  the retention; the second is one of **nine sites of one shape** — every valtype position that
-  discards its type accepts an unknown one — and is filed separately rather than swept in, because a
-  nine-site shape is not an encoder's business. Neither has a suite vector: the accept direction §9
-  G-3 names.
+  the retention (grave [#112](https://github.com/scttfrdmn/burroughs/issues/112)); the second is one
+  of **nine sites of one shape** — every valtype position that discards its type accepts an unknown
+  one — and is filed as [#111](https://github.com/scttfrdmn/burroughs/issues/111) rather than swept
+  in, because a nine-site shape is not an encoder's business. Neither has a suite vector: the accept
+  direction §9 G-3 names.
 
   **The frontier is now per-arm, and the asymmetry is deliberate.** `(memory 1)` encodes while
   `(memory (data "abc"))` does not, though both dispatch on `memory` — so the record is made at the
@@ -1554,6 +1555,51 @@ weakly-ordered platform.
   skip ([#29](https://github.com/scttfrdmn/burroughs/issues/29)).
 
 ### Fixed
+
+- **`limits`' nats were never read, so a 2^64 bound was accepted**
+  ([grave #112](https://github.com/scttfrdmn/burroughs/issues/112)). Both arms are `nat64`
+  (`parser.mly:467-468`), so `(memory 18446744073709551616)` is `i64 constant out of range` *from the
+  parser* upstream; the reader advanced the cursor and read nothing, at four call sites — memory and
+  table, defining and imported. Two independent silences kept it invisible: no vector writes a 2^64
+  limit at all, and an over-acceptance has no `assert_malformed` that can complain about it. Board
+  delta zero, before and after.
+
+  **The lesson is indexed by shape:** *a reject-only reader that advances past a literal cannot
+  enforce the literal's width.* Where a production's semantic action **is** a conversion
+  (`nat8`/`nat32`/`nat64`/`num`/`vec`), skipping the token skips the production's entire content. The
+  class-level tell was in the signature — every other NAT-consuming reader in the package names its
+  width (`nat32`, `laneidx`, `constImm`'s width-from-the-mnemonic, `memarg`'s two 64-bit checks) and
+  `limits` named a structure. The sweep found `limits` was the only one of seven missing it, and the
+  negative space is the finding: the readers whose *names* carry a width all had the check.
+
+  Found the way accept-direction defects in this stratum are always found — **something finally
+  needed the value.** Stated as a method, since it recurs (#75, #88): *a reader that discards cannot
+  be audited by any suite we have*, so the repair for a hand-trusted fact is to give the value a
+  consumer. `TestLimitsNatsAreCheckedAtSixtyFourBits` is scoped to all four call sites and watched
+  die three ways: reject-only restored (10 rows), `nat32` substituted (10 rows *on the message* plus
+  7 accept rows), and fixed at the two inline sites only — which fails exactly the 4 import rows a
+  control written against `(memory N)` would never have had.
+
+- **Two facts the code got right and nothing asserted, both turned up by #112's sweep.** Neither was
+  a defect; both were claims. The pattern they share with the grave is the point — a comment saying
+  *no vector covers this* discharges nothing, because the missing vector is exactly why a control has
+  to stand in for it.
+  - **`abbreviatedReftypes`' twelve-row pairing was prose until the emitter existed.** A swapped
+    expansion (`structref` → `ArrayHT`) parsed identically and no spelling of a test could see it,
+    because every caller of `reftype` discarded the value. Now
+    `TestEveryAbbreviatedReftypeExpandsAsItsTableClaims` iterates the table: the ten refused element
+    types are judged by the heap type their refusal names, and `funcref`/`externref` by the 0x70/0x6F
+    `encode.ml` writes — the one channel whose authority is not a string we produced. Falsified three
+    ways (refusal pairing, binary byte, table truncated to nine).
+  - **The module-field `idx` width was checked in code and asserted nowhere.** `types.go`'s comment
+    named the oracle gap — "no vector puts an over-wide index there without an instruction body" —
+    and left the property untested for as long as that stayed true.
+    `TestModuleFieldIdxIsCheckedAtThirtyTwoBits` covers eleven positions (five `export_desc` arms,
+    `start`, `elem declare`, `data`'s and `elem`'s nested indices, `subtype`'s `idx_list`,
+    `typeuse`), rejecting at 2^32 and
+    accepting at 2^32-1. Substituting `nat64` fails all eleven; the accept half is what makes that
+    distinguishable from rejecting long digit strings, and it is the half that would catch someone
+    reaching for `nat64` here because `limits` uses it one grave over.
 
 - **A comment asserting extended-const "arrives with its gate" when there is no such gate**
   ([#109](https://github.com/scttfrdmn/burroughs/issues/109)). `constOps`' comment said
