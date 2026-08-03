@@ -65,8 +65,20 @@ import (
 //
 // Closed by the *grammar*, not by what the suite exercises: the spec's constant
 // expression is `t.const`, `ref.null`, `ref.func`, and `global.get` of an immutable
-// import, terminated by END. Extended-const (`i32.add` and friends) and WasmGC
-// (`struct.new`) widen it, and both are gated, so they arrive with their gates.
+// import, terminated by END. WasmGC (`struct.new`) widens it and arrives with its gate.
+//
+// **The sentence that used to stand here said extended-const did too, and it does not** (#109).
+// There is no extended-const field in `Features`, so `i32.add` in a constexpr is not declined
+// by a gate — it is rejected outright, with `constant expression required`, on nine modules the
+// suite requires accepted (`data.wast:178`, `elem.wast:1057`, `global.wast:3`, and six more).
+// The claim read as *declared and tracked* and licensed the omission, which is the
+// defect-stated-as-the-rule shape: review verifies code against claims, and this claim was
+// false. Found by the #67 cross-check corpus, because every one of the 4162 green vectors is a
+// rejection and no board can see a decoder that wrongly rejects (contract §9 G-3).
+//
+// Whether the answer is a ninth gate or a grammar exclusion is Scott's call in #109 — G-2 does
+// not name extended-const, though it is Wasm 3.0 core. Either way the *string* is wrong: a
+// declined feature reports a feature-named error, never a spec `invalid` string (#5).
 var constOps = map[byte]bool{
 	0x41: true, // i32.const
 	0x42: true, // i64.const

@@ -88,6 +88,14 @@ func (p *parser) atHeaptypeStart() bool {
 // `(Null, <heaptype>)`, so all twelve are nullable and they differ only in the heap type. The
 // pairing is written out because a wrong expansion is a *comparison* defect now, not just an
 // acceptance one — `funcref` versus `(ref func)` decides whether an inline signature matches.
+//
+// **The pairing is checked now, and it was prose until the emitter existed** —
+// TestEveryAbbreviatedReftypeExpandsAsItsTableClaims iterates this table, judging the ten refused
+// element types by the heap type their refusal names and `funcref`/`externref` by the 0x70/0x6F
+// encode.ml writes. Found by grave #112's sweep: a swapped pairing here used to parse identically
+// and no spelling of a test could see it, because every caller of `reftype` discarded the value.
+// That is #112's method restated — *a reader that discards cannot be audited by any suite we have*,
+// and the repair is to give the value a consumer, not to write a better comment.
 var abbreviatedReftypes = []struct {
 	kw   keywordKind
 	heap keywordKind
@@ -455,48 +463,110 @@ func (p *parser) subtype() (compType, error) {
 // table maps all four to NUMTYPE — the one place in this file where a keyword's *spelling*
 // matters rather than its kind, and that is a property of the reference's own lexer collapsing
 // them.
-func (p *parser) addrtype() error {
+// It returns whether the type is I64AT, which the *binary* format spends a flag bit on
+// (`flag (at = I64AT) 2` in encode.ml:187) — so this is the second production whose return value
+// the encoder needs and the reject-only parser did not.
+func (p *parser) addrtype() (bool, error) {
 	if !p.c.atKeyword(kwNumtype) {
-		return nil // empty arm: i32 by default
+		return false, nil // empty arm: i32 by default
 	}
 	tok := p.c.peek()
 	if tok.Text != "i32" && tok.Text != "i64" {
-		return errAt(tok, "malformed address type")
+		return false, errAt(tok, "malformed address type")
 	}
 	p.c.next()
-	return nil
+	return tok.Text == "i64", nil
 }
 
 // limits parses `limits` (parser.mly:466-468): one nat, or two.
-func (p *parser) limits() error {
+//
+// **Both nats are `nat64`, and reading them is what closes a missing reject** — grave #112. The
+// reference's arms are `{min = nat64 $1 …; max = Some (nat64 $2 …)}`, so a minimum that does not fit
+// 64 bits is `i64 constant out of range` *from the parser*. This function previously advanced the
+// cursor and read nothing, so `(memory 18446744073709551616)` was accepted — measured before this
+// change, and the suite has **no vector** for it: the accept direction §9 G-3 names, found only
+// because the encoder needed the value and asking what a nat is worth forced the width question.
+// The lesson is indexed by shape: *a reject-only reader that advances past a literal cannot enforce
+// the literal's width*, and where the production's action **is** the conversion, skipping the token
+// skips the production. The control is `TestLimitsNatsAreCheckedAtSixtyFourBits`, scoped to all four
+// call sites because a fix applied only to the two inline ones passes every row about `(memory N)`.
+//
+// Not a decoder-side check in disguise. `binary.decodeLimits` reads its own u64 budget and reports
+// `integer too large`, which is the *binary* grammar's complaint about a LEB; this is the text
+// grammar's complaint about a literal, and the two messages are different because the two grammars
+// are.
+func (p *parser) limits() (limits, error) {
+	var lim limits
 	if !p.c.at(NatTok) {
-		return p.unexpected()
+		return lim, p.unexpected()
 	}
-	p.c.next()
+	// Assigned straight into the struct rather than through locals named `min`/`max`: those shadow the
+	// builtins, and `bytesIndex`'s section walk in the tests uses `min` two files away.
+	var err error
+	if lim.min, err = p.nat64(); err != nil {
+		return lim, err
+	}
 	if p.c.at(NatTok) {
-		p.c.next()
+		if lim.max, err = p.nat64(); err != nil {
+			return lim, err
+		}
+		lim.hasMax = true
 	}
-	return nil
+	return lim, nil
 }
 
-// tabletype parses a table type (parser.mly:460-461): `addrtype limits reftype`.
+// nat64 parses one NAT at 64 bits — the reference's `nat64` (parser.mly:43-44).
+//
+// Its own function beside `nat32` (instr.go) rather than a width parameter on that one, because the
+// two carry *different messages* — `i64 constant out of range` against `i32 constant out of range` —
+// and a shared helper taking a width would have to take the message too, at which point the two
+// callers are the two functions with extra steps. The width and the message are one fact.
+//
+// This function is grave #112's fix: `limits` used to have no width at all.
+func (p *parser) nat64() (uint64, error) {
+	t := p.c.next()
+	v, ok := parseNat(t.Text, 64)
+	if !ok {
+		return 0, errAt(t, "i64 constant out of range")
+	}
+	return v, nil
+}
+
+// tabletype parses a table type (parser.mly:460-461): `addrtype limits reftype`, and stays
+// **error-only** while every caller discards.
+//
+// **The retaining version of this function was written, and `unparam` deleted it.** It returned a
+// `tabType` that no caller read: both call sites are inline-import arms, and an imported table's type
+// belongs to the import section — which this emitter does not write. The *defining* arms cannot call
+// it either, because the sugar branch (`addrtype reftype (elem …)`, parser.mly:1205) needs a lookahead
+// *between* `addrtype` and `limits`, so `tableField` interleaves the three productions itself. A
+// composed `tabletype` therefore has no consumer in either direction, and a return value nobody reads
+// is retention built for a hypothetical consumer — the generality-without-a-Go-shaped-consumer
+// non-goal, arriving in the smallest possible costume. 0006's rule is that retention grows out of what
+// the grammar needs at a *load-bearing* spot; this spot bears nothing.
+//
+// The field order against the binary format's is recorded at `encodeTables` instead, where the
+// reordering actually happens: text is `addrtype limits reftype`, binary is `reftype limits`
+// (encode.ml:200).
 func (p *parser) tabletype() error {
-	if err := p.addrtype(); err != nil {
+	if _, err := p.addrtype(); err != nil {
 		return err
 	}
-	if err := p.limits(); err != nil {
+	if _, err := p.limits(); err != nil {
 		return err
 	}
 	_, err := p.reftype()
 	return err
 }
 
-// memorytype parses a memory type (parser.mly:463-464): `addrtype limits`.
+// memorytype parses a memory type (parser.mly:463-464): `addrtype limits`. Error-only, for the reason
+// `tabletype` above records — its one caller is an inline import, whose type this emitter never writes.
 func (p *parser) memorytype() error {
-	if err := p.addrtype(); err != nil {
+	if _, err := p.addrtype(); err != nil {
 		return err
 	}
-	return p.limits()
+	_, err := p.limits()
+	return err
 }
 
 // typeuse parses `(type idx)` (parser.mly:470-471) and returns the reference, unresolved.
@@ -532,6 +602,13 @@ func (p *parser) atTypeuse() bool { return p.c.at(LParen) && p.c.peek2Keyword(kw
 // sat in a module field, and no vector puts an over-wide index there without an instruction body
 // in the same module. The check is the production's, so it belongs on the production, not on the
 // instruction reader that finally made it reachable.
+//
+// **And the module-field positions are asserted now** — TestModuleFieldIdxIsCheckedAtThirtyTwoBits,
+// eleven of them, reject at 2^32 and accept at 2^32-1. The sentence above named an oracle gap and
+// then left the property untested for as long as it was true, which is grave #112's class exactly:
+// a width the code gets right, a comment saying no vector covers it, and nothing standing in for
+// the vector. The instruction and label positions were already covered; these were the ones the
+// sentence was about.
 func (p *parser) idx() error {
 	_, err := p.typeIdx()
 	return err

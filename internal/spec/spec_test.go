@@ -203,7 +203,7 @@ func requireSuite(t *testing.T) {
 // none, because it looks stamped* (gen.PinnedRev's own reason).
 func suitePin(t *testing.T) string {
 	t.Helper()
-	rev, err := gen.PinnedRev("../../scripts/fetch-spec-tests.sh")
+	rev, err := gen.PinnedSuiteRev()
 	if err != nil {
 		t.Fatalf("reading the suite pin: %v\n\tThe board cannot name the corpus it measured, "+
 			"which makes every count below unattributable.", err)

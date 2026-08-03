@@ -1,6 +1,9 @@
 # 0014 — mnemonic→opcode is a join of the two generated tables, not a third one
 
-Date: 2026-08-02 · Status: **proposed** (needs Scott)
+Date: 2026-08-02 · Status: **accepted** (Scott, 2026-08-03, PR #108) — *with the Correction
+below*, which is the condition of acceptance rather than a footnote to it: the corrected premise
+was re-verified by a detector **outside both readers**, so option C now stands on evidence that
+could have disagreed with it.
 
 ## Decision
 

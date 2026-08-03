@@ -1205,6 +1205,129 @@ func TestStructFieldSpaceIsPerType(t *testing.T) {
 	}
 }
 
+// TestLimitsNatsAreCheckedAtSixtyFourBits is grave #112's control, and it is scoped to the *space*
+// of limits positions rather than to the one field that found the defect.
+//
+// `limits` is `NAT | NAT NAT`, both arms `nat64` (parser.mly:467-468), so the reference reports
+// `i64 constant out of range` **from the parser** for a bound that does not fit 64 bits. Before the
+// encoder needed the value, `limits` advanced the cursor and read nothing — every over-wide bound was
+// accepted. Invisible to the suite twice over: no vector writes a 2^64 limit at all, and an
+// accept-direction defect has no `assert_malformed` that can complain (contract §9 G-3).
+//
+// The space is four positions × two arms: memory and table, each defining or imported, with the
+// minimum and the maximum. Each is a *separate call* into `limits` in this reader — memoryField and
+// tableField call it inline, the inline-import arms reach it through `memorytype`/`tabletype` — so a
+// fix applied at one call site and not the others is exactly what a control scoped to `(memory N)`
+// would have missed. The `i64`/`i32` addrtype rows are here because the address type does not change
+// the *field's* declared width: `nat64` is what the production says regardless, which is the
+// bidirectional-control shape a width parameter threaded from the addrtype would break.
+func TestLimitsNatsAreCheckedAtSixtyFourBits(t *testing.T) {
+	// 2^64 — the first value `nat64` rejects. Written as the literal rather than computed, because
+	// the reference's check is on the decimal text.
+	const wide = "18446744073709551616"
+	// 2^64-1 — the widest value it accepts, and the accept half of every row below. Without it a
+	// reader that rejected *every* two-or-more-digit bound would pass the reject half wholesale.
+	const widest = "18446744073709551615"
+
+	for _, tc := range []struct{ field, why string }{
+		{"(memory " + wide + ")", "memoryField's own limits call, the minimum — the position the grave was found at"},
+		{"(memory 0 " + wide + ")", "the same call, the maximum: limits' second arm, a second nat64"},
+		{"(memory i64 " + wide + ")", "addrtype i64 does not widen the field: the production is nat64 either way"},
+		{"(memory i32 " + wide + ")", "and addrtype i32 does not narrow it to nat32, which is the reading a width parameter would invite"},
+		{"(table " + wide + " funcref)", "tableField's limits call — a separate call site from memoryField's"},
+		{"(table 0 " + wide + " funcref)", "and its maximum"},
+		{`(memory (import "m" "a") ` + wide + ")", "the inline-import arm, which reaches limits through memorytype rather than inline"},
+		{`(memory (import "m" "b") 0 ` + wide + ")", "same, the maximum"},
+		{`(table (import "m" "c") ` + wide + " funcref)", "the fourth call site: tabletype, via tableField's import arm"},
+		{`(table (import "m" "d") 0 ` + wide + " funcref)", "same, the maximum"},
+	} {
+		src := "(module " + tc.field + ")"
+		err := ReadModule([]byte(src))
+		if err == nil {
+			t.Errorf("ReadModule(%s) accepted; both limits arms are nat64 (parser.mly:467-468) — %s",
+				tc.field, tc.why)
+			continue
+		}
+		// The message is asserted, not just the verdict: `i64` versus `i32` is which production ran,
+		// and a limits position checked at 32 bits would reject these too — for the wrong reason,
+		// while wrongly rejecting the legal 4294967296 that the accept half below admits.
+		if !strings.Contains(err.Error(), "i64 constant out of range") {
+			t.Errorf("ReadModule(%s) = %q, want `i64 constant out of range` — %s", tc.field, err, tc.why)
+		}
+	}
+
+	// The accept half, at the same four call sites. This is what separates "checks at 64 bits" from
+	// "rejects large numbers": 2^64-1 is legal in every limits position, and 2^32 is legal too —
+	// which is the row that fails if anyone reuses nat32 here.
+	for _, tc := range []struct{ field, why string }{
+		{"(memory " + widest + ")", "2^64-1 is the widest legal minimum"},
+		{"(memory 0 " + widest + ")", "and the widest legal maximum"},
+		{"(memory 4294967296)", "2^32 in a limits position is legal — nat64, not nat32"},
+		{"(table " + widest + " funcref)", "the table's minimum, same width"},
+		{"(table 0 " + widest + " funcref)", "and its maximum"},
+		{`(memory (import "m" "a") ` + widest + ")", "the imported memory's, through memorytype"},
+		{`(table (import "m" "b") 0 ` + widest + " funcref)", "the imported table's, through tabletype"},
+	} {
+		src := "(module " + tc.field + ")"
+		if err := ReadModule([]byte(src)); err != nil {
+			t.Errorf("ReadModule(%s) = %v; want accepted — %s. Whether the *engine* can honour a "+
+				"limit this large is validation's question (memory.wast's `memory size must be at "+
+				"most 65536 pages`), not this stratum's", tc.field, err, tc.why)
+		}
+	}
+}
+
+// TestModuleFieldIdxIsCheckedAtThirtyTwoBits is the sibling grave #112's sweep turned up: the same
+// class — a width the code gets right and nothing asserts — one production over.
+//
+// `idx`'s NAT arm is `nat32 $1 $sloc` (parser.mly:488), so a 33-bit index is `i32 constant out of
+// range` from the parser. types.go's `idx` comment says as much and adds that "no vector puts an
+// over-wide index [in a module field] without an instruction body in the same module" — a true
+// statement about the oracle that left the property untested at every module-field position. The
+// instruction and label positions *are* covered (instr_test.go's lane vectors, label_test.go's
+// `br 0x100000000`); the module fields were not covered anywhere.
+//
+// Scoped to the *space* of module-field idx positions rather than to the one that prompted it: all
+// eight export/start/elem/data/subtype/typeuse sites reached without an instruction body, each with
+// the reject at 2^32 and the accept at 2^32-1. The accept half is not decoration — it is what
+// separates "checks at 32 bits" from "rejects long digit strings", and it is the half that would
+// fail if anyone reached for nat64 here on the reasoning that limits uses it (#112's fix is the
+// nearby precedent that makes that mistake plausible).
+func TestModuleFieldIdxIsCheckedAtThirtyTwoBits(t *testing.T) {
+	// Each row is a module field with an idx in it, written twice: `%s` takes the index. No
+	// instruction bodies, which is exactly the region types.go names as unsampled.
+	for _, tc := range []struct{ form, why string }{
+		{`(module (export "e" (func %s)))`, "export_desc:1235 — the func index space"},
+		{`(module (export "e" (table %s)))`, "export_desc:1236"},
+		{`(module (export "e" (memory %s)))`, "export_desc:1237"},
+		{`(module (export "e" (global %s)))`, "export_desc:1238"},
+		{`(module (export "e" (tag %s)))`, "export_desc:1239"},
+		{`(module (start %s))`, "start:1265, the single-index field"},
+		{`(module (elem declare func %s))`, "elemidx_list, reached past the declare keyword"},
+		{`(module (data (memory %s) (i32.const 0)))`, "data's memory index — a nested field, so the idx is not the field's first token"},
+		{`(module (elem (table %s) (i32.const 0) func))`, "elem's table index, the same nesting one field over"},
+		{`(module (type (sub %s (func))))`, "subtype's idx_list (parser.mly:453) — a type index in a type definition"},
+		{`(module (func (type %s)))`, "typeuse:1218, which resolves through the type table rather than deferring"},
+	} {
+		// 2^32 — the first value nat32 rejects.
+		over := strings.Replace(tc.form, "%s", "4294967296", 1)
+		err := ReadModule([]byte(over))
+		if err == nil {
+			t.Errorf("ReadModule(%s) accepted; idx's NAT arm is nat32 (parser.mly:488) — %s", over, tc.why)
+		} else if !strings.Contains(err.Error(), "i32 constant out of range") {
+			t.Errorf("ReadModule(%s) = %q, want `i32 constant out of range` — %s", over, err, tc.why)
+		}
+		// 2^32-1 — the widest legal index, and legal *here* even where it names nothing: an index
+		// out of range for the module is the validator's `unknown func`, not this stratum's width
+		// error. That distinction is the reason the accept half is written per position.
+		widest := strings.Replace(tc.form, "%s", "4294967295", 1)
+		if err := ReadModule([]byte(widest)); err != nil {
+			t.Errorf("ReadModule(%s) = %v; 4294967295 fits nat32, and an index naming nothing is "+
+				"validation's `unknown …` rather than a parse error — %s", widest, err, tc.why)
+		}
+	}
+}
+
 // TestNamedParamTakesExactlyOneType pins a rejection the grammar makes and no message announces.
 //
 // `(param $x i32 i64)` is not legal — the bindidx arm (parser.mly:1436) takes a single valtype,

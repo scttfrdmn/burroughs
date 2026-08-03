@@ -21,6 +21,200 @@ weakly-ordered platform.
 
 ### Added
 
+- **`internal/text/encode.go`: the memory and table section emitters, and a frontier that is now
+  per-arm rather than per-field** ([#8](https://github.com/scttfrdmn/burroughs/issues/8), 0011 part
+  2). `(memory i64 1 4)` and `(table 1 funcref)` encode; sections 4 and 5 join section 1 in id order,
+  and `w.limits` is shared because both spend the same flags byte. The suite's encodable population
+  goes **15 → 51** of 2150 parser-accepted text modules.
+
+  **The retention question inverted here, and asking it honestly found two rejects the reference
+  performs and we did not.** The type section grew out of retention the grammar already had
+  (`inline_functype_explicit` needs it); `limits`, `addrtype`, and `reftype` retained *nothing*, so
+  the emitter is their first consumer — the load-bearing spot 0006 warns about. Reading the values
+  for real is what surfaced both gaps: `limits`' nats are `nat64` in the reference, so
+  `(memory 18446744073709551616)` is `i64 constant out of range` *from the parser* and we accepted
+  it; and a table's element type resolves in the reference's stage 2 (parser.mly:1341-1347), so
+  `(table 1 (ref null $undefined))` is rejected upstream and accepted here. The first is fixed with
+  the retention (grave [#112](https://github.com/scttfrdmn/burroughs/issues/112)); the second is one
+  of **nine sites of one shape** — every valtype position that discards its type accepts an unknown
+  one — and is filed as [#111](https://github.com/scttfrdmn/burroughs/issues/111) rather than swept
+  in, because a nine-site shape is not an encoder's business. Neither has a suite vector: the accept
+  direction §9 G-3 names.
+
+  **The frontier is now per-arm, and the asymmetry is deliberate.** `(memory 1)` encodes while
+  `(memory (data "abc"))` does not, though both dispatch on `memory` — so the record is made at the
+  dispatch and *withdrawn* by the one arm that retained everything. Default is refusal: forgetting to
+  withdraw costs a visible refusal, forgetting to record silently drops a section. The withdrawal is
+  **identity-bound to its keyword token**, the same law as binding a CI verdict to its SHA — unkeyed,
+  a `(memory 1)` after an unencodable `(func …)` withdraws the *func's* refusal and emits a module
+  with the function dropped. That defect was installed and is now caught by four mixed-order rows;
+  before them it passed every test in the file, because every row put its unencodable field first.
+
+  **Nine defects installed, seven died, two were diagnosed — and the two are the findings.**
+
+  - **Dropping the limits flags' bit 2 passed twice.** First because no row exercised an i64
+    addrtype (fixed: `Memory64` on in the decode helper, four i64 rows). Then *again* with the rows
+    present — because `binary.Limits` is `{Min, Max, HasMax}` and carries **no address type**, so a
+    memory64 and a memory32 with the same minimum decode identically. The round trip is structurally
+    blind to that bit, which is why the assertion had to become byte-level
+    (`TestEncodeWritesTheAddressTypeFlagBit`, expected flags read from `encode.ml:187` rather than
+    from our own output). A control that cannot fail is worth more as a discovery than as a control.
+  - **The retention count check cannot currently be made to fire, and now says so at its site.**
+    Four defects against it all passed: the frontier refuses the offending module *before*
+    `encodableOrErr` reaches the loop, so it only runs on the population where the counts agree by
+    construction. Kept as a labelled tripwire for an arm that does not exist yet — declared and
+    tracked, per the `ErrTrailingData` ruling — rather than deleted or left claiming a guard it does
+    not provide.
+
+  **`unparam` deleted a function this PR wrote.** The retaining `tabletype`/`memorytype` returned
+  values no caller read: the inline-import arms discard (an imported table is an `Import`), and the
+  *defining* arms cannot call them at all, because the sugar branch needs a lookahead between
+  `addrtype` and `limits`. Retention built for a hypothetical consumer is the
+  generality-without-a-Go-shaped-consumer non-goal in its smallest costume; both are error-only again.
+  Separately, `govet`'s `shadow` and `gocritic`'s `sloppyReassign` demanded opposite things in the two
+  field functions — two curated linters describing one fact, that an error was held live across arms
+  with no business in it. Resolved by extracting `memoryDataSugar`, `tableElemSugar`, and
+  `importedExternType`, not by suppressing either.
+
+  **What the independent witness can and cannot say, measured rather than assumed.** The wabt corpus
+  joins **15** of the 51 encodable modules, and only **5** of those have a non-empty table or memory
+  section — the other ten agree empty-to-empty, which is no agreement. Two do carry the i64 bit
+  (`memory64-imports#12`/`#13`, both `01 70 04 0a`). The reason it is not deeper: wabt cannot parse 31
+  suite files, among them `memory`, `memory64`, `table`, and `table64` — all four rejected on
+  `(module definition …)`, a spec form wabt does not implement, which fails the whole file. **Every one
+  of the 36 modules this PR made encodable is in a file wabt skipped.** The second opinion is absent
+  from exactly the region the work is in, which is the scope-controls-to-the-space law pointed at a
+  witness: an independent oracle has a blind spot too, and it is not the same one.
+
+  **The frontier census is re-measured, and it turned a stated caution into a number.** Draining the
+  two largest buckets (`memory` 467, `table` 251 — 718 modules) yielded **36** newly encodable and
+  re-sorted the rest into the next field they contain (`func` +233, `elem` +157, `data` +115).
+  Two thirds of the largest two buckets bought a 5% move. *Bucket size estimates the reward, not the
+  job* — and the honest estimate for the next bucket is not its size but the count of modules whose
+  *last* blocker it is, which a histogram of *first* blockers cannot answer. Stated as the limitation
+  it is rather than re-measured into a nicer shape.
+
+- **`internal/text/encode.go`: the type-section emitter — `EncodeModule`, the bridge's first module
+  that runs** ([#8](https://github.com/scttfrdmn/burroughs/issues/8), 0011 part 2). Text in, binary
+  image out, checked by decoding: `(module (type (func (param i32) (result i64))))` becomes
+  `00 61 73 6d 01 00 00 00 01 06 01 60 01 7f 01 7e`. The return is bytes and an error, never a
+  module value — 0011's surface rule holds, `binary.Module` stays the codebase's sole module
+  authority, and `ReadModule` stays error-only.
+
+  **It reads retention the grammar already had, and the direction of that dependency is the whole
+  design.** `inline_functype_explicit` (parser.mly:245) compares inline signatures *structurally*,
+  so `runDeferred` already resolves the type index space into `c.typeCtx` for a reason that predates
+  any encoder. The emitter consumes that; it did not ask for it. The alternative — a retention pass
+  shaped by what an encoder wants — designs the parser's memory from its only consumer's
+  requirements, in the load-bearing spot 0006 rules on. Each further section is therefore a question
+  about what the *grammar* needs, asked one section at a time.
+
+  **A frontier is not a malformedness, so the emitter refuses rather than under-writes.** Every
+  module holding a field or a type this cannot fully encode is declined by name — `cannot yet encode
+  a (func …) field … (#8)` — and the refusal never borrows a spec word, because reporting
+  "malformed" for a module the spec calls well-formed lies about the input to conceal a gap in the
+  engine (the #5 ruling, pointed at an unfinished encoder instead of at a gate). Emitting a module
+  with its function section silently dropped is the accept-direction defect no vector can see (§9
+  G-3), which is the failure this bridge exists to be checked for. The frontier check reads the
+  parse's own dispatch record, never the source text and never `space.count`: an import advances the
+  count and an export binds nothing, so a count-based test could not tell `(func)` from
+  `(import "" "" (func))` and would emit an export-only module with the export gone.
+
+  **Three defects in the first draft, all found by building the controls rather than trusting the
+  comments, and each a different class:**
+
+  - **`(ref func)` was emitted as `0x70`** — the nullable byte for a non-nullable type, a wrong
+    module that decodes clean. `funcref` and `(ref null func)` *are* the same type (the parser
+    normalizes the abbreviation), which is what made the omission plausible; `{null: false}` needs
+    GC's `0x64` prefix. Fixed by folding the encodability predicate and the encoding into one
+    `valTypeByte(v) (byte, bool)`, so the frontier check and the emitter are one fact asked twice
+    and cannot drift — one concept, one trigger.
+  - **A control that passed with its defect installed**, the stillborn case, and interrogating *why*
+    was worth more than the control. It asserted `len(typeCtx)` across `encode` on the stated
+    reasoning that a second `runDeferred` drops the interned implicit types. Measured: `typeCtx`
+    comes back **identical**, because the thunks re-intern the same signatures in the same order.
+    What drifts is `types.count` — 1→2 on `(module (func))`, 2→4 on two distinct inline signatures.
+    So a plausible mechanism written into a comment was replaced by a measured one, the assertion
+    moved to the half that falsifies, and the table is still checked because the thunks'
+    idempotence is *contingent on what they currently do*.
+  - **`heapWat`'s general form was false while its comment asserted the property the code lacked** —
+    the defect-stated-as-the-rule shape. A keyword *kind* is a token class, not a spelling:
+    lower-casing yields that kind's own keyword for **96 of 173**, and `BINARY` → `binary` lexes to
+    a *different* kind (`BIN`). Narrowed to the twelve absolute heap types where the derivation does
+    hold, with the measurement at the site, a control ranging over `absoluteHeaptypes` so a
+    thirteenth is covered the day it is added, and the frontier message changed to quote
+    `Token.Text` (grave #36's rule for message text no oracle reads).
+
+  **The round-trip table states each module's types independently, by hand, and that is what makes
+  it a check.** An encoder and decoder that both had params and results backwards would round-trip
+  perfectly; the `want` column is a second reading of the wat. All six controls were installed with
+  the defect they name and watched to fail — params/results swap caught in both directions, the
+  `0x70` defect caught, a LEB-instead-of-fixed version field caught, a dropped frontier check caught
+  on ten subtests, a widened `absoluteHeaptypes` caught on both the count floor and
+  `heapWat("NUMTYPE")`.
+
+- **`internal/text/writer.go`: the encoder's byte layer — LEB128 and section framing**
+  ([#8](https://github.com/scttfrdmn/burroughs/issues/8), 0011 part 2). The first engine lines of
+  the text→binary bridge, whose veto 0011's appendix lifted once #98 gave `binary.Module`
+  something to represent. The decoder is the authority for every encoding decision, so the writer
+  is its inverse and is falsified by round trip — nothing here has an opinion about what a LEB is.
+
+  **Minimal width, and that is a choice rather than the obvious reading.** `uleb` *accepts* any
+  width up to the field budget — `80 80 80 80 10` is a legal five-byte small number, which
+  `binary-leb128.wast` asserts — so an encoder is free here, and freedom is where a silent
+  divergence lives. Minimality is checked against an independently derived width, because a
+  padded LEB **round-trips correctly**: the round-trip half of the test passes on `80 80 80 80 00`
+  and only the width assertion fails. Byte equality with wabt is deliberately *not* the criterion
+  and must not become one — the corpus is an authority on which module the text denotes, not on
+  encoding style, which is why the comparator compares `[]Instr`.
+
+  **`sleb` is not `uleb` with a cast**, the writing-direction mirror of grave 0003's lesson: a
+  correct signed encoder and a cast one agree on every non-negative value, so a round trip cannot
+  tell them apart. The trap is `0x40` — as a final payload byte it sign-extends to **-64**, so
+  stopping when the magnitude runs out writes 64 and means -64, a wrong value on valid input that
+  no vector can see (§9 G-3). Watched to fail on exactly that: `s64(64) wrote 40, read back as
+  -64`. Section lengths are **measured by splicing a nested buffer, never predicted**, so the
+  both-signs size disagreement grave #34 documents is unreachable from this side; also watched to
+  fail, on an off-by-one prediction.
+
+- **`testdata/xcorpus`: an independently produced binary image of every suite text module that
+  must succeed** ([#67](https://github.com/scttfrdmn/burroughs/issues/67),
+  [#8](https://github.com/scttfrdmn/burroughs/issues/8)). #67's second half asks whether the
+  encoder emits *the right module*, not merely a well-formed one, and our encoder compared
+  against our decoder is one witness talking to itself — inadmissible per 0011's second
+  appendix. So `wast2json` supplies the second opinion: **1954 modules, 312866 image bytes, cut
+  from suite `de54fd27` by wabt 1.0.41**, committed with a provenance manifest. wabt touches the
+  repo once as a generator and is never invoked by a test, never in CI, and never in the verdict
+  path — the same posture the generated tables hold toward the reference interpreter.
+
+  **`wast2json` is a second *splitter*, not just a second compiler**, which is why it is
+  stronger evidence than compiling text we ourselves parsed: the two command sequences are
+  independently derived and have to be joined. **The join is an ordinal, not a line, and that
+  was measured rather than assumed** — in `comments.wast` we report the opening `(`'s line and
+  wabt reports the `module` keyword's, one apart, and both readings are defensible. A key two
+  readers legitimately disagree on is not a key. Line is retained as a *corroborating* signal
+  precisely because it is unfit to key on (0014's correction, grave #106): 1953 of our 2238
+  module commands join, one pair exceeds a ±2 window, and **every unjoined command lives in a
+  file the manifest names as skipped** — the gap is accounted for, not merely stated.
+
+  **The corpus raises the accept population from 74 modules / 18 instructions to 1262 accepted
+  modules**, which is the oracle the accept direction has never had: all 4162 green vectors are
+  rejections, so contract §9 G-3 defects score green by construction. It paid for itself on the
+  first run — see #109 under Fixed.
+
+  **Flags are the tracked union, enumerated to match `Features`, and this replaced
+  `--enable-all`.** A feature flag does not only decide what wabt accepts; measured over the
+  whole suite, three flags *re-encode* modules the standard grammar already describes —
+  `function-references` 105 (element segments in expression form), `compact-imports` 45 (an
+  import as `00 7f`), `multi-memory` 2. Under `--enable-all` the corpus disagreed with our
+  decoder in 58 × `malformed import kind: 0x7f`, which was the **generator** handing over a
+  proposal encoding: a cross-check corpus that quietly re-encodes its subject is the
+  wrong-module failure #67 exists to detect, arriving through the instrument. The criterion is
+  not "does it re-encode" — `function-references` re-encodes the most and *is* tracked (0008
+  folds it into the GC gate) — it is contract §9 G-2, and the six omitted flags buy **one**
+  module between them. `TestFeatureFlagsCoverTheTrackedGates` reflects over `Features` so a
+  ninth gate fails there rather than silently narrowing the corpus.
+
 - **`internal/text/opcodes.go`: the mnemonic→opcode table, generated as a *join* of the two
   tables that already exist** ([#8](https://github.com/scttfrdmn/burroughs/issues/8),
   decision 0014). #8's encoder must answer "which byte does `i32.add` emit?" 494 times.
@@ -1361,6 +1555,69 @@ weakly-ordered platform.
   skip ([#29](https://github.com/scttfrdmn/burroughs/issues/29)).
 
 ### Fixed
+
+- **`limits`' nats were never read, so a 2^64 bound was accepted**
+  ([grave #112](https://github.com/scttfrdmn/burroughs/issues/112)). Both arms are `nat64`
+  (`parser.mly:467-468`), so `(memory 18446744073709551616)` is `i64 constant out of range` *from the
+  parser* upstream; the reader advanced the cursor and read nothing, at four call sites — memory and
+  table, defining and imported. Two independent silences kept it invisible: no vector writes a 2^64
+  limit at all, and an over-acceptance has no `assert_malformed` that can complain about it. Board
+  delta zero, before and after.
+
+  **The lesson is indexed by shape:** *a reject-only reader that advances past a literal cannot
+  enforce the literal's width.* Where a production's semantic action **is** a conversion
+  (`nat8`/`nat32`/`nat64`/`num`/`vec`), skipping the token skips the production's entire content. The
+  class-level tell was in the signature — every other NAT-consuming reader in the package names its
+  width (`nat32`, `laneidx`, `constImm`'s width-from-the-mnemonic, `memarg`'s two 64-bit checks) and
+  `limits` named a structure. The sweep found `limits` was the only one of seven missing it, and the
+  negative space is the finding: the readers whose *names* carry a width all had the check.
+
+  Found the way accept-direction defects in this stratum are always found — **something finally
+  needed the value.** Stated as a method, since it recurs (#75, #88): *a reader that discards cannot
+  be audited by any suite we have*, so the repair for a hand-trusted fact is to give the value a
+  consumer. `TestLimitsNatsAreCheckedAtSixtyFourBits` is scoped to all four call sites and watched
+  die three ways: reject-only restored (10 rows), `nat32` substituted (10 rows *on the message* plus
+  7 accept rows), and fixed at the two inline sites only — which fails exactly the 4 import rows a
+  control written against `(memory N)` would never have had.
+
+- **Two facts the code got right and nothing asserted, both turned up by #112's sweep.** Neither was
+  a defect; both were claims. The pattern they share with the grave is the point — a comment saying
+  *no vector covers this* discharges nothing, because the missing vector is exactly why a control has
+  to stand in for it.
+  - **`abbreviatedReftypes`' twelve-row pairing was prose until the emitter existed.** A swapped
+    expansion (`structref` → `ArrayHT`) parsed identically and no spelling of a test could see it,
+    because every caller of `reftype` discarded the value. Now
+    `TestEveryAbbreviatedReftypeExpandsAsItsTableClaims` iterates the table: the ten refused element
+    types are judged by the heap type their refusal names, and `funcref`/`externref` by the 0x70/0x6F
+    `encode.ml` writes — the one channel whose authority is not a string we produced. Falsified three
+    ways (refusal pairing, binary byte, table truncated to nine).
+  - **The module-field `idx` width was checked in code and asserted nowhere.** `types.go`'s comment
+    named the oracle gap — "no vector puts an over-wide index there without an instruction body" —
+    and left the property untested for as long as that stayed true.
+    `TestModuleFieldIdxIsCheckedAtThirtyTwoBits` covers eleven positions (five `export_desc` arms,
+    `start`, `elem declare`, `data`'s and `elem`'s nested indices, `subtype`'s `idx_list`,
+    `typeuse`), rejecting at 2^32 and
+    accepting at 2^32-1. Substituting `nat64` fails all eleven; the accept half is what makes that
+    distinguishable from rejecting long digit strings, and it is the half that would catch someone
+    reaching for `nat64` here because `limits` uses it one grave over.
+
+- **A comment asserting extended-const "arrives with its gate" when there is no such gate**
+  ([#109](https://github.com/scttfrdmn/burroughs/issues/109)). `constOps`' comment said
+  extended-const and WasmGC both "are gated, so they arrive with their gates"; `Features` has
+  eight fields and none is extended-const, so `i32.add` in a constexpr is rejected outright with
+  `constant expression required` on **nine modules the suite requires accepted**
+  (`data.wast:178`, `elem.wast:1057`, `global.wast:3`, and six more). The claim read as
+  *declared and tracked* and licensed the omission — the defect stated as the rule, since review
+  verifies code against claims. The comment is corrected here and the remedy is flagged for
+  Scott, because G-2 does not name extended-const though it is Wasm 3.0 core; either way the
+  string is wrong, a declined feature reporting a spec `invalid` string (#5).
+
+  **This is what the cross-check corpus was built to find, and it found it on the first run.**
+  Also a second-order lesson: 58 compact-import rejections and these 9 appeared together under
+  one flag change and were attributed to one cause. The first bucket vanished when the flags were
+  corrected and this one *survived* — `--enable-extended-const` is measurably inert in wabt (0
+  modules, 0 bytes), so these are baseline corpus content. Only re-measuring after the fix
+  separated the two causes.
 
 - **Three accept-direction defects in 0014's join, none of them findable from the board**
   ([grave #105](https://github.com/scttfrdmn/burroughs/issues/105),
