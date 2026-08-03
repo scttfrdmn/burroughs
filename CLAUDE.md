@@ -445,6 +445,50 @@ the choice, and consequences once Scott has called it.
   same shape in the same session. *An error constant with no reachable path
   is a missing check wearing a disguise* (grave, 0003); its inverse face is
   the predicate-property rule, and disguises come in families.
+- **Lessons are indexed by shape, not by file, so the sweep runs backwards too.**
+  `keywordgen` had already met and solved the wrapped-arm defect — its lexer arm head ends at
+  `->` for exactly that reason — and `opgen` reintroduced it because the regexp shape was
+  **re-derived instead of copied**: 411 rows where 436 were measured, silent. The graveyard's
+  value is only collected when the next author searches it by *structure* rather than by
+  filename, because a grave filed against one file reads as a fact about that file and is
+  actually a fact about a shape. #78 → #80 → #105 is one structure in three packages that share
+  nothing else. So before writing a reader, trigger, or regexp a sibling package already has,
+  **read the sibling's version first** — a same-shaped problem next door is a place to read,
+  not a place to invent — and title a grave by its shape, not its site. (Ruling: Scott, PR
+  #108; grave #105.)
+- **Floors bound the catastrophic case; only an exact count sees a small silent loss.** They are
+  *different instruments*, not strong and weak settings of one. A floor answers "did the
+  extraction happen at all" — a moved file, a changed indent. It cannot answer "did it get
+  everything," and `Floors.Lexer` at 350 stayed green through a 411-of-436 loss. What makes that
+  an indictment rather than an excuse is that **the 436-row measurement already existed**: the
+  sharper instrument was in hand while the looser one did the asserting. So wherever the exact
+  count is knowable, pin it *beside* the floor — the floor still covers the catastrophic case a
+  diff would report to nobody — and where it genuinely cannot be exact, say so at the site. And
+  floor **per partition, never one total**: 400 passes on one authority's 436 alone when the
+  other finds zero, an empty half absorbed by a full one, which is the vacuity law with a
+  partner to hide behind. (Ruling: Scott, PR #108; grave #105.)
+- **A suspiciously clean result is a tell, and *exactly zero* is the cleanest one.** 0014's
+  premise — overlap 0, **gap 0** between two authorities — was measured by a probe scoped to
+  `plaininstr`, one of five instruction-building productions, which is *the same scope the
+  reader had*. Premise and implementation agreed because they shared an assumption, not because
+  either was right, and every control-flow instruction joined to nothing. That is the
+  witness-correlated-with-subject grave in instrument form, and it is worse than a mis-scoped
+  control: review verifies code against claims, and here the two concurred. **A premise measured
+  over the same sample the code reads is not a premise, it is an echo.** So interrogate a perfect
+  agreement between supposedly independent sets like a green that came too easily — ask what the
+  *instrument* could not have seen. The repair needs a detector the mechanism does not supply,
+  because asking whether everything the join resolved was resolved is a tautology; being unfit as
+  a join key (a naming coincidence, not a derivation) is exactly what makes a signal fit as a
+  second opinion. (Ruling: Scott, PR #108; grave #106.)
+- **A control isn't born until it has been watched die.** `Extract`'s partition check read as a
+  real guard and could not fire on **any** input — `byGrammar` is keyed per token kind, `byLexer`
+  per keyword, so `byLexer[kind]` asked whether a keyword is spelled `BINARY`. It was found by
+  writing the falsification test and watching it *not fail*, which is the birth requirement
+  working exactly as written. A no-op guard and a working guard produce identical output on every
+  input that doesn't trip them, which is all of them. So budget for the falsification *passing*:
+  that is not the test being wrong, it is the control being **stillborn**, and it is the most
+  valuable outcome the exercise has. A lookup across two differently-keyed maps is a no-op
+  wearing a predicate's clothes. (Ruling: Scott, PR #108.)
 - **Unreachability is a grave only when it's silent.** Declared and tracked,
   it's a TODO with an audit trail — scaffolding wearing a name tag, not a
   missing check wearing a disguise. The test is whether the deferral was
