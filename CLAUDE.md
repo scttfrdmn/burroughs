@@ -223,6 +223,15 @@ the choice, and consequences once Scott has called it.
     mechanism gets built for this (*one concept, one trigger*, #82). A PR that drains
     the column lowers the ceiling in the same PR, exactly as `textFailCeiling` fell
     stepwise with a per-PR account.
+  - **The actor never chooses the instrument that judges the actor.** The umbrella the two
+    rules below were always standing under, written down once so it does not have to be
+    rediscovered a third time: not choosing the measure, not granting the exception — same
+    root. Both were violated on #113 in the same PR, both plausibly, and the tell in each
+    case was that the reading favouring the actor was *also* the reading the actor
+    proposed. Where a judgement is about the work, the actor makes it; where it is about
+    the actor, the actor's job is to *state the case and flag it*, and a principal rules.
+    The general form covers instruments not yet invented, which is why it is worth having
+    above the two specific ones. (Compression: Scott, PR #113.)
   - **Instrument-to-engine ratio is quoted, not felt.** Measured over the trailing six
     merges it went **1:1.8 → 1:5.1** (engine 2007→463 lines, test 3681→2347) while the
     unsupported column did not move at all. That is the number that made this rule; a
@@ -243,6 +252,9 @@ the choice, and consequences once Scott has called it.
       it — so **recalibrate the threshold once against the uniform comparator and let
       historical quotes stand with their era noted**; the 1:1.8 → 1:5.1 figures above
       predate it. A claim needs a fixed comparator more than it needs flattering values.
+      The recalibration is **#117**, and Scott spent the exemption token for it in advance
+      when he ordered it — a threshold asserted without its trailing window re-measured
+      would be the number-you-haven't-run that era-marking these figures exists to avoid.
       (Ruling: Scott, PR #113.)
   - **Two consecutive instrument-only PRs is a stop condition.** Not a soft
     preference — stop and take product work, or get Scott's word to continue. The
