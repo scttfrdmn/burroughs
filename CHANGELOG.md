@@ -21,6 +21,33 @@ weakly-ordered platform.
 
 ### Added
 
+- **`gate:extended-const` — the ninth `Features` gate, and the first one that governs a *position*
+  rather than a byte** ([#109](https://github.com/scttfrdmn/burroughs/issues/109)). The six
+  instructions the proposal adds (`i32.add`/`sub`/`mul` = 0x6a/0x6b/0x6c, `i64` = 0x7c/0x7d/0x7e) are
+  MVP opcodes that stay ungated in function bodies and become admissible inside a constant
+  expression, so nothing in the image distinguishes the gated construct from the ungated one. That
+  ruled out a `gatedOpcodes` row: `gateCheck` dispatches on the opcode alone, so an entry there would
+  decline `i32.add` in every function body — reintroducing, as its own fix, the accept-direction
+  defect #109 was filed for. The gate lives in `gatedNonOpcodes` and is checked in `constLegal`,
+  where the position is known.
+
+  **Contract §9 G-2 was amended to say extended-const is tracked** (Scott's stamp on #109; the
+  amendment cites it in its provenance line, and G-2's parenthetical was swept against the 3.0 merged
+  list once, completely, so the enumeration is auditable rather than illustrative). The nine
+  extended-const modules therefore move to gated-by-default in v0's posture and are **earned in the
+  all-on lane**, where `gated` must be 0 — the structural bound that keeps a deferral from becoming a
+  disappearance.
+
+- **`internal/gen/xcorpus/accept_test.go`: the permanent accept-direction control** (contract §9 G-3,
+  and product work under the standing rule for exactly that reason). Two walks over the 1954
+  committed corpus images: under the tracked union the decoder must accept **every one, zero
+  rejections exactly** — an equality rather than a ratchet, because every module here is one a
+  conforming producer emitted from a must-succeed suite module and there is no honest nonzero value —
+  and in v0's default posture every rejection must be an `errors.Is` feature decline that does not say
+  *malformed* (#5, pinned over 692 modules rather than over one probe). The measurement that found
+  #109 was made by hand and then discarded; this is the *artifacts become oracles* rule applied one
+  step later than it should have been.
+
 - **`internal/text/encode.go`: the memory and table section emitters, and a frontier that is now
   per-arm rather than per-field** ([#8](https://github.com/scttfrdmn/burroughs/issues/8), 0011 part
   2). `(memory i64 1 4)` and `(table 1 funcref)` encode; sections 4 and 5 join section 1 in id order,
@@ -1255,6 +1282,33 @@ weakly-ordered platform.
 
 ### Changed
 
+- **The instrument-to-engine ratio has a fixed comparator, and stop-condition exemptions can no longer
+  be granted by the actor** (rulings: Scott, PR #113). Two process laws, and both take the same shape —
+  *the actor being measured does not choose the measure, and does not grant its own exception*.
+  **Engine = code in the module path; instrument = tests, generators, harness — no per-file pleading.**
+  #113 quoted 1:5.2 and argued its accept-direction control onto the engine side on the true premise
+  that the standing rule calls such a control product work; the two readings differed by **1:5.2 versus
+  1:1.1**, and the choice between two honest numbers was the dishonesty. Product-work classification
+  (which governs *selection*) and ratio classification (which measures *drift*) are now deliberately
+  different questions with different answers for the same file. The uniform rule quotes uglier — #113
+  is **1:6.6** — so the threshold is recalibrated once against it and historical quotes stand with
+  their era noted. And **stop-condition exemptions are spent only by a principal's order or stamp**:
+  "this PR wasn't elective" is a plea every drifting PR can make, so it is inadmissible from the actor
+  however true it is. The actor flags; the principal rules.
+
+- **Identifiers in doc comments are citations now, and the class is un-frozen**
+  ([#116](https://github.com/scttfrdmn/burroughs/issues/116)). The class was left as convention on the
+  explicit criterion *convention until first drift*, recorded in #93's scope note. The drift arrived
+  and was measured: `constWalk` was cited in three comments across three PRs and has **never existed**
+  — not renamed, not moved, fiction from the first keystroke, in prose describing where a gate is read.
+  So the criterion has fired and the fixture-provenance treatment extends to prose-in-code: an
+  identifier named in a comment resolves to a definition, or the comment is phrased historically.
+  The control is `TestEveryCitedTestNameResolves` widened from test names to identifiers generally, and
+  its three paid-for trigger lessons are recorded to be **copied rather than re-derived** (#105):
+  rejoin hyphenated line wraps, scope the historical exemption **per sentence** not per block, and
+  exclude declaration-shape spans rather than backticked ones. The still-unchecked sibling is the
+  **issue-number** class from #84 — different oracle, so it stays split at the seam.
+
 - **The three code generators live in `internal/gen/`, and a repo-relative path is now
   *derived* rather than counted** (decision 0014). `opcodegen` was
   `internal/binary/internal/opcodegen` and `keywordgen` was `internal/text/internal/...`,
@@ -1555,6 +1609,41 @@ weakly-ordered platform.
   skip ([#29](https://github.com/scttfrdmn/burroughs/issues/29)).
 
 ### Fixed
+
+- **Nine valid modules were rejected, and the comment above the bug asserted the rule it broke**
+  ([grave #109](https://github.com/scttfrdmn/burroughs/issues/109)). `constOps`' comment said
+  extended-const "arrives with its gate" while no such gate existed and `constLegal`'s predecessor
+  returned false for all six opcodes, so `(data (i32.add (i32.const 0) (i32.const 42)))` and its
+  siblings in `data.wast`, `elem.wast`, and `global.wast` failed with `constant expression required:
+  0x6a/0x6b/0x6c`. **Invisible on both boards by construction**: all 4162 green vectors are
+  rejections, so a decoder that wrongly rejects scores full marks (§9 G-3), and the all-on lane
+  scores the same. Found by the corpus simply trying to read the images; reproduced from a clean tree
+  by reverting `constLegal` to `return false`, which yields exactly those nine. *The defect stated as
+  the rule* is the shape — review verifies code against claims, and here the claim was the bug.
+
+  Three collateral repairs of the same shape — greens whose subjects were fiction — each ruled a grave
+  in its own right ([#114](https://github.com/scttfrdmn/burroughs/issues/114),
+  [#115](https://github.com/scttfrdmn/burroughs/issues/115),
+  [#116](https://github.com/scttfrdmn/burroughs/issues/116)) with a comment at each fix site.
+  `TestAgreementHoldsUnderEveryFeatureConfiguration` claimed its four booleans were "the same
+  derivation without a dependency" while walking **4 of 8** gates, pinning the other four off in all 16
+  configurations — it now reflects over `Features` (2^9 = 512), and the lesson is that an enumeration
+  wearing a *derivation's* description is worse than a bare enumeration, because the description
+  defeats the review that would have caught it. `TestEveryGateOffDeclinesSomething`'s probe struct
+  documented a `body`/`constExpr` selector that was **not a field**, which is why no probe could reach
+  a const position; the tell was *tense* — a capability the code lacks belongs in the future tense, or
+  in an issue, or nowhere. And three comments cited `constWalk`, a function that has never existed in
+  the package through three PRs — *a citation to a symbol is as checkable as a `.wast:N`*, and nothing
+  was checking these.
+
+  **The new control was itself born stillborn, which is the part worth keeping.**
+  `TestEveryCorpusModuleDecodesUnderFullFeatures`' floors measured `len(m.Modules)` — the population —
+  and said nothing about whether the loop consumed it, so `range m.Modules[:0]` left it **green**.
+  Found by writing the falsification and watching it *not* fire (*a control isn't born until it has
+  been watched die*), fixed with a `walked` counter, and re-falsified: the injection now reports
+  `walked 0 of 1954`. The sweep to its sibling came back **negative and is recorded as such** — that
+  walk's floor is on *declines*, which can only accrue from iterations that happened, so a second
+  counter there would be one concept with two triggers.
 
 - **`limits`' nats were never read, so a 2^64 bound was accepted**
   ([grave #112](https://github.com/scttfrdmn/burroughs/issues/112)). Both arms are `nat64`

@@ -69,6 +69,7 @@ const (
 	gateMultiMemory       gateID = "MultiMemory"
 	gateThreads           gateID = "Threads"
 	gateMemory64          gateID = "Memory64"
+	gateExtendedConst     gateID = "ExtendedConst"
 )
 
 // gatedOpcode is one mapped construct: a prefix (0x00 for none), a sub-opcode range, the
@@ -212,6 +213,19 @@ var gatedNonOpcodes = map[gateID]string{
 	gateSIMD:              "the v128 value type, including as a blocktype — decodeValType",
 	gateGC: "the 0x40 table form with an initializer (function-references), and the twelve " +
 		"GC reftypes — sections.go decodeTable, decodeRefType (#51)",
+	// **The one entry here whose construct is a position rather than a syntactic form**, and the
+	// distinction is load-bearing rather than pedantic. Every other entry in either map names
+	// something that appears in the image and can be pointed at: a flags value, a section id, a
+	// value type, an opcode. Extended-const names *where* six existing opcodes are allowed to
+	// appear, so nothing in the byte stream distinguishes a gated construct from an ungated one —
+	// `0x6a` in a function body is MVP, and `0x6a` in a global's initializer is this proposal.
+	//
+	// Which is precisely why it must not be in `gatedOpcodes`: `gateCheck` dispatches on the
+	// opcode alone and cannot see the position, so an entry there would decline `i32.add`
+	// everywhere. The check belongs where the position is known, and `instrCtx.constLegal` is the
+	// only place that knows it — see extendedConstOps in instr.go.
+	gateExtendedConst: "i32/i64 add, sub, mul in a constant expression — instr.go " +
+		"extendedConstOps, checked in constLegal where the position is known (#109)",
 }
 
 // gateFor returns the gate governing one opcode, and whether one exists.
@@ -260,6 +274,8 @@ func (f Features) enabled(g gateID) (on bool, known bool) {
 		return f.Threads, true
 	case gateMemory64:
 		return f.Memory64, true
+	case gateExtendedConst:
+		return f.ExtendedConst, true
 	}
 	return false, false
 }

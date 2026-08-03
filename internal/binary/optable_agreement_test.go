@@ -3,6 +3,7 @@ package binary
 import (
 	"errors"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -446,6 +447,47 @@ func TestEveryImmediateInTheTableHasABytesVerdict(t *testing.T) {
 	}
 }
 
+// constLegalBytes is the whole const-legal space: the unconditional set plus the set
+// extended-const admits under its gate.
+//
+// It exists because three controls in this file were keyed on `constOps` alone, and once
+// extended-const's six became const-legal-under-a-gate that key stopped naming the space and
+// started naming a *sample of it* — the overfitting-applied-to-a-control failure #33 was widened
+// to avoid, arriving by the back door as a new set rather than as a new opcode. The union is
+// derived here once so a tenth const-legal opcode, whatever gate admits it, is covered by every
+// walk below on arrival instead of by whichever ones remembered to mention it.
+//
+// The floor is not decoration. If either map were emptied — or if a future refactor moved
+// membership somewhere this function does not read — the walks it feeds would each pass by
+// comparing nothing, which is the vacuity class and is invisible on a board by construction.
+func constLegalBytes(tb testing.TB) map[byte]bool {
+	tb.Helper()
+
+	all := make(map[byte]bool, len(constOps)+len(extendedConstOps))
+	for b := range constOps {
+		all[b] = true
+	}
+	for b := range extendedConstOps {
+		if all[b] {
+			tb.Errorf("%#02x is in both constOps and extendedConstOps: a byte that is both "+
+				"unconditionally const-legal and gated makes the gate unobservable, because the "+
+				"unconditional arm answers first (constLegal checks constOps before the gate)", b)
+		}
+		all[b] = true
+	}
+	if len(all) != len(constOps)+len(extendedConstOps) {
+		tb.Fatalf("union of the const sets has %d members, want %d: the overlap above is the "+
+			"only way this happens and it must not be reached silently",
+			len(all), len(constOps)+len(extendedConstOps))
+	}
+	if len(all) < 13 {
+		tb.Fatalf("the const-legal space has %d members; it had 13 when #109 landed (seven "+
+			"unconditional, six extended-const), and a domain smaller than that means a set this "+
+			"helper reads has been emptied — every walk keyed on it would then agree vacuously", len(all))
+	}
+	return all
+}
+
 // TestConstSetUsesNoStructuralImmediate keeps immBytes' nil entries from being an
 // assumption.
 //
@@ -455,7 +497,7 @@ func TestEveryImmediateInTheTableHasABytesVerdict(t *testing.T) {
 // opcode and stay green. That is the failure this test exists to convert into a red:
 // the *reason* the extent check is total is recorded as its own assertion.
 func TestConstSetUsesNoStructuralImmediate(t *testing.T) {
-	for b := range constOps {
+	for b := range constLegalBytes(t) {
 		info, ok := opTable[uint32(b)]
 		if !ok {
 			continue // membership's problem, asserted separately
@@ -486,10 +528,7 @@ func TestConstSetUsesNoStructuralImmediate(t *testing.T) {
 // `expectEnd` — so the exception is gone rather than suppressed. The fact it stood on
 // is still checked, by TestEveryReasonRowIsABlockDelimiter.
 func TestConstSetIsASubsetOfTheAuthority(t *testing.T) {
-	if len(constOps) == 0 {
-		t.Fatal("constOps is empty: a subset check over an empty set passes vacuously")
-	}
-	for b := range constOps {
+	for b := range constLegalBytes(t) {
 		info, ok := opTable[uint32(b)]
 		if !ok {
 			t.Errorf("const-legal %#02x does not exist in the reference's table "+
@@ -536,13 +575,11 @@ func TestConstSetIsASubsetOfTheAuthority(t *testing.T) {
 func TestConstExprExtentMatchesTheAuthority(t *testing.T) {
 	const input = "\x70\x70\x70\x70\x70\x70\x70\x70\x70\x70\x70\x70\x70\x70\x70\x70"
 
-	if len(constOps) == 0 {
-		t.Fatal("constOps is empty: an extent comparison over no opcodes compares nothing")
-	}
+	space := constLegalBytes(t)
 	d := &Decoder{}
 	c := &instrCtx{d: d, nonConst: -1}
 	checked := 0
-	for b := range constOps {
+	for b := range space {
 		info, ok := opTable[uint32(b)]
 		if !ok {
 			continue // membership's problem
@@ -577,9 +614,9 @@ func TestConstExprExtentMatchesTheAuthority(t *testing.T) {
 		}
 		checked++
 	}
-	if checked != len(constOps) {
+	if checked != len(space) {
 		t.Errorf("compared %d of %d const-legal opcodes: an extent check that quietly skips "+
-			"is a coverage claim it cannot support", checked, len(constOps))
+			"is a coverage claim it cannot support", checked, len(space))
 	}
 	t.Logf("%d const-legal opcodes agree on immediate extent", checked)
 }
@@ -810,17 +847,31 @@ func TestEveryReasonRowIsABlockDelimiter(t *testing.T) {
 // count folded into `present`: 0x05 and 0x0b are delimiters, so `decodeConstExpr`
 // *accepts* a bare one — as an empty expression — rather than rejecting it. See
 // TestEveryReasonRowIsABlockDelimiter.
+//
+// **`present` fell 185 → 179 when extended-const's gate landed** (#109), and the direction is
+// the point: this walk runs with every gate *on*, so the six opcodes extended-const admits are
+// const-legal here and the `released` half rightly stopped reporting `constant expression
+// required` for them. They leave the `present` bucket for the same reason `constOps`' seven were
+// never in it — under this decoder they are legal — and the excluded set is therefore
+// `constOps ∪ extendedConstOps` rather than `constOps`. This test failed exactly here when the
+// gate was added, which is the partition control doing its job: a bucket whose membership rule
+// changed said so instead of absorbing six members silently.
 func TestEveryNonConstByteGetsTheRightVerdict(t *testing.T) {
-	// Every gate on. Ten of the 185 non-const bytes are *also* gated — throw, throw_ref,
+	// Every gate on. Ten of the non-const bytes are *also* gated — throw, throw_ref,
 	// the tail calls, the function-references five, ref.eq — so on v0's gates-off posture
 	// the feature decline outranks the const verdict (0008) and this walk would score ten
 	// members against the wrong question. The gated verdict has its own controls in
 	// gatemap_test.go; this one is about const-ness over the whole space.
+	//
+	// It is also why extended-const's six are skipped below rather than bucketed: with its gate
+	// on they are legal, and *this* decoder has it on. The gate-off direction — where the same
+	// six must be declined by name and must not report `constant expression required` — is
+	// TestExtendedConstGateIsPositional's, because a walk with all gates on cannot ask it.
 	d := constVerdictDecoder(t)
 	c := &instrCtx{d: d, nonConst: -1}
 	var absent, escape, illegal, present, delimiter, released int
 	for b := range 256 {
-		if constOps[byte(b)] {
+		if constOps[byte(b)] || extendedConstOps[byte(b)] {
 			continue
 		}
 
@@ -935,7 +986,7 @@ func TestEveryNonConstByteGetsTheRightVerdict(t *testing.T) {
 		wantAbsent    = 38  // no arm in decode.ml: the catch-all's territory
 		wantEscape    = 3   // 0xfb, 0xfc, 0xfd: dispatch to a sub-table
 		wantIllegal   = 21  // an arm that explicitly rejects
-		wantPresent   = 185 // a real instruction that is simply not constant
+		wantPresent   = 179 // a real instruction that is simply not constant
 		wantDelimiter = 2   // 0x05, 0x0b: `block` stops on them
 	)
 	if absent != wantAbsent || escape != wantEscape || illegal != wantIllegal ||
@@ -945,7 +996,10 @@ func TestEveryNonConstByteGetsTheRightVerdict(t *testing.T) {
 			absent, escape, illegal, present, delimiter,
 			wantAbsent, wantEscape, wantIllegal, wantPresent, wantDelimiter)
 	}
-	if got := absent + escape + illegal + present + delimiter + len(constOps); got != 256 {
+	// The coverage sum takes both const sets, matching the loop's skip. Two independent
+	// oversights are caught by keeping this in step: a member of one set going missing (the
+	// buckets would over-count) and the skip and the sum disagreeing (256 would not be hit).
+	if got := absent + escape + illegal + present + delimiter + len(constOps) + len(extendedConstOps); got != 256 {
 		t.Errorf("partition does not cover the space: %d of 256 bytes classified", got)
 	}
 }
@@ -1222,27 +1276,46 @@ func TestPrefixRegionsCoverTheTable(t *testing.T) {
 // Gated const-expr additions (WasmGC's ref.i31, extended-const's arithmetic) will route
 // through Features on both sides, and the agreement must hold *per configuration* — a
 // cross-check run only with gates off would say nothing about the configuration a user
-// actually enables. Nothing in the const set is gate-dependent today except ref.null's
-// heaptype, so this currently proves invariance rather than covering variation; it is
-// here so that the coverage arrives with the feature instead of being remembered.
+// actually enables. That sentence was written as a prophecy and #109 is its subject
+// arriving: extended-const's six are const-legal only under a gate, so this test has
+// stopped proving invariance and started covering variation, which is what it was filed
+// for. *A pre-registered control's value is collected when its subject shows up*, and the
+// collection is two edits — the walk's domain and the mask's width.
 //
-// The configurations are derived by reflection over Features in featureset_test.go's
-// helper if one exists; here the four booleans are walked as a bitmask, which is the
-// same derivation without a dependency.
+// **The mask is now reflected over `Features`, and the previous version's claim that four
+// booleans were "the same derivation without a dependency" was false.** It walked
+// ExceptionHandling, SIMD, Threads, Memory64 — four of what were then eight gates — so
+// GC, TailCall, RelaxedSIMD and MultiMemory were pinned *off* in all sixteen
+// configurations and the count `16` read as complete. An enumeration is a sample and a
+// sample has a blind spot by construction; here the blind spot was half the struct, and
+// the comment asserting otherwise is why nobody looked. Reflection makes a ninth gate widen
+// the walk to 512 rather than leaving it at 16 with one more field silently held low.
+//
+// Grave #114. The lesson is that an enumeration wearing a *derivation's* description is
+// worse than a bare enumeration, because the description defeats the review that would have
+// caught it: print the domain's size, never read the sentence claiming it was derived.
 func TestAgreementHoldsUnderEveryFeatureConfiguration(t *testing.T) {
 	const input = "\x70\x70\x70\x70\x70\x70\x70\x70\x70\x70\x70\x70\x70\x70\x70\x70"
 
+	gates := featureGateIDs(t)
+	space := constLegalBytes(t)
+	want := 1 << len(gates)
+
 	configs := 0
-	for mask := range 16 {
-		f := Features{
-			ExceptionHandling: mask&1 != 0,
-			SIMD:              mask&2 != 0,
-			Threads:           mask&4 != 0,
-			Memory64:          mask&8 != 0,
+	for mask := range want {
+		var f Features
+		v := reflect.ValueOf(&f).Elem()
+		for i, g := range gates {
+			fld := v.FieldByName(string(g))
+			if !fld.IsValid() || fld.Kind() != reflect.Bool {
+				t.Fatalf("Features.%s is not a settable bool: a gate this walk cannot vary "+
+					"would run as off in every configuration while the count claims coverage", g)
+			}
+			fld.SetBool(mask&(1<<i) != 0)
 		}
 		d := &Decoder{Features: f}
 		c := &instrCtx{d: d, nonConst: -1}
-		for b := range constOps {
+		for b := range space {
 			info, ok := opTable[uint32(b)]
 			if !ok {
 				continue
@@ -1269,8 +1342,10 @@ func TestAgreementHoldsUnderEveryFeatureConfiguration(t *testing.T) {
 		}
 		configs++
 	}
-	if configs != 16 {
-		t.Fatalf("walked %d configurations, want 16 (2^4 tracked gates): a per-configuration "+
-			"claim must actually walk them", configs)
+	if configs != want {
+		t.Fatalf("walked %d configurations, want %d (2^%d tracked gates): a per-configuration "+
+			"claim must actually walk them", configs, want, len(gates))
 	}
+	t.Logf("%d configurations × %d const-legal opcodes agree on immediate extent",
+		configs, len(space))
 }

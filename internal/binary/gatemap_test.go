@@ -376,22 +376,51 @@ func splitCitation(cite string) (file string, line int, ok bool) {
 // ErrFeatureDisabled with `malformed value type` — a gate manufacturing malformedness. Move
 // the branch and this test goes red. *One control, two obligations.*
 func TestEveryGateOffDeclinesSomething(t *testing.T) {
-	// One probe per gate: bytes that use a construct that gate governs, and the form to
-	// wrap them in. `body` is a function body's instructions (END supplied); `constExpr`
-	// is an initialiser.
+	// One probe per gate: bytes that use a construct that gate governs, the form to wrap
+	// them in, and a human name.
+	//
+	// **`constOnly` is a real field now, and the previous version of this comment claimed it
+	// was.** It read "`body` is a function body's instructions (END supplied); `constExpr` is
+	// an initialiser" while the struct had no such selector and every probe ran as a function
+	// body — a comment describing a distinction the code did not draw, which is the
+	// defect-stated-as-the-rule shape (a reviewer checking code against claims finds
+	// agreement). It went unnoticed because no gate needed the other form. Extended-const is
+	// the first that does: its whole content is *position*, so a function-body probe cannot
+	// exercise it at all, and the field the comment promised is the field the probe needs.
+	//
+	// Grave #115. The tell was *tense*: a capability the code does not have gets written in
+	// the future, or filed, or not written at all — a present-tense comment about a missing
+	// field is a plan that reads as documentation, and nothing distinguishes the two until
+	// something needs the field.
 	probes := map[gateID]struct {
-		instrs []byte
-		what   string
+		instrs    []byte
+		constOnly bool
+		what      string
 	}{
-		gateExceptionHandling: {[]byte{0x0a}, "throw_ref"},
-		gateGC:                {[]byte{0xd3}, "ref.eq"},
-		gateTailCall:          {[]byte{0x12, 0x00}, "return_call 0"},
+		gateExceptionHandling: {instrs: []byte{0x0a}, what: "throw_ref"},
+		gateGC:                {instrs: []byte{0xd3}, what: "ref.eq"},
+		gateTailCall:          {instrs: []byte{0x12, 0x00}, what: "return_call 0"},
 		// fd 0x0c is v128.const: the prefix, a one-byte sub-opcode, 16 bytes of literal.
-		gateSIMD: {append([]byte{0xfd, 0x0c}, make([]byte, 16)...), "v128.const"},
+		gateSIMD: {instrs: append([]byte{0xfd, 0x0c}, make([]byte, 16)...), what: "v128.const"},
 		// fd 0x100 is i8x16.relaxed_swizzle, whose sub-opcode is a two-byte LEB.
-		gateRelaxedSIMD: {[]byte{0xfd, 0x80, 0x02}, "i8x16.relaxed_swizzle"},
+		gateRelaxedSIMD: {instrs: []byte{0xfd, 0x80, 0x02}, what: "i8x16.relaxed_swizzle"},
 		// i32.load with flags bit 6 set: align 0, an explicit memory index, offset 0.
-		gateMultiMemory: {[]byte{0x28, 0x40, 0x00, 0x00}, "i32.load with an explicit memory index"},
+		gateMultiMemory: {
+			instrs: []byte{0x28, 0x40, 0x00, 0x00},
+			what:   "i32.load with an explicit memory index",
+		},
+		// `i32.const 2` `i32.const 3` `i32.mul` — and `constOnly` is not a detail here, it is
+		// the gate's entire subject. With it false these same bytes are an ordinary MVP
+		// function body that must decode cleanly under every configuration; with it true they
+		// are a constant expression, which is the only position extended-const governs. A
+		// probe that ran as a body would report this gate as declining nothing, and the fix
+		// for *that* would have been to route extended-const through `gatedOpcodes` — which
+		// declines `i32.add` everywhere and reintroduces #109's own defect.
+		gateExtendedConst: {
+			instrs:    []byte{0x41, 0x02, 0x41, 0x03, 0x6c},
+			constOnly: true,
+			what:      "i32.mul in a constant expression",
+		},
 	}
 
 	gates := featureGateIDs(t)
@@ -429,12 +458,24 @@ func TestEveryGateOffDeclinesSomething(t *testing.T) {
 		}
 
 		d := &Decoder{Features: f}
-		c := &instrCtx{d: d, nonConst: -1}
+		c := &instrCtx{d: d, constOnly: p.constOnly, nonConst: -1}
 		r := &reader{b: append(append([]byte{}, p.instrs...), 0x0B), eof: ErrPayloadEnd}
 		if err := c.block(r); err != nil {
 			t.Errorf("Features.%s off: reading %s (% x) failed with %v; the probe must reach "+
 				"the gate check, not die in the grammar", g, p.what, p.instrs, err)
 			continue
+		}
+		// A const-position probe must not have armed the *const* verdict, which would make
+		// the decline below ambiguous: `nonConst` set means the opcode was judged non-const
+		// rather than gate-declined, and `release` returning ErrFeatureDisabled would then
+		// be true of a reader that also reports `constant expression required` for a valid
+		// module. The two verdicts are ordered (0008) precisely so they can be told apart,
+		// and this asserts the ordering is not being leaned on to hide a second answer.
+		if p.constOnly && c.nonConst >= 0 {
+			t.Errorf("Features.%s off: %s (% x) also recorded a non-const verdict at %#02x; "+
+				"the gate must decline by *name*, not fall through to `constant expression "+
+				"required` — that string is a spec invalid string and the module is valid (#5)",
+				g, p.what, p.instrs, c.nonConst)
 		}
 		err := c.release()
 		if !errors.Is(err, ErrFeatureDisabled) {
@@ -452,21 +493,26 @@ func TestEveryGateOffDeclinesSomething(t *testing.T) {
 		// The same construct must be accepted with the gate on, or the decline above is
 		// indistinguishable from the decoder simply not supporting it.
 		on := &Decoder{Features: featuresAllOn(t)}
-		onCtx := &instrCtx{d: on, nonConst: -1}
+		onCtx := &instrCtx{d: on, constOnly: p.constOnly, nonConst: -1}
 		onR := &reader{b: append(append([]byte{}, p.instrs...), 0x0B), eof: ErrPayloadEnd}
 		if err := onCtx.block(onR); err != nil {
 			t.Errorf("Features.%s on: %s (% x) failed with %v; a construct that fails either way "+
 				"proves nothing about the gate", g, p.what, p.instrs, err)
 		} else if err := onCtx.release(); err != nil {
 			t.Errorf("Features.%s on: %s (% x) still declined with %v", g, p.what, p.instrs, err)
+		} else if p.constOnly && onCtx.nonConst >= 0 {
+			t.Errorf("Features.%s on: %s (% x) recorded a non-const verdict at %#02x with the "+
+				"gate *on*: the construct the gate admits must be const-legal, or the gate admits "+
+				"nothing and the decline above was measuring the const check", g, p.what, p.instrs,
+				onCtx.nonConst)
 		}
 		declined++
 	}
 
-	// Vacuity floor. Six of the eight gates have instruction probes; if the probe map is
+	// Vacuity floor. Seven of the nine gates have instruction probes; if the probe map is
 	// emptied or the loop stops matching, this fails instead of passing by asking nothing.
-	if declined < 6 {
-		t.Errorf("only %d gates were observed declining a construct, want >=6 of %d: this test "+
+	if declined < 7 {
+		t.Errorf("only %d gates were observed declining a construct, want >=7 of %d: this test "+
 			"passing while exercising nothing is the failure it exists to prevent", declined, len(gates))
 	}
 	t.Logf("%d of %d gates observed declining an instruction construct", declined, len(gates))

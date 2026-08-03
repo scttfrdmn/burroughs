@@ -40,10 +40,22 @@ import (
 // function`, which is what the suite asks for. A malformed verdict from a lower layer
 // must be allowed to win, and it can only win if the grammar is allowed to finish.
 //
-// So constWalk defers: it records the first non-const instruction and returns it only
-// if the grammar completed. *An invalid verdict that pre-empts a malformed one is
-// reporting the wrong layer's answer* — the same error as an error from the wrong
-// layer (#36), pointed the other way.
+// So the read defers: `instr` records the first non-const instruction in `instrCtx.nonConst`
+// and `constExprBody` returns it only if the grammar completed. *An invalid verdict that
+// pre-empts a malformed one is reporting the wrong layer's answer* — the same error as an
+// error from the wrong layer (#36), pointed the other way.
+//
+// Those two names are named because the previous version of this sentence said "constWalk
+// defers" and no function of that name has ever existed in this package — a citation to a
+// symbol is as checkable as a `.wast:N`, and this one resolved to nothing through three
+// PRs (#109 swept it).
+//
+// Grave #116, and it is the one of that family with work still open. Identifiers in prose
+// were left unchecked on the criterion *convention until first drift*; `constWalk` is the
+// first measured drift — not renamed or moved but **fiction from the first keystroke** — so
+// the criterion has fired and the resolving check `TestEveryCitedTestNameResolves` performs
+// for test names is owed to identifiers generally. Until it exists, this class is convention
+// again, which is the state that produced this comment.
 //
 // # What the table drives and what it cannot
 //
@@ -67,18 +79,18 @@ import (
 // expression is `t.const`, `ref.null`, `ref.func`, and `global.get` of an immutable
 // import, terminated by END. WasmGC (`struct.new`) widens it and arrives with its gate.
 //
-// **The sentence that used to stand here said extended-const did too, and it does not** (#109).
-// There is no extended-const field in `Features`, so `i32.add` in a constexpr is not declined
-// by a gate — it is rejected outright, with `constant expression required`, on nine modules the
-// suite requires accepted (`data.wast:178`, `elem.wast:1057`, `global.wast:3`, and six more).
-// The claim read as *declared and tracked* and licensed the omission, which is the
-// defect-stated-as-the-rule shape: review verifies code against claims, and this claim was
+// **Extended-const widens it too, and it is a gate now** (#109, stamped by Scott). The sentence
+// that used to stand here claimed extended-const "arrives with its gate" while no such gate
+// existed: `i32.add` in a constexpr was rejected outright with `constant expression required`, on
+// nine modules the suite requires accepted (`data.wast:178`, `elem.wast:1057`, `global.wast:3`,
+// and six more). The claim read as *declared and tracked* and licensed the omission, which is the
+// defect-stated-as-the-rule shape — review verifies code against claims, and this claim was
 // false. Found by the #67 cross-check corpus, because every one of the 4162 green vectors is a
 // rejection and no board can see a decoder that wrongly rejects (contract §9 G-3).
 //
-// Whether the answer is a ninth gate or a grammar exclusion is Scott's call in #109 — G-2 does
-// not name extended-const, though it is Wasm 3.0 core. Either way the *string* is wrong: a
-// declined feature reports a feature-named error, never a spec `invalid` string (#5).
+// The ruling also amended G-2: extended-const is Wasm 3.0 core and the parenthetical that omitted
+// it is why the false comment was believable. See `extendedConstOps` for why the gate cannot be a
+// `gatedOpcodes` entry, and `constLegal` for where it is checked.
 var constOps = map[byte]bool{
 	0x41: true, // i32.const
 	0x42: true, // i64.const
@@ -87,6 +99,33 @@ var constOps = map[byte]bool{
 	0x23: true, // global.get
 	0xD0: true, // ref.null
 	0xD2: true, // ref.func
+}
+
+// extendedConstOps is the set extended-const adds to constOps when its gate is on.
+//
+// A **separate map rather than six more rows in `constOps`**, because the two differ in exactly
+// the way the gates doctrine cares about: `constOps`' members are const-legal unconditionally,
+// and these six are const-legal only under a feature. Merging them would need a per-row gate
+// field, which is a second authority inside one table — the thing 0008 kept out of `optable.go`.
+//
+// The bytes are read from the generated table's own mnemonics rather than typed from the
+// proposal: `i32.add` is 0x6a (optable.go:179), `i32.sub` 0x6b, `i32.mul` 0x6c, `i64.add` 0x7c
+// (:197), `i64.sub` 0x7d, `i64.mul` 0x7e. The proposal document lists the six by *name*
+// (`proposals/extended-const/Overview.md:41-46`) and names are not encodings; the join between
+// them is `TestExtendedConstOpsAreTheProposalsSix`, which checks these keys against the table's
+// mnemonics so a transcription slip is a build failure rather than a wrong verdict on one opcode.
+//
+// **`i32.const` is not here and the near-miss is the reason to say so**: `0x41` versus `0x6a` is
+// one bucket of the board apart, and a slip that put a const opcode in this map would make it
+// gate-dependent — breaking every MVP module — while a slip in the other direction would make an
+// extended-const opcode unconditionally legal, which no vector can see.
+var extendedConstOps = map[byte]bool{
+	0x6a: true, // i32.add
+	0x6b: true, // i32.sub
+	0x6c: true, // i32.mul
+	0x7c: true, // i64.add
+	0x7d: true, // i64.sub
+	0x7e: true, // i64.mul
 }
 
 // prefixRegions is every region of the generated table, keyed by prefix byte with 0x00
@@ -263,6 +302,56 @@ func (c *instrCtx) decline(err error) {
 // somewhere the rule can be stated once and somewhere a third caller has to think about.
 func (c *instrCtx) release() error { return c.declined }
 
+// constLegal reports whether one opcode may appear in a constant expression, and it is where
+// extended-const's gate is read (#109).
+//
+// **The gate is checked here rather than through `gateCheck` because this is the only place that
+// knows the position.** `gateCheck` sees an opcode and nothing else, so it cannot distinguish
+// `i32.add` in a function body (MVP, ungated) from `i32.add` in a global's initializer (this
+// proposal). Routing extended-const through the opcode map would decline the first, rejecting
+// valid modules — which is exactly the accept-direction failure #109 was filed for, reintroduced
+// by the fix. See gatemap.go's `gatedNonOpcodes` entry.
+//
+// **Gate off is not silence.** An extended-const opcode with the gate off is *declined by name*,
+// via `decline`, and does not fall through to `nonConst` — because `constant expression required`
+// is a spec **invalid** string and the module is well-formed and valid. Reporting it would lie
+// about the module to conceal the engine's configuration, which is the #5 ruling. So the byte is
+// const-legal for reporting purposes either way, and which error it produces is the gate's answer:
+// on, it is accepted; off, `extended-const: feature gate disabled`.
+//
+// The decline is deferred like every other, so a malformed verdict further along still wins —
+// binary.wast:112's reason, applied to a gate.
+//
+// # Grave: nine valid modules rejected, with the rule stated above the bug (#109)
+//
+// This function's predecessor returned `constOps[b]` alone, and `constOps`' comment asserted that
+// extended-const "arrives with its gate" while no gate existed anywhere in `Features`. So
+// `(data (i32.add (i32.const 0) (i32.const 42)))` was rejected with `constant expression required:
+// 0x6a` — nine modules across `data.wast`, `elem.wast`, and `global.wast`, every one of them valid.
+//
+// **Neither board could see it, and that is a property of the corpus rather than an oversight.**
+// All 4162 green vectors are `assert_malformed`, so a decoder that wrongly *rejects* scores full
+// marks (contract §9 G-3); the all-on lane scores identically, because it also only asks rejection
+// questions. What found it was `internal/gen/xcorpus`' accept-direction walk — 1954 independently
+// produced images of must-succeed modules — which is why that control is product work rather than
+// overhead.
+//
+// The lesson is *the defect stated as the rule*: review verifies code against its claims, and here
+// the claim **was** the bug, so every reader who checked the two against each other found agreement.
+// Print what the code returns; do not read what it says it returns.
+func (c *instrCtx) constLegal(b byte) bool {
+	if constOps[b] {
+		return true
+	}
+	if !extendedConstOps[b] {
+		return false
+	}
+	if !c.d.Features.ExtendedConst {
+		c.decline(featureErr("extended-const"))
+	}
+	return true
+}
+
 // gateCheck records a decline if the opcode is gated and its gate is off.
 //
 // Called from both dispatch paths — single-byte and prefixed — because both read opcodes
@@ -395,7 +484,7 @@ func (c *instrCtx) instr(r *reader) error {
 	c.gateCheck(0x00, uint32(b))
 	// Deferred, not returned: see decodeConstExpr. The *first* one is kept, because
 	// that is the one a validator reading left to right would report.
-	if c.constOnly && !constOps[b] && c.nonConst < 0 {
+	if c.constOnly && !c.constLegal(b) && c.nonConst < 0 {
 		c.nonConst = int(b)
 	}
 	if err := c.imms(r, b, info.imms); err != nil {
