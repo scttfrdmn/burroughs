@@ -19,10 +19,16 @@ import "fmt"
 
 // decodeGlobal reads a globaltype followed by its initialiser.
 func (d *Decoder) decodeGlobal(r *reader) error {
-	if err := d.decodeGlobalType(r); err != nil {
+	vt, mut, err := d.decodeGlobalType(r)
+	if err != nil {
 		return err
 	}
-	return d.decodeConstExpr(r)
+	init, err := d.decodeConstExprKeep(r)
+	if err != nil {
+		return err
+	}
+	d.mod().Globals = append(d.mod().Globals, Global{Type: vt, Mutable: mut, Init: init})
+	return nil
 }
 
 // decodeElemSegment reads one element segment.

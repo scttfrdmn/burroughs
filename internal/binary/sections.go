@@ -103,6 +103,90 @@ type Decoder struct {
 	// stateful-instrument law (#28) applied to the decoder itself: state that survives
 	// a measurement reports history.
 	sawDataRef bool
+
+	// m is the module under construction, and it is per-decode state for exactly
+	// sawDataRef's reason — reset at the top of DecodeModule so a reused Decoder
+	// cannot carry one module's retained form into the next.
+	//
+	// **This field is the producer seam's answer** (see module.go). The descent grows
+	// the representation as it recognizes, rather than a second pass rebuilding it from
+	// the payloads the first pass aliased, and sawDataRef is the precedent: state on the
+	// Decoder, written from the bottom of the grammar, read at module level. A second
+	// pass would be a second grammar over the same bytes, drifting silently from this
+	// one — the risk 0006 says to prefer away from.
+	//
+	// The consequence, stated because it constrains every function below: `decode*`
+	// signatures stay **error-only**. 4162 of the suite's vectors are rejections, and a
+	// rejection path whose shape changes is a rejection path whose behaviour has to be
+	// re-proven. So a production that retains something writes it here and still returns
+	// only an error.
+	//
+	// Written unconditionally, including on paths that go on to fail: a decode that
+	// returns an error discards the module, so a partially-filled m is never observed.
+	// Guarding each write on eventual success would mean buffering, which is the second
+	// pass wearing a different hat.
+	//
+	// **Never read directly — go through mod().** Every retaining production is also
+	// reachable from a test that drives it without a surrounding DecodeModule, and the
+	// first version of this field was read directly on the assumption that the module
+	// grammar is the only caller. That assumption is false in the tree *today*
+	// (rectype_test.go:191 calls decodeCompType with a bare Decoder) and it made a nil
+	// dereference, not a wrong answer — so the panic was found. The lesson is the one that
+	// generalizes: a retention target that only exists on one entry point's path makes
+	// every production's correctness depend on who called it, and the productions are
+	// deliberately callable in isolation because that is how their rejection direction is
+	// pinned. mod() removes the precondition rather than documenting it.
+	m *Module
+
+	// funcTypeIdx holds the function section's type indices until the code section's
+	// bodies arrive to be zipped with them.
+	//
+	// A staging field rather than writing directly into m.Funcs, because the two halves
+	// of a Func are in two different sections and the *function* section comes first —
+	// so at the time the indices are read there are no bodies to attach them to.
+	// checkCounts already requires the two counts to agree, but it runs at the *end* of
+	// DecodeModule, after both grammars: so this pairing cannot assume agreement and
+	// zips defensively, keeping whichever half is short. A module whose halves disagree
+	// is rejected by checkCounts moments later and its retained form is discarded.
+	funcTypeIdx []uint32
+
+	// valType is the value type the most recent successful `valtype` read accepted.
+	//
+	// An out-parameter on the Decoder rather than a return value, and that is forced
+	// rather than chosen: `decodeValType` is passed as a `func(*reader) error` to both
+	// `either` and `decodeVec`, so widening its signature would widen theirs — and
+	// `either`'s signature is the shape of a *backtracking alternation*, which has no
+	// meaningful value to return for a branch that failed.
+	//
+	// Written only immediately before a successful return, never on a path that goes on
+	// to fail. That ordering is what makes it safe under `either`: a branch that
+	// backtracks has not written, so the value standing after the alternation belongs to
+	// the branch that actually matched. A write-then-fail would leave a type from a
+	// production the module never contained — the invented-evidence class (grave #36) in
+	// a field instead of a message.
+	valType ValType
+
+	// blockType is the encoded blocktype the most recent `blocktype` read accepted, on
+	// the Decoder for valType's reason — its alternation is an `either`. See
+	// decodeBlockTypeValue for the encoding and for why the three forms cannot collide.
+	blockType uint64
+}
+
+// mod returns the module the descent retains into, creating it if this Decoder was driven
+// below DecodeModule.
+//
+// The lazy creation is not convenience — it is what keeps retention's correctness
+// independent of the entry point. Every production that retains something is also called
+// directly by a test pinning its rejection direction, and those tests construct a bare
+// `&Decoder{}`; requiring a caller to have set up a module first would mean the retaining
+// half of each production is only exercised through one door, which is the shape of a
+// precondition that excuses its own check. A module built here is discarded with the
+// Decoder, so nothing observes it.
+func (d *Decoder) mod() *Module {
+	if d.m == nil {
+		d.m = &Module{}
+	}
+	return d.m
 }
 
 // featureErr names the gate, never the grammar. The text deliberately does not
@@ -130,7 +214,7 @@ func (d *Decoder) decodePayload(sid SectionID, size uint32, r *reader) (bool, er
 	case SectionImport:
 		return true, d.decodeVec(r, d.decodeImport)
 	case SectionFunction:
-		return true, d.decodeVec(r, discardIndex)
+		return true, d.decodeVec(r, d.decodeFuncTypeIdx)
 	case SectionTable:
 		return true, d.decodeVec(r, d.decodeTable)
 	case SectionMemory:
@@ -139,7 +223,12 @@ func (d *Decoder) decodePayload(sid SectionID, size uint32, r *reader) (bool, er
 		return true, d.decodeVec(r, d.decodeExport)
 	case SectionStart:
 		// A bare function index, not a vec.
-		return true, discardIndex(r)
+		idx, err := r.u32()
+		if err != nil {
+			return true, err
+		}
+		d.mod().Start, d.mod().HasStart = idx, true
+		return true, nil
 	case SectionDataCount:
 		// A bare u32, not a vec. Its value is cross-checked in checkCounts; here
 		// it only has to be present and well-formed.
@@ -185,9 +274,28 @@ func (d *Decoder) decodePayload(sid SectionID, size uint32, r *reader) (bool, er
 // discardIndex reads an index and drops it. Index *validity* — does the function
 // exist — is the validator's question, not the decoder's; here the only claim is
 // that a well-formed u32 occupies those bytes.
+//
+// Still the right reader at the sites that keep it — a subtype's declared supertypes, a
+// br_table's label vector, an explicit memory index — where the index is read to prove
+// the field is well-formed and nothing yet consumes its value. Those are #7's remaining
+// gaps, named at their call sites.
 func discardIndex(r *reader) error {
 	_, err := r.u32()
 	return err
+}
+
+// decodeFuncTypeIdx reads one entry of the function section: a type index, staged until
+// the code section's bodies arrive.
+//
+// The two halves of a Func live in two sections and the function section comes first, so
+// there is nothing to attach an index to when it is read. See Decoder.funcTypeIdx.
+func (d *Decoder) decodeFuncTypeIdx(r *reader) error {
+	idx, err := r.u32()
+	if err != nil {
+		return err
+	}
+	d.funcTypeIdx = append(d.funcTypeIdx, idx)
+	return nil
 }
 
 // decodeVec applies an element grammar `count` times. The count is a u32 read
@@ -305,24 +413,49 @@ func (d *Decoder) decodeCompType(r *reader) error {
 	}
 	switch form {
 	case -0x20: // 0x60 — functype
-		for range 2 { // params, then results — same grammar, twice
-			if err := d.decodeVec(r, d.decodeValType); err != nil {
+		// Retained, and the two vectors are read into the two fields rather than by the
+		// shared `decodeVec(d.decodeValType)` the loop used to run twice. The loop is
+		// gone because retention is the one thing the two halves do *not* share: they
+		// are the same grammar writing to different destinations, and a loop over two
+		// destinations is a loop with a branch in it.
+		var ft FuncType
+		for _, dst := range [...]*[]ValType{&ft.Params, &ft.Results} {
+			if err := d.decodeVec(r, func(r *reader) error {
+				if err := d.decodeValType(r); err != nil {
+					return err
+				}
+				*dst = append(*dst, d.valType)
+				return nil
+			}); err != nil {
 				return err
 			}
 		}
+		d.mod().Types = append(d.mod().Types, CompType{Kind: CompFunc, Func: ft})
 		return nil
 
 	case -0x21: // 0x5f — structtype: a vector of fieldtypes
 		if !d.Features.GC {
 			return featureErr("gc")
 		}
-		return d.decodeVec(r, d.decodeFieldType)
+		if err := d.decodeVec(r, d.decodeFieldType); err != nil {
+			return err
+		}
+		// The slot is taken and the contents are not retained — fieldtypes have no
+		// representation yet and nothing consumes them (#7). Taking the slot is the
+		// part that matters: a struct type occupies a type index, so skipping it here
+		// would shift every later index in the all-gates-on lane and nowhere else.
+		d.mod().Types = append(d.mod().Types, CompType{Kind: CompStruct})
+		return nil
 
 	case -0x22: // 0x5e — arraytype: exactly one fieldtype
 		if !d.Features.GC {
 			return featureErr("gc")
 		}
-		return d.decodeFieldType(r)
+		if err := d.decodeFieldType(r); err != nil {
+			return err
+		}
+		d.mod().Types = append(d.mod().Types, CompType{Kind: CompArray})
+		return nil
 	}
 	// GRAVE (#36): the message names the byte the image actually held, which at
 	// width 7 is the low seven bits of the decoded value — the range is -64..63, so
@@ -348,7 +481,11 @@ func (d *Decoder) decodeFieldType(r *reader) error {
 	if err := d.decodeStorageType(r); err != nil {
 		return err
 	}
-	return d.decodeMutability(r)
+	// The mutability bit is read and dropped: fieldtypes are not retained (#7, and see
+	// CompType), so there is nothing to record it on. The *read* is what matters — it is
+	// the check `binary-gc.wast` scores.
+	_, err := d.decodeMutability(r)
+	return err
 }
 
 // decodeStorageType reads a storagetype: a valtype or a packed type (decode.ml:236-241).
@@ -380,15 +517,15 @@ func (d *Decoder) decodeStorageType(r *reader) error {
 // production in the reference, called from two arms, copied at one of them. Written as a
 // shared function *before* the second copy could exist rather than factored out after
 // (#86).
-func (d *Decoder) decodeMutability(r *reader) error {
+func (d *Decoder) decodeMutability(r *reader) (bool, error) {
 	mut, err := r.byte()
 	if err != nil {
-		return err
+		return false, err
 	}
 	if mut > 0x01 {
-		return fmt.Errorf("%w: %#02x", ErrMalformedMutability, mut)
+		return false, fmt.Errorf("%w: %#02x", ErrMalformedMutability, mut)
 	}
-	return nil
+	return mut == 0x01, nil
 }
 
 // decodeValType reads a value type — `valtype` (decode.ml:220-225).
@@ -428,6 +565,7 @@ func (d *Decoder) decodeNumType(r *reader) error {
 	}
 	switch form {
 	case -0x01, -0x02, -0x03, -0x04: // i32 i64 f32 f64
+		d.valType = ValType(form & 0x7F)
 		return nil
 	}
 	return fmt.Errorf("%w: %#02x", ErrMalformedNumType, byte(form&0x7F))
@@ -450,6 +588,7 @@ func (d *Decoder) decodeVecType(r *reader) error {
 	if !d.Features.SIMD {
 		return featureErr("simd")
 	}
+	d.valType = V128
 	return nil
 }
 
@@ -477,6 +616,7 @@ func (d *Decoder) decodeRefType(r *reader) error {
 	}
 	switch form {
 	case -0x10, -0x11: // funcref (0x70), externref (0x6F) — Wasm 2.0, ungated
+		d.valType = ValType(form & 0x7F)
 		return nil
 
 	case -0x0C, -0x0D, -0x0E, -0x0F, // noexn, nofunc, noextern, none
@@ -486,6 +626,12 @@ func (d *Decoder) decodeRefType(r *reader) error {
 		if !d.Features.GC {
 			return featureErr("gc")
 		}
+		// Accepted, and **not representable** in ValType — so the sentinel is written
+		// rather than the field left alone. Leaving it would let the previous read's
+		// type stand as this one's answer, which is grave #36's class in a field instead
+		// of a message: an engine reporting a value its input never held. The all-gates-on
+		// CI lane is what makes this reachable, so it is not a hypothetical arm.
+		d.valType = NoValType
 		return nil
 
 	case -0x1C, -0x1D: // (ref ht), (ref null ht)
@@ -495,7 +641,11 @@ func (d *Decoder) decodeRefType(r *reader) error {
 		if !d.Features.GC {
 			return featureErr("gc")
 		}
-		return d.decodeHeapType(r)
+		if err := d.decodeHeapType(r); err != nil {
+			return err
+		}
+		d.valType = NoValType
+		return nil
 	}
 	return fmt.Errorf("%w: %#02x", ErrMalformedRefType, byte(form&0x7F))
 }
@@ -589,38 +739,44 @@ func (d *Decoder) decodeHeapType(r *reader) error {
 //
 // This is reader.u64's first production caller, closing #19's declared-and-tracked
 // deferral by making it reachable rather than by allowlisting it.
-func (d *Decoder) decodeLimits(r *reader) error {
+// It returns the Limits it read rather than writing them to a Decoder field, and the
+// asymmetry with decodeValType's out-parameter is a fact about the callers, not an
+// inconsistency: `decodeValType` is handed to `either` and `decodeVec` as a
+// `func(*reader) error` and cannot widen, while `decodeLimits` has three direct callers
+// and no combinator. Where a return value is available it is preferable — a value that
+// cannot outlive its read cannot be read stale.
+func (d *Decoder) decodeLimits(r *reader) (Limits, error) {
+	var lim Limits
 	flags, err := r.byte()
 	if err != nil {
-		return err
+		return lim, err
 	}
-	var hasMax bool
 	switch flags {
 	case 0x00:
 	case 0x01:
-		hasMax = true
+		lim.HasMax = true
 	case 0x02, 0x03:
 		if !d.Features.Threads {
-			return featureErr("threads")
+			return lim, featureErr("threads")
 		}
-		hasMax = flags == 0x03
+		lim.HasMax = flags == 0x03
 	case 0x04, 0x05, 0x06, 0x07:
 		if !d.Features.Memory64 {
-			return featureErr("memory64")
+			return lim, featureErr("memory64")
 		}
-		hasMax = flags&0x01 != 0
+		lim.HasMax = flags&0x01 != 0
 	default:
-		return fmt.Errorf("%w: %#02x", ErrMalformedLimits, flags)
+		return lim, fmt.Errorf("%w: %#02x", ErrMalformedLimits, flags)
 	}
-	if _, err := r.u64(); err != nil {
-		return err
+	if lim.Min, err = r.u64(); err != nil {
+		return lim, err
 	}
-	if hasMax {
-		if _, err := r.u64(); err != nil {
-			return err
+	if lim.HasMax {
+		if lim.Max, err = r.u64(); err != nil {
+			return lim, err
 		}
 	}
-	return nil
+	return lim, nil
 }
 
 // decodeTable reads one table — `table` (decode.ml:1049-1063).
@@ -652,31 +808,49 @@ func (d *Decoder) decodeLimits(r *reader) error {
 // and the disjointness probe is what killed it. Extent cannot differ between branches
 // that never both apply.)
 func (d *Decoder) decodeTable(r *reader) error {
+	tbl, err := d.decodeTableForm(r)
+	if err != nil {
+		return err
+	}
+	d.mod().Tables = append(d.mod().Tables, tbl)
+	return nil
+}
+
+// decodeTableForm is decodeTable's grammar, returning what it read. Split so that
+// decodeImport can read a table type *without* appending to m.Tables — an imported table
+// occupies the table index space, but the module's own table section is a different
+// population, and merging them here would make an import look like a definition.
+func (d *Decoder) decodeTableForm(r *reader) (Table, error) {
+	var tbl Table
 	if b, ok := r.peek(); ok && b == 0x40 {
 		// `expect 0x40 s ""; zero s; tabletype s; const s`.
 		if _, err := r.byte(); err != nil {
-			return err
+			return tbl, err
 		}
 		if !d.Features.GC {
 			// Function references, folded into the GC gate by decision 0008. Named
 			// before the zero byte is read, so the decline describes the construct
 			// rather than whatever byte happens to follow it.
-			return featureErr("gc")
+			return tbl, featureErr("gc")
 		}
 		z, err := r.byte()
 		if err != nil {
-			return err
+			return tbl, err
 		}
 		if z != 0x00 {
-			return fmt.Errorf("%w: %#02x", ErrZeroByteExpected, z)
+			return tbl, fmt.Errorf("%w: %#02x", ErrZeroByteExpected, z)
 		}
-		if err := d.decodeTableType(r); err != nil {
-			return err
+		if tbl, err = d.decodeTableType(r); err != nil {
+			return tbl, err
 		}
 		// The initializer, through the existing const-expr grammar — which is why this
 		// is a small change rather than a new reader: #25's authority-derived table
 		// already knows every const instruction's immediate widths.
-		return d.decodeConstExpr(r)
+		//
+		// The initializer expression is **not retained** (#7): this form is GC-gated, so
+		// no accepted module on the default board has one, and the interpreter has no GC
+		// consumer to hand it to. Declared here rather than left to be noticed.
+		return tbl, d.decodeConstExpr(r)
 	}
 	return d.decodeTableType(r)
 }
@@ -686,15 +860,24 @@ func (d *Decoder) decodeTable(r *reader) error {
 // Split out of decodeTable because the 0x40 form needs it too, and because the reference
 // has it as its own production. Both callers are in this file, so this is not the
 // premature-sharing case decision 0006 warns about — the second consumer exists now.
-func (d *Decoder) decodeTableType(r *reader) error {
+func (d *Decoder) decodeTableType(r *reader) (Table, error) {
+	var tbl Table
 	if err := d.decodeRefType(r); err != nil {
-		return err
+		return tbl, err
 	}
-	return d.decodeLimits(r)
+	tbl.ElemType = d.valType
+	var err error
+	tbl.Limits, err = d.decodeLimits(r)
+	return tbl, err
 }
 
 func (d *Decoder) decodeMemory(r *reader) error {
-	return d.decodeLimits(r)
+	lim, err := d.decodeLimits(r)
+	if err != nil {
+		return err
+	}
+	d.mod().Memories = append(d.mod().Memories, Memory{Limits: lim})
+	return nil
 }
 
 // decodeGlobalType reads a global's value type and mutability byte — `globaltype`
@@ -704,34 +887,59 @@ func (d *Decoder) decodeMemory(r *reader) error {
 // the reference shares it. The eight `malformed mutability` vectors in `global.wast` score
 // this path and the one in `binary-gc.wast` scores the other; a second copy here would be
 // green on both and drift on the next change to either.
-func (d *Decoder) decodeGlobalType(r *reader) error {
+func (d *Decoder) decodeGlobalType(r *reader) (ValType, bool, error) {
 	if err := d.decodeValType(r); err != nil {
-		return err
+		return NoValType, false, err
 	}
-	return d.decodeMutability(r)
+	vt := d.valType
+	mut, err := d.decodeMutability(r)
+	return vt, mut, err
 }
 
 // decodeImport reads module name, field name, and the kind-specific descriptor.
+//
+// **The names are copied, not aliased**, and this is the one place in the decoder where
+// that is true. Everything else here holds `[]byte` views into the caller's image
+// (Section.Payload says so explicitly), which is the in-place posture and correct for
+// bytes the engine only ever compares. An import's names are different: they are the
+// linker's keys, they outlive the decode, and a `string` conversion is the copy. A view
+// would make a module's identity depend on the caller not reusing its buffer.
 func (d *Decoder) decodeImport(r *reader) error {
-	for range 2 { // module name, then field name
-		if err := r.name(); err != nil {
+	var im Import
+	for i, dst := range [...]*string{&im.Module, &im.Name} {
+		_ = i
+		n, err := r.nameString()
+		if err != nil {
 			return err
 		}
+		*dst = n
 	}
 	kind, err := r.byte()
 	if err != nil {
 		return err
 	}
+	im.Kind = ExternKind(kind)
 	switch kind {
 	case 0x00: // func: a type index
-		_, err = r.u32()
-		return err
+		if im.Index, err = r.u32(); err != nil {
+			return err
+		}
 	case 0x01:
-		return d.decodeTable(r)
+		// Read through decodeTableForm, *not* decodeTable: an imported table must not
+		// land in m.Tables. Both occupy the table index space, but the section holds
+		// definitions and an import is not one — merging them would make the two
+		// populations indistinguishable to every later consumer.
+		if _, err = d.decodeTableForm(r); err != nil {
+			return err
+		}
 	case 0x02:
-		return d.decodeMemory(r)
+		if _, err = d.decodeLimits(r); err != nil {
+			return err
+		}
 	case 0x03:
-		return d.decodeGlobalType(r)
+		if _, _, err = d.decodeGlobalType(r); err != nil {
+			return err
+		}
 	case 0x04: // tag
 		if !d.Features.ExceptionHandling {
 			return featureErr("exception handling")
@@ -739,15 +947,24 @@ func (d *Decoder) decodeImport(r *reader) error {
 		if _, err = r.byte(); err != nil { // attribute
 			return err
 		}
-		_, err = r.u32() // type index
-		return err
+		if _, err = r.u32(); err != nil { // type index
+			return err
+		}
+	default:
+		return fmt.Errorf("%w: %#02x", ErrMalformedImportKind, kind)
 	}
-	return fmt.Errorf("%w: %#02x", ErrMalformedImportKind, kind)
+	// The non-func descriptors are read and dropped (#7). Index is the type index for a
+	// function import and unset for the others, which is what its comment says; a
+	// consumer that needs an imported table's type is the reason to retain one, and no
+	// such consumer exists yet.
+	d.mod().Imports = append(d.mod().Imports, im)
+	return nil
 }
 
 // decodeExport reads a name, a kind byte, and an index.
 func (d *Decoder) decodeExport(r *reader) error {
-	if err := r.name(); err != nil {
+	name, err := r.nameString()
+	if err != nil {
 		return err
 	}
 	kind, err := r.byte()
@@ -763,6 +980,10 @@ func (d *Decoder) decodeExport(r *reader) error {
 	default:
 		return fmt.Errorf("%w: %#02x", ErrMalformedExportKind, kind)
 	}
-	_, err = r.u32()
-	return err
+	idx, err := r.u32()
+	if err != nil {
+		return err
+	}
+	d.mod().Exports = append(d.mod().Exports, Export{Name: name, Kind: ExternKind(kind), Index: idx})
+	return nil
 }
