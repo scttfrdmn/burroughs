@@ -966,6 +966,55 @@ weakly-ordered platform.
 
 ### Changed
 
+- **The rules now govern work *selection*, because the board reached 0 fail and the project
+  kept building instruments.** *Bucketed failures are the work plan* presumes buckets; when
+  fail hit zero that rule lost its subject and the fallback — deferral citations, controls,
+  metadata — is all overhead by nature, so the gradient inverted with nothing saying so.
+  The measurement that made the rule: over the trailing six merges the instrument-to-engine
+  line ratio went **1:1.8 → 1:5.1** (engine 2007→463, test 3681→2347) while the
+  `unsupported` column did not move at all, and `internal/interp` still holds **0 engine
+  lines** against 493 test lines. Invisible per-PR because every one of those PRs was
+  individually defensible.
+
+  Five new Disciplines, placed *first* in the section because they run upstream of every
+  rule about doing selected work well: **the phase's product is the work** (with a per-PR
+  `unsupported` delta, a quoted instrument-to-engine ratio, and *two consecutive
+  instrument-only PRs is a stop condition*); **control work is a debt against the product**,
+  whose only exception is a control catching an **accept-direction** defect the suite scores
+  green by construction (§9 G-3); **a zero-fail board is not a green light, it is a lost
+  instrument**; **a representation is not a recognizer**; and **decisions serve the thesis
+  directionally**. The delta rule points at the existing `unsupportedCeiling` rather than
+  building a second mechanism (*one concept, one trigger*, [#82](https://github.com/scttfrdmn/burroughs/pull/82)),
+  and the Board section of a PR now carries both figures, since a rule with nowhere to be
+  written is a habit.
+
+  Two corrections fall out of the same measurement. **Decision-before-code gains a
+  counterweight** — an ADR is not product work either, so *one ADR earns one
+  implementation*. And a stale citation: the LEB bucket's 13 blocked members were blocked on
+  **#39**, the code-section grammar, not on #7, the interpreter core. The conflation was
+  carried across a session boundary in a summary and cost real time before it was checked.
+
+- **0011's bridge has no destination yet, so the internal form comes first**
+  ([#67](https://github.com/scttfrdmn/burroughs/issues/67),
+  [0011](docs/decisions/0011-wat-parser-return-form.md) appended). Part 1 of that decision —
+  the error-only `text.ReadModule` surface — is vindicated: #62/#63/#64 all landed against
+  it. Part 2's accounting was wrong. It said reaching `binary.Module` through an encoder buys
+  "the binary path's entire conformance record", but `binary.Module` is `{Version, Sections}`
+  with payloads aliasing the input image, **28 of the decoder's 29 `decode*` functions return
+  bare `error`**, and the 29th returns `(bool, error)` where the bool reports whether the
+  section *has* a grammar. Arriving there buys the decoder's *verdict*, not a module — and
+  `assert_return` needs something instantiable.
+
+  The one-module-authority ruling **stands and is strengthened** (the authority now has to be
+  built, not merely reached); only the order changes. The internal form is grown out of the
+  decoder, which has 4162 vectors of conformance record, and the encoder targets it
+  afterward — building the encoder first would shape the representation from a parser that
+  has never accepted a module, which is the load-bearing-spot manoeuvre 0011 itself declined
+  as option B. #67's half 2 asked for "a statement of what the text denotes, from outside
+  both the encoder and the decoder" and called it a design question; the internal form *is*
+  that statement, so the comparator dissolves into the artifact. Scott's veto on the bridge
+  stays open and is no longer the head of the queue.
+
 - **The all-gates-on pass floor was stale by 3380** ([#87](https://github.com/scttfrdmn/burroughs/issues/87)).
   `allOnPassFloor` was **798 against an actual 4178** — set in [#56](https://github.com/scttfrdmn/burroughs/issues/56),
   15 commits back, and left behind by every text-side landing since. It could not have caught a

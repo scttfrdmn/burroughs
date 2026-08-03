@@ -33,6 +33,15 @@ API surface and optimization priorities only.
 Current phase: **v0**. Do not reach ahead of the phase without a decision
 doc approving it.
 
+**v0's product is a module that runs**, and the ladder is a sequence of *artifacts*,
+not of instruments: decoder → **internal form (0002)** → validator → interpreter. The
+harness, the controls, and the generated tables are how those artifacts are known to be
+right; they are never the deliverable. State of play, measured rather than felt:
+`internal/interp` holds **0 engine lines** against 493 test lines, and the board is
+**4162 pass / 0 fail / 60872 unsupported** — 93.6% of the corpus unanswered, essentially
+all of it behind the one artifact that does not exist yet. A phase is judged by its
+product, so v0 is early, and the next PR adds engine lines.
+
 ## Where the work is tracked
 
 **GitHub is the tracker.** The repo's markdown footprint is frozen at
@@ -60,6 +69,17 @@ Work happens in PRs, even self-merged ones. The PR description carries
 exactly these sections: **Board** (suite counts, build status) · **Landed** ·
 **Decisions taken** (with ADR links) · **Decisions needed from Scott** ·
 **Graves** (bugs found, lessons) · **Next**.
+
+**The Board section carries the progress line**, because a rule with nowhere to be
+written is a habit. Two figures beside the counts, both cheap and both quoted rather
+than described:
+
+- **`unsupported` delta** (`60872 → N`, or **`unmoved`** stated in that word), and when
+  unmoved, the product work this PR is overhead *for*.
+- **engine / instrument lines** for the diff (non-test `.go` versus `_test.go`), which is
+  the ratio the *product* rule above is enforced by. Its purpose is to make the
+  wheel-spinning visible *per PR* rather than only in a trailing window — the 1:1.8 →
+  1:5.1 drift was invisible precisely because each PR was individually defensible.
 
 Two principals review: **Scott** (owner, all decisions) and **chat-Claude**
 (contract author, architecture review). Scott reviews in the GitHub UI and
@@ -176,9 +196,91 @@ the choice, and consequences once Scott has called it.
 
 ## Disciplines (Scott's, non-negotiable)
 
+- **The phase's product is the work; instruments are overhead on it.** This rule is
+  first because it governs what gets *selected*, upstream of every rule below about
+  doing selected work well. v0's product is a **running interpreter** — decoder →
+  validator → interpreter over 0002's internal form. A control, a census, a board
+  bound, a changelog gate, a citation sweep: each is overhead that must be *charged to*
+  a piece of product work, and the honest accounting is per-PR, not per-session.
+  - **Every PR states its unsupported-column delta, and a zero is a confession.** The
+    board's `unsupported` count is the phase's real progress measure once fail hits
+    zero; `Board` lines already carry it. A PR that moves it by nothing says so, in
+    those words, and names the product work it is overhead *for*. The gate already
+    exists — `unsupportedCeiling` in `spec_test.go`, a **ceiling**, which per 0013 rots
+    by the system working — so lowering it *is* the record of progress and no second
+    mechanism gets built for this (*one concept, one trigger*, #82). A PR that drains
+    the column lowers the ceiling in the same PR, exactly as `textFailCeiling` fell
+    stepwise with a per-PR account.
+  - **Instrument-to-engine ratio is quoted, not felt.** Measured over the trailing six
+    merges it went **1:1.8 → 1:5.1** (engine 2007→463 lines, test 3681→2347) while the
+    unsupported column did not move at all. That is the number that made this rule; a
+    ratio worsening while the column stands still is the definition of spinning, and it
+    was invisible because every individual PR was defensible.
+  - **Two consecutive instrument-only PRs is a stop condition.** Not a soft
+    preference — stop and take product work, or get Scott's word to continue. The
+    ratchet only turns one way otherwise, because control work is always available,
+    always passes review, and always produces a clean green.
+- **Control work is a debt against the product, so it is charged, deferred, or
+  declined — never taken because it is available.** The genuine finding that a control
+  is missing is *filed*, and filing it discharges the obligation (*a design debt is
+  discharged by a tripwire, never by an intention* — that rule says file the tripwire,
+  and it does **not** say build it now). The exception, and it is the only one: a
+  control that would catch an **accept-direction** defect the suite cannot see (§9 G-3)
+  is product work, because the suite scores such defects green by construction and
+  nothing else will find them. `optable`'s reference agreement and #88's twelve
+  wrongly-rejected valtypes are the paradigm; a citation sweep is not.
+- **A zero-fail board is not a green light, it is a lost instrument.** *Bucketed
+  failures are the work plan* presumes buckets. When fail reaches zero the project has
+  not finished, it has lost the thing that was pulling it toward engine work — and the
+  fallback (deferral citations, controls, metadata) is all overhead by nature, so the
+  gradient silently inverts. At zero fail the plan comes from **the largest unsupported
+  stratum and the artifact it names**, and that artifact is stated in the PR. Found the
+  way these things are: 4162/0 was reached and the next three PRs were instruments.
+- **A representation is not a recognizer, and 93.6% of the board wants the
+  representation.** Both front ends recognize and retain nothing — 28 of the decoder's
+  29 `decode*` functions return bare `error` and the 29th returns `(bool, error)` where
+  the bool means *"this section has a grammar"*, not data; 0011 makes `text.ReadModule`
+  error-only by design — so `binary.Module` is `{Version, Sections}` of aliased bytes and
+  **nothing in the codebase can represent a module**. That is one missing artifact (0002's internal
+  form) behind four blocked items: #7 execution, #9 validation, #67's half-2
+  comparator, and the text encoder's target. When a single artifact blocks the majority
+  of the board, building anything else is choosing the smaller number — and the
+  encoder-first framing was wrong for exactly this reason: it bridges to a destination
+  that does not exist. **Grow the representation out of the path that has a
+  conformance record** (the decoder, 4162 vectors), never out of the path that has
+  never accepted a module — that is 0006's load-bearing-spot rule and 0011's own
+  option-B refusal.
+- **Decisions serve the thesis directionally, or they are not this project's decisions
+  to make.** The project has a **central core and thesis** — contract §0: a
+  *language-directed engine* whose host contract, fast paths, and API surface are
+  designed to the specification of the Go runtime, **correctness-neutral and
+  performance-partisan**, with §1's non-goals naming what is deliberately given up
+  (peak throughput parity, browser embedding, non-Go ergonomics, v0 hardening). Every
+  option in an ADR is argued toward that, and the question a decision must answer is
+  *"which option moves the engine toward being Go's engine?"* — not "which is more
+  elegant", "more general", or "more like other runtimes".
+  - **The paradigm is 0002, and it is worth copying exactly.** The side table did not
+    lose on aesthetics; it lost because its win served *many short-lived modules*,
+    a workload **§1 disclaims** — Go guests are megabytes that load once and run for
+    hours, so rewrite's build cost amortizes to nothing on the thesis workload. The
+    option died *on the thesis*, and that is the intended way for a design to die here.
+  - **Generality without a Go-shaped consumer is a non-goal wearing a virtue's
+    clothes.** Burroughs is allowed to be narrow — narrowness is the whole design
+    philosophy, the B5000 lesson. So "but another guest language might want X" is not
+    an argument in this repo unless X is spec conformance, which is
+    non-negotiable for a *different* reason (correctness-neutral, §9 enforces it).
+  - **State the direction, not just the choice.** An ADR names which thesis clause or
+    non-goal the decision advances, and a decision that cannot cite one is a signal the
+    question belongs upstream with Scott — or is not this project's question. Directional
+    silence is how a general-purpose runtime gets built by accident, one locally
+    reasonable choice at a time.
 - **Decision-before-code.** Design choices get `docs/decisions/NNNN-*.md`
   (context, options, choice, consequences) *before* implementation.
   Decisions Scott must make are flagged in reports, not made for him.
+  Its counterweight is the product rule above: a decision doc is *not* product work
+  either, so **one ADR earns one implementation**, and an ADR whose implementation has
+  not started is a reason to write code rather than another ADR. Deliberation lives in
+  the issue; the ADR is the tombstone.
 - **The suite is the oracle.** A feature exists when its spec tests pass.
   Claims of correctness cite counts (`N/N green`), not impressions.
 - **The spec is the objective function; the suite samples it.** The oracle
@@ -435,17 +537,22 @@ the choice, and consequences once Scott has called it.
   property from an accident of one scheduling. (#28.)
 - **Honest boards.** The PR description and the issue tracker reflect
   reality, including what's red. Never quote a suite count that wasn't run.
-- **Bucketed failures are the work plan.** A suite Board line reports pass /
-  fail / unsupported, with failures bucketed by the missing feature (for the
-  decoder, by expected spec error string). The biggest bucket is the next
-  issue to take; a bucket going to zero is a PR's measure of done. Failures
-  are reported, never skipped — skipping hides the queue.
+- **Bucketed failures are the work plan — while there are buckets.** A suite Board line
+  reports pass / fail / unsupported, with failures bucketed by the missing feature (for
+  the decoder, by expected spec error string). The biggest bucket is the next issue to
+  take; a bucket going to zero is a PR's measure of done. Failures are reported, never
+  skipped — skipping hides the queue. **At zero fail this rule has no subject and the
+  fallback is not "whatever is available"** — see *a zero-fail board is not a green
+  light, it is a lost instrument* above: the plan becomes the largest unsupported
+  stratum and the artifact it names.
 - **Bucket size estimates the reward, not the job.** The board buckets by the
   *expected spec string*, which is the right key for scheduling — it names what a
   user would see — but a spec string cuts across mechanism, so one bucket is
   usually several jobs. The LEB 18 partitioned into 13 blocked on the code-section
-  grammar (#7), 4 reachable immediately, and 1 unrelated question about the
-  functype tag; the four cost an afternoon and the thirteen are a milestone. So
+  grammar (#39 — *not* #7, which is the interpreter core; the conflation was carried in
+  a session summary and cost real time before it was checked), 4 reachable immediately,
+  and 1 unrelated question about the functype tag; the four cost an afternoon and the
+  thirteen were a milestone. So
   take the biggest bucket, then **partition it by mechanism before estimating it**,
   and say in the PR which members were reachable and which are waiting on what. A
   bucket quoted as a single number is a plan that has not been made yet.
