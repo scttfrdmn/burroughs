@@ -114,6 +114,15 @@ func (w *writer) sleb(v int64) {
 	}
 }
 
+// u32le writes four little-endian bytes: the *fixed-width* u32 the preamble's version field is.
+//
+// Distinct from `u32`, which is a LEB, and the distinction is the one place the module format has
+// both — `binary.Version` is `01 00 00 00` and never `01`. A LEB there would produce a four-byte
+// preamble the decoder reads as a short image ("unexpected end"), which is a loud failure and so
+// the *lucky* case; the unlucky one is a version field that happens to LEB-encode to four bytes and
+// means something else. Named for the difference rather than overloading u32.
+func (w *writer) u32le(v uint32) { w.f32(v) }
+
 // f32 writes four little-endian bytes.
 func (w *writer) f32(v uint32) {
 	w.b = append(w.b, byte(v), byte(v>>8), byte(v>>16), byte(v>>24))

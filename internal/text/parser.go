@@ -52,19 +52,13 @@ type parser struct {
 // from reject vectors would fit it to code that never reads it. When well-formed modules are
 // needed, 0011's second half applies — the parser emits binary bytes into the proven decoder,
 // and `binary.Module` stays the codebase's one module authority.
+// The body is `parseModule` with the parser discarded, which *is* what an error-only surface means
+// (0011). Sharing the sequence rather than duplicating it: the three steps end in a trailing-token
+// check that is easy to omit, and `EncodeModule` omitting it would accept `(module) (module)` as one
+// module and encode the first — two places knowing one sequence, drifting silently (0006).
 func ReadModule(src []byte) error {
-	c, err := newCursor(src)
-	if err != nil {
-		return err // a lex error, unwrapped; see newCursor
-	}
-	p := &parser{c: c}
-	if err := p.module(); err != nil {
-		return err
-	}
-	if !p.c.at(EOF) {
-		return p.unexpected()
-	}
-	return nil
+	_, err := parseModule(src)
+	return err
 }
 
 // module parses `module_` (parser.mly:1389-1392) and the two inline sugar forms.
@@ -141,6 +135,17 @@ func (p *parser) moduleField() error {
 	if kw.Kind != KeywordTok {
 		return p.unexpectedAt(kw)
 	}
+	// Everything but a type definition is past the encoder's frontier (#8). Recorded here, at the
+	// dispatch, because this is the one place that sees every field kind exactly once — a check
+	// added to each field's own function would be twelve places to forget one, and the omission
+	// would be a *silently dropped section* rather than a compile error.
+	if kw.Keyword != kwType && kw.Keyword != kwRec {
+		// The *keyword* token, not the LPAR `p.c.peek()` would give: the message quotes the token's
+		// text, and the LPAR's text is "(", which names nothing. Its offset is one byte later than
+		// the field's start and is the more useful of the two anyway.
+		p.ctx.noteNonTypeField(kw)
+	}
+
 	switch kw.Keyword {
 	case kwType, kwRec:
 		return p.typeField()

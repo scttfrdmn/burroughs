@@ -1,6 +1,9 @@
 package text
 
-import "slices"
+import (
+	"fmt"
+	"slices"
+)
 
 // The type index space's *content*, and the deferred phase that reads it.
 //
@@ -135,6 +138,39 @@ type resolvedVal struct {
 	abs   keywordKind
 	idx   uint32
 	isIdx bool
+}
+
+// String renders a resolved value type in the *text* format's spelling.
+//
+// For diagnostics only, and specifically for the encoder's frontier messages (#8), which name a
+// type the emitter has no byte for. It renders wat rather than a Go struct dump because the reader
+// is holding wat — and it renders it in the reference's own spelling, `(ref null $t)` and the
+// abbreviations, so a message quoting a type quotes something the user could have typed.
+//
+// **Not the reference's `string_of_val_type`, and not claiming to be.** That renders a *resolved*
+// index as `(ref null 3)` after the parse has forgotten which `$name` produced it, which is exactly
+// what this does — the identifier is gone by this point, by design (resolveTypeIdx keeps the index).
+// So a name the user wrote comes back as a number here. That is honest for a frontier message and
+// would be wrong for an error the suite matches; nothing here is matched by the suite.
+func (v resolvedVal) String() string {
+	if v.num != "" {
+		return v.num
+	}
+	if v.isIdx {
+		if v.null {
+			return fmt.Sprintf("(ref null %d)", v.idx)
+		}
+		return fmt.Sprintf("(ref %d)", v.idx)
+	}
+	// The absolute heap types, spelled through heapWat — which is scoped to exactly these twelve
+	// and whose comment has the measurement showing why the general version of that derivation is
+	// false. This is the one diagnostic in the package with no token to quote: resolveVal keeps
+	// `abs` and drops the keyword.
+	name := heapWat(v.abs)
+	if v.null {
+		return "(ref null " + name + ")"
+	}
+	return "(ref " + name + ")"
 }
 
 // resolvedFunc is a functype whose value types are all resolved.

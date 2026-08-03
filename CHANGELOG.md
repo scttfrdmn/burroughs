@@ -21,6 +21,65 @@ weakly-ordered platform.
 
 ### Added
 
+- **`internal/text/encode.go`: the type-section emitter — `EncodeModule`, the bridge's first module
+  that runs** ([#8](https://github.com/scttfrdmn/burroughs/issues/8), 0011 part 2). Text in, binary
+  image out, checked by decoding: `(module (type (func (param i32) (result i64))))` becomes
+  `00 61 73 6d 01 00 00 00 01 06 01 60 01 7f 01 7e`. The return is bytes and an error, never a
+  module value — 0011's surface rule holds, `binary.Module` stays the codebase's sole module
+  authority, and `ReadModule` stays error-only.
+
+  **It reads retention the grammar already had, and the direction of that dependency is the whole
+  design.** `inline_functype_explicit` (parser.mly:245) compares inline signatures *structurally*,
+  so `runDeferred` already resolves the type index space into `c.typeCtx` for a reason that predates
+  any encoder. The emitter consumes that; it did not ask for it. The alternative — a retention pass
+  shaped by what an encoder wants — designs the parser's memory from its only consumer's
+  requirements, in the load-bearing spot 0006 rules on. Each further section is therefore a question
+  about what the *grammar* needs, asked one section at a time.
+
+  **A frontier is not a malformedness, so the emitter refuses rather than under-writes.** Every
+  module holding a field or a type this cannot fully encode is declined by name — `cannot yet encode
+  a (func …) field … (#8)` — and the refusal never borrows a spec word, because reporting
+  "malformed" for a module the spec calls well-formed lies about the input to conceal a gap in the
+  engine (the #5 ruling, pointed at an unfinished encoder instead of at a gate). Emitting a module
+  with its function section silently dropped is the accept-direction defect no vector can see (§9
+  G-3), which is the failure this bridge exists to be checked for. The frontier check reads the
+  parse's own dispatch record, never the source text and never `space.count`: an import advances the
+  count and an export binds nothing, so a count-based test could not tell `(func)` from
+  `(import "" "" (func))` and would emit an export-only module with the export gone.
+
+  **Three defects in the first draft, all found by building the controls rather than trusting the
+  comments, and each a different class:**
+
+  - **`(ref func)` was emitted as `0x70`** — the nullable byte for a non-nullable type, a wrong
+    module that decodes clean. `funcref` and `(ref null func)` *are* the same type (the parser
+    normalizes the abbreviation), which is what made the omission plausible; `{null: false}` needs
+    GC's `0x64` prefix. Fixed by folding the encodability predicate and the encoding into one
+    `valTypeByte(v) (byte, bool)`, so the frontier check and the emitter are one fact asked twice
+    and cannot drift — one concept, one trigger.
+  - **A control that passed with its defect installed**, the stillborn case, and interrogating *why*
+    was worth more than the control. It asserted `len(typeCtx)` across `encode` on the stated
+    reasoning that a second `runDeferred` drops the interned implicit types. Measured: `typeCtx`
+    comes back **identical**, because the thunks re-intern the same signatures in the same order.
+    What drifts is `types.count` — 1→2 on `(module (func))`, 2→4 on two distinct inline signatures.
+    So a plausible mechanism written into a comment was replaced by a measured one, the assertion
+    moved to the half that falsifies, and the table is still checked because the thunks'
+    idempotence is *contingent on what they currently do*.
+  - **`heapWat`'s general form was false while its comment asserted the property the code lacked** —
+    the defect-stated-as-the-rule shape. A keyword *kind* is a token class, not a spelling:
+    lower-casing yields that kind's own keyword for **96 of 173**, and `BINARY` → `binary` lexes to
+    a *different* kind (`BIN`). Narrowed to the twelve absolute heap types where the derivation does
+    hold, with the measurement at the site, a control ranging over `absoluteHeaptypes` so a
+    thirteenth is covered the day it is added, and the frontier message changed to quote
+    `Token.Text` (grave #36's rule for message text no oracle reads).
+
+  **The round-trip table states each module's types independently, by hand, and that is what makes
+  it a check.** An encoder and decoder that both had params and results backwards would round-trip
+  perfectly; the `want` column is a second reading of the wat. All six controls were installed with
+  the defect they name and watched to fail — params/results swap caught in both directions, the
+  `0x70` defect caught, a LEB-instead-of-fixed version field caught, a dropped frontier check caught
+  on ten subtests, a widened `absoluteHeaptypes` caught on both the count floor and
+  `heapWat("NUMTYPE")`.
+
 - **`internal/text/writer.go`: the encoder's byte layer — LEB128 and section framing**
   ([#8](https://github.com/scttfrdmn/burroughs/issues/8), 0011 part 2). The first engine lines of
   the text→binary bridge, whose veto 0011's appendix lifted once #98 gave `binary.Module`

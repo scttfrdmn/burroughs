@@ -1,5 +1,7 @@
 package text
 
+import "strings"
+
 // The keyword kinds the module grammar matches on.
 //
 // keywords.go is generated and holds the vocabulary's *authority*: 589 keywords mapping to 173
@@ -114,6 +116,26 @@ const (
 	// assert_malformed can catch.
 	kwCatchAllRef keywordKind = "CATCH_ALL_REF"
 )
+
+// heapWat renders an *absolute heap type's* kind as its wat spelling.
+//
+// **Scoped to `absoluteHeaptypes` and nothing wider, because the general version is false.** A
+// keyword kind is the lexer's token *class*, not a spelling: `LOCAL_GET` is the class for
+// `local.get` (a dot, not an underscore), `NUMTYPE` is the class all four number types share, and
+// `VEC_BINARY` names no literal at all. Measured over the generated table: lower-casing a kind
+// yields that same kind's keyword for **96 of 173**, and for one it yields a *different* kind —
+// `BINARY` lower-cases to `binary`, which lexes to `BIN`. A wrong spelling, not a missing one,
+// which is the shape that would make a diagnostic quote something the user never wrote (grave #36).
+//
+// The twelve heap types are the subset where the derivation holds, and they need it because a
+// resolved value type retains no token — resolveVal keeps `abs`, having consumed the keyword. Every
+// other diagnostic in this package quotes `Token.Text` instead and should keep doing so: bindAbs's
+// comment gives the reason, and it is the reference's own practice.
+//
+// The domain is the parser's existing list rather than a fresh enumeration, so a thirteenth heap
+// type is covered by the control the day it is added — derive the domain, never enumerate it.
+// TestEveryAbsoluteHeaptypeRoundTripsThroughTheKeywordTable is what holds the premise.
+func heapWat(k keywordKind) string { return strings.ToLower(string(k)) }
 
 // parserKinds is every constant above, for the table-membership control.
 //

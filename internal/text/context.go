@@ -325,6 +325,39 @@ type context struct {
 	typeDefs []compType     // explicit definitions, in source order
 	typeCtx  []resolvedComp // the resolved table, built by runDeferred and extended by implicit types
 	deferred []func() error // stage-2 operations, in parse order
+
+	// The first module field that is not a type definition, for the encoder's frontier check
+	// (#8, encode.go). The keyword token itself, so the message can quote `Token.Text` and the
+	// error can carry `Token.Offset` — one field for both, because the token holds both. A bool
+	// beside it rather than a zero-Token test, since offset 0 line 0 is a legal position: a bare
+	// `(func)` module's keyword is at offset 1, but an `(import …)` inside `inline_module` sugar
+	// can start the file.
+	//
+	// **Recorded here rather than derived from the index spaces**, and that is not a
+	// convenience. `space.count` advances for imported entries too, so a count-based test
+	// cannot tell `(func)` from `(import "" "" (func))` — the same trap the curDefined comment
+	// above names for a different check. Worse, an `(export …)` field binds no space at all, so
+	// a count-based frontier check would pass an export-only module and the encoder would emit
+	// it with the export silently dropped: a module that decodes clean and means something
+	// else, in the accept direction no vector covers (§9 G-3).
+	//
+	// This is the encoder's *only* new retention, and it is deliberately not a step toward
+	// retaining fields. It records that a field kind was seen, never its content — because the
+	// content each further section needs is a question about what that section's grammar
+	// requires, answered when that section is written rather than guessed at now (0006).
+	firstNonType Token
+	haveNonType  bool
+}
+
+// noteNonTypeField records the first module field the encoder has no emitter for.
+//
+// First rather than last, so the message points at the earliest construct a reader would have to
+// remove to get an image out — which is the actionable one.
+func (c *context) noteNonTypeField(kw Token) {
+	if c.haveNonType {
+		return
+	}
+	c.firstNonType, c.haveNonType = kw, true
 }
 
 // importKind is the definition kind an `import after …` message names.
