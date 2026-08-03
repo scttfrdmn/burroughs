@@ -126,3 +126,45 @@ than needing its own answer — provided the decoder is the form's producer.
 **The veto stays open, and it is no longer the head of the queue.** It governs the
 encoder, which is now downstream of the internal form. Nothing waiting on Scott blocks
 building the representation.
+
+---
+
+# Appended: the veto is lifted, and the comparator is ruled
+
+Body above preserved, per *a ruling is discharged by appending to the ADR*. Recorded
+2026-08-02 (Scott, after reading the repo directly). The two sentences above that say the
+veto "stays open" are **superseded** — left in place because the record of what was believed
+is the part worth keeping, and because the appendix directly above them is what made lifting
+it answerable.
+
+**The veto is lifted.** Its precondition was the sequencing that appendix identified — the
+internal form before the encoder — and PR #98 is that artifact (`main` @ `31e0491`). So part 2
+proceeds exactly as originally ruled: the parser emits binary bytes into the decoder, and the
+decoder stays the sole module authority. The bridge is now buildable rather than merely
+argued, and the correction the appendix made to part 2's *accounting* stands: arriving at
+`binary.Module` now buys a module, because #98 gave the authority something to represent.
+
+**The comparator is ruled, at bridge time as the appendix said it would be:** **wabt as a
+one-time generator of a committed cross-check corpus, with a provenance header — the
+extraction pattern — never as a gate in the verdict path.**
+
+The reasoning is the part to keep. **Self-agreement stays inadmissible**: our encoder agreeing
+with our decoder is one witness talking to itself, which is the enrolled-witness rule, and it
+is precisely the failure #67 exists to catch. But a *generated* external witness does not put
+a non-Go binary in CI. The corpus is the witness; wabt is the tool that produced it and
+retires when the corpus is committed. Same shape as `optable.go` (0007) and `keywords.go`
+(0009): external authority, machine-derived, artifact in-tree and drift-checked, generator not
+a runtime dependency. This also keeps the **no cgo, pure Go** gate untouched, since nothing
+external is ever invoked to reach a verdict.
+
+**Consequence for #67**, completing what the appendix above began: half 2's comparator
+compares `[]Instr` to `[]Instr` — the form decoded from the encoder's text-derived bytes
+against the form decoded from the committed corpus — so no third representation is invented
+for the comparison. It remains a pre-registered tripwire in **#8's definition of done**, and
+per its own charter it closes by being **falsified in both halves** (bytes malformed; bytes
+well-formed for the *wrong* module), never by the encoder merely landing.
+
+**Consequence for #63**, which was holding a `plaininstr`/immediate-reader scope statement as
+a decision: with the bridge live, that scope is *derived* — it is what #8's accept grammar
+requires, read off the vectors that must succeed — and so it stops being a design call. The
+same dissolution as half 2: the artifact answers what looked like a question.
