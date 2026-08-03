@@ -353,6 +353,17 @@ type context struct {
 //
 // First rather than last, so the message points at the earliest construct a reader would have to
 // remove to get an image out — which is the actionable one.
+//
+// **The consequence for reading the frontier as a work plan: these refusals bucket *modules*, not
+// constructs.** Measured over the suite — 2150 parser-accepted text modules, of which 15 encode in
+// full today — the refusals partition as `func` 1105, `memory` 467, `table` 251, `import` 177,
+// `global` 56, `data` 24, `export` 18, `elem` 16, `tag` 9, struct-or-array types 9, GC valtypes 3.
+// Each module is counted once, under whichever unencodable field it happens to reach first, so a
+// bucket is a lower bound on the modules that construct blocks and says nothing about how many
+// occurrences it has. Draining `func` would not reveal 1105 encodable modules; it would re-sort
+// most of them into the next field they contain. *Bucket size estimates the reward, not the job* —
+// and here the key is "first blocking field", which cuts across mechanism exactly as the board's
+// spec-string key does.
 func (c *context) noteNonTypeField(kw Token) {
 	if c.haveNonType {
 		return

@@ -39,6 +39,25 @@ import (
 // and this issue, never a spec string. Reporting "malformed" for a module the spec calls well-formed
 // would lie about the input to conceal a gap in the engine, which is the ruling on #5 pointed at an
 // unfinished encoder instead of at a gate.
+//
+// # What an independent witness says so far
+//
+// Measured against #67's wabt corpus, joined on (file, ordinal): of the suite's 2150
+// parser-accepted text modules this encodes **15** in full, 10 of which the corpus can be joined to
+// — and those 10 agree **byte for byte**, 0 disagreements. The 5 unjoined all live in
+// `annotations.wast`, which the manifest names as skipped with its reason, so the gap is accounted
+// for rather than merely stated.
+//
+// That figure is quoted with its own vacuity check attached, because *exactly zero* on an agreement
+// is the tell grave #106 was filed for. Nine of the ten are 8-byte bare preambles and prove nothing
+// about the type section. The witness is the tenth: `type.wast#0`, 23 type definitions and 148
+// bytes, identical to an image produced by a toolchain that has never seen this parser. One real
+// agreement is the honest claim here — not ten.
+//
+// Byte equality is *evidence*, deliberately not the criterion: the corpus is an authority on which
+// module the text denotes, not on encoding style, which is why #67's comparator compares `[]Instr`.
+// A future divergence in a legal-but-different encoding is a fact about wabt's style and must not be
+// read as a defect here.
 
 // secType is the type section's id. The other twelve ids arrive with their sections — naming them
 // now would be twelve constants nothing reads, which is the placeholder shape #6 rules on, and the
