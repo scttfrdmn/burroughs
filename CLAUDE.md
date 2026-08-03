@@ -137,6 +137,18 @@ Three separate mistakes are being avoided, and they were made in that order:
    keep working; the completion arrives as a notification. A five-minute CI run
    should cost five minutes of *CI*, not five minutes of doing nothing.
 
+**And `sleep` is never how you wait for a signal that exists — background it and let the
+wake-up arrive.** This is mistake 1 restated because restating it was necessary: it was
+committed *again*, on an already-backgrounded watch, by running `sleep 200` to poll the task's
+own output file while its completion notification was in flight. Polling a background task with
+a timer is strictly worse than a bare `sleep`, because the signal already exists and the timer
+replaces it with a guess. The test is one question — **does a completion signal exist?** If
+yes, wait on the signal; if no (GitHub has no "run created" event), poll for the *condition* in
+a bounded loop that gives up loudly, which is the one honest `sleep` in this file. If nothing
+else is ready to do, say what is pending and stop: an idle turn costs nothing, a blocked tool
+call costs the whole wait. (Directive: Scott, PR #103 — *"stop using sleep"*, and he was right
+to be terse about it, the rule having already been written here by the agent that broke it.)
+
 The first two are *verdict channel and mechanism channel are different
 instruments* applied to time and to identity: ask the right channel, and ask it
 about the right run.
