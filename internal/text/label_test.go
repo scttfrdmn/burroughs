@@ -54,7 +54,7 @@ import (
 // index. Enumerating today's five would freeze the control at the moment of authorship — the
 // blind-spot shape decision 0006 names.
 func TestLabelTakingArmsMatchTheReference(t *testing.T) {
-	src := testenv.RequireSpecRef(t, refPath(testenv.RefParserMLY))
+	src := testenv.RequireSpecRef(t, testenv.RefParserMLY)
 	body := productionBody(t, src, "plaininstr")
 
 	// An arm's head is everything up to its action; the action is where the category lives. Split
@@ -138,7 +138,7 @@ var reLabelLookup = regexp.MustCompile(`\$\d+ c'? label\b`)
 // `br_table`'s two (`$2 c label :: $3 c label`), which is precisely the fact labelIdxList exists
 // for; a drop to five would mean the tail stopped being a label position upstream.
 func TestLabelLookupProductionsAreAllRead(t *testing.T) {
-	src := testenv.RequireSpecRef(t, refPath(testenv.RefParserMLY))
+	src := testenv.RequireSpecRef(t, testenv.RefParserMLY)
 
 	// The productions this package reads a label in, and where.
 	want := map[string]struct {
@@ -212,7 +212,7 @@ func TestLabelLookupProductionsAreAllRead(t *testing.T) {
 // position 3 instead of 4 would report `unknown label $e` for a legal module — an over-rejection,
 // which is the direction the suite cannot report.
 func TestCatchLabelIsTheLastIndexOfItsArm(t *testing.T) {
-	src := testenv.RequireSpecRef(t, refPath(testenv.RefParserMLY))
+	src := testenv.RequireSpecRef(t, testenv.RefParserMLY)
 
 	checked := 0
 	for _, prod := range []string{"handler_block_body", "try_block_handler_body"} {

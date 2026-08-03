@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -14,7 +13,11 @@ import (
 )
 
 // refPath is the vendored authority, from this package's directory.
-var refPath = filepath.Join("..", "..", "..", "..", testenv.RefDecodeML)
+// refPath names the vendored authority. Only the *name* matters: RequireSpecRef resolves
+// it from the repo root and uses this to select the file's size floor, so this is no longer
+// a claim about where this package sits. It was one, and the claim was wrong for a while
+// without failing — see gen.FromRoot.
+var refPath = testenv.RefDecodeML
 
 func refSource(tb testing.TB) string {
 	tb.Helper()
@@ -542,7 +545,7 @@ func TestEmitRejectsAnImmediateWithNoIdentifier(t *testing.T) {
 // with an authority it never read.
 func TestCommittedTableMatchesTheReference(t *testing.T) {
 	src := refSource(t)
-	sha, err := gen.PinnedRev(filepath.Join("..", "..", "..", "..", "scripts", "fetch-spec-ref.sh"))
+	sha, err := gen.PinnedRefRev()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -554,7 +557,10 @@ func TestCommittedTableMatchesTheReference(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Emit: %v", err)
 	}
-	path := filepath.Join("..", "..", "optable.go")
+	path, err := gen.FromRoot(Output)
+	if err != nil {
+		t.Fatal(err)
+	}
 	gotB, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)

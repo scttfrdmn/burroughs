@@ -21,6 +21,63 @@ weakly-ordered platform.
 
 ### Added
 
+- **`internal/text/opcodes.go`: the mnemonic→opcode table, generated as a *join* of the two
+  tables that already exist** ([#8](https://github.com/scttfrdmn/burroughs/issues/8),
+  decision 0014). #8's encoder must answer "which byte does `i32.add` emit?" 494 times.
+  Neither authority states that: `parser.mly` and `lexer.mll` name the reference's
+  *constructor* (`i32_add`), and `optable.go` — itself machine-derived from the same
+  revision's `decode.ml` — says which byte that constructor decodes from. So
+  `internal/gen/opgen` reads no opcodes at all; it reads the **link** between two committed
+  artifacts and emits their join. **494 rows, 58 named by the grammar's semantic actions, 436
+  by the lexer's token payloads, 95 keywords with no opcode to have, 3 ambiguous.** Neither
+  hand-written (this repo's measured hand-transcription rate is 7 wrong in 12, #37) nor a
+  third extractor (which would make two places know `i32.add` is 0x6a with no derivation
+  between them — 0006's drift risk).
+
+  **The three ambiguous mnemonics are emitted, not resolved.** `select` (0x1b bare / 0x1c
+  typed), `ref.test` and `ref.cast` (0xfb 0x14/0x15 and 0x16/0x17) are distinguished by the
+  reference on *what follows the mnemonic*, so a map keyed on the mnemonic alone returns one
+  of two and is wrong on the other spelling — with no board consequence, since both spellings
+  decode clean. `ambiguousOpcodes` carries both codes and the encoder chooses on the operand.
+
+  **Product work under the accept-direction exception, and three defects paid for the claim.**
+  Every spec vector bearing on this table is a module the suite expects to *work*, so a wrong
+  row emits a different instruction than the text denotes and scores green (contract §9 G-3).
+  All three were found by *printing what the reader returned for named inputs*, none was
+  findable from the board, and each is a distinct class:
+
+  - **25 wrapped lexer arms silently absorbed** — 411 rows where 436 were measured. The head
+    regexp required `-> TOKEN` on one line, true of 564 arms and false of the `const` family
+    and the `v128.*_lane`/`_splat` group, which wrap. No error and no unrecognized arm: the
+    under-matching trigger of #78/#82, which produces *no finding rather than a wrong one*.
+    The floors did not catch it, because 411 clears a floor of 350 — **floors bound the
+    catastrophic case, and only an exact count sees a 6% silent loss.**
+  - **The grammar reader was scoped to `plaininstr`**, one of **five** instruction-building
+    productions, so `select`, `block`, `loop`, `if`, `call_indirect`, `return_call_indirect`
+    and `try_table` — every control-flow construct in the language — were named by neither
+    authority and joined to nothing. See 0014's Correction: the ADR's premise was *measured
+    with a probe scoped to the same production the reader read*, so the gap came out at
+    exactly 0 because neither could see it. **A premise measured over the same sample the
+    code reads is not a premise, it is an echo.**
+  - **`constructorIn` was fed the arm's symbol list, not just its action**, so
+    `| LOOP labeling_opt block END labeling_end_opt` resolved `LOOP` to the *nonterminal*
+    `block` — which is also a constructor the opcode table holds. **`loop` would have encoded
+    as 0x02.**
+
+  **`Extract`'s partition check was a no-op**, found by writing its falsification test and
+  watching it *not* fail: `byGrammar` is keyed per kind and `byLexer` per keyword, so
+  `byLexer[kind]` asked whether some keyword is spelled `BINARY` — never true, uppercase.
+  It read as a partition check and could not fire on any input. The corrected gap control uses
+  a detector drawn from **outside both readers** (the mnemonic's own spelling, rejected as a
+  join key and therefore fit as a second opinion), because asking whether every kind the join
+  resolved was resolved is a tautology — *the* tautology that hid the seven.
+
+  Floors are **per-partition, not one total**: a total of 400 passes on the lexer's 436 alone
+  if the grammar side finds zero, which is an empty half absorbed by a full one — the vacuity
+  law with a partner to hide behind. `make opcodes-text` regenerates, `make opcodes-text-drift`
+  asserts agreement with the pin, and `Emit` refuses an empty table because an empty map
+  compiles, formats, and reads as "no mnemonic encodes to anything".
+
 - **The internal form: the decoder now retains modules instead of only judging them**
   ([#7](https://github.com/scttfrdmn/burroughs/issues/7), decision 0002). Before this,
   nothing in the codebase could represent a module — 28 of the 29 `decode*` functions
@@ -879,7 +936,7 @@ weakly-ordered platform.
   `match` block, 589 one-shape arms, no alternations, no wrapped heads — which is the recon
   finding that let 8a stand alone instead of folding into
   [#8](https://github.com/scttfrdmn/burroughs/issues/8).
-- **`internal/text/internal/keywordgen`** with 0007's four conditions discharged: an
+- **`internal/gen/keywordgen`** with 0007's four conditions discharged: an
   unrecognized arm inside the block is a hard error rather than an omission, a `Floor = 400`
   vacuity control against 589 measured, a generation header naming authority/revision/
   extractor version, and `make keyword-drift` in CI. One floor rather than `opcodegen`'s
@@ -1003,6 +1060,42 @@ weakly-ordered platform.
   behind**. That makes #53's done-when checkable by CI instead of by a reviewer.
 
 ### Changed
+
+- **The three code generators live in `internal/gen/`, and a repo-relative path is now
+  *derived* rather than counted** (decision 0014). `opcodegen` was
+  `internal/binary/internal/opcodegen` and `keywordgen` was `internal/text/internal/...`,
+  which is right while each generator serves one package and wrong the moment a third one
+  reads both — `opgen` imports the pair, and a generator nested under one of its own inputs
+  cannot. All three are now siblings under `internal/gen/`, with `cmd/` subpackages
+  unchanged in shape.
+
+  **The move surfaced as a *skip*, not a failure, which is the part worth recording.** Five
+  sites reached the vendored reference by climbing `../../../..`, correct only at the
+  pre-move depth. A wrong path did not error — it made a *vendored* reference look **absent**,
+  so `testenv.RequireSpecRef` licensed a skip and every generator drift check passed by
+  asking nothing. Only `BURROUGHS_NO_SKIP=1` turned it into the failure that found it: *a
+  skip is not a verdict*, and here the skip was **bought** by the defect. Fixed at the door
+  rather than at the five literals — `gen.FromRoot` walks up to `go.mod` and fails loudly, so
+  the class is gone rather than the instance: *derive the domain, never enumerate it*, applied
+  to **location**. `RequireSuiteFile` takes a file *name* now for the same reason;
+  `RequireSuite`/`SuiteFiles` keep their directory parameter because their own falsification
+  tests point them at empty temp dirs.
+
+  Each emitter also declares its own `Output` constant, so `make <target>` and the drift check
+  name one fact once. Previously both spelled it — the Makefile from the root, the test from
+  its own directory — and the move falsified the test's copy while the Makefile's stayed
+  right: two places knowing one fact (0006), where the fact is a location and the mover is a
+  directory rename.
+
+- **`opcodegen.Arm.Mnemonic` is load-bearing, and its comment said the opposite**
+  (decision 0014). It read "kept for the generated table's readability and for error
+  messages. Not load-bearing" — true when written, and false the moment 0014's join keyed on
+  it: a mnemonic is now what says `i32.add` encodes to 0x6a, so an upstream constructor rename
+  silently *moves an opcode* instead of changing a string nobody reads. Corrected in the same
+  change rather than in a follow-up, because *a ruling retroactively falsifies the prose
+  written before it*, and a field documented as decorative is exactly the field a future
+  change treats as safe to rename. `opcodegen.Version` → 2 and `optable.go` regenerated, since
+  the header is a claim about the extractor/table *pair*.
 
 - **The vendored suite is pinned by SHA, and the board names the corpus it measured**
   ([#42](https://github.com/scttfrdmn/burroughs/issues/42)). `fetch-spec-tests.sh` cloned
@@ -1268,6 +1361,48 @@ weakly-ordered platform.
   skip ([#29](https://github.com/scttfrdmn/burroughs/issues/29)).
 
 ### Fixed
+
+- **Three accept-direction defects in 0014's join, none of them findable from the board**
+  ([grave #105](https://github.com/scttfrdmn/burroughs/issues/105),
+  [grave #106](https://github.com/scttfrdmn/burroughs/issues/106),
+  [grave #107](https://github.com/scttfrdmn/burroughs/issues/107),
+  [#8](https://github.com/scttfrdmn/burroughs/issues/8)). All three found by *printing what
+  the reader returned for named inputs*, not by reading code; all three would have scored
+  green on every board, since a wrong row emits a well-formed module that decodes clean.
+  Each is a distinct class, and the middle one is the one worth the space:
+
+  **#105 — an under-matching trigger, 411 rows where 436 were measured.** The lexer arm-head
+  regexp required `-> TOKEN` on one line, false of the 25 arms that wrap; they were absorbed
+  as continuation lines of the preceding keyword. `keywordgen` had already met and solved this
+  (its head ends at `->`), and the defect was reintroduced because the shape was **re-derived
+  instead of copied**. The floors were green throughout — 411 clears 350 — so exact counts now
+  sit beside them, and `reLexArmish` makes an arm-shaped line that fails to parse an error.
+
+  **#106 — the ADR's own premise was measured with the code's blind spot.** The grammar reader
+  read `plaininstr`, one of five instruction-building productions, and 0014's "overlap 0,
+  gap 0" was measured by a probe *scoped to the same production*. So premise and code agreed
+  while both were wrong, and every control-flow instruction — `select`, `block`, `loop`, `if`,
+  `call_indirect`, `return_call_indirect`, `try_table` — joined to nothing. **A premise
+  measured over the same sample the code reads is not a premise, it is an echo**; and the tell
+  was available at the time and not taken, because a gap of *exactly* 0 should prompt the
+  question of what the counting instrument cannot see. The repaired gap control therefore uses
+  a detector drawn from outside both readers, since asking whether every kind the join resolved
+  was resolved is the tautology that hid the seven.
+
+  **#107 — a sound filter widened past the region that made it sound.** `constructorIn`
+  identifies a constructor by asking which lowercase identifier the *opcode table* holds, which
+  is what avoids parsing OCaml. Fed the whole arm rather than just the action, it matched
+  `block` in `| LOOP labeling_opt block END labeling_end_opt` — the **nonterminal**, which is
+  also a constructor at 0x02. `loop` would have encoded as **0x02**. Grammar nonterminals share
+  the reference's naming convention with its constructors precisely because both name
+  instructions, so the filter's soundness was a property of its input region and nothing said
+  so.
+
+  A fourth, in the controls rather than the reader: **`Extract`'s partition check was a
+  no-op** — `byGrammar` is keyed per kind and `byLexer` per keyword, so `byLexer[kind]` asked
+  whether a keyword is spelled `BINARY`, never true. It read as a partition check and could not
+  fire on any input. Found by writing its falsification test and watching it *not* fail: *a
+  green that survives the bug it names is a control in name only.*
 
 - **The retained sequence dropped every block terminator, so `(func)` decoded to nothing at
   all** ([grave #99](https://github.com/scttfrdmn/burroughs/issues/99),

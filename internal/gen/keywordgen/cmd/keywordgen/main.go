@@ -3,7 +3,7 @@
 //
 // Usage:
 //
-//	go run ./internal/text/internal/keywordgen/cmd/keywordgen -o internal/text/keywords.go
+//	go run ./internal/gen/keywordgen/cmd/keywordgen -o internal/text/keywords.go
 //
 // or, normally, 'make keywords'. The output is committed, so a fresh clone builds with no
 // fetch; 'make keyword-drift' asserts the committed file still agrees with the reference.
@@ -18,8 +18,8 @@ import (
 	"os"
 
 	"github.com/scttfrdmn/burroughs/internal/gen"
+	"github.com/scttfrdmn/burroughs/internal/gen/keywordgen"
 	"github.com/scttfrdmn/burroughs/internal/testenv"
-	"github.com/scttfrdmn/burroughs/internal/text/internal/keywordgen"
 )
 
 func main() {
@@ -33,7 +33,7 @@ func main() {
 }
 
 func run(out string) error {
-	sha, err := gen.PinnedRev("scripts/fetch-spec-ref.sh")
+	sha, err := gen.PinnedRefRev()
 	if err != nil {
 		return err
 	}

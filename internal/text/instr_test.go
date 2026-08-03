@@ -98,7 +98,7 @@ func productionArms(t *testing.T, src, nonterminal string) []string {
 // which is a control comparing a value to itself.
 func plaininstrArms(t *testing.T) map[keywordKind][]string {
 	t.Helper()
-	src := testenv.RequireSpecRef(t, refPath(testenv.RefParserMLY))
+	src := testenv.RequireSpecRef(t, testenv.RefParserMLY)
 
 	arms := map[keywordKind][]string{}
 	total := 0
@@ -251,7 +251,7 @@ func TestPlaininstrShapesMatchTheReference(t *testing.T) {
 // A reader that stopped working — a renamed production, a changed indentation — yields no arms, and
 // every loop below then passes by asking nothing. The floor is the control on the control.
 func TestExpr1LeadersMatchTheReference(t *testing.T) {
-	src := testenv.RequireSpecRef(t, refPath(testenv.RefParserMLY))
+	src := testenv.RequireSpecRef(t, testenv.RefParserMLY)
 	arms := productionArms(t, src, "expr1")
 
 	// 10 arms at bdd7164: `plaininstr expr_list`, SELECT, CALL_INDIRECT ×2, RETURN_CALL_INDIRECT ×2,
