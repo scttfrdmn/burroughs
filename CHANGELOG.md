@@ -1004,6 +1004,24 @@ weakly-ordered platform.
 
 ### Changed
 
+- **The vendored suite is pinned by SHA, and the board names the corpus it measured**
+  ([#42](https://github.com/scttfrdmn/burroughs/issues/42)). `fetch-spec-tests.sh` cloned
+  upstream's tip and `pull --ff-only`'d thereafter, so the corpus floated: it happened to sit
+  at `de54fd2` and nothing in the repo said so or would have noticed it moving. Pinned to
+  `de54fd27ecf3e68dfd16b6199c548df77b6a2cc1` (2026-07-29, 257 `.wast` files), asserted on
+  every path, with a `MinSuiteFiles` floor so a one-file checkout cannot pass as a corpus.
+  The board's aggregate line now prints `corpus: suite pin <sha>` beside its counts and
+  **verifies the pin against the actual checkout**, because *a count is a claim about a
+  corpus* and an unpinned corpus has no identity — two developers on different fetch dates
+  could quote incompatible numbers and both be honest, which made *never quote a suite count
+  that wasn't run* ambiguous about which corpus a run quoted. The trade is drift for
+  staleness, taken deliberately: a stale corpus is visible in a diff, where drift is visible
+  only as a number that moved. Bumps are now deliberate PRs, the same posture as
+  toolchain currency (0005). Decision 0007's reason for *not* pinning the suite alongside the
+  reference is preserved rather than repealed — an input to a report gets pinned, a report
+  does not have to be — and what changed is the measurement that "drift is visible" is weaker
+  than it sounds.
+
 - **0011's bridge veto is lifted, and the text→binary comparator is ruled** (decision 0011,
   appended; [#67](https://github.com/scttfrdmn/burroughs/issues/67)). The veto's precondition
   was the sequencing correction recorded in 0011's first appendix — the internal form before

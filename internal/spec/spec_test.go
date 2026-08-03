@@ -3,6 +3,7 @@ package spec
 import (
 	"errors"
 	"fmt"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -10,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/scttfrdmn/burroughs/internal/binary"
+	"github.com/scttfrdmn/burroughs/internal/gen"
 	"github.com/scttfrdmn/burroughs/internal/testenv"
 	"github.com/scttfrdmn/burroughs/internal/text"
 )
@@ -186,6 +188,60 @@ func run(s *Script) *Result { return s.RunGated(decode, readText, isGated) }
 func requireSuite(t *testing.T) {
 	t.Helper()
 	testenv.RequireSuite(t, suiteDir)
+}
+
+// suitePin reports the suite revision the board's counts were measured against.
+//
+// Read from the *fetch script's pin* rather than from `git -C testdata/spec rev-parse`, and
+// the difference is the point: the script's `rev` is what the corpus is *supposed* to be, and
+// the script asserts on every path that the checkout matches it (#42). So quoting the pin
+// quotes an already-verified fact, where shelling out to git would make the board's provenance
+// depend on a second, unasserted reading — and would make the test invoke git at all, which a
+// board test has no business doing.
+//
+// Failure is fatal rather than a blank: *a provenance header that says nothing is worse than
+// none, because it looks stamped* (gen.PinnedRev's own reason).
+func suitePin(t *testing.T) string {
+	t.Helper()
+	rev, err := gen.PinnedRev("../../scripts/fetch-spec-tests.sh")
+	if err != nil {
+		t.Fatalf("reading the suite pin: %v\n\tThe board cannot name the corpus it measured, "+
+			"which makes every count below unattributable.", err)
+	}
+	// And the pin is checked against the checkout it claims to describe, because the two
+	// can disagree: the script asserts them equal *when it runs*, and nothing stops a later
+	// `git -C testdata/spec checkout` from moving the tree underneath it. Printing the pin
+	// without this check would quote what the corpus is supposed to be while the counts came
+	// from whatever is actually there — a stamped provenance that is wrong exactly when it
+	// matters, which is the hearsay #42 is about.
+	//
+	// **Resolved with git rather than by reading .git/HEAD**, and the first draft did the
+	// latter: on a branch checkout HEAD holds a *symbolic ref* (`ref: refs/heads/utf8-names`,
+	// which is what the vendored corpus actually has), so the comparison put a ref name
+	// against a SHA and failed for every developer whose corpus was not detached. A false
+	// alarm on the board's own provenance line — and the fix is not more parsing, it is
+	// *measure with the instrument*: `rev-parse` is the thing that knows how to resolve a
+	// ref, and reimplementing it here would be a second opinion about git's storage format.
+	//
+	// The earlier version of this comment argued a board test "has no business" invoking
+	// git. That was wrong, and it is quoted rather than deleted: verifying what a working
+	// tree is at *is* a git question, and answering it with a file read was the reasoning
+	// that produced the false alarm.
+	//
+	// A tree that is not a git checkout at all (a tarball) is unverifiable rather than
+	// violated, so the board says which of the two it is instead of implying either.
+	out, err := exec.Command("git", "-C", suiteDir, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Logf("note: cannot resolve %s to a revision (%v), so the pin %s is unverified "+
+			"against the tree", suiteDir, err, rev)
+		return rev
+	}
+	if got := strings.TrimSpace(string(out)); got != rev {
+		t.Errorf("suite pin is %s but %s is checked out at %s.\n\tThe board would name a "+
+			"corpus it did not measure. Run `make spec-tests` to return to the pin, or bump "+
+			"the pin deliberately.", rev, suiteDir, got)
+	}
+	return rev
 }
 
 // suitePaths returns every vendored .wast file, having already required the
@@ -846,6 +902,13 @@ func TestPhase1Files(t *testing.T) {
 			aggBuckets[k] = append(aggBuckets[k], fs...)
 		}
 	}
+	// The corpus identity, printed *with* the counts and not merely available somewhere
+	// (#42). A count is a claim about a corpus, so a board line that does not name its
+	// corpus is a verdict without an identity check — two developers on different fetch
+	// dates can quote incompatible numbers and both be honest. Pairing the suite pin with
+	// the engine commit is what makes "never quote a suite count that wasn't run"
+	// unambiguous about *which* run.
+	t.Logf("corpus: suite pin %s (%s)", suitePin(t), suiteDir)
 	t.Logf("board total over %d files: %d pass, %d fail, %d unsupported, %d gated, %d unimplemented",
 		len(files), totalPass, totalFail, totalUnsup, totalGated, totalUnimpl)
 
