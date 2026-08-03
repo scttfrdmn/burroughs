@@ -1,10 +1,13 @@
 package text
 
 import (
+	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/scttfrdmn/burroughs/internal/binary"
+	"github.com/scttfrdmn/burroughs/internal/testenv"
 )
 
 // decodeForTest reads an encoder's output with the gates the *encoder* can produce turned on.
@@ -71,6 +74,7 @@ var encodableModules = []struct {
 	wantTabs    []binary.Table
 	wantMems    []binary.Memory
 	wantImports []binary.Import
+	wantExports []binary.Export
 }{
 	{src: `(module)`},
 	{src: `(module (type (func)))`, want: []binary.CompType{
@@ -447,6 +451,170 @@ var encodableModules = []struct {
 		wantMems:    []binary.Memory{{Limits: binary.Limits{Min: 1}}},
 		wantImports: []binary.Import{{Module: "m", Name: "x", Kind: binary.ExternMemory}},
 	},
+
+	// # The export section (id 7)
+	//
+	// **One row per space, because the kind byte is a five-way mapping and a suite vector cannot see
+	// it.** `externKindByte` is shared with the import section, whose orders are exact reversals
+	// (memory being the fixed point — grave #119's pass-set shape), so a row for each space is what
+	// distinguishes a working mapping from one that happens to be right for memory.
+	{
+		src:         `(module (memory 1) (export "m" (memory 0)))`,
+		wantMems:    []binary.Memory{{Limits: binary.Limits{Min: 1}}},
+		wantExports: []binary.Export{{Name: "m", Kind: binary.ExternMemory, Index: 0}},
+	},
+	{
+		src:         `(module (table 1 funcref) (export "t" (table 0)))`,
+		wantTabs:    []binary.Table{{ElemType: binary.FuncRef, Limits: binary.Limits{Min: 1}}},
+		wantExports: []binary.Export{{Name: "t", Kind: binary.ExternTable, Index: 0}},
+	},
+	{
+		src:         `(module (import "m" "f" (func)) (export "f" (func 0)))`,
+		want:        []binary.CompType{{Kind: binary.CompFunc}},
+		wantImports: []binary.Import{{Module: "m", Name: "f", Kind: binary.ExternFunc}},
+		wantExports: []binary.Export{{Name: "f", Kind: binary.ExternFunc, Index: 0}},
+	},
+	{
+		src:         `(module (import "m" "g" (global i32)) (export "g" (global 0)))`,
+		wantImports: []binary.Import{{Module: "m", Name: "g", Kind: binary.ExternGlobal}},
+		wantExports: []binary.Export{{Name: "g", Kind: binary.ExternGlobal, Index: 0}},
+	},
+	{
+		src:         `(module (import "m" "t" (tag)) (export "t" (tag 0)))`,
+		want:        []binary.CompType{{Kind: binary.CompFunc}},
+		wantImports: []binary.Import{{Module: "m", Name: "t", Kind: binary.ExternTag}},
+		wantExports: []binary.Export{{Name: "t", Kind: binary.ExternTag, Index: 0}},
+	},
+
+	// **A symbolic index, resolved forward.** `exports.wast:14`'s shape: `$m` is not bound when the
+	// export is read, so an emitter resolving at the cursor rejects a module the spec accepts. The
+	// Index column is what makes the resolution visible — a parse verdict cannot see it.
+	{
+		src:         `(module (export "m" (memory $m)) (memory $m 1))`,
+		wantMems:    []binary.Memory{{Limits: binary.Limits{Min: 1}}},
+		wantExports: []binary.Export{{Name: "m", Kind: binary.ExternMemory, Index: 0}},
+	},
+	// **A symbolic index that is not zero, and an imported entry ahead of it.** Two ways to get the
+	// index wrong that a zero cannot distinguish: resolving to the wrong binding, and forgetting that
+	// an *imported* memory occupies index 0 (`space.count` advances for imports, which is why
+	// `bindidxOpt` runs on the import arms too). Index 2 fails on either mistake.
+	{
+		src: `(module (import "m" "x" (memory 3)) (memory $a 1) (memory $b 2) ` +
+			`(export "b" (memory $b)))`,
+		wantMems: []binary.Memory{
+			{Limits: binary.Limits{Min: 1}}, {Limits: binary.Limits{Min: 2}},
+		},
+		wantImports: []binary.Import{{Module: "m", Name: "x", Kind: binary.ExternMemory}},
+		wantExports: []binary.Export{{Name: "b", Kind: binary.ExternMemory, Index: 2}},
+	},
+	// Source order is section order, and an empty name is legal (`exports.wast` exports `""`). Three
+	// entries so a reversal or a stable-sort-by-name is visible; the names are deliberately not in
+	// alphabetical order.
+	{
+		src: `(module (memory 1) (export "z" (memory 0)) (export "" (memory 0)) ` +
+			`(export "a" (memory 0)))`,
+		wantMems: []binary.Memory{{Limits: binary.Limits{Min: 1}}},
+		wantExports: []binary.Export{
+			{Name: "z", Kind: binary.ExternMemory, Index: 0},
+			{Name: "", Kind: binary.ExternMemory, Index: 0},
+			{Name: "a", Kind: binary.ExternMemory, Index: 0},
+		},
+	},
+
+	// # The inline-export sugar (parser.mly:1269-1274)
+	//
+	// **Paired with the module-field spelling above, because the two must produce the same image and
+	// nothing else can say so.** `(memory (export "m") 1)` and `(memory 1) (export "m" (memory 0))`
+	// denote one module; a suite vector cannot tell them apart, since both are `assert_malformed`-free
+	// text whose only observable is the image. These rows moved out of
+	// `TestEncodeRefusesWhatItCannotWrite`, where they sat as "+ an export section" refusals.
+	//
+	// The sugar takes its index from the enclosing field rather than from a lookup, so the defect it
+	// can have is *off-by-one against the field's own binding* — which is why the pairs below put the
+	// exported field at a non-zero index wherever the space allows one.
+	{
+		src:         `(module (memory (export "m") 1))`,
+		wantMems:    []binary.Memory{{Limits: binary.Limits{Min: 1}}},
+		wantExports: []binary.Export{{Name: "m", Kind: binary.ExternMemory, Index: 0}},
+	},
+	{
+		src:         `(module (table (export "t") 1 funcref))`,
+		wantTabs:    []binary.Table{{ElemType: binary.FuncRef, Limits: binary.Limits{Min: 1}}},
+		wantExports: []binary.Export{{Name: "t", Kind: binary.ExternTable, Index: 0}},
+	},
+	// **The index is the field's own, not zero.** Two memories ahead of the exported one, so an
+	// emitter that wrote 0 — or that read `space.count` *after* binding and wrote 3 — fails here. This
+	// is the row the sugar's whole mechanism rests on, and no vector can see it.
+	{
+		src: `(module (memory 1) (memory 2) (memory (export "third") 3))`,
+		wantMems: []binary.Memory{
+			{Limits: binary.Limits{Min: 1}},
+			{Limits: binary.Limits{Min: 2}},
+			{Limits: binary.Limits{Min: 3}},
+		},
+		wantExports: []binary.Export{{Name: "third", Kind: binary.ExternMemory, Index: 2}},
+	},
+	// **An inline export on an inline *import*.** The one arm where the two sugars interact: the
+	// export comes first in the recursion (`inline_export func_fields`, :985), so this parses, and the
+	// index it exports is the import's — an imported memory occupies index 0 like any other. An
+	// emitter that skipped imports when numbering would write 0 here and be right by accident, so the
+	// pair below adds a defined memory ahead of nothing and an import ahead of the export.
+	{
+		src:         `(module (memory (export "m") (import "m" "x") 1))`,
+		wantImports: []binary.Import{{Module: "m", Name: "x", Kind: binary.ExternMemory}},
+		wantExports: []binary.Export{{Name: "m", Kind: binary.ExternMemory, Index: 0}},
+	},
+	{
+		src: `(module (import "m" "a" (memory 1)) (memory (export "second") (import "m" "b") 2))`,
+		wantImports: []binary.Import{
+			{Module: "m", Name: "a", Kind: binary.ExternMemory},
+			{Module: "m", Name: "b", Kind: binary.ExternMemory},
+		},
+		wantExports: []binary.Export{{Name: "second", Kind: binary.ExternMemory, Index: 1}},
+	},
+	{
+		src:         `(module (global (export "g") (import "m" "g") i32))`,
+		wantImports: []binary.Import{{Module: "m", Name: "g", Kind: binary.ExternGlobal}},
+		wantExports: []binary.Export{{Name: "g", Kind: binary.ExternGlobal, Index: 0}},
+	},
+	{
+		src:         `(module (func (export "f") (import "m" "f")))`,
+		want:        []binary.CompType{{Kind: binary.CompFunc}},
+		wantImports: []binary.Import{{Module: "m", Name: "f", Kind: binary.ExternFunc}},
+		wantExports: []binary.Export{{Name: "f", Kind: binary.ExternFunc, Index: 0}},
+	},
+	{
+		src:         `(module (tag (export "t") (import "m" "t")))`,
+		want:        []binary.CompType{{Kind: binary.CompFunc}},
+		wantImports: []binary.Import{{Module: "m", Name: "t", Kind: binary.ExternTag}},
+		wantExports: []binary.Export{{Name: "t", Kind: binary.ExternTag, Index: 0}},
+	},
+	// **The recursion, which is why `inlineExports` is a loop.** `inline_export func_fields` is
+	// right-recursive over the whole field, so two are legal and their order is source order. A
+	// non-looping reader accepts the first and leaves the second for `inlineImport` to reject.
+	{
+		src:      `(module (table (export "a") (export "b") 1 funcref))`,
+		wantTabs: []binary.Table{{ElemType: binary.FuncRef, Limits: binary.Limits{Min: 1}}},
+		wantExports: []binary.Export{
+			{Name: "a", Kind: binary.ExternTable, Index: 0},
+			{Name: "b", Kind: binary.ExternTable, Index: 0},
+		},
+	},
+	// **Both spellings in one module, and the sugar's entry comes first.** The reference builds the
+	// export list per field (`$1 (FuncX x) c :: exs`, :987) inside `module_fields1`'s fold, so a
+	// field's inline exports land where the *field* is, not after every module-field export. Written
+	// with the `(export …)` field first in the text to make the two orders differ: source order for
+	// the section is memory-sugar then field, because the memory field precedes it.
+	{
+		src: `(module (memory (export "inline") 1) (export "field" (memory 0)))`,
+		wantMems: []binary.Memory{
+			{Limits: binary.Limits{Min: 1}},
+		},
+		wantExports: []binary.Export{
+			{Name: "inline", Kind: binary.ExternMemory, Index: 0},
+			{Name: "field", Kind: binary.ExternMemory, Index: 0},
+		},
+	},
 }
 
 // TestEncodeRoundTripsThroughTheDecoder is the encoder's acceptance check, and the direction of the
@@ -506,6 +674,16 @@ func TestEncodeRoundTripsThroughTheDecoder(t *testing.T) {
 			for i, want := range tc.wantImports {
 				if got := m.Imports[i]; got != want {
 					t.Errorf("import %d is %+v, want %+v", i, got, want)
+				}
+			}
+			if len(m.Exports) != len(tc.wantExports) {
+				t.Fatalf("encoded % x, which decodes to %d exports, want %d: %v",
+					b, len(m.Exports), len(tc.wantExports), m.Exports)
+			}
+			for i, want := range tc.wantExports {
+				if got := m.Exports[i]; got != want {
+					t.Errorf("export %d is %+v, want %+v — the Index is the resolved one, so a "+
+						"wrong resolution shows up here and not in any parse verdict", i, got, want)
 				}
 			}
 
@@ -760,7 +938,6 @@ func TestEncodeDoesNotRerunTheDeferredPhase(t *testing.T) {
 func TestEncodeRefusesWhatItCannotWrite(t *testing.T) {
 	for _, tc := range []struct{ src, contains string }{
 		{`(module (func))`, "(func …) field"},
-		{`(module (export "a" (func 0)) (func))`, "(export …) field"},
 		{`(module (global i32 (i32.const 0)))`, "(global …) field"},
 		{`(module (start 0) (func))`, "(start …) field"},
 		{`(module (data "abc"))`, "(data …) field"},
@@ -788,22 +965,18 @@ func TestEncodeRefusesWhatItCannotWrite(t *testing.T) {
 		// with one was refuse it. Now both spellings retain, and the pairs in `encodableModules` assert
 		// the two denote the same import. What stays here is every arm that retains something *no*
 		// section exists for.
-		{`(module (memory (data "abc")))`, "(memory …) field"},   // + an implicit data segment
-		{`(module (memory i64 (data "")))`, "(memory …) field"},  // the sugar's addrtype arm
-		{`(module (memory (export "a") 1))`, "(memory …) field"}, // + an export section
-		{`(module (table (export "a") 1 funcref))`, "(table …) field"},
-		// An inline import *with* an inline export, which is the one arm where the two interact: the
-		// export comes first in the recursion (`inline_export func_fields`, :986), so this parses — and
-		// it must still refuse, because the export section does not exist. This is what the `exported`
-		// lookahead in each field buys, and without it the withdrawal would fire and drop the export.
-		{`(module (memory (export "a") (import "m" "x") 1))`, "(memory …) field"},
-		{`(module (table (export "a") (import "m" "x") 1 funcref))`, "(table …) field"},
-		{`(module (global (export "a") (import "m" "g") i32))`, "(global …) field"},
-		{`(module (func (export "a") (import "m" "f")))`, "(func …) field"},
-		{`(module (tag (export "a") (import "m" "t")))`, "(tag …) field"},
-		// And the `(import …)` field has no inline-export arm at all (:1250), so there is no such row
-		// for it — the asymmetry is the grammar's, and `importField`'s unconditional withdrawal is why
-		// it needs no lookahead.
+		{`(module (memory (data "abc")))`, "(memory …) field"},  // + an implicit data segment
+		{`(module (memory i64 (data "")))`, "(memory …) field"}, // the sugar's addrtype arm
+		// **The seven inline-export rows moved to `encodableModules` in this PR**, and the move is what
+		// the export section *is*. They were here because an inline export needed a section that did
+		// not exist, so every field carrying one had to keep its refusal — which is what the
+		// `exported` lookahead in each field bought, and what `inlineImportTail`'s deleted parameter
+		// was for. Now the sugar retains, so nothing suppresses the withdrawal and the pairs in
+		// `encodableModules` assert that the two spellings denote one module.
+		//
+		// The `(import …)` field has no inline-export arm at all (:1250), so there was never a row for
+		// it — the asymmetry is the grammar's, and `importField`'s unconditional withdrawal is why it
+		// never needed the lookahead the other five have now lost.
 		{`(module (table funcref (elem)))`, "(table …) field"}, // + an implicit elem segment
 		{`(module (table i64 funcref (elem)))`, "(table …) field"},
 		{`(module (func $f) (table 1 funcref (ref.func $f)))`, "(func …) field"}, // an initializer expr
@@ -1083,4 +1256,142 @@ func TestEveryAbbreviatedReftypeExpandsAsItsTableClaims(t *testing.T) {
 		t.Errorf("exercised %d of %d abbreviations; the loop is over the table, so a spelling "+
 			"missing from it is an arm nothing tested", len(seen), len(wantDenotes))
 	}
+}
+
+// externArmRE matches one arm of an encode.ml `extern*` match, capturing the constructor and the
+// byte it writes: `| ExternFuncT ut -> byte 0x00; …` and `| FuncX x -> byte 0x00; idx x`.
+//
+// Anchored on `byte 0x` rather than on the arrow alone, because an arm that writes something other
+// than a literal kind byte is not a member of the set being compared and should be *absent* rather
+// than matched with an empty capture. Written to the head only, per keywordgen's wrapped-arm lesson
+// (grave #105): the arms here are single-line at this revision and the regexp says so by requiring
+// both halves on one line, so a future wrapped arm is a missing row the count check reports rather
+// than a silently truncated one.
+var externArmRE = regexp.MustCompile(`(?m)^\s*\|\s*(\w+)\s+\w+\s*->\s*byte\s+(0x[0-9a-fA-F]{2})`)
+
+// TestExternKindByteAgreesForBothSections holds the derivation `textExport` and `encodeExports`
+// are built on: that an export's kind byte and an import's are **one fact**.
+//
+// Reusing `externKindByte` across the import and export sections is only sound while encode.ml's
+// two arm lists assign the same five bytes in the same order — `externtype` (:201-208) for the
+// import section's descriptor, `externidx` (:1001-1007) for the export section's target. That is
+// true at this revision and it is not a law: they are separate `match` expressions in separate
+// parts of the file, and nothing upstream forces them to move together. So this is the tripwire the
+// shared type is licensed by, and grave #105's lesson is the reason it exists rather than a second
+// hand-copied table — a same-shaped fact next door is a place to read, not a place to invent.
+//
+// Three assertions, and they are three different questions:
+//
+//   - the two arm lists agree with each other, which is the *reuse's* premise;
+//   - `externKindByte` agrees with them, which is the engine's half;
+//   - both lists have five arms, which is the vacuity floor — two empty extractions agree
+//     perfectly, and a moved `match` or a changed indentation is exactly how that arrives.
+//
+// The comparison is by *byte per constructor* rather than by position, because a positional check
+// on two lists that were reordered together would pass while every byte moved.
+func TestExternKindByteAgreesForBothSections(t *testing.T) {
+	src := testenv.RequireSpecRef(t, testenv.RefEncodeML)
+
+	// `externtype`'s arms are `ExternFuncT` etc.; `externidx`'s are `FuncX` etc. Both are keyed
+	// here by the *space* they name, which is the only vocabulary the two share.
+	typeArms := externKindBytes(t, src, "let externtype = function", "ExternFuncT", "T")
+	idxArms := externKindBytes(t, src, "let externidx xx =", "FuncX", "X")
+
+	if len(typeArms) != 5 || len(idxArms) != 5 {
+		t.Fatalf("extracted %d externtype arms and %d externidx arms, want 5 and 5; an empty or "+
+			"short extraction agrees with anything, so this is a broken reader (the match heads, "+
+			"or externArmRE) rather than a finding.\n\ttypes=%v idxs=%v",
+			len(typeArms), len(idxArms), typeArms, idxArms)
+	}
+
+	// The reuse's premise, asserted directly. If this fails, `textExport.kind` may no longer be an
+	// `importKind` and `encodeExports` needs its own mapping — read the failure as a design
+	// question, not as a wrong constant.
+	for space, tb := range typeArms {
+		ib, ok := idxArms[space]
+		if !ok {
+			t.Errorf("encode.ml's externtype has a %s arm and externidx does not; the two grammars "+
+				"no longer name the same five spaces, so externKindByte cannot serve both sections",
+				space)
+			continue
+		}
+		if tb != ib {
+			t.Errorf("encode.ml writes %s as %#02x in externtype (import section) and %#02x in "+
+				"externidx (export section); they have diverged upstream, and every export of a %s "+
+				"is now written with the import section's byte", space, tb, ib, space)
+		}
+	}
+
+	// The engine's half. The domain is every `importKind` value, derived from the type's extent
+	// rather than listed, so a sixth kind is covered the day it is added — and `importFunc` being
+	// last is what makes the extent knowable (context.go's defCount array depends on it too).
+	wantSpace := map[importKind]string{
+		importFunc: "Func", importTable: "Table", importMemory: "Memory",
+		importGlobal: "Global", importTag: "Tag",
+	}
+	for k := importTag; k <= importFunc; k++ {
+		space, ok := wantSpace[k]
+		if !ok {
+			t.Errorf("importKind %d has no expected encode.ml constructor here; a new kind must "+
+				"name the arm it maps to", int(k))
+			continue
+		}
+		want, ok := idxArms[space]
+		if !ok {
+			t.Errorf("encode.ml's externidx has no %s arm, but externKindByte maps a kind to it", space)
+			continue
+		}
+		if got := externKindByte(k); got != want {
+			t.Errorf("externKindByte(%s) = %#02x, want %#02x (encode.ml's %sX arm) — the mapping is "+
+				"the guard against a kind byte that points the decoder at the wrong payload "+
+				"grammar, and every byte it can write is a *legal* one", k, got, want, space)
+		}
+	}
+}
+
+// externKindBytes extracts one `extern*` match's arms, keyed by space name.
+//
+// `head` bounds the search at the match's own text and `sample` is a constructor that must appear
+// inside those bounds — a presence check on the *region*, not just on the file, because an
+// unbounded reader finds the other match's arms and the comparison this feeds becomes a tautology
+// (grave #106: a premise measured over the same sample the code reads is an echo). `suffix` is the
+// constructor's grammar-specific tail (`T` for externtype, `X` for externidx), stripped so the two
+// lists share a key vocabulary.
+func externKindBytes(tb testing.TB, src, head, sample, suffix string) map[string]byte {
+	tb.Helper()
+
+	i := strings.Index(src, head)
+	if i < 0 {
+		tb.Fatalf("could not locate %q in encode.ml; it is cited by encodeExports and "+
+			"externKindByte, and a citation that no longer resolves is this drift", head)
+		return nil
+	}
+	// Bounded at the next top-level `let`, which is where every arm list in this file ends.
+	rest := src[i+len(head):]
+	if j := strings.Index(rest, "\n  let "); j >= 0 {
+		rest = rest[:j]
+	}
+	if !strings.Contains(rest, sample) {
+		tb.Fatalf("the region after %q does not mention %q; the match bound is wrong, and a "+
+			"mis-bounded region reads the *other* grammar's arms while claiming to read this "+
+			"one", head, sample)
+		return nil
+	}
+
+	out := map[string]byte{}
+	for _, m := range externArmRE.FindAllStringSubmatch(rest, -1) {
+		ctor, hex := m[1], m[2]
+		space := strings.TrimSuffix(strings.TrimPrefix(ctor, "Extern"), suffix)
+		var b byte
+		if _, err := fmt.Sscanf(hex, "0x%02x", &b); err != nil {
+			tb.Errorf("could not parse the kind byte %q in %q's %s arm: %v", hex, head, ctor, err)
+			continue
+		}
+		if prev, dup := out[space]; dup {
+			tb.Errorf("%q has two arms for %s (%#02x and %#02x); the key is not unique and the "+
+				"comparison this feeds is meaningless", head, space, prev, b)
+		}
+		out[space] = b
+	}
+	return out
 }

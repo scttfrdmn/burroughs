@@ -2,6 +2,7 @@ package text
 
 import (
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -213,31 +214,270 @@ type step struct {
 func def(k importKind) step { return step{kind: k} }
 func imp() step             { return step{isImport: true} }
 
-// TestImportKindWordsMatchTheReference pins the two-vocabularies fact.
+// TestImportKindWordsMatchTheReference pins the import-ordering message's five words.
 //
-// The same index space is called `function` by the import-ordering message
-// (parser.mly:1354) and `func` by the duplicate message (`bind_func` → `bind_abs "function"`
-// … and the suite wants "duplicate func"). Two words for one space, both suite-pinned, and a
-// shared constant would be wrong for one of them.
+// **This test used to assert a two-vocabularies fact that does not exist**, and the retired
+// paragraph is kept because it is the defect stated as the rule (grave #120):
+//
+//	The same index space is called `function` by the import-ordering message
+//	(parser.mly:1354) and `func` by the duplicate message (`bind_func` → `bind_abs
+//	"function"` … and the suite wants "duplicate func"). Two words for one space, both
+//	suite-pinned, and a shared constant would be wrong for one of them.
+//
+// The parenthetical contains its own refutation: `bind_func` *is* `bind_abs "function"`, so the
+// reference says `duplicate function $foo` and there is one vocabulary. What the suite wants is
+// the string `"duplicate func"`, which the harness matches by **substring** (decision 0003) — so
+// it is satisfied by `duplicate function $foo` as a prefix, and both words scored green. The
+// duplicate half of the assertion moved to TestSpaceKindWordsMatchTheReference, which checks all
+// eleven spaces against the authority instead of one space against a suite string that cannot
+// distinguish them.
 func TestImportKindWordsMatchTheReference(t *testing.T) {
 	if got := importFunc.String(); got != "function" {
 		t.Errorf("importFunc = %q, want %q (parser.mly:1354, imports.wast:677 expects "+
 			"\"import after function\")", got, "function")
 	}
-	// And the duplicate side, which is the other word for the same space.
+}
+
+// TestSpaceKindWordsMatchTheReference pins every category word against parser.mly.
+//
+// **The whole domain, not the spaces this PR touches** — the reference defines eleven
+// `bind_*`/`lookup` pairs and all eleven are listed, because a control scoped to today's callers
+// inherits today's blind spot, and this defect *was* today's blind spot three times over. Three
+// of these eleven were wrong when the test was written: `func`, `data`, `elem` (grave #120).
+//
+// Why a hand table is the right instrument here and a machine extraction is not: these are
+// eleven string literals in two adjacent helper blocks, and the extraction would have to parse
+// OCaml `let` bindings to recover them — more transcription risk in the extractor than in the
+// table. Contrast keywordgen's 589 arms, where the ratio runs the other way. The mitigation is
+// that the table is *complete over the reference's helpers*, so a reviewer diffs eleven lines
+// against parser.mly:152-163 and :187-198 rather than trusting a sample.
+//
+// The two trailing-space quirks are deliberately **not** in this table: `lookup "label "` (:161)
+// and `lookup "field "` (:163) differ from their bind words, and that asymmetry belongs to the
+// lookup site. lookupLabel writes `unknown label  %s` with the doubled space itself, and
+// TestUnknownLabelMessageMatchesTheReference is what holds it.
+func TestSpaceKindWordsMatchTheReference(t *testing.T) {
+	// Every category literal the reference passes to bind_abs/bind_rel/bind and to lookup, read
+	// from parser.mly at the pinned revision. The cite is the bind side; the lookup side agrees
+	// for all nine absolute spaces (:152-160).
+	for _, tc := range []struct {
+		kind spaceKind
+		want string
+		cite string
+	}{
+		{spaceType, "type", "bind_type :187 / lookup :152"},
+		{spaceTag, "tag", "bind_tag :188 / lookup :153"},
+		{spaceGlobal, "global", "bind_global :189 / lookup :154"},
+		{spaceMemory, "memory", "bind_memory :190 / lookup :155"},
+		{spaceTable, "table", "bind_table :191 / lookup :156"},
+		{spaceFunc, "function", "bind_func :192 / lookup :157 — NOT `func`, grave #120"},
+		{spaceData, "data segment", "bind_data :193 / lookup :158 — two words, grave #120"},
+		{spaceElem, "elem segment", "bind_elem :194 / lookup :159 — two words, grave #120"},
+		{spaceLocal, "local", "bind_local :195 / lookup :160"},
+		{spaceField, "field", "bind_field :198"},
+		{spaceLabel, "label", "bind_label :196 (lookup adds a trailing space, :161)"},
+	} {
+		if got := tc.kind.String(); got != tc.want {
+			t.Errorf("spaceKind(%d) = %q, want %q (%s)\n\tthe suite cannot see this: "+
+				"expected strings are matched by substring, so a short word is a passing "+
+				"prefix of the reference's real one", int(tc.kind), got, tc.want, tc.cite)
+		}
+	}
+	// Vacuity's cousin: the table above is a list, so it cannot notice a kind it omits. Bound the
+	// domain by its extent instead of by this table's length.
+	if got := int(spaceLabel) + 1; got != 12 {
+		t.Errorf("spaceKind has %d values including spaceUnset, table covers 11 plus unset — "+
+			"a new space needs a row above, and this is what says so", got)
+	}
+}
+
+// TestUnsetSpaceKindIsNotASpace pins that the zero value names no space.
+//
+// `context` is built by newContext, but a `space` written as a literal elsewhere (the per-struct
+// field space, or any test) gets the zero value — and if `spaceType` sat at ordinal 0 that space
+// would print `duplicate type $f` for a func. The marker is unmistakable in a message, which is
+// the point: an omission should look like an omission rather than like a plausible word.
+func TestUnsetSpaceKindIsNotASpace(t *testing.T) {
 	var s space
-	tok := Token{Kind: VarTok, Text: "$f"}
-	if err := s.bindAbs("func", tok, "$f"); err != nil {
+	if err := s.bindAbs(Token{Kind: VarTok, Text: "$f"}, "$f"); err != nil {
 		t.Fatalf("first bind: %v", err)
 	}
-	err := s.bindAbs("func", tok, "$f")
+	err := s.bindAbs(Token{Kind: VarTok, Text: "$f"}, "$f")
 	if err == nil {
 		t.Fatal("second bind of $f accepted; want a duplicate error")
 	}
-	if !strings.HasPrefix(err.Error(), "duplicate func ") {
-		t.Errorf("duplicate error = %q, want a %q prefix — the suite (func.wast) matches on "+
-			"the short word while the ordering message uses the long one", err.Error(),
-			"duplicate func ")
+	if !strings.Contains(err.Error(), "<space kind unset>") {
+		t.Errorf("zero-value space reported %q; want the unset marker, so a space that was "+
+			"never given its kind cannot impersonate one that was", err.Error())
+	}
+}
+
+// TestEverySpaceHasItsKind walks context's fields, so a space added later cannot skip newContext.
+//
+// Derived from the struct rather than from a list of the nine spaces, for the reason every
+// control in this repo is: an enumeration freezes at the moment of authorship, and the failure
+// mode here is silent — a tenth space left at spaceUnset binds and looks up perfectly well, and
+// only its error messages are wrong, in the direction no vector covers.
+func TestEverySpaceHasItsKind(t *testing.T) {
+	c := newContext()
+	v := reflect.ValueOf(c)
+	spaceStruct := reflect.TypeOf(space{})
+	var checked int
+	for i := range v.NumField() {
+		if v.Type().Field(i).Type != spaceStruct {
+			continue
+		}
+		checked++
+		// Int() rather than Interface(): reflect refuses to hand out an unexported field as an
+		// any, and spaceKind is an int, so its numeric value is readable without it.
+		if spaceKind(v.Field(i).FieldByName("kind").Int()) == spaceUnset {
+			t.Errorf("context.%s has no spaceKind — add it to newContext",
+				v.Type().Field(i).Name)
+		}
+	}
+	if checked != 9 {
+		t.Errorf("walked %d space fields, want 9 — if a space was added, this count moves "+
+			"with it deliberately; if it dropped, the loop stopped finding them and every "+
+			"assertion above went vacuous", checked)
+	}
+}
+
+// TestSpaceForCoversEveryImportKind walks the `importKind` enum so `spaceFor`'s default arm cannot
+// silently absorb a kind.
+//
+// `spaceFor` ends in `default: return &c.funcs` rather than in a fifth `case`, which is the arm that
+// makes a *sixth* kind route to the func space with nothing saying so — the enum's extent is the only
+// thing that can notice. Derived from `importTag..importFunc` rather than listed, and the identity is
+// checked by pointer against the field it must name: comparing `String()` or a kind byte would let
+// two arms return the same space and still agree.
+//
+// The distinctness assertion is the load-bearing half. Five arms returning five pointers is what the
+// default arm's safety rests on, and a `case importGlobal: return &c.globals` mistyped as
+// `&c.memories` produces a perfectly working parser that resolves every `(export "e" (global $g))`
+// against the memory space — an accept-direction defect (§9 G-3), so no vector can see it.
+func TestSpaceForCoversEveryImportKind(t *testing.T) {
+	c := newContext()
+	want := map[importKind]*space{
+		importTag:    &c.tags,
+		importGlobal: &c.globals,
+		importMemory: &c.memories,
+		importTable:  &c.tables,
+		importFunc:   &c.funcs,
+	}
+	seen := map[*space]importKind{}
+	var covered int
+	for k := importTag; k <= importFunc; k++ {
+		covered++
+		got := c.spaceFor(k)
+		exp, ok := want[k]
+		if !ok {
+			t.Errorf("importKind %d (%s) has no expected space here; a new kind needs a row, and "+
+				"until it has one spaceFor's default arm routes it to funcs", int(k), k)
+			continue
+		}
+		if got != exp {
+			t.Errorf("spaceFor(%s) returned the wrong space — an export or import of a %s would "+
+				"resolve against another space's names, which is green on every board because "+
+				"the suite has no accept-direction vector for it", k, k)
+		}
+		if prev, dup := seen[got]; dup {
+			t.Errorf("spaceFor(%s) and spaceFor(%s) return the same space; the default arm's "+
+				"safety rests on the five arms being five distinct spaces", k, prev)
+		}
+		seen[got] = k
+	}
+	// The extent, not the map's length: a shrunken enum would make the loop cover less while every
+	// assertion inside it still passed. Five is the count at parser.mly:1258-1263.
+	if covered != 5 {
+		t.Errorf("walked %d importKinds, want 5 (externidx's arms, parser.mly:1258-1263) — the "+
+			"loop bounds are the enum's extent, so this moving means importFunc is no longer last "+
+			"and defCount's array bound is wrong too", covered)
+	}
+}
+
+// TestExportResolvesInEverySpace is the reject direction of the export field's five arms.
+//
+// `TestModuleAcceptDirection` covers the accept side one arm at a time, and it cannot see the defect
+// that matters: **which space each arm looks in**. An arm wired to the wrong space accepts every
+// module whose name happens to exist in *some* space, so the accept table stays green — which is how
+// its `(export "e" (global $g))` row came to assert that an undefined `$g` is fine (it is not;
+// parser.mly:1259 is `$3 c global`, a `lookup`). The row was green because the index was discarded
+// unresolved, so the table was asserting the absence of a check as a grammar fact.
+//
+// Two halves per space, because either alone passes a wrong wiring:
+//
+//   - an *unbound* name in that space must be rejected with the reference's own category word, which
+//     is what proves a lookup happened at all;
+//   - a name bound in a *different* space must still be rejected, which is what proves the lookup
+//     went to the right space. `(global $x i32) (export "e" (func $x))` is the shape: `$x` exists,
+//     and a func-arm reading the global space would resolve it and emit an export of func 0.
+//
+// The second half is the one no vector covers and the one a hand review reads straight past.
+func TestExportResolvesInEverySpace(t *testing.T) {
+	// One definition per space, and the *other* four spaces' arms must all reject its name. Keyed
+	// by the keyword the externidx arm takes so the table reads as the grammar does.
+	spaces := []struct {
+		kw   string // the externidx keyword (parser.mly:1258-1263)
+		def  string // a module field defining `$x` in that space
+		word string // the reference's lookup category for it (parser.mly:153-157)
+	}{
+		{"tag", `(tag $x)`, "tag"},
+		{"global", `(global $x i32)`, "global"},
+		{"memory", `(memory $x 1)`, "memory"},
+		{"table", `(table $x 1 funcref)`, "table"},
+		{"func", `(func $x)`, "function"},
+	}
+
+	for _, s := range spaces {
+		// Half one: nothing defines $x anywhere.
+		src := `(module (export "e" (` + s.kw + ` $x)))`
+		err := ReadModule([]byte(src))
+		if err == nil {
+			t.Errorf("ReadModule(%q) accepted an unbound $x; parser.mly:1258-1263 makes every "+
+				"externidx arm a lookup, so this arm is resolving nothing", src)
+		} else if want := "unknown " + s.word + " $x"; !strings.Contains(err.Error(), want) {
+			t.Errorf("ReadModule(%q) = %q, want it to contain %q — the category word is the "+
+				"space's own (grave #120), and the suite cannot tell a short word from the "+
+				"reference's because it matches by substring", src, err.Error(), want)
+		}
+
+		// Half two: $x is defined, but in each of the other four spaces.
+		for _, other := range spaces {
+			if other.kw == s.kw {
+				continue
+			}
+			src := `(module ` + other.def + ` (export "e" (` + s.kw + ` $x)))`
+			err := ReadModule([]byte(src))
+			if err == nil {
+				t.Errorf("ReadModule(%q) accepted: `$x` is defined in the %s space and this is a "+
+					"%s export, so the arm looked in the wrong space.\n\tThe module encodes to a "+
+					"valid image naming the wrong thing — an accept-direction defect no vector "+
+					"can see (§9 G-3), which is this test's whole subject",
+					src, other.word, s.kw)
+				continue
+			}
+			if want := "unknown " + s.word + " $x"; !strings.Contains(err.Error(), want) {
+				t.Errorf("ReadModule(%q) = %q, want it to contain %q — it was rejected, but for "+
+					"the wrong reason, and a right verdict from a wrong layer is evidence about "+
+					"where structure was lost", src, err.Error(), want)
+			}
+		}
+	}
+
+	// Vacuity floor: every assertion above is inside the loop, so an emptied table passes by
+	// iterating nothing. Five is externidx's arm count, and the inner loop makes 5*4 cross-space
+	// cases — the count is asserted rather than the table's length so a duplicated row cannot
+	// stand in for a missing one.
+	if len(spaces) != 5 {
+		t.Fatalf("table covers %d spaces, want externidx's 5 (parser.mly:1258-1263)", len(spaces))
+	}
+	seen := map[string]bool{}
+	for _, s := range spaces {
+		if seen[s.kw] {
+			t.Errorf("the table has two %s rows; a duplicate fills the count while leaving a "+
+				"space uncovered", s.kw)
+		}
+		seen[s.kw] = true
 	}
 }
 
@@ -257,12 +497,12 @@ func TestImportKindWordsMatchTheReference(t *testing.T) {
 // rather than against the partition, and passing while covering half of what its name claims.
 // The count is asserted after every step now, so a missing increment on either path fails.
 func TestBindAbsCountsAnonymousDefinitions(t *testing.T) {
-	var s space
+	s := space{kind: spaceFunc}
 	s.bindAnon()
 	if s.count != 1 {
 		t.Fatalf("after one anonymous definition count = %d, want 1", s.count)
 	}
-	if err := s.bindAbs("func", Token{Text: "$f"}, "$f"); err != nil {
+	if err := s.bindAbs(Token{Text: "$f"}, "$f"); err != nil {
 		t.Fatalf("bind $f: %v", err)
 	}
 	if got := s.names["$f"]; got != 1 {
@@ -276,15 +516,15 @@ func TestBindAbsCountsAnonymousDefinitions(t *testing.T) {
 	}
 
 	// The mirror: named first, so the next two indices depend on bindAbs having advanced.
-	var m space
-	if err := m.bindAbs("func", Token{Text: "$a"}, "$a"); err != nil {
+	m := space{kind: spaceFunc}
+	if err := m.bindAbs(Token{Text: "$a"}, "$a"); err != nil {
 		t.Fatalf("bind $a: %v", err)
 	}
-	if err := m.bindAbs("func", Token{Text: "$b"}, "$b"); err != nil {
+	if err := m.bindAbs(Token{Text: "$b"}, "$b"); err != nil {
 		t.Fatalf("bind $b: %v", err)
 	}
 	m.bindAnon()
-	if err := m.bindAbs("func", Token{Text: "$c"}, "$c"); err != nil {
+	if err := m.bindAbs(Token{Text: "$c"}, "$c"); err != nil {
 		t.Fatalf("bind $c: %v", err)
 	}
 	for name, want := range map[string]uint32{"$a": 0, "$b": 1, "$c": 3} {

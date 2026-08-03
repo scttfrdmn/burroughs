@@ -30,10 +30,18 @@ import (
 // would need retention that does not exist yet, and building that retention *and* its consumer in one
 // motion shapes a representation in the load-bearing spot.
 //
-// Landed so far: **type (1), import (2), table (4), memory (5)**, written in id order. This paragraph
-// said "the type section and nothing else" for two PRs after that stopped being true, which is the
-// drifted-citation defect wearing a scope note — so it now names the set rather than the moment, and
-// `secType`'s const block below is the enumeration a reader can check it against.
+// Landed so far: **type (1), import (2), table (4), memory (5), export (7)**, written in id order.
+// This paragraph said "the type section and nothing else" for two PRs after that stopped being true,
+// which is the drifted-citation defect wearing a scope note — so it now names the set rather than the
+// moment, and `secType`'s const block below is the enumeration a reader can check it against.
+//
+// **The export section is the first one with no payload branch, and that is a fact about exports
+// rather than a simplification.** An `externtype` carries the thing's type, so section 2's five kinds
+// each write their own descriptor; an `externidx` carries only an index into a space that already
+// holds the thing, so all five kinds collapse to a kind byte and a `u32` (encode.ml:1009-1014). The
+// kind bytes are `externtype`'s own, reused rather than re-listed, and that reuse's premise —
+// identical order in both grammars — is machine-checked by
+// TestExternKindByteAgreesForBothSections rather than assumed.
 //
 // So `EncodeModule` **refuses** every module it cannot fully encode, naming what stopped it.
 // Emitting a module while silently dropping its function section would produce bytes that decode
@@ -48,19 +56,27 @@ import (
 // # What an independent witness says so far
 //
 // Measured against #67's wabt corpus, joined on (file, ordinal): of the suite's 2150
-// parser-accepted text modules this encodes **141** in full, **101** of which the corpus can be
-// joined to — and those 101 agree **byte for byte**, 0 disagreements. The 40 unjoined fall in exactly
+// parser-accepted text modules this encodes **196** in full, **156** of which the corpus can be
+// joined to — and those 156 agree **byte for byte**, 0 disagreements. The 40 unjoined fall in exactly
 // six files, `annotations`, `memory`, `memory64`, `table`, `table64` and `tag`, and every one of the
 // six is in the manifest's `skipped_files` with wabt's own reason, so the gap is accounted for rather
-// than merely stated.
+// than merely stated. The unjoined count did not move with the export section, which is the expected
+// shape: those six files are excluded wholesale by the *generator*, so nothing this encoder learns to
+// write can join them.
 //
 // The figure carries its vacuity check, because *exactly zero* on an agreement is the tell grave #106
 // was filed for, and at the type section's landing it was the right question to press: 9 of 10
 // agreements were 8-byte bare preambles and the whole witness was one module. It is no longer close
-// to vacuous — **92 of the 101 are longer than a bare preamble**, led by `type#0` at 148 bytes and 23
-// type definitions, `imports2#4` at 129, and the memory64 import files at ~50 each. A hundred
-// agreements against a toolchain that has never seen this parser is a claim about the import section
-// specifically, since two thirds of the joined population are import modules.
+// to vacuous — **147 of the 156 are longer than a bare preamble**, led by `type#0` at 148 bytes and 23
+// type definitions, `imports2#4` at 129, and the memory64 import files at ~50 each. A hundred and
+// fifty agreements against a toolchain that has never seen this parser is now a claim about the
+// import *and* export sections, the latter being 55 of the 55 modules the export work added.
+//
+// **Both the before and after figures above were measured with the same probe, deliberately.** The
+// 141/101 baseline is quoted from a re-run against the merge-base rather than from this comment's
+// previous revision — an easy thing to skip, and the reason not to is that a delta between two
+// instruments is not a delta. That the re-run reproduced 141/101/101/0/92 exactly is what makes
+// 196/156/156/0/147 comparable to it.
 //
 // **And the zero was earned twice, which is the part worth recording.** The first re-measurement
 // reported 99 agreements and **one disagreement**, `token#11` — ours 34 bytes, wabt 25 — and the
@@ -86,6 +102,7 @@ const (
 	secImport byte = 2
 	secTable  byte = 4
 	secMemory byte = 5
+	secExport byte = 7
 )
 
 // tagFunc is `comptype`'s functype form, 0x60 — which is -0x20 read as the sleb(7) the decoder
@@ -122,7 +139,7 @@ func parseModule(src []byte) (*parser, error) {
 	if err != nil {
 		return nil, err // a lex error, unwrapped; see newCursor
 	}
-	p := &parser{c: c}
+	p := &parser{c: c, ctx: newContext()}
 	if err := p.module(); err != nil {
 		return nil, err
 	}
@@ -186,6 +203,9 @@ func (p *parser) encode() ([]byte, error) {
 	if len(p.ctx.memDefs) > 0 {
 		w.section(secMemory, p.encodeMemories)
 	}
+	if len(p.ctx.exports) > 0 {
+		w.section(secExport, p.encodeExports)
+	}
 	return w.b, nil
 }
 
@@ -220,7 +240,7 @@ func (p *parser) encodableOrErr() error {
 		// papered over — naming the arm needs the arm threaded into the record, and the field is
 		// what a reader edits.
 		return errf(p.ctx.firstNonType, "cannot yet encode this (%s …) field: the emitter writes "+
-			"the type, table and memory sections (#8)", p.ctx.firstNonType.Text)
+			"the type, import, table, memory and export sections (#8)", p.ctx.firstNonType.Text)
 	}
 	// **The withdrawal check.** Every *defined* memory and table must have been retained, or a
 	// section is short by one and the image means something else. `clearNonTypeField` is a claim an
@@ -275,6 +295,21 @@ func (p *parser) encodableOrErr() error {
 	// and this fires. Both directions, because a doubled `defineImport` would emit the import twice.
 	if got, want := len(p.ctx.imports), p.ctx.importsSeen; got != want {
 		return fmt.Errorf("text: internal: %d imports retained, %d parsed — a spelling withdrew the "+
+			"encoder's frontier without recording its content (#8)", got, want)
+	}
+	// The same check for section 7, and it can fire for the same reason: `exportsSeen` is the
+	// grammar's, incremented in `exportHead`, and `len(exports)` is the emitter's, appended by
+	// `defineExport`. Two spellings reach `exportHead` and each calls `defineExport` separately, so the
+	// counts are produced by different code and a spelling that parses an export without retaining it
+	// fails here.
+	//
+	// Falsified by deleting the `defineExport` call from `inlineExports`:
+	// `(module (memory (export "e") 1))` then emits no section 7 at all — a module that decodes clean
+	// and exports nothing — and this fires with `0 exports retained, 1 parsed`. That is precisely the
+	// defect the sugar shipped with for four PRs, which is the argument for the check: it was invisible
+	// then because nothing compared the two numbers.
+	if got, want := len(p.ctx.exports), p.ctx.exportsSeen; got != want {
+		return fmt.Errorf("text: internal: %d exports retained, %d parsed — a spelling withdrew the "+
 			"encoder's frontier without recording its content (#8)", got, want)
 	}
 	for i, t := range p.ctx.tabDefs {
@@ -380,6 +415,25 @@ func (p *parser) encodeImports(w *writer) {
 			w.valType(g.val)
 			w.mutability(g.mut)
 		}
+	})
+}
+
+// encodeExports writes the export section from the retained exports (encode.ml:1009-1014).
+//
+// Each entry is `name externidx`, and `externidx`'s five forms are :1001-1007 — a kind byte then the
+// index. **The same five bytes in the same order as `externtype`'s** (:202-208), which is why
+// `externKindByte` is called here rather than copied: an export's kind byte and an import's are one
+// fact, and re-deriving it is how #105 happened. TestExternKindByteAgreesForBothSections holds it.
+//
+// Simpler than encodeImports because there is no payload to branch on — an export names a thing that
+// is already defined, where an import declares its whole type. So the kind byte's five arms collapse
+// to `w.u32(ex.idx)` for all of them.
+func (p *parser) encodeExports(w *writer) {
+	w.vec(len(p.ctx.exports), func(w *writer, i int) {
+		ex := p.ctx.exports[i]
+		w.name(ex.name)
+		w.byte1(externKindByte(ex.kind))
+		w.u32(ex.idx)
 	})
 }
 
