@@ -297,7 +297,7 @@ func (p *parser) fieldtypeList() (int, error) {
 // The field index space is per-struct-type, so it is a local here rather than a context member
 // — `x` in the reference is the type index the fields belong to.
 func (p *parser) structtype() error {
-	var fields space
+	fields := space{kind: spaceField}
 	for p.c.at(LParen) && p.c.peek2Keyword(kwField) {
 		if err := p.lpar(kwField); err != nil {
 			return err
@@ -308,7 +308,7 @@ func (p *parser) structtype() error {
 			if err != nil {
 				return err
 			}
-			if err := fields.bindAbs("field", tok, name); err != nil {
+			if err := fields.bindAbs(tok, name); err != nil {
 				return err
 			}
 			if err := p.fieldtype(); err != nil {
@@ -600,13 +600,13 @@ func (p *parser) memorytype() (memType, error) {
 // `fun c ->` whose caller is a stage-2 thunk, after every name is bound. Returning the reference
 // and resolving in `runDeferred` reproduces that; resolving here would reject `imports.wast:62`'s
 // forward reference, a valid module. See typetable.go's header.
-func (p *parser) typeuse() (typeRef, error) {
+func (p *parser) typeuse() (idxRef, error) {
 	if err := p.lpar(kwType); err != nil {
-		return typeRef{}, err
+		return idxRef{}, err
 	}
-	r, err := p.typeIdx()
+	r, err := p.idxValue()
 	if err != nil {
-		return typeRef{}, err
+		return idxRef{}, err
 	}
 	return r, p.rpar()
 }
@@ -635,39 +635,51 @@ func (p *parser) atTypeuse() bool { return p.c.at(LParen) && p.c.peek2Keyword(kw
 // the vector. The instruction and label positions were already covered; these were the ones the
 // sentence was about.
 func (p *parser) idx() error {
-	_, err := p.typeIdx()
+	_, err := p.idxValue()
 	return err
 }
 
-// typeIdx is `idx` returning what it read, for the positions whose index is resolved later.
+// idxValue is `idx` returning what it read, for the positions whose index is resolved later.
 //
-// Not named `idxValue`, because the *only* index space this stratum resolves is the type space:
-// funcs, tables, labels and locals are `unknown <category>` errors from validation, and #64's own
-// board carries two `unknown label` vectors that are deliberately not this PR's. A helper named
-// for indices generally would invite exactly the scope creep the two-vector deferral avoids.
+// **It was called `typeIdx`, and the comment that justified that name is quoted here rather than
+// deleted, because the name was right for a reason that expired rather than for a wrong reason:**
+//
+//	Not named `idxValue`, because the *only* index space this stratum resolves is the type space:
+//	funcs, tables, labels and locals are `unknown <category>` errors from validation, and #64's own
+//	board carries two `unknown label` vectors that are deliberately not this PR's. A helper named
+//	for indices generally would invite exactly the scope creep the two-vector deferral avoids.
+//
+// The export section is what expired it. An export's `externidx` is `lookup c (var …)` against the
+// func, table, memory, global or tag space (parser.mly:1258-1263) — the *grammar's* lookup, not
+// validation's — and the emitter needs the number it produces, so this stratum now resolves five
+// more spaces than the type space and `resolveSpaceIdx` is where they land. What the old paragraph
+// got right is the thing it was guarding, and that guard still holds: **a label is still not
+// resolved here** and a numeric index is still never looked up, so the scope creep it feared did not
+// arrive with the widening. A name naming one space while serving six would be the drifted-scope-note
+// defect, which is why the rename came with the consumer rather than before it.
 //
 // **Both arms of the reference's `idx` are here and they fail differently** (parser.mly:487-489).
 // The NAT arm is `nat32 $1` — a width check, no lookup, so a numeric index is never
 // `unknown type $name`. The VAR arm is `lookup c (var …)`, the second UTF-8 decode site, and the
-// resolution it performs is what typeRef defers.
-func (p *parser) typeIdx() (typeRef, error) {
+// resolution it performs is what idxRef defers.
+func (p *parser) idxValue() (idxRef, error) {
 	switch {
 	case p.c.at(NatTok):
 		t := p.c.next()
 		n, ok := parseNat(t.Text, 32)
 		if !ok {
-			return typeRef{}, errAt(t, "i32 constant out of range")
+			return idxRef{}, errAt(t, "i32 constant out of range")
 		}
-		return typeRef{tok: t, idx: uint32(n)}, nil
+		return idxRef{tok: t, idx: uint32(n)}, nil
 	case p.c.at(VarTok):
 		t := p.c.peek()
 		name, err := decodedVar(p.c.next())
 		if err != nil {
-			return typeRef{}, err
+			return idxRef{}, err
 		}
-		return typeRef{tok: t, isVar: true, name: name}, nil
+		return idxRef{tok: t, isVar: true, name: name}, nil
 	default:
-		return typeRef{}, p.unexpected()
+		return idxRef{}, p.unexpected()
 	}
 }
 
@@ -691,11 +703,13 @@ func (p *parser) idxList() error {
 // validation's verdict into the parser, where it would also reject `(br 1)` inside legal code that
 // validation accepts.
 //
-// So the two arms are typeIdx's, and only the symbolic one resolves. Delegating to typeIdx rather
-// than re-reading the token keeps the NAT width check and the UTF-8 decode in one place; the name
-// `typeIdx` is about which space *defers*, and a label neither defers nor is a type.
+// So the two arms are idxValue's, and only the symbolic one resolves. Delegating to idxValue rather
+// than re-reading the token keeps the NAT width check and the UTF-8 decode in one place, and it is
+// the *resolution* that differs per position: a label resolves against a relative stack here and
+// now, an export's index against an absolute space in stage 2, and a type index against the type
+// table. One reader, three resolvers.
 func (p *parser) labelIdx() error {
-	r, err := p.typeIdx()
+	r, err := p.idxValue()
 	if err != nil {
 		return err
 	}
@@ -738,23 +752,47 @@ func (p *parser) bindidx() (string, error) {
 	return decodedVar(p.c.next())
 }
 
-// bindidxOpt parses `bindidx_opt` (parser.mly:503-505) and binds into s.
+// bindidxOpt parses `bindidx_opt` (parser.mly:503-505), binds into s, and returns the index bound.
 //
 // The two arms are `anon c` and `bind c $1`, which is precisely space.bindAnon versus
-// space.bindAbs — the split those two methods exist to mirror. category is the word the
-// duplicate message uses, which for funcs is `func` while the ordering message says
-// `function`; see importKind's comment for why that is not a bug.
-func (p *parser) bindidxOpt(s *space, category string) error {
+// space.bindAbs — the split those two methods exist to mirror.
+//
+// **The index is returned because the reference returns it**, and one caller needs it: `bindidx_opt`
+// evaluates to the `x` that `func_fields` and friends receive, and the inline-export arm is
+// `$1 (FuncX x) c :: exs` (parser.mly:985-987) — the sugar exports *the field's own index*, which is
+// why that spelling performs no lookup. Every other caller discards it, and that asymmetry is the
+// reference's too.
+//
+// **It used to take the category word as a parameter, and the comment justifying that is quoted
+// rather than deleted, because it is the defect stated as the rule:**
+//
+//	category is the word the duplicate message uses, which for funcs is `func` while the
+//	ordering message says `function`; see importKind's comment for why that is not a bug.
+//
+// It is a bug (grave #120). The reference has one word per space: `bind_abs "function" c.funcs`
+// (parser.mly:192) *and* `lookup "function" c.funcs` (:157). There is no second vocabulary — the
+// `func`/`function` pair the old comment described is `duplicate func` being a **prefix** of the
+// reference's `duplicate function $foo` under the harness's substring match, so the three
+// `func.wast` vectors passed either way. `data`/`elem` were wrong the same way with no vector at
+// all. The word now lives on the space (spaceKind), written once in newContext.
+func (p *parser) bindidxOpt(s *space) (uint32, error) {
+	// Read before either arm binds: both advance s.count, so reading after would give the *next*
+	// index rather than this definition's. The reference has the same ordering — `bind` returns
+	// `space.count` before the shift (parser.mly:101-104).
+	idx := s.count
 	if !p.c.at(VarTok) {
 		s.bindAnon()
-		return nil
+		return idx, nil
 	}
 	tok := p.c.peek()
 	name, err := p.bindidx()
 	if err != nil {
-		return err
+		return 0, err
 	}
-	return s.bindAbs(category, tok, name)
+	if err := s.bindAbs(tok, name); err != nil {
+		return 0, err
+	}
+	return idx, nil
 }
 
 // name parses a `name` (parser.mly:339-340): a string token, UTF-8 validated, and returns it.
@@ -762,10 +800,13 @@ func (p *parser) bindidxOpt(s *space, category string) error {
 // The **first** UTF-8 decode site, and where 176 of #62's vectors land. Every one of them is a
 // string token that lexes cleanly and fails here.
 //
-// The value is returned because the import section's two names are the emitter's input (#8); the
-// export field and the inline-export sugar still discard it, and that discard is honest for the
-// same reason the pre-#8 discard here was — the export section has no emitter yet, so retaining
-// its name would be retention shaped by a consumer that does not exist (0006).
+// The value is returned because it is the emitter's input (#8): the import section's two names, and
+// now the export section's one. Both export spellings retain it, which is what the paragraph
+// previously here said they did *not* do — "the export field and the inline-export sugar still
+// discard it", honest at the time on 0006's grounds (the section had no emitter, so retaining the
+// name would be retention shaped by an absent consumer) and false the moment section 7 landed.
+// Superseded rather than deleted, because the discard's honest interval is the part worth keeping:
+// it is what the argument for retention looks like *before* the consumer exists.
 func (p *parser) name() (string, error) {
 	if !p.c.at(StringTok) {
 		return "", p.unexpected()

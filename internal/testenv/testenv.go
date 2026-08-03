@@ -170,6 +170,23 @@ const MinRefLexerBytes = 20000
 // exactly the accident the separate constants exist to keep from becoming load-bearing.
 const MinRefParserBytes = 20000
 
+// RefEncodeML is the reference interpreter's binary *encoder*, relative to the repo root.
+//
+// The authority for the text→binary bridge (0011): decode.ml says what an image means,
+// and encode.ml says which image a module produces — a different question, and the one
+// every emitter in internal/text is written against. It was cited 28 times there before
+// it was licensed here, which is the citation-without-a-resolver shape one level up from
+// prose: the *file* was trusted with no floor and no presence check, so a truncated fetch
+// would have been read as an authority. Registered when the first control actually
+// compared against it (TestExternKindByteAgreesForBothSections).
+const RefEncodeML = "third_party/spec/interpreter/binary/encode.ml"
+
+// MinRefEncodeBytes is the floor for encode.ml, which is 45362 bytes at bdd7164.
+//
+// Its own constant, per the argument above — four files, four claims. The shared 20000 is
+// deliberately not a shared symbol.
+const MinRefEncodeBytes = 20000
+
 // refFloors is the size floor per reference file, keyed by the path constants above.
 //
 // A map rather than a parameter on RequireSpecRef, deliberately: a floor passed at the
@@ -183,6 +200,7 @@ var refFloors = map[string]int{
 	RefDecodeML:  MinRefDecodeBytes,
 	RefLexerMLL:  MinRefLexerBytes,
 	RefParserMLY: MinRefParserBytes,
+	RefEncodeML:  MinRefEncodeBytes,
 }
 
 // LicensedRefPaths returns every reference file this package licenses as an authority.

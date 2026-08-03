@@ -199,6 +199,23 @@ type textImport struct {
 	desc   importDesc
 }
 
+// textExport is one retained export: a name, which of the five spaces it names, and the resolved
+// index into that space.
+//
+// `kind` is `importKind` rather than a new export-specific type, and this is a *derivation* rather
+// than a convenience. The reference's `externidx` (encode.ml:1001-1007) and `externtype`
+// (:202-208) assign the same five kind bytes in the same order — func 0x00, table 0x01, memory
+// 0x02, global 0x03, tag 0x04 — so an export's kind byte is the identical fact an import's
+// descriptor already carries, and `externKindByte` serves both. The naming is now off by one
+// grammar (an `importKind` in an export), which is the price of not having two enums that must
+// agree; TestExternKindByteAgreesForBothSections is what holds the agreement, so the shared type is
+// checked rather than assumed. Grave #105's lesson pointed at a type instead of a regexp.
+type textExport struct {
+	name string
+	kind importKind
+	idx  uint32
+}
+
 // resolvedTable is a table definition whose element type has been resolved — what the encoder writes.
 //
 // Distinct from `tabType` for exactly the reason `resolvedComp` is distinct from `compType`: one is
@@ -210,14 +227,14 @@ type resolvedTable struct {
 	elem   resolvedVal
 }
 
-// typeRef is a `typeuse`'s operand (parser.mly:470-471, `idx` at :487-489), kept unresolved.
+// idxRef is a `typeuse`'s operand (parser.mly:470-471, `idx` at :487-489), kept unresolved.
 //
 // **The two arms fail differently and the reference's messages say so.** `idx`'s NAT arm is
 // `nat32 $1` with *no lookup* — a number is never `unknown type $name`; it becomes `unknown type
 // <n>` only later, from `func_type`'s out-of-range access. The VAR arm is `lookup c (var …)`,
 // which raises `unknown type $name` with the name printed. So a numeric index that is out of
 // range and a symbolic one that is unbound produce different text, and both are the reference's.
-type typeRef struct {
+type idxRef struct {
 	tok   Token
 	isVar bool
 	name  string // the decoded identifier, when isVar
@@ -358,6 +375,35 @@ func (c *context) defineImport(module, name string, fill func() (importDesc, err
 	})
 }
 
+// defineExport records one export, deferring the index resolution to stage 2.
+//
+// **Read defineImport above before this**, which is the sibling shape: slot appended at the parse
+// position, filled by a thunk. Copied rather than re-derived, per the lessons-are-indexed-by-shape
+// rule — and the deferral is load-bearing for a *different* reason here. An import's forward
+// reference is to a type; an export's is to the thing it exports, and the suite proves it:
+//
+//	exports.wast:14  (module (export "a" (func $a)) (func $a))
+//
+// `$a` is not bound when the export is read. The reference gets this from `module_fields1`'s export
+// arm evaluating `$1 c` inside the innermost `fun () ->` (parser.mly:1382-1384), by which time
+// every field has bound its names. Resolving at the cursor would reject that module — the accept
+// direction, where no vector will tell us (§9 G-3).
+//
+// The thunk returns the resolved index rather than taking one, matching defineImport's argument
+// about not letting a thunk read a neighbouring slot.
+func (c *context) defineExport(name string, kind importKind, resolve func() (uint32, error)) {
+	i := len(c.exports)
+	c.exports = append(c.exports, textExport{name: name, kind: kind})
+	c.deferOp(func() error {
+		idx, err := resolve()
+		if err != nil {
+			return err
+		}
+		c.exports[i].idx = idx
+		return nil
+	})
+}
+
 // deferOp records one stage-2 operation. See the file header for why parse order is stage-2 order.
 func (c *context) deferOp(f func() error) { c.deferred = append(c.deferred, f) }
 
@@ -400,7 +446,7 @@ func (c *context) resolveVal(v valType) (resolvedVal, error) {
 	if v.heap.abs != "" {
 		return resolvedVal{null: v.null, abs: v.heap.abs}, nil
 	}
-	idx, err := c.resolveTypeIdx(typeRefFromToken(v.heap.tok))
+	idx, err := c.resolveTypeIdx(idxRefFromToken(v.heap.tok))
 	if err != nil {
 		return resolvedVal{}, err
 	}
@@ -431,7 +477,7 @@ func (c *context) resolveFunc(ft funcType) (resolvedFunc, error) {
 // token's own text rather than reconstructed from the decoded name: the reference's `print` (:145)
 // re-quotes a name whose decoded form differs from its spelling, and reproducing that rendering
 // from a decoded value is how grave #36 came to quote a byte the input never held.
-func (c *context) resolveTypeIdx(r typeRef) (uint32, error) {
+func (c *context) resolveTypeIdx(r idxRef) (uint32, error) {
 	if !r.isVar {
 		return r.idx, nil
 	}
@@ -451,9 +497,9 @@ func (c *context) resolveTypeIdx(r typeRef) (uint32, error) {
 // `Int32.to_string x.it` — the *index*, after any name lookup, not the identifier — which is why
 // this prints idx rather than the token.
 //
-// **It takes the index rather than the typeRef because the two lookups are separately timed.** The
+// **It takes the index rather than the idxRef because the two lookups are separately timed.** The
 // name lookup is `typeuse`'s (`$3 c type_`, :471) and happens whenever a typeuse is written; the
-// *range* check is this function's and is skipped in the deferred case. Threading a typeRef in here
+// *range* check is this function's and is skipped in the deferred case. Threading a idxRef in here
 // and resolving it locally would fuse them, which is the defect inlineFuncTypeExplicit's header
 // describes.
 func (c *context) funcTypeAt(tok Token, idx uint32) (resolvedFunc, error) {
@@ -534,7 +580,7 @@ func (c *context) internImplicit(ft funcType) (uint32, error) {
 //
 // See funcType.isEmpty for the two vectors that pin the deferral of the range check in both
 // directions on one module.
-func (c *context) inlineFuncTypeExplicit(r typeRef, ft funcType) error {
+func (c *context) inlineFuncTypeExplicit(r idxRef, ft funcType) error {
 	_, err := c.checkExplicit(r, ft)
 	return err
 }
@@ -552,7 +598,7 @@ func (c *context) inlineFuncTypeExplicit(r typeRef, ft funcType) error {
 // type being named. An import whose typeuse is `(type $t)` with no inline signature still imports
 // type `$t` — returning 0 on that path would be a silently wrong descriptor on the commonest
 // spelling in the corpus, and no error anywhere.
-func (c *context) checkExplicit(r typeRef, ft funcType) (uint32, error) {
+func (c *context) checkExplicit(r idxRef, ft funcType) (uint32, error) {
 	idx, err := c.resolveTypeIdx(r)
 	if err != nil {
 		return 0, err
@@ -598,16 +644,16 @@ func (c *context) declareBlockImplicit(ft funcType) error {
 	return c.declareImplicit(ft)
 }
 
-// typeRefFromToken builds a typeRef from a heaptype's index token.
+// idxRefFromToken builds a idxRef from a heaptype's index token.
 //
 // A heaptype's `idx` has already been range-checked and decoded by the reader, so this re-derives
-// the two arms from the token kind rather than threading a second typeRef through every valtype.
-// The NAT arm cannot overflow: `p.typeIdx` rejected a 33-bit index as `i32 constant out of range`
+// the two arms from the token kind rather than threading a second idxRef through every valtype.
+// The NAT arm cannot overflow: `p.idxValue` rejected a 33-bit index as `i32 constant out of range`
 // at the production, which is where the reference's `nat32` puts it.
-func typeRefFromToken(t Token) typeRef {
+func idxRefFromToken(t Token) idxRef {
 	if t.Kind == VarTok {
-		return typeRef{tok: t, isVar: true, name: string(t.Value)}
+		return idxRef{tok: t, isVar: true, name: string(t.Value)}
 	}
 	idx, _ := parseNat(t.Text, 32)
-	return typeRef{tok: t, idx: uint32(idx)}
+	return idxRef{tok: t, idx: uint32(idx)}
 }

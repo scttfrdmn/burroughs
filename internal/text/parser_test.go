@@ -372,7 +372,18 @@ func TestModuleAcceptDirection(t *testing.T) {
 
 		// Exports.
 		{`(module (export "e" (func 0)))`, "export:1265 + externidx:1262"},
-		{`(module (export "e" (global $g)))`, "externidx:1259"},
+		// This row used to be `(module (export "e" (global $g)))` with `$g` never defined, on the
+		// claim that externidx:1259 accepts it. It does not: the arm is `fun c -> GlobalX ($3 c
+		// global)` and `global` is `lookup "global" c.globals`, which raises `unknown global $g`.
+		// The row was green only because the index was discarded unresolved, so the accept table
+		// was asserting the *absence* of a check as though it were a grammar fact — and it was
+		// caught by resolveSpaceIdx's arrival, not by review. Defining `$g` keeps the arm covered
+		// and makes the claim true; the reject direction is TestExportResolvesInEverySpace's.
+		{`(module (global $g i32) (export "e" (global $g)))`, "externidx:1259, a *defined* $g"},
+		{
+			`(module (export "a" (func $a)) (func $a))`,
+			"exports.wast:14 — the forward reference, which is why resolution is stage 2's",
+		},
 		{`(module (export "" (memory 0)))`, "externidx:1260, empty name"},
 		{`(module (export "e" (table 0)) (export "f" (tag 0)))`, "externidx:1261/1258"},
 
@@ -505,7 +516,13 @@ func TestModuleAcceptDirection(t *testing.T) {
 // before the forecast was written.
 func TestModuleRejectDirection(t *testing.T) {
 	for _, tc := range []struct{ src, want, cite string }{
-		{`(module (func $f) (func $f))`, "duplicate func $f", "func.wast, bind_abs:174"},
+		// The three category words grave #120 corrected. Each row used to want the short word,
+		// citing the very line that refutes it: `bind_abs:174` renders `"duplicate " ^ category`,
+		// and the category `bind_func` passes is `"function"` (parser.mly:192), not `func`.
+		// `func.wast:966` wants the string `"duplicate func"` and gets it — as a *prefix*, under
+		// the harness's substring match — which is why three suite vectors could not tell the two
+		// spellings apart. `data`/`elem` had no vector at all.
+		{`(module (func $foo)(func $foo))`, "duplicate function $foo", "func.wast:966, bind_func:192"},
 		{
 			`(module (global $g i32) (global $g (import "m" "g") i32))`, "duplicate global $g",
 			"bind_abs:174 via bind_global",
@@ -513,8 +530,8 @@ func TestModuleRejectDirection(t *testing.T) {
 		{`(module (type $t (func)) (type $t (func)))`, "duplicate type $t", "bind_abs:174"},
 		{`(module (memory $m 1) (memory $m 1))`, "duplicate memory $m", "bind_abs:174"},
 		{`(module (table $t 1 funcref) (table $t 1 funcref))`, "duplicate table $t", "bind_abs:174"},
-		{`(module (data $d) (data $d))`, "duplicate data $d", "bind_abs:174"},
-		{`(module (elem $e) (elem $e))`, "duplicate elem $e", "bind_abs:174"},
+		{`(module (data $d) (data $d))`, "duplicate data segment $d", "bind_data:193 — two words"},
+		{`(module (elem $e) (elem $e))`, "duplicate elem segment $e", "bind_elem:194 — two words"},
 		{`(module (tag $t) (tag $t))`, "duplicate tag $t", "bind_abs:174"},
 		{
 			`(module (func (param $x i32) (local $x i32)))`, "duplicate local $x",

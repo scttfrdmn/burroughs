@@ -205,7 +205,7 @@ func (p *parser) typeDef() error {
 	if err := p.lpar(kwType); err != nil {
 		return err
 	}
-	if err := p.bindidxOpt(&p.ctx.types, "type"); err != nil {
+	if _, err := p.bindidxOpt(&p.ctx.types); err != nil {
 		return err
 	}
 	ct, err := p.subtype()
@@ -308,14 +308,14 @@ func (p *parser) externtype() (func() (importDesc, error), error) {
 		// They differ by **one byte** in the binary form — a tag writes an attribute `00` before the
 		// index (encode.ml:191) — and that is the emitter's business, keyed on `desc.kind`, so the
 		// two still share this arm. The kind is what the descriptor carries out of here.
-		space, category, kind := &p.ctx.funcs, "func", importFunc
+		space, kind := &p.ctx.funcs, importFunc
 		if kw.Keyword == kwTag {
-			space, category, kind = &p.ctx.tags, "tag", importTag
+			space, kind = &p.ctx.tags, importTag
 		}
 		if err := p.lpar(kw.Keyword); err != nil {
 			return nil, err
 		}
-		if err := p.bindidxOpt(space, category); err != nil {
+		if _, err := p.bindidxOpt(space); err != nil {
 			return nil, err
 		}
 		// **No typeuse arm here takes an inline signature**, so neither helper is reached: the
@@ -340,7 +340,7 @@ func (p *parser) externtype() (func() (importDesc, error), error) {
 		if err := p.lpar(kwGlobal); err != nil {
 			return nil, err
 		}
-		if err := p.bindidxOpt(&p.ctx.globals, "global"); err != nil {
+		if _, err := p.bindidxOpt(&p.ctx.globals); err != nil {
 			return nil, err
 		}
 		f, err := p.importedGlobal()
@@ -352,7 +352,7 @@ func (p *parser) externtype() (func() (importDesc, error), error) {
 		if err := p.lpar(kwMemory); err != nil {
 			return nil, err
 		}
-		if err := p.bindidxOpt(&p.ctx.memories, "memory"); err != nil {
+		if _, err := p.bindidxOpt(&p.ctx.memories); err != nil {
 			return nil, err
 		}
 		f, err := p.importedMemory()
@@ -364,7 +364,7 @@ func (p *parser) externtype() (func() (importDesc, error), error) {
 		if err := p.lpar(kwTable); err != nil {
 			return nil, err
 		}
-		if err := p.bindidxOpt(&p.ctx.tables, "table"); err != nil {
+		if _, err := p.bindidxOpt(&p.ctx.tables); err != nil {
 			return nil, err
 		}
 		f, err := p.importedTable()
@@ -477,41 +477,90 @@ func (p *parser) importedTable() (func() (importDesc, error), error) {
 // suite vectors, correctly outside this stratum, and measured before writing this so the figure
 // could not drift into #62's forecast.
 func (p *parser) exportField() error {
+	kw, name, err := p.exportHead()
+	if err != nil {
+		return err
+	}
+	kind, ref, err := p.externidx()
+	if err != nil {
+		return err
+	}
+	space := p.ctx.spaceFor(kind)
+	p.ctx.defineExport(name, kind, func() (uint32, error) { return space.resolveSpaceIdx(ref) })
+	if err := p.rpar(); err != nil {
+		return err
+	}
+	p.ctx.clearNonTypeField(kw)
+	return nil
+}
+
+// exportHead consumes the `LPAR EXPORT name` both export spellings begin with, returning the
+// keyword's token (for the frontier withdrawal) and the name.
+//
+// **It exists to be the one place the grammar counts an export.** `export` (:1265-1267) and
+// `inline_export` (:1269-1274) diverge only after the name — one reads an `externidx`, the other
+// takes its index from the enclosing field — so the shared prefix is a real production boundary and
+// not a factoring convenience. That matters because the counter it increments is half of
+// `encodableOrErr`'s withdrawal check, and `noteImport`'s comment owns the argument for why a
+// counter belongs at a shared site: a call added at each spelling is two places to forget one, and
+// the omission is a *silently short export section* rather than a compile error.
+//
+// The forgetting is not hypothetical here. The sugar spelling parsed and discarded its name for
+// four PRs, and every board stayed green, because a module missing an export it never claimed to
+// have is not a decode error.
+func (p *parser) exportHead() (Token, string, error) {
+	kw := p.c.peek2()
 	if err := p.lpar(kwExport); err != nil {
-		return err
+		return Token{}, "", err
 	}
-	// Discarded, and honestly so: there is no export section emitter, so the name has no consumer.
-	// `p.name`'s doc comment carries the same note and the reason it is not a gap.
-	if _, err := p.name(); err != nil {
-		return err
+	p.ctx.noteExport()
+	name, err := p.name()
+	if err != nil {
+		return Token{}, "", err
 	}
-	if err := p.externidx(); err != nil {
-		return err
-	}
-	return p.rpar()
+	return kw, name, nil
 }
 
 // externidx parses `externidx` (parser.mly:1258-1263): `(func idx)` and its four siblings.
-func (p *parser) externidx() error {
+//
+// Returns the kind and the *unresolved* index. Unresolved because the resolution belongs to stage 2
+// — `exports.wast:14` exports `(func $a)` before `$a` is bound — and the kind because the five arms
+// differ in nothing else: each is `LPAR <keyword> idx RPAR`, and the keyword is the only fact the
+// emitter needs beyond the number.
+func (p *parser) externidx() (importKind, idxRef, error) {
 	if !p.c.at(LParen) {
-		return p.unexpected()
+		return 0, idxRef{}, p.unexpected()
 	}
 	kw := p.c.peek2()
 	if kw.Kind != KeywordTok {
-		return p.unexpectedAt(kw)
+		return 0, idxRef{}, p.unexpectedAt(kw)
 	}
+	var kind importKind
 	switch kw.Keyword {
-	case kwTag, kwGlobal, kwMemory, kwTable, kwFunc:
-		if err := p.lpar(kw.Keyword); err != nil {
-			return err
-		}
-		if err := p.idx(); err != nil {
-			return err
-		}
-		return p.rpar()
+	case kwTag:
+		kind = importTag
+	case kwGlobal:
+		kind = importGlobal
+	case kwMemory:
+		kind = importMemory
+	case kwTable:
+		kind = importTable
+	case kwFunc:
+		kind = importFunc
 	default:
-		return p.unexpectedAt(kw)
+		return 0, idxRef{}, p.unexpectedAt(kw)
 	}
+	if err := p.lpar(kw.Keyword); err != nil {
+		return 0, idxRef{}, err
+	}
+	ref, err := p.idxValue()
+	if err != nil {
+		return 0, idxRef{}, err
+	}
+	if err := p.rpar(); err != nil {
+		return 0, idxRef{}, err
+	}
+	return kind, ref, nil
 }
 
 // inlineImport parses `inline_import` (parser.mly:1255-1256): `(import name name)` appearing
@@ -557,23 +606,37 @@ func (p *parser) inlineImport() (inlineImportNames, error) {
 }
 
 // inlineExports parses zero or more `inline_export` (parser.mly:1269-1274): `(export name)`
-// inside a definition.
+// inside a definition, retaining each as an export of `kind` at `idx`.
 //
 // A loop because the reference's arm is right-recursive over the whole field
 // (`inline_export func_fields`), so `(func (export "a") (export "b"))` is legal. And they come
 // *before* an inline import in the recursion, so `(func (export "a") (import "m" "f"))` parses
 // while the reverse order does not — an ordering the arms encode and a paraphrase loses.
-func (p *parser) inlineExports() error {
+//
+// **This spelling performs no lookup, and that is the reference's design rather than an omission.**
+// `inline_export` is `fun d c -> Export ($3, d @@ $sloc)` (:1273): the index `d` arrives as a
+// *parameter*, supplied by the enclosing field's arm as `$1 (FuncX x) c` (:987), where `x` is the
+// field's own `bindidx_opt` result. So there is no name to resolve — the field being exported is the
+// one the export is written inside, and `(func (export "a"))` cannot have a dangling reference the
+// way `(export "a" (func $a))` can. `defineExport` still receives a thunk, because the *slot* order
+// is what stage 2 preserves; the thunk simply closes over an index already known.
+//
+// The index is the field's own even for an inline *import*: `(memory (export "e") (import "m" "m") 1)`
+// exports the imported memory, which occupies an index in the memory space like any other. That is
+// why `bindidxOpt` runs before the arm split at every call site.
+func (p *parser) inlineExports(kind importKind, idx uint32) error {
 	for p.c.at(LParen) && p.c.peek2Keyword(kwExport) {
-		if err := p.lpar(kwExport); err != nil {
-			return err
-		}
-		if _, err := p.name(); err != nil { // discarded: no export section emitter, see p.name
+		_, name, err := p.exportHead()
+		if err != nil {
 			return err
 		}
 		if err := p.rpar(); err != nil {
 			return err
 		}
+		// After the closing paren, per the rule every retention site here follows: a field that
+		// errors out mid-way must leave no trace, or the retained counts disagree with the sections
+		// on a module that never finished parsing.
+		p.ctx.defineExport(name, kind, func() (uint32, error) { return idx, nil })
 	}
 	return nil
 }
@@ -590,18 +653,18 @@ func (p *parser) funcField() error {
 	if err := p.lpar(kwFunc); err != nil {
 		return err
 	}
-	if err := p.bindidxOpt(&p.ctx.funcs, "func"); err != nil {
-		return err
+	idx, idxErr := p.bindidxOpt(&p.ctx.funcs)
+	if idxErr != nil {
+		return idxErr
 	}
-	exported := p.c.at(LParen) && p.c.peek2Keyword(kwExport)
-	if err := p.inlineExports(); err != nil {
+	if err := p.inlineExports(importFunc, idx); err != nil {
 		return err
 	}
 	imp, impErr := p.inlineImport()
 	if impErr != nil {
 		return impErr
 	}
-	use, haveUse := typeRef{}, false
+	use, haveUse := idxRef{}, false
 	if p.atTypeuse() {
 		u, err := p.typeuse()
 		if err != nil {
@@ -622,7 +685,7 @@ func (p *parser) funcField() error {
 		// own first result and returns the same index, meaning the defect would be *invisible* here and
 		// would surface only as a type-section count. Exactly the class `declareBlockImplicit`'s comment
 		// warns about, reached from the other direction.
-		return p.inlineImportTail(imp, exported, kw, p.importedFuncDesc(importFunc, use, haveUse, ft))
+		return p.inlineImportTail(imp, kw, p.importedFuncDesc(importFunc, use, haveUse, ft))
 	}
 	ft, err := p.funcSignature()
 	if err != nil {
@@ -687,7 +750,7 @@ func (p *parser) funcField() error {
 // appends, so it decides the index an implicit type gets and therefore what `unknown type <n>`
 // means for a later numeric typeuse. See typetable.go's header for why parse order *is* stage-2
 // order.
-func (p *parser) deferSignature(use typeRef, haveUse bool, ft funcType) {
+func (p *parser) deferSignature(use idxRef, haveUse bool, ft funcType) {
 	if haveUse {
 		p.ctx.deferOp(func() error { return p.ctx.inlineFuncTypeExplicit(use, ft) })
 		return
@@ -709,7 +772,7 @@ func (p *parser) deferSignature(use typeRef, haveUse bool, ft funcType) {
 // itself, whereas this returns a thunk for `defineImport` to record, so that the descriptor lands in
 // the import slot. Two functions that look alike because they share a rule, differing in who owns the
 // deferral — and the rule they share is in one place, which is the point.
-func (p *parser) importedFuncDesc(kind importKind, use typeRef, haveUse bool, ft funcType) func() (importDesc, error) {
+func (p *parser) importedFuncDesc(kind importKind, use idxRef, haveUse bool, ft funcType) func() (importDesc, error) {
 	if haveUse {
 		return p.externFuncDesc(kind, func() (uint32, error) { return p.ctx.checkExplicit(use, ft) })
 	}
@@ -723,7 +786,12 @@ func (p *parser) importedFuncDesc(kind importKind, use typeRef, haveUse bool, ft
 // `(func (param $x i32) (local $x i32))` is `duplicate local $x`. That is one of #62's 13
 // duplicate-binding vectors and it only works if params and locals share one space.
 //
-// The locals space is reset per function, since it is `enter_func`'s (parser.mly:965).
+// The locals space is reset per function, since it is `enter_func`'s (parser.mly:965) — and the
+// reset carries the kind rather than zeroing it. `space{}` here was the first thing spaceUnset
+// caught: a fresh zero value has no category, so every `duplicate local $x` became `duplicate
+// <space kind unset> $x`. Which is the marker doing its job, and the reason it renders as
+// something no reference message contains — had spaceType sat at ordinal 0 this would have said
+// `duplicate type $x` and passed review (grave #120).
 //
 // It was `markFuncSignature` while the binding was its whole purpose; it returns the type now
 // because `func_fields`'s arms pass `fst $2 c'` — this signature — to whichever helper applies.
@@ -731,7 +799,7 @@ func (p *parser) importedFuncDesc(kind importKind, use typeRef, haveUse bool, ft
 // shape, and the *reason* the name changed is that the production always returned this and the
 // previous stratum had nothing to do with it.
 func (p *parser) funcSignature() (funcType, error) {
-	p.ctx.locals = space{}
+	p.ctx.locals = space{kind: spaceLocal}
 	var ft funcType
 	for p.c.at(LParen) && p.c.peek2Keyword(kwParam) {
 		if err := p.lpar(kwParam); err != nil {
@@ -743,7 +811,7 @@ func (p *parser) funcSignature() (funcType, error) {
 			if nameErr != nil {
 				return ft, nameErr
 			}
-			if err := p.ctx.locals.bindAbs("local", tok, name); err != nil {
+			if err := p.ctx.locals.bindAbs(tok, name); err != nil {
 				return ft, err
 			}
 			v, err := p.valtype()
@@ -785,7 +853,7 @@ func (p *parser) locals() error {
 			if err != nil {
 				return err
 			}
-			if err := p.ctx.locals.bindAbs("local", tok, name); err != nil {
+			if err := p.ctx.locals.bindAbs(tok, name); err != nil {
 				return err
 			}
 			// The valtype is read and discarded: a local's type is nothing the grammar
@@ -821,18 +889,18 @@ func (p *parser) tagField() error {
 	if err := p.lpar(kwTag); err != nil {
 		return err
 	}
-	if err := p.bindidxOpt(&p.ctx.tags, "tag"); err != nil {
-		return err
+	idx, idxErr := p.bindidxOpt(&p.ctx.tags)
+	if idxErr != nil {
+		return idxErr
 	}
-	exported := p.c.at(LParen) && p.c.peek2Keyword(kwExport)
-	if err := p.inlineExports(); err != nil {
+	if err := p.inlineExports(importTag, idx); err != nil {
 		return err
 	}
 	imp, err := p.inlineImport()
 	if err != nil {
 		return err
 	}
-	use, haveUse := typeRef{}, false
+	use, haveUse := idxRef{}, false
 	if p.atTypeuse() {
 		use, err = p.typeuse()
 		if err != nil {
@@ -846,7 +914,7 @@ func (p *parser) tagField() error {
 	}
 	if imp.have {
 		// See funcField's arm for why this *replaces* deferSignature rather than joining it.
-		return p.inlineImportTail(imp, exported, kw, p.importedFuncDesc(importTag, use, haveUse, ft))
+		return p.inlineImportTail(imp, kw, p.importedFuncDesc(importTag, use, haveUse, ft))
 	}
 	p.deferSignature(use, haveUse, ft)
 	p.ctx.markDefined(importTag)
@@ -864,13 +932,13 @@ func (p *parser) globalField() error {
 	if err := p.lpar(kwGlobal); err != nil {
 		return err
 	}
-	if err := p.bindidxOpt(&p.ctx.globals, "global"); err != nil {
-		return err
+	idx, idxErr := p.bindidxOpt(&p.ctx.globals)
+	if idxErr != nil {
+		return idxErr
 	}
-	// Read before the arms, as in memoryField: an inline export makes the field unencodable whichever
-	// arm follows, and the way to say so is to leave the dispatch's frontier note standing.
-	exported := p.c.at(LParen) && p.c.peek2Keyword(kwExport)
-	if err := p.inlineExports(); err != nil {
+	// Before the arms, as in memoryField: the index is the field's own whichever arm follows, and an
+	// inline export on an *imported* global is an export of that import's index.
+	if err := p.inlineExports(importGlobal, idx); err != nil {
 		return err
 	}
 	imp, err := p.inlineImport()
@@ -882,7 +950,7 @@ func (p *parser) globalField() error {
 		return err
 	}
 	if imp.have {
-		return p.inlineImportTail(imp, exported, kw, fill)
+		return p.inlineImportTail(imp, kw, fill)
 	}
 	// The defining arm keeps parsing and stays unencodable: a defined global needs a global section
 	// and an initializer expression, and neither exists (#8's remaining arms). The thunk goes unused
@@ -928,14 +996,19 @@ func (p *parser) globalField() error {
 // trace and `encodableOrErr`'s count check cannot disagree with the sections on a module that never
 // finished parsing. That is memoryField's tail's rule, and having one helper is how the third site
 // gets it without anyone having to remember.
-func (p *parser) inlineImportTail(imp inlineImportNames, exported bool, kw Token, fill func() (importDesc, error)) error {
+//
+// **The `exported bool` parameter is gone, and its disappearance is the export section landing.**
+// It existed to suppress the frontier withdrawal — an inline export made a field unencodable, so the
+// field could not clear its own refusal. Now `inlineExports` retains, so the withdrawal is
+// unconditional and the five call sites that computed `exported` have nothing left to compute. It is
+// removed rather than left as an always-false argument, because a parameter no caller can vary is a
+// branch no test can reach.
+func (p *parser) inlineImportTail(imp inlineImportNames, kw Token, fill func() (importDesc, error)) error {
 	if err := p.rpar(); err != nil {
 		return err
 	}
 	p.ctx.defineImport(imp.module, imp.name, fill)
-	if !exported {
-		p.ctx.clearNonTypeField(kw)
-	}
+	p.ctx.clearNonTypeField(kw)
 	return nil
 }
 
@@ -945,24 +1018,30 @@ func (p *parser) inlineImportTail(imp inlineImportNames, exported bool, kw Token
 // its own data — and that arm creates a *data segment* too, which is why the reference threads a
 // data list out of memory_fields. Under 0011 nothing is created, but the arm still has to parse
 // or `(memory (data "abc"))` is a valid module rejected.
-// **One of its four arms is encodable (#8), and it is the plain one.** The inline-import arm defines
-// no memory (it is an import); the `(data …)` sugar defines both a memory *and* a data segment, and
-// emitting the memory without the data would be a module that decodes clean and means something
-// else; an inline export needs an export section. So only `addrtype limits` withdraws the frontier,
-// and it does so at the end, where every retention has happened.
+// **Three of its four arms are encodable (#8), and the `(data …)` sugar is the one that is not.** It
+// defines both a memory *and* a data segment, and emitting the memory without the data would be a
+// module that decodes clean and means something else. The plain `addrtype limits` arm withdraws the
+// frontier at the end, where every retention has happened; the inline-import arm withdraws through
+// `inlineImportTail`, section 2 having landed in #119.
+//
+// This paragraph read "**one** of its four arms is encodable … an inline export needs an export
+// section", which counted the inline export as a fifth arm's worth of refusal and was true until this
+// PR. It is now wrong twice over: the inline export is a *prefix* rather than an arm — it precedes the
+// arm split, which is why `inlineExports` is called above the `imp.have` branch — and section 7
+// exists, so it withdraws nothing. The count is quoted here rather than left vague because a
+// paragraph naming a number is checkable against the arms and a paragraph saying "some" is not.
 func (p *parser) memoryField() error {
 	kw := p.c.peek2()
 	if err := p.lpar(kwMemory); err != nil {
 		return err
 	}
-	if err := p.bindidxOpt(&p.ctx.memories, "memory"); err != nil {
-		return err
+	idx, idxErr := p.bindidxOpt(&p.ctx.memories)
+	if idxErr != nil {
+		return idxErr
 	}
-	// Recorded before the arm is known: an inline export makes this field unencodable, and the
-	// dispatch's record already stands, so there is nothing to do but *not withdraw* it. The
-	// variable is what the plain arm consults before withdrawing.
-	exported := p.c.at(LParen) && p.c.peek2Keyword(kwExport)
-	if err := p.inlineExports(); err != nil {
+	// Before the arm is known, because the index does not depend on the arm: an imported memory
+	// occupies an index in the memory space exactly as a defined one does.
+	if err := p.inlineExports(importMemory, idx); err != nil {
 		return err
 	}
 	imp, err := p.inlineImport()
@@ -974,7 +1053,7 @@ func (p *parser) memoryField() error {
 		if ftErr != nil {
 			return ftErr
 		}
-		return p.inlineImportTail(imp, exported, kw, fill)
+		return p.inlineImportTail(imp, kw, fill)
 	}
 	// The `addrtype LPAR DATA string_list RPAR` sugar (parser.mly:1129), distinguished from
 	// `memorytype` by an LPAR where a nat would be. addrtype is optional in both, so it is
@@ -999,9 +1078,7 @@ func (p *parser) memoryField() error {
 	// with the sections on a module that never finished parsing.
 	p.ctx.defineMemory(memType{addr64: addr64, lim: lim})
 	p.ctx.noteDefined(importMemory)
-	if !exported {
-		p.ctx.clearNonTypeField(kw)
-	}
+	p.ctx.clearNonTypeField(kw)
 	return nil
 }
 
@@ -1039,19 +1116,21 @@ func (p *parser) memoryDataSugar() error {
 // Five arms. Two are sugar forms taking `(elem …)` and sizing the table to it, and both create
 // an elem segment. The `tabletype constexpr1` arm reaches the instruction boundary; the bare
 // `tabletype` arm (`:1192`) completes, because the reference synthesizes a `ref.null` init.
-// **One of its five arms is encodable (#8): `tabletype` with no initializer**, the bare form at
-// :1192. The `constexpr1` arm has an initializer expression the emitter cannot write (no instruction
-// emitter yet), and both `(elem …)` sugar arms define an elem segment there is no elem section for.
+// **Two of its five arms are encodable (#8): `tabletype` with no initializer**, the bare form at
+// :1192, and the inline-import arm since section 2 landed in #119. The `constexpr1` arm has an
+// initializer expression the emitter cannot write (no instruction emitter yet), and both `(elem …)`
+// sugar arms define an elem segment there is no elem section for. An inline export is not among the
+// refusals and never was an arm — see memoryField, which owns the paragraph correcting that count.
 func (p *parser) tableField() error {
 	kw := p.c.peek2()
 	if err := p.lpar(kwTable); err != nil {
 		return err
 	}
-	if err := p.bindidxOpt(&p.ctx.tables, "table"); err != nil {
-		return err
+	idx, idxErr := p.bindidxOpt(&p.ctx.tables)
+	if idxErr != nil {
+		return idxErr
 	}
-	exported := p.c.at(LParen) && p.c.peek2Keyword(kwExport)
-	if err := p.inlineExports(); err != nil {
+	if err := p.inlineExports(importTable, idx); err != nil {
 		return err
 	}
 	imp, err := p.inlineImport()
@@ -1063,7 +1142,7 @@ func (p *parser) tableField() error {
 		if ttErr != nil {
 			return ttErr
 		}
-		return p.inlineImportTail(imp, exported, kw, fill)
+		return p.inlineImportTail(imp, kw, fill)
 	}
 	addr64, err := p.addrtype()
 	if err != nil {
@@ -1093,9 +1172,7 @@ func (p *parser) tableField() error {
 		// round-trips with no initializer to write, and the 0x40 form is never needed here.
 		p.ctx.defineTable(tabType{addr64: addr64, lim: lim, elem: elem})
 		p.ctx.noteDefined(importTable)
-		if !exported {
-			p.ctx.clearNonTypeField(kw)
-		}
+		p.ctx.clearNonTypeField(kw)
 		return nil
 	}
 	if err := p.constexpr1(); err != nil { // tabletype constexpr1
@@ -1159,7 +1236,7 @@ func (p *parser) dataField() error {
 	if err := p.lpar(kwData); err != nil {
 		return err
 	}
-	if err := p.bindidxOpt(&p.ctx.datas, "data"); err != nil {
+	if _, err := p.bindidxOpt(&p.ctx.datas); err != nil {
 		return err
 	}
 	if p.c.at(LParen) && p.c.peek2Keyword(kwMemory) { // memoryuse, parser.mly:1109
@@ -1205,7 +1282,7 @@ func (p *parser) elemField() error {
 	if err := p.lpar(kwElem); err != nil {
 		return err
 	}
-	if err := p.bindidxOpt(&p.ctx.elems, "elem"); err != nil {
+	if _, err := p.bindidxOpt(&p.ctx.elems); err != nil {
 		return err
 	}
 	if p.c.atKeyword(kwDeclare) {
@@ -1834,7 +1911,7 @@ const (
 // upstairs calls *the defect stated as the rule*: print it, don't reason about it. See
 // TestNestedBlockTypeInternsBeforeItsEnclosingOne.
 func (p *parser) orderedTypeUse(kind signatureKind, tail func() error) error {
-	use, haveUse := typeRef{}, false
+	use, haveUse := idxRef{}, false
 	if p.atTypeuse() {
 		var err error
 		use, err = p.typeuse()
@@ -1874,7 +1951,7 @@ func (p *parser) orderedTypeUse(kind signatureKind, tail func() error) error {
 
 // deferBlockSignature is deferSignature for the shared chain, differing only in the sugar arm's
 // conditional interning. See signatureKind, and declareBlockImplicit for why the condition exists.
-func (p *parser) deferBlockSignature(kind signatureKind, use typeRef, haveUse bool, ft funcType) {
+func (p *parser) deferBlockSignature(kind signatureKind, use idxRef, haveUse bool, ft funcType) {
 	switch {
 	case haveUse:
 		p.ctx.deferOp(func() error { return p.ctx.inlineFuncTypeExplicit(use, ft) })

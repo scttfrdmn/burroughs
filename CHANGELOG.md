@@ -48,6 +48,74 @@ weakly-ordered platform.
   #109 was made by hand and then discarded; this is the *artifacts become oracles* rule applied one
   step later than it should have been.
 
+- **`internal/text/encode.go`: the export section emitter, both spellings**
+  ([#8](https://github.com/scttfrdmn/burroughs/issues/8), 0011 part 2). Section 7 joins 1, 2, 4 and 5
+  in id order, and all five extern kinds export. The suite's encodable population goes **141 → 196**
+  of 2150 parser-accepted text modules, and the `export` frontier bucket at 39 goes to **zero** — it
+  is gone from the census histogram rather than reduced.
+
+  **A bucket of 39 paid 55 modules, and the arithmetic is the finding.** An export is not a field one
+  writes a section for so much as a construct that appears *inside* five other fields, so draining it
+  also moved `memory` 104 → 31 and `table` 29 → 13: those were modules whose first blocker was an
+  inline export on a memory or table, which the field's own emitter could not withdraw for. The
+  memory/table PR observed that draining a bucket re-sorts the queue instead of emptying it; this is
+  the first counter-example, and it sharpens the rule rather than refuting it — a bucket keyed on a
+  construct other fields *embed* pays more than its size, one keyed on a field that embeds others
+  pays less. `func` at 1361 is the second kind.
+
+  **This is the first section with no payload branch, and that is a fact about `externidx`.** An
+  `externtype` carries the thing's type, so section 2's five kinds each write a descriptor; an
+  `externidx` carries only an index into a space that already holds the thing, so all five collapse to
+  a kind byte and a `u32` (encode.ml:1009-1014). The kind bytes are `externtype`'s own — identical
+  order in both grammars — so `externKindByte` is **reused**, and the reuse's premise is now
+  machine-checked against the reference rather than assumed: `TestExternKindByteAgreesForBothSections`
+  extracts both arm lists from encode.ml and compares **by constructor, not by position**, because a
+  positional check on two lists reordered together passes while every byte moves. Its region bound and
+  in-bounds sample check are grave [#106](https://github.com/scttfrdmn/burroughs/issues/106)'s lesson:
+  an unbounded reader finds the other grammar's arms and the comparison becomes a tautology. Removing
+  the bound reports 12 arms where 5 exist, which is the vacuity floor doing its job in the loud
+  direction.
+
+  **The two spellings differ in whether they look anything up, and the sugar's answer is "no".**
+  `(export "e" (func $f))` resolves `$f` in one of five index spaces; `(func (export "e"))` takes the
+  index from the enclosing field — the reference's arm is `fun d c -> Export ($3, d @@ $sloc)`, the
+  index arriving as a *parameter* supplied as `$1 (FuncX x) c` where `x` is `bindidx_opt`'s result. So
+  `bindidxOpt` now returns that index, read **before** either arm binds, matching the reference's
+  `bind` returning `space.count` before the shift. A non-zero-index row pins it:
+  `(module (memory 1) (memory 2) (memory (export "third") 3))` fails if the emitter writes 0 *or* if
+  it reads the count after binding and writes 3.
+
+  **The `exported bool` parameter is gone from `inlineImportTail`, and its disappearance is the
+  section landing.** It existed to suppress the frontier withdrawal, an inline export having made a
+  field unencodable; now the withdrawal is unconditional and the five call sites that computed it have
+  nothing to compute. Removed rather than left as an always-false argument, because a parameter no
+  caller can vary is a branch no test can reach. Seven rows moved out of
+  `TestEncodeRefusesWhatItCannotWrite` into `encodableModules` with paired-spelling assertions, and
+  that move *is* what the section is.
+
+  **The export withdrawal check fires in both directions, unlike the memory/table tripwire it copies.**
+  `exportsSeen` is incremented in `exportHead` — the `LPAR EXPORT name` prefix both spellings share,
+  which is a real production boundary rather than a factoring convenience — and `len(exports)` comes
+  from `defineExport`, so the two numbers are produced by different code. Deleting `defineExport` from
+  `inlineExports` fails ten rows with `0 exports retained, 1 parsed`; doubling it fails them with `2
+  … 1`; and the mixed-spelling row reports `1 … 2`, which is the check distinguishing *which* spelling
+  forgot. The forgetting is not hypothetical: the sugar parsed and discarded its name for four PRs and
+  every board was green, because a module missing an export it never claimed to have is not a decode
+  error.
+
+  **`TestExportResolvesInEverySpace` is scoped to the space rather than to today's cases**: per index
+  space, an unbound name is rejected with the reference's own word, and a name bound in each of the
+  *other four* spaces is still rejected — 5×4 cross-space rows. Wiring the global arm to the memory
+  space fails it in the **accept** direction, `(module (memory $x 1) (export "e" (global $x)))` being
+  accepted, which is a valid image naming the wrong thing and exactly what no suite vector covers.
+
+  **The independent witness: 156 joined against wabt's corpus, 156 agree byte for byte, 0 disagree,
+  147 longer than a bare preamble** — from 101/101/0/92. Both figures were measured with the same
+  probe, the baseline re-run against the merge-base rather than quoted from the previous revision of
+  the comment that holds it, because a delta between two instruments is not a delta. The 40 unjoined
+  did not move, which is the expected shape: those six files are excluded wholesale by the corpus
+  *generator*, so nothing this encoder learns to write can join them.
+
 - **`internal/text/encode.go`: the import section emitter, both spellings**
   ([#8](https://github.com/scttfrdmn/burroughs/issues/8), 0011 part 2). Section 2 joins 1, 4 and 5 in
   id order, and all five external kinds encode — func, table, memory, global, tag. The suite's
@@ -1659,6 +1727,17 @@ weakly-ordered platform.
   skip ([#29](https://github.com/scttfrdmn/burroughs/issues/29)).
 
 ### Fixed
+
+- **Three duplicate-name errors named the wrong space, and a substring match hid the one that had
+  vectors** ([grave #120](https://github.com/scttfrdmn/burroughs/issues/120)). The reference says
+  `duplicate function`, `duplicate data segment`, `duplicate elem segment`; Burroughs said `duplicate
+  func`, `duplicate data`, `duplicate elem`. The func case has suite vectors and passed all of them,
+  because the harness matches expected strings by **substring** (decision 0003) and `duplicate func`
+  is a prefix of `duplicate function $foo` — so the oracle read exactly as far as the expected string
+  did and no further, which is the invented-evidence class with the verdict coming out right. The data
+  and elem cases have **zero** vectors in either direction. Fixed by writing the category word once
+  per space in `newContext` and pinning all nine against parser.mly's `lookup`/`bind` tables, so the
+  words are derived from the authority rather than transcribed beside each use.
 
 - **Nine valid modules were rejected, and the comment above the bug asserted the rule it broke**
   ([grave #109](https://github.com/scttfrdmn/burroughs/issues/109)). `constOps`' comment said

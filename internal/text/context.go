@@ -82,13 +82,104 @@ func decodedVar(t Token) (string, error) {
 	return string(t.Value), nil
 }
 
+// spaceKind identifies an index space, and carries the one word the reference's messages use
+// for it.
+//
+// **The word is a property of the space, not an argument at the call site**, and that is a
+// repair rather than a tidy-up. The reference has exactly one category literal per space,
+// written twice — `bind_abs "function" c.funcs` at parser.mly:192 and `lookup "function"
+// c.funcs` at :157 — so bind and lookup cannot disagree about a space's name there without
+// someone editing two adjacent lines differently. Here the word was a `string` parameter
+// threaded through `bindidxOpt` from twelve call sites, which made disagreement a typo away,
+// and **three of the twelve were already wrong**: `func` for `function`, `data` for `data
+// segment`, `elem` for `elem segment` (grave #120). Adding the *lookup* direction for
+// `externidx` would have doubled the sites and re-run the same risk, so the word moved to
+// where it can only be written once.
+//
+// Why the divergence was invisible: the harness matches expected strings by substring
+// (decision 0003), and `func.wast:966`'s expected `"duplicate func"` is a *prefix* of the
+// reference's actual `duplicate function $foo`. So the three suite vectors that touch this
+// message score pass under either word, and no vector exists at all for `duplicate data` or
+// `duplicate elem` — the accept-shaped blind spot of contract §9 G-3, in the half of a
+// message the oracle never reads. Sibling of grave #36, where the verdict was right and the
+// testimony was fabricated.
+// The zero value is deliberately **not** a space. `context` is created as a zero value
+// (`&parser{c: c}`), so if `spaceType` sat at ordinal 0 then a space whose kind was never set
+// would silently claim to be the type space and print `duplicate type $f` for a func — the
+// wrong-word defect again, reintroduced by an omission instead of a typo. spaceUnset makes that
+// omission loud: `String` renders it as a marker no reference message contains, and
+// TestEverySpaceHasItsKind walks context's fields by reflection so a *newly added* space with no
+// kind fails too (scope the control to the space, not to today's fields).
+type spaceKind int
+
+const (
+	spaceUnset spaceKind = iota
+	spaceType
+	spaceTag
+	spaceGlobal
+	spaceMemory
+	spaceTable
+	spaceFunc
+	spaceData
+	spaceElem
+	spaceLocal
+	spaceField
+	spaceLabel
+)
+
+// String is the reference's category word, verbatim, for the `duplicate <category> <name>` and
+// `unknown <category> <name>` messages.
+//
+// Transcribed from the reference's `bind_*` and `lookup` helper pairs (parser.mly:152-163 and
+// :187-198), whose words agree per space for all nine absolute spaces. Two do not agree, and
+// both are the reference's own trailing-space quirk on the *lookup* side only — `lookup "label
+// "` (:161) and `lookup "field "` (:163) against `bind_rel "label"` (:196) and `bind_abs
+// "field"` (:198), rendering `unknown label  $l` with two spaces. That asymmetry is honoured
+// where it lives rather than here: lookupLabel writes the doubled space itself, and the field
+// space has no lookup in this stratum. See TestSpaceKindWordsMatchTheReference, which pins all
+// eleven against the authority.
+func (k spaceKind) String() string {
+	switch k {
+	case spaceUnset:
+		return "<space kind unset>"
+	case spaceType:
+		return "type"
+	case spaceTag:
+		return "tag"
+	case spaceGlobal:
+		return "global"
+	case spaceMemory:
+		return "memory"
+	case spaceTable:
+		return "table"
+	case spaceFunc:
+		return "function"
+	case spaceData:
+		return "data segment"
+	case spaceElem:
+		return "elem segment"
+	case spaceLocal:
+		return "local"
+	case spaceField:
+		return "field"
+	default:
+		return "label"
+	}
+}
+
 // space is one index space: the symbolic names bound in it, and how many entries it holds.
 //
 // The reference's `type space = {mutable map : int32 VarMap.t; mutable count : int32}`
 // (parser.mly:92). count advances for anonymous definitions too, which is why it is not
 // len(names) — `(func)` with no identifier still occupies index 0 and shifts the next
 // `(func $f)` to 1.
+//
+// `kind` is Burroughs' addition and has no counterpart in that record: it is the category word
+// the reference passes to `bind_abs` and `lookup` as an argument, moved onto the space so the
+// two directions read one field instead of two literals. See spaceKind for the three wrong
+// words that motivated it.
 type space struct {
+	kind  spaceKind
 	names map[string]uint32
 	count uint32
 }
@@ -105,16 +196,47 @@ type space struct {
 // `print` in the reference re-quotes a name whose decoded form differs from its source
 // spelling, and reproducing that rendering from a decoded value is how an error comes to
 // quote a byte the input never held. Using t.Text sidesteps the question entirely.
-func (s *space) bindAbs(category string, t Token, name string) error {
+//
+// The category comes from s.kind rather than from a parameter, which is grave #120's fix: the
+// same word must serve this message and resolveSpaceIdx's, and a parameter let them differ.
+func (s *space) bindAbs(t Token, name string) error {
 	if s.names == nil {
 		s.names = make(map[string]uint32)
 	}
 	if _, dup := s.names[name]; dup {
-		return errf(t, "duplicate %s %s", category, t.Text)
+		return errf(t, "duplicate %s %s", s.kind, t.Text)
 	}
 	s.names[name] = s.count
 	s.count++
 	return nil
+}
+
+// resolveSpaceIdx resolves a symbolic index against this space, or reports `unknown <category>`.
+//
+// The reference's `lookup` (parser.mly:148-150) is **one** function that every space's helper
+// calls with its own category and map:
+//
+//	let lookup category space x =
+//	  try VarMap.find x.it space.map
+//	  with Not_found -> error x.at ("unknown " ^ category ^ " " ^ print x)
+//
+// So this is one method, not five: `type_`, `tag`, `global`, `memory`, `table` and `func` at
+// :152-157 differ only in the two arguments, and writing six Go functions would be six places
+// for the word to drift — the defect spaceKind exists to close.
+//
+// A numeric index is returned unresolved, because there is nothing to resolve: `lookup` is
+// reached only from the `var` arm of the reference's `idx` production, and `(func 3)` names
+// index 3 whether or not a func 3 exists. Whether it does is the *validator's* question, which
+// is why every suite vector for `unknown function` is `assert_invalid` — measured, all 9 of
+// them — and why the accept direction here has no board coverage at all.
+func (s *space) resolveSpaceIdx(r idxRef) (uint32, error) {
+	if !r.isVar {
+		return r.idx, nil
+	}
+	if i, ok := s.names[r.name]; ok {
+		return i, nil
+	}
+	return 0, errf(r.tok, "unknown %s %s", s.kind, r.tok.Text)
 }
 
 // bindAnon reserves the next index for a definition with no identifier.
@@ -243,6 +365,9 @@ func (l *labelSpace) lookupLabel(t Token, name string) error {
 // Unexported, per 0011: nothing outside this package sees a context, and no module value
 // comes out. When well-formed modules are needed, the parser will emit binary bytes into
 // the proven decoder (#67 is the tripwire on that bridge being faithful).
+// Every `space` field carries its own kind, set by newContext and never by a call site — the
+// nine absolute spaces are the reference's nine `bind_*`/`lookup` pairs, and its category
+// literal is theirs rather than each caller's.
 type context struct {
 	types    space
 	tags     space
@@ -383,6 +508,17 @@ type context struct {
 	// the parse and filled by a thunk.
 	imports []textImport
 
+	// The retained exports, in source order — the emitter's input for section 7 (#8). Both
+	// spellings land here for the same reason imports do: `(export …)` as a module field
+	// (parser.mly:1265-1267) and `inline_export` inside a definition (:1269-1274), and the
+	// reference makes no distinction downstream either.
+	//
+	// **The inline spelling needs no lookup at all**, which is the one place the two diverge:
+	// `inline_export` is `fun d c -> Export ($3, d @@ $sloc)` — it receives the enclosing field's
+	// own index `d` as a parameter, so `(func $f (export "e"))` exports index-of-$f without
+	// consulting any space. Only the module-field spelling reaches resolveSpaceIdx.
+	exports []textExport
+
 	// importsSeen counts every import the *grammar* saw, for the withdrawal check.
 	//
 	// Incremented in `noteImport`, which is the one place both spellings already pass through —
@@ -397,6 +533,16 @@ type context struct {
 	// the ordering rule next door is load-bearing and this looks like a violation of it.
 	importsSeen int
 
+	// exportsSeen counts every export the *grammar* saw, the same instrument for section 7.
+	//
+	// Its own counter rather than a reuse, on `importsSeen`'s argument: two spellings and one
+	// retention list, so the honest check compares a number the grammar produced against one the
+	// emitter reads. `noteExport` is called from the two `(export` recognizers — `exportField`'s
+	// `lpar` and `inlineExports`' loop — and those are exactly the two places a spelling could
+	// withdraw the frontier and forget to record, which for exports is not hypothetical: the sugar
+	// discarded its name for four PRs and every board was green.
+	exportsSeen int
+
 	// defCount counts *defined* (non-imported) entries per kind, for the withdrawal check in
 	// `encodableOrErr`.
 	//
@@ -410,20 +556,74 @@ type context struct {
 	defCount [importFunc + 1]uint32
 }
 
+// newContext returns a context whose every index space knows which space it is.
+//
+// This is the one place a `spaceKind` is written, which is the whole point of the type: the
+// reference names a space's category twice, adjacently, in a helper pair it defines once
+// (parser.mly:152-157 and :187-192), and Burroughs' twelve `bindidxOpt` call sites had made that
+// one fact into twelve — three of them wrong (grave #120). Assigning here means a caller cannot
+// name a space at all, correctly or otherwise.
+//
+// A constructor rather than a `spaceKind` argument on the methods, because the *lookup* direction
+// this PR adds would otherwise need the word too, at six more sites, on the accept side where the
+// suite has no vectors. `labels` is absent because labelSpace is its own type with its own
+// relative semantics and its own message quirk; see lookupLabel.
+func newContext() context {
+	return context{
+		types:    space{kind: spaceType},
+		tags:     space{kind: spaceTag},
+		globals:  space{kind: spaceGlobal},
+		memories: space{kind: spaceMemory},
+		tables:   space{kind: spaceTable},
+		funcs:    space{kind: spaceFunc},
+		datas:    space{kind: spaceData},
+		elems:    space{kind: spaceElem},
+		locals:   space{kind: spaceLocal},
+	}
+}
+
+// spaceFor is the index space an `externidx` kind names.
+//
+// The reference does this by *which helper the arm calls* — `externidx`'s five arms are `$3 c tag`,
+// `$3 c global`, `$3 c memory`, `$3 c table`, `$3 c func` (parser.mly:1258-1263), each a partial
+// application of `lookup` to one space. Written as a mapping here because Go has no such
+// pre-application, and it is a `switch` returning a pointer rather than a `[importFunc+1]*space`
+// array for a reason worth stating: an array of pointers into `c`'s own fields is initialised once
+// and then aliases them, so a `locals`-style per-field reset would leave a stale pointer. A switch
+// re-derives the pointer each call and cannot go stale.
+//
+// The default is deliberately the func space and deliberately unreachable from externidx, whose
+// switch already rejected every other keyword — so this cannot silently misroute a sixth kind.
+// TestSpaceForCoversEveryImportKind walks the enum, which is what makes that claim checkable
+// instead of merely stated.
+func (c *context) spaceFor(k importKind) *space {
+	switch k {
+	case importTag:
+		return &c.tags
+	case importGlobal:
+		return &c.globals
+	case importMemory:
+		return &c.memories
+	case importTable:
+		return &c.tables
+	default:
+		return &c.funcs
+	}
+}
+
 // noteNonTypeField records the first module field the encoder has no emitter for.
 //
 // First rather than last, so the message points at the earliest construct a reader would have to
 // remove to get an image out — which is the actionable one.
 //
 // **The consequence for reading the frontier as a work plan: these refusals bucket *modules*, not
-// constructs.** Measured over the suite — 2150 parser-accepted text modules, of which 51 encode in
-// full today — the refusals partition as `func` 1338, `import` 177, `elem` 173, `data` 139,
-// `memory` 118, `global` 63, `export` 36, `table` 33, struct-or-array comptypes 12, `tag` 9, and 1
-// table whose element type needs a parameterized reference encoding. Each module is counted once,
-// under whichever unencodable field it happens to reach first, so a bucket is a lower bound on the
-// modules that construct blocks and says nothing about how many occurrences it has. *Bucket size
-// estimates the reward, not the job* — the key is "first blocking field", which cuts across
-// mechanism exactly as the board's spec-string key does.
+// constructs.** Measured over the suite — 2150 parser-accepted text modules, of which **196** encode
+// in full today — the refusals partition as `func` 1361, `elem` 237, `data` 223, `global` 50,
+// `memory` 31, GC parameterized references 16, struct-or-array comptypes 14, `table` 13, `tag` 8,
+// and 1 `start`. Each module is counted once, under whichever unencodable field it happens to reach
+// first, so a bucket is a lower bound on the modules that construct blocks and says nothing about how
+// many occurrences it has. *Bucket size estimates the reward, not the job* — the key is "first
+// blocking field", which cuts across mechanism exactly as the board's spec-string key does.
 //
 // **The memory/table emitters are the measurement that turned that from a caution into a number.**
 // Before them the same census read `memory` 467 and `table` 251 with 15 encodable. Both drained —
@@ -437,9 +637,20 @@ type context struct {
 // histogram, which is the limitation to carry forward rather than paper over — a histogram of first
 // blockers cannot answer a question about last ones, and re-measuring it will not change that.
 //
-// `table-elemtype` at 1 is the useful smallness in the table: exactly one module in the suite is
-// blocked by the GC-gated parameterized reference encoding, so that refusal is correctly a frontier
-// and not a queue.
+// **The export section is the counter-example to the re-sorting, and it is the first one.** The
+// `export` bucket at 39 drained to **zero** — it is gone from the histogram entirely, not reduced —
+// and 55 modules reached encodable off a bucket of 39. That arithmetic is the interesting part: an
+// export is not a *field* one writes a section for so much as a construct that appears inside five
+// other fields, so draining it moved `memory` 104→31 and `table` 29→13 as well. Those were modules
+// whose first blocker was an inline export *on* a memory or table, which the field's own emitter
+// could not withdraw for. So the honest generalization of the re-sorting rule gains a second case:
+// a bucket keyed on a field that other fields *embed* pays more than its size, and a bucket keyed on
+// a field that embeds others pays less. `func` at 1361 is the second kind.
+//
+// `start` at 1 is the useful smallness in the table now: exactly one module in the suite is blocked
+// by the start section, so that refusal is correctly a frontier and not a queue. It replaced
+// `table-elemtype` at 1 in that role, the elemtype modules having re-sorted into the GC bucket when
+// the table emitter landed.
 func (c *context) noteNonTypeField(kw Token) {
 	if c.haveNonType {
 		return
@@ -483,11 +694,26 @@ func (c *context) noteDefined(k importKind) { c.defCount[k]++ }
 // fixed by the reference and a misspelled map key would silently never match, which is the
 // unreachable-branch shape. The values are the reference's own words at
 // parser.mly:1322/1330/1338/1346/1354 — `tag`, `global`, `memory`, `table`, `function` —
-// and note that the last is `function`, not `func`, while the *duplicate* message for the
-// same space says `func`. Two different words for one space, in one grammar, and the suite
-// pins both (`imports.wast:677` wants "import after function", `binary.wast` and
-// `func.wast` want "duplicate func"). A single shared constant here would be wrong for one
-// of them.
+// and note that the last is `function`, not `func`.
+//
+// **The paragraph that stood here claimed the reference spells the same space two ways, and
+// it was false** (grave #120). Verbatim, because what a wrong belief was is the part worth
+// keeping: *"note that the last is `function`, not `func`, while the duplicate message for
+// the same space says `func`. Two different words for one space, in one grammar, and the
+// suite pins both … A single shared constant here would be wrong for one of them."*
+//
+// `bind_func` is `bind_abs "function"` (parser.mly:191) and `func` is `lookup "function"`
+// (:157) — **one word per space**, written twice adjacently, and the only pair that differs
+// is `label`/`label ` by the reference's own trailing-space quirk. What made the false claim
+// survive is that `func.wast:966` writes `"duplicate func"` and the harness matches expected
+// strings by *substring* (internal/spec/wast.go:802), so `duplicate function $foo` satisfies
+// it as a prefix. A truncated expected string read as evidence about the reference's
+// vocabulary — the oracle reading exactly as far as its expected string does, mistaken for
+// the oracle reading everything.
+//
+// The category word is therefore *not* here at all: it belongs to the space, is written once
+// in newContext, and is pinned against the authority by TestSpaceKindWordsMatchTheReference.
+// This type keeps only the import-ordering word, which is a different message.
 type importKind int
 
 const (
@@ -556,6 +782,13 @@ func (c *context) noteImport(t Token) {
 		c.sinceDefined = true
 	}
 }
+
+// noteExport counts one export the grammar recognized. See `exportsSeen` and `exportHead`.
+//
+// Takes no token, unlike `noteImport`: exports have no ordering rule to report a position for —
+// section 7 comes after every definition section, so an export can never precede a definition it
+// names. The counter is the whole content, which is why this is one line and its sibling is six.
+func (c *context) noteExport() { c.exportsSeen++ }
 
 // importOrderErr returns the ordering error, if any. Called once the module's field list is
 // complete, because a definition only qualifies if an import follows it.
