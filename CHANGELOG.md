@@ -21,6 +21,30 @@ weakly-ordered platform.
 
 ### Added
 
+- **`internal/text/writer.go`: the encoder's byte layer — LEB128 and section framing**
+  ([#8](https://github.com/scttfrdmn/burroughs/issues/8), 0011 part 2). The first engine lines of
+  the text→binary bridge, whose veto 0011's appendix lifted once #98 gave `binary.Module`
+  something to represent. The decoder is the authority for every encoding decision, so the writer
+  is its inverse and is falsified by round trip — nothing here has an opinion about what a LEB is.
+
+  **Minimal width, and that is a choice rather than the obvious reading.** `uleb` *accepts* any
+  width up to the field budget — `80 80 80 80 10` is a legal five-byte small number, which
+  `binary-leb128.wast` asserts — so an encoder is free here, and freedom is where a silent
+  divergence lives. Minimality is checked against an independently derived width, because a
+  padded LEB **round-trips correctly**: the round-trip half of the test passes on `80 80 80 80 00`
+  and only the width assertion fails. Byte equality with wabt is deliberately *not* the criterion
+  and must not become one — the corpus is an authority on which module the text denotes, not on
+  encoding style, which is why the comparator compares `[]Instr`.
+
+  **`sleb` is not `uleb` with a cast**, the writing-direction mirror of grave 0003's lesson: a
+  correct signed encoder and a cast one agree on every non-negative value, so a round trip cannot
+  tell them apart. The trap is `0x40` — as a final payload byte it sign-extends to **-64**, so
+  stopping when the magnitude runs out writes 64 and means -64, a wrong value on valid input that
+  no vector can see (§9 G-3). Watched to fail on exactly that: `s64(64) wrote 40, read back as
+  -64`. Section lengths are **measured by splicing a nested buffer, never predicted**, so the
+  both-signs size disagreement grave #34 documents is unreachable from this side; also watched to
+  fail, on an off-by-one prediction.
+
 - **`testdata/xcorpus`: an independently produced binary image of every suite text module that
   must succeed** ([#67](https://github.com/scttfrdmn/burroughs/issues/67),
   [#8](https://github.com/scttfrdmn/burroughs/issues/8)). #67's second half asks whether the
