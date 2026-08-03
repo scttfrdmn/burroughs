@@ -81,3 +81,48 @@ vectors.
 Scott's veto stays open on the bridge, as a design call of 0006 shape. Nothing in #62
 depends on it: the error-only surface is what #62 builds against, and the bridge governs a
 consumer that does not exist yet.
+
+---
+
+# Appended: the bridge's destination does not exist, so the veto is not the next question
+
+Body above preserved, per *a ruling is discharged by appending to the ADR*. Recorded
+2026-08-02, after the reject direction finished (board **4162 pass / 0 fail**) and the
+question "what unblocks the 60872 unsupported" was measured rather than assumed.
+
+**Part 1 of the decision is unaffected and has been vindicated.** The error-only surface
+was right: #62/#63/#64 built against it, all landed, and the text parser answers every
+reachable reject vector without a module value ever existing. Nothing here reopens that.
+
+**Part 2's premise needs a correction.** The decision says the text path "reaches
+`binary.Module`" through an encoder, "buying the binary path's entire conformance record
+for the price of that encoder". The first half is true and the second is where the
+accounting was wrong: **`binary.Module` is `{Version, Sections}` with payloads aliasing
+the input image, so arriving there buys the *decoder's verdict* and not a module.** 28 of
+the 29 `decode*` functions return bare `error`; the 29th, `decodePayload`, returns
+`(bool, error)` where the bool reports whether the section *has* a grammar. The binary
+path recognizes and retains
+nothing, so an encoder producing bytes for it delivers a well-formedness check, not
+something instantiable — and `assert_return` needs something instantiable.
+
+So the sentence "one module authority in the codebase, ever — `binary.Module`" describes
+an authority that **does not yet represent a module**, and the encoder bridges to a
+destination that does not exist. The missing artifact is 0002's internal form.
+
+**What this changes about sequencing, and what it does not change about the decision.**
+The ruling that there is exactly one module authority stands — it is the reason not to
+grow a second representation on the text side, and it is *strengthened* by this, because
+the one authority now has to be *built* rather than merely reached. The correction is to
+the order: the internal form comes first, grown out of the decoder (4162 vectors of
+conformance record), and the encoder targets it afterward. Building the encoder first
+would shape the module representation from a parser that has never accepted a module —
+the load-bearing-spot manoeuvre this very ADR declined as option B.
+
+Consequence for **#67**: half 2 asked for "a statement of what the text denotes, from
+outside both the encoder and the decoder", and called it a design question. The internal
+form *is* that statement, so the comparator problem dissolves into the artifact rather
+than needing its own answer — provided the decoder is the form's producer.
+
+**The veto stays open, and it is no longer the head of the queue.** It governs the
+encoder, which is now downstream of the internal form. Nothing waiting on Scott blocks
+building the representation.
