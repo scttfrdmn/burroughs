@@ -15,12 +15,24 @@ import (
 // configuration and says nothing about the encoder. Naming the gate here rather than dropping v128
 // from the tables keeps the encodable set and the checked set the same set.
 //
+// **Memory64 is on for the same reason, and it was added because a defect probe passed.** Swapping
+// `flags |= 0x04` for `0x02` — writing the *shared* bit where the 64-bit bit belongs — left every
+// row green, which said the tables had no row exercising an i64 addrtype at all. They could not
+// have: `(memory i64 1)` encodes to flags 0x04 and `decodeLimits` declines that with Memory64 off,
+// so the row would have failed for the decoder's configuration rather than for the encoder. The
+// retained `addr64` field was written by the emitter and checked by nothing — one bit of every
+// limits flags byte, unasserted. Found by budgeting for the falsification to *pass*, which is the
+// outcome the exercise exists for.
+//
 // GC stays **off** on purpose: it is the frontier `encodableOrErr` refuses at, so turning it on
-// would test bytes this encoder does not emit. When the GC gate flips for the encoder, this is one
-// field and the tables grow.
+// would test bytes this encoder does not emit. Threads stays off for a different reason — the text
+// grammar has no `shared` arm (parser.mly:466-468), so no wat source can denote a shared memory and
+// there is nothing for the gate to admit. The distinction is worth keeping: SIMD and Memory64 are on
+// because the encoder *can* emit them, GC is off because it cannot yet, and Threads is off because
+// no input can ask for it.
 func decodeForTest(t *testing.T, b []byte) *binary.Module {
 	t.Helper()
-	d := &binary.Decoder{Features: binary.Features{SIMD: true}}
+	d := &binary.Decoder{Features: binary.Features{SIMD: true, Memory64: true}}
 	m, err := d.DecodeModule(b)
 	if err != nil {
 		t.Fatalf("the encoder produced % x, which the decoder rejects: %v", b, err)
@@ -40,35 +52,41 @@ func decodeForTest(t *testing.T, b []byte) *binary.Module {
 // plus a distinct inline signature must yield **two** slots, and interning must reuse rather than
 // append for an inline signature equal to an existing type. Neither is visible in a module with one
 // type, which is why both shapes are here.
+// The memory and table columns are `nil` on the type-only rows and vice versa, which is deliberate:
+// one table over all encodable modules, so a section this emitter writes for a module that should
+// have none is a failure rather than an unchecked case. A per-section table would have no row saying
+// `(module (type (func)))` has *no* memory section.
 var encodableModules = []struct {
-	src  string
-	want []binary.CompType
+	src      string
+	want     []binary.CompType
+	wantTabs []binary.Table
+	wantMems []binary.Memory
 }{
-	{`(module)`, nil},
-	{`(module (type (func)))`, []binary.CompType{
+	{src: `(module)`},
+	{src: `(module (type (func)))`, want: []binary.CompType{
 		{Kind: binary.CompFunc},
 	}},
-	{`(module (type (func (param i32))))`, []binary.CompType{
+	{src: `(module (type (func (param i32))))`, want: []binary.CompType{
 		{Kind: binary.CompFunc, Func: binary.FuncType{Params: []binary.ValType{binary.I32}}},
 	}},
-	{`(module (type (func (result i64))))`, []binary.CompType{
+	{src: `(module (type (func (result i64))))`, want: []binary.CompType{
 		{Kind: binary.CompFunc, Func: binary.FuncType{Results: []binary.ValType{binary.I64}}},
 	}},
 	// Param order and result order, both, in one signature — a reversal in either would still
 	// round-trip if the writer and reader reversed together, and the want column is what catches it.
-	{`(module (type (func (param i32 f32) (result f64 i64))))`, []binary.CompType{
+	{src: `(module (type (func (param i32 f32) (result f64 i64))))`, want: []binary.CompType{
 		{Kind: binary.CompFunc, Func: binary.FuncType{
 			Params:  []binary.ValType{binary.I32, binary.F32},
 			Results: []binary.ValType{binary.F64, binary.I64},
 		}},
 	}},
 	// A named type. The name is a parse-time binding and must leave no trace in the image.
-	{`(module (type $t (func (param f32))))`, []binary.CompType{
+	{src: `(module (type $t (func (param f32))))`, want: []binary.CompType{
 		{Kind: binary.CompFunc, Func: binary.FuncType{Params: []binary.ValType{binary.F32}}},
 	}},
 	// All five number types, in one place, so a transposed byte in the table is a single failure
 	// rather than a missing row.
-	{`(module (type (func (param i32 i64 f32 f64 v128))))`, []binary.CompType{
+	{src: `(module (type (func (param i32 i64 f32 f64 v128))))`, want: []binary.CompType{
 		{Kind: binary.CompFunc, Func: binary.FuncType{Params: []binary.ValType{
 			binary.I32, binary.I64, binary.F32, binary.F64, binary.V128,
 		}}},
@@ -78,35 +96,122 @@ var encodableModules = []struct {
 	// params here are exactly two distinct types, and an encoder that treated the spellings as
 	// distinct would produce four different bytes.
 	{
-		`(module (type (func (param funcref externref (ref null func) (ref null extern)))))`,
-		[]binary.CompType{{Kind: binary.CompFunc, Func: binary.FuncType{Params: []binary.ValType{
+		src: `(module (type (func (param funcref externref (ref null func) (ref null extern)))))`,
+		want: []binary.CompType{{Kind: binary.CompFunc, Func: binary.FuncType{Params: []binary.ValType{
 			binary.FuncRef, binary.ExternRef, binary.FuncRef, binary.ExternRef,
 		}}}},
 	},
 	// Multiple results, which is a Wasm 2.0 feature the encoder gets for free from `vec` and which
 	// a one-result assumption would silently truncate.
-	{`(module (type (func (result i32 i32 i32))))`, []binary.CompType{
+	{src: `(module (type (func (result i32 i32 i32))))`, want: []binary.CompType{
 		{Kind: binary.CompFunc, Func: binary.FuncType{Results: []binary.ValType{
 			binary.I32, binary.I32, binary.I32,
 		}}},
 	}},
 	// Two explicit types, so index order is asserted rather than assumed.
-	{`(module (type (func (param i32))) (type (func (param i64))))`, []binary.CompType{
+	{src: `(module (type (func (param i32))) (type (func (param i64))))`, want: []binary.CompType{
 		{Kind: binary.CompFunc, Func: binary.FuncType{Params: []binary.ValType{binary.I32}}},
 		{Kind: binary.CompFunc, Func: binary.FuncType{Params: []binary.ValType{binary.I64}}},
 	}},
 	// A `(rec …)` group. Its members occupy ordinary type indices, and with GC off a rec group of
 	// functypes is still a legal spelling — so this asserts the group does not become one slot.
-	{`(module (rec (type (func (param i32))) (type (func (param i64)))))`, []binary.CompType{
+	{src: `(module (rec (type (func (param i32))) (type (func (param i64)))))`, want: []binary.CompType{
 		{Kind: binary.CompFunc, Func: binary.FuncType{Params: []binary.ValType{binary.I32}}},
 		{Kind: binary.CompFunc, Func: binary.FuncType{Params: []binary.ValType{binary.I64}}},
 	}},
 	// `(sub …)`'s supertype list is read and discarded (subtype's comment), so the encoded type is
 	// the inner comptype and the parents leave no bytes.
-	{`(module (type (func)) (type (sub 0 (func (param i32)))))`, []binary.CompType{
+	{src: `(module (type (func)) (type (sub 0 (func (param i32)))))`, want: []binary.CompType{
 		{Kind: binary.CompFunc},
 		{Kind: binary.CompFunc, Func: binary.FuncType{Params: []binary.ValType{binary.I32}}},
 	}},
+
+	// # Memories (#8)
+	//
+	// The want column is read from the wat: `(memory 1)` is min 1, no max, 32-bit — so flags 0x00.
+	{src: `(module (memory 1))`, wantMems: []binary.Memory{{Limits: binary.Limits{Min: 1}}}},
+	// A maximum, which is flag bit 0 — and the *presence* is asserted separately from the value,
+	// because `HasMax` false with `Max` 0 and `HasMax` true with `Max` 0 are different modules.
+	{src: `(module (memory 1 2))`, wantMems: []binary.Memory{
+		{Limits: binary.Limits{Min: 1, Max: 2, HasMax: true}},
+	}},
+	// Max equal to min, which is what the `(data …)` sugar would produce and what an encoder writing
+	// `hasMax` from `max != 0` would get wrong in the other direction.
+	{src: `(module (memory 0 0))`, wantMems: []binary.Memory{
+		{Limits: binary.Limits{Min: 0, Max: 0, HasMax: true}},
+	}},
+	// The explicit i32 addrtype, which is the *same type* as the empty arm — so flags stay 0x00 and
+	// an encoder that set bit 2 on any explicit addrtype would fail here rather than on i64.
+	{src: `(module (memory i32 1))`, wantMems: []binary.Memory{{Limits: binary.Limits{Min: 1}}}},
+	// Two memories, so index order is asserted. Multi-memory is a tracked gate and the *text* grammar
+	// admits two `(memory …)` fields regardless — the decoder's own multi-memory gate governs the
+	// binary side, and this row is what would fail if it did not.
+	{src: `(module (memory 1) (memory 2 3))`, wantMems: []binary.Memory{
+		{Limits: binary.Limits{Min: 1}},
+		{Limits: binary.Limits{Min: 2, Max: 3, HasMax: true}},
+	}},
+	// A named memory: the name is a parse-time binding and must leave no trace in the image.
+	{src: `(module (memory $m 1))`, wantMems: []binary.Memory{{Limits: binary.Limits{Min: 1}}}},
+	// A minimum needing a multi-byte LEB, so the writer's u64 is exercised past one byte in a real
+	// section rather than only in writer_test's unit rows.
+	{src: `(module (memory 65536))`, wantMems: []binary.Memory{{Limits: binary.Limits{Min: 65536}}}},
+	// The i64 addrtype, which is flags bit **2**. Added because its absence let a defect probe pass:
+	// see decodeForTest for the measurement. `Memory` carries no address-type field of its own, so
+	// what the want column can state is the limits — and the *bit* is asserted by the two probes
+	// (0x02 and no bit at all) failing on this row rather than by a field comparison.
+	{src: `(module (memory i64 1))`, wantMems: []binary.Memory{{Limits: binary.Limits{Min: 1}}}},
+	{src: `(module (memory i64 1 4))`, wantMems: []binary.Memory{
+		{Limits: binary.Limits{Min: 1, Max: 4, HasMax: true}},
+	}},
+	// A minimum above 2^32, which *only* an i64 memory can have — and which is the reason `limits`
+	// reads `nat64`. A 32-bit read would have truncated this silently.
+	{src: `(module (memory i64 4294967296))`, wantMems: []binary.Memory{
+		{Limits: binary.Limits{Min: 4294967296}},
+	}},
+
+	// # Tables (#8)
+	//
+	// `(table 1 funcref)` is min 1, no max, element type funcref — and note the emitted field order
+	// is reftype-then-limits, the reverse of the text's.
+	{src: `(module (table 1 funcref))`, wantTabs: []binary.Table{
+		{ElemType: binary.FuncRef, Limits: binary.Limits{Min: 1}},
+	}},
+	{src: `(module (table 1 2 externref))`, wantTabs: []binary.Table{
+		{ElemType: binary.ExternRef, Limits: binary.Limits{Min: 1, Max: 2, HasMax: true}},
+	}},
+	// `funcref` and `(ref null func)` are the same type, so these two rows must produce the same
+	// element byte — the abbreviation-normalization assertion, at the table's element position.
+	{src: `(module (table 0 (ref null func)))`, wantTabs: []binary.Table{
+		{ElemType: binary.FuncRef, Limits: binary.Limits{Min: 0}},
+	}},
+	{src: `(module (table $t 3 funcref))`, wantTabs: []binary.Table{
+		{ElemType: binary.FuncRef, Limits: binary.Limits{Min: 3}},
+	}},
+	// A table's own i64 addrtype — the same flag bit, at the other construct, because `addrtype` is
+	// shared between `tabletype` and `memorytype` and an emitter could get one right and the other
+	// wrong.
+	{src: `(module (table i64 1 funcref))`, wantTabs: []binary.Table{
+		{ElemType: binary.FuncRef, Limits: binary.Limits{Min: 1}},
+	}},
+	// Two tables, index order, with different element types — a transposed element would swap them.
+	{src: `(module (table 1 funcref) (table 2 externref))`, wantTabs: []binary.Table{
+		{ElemType: binary.FuncRef, Limits: binary.Limits{Min: 1}},
+		{ElemType: binary.ExternRef, Limits: binary.Limits{Min: 2}},
+	}},
+
+	// # The three sections together, so section *order* is asserted
+	//
+	// `checkSectionOrder` rejects an image whose ids do not ascend, and the text field order here is
+	// deliberately the reverse of the binary section order (memory before table, table id 4 before
+	// memory id 5) — so an emitter that wrote sections in field order rather than id order fails.
+	{
+		src: `(module (memory 1) (table 1 funcref) (type (func (param i32))))`,
+		want: []binary.CompType{
+			{Kind: binary.CompFunc, Func: binary.FuncType{Params: []binary.ValType{binary.I32}}},
+		},
+		wantTabs: []binary.Table{{ElemType: binary.FuncRef, Limits: binary.Limits{Min: 1}}},
+		wantMems: []binary.Memory{{Limits: binary.Limits{Min: 1}}},
+	},
 }
 
 // TestEncodeRoundTripsThroughTheDecoder is the encoder's acceptance check, and the direction of the
@@ -141,6 +246,25 @@ func TestEncodeRoundTripsThroughTheDecoder(t *testing.T) {
 				t.Fatalf("encoded % x, which decodes to %d types, want %d: %v",
 					b, len(m.Types), len(tc.want), m.Types)
 			}
+			if len(m.Memories) != len(tc.wantMems) {
+				t.Fatalf("encoded % x, which decodes to %d memories, want %d: %v",
+					b, len(m.Memories), len(tc.wantMems), m.Memories)
+			}
+			for i, want := range tc.wantMems {
+				if got := m.Memories[i]; got != want {
+					t.Errorf("memory %d is %+v, want %+v", i, got, want)
+				}
+			}
+			if len(m.Tables) != len(tc.wantTabs) {
+				t.Fatalf("encoded % x, which decodes to %d tables, want %d: %v",
+					b, len(m.Tables), len(tc.wantTabs), m.Tables)
+			}
+			for i, want := range tc.wantTabs {
+				if got := m.Tables[i]; got != want {
+					t.Errorf("table %d is %+v, want %+v", i, got, want)
+				}
+			}
+
 			for i, want := range tc.want {
 				got := m.Types[i]
 				if got.Kind != want.Kind {
@@ -166,6 +290,136 @@ func TestEncodeRoundTripsThroughTheDecoder(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestEncodeWritesTheAddressTypeFlagBit asserts the one bit the round trip structurally cannot see.
+//
+// **This is a byte-level assertion, and writer.go's header says byte equality is not the criterion —
+// so the exception needs its reason.** The reason is that the round trip has no opinion here:
+// `binary.Limits` is `{Min, Max, HasMax}` and carries **no address type**, so `decodeLimits` reads
+// flags bit 2, uses it to pick a gate, and then discards which one it saw. A memory64 with min 1 and
+// a memory32 with min 1 decode to *identical* `binary.Memory` values. Every other encoding fact in
+// this file is falsified by round trip; this one has nothing to round-trip against.
+//
+// Found by the falsification budget rather than by design. Two probes were run against the flags
+// byte: writing bit 1 (shared) instead of bit 2 *passed* the whole suite, which said no row
+// exercised an i64 addrtype — fixed by adding rows and turning Memory64 on. Then dropping bit 2
+// **entirely** passed again, with the rows present, and that second pass is what identified the
+// blindness as structural rather than as missing coverage. A control that cannot fail is worth more
+// as a discovery than as a control (#108's birth rule), and the discovery here is that the
+// instrument was wrong, not the table.
+//
+// The expected flags are read from `encode.ml:187` — `flag (max <> None) 0 + flag (at = I64AT) 2` —
+// not from this encoder's output. The image is scanned for the memory section rather than indexed at
+// a fixed offset, so a row's type section does not shift the assertion.
+//
+// The independent witness for the same fact is the wabt corpus (#67 half 2), and **its reach here was
+// measured rather than assumed, because the first version of this sentence was wrong.** It claimed the
+// corpus "compares whole images and therefore does see the bit". Joined on `(File, Ordinal)` over the
+// suite, the emitter produces 51 encodable modules, **15** of which have a wabt witness at all, and of
+// those 15 only **5** have a non-empty table or memory section — the other ten agree empty-to-empty,
+// which is no agreement. Two of the five do carry this bit: `memory64-imports#12` and `#13`, where wabt
+// and this encoder both write `01 70 04 0a`, an i64 table. So the corroboration is real and it is two
+// modules deep.
+//
+// The reason it is not deeper is worth keeping, because it is the shape of the whole witness: wabt
+// **cannot parse 31 of the suite's files**, and among them are `memory`, `memory64`, `table`, and
+// `table64` — the four that exercise this section most — all four rejected on `(module definition …)`,
+// a spec form wabt does not implement, which fails the entire file. Every one of the 36 modules this
+// PR made encodable is in a skipped file. *The second opinion is absent from exactly the region the
+// work is in*, which is the same lesson as scoping a control to the current sample: an independent
+// witness has a blind spot too, and it is not the same one. Hence this test — it covers the region the
+// corpus cannot reach, and the corpus covers the two rows it can.
+func TestEncodeWritesTheAddressTypeFlagBit(t *testing.T) {
+	for _, tc := range []struct {
+		src       string
+		wantFlags byte
+	}{
+		{`(module (memory 1))`, 0x00},
+		{`(module (memory i32 1))`, 0x00},
+		{`(module (memory 1 2))`, 0x01},
+		{`(module (memory i64 1))`, 0x04},
+		{`(module (memory i64 1 2))`, 0x05},
+		// This row exists to falsify `bytesIndex`, not the flags byte. The table section is id 4 and
+		// is emitted before the memory section, so a `bytesIndex` that *searched* for the byte `05`
+		// instead of walking the framing would stop on this table's limits minimum — the earlier
+		// occurrence — and read the memory section's id and size as a count and a flags byte. Without
+		// this row that shortcut passes every case above, which is what it did when it was installed
+		// as a probe: the helper was correct in general and asserted by nothing.
+		{`(module (table 5 funcref) (memory i64 1))`, 0x04},
+	} {
+		t.Run(tc.src, func(t *testing.T) {
+			b, err := EncodeModule([]byte(tc.src))
+			if err != nil {
+				t.Fatalf("EncodeModule refused a module the encoder is meant to write: %v", err)
+			}
+			// The memory section is id 5, and every module here has exactly one memory — so the
+			// section body is `01` (the vector count) followed by the flags byte. Located by scanning
+			// for the id rather than by a fixed offset.
+			i := bytesIndex(b, secMemory)
+			if i < 0 {
+				t.Fatalf("the encoder produced % x with no memory section (id %d)", b, secMemory)
+			}
+			// id, length, count, flags
+			if len(b) < i+4 {
+				t.Fatalf("the memory section in % x is truncated", b)
+			}
+			if got, want := b[i+2], byte(0x01); got != want {
+				t.Fatalf("the memory section in % x declares %d entries, want %d", b, got, want)
+			}
+			if got := b[i+3]; got != tc.wantFlags {
+				t.Errorf("the limits flags byte is %#02x, want %#02x: bit 0 is a maximum and bit 2 is "+
+					"a 64-bit address type (encode.ml:187), and neither is visible to a round trip "+
+					"because binary.Limits carries no address type", got, tc.wantFlags)
+			}
+		})
+	}
+}
+
+// bytesIndex finds a section's id byte in an encoded module by walking the framing.
+//
+// It walks rather than searching for the byte, because `05` occurs inside a LEB, a valtype, or a
+// limits minimum, and a search would find one of those first. The shortcut was installed as a probe
+// and **passed** — it is right on every row that has one section before the memory — so the
+// `(table 5 funcref)` row above exists to kill it. That row is the whole reason this comment is a
+// claim rather than an assertion: a helper whose general-case correctness nothing exercises is the
+// stillborn-control shape one level down, in the instrument instead of in the engine (#108).
+//
+// `uvarint`'s multi-byte path is **not** exercised here: no section in any row reaches 128 bytes, so
+// every size LEB is one byte and the continuation branch never runs. Stated rather than hidden, and
+// the exactness is the point — this is a knowable zero, not an estimate. It stays unexercised because
+// a 128-byte section would need ~40 memories to say nothing this file does not already say; the fact
+// worth having is that the shortcut `size := b[i+1]` would pass identically today, so anyone widening
+// these rows past that boundary is the one who needs the coverage, and this sentence is the notice.
+func bytesIndex(b []byte, id byte) int {
+	i := 8 // past magic and version
+	for i < len(b) {
+		secID := b[i]
+		size, n := uvarint(b[i+1:])
+		if n <= 0 {
+			return -1
+		}
+		if secID == id {
+			return i
+		}
+		i += 1 + n + int(size)
+	}
+	return -1
+}
+
+// uvarint reads a LEB128 the way the decoder's reader does, for the section walk above.
+//
+// Not `binary.Uvarint` from the standard library's `encoding/binary`: that package is not imported
+// here and this file's `binary` is the engine's own. Ten bytes maximum, matching the u64 budget.
+func uvarint(b []byte) (uint64, int) {
+	var v uint64
+	for i := range min(len(b), 10) {
+		v |= uint64(b[i]&0x7F) << (7 * i)
+		if b[i]&0x80 == 0 {
+			return v, i + 1
+		}
+	}
+	return 0, 0
 }
 
 // TestEncodeDoesNotRerunTheDeferredPhase pins the defect the first draft of `encode` had, and it
@@ -264,8 +518,6 @@ func TestEncodeRefusesWhatItCannotWrite(t *testing.T) {
 		{`(module (func))`, "(func …) field"},
 		{`(module (import "m" "f" (func)))`, "(import …) field"},
 		{`(module (export "a" (func 0)) (func))`, "(export …) field"},
-		{`(module (memory 1))`, "(memory …) field"},
-		{`(module (table 1 funcref))`, "(table …) field"},
 		{`(module (global i32 (i32.const 0)))`, "(global …) field"},
 		{`(module (start 0) (func))`, "(start …) field"},
 		{`(module (data "abc"))`, "(data …) field"},
@@ -277,6 +529,60 @@ func TestEncodeRefusesWhatItCannotWrite(t *testing.T) {
 		{`(module (type (func (param (ref extern)))))`, "parameterized reference"},
 		{`(module (type $t (func)) (type (func (param (ref null $t)))))`, "parameterized reference"},
 		{`(module (type (func (param anyref))))`, "parameterized reference"},
+
+		// # The unencodable *arms* of memory and table (#8)
+		//
+		// **This is the half of the frontier the per-field version could not express.** `(memory 1)`
+		// and `(table 1 funcref)` moved out of this table and into `encodableModules`, and what
+		// remains is per-arm: each row below dispatches on a keyword the emitter *can* write and is
+		// still refused, because its own arm retains something no section exists for. A frontier
+		// keyed on the field kind would have accepted every one of these and emitted a module with
+		// the sugar's data or elem segment silently dropped.
+		//
+		// The inline-import rows are the population split: an imported memory belongs to the import
+		// section, so emitting it as a memory section entry would declare it twice.
+		{`(module (memory (data "abc")))`, "(memory …) field"},       // + an implicit data segment
+		{`(module (memory i64 (data "")))`, "(memory …) field"},      // the sugar's addrtype arm
+		{`(module (memory (import "m" "x") 1))`, "(memory …) field"}, // an import, not a definition
+		{`(module (memory (export "a") 1))`, "(memory …) field"},     // + an export section
+		{`(module (table (import "m" "x") 1 funcref))`, "(table …) field"},
+		{`(module (table (export "a") 1 funcref))`, "(table …) field"},
+		{`(module (table funcref (elem)))`, "(table …) field"}, // + an implicit elem segment
+		{`(module (table i64 funcref (elem)))`, "(table …) field"},
+		{`(module (func $f) (table 1 funcref (ref.func $f)))`, "(func …) field"}, // an initializer expr
+		// A table whose element type needs GC's prefix: refused by the *element type* check rather
+		// than by the field check, so the message names the type rather than the field.
+		{`(module (table 1 (ref func)))`, "element type (ref func)"},
+		{`(module (table 1 anyref))`, "element type (ref null any)"},
+		{`(module (type $t (func)) (table 1 (ref null $t)))`, "element type (ref null 0)"},
+		// The same table with its type defined **after** it, which is what `defineTable`'s deferral is
+		// for: `table_fields` runs in `module_fields1`'s second `fun () ->` (parser.mly:1341-1347), so
+		// the element type may forward-reference. Both orders refuse today, so the *verdict* cannot see
+		// the deferral — replacing it with eager resolution keeps every row green. What it changes is
+		// the testimony: the message becomes `element type (ref )`, an unresolved index rendered as
+		// nothing, which is the fabricated-evidence class (grave #36) — right refusal, invented type.
+		// So this row pins the message, and it is the only instrument that can: the deferral's effect
+		// on this module is entirely inside a string the suite never reads.
+		{`(module (table 1 (ref null $t)) (type $t (func)))`, "element type (ref null 0)"},
+
+		// # An encodable field *after* an unencodable one — the withdrawal's identity check
+		//
+		// **These four rows exist because the check they falsify was unfalsifiable without them, and
+		// the comment on `clearNonTypeField` had already claimed otherwise.** Removing that function's
+		// `firstNonType.Offset == kw.Offset` comparison passes every other row in this file: each of
+		// them puts the unencodable field first *and last*, so there is no later encodable field to
+		// withdraw the wrong record. With the comparison gone, `(module (func) (memory 1))` encodes —
+		// the memory arm withdraws the *func's* refusal — and emits a module whose function is
+		// silently dropped. That is the accept-direction defect arriving through the mechanism built
+		// to prevent it, and until these rows existed nothing could see it.
+		//
+		// Two orders and two kinds, because the defect is about *which* record gets cleared: the
+		// unencodable field is the one whose name must appear in the message, never the encodable
+		// field that follows it.
+		{`(module (func) (memory 1))`, "(func …) field"},
+		{`(module (data "abc") (table 1 funcref))`, "(data …) field"},
+		{`(module (memory (data "x")) (memory 1))`, "(memory …) field"},
+		{`(module (tag) (memory 1) (table 1 funcref))`, "(tag …) field"},
 	} {
 		t.Run(tc.src, func(t *testing.T) {
 			if err := ReadModule([]byte(tc.src)); err != nil {

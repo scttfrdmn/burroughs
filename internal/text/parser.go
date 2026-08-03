@@ -308,6 +308,11 @@ func (p *parser) externtype() error {
 		if err := p.bindidxOpt(&p.ctx.memories, "memory"); err != nil {
 			return err
 		}
+		// Nothing retained, and this is the import section's business rather than a gap: an imported
+		// memory is an `Import`, not a `Memory`, so its type belongs to a section this emitter does
+		// not write. The `(import …)` field is refused wholesale at the dispatch. This call site is
+		// why `memorytype` stays error-only — see its doc comment for what happened to the version
+		// that returned a value.
 		if err := p.memorytype(); err != nil {
 			return err
 		}
@@ -694,19 +699,55 @@ func (p *parser) globalField() error {
 	return p.rpar()
 }
 
+// importedExternType parses an inline import's type and closes the field.
+//
+// **A three-line helper, and the reason it exists is worth more than the three lines.** Inline in
+// `memoryField` and `tableField`, this arm sat inside the live range of the outer `err` that the
+// retention below now reads — so `govet`'s `shadow` objected to `if err := …` and `gocritic`'s
+// `sloppyReassign` objected to `if err = …`. Two curated linters wanting opposite things is not noise
+// to suppress; it is both of them describing one fact, which is that an error was being held live
+// across an arm that has no business in it. Lifting the arm out ends the disagreement by removing its
+// subject, and that is the outcome the spirit clause asks for — a `nolint` on either would have
+// recorded the standoff and fixed nothing.
+//
+// It also unifies what was two copies of one three-line sequence, and both call sites are the same
+// fact: an imported memory or table is an `Import`, not a definition, so its type belongs to a section
+// this emitter does not write and nothing here retains it.
+//
+// The first attempt at this got it wrong in a way worth recording: it kept the arms in place, wrote
+// `err =`, and asserted in a comment that `sloppyReassign` "does not fire on this one because the
+// variable genuinely is reused". It fires. The claim was checked by running the linter rather than by
+// reading it, which is the only reason it did not ship as a comment stating the opposite of the truth.
+func (p *parser) importedExternType(parse func() error) error {
+	if err := parse(); err != nil {
+		return err
+	}
+	return p.rpar()
+}
+
 // memoryField parses `memory` (parser.mly:1112-1134).
 //
 // Four arms, one of them the `addrtype (data string_list)` sugar that defines a memory sized to
 // its own data — and that arm creates a *data segment* too, which is why the reference threads a
 // data list out of memory_fields. Under 0011 nothing is created, but the arm still has to parse
 // or `(memory (data "abc"))` is a valid module rejected.
+// **One of its four arms is encodable (#8), and it is the plain one.** The inline-import arm defines
+// no memory (it is an import); the `(data …)` sugar defines both a memory *and* a data segment, and
+// emitting the memory without the data would be a module that decodes clean and means something
+// else; an inline export needs an export section. So only `addrtype limits` withdraws the frontier,
+// and it does so at the end, where every retention has happened.
 func (p *parser) memoryField() error {
+	kw := p.c.peek2()
 	if err := p.lpar(kwMemory); err != nil {
 		return err
 	}
 	if err := p.bindidxOpt(&p.ctx.memories, "memory"); err != nil {
 		return err
 	}
+	// Recorded before the arm is known: an inline export makes this field unencodable, and the
+	// dispatch's record already stands, so there is nothing to do but *not withdraw* it. The
+	// variable is what the plain arm consults before withdrawing.
+	exported := p.c.at(LParen) && p.c.peek2Keyword(kwExport)
 	if err := p.inlineExports(); err != nil {
 		return err
 	}
@@ -715,34 +756,62 @@ func (p *parser) memoryField() error {
 		return err
 	}
 	if imported {
-		if err := p.memorytype(); err != nil {
-			return err
-		}
-		return p.rpar()
+		return p.importedExternType(p.memorytype)
 	}
 	// The `addrtype LPAR DATA string_list RPAR` sugar (parser.mly:1129), distinguished from
 	// `memorytype` by an LPAR where a nat would be. addrtype is optional in both, so it is
 	// consumed first and the branch happens after.
-	if err := p.addrtype(); err != nil {
+	addr64, err := p.addrtype()
+	if err != nil {
 		return err
 	}
 	if p.c.at(LParen) && p.c.peek2Keyword(kwData) {
-		if err := p.lpar(kwData); err != nil {
-			return err
-		}
-		if err := p.stringList(); err != nil {
-			return err
-		}
-		if err := p.rpar(); err != nil {
-			return err
-		}
-		p.ctx.datas.bindAnon() // the sugar's implicit data segment
-		p.ctx.markDefined(importMemory)
-		return p.rpar()
+		return p.memoryDataSugar()
 	}
-	if err := p.limits(); err != nil {
+	lim, err := p.limits()
+	if err != nil {
 		return err
 	}
+	p.ctx.markDefined(importMemory)
+	if err := p.rpar(); err != nil {
+		return err
+	}
+	// After the closing paren, so a malformed field never records content. The order matters for the
+	// retention check: a field that errors out mid-way must leave no trace, or the counts disagree
+	// with the sections on a module that never finished parsing.
+	p.ctx.defineMemory(memType{addr64: addr64, lim: lim})
+	p.ctx.noteDefined(importMemory)
+	if !exported {
+		p.ctx.clearNonTypeField(kw)
+	}
+	return nil
+}
+
+// memoryDataSugar parses the tail of `(memory <addrtype> (data …))` (parser.mly:1129).
+//
+// **Its own function for a lint reason that turned out to be a structural one.** Inline, it put three
+// `if err := …` blocks between `memoryField`'s outer `err` and that variable's last use, so `govet`'s
+// `shadow` reported each — and rewriting them as `err =` traded those for `gocritic`'s
+// `sloppyReassign`, the two linters wanting opposite things. Neither is wrong: the conflict is the
+// signal that one function was holding an error live across an arm that does not need it. Extracting
+// the arm satisfies both by removing the cause, which is the outcome the spirit clause prefers over a
+// suppression — a `nolint` here would have documented a disagreement instead of resolving it.
+//
+// No retention and no withdrawal: this arm defines a memory the emitter *cannot* write, because its
+// size is derived from a data segment there is no data section for yet. Counting it would make
+// `encodableOrErr`'s retention check disagree with itself, which is the check working — it asks
+// whether every defined memory was retained, and this one deliberately was not.
+func (p *parser) memoryDataSugar() error {
+	if err := p.lpar(kwData); err != nil {
+		return err
+	}
+	if err := p.stringList(); err != nil {
+		return err
+	}
+	if err := p.rpar(); err != nil {
+		return err
+	}
+	p.ctx.datas.bindAnon() // the sugar's implicit data segment
 	p.ctx.markDefined(importMemory)
 	return p.rpar()
 }
@@ -752,13 +821,18 @@ func (p *parser) memoryField() error {
 // Five arms. Two are sugar forms taking `(elem …)` and sizing the table to it, and both create
 // an elem segment. The `tabletype constexpr1` arm reaches the instruction boundary; the bare
 // `tabletype` arm (`:1192`) completes, because the reference synthesizes a `ref.null` init.
+// **One of its five arms is encodable (#8): `tabletype` with no initializer**, the bare form at
+// :1192. The `constexpr1` arm has an initializer expression the emitter cannot write (no instruction
+// emitter yet), and both `(elem …)` sugar arms define an elem segment there is no elem section for.
 func (p *parser) tableField() error {
+	kw := p.c.peek2()
 	if err := p.lpar(kwTable); err != nil {
 		return err
 	}
 	if err := p.bindidxOpt(&p.ctx.tables, "table"); err != nil {
 		return err
 	}
+	exported := p.c.at(LParen) && p.c.peek2Keyword(kwExport)
 	if err := p.inlineExports(); err != nil {
 		return err
 	}
@@ -767,42 +841,72 @@ func (p *parser) tableField() error {
 		return err
 	}
 	if imported {
-		if err := p.tabletype(); err != nil {
-			return err
-		}
-		return p.rpar()
+		return p.importedExternType(p.tabletype)
 	}
-	if err := p.addrtype(); err != nil {
+	addr64, err := p.addrtype()
+	if err != nil {
 		return err
 	}
 	// `addrtype reftype (elem …)` sugar (parser.mly:1205/1216) versus `addrtype limits
 	// reftype`: the sugar has no limits, so a reftype where a nat would be is the tell.
 	if p.atReftypeStart() {
-		// Discarded: a table's element type is never a comparison operand. See types.go's
-		// header for where the value-returning half of the type algebra stops.
-		if _, err := p.reftype(); err != nil {
+		return p.tableElemSugar()
+	}
+	lim, err := p.limits()
+	if err != nil {
+		return err
+	}
+	elem, err := p.reftype()
+	if err != nil {
+		return err
+	}
+	p.ctx.markDefined(importTable)
+	if p.c.at(RParen) { // the bare-tabletype arm, parser.mly:1192
+		if err := p.rpar(); err != nil {
 			return err
 		}
-		if err := p.lpar(kwElem); err != nil {
-			return err
+		// The reference synthesizes a `ref.null ht` initializer for this arm (:1193-1194), and
+		// `encode.ml:960-962` writes the *plain* tabletype whenever the initializer is exactly
+		// `ref.null` of the table's own heap type — which is precisely this arm. So the bare form
+		// round-trips with no initializer to write, and the 0x40 form is never needed here.
+		p.ctx.defineTable(tabType{addr64: addr64, lim: lim, elem: elem})
+		p.ctx.noteDefined(importTable)
+		if !exported {
+			p.ctx.clearNonTypeField(kw)
 		}
-		p.ctx.elems.bindAnon() // the sugar's implicit elem segment
-		// Both sugar arms' contents are instruction-level: elemexpr_list or elemidx_list. The
-		// idx list is reachable here; an `(item …)` or folded expr is #63's — the folded arm
-		// by the defect-ownership ruling on #63, which put `expr1`'s minimal arm there.
-		if p.c.at(NatTok) || p.c.at(VarTok) || p.c.at(RParen) {
-			// elemidx_list (parser.mly:1147), whose idx_list has an empty arm — so
-			// `(table funcref (elem))` is well-formed.
-			if err := p.idxList(); err != nil {
-				return err
-			}
-			if err := p.rpar(); err != nil {
-				return err
-			}
-			p.ctx.markDefined(importTable)
-			return p.rpar()
-		}
-		if err := p.elemexprList(); err != nil { // parser.mly:1205
+		return nil
+	}
+	if err := p.constexpr1(); err != nil { // tabletype constexpr1
+		return err
+	}
+	return p.rpar()
+}
+
+// tableElemSugar parses the tail of `(table <addrtype> reftype (elem …))` (parser.mly:1205/1216).
+//
+// Extracted for the reason `memoryDataSugar` records: inline, its nested arms held `tableField`'s
+// outer `err` live and pitted `shadow` against `sloppyReassign`.
+//
+// Nothing retained: this arm's table is sized from an elem segment the emitter cannot write, so there
+// is nothing to retain it for. **The reference resolves the reftype here too** — the arm is `$2 c`, a
+// lookup — so `(table (ref null $undefined) (elem))` is a module we accept and upstream rejects. Not
+// fixed here: it is one of nine sites of one shape, filed as its own issue rather than swept into an
+// encoder PR (see types.go's header).
+func (p *parser) tableElemSugar() error {
+	if _, err := p.reftype(); err != nil {
+		return err
+	}
+	if err := p.lpar(kwElem); err != nil {
+		return err
+	}
+	p.ctx.elems.bindAnon() // the sugar's implicit elem segment
+	// Both sugar arms' contents are instruction-level: elemexpr_list or elemidx_list. The
+	// idx list is reachable here; an `(item …)` or folded expr is #63's — the folded arm
+	// by the defect-ownership ruling on #63, which put `expr1`'s minimal arm there.
+	if p.c.at(NatTok) || p.c.at(VarTok) || p.c.at(RParen) {
+		// elemidx_list (parser.mly:1147), whose idx_list has an empty arm — so
+		// `(table funcref (elem))` is well-formed.
+		if err := p.idxList(); err != nil {
 			return err
 		}
 		if err := p.rpar(); err != nil {
@@ -811,19 +915,13 @@ func (p *parser) tableField() error {
 		p.ctx.markDefined(importTable)
 		return p.rpar()
 	}
-	if err := p.limits(); err != nil {
+	if err := p.elemexprList(); err != nil { // parser.mly:1205
 		return err
 	}
-	if _, err := p.reftype(); err != nil {
+	if err := p.rpar(); err != nil {
 		return err
 	}
 	p.ctx.markDefined(importTable)
-	if p.c.at(RParen) { // the bare-tabletype arm, parser.mly:1192
-		return p.rpar()
-	}
-	if err := p.constexpr1(); err != nil { // tabletype constexpr1
-		return err
-	}
 	return p.rpar()
 }
 

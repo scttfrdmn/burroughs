@@ -347,6 +347,35 @@ type context struct {
 	// requires, answered when that section is written rather than guessed at now (0006).
 	firstNonType Token
 	haveNonType  bool
+
+	// The retained memory and table definitions, in source order — the emitter's input for sections
+	// 5 and 4. Read by encodeMemories and encodeTables; written by defineMemory and defineTable in
+	// typetable.go, which owns the argument for why one is deferred and the other is not.
+	//
+	// **The paragraph above says this struct's frontier record is "deliberately not a step toward
+	// retaining fields", and these two fields are the first exception it anticipated.** They are not
+	// a reversal of it: the rule is 0006's, that retention grows out of what a *section's grammar*
+	// requires when that section is written, and these are exactly that — written because sections 4
+	// and 5 now have emitters, shaped by what `encode.ml:187-200` reads, and no wider. `tabDefs` holds
+	// `resolvedTable` rather than `tabType` because the element type resolves in the deferred phase and
+	// what survives it is the resolved form.
+	//
+	// Defined entries only. An imported memory or table is an `Import`, and its type belongs to a
+	// section this emitter does not write — the same split `decodeTableForm` names on the binary side.
+	memDefs []memType
+	tabDefs []resolvedTable
+
+	// defCount counts *defined* (non-imported) entries per kind, for the withdrawal check in
+	// `encodableOrErr`.
+	//
+	// **This is what stops a withdrawal from lying.** `clearNonTypeField` is a claim that an arm
+	// retained everything it parsed, and nothing about the call site proves it — an arm that marks a
+	// definition, withdraws the frontier, and forgets to record the type would emit a module missing
+	// a memory, decoding clean and meaning something else. So the claim is checked: on a module that
+	// passes the frontier, the retained count must equal the defined count, per kind. An array over
+	// `importKind` rather than a field per kind, so a sixth kind is a compile-time question rather
+	// than a field somebody forgets.
+	defCount [importFunc + 1]uint32
 }
 
 // noteNonTypeField records the first module field the encoder has no emitter for.
@@ -355,21 +384,66 @@ type context struct {
 // remove to get an image out — which is the actionable one.
 //
 // **The consequence for reading the frontier as a work plan: these refusals bucket *modules*, not
-// constructs.** Measured over the suite — 2150 parser-accepted text modules, of which 15 encode in
-// full today — the refusals partition as `func` 1105, `memory` 467, `table` 251, `import` 177,
-// `global` 56, `data` 24, `export` 18, `elem` 16, `tag` 9, struct-or-array types 9, GC valtypes 3.
-// Each module is counted once, under whichever unencodable field it happens to reach first, so a
-// bucket is a lower bound on the modules that construct blocks and says nothing about how many
-// occurrences it has. Draining `func` would not reveal 1105 encodable modules; it would re-sort
-// most of them into the next field they contain. *Bucket size estimates the reward, not the job* —
-// and here the key is "first blocking field", which cuts across mechanism exactly as the board's
-// spec-string key does.
+// constructs.** Measured over the suite — 2150 parser-accepted text modules, of which 51 encode in
+// full today — the refusals partition as `func` 1338, `import` 177, `elem` 173, `data` 139,
+// `memory` 118, `global` 63, `export` 36, `table` 33, struct-or-array comptypes 12, `tag` 9, and 1
+// table whose element type needs a parameterized reference encoding. Each module is counted once,
+// under whichever unencodable field it happens to reach first, so a bucket is a lower bound on the
+// modules that construct blocks and says nothing about how many occurrences it has. *Bucket size
+// estimates the reward, not the job* — the key is "first blocking field", which cuts across
+// mechanism exactly as the board's spec-string key does.
+//
+// **The memory/table emitters are the measurement that turned that from a caution into a number.**
+// Before them the same census read `memory` 467 and `table` 251 with 15 encodable. Both drained —
+// those buckets now hold only the arms the emitter still refuses, the per-arm frontier showing up in
+// the census — and the 718 modules went: **36** to encodable, and the rest re-sorted into the next
+// field they contain (`func` +233, `elem` +157, `data` +115, `export` +18, `global` +7, comptypes +3).
+// Two thirds of the largest two buckets bought a 5% move in the only column that counts. So the
+// prediction stated here before the work is now the observation: **draining a bucket re-sorts the
+// queue instead of emptying it**, and the honest reward estimate for the next bucket is not its size
+// but the number of modules whose *last* blocker it is. That number is not knowable from this
+// histogram, which is the limitation to carry forward rather than paper over — a histogram of first
+// blockers cannot answer a question about last ones, and re-measuring it will not change that.
+//
+// `table-elemtype` at 1 is the useful smallness in the table: exactly one module in the suite is
+// blocked by the GC-gated parameterized reference encoding, so that refusal is correctly a frontier
+// and not a queue.
 func (c *context) noteNonTypeField(kw Token) {
 	if c.haveNonType {
 		return
 	}
 	c.firstNonType, c.haveNonType = kw, true
 }
+
+// clearNonTypeField withdraws a frontier record, for a field the emitter *can* write.
+//
+// Called at the end of an arm that retained everything it parsed, and bound to the token it
+// withdraws: an arm that returns early — an inline import, a sugar form, an error — never reaches the
+// call and the refusal stands. That is why the token is a parameter rather than implicit. A withdrawal
+// keyed on nothing would clear whatever record happened to be current, so a `(memory 1)` following an
+// unencodable `(func …)` would withdraw the *func's* refusal and emit a module with the function
+// dropped — the accept-direction defect, arriving through the mechanism built to prevent it. The
+// identity check is what makes that impossible, and it is the same law as binding a CI verdict to its
+// SHA.
+//
+// Only the *first* record exists, so withdrawing a later field's token is a no-op by construction: if
+// an earlier field already refused, this field's own encodability does not matter.
+//
+// **The identity check's own falsification is `TestEncodeRefusesWhatItCannotWrite`'s mixed rows, and
+// it was watched die**: with the `Offset` comparison removed, `(module (func) (memory 1))` encodes and
+// drops the function. Recorded because the check reads like a defensive nicety and is the opposite.
+func (c *context) clearNonTypeField(kw Token) {
+	if c.haveNonType && c.firstNonType.Offset == kw.Offset {
+		c.haveNonType = false
+	}
+}
+
+// noteDefined counts a defined entry of the given kind, for encodableOrErr's retention check.
+//
+// Separate from `markDefined`, which records the *latest* kind for the import-ordering message and
+// therefore cannot count: conflating them would make that check's "latest definition" state a
+// counter, and a counter cannot be reset the way `markDefined` needs. Two questions, two mechanisms.
+func (c *context) noteDefined(k importKind) { c.defCount[k]++ }
 
 // importKind is the definition kind an `import after …` message names.
 //

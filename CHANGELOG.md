@@ -21,6 +21,78 @@ weakly-ordered platform.
 
 ### Added
 
+- **`internal/text/encode.go`: the memory and table section emitters, and a frontier that is now
+  per-arm rather than per-field** ([#8](https://github.com/scttfrdmn/burroughs/issues/8), 0011 part
+  2). `(memory i64 1 4)` and `(table 1 funcref)` encode; sections 4 and 5 join section 1 in id order,
+  and `w.limits` is shared because both spend the same flags byte. The suite's encodable population
+  goes **15 → 51** of 2150 parser-accepted text modules.
+
+  **The retention question inverted here, and asking it honestly found two rejects the reference
+  performs and we did not.** The type section grew out of retention the grammar already had
+  (`inline_functype_explicit` needs it); `limits`, `addrtype`, and `reftype` retained *nothing*, so
+  the emitter is their first consumer — the load-bearing spot 0006 warns about. Reading the values
+  for real is what surfaced both gaps: `limits`' nats are `nat64` in the reference, so
+  `(memory 18446744073709551616)` is `i64 constant out of range` *from the parser* and we accepted
+  it; and a table's element type resolves in the reference's stage 2 (parser.mly:1341-1347), so
+  `(table 1 (ref null $undefined))` is rejected upstream and accepted here. The first is fixed with
+  the retention; the second is one of **nine sites of one shape** — every valtype position that
+  discards its type accepts an unknown one — and is filed separately rather than swept in, because a
+  nine-site shape is not an encoder's business. Neither has a suite vector: the accept direction §9
+  G-3 names.
+
+  **The frontier is now per-arm, and the asymmetry is deliberate.** `(memory 1)` encodes while
+  `(memory (data "abc"))` does not, though both dispatch on `memory` — so the record is made at the
+  dispatch and *withdrawn* by the one arm that retained everything. Default is refusal: forgetting to
+  withdraw costs a visible refusal, forgetting to record silently drops a section. The withdrawal is
+  **identity-bound to its keyword token**, the same law as binding a CI verdict to its SHA — unkeyed,
+  a `(memory 1)` after an unencodable `(func …)` withdraws the *func's* refusal and emits a module
+  with the function dropped. That defect was installed and is now caught by four mixed-order rows;
+  before them it passed every test in the file, because every row put its unencodable field first.
+
+  **Nine defects installed, seven died, two were diagnosed — and the two are the findings.**
+
+  - **Dropping the limits flags' bit 2 passed twice.** First because no row exercised an i64
+    addrtype (fixed: `Memory64` on in the decode helper, four i64 rows). Then *again* with the rows
+    present — because `binary.Limits` is `{Min, Max, HasMax}` and carries **no address type**, so a
+    memory64 and a memory32 with the same minimum decode identically. The round trip is structurally
+    blind to that bit, which is why the assertion had to become byte-level
+    (`TestEncodeWritesTheAddressTypeFlagBit`, expected flags read from `encode.ml:187` rather than
+    from our own output). A control that cannot fail is worth more as a discovery than as a control.
+  - **The retention count check cannot currently be made to fire, and now says so at its site.**
+    Four defects against it all passed: the frontier refuses the offending module *before*
+    `encodableOrErr` reaches the loop, so it only runs on the population where the counts agree by
+    construction. Kept as a labelled tripwire for an arm that does not exist yet — declared and
+    tracked, per the `ErrTrailingData` ruling — rather than deleted or left claiming a guard it does
+    not provide.
+
+  **`unparam` deleted a function this PR wrote.** The retaining `tabletype`/`memorytype` returned
+  values no caller read: the inline-import arms discard (an imported table is an `Import`), and the
+  *defining* arms cannot call them at all, because the sugar branch needs a lookahead between
+  `addrtype` and `limits`. Retention built for a hypothetical consumer is the
+  generality-without-a-Go-shaped-consumer non-goal in its smallest costume; both are error-only again.
+  Separately, `govet`'s `shadow` and `gocritic`'s `sloppyReassign` demanded opposite things in the two
+  field functions — two curated linters describing one fact, that an error was held live across arms
+  with no business in it. Resolved by extracting `memoryDataSugar`, `tableElemSugar`, and
+  `importedExternType`, not by suppressing either.
+
+  **What the independent witness can and cannot say, measured rather than assumed.** The wabt corpus
+  joins **15** of the 51 encodable modules, and only **5** of those have a non-empty table or memory
+  section — the other ten agree empty-to-empty, which is no agreement. Two do carry the i64 bit
+  (`memory64-imports#12`/`#13`, both `01 70 04 0a`). The reason it is not deeper: wabt cannot parse 31
+  suite files, among them `memory`, `memory64`, `table`, and `table64` — all four rejected on
+  `(module definition …)`, a spec form wabt does not implement, which fails the whole file. **Every one
+  of the 36 modules this PR made encodable is in a file wabt skipped.** The second opinion is absent
+  from exactly the region the work is in, which is the scope-controls-to-the-space law pointed at a
+  witness: an independent oracle has a blind spot too, and it is not the same one.
+
+  **The frontier census is re-measured, and it turned a stated caution into a number.** Draining the
+  two largest buckets (`memory` 467, `table` 251 — 718 modules) yielded **36** newly encodable and
+  re-sorted the rest into the next field they contain (`func` +233, `elem` +157, `data` +115).
+  Two thirds of the largest two buckets bought a 5% move. *Bucket size estimates the reward, not the
+  job* — and the honest estimate for the next bucket is not its size but the count of modules whose
+  *last* blocker it is, which a histogram of *first* blockers cannot answer. Stated as the limitation
+  it is rather than re-measured into a nicer shape.
+
 - **`internal/text/encode.go`: the type-section emitter — `EncodeModule`, the bridge's first module
   that runs** ([#8](https://github.com/scttfrdmn/burroughs/issues/8), 0011 part 2). Text in, binary
   image out, checked by decoding: `(module (type (func (param i32) (result i64))))` becomes

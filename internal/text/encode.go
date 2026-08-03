@@ -59,10 +59,14 @@ import (
 // A future divergence in a legal-but-different encoding is a fact about wabt's style and must not be
 // read as a defect here.
 
-// secType is the type section's id. The other twelve ids arrive with their sections — naming them
-// now would be twelve constants nothing reads, which is the placeholder shape #6 rules on, and the
-// honest version of "later" here is an empty line rather than a tracked stub.
-const secType byte = 1
+// The section ids this emitter writes. The remaining ten arrive with their sections — naming them
+// now would be constants nothing reads, which is the placeholder shape #6 rules on, and the honest
+// version of "later" here is an empty line rather than a tracked stub.
+const (
+	secType   byte = 1
+	secTable  byte = 4
+	secMemory byte = 5
+)
 
 // tagFunc is `comptype`'s functype form, 0x60 — which is -0x20 read as the sleb(7) the decoder
 // reads it as (decodeCompType's comment has the vector that forces the signedness). Written as the
@@ -153,6 +157,12 @@ func (p *parser) encode() ([]byte, error) {
 	if len(p.ctx.typeCtx) > 0 {
 		w.section(secType, p.encodeTypes)
 	}
+	if len(p.ctx.tabDefs) > 0 {
+		w.section(secTable, p.encodeTables)
+	}
+	if len(p.ctx.memDefs) > 0 {
+		w.section(secMemory, p.encodeMemories)
+	}
 	return w.b, nil
 }
 
@@ -180,8 +190,59 @@ func (p *parser) encodableOrErr() error {
 		// spelling — measured: lower-casing a kind reproduces its own keyword for only 96 of 173,
 		// and `BINARY` lower-cases to a literal that lexes to `BIN`. Quoting Token.Text is the
 		// reference's own practice for the same reason (bindAbs), and it makes the question moot.
-		return errf(p.ctx.firstNonType, "cannot yet encode a (%s …) field: the emitter writes the "+
-			"type section only (#8)", p.ctx.firstNonType.Text)
+		//
+		// The message names the *field*, and for memory and table that is now imprecise in one
+		// direction only: a refused `(memory …)` is a memory in one of its three unencodable arms,
+		// so the reader is told which field to look at and not which arm. Accepted rather than
+		// papered over — naming the arm needs the arm threaded into the record, and the field is
+		// what a reader edits.
+		return errf(p.ctx.firstNonType, "cannot yet encode this (%s …) field: the emitter writes "+
+			"the type, table and memory sections (#8)", p.ctx.firstNonType.Text)
+	}
+	// **The withdrawal check.** Every *defined* memory and table must have been retained, or a
+	// section is short by one and the image means something else. `clearNonTypeField` is a claim an
+	// arm makes about itself and nothing at the call site proves it; this is the proof, and it is
+	// structural rather than per-arm — a sixth arm added to `memoryField` that withdraws without
+	// recording fails here rather than emitting a truncated section.
+	//
+	// Counted per kind, both directions, because either mismatch is a defect: fewer retained than
+	// defined is a dropped entry, and more retained than defined means something recorded content for
+	// a field that is not a definition (an import), which would emit it twice.
+	//
+	// **This check cannot currently be made to fire, and that is stated here rather than left to be
+	// discovered.** Four defects were installed against it and all four passed: disabling the
+	// comparison outright changes nothing, dropping `defineMemory` while keeping `noteDefined` does not
+	// compile (the retained value goes unused, so Go rejects it), and adding a spurious `noteDefined`
+	// to the `(data …)` sugar arm is invisible because *the frontier refuses that module first* — the
+	// arm does not withdraw, so `encodableOrErr` returns at the `firstNonType` check above and never
+	// reaches this loop. The structural reason is general: this loop only runs on modules where every
+	// memory and table arm was the retaining one, which is exactly the population where the counts
+	// agree by construction.
+	//
+	// So it is a **tripwire for an arm that does not exist yet**, not a control over today's code, and
+	// per the declared-and-tracked ruling that is legitimate only if it is *labelled* as one. The arm
+	// it waits for is the one this comment describes: a sixth `memoryField`/`tableField` arm that
+	// withdraws the frontier and records nothing, or records for an import. When such an arm is
+	// written, this check fires and the falsification budget is spent then. Keeping it costs four
+	// lines; deleting it and rediscovering the need is how a section comes to be short by one entry.
+	//
+	// What is *not* claimed: that removing this loop would be caught by the suite. It would not, today,
+	// by any of the six probes run. An unfalsifiable control announced as unfalsifiable is scaffolding
+	// with a name tag; the failure mode the graveyard names is the one that stays quiet about it.
+	for _, k := range [...]struct {
+		kind     importKind
+		retained int
+	}{{importMemory, len(p.ctx.memDefs)}, {importTable, len(p.ctx.tabDefs)}} {
+		if got, want := k.retained, int(p.ctx.defCount[k.kind]); got != want {
+			return fmt.Errorf("text: internal: %d %s definitions retained, %d defined — an arm "+
+				"withdrew the encoder's frontier without recording its content (#8)", got, k.kind, want)
+		}
+	}
+	for i, t := range p.ctx.tabDefs {
+		if _, ok := valTypeByte(t.elem); !ok {
+			return fmt.Errorf("cannot yet encode table %d: element type %s needs a parameterized "+
+				"reference encoding, which arrives with the GC gate (#8)", i, t.elem)
+		}
 	}
 	// The type-space refusals carry no offset, and that is deliberate rather than a shortcut. A
 	// position is a *malformedness* affordance — it points a user at the text that is wrong — and
@@ -222,6 +283,57 @@ func (p *parser) encodeTypes(w *writer) {
 		w.vec(len(ft.params), func(w *writer, j int) { w.valType(ft.params[j]) })
 		w.vec(len(ft.results), func(w *writer, j int) { w.valType(ft.results[j]) })
 	})
+}
+
+// encodeTables writes the table section from the retained definitions.
+//
+// **The field order is the binary format's, not the text's**, and they differ: text is `addrtype
+// limits reftype` (parser.mly:460) while binary is `reftype` then `limits` (encode.ml:200). Emitting
+// in text order would produce an image whose first byte the decoder reads as a limits flags byte —
+// for `(table 1 funcref)` that is `0x70`, `malformed limits flags`, which is the *lucky* failure. The
+// unlucky one is a reftype byte that happens to be a legal flags value: `funcref`'s 0x70 is not, but
+// a future one-byte type could be, and then the image decodes clean as a different table.
+func (p *parser) encodeTables(w *writer) {
+	w.vec(len(p.ctx.tabDefs), func(w *writer, i int) {
+		t := p.ctx.tabDefs[i]
+		w.valType(t.elem)
+		w.limits(t.addr64, t.lim)
+	})
+}
+
+// encodeMemories writes the memory section from the retained definitions.
+func (p *parser) encodeMemories(w *writer) {
+	w.vec(len(p.ctx.memDefs), func(w *writer, i int) {
+		m := p.ctx.memDefs[i]
+		w.limits(m.addr64, m.lim)
+	})
+}
+
+// limits writes a limits: the flags byte, the minimum, and the maximum when present.
+//
+// The flags are `flag (max <> None) 0 + flag (at = I64AT) 2` (encode.ml:187) — bit 0 for a maximum,
+// bit 2 for a 64-bit address type. **Bit 1 is the shared flag and this never sets it**, which is not
+// an omission: the text grammar's `limits` has no `shared` arm (parser.mly:466-468), so no wat source
+// can denote a shared memory and an encoder that could emit one would be encoding something no input
+// says. The decoder reads 0x02/0x03 behind the Threads gate, and a threads-era text grammar will add
+// the arm; until then the bit has no source.
+//
+// It is a method on `writer` rather than a function in encode.go because it is the byte layer's kind
+// of fact — a flags byte and two LEBs — and because the *reader* it inverts is `decodeLimits`. Its
+// falsification is the round trip, per writer.go's header.
+func (w *writer) limits(addr64 bool, lim limits) {
+	var flags byte
+	if lim.hasMax {
+		flags |= 0x01
+	}
+	if addr64 {
+		flags |= 0x04
+	}
+	w.byte1(flags)
+	w.u64(lim.min)
+	if lim.hasMax {
+		w.u64(lim.max)
+	}
 }
 
 // valTypeByte is the encoding of one resolved value type, and the encodability predicate.

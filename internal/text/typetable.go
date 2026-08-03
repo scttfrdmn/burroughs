@@ -116,6 +116,50 @@ type compType struct {
 	ft     funcType
 }
 
+// limits is a `limits` (parser.mly:466-468): a 64-bit minimum and an optional maximum.
+//
+// Both at 64 bits because the reference's arms are `nat64`, and `hasMax` rather than a `*uint64`
+// because that is the shape `binary.Limits` has on the other side — a difference in representation
+// between the two sides of one round trip is a place for a nil to mean zero.
+type limits struct {
+	min    uint64
+	max    uint64
+	hasMax bool
+}
+
+// memType is a `memorytype` (parser.mly:463-464).
+//
+// `addr64` is the addrtype, held as a bool rather than a keyword because the binary format holds it
+// as **one flag bit** (encode.ml:187) and the text grammar admits exactly two spellings — `addrtype`
+// already rejected everything else as `malformed address type`. A keyword field would be a wider
+// domain than either grammar has, inviting a third case that cannot occur.
+type memType struct {
+	addr64 bool
+	lim    limits
+}
+
+// tabType is a `tabletype` (parser.mly:460-461), element type **unresolved**.
+//
+// The element type is a `valType`, the same unresolved form a functype's params hold, and for the
+// same reason: a `(ref null $t)` in a table may forward-reference. `defineTable` resolves it in the
+// deferred phase.
+type tabType struct {
+	addr64 bool
+	lim    limits
+	elem   valType
+}
+
+// resolvedTable is a table definition whose element type has been resolved — what the encoder writes.
+//
+// Distinct from `tabType` for exactly the reason `resolvedComp` is distinct from `compType`: one is
+// what the parse read, the other is what the deferred phase produced, and collapsing them would put
+// a field in the struct that is meaningful only after a phase the type does not mention.
+type resolvedTable struct {
+	addr64 bool
+	lim    limits
+	elem   resolvedVal
+}
+
 // typeRef is a `typeuse`'s operand (parser.mly:470-471, `idx` at :487-489), kept unresolved.
 //
 // **The two arms fail differently and the reference's messages say so.** `idx`'s NAT arm is
@@ -195,6 +239,48 @@ type resolvedComp struct {
 // walks the field list in source order doing nothing else, so recording during the parse is the
 // same table. The name was already bound by bindidxOpt, at stage 0.
 func (c *context) defineType(ct compType) { c.typeDefs = append(c.typeDefs, ct) }
+
+// defineMemory records a defined memory's type at its index (#8).
+//
+// Not deferred, and that is a grammar fact rather than a shortcut: a `memorytype` is `addrtype
+// limits` and neither half can name a type, so there is nothing in it to resolve. The reference's
+// `memory_fields` arm still runs in stage 2, but stage is only observable where a *lookup* happens.
+//
+// **Defined memories only.** An imported memory occupies the memory index space and belongs to the
+// import section, not the memory section — the same population split `decodeTableForm`'s comment
+// names on the other side, where merging them "would make an import look like a definition".
+func (c *context) defineMemory(mt memType) { c.memDefs = append(c.memDefs, mt) }
+
+// defineTable records a defined table, deferring its element type's resolution.
+//
+// Deferred because `table_fields` runs inside `module_fields1`'s *second* `fun () ->`
+// (parser.mly:1341-1347) and its `tabletype` is `$1 c` — a context lookup — so
+// `(table 1 (ref null $t)) (type $t (func))` is a valid module whose reftype resolves against a
+// type defined later. Resolving at the cursor would reject it: the accept-direction failure §9 G-3
+// names, and the same one typetable.go's header has `imports.wast:62` for.
+//
+// **The slot is appended now and filled later**, rather than appending inside the thunk, because
+// stage-2 order is *field* order and a table's own thunk runs at its own position — so the two
+// orders agree — but a reader should not have to prove that to know the table's index. The index is
+// the append's position, established during the parse where it is obvious.
+//
+// This also closes a missing reject that the retention forces rather than chooses:
+// `(table 1 (ref null $undefined))` was accepted before this, because the reftype's value was
+// discarded and with it the lookup. Measured, and the suite has no vector for it — `ref.wast:42`
+// spells the numeric form as `assert_invalid`, the validator's, so nothing on the board could see
+// the symbolic one.
+func (c *context) defineTable(tt tabType) {
+	i := len(c.tabDefs)
+	c.tabDefs = append(c.tabDefs, resolvedTable{addr64: tt.addr64, lim: tt.lim})
+	c.deferOp(func() error {
+		rv, err := c.resolveVal(tt.elem)
+		if err != nil {
+			return err
+		}
+		c.tabDefs[i].elem = rv
+		return nil
+	})
+}
 
 // deferOp records one stage-2 operation. See the file header for why parse order is stage-2 order.
 func (c *context) deferOp(f func() error) { c.deferred = append(c.deferred, f) }
