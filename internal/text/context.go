@@ -341,13 +341,30 @@ func (l *labelSpace) labelRestore(old []string) { l.names = old }
 //
 // Scans from the top so the innermost binding wins, and skips anonymous levels — they occupy a
 // level but bind no name.
-func (l *labelSpace) lookupLabel(t Token, name string) error {
+//
+// **It returns the relative depth**, which is what `labelPushAnon`'s comment said this stratum did
+// not need and named the arrival of: *"when indices are needed (0011's second half, the binary bridge
+// #67), the depth is already right and the shift falls out of the position in the slice."* The depth
+// does fall out — `len-1-i` counting from the innermost — so the anonymous push is load-bearing for a
+// value now and not only for the pop invariant, and `(block $l (block (br $l)))` resolves to **1**
+// where a reader that skipped anonymous levels answers 0. TestLabelIndexCountsAnonymousLevels pins
+// that in both directions.
+//
+// **The value is not yet observable through a module, and that control is on this function rather
+// than on the path for a measured reason.** Every block form is refused by `refuseUnencodable`
+// *before* its body is parsed (blockinstr), so the only label index the code section writes is a
+// NAT — `br 0`, whose arm makes no lookup at all. Seven spellings were probed and all seven refuse
+// at the block, so no encodable module reaches the symbolic arm; in `recognize` mode the lookup runs
+// and its depth is dropped. That makes the test *a control on the helper, not on the path*, which is
+// declared here rather than left to be discovered, and the path's control arrives with the block
+// instruction's encoding (#63/#64).
+func (l *labelSpace) lookupLabel(t Token, name string) (uint32, error) {
 	for i := len(l.names) - 1; i >= 0; i-- {
 		if l.names[i] != "" && l.names[i] == name {
-			return nil
+			return uint32(len(l.names) - 1 - i), nil
 		}
 	}
-	return errf(t, "unknown label  %s", t.Text)
+	return 0, errf(t, "unknown label  %s", t.Text)
 }
 
 // context is the parser's accumulated state: the index spaces, and the module-level facts
@@ -617,10 +634,11 @@ func (c *context) spaceFor(k importKind) *space {
 // remove to get an image out — which is the actionable one.
 //
 // **The consequence for reading the frontier as a work plan: these refusals bucket *modules*, not
-// constructs.** Measured over the suite — 2150 parser-accepted text modules, of which **196** encode
-// in full today — the refusals partition as `func` 1361, `elem` 237, `data` 223, `global` 50,
-// `memory` 31, GC parameterized references 16, struct-or-array comptypes 14, `table` 13, `tag` 8,
-// and 1 `start`. Each module is counted once, under whichever unencodable field it happens to reach
+// constructs.** Measured over the suite — 2143 parser-accepted text modules, of which **926** encode
+// in full today — the refusals partition by *mechanism* as structural-or-control instructions 363,
+// SIMD 340, tier-2 immediates (memarg and the rest) 231, `elem` 97, `data` 60, `global` 47, GC
+// parameterized references 36, struct-or-array comptypes 23, `table` 14, `memory` 6, `start` 3,
+// `tag` 3. Each module is counted once, under whichever unencodable field it happens to reach
 // first, so a bucket is a lower bound on the modules that construct blocks and says nothing about how
 // many occurrences it has. *Bucket size estimates the reward, not the job* — the key is "first
 // blocking field", which cuts across mechanism exactly as the board's spec-string key does.
@@ -651,6 +669,69 @@ func (c *context) spaceFor(k importKind) *space {
 // by the start section, so that refusal is correctly a frontier and not a queue. It replaced
 // `table-elemtype` at 1 in that role, the elemtype modules having re-sorted into the GC bucket when
 // the table emitter landed.
+//
+// **`func` at 1361 was partitioned by mechanism before being estimated, which is the rule this
+// histogram's own limitation demands.** A first-blocker count cannot answer a question about last
+// blockers — stated above, and the way around it is not to re-measure this table but to ask a
+// *different* question of the same population. Of the 1361 func-blocked modules, **1228 contain no
+// other unencodable construct** (counted by scanning each module's source for `(elem`, `(data`,
+// `(global`, `(start`, `(struct`, `(array` — crude, a substring scan, and a lower bound on
+// co-blockers rather than an exact one). The co-blocked remainder is `elem` 91, `global` 47, `struct`
+// 29, `array` 3, `data` 2, `start` 2.
+//
+// So the code section is the **opposite** case from the export section, and both directions of the
+// sharpened rule now have a measurement rather than an argument: `export` was a construct five fields
+// embed, so a bucket of 39 paid 55; `func` is a field that embeds others, so a bucket of 1361 pays
+// about 1228 and no more. What it embeds is mostly *instructions*, which is what the code section
+// writes — the reason the number is high rather than a coincidence. Quoting it before the work makes
+// the estimate falsifiable by the work, which is the only kind worth writing down.
+//
+// # What the code section actually paid, against that estimate
+//
+// **196 → 926, and the `func` bucket is gone from the histogram entirely.** The estimate said a
+// bucket of 1361 pays "about 1228 and no more"; the section pays **730**, which is 59% of the
+// forecast. So the forecast was optimistic and the *direction* it argued was right — the export
+// case's re-sorting appeared again, and the 498 modules that did not reach encodable re-sorted into
+// the frontier of instructions the first tier does not write.
+//
+// **These figures moved from 920/724 to 926/730 within this PR, and by a mechanism worth naming.**
+// The typeuse frontier (#77) was first written as a refusal on *every* func with a typeuse, which
+// cost six encodable modules including a row already in the round-trip table; narrowing it to the
+// case that is actually unencodable — a symbolic *local* resolved against a possibly-short space,
+// refused in `retainIdx` — returned them. So a frontier's *width* is worth six modules here, which
+// is the concrete reason the narrow predicate was worth finding rather than a stylistic preference.
+//
+// The number missed for a reason the histogram could not have shown, and it is the same limitation
+// this comment already states rather than a new one: a first-blocker count over *fields* cannot see
+// a frontier *inside* a field. The substring scan that produced 1228 looked for `(elem`, `(data`,
+// `(global` and their siblings — other **fields** — because at the time the only frontier the
+// encoder had was per-field. A module whose sole blocker was `(func … block …)` counted as
+// co-blocker-free and was forecast as a payer. It is now the largest bucket. *Bucket size estimates
+// the reward, not the job*, and the sharper form the code section paid to learn: an estimate is only
+// as fine-grained as the frontier that produced it, so the first emitter to introduce a frontier at
+// a *new* granularity will overshoot by exactly what the old granularity could not distinguish.
+//
+// The new histogram is therefore keyed by mechanism rather than by field, which is what makes it a
+// plan: `v128.const` alone is 252 modules and belongs to the SIMD gate, not to this section, while
+// the 231 tier-2 immediates are almost all memarg — one shape, and the natural-alignment defaults it
+// needs live as 45 per-mnemonic `opt a N` rows in `lexer.mll` and in no generated table, which is
+// the extraction that tier costs. The 363 structural-and-control modules are the largest bucket this
+// section could take and are also where the *interpreter* has to arrive anyway.
+//
+// **Both forecasts reproduce now that the section has landed and the buckets can be read off real
+// refusals**: tier 2 forecast 231, measured **249**; structural-and-control forecast 363, measured
+// **364** (242 block/loop/if/select/br_table/call_indirect, plus 73 `table.init` and 49
+// `memory.init`, which the mechanism histogram grouped with control and the refusal strings name
+// separately). A forecast agreeing to one module is worth stating precisely because the *previous*
+// forecast — the field-keyed one this paragraph exists to correct — missed by a bucket-defining
+// margin: keying by mechanism is what made the estimate an estimate.
+//
+// The caveat, because a bucket count is only as sharp as what produced it: `EncodeModule` returns
+// its **first** refusal, so these count modules by their *first* blocker in parse order, not by
+// their hardest. A module needing both a memarg and a block lands wherever the parser met one
+// first. That biases nothing about the totals — every refused module is counted exactly once — but
+// it means a tier's count is not the number of modules that tier would *unblock* on its own, and
+// whichever PR takes tier 2 should expect its own gain to undershoot 249.
 func (c *context) noteNonTypeField(kw Token) {
 	if c.haveNonType {
 		return

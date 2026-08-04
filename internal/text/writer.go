@@ -80,11 +80,21 @@ func (w *writer) uleb(v uint64) {
 	}
 }
 
-// There is deliberately no `s32` yet. Its caller is `i32.const`'s immediate, which arrives with
-// the instruction emitter, and a one-line wrapper with no caller is the placeholder shape the
-// `ErrTrailingData` ruling (#6) says must be declared-and-tracked to be honest. Tracking it would
-// cost more than writing it later does: `sleb` is the kernel and is already covered, so `s32` is
-// `sleb` with a cast and nothing else. Added when something calls it.
+// s32 writes a signed LEB128 integer of up to 32 bits, minimal width.
+//
+// **Its caller arrived, which is why it exists now.** This spot held a paragraph declining to write
+// it — "a one-line wrapper with no caller is the placeholder shape the `ErrTrailingData` ruling (#6)
+// says must be declared-and-tracked, added when something calls it" — and `i32.const`'s immediate is
+// that caller (`s32 c`, encode.ml:576). The paragraph is quoted rather than deleted because the
+// prediction it made is the thing to check against: it said `s32` would be "`sleb` with a cast and
+// nothing else", and it is.
+//
+// The cast is `int64(v)` on an `int32`, which sign-extends — the whole content of the function. A
+// `uint32` parameter would not: `i32.const -1` arrives as the bit pattern 0xffffffff, and
+// `sleb(int64(uint32(0xffffffff)))` writes 4294967295 as five bytes where the reference writes one.
+// So the *caller* interprets the sign at its own width and this takes the interpreted value, which
+// is why intConstBits returns a pattern and not a value.
+func (w *writer) s32(v int32) { w.sleb(int64(v)) }
 
 // s64 writes a signed LEB128 integer, minimal width.
 func (w *writer) s64(v int64) { w.sleb(v) }

@@ -116,6 +116,20 @@ func hexDigit(c byte) (byte, bool) {
 
 // fitsAsIntConst reports whether an integer `num` literal is in range for an `iN.const`.
 //
+// **A face on intConstBits, not a second reading of the range.** The predicate came first and the
+// conversion arrived with the code section (#8); merging them rather than writing the range twice is
+// the one-concept-one-trigger rule at the point where it matters most — a range check that admits a
+// literal the converter mis-encodes is an accept-direction defect, and two copies of ixx.ml's
+// composed bounds is exactly how the two would come to disagree. The range's derivation is
+// intConstBits'.
+func fitsAsIntConst(s string, bits uint) bool {
+	_, ok := intConstBits(s, bits)
+	return ok
+}
+
+// intConstBits converts an integer `num` literal to the bit pattern an `iN.const` immediate holds,
+// reporting whether it is in range.
+//
 // The range is **asymmetric and wider than either signed or unsigned alone**: `[-2^(bits-1),
 // 2^bits - 1]`. That is not a convenience, it is `of_string`'s two checks composed
 // (ixx.ml:328-342), and both halves are needed:
@@ -132,7 +146,19 @@ func hexDigit(c byte) (byte, bool) {
 // satisfies *either* bound, and asking only one of them would reject a whole half of the legal
 // spellings. `i32.const -2147483648` and `i32.const 4294967295` are both fine and neither fits
 // the other's bound.
-func fitsAsIntConst(s string, bits uint) bool {
+//
+// **The return is a bit pattern, not a value, and the two ranges above are why.** `i32.const
+// 4294967295` and `i32.const -1` denote the same i32 — the reference's `of_string` produces one
+// `Rep`, a bit pattern, from both — so a signed return type would have to reject one of the two
+// legal spellings or widen to hold a value no i32 has. The caller sign-interprets at the width it
+// knows: `w.s32(int32(uint32(v)))` for 32 bits, `w.s64(int64(v))` for 64, which is `s32 c` and
+// `s64 c` at encode.ml:576-579.
+//
+// Negation is two's complement on the pattern (`-n` on a uint64, wrapping by definition), which is
+// the same operation `Rep.neg` is and is *not* the sign-bit XOR floats use — the difference between
+// the two negations is a fact about the representations, and getting it backwards would give
+// `i32.const -1` the pattern 0x80000001.
+func intConstBits(s string, bits uint) (uint64, bool) {
 	neg := false
 	switch {
 	case strings.HasPrefix(s, "-"):
@@ -145,22 +171,28 @@ func fitsAsIntConst(s string, bits uint) bool {
 	}
 	n, ok := parseNat(s, 64)
 	if !ok {
-		return false
+		return 0, false
 	}
 	if neg {
 		// Magnitude ≤ 2^(bits-1). Written as a comparison against a shift rather than as a
 		// negated value so 64-bit works without wrapping: at bits=64 the bound is 2^63, which
 		// has no positive int64.
-		return n <= uint64(1)<<(bits-1)
+		if n > uint64(1)<<(bits-1) {
+			return 0, false
+		}
+		return -n, true
 	}
 	if bits >= 64 {
-		return true // parseNat already bounded it at 64 bits
+		return n, true // parseNat already bounded it at 64 bits
 	}
 	// `n < 2^bits` rather than `n <= 2^bits - 1`, which is the same set and does not depend on
 	// the guard above to avoid wrapping: at bits=64 the shift would overflow in the `- 1` form's
 	// intermediate. Taking gocritic's simplification because it removes an action-at-a-distance,
 	// not merely because it is shorter.
-	return n < uint64(1)<<bits
+	if n >= uint64(1)<<bits {
+		return 0, false
+	}
+	return n, true
 }
 
 // fitsAsFloatConst reports whether a `num` literal is in range for an `fN.const`.
@@ -178,28 +210,156 @@ func fitsAsIntConst(s string, bits uint) bool {
 //
 // **`inf` and `nan` are accepted by arms that run before the `is_inf` check**, which is the
 // only reason `f32.const inf` is well-formed. Ordering the arms any other way rejects it.
+//
+// **A face on floatConstBits**, for fitsAsIntConst's reason: the arms are the same arms, and a
+// predicate holding its own copy of them is how a literal comes to pass the range check and be
+// mis-encoded. The four arms are now written out in signlessFloatBits.
 func fitsAsFloatConst(s string, bits uint) bool {
+	_, ok := floatConstBits(s, bits)
+	return ok
+}
+
+// floatConstBits converts a float `num` literal to the IEEE bit pattern an `fN.const` immediate
+// holds, reporting whether it is in range.
+//
+// **This is `of_string` (fxx.ml:325-332) and it is a bit-pattern function all the way down**, which
+// is the fact the predicate face did not need and the encoder cannot do without. Three of the four
+// arms have no float value at all in the reference — `nan` is `pos_nan`, `nan:0x…` is
+// `Rep.logor payload bare_nan`, and the sign is `neg x = Rep.logxor x Rep.min_int` (:212-213), a
+// **XOR with the sign bit on the pattern**. So `-nan:0x200000` is built, not computed.
+//
+// # What the bit-pattern representation actually buys, measured rather than asserted
+//
+// This paragraph replaces a wrong one, and the wrong one is worth quoting because it was the
+// plausible thing to believe: it said a float-valued implementation "would collapse every NaN
+// payload to one quiet NaN", and named the sign as a place it would break. Both halves were checked
+// against the mutation the claim predicts, and **neither failed** — so the claim was retired and
+// re-derived. The corrections:
+//
+//   - **Negation is not a hazard at all.** Go's unary minus on a float32 is *exhaustively* the
+//     sign-bit XOR: over all 2^32 patterns, including every NaN payload and both zeroes, 0 differ.
+//     So `-nan:0x2abcde` survives an arithmetic negation intact, and the XOR here is chosen for
+//     matching the reference's *derivation* rather than for fixing a defect. `-0` → 0x8000_0000
+//     still reads as a bug and still is not one.
+//   - **The collapse is real but it lives in the `float64` round trip, not in the negation.**
+//     Narrowing is where a payload dies: `float32(math.Float64frombits(0x7ff0000000012345))` is
+//     0x7fc00000, and so is every other f64 NaN — all payloads map to one quiet f32 NaN. An
+//     implementation that carried literals as `float64` and narrowed at the end would therefore
+//     lose exactly the nine `nan:0x…` vectors `float_literals.wast` states patterns for. Returning
+//     a width-sized pattern from the arm that knows the width is what avoids it.
+//
+// The narrower true statement is that three arms *have no float to be valued as*, which is a fact
+// about the reference's structure and is sufficient reason on its own.
+//
+// The finite path is `float_of_string_prevent_double_rounding` then `of_float` then the `is_inf`
+// check. Go's `strconv.ParseFloat(t, bits)` is a single correctly-rounded conversion, so it produces
+// what the reference's double-rounding correction exists to produce — and passing `bits` rather than
+// 64-and-narrow is load-bearing: 24 of the corpus's 1295 parseable distinct `f32.const` spellings
+// are double-rounding-sensitive, all of them in `const.wast` (`:444` rounds to `+0x1.000002p-50`
+// where the two-step path gives `+0x1.000000p-50`).
+//
+// The sign is applied *after* the range check, per the arm order, so `-0x1p128` and `0x1p128` are
+// rejected identically (`const.wast:319`/`:323`) — what fitsAsFloatConst's comment already recorded
+// from the predicate side.
+//
+// Agreement is **accept-direction** — a module with the wrong constant in it is well-formed, so no
+// reject vector can report the defect — and it is checked by
+// TestFloatConstBitsMatchTheSuitesBitPatterns, which reads `float_literals.wast` as a table of bit
+// patterns (`i32.reinterpret_f32` being the identity on bits) and `const.wast`'s 300 adjacent-line
+// pairs as a table of roundings.
+func floatConstBits(s string, bits uint) (uint64, bool) {
 	if s == "" {
-		return false // `if s = "" then failwith "of_string"` (fxx.ml:326)
+		return 0, false // `if s = "" then failwith "of_string"` (fxx.ml:326)
 	}
+	// `of_string`'s sign handling (fxx.ml:328-331): strip it, convert the remainder as signless,
+	// then `if s.[0] = '+' then x else neg x`. The sign bit is the *width's*, so it is computed
+	// here rather than passed down.
+	negate := false
 	if s[0] == '+' || s[0] == '-' {
+		negate = s[0] == '-'
 		s = s[1:]
 	}
-	if s == "inf" || s == "nan" {
-		return true
+	n, ok := signlessFloatBits(s, bits)
+	if !ok {
+		return 0, false
 	}
-	// `String.length s > 6 && String.sub s 0 6 = "nan:0x"` (fxx.ml:310). Written as the
-	// reference's guard rather than as `CutPrefix`, because the two differ on exactly `"nan:0x"`
-	// with no payload: the reference falls *through* to `float_of_string`, which fails. Same
-	// class as parseNat's bare `"0x"` — unreachable through the lexer (`"nan:" "0x" hexnum`
-	// needs a hexdigit, lexer.mll:106), so no vector distinguishes them, which is why it is
-	// written the reference's way and not the way that happens to be untestable.
+	if negate {
+		n ^= uint64(1) << (bits - 1) // `Rep.logxor x Rep.min_int`
+	}
+	return n, true
+}
+
+// signlessFloatBits is `of_signless_string` (fxx.ml:305-323), whose arms are the reason the sign is
+// stripped by the caller: three of them never see a float.
+func signlessFloatBits(s string, bits uint) (uint64, bool) {
+	// The three special forms, as bit patterns from f32.ml/f64.ml. `pos_nan` is the *quiet* NaN —
+	// bare exponent plus the mantissa's top bit — which is what a bare `nan` denotes; `nan:0x…`
+	// ors its payload onto `bare_nan` instead, so `nan` and `nan:0x400000` coincide at f32 and
+	// `nan:0x1` does not. Written as literals per width because that is how the reference has them.
+	var posInf, posNaN, bareNaN uint64
+	switch bits {
+	case 32:
+		posInf, posNaN, bareNaN = 0x7f80_0000, 0x7fc0_0000, 0x7f80_0000
+	case 64:
+		posInf, posNaN, bareNaN = 0x7ff0_0000_0000_0000, 0x7ff8_0000_0000_0000, 0x7ff0_0000_0000_0000
+	default:
+		// No third float width exists in the tracked set; fitsAsNaNPayload's default carries the
+		// argument for why this is a refusal rather than a fallthrough.
+		return 0, false
+	}
+	if s == "inf" {
+		return posInf, true
+	}
+	if s == "nan" {
+		return posNaN, true
+	}
+	// `String.length s > 6 && String.sub s 0 6 = "nan:0x"` (fxx.ml:310) — the reference's guard, for
+	// the reason fitsAsFloatConst's comment gives: bare `"nan:0x"` falls *through* to
+	// `float_of_string` and fails there.
 	if len(s) > 6 && s[:6] == "nan:0x" {
-		return fitsAsNaNPayload(s[4:], bits)
+		if !fitsAsNaNPayload(s[4:], bits) {
+			return 0, false
+		}
+		// `Rep.logor x bare_nan` (:311). The payload is re-parsed rather than threaded out of the
+		// predicate: fitsAsNaNPayload's three arms are the range check, and parseNat is
+		// side-effect-free, so asking twice cannot disagree with itself the way two copies of the
+		// range would.
+		n, _ := parseNat(s[4:], bits)
+		return n | bareNaN, true
 	}
+	f, ok := finiteFloat(s, bits)
+	if !ok {
+		return 0, false
+	}
+	// `of_float` then `if is_inf x then failwith` (fxx.ml:322-323), and the bits come from the
+	// *target width's* representation — `math.Float32bits` for f32, so a value strconv already
+	// rounded to float32 is stored as four bytes rather than eight.
+	if bits == 32 {
+		return uint64(math.Float32bits(float32(f))), true
+	}
+	return math.Float64bits(f), true
+}
+
+// finiteFloat is `of_signless_string`'s last arm: strip underscores, convert, reject an infinity.
+//
+// Split out so both the bit-pattern path above and the predicate below name one conversion. The
+// underscore stripping and the `p0` graft are the two places Go's grammar differs from OCaml's, and
+// both are derivations rather than choices — see fitsAsFloatConst.
+func finiteFloat(s string, bits uint) (float64, bool) {
 	// `String.concat "" (String.split_on_char '_' s)` (fxx.ml:321): the underscores are stripped
 	// *here*, not skipped digit-by-digit as parseNat does. Same premise about placement either
 	// way — TestUnderscorePlacementIsTheLexersJob covers both readers.
+	//
+	// **The strip is load-bearing in the reject direction, which is the reverse of the obvious
+	// reading.** Removing it does not break any legal literal on this corpus: Go's ParseFloat
+	// already accepts underscores in the *well-placed* positions wat allows, so of 67 distinct
+	// underscore-bearing finite `fN.const` spellings in the suite, 33 parse identically either
+	// way and all 34 that differ are ones Go *rejects* and the strip makes acceptable —
+	// `_100`, `99_`, `1__000`, `1_.0`, `1._0`. Those are the `assert_malformed` "unknown
+	// operator" vectors, and they never reach here: the lexer's `float` rule refuses the token
+	// first, which is the premise the test above pins. So the strip is doing the reference's
+	// derivation faithfully and, on the current corpus, would be unobservable if deleted.
+	// Stated because a future reader measuring it would find it apparently dead code.
 	t := strings.ReplaceAll(s, "_", "")
 	// **Go's hex float syntax is narrower than wat's**: `strconv.ParseFloat` requires a binary
 	// exponent, so `0x1.8` and `0xff` are syntax errors to it and perfectly legal to the
@@ -219,12 +379,15 @@ func fitsAsFloatConst(s string, bits uint) bool {
 		// `constant out of range`. Not swallowed silently: the verdict is a reject either way,
 		// so a disagreement shows up as a red vector rather than as an accepted malformed
 		// module.
-		return false
+		return 0, false
 	}
 	// The reference's actual predicate (fxx.ml:323), asserted on the value rather than inferred
 	// from strconv's error taxonomy — *verdict channel and mechanism channel are different
 	// instruments*, and `err` is the mechanism's.
-	return !math.IsInf(v, 0)
+	if math.IsInf(v, 0) {
+		return 0, false
+	}
+	return v, true
 }
 
 // fitsAsNaNPayload reports whether a `nan:0x…` payload is in range, per of_signless_string's

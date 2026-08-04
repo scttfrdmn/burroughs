@@ -63,10 +63,21 @@ import (
 // `inline_functype_explicit`'s deferred branch (:240-245) also binds the named type's params into
 // the function's local space, so `(func (type $sig) (local.get 0))` has locals it never wrote. The
 // local space is per-function and `enter_func` resets it (:134), so honouring that here would mean
-// carrying a live local space per pending operation. It is not done, and the consequence is bounded:
-// this stratum resolves no local at all — `unknown local` is validation's and unimplemented — so
-// the only reader of a local count is the duplicate check, which compares *written* names. Zero
-// board effect either way, declared here rather than left silent, and tracked in #77.
+// carrying a live local space per pending operation. It is not done, and it is tracked in #77.
+//
+// **The "zero board effect either way" this paragraph claimed is now false, and the correction is
+// the reason to read #77 as live rather than cosmetic.** The claim rested on nothing resolving a
+// local — true while the parser was only a recognizer, and untrue the moment the code section began
+// *writing* local indices. A short local space makes `(func (type $sig) (local $var i32)
+// (local.get $var))` encode `$var` as slot 0 where `$sig`'s param owns 0: a well-formed image
+// denoting a different function. Found by the wabt corpus at one byte, invisible to all 4162
+// vectors. The frontier now refuses that case in `retainIdx` (code.go) rather than emitting it, so
+// the consequence is a *declined* module instead of a wrong one — and #77 is what makes the
+// question answerable rather than merely refusable.
+//
+// Kept as a correction with its body intact rather than rewritten, because a scope note that went
+// stale by the code around it growing a consumer is the drifted-citation defect's own shape, and the
+// record of what was believed is the part worth keeping.
 
 // valType is one wat value type, carrying as much as a structural comparison needs
 // (parser.mly:391-394).

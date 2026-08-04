@@ -21,6 +21,36 @@ weakly-ordered platform.
 
 ### Added
 
+- **`internal/text/code.go`: the code section and its companion the function section — #8's largest
+  bucket, and #7's door** ([#8](https://github.com/scttfrdmn/burroughs/issues/8), 0011 part 2). The
+  parser starts *retaining*: every reader in `instr.go` was called for its error and its value
+  discarded, which was correct while the product was a recognizer and is what blocked 1358 of 2143
+  parser-accepted modules. The suite's encodable population goes **196 → 926**, and the `func`
+  frontier bucket is gone from the census histogram entirely rather than reduced.
+
+  Retention is deliberately shallow — an instruction becomes an opcode plus its already-encoded
+  immediate bytes, appended to a flat list in emission order. It is **not** 0002's internal form and
+  must not grow toward one: 0002's form is the interpreter's, built from `binary.DecodeModule`'s
+  output on the path that has a conformance record, and a second representation growing out of the
+  *text* path is precisely the option 0011 refused.
+
+  **The independent witness moved by an order of magnitude, and its size distribution is the part
+  that matters.** Against #67's wabt corpus, joined on (file, ordinal): **878** of the 926 join, and
+  all 878 agree **byte for byte, 0 disagreements**. Before this section the largest agreement was
+  `type#0` at 148 bytes; now it is `names#2` at **7584**, with `float_literals#0` at 3010 and four
+  SIMD arithmetic modules between 842 and 1944. A seven-kilobyte image agreeing byte for byte with a
+  toolchain that has never seen this parser is a different order of claim from a preamble, because a
+  code section is where an off-by-one immediate lives. The 48 unjoined fall in exactly nine files,
+  every one of them in the manifest's `skipped_files` with wabt's own reason.
+
+  **The frontier moved *inside* an instruction, which is new.** Sections 1–7 are each a field the
+  parse retains in full or refuses; a function body is a sequence whose members are individually
+  encodable or not, so `refuseUnencodable` refuses per *instruction* and the module withdraws. Five
+  of sixteen immediate shapes are writable — the largest set whose emission is a lookup, no natural
+  alignment defaults and no block types — and the remaining tiers measure 249 memarg and 364
+  structural-and-control, both reproducing the pre-landing forecast (231 and 363) now that the
+  buckets can be read off real refusals.
+
 - **`gate:extended-const` — the ninth `Features` gate, and the first one that governs a *position*
   rather than a byte** ([#109](https://github.com/scttfrdmn/burroughs/issues/109)). The six
   instructions the proposal adds (`i32.add`/`sub`/`mul` = 0x6a/0x6b/0x6c, `i64` = 0x7c/0x7d/0x7e) are
@@ -1727,6 +1757,29 @@ weakly-ordered platform.
   skip ([#29](https://github.com/scttfrdmn/burroughs/issues/29)).
 
 ### Fixed
+
+- **Two accept-direction defects in the code section, both caught by the wabt corpus at one byte and
+  invisible to all 4162 vectors** ([#8](https://github.com/scttfrdmn/burroughs/issues/8),
+  [#77](https://github.com/scttfrdmn/burroughs/issues/77)). Not graves — the corpus found them inside
+  the PR that wrote them, which is the accept-direction control doing the job it was made product work
+  for. Both are the shape §9 G-3 names: a well-formed image that decodes clean and denotes a different
+  function.
+
+  **A label immediate was emitted as nothing at all.** `br 0` wrote `0x0c` with no operand, so the
+  body's terminating `0x0b` was consumed as the immediate — `token#5`, 26 bytes against wabt's 27. The
+  regression row is `(module (func br 0(nop)))`, and the trailing `(nop)` is the part with teeth:
+  without an instruction after the `br`, a missing immediate eats the `end` and *still* decodes, which
+  is exactly how it survived. A second row pins a non-zero depth and `br_if`, so the first is not a
+  fixed point.
+
+  **A symbolic local resolved one slot too low whenever a typeuse supplied the params.**
+  `(func (type $sig) (local $var i32) (local.get $var))` encoded `$var` as slot 0 where `$sig`'s param
+  owns 0 — 77 bytes agreeing with wabt everywhere except `20 00` against `20 01`. The frontier now
+  refuses that case in `retainIdx` rather than emitting it, and the refusal is *narrow* deliberately:
+  refusing every typeuse cost six encodable modules including a row already in the round-trip table, so
+  the predicate is "a symbolic local resolved against a possibly-short space", not "a typeuse". It
+  still over-refuses a param-less type, which is pinned as its own row so that #77 landing without
+  reaching the predicate is a visible failure rather than a silent one.
 
 - **Three duplicate-name errors named the wrong space, and a substring match hid the one that had
   vectors** ([grave #120](https://github.com/scttfrdmn/burroughs/issues/120)). The reference says

@@ -708,15 +708,56 @@ func (p *parser) idxList() error {
 // the *resolution* that differs per position: a label resolves against a relative stack here and
 // now, an export's index against an absolute space in stage 2, and a type index against the type
 // table. One reader, three resolvers.
+//
+// **It retains the index, and that it did not was a defect the suite could not see.** `br 0` emitted
+// `0x0c` with *no immediate at all* — the body's terminating `0x0b` was then read as the operand, so
+// `(func br 0)` decoded as a `br` to label 11 followed by nothing, a well-formed image denoting a
+// different function. Every label-taking arm returns before the main switch's `idxRetained` (see
+// `immediates`), so the retention had to happen here or nowhere, and nothing failed: the 4162 vectors
+// are rejections, and the round-trip table had no `br` row. It was the wabt corpus that said so —
+// `token#5`, ours 26 bytes against wabt's 27 — which is the accept-direction control earning its
+// keep, exactly as #109 did for the decoder.
+//
+// The NAT arm retains too, and the numeric case is the one the corpus caught: a written `0` must be
+// encoded as a `0`, the absence of a lookup being about *resolution*, not about retention. Reading
+// the early return as "nothing to do here" is what produced the bug.
+//
+// **In build mode only the NAT arm is currently reachable**, and saying so is what keeps the symbolic
+// half from reading as tested. A symbolic label needs an enclosing block to bind it, and every block
+// form refuses at `refuseUnencodable` before its body is parsed — probed over all seven spellings
+// (`block`/`loop`/`if`/`try_table`, folded and flat), all seven refusing at the block. So the
+// symbolic arm's retention is written from the reference and controlled at `lookupLabel`'s own level
+// (TestLabelIndexCountsAnonymousLevels), not through any module; it becomes reachable with #63/#64's
+// blocktype encoding, and that is where its module-level row belongs.
 func (p *parser) labelIdx() error {
 	r, err := p.idxValue()
 	if err != nil {
 		return err
 	}
 	if !r.isVar {
-		return nil // the NAT arm: a width check, already made, and no lookup
+		// The NAT arm: a width check, already made, and no lookup — but the written index is
+		// still the immediate.
+		return p.retainLabelIdx(r.idx)
 	}
-	return p.ctx.labels.lookupLabel(r.tok, r.name)
+	depth, err := p.ctx.labels.lookupLabel(r.tok, r.name)
+	if err != nil {
+		return err
+	}
+	return p.retainLabelIdx(depth)
+}
+
+// retainLabelIdx appends a resolved label index to the current instruction's immediates.
+//
+// Separate from `retainIdx` because a label is not resolved through a `space`: `idxSpaceFor` returns
+// nil for `catLabel` by design, so routing labels through the general path would need a special case
+// inside it that reads as an exemption rather than as a different mechanism. The encoding is the
+// same `u32` either way.
+func (p *parser) retainLabelIdx(depth uint32) error {
+	if !p.retaining() {
+		return nil
+	}
+	p.appendImm(encodeLocalIdx(depth))
+	return nil
 }
 
 // labelIdxList parses an `idx_list` whose members are all labels — `br_table`'s tail.

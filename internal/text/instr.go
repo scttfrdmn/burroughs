@@ -140,6 +140,122 @@ var labelTakingKinds = map[keywordKind]bool{
 	"BR_ON_CAST": true,
 }
 
+// idxCategory is the index space an instruction's index immediate resolves against.
+//
+// The reference makes this a *parameter* of `idx` (parser.mly:487-489) and each arm supplies one —
+// `call ($2 c func)`, `local_get ($2 c local)`, `memory_size ($2 c memory)`. A reader that ignores
+// the category resolves `$x` in whichever space it happens to consult, which for a symbolic index
+// silently produces a *different instruction*: accept-direction, and no vector reports it, because
+// every `unknown <space>` vector in the corpus is an `assert_invalid` with a numeric index.
+type idxCategory uint8
+
+const (
+	catNone idxCategory = iota
+	catLocal
+	catFunc
+	catMemory
+	catLabel
+	catType
+	catTag
+	catGlobal
+	catTable
+	catData
+	catElem
+)
+
+// idxLookupKinds is the lookup category each `plaininstr` arm's **first** index takes.
+//
+// Transcribed from the 47 arms of `plaininstr` that pass one, and machine-checked against them by
+// TestIdxLookupKindsMatchTheReference — the same discipline `labelTakingKinds` is held to, and for
+// the same reason: this is an accept-direction fact about which space a name resolves in, so the
+// authority has to be the grammar rather than a reading of it.
+//
+// **Scoped to the space, not to the slice** (#33's widening rule): all 47 arms are listed, including
+// the ten categories the code section cannot encode yet, because a control covering only today's
+// three would freeze at the moment of authorship and say nothing about the next arm added. What the
+// encoder does with a category it cannot resolve is refuse — see `idxSpaceFor`.
+//
+// The *second* index of a two-index arm is not here. Four arms take two categories
+// (`array.init_data` is `type_` then `data`, `table.init` is `elem` and a defaulted `table`), and
+// they are all in tiers this section does not reach; their second category is handled where those
+// arms are implemented, and the drift control asserts the first-index mapping only, saying so.
+var idxLookupKinds = map[keywordKind]idxCategory{
+	"ARRAY_COPY": catType, "ARRAY_FILL": catType, "ARRAY_GET": catType,
+	"ARRAY_INIT_DATA": catType, "ARRAY_INIT_ELEM": catType, "ARRAY_NEW": catType,
+	"ARRAY_NEW_DATA": catType, "ARRAY_NEW_ELEM": catType, "ARRAY_NEW_FIXED": catType,
+	"ARRAY_SET": catType, "STRUCT_GET": catType, "STRUCT_NEW": catType, "STRUCT_SET": catType,
+	"CALL_REF": catType, "RETURN_CALL_REF": catType,
+
+	"BR": catLabel, "BR_IF": catLabel, "BR_ON_CAST": catLabel, "BR_ON_NULL": catLabel,
+	"BR_TABLE": catLabel,
+
+	"CALL": catFunc, "RETURN_CALL": catFunc, "REF_FUNC": catFunc,
+
+	"LOCAL_GET": catLocal, "LOCAL_SET": catLocal, "LOCAL_TEE": catLocal,
+
+	"GLOBAL_GET": catGlobal, "GLOBAL_SET": catGlobal,
+
+	"LOAD": catMemory, "STORE": catMemory, "VEC_LOAD": catMemory, "VEC_STORE": catMemory,
+	"MEMORY_COPY": catMemory, "MEMORY_FILL": catMemory, "MEMORY_GROW": catMemory,
+	"MEMORY_SIZE": catMemory,
+
+	"TABLE_COPY": catTable, "TABLE_FILL": catTable, "TABLE_GET": catTable,
+	"TABLE_GROW": catTable, "TABLE_SET": catTable, "TABLE_SIZE": catTable,
+
+	// **The two sugar arms' written index is not the space their name suggests.**
+	// `memory.init x y` is `memory_init ($2 c memory) ($3 c data)` (:607) and its sugar arm
+	// `MEMORY_INIT idx` is `memory_init (0l @@ $loc($1)) ($2 c data)` (:609) — so when one index
+	// is written it is the **data** index and the memory defaults to 0. `table.init` is the same
+	// shape with `elem` (:587 and :589). Getting this backwards encodes a legal module that does
+	// something else, which is why it is called out rather than left to the table's shape.
+	//
+	// These four line numbers were `:588` and `:607` — the two-index arm's line for one kind and
+	// nothing in particular for the other — until TestIdxLookupKindsMatchTheReference was written
+	// against this row and the sugar arms had to be located exactly. The prose was right and its
+	// citations were not, which is the same class the fixture-provenance check exists for: a
+	// citation nobody resolves is a claim.
+	"MEMORY_INIT": catData, "TABLE_INIT": catElem,
+
+	"DATA_DROP": catData, "ELEM_DROP": catElem,
+
+	"THROW": catTag,
+}
+
+// idxSpaceFor returns the index space a category resolves against, or nil when this stratum cannot
+// resolve it yet.
+//
+// A nil space is an *encode* refusal, not a parse failure: the recognizer already handles every one
+// of these arms and must keep doing so. Refusing rather than defaulting is the point — a category
+// resolved in the wrong space is the accept-direction defect idxCategory's comment describes, and
+// "not yet" is a verdict this project prefers to a guess.
+func (p *parser) idxSpaceFor(cat idxCategory) *space {
+	switch cat {
+	case catLocal:
+		return &p.ctx.locals
+	case catFunc:
+		return &p.ctx.funcs
+	case catMemory:
+		return &p.ctx.memories
+	case catGlobal:
+		return &p.ctx.globals
+	case catTable:
+		return &p.ctx.tables
+	case catType:
+		return &p.ctx.types
+	case catTag:
+		return &p.ctx.tags
+	case catData:
+		return &p.ctx.datas
+	case catElem:
+		return &p.ctx.elems
+	case catLabel, catNone:
+		// A label is resolved by `labelIdx` against the lexical label stack, not by a space —
+		// see labelTakingKinds. catNone reaches here only from a shape with no index.
+		return nil
+	}
+	return nil
+}
+
 // shapeOf resolves a keyword token to its immediate shape.
 //
 // The optional-first-index kinds are answered here rather than from the map, because their two
@@ -208,6 +324,12 @@ func startsInstruction(k keywordKind) bool {
 // Returns false without consuming anything when the cursor is not on a mnemonic this table
 // knows, so `instr1` can try `blockinstr` and `expr` instead. A production that reports "not
 // mine" must leave the cursor where it found it, or the caller's alternative starts mid-token.
+// **Emission happens here, after the immediates are read**, which is the only order available: an
+// instruction's bytes are its opcode followed by its immediates, and the immediates are not known
+// until they are parsed. So `immediates` accumulates into `p.imm` and this appends the finished
+// instruction. The accumulator is reset per instruction rather than per call site, because a nested
+// reader (a folded operand inside a memarg? not legal, but `select`'s result list is) must not
+// inherit a half-built immediate list.
 func (p *parser) plaininstr() (bool, error) {
 	t := p.c.peek()
 	if t.Kind != KeywordTok {
@@ -218,7 +340,33 @@ func (p *parser) plaininstr() (bool, error) {
 		return false, nil
 	}
 	p.c.next()
-	return true, p.immediates(shape, t)
+	saved := p.imm
+	p.imm = nil
+	defer func() { p.imm = saved }()
+	if err := p.immediates(shape, t); err != nil {
+		return true, err
+	}
+	if !p.retaining() {
+		return true, nil
+	}
+	if !encodableShapes[shape] {
+		// A shape whose immediates this file does not write — memarg's natural-alignment default,
+		// the lane and vector forms, the reftype and heaptype arms. The *parse* was complete, so
+		// this is an encode refusal, and it is checked before `opBytes` so the message names the
+		// reason rather than the mnemonic's absence from a table it is in fact present in.
+		return true, p.refuseUnencodable(t, "the "+t.Text+" instruction's immediates")
+	}
+	op, ok := opBytes(t.Text)
+	if !ok {
+		// A mnemonic with no unambiguous encoding: the three type-dependent ones, or one the
+		// generated table does not carry. The *parse* succeeded, so this is an encode refusal and
+		// not a syntax error — it reads as "this module is not encodable yet", which is what the
+		// frontier message says for the fields that have no section.
+		return true, errf(t, "cannot yet encode the %s instruction (#8)", t.Text)
+	}
+	p.emit(instr{op: op, imm: p.imm, patch: p.immPatch})
+	p.immPatch = nil
+	return true, nil
 }
 
 // immediates reads the immediate sequence for one shape.
@@ -270,27 +418,50 @@ func (p *parser) immediates(shape immShape, mnemonic Token) error {
 	case immNone:
 		return nil
 	case immIdx:
-		return p.idx()
+		return p.idxRetained(mnemonic)
 	case immIdxIdx:
 		if err := p.idx(); err != nil {
 			return err
 		}
 		return p.idx()
 	case immIdxOpt:
-		_, err := p.idxOpt()
-		return err
+		// `memory.size`/`memory.grow` write a **bare `idx`** (encode.ml `op 0x3f; idx x`, :601),
+		// so the immediate is always present in the encoding even when the text omits it — the
+		// empty arm means index 0, not "no immediate". An emitter that wrote nothing here would
+		// produce a one-byte instruction the decoder reads as `memory.size` followed by whatever
+		// came next.
+		r, present, err := p.idxOpt()
+		if err != nil {
+			return err
+		}
+		if !present {
+			// The reference's own default: `MEMORY_SIZE /* empty */ { fun c -> memory_size
+			// (0l @@ …) }`. Index 0 written explicitly, because the encoding has no empty arm.
+			p.appendImm(encodeLocalIdx(0))
+			return nil
+		}
+		return p.retainIdx(mnemonic, r)
 	case immIdxIdxOpt:
 		// `idx_idx_opt` (:494) is empty-or-two, and the `memory.init`/`table.init` sugar arms
 		// are one-or-two. Both are served by "read as many as are there", which is why the
 		// second read is conditional rather than required after the first.
-		present, err := p.idxOpt()
+		first, present, err := p.idxOpt()
 		if err != nil {
 			return err
 		}
-		if present {
-			_, err = p.idxOpt()
+		if !present {
+			// `memory.copy` with neither index written: both default to 0, and **both are
+			// written** — `MemoryCopy (x, y) → op 0xfc; u32 0x0al; idx x; idx y` (encode.ml:597)
+			// has no arm that omits an index.
+			p.appendImm(encodeLocalIdx(0))
+			p.appendImm(encodeLocalIdx(0))
+			return nil
 		}
-		return err
+		second, present2, err := p.idxOpt()
+		if err != nil {
+			return err
+		}
+		return p.retainIdxPair(mnemonic, first, second, present2)
 	case immMemarg:
 		return p.memarg()
 	case immLaneImms:
@@ -333,7 +504,7 @@ func (p *parser) immediates(shape immShape, mnemonic Token) error {
 		}
 		return p.nat32()
 	case immNum:
-		return p.constImm(mnemonic)
+		return p.constImmRetained(mnemonic)
 	case immVecConst:
 		return p.vecConst(mnemonic)
 	case immLaneIdxList:
@@ -359,11 +530,16 @@ func (p *parser) atIdx() bool { return p.c.at(NatTok) || p.c.at(VarTok) }
 // which is a second channel for a verdict that already has one — and worse, a caller that
 // ignored the bool would silently drop a width error. Two return values make dropping one a
 // compile error at the call site.
-func (p *parser) idxOpt() (bool, error) {
+// **It returns the reference too, now that a caller encodes it.** The three-value signature is
+// uglier than the two-value one and is the alternative to a "last index read" field on the parser,
+// which would be a second channel for a value the function already has — the same objection the
+// paragraph above makes to stashing the error.
+func (p *parser) idxOpt() (idxRef, bool, error) {
 	if !p.atIdx() {
-		return false, nil
+		return idxRef{}, false, nil
 	}
-	return true, p.idx()
+	r, err := p.idxValue()
+	return r, true, err
 }
 
 // memarg parses `idx_opt offset_opt align_opt` (:596), the load/store immediates.
@@ -373,7 +549,7 @@ func (p *parser) idxOpt() (bool, error) {
 // `i32.load align=4 offset=0` is malformed, and this reports it by leaving `offset=` unconsumed
 // for the caller's `unexpected token`.
 func (p *parser) memarg() error {
-	if _, err := p.idxOpt(); err != nil {
+	if _, _, err := p.idxOpt(); err != nil {
 		return err
 	}
 	if p.c.at(OffsetEqNat) {

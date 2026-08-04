@@ -3,6 +3,7 @@ package text
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -68,6 +69,13 @@ func decodeForTest(t *testing.T, b []byte) *binary.Module {
 // one table over all encodable modules, so a section this emitter writes for a module that should
 // have none is a failure rather than an unchecked case. A per-section table would have no row saying
 // `(module (type (func)))` has *no* memory section.
+//
+// **`wantFuncs` states the body, and the body's last instruction is always `end`.** The text does
+// not spell it: `encode.ml`'s code writer calls `end_ ()` after the body (:1029-1039), so every
+// function's bytes finish with an explicit `0x0b` and the decoder retains it in `Body`. A want column
+// that omitted it would be asserting the encoder's output against a reading of the *text* that is
+// wrong about the format — so it is written out on every row, and a `(func)` with an empty body is
+// one instruction rather than none.
 var encodableModules = []struct {
 	src         string
 	want        []binary.CompType
@@ -75,6 +83,7 @@ var encodableModules = []struct {
 	wantMems    []binary.Memory
 	wantImports []binary.Import
 	wantExports []binary.Export
+	wantFuncs   []binary.Func
 }{
 	{src: `(module)`},
 	{src: `(module (type (func)))`, want: []binary.CompType{
@@ -615,6 +624,252 @@ var encodableModules = []struct {
 			{Name: "field", Kind: binary.ExternMemory, Index: 0},
 		},
 	},
+
+	// # The function and code sections (#8)
+	//
+	// **One list, two sections.** `encode.ml` derives both from `m.it.funcs` under one condition
+	// (:1141 and :1159), and a module whose two sections disagree about N is the malformed `function
+	// and code section have inconsistent lengths`. So every row here asserts the *pair*: the decoder
+	// zips them, and `binary.Func` existing at all is that zip.
+	{
+		src:  `(module (func))`,
+		want: []binary.CompType{{Kind: binary.CompFunc}},
+		wantFuncs: []binary.Func{
+			{TypeIndex: 0, Body: []binary.Instr{{Op: 0x0b}}},
+		},
+	},
+	// The inline signature interns, so the type section the func *implies* is asserted here as well
+	// as the body — a func whose signature vanished would still round-trip its body.
+	{
+		src: `(module (func (param i32) (result i64)))`,
+		want: []binary.CompType{{Kind: binary.CompFunc, Func: binary.FuncType{
+			Params:  []binary.ValType{binary.I32},
+			Results: []binary.ValType{binary.I64},
+		}}},
+		wantFuncs: []binary.Func{
+			{TypeIndex: 0, Body: []binary.Instr{{Op: 0x0b}}},
+		},
+	},
+	// **Three funcs and two distinct signatures**, which is what pins section 3 to being a vector of
+	// *type indices* rather than of positions: func 1 must carry index 1 and func 2 index 0 again. An
+	// emitter writing `i` instead of the interned index passes every single-signature row above.
+	{
+		src: `(module (func) (func (param i32)) (func))`,
+		want: []binary.CompType{
+			{Kind: binary.CompFunc},
+			{Kind: binary.CompFunc, Func: binary.FuncType{Params: []binary.ValType{binary.I32}}},
+		},
+		wantFuncs: []binary.Func{
+			{TypeIndex: 0, Body: []binary.Instr{{Op: 0x0b}}},
+			{TypeIndex: 1, Body: []binary.Instr{{Op: 0x0b}}},
+			{TypeIndex: 0, Body: []binary.Instr{{Op: 0x0b}}},
+		},
+	},
+	// An explicit `(type $t)` typeuse with the type defined *after* the func, which is what
+	// `textFunc.typeIdx` being a thunk is for. Eager resolution rejects this legal module.
+	{
+		src:  `(module (func (type $t)) (type $t (func)))`,
+		want: []binary.CompType{{Kind: binary.CompFunc}},
+		wantFuncs: []binary.Func{
+			{TypeIndex: 0, Body: []binary.Instr{{Op: 0x0b}}},
+		},
+	},
+	// **Locals, declared in three groups and decoded as five.** The wire form is run-length
+	// (`count, valtype`, encode.ml:238-242) and `decodeLocals` flattens, so the want column states the
+	// flat reading: an RLE that dropped a run's count would decode to three.
+	{
+		src:  `(module (func (local i32 i32) (local i64) (local f32 f32)))`,
+		want: []binary.CompType{{Kind: binary.CompFunc}},
+		wantFuncs: []binary.Func{{
+			TypeIndex: 0,
+			Locals:    []binary.ValType{binary.I32, binary.I32, binary.I64, binary.F32, binary.F32},
+			Body:      []binary.Instr{{Op: 0x0b}},
+		}},
+	},
+	// **Params are not locals in the wire form.** They occupy the same index space at *validation*,
+	// but the code section declares only the declared locals — so a func with two params and one local
+	// has `Locals` of length one, and `local.get 2` reaches that local. An emitter that wrote the
+	// params into the locals vector would double them and still round-trip.
+	{
+		src: `(module (func (param i32 i64) (local f64) (local.get 2) drop))`,
+		want: []binary.CompType{{Kind: binary.CompFunc, Func: binary.FuncType{
+			Params: []binary.ValType{binary.I32, binary.I64},
+		}}},
+		wantFuncs: []binary.Func{{
+			TypeIndex: 0,
+			Locals:    []binary.ValType{binary.F64},
+			Body: []binary.Instr{
+				{Op: 0x20, Imm0: 2}, // local.get 2 — the local, one past the two params
+				{Op: 0x1a},          // drop
+				{Op: 0x0b},
+			},
+		}},
+	},
+	// A **named** local and a named param, resolved at the cursor. `funcSignature` resets
+	// `p.ctx.locals` per function and binds the params first, so `$x` is 0 and `$y` is 1 — an
+	// off-by-one here is a wrong-but-well-formed module, which is why the want column reads the
+	// indices rather than the names.
+	{
+		src: `(module (func (param $x i32) (local $y i32) (local.get $y) (local.get $x) drop drop))`,
+		want: []binary.CompType{{Kind: binary.CompFunc, Func: binary.FuncType{
+			Params: []binary.ValType{binary.I32},
+		}}},
+		wantFuncs: []binary.Func{{
+			TypeIndex: 0,
+			Locals:    []binary.ValType{binary.I32},
+			Body: []binary.Instr{
+				{Op: 0x20, Imm0: 1}, // $y, the local
+				{Op: 0x20, Imm0: 0}, // $x, the param
+				{Op: 0x1a},
+				{Op: 0x1a},
+				{Op: 0x0b},
+			},
+		}},
+	},
+	// **A folded expression: operands precede their leader.** `expr1`'s `plaininstr expr_list`
+	// (parser.mly:814) parses the leader *first* and must emit it *last*, which is what the nested
+	// sink and `splice` are for. Reversed, this encodes `i32.add` before its operands — a body that
+	// decodes clean and computes something else, and the reason the frontier refuses rather than
+	// drops. Nested two deep so a one-level-only splice fails too.
+	{
+		src:  `(module (func (result i32) (i32.add (i32.const 1) (i32.mul (i32.const 2) (i32.const 3)))))`,
+		want: []binary.CompType{{Kind: binary.CompFunc, Func: binary.FuncType{Results: []binary.ValType{binary.I32}}}},
+		wantFuncs: []binary.Func{{TypeIndex: 0, Body: []binary.Instr{
+			{Op: 0x41, Imm0: 1}, // i32.const 1
+			{Op: 0x41, Imm0: 2}, // i32.const 2
+			{Op: 0x41, Imm0: 3}, // i32.const 3
+			{Op: 0x6c},          // i32.mul — after its two operands
+			{Op: 0x6a},          // i32.add — after all of its
+			{Op: 0x0b},
+		}}},
+	},
+	// The same instructions written **flat**, which must produce the identical body. Two spellings of
+	// one module, the pattern the inline-import and inline-export rows above use: an emitter that got
+	// the fold's order wrong would disagree with itself between these two rows.
+	{
+		src:  `(module (func (result i32) i32.const 1 i32.const 2 i32.mul i32.add))`,
+		want: []binary.CompType{{Kind: binary.CompFunc, Func: binary.FuncType{Results: []binary.ValType{binary.I32}}}},
+		wantFuncs: []binary.Func{{TypeIndex: 0, Body: []binary.Instr{
+			{Op: 0x41, Imm0: 1},
+			{Op: 0x41, Imm0: 2},
+			{Op: 0x6c},
+			{Op: 0x6a},
+			{Op: 0x0b},
+		}}},
+	},
+	// **A forward `call`, which is the one index category that defers** (`p.immPatch`). Locals resolve
+	// at the cursor because `p.ctx.locals` is per-function and a deferred local resolution would run
+	// against the *last* function's locals; func indices cannot resolve at the cursor because this
+	// module is legal. Both timings in one place, one row above and one here.
+	{
+		src:  `(module (func (call $late)) (func $late))`,
+		want: []binary.CompType{{Kind: binary.CompFunc}},
+		wantFuncs: []binary.Func{
+			{TypeIndex: 0, Body: []binary.Instr{{Op: 0x10, Imm0: 1}, {Op: 0x0b}}},
+			{TypeIndex: 0, Body: []binary.Instr{{Op: 0x0b}}},
+		},
+	},
+	// An **imported** func occupies index 0, so the defined func's `call 0` names the import and not
+	// itself. Section 3 lists only the defined one — the import's type index is the descriptor's —
+	// which is the split `Funcs` being "one entry per *defined* function" states.
+	{
+		src:  `(module (import "m" "f" (func)) (func (call 0)))`,
+		want: []binary.CompType{{Kind: binary.CompFunc}},
+		wantImports: []binary.Import{
+			{Module: "m", Name: "f", Kind: binary.ExternFunc, Index: 0},
+		},
+		wantFuncs: []binary.Func{
+			{TypeIndex: 0, Body: []binary.Instr{{Op: 0x10, Imm0: 0}, {Op: 0x0b}}},
+		},
+	},
+	// **The four constant widths, with the sign and bit-pattern readings that distinguish them.**
+	// `i32.const -1` and `i32.const 4294967295` are the same instruction: `constImmBytes` interprets
+	// the sign at the *mnemonic's* width, so both are `41 7f` and both decode to the same Imm0. The
+	// float rows carry a NaN payload, which is the one place a naive strconv round trip loses data —
+	// `floatConstBits` and TestFloatConstBitsMatchTheSuitesBitPatterns exist for it, and this is the row that
+	// takes those bits all the way through a decoder.
+	//
+	// **The i32 rows read `0xffffffffffffffff`, not `0xffffffff`, and that is the decoder's
+	// deliberate choice rather than a surprise.** `immS32` is *sign-extended* into the 64-bit slot
+	// (instr.go:686-690: "the same value at 32 and a different one the moment anything widens it"),
+	// so both spellings land on the full-width -1. Written as `0xffffffff` first, which is what a
+	// reading of the *text* alone suggests, and the failure sent this to the decoder's comment — the
+	// want column is a second reading of the wat and the format, and the format had the answer.
+	{
+		src: `(module (func (result i32) i32.const 4294967295) (func (result i32) i32.const -1)
+		              (func (result i64) i64.const -1) (func (result f32) f32.const nan:0x200000)
+		              (func (result f64) f64.const -0x1p-1))`,
+		want: []binary.CompType{
+			{Kind: binary.CompFunc, Func: binary.FuncType{Results: []binary.ValType{binary.I32}}},
+			{Kind: binary.CompFunc, Func: binary.FuncType{Results: []binary.ValType{binary.I64}}},
+			{Kind: binary.CompFunc, Func: binary.FuncType{Results: []binary.ValType{binary.F32}}},
+			{Kind: binary.CompFunc, Func: binary.FuncType{Results: []binary.ValType{binary.F64}}},
+		},
+		wantFuncs: []binary.Func{
+			{TypeIndex: 0, Body: []binary.Instr{{Op: 0x41, Imm0: 0xffffffffffffffff}, {Op: 0x0b}}},
+			{TypeIndex: 0, Body: []binary.Instr{{Op: 0x41, Imm0: 0xffffffffffffffff}, {Op: 0x0b}}},
+			{TypeIndex: 1, Body: []binary.Instr{{Op: 0x42, Imm0: 0xffffffffffffffff}, {Op: 0x0b}}},
+			{TypeIndex: 2, Body: []binary.Instr{{Op: 0x43, Imm0: 0x7fa00000}, {Op: 0x0b}}},
+			{TypeIndex: 3, Body: []binary.Instr{{Op: 0x44, Imm0: 0xbfe0000000000000}, {Op: 0x0b}}},
+		},
+	},
+	// **`memory.size` writes an index the text does not spell** — a bare `idx`, encode.ml:601, which
+	// has no empty arm. An emitter that wrote no immediate for the omitted operand produces a body one
+	// byte short and the *next* instruction is read out of it.
+	{
+		src:      `(module (memory 1) (func (memory.size) drop))`,
+		want:     []binary.CompType{{Kind: binary.CompFunc}},
+		wantMems: []binary.Memory{{Limits: binary.Limits{Min: 1}}},
+		wantFuncs: []binary.Func{{TypeIndex: 0, Body: []binary.Instr{
+			{Op: 0x3f, Imm0: 0}, {Op: 0x1a}, {Op: 0x0b},
+		}}},
+	},
+	// **A label immediate, which was emitted as nothing at all.** `br 0` wrote `0x0c` with no operand,
+	// so the body's terminating `0x0b` became the operand and `(func br 0)` decoded as a branch to
+	// label 11 followed by nothing: a well-formed image denoting a different function, green on every
+	// board. The wabt corpus is what said so — `token#5`, 26 bytes against wabt's 27 — and the cause
+	// is that every label-taking arm returns before the main switch's `idxRetained` (`immediates`), so
+	// the retention had to be added at `labelIdx` or nowhere.
+	//
+	// The trailing `(nop)` is the vector's own and it is the part with teeth: without an instruction
+	// after the `br`, a missing immediate eats the `end` and *still* decodes, which is exactly how
+	// this survived. With it, the wrong reading is a body one byte short of its declared size.
+	{
+		src:  `(module (func br 0(nop)))`, // token.wast:30
+		want: []binary.CompType{{Kind: binary.CompFunc}},
+		wantFuncs: []binary.Func{{TypeIndex: 0, Body: []binary.Instr{
+			{Op: 0x0c, Imm0: 0}, // br 0 — the immediate the emitter dropped
+			{Op: 0x01},          // nop
+			{Op: 0x0b},
+		}}},
+	},
+	// A non-zero depth and a second label-taking mnemonic, so the row above is not a fixed point: `br
+	// 0`'s correct bytes and its buggy bytes differ only in *length*, and an emitter writing a
+	// constant `0x00` operand would pass it. `br_if` also proves the retention is not `br`-specific —
+	// both reach `labelIdx` through `labelTakingKinds`, which is the mechanism under test.
+	{
+		src:  `(module (func (br 3) (nop)) (func (br_if 2 (i32.const 0))))`,
+		want: []binary.CompType{{Kind: binary.CompFunc}},
+		wantFuncs: []binary.Func{
+			{TypeIndex: 0, Body: []binary.Instr{{Op: 0x0c, Imm0: 3}, {Op: 0x01}, {Op: 0x0b}}},
+			{TypeIndex: 0, Body: []binary.Instr{
+				{Op: 0x41, Imm0: 0}, {Op: 0x0d, Imm0: 2}, {Op: 0x0b},
+			}},
+		},
+	},
+	// **A func and an inline export**, so the export's index resolves against a func space whose sole
+	// member is this one — and so the withdrawal's `func` row is not the only place `funcField`'s tail
+	// runs beside another section's retention.
+	{
+		src:  `(module (func (export "f")))`,
+		want: []binary.CompType{{Kind: binary.CompFunc}},
+		wantExports: []binary.Export{
+			{Name: "f", Kind: binary.ExternFunc, Index: 0},
+		},
+		wantFuncs: []binary.Func{
+			{TypeIndex: 0, Body: []binary.Instr{{Op: 0x0b}}},
+		},
+	},
 }
 
 // TestEncodeRoundTripsThroughTheDecoder is the encoder's acceptance check, and the direction of the
@@ -632,10 +887,30 @@ var encodableModules = []struct {
 // a check. The fully independent witness is the wabt corpus, at module level, which is #67's other
 // half; this is the part that can be asserted inside the package.
 func TestEncodeRoundTripsThroughTheDecoder(t *testing.T) {
-	if len(encodableModules) < 12 {
-		t.Fatalf("encodableModules has %d rows: a table this check reads is a table whose size is "+
-			"part of the assertion, since a comparison over an empty set succeeds",
-			len(encodableModules))
+	// Vacuity, and **per partition rather than one total**. The table is 84 rows, of which 14 assert a
+	// function body; a single floor lets the func half go to zero and be absorbed by the other 70,
+	// which is the empty-half-hiding-behind-a-full-one defect (grave #105) with a table for a
+	// partner. So the code section's rows are counted separately from the table's size.
+	//
+	// The floor was 12 against 84 rows for five sections' worth of growth — a bound so far from what
+	// it bounds that it ran, agreed, and said nothing. Set close enough to the real counts to notice a
+	// deletion, and loose enough that adding a row is not a failure.
+	if len(encodableModules) < 70 {
+		t.Fatalf("encodableModules has %d rows, want >=70 (84 at this commit): a table this check "+
+			"reads is a table whose size is part of the assertion, since a comparison over an empty "+
+			"set succeeds", len(encodableModules))
+	}
+	withFuncs := 0
+	for _, tc := range encodableModules {
+		if len(tc.wantFuncs) > 0 {
+			withFuncs++
+		}
+	}
+	if withFuncs < 12 {
+		t.Fatalf("only %d of %d encodableModules rows assert a function body, want >=12 (14 at this "+
+			"commit): the code section is the newest and least-covered half of this table, and a "+
+			"total-only floor would let its rows go to zero behind the other sections'",
+			withFuncs, len(encodableModules))
 	}
 	for _, tc := range encodableModules {
 		t.Run(tc.src, func(t *testing.T) {
@@ -684,6 +959,32 @@ func TestEncodeRoundTripsThroughTheDecoder(t *testing.T) {
 				if got := m.Exports[i]; got != want {
 					t.Errorf("export %d is %+v, want %+v — the Index is the resolved one, so a "+
 						"wrong resolution shows up here and not in any parse verdict", i, got, want)
+				}
+			}
+
+			// The function and code sections, asserted as one thing because the decoder zips them
+			// and a length disagreement between the two is malformed (`function and code section
+			// have inconsistent lengths`) — so a wrong N here fails at `decodeForTest` above, and
+			// what this reads is the content.
+			if len(m.Funcs) != len(tc.wantFuncs) {
+				t.Fatalf("encoded % x, which decodes to %d defined functions, want %d: %v",
+					b, len(m.Funcs), len(tc.wantFuncs), m.Funcs)
+			}
+			for i, want := range tc.wantFuncs {
+				got := m.Funcs[i]
+				if got.TypeIndex != want.TypeIndex {
+					t.Errorf("func %d has type index %d, want %d: section 3 is a vector of interned "+
+						"type indices, not of positions", i, got.TypeIndex, want.TypeIndex)
+				}
+				if !slices.Equal(got.Locals, want.Locals) {
+					t.Errorf("func %d has locals %v, want %v: the wire form is run-length and the "+
+						"decoder flattens, so this is the flat reading", i, got.Locals, want.Locals)
+				}
+				if !slices.Equal(got.Body, want.Body) {
+					t.Errorf("func %d has body %+v, want %+v: a body whose instructions are in the "+
+						"wrong order decodes clean and computes something else, which is the "+
+						"accept-direction defect no suite vector can see (§9 G-3)",
+						i, got.Body, want.Body)
 				}
 			}
 
@@ -882,7 +1183,7 @@ func TestEncodeDoesNotRerunTheDeferredPhase(t *testing.T) {
 		{`(module (func (param i32)) (func (param i32)))`, 1},        // the second reuses the first
 	} {
 		t.Run(tc.src, func(t *testing.T) {
-			p, err := parseModule([]byte(tc.src))
+			p, err := parseModule([]byte(tc.src), build)
 			if err != nil {
 				t.Fatalf("parse: %v", err)
 			}
@@ -937,7 +1238,9 @@ func TestEncodeDoesNotRerunTheDeferredPhase(t *testing.T) {
 // message says what is missing without borrowing a spec string.
 func TestEncodeRefusesWhatItCannotWrite(t *testing.T) {
 	for _, tc := range []struct{ src, contains string }{
-		{`(module (func))`, "(func …) field"},
+		// `(module (func))` was here and is now in `encodableModules`, which is what the code section
+		// *is*. The `(start 0)` row below still needs a func to be well-formed and is still refused —
+		// by the start field, now, rather than by the func that precedes it.
 		{`(module (global i32 (i32.const 0)))`, "(global …) field"},
 		{`(module (start 0) (func))`, "(start …) field"},
 		{`(module (data "abc"))`, "(data …) field"},
@@ -979,7 +1282,11 @@ func TestEncodeRefusesWhatItCannotWrite(t *testing.T) {
 		// never needed the lookahead the other five have now lost.
 		{`(module (table funcref (elem)))`, "(table …) field"}, // + an implicit elem segment
 		{`(module (table i64 funcref (elem)))`, "(table …) field"},
-		{`(module (func $f) (table 1 funcref (ref.func $f)))`, "(func …) field"}, // an initializer expr
+		// An initializer expr. This row read `"(func …) field"` until the code section landed, because
+		// the func was refused before the table was reached — so what it *checked* was the func
+		// frontier, and the table's own arm was never the thing under test. Now the func encodes and
+		// the row says what its comment always claimed.
+		{`(module (func $f) (table 1 funcref (ref.func $f)))`, "(table …) field"},
 		// A table whose element type needs GC's prefix: refused by the *element type* check rather
 		// than by the field check, so the message names the type rather than the field.
 		{`(module (table 1 (ref func)))`, "element type (ref func)"},
@@ -1009,10 +1316,52 @@ func TestEncodeRefusesWhatItCannotWrite(t *testing.T) {
 		// Two orders and two kinds, because the defect is about *which* record gets cleared: the
 		// unencodable field is the one whose name must appear in the message, never the encodable
 		// field that follows it.
-		{`(module (func) (memory 1))`, "(func …) field"},
+		//
+		// **The leader was `(func)` and is now `(data "abc")`, because a leader must be a field the
+		// emitter still cannot write.** This is the tripwire-re-pointing rule (#33) at test-row scale:
+		// the row named a risk — a later field withdrawing an earlier field's refusal — and the code
+		// section dissolved its *subject* without touching the risk. Deleting it would retire a live
+		// control on a technicality; so `func` moves from leader to **follower** below, where it is a
+		// stronger witness than it was as a leader, `funcField`'s tail being the one place that both
+		// retains and clears in the same breath.
+		{`(module (data "abc") (memory 1))`, "(data …) field"},
 		{`(module (data "abc") (table 1 funcref))`, "(data …) field"},
 		{`(module (memory (data "x")) (memory 1))`, "(memory …) field"},
 		{`(module (tag) (memory 1) (table 1 funcref))`, "(tag …) field"},
+		// `func` as the *follower*: an unencodable field, then a func that encodes. `funcField`'s tail
+		// calls `noteDefined` and `clearNonTypeField` after retaining its body, so it is the newest
+		// candidate for clearing a record that is not its own — and unlike the memory and table arms,
+		// it reaches that call on every well-formed func. Falsified by dropping the offset comparison
+		// in `clearNonTypeField`: these two encode, emitting a module whose data or tag is gone.
+		{`(module (data "abc") (func))`, "(data …) field"},
+		{`(module (tag) (func) (memory 1))`, "(tag …) field"},
+
+		// # The typeuse frontier, which is a *wrong index* rather than a missing section
+		//
+		// Every row above refuses a field with no emitter. These two refuse a func the emitter can
+		// otherwise write completely, because one immediate inside it would be **wrong**: a typeuse
+		// with no re-stated signature contributes its referenced type's params as anonymous locals
+		// (parser.mly:241-244), the count is unknowable at the cursor (the type may be defined later),
+		// and `p.ctx.locals` is therefore short by it. `(local.get $var)` resolved to slot 0 where the
+		// param owns 0 — 77 bytes agreeing with wabt everywhere except `20 00` against `20 01`, found
+		// by the corpus and invisible to all 4162 vectors.
+		//
+		// So the assertion is the same in shape and different in kind: refusing here is not "no
+		// section yet", it is "this index would be a lie". The tracking issue is #77's rather than
+		// #8's, which is why the loop below accepts either.
+		{
+			`(module (type $sig (func (param i32))) (func (type $sig) (local $var i32) (local.get $var) drop))`,
+			"typeuse supplies its params",
+		},
+		// The **over-refusal**, stated as a row rather than left in a comment. `$t` has no params, so
+		// `$v` really is slot 0 and this module is encodable — and it is refused, because "does the
+		// type have params" is the same unanswerable question at this cursor as "how many". A frontier
+		// that declines an encodable module is a cost; one that writes a wrong index is a defect no
+		// vector can see. If #77 lands and this row still refuses, the fix did not reach the predicate.
+		{
+			`(module (type $t (func)) (func (type $t) (local $v i32) (local.get $v) drop))`,
+			"typeuse supplies its params",
+		},
 	} {
 		t.Run(tc.src, func(t *testing.T) {
 			if err := ReadModule([]byte(tc.src)); err != nil {
@@ -1028,8 +1377,13 @@ func TestEncodeRefusesWhatItCannotWrite(t *testing.T) {
 			if !strings.Contains(err.Error(), tc.contains) {
 				t.Errorf("refusal says %q, want it to name %q", err, tc.contains)
 			}
-			if !strings.Contains(err.Error(), "#8") {
-				t.Errorf("refusal says %q, want a tracking issue: an unexplained gap is the "+
+			// **Either tracking issue, not a substring that any `#` satisfies.** The section frontiers
+			// are #8's; the typeuse rows are #77's, that gap being a wrong *index* rather than a
+			// missing emitter. Spelled as two accepted numbers rather than as `strings.Contains(err,
+			// "#")` — a predicate matching any hash would pass on a message citing #0 or on the word
+			// "channel #", which is a citation nobody can resolve wearing a tracked deferral's clothes.
+			if !strings.Contains(err.Error(), "#8") && !strings.Contains(err.Error(), "#77") {
+				t.Errorf("refusal says %q, want it to cite #8 or #77: an unexplained gap is the "+
 					"declared-and-tracked ruling's silent half (#6)", err)
 			}
 			for _, spec := range []string{"malformed", "unexpected", "unknown", "invalid"} {

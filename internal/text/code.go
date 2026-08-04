@@ -1,0 +1,628 @@
+package text
+
+// The code section and its companion, the function section: #8's largest bucket and #7's door.
+//
+// # What this file adds that the rest of the parser refused to
+//
+// Every reader in instr.go is called for its *error* and its value discarded, which was correct
+// while the product was a recognizer: 0011 makes `text.ReadModule` error-only by design, and a
+// grammar that only answers yes/no needs nothing retained. The census says that stance blocks 1358
+// of 2143 parser-accepted modules — the `func` bucket is 63% of the corpus, and no other field is
+// within a factor of five of it. So this is where the parser starts *retaining*.
+//
+// **Measured after the fact: 196 → 926 encodable, a gain of 730.** That is the census's whole point
+// landing, and the two figures beside it are what the section actually bought — 712 of the 926 now
+// carry at least one instruction where the number before was **zero**, and 196 carry no function
+// section at all, which is *exactly* the baseline's 196. A section that added function bodies while
+// leaving the count of body-less modules unmoved is the consistency check passing: nothing in the
+// old set was reclassified, the new set is additive. See encode.go's witness paragraph for the
+// independent-producer half — 878 of the 926 join wabt's corpus and agree byte for byte.
+//
+// The retention is deliberately shallow. An instruction becomes `instr`: an opcode plus its already
+// encoded immediate bytes, appended to a flat list in emission order. It is **not** 0002's internal
+// form and must not grow toward one — 0002's form is the interpreter's, built from
+// `binary.DecodeModule`'s output on the path that has a conformance record, and a second
+// representation growing out of the *text* path is exactly the option 0011 refused. What goes in
+// this list is bytes with an opcode attached, and the moment anything wants to ask a question about
+// an instruction rather than write it, the answer is that the question belongs on the other side of
+// the decoder.
+//
+// # Emission order, which is the one place folding is not free
+//
+// `expr1`'s plain arm is `plaininstr expr_list` (parser.mly:814): the leader is parsed *first* and
+// must be emitted *last*, because `(i32.add (i32.const 1) (i32.const 2))` denotes the same sequence
+// as `i32.const 1  i32.const 2  i32.add`. So a folded instruction's operands are collected into a
+// nested sink and spliced ahead of the leader. Getting this backwards produces a module that
+// decodes clean and computes a different answer — accept-direction, invisible to every vector the
+// suite has, because the suite's vectors are modules it expects to *work*.
+//
+// # Two index resolutions, and why they are not one mechanism
+//
+// `local.get $x` resolves **at the cursor**: `funcSignature` resets `p.ctx.locals` per function and
+// binds params before the body is read, so the name is in scope when it is used and a forward
+// reference is meaningless. `call $f` resolves **in the deferred phase**, because a function may be
+// called before its definition is parsed. That asymmetry is a fact about the two spaces rather than
+// a choice here, and it is why the local path writes its bytes immediately while the call path
+// appends a placeholder and patches it under `deferOp` — the same slot-plus-thunk shape
+// `defineExport` uses (typetable.go), copied rather than re-derived (*lessons are indexed by shape*).
+//
+// Both are accept-direction: every `unknown local`/`unknown function` vector in the corpus is an
+// `assert_invalid` with a numeric index, so a *symbolic* index resolved to the wrong number is
+// something no vector reports.
+
+// # Where the sink lives, and why it is not a parameter
+//
+// The sink is a field on the parser, set by `funcField` and nil everywhere else. The alternative —
+// threading a `*instrSink` parameter — reaches `instrList`, `instr1`, `plaininstr`, `immediates`,
+// `expr`, `expr1`, `exprList`, `constexpr1`, `offset`, `elemexpr`, `elemexprList`, `block`,
+// `foldedBlock` and the memarg/lane readers below them: fourteen signatures changed to carry a value
+// that is the same value at all fourteen, which makes every one of them a place to pass the wrong
+// sink. The nested-sink case (folded operands) is served by *swapping* the field and restoring it,
+// which is the same `labelReset`/`labelRestore` discipline funcField already uses for label scopes
+// and is balanced by defer at the one site that swaps.
+//
+// A nil sink means "recognize, do not retain", which is the state every non-func caller of the
+// instruction readers is in: `offset`, `elemexpr` and the global/data initializers all parse
+// instructions this file has no section for yet, and they must keep working unchanged. So `emit` is
+// a no-op on nil rather than a panic — the retention is additive to a recognizer that already
+// passes 4162 vectors, and a panic there would make an unretained path a crash instead of the
+// no-change it is.
+
+// instr is one retained instruction: an opcode and its immediate bytes, ready to write.
+//
+// The immediates are encoded at parse time rather than stored as values, which is the whole reason
+// this type is three fields instead of a variant per shape. `i32.const -1` becomes the bytes
+// `7f` here, not an `int32` awaiting a writer, so nothing downstream needs to know that an
+// `i32.const`'s immediate is signed while a `local.get`'s is not — that knowledge lives at the one
+// site that has the token in hand and the width from the mnemonic.
+//
+// # Why patchLocal exists rather than a deferred byte slice
+//
+// A `call $f` cannot encode its immediate at parse time, so `imm` is left empty and `patch` records
+// the resolution to run in stage 2. The alternative — deferring the whole instruction — would put
+// an instruction's *position* in a thunk, and position is the one thing this list exists to fix.
+type instr struct {
+	// op is the opcode's byte sequence, prefix included: one byte for `i32.add`, two for a
+	// prefixed opcode. Taken from the generated table, never from a literal here.
+	op []byte
+	// imm is the encoded immediates, in the order the reference's `encode.ml` arm writes them.
+	imm []byte
+	// patch, when non-nil, computes the immediate in stage 2. Used only by the symbolic arms
+	// whose space allows forward references.
+	patch func() ([]byte, error)
+}
+
+// instrSink collects instructions in emission order.
+//
+// A slice with a splice operation rather than an `io.Writer`, for the folded case: operands are
+// parsed after their leader and emitted before it, so the sink must be able to accept a nested
+// sink's contents *ahead* of an instruction it has not appended yet. A writer cannot seek
+// backwards, which is the same reason `writer.section` splices a nested buffer.
+type instrSink struct {
+	instrs []instr
+}
+
+// add appends one instruction.
+func (s *instrSink) add(in instr) { s.instrs = append(s.instrs, in) }
+
+// splice appends every instruction from another sink, preserving order.
+func (s *instrSink) splice(other *instrSink) { s.instrs = append(s.instrs, other.instrs...) }
+
+// emit appends one instruction to the active sink, or does nothing when there is none.
+//
+// The nil case is the recognizer path and is silent by design — see this file's header. It is
+// `p.sink == nil` rather than a flag, so "am I retaining" and "where do I retain to" cannot
+// disagree.
+func (p *parser) emit(in instr) {
+	if p.sink == nil {
+		return
+	}
+	p.sink.add(in)
+}
+
+// retaining reports whether instructions are being kept.
+//
+// Read by the arms that must *refuse* rather than skip: an immediate shape this file cannot encode
+// has to fail the encode while still parsing cleanly for the recognizer, so it asks this instead of
+// checking for nil itself at four sites.
+func (p *parser) retaining() bool { return p.sink != nil }
+
+// appendImm adds encoded immediate bytes to the instruction being built, or does nothing when not
+// retaining.
+func (p *parser) appendImm(b []byte) {
+	if p.sink == nil {
+		return
+	}
+	p.imm = append(p.imm, b...)
+}
+
+// refuseUnencodable is the instruction frontier: it errors when retaining and does nothing
+// otherwise.
+//
+// **The whole reason this exists is that an instruction which parses and emits nothing is worse than
+// one that fails.** `blockinstr` reads a `block … end` perfectly well and this file has no opcode for
+// it; if retention simply skipped it, the body's *inner* instructions would still be emitted and the
+// image would hold a function whose control flow is gone — a module that decodes clean, validates,
+// and computes something else. That is the accept-direction class in its purest form, and the suite
+// scores it green by construction because every vector containing a block is a module the suite
+// expects to work.
+//
+// So the shape is: parse everything, emit what is encodable, and **refuse the module** the moment
+// something unencodable is retained. `ReadModule` never retains, so all 4162 vectors are untouched
+// by every call site of this function — which is the property that lets the frontier be drawn
+// narrowly and moved outward one tier at a time.
+//
+// The message names the construct and this issue, never a spec string: reporting malformedness for
+// well-formed text would lie about the module to conceal the encoder's own frontier (#5's ruling).
+func (p *parser) refuseUnencodable(t Token, what string) error {
+	if !p.retaining() {
+		return nil
+	}
+	return errf(t, "cannot yet encode %s (#8)", what)
+}
+
+// encodableShapes are the immediate shapes the code section can write.
+//
+// **Five of sixteen, and the boundary is a measurement rather than a preference.** The census
+// partitions the 1358 modules the `func` bucket blocks by their hardest instruction: 697 need only
+// these five, 68 more need `memarg`, 87 more need control flow, and 403 are behind a gate this
+// build does not turn on. So this set is the largest one whose emission is a lookup — no natural
+// alignment defaults, no block types, no operand-dependent opcodes — and each of the other three
+// tiers is its own question with its own authority to read.
+//
+// **The prediction was 697 and the delivered gain is 730, so the tier boundary is not the predictor
+// the census took it for** — 33 modules over, and an estimate that is *generous* still needs its
+// error bounded, because a tier count nobody re-measured is the next tier's estimate too. The excess
+// is accounted for and then some: **82 of the newly-encodable modules use a prefixed opcode**, across
+// 54 files led by `memory_copy`/`memory_copy64` at 10 each and the SIMD arithmetic files at 1–2. The
+// census counted those in its "behind a gate" tier, and they encode here because **the text front end
+// reads no `Features` at all** — the whole package has zero references to it, gating living entirely
+// in the decoder. So `EncodeModule` writes `memory.copy` whether or not bulk-memory is on, and the
+// census's fourth tier was measuring the *decoder's* gates against the *encoder's* frontier: two
+// different questions joined on a name. That is not a defect in this section — an encoder with no
+// features argument has no gate to consult, and 0011's surface does not carry one — but it does mean
+// the remaining tier counts (68 memarg, 87 control) are **upper-bound-shaped rather than exact**, and
+// whichever PR takes tier 2 re-measures rather than quoting them. Filed as the question it actually
+// is: whether the text front end should take a `Features` at all is a decision, not a cleanup, and it
+// belongs to Scott (#8's thread).
+//
+// Held as a set rather than as a `switch` in `immediates` so the frontier is one legible list, and
+// so the shapes *outside* it refuse structurally: a shape added to `immShape` and not to this map
+// is refused rather than silently emitting an instruction with no immediates.
+var encodableShapes = map[immShape]bool{
+	immNone:      true,
+	immIdx:       true,
+	immIdxOpt:    true,
+	immIdxIdxOpt: true,
+	immNum:       true,
+}
+
+// idxRetained parses one index immediate and retains it, resolving in the category the mnemonic's
+// arm names.
+//
+// This is the wrapper `immediates`' `immIdx` arm calls in place of `idx`, and the split from `idx`
+// is deliberate: `idx` is still the reader for every *module field* position, where no instruction
+// is being built and no category applies.
+func (p *parser) idxRetained(mnemonic Token) error {
+	r, err := p.idxValue()
+	if err != nil {
+		return err
+	}
+	return p.retainIdx(mnemonic, r)
+}
+
+// retainIdx encodes one already-parsed index reference as the current instruction's immediate.
+//
+// **The two resolution timings live here, and which one applies is a property of the space rather
+// than of this call.** A numeric index needs no resolution at all. A symbolic index in a space whose
+// names are all bound before use — locals, whose space `funcSignature` resets and fills per function
+// — resolves at the cursor. A symbolic index in a space that permits forward references — funcs,
+// where `call $f` may precede `(func $f)` — cannot, so it defers through `immPatch`.
+//
+// Deferring *only* the categories that need it is not an optimization: `p.ctx.locals` is reset per
+// function, so a local resolution deferred to stage 2 would run against whichever function's locals
+// happened to be current at the end of the parse, which is the last one. That is an
+// accept-direction defect and would score green on every vector in the corpus.
+func (p *parser) retainIdx(mnemonic Token, r idxRef) error {
+	if !p.retaining() {
+		return nil
+	}
+	if !r.isVar {
+		p.appendImm(encodeLocalIdx(r.idx))
+		return nil
+	}
+	cat := idxLookupKinds[mnemonic.Keyword]
+	space := p.idxSpaceFor(cat)
+	if space == nil {
+		return errf(r.tok, "cannot yet encode a symbolic index on %s (#8)", mnemonic.Text)
+	}
+	// **The locals space may be short, and this is the one place that can tell.** A typeuse with no
+	// re-stated signature contributes its referenced type's params as anonymous locals, and this
+	// stratum cannot count them (`funcField`, #77) — so every symbolic local in the body resolves one
+	// slot too low. `(func (type $sig) (local $var i32) (local.get $var))` encoded `$var` as **0**
+	// where `$sig`'s param owns 0: a well-formed image denoting a different function, which the wabt
+	// corpus caught at one byte and no suite vector can see.
+	//
+	// Refused *here* rather than at the func, because the narrow predicate is the honest one. Refusing
+	// every typeuse costs `(module (func (type $t)) (type $t (func)))`, whose `$t` has no params and
+	// whose body is fine — a row already in the round-trip table. What is actually unencodable is a
+	// symbolic *local* read against a space that may be missing entries, and a numeric one is not
+	// affected: `local.get 0` means slot 0 whatever the space holds, so it is the resolution and not
+	// the typeuse that is blocked. The error names the typeuse token all the same, that being the
+	// field the engine cannot write.
+	//
+	// **It still over-refuses, and by how much is stated rather than left to be inferred.** A typeuse
+	// naming a *param-less* type is harmless — `(type $t (func))` binds nothing, so `$v` really is slot
+	// 0 — and this refuses it anyway, because the param count is what cannot be known at the cursor
+	// and "does it have params" is the same unanswerable question as "how many". So the predicate is
+	// deliberately the coarser one on the side that refuses; a frontier that occasionally declines an
+	// encodable module is a cost, where one that occasionally writes a wrong index is a defect no
+	// vector can see. #77's `force_locals` machinery is what makes the question answerable.
+	if cat == catLocal && p.localsMissParams {
+		return errf(p.localsMissParamsTok,
+			"cannot yet encode a symbolic local in a func whose typeuse supplies its params (#77)")
+	}
+	if cat == catFunc {
+		// Forward references are legal here, so the resolution is stage 2's. One patch per
+		// instruction, which plaininstr consumes — an instruction with two symbolic indices in
+		// forward-referencing spaces would need more, and none exists in the slice this section
+		// reaches; the pair path below refuses rather than silently keeping one.
+		if p.immPatch != nil {
+			return errf(r.tok, "cannot yet encode two deferred indices on one instruction (#8)")
+		}
+		before := len(p.imm)
+		if before != 0 {
+			return errf(r.tok, "cannot yet encode a deferred index after another immediate (#8)")
+		}
+		p.immPatch = func() ([]byte, error) {
+			idx, err := p.ctx.funcs.resolveSpaceIdx(r)
+			if err != nil {
+				return nil, err
+			}
+			return encodeLocalIdx(idx), nil
+		}
+		return nil
+	}
+	idx, err := space.resolveSpaceIdx(r)
+	if err != nil {
+		return err
+	}
+	p.appendImm(encodeLocalIdx(idx))
+	return nil
+}
+
+// retainIdxPair encodes the one-or-two index immediates of an `idx_idx_opt` arm.
+//
+// **The written index is not always the first one encoded.** `memory.init`'s sugar arm writes only
+// the *data* index and defaults the memory to 0 — `memory_init (0l @@ …) ($2 c data)`
+// (parser.mly:588) — while `encode.ml` writes `MemoryInit (x, y) → op 0xfc; u32 0x08l; idx y;
+// idx x` (:598), reversing them again. `table.init` repeats the pattern with `elem`. Two reversals
+// that cancel for the two-index spelling and do not for the sugar one, which is precisely the kind
+// of thing that encodes a well-formed module denoting something else.
+//
+// Rather than implement four sugar/order combinations for arms in a tier this section does not
+// reach, it refuses them by name and encodes only the in-order pair (`memory.copy`, `table.copy`)
+// that the slice contains. The refusal is stated at the mnemonic, so the frontier is legible.
+func (p *parser) retainIdxPair(mnemonic Token, first, second idxRef, havePair bool) error {
+	if !p.retaining() {
+		return nil
+	}
+	if initSugarKinds[mnemonic.Keyword] {
+		// `memory.init`/`table.init`: both the argument reversal and the sugar default apply, and
+		// neither is exercised by the slice. Refused rather than guessed.
+		return errf(mnemonic, "cannot yet encode %s (#8)", mnemonic.Text)
+	}
+	if err := p.retainIdx(mnemonic, first); err != nil {
+		return err
+	}
+	if !havePair {
+		// `memory.copy 0` — one index written where the encoding wants two. The reference's
+		// `idx_idx_opt` (:494) has no one-index arm for these mnemonics, so this cannot arise from
+		// legal text; a refusal rather than a padded zero keeps the impossible case loud.
+		return errf(mnemonic, "cannot yet encode %s with one index (#8)", mnemonic.Text)
+	}
+	return p.retainIdx(mnemonic, second)
+}
+
+// constImmRetained is constImm plus the encoded immediate.
+//
+// The range check and the encoding come from the same conversion (num.go's `*ConstBits` pair), which
+// is what stops a literal from passing the check and being written wrong — the drift
+// `fitsAsIntConst`'s face-comment describes.
+func (p *parser) constImmRetained(mnemonic Token) error {
+	t := p.c.peek()
+	if err := p.constImm(mnemonic); err != nil {
+		return err
+	}
+	if !p.retaining() {
+		return nil
+	}
+	bits, isFloat := constWidth(mnemonic.Text)
+	b, ok := constImmBytes(t, bits, isFloat)
+	if !ok {
+		// Unreachable: constImm's range check uses the same conversion, so a token that passed it
+		// converts. A panic would be the honest response to a broken invariant, but this is a
+		// parser and the invariant's other half is one function away — an error naming the
+		// disagreement is diagnosable where a panic in a library is not.
+		return errf(t, "internal: %s passed the range check and failed to encode", t.Text)
+	}
+	p.appendImm(b)
+	return nil
+}
+
+// textFunc is one defined function's retained body.
+//
+// `typeIdx` is resolved in stage 2 like every other signature, so it is a thunk rather than a
+// number: `deferSignature` already owns the type-interning question and this must not answer it a
+// second time. `locals` is the *flattened* valtype vector — one entry per local, not per run —
+// because `binary.Func.Locals` is flattened on the other side and the RLE is applied on the way
+// out. Comparing flattened is what makes the round trip's comparison meaningful.
+type textFunc struct {
+	typeIdx func() (uint32, error)
+	// locals are unresolved, because `(local (ref null $t))` may name a type defined later —
+	// see funcField's tail and funcLocalBytes.
+	locals []valType
+	// kw is the field's `func` keyword, for the position an encodability refusal quotes. A local's
+	// own valtype token would be better and is not retained: `valtype` returns a value, and threading
+	// a token out of it to improve one message's offset is a change to eleven callers for a field the
+	// refusal already names.
+	kw   Token
+	body instrSink
+}
+
+// funcLocalBytes resolves and encodes one function's locals, in the deferred phase.
+//
+// **Both halves have to happen here rather than at the cursor.** Resolution is deferred because a
+// local may name a forward-referenced type; encodability is asked *with* it because `valTypeByte` is
+// one function answering both questions (encode.go's argument), and splitting them would be a second
+// place knowing which types have bytes.
+//
+// It refuses per function rather than per module, and quotes the local's ordinal, because that is
+// what a reader edits — the same reason `encodableOrErr` refuses per import rather than folding the
+// valtype check into one loop.
+func (p *parser) funcLocalBytes(f textFunc) ([]byte, error) {
+	out := make([]byte, 0, len(f.locals))
+	for i, v := range f.locals {
+		rv, err := p.ctx.resolveVal(v)
+		if err != nil {
+			return nil, err
+		}
+		b, ok := valTypeByte(rv)
+		if !ok {
+			return nil, errf(f.kw, "cannot yet encode local %d: %s needs a parameterized reference "+
+				"encoding, which arrives with the GC gate (#8)", i, rv)
+		}
+		out = append(out, b)
+	}
+	return out, nil
+}
+
+// opBytes returns a mnemonic's opcode byte sequence.
+//
+// The table is generated from the reference (`opcodes.go`, decision 0014), so this is a lookup and
+// not a decision. A mnemonic absent from the table has no encoding, and that is reported to the
+// caller rather than defaulted: a default opcode is how an unencodable instruction would emit
+// *some other instruction* and decode clean.
+//
+// Ambiguous mnemonics are refused here rather than guessed. `ambiguousOpcodes` holds the three
+// whose encoding depends on their operands' types (`select`, `ref.test`, `ref.cast`), which is
+// validation's knowledge and not this stratum's — so they stay unencodable and say so. None of them
+// occurs in the slice this section is scoped to, and a wrong guess would be accept-direction.
+func opBytes(mnemonic string) ([]byte, bool) {
+	if _, ambiguous := ambiguousOpcodes[mnemonic]; ambiguous {
+		return nil, false
+	}
+	e, ok := mnemonicOpcodes[mnemonic]
+	if !ok {
+		return nil, false
+	}
+	var w writer
+	if e.prefix == 0 {
+		w.byte1(byte(e.code))
+		return w.b, true
+	}
+	// A prefixed opcode is `prefix` then the sub-opcode as a **u32 LEB**, not as a bare byte:
+	// `encode.ml` writes `op 0xfc; u32 0x0cl` (:596), and a sub-opcode above 127 therefore takes
+	// two bytes. Writing it as one byte is correct for every sub-opcode the slice reaches and
+	// wrong in general, which is the shape of defect this project treats as worse than a failure.
+	w.byte1(e.prefix)
+	w.u32(e.code)
+	return w.b, true
+}
+
+// encodedFunc is one function after every deferred question has been answered: a type index, the
+// RLE-able locals, and the body's bytes up to but not including the terminator.
+//
+// **It exists so that the two writers cannot fail.** The resolutions a function needs — its type
+// index, a forward-referenced `call $f`, a local's heap type — all belong to the deferred phase, and
+// a writer that performed them inline would have to abandon a half-written section on error. Every
+// other section in this emitter is written by a `func(*writer)` that cannot fail, because
+// `encodableOrErr` asked its questions first; this type is what lets sections 3 and 10 keep that
+// property rather than becoming the one place an error can leave bytes behind.
+type encodedFunc struct {
+	typeIdx uint32
+	locals  []byte
+	body    []byte
+}
+
+// resolveFuncs answers every deferred question the function and code sections have, or reports the
+// first that cannot be answered.
+//
+// Run before a single byte of either section is written, which is `encodableOrErr`'s discipline
+// extended to the two sections whose content is resolved rather than merely present.
+func (p *parser) resolveFuncs() ([]encodedFunc, error) {
+	out := make([]encodedFunc, 0, len(p.funcs))
+	for _, f := range p.funcs {
+		idx, err := f.typeIdx()
+		if err != nil {
+			return nil, err
+		}
+		locals, err := p.funcLocalBytes(f)
+		if err != nil {
+			return nil, err
+		}
+		var fb writer
+		for _, in := range f.body.instrs {
+			fb.bytes(in.op)
+			imm := in.imm
+			if in.patch != nil {
+				// A `call $f` whose target is now bound. The patch *replaces* the immediates rather
+				// than appending to them, which is why retainIdx refuses an instruction that would
+				// need both: one deferred index and one immediate would need a position, and a
+				// position is what the byte slice does not carry.
+				b, perr := in.patch()
+				if perr != nil {
+					return nil, perr
+				}
+				imm = b
+			}
+			fb.bytes(imm)
+		}
+		out = append(out, encodedFunc{typeIdx: idx, locals: locals, body: fb.b})
+	}
+	return out, nil
+}
+
+// writeFuncSection writes section 3: one type index per defined function.
+//
+// Sections 3 and 10 are *both* derived from the same function list, exactly as `encode.ml` derives
+// them from `m.it.funcs` at :1141 and :1159 — `func_section` writing `idx x` per function and
+// `code_section` writing the bodies. Fed from one list here for the same reason: two lists would be
+// two places knowing how many functions there are, and a disagreement between them is a module
+// whose code section describes bodies for functions the type section never declared.
+func writeFuncSection(w *writer, funcs []encodedFunc) {
+	w.section(secFunction, func(body *writer) {
+		body.vec(len(funcs), func(bw *writer, i int) { bw.u32(funcs[i].typeIdx) })
+	})
+}
+
+// writeCodeSection writes section 10: each function's locals and body.
+//
+// The per-body length prefix is `encode.ml`'s `gap32`/`patch_gap32` pair (:1029-1039) — a gap
+// written, the body encoded, the measured distance patched back — and the nested writer below is the
+// same mechanism with the seek removed. Measuring rather than predicting keeps the "never compute a
+// length twice" property the writer's header states.
+//
+// **Every body ends with an explicit `0x0b` the text does not spell.** `code` calls `end_ ()` after
+// its instruction list (:1035), so the terminator is the encoder's to add; a text `(func)` with an
+// empty body still encodes as one byte. Omitting it makes the decoder read the next function's
+// locals as this one's instructions, which is the wrong-layer error this project's graves are full
+// of.
+func writeCodeSection(w *writer, funcs []encodedFunc) {
+	w.section(secCode, func(body *writer) {
+		body.vec(len(funcs), func(bw *writer, i int) {
+			// The entry is built in a nested writer so its length is measured. `writer.section`
+			// cannot serve here — a code entry is length-prefixed *without* an id byte — so the
+			// splice is written out rather than shoehorned into a helper whose shape differs.
+			var fb writer
+			writeLocals(&fb, funcs[i].locals)
+			fb.bytes(funcs[i].body)
+			fb.byte1(opEnd)
+			bw.u32(uint32(len(fb.b)))
+			bw.bytes(fb.b)
+		})
+	})
+}
+
+// opEnd is the `end` opcode every function body is terminated with.
+//
+// Named rather than written as a literal `0x0b` at the one site that needs it, because it is *not*
+// this file's fact to state: it is the decoder's. Cross-checked by
+// TestEndOpcodeMatchesTheDecodersOpinion, so a literal here cannot drift from the decoder's own
+// opinion of which byte ends a block.
+//
+// **That check is behavioural, and the name says so because an earlier draft of this comment cited a
+// table comparison that could not be written.** `optable.go` holds the `0x0b` row and is unexported
+// in `internal/binary`, so reading it from here would mean widening a package's surface to let a test
+// make an assertion. Asking the decoder whether a body terminated with this byte decodes — and
+// whether any of the other 255 also do — obtains the same fact from the authority instead of from a
+// second copy of it. This comment previously cited `TestEndOpcodeMatchesTheTable`, which never
+// existed, for three commits (#114/#115/#116); `TestEveryCitedTestNameResolves` is what said so.
+const opEnd byte = 0x0b
+
+// writeLocals writes a function's locals as the run-length-encoded vector the format requires.
+//
+// `encode.ml:238-242` is a **right fold**: `combine` merges a local into the head run when the
+// types match, so runs form from the right and the result is `vec local` over `(count, type)`
+// pairs. A left fold produces the same runs for every input — the merge condition is symmetric —
+// but the direction is stated because the reference's is, and a reader checking this against
+// :238 should find the same shape rather than an equivalent one.
+//
+// The input is flattened (one entry per local) and the output is RLE, which is the asymmetry
+// `textFunc.locals` documents: `binary.Func.Locals` is flattened on the decode side, so the round
+// trip compares flattened vectors and the RLE is purely an encoding detail. A comparison against
+// the RLE form would be comparing our own grouping choice to itself.
+func writeLocals(w *writer, locals []byte) {
+	type run struct {
+		n uint32
+		t byte
+	}
+	var runs []run
+	for _, t := range locals {
+		if len(runs) > 0 && runs[len(runs)-1].t == t {
+			runs[len(runs)-1].n++
+			continue
+		}
+		runs = append(runs, run{n: 1, t: t})
+	}
+	w.vec(len(runs), func(bw *writer, i int) {
+		bw.u32(runs[i].n) // `len n` (:239)
+		bw.byte1(runs[i].t)
+	})
+}
+
+// encodeLocalIdx encodes a resolved index as a `u32` immediate.
+//
+// Trivial, and named anyway: it is the one place an index immediate's *width and signedness* are
+// decided, and `encode.ml`'s `idx` is `u32` for every index category (:571). An index written as
+// an `s32` would encode identically for small values and differ above 63, which is the silent
+// divergence class this project spends its comments on.
+func encodeLocalIdx(v uint32) []byte {
+	var w writer
+	w.u32(v)
+	return w.b
+}
+
+// constImmBytes encodes an `iN.const`/`fN.const` immediate from its token.
+//
+// The four arms are `encode.ml:576-579` — `I32 → s32 c`, `I64 → s64 c`, `F32 → f32 c`,
+// `F64 → f64 c` — and the two halves of each row matter independently: the *width* comes from the
+// mnemonic (constWidth) and the *signedness* from the arm. Ints are signed LEBs, floats are raw
+// little-endian words of the width, and a float written as a LEB would be a valid encoding of a
+// different instruction.
+//
+// The conversions return **bit patterns** (num.go), and the sign interpretation happens here at the
+// width the mnemonic named: `int32(uint32(v))` for i32 so `i32.const 4294967295` and
+// `i32.const -1` — the same i32, two spellings — both write the single byte `7f`. Doing the
+// interpretation in the converter instead would force it to choose one spelling's reading and
+// reject the other, which is the accept-direction failure `intConstBits`' comment records.
+func constImmBytes(t Token, bits uint, isFloat bool) ([]byte, bool) {
+	var w writer
+	if isFloat {
+		n, ok := floatConstBits(t.Text, bits)
+		if !ok {
+			return nil, false
+		}
+		if bits == 32 {
+			w.f32(uint32(n))
+		} else {
+			w.f64(n)
+		}
+		return w.b, true
+	}
+	n, ok := intConstBits(t.Text, bits)
+	if !ok {
+		return nil, false
+	}
+	if bits == 32 {
+		w.s32(int32(uint32(n)))
+	} else {
+		w.s64(int64(n))
+	}
+	return w.b, true
+}
+
+// The locals path deliberately has no encodability helper of its own: it calls `valTypeByte`, the
+// same predicate the five existing sections use. A second opinion about which value types can be
+// encoded is what #111's six remaining sites are the standing reminder of, and a wrapper adding
+// nothing but a name would be the first step toward one.
