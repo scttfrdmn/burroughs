@@ -179,12 +179,22 @@ func (p *parser) refuseUnencodable(t Token, what string) error {
 // reads no `Features` at all** — the whole package has zero references to it, gating living entirely
 // in the decoder. So `EncodeModule` writes `memory.copy` whether or not bulk-memory is on, and the
 // census's fourth tier was measuring the *decoder's* gates against the *encoder's* frontier: two
-// different questions joined on a name. That is not a defect in this section — an encoder with no
-// features argument has no gate to consult, and 0011's surface does not carry one — but it does mean
-// the remaining tier counts (68 memarg, 87 control) are **upper-bound-shaped rather than exact**, and
-// whichever PR takes tier 2 re-measures rather than quoting them. Filed as the question it actually
-// is: whether the text front end should take a `Features` at all is a decision, not a cleanup, and it
-// belongs to Scott (#8's thread).
+// different questions joined on a name.
+//
+// **That gate-blindness is designed, and ruled so: it is contraindicated to change, not merely
+// premature** (Scott, #124). Gate enforcement belongs to the **sole module authority** — the decoder,
+// which every encoded image already passes through at the check-by-decoding step, where a gated
+// construct gets its feature-named decline. An encoder reading `Features` would be a *second* gate
+// predicate: two authorities for one truth, which is the drift 0011's sole-authority rule exists to
+// forbid. So the discrepancy is a **census-lens artifact**, and the repair is to label the lens —
+// measure through the decoder's gates, since that is what conformance sees — rather than to arm this
+// package. The one thing that may cross the boundary is the caller's `Features` as **pass-through
+// configuration** for the decode check; nothing here branches on it, and a `Features` reaching this
+// package is not a counter-example to the ruling as long as that stays true.
+//
+// The planning consequence stands either way: the remaining tier counts (68 memarg, 87 control) are
+// **upper-bound-shaped rather than exact**, so whichever PR takes tier 2 re-measures rather than
+// quoting them.
 //
 // Held as a set rather than as a `switch` in `immediates` so the frontier is one legible list, and
 // so the shapes *outside* it refuse structurally: a shape added to `immShape` and not to this map
