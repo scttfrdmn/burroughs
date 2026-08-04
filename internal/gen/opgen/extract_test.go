@@ -300,16 +300,20 @@ func TestConstructorsAgreeWithMnemonicSpelling(t *testing.T) {
 	}
 }
 
-// TestLexerBlockAgreesWithKeywordgen justifies this package's duplicated block-locator
-// regexps, which are *one concept, two triggers* (#82) — the defect class that let a fixture
-// file register with a checker unable to read it.
+// TestLexerBlockAgreesWithKeywordgen used to justify this package's *duplicated* block-locator
+// regexps, and the duplication is gone: both readers call `mllex` now, on Scott's consolidation
+// clause for the shape's third occurrence. The sentence that stood here — "keywordgen's locators
+// are unexported and this is a different package, so the honest options were duplication or
+// exporting a locator" — was falsified by that ruling, because the third option was a package
+// neither generator owns. Re-pointed rather than deleted: *a tripwire whose subject dissolves is
+// re-pointed*, and the risk this control names outlived the code shape it was filed against.
 //
-// The duplication is not avoidable: keywordgen's locators are unexported and this is a
-// different package, so the honest options were duplication or exporting a locator, and
-// exporting one would make keywordgen's internal grammar part of its API. What makes
-// duplication safe is this test — the two locators must find *the same arm set*, so a
-// divergence is a failure rather than a silent difference in which lines each reader
-// considers a keyword arm.
+// **What it asserts now.** The two readers can no longer disagree about which lines are arms —
+// there is one reader. What they can still disagree about is what each *keeps*: this package
+// returns only arms whose body names a constructor the opcode table holds, so a keyword appearing
+// here and not in keywordgen's set would mean this package manufacturing a row its substrate never
+// handed it, and a line mismatch would mean a row citing a continuation instead of its head. Both
+// are real failures and both are checked below.
 //
 // Set comparison, not counts: two readers finding 436 arms each could be finding different
 // 436 arms, which is precisely the failure a count cannot see.
@@ -333,9 +337,9 @@ func TestLexerBlockAgreesWithKeywordgen(t *testing.T) {
 	for keyword, n := range mine {
 		line, ok := theirs[keyword]
 		if !ok {
-			t.Errorf("this package's locator found keyword %q (lexer.mll:%d) that keywordgen's "+
-				"did not: the two readers disagree about which lines are keyword arms, so one of "+
-				"them is reading a block that is not the block", keyword, n.line)
+			t.Errorf("this package returned keyword %q (lexer.mll:%d) that keywordgen did not: "+
+				"both read the same arms from mllex, so a row here and not there is this package "+
+				"manufacturing one its substrate never handed it", keyword, n.line)
 			continue
 		}
 		if line != n.line {
@@ -392,10 +396,15 @@ func TestWrappedArmsAreRead(t *testing.T) {
 // TestUnreadableArmIsAnErrorNotASkip falsifies the reader's loud half.
 //
 // The wrapped-arm defect was silent *because* the head regexp did not match, so the line
-// never reached the error path — it looked like a continuation. `reLexArmish` is the
-// discriminator that closes that: a line opening with `| "` that does not parse as an arm is
-// an error. This introduces exactly that line and asserts the error, per *a control's green
-// must be falsifiable, and the way to know is to break it*.
+// never reached the error path — it looked like a continuation. `mllex.ErrUnrecognized` and the
+// arm-shaped discriminator behind it are what close that: a line opening with `| "` that does not
+// parse as an arm is an error. This introduces exactly that line and asserts the error, per *a
+// control's green must be falsifiable, and the way to know is to break it*.
+//
+// It is asserted **here as well as in mllex** deliberately, and that is not one concept with two
+// triggers: mllex proves its own error fires, this proves the error survives *this package's*
+// wrapping of it into ErrUnrecognized. A consolidation that swallowed the substrate's error into a
+// skip would pass mllex's control and fail here, which is the only place that failure is visible.
 func TestUnreadableArmIsAnErrorNotASkip(t *testing.T) {
 	_, lex, _, ops := refs(t)
 

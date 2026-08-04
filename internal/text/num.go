@@ -2,6 +2,7 @@ package text
 
 import (
 	"math"
+	mathbits "math/bits"
 	"strconv"
 	"strings"
 )
@@ -525,17 +526,32 @@ func offsetEqValue(text string) string { return strings.TrimPrefix(text, "offset
 // it. Those vectors stay red until validation exists, and they are named in #63's reconciliation
 // with the component they wait on rather than netted out.
 //
-// The value is discarded rather than returned: this stratum returns errors and nothing else
-// (decision 0011), so what the alignment *is* has no consumer until the encoder. Reporting only
-// the verdict keeps that honest — a returned value nobody reads is the unreachable-error shape
-// wearing a result.
-func parseAlign(text string) (ok, isNat bool) {
+// **It returns the exponent now, because the encoder is that consumer** (#8 tier 2). The value was
+// deliberately discarded while this stratum returned errors and nothing else (decision 0011), on
+// the stated ground that "a returned value nobody reads is the unreachable-error shape wearing a
+// result"; the ground was sound and the condition it named has ended.
+//
+// **The log2 is taken here rather than by the caller, and that is where the reference takes it.**
+// `align`'s action is `Some (Int64.to_int (Lib.Int64.log2_unsigned n))` — the production converts,
+// so what the closure receives is already an exponent, and `encode.ml:221`'s `memop` writes
+// `of_int align` straight into the flags field with no further arithmetic. Converting at this one
+// site keeps the number the same number on both sides of the parse. A caller doing its own
+// `mathbits.TrailingZeros` would be a second implementation of an authority's one-line action.
+//
+// The exponent is meaningful only when ok is true. `n=0` fails the power-of-two check, and
+// `mathbits.Len64(0)-1` would be -1, so the pow2 verdict guards the value rather than the value
+// implying the verdict.
+func parseAlign(text string) (align int, ok, isNat bool) {
 	// The lexeme is "align=" + nat; the lexer's matchEqNat guarantees the prefix and a
 	// non-empty nat, so this slice is safe and its emptiness would be a lexer defect.
 	const prefix = "align="
 	n, isNat := parseNat(text[len(prefix):], 64)
 	if !isNat {
-		return false, false
+		return 0, false, false
 	}
-	return n != 0 && n&(n-1) == 0, true
+	if n == 0 || n&(n-1) != 0 {
+		return 0, false, true
+	}
+	// log2_unsigned of an exact power of two: the index of its one set bit.
+	return mathbits.Len64(n) - 1, true, true
 }

@@ -463,12 +463,12 @@ func (p *parser) immediates(shape immShape, mnemonic Token) error {
 		}
 		return p.retainIdxPair(mnemonic, first, second, present2)
 	case immMemarg:
-		return p.memarg()
+		return p.memarg(mnemonic)
 	case immLaneImms:
 		// `lane_imms` (:661) is the memarg shape with a mandatory trailing laneidx, spelled out
 		// upstream as five arms "to avoid spurious conflicts" rather than as a composition,
 		// and the fifth is why this cannot *be* a composition: see laneImms.
-		return p.laneImms()
+		return p.laneImms(mnemonic)
 	case immLaneIdx:
 		return p.laneidx()
 	case immReftype:
@@ -548,29 +548,128 @@ func (p *parser) idxOpt() (idxRef, bool, error) {
 // how the production is written and the lexer hands back distinct kinds for the two. So
 // `i32.load align=4 offset=0` is malformed, and this reports it by leaving `offset=` unconsumed
 // for the caller's `unexpected token`.
-func (p *parser) memarg() error {
-	if _, _, err := p.idxOpt(); err != nil {
+//
+// It parses into a memargImm and hands that to retainMemarg; the *encoding* is that function's,
+// and the split is not stylistic — see it for why the write order cannot follow the read order.
+//
+// **The parsed value is not returned**, though the first draft returned it beside the error on the
+// symmetry of every other retaining reader. Neither caller read it — `unparam` said so — and a
+// returned value nobody reads is the unreachable-error shape wearing a result, which is the exact
+// objection parseAlign's own doc makes about the value *it* used to discard. The day a caller needs
+// the fields (the lane forms, whose retention wants a raw trailing byte) is the day the signature
+// grows one, with a reader in the same commit.
+func (p *parser) memarg(mnemonic Token) error {
+	m := memargImm{align: -1}
+	r, haveIdx, err := p.idxOpt()
+	if err != nil {
 		return err
 	}
+	m.idx, m.haveIdx = r, haveIdx
 	if p.c.at(OffsetEqNat) {
 		t := p.c.next()
 		// `offset_` is `nat64` (:526) — 64 bits regardless of the memory's address type, which
 		// is the width the *field* declares rather than the width the module uses. *When two
 		// fields disagree about a value, the suite has handed you a bidirectional control.*
-		if _, ok := parseNat(offsetEqValue(t.Text), 64); !ok {
+		v, ok := parseNat(offsetEqValue(t.Text), 64)
+		if !ok {
 			return errAt(t, "i64 constant out of range")
 		}
+		m.offset = v
 	}
 	if p.c.at(AlignEqNat) {
 		t := p.c.next()
-		pow2, isNat := parseAlign(t.Text)
+		align, pow2, isNat := parseAlign(t.Text)
 		if !isNat {
 			return errAt(t, "i64 constant out of range")
 		}
 		if !pow2 {
 			return errAt(t, "alignment must be a power of two")
 		}
+		m.align = align
 	}
+	return p.retainMemarg(mnemonic, m)
+}
+
+// memargImm is one parsed memarg: the three separately-optional fields of `idx_opt offset_opt
+// align_opt`, in the form the encoding needs them.
+//
+// `align` is **-1 when the text omitted `align=`**, which is the reference's `None` (align_opt,
+// :534) rather than a sentinel invented here. Zero cannot serve: `align=1` is a legal written
+// alignment whose exponent *is* 0, so a zero-means-absent encoding would give every `i32.load8_u`
+// the same image whether or not its alignment was written — indistinguishable, in that one case,
+// and wrong for `i64.load` where the default is 3.
+type memargImm struct {
+	idx     idxRef
+	haveIdx bool
+	offset  uint64
+	align   int
+}
+
+// retainMemarg encodes a parsed memarg per `encode.ml:221`'s `memop`.
+//
+//	let memop x {align; offset; _} =
+//	  let has_idx = x.it <> 0l in
+//	  let flags = Int32.(logor (of_int align) (if has_idx then 0x40l else 0x00l)) in
+//	  u32 flags; if has_idx then idx x; u64 offset
+//
+// **The write order is not the read order, and that is the whole reason this is a separate
+// function.** The text writes the memory index *first* and the image writes the flags byte first,
+// so the index cannot be appended as it is parsed the way every other retaining reader does it —
+// `idxRetained` appends at the cursor, and doing that here would put the index ahead of the flags
+// and encode a different instruction. So the memarg is parsed into a value and written after.
+//
+// **`has_idx` is a test on the value, not on the presence**, which is the subtle half. `idx_opt`
+// (:492) returns `0l` for the empty production, so an *omitted* memory index and a written `0`
+// produce the identical AST and the identical image: no 0x40 bit, no index field. `(memory 0)
+// (i32.load 0)` and `(memory 0) (i32.load)` are the same bytes. Reading `has_idx` as "the text
+// wrote one" would set 0x40 and emit an index for the explicit zero — a legal image whose flags
+// byte says a memory index follows, decoding the offset LEB as that index. No `assert_malformed`
+// can see it; `memory-multi.wast`'s round trip can.
+//
+// A symbolic index resolves against the memory space, which does not permit forward references
+// (memories are declared before the code section's bodies are read), so this resolves at the
+// cursor rather than deferring like `catFunc`.
+func (p *parser) retainMemarg(mnemonic Token, m memargImm) error {
+	if !p.retaining() {
+		return nil
+	}
+	align := m.align
+	if align < 0 {
+		// `align_opt`'s `None` becomes the mnemonic's natural alignment, which is the reference's
+		// own `opt a N` default read out of lexer.mll (memarg.go, generated). A mnemonic absent
+		// from that table takes no memarg at all, so its presence here would mean the shape table
+		// and the alignment table disagree — refused rather than defaulted to zero, since a zero
+		// exponent is a legal alignment and would encode silently.
+		nat, ok := naturalAlign[mnemonic.Text]
+		if !ok {
+			return errf(mnemonic, "cannot yet encode %s: no natural alignment (#8)", mnemonic.Text)
+		}
+		align = int(nat)
+	}
+
+	idx := uint32(0)
+	if m.haveIdx {
+		resolved, err := p.ctx.memories.resolveSpaceIdx(m.idx)
+		if err != nil {
+			return err
+		}
+		idx = resolved
+	}
+
+	// The value test, not the presence test. See the doc above.
+	hasIdx := idx != 0
+
+	flags := uint32(align)
+	if hasIdx {
+		flags |= 0x40
+	}
+	var w writer
+	w.u32(flags)
+	if hasIdx {
+		w.u32(idx)
+	}
+	w.u64(m.offset)
+	p.appendImm(w.b)
 	return nil
 }
 
@@ -609,13 +708,19 @@ func (p *parser) memarg() error {
 // done). A fix that merely stopped reading a memory index would pass the same ten vectors and
 // break arm 1, and only `simd_memory-multi.wast` writes a two-NAT form — so the control pins each
 // arm by hand and the falsification is the two-NAT case, not the bare one.
-func (p *parser) laneImms() error {
+// **It stays unencodable, and the reason is a shape this file's retention cannot express.** The
+// lane forms are `memop x mo; u8 i` (encode.ml:387) — the memarg's bytes, then a *raw* byte for the
+// lane index, not a LEB. `laneidx` reads the lane through `parseNat` and discards it, so retaining
+// this arm means a second immediate writer, and arm 5 additionally has no memarg to write at all.
+// The refusal is `encodableShapes`', which is where the frontier is one legible list; passing the
+// mnemonic through keeps the natural-alignment lookup honest for the day the shape is added.
+func (p *parser) laneImms(mnemonic Token) error {
 	if p.c.at(NatTok) && !p.natContinuesMemarg() {
 		// Arm 5: the lone NAT is the laneidx. Nothing for memarg to read, and calling it anyway
 		// would consume the token as `idx_opt`.
 		return p.laneidx()
 	}
-	if err := p.memarg(); err != nil {
+	if err := p.memarg(mnemonic); err != nil {
 		return err
 	}
 	return p.laneidx()

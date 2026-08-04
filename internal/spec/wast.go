@@ -673,7 +673,7 @@ const (
 	// instantiation. Separate from StratumText because they are separate entry points
 	// with separate frontiers: ReadModule answers 253 files' module forms with 0 reds,
 	// while EncodeModule cannot yet emit most instruction bodies. Folding them together
-	// would raise the reader's ceiling by 13991 and destroy its value as a regression
+	// would raise the reader's ceiling by 13775 and destroy its value as a regression
 	// detector — one instrument per component, or neither is an instrument.
 	StratumEncode
 	// StratumExec is the interpreter.
@@ -1024,7 +1024,7 @@ func (s *Script) run(opts runOpts) *Result {
 	//
 	// curErr carries *why* there is no instance, so a run of assert_returns after a module
 	// that failed to instantiate reports the cause once per vector rather than an anonymous
-	// nil — and curStratum carries *whose* fault it was, which is what keeps 13991 encoder
+	// nil — and curStratum carries *whose* fault it was, which is what keeps 13775 encoder
 	// frontiers out of the interpreter's ceiling. See Stratum.
 	//
 	// curGated is the third state a module command can leave behind, and it is *not*
