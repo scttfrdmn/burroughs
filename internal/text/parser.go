@@ -42,6 +42,55 @@ package text
 type parser struct {
 	c   *cursor
 	ctx context
+
+	// retain is the *mode*: whether this parse is building a module or only judging one.
+	//
+	// Set by `parseModule` from its caller, and read in exactly one place — `funcField`, which
+	// installs the sink. Everything downstream asks `retaining()` instead, so the mode is consulted
+	// once and the sink's nil-ness carries it the rest of the way.
+	//
+	// It exists because retention is not free of consequences: the instruction frontier
+	// (`refuseUnencodable`) *errors* on well-formed input it cannot encode, and `ReadModule` must
+	// never do that. The first version of this file installed the sink unconditionally, and the suite
+	// said what that costs — 40-odd rows across four tests demanding `mismatching label` or `unknown
+	// type 1` and getting `cannot yet encode the block instruction`. That is the accept-direction
+	// failure this package's whole discipline is about, caught here only because those tests assert
+	// the *specific* error rather than mere rejection.
+	retain bool
+	// sink is where retained instructions go, and nil means "recognize only" — see code.go's
+	// header for why this is a field rather than fourteen parameters, and why nil is silent.
+	sink *instrSink
+	// imm accumulates the current instruction's immediate bytes. Reset per instruction by
+	// plaininstr, which is the one function that knows where an instruction begins.
+	imm []byte
+	// immPatch defers the current instruction's immediate to stage 2, for the one category that
+	// can forward-reference: a `call $f` naming a function defined later. Set by the index
+	// reader, consumed and cleared by plaininstr.
+	immPatch func() ([]byte, error)
+	// localsMissParams is non-zero while the func being parsed has a typeuse whose params this
+	// stratum could not bind into `p.ctx.locals` — see funcField, and #77.
+	//
+	// **A flag rather than a refusal at the func**, because the refusal has to be *narrow*: a typeuse
+	// whose referenced type happens to have no params costs nothing, and refusing every typeuse threw
+	// away `(module (func (type $t)) (type $t (func)))`, an encodable row already in the round-trip
+	// table. The count is unknowable at this cursor (the type may be defined later), so the honest
+	// predicate is not "how many params" but "is a local index about to be resolved against a space
+	// that may be short" — which is a question only `retainIdx` is standing at.
+	//
+	// It carries the typeuse's own token so the message points at `(type $sig)`, the thing that is
+	// unencodable, rather than at the `local.get` that merely revealed it.
+	//
+	// **A separate bool, not a zero-Token test**, and that is grave #120's lesson one type over:
+	// `LParen` is `TokenKind`'s ordinal 0, so `tok.Kind != 0` reads a zero value as a paren token and
+	// the guard would fire in every func. The zero value of a struct is not a sentinel unless someone
+	// made it one — `spaceKind` has `spaceUnset` for exactly this and `Token` has no equivalent.
+	localsMissParams    bool
+	localsMissParamsTok Token
+	// funcs is the retained body of every *defined* function, in definition order — which is
+	// the order sections 3 and 10 both require, and the reason they are fed from one list
+	// (encode.ml:1141/:1159). Imported funcs are absent: they have no body and their type index
+	// is the import descriptor's.
+	funcs []textFunc
 }
 
 // ReadModule reports whether src is a well-formed wat module, to the depth this stratum
@@ -57,7 +106,7 @@ type parser struct {
 // check that is easy to omit, and `EncodeModule` omitting it would accept `(module) (module)` as one
 // module and encode the first — two places knowing one sequence, drifting silently (0006).
 func ReadModule(src []byte) error {
-	_, err := parseModule(src)
+	_, err := parseModule(src, recognize)
 	return err
 }
 
@@ -139,6 +188,11 @@ func (p *parser) moduleField() error {
 	// dispatch, because this is the one place that sees every field kind exactly once — a check
 	// added to each field's own function would be twelve places to forget one, and the omission
 	// would be a *silently dropped section* rather than a compile error.
+	// The exemption list grows as sections land, and it is a *list of keywords* rather than a check
+	// each field makes, on the argument the paragraph above gives. `func` is exempt now because
+	// section 3 and section 10 exist — but only conditionally: `funcField` withdraws the record at its
+	// tail on the arms it can write and leaves it standing on the ones it cannot, which is why the
+	// note is still taken here for every field and cleared there rather than skipped.
 	if kw.Keyword != kwType && kw.Keyword != kwRec {
 		// The *keyword* token, not the LPAR `p.c.peek()` would give: the message quotes the token's
 		// text, and the LPAR's text is "(", which names nothing. Its offset is one byte later than
@@ -695,8 +749,45 @@ func (p *parser) funcField() error {
 	if err != nil {
 		return err
 	}
-	p.deferSignature(use, haveUse, ft)
-	if err := p.locals(); err != nil {
+	typeIdx := p.deferSignature(use, haveUse, ft)
+	// **A typeuse with no re-stated signature contributes its referenced type's params as anonymous
+	// locals, and this stratum cannot compute them** — so `p.ctx.locals` is missing them and every
+	// symbolic local index in the body is off by the param count. The flag says so; `retainIdx`
+	// refuses at the index that would be wrong. See localsMissParams for why the refusal is there and
+	// not here.
+	//
+	// `inline_functype_explicit`'s deferred branch binds them: `defer_locals c (fun () -> let (ts1,
+	// _ts2) = func_type c x in bind "local" c.locals (length ts1) x.at)` (parser.mly:241-244), with the
+	// reference's own comment at :239 saying why it is deferred. The count is `length ts1` of a type
+	// that may be **defined later in the field list** — `(func (type $late) …) (type $late (func (param
+	// i32)))` is legal wat, and this parser accepts it — so at this cursor the number does not exist
+	// yet. Locals, meanwhile, resolve *at the cursor* by design (see code.go's header: a deferred local
+	// resolution would run against the last function's space), so the two timings are incompatible
+	// without the reference's `force_locals` machinery.
+	//
+	// The bug this replaces was live and the corpus is what found it: `(func (type $sig) (local $var
+	// i32) (local.get $var))` encoded `$var` as local **0** where `$sig`'s param owns 0, so `func#2`
+	// disagreed with wabt at one byte — 77 bytes each, `20 00` against `20 01`. A well-formed image
+	// denoting a different function, which is why refusing is the only honest option short of the full
+	// machinery: this stratum's alternative was not "slightly wrong indices", it was silent
+	// miscompilation on the commonest typeuse spelling in the corpus.
+	//
+	// #77 tracked exactly this, on the premise that it had "zero board effect either way" because "this
+	// stratum resolves no local at all". The code section is the reader that premise did not have, so
+	// the note in typetable.go's header is now historical and the refusal is #77's until #77 lands.
+	//
+	// It is set from `p.retain` — the *mode* — and not from `p.retaining()`, which asks whether the
+	// sink is installed. The sink goes in below, at the body, so `retaining()` is false here in
+	// **both** modes and a guard written against it silently never fires: the first draft did exactly
+	// that, and the probe showed the offending row still encoding `20 00`. A predicate that is false
+	// everywhere it is called is the stillborn control shape (#108) arriving in engine code, and the
+	// two spellings are one letter apart.
+	if haveUse && ft.isEmpty() && p.retain {
+		p.localsMissParams, p.localsMissParamsTok = true, use.tok
+		defer func() { p.localsMissParams = false }()
+	}
+	locals, err := p.locals()
+	if err != nil {
 		return err
 	}
 	p.ctx.markDefined(importFunc)
@@ -734,11 +825,48 @@ func (p *parser) funcField() error {
 	saved := p.ctx.labels.labelReset()
 	defer p.ctx.labels.labelRestore(saved)
 	p.ctx.labels.labelPushAnon()
+	// **The sink is installed here and nowhere else**, which is what makes retention a property of
+	// being inside a defined function's body rather than of the instruction readers. Every other caller
+	// of `instrList` — a data offset, an elem item, a global initializer — parses instructions this
+	// emitter has no section for, and they keep running against a nil sink exactly as before. See
+	// code.go's header for why this is a field rather than a parameter threaded through fourteen
+	// signatures.
+	//
+	// **And only when the parse's mode says to.** `p.retain` is read here and nowhere else: a
+	// `ReadModule` parse leaves the sink nil through the func body too, so the frontier's refusals
+	// stay silent and the recognizer answers exactly what it answered before this file existed. See
+	// the field's comment for what installing it unconditionally cost.
+	//
+	// Swapped-and-restored rather than set-and-cleared, on the same discipline as the label reset two
+	// lines up: a func cannot nest in a func in legal wat, so the saved value is always nil today, and
+	// writing the swap anyway is what stops that from being an assumption a future caller silently
+	// breaks.
+	var body instrSink
+	outerSink := p.sink
+	if p.retain {
+		p.sink = &body
+	}
+	defer func() { p.sink = outerSink }()
 	// func_body is instr_list (parser.mly:1019), whose empty arm makes `(func)` well-formed.
 	if err := p.instrList(); err != nil {
 		return err
 	}
-	return p.rpar()
+	if err := p.rpar(); err != nil {
+		return err
+	}
+	// **After the closing paren, on `memoryField`'s tail's rule**: a field that errors out mid-way
+	// must leave no trace, or the retained count disagrees with section 3's on a module that never
+	// finished parsing.
+	//
+	// The locals are stored **unresolved**, and that is not laziness. `resolveVal` resolves a heap
+	// type's index against the type space, and `(local (ref null $t))` may name a type defined later in
+	// the module — so resolving at the cursor would reject a legal module, which is the accept-direction
+	// failure this whole file is careful about. The resolution and the encodability question both belong
+	// to the deferred phase, and `encodableOrErr` runs there; see `funcLocalBytes`.
+	p.funcs = append(p.funcs, textFunc{typeIdx: typeIdx, locals: locals, kw: kw, body: body})
+	p.ctx.noteDefined(importFunc)
+	p.ctx.clearNonTypeField(kw)
+	return nil
 }
 
 // deferSignature records the stage-2 operation a `typeuse?` plus inline signature implies.
@@ -754,12 +882,48 @@ func (p *parser) funcField() error {
 // appends, so it decides the index an implicit type gets and therefore what `unknown type <n>`
 // means for a later numeric typeuse. See typetable.go's header for why parse order *is* stage-2
 // order.
-func (p *parser) deferSignature(use idxRef, haveUse bool, ft funcType) {
+// **It returns the resolved type index rather than recording only the check**, which section 3
+// needs — `func_section` is `idx x` per function (encode.ml:1141) and `x` is exactly the index the
+// helper produced. The value arrives through a captured slot filled by the deferred op, not by
+// calling the helper a second time: `inline_functype` *appends*, so a second call for the sugar arm
+// would intern a second identical type and the defect would be invisible here, surfacing only as a
+// type-section count. That hazard is the one funcField's inline-import comment already names, and
+// this is the same slot-plus-thunk shape `defineExport` uses (typetable.go) rather than a second
+// answer to it.
+//
+// The returned thunk must not be called before stage 2. It reports so rather than returning a
+// plausible zero, because a zero type index is a *legal* index and a premature read would encode a
+// function with the wrong signature and decode clean.
+func (p *parser) deferSignature(use idxRef, haveUse bool, ft funcType) func() (uint32, error) {
+	var (
+		idx    uint32
+		filled bool
+	)
 	if haveUse {
-		p.ctx.deferOp(func() error { return p.ctx.inlineFuncTypeExplicit(use, ft) })
-		return
+		p.ctx.deferOp(func() error {
+			v, err := p.ctx.checkExplicit(use, ft)
+			if err != nil {
+				return err
+			}
+			idx, filled = v, true
+			return nil
+		})
+	} else {
+		p.ctx.deferOp(func() error {
+			v, err := p.ctx.internImplicit(ft)
+			if err != nil {
+				return err
+			}
+			idx, filled = v, true
+			return nil
+		})
 	}
-	p.ctx.deferOp(func() error { return p.ctx.declareImplicit(ft) })
+	return func() (uint32, error) {
+		if !filled {
+			return 0, errf(use.tok, "internal: function type index read before stage 2 resolved it")
+		}
+		return idx, nil
+	}
 }
 
 // importedFuncDesc is deferSignature for an inline-imported func or tag: same pairing, and the index
@@ -846,39 +1010,57 @@ func (p *parser) funcSignature() (funcType, error) {
 //
 // Same two-arm shape as params, into the same space, which is what makes a param/local name
 // collision a duplicate.
-func (p *parser) locals() error {
+//
+// It returns the declared valtypes in order, which is what the code section's locals vector is.
+// They were previously read and discarded on the true premise that *the grammar* never compares a
+// local's type — the comment saying so is quoted in the body below, because the premise is still
+// true and is no longer sufficient: retaining them is the code section's requirement, not the
+// grammar's.
+func (p *parser) locals() ([]valType, error) {
+	var out []valType
 	for p.c.at(LParen) && p.c.peek2Keyword(kwLocal) {
 		if err := p.lpar(kwLocal); err != nil {
-			return err
+			return nil, err
 		}
 		if p.c.at(VarTok) {
 			tok := p.c.peek()
 			name, err := p.bindidx()
 			if err != nil {
-				return err
+				return nil, err
 			}
-			if err := p.ctx.locals.bindAbs(tok, name); err != nil {
-				return err
+			if berr := p.ctx.locals.bindAbs(tok, name); berr != nil {
+				return nil, berr
 			}
-			// The valtype is read and discarded: a local's type is nothing the grammar
-			// compares. Only a functype's value types reach `inline_functype_explicit`.
-			if _, err := p.valtype(); err != nil {
-				return err
+			// The named arm binds exactly one local (`local_type` is singular at :1006), so the
+			// valtype is appended once. It used to be discarded here — "a local's type is nothing
+			// the grammar compares. Only a functype's value types reach
+			// `inline_functype_explicit`" — which remains an accurate statement about the
+			// *grammar* and is why nothing was lost before section 10 existed.
+			v, err := p.valtype()
+			if err != nil {
+				return nil, err
 			}
+			out = append(out, v)
 		} else {
 			vs, err := p.valtypeList()
 			if err != nil {
-				return err
+				return nil, err
 			}
 			for range vs {
 				p.ctx.locals.bindAnon()
 			}
+			// **The binding count and the type count are the same number, and that is the
+			// invariant this arm rests on**: `bindAnon` is called once per valtype, so a local's
+			// index is its position in this list. If the two ever diverged, `local.get 3` would
+			// resolve against one vector and be typed against another, which validation would
+			// catch on a well-formed module and would silently mistype on a malformed one.
+			out = append(out, vs...)
 		}
 		if err := p.rpar(); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	return nil
+	return out, nil
 }
 
 // tagField parses `tag` (parser.mly:1042-1072).
@@ -1495,8 +1677,20 @@ func (p *parser) flatSelectOrCall() (bool, error) {
 	}
 	switch t.Keyword {
 	case kwSelect:
+		// `select`'s opcode depends on whether a result type was written (0x1b or 0x1c), which is
+		// `ambiguousOpcodes`' whole content — and its `instr_list` tail is encodable, so the same
+		// dropped-instruction hazard blockinstr's refusal describes applies.
+		if err := p.refuseUnencodable(t, "the select instruction"); err != nil {
+			return true, err
+		}
 		return true, p.selectResults(p.instrList)
 	case kwCallIndirect, kwReturnCallIndirect:
+		// Two immediates in *reversed* order — `CallIndirect (x, y) → op 0x11; idx y; idx x`
+		// (encode.ml:583) writes the type index before the table index, where the text writes the
+		// table first. Out of this tier, and refused rather than guessed.
+		if err := p.refuseUnencodable(t, "the "+t.Text+" instruction"); err != nil {
+			return true, err
+		}
 		p.c.next() // the keyword
 		// The table index is a sugar arm (:693/:699), not an `idx_opt`: a NAT or VAR here is the
 		// index, and anything else starts the type chain.
@@ -1647,6 +1841,14 @@ func (p *parser) blockinstr() (bool, error) {
 	case kwBlock, kwLoop, kwIf, kwTryTable:
 	default:
 		return false, nil
+	}
+	// **Refused before the body is read, not after.** A block's own opcode has a blocktype immediate
+	// this file does not encode, and its body's instructions *are* encodable — so emitting the body
+	// while dropping the block would produce a function whose control flow is gone and which decodes
+	// clean. Refusing here means the body is still parsed (the error propagates, so nothing downstream
+	// runs) and no half-encoded function can exist. See refuseUnencodable.
+	if err := p.refuseUnencodable(t, "the "+t.Text+" instruction"); err != nil {
+		return true, err
 	}
 	p.c.next()
 
@@ -2259,10 +2461,21 @@ func (p *parser) expr() (bool, error) {
 func (p *parser) expr1(leader keywordKind) error {
 	switch leader {
 	case kwBlock, kwLoop, kwIf, kwTryTable:
+		// The folded spelling of the same refusal `blockinstr` makes, at the other production. Two
+		// sites because the reference has two productions, not because the reason differs.
+		if err := p.refuseUnencodable(p.c.peek(), "the "+p.c.peek().Text+" instruction"); err != nil {
+			return err
+		}
 		return p.foldedBlock(leader)
 	case kwSelect:
+		if err := p.refuseUnencodable(p.c.peek(), "the select instruction"); err != nil {
+			return err
+		}
 		return p.selectResults(p.exprList)
 	case kwCallIndirect, kwReturnCallIndirect:
+		if err := p.refuseUnencodable(p.c.peek(), "the "+p.c.peek().Text+" instruction"); err != nil {
+			return err
+		}
 		p.c.next() // the keyword
 		// `idx` is optional here as a *sugar arm* (:819/:823), not as an `idx_opt`: the table
 		// index may be a NAT or a VAR, and anything else starts `callexpr_type`.
@@ -2278,11 +2491,36 @@ func (p *parser) expr1(leader keywordKind) error {
 		// the honest statement is that this switch dispatches nine arms out of 173 keyword kinds
 		// and hands everything else to `plaininstr` — which is a fallback, not an omission.
 	}
-	// `plaininstr expr_list` (:814), the arm #63 owned.
-	if _, err := p.plaininstr(); err != nil {
+	// `plaininstr expr_list` (:814), the arm #63 owned — and **the one place emission order is not
+	// parse order**. The leader is parsed first and denotes the *last* instruction of the sequence:
+	// `(i32.add (i32.const 1) (i32.const 2))` is `i32.const 1 · i32.const 2 · i32.add`. So the leader
+	// goes into a sink of its own, the operands accumulate into the active one, and the leader is
+	// spliced afterwards.
+	//
+	// Getting this backwards emits a module that decodes clean, validates, and computes a different
+	// answer — invisible to every vector, because the suite's folded modules are ones it expects to
+	// work. Pinned by TestEncodeRoundTripsThroughTheDecoder, whose two-deep folded row and its flat
+	// twin state the body's instruction order in the want column; reversing this splice fails the
+	// folded row with `i32.add` leading, and the flat row is what stops the fix being "reverse both".
+	if !p.retaining() {
+		if _, err := p.plaininstr(); err != nil {
+			return err
+		}
+		return p.exprList()
+	}
+	var leaderSink instrSink
+	outer := p.sink
+	p.sink = &leaderSink
+	_, err := p.plaininstr()
+	p.sink = outer
+	if err != nil {
 		return err
 	}
-	return p.exprList()
+	if err := p.exprList(); err != nil {
+		return err
+	}
+	p.sink.splice(&leaderSink)
+	return nil
 }
 
 // exprList parses `expr_list` (:946-948): zero or more folded operands, each itself an `expr`.

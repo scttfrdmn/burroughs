@@ -1,7 +1,9 @@
 package text
 
 import (
+	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -694,5 +696,263 @@ func TestLaneImmsCoversAllFiveArms(t *testing.T) {
 			t.Errorf("v128.store8_lane %s: %v; want accepted "+
 				"(simd_memory-multi.wast:27, :37, :34 — the store family shares lane_imms)", imms, err)
 		}
+	}
+}
+
+// TestEveryUnencodableShapeIsRefused is the *instruction* frontier's control, and it exists because
+// the frontier had none.
+//
+// The field frontier has TestEncodeRefusesWhatItCannotWrite. The instruction frontier had nothing:
+// deleting `blockinstr`'s `refuseUnencodable` call left the **entire package green** while
+// `(module (func block i32.const 1 drop end i32.const 2 drop))` encoded to a body of `41 01 1a 41 02
+// 1a 0b` — the block gone, its contents kept, the module decoding clean and computing something else.
+// That is the accept-direction defect this whole file's discipline is about, and it was invisible.
+//
+// **The domain is derived, not enumerated** (0006/#33): every kind in `plaininstrShapes` whose shape
+// is absent from `encodableShapes`, so a shape added to `immShape` without an entry in either map
+// arrives here as an unrefused kind rather than as silence. A hand-listed set of "instructions we
+// cannot encode yet" would freeze at the moment of authorship and go stale the first time the
+// frontier moves outward — which is a thing that will happen deliberately and repeatedly.
+//
+// The witness per kind is a **mnemonic**, and that is where the derivation stops being free. A
+// keywordKind is a *class* (`BINARY` covers `i32.add` through `f64.copysign`), so a wat module needs
+// a spelling, and the spelling comes from the generated keyword table rather than from a second
+// hand-written list — `keywordsByKind` is the same authority `TestStartsInstructionIsTheUnionOfBothArms`
+// reads. What is hand-written is only the *frame* each mnemonic goes in, because a `load` needs an
+// operand and a `memory.size` does not, and there is no table of that.
+func TestEveryUnencodableShapeIsRefused(t *testing.T) {
+	// A module frame per kind that needs operands to be well-formed. The frontier is about
+	// well-formed input, so a row that does not parse is not a witness — the loop below fails such a
+	// row rather than skipping it, on `a skip is not a verdict`.
+	//
+	// The default frame is a bare `(func <mnemonic> …)`, which suffices for every kind whose
+	// immediates the parser reads from the text and whose operands it does not typecheck: the parser
+	// is not a validator, so a stack-underflowing body is still well-formed here.
+	frames := map[keywordKind]string{
+		// The memarg family takes an address operand; the immediates are optional and omitted.
+		"LOAD":            `(module (memory 1) (func (result i32) i32.const 0 %s))`,
+		"STORE":           `(module (memory 1) (func i32.const 0 i32.const 0 %s))`,
+		"VEC_LOAD":        `(module (memory 1) (func (result v128) i32.const 0 %s))`,
+		"VEC_STORE":       `(module (memory 1) (func i32.const 0 v128.const i32x4 0 0 0 0 %s))`,
+		"VEC_LOAD_LANE":   `(module (memory 1) (func (result v128) i32.const 0 v128.const i32x4 0 0 0 0 %s 0 0))`,
+		"VEC_STORE_LANE":  `(module (memory 1) (func i32.const 0 v128.const i32x4 0 0 0 0 %s 0 0))`,
+		"VEC_EXTRACT":     `(module (func (result i32) v128.const i32x4 0 0 0 0 %s 0))`,
+		"VEC_REPLACE":     `(module (func (result v128) v128.const i32x4 0 0 0 0 i32.const 0 %s 0))`,
+		"VEC_SHUFFLE":     `(module (func (result v128) v128.const i32x4 0 0 0 0 v128.const i32x4 0 0 0 0 %s 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15))`,
+		"REF_CAST":        `(module (func (result funcref) ref.null func %s funcref))`,
+		"REF_TEST":        `(module (func (result i32) ref.null func %s funcref))`,
+		"REF_NULL":        `(module (func (result funcref) %s func))`,
+		"BR_TABLE":        `(module (func i32.const 0 %s 0))`,
+		"BR_ON_CAST":      `(module (func (result funcref) ref.null func %s 0 funcref funcref))`,
+		"ARRAY_NEW_FIXED": `(module (type $a (array i32)) (func %s $a 0))`,
+		// The `idx idx` family, whose second index is a struct field or a data/elem segment. Each
+		// needs the type or segment it names to exist.
+		"STRUCT_GET":      `(module (type $s (struct (field i32))) (func (result i32) ref.null $s %s $s 0))`,
+		"STRUCT_SET":      `(module (type $s (struct (field (mut i32)))) (func ref.null $s i32.const 0 %s $s 0))`,
+		"ARRAY_COPY":      `(module (type $a (array i32)) (func %s $a $a))`,
+		"ARRAY_NEW_DATA":  `(module (type $a (array i32)) (data $d "x") (func %s $a $d))`,
+		"ARRAY_NEW_ELEM":  `(module (type $a (array funcref)) (elem $e func) (func %s $a $e))`,
+		"ARRAY_INIT_DATA": `(module (type $a (array i32)) (data $d "x") (func %s $a $d))`,
+		"ARRAY_INIT_ELEM": `(module (type $a (array funcref)) (elem $e func) (func %s $a $e))`,
+		"VEC_CONST":       `(module (func (result v128) %s i32x4 0 0 0 0))`,
+	}
+
+	// The kinds whose refusal cannot be attributed to the mnemonic, with the reason. Each needs a
+	// construct that is *itself* unencodable in order to be well-formed at all, so the refusal
+	// legitimately comes from elsewhere and this control can only witness that the module is refused —
+	// not why.
+	//
+	// **They are still worth having as rows**, because "refused" is the property that matters for
+	// accept-direction safety: what would be dangerous is emitting one. What they cannot do is
+	// witness their own guard, and they are named here so that is on the record rather than hidden in
+	// a green. Every entry leaves this table when GC's type encoding lands, at which point the frames
+	// become attributable and the assertion above starts applying to them.
+	witnessedByTheTypeLevel := map[keywordKind]bool{
+		// A `(type (struct …))` / `(type (array …))` comptype is refused by `encodableOrErr` before
+		// any function body is reached — `compType` retains no fields, so there is nothing to write.
+		"STRUCT_GET": true, "STRUCT_SET": true,
+		"ARRAY_COPY": true, "ARRAY_NEW_DATA": true, "ARRAY_NEW_ELEM": true,
+		"ARRAY_INIT_DATA": true, "ARRAY_INIT_ELEM": true, "ARRAY_NEW_FIXED": true,
+		// `ref.cast`, `ref.test` and `br_on_cast` need a reference operand, and the only way to spell
+		// one in a module this encoder otherwise accepts is `ref.null`, whose own `immHeaptype` is
+		// refused first. A frame with a `local` of reference type hits the same wall from the other
+		// side, since `local.get` of a reference still yields a value only these can consume.
+		"REF_CAST": true, "REF_TEST": true, "BR_ON_CAST": true,
+		// The SIMD operand family: every one of these takes a `v128` operand, and the only way to
+		// produce one is `v128.const` — itself `immVecConst`, itself unencodable. `v128.load` would
+		// serve, and it is `immMemarg`, also unencodable. So there is no spelling of a v128 value in
+		// this tier at all, which makes the whole family unattributable together.
+		//
+		// Note which SIMD kinds are *not* here: `VEC_LOAD` and `VEC_CONST` take no v128 operand, so
+		// their frames are attributable and they are held to the assertion. The line falls exactly
+		// where the operand type does, which is the tell that this list is a consequence rather than
+		// a convenience.
+		"VEC_STORE": true, "VEC_LOAD_LANE": true, "VEC_STORE_LANE": true,
+		"VEC_EXTRACT": true, "VEC_REPLACE": true, "VEC_SHUFFLE": true,
+	}
+
+	// Every unencodable shape, and every kind carrying one — the derived domain.
+	var kinds []keywordKind
+	for k, shape := range plaininstrShapes {
+		if !encodableShapes[shape] {
+			kinds = append(kinds, k)
+		}
+	}
+	slices.Sort(kinds)
+
+	// The vacuity check, per partition rather than one total: shapes *and* kinds, because a
+	// `plaininstrShapes` that failed to load would leave both empty and this control would agree
+	// with itself perfectly. 11 of the 16 shapes are unencodable today and the count falls as the
+	// frontier moves; the floor is the direction, and a rise past it means `encodableShapes` grew
+	// without this control being re-read.
+	unencodableShapes := map[immShape]bool{}
+	for _, k := range kinds {
+		unencodableShapes[plaininstrShapes[k]] = true
+	}
+	if len(unencodableShapes) < 5 || len(kinds) < 15 {
+		t.Fatalf("the derived domain is %d shapes over %d kinds, which is too small to be the real "+
+			"partition: %d shapes exist and %d are encodable, so an empty or near-empty domain here "+
+			"means the table did not load and this control is comparing nothing",
+			len(unencodableShapes), len(kinds), len(plaininstrShapes), len(encodableShapes))
+	}
+
+	// The spelling per kind, inverted out of the *generated* table rather than hand-listed. A kind is
+	// a class — `BINARY` covers `i32.add` through `f64.copysign` — and `keywords` is spelling→kind, so
+	// the inversion is where a witness comes from without a second vocabulary being written here.
+	byKind := map[keywordKind][]string{}
+	for spelling, k := range keywords {
+		byKind[k] = append(byKind[k], spelling)
+	}
+
+	for _, kind := range kinds {
+		mnemonics := byKind[kind]
+		if len(mnemonics) == 0 {
+			t.Errorf("kind %s has no mnemonic in the generated keyword table, so no wat module can "+
+				"reach it and this control cannot witness its refusal", kind)
+			continue
+		}
+		mnemonic := slices.Min(mnemonics) // deterministic, and any member exercises the shape
+		frame, ok := frames[kind]
+		if !ok {
+			frame = `(module (func %s))`
+		}
+		src := fmt.Sprintf(frame, mnemonic)
+
+		t.Run(string(kind), func(t *testing.T) {
+			// A frontier is about well-formed input, so an unparseable frame is a defect in this
+			// table and not a pass. Failed rather than skipped: a skip is not a verdict.
+			if err := ReadModule([]byte(src)); err != nil {
+				t.Fatalf("the frame for %s does not parse, so it witnesses nothing — fix the frame, "+
+					"because a refusal on malformed input says only that the input was malformed: "+
+					"%s\n%v", kind, src, err)
+			}
+			b, err := EncodeModule([]byte(src))
+			if err == nil {
+				t.Fatalf("EncodeModule wrote % x for %s (shape %d), which it has no encoding for: "+
+					"emitting an instruction's opcode without its immediates, or dropping it and "+
+					"keeping its operands, produces a module that decodes clean and computes "+
+					"something else — the accept-direction defect no suite vector can see (§9 G-3)",
+					b, mnemonic, plaininstrShapes[kind])
+			}
+			// **The refusal must name *this* mnemonic**, and that requirement is the whole reason
+			// this assertion exists rather than a bare non-nil check.
+			//
+			// Measured, by neutralizing `plaininstr`'s shape gate: 13 of the 23 rows failed as
+			// designed and **10 passed anyway** — `struct.get`, both `ref.cast` and `ref.test`, and
+			// the six array forms, every one of them refused by a *different instruction in its own
+			// frame*. `ref.cast`'s frame needs a `ref.null` operand, whose `immHeaptype` is refused
+			// first; the array frames need a `(type (array …))`, which `encodableOrErr` refuses at the
+			// type level before any body is reached. Those rows were scoring green while saying
+			// nothing about the kind they are named for — the witness-correlated-with-subject grave
+			// (#106) at row scale, and a bare non-nil check cannot see it.
+			//
+			// So the frame's other refusals are not allowed to stand in for this one. Where a frame
+			// genuinely cannot avoid them — a `struct.get` requires a struct type, and a struct type
+			// is itself unencodable — the kind is named in `witnessedByTheTypeLevel` below with that
+			// reason, which is a declared-and-tracked deferral rather than a silent pass (#6).
+			if !witnessedByTheTypeLevel[kind] && !strings.Contains(err.Error(), mnemonic) {
+				t.Errorf("refusing %s says %q, which does not name %s: the frame's *other* "+
+					"instructions or types were refused first, so this row scores green while saying "+
+					"nothing about the kind it is named for — either give it a frame whose only "+
+					"unencodable thing is the mnemonic, or list it in witnessedByTheTypeLevel with "+
+					"the reason it cannot have one", mnemonic, err, mnemonic)
+			}
+			if !strings.Contains(err.Error(), "#8") {
+				t.Errorf("refusing %s says %q, want a tracking issue: an unexplained gap is the "+
+					"declared-and-tracked ruling's silent half (#6)", mnemonic, err)
+			}
+			for _, spec := range []string{"malformed", "unexpected", "unknown", "invalid"} {
+				if strings.Contains(err.Error(), spec) {
+					t.Errorf("refusing %s says %q, which contains the spec word %q: reporting a "+
+						"malformedness for a module the spec calls well-formed lies about the input "+
+						"to conceal a gap in the engine (#5)", mnemonic, err, spec)
+				}
+			}
+		})
+	}
+}
+
+// TestEveryStructuralInstructionIsRefused is the other half of the instruction frontier, and it is a
+// separate test because these instructions are not in `plaininstrShapes` at all.
+//
+// `block`, `loop`, `if`, `try_table`, `select` and `call_indirect` are their own productions — the
+// block family opens a scope, `select` and `call_indirect` carry a typeuse — so no shape table covers
+// them and the derivation above cannot reach them. They are also the *dangerous* ones: a `block` has
+// no opcode in this tier while its **body** is fully encodable, so dropping it silently keeps the
+// contents and loses the control flow. That is what makes the frontier a refusal rather than a skip,
+// and it is the case the deleted-guard probe demonstrated.
+//
+// Both spellings of each, flat and folded, because they are **different productions with different
+// refusal sites**: `blockinstr` and `expr1`'s block arm, `flatSelectOrCall` and `expr1`'s select and
+// call_indirect arms. Deleting `blockinstr`'s guard leaves the folded form refused, so a one-spelling
+// table would have called that repaired.
+func TestEveryStructuralInstructionIsRefused(t *testing.T) {
+	for _, src := range []string{
+		// The block family, flat.
+		`(module (func block end))`,
+		`(module (func loop end))`,
+		`(module (func i32.const 0 if end))`,
+		`(module (func i32.const 0 if else end))`,
+		`(module (func try_table end))`,
+		// The block family, folded — `expr1`'s arms.
+		`(module (func (block)))`,
+		`(module (func (loop)))`,
+		`(module (func (if (i32.const 0) (then))))`,
+		`(module (func (try_table)))`,
+		// A block whose *body* is entirely encodable, which is the shape that makes a dropped block
+		// dangerous rather than merely incomplete: `41 01 1a 41 02 1a 0b`, the block gone and its
+		// contents kept.
+		`(module (func block i32.const 1 drop end i32.const 2 drop))`,
+		`(module (func (block (i32.const 1) drop) (i32.const 2) drop))`,
+		// select: its opcode depends on whether a result type was written (0x1b or 0x1c), which is
+		// `ambiguousOpcodes`' whole content.
+		`(module (func (result i32) i32.const 1 i32.const 2 i32.const 0 select))`,
+		`(module (func (result i32) i32.const 1 i32.const 2 i32.const 0 select (result i32)))`,
+		`(module (func (result i32) (select (i32.const 1) (i32.const 2) (i32.const 0))))`,
+		// call_indirect: `encode.ml:583` writes `idx y; idx x`, reversing the text's order.
+		`(module (table 0 funcref) (func i32.const 0 call_indirect))`,
+		`(module (table 0 funcref) (func (call_indirect (i32.const 0))))`,
+		`(module (table 0 funcref) (func i32.const 0 return_call_indirect))`,
+	} {
+		t.Run(src, func(t *testing.T) {
+			if err := ReadModule([]byte(src)); err != nil {
+				t.Fatalf("the parser rejects this module, so it is the wrong vector for a frontier "+
+					"test — a frontier is about well-formed input: %v", err)
+			}
+			b, err := EncodeModule([]byte(src))
+			if err == nil {
+				t.Fatalf("EncodeModule wrote % x, which has no encoding for this instruction: a "+
+					"dropped block keeps its body and loses its control flow, decoding clean and "+
+					"computing something else (§9 G-3)", b)
+			}
+			if !strings.Contains(err.Error(), "#8") {
+				t.Errorf("refusal says %q, want a tracking issue (#6)", err)
+			}
+			for _, spec := range []string{"malformed", "unexpected", "unknown", "invalid"} {
+				if strings.Contains(err.Error(), spec) {
+					t.Errorf("refusal says %q, which contains the spec word %q (#5)", err, spec)
+				}
+			}
+		})
 	}
 }

@@ -30,10 +30,17 @@ import (
 // would need retention that does not exist yet, and building that retention *and* its consumer in one
 // motion shapes a representation in the load-bearing spot.
 //
-// Landed so far: **type (1), import (2), table (4), memory (5), export (7)**, written in id order.
-// This paragraph said "the type section and nothing else" for two PRs after that stopped being true,
-// which is the drifted-citation defect wearing a scope note — so it now names the set rather than the
-// moment, and `secType`'s const block below is the enumeration a reader can check it against.
+// Landed so far: **type (1), function (3), table (4), memory (5), export (7), code (10)**, plus
+// import (2), written in id order. This paragraph said "the type section and nothing else" for two
+// PRs after that stopped being true, which is the drifted-citation defect wearing a scope note — so
+// it now names the set rather than the moment, and `secType`'s const block below is the enumeration
+// a reader can check it against.
+//
+// **The code section is the first one that is not a vertical slice of a field, and the frontier
+// moved inside an instruction as a result.** Sections 1–7 are each a *field* the parse either
+// retains in full or refuses; a function body is a sequence whose members are individually
+// encodable or not, so `refuseUnencodable` refuses per *instruction* and the module withdraws. See
+// code.go's header for the shape of that frontier and for the mechanism census that priced it.
 //
 // **The export section is the first one with no payload branch, and that is a fact about exports
 // rather than a simplification.** An `externtype` carries the thing's type, so section 2's five kinds
@@ -56,27 +63,35 @@ import (
 // # What an independent witness says so far
 //
 // Measured against #67's wabt corpus, joined on (file, ordinal): of the suite's 2150
-// parser-accepted text modules this encodes **196** in full, **156** of which the corpus can be
-// joined to — and those 156 agree **byte for byte**, 0 disagreements. The 40 unjoined fall in exactly
-// six files, `annotations`, `memory`, `memory64`, `table`, `table64` and `tag`, and every one of the
-// six is in the manifest's `skipped_files` with wabt's own reason, so the gap is accounted for rather
-// than merely stated. The unjoined count did not move with the export section, which is the expected
-// shape: those six files are excluded wholesale by the *generator*, so nothing this encoder learns to
-// write can join them.
+// parser-accepted text modules this encodes **926** in full, **878** of which the corpus can be
+// joined to — and those 878 agree **byte for byte**, 0 disagreements. The 48 unjoined fall in exactly
+// nine files, `annotations`, `memory`, `memory64`, `table`, `table64`, `table_init`, `table_init64`,
+// `tag` and `type-subtyping`, and every one of the nine is in the manifest's `skipped_files` with
+// wabt's own reason, so the gap is accounted for rather than merely stated. The three files the code
+// section *added* to that list were already excluded wholesale by the generator — `table_init` on
+// `arrayref`, `type-subtyping` on `sub` — so learning to write a section can only ever enlarge the
+// unjoined count by finding more modules inside files the corpus does not carry, never by failing to
+// join something it does.
 //
 // The figure carries its vacuity check, because *exactly zero* on an agreement is the tell grave #106
 // was filed for, and at the type section's landing it was the right question to press: 9 of 10
-// agreements were 8-byte bare preambles and the whole witness was one module. It is no longer close
-// to vacuous — **147 of the 156 are longer than a bare preamble**, led by `type#0` at 148 bytes and 23
-// type definitions, `imports2#4` at 129, and the memory64 import files at ~50 each. A hundred and
-// fifty agreements against a toolchain that has never seen this parser is now a claim about the
-// import *and* export sections, the latter being 55 of the 55 modules the export work added.
+// agreements were 8-byte bare preambles and the whole witness was one module. It is now nowhere near
+// vacuous, and the size distribution is the part that changed rather than only the count — **869 of
+// the 878 are longer than a bare preamble**, led by `names#2` at **7584 bytes**, `float_literals#0` at
+// 3010, and four SIMD arithmetic modules between 842 and 1944. Before this section the largest
+// agreement in the corpus was `type#0` at 148 bytes; a seven-kilobyte image agreeing byte for byte
+// with a toolchain that has never seen this parser is a different order of claim, because a code
+// section is where an off-by-one immediate lives and every one of those bytes had to be right.
 //
-// **Both the before and after figures above were measured with the same probe, deliberately.** The
-// 141/101 baseline is quoted from a re-run against the merge-base rather than from this comment's
-// previous revision — an easy thing to skip, and the reason not to is that a delta between two
-// instruments is not a delta. That the re-run reproduced 141/101/101/0/92 exactly is what makes
-// 196/156/156/0/147 comparable to it.
+// **Both the before and after figures above were measured with the same probe, deliberately** — a
+// delta between two instruments is not a delta. The 196/156/156/0/147 baseline is a re-run against
+// the merge-base, and the re-run is also where the *denominators* got checked for the first time:
+// 2150 is `module text` (2143) plus `(module quote …)` (7), and the 1229 `assert_malformed` inner
+// quote modules contribute **0 accepted**, so they were never inflating it. The probe's first
+// revision this cycle counted only `KindModuleText` and reported 2143/919 — three figures reproducing
+// the comment exactly while two did not, which is the tell that the *narrowing* was the change. Same
+// enumeration defect the paragraph below records fixing for the ordinal, never re-derived for the
+// denominator: a quote module is a module.
 //
 // **And the zero was earned twice, which is the part worth recording.** The first re-measurement
 // reported 99 agreements and **one disagreement**, `token#11` — ours 34 bytes, wabt 25 — and the
@@ -98,11 +113,13 @@ import (
 // now would be constants nothing reads, which is the placeholder shape #6 rules on, and the honest
 // version of "later" here is an empty line rather than a tracked stub.
 const (
-	secType   byte = 1
-	secImport byte = 2
-	secTable  byte = 4
-	secMemory byte = 5
-	secExport byte = 7
+	secType     byte = 1
+	secImport   byte = 2
+	secFunction byte = 3
+	secTable    byte = 4
+	secMemory   byte = 5
+	secExport   byte = 7
+	secCode     byte = 10
 )
 
 // tagFunc is `comptype`'s functype form, 0x60 — which is -0x20 read as the sleb(7) the decoder
@@ -121,7 +138,7 @@ const tagFunc byte = 0x60
 // cannot yet write. Routing a verdict through here would convert the encoder's frontier into a
 // judgement about the module.
 func EncodeModule(src []byte) ([]byte, error) {
-	p, err := parseModule(src)
+	p, err := parseModule(src, build)
 	if err != nil {
 		return nil, err
 	}
@@ -134,12 +151,30 @@ func EncodeModule(src []byte) ([]byte, error) {
 // sequence is three steps with a trailing-token check that is easy to omit — and two places knowing
 // one sequence is the drift risk 0006 names. `ReadModule` is now this plus discarding the parser,
 // which is exactly what its error-only surface means.
-func parseModule(src []byte) (*parser, error) {
+// parseMode is whether a parse builds a module or only judges one.
+//
+// A named type rather than a bare bool, because the two calls sit in different files and
+// `parseModule(src, true)` at the `EncodeModule` site would be a coin flip to a reader — while the
+// wrong value is not a compile error but an *accept-direction* one, the whole class this package
+// spends its comments on. The zero value is `recognize`, which is the conservative half: a parse that
+// forgets to state its mode refuses nothing.
+type parseMode bool
+
+const (
+	// recognize answers well-formedness and retains nothing. `ReadModule`'s mode, and the 4162
+	// vectors' mode: the instruction frontier must be invisible here.
+	recognize parseMode = false
+	// build retains what the encoder writes, and therefore *refuses* well-formed modules whose
+	// instructions have no encoding yet. `EncodeModule`'s mode.
+	build parseMode = true
+)
+
+func parseModule(src []byte, mode parseMode) (*parser, error) {
 	c, err := newCursor(src)
 	if err != nil {
 		return nil, err // a lex error, unwrapped; see newCursor
 	}
-	p := &parser{c: c, ctx: newContext()}
+	p := &parser{c: c, ctx: newContext(), retain: bool(mode)}
 	if err := p.module(); err != nil {
 		return nil, err
 	}
@@ -183,6 +218,13 @@ func (p *parser) encode() ([]byte, error) {
 	if err := p.encodableOrErr(); err != nil {
 		return nil, err
 	}
+	// **Before the preamble, not between sections.** Sections 3 and 10 are the first whose content
+	// needs resolving rather than merely reading, and resolving them here keeps the invariant every
+	// other section relies on: once bytes start being written, nothing can fail. See resolveFuncs.
+	funcs, err := p.resolveFuncs()
+	if err != nil {
+		return nil, err
+	}
 
 	var w writer
 	w.bytes(binary.Magic[:])
@@ -197,6 +239,13 @@ func (p *parser) encode() ([]byte, error) {
 	if len(p.ctx.imports) > 0 {
 		w.section(secImport, p.encodeImports)
 	}
+	// Sections 3 and 10 are written from one list and guarded by one condition, because the format
+	// requires them to agree: a function section declaring N functions and a code section carrying
+	// M bodies is malformed on the merits (`function and code section have inconsistent lengths`), and
+	// two conditions here would be two places that could disagree about N.
+	if len(funcs) > 0 {
+		writeFuncSection(&w, funcs)
+	}
 	if len(p.ctx.tabDefs) > 0 {
 		w.section(secTable, p.encodeTables)
 	}
@@ -205,6 +254,9 @@ func (p *parser) encode() ([]byte, error) {
 	}
 	if len(p.ctx.exports) > 0 {
 		w.section(secExport, p.encodeExports)
+	}
+	if len(funcs) > 0 {
+		writeCodeSection(&w, funcs)
 	}
 	return w.b, nil
 }
@@ -240,7 +292,8 @@ func (p *parser) encodableOrErr() error {
 		// papered over — naming the arm needs the arm threaded into the record, and the field is
 		// what a reader edits.
 		return errf(p.ctx.firstNonType, "cannot yet encode this (%s …) field: the emitter writes "+
-			"the type, import, table, memory and export sections (#8)", p.ctx.firstNonType.Text)
+			"the type, import, function, table, memory, export and code sections (#8)",
+			p.ctx.firstNonType.Text)
 	}
 	// **The withdrawal check.** Every *defined* memory and table must have been retained, or a
 	// section is short by one and the image means something else. `clearNonTypeField` is a claim an
@@ -275,7 +328,18 @@ func (p *parser) encodableOrErr() error {
 	for _, k := range [...]struct {
 		kind     importKind
 		retained int
-	}{{importMemory, len(p.ctx.memDefs)}, {importTable, len(p.ctx.tabDefs)}} {
+	}{
+		{importMemory, len(p.ctx.memDefs)},
+		{importTable, len(p.ctx.tabDefs)},
+		// **The func row can fire, unlike the two above.** `funcField` has one retaining path and one
+		// import path, and the import path returns through `inlineImportTail` without touching
+		// `p.funcs` — so a future arm that withdraws the frontier and forgets to append is a section 3
+		// short by one entry, and section 10 short by a body, which is the *malformed* inconsistent-
+		// lengths error rather than a silently different module. Falsified by deleting the
+		// `p.funcs = append(…)` line: `(module (func))` then emits an 8-byte bare preamble and this
+		// fires with `0 function definitions retained, 1 defined`.
+		{importFunc, len(p.funcs)},
+	} {
 		if got, want := k.retained, int(p.ctx.defCount[k.kind]); got != want {
 			return fmt.Errorf("text: internal: %d %s definitions retained, %d defined — an arm "+
 				"withdrew the encoder's frontier without recording its content (#8)", got, k.kind, want)

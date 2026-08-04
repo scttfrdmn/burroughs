@@ -760,3 +760,119 @@ func TestLabelStackIsBalancedOnEveryExitPath(t *testing.T) {
 		}
 	}
 }
+
+// TestLabelIndexCountsAnonymousLevels is the depth half of fact 2, and it exists because
+// `lookupLabel` started answering with a *number* when the code section needed one.
+//
+// `labelPushAnon`'s header spent a paragraph on the anonymous level changing no lookup's answer, and
+// that was true while the answer was bound-or-not: `(block $l (block (br $l)))` resolves `$l` by name
+// either way. The reference's `anon_label` calls `enter_block`, which shifts every enclosing binding
+// up by one (parser.mly:132, :514), so the level is worth exactly one index — and the moment the
+// depth is the answer, dropping the push turns a `br 1` into a `br 0`: a well-formed image branching
+// to the wrong block. That is the accept-direction shape (§9 G-3), and the two rows below are what
+// the earlier comment said it could not offer.
+//
+// **It is a control on the helper, not on the path, and that is declared rather than discovered.**
+// No encodable module reaches the symbolic arm today: a symbolic label needs an enclosing block to
+// bind it, and every block form refuses at `refuseUnencodable` before its body is parsed — probed
+// over all seven spellings, all seven refusing at the block. So a module-level row would be asserting
+// a property of code that does not run, which passes for the wrong reason and is indistinguishable on
+// the board from one that passes for the right one. The `labelSpace` is exercised directly instead,
+// and #63/#64's blocktype encoding is what makes the module-level row possible.
+//
+// The stack is built with `pushLabel`, the function the block sites actually call, rather than with
+// `labelPush`/`labelPushAnon` directly — **and the reason first written here was wrong.** The draft
+// said a control reaching past the dispatcher would keep passing if `pushLabel` stopped choosing the
+// anonymous arm; collapsing `pushLabel` to an unconditional `labelPush(name)` was probed and this
+// test stayed **green**, because `labelPush("")` and `labelPushAnon()` append the same empty string.
+// The dispatcher is a readability split, not a behavioural one, and no test here can distinguish its
+// arms. Kept as the entry point because it is the real one; the false claim is recorded rather than
+// deleted, per the falsification-passing case being the exercise's most valuable outcome (#108).
+func TestLabelIndexCountsAnonymousLevels(t *testing.T) {
+	for _, tc := range []struct {
+		levels []string // innermost last, "" for an anonymous block
+		name   string
+		want   uint32
+		why    string
+	}{
+		{
+			[]string{"l"},
+			"l", 0,
+			"the innermost binding is 0, which is `bind_label`'s own return value (:196)",
+		},
+		{
+			[]string{"l", ""},
+			"l", 1,
+			"an anonymous block between the `br` and its target still occupies a level; a " +
+				"reader that skipped it answers 0 and the branch leaves the wrong block",
+		},
+		{
+			[]string{"l", "", ""},
+			"l", 2,
+			"two of them, so the shift is per level rather than a single flag",
+		},
+		{
+			[]string{"", "l"},
+			"l", 0,
+			"an anonymous level *outside* the target contributes nothing — the depth counts " +
+				"from the innermost, so this is the direction an off-by-one gets caught in",
+		},
+		{
+			[]string{"outer", "", "inner"},
+			"outer", 2,
+			"a named level below and an anonymous one between: the shift counts every level, " +
+				"named or not, which is what `scoped`'s `VarMap.map (shift …)` does to all of them",
+		},
+		{
+			[]string{"l", "", "l"},
+			"l", 0,
+			"shadowing wins innermost, and the anonymous level between is not what makes it " +
+				"win — `VarMap.add`'s overwrite is (:196)",
+		},
+	} {
+		var l labelSpace
+		for _, name := range tc.levels {
+			// Through the dispatcher the block sites use, so the anonymous arm is the one under
+			// test rather than one this test selected for itself.
+			c := &context{labels: l}
+			c.pushLabel(name)
+			l = c.labels
+		}
+		got, err := l.lookupLabel(Token{Text: "$" + tc.name}, tc.name)
+		if err != nil {
+			t.Errorf("lookupLabel(%q) over %v = %v; the name is bound in this stack, so a "+
+				"failure here means the scan is wrong rather than the arithmetic — %s",
+				tc.name, tc.levels, err, tc.why)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("lookupLabel(%q) over %v = %d, want %d — %s",
+				tc.name, tc.levels, got, tc.want, tc.why)
+		}
+	}
+	// The reject direction, in the same shape: an anonymous level binds *no* name, so nothing
+	// resolves against it. Without this, a `labelPushAnon` that pushed some placeholder name would
+	// satisfy every row above by making the depths right for the wrong reason.
+	for _, tc := range []struct {
+		levels []string
+		name   string
+		why    string
+	}{
+		{[]string{""}, "", "the empty name, which is what the anonymous level holds internally"},
+		{[]string{"", ""}, "", "two of them, so the scan's skip is not a single-level special case"},
+		{[]string{"l", ""}, "", "and beside a named one, where a scan that matched empties would " +
+			"answer 0 for a name no block bound"},
+	} {
+		var l labelSpace
+		for _, name := range tc.levels {
+			c := &context{labels: l}
+			c.pushLabel(name)
+			l = c.labels
+		}
+		if got, err := l.lookupLabel(Token{Text: "$"}, tc.name); err == nil {
+			t.Errorf("lookupLabel(%q) over %v = %d; an anonymous level occupies a level and "+
+				"binds no name (`(block $)` is `empty identifier` from the lexer, so no *named* "+
+				"level can be \"\") — %s", tc.name, tc.levels, got, tc.why)
+		}
+	}
+}
