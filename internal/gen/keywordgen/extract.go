@@ -91,22 +91,18 @@ var errUnrecognized = errors.New("unrecognized arm in lexer.mll")
 // ErrVacuous reports an extraction that produced implausibly little. See Extract.
 var ErrVacuous = errors.New("extraction produced too few keywords")
 
+// The arm shape and the block's delimiters used to live here, in four regexps this package
+// declared for itself. They are `mllex`'s now — the wrapped-arm shape's third occurrence
+// un-froze the tooling and Scott's consolidation clause moved the substrate to one reader
+// (see mllex's package doc). What is left is this generator's own grammar over an arm's
+// body, which is genuinely per-consumer: `opgen` mines the same bodies for lowercase
+// identifiers and `memarggen` for `(opt a N)`.
 var (
-	// reArm is the arm shape, and the whole grammar of this extractor's head:
-	// `| "i32.add" -> BINARY i32_add`. The RHS may be empty, which is how the
-	// fourteen multi-line arms are written (`| "v128.load8_splat" ->` with the
-	// constructor on the following line).
-	reArm = regexp.MustCompile(`^\s*\|\s*"([^"]*)"\s*->(.*)$`)
-	// reKind takes the token constructor: the first capitalised identifier in the RHS.
+	// reKind takes the token constructor: the first capitalised identifier in the body.
 	// `BINARY i32_add` → BINARY; `VEC_LOAD (fun x a o -> ...)` → VEC_LOAD;
 	// `PACKTYPE Types.I8T` → PACKTYPE.
 	reKind = regexp.MustCompile(`^\s*([A-Z][A-Za-z0-9_]*)`)
-	// The block's own delimiters. The head is the `| keyword as s` arm of `rule token`,
-	// and the block ends at its fallthrough — which is one of the two producers of
-	// `unknown operator` (lexer.mll:809; the other is `| reserved`, at :839, outside
-	// this block and not a keyword).
-	reBlockStart   = regexp.MustCompile(`^\s*\|\s*keyword\s+as\s+s\s*$`)
-	reBlockMatch   = regexp.MustCompile(`^\s*\{\s*match\s+s\s+with\s*$`)
-	reFallthrough  = regexp.MustCompile(`^\s*\|\s*_\s*->\s*unknown\s+lexbuf\s*$`)
+	// reKeywordShape is the `keyword` production ocamllex matched *before* this block ran.
+	// See checkShape for why an arm head outside it is the reference having a bug.
 	reKeywordShape = regexp.MustCompile(`^[a-z][a-zA-Z0-9_.:]+$`)
 )

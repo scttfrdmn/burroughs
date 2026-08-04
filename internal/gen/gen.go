@@ -18,6 +18,12 @@
 // the two facts that are about the repository — where the pin lives, how generated
 // source is formatted — and nothing about OCaml, decoders, or lexers. A shared package
 // that grew a `parseArm` would be the wrong seam.
+//
+// That last sentence was tested and held. The wrapped-arm shape's third occurrence un-froze
+// the tooling and the arm reader *was* consolidated — into `gen/mllex`, a sibling that knows
+// OCaml lexer grammar and nothing about the repository, rather than into here. Two seams,
+// each with one concern; the refusal above is why the new code has a package of its own
+// instead of a home in this one.
 package gen
 
 import (

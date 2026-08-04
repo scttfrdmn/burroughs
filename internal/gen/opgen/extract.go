@@ -58,6 +58,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/scttfrdmn/burroughs/internal/gen/mllex"
 )
 
 // Errors this package reports. Three, and the split is diagnostic: an unreadable arm means
@@ -199,43 +201,9 @@ var (
 	// does not try to parse OCaml. See constructorIn.
 	reIdent = regexp.MustCompile(`\b[a-z][a-z0-9_]*\b`)
 
-	// A lexer keyword arm's *head*: `| "literal" ->`, with whatever follows captured
-	// separately and possibly empty.
-	//
-	// GRAVE #105.
-	//
-	// **The `->` ends the head, and the token kind is deliberately not part of the
-	// match.** The first draft required `-> TOKEN` on one line, which is true of 564 arms
-	// and false of 25 — the `const` family and the `v128.*_lane`/`_splat` group wrap:
-	//
-	//	| "i32.const" ->
-	//	  CONST (fun s -> … i32_const (n @@ s.at), Value.I32 n)
-	//
-	// Those 25 did not match the head, so they were absorbed as *continuation lines of
-	// the preceding keyword* and vanished: 411 rows where 436 were measured, no error, no
-	// unrecognized arm. That is #78's under-matching trigger exactly — a trigger that
-	// under-matches produces **no finding rather than a wrong one** — and it was caught by
-	// printing what the reader returned for `i32.const` rather than by reading the regexp,
-	// which is the only way this class is ever caught. keywordgen had already met and
-	// solved it (its reArm ends at `->`); the sibling defect was reintroduced here because
-	// the shape was re-derived instead of copied. Hence TestExtractMatchesMeasuredShape's
-	// exact counts: the floors did *not* catch this, because 411 clears a floor of 350.
-	reLexArm = regexp.MustCompile(`^\s*\|\s*"((?:[^"\\]|\\.)*)"\s*->(.*)$`)
-
-	// A line that looks like an arm head but did not parse as one. The discriminator
-	// keywordgen uses, and the reason an unreadable arm is an error rather than a skip.
-	reLexArmish = regexp.MustCompile(`^\s*\|\s*"`)
-
-	// The lexer keyword block's two-line head and its fallthrough, exactly as keywordgen
-	// locates them. Duplicated regexps would be *one concept, two triggers* (#82) — but
-	// these live in a different package and keywordgen's are unexported, so the honest
-	// options are duplication or exporting a locator. Neither table is read from these:
-	// the block bounds are only used to know which lexer lines are keyword arms, and
-	// TestLexerBlockAgreesWithKeywordgen asserts this locator finds the same arm set
-	// keywordgen does, which is the control that makes the duplication safe.
-	reLexBlockStart = regexp.MustCompile(`^\s*\|\s*keyword\s+as\s+s\s*$`)
-	reLexBlockMatch = regexp.MustCompile(`^\s*\{\s*match\s+s\s+with\s*$`)
-	reLexFallthru   = regexp.MustCompile(`^\s*\|\s*_\s*->\s*unknown\s+lexbuf\s*$`)
+	// The five regexps that read `lexer.mll` — the arm head, the arm-shaped discriminator,
+	// and the block's three delimiters — used to be declared here. They are `mllex`'s now;
+	// see lexerConstructors for the grave that moved them.
 )
 
 // OpTable is the opcode side of the join: the caller supplies it, because this package must
@@ -482,70 +450,57 @@ func grammarConstructors(mly string, ops OpTable) (map[string]named, error) {
 //
 // Keywords whose payload names none are absent, which is the grammar's half or no
 // instruction at all (a type keyword, a script keyword).
+//
+// # GRAVE #105 lives here, and its regexps do not
+//
+// **The `->` ends an arm's head, and the token kind is deliberately not part of the match.**
+// The first draft of this reader required `-> TOKEN` on one line, which is true of 564 arms
+// and false of 25 — the `const` family and the `v128.*_lane`/`_splat` group wrap:
+//
+//	| "i32.const" ->
+//	  CONST (fun s -> … i32_const (n @@ s.at), Value.I32 n)
+//
+// Those 25 did not match the head, so they were absorbed as *continuation lines of the
+// preceding keyword* and vanished: 411 rows where 436 were measured, no error, no
+// unrecognized arm. That is #78's under-matching trigger exactly — a trigger that
+// under-matches produces **no finding rather than a wrong one** — and it was caught by
+// printing what the reader returned for `i32.const` rather than by reading the regexp, which
+// is the only way this class is ever caught. `keywordgen` had already met and solved it; the
+// sibling defect was reintroduced here because the shape was re-derived instead of copied.
+// Hence TestExtractMatchesMeasuredShape's exact counts: the floors did *not* catch this,
+// because 411 clears a floor of 350.
+//
+// The block locating and the arm rejoining are **`mllex`'s** now, not this package's, on
+// Scott's consolidation clause: three occurrences of one shape un-freezes tooling, so a
+// fourth is structurally impossible rather than personally avoided. The prose that used to
+// stand at the regexps said "keywordgen's are unexported, so the honest options are
+// duplication or exporting a locator" — the ruling falsified it, and the third option was a
+// package neither generator owns.
+//
+// What is still this package's is the part that is genuinely per-consumer: mining an arm's
+// *body* for a lowercase identifier the opcode table holds. The token kind is included in
+// that body, and that is safe because reIdent only matches lowercase-initial identifiers
+// while every kind is SCREAMING_CASE — so the kind cannot become a constructor, and not
+// having to *exclude* it is what lets the shared head regexp stop at `->` at all.
 func lexerConstructors(lex string, ops OpTable) (map[string]named, error) {
 	lines := strings.Split(lex, "\n")
-
-	lo, hi := -1, -1
-	for i, l := range lines {
-		if lo < 0 && reLexBlockStart.MatchString(l) && i+1 < len(lines) && reLexBlockMatch.MatchString(lines[i+1]) {
-			lo = i + 2
-			continue
-		}
-		if lo >= 0 && reLexFallthru.MatchString(l) {
-			hi = i
-			break
-		}
+	block, err := mllex.FindBlock(lines)
+	if err != nil {
+		// Wrapped as ErrVacuous so this package's error vocabulary is unchanged by the
+		// consolidation; mllex.ErrNoBlock stays readable underneath.
+		return nil, fmt.Errorf("%w: %w", ErrVacuous, err)
 	}
-	if lo < 0 || hi < 0 {
-		return nil, fmt.Errorf("%w: could not locate lexer.mll's keyword block (found %d..%d)",
-			ErrVacuous, lo, hi)
+	arms, err := mllex.Arms(lines, block)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrUnrecognized, err)
 	}
 
 	out := map[string]named{}
-	kw, start := "", 0
-	var body strings.Builder
-	flush := func() {
-		if kw == "" {
-			return
-		}
-		if c := constructorIn(body.String(), ops); c != "" {
-			out[kw] = named{ctor: c, line: start}
+	for _, a := range arms {
+		if c := constructorIn(a.Body, ops); c != "" {
+			out[a.Keyword] = named{ctor: c, line: a.Line}
 		}
 	}
-	for i := lo; i < hi; i++ {
-		l := lines[i]
-		if m := reLexArm.FindStringSubmatch(l); m != nil {
-			flush()
-			kw, start = m[1], i+1
-			body.Reset()
-			// Everything after `->`, token kind included. Including the kind is safe
-			// because reIdent only matches lowercase-initial identifiers and every token
-			// kind is SCREAMING_CASE — so the kind cannot become a constructor, and not
-			// having to *exclude* it is what lets the head regexp stop at `->` and so
-			// match the 25 wrapped arms at all.
-			body.WriteString(m[2])
-			body.WriteString("\n")
-			continue
-		}
-		if reLexArmish.MatchString(l) {
-			// Looks like an arm, did not parse as one. An error, not a skip: an
-			// unreadable arm is exactly the case where silence costs a row.
-			return nil, fmt.Errorf("%w: lexer.mll:%d looks like a keyword arm but did not parse: %q",
-				ErrUnrecognized, i+1, l)
-		}
-		if kw == "" {
-			if s := strings.TrimSpace(l); s != "" {
-				return nil, fmt.Errorf("%w: lexer.mll:%d inside the keyword block before any arm: %q",
-					ErrUnrecognized, i+1, l)
-			}
-			continue
-		}
-		// A continuation line of the current arm's payload. Kept, because several arms
-		// wrap: `| "v128.store64_lane" ->\n  VEC_STORE_LANE (fun x a o i -> …)`.
-		body.WriteString(l)
-		body.WriteString("\n")
-	}
-	flush()
 	return out, nil
 }
 

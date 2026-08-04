@@ -21,6 +21,44 @@ weakly-ordered platform.
 
 ### Added
 
+- **`internal/text`: the memarg emitter, and the default alignment table it needs**
+  ([#8](https://github.com/scttfrdmn/burroughs/issues/8),
+  [#127](https://github.com/scttfrdmn/burroughs/issues/127), 0007). The load/store immediate — flags
+  byte, optional memory index, offset — is `encode.ml:221`'s `memop`, and it is the largest single
+  immediate shape on the board's biggest wall: **fail falls 14330 → 14216**, the encode stratum
+  **13974 → 13775**, and twelve load/store buckets appear for the first time in the *execution*
+  column (`28`, `2d`, `36`–`3e`), which is what an encoder gap closing looks like from downstream.
+  The 9,529-vector census was upper-bound-shaped, exactly as `code.go:195` pre-registered: a bucket
+  keyed on a module's *first* refusal moves it only if nothing else in it is unencodable, and the
+  freed `address*.wast`/`memory_copy*.wast` sweeps hit `(data …)` next — now the largest bucket at
+  **8882**, 7.6× the runner-up.
+
+  **`internal/text/memarg.go` is generated, and the reason is that its 45 defaults are invisible to
+  the suite.** A wrong natural alignment writes an image that decodes clean and differs from the
+  source only in a flags byte no `assert_malformed` inspects — contract §9 G-3, and decision 0007's
+  argument for machine derivation applied to a third table. `memarggen` reads `lexer.mll`'s
+  `opt a N` per arm, `make memarg-drift` asserts continued agreement, and the floors are **per
+  partition with the exact count pinned beside each** (grave #105's lesson: a floor catches a moved
+  file, never a 6% silent loss).
+
+  **The emitter has two witnesses because one of them is structurally blind.** `decodeMemop`
+  discards alignment — it is a validation constraint with no execution semantics — so the
+  round-trip table cannot see the whole 45-row table, in precisely the way it cannot see the limits
+  address-type bit. `TestEncodeWritesTheNaturalAlignmentDefault` reads the flags byte directly, in
+  three named partitions. Six falsifications were installed and each now fails at a named
+  assertion; **the most valuable outcome was one that passed** — the presence-vs-value defect
+  (`has_idx` read as "the text wrote an index" rather than "the index is non-zero") emits
+  `28 42 00 00` where the correct image is `28 02 00`, and because the emitter writes its own
+  body-size field the decoder returns identical `Imm0`/`Imm1`. A self-consistent wrong image
+  round-trips clean; only the flags byte distinguishes them, so that property moved to the
+  byte-level witness and the round-trip row records that it is stillborn for it.
+
+  **`MultiMemory` joined the decode-side gate set by a row failing, not by reasoning ahead.**
+  `memopIndex` records its bit-6 decline on the context rather than returning it — but `release()`
+  hands the recorded decline back once the body's grammar completes, so a deferred decline is still
+  a decline. Third derivation of that rule and third time the prose was wrong until an input said
+  so.
+
 - **`internal/interp`: the interpreter, and the first instruction Burroughs ever executed**
   ([#7](https://github.com/scttfrdmn/burroughs/issues/7), 0002). Decoder → internal form →
   execution, over the 139-opcode numeric core: constants, locals, drop/nop/unreachable, the full i32
@@ -1477,6 +1515,15 @@ weakly-ordered platform.
   behind**. That makes #53's done-when checkable by CI instead of by a reviewer.
 
 ### Changed
+
+- **`internal/gen/mllex`: the `lexer.mll` arm reader is one implementation, and the three generators
+  call it** ([#105](https://github.com/scttfrdmn/burroughs/issues/105)). `keywordgen`, `opgen` and the
+  new `memarggen` each read the same authority's arm heads, and the wrapped-arm defect that cost grave
+  #105 (411 rows extracted where 436 were measured, silently) was **re-derived rather than copied** —
+  which is the whole finding: a grave filed against one file reads as a fact about that file and is
+  actually a fact about a shape. `FindBlock`/`Arms` now own the rejoining, the continuation rule, and
+  the empty-block refusal in one place, so the third consumer inherited the lesson instead of paying
+  for it. `crossover_test.go` asserts both wrap directions against the pinned reference.
 
 - **The instrument-to-engine ratio has a fixed comparator, and stop-condition exemptions can no longer
   be granted by the actor** (rulings: Scott, PR #113). Two process laws, and both take the same shape —

@@ -5,7 +5,7 @@ GO ?= go
 # anything globally.
 TOOL = $(GO) tool -modfile=tools/go.mod
 
-.PHONY: all build test vet fmt lint check vuln deadcode fuzz bench spec-tests spec-ref tidy conformance strict opcodes opcode-drift keywords keyword-drift opcodes-text opcodes-text-drift gate-census xcorpus
+.PHONY: all build test vet fmt lint check vuln deadcode fuzz bench spec-tests spec-ref tidy conformance strict opcodes opcode-drift keywords keyword-drift opcodes-text opcodes-text-drift memarg memarg-drift gate-census xcorpus
 
 # The default gate. `check` is what must be green before a report — it is the
 # local mirror of CI, so a surprise in CI means a bug in this line, not a bug in
@@ -263,6 +263,38 @@ opcodes-text-drift:
 		echo "reference not vendored; run: make spec-ref"; exit 1; \
 	fi
 	$(STRICT) $(GO) test -v -shuffle=on -count=1 ./internal/gen/opgen/
+
+# Regenerate the natural-alignment table (#127). Fourth generator, third reader of lexer.mll,
+# and the first whose *values* the suite cannot check at all.
+#
+# The other three tables are checkable in the reject direction: a wrong opcode or a missing
+# keyword makes some vector fail. A wrong natural alignment does not — `align=` is optional in
+# the text, the flags byte it defaults into is a legal alignment, and validation rejects only
+# *over*-alignment. So a mistyped default yields an image that decodes clean and differs from
+# its source in a byte no assert_malformed inspects. That is contract §9 G-3, and it is the whole
+# argument for machine-reading these 45 numbers rather than typing them.
+memarg: spec-ref
+	$(GO) run ./internal/gen/memarggen/cmd/memarggen -o internal/text/memarg.go
+	@echo "regenerated internal/text/memarg.go"
+
+# The alignment table's drift check. 0007's condition 4 a fourth time.
+#
+# Two packages, not one, and the second is the consolidation clause's receipt. `mllex` is the
+# shared arm reader all three lexer.mll generators now call — the wrapped-arm shape's third
+# occurrence un-froze the tooling, so the substrate moved to one place rather than being avoided
+# three times. Its tests are what stand behind every floor in the other three targets: if the
+# arm reader silently truncates a wrapped body, memarggen loses rows, opgen loses joins, and
+# nothing in either package's own tests would name the cause. A shared reader's drift check
+# belongs to whichever target is closest to it, and this is that target.
+#
+# Only the reference is guarded — no suite vector is read, and there is no vector that could be.
+#
+# Whole packages, -count=1, $(STRICT): see opcode-drift for each.
+memarg-drift:
+	@if [ ! -f third_party/spec/interpreter/text/lexer.mll ]; then \
+		echo "reference not vendored; run: make spec-ref"; exit 1; \
+	fi
+	$(STRICT) $(GO) test -v -shuffle=on -count=1 ./internal/gen/mllex/ ./internal/gen/memarggen/
 
 # Regenerate the #67 cross-check corpus: independently produced binary images of the suite's
 # must-succeed text modules (0011's second appendix, #67 half 2).

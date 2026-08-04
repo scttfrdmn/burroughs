@@ -242,32 +242,42 @@ func TestUnderscorePlacementIsTheLexersJob(t *testing.T) {
 // TestParseAlignAppliesThePowerOfTwoCheck pins `align` (parser.mly:532) and the seam its doc
 // comment names: this reader owns "must be a power of two", and the validator owns "must not be
 // larger than natural".
+//
+// **The exponent column is asserted too, and it is the half no vector covers** (#127). The bytes
+// this value reaches are a flags field a decoder accepts whatever it holds, so `align=4` writing 4
+// instead of 2 encodes a legal image denoting a different access width — the accept-direction class,
+// and `log2_unsigned` is the one line of arithmetic between the text and the field. `align=0x10`
+// earns its place twice over here: the hex branch and the exponent 4 are independent, and a reader
+// that returned the *value* rather than its log2 would pass every boolean above.
 func TestParseAlignAppliesThePowerOfTwoCheck(t *testing.T) {
 	for _, c := range []struct {
 		in        string
+		wantAlign int
 		wantOK    bool
 		wantIsNat bool
 		cites     string
 	}{
-		{"align=1", true, true, "derived: 1 land 0 = 0, lib.ml:331"},
-		{"align=2", true, true, "derived: as above"},
-		{"align=4", true, true, "derived: as above"},
-		{"align=0x10", true, true, "derived: nat64 first, so the hex branch applies"},
-		{"align=9223372036854775808", true, true, "derived: 2^63, the largest power of two in 64 bits"},
+		{"align=1", 0, true, true, "derived: 1 land 0 = 0, lib.ml:331; log2 1 = 0"},
+		{"align=2", 1, true, true, "derived: as above"},
+		{"align=4", 2, true, true, "derived: as above"},
+		{"align=0x10", 4, true, true, "derived: nat64 first, so the hex branch applies; log2 16 = 4"},
+		{"align=9223372036854775808", 63, true, true, "derived: 2^63, the largest power of two in 64 bits"},
 		// align=0 is a power-of-two failure, not a width failure — `n <> 0` is the first
 		// conjunct of is_power_of_two_unsigned. Worth its own case because "zero is invalid"
-		// could plausibly be either check, and only one of them is this reader's.
-		{"align=0", false, true, "derived: `n <> 0 &&` in lib.ml:331; align.wast has vectors for it"},
-		{"align=3", false, true, "derived: 3 land 2 = 2"},
-		{"align=6", false, true, "derived: 6 land 5 = 4"},
+		// could plausibly be either check, and only one of them is this reader's. The exponent
+		// is 0 and meaningless: `bits.Len64(0)-1` is -1, so the reader returns before computing
+		// it and the verdict is what guards the value.
+		{"align=0", 0, false, true, "derived: `n <> 0 &&` in lib.ml:331; align.wast has vectors for it"},
+		{"align=3", 0, false, true, "derived: 3 land 2 = 2"},
+		{"align=6", 0, false, true, "derived: 6 land 5 = 4"},
 		// A nat64 overflow: isNat false, so the caller reports the width error rather than the
 		// power-of-two one. Two error strings behind one lexeme, which is why parseAlign
 		// returns two booleans instead of one.
-		{"align=18446744073709551616", false, false, "derived: nat64 runs first (parser.mly:532)"},
-		{"align=0x10000000000000000", false, false, "derived: as above, hex branch"},
+		{"align=18446744073709551616", 0, false, false, "derived: nat64 runs first (parser.mly:532)"},
+		{"align=0x10000000000000000", 0, false, false, "derived: as above, hex branch"},
 	} {
 		t.Run(c.in, func(t *testing.T) {
-			ok, isNat := parseAlign(c.in)
+			align, ok, isNat := parseAlign(c.in)
 			if isNat != c.wantIsNat {
 				t.Fatalf("parseAlign(%q) isNat = %v, want %v\n\tprovenance: %s",
 					c.in, isNat, c.wantIsNat, c.cites)
@@ -275,6 +285,11 @@ func TestParseAlignAppliesThePowerOfTwoCheck(t *testing.T) {
 			if ok != c.wantOK {
 				t.Errorf("parseAlign(%q) ok = %v, want %v\n\tprovenance: %s",
 					c.in, ok, c.wantOK, c.cites)
+			}
+			if align != c.wantAlign {
+				t.Errorf("parseAlign(%q) align = %d, want %d — this is the exponent the flags "+
+					"field holds, and a wrong one encodes a legal image with the wrong access "+
+					"width\n\tprovenance: %s", c.in, align, c.wantAlign, c.cites)
 			}
 		})
 	}
