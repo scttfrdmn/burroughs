@@ -194,7 +194,10 @@ func (p *parser) refuseUnencodable(t Token, what string) error {
 //
 // The planning consequence stands either way: the remaining tier counts (68 memarg, 87 control) are
 // **upper-bound-shaped rather than exact**, so whichever PR takes tier 2 re-measures rather than
-// quoting them.
+// quoting them. **Tier 2 re-measured and the pre-registration held**: the 9,529-vector memarg census
+// paid 199 modules, because a bucket keyed on a module's *first* refusal moves it only when nothing
+// else in the module is unencodable, and the freed `address*.wast`/`memory_copy*.wast` sweeps hit
+// `(data …)` on the next pass.
 //
 // Held as a set rather than as a `switch` in `immediates` so the frontier is one legible list, and
 // so the shapes *outside* it refuse structurally: a shape added to `immShape` and not to this map

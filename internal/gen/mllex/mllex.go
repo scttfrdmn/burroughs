@@ -12,7 +12,17 @@
 //	#127  memarggen    would have been the third, and was met preventively
 //
 // The third was avoided by *reading the sibling first*, which is the ruling on #108
-// working exactly as written. But avoidance is personal and does not survive the next
+// working exactly as written.
+//
+// **A note on `#127`, because the number is a citation and this one was right by luck.**
+// It was written into these comments during the work and *then* became this PR's number
+// — GitHub shares one sequence between issues and PRs, so it resolves, but it resolved to
+// nothing at the moment it was typed. That is the fiction-citation class (#114, #115) in
+// its issue-number half, which #116 has open and which has no local oracle: `constWalk`
+// was caught because a package's identifiers can be enumerated, and `#NN` cannot be
+// resolved without the network. Recorded here rather than silently corrected, since the
+// value of the near-miss is that it shows the class is live in a place the current sweep
+// cannot reach. But avoidance is personal and does not survive the next
 // author, so Scott's consolidation clause applies: at three occurrences the shape becomes
 // **one shared helper both generators and the new one call**, so a fourth occurrence is
 // structurally impossible rather than individually dodged. Lessons indexed by shape, now
