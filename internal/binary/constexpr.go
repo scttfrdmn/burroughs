@@ -120,16 +120,29 @@ func (d *Decoder) decodeElemSegment(r *reader) error {
 // vector for. TestByteVecIsNotAName is the control, and this is the caller that
 // finally makes it non-vacuous: until now the data section was never descended into,
 // so a probe pushing utf8.Valid down into byteVec left the test green (grave #32).
+// Retaining as of 0015: the mode and the offset are staged into a DataSegment and appended to
+// the module's index order, where they used to be read and dropped. #7's memory work is the
+// consumer that made this load-bearing — before it, nothing in the codebase could represent a
+// module's data at all, which is what left the wat encoder's round-trip witness byte-level.
 func (d *Decoder) decodeDataSegment(r *reader) error {
-	if err := d.decodeDataSegmentMode(r); err != nil {
+	seg, err := d.decodeDataSegmentMode(r)
+	if err != nil {
 		return err
 	}
 	// ErrPayloadEnd, not ErrSectionOverrun: binary.wast:877 is a segment declaring 7
 	// content bytes with 6 left in the image and expects "unexpected end of section or
 	// function", where the same overrun on an export *name* (:754) is "length out of
 	// bounds". See byteVecErr for why that split is a per-call-site choice.
-	_, err := r.byteVecErr(ErrPayloadEnd)
-	return err
+	init, err := r.byteVecErr(ErrPayloadEnd)
+	if err != nil {
+		return err
+	}
+	// Aliased, not copied — the decoder's in-place posture. A segment's bytes are already
+	// the caller's image, and `Init` being empty is legal rather than a missing read:
+	// `(data "")` is a real module in memory64.wast.
+	seg.Init = init
+	d.mod().Datas = append(d.mod().Datas, seg)
+	return nil
 }
 
 // decodeDataSegmentMode reads the flags byte and whatever the mode it selects puts
@@ -141,22 +154,33 @@ func (d *Decoder) decodeDataSegment(r *reader) error {
 // trips govet's shadow — two enabled linters pointing opposite ways, which is a
 // signal about the shape rather than about the config (decision 0005's spirit
 // clause). Narrowing the scope so neither applies is the fix both were asking for.
-func (d *Decoder) decodeDataSegmentMode(r *reader) error {
+// Retaining as of 0015: it returns the staged segment rather than reporting only whether the
+// mode read. `decodeConstExprKeep` is the retaining twin whose doc comment named #7 as its
+// missing consumer; this is that consumer arriving.
+func (d *Decoder) decodeDataSegmentMode(r *reader) (DataSegment, error) {
+	var seg DataSegment
 	flags, err := r.u32()
 	if err != nil {
-		return err
+		return seg, err
 	}
 	switch flags {
 	case 0x00: // active, memory 0 implied
-		return d.decodeConstExpr(r) // offset
+		seg.Offset, err = d.decodeConstExprKeep(r)
+		return seg, err
 	case 0x01: // passive: no memory index, no offset
-		return nil
+		seg.Passive = true
+		return seg, nil
 	case 0x02: // active with an explicit memory index
-		if err := discardIndex(r); err != nil {
-			return err
+		// Retained where it used to be discarded. The index is *recorded*, not checked:
+		// whether it names a memory the module has is #9's question, and data1.wast's 14
+		// vectors turn on the difference — `(data (memory 2) …)` against three memories is
+		// a module that traps, not one that is invalid.
+		if seg.MemIndex, err = r.u32(); err != nil {
+			return seg, err
 		}
-		return d.decodeConstExpr(r) // offset
+		seg.Offset, err = d.decodeConstExprKeep(r)
+		return seg, err
 	default:
-		return fmt.Errorf("%w: %#02x", ErrMalformedDataSegKind, flags)
+		return seg, fmt.Errorf("%w: %#02x", ErrMalformedDataSegKind, flags)
 	}
 }

@@ -780,6 +780,10 @@ func (d *Decoder) decodeLimits(r *reader) (Limits, error) {
 			return lim, featureErr("memory64")
 		}
 		lim.HasMax = flags&0x01 != 0
+		// Retained as of 0015: the address width is only knowable from this byte, and the
+		// interpreter's bounds check needs it. Set here rather than derived at use time
+		// because by then the flags are gone.
+		lim.Addr64 = true
 	default:
 		return lim, fmt.Errorf("%w: %#02x", ErrMalformedLimits, flags)
 	}

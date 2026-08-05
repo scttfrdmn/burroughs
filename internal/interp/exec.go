@@ -467,6 +467,53 @@ func (in *Instance) run(fn *binary.Func, locals []uint64, st *stack) error {
 			}
 			st.pushI64(int64(int32(st.popI64())))
 
+		// ---- linear memory -------------------------------------------------------
+		//
+		// Imm0 is the static offset and Imm1 the memory index, staged by decodeMemop;
+		// alignment is deliberately not retained, being a validation constraint with no
+		// execution semantics. The width, signedness and slot type come from `memops`,
+		// whose rows are cross-checked against the generated table's mnemonics rather
+		// than hand-asserted (memop.go).
+
+		case 0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e, 0x2f,
+			0x30, 0x31, 0x32, 0x33, 0x34, 0x35,
+			0x36, 0x37, 0x38, 0x39, 0x3a, 0x3b, 0x3c, 0x3d, 0x3e:
+			if err := in.memAccess(ins, st); err != nil {
+				return err
+			}
+
+		case 0x3f: // memory.size
+			mem, err := in.memoryFor("instruction", ins.Imm0)
+			if err != nil {
+				return err
+			}
+			// The result's *type* follows the memory's address width: an i64 memory's
+			// size is an i64. `addrtype_of` is what the reference consults, which is
+			// why Limits.Addr64 is retained.
+			if mem.limits.Addr64 {
+				st.pushI64(int64(mem.size()))
+			} else {
+				st.pushI32(int32(uint32(mem.size())))
+			}
+
+		case 0x40: // memory.grow
+			mem, err := in.memoryFor("instruction", ins.Imm0)
+			if err != nil {
+				return err
+			}
+			if err := st.needNum(1); err != nil {
+				return err
+			}
+			// **Failure is -1 in the result, not a trap.** memory.grow is total: the
+			// reference's SizeOverflow and SizeLimit become the sentinel value, so
+			// returning an error here would convert ~53 assert_return vectors into
+			// assert_trap answers — the right failure reported on the wrong channel.
+			if mem.limits.Addr64 {
+				st.pushI64(mem.grow(uint64(st.popI64())))
+			} else {
+				st.pushI32(int32(mem.grow(uint64(uint32(st.popI32())))))
+			}
+
 		default:
 			return unsupported(ins)
 		}

@@ -9,31 +9,146 @@ import (
 
 // Instance is a module ready to be invoked.
 //
-// **Not an instantiation, and the name is the honest one available.** Real instantiation
-// (contract §3) allocates memories and tables, evaluates global initializers, runs the start
-// function, and links imports; none of that exists yet, and none of it is needed to invoke an
-// exported function whose body is arithmetic. So this holds the decoded module and nothing else,
-// and the moment a memory or a global is executable this type grows the state — which is why it
-// is a struct with one field rather than an alias for `*binary.Module`.
+// **Not a full instantiation, and the name is the honest one available.** Contract §3's
+// instantiation links imports, evaluates global initializers, and runs the start function; none
+// of that is here. What *is* here as of 0015 is linear memory: allocated at its declared minimum
+// and initialized from the module's active data segments.
 //
-// It is deliberately constructed by a function that **cannot fail**. An `Instantiate` returning
-// an error would be a second place judging modules, and the judgement it would be making is
-// #9's: every failure a real instantiation can report (a global initializer that is not a
-// constant expression, an unlinkable import, a table's element type disagreeing) is a
-// *validation* verdict, and inventing an interpreter-shaped version of it here would put the
-// validator's answers under a name that hides them. What this package refuses, it refuses at
-// the point of execution, with an error that says the engine has no arm for the instruction —
-// never with a claim about the module.
+// # Two kinds of failure, two channels (0015)
+//
+// The constructor used to promise it **could not fail**, on this reasoning, which was right
+// about what it was defending and is preserved because of that:
+//
+//	An `Instantiate` returning an error would be a second place judging modules, and the
+//	judgement it would be making is #9's.
+//
+// That intent survives intact — the interpreter never judges a module — but the promise was
+// stated one step too strongly. Copying an active data segment past the end of its memory is
+// not a judgement about the module; it is a **runtime event**, and `Trap` is the carrier built
+// for events. So:
+//
+//   - **Verdicts belong to the validator, forever.** A global initializer that is not a constant
+//     expression, an unlinkable import, a table whose element type disagrees: this package never
+//     reports these, under any name. Where one is unavoidably reached before #9 exists, it comes
+//     out as ErrNotValidated — the layering debt said out loud, not a spec verdict.
+//   - **Traps belong to execution**, and instantiation *is* execution at time zero.
+//
+// The taxonomy is the suite's rather than this engine's, which is what settled it: `data1.wast`
+// is 14 vectors of `assert_trap` wrapping a bare `(module …)`, every one expecting `out of bounds
+// memory access`, with no invoke anywhere in the form. The oracle already distinguishes a module
+// that is invalid from a module that traps while coming to life, so the design has to answer a
+// question the judge is asking.
+//
+// Enforced by the return type rather than by this comment: Instantiate returns `*Trap`, so a
+// verdict cannot travel through it even by mistake.
 type Instance struct {
 	mod *binary.Module
+
+	// mems is the memory index space, in index order — **imports first, then definitions**,
+	// which is the space's shape and not a convenience. A slot is nil when there is nothing
+	// to put in it: an imported memory (linking is contract §3, so v0 has no supplier) or a
+	// declared one whose allocation failed for a reason that is #9's rather than a trap's.
+	// See Instantiate on why a nil slot beats a shorter slice.
+	//
+	// **The import slots are reserved rather than omitted, and the difference is 22 vectors.**
+	// The first draft sized this `len(m.Memories)` and argued in this comment that a module
+	// importing a memory "has no memory to allocate and its accesses reach memoryFor's index
+	// check" — which is true only if the import consumed no index. It consumes one, so
+	// `memory.size $mem1` in `memory_grow.wast` read $mem3 and returned 3 pages instead of 2:
+	// not an unimplemented import reported honestly, a *wrong answer* about a different
+	// memory. The nil-slot rule was already written down one paragraph over for allocation
+	// failures; it stopped at the import boundary because nothing had crossed it yet.
+	mems []*memory
+
+	// deferred holds the validation-shaped failures instantiation met and could not report,
+	// because 0015's trap channel may not carry a verdict.
+	//
+	// **Retained rather than dropped, and read at the point of use** (memoryFor): a nil
+	// memory slot with no reason attached would make an access report "memory 0 of 1" when
+	// the truth is "this memory declared min above max", which is the engine being vague
+	// about its own input. Every one of these becomes unreachable when #9 lands, which is
+	// the same declared-and-tracked shape as ErrNotValidated itself.
+	deferred error
 }
 
-// New wraps a decoded module for invocation.
+// Instantiate allocates a module's memories and copies its active data segments in.
 //
 // The module is retained, not copied: `binary.Module`'s payloads already alias the caller's
 // image (the decoder's in-place posture), so a copy here would be a second aliasing of the same
-// bytes under the illusion of ownership.
-func New(m *binary.Module) *Instance { return &Instance{mod: m} }
+// bytes under the illusion of ownership. The segments' bytes are copied, because a memory is
+// mutable and the image is not.
+//
+// **Returns `*Trap`, never a bare error** — 0015's channel split, in the signature. A caller
+// getting a non-nil trap has a module that came to life and died doing it, which is exactly what
+// `assert_trap` wrapping a module form asserts.
+func Instantiate(m *binary.Module) (*Instance, *Trap) {
+	// One slot per memory *index*, filled positionally and **never skipped**: the imported
+	// memories first — nil, since v0 has no linker — then the defined ones at the offset the
+	// index space gives them. A failed allocation likewise leaves a nil slot rather than
+	// shortening the slice, because appending only the successes would shift every later
+	// memory's index — the same defect `Module.Types` keeps struct and array slots to avoid,
+	// and one no board could see, since the affected vectors are ones the suite expects to
+	// pass. That last clause was written before the import offset was measured, and the
+	// measurement is what made it concrete rather than cautionary: 22 vectors, all "passing"
+	// with the wrong memory's answer.
+	off := m.ImportedMems()
+	in := &Instance{mod: m, mems: make([]*memory, off+len(m.Memories))}
+	for i := range m.Memories {
+		mem, err := newMemory(m.Memories[i])
+		if err != nil {
+			if t := asTrap(err); t != nil {
+				return nil, t
+			}
+			// A verdict-shaped failure, which cannot travel this channel (0015). It is
+			// **retained, not dropped**: silent degradation is a skip one step quieter,
+			// and a nil slot with no recorded reason would make the eventual access
+			// report a missing memory instead of the reason it is missing.
+			in.deferred = errors.Join(in.deferred, err)
+			continue
+		}
+		in.mems[off+i] = mem
+	}
+	for i := range m.Datas {
+		if err := in.initData(&m.Datas[i]); err != nil {
+			if t := asTrap(err); t != nil {
+				return nil, t
+			}
+			in.deferred = errors.Join(in.deferred, err)
+		}
+	}
+	return in, nil
+}
+
+// Deferred reports the failures instantiation met that could not travel the trap channel, or nil.
+//
+// **Exported because a caller can otherwise be told "nothing went wrong" when something did.**
+// A trap answers "this module died coming to life"; a nil trap is *not* the same claim as "this
+// module came to life completely". Between them sits the case this accessor exists for: an active
+// data segment that could not be copied because its target memory is imported and v0 has no
+// linker. Instantiation cannot trap for that — the reason is not a runtime event — and it cannot
+// return a verdict either (0015), so the instance comes back usable with the shortfall recorded.
+//
+// Found on the board, which is the only reason it is exported: `data1.wast`'s :80, :117 and :136
+// wrap modules whose data segments target imported memories, and all three were scored "the
+// module instantiated without trapping" — true, unhelpful, and naming no missing component. With
+// this the bucket names linking (contract §3), which is what a work plan is for.
+//
+// It is *not* an error channel in disguise: an accesses to a memory whose slot is empty still
+// reports the reason at the point of use (memoryFor). This is for a caller that needs to know
+// whether the instance is complete before deciding what a nil trap means.
+func (in *Instance) Deferred() error { return in.deferred }
+
+// asTrap extracts the trap in err, or nil if err is not one.
+//
+// The one place 0015's channel split is enforced, so that "traps travel, verdicts do not" is a
+// single predicate rather than a convention repeated at each site.
+func asTrap(err error) *Trap {
+	var t *Trap
+	if errors.As(err, &t) {
+		return t
+	}
+	return nil
+}
 
 // Module returns the instance's module.
 func (in *Instance) Module() *binary.Module { return in.mod }
@@ -103,6 +218,20 @@ var ErrUnsupportedOp = errors.New("interp: no arm for opcode")
 // What it must never become is a spec verdict: `type mismatch` is the validator's string, and
 // reporting it from here would put #9's answer in a place #9 cannot be tested from.
 var ErrNotValidated = errors.New("interp: module reached the interpreter unvalidated")
+
+// ErrUnsupported is an engine feature the module legitimately asked for and this phase does not
+// implement.
+//
+// **The third category, and it exists because the first two would have lied.** A module importing
+// a memory is well-formed (not ErrNotValidated) and the instruction reaching for it is a real
+// arm that this engine has (not ErrUnsupportedOp); what is missing is *linking*, which is
+// contract §3 and v2-or-later work. Reporting either sibling would have named the wrong gap — one
+// blames the module, the other blames a table — and the board's buckets are a work plan only
+// while each key names the thing actually missing.
+//
+// Like ErrUnsupportedOp it is reported when the feature is *reached*, so a module that imports a
+// memory and never touches it still runs.
+var ErrUnsupported = errors.New("interp: feature not implemented in this phase")
 
 // Invoke calls an exported function by name.
 //

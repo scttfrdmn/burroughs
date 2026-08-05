@@ -236,17 +236,27 @@ var encodableModules = []struct {
 	// section rather than only in writer_test's unit rows.
 	{src: `(module (memory 65536))`, wantMems: []binary.Memory{{Limits: binary.Limits{Min: 65536}}}},
 	// The i64 addrtype, which is flags bit **2**. Added because its absence let a defect probe pass:
-	// see decodeForTest for the measurement. `Memory` carries no address-type field of its own, so
-	// what the want column can state is the limits — and the *bit* is asserted by the two probes
-	// (0x02 and no bit at all) failing on this row rather than by a field comparison.
-	{src: `(module (memory i64 1))`, wantMems: []binary.Memory{{Limits: binary.Limits{Min: 1}}}},
+	// see decodeForTest for the measurement.
+	//
+	// **These rows now assert the bit directly, and the change is a retention landing, not a
+	// strengthening of the test.** The paragraph here used to say `Memory` carries no address-type
+	// field of its own, so the want column could only state the limits and the bit was asserted
+	// *indirectly* — by two defect probes failing on this row. `Limits.Addr64` exists as of #7's
+	// memory work, because `memory.ml:27`'s `valid_size` caps an i32 memory at 0xffff pages and an
+	// i64 memory at nothing, so the interpreter has to know which it has. The moment it was
+	// retained these five rows failed, which is the round-trip witness doing precisely its job: a
+	// newly-kept field is a newly-checkable fact, and an expectation that predates the field is
+	// silently weaker than it reads.
+	{src: `(module (memory i64 1))`, wantMems: []binary.Memory{
+		{Limits: binary.Limits{Min: 1, Addr64: true}},
+	}},
 	{src: `(module (memory i64 1 4))`, wantMems: []binary.Memory{
-		{Limits: binary.Limits{Min: 1, Max: 4, HasMax: true}},
+		{Limits: binary.Limits{Min: 1, Max: 4, HasMax: true, Addr64: true}},
 	}},
 	// A minimum above 2^32, which *only* an i64 memory can have — and which is the reason `limits`
 	// reads `nat64`. A 32-bit read would have truncated this silently.
 	{src: `(module (memory i64 4294967296))`, wantMems: []binary.Memory{
-		{Limits: binary.Limits{Min: 4294967296}},
+		{Limits: binary.Limits{Min: 4294967296, Addr64: true}},
 	}},
 
 	// # Tables (#8)
@@ -271,7 +281,7 @@ var encodableModules = []struct {
 	// shared between `tabletype` and `memorytype` and an emitter could get one right and the other
 	// wrong.
 	{src: `(module (table i64 1 funcref))`, wantTabs: []binary.Table{
-		{ElemType: binary.FuncRef, Limits: binary.Limits{Min: 1}},
+		{ElemType: binary.FuncRef, Limits: binary.Limits{Min: 1, Addr64: true}},
 	}},
 	// Two tables, index order, with different element types — a transposed element would swap them.
 	{src: `(module (table 1 funcref) (table 2 externref))`, wantTabs: []binary.Table{
@@ -1157,7 +1167,7 @@ var encodableModules = []struct {
 	// the i32 sugar row above precisely so the 0x41/0x42 difference is the only thing between them.
 	{
 		src:         `(module (memory i64 (data "abc")))`,
-		wantMems:    []binary.Memory{{Limits: binary.Limits{Min: 1, Max: 1, HasMax: true}}},
+		wantMems:    []binary.Memory{{Limits: binary.Limits{Min: 1, Max: 1, HasMax: true, Addr64: true}}},
 		wantDataSec: []byte{0x01, 0x00, 0x42, 0x00, 0x0b, 0x03, 'a', 'b', 'c'},
 	},
 	// **The sugar's segment belongs to *its own* memory**, not to memory 0 — `Active (x, offset)`

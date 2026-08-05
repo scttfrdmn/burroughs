@@ -152,7 +152,16 @@ func TestHarnessAndEngineLiteralReadersAgree(t *testing.T) {
 			t.Errorf("%s.const %s: the engine's own output did not decode: %v", l.kind, l.text, err)
 			continue
 		}
-		got, err := invoke(interp.New(m), "c", nil)
+		in, trap := interp.Instantiate(m)
+		if trap != nil {
+			// These modules are a single const and an END with no memory, so a trap is a
+			// finding about instantiation rather than about the literal. Counted as
+			// uncovered with the reason quoted, never silently skipped.
+			uncovered++
+			t.Logf("  not covered (instantiation trapped): %s.const %s: %v", l.kind, l.text, trap)
+			continue
+		}
+		got, err := invoke(in, "c", nil)
 		if err != nil {
 			// The interpreter's frontier. Logged rather than skipped silently: an uncovered
 			// spelling that looks covered is this control's own failure mode.

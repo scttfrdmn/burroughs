@@ -66,10 +66,19 @@ const suiteDir = "../../testdata/spec"
 // (#69).** Same sentence as the paragraph above, and that repetition is the finding: this
 // is the third time a capability landing has moved the *file set* rather than the command
 // mix inside a fixed set, because the selector's question is "does this file hold one
-// scorable command". 253 of 257 vendored files now do, and the four that do not were
-// *printed*, not predicted — three are the interpreter's and one is a real gap:
+// scorable command".
 //
-//	data1.wast              14 assert_trap        the interpreter's
+// **And a fourth time, 253 → 254, when instantiation gained a trapping path (0015).**
+// `data1.wast` was the one excluded file whose exclusion this list called "the
+// interpreter's", and the label was a prediction that came due: every form in it is
+// `assert_trap` wrapping a bare module, nothing else, so the file held no scorable command
+// until that shape became a Kind. The list below is now three, and the shrink is the reason
+// this paragraph exists — *an itemized exclusion outlives the exclusion unless someone
+// re-prints it*, and this one had a file in it that the same PR admitted.
+//
+// 254 of 257 vendored files hold a scorable command, and the three that do not were
+// *printed*, not predicted — two are the validator's and one is a real gap:
+//
 //	memory_size3.wast        2 assert_invalid     the validator's
 //	unreached-invalid.wast 121 assert_invalid     the validator's
 //	inline-module.wast       3 bare fields        **not** a later stratum's — see below
@@ -120,9 +129,15 @@ func boardFiles(t *testing.T) []string {
 	// admission just brought in, and therefore every vector the 4122 pass floor rests on
 	// — and this guard would still report success. *A floor left at its historical value
 	// is a floor that stopped bounding anything*, so it moves with the measurement or it
-	// is decoration. 240 of 253, the 13-file margin being upstream churn room; the four
-	// legitimately-excluded files are itemized at the top of this function, so a fifth
+	// is decoration. 240 of 254, the 14-file margin being upstream churn room; the three
+	// legitimately-excluded files are itemized at the top of this function, so a fourth
 	// appearing is a fact somebody has to write down.
+	//
+	// Deliberately **not** raised to 241 by 0015's one extra file. The margin is churn room
+	// measured against upstream, not slack to be reclaimed every time the number moves by
+	// one, and re-pinning a floor to each new actual makes it a restatement of the actual
+	// rather than a bound. It moves when the *distance* stops being meaningful — which is
+	// the 60-against-253 case above — not when the actual moves inside it.
 	if len(files) < 240 {
 		t.Fatalf("boardFiles selected only %d files, want >=240 — the selector is not "+
 			"finding answerable commands, so every count below is over a corpus that "+
@@ -230,7 +245,29 @@ func instantiateWith(f binary.Features, c Command) (Instance, Stratum, error) {
 	if err != nil {
 		return nil, stratum, err
 	}
-	return interp.New(m), StratumUnset, nil
+	// **A trap here is a verdict, not a failure to instantiate** (0015). Instantiation is
+	// execution at time zero, so an active data segment copied out of bounds makes this a
+	// module that came to life and died doing it — which is exactly what `data1.wast`'s 14
+	// `assert_trap`-wrapping-a-module vectors assert. Charged to StratumExec because the
+	// interpreter is the component that produced it.
+	in, trap := interp.Instantiate(m)
+	if trap != nil {
+		return nil, StratumExec, trap
+	}
+	// **A nil trap is not "instantiation completed".** Instantiation can fall short without
+	// trapping — an active data segment whose target memory is imported cannot be copied, and
+	// "there is no linker" is neither a runtime event nor a verdict (0015), so it comes back on
+	// this channel. Quoting it here is what makes `data1.wast`'s :80/:117/:136 read as *linking
+	// is missing* instead of as "the module instantiated without trapping", which was true and
+	// named no component. Charged to StratumExec, the layer that reported it.
+	//
+	// The instance is discarded rather than returned alongside the error, because a partially
+	// initialized memory is exactly the thing a following assert_return must not read: it would
+	// compute a confident answer over bytes that were never copied.
+	if err := in.Deferred(); err != nil {
+		return nil, StratumExec, err
+	}
+	return in, StratumUnset, nil
 }
 
 // invoke is the interpreter's call entry point, and it is where the two value models meet.
@@ -703,6 +740,28 @@ func TestGatedVectors(t *testing.T) {
 		// naming the right feature, and no reader re-derived it. The counts here are the *decoder's*
 		// (`len(Memories)` plus the memory imports, all gates on), which is the index space the
 		// flags bit is actually about. Measure with the instrument, not a regex (grave #129).
+		// # The bare-invoke Kind's 74, which add no module and no feature
+		//
+		// #7's memory work taught the harness to run a top-level `(invoke …)` as a command
+		// rather than to walk past it, so 74 commands that were never scored now reach the run
+		// loop — and every one of them stands after a module the gates had **already** declined.
+		// They add no file, no module and no feature: each of the 74 is spliced into a block
+		// that existed, carrying the *same reason string as its own module's other vectors*,
+		// which is what "no new feature" means concretely rather than as a claim.
+		//
+		// Four modules are the exception and they are the only entries here read from source
+		// rather than inherited: `memory_copy64.wast:4863`, `:4875`, `:4887` and
+		// `memory_init64.wast:203` are followed by an `(invoke "test")` and by nothing else, so
+		// no sibling vector had ever put them in this list. All four declare `(memory i64 …)`.
+		//
+		// **The reason strings were inherited by module line, not retyped**, because the
+		// alternative is 74 hand-copied claims about features and grave #129 is what retyping a
+		// module fact costs. Verified in the direction that can fail silently: the pre-existing
+		// 963 entries were extracted before and after and compared as sets — identical, +74 —
+		// so this edit cannot have quietly changed a reason while adding lines. And the reverse
+		// check below stayed silent throughout, which is the load-bearing negative: it says the
+		// vectors these join are still declined, so the 74 are additions to a live list and not
+		// a list going stale in place.
 		"address0.wast": {
 			105: "multi-memory: 2 memories at :3, so a memarg carries flags bit 6",
 			106: "multi-memory: 2 memories at :3, so a memarg carries flags bit 6",
@@ -1097,39 +1156,50 @@ func TestGatedVectors(t *testing.T) {
 			866: "memory64: (memory i64 1) at :854 — an i64 index type",
 		},
 		"bulk64.wast": {
-			22: "memory64: (memory i64 1) at :7 — an i64 index type",
-			23: "memory64: (memory i64 1) at :7 — an i64 index type",
-			24: "memory64: (memory i64 1) at :7 — an i64 index type",
-			25: "memory64: (memory i64 1) at :7 — an i64 index type",
-			26: "memory64: (memory i64 1) at :7 — an i64 index type",
-			30: "memory64: (memory i64 1) at :7 — an i64 index type",
-			31: "memory64: (memory i64 1) at :7 — an i64 index type",
-			62: "memory64: (memory i64 1 1) at :45 — an i64 index type",
-			63: "memory64: (memory i64 1 1) at :45 — an i64 index type",
-			64: "memory64: (memory i64 1 1) at :45 — an i64 index type",
-			65: "memory64: (memory i64 1 1) at :45 — an i64 index type",
-			66: "memory64: (memory i64 1 1) at :45 — an i64 index type",
-			67: "memory64: (memory i64 1 1) at :45 — an i64 index type",
-			71: "memory64: (memory i64 1 1) at :45 — an i64 index type",
-			72: "memory64: (memory i64 1 1) at :45 — an i64 index type",
-			73: "memory64: (memory i64 1 1) at :45 — an i64 index type",
-			74: "memory64: (memory i64 1 1) at :45 — an i64 index type",
-			75: "memory64: (memory i64 1 1) at :45 — an i64 index type",
-			76: "memory64: (memory i64 1 1) at :45 — an i64 index type",
-			80: "memory64: (memory i64 1 1) at :45 — an i64 index type",
-			81: "memory64: (memory i64 1 1) at :45 — an i64 index type",
-			82: "memory64: (memory i64 1 1) at :45 — an i64 index type",
-			83: "memory64: (memory i64 1 1) at :45 — an i64 index type",
-			84: "memory64: (memory i64 1 1) at :45 — an i64 index type",
-			85: "memory64: (memory i64 1 1) at :45 — an i64 index type",
-			86: "memory64: (memory i64 1 1) at :45 — an i64 index type",
-			92: "memory64: (memory i64 1 1) at :45 — an i64 index type",
-			93: "memory64: (memory i64 1 1) at :45 — an i64 index type",
-			94: "memory64: (memory i64 1 1) at :45 — an i64 index type",
-			95: "memory64: (memory i64 1 1) at :45 — an i64 index type",
-			96: "memory64: (memory i64 1 1) at :45 — an i64 index type",
-			97: "memory64: (memory i64 1 1) at :45 — an i64 index type",
-			98: "memory64: (memory i64 1 1) at :45 — an i64 index type",
+			21:  "memory64: (memory i64 1) at :7 — an i64 index type",
+			22:  "memory64: (memory i64 1) at :7 — an i64 index type",
+			23:  "memory64: (memory i64 1) at :7 — an i64 index type",
+			24:  "memory64: (memory i64 1) at :7 — an i64 index type",
+			25:  "memory64: (memory i64 1) at :7 — an i64 index type",
+			26:  "memory64: (memory i64 1) at :7 — an i64 index type",
+			29:  "memory64: (memory i64 1) at :7 — an i64 index type",
+			30:  "memory64: (memory i64 1) at :7 — an i64 index type",
+			31:  "memory64: (memory i64 1) at :7 — an i64 index type",
+			34:  "memory64: (memory i64 1) at :7 — an i64 index type",
+			37:  "memory64: (memory i64 1) at :7 — an i64 index type",
+			60:  "memory64: (memory i64 1 1) at :45 — an i64 index type",
+			62:  "memory64: (memory i64 1 1) at :45 — an i64 index type",
+			63:  "memory64: (memory i64 1 1) at :45 — an i64 index type",
+			64:  "memory64: (memory i64 1 1) at :45 — an i64 index type",
+			65:  "memory64: (memory i64 1 1) at :45 — an i64 index type",
+			66:  "memory64: (memory i64 1 1) at :45 — an i64 index type",
+			67:  "memory64: (memory i64 1 1) at :45 — an i64 index type",
+			70:  "memory64: (memory i64 1 1) at :45 — an i64 index type",
+			71:  "memory64: (memory i64 1 1) at :45 — an i64 index type",
+			72:  "memory64: (memory i64 1 1) at :45 — an i64 index type",
+			73:  "memory64: (memory i64 1 1) at :45 — an i64 index type",
+			74:  "memory64: (memory i64 1 1) at :45 — an i64 index type",
+			75:  "memory64: (memory i64 1 1) at :45 — an i64 index type",
+			76:  "memory64: (memory i64 1 1) at :45 — an i64 index type",
+			79:  "memory64: (memory i64 1 1) at :45 — an i64 index type",
+			80:  "memory64: (memory i64 1 1) at :45 — an i64 index type",
+			81:  "memory64: (memory i64 1 1) at :45 — an i64 index type",
+			82:  "memory64: (memory i64 1 1) at :45 — an i64 index type",
+			83:  "memory64: (memory i64 1 1) at :45 — an i64 index type",
+			84:  "memory64: (memory i64 1 1) at :45 — an i64 index type",
+			85:  "memory64: (memory i64 1 1) at :45 — an i64 index type",
+			86:  "memory64: (memory i64 1 1) at :45 — an i64 index type",
+			92:  "memory64: (memory i64 1 1) at :45 — an i64 index type",
+			93:  "memory64: (memory i64 1 1) at :45 — an i64 index type",
+			94:  "memory64: (memory i64 1 1) at :45 — an i64 index type",
+			95:  "memory64: (memory i64 1 1) at :45 — an i64 index type",
+			96:  "memory64: (memory i64 1 1) at :45 — an i64 index type",
+			97:  "memory64: (memory i64 1 1) at :45 — an i64 index type",
+			98:  "memory64: (memory i64 1 1) at :45 — an i64 index type",
+			101: "memory64: (memory i64 1 1) at :45 — an i64 index type",
+			102: "memory64: (memory i64 1 1) at :45 — an i64 index type",
+			105: "memory64: (memory i64 1 1) at :45 — an i64 index type",
+			106: "memory64: (memory i64 1 1) at :45 — an i64 index type",
 		},
 		"endianness64.wast": {
 			133: "memory64: (memory i64 1) at :1 — an i64 index type",
@@ -1204,84 +1274,116 @@ func TestGatedVectors(t *testing.T) {
 		"float_memory0.wast": {
 			20: "multi-memory: 6 memories at :5, so a memarg carries flags bit 6",
 			21: "multi-memory: 6 memories at :5, so a memarg carries flags bit 6",
+			22: "multi-memory: 6 memories at :5, so a memarg carries flags bit 6",
 			23: "multi-memory: 6 memories at :5, so a memarg carries flags bit 6",
 			24: "multi-memory: 6 memories at :5, so a memarg carries flags bit 6",
+			25: "multi-memory: 6 memories at :5, so a memarg carries flags bit 6",
 			26: "multi-memory: 6 memories at :5, so a memarg carries flags bit 6",
 			27: "multi-memory: 6 memories at :5, so a memarg carries flags bit 6",
+			28: "multi-memory: 6 memories at :5, so a memarg carries flags bit 6",
 			29: "multi-memory: 6 memories at :5, so a memarg carries flags bit 6",
 			30: "multi-memory: 6 memories at :5, so a memarg carries flags bit 6",
+			31: "multi-memory: 6 memories at :5, so a memarg carries flags bit 6",
 			32: "multi-memory: 6 memories at :5, so a memarg carries flags bit 6",
 			33: "multi-memory: 6 memories at :5, so a memarg carries flags bit 6",
 			46: "multi-memory: 2 memories at :35, so a memarg carries flags bit 6",
 			47: "multi-memory: 2 memories at :35, so a memarg carries flags bit 6",
+			48: "multi-memory: 2 memories at :35, so a memarg carries flags bit 6",
 			49: "multi-memory: 2 memories at :35, so a memarg carries flags bit 6",
 			50: "multi-memory: 2 memories at :35, so a memarg carries flags bit 6",
+			51: "multi-memory: 2 memories at :35, so a memarg carries flags bit 6",
 			52: "multi-memory: 2 memories at :35, so a memarg carries flags bit 6",
 			53: "multi-memory: 2 memories at :35, so a memarg carries flags bit 6",
+			54: "multi-memory: 2 memories at :35, so a memarg carries flags bit 6",
 			55: "multi-memory: 2 memories at :35, so a memarg carries flags bit 6",
 			56: "multi-memory: 2 memories at :35, so a memarg carries flags bit 6",
+			57: "multi-memory: 2 memories at :35, so a memarg carries flags bit 6",
 			58: "multi-memory: 2 memories at :35, so a memarg carries flags bit 6",
 			59: "multi-memory: 2 memories at :35, so a memarg carries flags bit 6",
 		},
 		"float_memory64.wast": {
 			15:  "memory64: (memory i64 (data \"\\00\\00\\a0\\7f\")) at :5 — an i64 index type",
 			16:  "memory64: (memory i64 (data \"\\00\\00\\a0\\7f\")) at :5 — an i64 index type",
+			17:  "memory64: (memory i64 (data \"\\00\\00\\a0\\7f\")) at :5 — an i64 index type",
 			18:  "memory64: (memory i64 (data \"\\00\\00\\a0\\7f\")) at :5 — an i64 index type",
 			19:  "memory64: (memory i64 (data \"\\00\\00\\a0\\7f\")) at :5 — an i64 index type",
+			20:  "memory64: (memory i64 (data \"\\00\\00\\a0\\7f\")) at :5 — an i64 index type",
 			21:  "memory64: (memory i64 (data \"\\00\\00\\a0\\7f\")) at :5 — an i64 index type",
 			22:  "memory64: (memory i64 (data \"\\00\\00\\a0\\7f\")) at :5 — an i64 index type",
+			23:  "memory64: (memory i64 (data \"\\00\\00\\a0\\7f\")) at :5 — an i64 index type",
 			24:  "memory64: (memory i64 (data \"\\00\\00\\a0\\7f\")) at :5 — an i64 index type",
 			25:  "memory64: (memory i64 (data \"\\00\\00\\a0\\7f\")) at :5 — an i64 index type",
+			26:  "memory64: (memory i64 (data \"\\00\\00\\a0\\7f\")) at :5 — an i64 index type",
 			27:  "memory64: (memory i64 (data \"\\00\\00\\a0\\7f\")) at :5 — an i64 index type",
 			28:  "memory64: (memory i64 (data \"\\00\\00\\a0\\7f\")) at :5 — an i64 index type",
 			40:  "memory64: (memory i64 (data …)) at :30 — an i64 index type",
 			41:  "memory64: (memory i64 (data …)) at :30 — an i64 index type",
+			42:  "memory64: (memory i64 (data …)) at :30 — an i64 index type",
 			43:  "memory64: (memory i64 (data …)) at :30 — an i64 index type",
 			44:  "memory64: (memory i64 (data …)) at :30 — an i64 index type",
+			45:  "memory64: (memory i64 (data …)) at :30 — an i64 index type",
 			46:  "memory64: (memory i64 (data …)) at :30 — an i64 index type",
 			47:  "memory64: (memory i64 (data …)) at :30 — an i64 index type",
+			48:  "memory64: (memory i64 (data …)) at :30 — an i64 index type",
 			49:  "memory64: (memory i64 (data …)) at :30 — an i64 index type",
 			50:  "memory64: (memory i64 (data …)) at :30 — an i64 index type",
+			51:  "memory64: (memory i64 (data …)) at :30 — an i64 index type",
 			52:  "memory64: (memory i64 (data …)) at :30 — an i64 index type",
 			53:  "memory64: (memory i64 (data …)) at :30 — an i64 index type",
 			67:  "memory64: (memory i64 (data …)) at :57 — an i64 index type",
 			68:  "memory64: (memory i64 (data …)) at :57 — an i64 index type",
+			69:  "memory64: (memory i64 (data …)) at :57 — an i64 index type",
 			70:  "memory64: (memory i64 (data …)) at :57 — an i64 index type",
 			71:  "memory64: (memory i64 (data …)) at :57 — an i64 index type",
+			72:  "memory64: (memory i64 (data …)) at :57 — an i64 index type",
 			73:  "memory64: (memory i64 (data …)) at :57 — an i64 index type",
 			74:  "memory64: (memory i64 (data …)) at :57 — an i64 index type",
+			75:  "memory64: (memory i64 (data …)) at :57 — an i64 index type",
 			76:  "memory64: (memory i64 (data …)) at :57 — an i64 index type",
 			77:  "memory64: (memory i64 (data …)) at :57 — an i64 index type",
+			78:  "memory64: (memory i64 (data …)) at :57 — an i64 index type",
 			79:  "memory64: (memory i64 (data …)) at :57 — an i64 index type",
 			80:  "memory64: (memory i64 (data …)) at :57 — an i64 index type",
 			92:  "memory64: (memory i64 (data …)) at :82 — an i64 index type",
 			93:  "memory64: (memory i64 (data …)) at :82 — an i64 index type",
+			94:  "memory64: (memory i64 (data …)) at :82 — an i64 index type",
 			95:  "memory64: (memory i64 (data …)) at :82 — an i64 index type",
 			96:  "memory64: (memory i64 (data …)) at :82 — an i64 index type",
+			97:  "memory64: (memory i64 (data …)) at :82 — an i64 index type",
 			98:  "memory64: (memory i64 (data …)) at :82 — an i64 index type",
 			99:  "memory64: (memory i64 (data …)) at :82 — an i64 index type",
+			100: "memory64: (memory i64 (data …)) at :82 — an i64 index type",
 			101: "memory64: (memory i64 (data …)) at :82 — an i64 index type",
 			102: "memory64: (memory i64 (data …)) at :82 — an i64 index type",
+			103: "memory64: (memory i64 (data …)) at :82 — an i64 index type",
 			104: "memory64: (memory i64 (data …)) at :82 — an i64 index type",
 			105: "memory64: (memory i64 (data …)) at :82 — an i64 index type",
 			119: "memory64: (memory i64 (data \"\\01\\00\\d0\\7f\")) at :109 — an i64 index type",
 			120: "memory64: (memory i64 (data \"\\01\\00\\d0\\7f\")) at :109 — an i64 index type",
+			121: "memory64: (memory i64 (data \"\\01\\00\\d0\\7f\")) at :109 — an i64 index type",
 			122: "memory64: (memory i64 (data \"\\01\\00\\d0\\7f\")) at :109 — an i64 index type",
 			123: "memory64: (memory i64 (data \"\\01\\00\\d0\\7f\")) at :109 — an i64 index type",
+			124: "memory64: (memory i64 (data \"\\01\\00\\d0\\7f\")) at :109 — an i64 index type",
 			125: "memory64: (memory i64 (data \"\\01\\00\\d0\\7f\")) at :109 — an i64 index type",
 			126: "memory64: (memory i64 (data \"\\01\\00\\d0\\7f\")) at :109 — an i64 index type",
+			127: "memory64: (memory i64 (data \"\\01\\00\\d0\\7f\")) at :109 — an i64 index type",
 			128: "memory64: (memory i64 (data \"\\01\\00\\d0\\7f\")) at :109 — an i64 index type",
 			129: "memory64: (memory i64 (data \"\\01\\00\\d0\\7f\")) at :109 — an i64 index type",
+			130: "memory64: (memory i64 (data \"\\01\\00\\d0\\7f\")) at :109 — an i64 index type",
 			131: "memory64: (memory i64 (data \"\\01\\00\\d0\\7f\")) at :109 — an i64 index type",
 			132: "memory64: (memory i64 (data \"\\01\\00\\d0\\7f\")) at :109 — an i64 index type",
 			144: "memory64: (memory i64 (data …)) at :134 — an i64 index type",
 			145: "memory64: (memory i64 (data …)) at :134 — an i64 index type",
+			146: "memory64: (memory i64 (data …)) at :134 — an i64 index type",
 			147: "memory64: (memory i64 (data …)) at :134 — an i64 index type",
 			148: "memory64: (memory i64 (data …)) at :134 — an i64 index type",
+			149: "memory64: (memory i64 (data …)) at :134 — an i64 index type",
 			150: "memory64: (memory i64 (data …)) at :134 — an i64 index type",
 			151: "memory64: (memory i64 (data …)) at :134 — an i64 index type",
+			152: "memory64: (memory i64 (data …)) at :134 — an i64 index type",
 			153: "memory64: (memory i64 (data …)) at :134 — an i64 index type",
 			154: "memory64: (memory i64 (data …)) at :134 — an i64 index type",
+			155: "memory64: (memory i64 (data …)) at :134 — an i64 index type",
 			156: "memory64: (memory i64 (data …)) at :134 — an i64 index type",
 			157: "memory64: (memory i64 (data …)) at :134 — an i64 index type",
 		},
@@ -1321,18 +1423,21 @@ func TestGatedVectors(t *testing.T) {
 			16: "memory64: (memory i64 (data \"x\")) at :15 — an i64 index type",
 		},
 		"memory_copy0.wast": {
+			19: "multi-memory: 4 memories at :2, so a memarg carries flags bit 6",
 			21: "multi-memory: 4 memories at :2, so a memarg carries flags bit 6",
 			22: "multi-memory: 4 memories at :2, so a memarg carries flags bit 6",
 			23: "multi-memory: 4 memories at :2, so a memarg carries flags bit 6",
 			24: "multi-memory: 4 memories at :2, so a memarg carries flags bit 6",
 			25: "multi-memory: 4 memories at :2, so a memarg carries flags bit 6",
 			26: "multi-memory: 4 memories at :2, so a memarg carries flags bit 6",
+			29: "multi-memory: 4 memories at :2, so a memarg carries flags bit 6",
 			30: "multi-memory: 4 memories at :2, so a memarg carries flags bit 6",
 			31: "multi-memory: 4 memories at :2, so a memarg carries flags bit 6",
 			32: "multi-memory: 4 memories at :2, so a memarg carries flags bit 6",
 			33: "multi-memory: 4 memories at :2, so a memarg carries flags bit 6",
 			34: "multi-memory: 4 memories at :2, so a memarg carries flags bit 6",
 			35: "multi-memory: 4 memories at :2, so a memarg carries flags bit 6",
+			38: "multi-memory: 4 memories at :2, so a memarg carries flags bit 6",
 			39: "multi-memory: 4 memories at :2, so a memarg carries flags bit 6",
 			40: "multi-memory: 4 memories at :2, so a memarg carries flags bit 6",
 			41: "multi-memory: 4 memories at :2, so a memarg carries flags bit 6",
@@ -1340,259 +1445,278 @@ func TestGatedVectors(t *testing.T) {
 			43: "multi-memory: 4 memories at :2, so a memarg carries flags bit 6",
 			44: "multi-memory: 4 memories at :2, so a memarg carries flags bit 6",
 			45: "multi-memory: 4 memories at :2, so a memarg carries flags bit 6",
+			48: "multi-memory: 4 memories at :2, so a memarg carries flags bit 6",
+			49: "multi-memory: 4 memories at :2, so a memarg carries flags bit 6",
+			52: "multi-memory: 4 memories at :2, so a memarg carries flags bit 6",
+			53: "multi-memory: 4 memories at :2, so a memarg carries flags bit 6",
 		},
 		"memory_copy64.wast": {
-			17:  "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
-			18:  "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
-			19:  "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
-			20:  "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
-			21:  "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
-			22:  "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
-			23:  "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
-			24:  "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
-			25:  "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
-			26:  "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
-			27:  "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
-			28:  "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
-			29:  "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
-			30:  "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
-			31:  "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
-			32:  "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
-			33:  "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
-			34:  "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
-			35:  "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
-			36:  "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
-			37:  "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
-			38:  "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
-			39:  "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
-			40:  "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
-			41:  "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
-			42:  "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
-			43:  "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
-			44:  "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
-			45:  "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
-			46:  "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
-			59:  "memory64: (memory (export \"memory0\") i64 1 1) at :48 — an i64 index type",
-			60:  "memory64: (memory (export \"memory0\") i64 1 1) at :48 — an i64 index type",
-			61:  "memory64: (memory (export \"memory0\") i64 1 1) at :48 — an i64 index type",
-			62:  "memory64: (memory (export \"memory0\") i64 1 1) at :48 — an i64 index type",
-			63:  "memory64: (memory (export \"memory0\") i64 1 1) at :48 — an i64 index type",
-			64:  "memory64: (memory (export \"memory0\") i64 1 1) at :48 — an i64 index type",
-			65:  "memory64: (memory (export \"memory0\") i64 1 1) at :48 — an i64 index type",
-			66:  "memory64: (memory (export \"memory0\") i64 1 1) at :48 — an i64 index type",
-			67:  "memory64: (memory (export \"memory0\") i64 1 1) at :48 — an i64 index type",
-			68:  "memory64: (memory (export \"memory0\") i64 1 1) at :48 — an i64 index type",
-			69:  "memory64: (memory (export \"memory0\") i64 1 1) at :48 — an i64 index type",
-			70:  "memory64: (memory (export \"memory0\") i64 1 1) at :48 — an i64 index type",
-			71:  "memory64: (memory (export \"memory0\") i64 1 1) at :48 — an i64 index type",
-			72:  "memory64: (memory (export \"memory0\") i64 1 1) at :48 — an i64 index type",
-			73:  "memory64: (memory (export \"memory0\") i64 1 1) at :48 — an i64 index type",
-			74:  "memory64: (memory (export \"memory0\") i64 1 1) at :48 — an i64 index type",
-			75:  "memory64: (memory (export \"memory0\") i64 1 1) at :48 — an i64 index type",
-			76:  "memory64: (memory (export \"memory0\") i64 1 1) at :48 — an i64 index type",
-			77:  "memory64: (memory (export \"memory0\") i64 1 1) at :48 — an i64 index type",
-			78:  "memory64: (memory (export \"memory0\") i64 1 1) at :48 — an i64 index type",
-			79:  "memory64: (memory (export \"memory0\") i64 1 1) at :48 — an i64 index type",
-			80:  "memory64: (memory (export \"memory0\") i64 1 1) at :48 — an i64 index type",
-			81:  "memory64: (memory (export \"memory0\") i64 1 1) at :48 — an i64 index type",
-			82:  "memory64: (memory (export \"memory0\") i64 1 1) at :48 — an i64 index type",
-			83:  "memory64: (memory (export \"memory0\") i64 1 1) at :48 — an i64 index type",
-			84:  "memory64: (memory (export \"memory0\") i64 1 1) at :48 — an i64 index type",
-			85:  "memory64: (memory (export \"memory0\") i64 1 1) at :48 — an i64 index type",
-			86:  "memory64: (memory (export \"memory0\") i64 1 1) at :48 — an i64 index type",
-			87:  "memory64: (memory (export \"memory0\") i64 1 1) at :48 — an i64 index type",
-			88:  "memory64: (memory (export \"memory0\") i64 1 1) at :48 — an i64 index type",
-			101: "memory64: (memory (export \"memory0\") i64 1 1) at :90 — an i64 index type",
-			102: "memory64: (memory (export \"memory0\") i64 1 1) at :90 — an i64 index type",
-			103: "memory64: (memory (export \"memory0\") i64 1 1) at :90 — an i64 index type",
-			104: "memory64: (memory (export \"memory0\") i64 1 1) at :90 — an i64 index type",
-			105: "memory64: (memory (export \"memory0\") i64 1 1) at :90 — an i64 index type",
-			106: "memory64: (memory (export \"memory0\") i64 1 1) at :90 — an i64 index type",
-			107: "memory64: (memory (export \"memory0\") i64 1 1) at :90 — an i64 index type",
-			108: "memory64: (memory (export \"memory0\") i64 1 1) at :90 — an i64 index type",
-			109: "memory64: (memory (export \"memory0\") i64 1 1) at :90 — an i64 index type",
-			110: "memory64: (memory (export \"memory0\") i64 1 1) at :90 — an i64 index type",
-			111: "memory64: (memory (export \"memory0\") i64 1 1) at :90 — an i64 index type",
-			112: "memory64: (memory (export \"memory0\") i64 1 1) at :90 — an i64 index type",
-			113: "memory64: (memory (export \"memory0\") i64 1 1) at :90 — an i64 index type",
-			114: "memory64: (memory (export \"memory0\") i64 1 1) at :90 — an i64 index type",
-			115: "memory64: (memory (export \"memory0\") i64 1 1) at :90 — an i64 index type",
-			116: "memory64: (memory (export \"memory0\") i64 1 1) at :90 — an i64 index type",
-			117: "memory64: (memory (export \"memory0\") i64 1 1) at :90 — an i64 index type",
-			118: "memory64: (memory (export \"memory0\") i64 1 1) at :90 — an i64 index type",
-			119: "memory64: (memory (export \"memory0\") i64 1 1) at :90 — an i64 index type",
-			120: "memory64: (memory (export \"memory0\") i64 1 1) at :90 — an i64 index type",
-			121: "memory64: (memory (export \"memory0\") i64 1 1) at :90 — an i64 index type",
-			122: "memory64: (memory (export \"memory0\") i64 1 1) at :90 — an i64 index type",
-			123: "memory64: (memory (export \"memory0\") i64 1 1) at :90 — an i64 index type",
-			124: "memory64: (memory (export \"memory0\") i64 1 1) at :90 — an i64 index type",
-			125: "memory64: (memory (export \"memory0\") i64 1 1) at :90 — an i64 index type",
-			126: "memory64: (memory (export \"memory0\") i64 1 1) at :90 — an i64 index type",
-			127: "memory64: (memory (export \"memory0\") i64 1 1) at :90 — an i64 index type",
-			128: "memory64: (memory (export \"memory0\") i64 1 1) at :90 — an i64 index type",
-			129: "memory64: (memory (export \"memory0\") i64 1 1) at :90 — an i64 index type",
-			130: "memory64: (memory (export \"memory0\") i64 1 1) at :90 — an i64 index type",
-			143: "memory64: (memory (export \"memory0\") i64 1 1) at :132 — an i64 index type",
-			144: "memory64: (memory (export \"memory0\") i64 1 1) at :132 — an i64 index type",
-			145: "memory64: (memory (export \"memory0\") i64 1 1) at :132 — an i64 index type",
-			146: "memory64: (memory (export \"memory0\") i64 1 1) at :132 — an i64 index type",
-			147: "memory64: (memory (export \"memory0\") i64 1 1) at :132 — an i64 index type",
-			148: "memory64: (memory (export \"memory0\") i64 1 1) at :132 — an i64 index type",
-			149: "memory64: (memory (export \"memory0\") i64 1 1) at :132 — an i64 index type",
-			150: "memory64: (memory (export \"memory0\") i64 1 1) at :132 — an i64 index type",
-			151: "memory64: (memory (export \"memory0\") i64 1 1) at :132 — an i64 index type",
-			152: "memory64: (memory (export \"memory0\") i64 1 1) at :132 — an i64 index type",
-			153: "memory64: (memory (export \"memory0\") i64 1 1) at :132 — an i64 index type",
-			154: "memory64: (memory (export \"memory0\") i64 1 1) at :132 — an i64 index type",
-			155: "memory64: (memory (export \"memory0\") i64 1 1) at :132 — an i64 index type",
-			156: "memory64: (memory (export \"memory0\") i64 1 1) at :132 — an i64 index type",
-			157: "memory64: (memory (export \"memory0\") i64 1 1) at :132 — an i64 index type",
-			158: "memory64: (memory (export \"memory0\") i64 1 1) at :132 — an i64 index type",
-			159: "memory64: (memory (export \"memory0\") i64 1 1) at :132 — an i64 index type",
-			160: "memory64: (memory (export \"memory0\") i64 1 1) at :132 — an i64 index type",
-			161: "memory64: (memory (export \"memory0\") i64 1 1) at :132 — an i64 index type",
-			162: "memory64: (memory (export \"memory0\") i64 1 1) at :132 — an i64 index type",
-			163: "memory64: (memory (export \"memory0\") i64 1 1) at :132 — an i64 index type",
-			164: "memory64: (memory (export \"memory0\") i64 1 1) at :132 — an i64 index type",
-			165: "memory64: (memory (export \"memory0\") i64 1 1) at :132 — an i64 index type",
-			166: "memory64: (memory (export \"memory0\") i64 1 1) at :132 — an i64 index type",
-			167: "memory64: (memory (export \"memory0\") i64 1 1) at :132 — an i64 index type",
-			168: "memory64: (memory (export \"memory0\") i64 1 1) at :132 — an i64 index type",
-			169: "memory64: (memory (export \"memory0\") i64 1 1) at :132 — an i64 index type",
-			170: "memory64: (memory (export \"memory0\") i64 1 1) at :132 — an i64 index type",
-			171: "memory64: (memory (export \"memory0\") i64 1 1) at :132 — an i64 index type",
-			172: "memory64: (memory (export \"memory0\") i64 1 1) at :132 — an i64 index type",
-			185: "memory64: (memory (export \"memory0\") i64 1 1) at :174 — an i64 index type",
-			186: "memory64: (memory (export \"memory0\") i64 1 1) at :174 — an i64 index type",
-			187: "memory64: (memory (export \"memory0\") i64 1 1) at :174 — an i64 index type",
-			188: "memory64: (memory (export \"memory0\") i64 1 1) at :174 — an i64 index type",
-			189: "memory64: (memory (export \"memory0\") i64 1 1) at :174 — an i64 index type",
-			190: "memory64: (memory (export \"memory0\") i64 1 1) at :174 — an i64 index type",
-			191: "memory64: (memory (export \"memory0\") i64 1 1) at :174 — an i64 index type",
-			192: "memory64: (memory (export \"memory0\") i64 1 1) at :174 — an i64 index type",
-			193: "memory64: (memory (export \"memory0\") i64 1 1) at :174 — an i64 index type",
-			194: "memory64: (memory (export \"memory0\") i64 1 1) at :174 — an i64 index type",
-			195: "memory64: (memory (export \"memory0\") i64 1 1) at :174 — an i64 index type",
-			196: "memory64: (memory (export \"memory0\") i64 1 1) at :174 — an i64 index type",
-			197: "memory64: (memory (export \"memory0\") i64 1 1) at :174 — an i64 index type",
-			198: "memory64: (memory (export \"memory0\") i64 1 1) at :174 — an i64 index type",
-			199: "memory64: (memory (export \"memory0\") i64 1 1) at :174 — an i64 index type",
-			200: "memory64: (memory (export \"memory0\") i64 1 1) at :174 — an i64 index type",
-			201: "memory64: (memory (export \"memory0\") i64 1 1) at :174 — an i64 index type",
-			202: "memory64: (memory (export \"memory0\") i64 1 1) at :174 — an i64 index type",
-			203: "memory64: (memory (export \"memory0\") i64 1 1) at :174 — an i64 index type",
-			204: "memory64: (memory (export \"memory0\") i64 1 1) at :174 — an i64 index type",
-			205: "memory64: (memory (export \"memory0\") i64 1 1) at :174 — an i64 index type",
-			206: "memory64: (memory (export \"memory0\") i64 1 1) at :174 — an i64 index type",
-			207: "memory64: (memory (export \"memory0\") i64 1 1) at :174 — an i64 index type",
-			208: "memory64: (memory (export \"memory0\") i64 1 1) at :174 — an i64 index type",
-			209: "memory64: (memory (export \"memory0\") i64 1 1) at :174 — an i64 index type",
-			210: "memory64: (memory (export \"memory0\") i64 1 1) at :174 — an i64 index type",
-			211: "memory64: (memory (export \"memory0\") i64 1 1) at :174 — an i64 index type",
-			212: "memory64: (memory (export \"memory0\") i64 1 1) at :174 — an i64 index type",
-			213: "memory64: (memory (export \"memory0\") i64 1 1) at :174 — an i64 index type",
-			214: "memory64: (memory (export \"memory0\") i64 1 1) at :174 — an i64 index type",
-			227: "memory64: (memory (export \"memory0\") i64 1 1) at :216 — an i64 index type",
-			228: "memory64: (memory (export \"memory0\") i64 1 1) at :216 — an i64 index type",
-			229: "memory64: (memory (export \"memory0\") i64 1 1) at :216 — an i64 index type",
-			230: "memory64: (memory (export \"memory0\") i64 1 1) at :216 — an i64 index type",
-			231: "memory64: (memory (export \"memory0\") i64 1 1) at :216 — an i64 index type",
-			232: "memory64: (memory (export \"memory0\") i64 1 1) at :216 — an i64 index type",
-			233: "memory64: (memory (export \"memory0\") i64 1 1) at :216 — an i64 index type",
-			234: "memory64: (memory (export \"memory0\") i64 1 1) at :216 — an i64 index type",
-			235: "memory64: (memory (export \"memory0\") i64 1 1) at :216 — an i64 index type",
-			236: "memory64: (memory (export \"memory0\") i64 1 1) at :216 — an i64 index type",
-			237: "memory64: (memory (export \"memory0\") i64 1 1) at :216 — an i64 index type",
-			238: "memory64: (memory (export \"memory0\") i64 1 1) at :216 — an i64 index type",
-			239: "memory64: (memory (export \"memory0\") i64 1 1) at :216 — an i64 index type",
-			240: "memory64: (memory (export \"memory0\") i64 1 1) at :216 — an i64 index type",
-			241: "memory64: (memory (export \"memory0\") i64 1 1) at :216 — an i64 index type",
-			242: "memory64: (memory (export \"memory0\") i64 1 1) at :216 — an i64 index type",
-			243: "memory64: (memory (export \"memory0\") i64 1 1) at :216 — an i64 index type",
-			244: "memory64: (memory (export \"memory0\") i64 1 1) at :216 — an i64 index type",
-			245: "memory64: (memory (export \"memory0\") i64 1 1) at :216 — an i64 index type",
-			246: "memory64: (memory (export \"memory0\") i64 1 1) at :216 — an i64 index type",
-			247: "memory64: (memory (export \"memory0\") i64 1 1) at :216 — an i64 index type",
-			248: "memory64: (memory (export \"memory0\") i64 1 1) at :216 — an i64 index type",
-			249: "memory64: (memory (export \"memory0\") i64 1 1) at :216 — an i64 index type",
-			250: "memory64: (memory (export \"memory0\") i64 1 1) at :216 — an i64 index type",
-			251: "memory64: (memory (export \"memory0\") i64 1 1) at :216 — an i64 index type",
-			252: "memory64: (memory (export \"memory0\") i64 1 1) at :216 — an i64 index type",
-			253: "memory64: (memory (export \"memory0\") i64 1 1) at :216 — an i64 index type",
-			254: "memory64: (memory (export \"memory0\") i64 1 1) at :216 — an i64 index type",
-			255: "memory64: (memory (export \"memory0\") i64 1 1) at :216 — an i64 index type",
-			256: "memory64: (memory (export \"memory0\") i64 1 1) at :216 — an i64 index type",
-			269: "memory64: (memory (export \"memory0\") i64 1 1) at :258 — an i64 index type",
-			270: "memory64: (memory (export \"memory0\") i64 1 1) at :258 — an i64 index type",
-			271: "memory64: (memory (export \"memory0\") i64 1 1) at :258 — an i64 index type",
-			272: "memory64: (memory (export \"memory0\") i64 1 1) at :258 — an i64 index type",
-			273: "memory64: (memory (export \"memory0\") i64 1 1) at :258 — an i64 index type",
-			274: "memory64: (memory (export \"memory0\") i64 1 1) at :258 — an i64 index type",
-			275: "memory64: (memory (export \"memory0\") i64 1 1) at :258 — an i64 index type",
-			276: "memory64: (memory (export \"memory0\") i64 1 1) at :258 — an i64 index type",
-			277: "memory64: (memory (export \"memory0\") i64 1 1) at :258 — an i64 index type",
-			278: "memory64: (memory (export \"memory0\") i64 1 1) at :258 — an i64 index type",
-			279: "memory64: (memory (export \"memory0\") i64 1 1) at :258 — an i64 index type",
-			280: "memory64: (memory (export \"memory0\") i64 1 1) at :258 — an i64 index type",
-			281: "memory64: (memory (export \"memory0\") i64 1 1) at :258 — an i64 index type",
-			282: "memory64: (memory (export \"memory0\") i64 1 1) at :258 — an i64 index type",
-			283: "memory64: (memory (export \"memory0\") i64 1 1) at :258 — an i64 index type",
-			284: "memory64: (memory (export \"memory0\") i64 1 1) at :258 — an i64 index type",
-			285: "memory64: (memory (export \"memory0\") i64 1 1) at :258 — an i64 index type",
-			286: "memory64: (memory (export \"memory0\") i64 1 1) at :258 — an i64 index type",
-			287: "memory64: (memory (export \"memory0\") i64 1 1) at :258 — an i64 index type",
-			288: "memory64: (memory (export \"memory0\") i64 1 1) at :258 — an i64 index type",
-			289: "memory64: (memory (export \"memory0\") i64 1 1) at :258 — an i64 index type",
-			290: "memory64: (memory (export \"memory0\") i64 1 1) at :258 — an i64 index type",
-			291: "memory64: (memory (export \"memory0\") i64 1 1) at :258 — an i64 index type",
-			292: "memory64: (memory (export \"memory0\") i64 1 1) at :258 — an i64 index type",
-			293: "memory64: (memory (export \"memory0\") i64 1 1) at :258 — an i64 index type",
-			294: "memory64: (memory (export \"memory0\") i64 1 1) at :258 — an i64 index type",
-			295: "memory64: (memory (export \"memory0\") i64 1 1) at :258 — an i64 index type",
-			296: "memory64: (memory (export \"memory0\") i64 1 1) at :258 — an i64 index type",
-			297: "memory64: (memory (export \"memory0\") i64 1 1) at :258 — an i64 index type",
-			298: "memory64: (memory (export \"memory0\") i64 1 1) at :258 — an i64 index type",
-			311: "memory64: (memory (export \"memory0\") i64 1 1) at :300 — an i64 index type",
-			312: "memory64: (memory (export \"memory0\") i64 1 1) at :300 — an i64 index type",
-			313: "memory64: (memory (export \"memory0\") i64 1 1) at :300 — an i64 index type",
-			314: "memory64: (memory (export \"memory0\") i64 1 1) at :300 — an i64 index type",
-			315: "memory64: (memory (export \"memory0\") i64 1 1) at :300 — an i64 index type",
-			316: "memory64: (memory (export \"memory0\") i64 1 1) at :300 — an i64 index type",
-			317: "memory64: (memory (export \"memory0\") i64 1 1) at :300 — an i64 index type",
-			318: "memory64: (memory (export \"memory0\") i64 1 1) at :300 — an i64 index type",
-			319: "memory64: (memory (export \"memory0\") i64 1 1) at :300 — an i64 index type",
-			320: "memory64: (memory (export \"memory0\") i64 1 1) at :300 — an i64 index type",
-			321: "memory64: (memory (export \"memory0\") i64 1 1) at :300 — an i64 index type",
-			322: "memory64: (memory (export \"memory0\") i64 1 1) at :300 — an i64 index type",
-			323: "memory64: (memory (export \"memory0\") i64 1 1) at :300 — an i64 index type",
-			324: "memory64: (memory (export \"memory0\") i64 1 1) at :300 — an i64 index type",
-			325: "memory64: (memory (export \"memory0\") i64 1 1) at :300 — an i64 index type",
-			326: "memory64: (memory (export \"memory0\") i64 1 1) at :300 — an i64 index type",
-			327: "memory64: (memory (export \"memory0\") i64 1 1) at :300 — an i64 index type",
-			328: "memory64: (memory (export \"memory0\") i64 1 1) at :300 — an i64 index type",
-			329: "memory64: (memory (export \"memory0\") i64 1 1) at :300 — an i64 index type",
-			330: "memory64: (memory (export \"memory0\") i64 1 1) at :300 — an i64 index type",
-			331: "memory64: (memory (export \"memory0\") i64 1 1) at :300 — an i64 index type",
-			332: "memory64: (memory (export \"memory0\") i64 1 1) at :300 — an i64 index type",
-			333: "memory64: (memory (export \"memory0\") i64 1 1) at :300 — an i64 index type",
-			334: "memory64: (memory (export \"memory0\") i64 1 1) at :300 — an i64 index type",
-			335: "memory64: (memory (export \"memory0\") i64 1 1) at :300 — an i64 index type",
-			336: "memory64: (memory (export \"memory0\") i64 1 1) at :300 — an i64 index type",
-			337: "memory64: (memory (export \"memory0\") i64 1 1) at :300 — an i64 index type",
-			338: "memory64: (memory (export \"memory0\") i64 1 1) at :300 — an i64 index type",
-			339: "memory64: (memory (export \"memory0\") i64 1 1) at :300 — an i64 index type",
-			340: "memory64: (memory (export \"memory0\") i64 1 1) at :300 — an i64 index type",
+			15:   "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
+			17:   "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
+			18:   "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
+			19:   "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
+			20:   "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
+			21:   "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
+			22:   "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
+			23:   "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
+			24:   "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
+			25:   "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
+			26:   "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
+			27:   "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
+			28:   "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
+			29:   "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
+			30:   "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
+			31:   "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
+			32:   "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
+			33:   "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
+			34:   "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
+			35:   "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
+			36:   "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
+			37:   "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
+			38:   "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
+			39:   "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
+			40:   "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
+			41:   "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
+			42:   "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
+			43:   "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
+			44:   "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
+			45:   "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
+			46:   "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
+			57:   "memory64: (memory (export \"memory0\") i64 1 1) at :48 — an i64 index type",
+			59:   "memory64: (memory (export \"memory0\") i64 1 1) at :48 — an i64 index type",
+			60:   "memory64: (memory (export \"memory0\") i64 1 1) at :48 — an i64 index type",
+			61:   "memory64: (memory (export \"memory0\") i64 1 1) at :48 — an i64 index type",
+			62:   "memory64: (memory (export \"memory0\") i64 1 1) at :48 — an i64 index type",
+			63:   "memory64: (memory (export \"memory0\") i64 1 1) at :48 — an i64 index type",
+			64:   "memory64: (memory (export \"memory0\") i64 1 1) at :48 — an i64 index type",
+			65:   "memory64: (memory (export \"memory0\") i64 1 1) at :48 — an i64 index type",
+			66:   "memory64: (memory (export \"memory0\") i64 1 1) at :48 — an i64 index type",
+			67:   "memory64: (memory (export \"memory0\") i64 1 1) at :48 — an i64 index type",
+			68:   "memory64: (memory (export \"memory0\") i64 1 1) at :48 — an i64 index type",
+			69:   "memory64: (memory (export \"memory0\") i64 1 1) at :48 — an i64 index type",
+			70:   "memory64: (memory (export \"memory0\") i64 1 1) at :48 — an i64 index type",
+			71:   "memory64: (memory (export \"memory0\") i64 1 1) at :48 — an i64 index type",
+			72:   "memory64: (memory (export \"memory0\") i64 1 1) at :48 — an i64 index type",
+			73:   "memory64: (memory (export \"memory0\") i64 1 1) at :48 — an i64 index type",
+			74:   "memory64: (memory (export \"memory0\") i64 1 1) at :48 — an i64 index type",
+			75:   "memory64: (memory (export \"memory0\") i64 1 1) at :48 — an i64 index type",
+			76:   "memory64: (memory (export \"memory0\") i64 1 1) at :48 — an i64 index type",
+			77:   "memory64: (memory (export \"memory0\") i64 1 1) at :48 — an i64 index type",
+			78:   "memory64: (memory (export \"memory0\") i64 1 1) at :48 — an i64 index type",
+			79:   "memory64: (memory (export \"memory0\") i64 1 1) at :48 — an i64 index type",
+			80:   "memory64: (memory (export \"memory0\") i64 1 1) at :48 — an i64 index type",
+			81:   "memory64: (memory (export \"memory0\") i64 1 1) at :48 — an i64 index type",
+			82:   "memory64: (memory (export \"memory0\") i64 1 1) at :48 — an i64 index type",
+			83:   "memory64: (memory (export \"memory0\") i64 1 1) at :48 — an i64 index type",
+			84:   "memory64: (memory (export \"memory0\") i64 1 1) at :48 — an i64 index type",
+			85:   "memory64: (memory (export \"memory0\") i64 1 1) at :48 — an i64 index type",
+			86:   "memory64: (memory (export \"memory0\") i64 1 1) at :48 — an i64 index type",
+			87:   "memory64: (memory (export \"memory0\") i64 1 1) at :48 — an i64 index type",
+			88:   "memory64: (memory (export \"memory0\") i64 1 1) at :48 — an i64 index type",
+			99:   "memory64: (memory (export \"memory0\") i64 1 1) at :90 — an i64 index type",
+			101:  "memory64: (memory (export \"memory0\") i64 1 1) at :90 — an i64 index type",
+			102:  "memory64: (memory (export \"memory0\") i64 1 1) at :90 — an i64 index type",
+			103:  "memory64: (memory (export \"memory0\") i64 1 1) at :90 — an i64 index type",
+			104:  "memory64: (memory (export \"memory0\") i64 1 1) at :90 — an i64 index type",
+			105:  "memory64: (memory (export \"memory0\") i64 1 1) at :90 — an i64 index type",
+			106:  "memory64: (memory (export \"memory0\") i64 1 1) at :90 — an i64 index type",
+			107:  "memory64: (memory (export \"memory0\") i64 1 1) at :90 — an i64 index type",
+			108:  "memory64: (memory (export \"memory0\") i64 1 1) at :90 — an i64 index type",
+			109:  "memory64: (memory (export \"memory0\") i64 1 1) at :90 — an i64 index type",
+			110:  "memory64: (memory (export \"memory0\") i64 1 1) at :90 — an i64 index type",
+			111:  "memory64: (memory (export \"memory0\") i64 1 1) at :90 — an i64 index type",
+			112:  "memory64: (memory (export \"memory0\") i64 1 1) at :90 — an i64 index type",
+			113:  "memory64: (memory (export \"memory0\") i64 1 1) at :90 — an i64 index type",
+			114:  "memory64: (memory (export \"memory0\") i64 1 1) at :90 — an i64 index type",
+			115:  "memory64: (memory (export \"memory0\") i64 1 1) at :90 — an i64 index type",
+			116:  "memory64: (memory (export \"memory0\") i64 1 1) at :90 — an i64 index type",
+			117:  "memory64: (memory (export \"memory0\") i64 1 1) at :90 — an i64 index type",
+			118:  "memory64: (memory (export \"memory0\") i64 1 1) at :90 — an i64 index type",
+			119:  "memory64: (memory (export \"memory0\") i64 1 1) at :90 — an i64 index type",
+			120:  "memory64: (memory (export \"memory0\") i64 1 1) at :90 — an i64 index type",
+			121:  "memory64: (memory (export \"memory0\") i64 1 1) at :90 — an i64 index type",
+			122:  "memory64: (memory (export \"memory0\") i64 1 1) at :90 — an i64 index type",
+			123:  "memory64: (memory (export \"memory0\") i64 1 1) at :90 — an i64 index type",
+			124:  "memory64: (memory (export \"memory0\") i64 1 1) at :90 — an i64 index type",
+			125:  "memory64: (memory (export \"memory0\") i64 1 1) at :90 — an i64 index type",
+			126:  "memory64: (memory (export \"memory0\") i64 1 1) at :90 — an i64 index type",
+			127:  "memory64: (memory (export \"memory0\") i64 1 1) at :90 — an i64 index type",
+			128:  "memory64: (memory (export \"memory0\") i64 1 1) at :90 — an i64 index type",
+			129:  "memory64: (memory (export \"memory0\") i64 1 1) at :90 — an i64 index type",
+			130:  "memory64: (memory (export \"memory0\") i64 1 1) at :90 — an i64 index type",
+			141:  "memory64: (memory (export \"memory0\") i64 1 1) at :132 — an i64 index type",
+			143:  "memory64: (memory (export \"memory0\") i64 1 1) at :132 — an i64 index type",
+			144:  "memory64: (memory (export \"memory0\") i64 1 1) at :132 — an i64 index type",
+			145:  "memory64: (memory (export \"memory0\") i64 1 1) at :132 — an i64 index type",
+			146:  "memory64: (memory (export \"memory0\") i64 1 1) at :132 — an i64 index type",
+			147:  "memory64: (memory (export \"memory0\") i64 1 1) at :132 — an i64 index type",
+			148:  "memory64: (memory (export \"memory0\") i64 1 1) at :132 — an i64 index type",
+			149:  "memory64: (memory (export \"memory0\") i64 1 1) at :132 — an i64 index type",
+			150:  "memory64: (memory (export \"memory0\") i64 1 1) at :132 — an i64 index type",
+			151:  "memory64: (memory (export \"memory0\") i64 1 1) at :132 — an i64 index type",
+			152:  "memory64: (memory (export \"memory0\") i64 1 1) at :132 — an i64 index type",
+			153:  "memory64: (memory (export \"memory0\") i64 1 1) at :132 — an i64 index type",
+			154:  "memory64: (memory (export \"memory0\") i64 1 1) at :132 — an i64 index type",
+			155:  "memory64: (memory (export \"memory0\") i64 1 1) at :132 — an i64 index type",
+			156:  "memory64: (memory (export \"memory0\") i64 1 1) at :132 — an i64 index type",
+			157:  "memory64: (memory (export \"memory0\") i64 1 1) at :132 — an i64 index type",
+			158:  "memory64: (memory (export \"memory0\") i64 1 1) at :132 — an i64 index type",
+			159:  "memory64: (memory (export \"memory0\") i64 1 1) at :132 — an i64 index type",
+			160:  "memory64: (memory (export \"memory0\") i64 1 1) at :132 — an i64 index type",
+			161:  "memory64: (memory (export \"memory0\") i64 1 1) at :132 — an i64 index type",
+			162:  "memory64: (memory (export \"memory0\") i64 1 1) at :132 — an i64 index type",
+			163:  "memory64: (memory (export \"memory0\") i64 1 1) at :132 — an i64 index type",
+			164:  "memory64: (memory (export \"memory0\") i64 1 1) at :132 — an i64 index type",
+			165:  "memory64: (memory (export \"memory0\") i64 1 1) at :132 — an i64 index type",
+			166:  "memory64: (memory (export \"memory0\") i64 1 1) at :132 — an i64 index type",
+			167:  "memory64: (memory (export \"memory0\") i64 1 1) at :132 — an i64 index type",
+			168:  "memory64: (memory (export \"memory0\") i64 1 1) at :132 — an i64 index type",
+			169:  "memory64: (memory (export \"memory0\") i64 1 1) at :132 — an i64 index type",
+			170:  "memory64: (memory (export \"memory0\") i64 1 1) at :132 — an i64 index type",
+			171:  "memory64: (memory (export \"memory0\") i64 1 1) at :132 — an i64 index type",
+			172:  "memory64: (memory (export \"memory0\") i64 1 1) at :132 — an i64 index type",
+			183:  "memory64: (memory (export \"memory0\") i64 1 1) at :174 — an i64 index type",
+			185:  "memory64: (memory (export \"memory0\") i64 1 1) at :174 — an i64 index type",
+			186:  "memory64: (memory (export \"memory0\") i64 1 1) at :174 — an i64 index type",
+			187:  "memory64: (memory (export \"memory0\") i64 1 1) at :174 — an i64 index type",
+			188:  "memory64: (memory (export \"memory0\") i64 1 1) at :174 — an i64 index type",
+			189:  "memory64: (memory (export \"memory0\") i64 1 1) at :174 — an i64 index type",
+			190:  "memory64: (memory (export \"memory0\") i64 1 1) at :174 — an i64 index type",
+			191:  "memory64: (memory (export \"memory0\") i64 1 1) at :174 — an i64 index type",
+			192:  "memory64: (memory (export \"memory0\") i64 1 1) at :174 — an i64 index type",
+			193:  "memory64: (memory (export \"memory0\") i64 1 1) at :174 — an i64 index type",
+			194:  "memory64: (memory (export \"memory0\") i64 1 1) at :174 — an i64 index type",
+			195:  "memory64: (memory (export \"memory0\") i64 1 1) at :174 — an i64 index type",
+			196:  "memory64: (memory (export \"memory0\") i64 1 1) at :174 — an i64 index type",
+			197:  "memory64: (memory (export \"memory0\") i64 1 1) at :174 — an i64 index type",
+			198:  "memory64: (memory (export \"memory0\") i64 1 1) at :174 — an i64 index type",
+			199:  "memory64: (memory (export \"memory0\") i64 1 1) at :174 — an i64 index type",
+			200:  "memory64: (memory (export \"memory0\") i64 1 1) at :174 — an i64 index type",
+			201:  "memory64: (memory (export \"memory0\") i64 1 1) at :174 — an i64 index type",
+			202:  "memory64: (memory (export \"memory0\") i64 1 1) at :174 — an i64 index type",
+			203:  "memory64: (memory (export \"memory0\") i64 1 1) at :174 — an i64 index type",
+			204:  "memory64: (memory (export \"memory0\") i64 1 1) at :174 — an i64 index type",
+			205:  "memory64: (memory (export \"memory0\") i64 1 1) at :174 — an i64 index type",
+			206:  "memory64: (memory (export \"memory0\") i64 1 1) at :174 — an i64 index type",
+			207:  "memory64: (memory (export \"memory0\") i64 1 1) at :174 — an i64 index type",
+			208:  "memory64: (memory (export \"memory0\") i64 1 1) at :174 — an i64 index type",
+			209:  "memory64: (memory (export \"memory0\") i64 1 1) at :174 — an i64 index type",
+			210:  "memory64: (memory (export \"memory0\") i64 1 1) at :174 — an i64 index type",
+			211:  "memory64: (memory (export \"memory0\") i64 1 1) at :174 — an i64 index type",
+			212:  "memory64: (memory (export \"memory0\") i64 1 1) at :174 — an i64 index type",
+			213:  "memory64: (memory (export \"memory0\") i64 1 1) at :174 — an i64 index type",
+			214:  "memory64: (memory (export \"memory0\") i64 1 1) at :174 — an i64 index type",
+			225:  "memory64: (memory (export \"memory0\") i64 1 1) at :216 — an i64 index type",
+			227:  "memory64: (memory (export \"memory0\") i64 1 1) at :216 — an i64 index type",
+			228:  "memory64: (memory (export \"memory0\") i64 1 1) at :216 — an i64 index type",
+			229:  "memory64: (memory (export \"memory0\") i64 1 1) at :216 — an i64 index type",
+			230:  "memory64: (memory (export \"memory0\") i64 1 1) at :216 — an i64 index type",
+			231:  "memory64: (memory (export \"memory0\") i64 1 1) at :216 — an i64 index type",
+			232:  "memory64: (memory (export \"memory0\") i64 1 1) at :216 — an i64 index type",
+			233:  "memory64: (memory (export \"memory0\") i64 1 1) at :216 — an i64 index type",
+			234:  "memory64: (memory (export \"memory0\") i64 1 1) at :216 — an i64 index type",
+			235:  "memory64: (memory (export \"memory0\") i64 1 1) at :216 — an i64 index type",
+			236:  "memory64: (memory (export \"memory0\") i64 1 1) at :216 — an i64 index type",
+			237:  "memory64: (memory (export \"memory0\") i64 1 1) at :216 — an i64 index type",
+			238:  "memory64: (memory (export \"memory0\") i64 1 1) at :216 — an i64 index type",
+			239:  "memory64: (memory (export \"memory0\") i64 1 1) at :216 — an i64 index type",
+			240:  "memory64: (memory (export \"memory0\") i64 1 1) at :216 — an i64 index type",
+			241:  "memory64: (memory (export \"memory0\") i64 1 1) at :216 — an i64 index type",
+			242:  "memory64: (memory (export \"memory0\") i64 1 1) at :216 — an i64 index type",
+			243:  "memory64: (memory (export \"memory0\") i64 1 1) at :216 — an i64 index type",
+			244:  "memory64: (memory (export \"memory0\") i64 1 1) at :216 — an i64 index type",
+			245:  "memory64: (memory (export \"memory0\") i64 1 1) at :216 — an i64 index type",
+			246:  "memory64: (memory (export \"memory0\") i64 1 1) at :216 — an i64 index type",
+			247:  "memory64: (memory (export \"memory0\") i64 1 1) at :216 — an i64 index type",
+			248:  "memory64: (memory (export \"memory0\") i64 1 1) at :216 — an i64 index type",
+			249:  "memory64: (memory (export \"memory0\") i64 1 1) at :216 — an i64 index type",
+			250:  "memory64: (memory (export \"memory0\") i64 1 1) at :216 — an i64 index type",
+			251:  "memory64: (memory (export \"memory0\") i64 1 1) at :216 — an i64 index type",
+			252:  "memory64: (memory (export \"memory0\") i64 1 1) at :216 — an i64 index type",
+			253:  "memory64: (memory (export \"memory0\") i64 1 1) at :216 — an i64 index type",
+			254:  "memory64: (memory (export \"memory0\") i64 1 1) at :216 — an i64 index type",
+			255:  "memory64: (memory (export \"memory0\") i64 1 1) at :216 — an i64 index type",
+			256:  "memory64: (memory (export \"memory0\") i64 1 1) at :216 — an i64 index type",
+			267:  "memory64: (memory (export \"memory0\") i64 1 1) at :258 — an i64 index type",
+			269:  "memory64: (memory (export \"memory0\") i64 1 1) at :258 — an i64 index type",
+			270:  "memory64: (memory (export \"memory0\") i64 1 1) at :258 — an i64 index type",
+			271:  "memory64: (memory (export \"memory0\") i64 1 1) at :258 — an i64 index type",
+			272:  "memory64: (memory (export \"memory0\") i64 1 1) at :258 — an i64 index type",
+			273:  "memory64: (memory (export \"memory0\") i64 1 1) at :258 — an i64 index type",
+			274:  "memory64: (memory (export \"memory0\") i64 1 1) at :258 — an i64 index type",
+			275:  "memory64: (memory (export \"memory0\") i64 1 1) at :258 — an i64 index type",
+			276:  "memory64: (memory (export \"memory0\") i64 1 1) at :258 — an i64 index type",
+			277:  "memory64: (memory (export \"memory0\") i64 1 1) at :258 — an i64 index type",
+			278:  "memory64: (memory (export \"memory0\") i64 1 1) at :258 — an i64 index type",
+			279:  "memory64: (memory (export \"memory0\") i64 1 1) at :258 — an i64 index type",
+			280:  "memory64: (memory (export \"memory0\") i64 1 1) at :258 — an i64 index type",
+			281:  "memory64: (memory (export \"memory0\") i64 1 1) at :258 — an i64 index type",
+			282:  "memory64: (memory (export \"memory0\") i64 1 1) at :258 — an i64 index type",
+			283:  "memory64: (memory (export \"memory0\") i64 1 1) at :258 — an i64 index type",
+			284:  "memory64: (memory (export \"memory0\") i64 1 1) at :258 — an i64 index type",
+			285:  "memory64: (memory (export \"memory0\") i64 1 1) at :258 — an i64 index type",
+			286:  "memory64: (memory (export \"memory0\") i64 1 1) at :258 — an i64 index type",
+			287:  "memory64: (memory (export \"memory0\") i64 1 1) at :258 — an i64 index type",
+			288:  "memory64: (memory (export \"memory0\") i64 1 1) at :258 — an i64 index type",
+			289:  "memory64: (memory (export \"memory0\") i64 1 1) at :258 — an i64 index type",
+			290:  "memory64: (memory (export \"memory0\") i64 1 1) at :258 — an i64 index type",
+			291:  "memory64: (memory (export \"memory0\") i64 1 1) at :258 — an i64 index type",
+			292:  "memory64: (memory (export \"memory0\") i64 1 1) at :258 — an i64 index type",
+			293:  "memory64: (memory (export \"memory0\") i64 1 1) at :258 — an i64 index type",
+			294:  "memory64: (memory (export \"memory0\") i64 1 1) at :258 — an i64 index type",
+			295:  "memory64: (memory (export \"memory0\") i64 1 1) at :258 — an i64 index type",
+			296:  "memory64: (memory (export \"memory0\") i64 1 1) at :258 — an i64 index type",
+			297:  "memory64: (memory (export \"memory0\") i64 1 1) at :258 — an i64 index type",
+			298:  "memory64: (memory (export \"memory0\") i64 1 1) at :258 — an i64 index type",
+			309:  "memory64: (memory (export \"memory0\") i64 1 1) at :300 — an i64 index type",
+			311:  "memory64: (memory (export \"memory0\") i64 1 1) at :300 — an i64 index type",
+			312:  "memory64: (memory (export \"memory0\") i64 1 1) at :300 — an i64 index type",
+			313:  "memory64: (memory (export \"memory0\") i64 1 1) at :300 — an i64 index type",
+			314:  "memory64: (memory (export \"memory0\") i64 1 1) at :300 — an i64 index type",
+			315:  "memory64: (memory (export \"memory0\") i64 1 1) at :300 — an i64 index type",
+			316:  "memory64: (memory (export \"memory0\") i64 1 1) at :300 — an i64 index type",
+			317:  "memory64: (memory (export \"memory0\") i64 1 1) at :300 — an i64 index type",
+			318:  "memory64: (memory (export \"memory0\") i64 1 1) at :300 — an i64 index type",
+			319:  "memory64: (memory (export \"memory0\") i64 1 1) at :300 — an i64 index type",
+			320:  "memory64: (memory (export \"memory0\") i64 1 1) at :300 — an i64 index type",
+			321:  "memory64: (memory (export \"memory0\") i64 1 1) at :300 — an i64 index type",
+			322:  "memory64: (memory (export \"memory0\") i64 1 1) at :300 — an i64 index type",
+			323:  "memory64: (memory (export \"memory0\") i64 1 1) at :300 — an i64 index type",
+			324:  "memory64: (memory (export \"memory0\") i64 1 1) at :300 — an i64 index type",
+			325:  "memory64: (memory (export \"memory0\") i64 1 1) at :300 — an i64 index type",
+			326:  "memory64: (memory (export \"memory0\") i64 1 1) at :300 — an i64 index type",
+			327:  "memory64: (memory (export \"memory0\") i64 1 1) at :300 — an i64 index type",
+			328:  "memory64: (memory (export \"memory0\") i64 1 1) at :300 — an i64 index type",
+			329:  "memory64: (memory (export \"memory0\") i64 1 1) at :300 — an i64 index type",
+			330:  "memory64: (memory (export \"memory0\") i64 1 1) at :300 — an i64 index type",
+			331:  "memory64: (memory (export \"memory0\") i64 1 1) at :300 — an i64 index type",
+			332:  "memory64: (memory (export \"memory0\") i64 1 1) at :300 — an i64 index type",
+			333:  "memory64: (memory (export \"memory0\") i64 1 1) at :300 — an i64 index type",
+			334:  "memory64: (memory (export \"memory0\") i64 1 1) at :300 — an i64 index type",
+			335:  "memory64: (memory (export \"memory0\") i64 1 1) at :300 — an i64 index type",
+			336:  "memory64: (memory (export \"memory0\") i64 1 1) at :300 — an i64 index type",
+			337:  "memory64: (memory (export \"memory0\") i64 1 1) at :300 — an i64 index type",
+			338:  "memory64: (memory (export \"memory0\") i64 1 1) at :300 — an i64 index type",
+			339:  "memory64: (memory (export \"memory0\") i64 1 1) at :300 — an i64 index type",
+			340:  "memory64: (memory (export \"memory0\") i64 1 1) at :300 — an i64 index type",
+			4867: "memory64: (memory i64 1 1) at :4863 — an i64 index type",
+			4879: "memory64: (memory i64 1 1) at :4875 — an i64 index type",
+			4891: "memory64: (memory i64 1 1) at :4887 — an i64 index type",
 		},
 		"memory_fill0.wast": {
+			18: "multi-memory: 3 memories at :2, so a memarg carries flags bit 6",
 			19: "multi-memory: 3 memories at :2, so a memarg carries flags bit 6",
 			20: "multi-memory: 3 memories at :2, so a memarg carries flags bit 6",
 			21: "multi-memory: 3 memories at :2, so a memarg carries flags bit 6",
 			22: "multi-memory: 3 memories at :2, so a memarg carries flags bit 6",
 			23: "multi-memory: 3 memories at :2, so a memarg carries flags bit 6",
+			26: "multi-memory: 3 memories at :2, so a memarg carries flags bit 6",
 			27: "multi-memory: 3 memories at :2, so a memarg carries flags bit 6",
 			28: "multi-memory: 3 memories at :2, so a memarg carries flags bit 6",
+			31: "multi-memory: 3 memories at :2, so a memarg carries flags bit 6",
 			36: "multi-memory: 3 memories at :2, so a memarg carries flags bit 6",
 			37: "multi-memory: 3 memories at :2, so a memarg carries flags bit 6",
+			40: "multi-memory: 3 memories at :2, so a memarg carries flags bit 6",
 		},
 		"memory_grow64.wast": {
 			14: "memory64: (memory i64 0) at :1 — an i64 index type",
@@ -1625,41 +1749,46 @@ func TestGatedVectors(t *testing.T) {
 			60: "memory64: (memory i64 0 10) at :48 — an i64 index type",
 		},
 		"memory_init64.wast": {
-			19: "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
-			20: "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
-			21: "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
-			22: "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
-			23: "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
-			24: "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
-			25: "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
-			26: "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
-			27: "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
-			28: "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
-			29: "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
-			30: "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
-			31: "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
-			32: "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
-			33: "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
-			34: "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
-			35: "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
-			36: "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
-			37: "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
-			38: "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
-			39: "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
-			40: "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
-			41: "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
-			42: "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
-			43: "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
-			44: "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
-			45: "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
-			46: "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
-			47: "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
-			48: "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
+			17:  "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
+			19:  "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
+			20:  "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
+			21:  "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
+			22:  "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
+			23:  "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
+			24:  "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
+			25:  "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
+			26:  "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
+			27:  "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
+			28:  "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
+			29:  "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
+			30:  "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
+			31:  "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
+			32:  "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
+			33:  "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
+			34:  "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
+			35:  "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
+			36:  "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
+			37:  "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
+			38:  "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
+			39:  "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
+			40:  "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
+			41:  "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
+			42:  "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
+			43:  "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
+			44:  "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
+			45:  "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
+			46:  "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
+			47:  "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
+			48:  "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
+			209: "memory64: (memory i64 1) at :203 — an i64 index type",
 		},
 		"memory_redundancy64.wast": {
 			59: "memory64: (memory i64 1 1) at :5 — an i64 index type",
+			60: "memory64: (memory i64 1 1) at :5 — an i64 index type",
 			61: "memory64: (memory i64 1 1) at :5 — an i64 index type",
+			62: "memory64: (memory i64 1 1) at :5 — an i64 index type",
 			63: "memory64: (memory i64 1 1) at :5 — an i64 index type",
+			64: "memory64: (memory i64 1 1) at :5 — an i64 index type",
 			65: "memory64: (memory i64 1 1) at :5 — an i64 index type",
 		},
 		"memory_trap0.wast": {
@@ -1686,10 +1815,14 @@ func TestGatedVectors(t *testing.T) {
 			44: "SIMD: a v128 instruction in a function body at :34",
 		},
 		"store0.wast": {
+			22: "multi-memory: 2 memories at :3, so a memarg carries flags bit 6",
+			23: "multi-memory: 2 memories at :3, so a memarg carries flags bit 6",
 			24: "multi-memory: 2 memories at :3, so a memarg carries flags bit 6",
 			25: "multi-memory: 2 memories at :3, so a memarg carries flags bit 6",
 		},
 		"store1.wast": {
+			49: "multi-memory: 2 memories at :30, so a memarg carries flags bit 6",
+			50: "multi-memory: 2 memories at :30, so a memarg carries flags bit 6",
 			51: "multi-memory: 2 memories at :30, so a memarg carries flags bit 6",
 			52: "multi-memory: 2 memories at :30, so a memarg carries flags bit 6",
 		},
@@ -2077,7 +2210,19 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	// default board and *answered* here, which is the deferral-cannot-become-a-disappearance
 	// property working on a path it could not previously see — see instantiateWith for the bug
 	// this lane caught in the course of it.
-	const allOnPassFloor = 17939
+	// **17939 → 27137, and the gap to the default lane's 26307 is 830.** #7's memory raises both
+	// floors; this lane's rises further because the default board's 1031 `gated` vectors answer
+	// on the merits here, and with load and store arms in place most of them now answer
+	// *correctly*.
+	//
+	// **The gap is the gated population's pass share, not the population** — a distinction this
+	// comment's first draft got wrong by calling 830 "the third-verdict population", and the
+	// numbers refute it in one line: 1031 declines become **830 passes and 201 fails** here, and
+	// fail moves 5349 → 5550 to match. 830 + 201 = 1031, which is the deferral-cannot-become-a-
+	// disappearance property as arithmetic rather than as a claim: every parked vector is
+	// accounted for in this lane, and the 201 stay honestly red until their feature works.
+	// Quoting 830 as the population would have implied 201 vectors vanished.
+	const allOnPassFloor = 27137
 	boardBound(t, "allOnPassFloor", totalPass, allOnPassFloor, boardBoundSlack, floorBound,
 		"a gated feature regressed, which the Gated==0 assertion above cannot see: with every "+
 			"gate on, a broken feature turns a pass into a fail and leaves Gated at zero")
@@ -2221,11 +2366,43 @@ func TestPhase1Files(t *testing.T) {
 	// records and became a command the harness can ask. The whole fall is one head: 52638
 	// assert_return commands were unsupported, 24530 still are — the shapes assertReturn
 	// declines, which it declines structurally and says so at each arm — and 28108 now get a
-	// verdict. Nothing else moved; the corpus is the same 253 files.
+	// verdict. Nothing else moved; the corpus was the same 253 files. (Past tense as of the
+	// next movement below, which selects a 254th — the sentence was true when written and the
+	// tense is what keeps it true.)
 	//
 	// The lowering is the record of the progress, per the standing rule, and it is lowered
 	// **in the PR that drained it** rather than left as slack for a later reader to notice.
-	const unsupportedCeiling = 32764
+	//
+	// # 32764 → 32377, and the small number is the honest one
+	//
+	// −387 in the PR that gave the engine a memory, and the modesty is the finding rather than an
+	// embarrassment to be dressed up: memory work paid in the **fail** column (exec 8713 → 440),
+	// not here, because those 8,000 vectors were already *asked* and answered wrongly. This
+	// column moves only when a command shape the classifier used to decline becomes askable, and
+	// #7's memory work made two such shapes askable:
+	//
+	//	347  `invoke` — a bare top-level `(invoke …)`, 357 → 10. It is a state mutation, so
+	//	     walking past it did not merely lose the command: it made the *following*
+	//	     `assert_return` read a memory nobody had stored to, and 73 of those were being
+	//	     scored as the interpreter computing a wrong value. A skip is not a verdict, with the
+	//	     roles swapped — the skip passed by asking nothing and made a neighbour fail.
+	//	 40  `assert_trap` wrapping a bare `(module …)` — instantiation itself trapping, which
+	//	     0015 is the record of. 54 such forms exist and all 54 are on the board; **40 of them
+	//	     moved off this column and 14 did not, because those 14 were not *on the board* at
+	//	     all.** They are `data1.wast`, every form in which is this shape — so under
+	//	     per-command selection the file held no scorable command, boardFiles did not select
+	//	     it, and it contributed 0 to this column and 0 to the denominator. Its 14 therefore
+	//	     arrive as **new** commands in a **new file**, which is the one place in this PR the
+	//	     board's file count moves: **253 → 254**. Measured by set-differencing the
+	//	     `assert_trap` command keys at b11a664 against this tree — 4963 → 4977, the entire
+	//	     difference being `data1.wast:14` — rather than inferred from 54 − 40, which is the
+	//	     arithmetic that hid the distinction in this comment's first draft. A conversion
+	//	     lowers this column; an admission raises the denominator instead, and a bare
+	//	     `54 − 40 = 14` calls them the same thing.
+	//
+	// 347 + 40 = 387, which is why the two lines are quoted rather than the total alone. The 10
+	// `invoke` commands still unsupported are the shapes classify declines structurally.
+	const unsupportedCeiling = 32377
 	boardBound(t, "unsupportedCeiling", totalUnsup, unsupportedCeiling, boardBoundSlack, ceilingBound,
 		"either a capability regressed or the corpus moved; both need an explanation rather "+
 			"than a raised ceiling")
@@ -2329,7 +2506,7 @@ func TestPhase1Files(t *testing.T) {
 				textFail++
 			case StratumEncode:
 				// **A column of its own, not folded into StratumText** (#8). ReadModule
-				// answers 253 files' module forms with 0 reds; EncodeModule cannot yet emit
+				// answers 254 files' module forms with 0 reds; EncodeModule cannot yet emit
 				// most instruction bodies. Folding them would raise the reader's ceiling
 				// from 0 to 13775 and destroy the only instrument watching the reader for
 				// regressions — one instrument per component, or neither is an instrument.
@@ -2800,14 +2977,36 @@ func TestPhase1Files(t *testing.T) {
 	// exactly the shape a reader would otherwise mis-read as progress.
 	//
 	// **Separate from textFailCeiling, and the separation is load-bearing.** `text.ReadModule`
-	// answers all 253 files' module forms with **0** reds; `text.EncodeModule` cannot emit most
+	// answers all 254 files' module forms with **0** reds; `text.EncodeModule` cannot emit most
 	// instruction bodies. Folding them would take the reader's ceiling from 0 to 4693 and
 	// destroy the only instrument watching the reader for regressions — one instrument per
 	// component, or neither is an instrument. They are two entry points in one package, which
 	// is exactly the case a Kind-keyed partition cannot express and a stated stratum can.
 	//
 	// Slack 0 like the two above: it may only fall, and it falls as #8 lands.
-	const encodeFailCeiling = 4693
+	//
+	// # Re-based 4693 → 4909, and a slack-0 ceiling rising is a claim that needs a diagnosis
+	//
+	// This bound says the encoder may only lose ground, so its own message read the rise as an
+	// encoder regression. It is not one, and the way to tell is to **partition the column by the
+	// Kind that produced it** rather than to trust either the message or this comment:
+	//
+	//	assert_return  4693   ← unchanged, to the vector
+	//	invoke          216   ← a population that did not exist before this PR
+	//
+	// The `assert_return` half is *identical*. What grew is the denominator: #7's memory work
+	// taught the harness to run a bare top-level `(invoke …)` as a command instead of walking
+	// past it (KindInvoke), so 216 more commands now meet the encoder's **unmoved** frontier and
+	// are honestly charged to it. Nothing the encoder used to emit stopped being emitted.
+	//
+	// Rebased rather than exempted, and the ceiling keeps slack 0 — but note what the instrument
+	// could and could not say. It fired correctly (the number rose), and its *stated reason* was
+	// wrong (nothing regressed), because a ceiling can express "may only fall" and cannot express
+	// "may only fall per vector asked". A bound over a growing population is measuring two things
+	// at once; the Kind split above is the one that answers the question this bound was for, and
+	// it is written here as the check to run the next time this rises rather than as a fact about
+	// this rise. Same shape as the exec ceiling's own note that it would rise as #8 landed.
+	const encodeFailCeiling = 4909
 	boardBound(t, "encodeFailCeiling", encodeFail, encodeFailCeiling, 0, ceilingBound,
 		"the wat encoder lost ground: either it stopped emitting an instruction it used to "+
 			"emit, or the corpus moved. This ceiling is deliberately not shared with the text "+
@@ -2853,7 +3052,48 @@ func TestPhase1Files(t *testing.T) {
 	// behind a fourth verdict. *Bucketed failures are the work plan.*
 	//
 	// Slack 0.
-	const execFailCeiling = 8713
+	//
+	// # Re-based 8713 → 440 by #7's memory work, which is what this column was for
+	//
+	// The `2d i32.load8_u` bucket above went **8001 → 0**, and with it the whole load/store
+	// region, `3f memory.size` and `40 memory.grow`. What is left is 440, and it partitions to
+	// exactly 440 — which is the point of a ceiling that names its members:
+	//
+	//	291  opcode arms this phase does not have, `no arm for opcode` and nothing else: `10
+	//	     call` 74, `0f return` 26, the `fc 00`–`fc 07` saturating conversions 180, `23
+	//	     global.get` 7, `fc 09`/`fc 10` 4. #7's remainder and #8's, unrelated to memory.
+	//	 48  `assert_return value mismatch`, every one downstream of a missing `fc 0a`/`fc 0b`
+	//	     — a vector that copies or fills before it loads reads bytes nobody wrote.
+	//	 41  `memory %d is imported, and linking is not implemented (contract §3)` — the third
+	//	     error category (ErrUnsupported), naming linking rather than blaming a table. 32
+	//	     reached at the instruction, 9 as `no instance` from the module command.
+	//	 34  `assert_trap (module)` where the trap did not arrive: 16 want *out of bounds table
+	//	     access* (element segments, unbuilt), 15 *out of bounds memory access* against a
+	//	     memory this phase cannot link, 3 *unreachable* from a start function.
+	//	 26  `fc 0a`/`fc 0b` themselves, reached directly rather than through a later load.
+	//
+	// **The 95 value mismatches this work introduced are the number that had to be explained
+	// rather than quoted**, because that bucket was 0 before this PR and a value mismatch reads
+	// as the interpreter computing wrong answers. 22 of them were: `memory.size $mem1` returning
+	// $mem3's page count, because the memory index space is shared between imports and
+	// definitions and this table was sized `len(m.Memories)`. Not an unimplemented import
+	// reported honestly — a *wrong answer about a different memory*, green on 22 vectors by
+	// construction. 73 were the harness's, not the engine's: a bare top-level `(invoke …)` was
+	// never run, so a following `assert_return` read a memory nobody had stored to. Both fixed;
+	// the 48 that remain are the `fc 0a`/`fc 0b` line above.
+	//
+	// **The partition above was drafted from the census and then corrected by running it**, which
+	// is worth the sentence because the draft was plausible: it said `10 call` 45 (it is 74), put
+	// the residue at 289 (291), and omitted the 34 `assert_trap (module)` fails entirely — a
+	// whole category, in a list that claimed to sum. The five lines now sum to 440 because they
+	// were read off the buckets rather than reasoned toward them.
+	//
+	// The prediction in the paragraph above — that this number would **rise** as #8 landed and
+	// more modules instantiated — is left standing rather than trimmed, because it was right and
+	// then overtaken: it rose 356 → 441 → 8713 exactly as written, and then the arms arrived and
+	// it fell by 8273. A forecast that came true twice and was then made obsolete by the work it
+	// was forecasting is the record worth keeping.
+	const execFailCeiling = 440
 	boardBound(t, "execFailCeiling", execFail, execFailCeiling, 0, ceilingBound,
 		"the interpreter answered fewer vectors than it did: either an opcode arm regressed or "+
 			"a value comparison started disagreeing. A *rise* caused by #8 unblocking more "+
@@ -3031,7 +3271,24 @@ func TestPhase1Files(t *testing.T) {
 	// the ceiling — 10 against a bound of 356 versus 10 against a floor of 17923. Stated
 	// because a floor that claims to be the evidence for a property it is the weakest witness
 	// to is overclaiming.
-	const passFloor = 17923
+	// # Re-based 17923 → 26307 by #7's memory, and the +8384 is one family
+	//
+	// Load and store arms, `memory.size`, `memory.grow`, memarg addressing, OOB traps and
+	// instantiation-time data-segment copying: one family, and the pass column's largest single
+	// jump. The account is on the exec ceiling below, which fell 8713 → 440 in the same motion —
+	// the two are the same 8,000 vectors seen from opposite sides, which is why a rise here and a
+	// fall there is one fact and not two.
+	//
+	// **The gain was measured rather than forecast, on Scott's rider, and the census was generous
+	// by 289 in one direction and blind by 136 in the other.** Pre-registered: ~8,424 payable,
+	// 289 residue. Delivered: exec 8713 → 440, the 289 residue exact — and two buckets the census
+	// had not predicted at all, 95 value mismatches and 41 memory-index errors, where 95 had been
+	// **zero** before this PR. Quoting the drop without them would have been the flattering half
+	// of a measurement. Partitioned: 22 were imported memories shifting the memory index space
+	// (fixed, class now 0), 73 were the harness never running a bare top-level `(invoke …)` — the
+	// engine right, the jig not having set the state up — and the 48 that remain are all
+	// downstream of the missing `fc 0a`/`fc 0b` arms and say so.
+	const passFloor = 26307
 	boardBound(t, "passFloor", totalPass, passFloor, boardBoundSlack, floorBound,
 		"a regression in a grammar that used to answer, or the corpus moved")
 }

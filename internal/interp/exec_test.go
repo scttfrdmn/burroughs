@@ -24,7 +24,14 @@ func run1(t *testing.T, src string) []Value {
 	if err != nil {
 		t.Fatalf("decode %s: %v", src, err)
 	}
-	out, err := New(m).Invoke("c")
+	in, trap := Instantiate(m)
+	if trap != nil {
+		// Reported rather than ignored: these sources declare no memory, so a trap here
+		// means instantiation grew a failure mode this helper's modules can reach, which is
+		// a finding about the engine and not about the vector.
+		t.Fatalf("instantiate %s: %v", src, trap)
+	}
+	out, err := in.Invoke("c")
 	if err != nil {
 		t.Fatalf("invoke %s: %v", src, err)
 	}
