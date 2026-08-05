@@ -58,11 +58,12 @@ fi
 # after lexer.mll became the second (0009) — a presence check that had silently narrowed
 # to a third of its subject, which is the same shape as the early-return defect above one
 # scope out. parser.mly is the third (#62's stratum), encode.ml the fourth (0011's bridge —
-# cited 28 times in internal/text before anything licensed it). The list is here rather than
-# derived because a shell script cannot read Go constants;
+# cited 28 times in internal/text before anything licensed it), syntax/free.ml the fifth (the
+# data count section's condition, cited by internal/binary since #22 with nothing resolving it).
+# The list is here rather than derived because a shell script cannot read Go constants;
 # TestFetchScriptAssertsEveryAuthority is what keeps the two agreeing.
 for f in interpreter/binary/decode.ml interpreter/text/lexer.mll interpreter/text/parser.mly \
-         interpreter/binary/encode.ml; do
+         interpreter/binary/encode.ml interpreter/syntax/free.ml; do
   if [ ! -f "$dest/$f" ]; then
     echo "reference vendored at $got but $dest/$f is missing" >&2
     exit 1

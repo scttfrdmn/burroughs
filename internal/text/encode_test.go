@@ -53,6 +53,26 @@ import (
 // prose was wrong until an input said so — the text grammar's `idx_opt` in a memarg (parser.mly:596)
 // has no gate, so wat source can write `(i32.load 1 …)`, the emitter sets bit 6, and `memopIndex`
 // declines it with the gate off. SIMD's case exactly.
+// sectionPayload returns a decoded module's section payload by id.
+//
+// **Through the decoder's own segmentation, never by scanning the image.** A test that walked the bytes
+// looking for an id would be a second section reader — one whose bugs would be indistinguishable from
+// the encoder's, and which would find an `11` inside a payload. `Module.Sections` is what the descent
+// recorded, so the extent is the decoder's and only the content is under assertion.
+//
+// Not `hasSection`, which is unexported and answers a different question; this needs the bytes. The
+// found bool rather than a nil payload, because an *empty* section is a legal thing to have written and
+// a distinguishable defect from having written none — `writer.section`'s comment makes the same point
+// from the other side.
+func sectionPayload(m *binary.Module, id binary.SectionID) ([]byte, bool) {
+	for _, s := range m.Sections {
+		if s.ID == id {
+			return s.Payload, true
+		}
+	}
+	return nil, false
+}
+
 func decodeForTest(t *testing.T, b []byte) *binary.Module {
 	t.Helper()
 	d := &binary.Decoder{Features: binary.Features{
@@ -88,6 +108,24 @@ func decodeForTest(t *testing.T, b []byte) *binary.Module {
 // that omitted it would be asserting the encoder's output against a reading of the *text* that is
 // wrong about the format — so it is written out on every row, and a `(func)` with an empty body is
 // one instruction rather than none.
+// **Sections 11 and 12 are asserted as payload bytes, and that is forced rather than chosen.**
+// `binary.Module` has no `Datas` field: `decodeDataSegment` reads the section's grammar and retains
+// nothing, citing #7. So the round trip *cannot see section 11* — an emitter that dropped it, or wrote
+// the wrong mode flag, or put the payload before the offset, would decode clean and every column above
+// would agree. That is the discard-blindness the memarg rows already hit twice (alignment, the
+// address-type bit) and it is temporary: #7's execution of the memory tests forces `Module` to retain
+// segments, and this column becomes a structured one then.
+//
+// Until it does, the witness is the bytes, read out of `Section.Payload` — the decoder's own
+// segmentation of the image, so the extent is not this test's arithmetic and only the *content* is
+// under assertion. Written by hand from the format, which makes it the second reading the rest of the
+// table is: `encode.ml`'s `data` is `mode-flag, [index], [const expr], vec(byte)` (:1092-1101) and
+// nothing here calls the encoder to find out what it should have said. Reconstructing the flag with a
+// helper that branched on the mode would be an echo of the code under test (grave #106).
+//
+// `nil` asserts the section is **absent**, which is a real assertion and not an unchecked case: a
+// segment-less module that emits an empty section 11, or a segment-only module that emits a section 12,
+// is wrong in the way that costs a decode — `data count section required` and its mismatch sibling.
 var encodableModules = []struct {
 	src         string
 	want        []binary.CompType
@@ -96,6 +134,13 @@ var encodableModules = []struct {
 	wantImports []binary.Import
 	wantExports []binary.Export
 	wantFuncs   []binary.Func
+	// wantDataSec is section 11's payload: the segment count, then each segment. nil means no
+	// section 11.
+	wantDataSec []byte
+	// wantDataCountSec is section 12's payload, which is a bare `u32` count and not a vector
+	// (`section 12 len (List.length datas)`, encode.ml:1109). nil means no section 12 — and whether
+	// there is one is a question about *instructions*, never about this list's length.
+	wantDataCountSec []byte
 }{
 	{src: `(module)`},
 	{src: `(module (type (func)))`, want: []binary.CompType{
@@ -967,7 +1012,229 @@ var encodableModules = []struct {
 			{Op: 0x41, Imm0: 0}, {Op: 0x41, Imm0: 1}, {Op: 0x36, Imm0: 4}, {Op: 0x0b},
 		}}},
 	},
+
+	// # The data and data count sections (#8)
+	//
+	// Asserted as payload bytes, per the table header — nothing retains data segments, so these rows
+	// are the *only* instrument over section 11, and every column above is blind to it.
+	//
+	// **The mode flag is the resolved index, not the spelling**, which is the first three rows: an
+	// explicit `(memory 0)` and the sugar collapse to the identical two-byte `0x00` form, because
+	// `encode.ml` matches `Active ({it = 0l; _}, c)` before `Active (x, c)` (:1096-1099). Three
+	// spellings, one image, and a suite vector cannot see it — all three are well-formed text whose
+	// only observable is the bytes.
+	{
+		src:         `(module (memory 1) (data (i32.const 0) "abc"))`,
+		wantMems:    []binary.Memory{{Limits: binary.Limits{Min: 1}}},
+		wantDataSec: []byte{0x01, 0x00, 0x41, 0x00, 0x0b, 0x03, 'a', 'b', 'c'},
+	},
+	{
+		src:         `(module (memory 1) (data (offset (i32.const 0)) "abc"))`,
+		wantMems:    []binary.Memory{{Limits: binary.Limits{Min: 1}}},
+		wantDataSec: []byte{0x01, 0x00, 0x41, 0x00, 0x0b, 0x03, 'a', 'b', 'c'},
+	},
+	{
+		src:         `(module (memory 1) (data (memory 0) (offset (i32.const 0)) "abc"))`,
+		wantMems:    []binary.Memory{{Limits: binary.Limits{Min: 1}}},
+		wantDataSec: []byte{0x01, 0x00, 0x41, 0x00, 0x0b, 0x03, 'a', 'b', 'c'},
+	},
+	// A **non-zero** memory index, which is the `0x02` arm and the row that makes the three above
+	// more than a tautology: an emitter that always wrote `0x00` and dropped the index passes all
+	// three of them. MultiMemory is on in `decodeForTest`, which is what lets a second memory exist.
+	{
+		src:      `(module (memory 1) (memory 1) (data (memory 1) (i32.const 0) "z"))`,
+		wantMems: []binary.Memory{{Limits: binary.Limits{Min: 1}}, {Limits: binary.Limits{Min: 1}}},
+		wantDataSec: []byte{
+			0x01, 0x02, 0x01, 0x41, 0x00, 0x0b, 0x01, 'z',
+		},
+	},
+	// The **passive** arm: `0x01` and a payload, no offset at all — and no memory, which is what
+	// makes a passive segment legal in a module with no memory section. This row is
+	// `(module (data "abc"))` from `TestEncodeRefusesWhatItCannotWrite`, arriving.
+	{src: `(module (data "hello"))`, wantDataSec: []byte{
+		0x01, 0x01, 0x05, 'h', 'e', 'l', 'l', 'o',
+	}},
+	// **An active segment with an *empty* offset expression**, which is why `textData.passive` is a
+	// field rather than a nil test. `(offset)` is legal — `constexpr` is `instr_list` (parser.mly:1091,
+	// :950) — so this is `0x00` with a bare terminator, and an emitter reading nil-ness as passive
+	// writes `0x01` here: a different segment mode in a well-formed image. Paired with the passive row
+	// above, whose bytes it must *not* equal.
+	{
+		src:         `(module (memory 1) (data (offset) ""))`,
+		wantMems:    []binary.Memory{{Limits: binary.Limits{Min: 1}}},
+		wantDataSec: []byte{0x01, 0x00, 0x0b, 0x00},
+	},
+	// An empty payload on the passive arm, for the same reason in the other direction: `0x01 0x00` is
+	// a segment with no bytes, not the absence of a segment.
+	{src: `(module (data))`, wantDataSec: []byte{0x01, 0x01, 0x00}},
+	// **`string_list` concatenates**, and the count is the sum. Three tokens, four bytes, one segment
+	// — an emitter retaining only the last token writes `0x02 'c' 'd'` and every other row passes.
+	{
+		src:         `(module (memory 1) (data (i32.const 0) "a" "b" "cd"))`,
+		wantMems:    []binary.Memory{{Limits: binary.Limits{Min: 1}}},
+		wantDataSec: []byte{0x01, 0x00, 0x41, 0x00, 0x0b, 0x04, 'a', 'b', 'c', 'd'},
+	},
+	// **A payload that is not valid UTF-8**, which is the row `stringList`'s "no decode" paragraph
+	// exists for: `(data "\ef\ff\fe")` is legal wat, and a blanket UTF-8 check on string tokens would
+	// reject it while passing all 176 `utf8-invalid-encoding.wast` vectors. The escapes are the
+	// lexer's, so this also pins that `Token.Value` is the *unescaped* bytes — six source characters
+	// per escape, three bytes in the image.
+	{
+		src:         `(module (memory 1) (data (i32.const 0) "\ef\ff\fe"))`,
+		wantMems:    []binary.Memory{{Limits: binary.Limits{Min: 1}}},
+		wantDataSec: []byte{0x01, 0x00, 0x41, 0x00, 0x0b, 0x03, 0xef, 0xff, 0xfe},
+	},
+	// Two segments, so the vector count is exercised as a count and the order as source order.
+	{
+		src:      `(module (memory 1) (data (i32.const 0) "a") (data (i32.const 8) "b"))`,
+		wantMems: []binary.Memory{{Limits: binary.Limits{Min: 1}}},
+		wantDataSec: []byte{
+			0x02,
+			0x00, 0x41, 0x00, 0x0b, 0x01, 'a',
+			0x00, 0x41, 0x08, 0x0b, 0x01, 'b',
+		},
+	},
+	// **A symbolic memory index defined *after* the segment**, which is what `defineData`'s stage-2
+	// deferral is for: `module_fields1` evaluates data fields in its second closure, so this is a
+	// legal module and resolving at the cursor rejects it. The image is identical to the numeric
+	// spelling's, so the *verdict* is the assertion — the accept direction, where the suite has
+	// nothing (its `unknown memory` vectors are numeric and hence the validator's).
+	{
+		src:         `(module (data (memory $m) (i32.const 0) "q") (memory $m 1))`,
+		wantMems:    []binary.Memory{{Limits: binary.Limits{Min: 1}}},
+		wantDataSec: []byte{0x01, 0x00, 0x41, 0x00, 0x0b, 0x01, 'q'},
+	},
+	// A symbolic index naming memory **1**, so the resolution is asserted as a value rather than as
+	// "it did not error": an implementation resolving every symbolic memory to 0 passes the row above.
+	{
+		src:      `(module (memory 1) (memory $m 1) (data (memory $m) (i32.const 0) "q"))`,
+		wantMems: []binary.Memory{{Limits: binary.Limits{Min: 1}}, {Limits: binary.Limits{Min: 1}}},
+		wantDataSec: []byte{
+			0x01, 0x02, 0x01, 0x41, 0x00, 0x0b, 0x01, 'q',
+		},
+	},
+
+	// ## `(memory <addrtype> (data …))` — the sugar that defines two things
+	//
+	// The memory's limits are `(len + 65535) / 65536` **as both min and max** (parser.mly:1128), and
+	// the offset is a synthesized `at_const` zero (:1130) with no source token — so the `wantMems`
+	// column and the `wantDataSec` column are checking two halves of one arm, and neither alone would
+	// notice the other's absence. Ceiling division, not floor: three bytes is *one* page.
+	{
+		src:         `(module (memory (data "abc")))`,
+		wantMems:    []binary.Memory{{Limits: binary.Limits{Min: 1, Max: 1, HasMax: true}}},
+		wantDataSec: []byte{0x01, 0x00, 0x41, 0x00, 0x0b, 0x03, 'a', 'b', 'c'},
+	},
+	// The **empty** payload, which is the row that pins ceiling division as ceiling *of zero*: no
+	// bytes is zero pages, not one. A `+1` implementation passes the row above and fails here.
+	{
+		src:         `(module (memory (data)))`,
+		wantMems:    []binary.Memory{{Limits: binary.Limits{Max: 0, HasMax: true}}},
+		wantDataSec: []byte{0x01, 0x00, 0x41, 0x00, 0x0b, 0x00},
+	},
+	// **Exactly one page**, the boundary the ceiling formula is most likely to be wrong at: 65536
+	// bytes is one page and 65537 is two. Written with a repeat rather than a literal, so the row
+	// states the length arithmetic rather than transcribing it.
+	{
+		src:         `(module (memory (data "` + strings.Repeat(`a`, 0x10000) + `")))`,
+		wantMems:    []binary.Memory{{Limits: binary.Limits{Min: 1, Max: 1, HasMax: true}}},
+		wantDataSec: append([]byte{0x01, 0x00, 0x41, 0x00, 0x0b, 0x80, 0x80, 0x04}, dataFill(0x10000)...),
+	},
+	{
+		src:      `(module (memory (data "` + strings.Repeat(`a`, 0x10001) + `")))`,
+		wantMems: []binary.Memory{{Limits: binary.Limits{Min: 2, Max: 2, HasMax: true}}},
+		wantDataSec: append([]byte{0x01, 0x00, 0x41, 0x00, 0x0b, 0x81, 0x80, 0x04},
+			dataFill(0x10001)...),
+	},
+	// **The `i64` addrtype**, which is the other half of `at_const`: the synthesized offset must be
+	// `i64.const` (0x42), not `i32.const` (0x41). An `i32.const` offset in an i64 memory is a
+	// validation error this encoder has no business producing.
+	//
+	// `wantMems` cannot say the memory is 64-bit — `binary.Memory` is `{Limits}` and retains no address
+	// type, which is the same discard that made `TestEncodeWritesTheAddressTypeFlagBit` a separate
+	// instrument. So the addrtype's *two* consequences are checked in two places: the limits flag bit
+	// there, and the offset opcode here. Neither column sees the other's, and the row is paired with
+	// the i32 sugar row above precisely so the 0x41/0x42 difference is the only thing between them.
+	{
+		src:         `(module (memory i64 (data "abc")))`,
+		wantMems:    []binary.Memory{{Limits: binary.Limits{Min: 1, Max: 1, HasMax: true}}},
+		wantDataSec: []byte{0x01, 0x00, 0x42, 0x00, 0x0b, 0x03, 'a', 'b', 'c'},
+	},
+	// **The sugar's segment belongs to *its own* memory**, not to memory 0 — `Active (x, offset)`
+	// where `x` is the field's index (parser.mly:1129-1131). With a memory ahead of it the segment
+	// takes the `0x02` arm with index 1, and an emitter defaulting to 0 would write the bytes into
+	// the wrong memory: a well-formed image denoting a different module.
+	{
+		src: `(module (memory 1) (memory (data "xy")))`,
+		wantMems: []binary.Memory{
+			{Limits: binary.Limits{Min: 1}},
+			{Limits: binary.Limits{Min: 1, Max: 1, HasMax: true}},
+		},
+		wantDataSec: []byte{0x01, 0x02, 0x01, 0x41, 0x00, 0x0b, 0x02, 'x', 'y'},
+	},
+	// Both spellings in one module, which is what `datasSeen` counts and what puts the two in source
+	// order: the sugar's segment is first because its field is.
+	{
+		src: `(module (memory (data "s")) (data (memory 0) (i32.const 4) "f"))`,
+		wantMems: []binary.Memory{
+			{Limits: binary.Limits{Min: 1, Max: 1, HasMax: true}},
+		},
+		wantDataSec: []byte{
+			0x02,
+			0x00, 0x41, 0x00, 0x0b, 0x01, 's',
+			0x00, 0x41, 0x04, 0x0b, 0x01, 'f',
+		},
+	},
+
+	// ## Section 12, whose condition is about instructions rather than segments
+	//
+	// `data_count_section` is guarded by `Free.((module_ m).datas <> Set.empty)` (encode.ml:1109), and
+	// `free.ml`'s `data` for a *segment* is `segmentmode memories mode` (:217) — a segment contributes
+	// nothing. So the two rows that matter are the two the obvious `len(datas) > 0` test gets
+	// backwards, and they are both here:
+	//
+	//   - segments and **no** data-referencing instruction: no section 12 (every row above)
+	//   - a `data.drop` and **no** segments: section 12 with a count of **zero**
+	//
+	// The second was measured before it was written: `(module (func (data.drop 0)))` emitted no
+	// section 12 and `binary.DecodeModule` rejected it with `data count section required`, the
+	// decoder's mirror of the same four `free.ml` lines.
+	{
+		src:              `(module (func (data.drop 0)))`,
+		want:             []binary.CompType{{Kind: binary.CompFunc}},
+		wantFuncs:        []binary.Func{{TypeIndex: 0, Body: []binary.Instr{{Op: 0x09, Prefix: 0xfc, Imm0: 0}, {Op: 0x0b}}}},
+		wantDataCountSec: []byte{0x00},
+	},
+	// A `data.drop` **and** a segment, which is the shape a real module has: section 12 counts the
+	// segments (1), and the image carries both sections in `module_`'s order — 12 before 10, 11 last.
+	{
+		src:              `(module (memory 1) (func (data.drop 0)) (data "x"))`,
+		want:             []binary.CompType{{Kind: binary.CompFunc}},
+		wantMems:         []binary.Memory{{Limits: binary.Limits{Min: 1}}},
+		wantFuncs:        []binary.Func{{TypeIndex: 0, Body: []binary.Instr{{Op: 0x09, Prefix: 0xfc, Imm0: 0}, {Op: 0x0b}}}},
+		wantDataSec:      []byte{0x01, 0x01, 0x01, 'x'},
+		wantDataCountSec: []byte{0x01},
+	},
+	// A **symbolic** data index in the body, resolved against the space the segment's `bindidx_opt`
+	// bound — so this row asserts `retainIdx`'s `catData` path and section 12's condition at once.
+	{
+		src:              `(module (memory 1) (data $seg (i32.const 0) "a") (func (data.drop $seg)))`,
+		want:             []binary.CompType{{Kind: binary.CompFunc}},
+		wantMems:         []binary.Memory{{Limits: binary.Limits{Min: 1}}},
+		wantFuncs:        []binary.Func{{TypeIndex: 0, Body: []binary.Instr{{Op: 0x09, Prefix: 0xfc, Imm0: 0}, {Op: 0x0b}}}},
+		wantDataSec:      []byte{0x01, 0x00, 0x41, 0x00, 0x0b, 0x01, 'a'},
+		wantDataCountSec: []byte{0x01},
+	},
 }
+
+// dataFill is the payload the two page-boundary rows above expect, stated as an argument rather than
+// transcribed.
+//
+// Its whole purpose is that the row's `src` and its `wantDataSec` are built from the *same* length by
+// two different expressions — `strings.Repeat` in the text and this in the bytes — so a row whose two
+// halves disagree is a compile-time-visible mismatch of one number rather than a silent one buried in
+// 65536 hex digits. A literal is not available at this size and calling the encoder would be an echo.
+func dataFill(n int) []byte { return []byte(strings.Repeat("a", n)) }
 
 // TestEncodeRoundTripsThroughTheDecoder is the encoder's acceptance check, and the direction of the
 // authority is fixed: the decoder has 4162 vectors of conformance record and this encoder has none,
@@ -991,26 +1258,54 @@ func TestEncodeRoundTripsThroughTheDecoder(t *testing.T) {
 	//
 	// The floor was 12 against 84 rows for five sections' worth of growth — a bound so far from what
 	// it bounds that it ran, agreed, and said nothing. Set close enough to the real counts to notice a
-	// deletion, and loose enough that adding a row is not a failure. **Both floors move with the
+	// deletion, and loose enough that adding a row is not a failure. **Every floor moves with the
 	// table in the same PR that grows it**, or the distance re-opens: the memarg rows (#8) added seven (84→91,
 	// 14→21) and a floor left at 70/12 would have gone straight back into the vacuum it was raised
 	// out of, silently, because a floor never complains about slack.
-	if len(encodableModules) < 85 {
-		t.Fatalf("encodableModules has %d rows, want >=85 (91 at this commit): a table this check "+
+	//
+	// **A partition gets its own floor as soon as it exists**, which section 11's rows are the third
+	// application of. The data rows are the *only* instrument over section 11 — nothing retains data
+	// segments, so `wantDataSec` is not one column among many but the whole assertion — and a
+	// total-only floor would let all 21 of them go while the other 92 held the number up. That is the
+	// empty-half-behind-a-full-one shape (grave #105) exactly, and the reason it gets a counter rather
+	// than trust is that this partition is the one whose loss is invisible everywhere else.
+	if len(encodableModules) < 105 {
+		t.Fatalf("encodableModules has %d rows, want >=105 (113 at this commit): a table this check "+
 			"reads is a table whose size is part of the assertion, since a comparison over an empty "+
 			"set succeeds", len(encodableModules))
 	}
-	withFuncs := 0
+	withFuncs, withData, withDataCount := 0, 0, 0
 	for _, tc := range encodableModules {
 		if len(tc.wantFuncs) > 0 {
 			withFuncs++
 		}
+		if tc.wantDataSec != nil {
+			withData++
+		}
+		if tc.wantDataCountSec != nil {
+			withDataCount++
+		}
 	}
-	if withFuncs < 19 {
-		t.Fatalf("only %d of %d encodableModules rows assert a function body, want >=19 (21 at this "+
+	if withFuncs < 22 {
+		t.Fatalf("only %d of %d encodableModules rows assert a function body, want >=22 (24 at this "+
 			"commit): the code section is the newest and least-covered half of this table, and a "+
 			"total-only floor would let its rows go to zero behind the other sections'",
 			withFuncs, len(encodableModules))
+	}
+	if withData < 19 {
+		t.Fatalf("only %d of %d encodableModules rows assert a data section payload, want >=19 (21 at "+
+			"this commit): these rows are the only instrument over section 11, since nothing retains "+
+			"data segments (#7) — losing them leaves the section emitted and unchecked",
+			withData, len(encodableModules))
+	}
+	// Its own floor at 2, small but not foldable into the one above: section 12's *condition* is a
+	// question about instructions rather than segments, so a row asserting a data section says nothing
+	// about it. Two is the minimum that covers both directions — a `data.drop` with no segments and
+	// one with a segment — which is the pair the obvious `len(datas) > 0` test gets backwards.
+	if withDataCount < 2 {
+		t.Fatalf("only %d of %d encodableModules rows assert a data count section, want >=2 (3 at this "+
+			"commit): section 12's condition is `free.ml`'s instruction set, not the segment list, and "+
+			"a single row cannot cover both directions of that", withDataCount, len(encodableModules))
 	}
 	for _, tc := range encodableModules {
 		t.Run(tc.src, func(t *testing.T) {
@@ -1059,6 +1354,37 @@ func TestEncodeRoundTripsThroughTheDecoder(t *testing.T) {
 				if got := m.Exports[i]; got != want {
 					t.Errorf("export %d is %+v, want %+v — the Index is the resolved one, so a "+
 						"wrong resolution shows up here and not in any parse verdict", i, got, want)
+				}
+			}
+
+			// Sections 11 and 12, by payload bytes — see the table's header for why this column is
+			// bytes and why that is temporary. Read through `Section.Payload`, so a section written
+			// with the wrong id, or written twice, or out of order, fails in `decodeForTest` above
+			// rather than being papered over here.
+			for _, s := range []struct {
+				id   binary.SectionID
+				what string
+				want []byte
+			}{
+				{binary.SectionData, "data", tc.wantDataSec},
+				{binary.SectionDataCount, "data count", tc.wantDataCountSec},
+			} {
+				got, found := sectionPayload(m, s.id)
+				switch {
+				case s.want == nil && found:
+					t.Errorf("encoded % x, which carries a %s section (% x) for a module that "+
+						"should have none: an unexpected section 11 or 12 is a decode failure on "+
+						"any real consumer, not a harmless extra", b, s.what, got)
+				case s.want != nil && !found:
+					t.Errorf("encoded % x, which carries no %s section: want payload % x. The "+
+						"round trip above cannot see this — nothing retains data segments (#7) — "+
+						"so a dropped section 11 is invisible to every other column here",
+						b, s.what, s.want)
+				case s.want != nil && !slices.Equal(got, s.want):
+					t.Errorf("the %s section's payload is % x, want % x: the mode flag, the memory "+
+						"index and the offset expression are all unretained by the decoder, so a "+
+						"wrong one decodes clean and denotes a different module",
+						s.what, got, s.want)
 				}
 			}
 
@@ -1494,7 +1820,8 @@ func TestEncodeRefusesWhatItCannotWrite(t *testing.T) {
 		// by the start field, now, rather than by the func that precedes it.
 		{`(module (global i32 (i32.const 0)))`, "(global …) field"},
 		{`(module (start 0) (func))`, "(start …) field"},
-		{`(module (data "abc"))`, "(data …) field"},
+		// `(module (data "abc"))` was here and is now in `encodableModules`, which is what section 11
+		// *is* — the same move `(module (func))` made when the code section landed.
 		{`(module (elem))`, "(elem …) field"},
 		{`(module (tag))`, "(tag …) field"},
 		{`(module (type (struct)))`, "struct or array"},
@@ -1519,8 +1846,13 @@ func TestEncodeRefusesWhatItCannotWrite(t *testing.T) {
 		// with one was refuse it. Now both spellings retain, and the pairs in `encodableModules` assert
 		// the two denote the same import. What stays here is every arm that retains something *no*
 		// section exists for.
-		{`(module (memory (data "abc")))`, "(memory …) field"},  // + an implicit data segment
-		{`(module (memory i64 (data "")))`, "(memory …) field"}, // the sugar's addrtype arm
+		// **The two memory-data-sugar rows moved to `encodableModules` in this PR**, and their departure
+		// is section 11's. They were here because the arm defines a memory *sized from* a data segment
+		// there was no section for, so emitting the memory alone would have written a page count with
+		// nothing in it. Both spellings now retain both halves, and the pairs in `encodableModules`
+		// assert the sugar and its longhand denote one module — which is the only instrument that can,
+		// the sugar's size arithmetic and synthesized offset having no source token to be wrong about.
+		//
 		// **The seven inline-export rows moved to `encodableModules` in this PR**, and the move is what
 		// the export section *is*. They were here because an inline export needed a section that did
 		// not exist, so every field carrying one had to keep its refusal — which is what the
@@ -1568,23 +1900,33 @@ func TestEncodeRefusesWhatItCannotWrite(t *testing.T) {
 		// unencodable field is the one whose name must appear in the message, never the encodable
 		// field that follows it.
 		//
-		// **The leader was `(func)` and is now `(data "abc")`, because a leader must be a field the
-		// emitter still cannot write.** This is the tripwire-re-pointing rule (#33) at test-row scale:
-		// the row named a risk — a later field withdrawing an earlier field's refusal — and the code
-		// section dissolved its *subject* without touching the risk. Deleting it would retire a live
-		// control on a technicality; so `func` moves from leader to **follower** below, where it is a
-		// stronger witness than it was as a leader, `funcField`'s tail being the one place that both
-		// retains and clears in the same breath.
-		{`(module (data "abc") (memory 1))`, "(data …) field"},
-		{`(module (data "abc") (table 1 funcref))`, "(data …) field"},
-		{`(module (memory (data "x")) (memory 1))`, "(memory …) field"},
+		// **The leader was `(func)`, then `(data "abc")`, and is now `(elem)` — re-pointed twice for the
+		// same reason.** This is the tripwire-re-pointing rule (#33) at test-row scale, and the second
+		// application is the one that proves it is a rule rather than a one-off: the rows name a *risk*
+		// — a later field withdrawing an earlier field's refusal — and each landing section dissolves
+		// whichever leader it implements without touching the risk. `func` moved to follower when the
+		// code section landed; `data` follows it now that section 11 does. Deleting the rows instead
+		// would have retired a live control twice on a technicality.
+		//
+		// `(elem)` is the leader that remains, and the ones after it are `(global …)`, `(start …)`,
+		// `(tag)`. When section 9 lands, this comment's instruction is to re-point again, not to delete.
+		{`(module (elem) (memory 1))`, "(elem …) field"},
+		{`(module (elem) (table 1 funcref))`, "(elem …) field"},
+		{`(module (table funcref (elem)) (memory 1))`, "(table …) field"},
 		{`(module (tag) (memory 1) (table 1 funcref))`, "(tag …) field"},
-		// `func` as the *follower*: an unencodable field, then a func that encodes. `funcField`'s tail
-		// calls `noteDefined` and `clearNonTypeField` after retaining its body, so it is the newest
-		// candidate for clearing a record that is not its own — and unlike the memory and table arms,
-		// it reaches that call on every well-formed func. Falsified by dropping the offset comparison
-		// in `clearNonTypeField`: these two encode, emitting a module whose data or tag is gone.
-		{`(module (data "abc") (func))`, "(data …) field"},
+		// **A `(data …)` field as the *follower*, which is where its departure makes it a better
+		// witness than it was as a leader.** `dataField` has three arms and every one of them calls
+		// `clearNonTypeField` after its closing paren, so it is the newest candidate for clearing a
+		// record that is not its own — and the sugar arm clears one too. Falsified by dropping the
+		// offset comparison in `clearNonTypeField`: these three encode, emitting a module whose elem or
+		// tag is gone.
+		{`(module (elem) (data "abc"))`, "(elem …) field"},
+		{`(module (tag) (memory 1) (data (i32.const 0) "x"))`, "(tag …) field"},
+		{`(module (elem) (memory (data "x")))`, "(elem …) field"},
+		// `func` as a follower, unchanged: `funcField`'s tail calls `noteDefined` and
+		// `clearNonTypeField` after retaining its body, and unlike the memory and table arms it reaches
+		// that call on every well-formed func.
+		{`(module (elem) (func))`, "(elem …) field"},
 		{`(module (tag) (func) (memory 1))`, "(tag …) field"},
 
 		// # The typeuse frontier, which is a *wrong index* rather than a missing section

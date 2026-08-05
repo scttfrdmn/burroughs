@@ -297,6 +297,14 @@ func (p *parser) retainIdx(mnemonic Token, r idxRef) error {
 		}
 		return nil
 	}
+	// Every other category resolves **at the cursor**, which is one pass where the reference has
+	// two — `module_fields1`'s second closure resolves all of them, and the `catFunc` arm above is
+	// that closure built for exactly one category because forward calls made the need unmissable.
+	// The premise for the rest ("its definitions precede the code section") is a fact about the
+	// *image*: `module_fields` admits any field order in the source, so
+	// `(module (func (data.drop $s)) (data $s …))` is rejected here and accepted upstream, while the
+	// reverse order is accepted here. Grave #130 — an accept-direction defect no vector can see,
+	// which is where the both-orders control scoped to all the categories lives.
 	idx, err := space.resolveSpaceIdx(r)
 	if err != nil {
 		return err

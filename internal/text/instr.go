@@ -107,6 +107,34 @@ var initSugarKinds = map[keywordKind]bool{
 	"TABLE_INIT":  true,
 }
 
+// dataRefKinds are the mnemonics whose free variables include the **data index space**, which is
+// section 12's emission condition (#8).
+//
+// Read off `free.ml` rather than off this file's own `idxLookupKinds`, and the two disagree in a way
+// that matters. `free.ml` names four arms — `MemoryInit (x,y)` (:165), `DataDrop x` (:166),
+// `ArrayNewData (x,y)` (:175), `ArrayInitData (x,y)` (:181) — but `idxLookupKinds` records each arm's
+// **first** category, and for the two array arms that is `catType`. So `cat == catData` finds two of
+// the four, and a module whose only data reference is an `array.init_data` would be emitted without
+// section 12: well-formed text, and an image the decoder rejects. The condition is a property of the
+// *instruction*, not of one of its indices, so it is keyed by mnemonic.
+//
+// This is the same set `internal/binary/instr.go`'s `dataRefOps` holds, one grammar over, and both
+// were derived from those four `free.ml` lines rather than from the two the suite exercises
+// (`binary.wast:302`, `:325` cover the `fc` pair; the `fb` pair has no vector at all).
+// TestDataRefKindsMatchTheDecodersOpcodes holds the two sides to one authority, because a set that
+// grows on one side of a round trip and not the other is an accept-direction defect on whichever
+// side stayed still.
+//
+// Held as a set of kinds rather than of opcodes because that is the key this grammar has: the text
+// side reaches the mnemonic and the binary side reaches the byte pair, so the agreement is checked
+// through the generated opcode table rather than asserted by matching literals.
+var dataRefKinds = map[keywordKind]bool{
+	"MEMORY_INIT":     true, // fc 08 — free.ml:165
+	"DATA_DROP":       true, // fc 09 — free.ml:166
+	"ARRAY_NEW_DATA":  true, // fb 09 — free.ml:175
+	"ARRAY_INIT_DATA": true, // fb 12 — free.ml:181
+}
+
 // labelTakingKinds are the `plaininstr` mnemonics whose **first** index is a label — the arms
 // that pass `label` as `idx`'s lookup function (#80).
 //
@@ -348,6 +376,15 @@ func (p *parser) plaininstr() (bool, error) {
 	}
 	if !p.retaining() {
 		return true, nil
+	}
+	// **Before the two refusals below**, so the record is a property of the instruction rather than of
+	// whether this stratum can encode it. Two of the four data-referencing mnemonics are refused a few
+	// lines down (`array.new_data`'s `immIdxIdx` shape is not in `encodableShapes`), and recording
+	// after those returns would make the flag mean "an *encodable* data reference" — a subtly
+	// different question, and one whose answer changes as the frontier moves. Ordering only, since the
+	// refusal aborts the encode either way; stated because a reader may otherwise move it.
+	if dataRefKinds[t.Keyword] {
+		p.ctx.sawDataRef = true
 	}
 	if !encodableShapes[shape] {
 		// A shape whose immediates this file does not write — memarg's natural-alignment default,
@@ -629,6 +666,14 @@ type memargImm struct {
 // A symbolic index resolves against the memory space, which does not permit forward references
 // (memories are declared before the code section's bodies are read), so this resolves at the
 // cursor rather than deferring like `catFunc`.
+//
+// **That parenthetical is a fact about the binary and it was read as a fact about the text.**
+// The section order does constrain the *image*; `module_fields` admits any field order in the
+// *source*, so `(module (func (data.drop $s)) (data $s …))` is a valid module this parser rejects
+// while the reverse order it accepts — resolution at the cursor is one pass where the reference has
+// two, and `catFunc`'s deferral is that second pass built for exactly one category. Every
+// non-catFunc space is affected, data segments being the only one with an encodable opcode today.
+// Grave #130, where the scope table and the both-orders control live.
 func (p *parser) retainMemarg(mnemonic Token, m memargImm) error {
 	if !p.retaining() {
 		return nil

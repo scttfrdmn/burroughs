@@ -109,17 +109,25 @@ import (
 // A future divergence in a legal-but-different encoding is a fact about wabt's style and must not be
 // read as a defect here.
 
-// The section ids this emitter writes. The remaining ten arrive with their sections — naming them
+// The section ids this emitter writes. The remaining eight arrive with their sections — naming them
 // now would be constants nothing reads, which is the placeholder shape #6 rules on, and the honest
 // version of "later" here is an empty line rather than a tracked stub.
+//
+// **The numbers are ids, and ids are not the order they are written in.** `module_` writes section 12
+// *before* section 10 and section 11 last (encode.ml:1156-1161), which is not a quirk of the writer
+// but the format: `binary.wast:1194` asserts a code section preceding a data count section is
+// malformed. `sectionRank` on the decoding side holds the same fact as an explicit rank, and
+// `encode`'s call sequence is where this side holds it.
 const (
-	secType     byte = 1
-	secImport   byte = 2
-	secFunction byte = 3
-	secTable    byte = 4
-	secMemory   byte = 5
-	secExport   byte = 7
-	secCode     byte = 10
+	secType      byte = 1
+	secImport    byte = 2
+	secFunction  byte = 3
+	secTable     byte = 4
+	secMemory    byte = 5
+	secExport    byte = 7
+	secCode      byte = 10
+	secData      byte = 11
+	secDataCount byte = 12
 )
 
 // tagFunc is `comptype`'s functype form, 0x60 — which is -0x20 read as the sleb(7) the decoder
@@ -255,8 +263,22 @@ func (p *parser) encode() ([]byte, error) {
 	if len(p.ctx.exports) > 0 {
 		w.section(secExport, p.encodeExports)
 	}
+	// **Section 12 before section 10, and section 11 after it** — `module_`'s order (encode.ml:1156-1161),
+	// which is the format's rather than the writer's: a code section preceding a data count section is
+	// malformed (`binary.wast:1194`), because the count is what lets a body's `data.drop` be validated
+	// before the segments are read. Writing them in id order would emit an image this project's own
+	// decoder rejects.
+	//
+	// Section 12's *condition* is `p.ctx.sawDataRef`, not `len(dataDefs) > 0` — see that field's
+	// comment for the two directions in which the obvious test is wrong.
+	if p.ctx.sawDataRef {
+		w.section(secDataCount, p.encodeDataCount)
+	}
 	if len(funcs) > 0 {
 		writeCodeSection(&w, funcs)
+	}
+	if len(p.ctx.dataDefs) > 0 {
+		w.section(secData, p.encodeDatas)
 	}
 	return w.b, nil
 }
@@ -292,8 +314,8 @@ func (p *parser) encodableOrErr() error {
 		// papered over — naming the arm needs the arm threaded into the record, and the field is
 		// what a reader edits.
 		return errf(p.ctx.firstNonType, "cannot yet encode this (%s …) field: the emitter writes "+
-			"the type, import, function, table, memory, export and code sections (#8)",
-			p.ctx.firstNonType.Text)
+			"the type, import, function, table, memory, export, code, data and data count "+
+			"sections (#8)", p.ctx.firstNonType.Text)
 	}
 	// **The withdrawal check.** Every *defined* memory and table must have been retained, or a
 	// section is short by one and the image means something else. `clearNonTypeField` is a claim an
@@ -375,6 +397,17 @@ func (p *parser) encodableOrErr() error {
 	if got, want := len(p.ctx.exports), p.ctx.exportsSeen; got != want {
 		return fmt.Errorf("text: internal: %d exports retained, %d parsed — a spelling withdrew the "+
 			"encoder's frontier without recording its content (#8)", got, want)
+	}
+	// The same check for section 11, and it fires today: `datasSeen` is the grammar's, incremented in
+	// `noteData` at each of the two `(data` recognizers, and `len(dataDefs)` is the emitter's, appended
+	// by `defineData`. Falsified by deleting the `defineData` call from `memoryDataSugar`:
+	// `(module (memory (data "abc")))` then emits a memory of one page with no bytes in it — a module
+	// that decodes clean and whose memory is empty — and this fires with `0 data segments retained,
+	// 1 parsed`. That is exactly the defect the sugar arm carried while section 11 did not exist, which
+	// was invisible because nothing compared the two numbers.
+	if got, want := len(p.ctx.dataDefs), p.ctx.datasSeen; got != want {
+		return fmt.Errorf("text: internal: %d data segments retained, %d parsed — a spelling withdrew "+
+			"the encoder's frontier without recording its content (#8)", got, want)
 	}
 	for i, t := range p.ctx.tabDefs {
 		if _, ok := valTypeByte(t.elem); !ok {
@@ -585,6 +618,57 @@ func (p *parser) encodeMemories(w *writer) {
 		m := p.ctx.memDefs[i]
 		w.limits(m.addr64, m.lim)
 	})
+}
+
+// encodeDatas writes section 11: one entry per data segment, in source order (#8).
+//
+// The three arms are `encode.ml`'s `data` (:1092-1101), and the discriminator is the **resolved**
+// memory index rather than the text's spelling:
+//
+//	Passive                 -> 0x01, payload
+//	Active ({it = 0l}, c)   -> 0x00, const expr, payload
+//	Active (x, c)           -> 0x02, memory index, const expr, payload
+//
+// So `(data (memory 0) …)` and `(data …)` produce identical bytes, which is what every other producer
+// does and what `textData`'s comment argues at length. The fourth arm, `Declarative`, is an *error* in
+// the reference (`illegal declarative data segment`) and is unreachable here for a stronger reason
+// than a check: the text grammar's `data` has no declarative arm at all (parser.mly:1094-1105) — only
+// `elem` does — so there is no spelling to refuse.
+//
+// **The mode flag is a `u32`, not a byte.** `u32 0x01l` (:1095) means a segment flag above 127 would
+// take two bytes; no such flag exists, so this is a distinction without a difference *today*, and
+// writing `byte1` would be a second reading of the same field to keep in agreement later. Same
+// argument `opBytes` makes about a prefixed opcode's sub-opcode, which is where getting it wrong
+// would have mattered.
+//
+// Cannot fail, on every other section's discipline: `defineData`'s thunks resolved the index and
+// encoded the offset in stage 2, and `encodableOrErr` refused anything left.
+func (p *parser) encodeDatas(w *writer) {
+	w.vec(len(p.ctx.dataDefs), func(w *writer, i int) {
+		d := p.ctx.dataDefs[i]
+		switch {
+		case d.passive:
+			w.u32(0x01)
+		case d.mem == 0:
+			w.u32(0x00)
+			w.bytes(d.offset)
+		default:
+			w.u32(0x02)
+			w.u32(d.mem)
+			w.bytes(d.offset)
+		}
+		w.byteVec(d.bytes)
+	})
+}
+
+// encodeDataCount writes section 12: the segment count and nothing else.
+//
+// `section 12 len (List.length datas)` (encode.ml:1109) — `len` is a bare `u32`, *not* a vector, so
+// this is one LEB with no elements after it. The count is the number of **segments**, while whether
+// the section exists at all is a question about **instructions** (`sawDataRef`), and conflating those
+// two is the defect that field's comment measures.
+func (p *parser) encodeDataCount(w *writer) {
+	w.u32(uint32(len(p.ctx.dataDefs)))
 }
 
 // limits writes a limits: the flags byte, the minimum, and the maximum when present.

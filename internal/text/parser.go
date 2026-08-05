@@ -1249,7 +1249,9 @@ func (p *parser) memoryField() error {
 		return err
 	}
 	if p.c.at(LParen) && p.c.peek2Keyword(kwData) {
-		return p.memoryDataSugar()
+		// `idx` is this memory's own index, which the sugar's data segment is `Active` on — not a
+		// defaulted 0. See memoryDataSugar.
+		return p.memoryDataSugar(kw, idx, addr64)
 	}
 	lim, err := p.limits()
 	if err != nil {
@@ -1278,23 +1280,84 @@ func (p *parser) memoryField() error {
 // the arm satisfies both by removing the cause, which is the outcome the spirit clause prefers over a
 // suppression — a `nolint` here would have documented a disagreement instead of resolving it.
 //
-// No retention and no withdrawal: this arm defines a memory the emitter *cannot* write, because its
-// size is derived from a data segment there is no data section for yet. Counting it would make
-// `encodableOrErr`'s retention check disagree with itself, which is the check working — it asks
-// whether every defined memory was retained, and this one deliberately was not.
-func (p *parser) memoryDataSugar() error {
+// **The arm defines two things and now retains both** (#8). The paragraph that stood here read "no
+// retention and no withdrawal: this arm defines a memory the emitter *cannot* write, because its size
+// is derived from a data segment there is no data section for yet" — honest while section 11 did not
+// exist, and section 11 is what expired it. It is quoted rather than deleted because the reason for
+// the decline is the reason this arm is *interesting*: it is the one place a memory's own type is
+// computed from a data segment's length, so retaining one without the other would emit a memory of
+// the wrong size or a segment with no home.
+//
+// The size is the reference's own arithmetic, `Int64.(div (add (of_int (String.length $4)) 65535L)
+// 65536L)` (parser.mly:1128) — the payload rounded **up** to whole 64KiB pages — with min and max
+// both set to it. Ceiling rather than floor: a floor would size `(memory (data "x"))` at zero pages
+// and the segment would not fit in the memory it was written for, which validation catches and the
+// encoder should never produce. The offset is `at_const $1 (0L)` (:1130, mnemonics.ml:18-20), an
+// `i32.const 0` or `i64.const 0` by the memory's own address type — so a 64-bit memory's sugar
+// segment gets an `i64.const`, and writing `i32.const` there would encode an offset of the wrong
+// type in an image that decodes clean.
+//
+// The data segment's memory index is **this memory's own**, `Active (x, offset)` where `x` is
+// `bindidx_opt`'s value — not a defaulted 0. For `(module (memory 1) (memory (data "x")))` the sugar
+// segment belongs to memory *1*, and defaulting it would silently write the bytes into the first
+// memory.
+func (p *parser) memoryDataSugar(kw Token, idx uint32, addr64 bool) error {
 	if err := p.lpar(kwData); err != nil {
 		return err
 	}
-	if err := p.stringList(); err != nil {
-		return err
-	}
+	p.ctx.noteData()
+	bs := p.stringList()
 	if err := p.rpar(); err != nil {
 		return err
 	}
 	p.ctx.datas.bindAnon() // the sugar's implicit data segment
 	p.ctx.markDefined(importMemory)
-	return p.rpar()
+	if err := p.rpar(); err != nil {
+		return err
+	}
+	// After the closing paren, on `memoryField`'s tail's rule, and in the reference's own order:
+	// the memory first, then the data segment that sizes it.
+	pages := (uint64(len(bs)) + 0xFFFF) / 0x10000
+	p.ctx.defineMemory(memType{addr64: addr64, lim: limits{min: pages, max: pages, hasMax: true}})
+	p.ctx.noteDefined(importMemory)
+	p.ctx.defineData(textData{
+		mem:    idxRef{idx: idx},
+		offset: sugarZeroOffset(addr64),
+		bytes:  bs,
+	})
+	p.ctx.clearNonTypeField(kw)
+	return nil
+}
+
+// sugarZeroOffset is the `at_const <addrtype> 0` offset the two data-bearing sugar arms synthesize
+// (parser.mly:1130, mnemonics.ml:18-20).
+//
+// **The instruction has no source token, which is why it is built here rather than parsed.** It is
+// the reference's `[at_const $1 (0L @@ loc) @@ loc]` — a one-instruction const expression the text
+// never spells — and the address type selects the mnemonic: `I32AT -> i32_const`, `I64AT ->
+// i64_const`. A `(memory i64 (data "x"))` whose offset were written as `i32.const 0` would encode an
+// i32 offset for an i64 memory, which is a validation error the encoder has no business producing.
+//
+// The immediate is a *signed* LEB of zero, which is one `00` byte either way — the same byte an
+// `i32.const 0` from source text gets, because `constImmBytes` writes `s32`/`s64` and both are
+// minimal. So the two paths agree by construction rather than by coincidence.
+func sugarZeroOffset(addr64 bool) instrSink {
+	mnemonic := "i32.const"
+	if addr64 {
+		mnemonic = "i64.const"
+	}
+	op, ok := opBytes(mnemonic)
+	if !ok {
+		// Unreachable: both mnemonics are in the generated table, which
+		// TestSugarZeroOffsetEncodesTheAddressTypesConst pins by decoding what this produces. A panic
+		// rather than an empty sink, because an offset expression missing its instruction encodes a
+		// segment whose offset is whatever the stack happened to hold — grave #36's class in an image.
+		panic("text: " + mnemonic + " has no opcode, so the data sugar's synthesized offset cannot " +
+			"be built")
+	}
+	var s instrSink
+	s.add(instr{op: op, imm: []byte{0x00}})
+	return s
 }
 
 // tableField parses `table` (parser.mly:1185-1225).
@@ -1414,50 +1477,141 @@ func (p *parser) tableElemSugar() error {
 	return p.rpar()
 }
 
-// dataField parses `data` (parser.mly:1095-1107).
+// dataField parses `data` (parser.mly:1095-1107) and retains it as section 11's content (#8).
 //
-// Three arms: passive, `(memory idx) offset string_list`, and the offset-only sugar. The offset
-// is an instruction sequence, so only the passive arm completes in this stratum — which is the
-// entire reason `(data "\ef\ff\fe")`'s legality is provable here at all.
+// Three arms, and all three are now encodable: passive, `(memory idx) offset string_list`, and the
+// offset-only sugar. The paragraph that stood here said "only the passive arm completes in this
+// stratum — which is the entire reason `(data "\ef\ff\fe")`'s legality is provable here at all", and
+// the legality half is still why the payload has no UTF-8 check; the arm half expired with this PR.
+//
+// **The offset is a constant expression in a module field, which is where the instruction sink
+// leaves `funcField` for the first time.** That escape is the grammar's shape rather than scope
+// creep: `offset` is `LPAR OFFSET constexpr RPAR | expr` (parser.mly:1091-1093) and the two active
+// arms both take one, so a data section cannot be written without retaining instructions outside a
+// function body. The reference does exactly this — the offset arms at :1102/:1105 build const
+// exprs that `module_fields1`'s second closure resolves — so the sink following the grammar out of
+// the func body is consumer-forced retention under 0006's rule, not a widening of it. See
+// `dataOffset` for the swap-and-restore, whose falsification is
+// TestDataOffsetRestoresTheOuterSink.
 func (p *parser) dataField() error {
+	kw := p.c.peek2()
 	if err := p.lpar(kwData); err != nil {
 		return err
 	}
+	p.ctx.noteData()
 	if _, err := p.bindidxOpt(&p.ctx.datas); err != nil {
 		return err
 	}
-	if p.c.at(LParen) && p.c.peek2Keyword(kwMemory) { // memoryuse, parser.mly:1109
-		if err := p.lpar(kwMemory); err != nil {
+	if p.c.at(LParen) && p.c.peek2Keyword(kwMemory) {
+		mem, err := p.memoryUse()
+		if err != nil {
 			return err
 		}
-		if err := p.idx(); err != nil {
+		off, err := p.dataOffset()
+		if err != nil {
 			return err
 		}
+		bs := p.stringList()
 		if err := p.rpar(); err != nil {
 			return err
 		}
-		if err := p.offset(); err != nil {
-			return err
-		}
-		if err := p.stringList(); err != nil {
-			return err
-		}
-		return p.rpar()
+		// After the closing paren, on `memoryField`'s tail's rule: a field that errors out mid-way
+		// must leave no trace, or the retained segment count disagrees with section 11's on a module
+		// that never finished parsing.
+		p.ctx.defineData(textData{mem: mem, offset: off, bytes: bs})
+		p.ctx.clearNonTypeField(kw)
+		return nil
 	}
 	if p.c.at(LParen) {
-		// The offset sugar: `(offset …)` or a folded expr (parser.mly:1105).
-		if err := p.offset(); err != nil {
+		// The offset sugar: `(offset …)` or a folded expr (parser.mly:1103-1105). The memory index
+		// **defaults to 0** — `Active (0l @@ $sloc, $4 c)` — which is `textData.mem`'s zero value, an
+		// `idxRef` resolving to 0. Not a separate flag: `data`'s `0x00` and `0x02` arms split on the
+		// *resolved* index, so an explicit `(memory 0)` and this default are the same encoding, and
+		// `textData`'s comment has why the first draft's flag was wrong.
+		off, err := p.dataOffset()
+		if err != nil {
 			return err
 		}
-		if err := p.stringList(); err != nil {
+		bs := p.stringList()
+		if err := p.rpar(); err != nil {
 			return err
 		}
-		return p.rpar()
+		p.ctx.defineData(textData{offset: off, bytes: bs})
+		p.ctx.clearNonTypeField(kw)
+		return nil
 	}
-	if err := p.stringList(); err != nil {
+	bs := p.stringList()
+	if err := p.rpar(); err != nil {
 		return err
 	}
-	return p.rpar()
+	// Passive: no offset at all, which `passive` says rather than a nil-offset test. An empty
+	// instruction list is a legal *active* offset (`(data (offset) "")` — `constexpr` is `instr_list`,
+	// so the empty sequence parses), so nil-ness cannot carry the mode.
+	p.ctx.defineData(textData{passive: true, bytes: bs})
+	p.ctx.clearNonTypeField(kw)
+	return nil
+}
+
+// memoryUse parses `memory_use` (parser.mly:1108): `LPAR MEMORY var RPAR`.
+//
+// Its own function rather than four inlined lines in dataField, and the reason is the grammar's
+// rather than style's: `memory_use` is a named production, and `data`'s active arm is the first of
+// what will be several consumers (`elem`'s `table_use` is its sibling, and #63's `memory.init`
+// takes the same shape). Naming it here is where the second consumer looks.
+func (p *parser) memoryUse() (idxRef, error) {
+	if err := p.lpar(kwMemory); err != nil {
+		return idxRef{}, err
+	}
+	mem, err := p.idxValue()
+	if err != nil {
+		return idxRef{}, err
+	}
+	if err := p.rpar(); err != nil {
+		return idxRef{}, err
+	}
+	return mem, nil
+}
+
+// dataOffset parses a data segment's offset, retaining the instructions it holds.
+//
+// **This is the one place the instruction sink is installed outside a function body**, and the escape
+// is grammar-forced: section 11's own grammar puts a constant expression in a module field
+// (parser.mly:1102/1105, `offset` at :1091-1093), and `encode.ml`'s `data` writes `const c` for both
+// active arms (:1098/:1101). A data section cannot be emitted without it. That is 0006's rule
+// running normally rather than an exception to it — the retention is grown from what this section's
+// grammar requires and no wider — and the reference resolves these same const exprs in
+// `module_fields1`'s second closure, so the shape is transcribed rather than invented.
+//
+// The swap-and-restore is `funcField`'s, copied rather than re-derived (*lessons are indexed by
+// shape*). **The saved value is always nil, and this comment said otherwise until it was measured.**
+// The claim was "genuinely non-nil in one case", which reads like the interesting half of the
+// mechanism; a counter on both branches, over all four `(data …)` spellings and the memory sugar,
+// reports `nil=1 nonNil=0` on every one — a `(data …)` field cannot nest inside a func body in any
+// spelling. So the swap's job here is the **clear**, exactly as it is in `funcField`, and writing it
+// as a swap is what keeps the nil-ness a fact about the grammar rather than an assumption a future
+// caller silently breaks.
+//
+// The correction matters because a control written to the old claim would have hunted for a non-nil
+// outer sink, found no input producing one, and been stillborn. Falsified as
+// TestDataOffsetRestoresTheOuterSink instead, in the direction that exists: deleting the restore
+// leaks the offset's `i32.const 0` into module-field scope, and the visible symptom is a *later*
+// field refusing at the wrong layer — `(table 1 funcref (ref.null func))` reporting the ref.null
+// instruction where it must report the `(table …)` field.
+//
+// **Only when the mode says to retain**, on `funcField`'s argument: a `ReadModule` parse must leave
+// the sink nil so `refuseUnencodable` stays silent and the recognizer answers exactly what it
+// answered before section 11 existed.
+func (p *parser) dataOffset() (instrSink, error) {
+	var off instrSink
+	outerSink := p.sink
+	if p.retain {
+		p.sink = &off
+	}
+	defer func() { p.sink = outerSink }()
+	if err := p.offset(); err != nil {
+		return instrSink{}, err
+	}
+	return off, nil
 }
 
 // elemField parses `elem` (parser.mly:1158-1180).

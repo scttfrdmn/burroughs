@@ -21,6 +21,48 @@ weakly-ordered platform.
 
 ### Added
 
+- **`internal/text`: the data section, the data count section, and the memory field's inline-data
+  sugar** ([#8](https://github.com/scttfrdmn/burroughs/issues/8)). Section 11's three arms are
+  discriminated on the *resolved* memory index per `encode.ml:1092`, so `(data (memory 0) …)` and
+  `(data …)` produce identical bytes and the `Declarative` arm is unreachable from wat — `data` has
+  no declarative production in `parser.mly:1094`, only `elem` does. Section 12 is emitted on the
+  reference's own condition, which is about **instructions and not segments**: `free.ml:217` makes a
+  segment contribute nothing to the `datas` set, which is fed only by `memory.init`, `data.drop`,
+  `array.new_data` and `array.init_data`, so a module with a hundred segments and no data-referencing
+  instruction gets no section 12 and `(func (data.drop 0))` with no segments at all gets one holding
+  zero. Both directions are pinned, because the obvious `len(datas) > 0` test gets them backwards.
+
+  **The board moved 9082 vectors and earned none of them, which is the honest headline.** Encode
+  stratum **13775 → 4693**; of that 9082, **8272 became execution fails and 810 became gate
+  declines, and zero became passes**. A `(data …)` module that now encodes still needs a *load arm*
+  to answer its `assert_return`, so `interp: no arm for opcode 2d` went 9 → 8001 and is now the
+  largest single number on the board. `unsupported` is **unmoved** at 32764: this payment landed in
+  the encode column, not that one, and the two are not interchangeable. `execFailCeiling` is re-based
+  441 → 8713 with the construct named, per the licence its own comment wrote.
+
+  **The sink escapes `funcField`, and that is the grammar's shape rather than scope creep** (Scott's
+  ruling): section 11's grammar puts a constant-expression in a *module field*, so the instruction
+  sink that `funcField` owns has to be swapped in and restored outside it. Documented at the site as
+  grammar-forced and falsified at birth — deleting the restore leaks the offset's `i32.const 0` into
+  module-field scope, where the visible symptom is a *later* field refusing at the wrong layer.
+
+  **The prose at that site was wrong and the correction is the finding.** It claimed the saved sink
+  "is genuinely non-nil in one case"; a counter on both branches over all four `(data …)` spellings
+  and the memory sugar reports `nil=1 nonNil=0` on every one. A control written to the old claim
+  would have hunted for a non-nil outer sink, found no input producing one, and been **stillborn** —
+  so `TestDataOffsetRestoresTheOuterSink` asserts the direction that exists instead.
+
+  **Section 11 is witness-blind and says so at the site.** `binary.Module` retains no data segments
+  (#7 will force it, when the interpreter's memory tests need them), so the round trip cannot see
+  this section at all and the witnesses are byte-level over `Section.Payload`. Saying so keeps the
+  round trip's silence from impersonating a check.
+
+  `internal/testenv` licenses a fifth reference authority, `interpreter/syntax/free.ml` — the
+  authority for *which index spaces an instruction references*, which neither `decode.ml` nor
+  `encode.ml` answers alone, and which `internal/binary`'s `dataRefOps` has cited since #22 with
+  nothing resolving it. Its floor is 5000 bytes against the other four's 20000, which is the
+  argument for per-file constants arriving as a measurement rather than as a principle.
+
 - **`internal/text`: the memarg emitter, and the default alignment table it needs**
   ([#8](https://github.com/scttfrdmn/burroughs/issues/8), 0007). The load/store immediate — flags
   byte, optional memory index, offset — is `encode.ml:221`'s `memop`, and it is the largest single
@@ -1851,6 +1893,23 @@ weakly-ordered platform.
   skip ([#29](https://github.com/scttfrdmn/burroughs/issues/29)).
 
 ### Fixed
+
+- **Two gate-allowlist reasons stated a memory count nobody re-derived: three memories documented as
+  five and as four** ([grave #129](https://github.com/scttfrdmn/burroughs/issues/129)).
+  `memory_trap0.wast:1` was recorded as "five memories at :1" and defines three;
+  `memory_fill0.wast:2` as "four" and defines three. Both came from counting the literal `(memory` in
+  the source, where `(memory.size $m)`, `(memory.grow …)`, `(memory.fill $m …)` and
+  `(data (memory 2) …)` spell those characters **without defining a memory** — three mnemonics and a
+  reference into the index space.
+
+  The entries named the right *feature*, so they did their allowlist job and review had no reason to
+  look past them; only the supporting number was false. That is #114's class with the identifier
+  replaced by a count, and it survived the allowlist's own "verified by reading each module head"
+  discipline because the head was read for the feature and the memories were counted off the same
+  text the emitter reads. The counts are now the **decoder's** — `len(Module.Memories)` plus the
+  memory imports, all gates on — which is the index space `memarg flags bit 6` is a statement about,
+  so the reason's number and the reason's claim are one measurement. *Measure with the instrument,
+  not a regex.*
 
 - **`i32.const` did not occupy its slot: the four `const` opcodes shared one arm, and 114 spellings
   converted wrongly with the board unmoved**
