@@ -588,6 +588,20 @@ the choice, and consequences once Scott has called it.
   a ceiling's comment called it "not ours"); different oracle, still open. *Split
   issues at the oracle seam* — this half's oracle is local, so this half lands first.
   (Ruling: Scott, PR #113; graves #114, #115, #116.)
+  - **Cite issues at fix sites, never PRs — the mitigation is a better target, not a better
+    resolver.** An issue number is a *durable home*: a grave stays a grave, and #8 still names
+    the encoder frontier whatever PR moves it. A PR number is a **supersedable container**, and
+    the demonstration took one afternoon: a citation to `#127` was wrong *twice in opposite
+    directions* — first fiction, typed before any such PR existed; then right by luck, GitHub
+    sharing one sequence between issues and PRs; then wrong again in a new and worse way when
+    #126's merge deleted the base branch, GitHub auto-closed #127 and refused to reopen it, and
+    the work landed as #128. **A citation that resolves perfectly while pointing at the closed,
+    superseded half of a pair is invisible to any resolver that only asks existence**, which is
+    the drifted-fixture defect with a live target for camouflage. Both errors were caught by a
+    human noticing, and *noticing is not a mechanism*. So PRs are cited only as **history**,
+    where being superseded is the point — the cascade narrative at `mllex.go` is the licensed
+    shape. This shrinks #116's oracle-less half to nearly nothing while building nothing, which
+    is why it is a rule and not an issue. (Ruling: Scott, PR #128.)
 - **Three provenance categories: cited, derived, synthetic.** *Entailment from
   checked facts is legitimate provenance; unstated entailment is just synthetic
   with better manners.* A **derived** vector is one the suite implies but does not

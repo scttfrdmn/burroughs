@@ -214,7 +214,7 @@ func instantiateWith(f binary.Features, c Command) (Instance, Stratum, error) {
 	if c.Kind != KindModuleBinary {
 		// **StratumEncode, not StratumText.** The module arm already asked ReadModule and
 		// scored its answer; this is EncodeModule, a different entry point with a different
-		// frontier, and charging its 13991 unemitted instruction bodies to the reader's
+		// frontier, and charging its 13775 unemitted instruction bodies to the reader's
 		// column would raise a ceiling that is 0 and destroy the only instrument watching
 		// the reader for regressions.
 		stratum = StratumEncode
@@ -628,13 +628,20 @@ func TestGatedVectors(t *testing.T) {
 			1: "gc: an array type's fieldtype, whose mutability byte is what the vector asserts",
 		},
 
-		// # The interpreter's arrival opened a second decline path, and these are its 17
+		// # The interpreter's arrival opened a second decline path, and these were its 17
 		//
 		// Every entry is an `assert_return` whose module carries an **i64 index type** —
-		// `(memory i64 0)` at memory_grow64.wast:1 and :34, `(table $t64 i64 0 externref)` at
-		// table_grow64.wast:2 — which is memory64's defining feature. With the gate off the
+		// `(memory i64 0)` at memory_grow64.wast:1, :36 and :48, `(table $t64 i64 0 externref)`
+		// at table_grow64.wast:2 — which is memory64's defining feature. With the gate off the
 		// decoder must reject the module, so the vector's question is never asked and `gated`
 		// is the only honest verdict for it.
+		//
+		// **Two of those three line numbers were wrong until this edit**, and the correction is a
+		// finding rather than a typo fix: the comment said ":1 and :34", which named one module
+		// this file has and one it does not — line 34 is blank, the second `(memory i64 0)` is at
+		// :36, and a *third* module at :48 was unmentioned because the memarg emitter had not yet
+		// made its vectors reachable. A citation nobody re-resolves is a claim, and this one had
+		// been read past in every review since #124.
 		//
 		// **They are here because the trigger could reach them, and it could not before.**
 		// These declines happen at *instantiation*, on a wat module with no `c.Module` for the
@@ -647,21 +654,174 @@ func TestGatedVectors(t *testing.T) {
 		// in two files share one cause. Both are passed in the all-gates-on lane, where the
 		// memory64 gate is on and the vectors answer on the merits — so the parked verdict is
 		// earned there rather than deferred everywhere.
+		// # The memarg emitter's 114, which is the same mechanism widened by one instruction shape
+		//
+		// #8's memarg emitter taught the encoder to write load and store immediates, so 199 modules that used to
+		// stop at `cannot yet encode` now reach the decoder — and 114 of their vectors reach a gate
+		// there. **They are all `gated` for one of two features and neither is the encoder's**: a
+		// module declaring `(memory i64 …)` is memory64, and a module with two or more memories
+		// makes some memarg carry flags bit 6, which is multi-memory. The emitter is right in both
+		// cases; the decoder is configured not to read what it correctly wrote.
+		//
+		// **The count is exactly the fail column's drop** — fail 14330 → 14216, gated 33 → 147 —
+		// which is what makes this a verdict moving to its honest column rather than a board being
+		// emptied. Every one is passed in the all-gates-on lane, where both gates are on and the
+		// vectors answer on the merits.
+		//
+		// Verified by reading each module head rather than by trusting that 114 declines in eleven
+		// files share two causes: the `module@` line is quoted per entry, and the two reasons were
+		// separated by the error string the engine actually produced (`memory64: feature gate
+		// disabled` versus `memarg flags bit 6 … decodeMemop`), not by the file's name — five of
+		// these files are named `*64` and two of those carry *no* i64 memory.
+		"align64.wast": {
+			866: "memory64: (memory i64 1) at :854 — an i64 index type",
+		},
+		"bulk64.wast": {
+			22: "memory64: (memory i64 1) at :7 — an i64 index type",
+			23: "memory64: (memory i64 1) at :7 — an i64 index type",
+			24: "memory64: (memory i64 1) at :7 — an i64 index type",
+			25: "memory64: (memory i64 1) at :7 — an i64 index type",
+			26: "memory64: (memory i64 1) at :7 — an i64 index type",
+			30: "memory64: (memory i64 1) at :7 — an i64 index type",
+			31: "memory64: (memory i64 1) at :7 — an i64 index type",
+		},
+		"endianness64.wast": {
+			133: "memory64: (memory i64 1) at :1 — an i64 index type",
+			134: "memory64: (memory i64 1) at :1 — an i64 index type",
+			135: "memory64: (memory i64 1) at :1 — an i64 index type",
+			136: "memory64: (memory i64 1) at :1 — an i64 index type",
+			138: "memory64: (memory i64 1) at :1 — an i64 index type",
+			139: "memory64: (memory i64 1) at :1 — an i64 index type",
+			140: "memory64: (memory i64 1) at :1 — an i64 index type",
+			141: "memory64: (memory i64 1) at :1 — an i64 index type",
+			143: "memory64: (memory i64 1) at :1 — an i64 index type",
+			144: "memory64: (memory i64 1) at :1 — an i64 index type",
+			145: "memory64: (memory i64 1) at :1 — an i64 index type",
+			146: "memory64: (memory i64 1) at :1 — an i64 index type",
+			148: "memory64: (memory i64 1) at :1 — an i64 index type",
+			149: "memory64: (memory i64 1) at :1 — an i64 index type",
+			150: "memory64: (memory i64 1) at :1 — an i64 index type",
+			151: "memory64: (memory i64 1) at :1 — an i64 index type",
+			153: "memory64: (memory i64 1) at :1 — an i64 index type",
+			154: "memory64: (memory i64 1) at :1 — an i64 index type",
+			155: "memory64: (memory i64 1) at :1 — an i64 index type",
+			156: "memory64: (memory i64 1) at :1 — an i64 index type",
+			158: "memory64: (memory i64 1) at :1 — an i64 index type",
+			159: "memory64: (memory i64 1) at :1 — an i64 index type",
+			160: "memory64: (memory i64 1) at :1 — an i64 index type",
+			161: "memory64: (memory i64 1) at :1 — an i64 index type",
+			163: "memory64: (memory i64 1) at :1 — an i64 index type",
+			164: "memory64: (memory i64 1) at :1 — an i64 index type",
+			165: "memory64: (memory i64 1) at :1 — an i64 index type",
+			166: "memory64: (memory i64 1) at :1 — an i64 index type",
+			168: "memory64: (memory i64 1) at :1 — an i64 index type",
+			169: "memory64: (memory i64 1) at :1 — an i64 index type",
+			170: "memory64: (memory i64 1) at :1 — an i64 index type",
+			171: "memory64: (memory i64 1) at :1 — an i64 index type",
+			173: "memory64: (memory i64 1) at :1 — an i64 index type",
+			174: "memory64: (memory i64 1) at :1 — an i64 index type",
+			175: "memory64: (memory i64 1) at :1 — an i64 index type",
+			176: "memory64: (memory i64 1) at :1 — an i64 index type",
+			178: "memory64: (memory i64 1) at :1 — an i64 index type",
+			179: "memory64: (memory i64 1) at :1 — an i64 index type",
+			180: "memory64: (memory i64 1) at :1 — an i64 index type",
+			181: "memory64: (memory i64 1) at :1 — an i64 index type",
+			184: "memory64: (memory i64 1) at :1 — an i64 index type",
+			185: "memory64: (memory i64 1) at :1 — an i64 index type",
+			186: "memory64: (memory i64 1) at :1 — an i64 index type",
+			187: "memory64: (memory i64 1) at :1 — an i64 index type",
+			189: "memory64: (memory i64 1) at :1 — an i64 index type",
+			190: "memory64: (memory i64 1) at :1 — an i64 index type",
+			191: "memory64: (memory i64 1) at :1 — an i64 index type",
+			192: "memory64: (memory i64 1) at :1 — an i64 index type",
+			194: "memory64: (memory i64 1) at :1 — an i64 index type",
+			195: "memory64: (memory i64 1) at :1 — an i64 index type",
+			196: "memory64: (memory i64 1) at :1 — an i64 index type",
+			197: "memory64: (memory i64 1) at :1 — an i64 index type",
+			199: "memory64: (memory i64 1) at :1 — an i64 index type",
+			200: "memory64: (memory i64 1) at :1 — an i64 index type",
+			201: "memory64: (memory i64 1) at :1 — an i64 index type",
+			202: "memory64: (memory i64 1) at :1 — an i64 index type",
+			204: "memory64: (memory i64 1) at :1 — an i64 index type",
+			205: "memory64: (memory i64 1) at :1 — an i64 index type",
+			206: "memory64: (memory i64 1) at :1 — an i64 index type",
+			207: "memory64: (memory i64 1) at :1 — an i64 index type",
+			209: "memory64: (memory i64 1) at :1 — an i64 index type",
+			210: "memory64: (memory i64 1) at :1 — an i64 index type",
+			211: "memory64: (memory i64 1) at :1 — an i64 index type",
+			212: "memory64: (memory i64 1) at :1 — an i64 index type",
+			214: "memory64: (memory i64 1) at :1 — an i64 index type",
+			215: "memory64: (memory i64 1) at :1 — an i64 index type",
+			216: "memory64: (memory i64 1) at :1 — an i64 index type",
+			217: "memory64: (memory i64 1) at :1 — an i64 index type",
+		},
+		"memory-multi.wast": {
+			41: "multi-memory: two memories at :26, so a memarg carries bit 6",
+			42: "multi-memory: two memories at :26, so a memarg carries bit 6",
+		},
+		"memory_fill0.wast": {
+			19: "multi-memory: four memories at :2, so a memarg carries bit 6",
+			20: "multi-memory: four memories at :2, so a memarg carries bit 6",
+			21: "multi-memory: four memories at :2, so a memarg carries bit 6",
+			22: "multi-memory: four memories at :2, so a memarg carries bit 6",
+			23: "multi-memory: four memories at :2, so a memarg carries bit 6",
+			27: "multi-memory: four memories at :2, so a memarg carries bit 6",
+			28: "multi-memory: four memories at :2, so a memarg carries bit 6",
+			36: "multi-memory: four memories at :2, so a memarg carries bit 6",
+			37: "multi-memory: four memories at :2, so a memarg carries bit 6",
+		},
 		"memory_grow64.wast": {
-			41: "memory64: (memory i64 0) — an i64 index type",
-			42: "memory64: (memory i64 0) — an i64 index type",
-			43: "memory64: (memory i64 0) — an i64 index type",
-			44: "memory64: (memory i64 0) — an i64 index type",
-			45: "memory64: (memory i64 0) — an i64 index type",
-			46: "memory64: (memory i64 0) — an i64 index type",
-			53: "memory64: (memory i64 0) — an i64 index type",
-			54: "memory64: (memory i64 0) — an i64 index type",
-			55: "memory64: (memory i64 0) — an i64 index type",
-			56: "memory64: (memory i64 0) — an i64 index type",
-			57: "memory64: (memory i64 0) — an i64 index type",
-			58: "memory64: (memory i64 0) — an i64 index type",
-			59: "memory64: (memory i64 0) — an i64 index type",
-			60: "memory64: (memory i64 0) — an i64 index type",
+			14: "memory64: (memory i64 0) at :1 — an i64 index type",
+			19: "memory64: (memory i64 0) at :1 — an i64 index type",
+			20: "memory64: (memory i64 0) at :1 — an i64 index type",
+			21: "memory64: (memory i64 0) at :1 — an i64 index type",
+			22: "memory64: (memory i64 0) at :1 — an i64 index type",
+			23: "memory64: (memory i64 0) at :1 — an i64 index type",
+			26: "memory64: (memory i64 0) at :1 — an i64 index type",
+			27: "memory64: (memory i64 0) at :1 — an i64 index type",
+			28: "memory64: (memory i64 0) at :1 — an i64 index type",
+			29: "memory64: (memory i64 0) at :1 — an i64 index type",
+			30: "memory64: (memory i64 0) at :1 — an i64 index type",
+			31: "memory64: (memory i64 0) at :1 — an i64 index type",
+			32: "memory64: (memory i64 0) at :1 — an i64 index type",
+			33: "memory64: (memory i64 0) at :1 — an i64 index type",
+			41: "memory64: (memory i64 0) at :36 — an i64 index type",
+			42: "memory64: (memory i64 0) at :36 — an i64 index type",
+			43: "memory64: (memory i64 0) at :36 — an i64 index type",
+			44: "memory64: (memory i64 0) at :36 — an i64 index type",
+			45: "memory64: (memory i64 0) at :36 — an i64 index type",
+			46: "memory64: (memory i64 0) at :36 — an i64 index type",
+			53: "memory64: (memory i64 0 10) at :48 — an i64 index type",
+			54: "memory64: (memory i64 0 10) at :48 — an i64 index type",
+			55: "memory64: (memory i64 0 10) at :48 — an i64 index type",
+			56: "memory64: (memory i64 0 10) at :48 — an i64 index type",
+			57: "memory64: (memory i64 0 10) at :48 — an i64 index type",
+			58: "memory64: (memory i64 0 10) at :48 — an i64 index type",
+			59: "memory64: (memory i64 0 10) at :48 — an i64 index type",
+			60: "memory64: (memory i64 0 10) at :48 — an i64 index type",
+		},
+		"memory_redundancy64.wast": {
+			59: "memory64: (memory i64 1 1) at :5 — an i64 index type",
+			61: "memory64: (memory i64 1 1) at :5 — an i64 index type",
+			63: "memory64: (memory i64 1 1) at :5 — an i64 index type",
+			65: "memory64: (memory i64 1 1) at :5 — an i64 index type",
+		},
+		"memory_trap0.wast": {
+			23: "multi-memory: five memories at :1, so a memarg carries bit 6",
+			24: "multi-memory: five memories at :1, so a memarg carries bit 6",
+			35: "multi-memory: five memories at :1, so a memarg carries bit 6",
+		},
+		"memory_trap64.wast": {
+			21: "memory64: (memory i64 1) at :1 — an i64 index type",
+			22: "memory64: (memory i64 1) at :1 — an i64 index type",
+		},
+		"store0.wast": {
+			24: "multi-memory: two memories at :3, so a memarg carries bit 6",
+			25: "multi-memory: two memories at :3, so a memarg carries bit 6",
+		},
+		"store1.wast": {
+			51: "multi-memory: two imported memories at :30, so a memarg carries bit 6",
+			52: "multi-memory: two imported memories at :30, so a memarg carries bit 6",
 		},
 		"table_grow64.wast": {
 			12: "memory64: (table $t64 i64 0 externref) — an i64 index type",
@@ -1268,9 +1428,9 @@ func TestPhase1Files(t *testing.T) {
 	// long as every failure was caused by the command it was reported against. An
 	// `assert_return` breaks that identity: the *command* is an assert_return, and the
 	// *defect* belongs to whichever component failed to produce the instance. Measured at
-	// this revision, **13991 of the 14347 fails are `assert_return`s whose module never
+	// this revision, **13775 of the 14216 fails are `assert_return`s whose module never
 	// instantiated, and every one of them is text.EncodeModule's instruction frontier
-	// (#8)** — so a Kind-keyed switch would have charged 13991 encoder gaps to the
+	// (#8)** — so a Kind-keyed switch would have charged 13775 encoder gaps to the
 	// interpreter's brand-new ceiling and reported the wrong stratum as broken on the day
 	// the interpreter landed. That is the same defect as #69's `default` arm, one layer
 	// deeper: not a Kind assigned to the wrong column, but a *column that cannot be
@@ -1301,7 +1461,7 @@ func TestPhase1Files(t *testing.T) {
 				// **A column of its own, not folded into StratumText** (#8). ReadModule
 				// answers 253 files' module forms with 0 reds; EncodeModule cannot yet emit
 				// most instruction bodies. Folding them would raise the reader's ceiling
-				// from 0 to 13991 and destroy the only instrument watching the reader for
+				// from 0 to 13775 and destroy the only instrument watching the reader for
 				// regressions — one instrument per component, or neither is an instrument.
 				encodeFail++
 			case StratumExec:
@@ -1735,57 +1895,76 @@ func TestPhase1Files(t *testing.T) {
 	boardBound(t, "textFailCeiling", textFail, textFailCeiling, 0, ceilingBound,
 		"either the reader regressed on vectors it used to answer, or the corpus moved")
 
-	// # The encoder's ceiling — 13974, and it is the largest single number on the board
+	// # The encoder's ceiling — 13775, and it is the largest single number on the board
 	//
 	// **This column exists because the interpreter's arrival created it, and it is the reason
 	// Stratum replaced Kind as the partition key.** Every member is an `assert_return` whose
 	// module `text.EncodeModule` could not emit, so the vector reaches the interpreter with no
 	// instance to run against. The command is an assert_return; the defect is the encoder's.
-	// Charged by Kind, all 13974 would have landed on `execFail` and reported the interpreter
+	// Charged by Kind, all 13775 would have landed on `execFail` and reported the interpreter
 	// as 40× more broken than it is, on the day it was born.
 	//
 	// A **work plan with a ceiling**, not a defect count — the same shape textFailCeiling had
 	// at 391. The buckets printed above are the order to take them in, and they are keyed by
 	// the encoder's own message, so the column reads as #8's instruction work list:
 	//
-	//	8661  i32.load8_u immediates      1067  call_indirect        1054  block
-	//	 600  loop                         405  ref.null              336  if
-	//	 318  select                       312  i64.load8_u           221  table.init
-	//	 201  memory.init                  148  i32.store8            120  i32.store
-	//	 103  f32.load                     103  f64.load               49  i32.load
-	//	  42  return_call_indirect          41  br_table               23  array.copy
-	//	  23  array.init_data           …and 17 more, all #8, plus 3 for #77
+	//	8882  (data …) field             1162  call_indirect        1087  block
+	//	 620  loop                        420  if                    405  ref.null
+	//	 318  select                      221  table.init            212  (memory …) field
+	//	 201  memory.init                  42  return_call_indirect   41  br_table
+	//	  23  array.copy                   23  array.init_data    …and 24 more, all #8, plus 3 for #77
 	//
-	// The memory-instruction buckets dominate because `address*.wast` and `memory_copy*.wast`
-	// are per-offset sweeps: 4320 vectors each in the two memory_copy files.
+	// **The memarg buckets are gone, and #8's memarg emitter is what removed them** (13974 → 13775). The nine
+	// load/store buckets this list used to lead with — `8661 i32.load8_u immediates`, `312
+	// i64.load8_u`, `148 i32.store8`, `120 i32.store`, `103 f32.load`, `103 f64.load`, `49
+	// i32.load` and two smaller — are absent, because the emitter now writes the shape. The
+	// remaining 199 of that 9,529 census estimate are modules blocked on a *second* frontier in the
+	// same body, which `code.go:195` pre-registered as the reason a per-shape census is
+	// upper-bound-shaped: a bucket keyed on the *first* refusal moves the whole module only if
+	// nothing else in it is unencodable, and `(data …)` — now the largest bucket by 7.6× — is what
+	// the freed `address*.wast` and `memory_copy*.wast` sweeps hit next.
+	//
+	// The `(data …)` bucket dominates for the same reason the memarg one did: `address*.wast` and
+	// `memory_copy*.wast` are per-offset sweeps, 4320 vectors each in the two memory_copy files, and
+	// every one of them declares a data segment.
 	//
 	// **Separate from textFailCeiling, and the separation is load-bearing.** `text.ReadModule`
 	// answers all 253 files' module forms with **0** reds; `text.EncodeModule` cannot emit most
-	// instruction bodies. Folding them would take the reader's ceiling from 0 to 13974 and
+	// instruction bodies. Folding them would take the reader's ceiling from 0 to 13775 and
 	// destroy the only instrument watching the reader for regressions — one instrument per
 	// component, or neither is an instrument. They are two entry points in one package, which
 	// is exactly the case a Kind-keyed partition cannot express and a stated stratum can.
 	//
 	// Slack 0 like the two above: it may only fall, and it falls as #8 lands.
-	const encodeFailCeiling = 13974
+	const encodeFailCeiling = 13775
 	boardBound(t, "encodeFailCeiling", encodeFail, encodeFailCeiling, 0, ceilingBound,
 		"the wat encoder lost ground: either it stopped emitting an instruction it used to "+
 			"emit, or the corpus moved. This ceiling is deliberately not shared with the text "+
 			"column so an encoder regression cannot hide behind ReadModule's zero")
 
-	// # The interpreter's ceiling — 356, the whole of it #7's opcode work list
+	// # The interpreter's ceiling — 441, the whole of it #7's opcode work list
 	//
 	// **The first ceiling this project has had over executed code.** Every member is a vector
 	// that reached `interp.Invoke` and got an error, bucketed by that error's own text, which
 	// `ErrUnsupportedOp` renders with its bytes — so the column is per-opcode and reads as the
 	// arms exec.go's switch still owes:
 	//
-	//	86  3f memory.size    52  40 memory.grow   26  0f return    7  23 global.get
+	//	86  3f memory.size    53  40 memory.grow   45  10 call      26  0f return
 	//	25  fc 03             24  fc 04            24  fc 06       23  fc 07
 	//	22  fc 00             22  fc 02            21  fc 01       19  fc 05
-	//	 3  fc 10              2  10 call
+	//	 9  2d i32.load8_u     7  23 global.get     6  36 i32.store  4  37 i64.store
+	//	 4  38 i32.store8      4  39 i32.store16    4  3b i64.store16
+	//	 4  3d i64.store32     4  3e f64.store      3  fc 10         2  28 i32.load
 	//
-	// Two things this ceiling is *not*. It is not the interpreter's total exposure: 13974
+	// **Re-based 356 → 441 by #8's memarg emitter, and the +85 is accounted per opcode rather than asserted.**
+	// The memarg emitter made 199 encode-stratum modules instantiate, so vectors that used to stop
+	// upstream now reach `Invoke`: `10 call` +43, the load/store region `28`/`2d`/`36`–`3e` +41 (all
+	// twelve of those buckets are *new*), `40 memory.grow` +1. Measured by diffing this column
+	// against the same corpus with the emitter stashed — the rise this comment's next paragraph
+	// predicted, arriving for the reason it predicted, and every member of it is `no arm for
+	// opcode`, which is #7's frontier and not a wrong answer.
+	//
+	// Two things this ceiling is *not*. It is not the interpreter's total exposure: 13775
 	// vectors never reach it at all, held upstream by encodeFailCeiling, so this number will
 	// **rise** as #8 lands and more modules instantiate. That is the honest direction and it is
 	// stated here so the rise is not read as a regression — but a ceiling cannot express "may
@@ -1798,7 +1977,7 @@ func TestPhase1Files(t *testing.T) {
 	// behind a fourth verdict. *Bucketed failures are the work plan.*
 	//
 	// Slack 0.
-	const execFailCeiling = 356
+	const execFailCeiling = 441
 	boardBound(t, "execFailCeiling", execFail, execFailCeiling, 0, ceilingBound,
 		"the interpreter answered fewer vectors than it did: either an opcode arm regressed or "+
 			"a value comparison started disagreeing. A *rise* caused by #8 unblocking more "+

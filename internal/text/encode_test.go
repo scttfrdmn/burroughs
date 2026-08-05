@@ -1,6 +1,7 @@
 package text
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 	"slices"
@@ -43,9 +44,20 @@ import (
 // meeting a decoder configured not to read it — so the row would fail for the decoder's configuration
 // and say nothing about the encoder. It is *not* the GC case, which is a frontier the encoder refuses
 // at, and not the Threads case, which no input can reach.
+//
+// **MultiMemory joined the list the same way — by a row failing, not by reasoning ahead.** The memarg
+// row carrying an explicit memory index (#8) was written with a comment claiming bit 6 needed no
+// gate to *decode*, on the ground that `memopIndex` records its decline rather than returning it. The
+// row then failed at this function: `release()` returns the recorded decline once the body's grammar
+// completes, so a deferred decline is still a decline. Third derivation of one rule and third time the
+// prose was wrong until an input said so — the text grammar's `idx_opt` in a memarg (parser.mly:596)
+// has no gate, so wat source can write `(i32.load 1 …)`, the emitter sets bit 6, and `memopIndex`
+// declines it with the gate off. SIMD's case exactly.
 func decodeForTest(t *testing.T, b []byte) *binary.Module {
 	t.Helper()
-	d := &binary.Decoder{Features: binary.Features{SIMD: true, Memory64: true, ExceptionHandling: true}}
+	d := &binary.Decoder{Features: binary.Features{
+		SIMD: true, Memory64: true, ExceptionHandling: true, MultiMemory: true,
+	}}
 	m, err := d.DecodeModule(b)
 	if err != nil {
 		t.Fatalf("the encoder produced % x, which the decoder rejects: %v", b, err)
@@ -870,6 +882,91 @@ var encodableModules = []struct {
 			{TypeIndex: 0, Body: []binary.Instr{{Op: 0x0b}}},
 		},
 	},
+
+	// # The memarg rows (#8), and **only two of its three fields are here**
+	//
+	// `decodeMemop` stages the offset in `Imm0` and the memory index in `Imm1` and
+	// **discards the alignment** — its own comment says so, on the ground that alignment is a
+	// validation constraint with no execution semantics. So a round trip is structurally blind to
+	// the whole generated `naturalAlign` table, exactly as it is blind to the limits address-type
+	// bit, and for the same reason: the decoded value carries no field to disagree in.
+	// `TestEncodeWritesTheNaturalAlignmentDefault` is the other witness, at byte level, and it
+	// exists because these rows cannot be it. Two fields checkable here, one not, stated rather
+	// than left for a reader to infer from which assertions happen to appear.
+	{
+		src:      `(module (memory 1) (func (drop (i32.load (i32.const 0)))))`,
+		want:     []binary.CompType{{Kind: binary.CompFunc}},
+		wantMems: []binary.Memory{{Limits: binary.Limits{Min: 1}}},
+		wantFuncs: []binary.Func{{TypeIndex: 0, Body: []binary.Instr{
+			{Op: 0x41, Imm0: 0}, // i32.const 0 — the address
+			{Op: 0x28},          // i32.load: offset 0, memory 0, both implicit
+			{Op: 0x1a},          // drop
+			{Op: 0x0b},
+		}}},
+	},
+	// **`offset=` is the one memarg field a round trip sees on its own**, so it is asserted at a
+	// value past one LEB byte: 128 encodes as `80 01`, and a writer that emitted a single byte
+	// would put `01` where the next instruction belongs. `u64` is the width (`memopOffset`), and
+	// `offsetEqValue` is the lexeme reader between the two.
+	{
+		src:      `(module (memory 1) (func (drop (i32.load offset=128 (i32.const 0)))))`,
+		want:     []binary.CompType{{Kind: binary.CompFunc}},
+		wantMems: []binary.Memory{{Limits: binary.Limits{Min: 1}}},
+		wantFuncs: []binary.Func{{TypeIndex: 0, Body: []binary.Instr{
+			{Op: 0x41, Imm0: 0}, {Op: 0x28, Imm0: 128}, {Op: 0x1a}, {Op: 0x0b},
+		}}},
+	},
+	// An explicit memory index `0`, whose correct bytes are the *implicit* case's — and **this row
+	// cannot see that, which was measured rather than assumed.** The presence-vs-value defect
+	// (`hasIdx := m.haveIdx`) was installed here and **passed**: it writes flags `0x42` plus an
+	// index field plus the offset, which is one byte longer and decodes to the identical `Imm0` and
+	// `Imm1`, because the emitter's own body-size field keeps the image self-consistent. So the
+	// wrong bytes are not a wrong *module* to any consumer that reads through the decoder — they
+	// differ from the reference's `memop` output and nothing in this direction can say so.
+	//
+	// The property therefore lives in `TestEncodeWritesTheNaturalAlignmentDefault`, which reads the
+	// flags byte and does see `0x42` against `0x02`. The row stays here because it belongs in the
+	// encodable set, and this paragraph is the record of a control that was written for a defect it
+	// could not catch — found by budgeting for the falsification to pass (#108).
+	{
+		src:      `(module (memory 1) (func (drop (i32.load 0 (i32.const 0)))))`,
+		want:     []binary.CompType{{Kind: binary.CompFunc}},
+		wantMems: []binary.Memory{{Limits: binary.Limits{Min: 1}}},
+		wantFuncs: []binary.Func{{TypeIndex: 0, Body: []binary.Instr{
+			{Op: 0x41, Imm0: 0}, {Op: 0x28}, {Op: 0x1a}, {Op: 0x0b},
+		}}},
+	},
+	// A **non-zero** memory index, which is the row that makes the two above falsifiable: it is the
+	// only one where `has_idx` is true, so an emitter that never set 0x40 passes both of them and
+	// fails here. `Imm1: 1` is the staged index; the flags byte is `0x42` (align 2 | 0x40).
+	//
+	// **This row is why `decodeForTest` turns MultiMemory on, and it got there by failing.** The
+	// sentence here first claimed bit 6 needed no gate to decode, reasoning from `memopIndex`
+	// recording its decline rather than returning it — but `release()` hands the recorded decline
+	// back once the body's grammar completes, so the row failed at `decodeForTest` with `memarg
+	// flags bit 6 … feature gate disabled`. That is the same mechanism the 114 new board declines
+	// come from, met here one layer closer: the emitter is right, the *decoder configuration* is
+	// what a gated construct needs, and on the board the gate stays off so those vectors are
+	// honestly `gated` rather than passed.
+	{
+		src:      `(module (memory 1) (memory 1) (func (drop (i32.load 1 (i32.const 0)))))`,
+		want:     []binary.CompType{{Kind: binary.CompFunc}},
+		wantMems: []binary.Memory{{Limits: binary.Limits{Min: 1}}, {Limits: binary.Limits{Min: 1}}},
+		wantFuncs: []binary.Func{{TypeIndex: 0, Body: []binary.Instr{
+			{Op: 0x41, Imm0: 0}, {Op: 0x28, Imm1: 1}, {Op: 0x1a}, {Op: 0x0b},
+		}}},
+	},
+	// A store, so the memarg reader is exercised on an instruction whose operands it follows rather
+	// than precedes, and with both optional fields at once. `0x36` is `i32.store`; natural alignment
+	// 2, offset 4.
+	{
+		src:      `(module (memory 1) (func (i32.store offset=4 (i32.const 0) (i32.const 1))))`,
+		want:     []binary.CompType{{Kind: binary.CompFunc}},
+		wantMems: []binary.Memory{{Limits: binary.Limits{Min: 1}}},
+		wantFuncs: []binary.Func{{TypeIndex: 0, Body: []binary.Instr{
+			{Op: 0x41, Imm0: 0}, {Op: 0x41, Imm0: 1}, {Op: 0x36, Imm0: 4}, {Op: 0x0b},
+		}}},
+	},
 }
 
 // TestEncodeRoundTripsThroughTheDecoder is the encoder's acceptance check, and the direction of the
@@ -887,16 +984,19 @@ var encodableModules = []struct {
 // a check. The fully independent witness is the wabt corpus, at module level, which is #67's other
 // half; this is the part that can be asserted inside the package.
 func TestEncodeRoundTripsThroughTheDecoder(t *testing.T) {
-	// Vacuity, and **per partition rather than one total**. The table is 84 rows, of which 14 assert a
+	// Vacuity, and **per partition rather than one total**. The table is 91 rows, of which 21 assert a
 	// function body; a single floor lets the func half go to zero and be absorbed by the other 70,
 	// which is the empty-half-hiding-behind-a-full-one defect (grave #105) with a table for a
 	// partner. So the code section's rows are counted separately from the table's size.
 	//
 	// The floor was 12 against 84 rows for five sections' worth of growth — a bound so far from what
 	// it bounds that it ran, agreed, and said nothing. Set close enough to the real counts to notice a
-	// deletion, and loose enough that adding a row is not a failure.
-	if len(encodableModules) < 70 {
-		t.Fatalf("encodableModules has %d rows, want >=70 (84 at this commit): a table this check "+
+	// deletion, and loose enough that adding a row is not a failure. **Both floors move with the
+	// table in the same PR that grows it**, or the distance re-opens: the memarg rows (#8) added seven (84→91,
+	// 14→21) and a floor left at 70/12 would have gone straight back into the vacuum it was raised
+	// out of, silently, because a floor never complains about slack.
+	if len(encodableModules) < 85 {
+		t.Fatalf("encodableModules has %d rows, want >=85 (91 at this commit): a table this check "+
 			"reads is a table whose size is part of the assertion, since a comparison over an empty "+
 			"set succeeds", len(encodableModules))
 	}
@@ -906,8 +1006,8 @@ func TestEncodeRoundTripsThroughTheDecoder(t *testing.T) {
 			withFuncs++
 		}
 	}
-	if withFuncs < 12 {
-		t.Fatalf("only %d of %d encodableModules rows assert a function body, want >=12 (14 at this "+
+	if withFuncs < 19 {
+		t.Fatalf("only %d of %d encodableModules rows assert a function body, want >=19 (21 at this "+
 			"commit): the code section is the newest and least-covered half of this table, and a "+
 			"total-only floor would let its rows go to zero behind the other sections'",
 			withFuncs, len(encodableModules))
@@ -1097,6 +1197,157 @@ func TestEncodeWritesTheAddressTypeFlagBit(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestEncodeWritesTheNaturalAlignmentDefault asserts the memarg field the round trip is
+// structurally blind to, and the blindness is the decoder's own stated design.
+//
+// `decodeMemop` stages the offset and the memory index and **discards the alignment** — "alignment
+// is a validation constraint and carries no execution semantics, so keeping it would be storing a
+// fact only #9 reads". That is the right call for the decoder and it means `binary.Instr` has no
+// field for the flags byte's low bits to disagree in: `i32.load align=1` and `i32.load align=4`
+// decode to *identical* instructions. So the `encodableModules` rows cannot see this table, in
+// precisely the way they cannot see the limits address-type bit, and this test is the second
+// witness for the same reason `TestEncodeWritesTheAddressTypeFlagBit` is.
+//
+// **The table is what makes it worth a test rather than a comment.** 45 generated numbers reach the
+// image through this one byte, and contract §9 G-3 is the whole argument for machine-reading them:
+// `align=` is optional in the text, every value the field can hold is a *legal* alignment, and the
+// validator rejects only over-alignment — so a mistyped default yields an image that decodes clean,
+// runs, and denotes an access the source did not write. No `assert_malformed` inspects the byte.
+// `make memarg-drift` asserts the table still agrees with lexer.mll; this asserts the emitter
+// actually writes what the table says, which is a different claim.
+//
+// The rows are three partitions and each is load-bearing:
+//
+//   - **defaults across the exponent range 0..4**, taken from `naturalAlign` by hand rather than by
+//     reading the map — a want column read out of the table under test is the tautology this file's
+//     header forbids. 0, 1, 2, 3 and 4 all appear, so a writer that emitted a constant, or the
+//     access width in bytes instead of its log2, fails somewhere.
+//   - **an explicit `align=` differing from the default in both directions**, which is what
+//     falsifies "the emitter ignores the text and always uses the table" — a defect every default
+//     row above would pass.
+//   - **one row with bit 6 set**, so the flags byte is asserted as a whole rather than as its low
+//     three bits: `0x43` is align 3 for `i64.load` *or* to a reader that only masks 0x07 it is
+//     indistinguishable from `0x03`.
+func TestEncodeWritesTheNaturalAlignmentDefault(t *testing.T) {
+	for _, tc := range []struct {
+		src       string
+		wantFlags byte
+	}{
+		// The defaults, one per exponent the table uses. Read from lexer.mll's `opt a N` arms as
+		// memarg.go records them, then written here by hand: 8-bit accesses default to 0, 16-bit to
+		// 1, i32/f32 to 2, i64/f64 to 3, v128 to 4.
+		{`(module (memory 1) (func (drop (i32.load8_u (i32.const 0)))))`, 0x00},
+		{`(module (memory 1) (func (drop (i32.load16_u (i32.const 0)))))`, 0x01},
+		{`(module (memory 1) (func (drop (i32.load (i32.const 0)))))`, 0x02},
+		{`(module (memory 1) (func (drop (i64.load (i32.const 0)))))`, 0x03},
+		{`(module (memory 1) (func (drop (v128.load (i32.const 0)))))`, 0x04},
+		// Stores, because the five above are all loads and the table's `STORE`-tagged arms are a
+		// separate region of lexer.mll — five of its rows carry the upstream `LOAD` tag on a store
+		// mnemonic (see memarg.go), so "loads work" is not evidence about stores.
+		{`(module (memory 1) (func (i32.store8 (i32.const 0) (i32.const 1))))`, 0x00},
+		{`(module (memory 1) (func (i32.store16 (i32.const 0) (i32.const 1))))`, 0x01},
+		{`(module (memory 1) (func (i64.store (i32.const 0) (i64.const 1))))`, 0x03},
+		// Explicit `align=`, below and above the mnemonic's default. Both directions, because an
+		// emitter that took `min(written, natural)` or `max` would pass one of them.
+		{`(module (memory 1) (func (drop (i32.load align=1 (i32.const 0)))))`, 0x00},
+		{`(module (memory 1) (func (drop (i32.load align=8 (i32.const 0)))))`, 0x03},
+		{`(module (memory 1) (func (drop (i64.load align=1 (i32.const 0)))))`, 0x00},
+		// Bit 6 beside a non-zero alignment, so the assertion is on the whole byte. `i64.load`'s
+		// default 3 or'd with 0x40.
+		{`(module (memory 1) (memory 1) (func (drop (i64.load 1 (i32.const 0)))))`, 0x43},
+		// **An explicit memory index `0`, and this row is the only witness the project has for
+		// `has_idx`'s value-not-presence test.** `idx_opt` (parser.mly:492) returns `0l` for the
+		// empty production, so a written literal `0` and an omitted index are the same AST and must
+		// be the same bytes: no 0x40, no index field. The defect — reading `has_idx` as "the text
+		// wrote one" — emits `28 42 00 00`, which is *self-consistently* one byte longer and
+		// **round-trips identically**, `Imm0` and `Imm1` both 0. It was installed against the
+		// `encodableModules` row for this source and passed; only the flags byte distinguishes it.
+		// So the value test has exactly one instrument, this is it, and no `assert_malformed` can
+		// express the question at all.
+		{`(module (memory 1) (func (drop (i32.load 0 (i32.const 0)))))`, 0x02},
+	} {
+		t.Run(tc.src, func(t *testing.T) {
+			b, err := EncodeModule([]byte(tc.src))
+			if err != nil {
+				t.Fatalf("EncodeModule refused a module the encoder is meant to write: %v", err)
+			}
+			// Located by walking the framing to the code section and then to the memarg, rather
+			// than by searching for the opcode: an opcode byte occurs inside a LEB and inside a
+			// valtype, which is the shortcut `bytesIndex`'s doc records as installed-and-passing.
+			got, err := memargFlags(b)
+			if err != nil {
+				t.Fatalf("locating the memarg in % x: %v", b, err)
+			}
+			if got != tc.wantFlags {
+				t.Errorf("the memarg flags byte is %#02x, want %#02x: bits 0-5 are the log2 "+
+					"alignment (encode.ml:221) and bit 6 is an explicit memory index. Neither is "+
+					"visible to a round trip, because decodeMemop discards the alignment by design "+
+					"and no assert_malformed inspects it — a wrong value here is a legal image "+
+					"denoting a different access width (§9 G-3)", got, tc.wantFlags)
+			}
+		})
+	}
+}
+
+// memargFlags returns the flags byte of the memarg in a single-function module's body.
+//
+// It walks: code section, vector count, body size, local declarations, then the instructions,
+// skipping each `i32.const`/`i64.const` operand by its LEB and stopping at the first
+// memory-accessing opcode. Written as a walk rather than a search for the same reason
+// `bytesIndex` is — `0x28` is a legal LEB byte and a legal valtype — and it refuses rather than
+// guessing, so a module this helper cannot read is a loud failure instead of a byte from the
+// wrong place.
+//
+// It handles exactly the shapes the rows above use. That is a deliberate narrowness with a
+// notice attached: widening the table past one function, one non-const operand, or a
+// multi-byte-LEB body size needs this helper widened first, and it will say so by erroring.
+func memargFlags(b []byte) (byte, error) {
+	i := bytesIndex(b, secCode)
+	if i < 0 {
+		return 0, errors.New("no code section")
+	}
+	_, n := uvarint(b[i+1:]) // section size
+	if n <= 0 {
+		return 0, errors.New("malformed code section size")
+	}
+	p := i + 1 + n
+	count, n := uvarint(b[p:])
+	if n <= 0 || count != 1 {
+		return 0, errors.New("this helper reads a single-function module")
+	}
+	p += n
+	if _, n = uvarint(b[p:]); n <= 0 { // body size
+		return 0, errors.New("malformed body size")
+	}
+	p += n
+	locals, n := uvarint(b[p:])
+	if n <= 0 || locals != 0 {
+		return 0, errors.New("this helper reads a body with no local declarations")
+	}
+	p += n
+	for p < len(b) {
+		switch op := b[p]; {
+		case op == 0x41 || op == 0x42: // i32.const, i64.const — skip the operand
+			if _, n = uvarint(b[p+1:]); n <= 0 {
+				return 0, errors.New("malformed const operand")
+			}
+			p += 1 + n
+		case op == 0x1a: // drop
+			p++
+		case op >= 0x28 && op <= 0x3e: // the MVP load/store region — memarg follows
+			return b[p+1], nil
+		case op == 0xfd: // the SIMD prefix: one LEB opcode, then the memarg
+			if _, n = uvarint(b[p+1:]); n <= 0 {
+				return 0, errors.New("malformed vector opcode")
+			}
+			return b[p+1+n], nil
+		default:
+			return 0, errors.New("unexpected opcode in a body this helper is meant to read")
+		}
+	}
+	return 0, errors.New("no memory-accessing instruction in the body")
 }
 
 // bytesIndex finds a section's id byte in an encoded module by walking the framing.

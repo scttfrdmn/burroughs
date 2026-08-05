@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+
+	"github.com/scttfrdmn/burroughs/internal/gen/mllex"
 )
 
 // Table is one extraction's result: the keywords, plus the provenance needed to audit it.
@@ -49,45 +51,42 @@ const Floor = 400
 //
 // sha is recorded verbatim into the result; the caller is responsible for it being the
 // revision src was read from (scripts/fetch-spec-ref.sh pins and verifies it).
+//
+// **The block locating and the arm rejoining are `mllex`'s**, not this package's, and the
+// consolidation is Scott's ruling on the third occurrence of the wrapped-arm shape (#78 here,
+// #105 in opgen, avoided in memarggen by reading this file first). Avoidance is personal
+// and does not survive the next author; one shared reader makes a fourth occurrence structural
+// rather than lucky. What stays here is what this generator's grammar knows — reading a *token
+// constructor* out of an arm's body — because that is genuinely different per consumer.
 func Extract(src, sha string) (*Table, error) {
-	lines := strings.Split(src, "\n")
-
-	lo, hi := -1, -1
-	for i, l := range lines {
-		// The head is two lines: `| keyword as s` then `{ match s with`. Both are
-		// required, because `| keyword as s` alone also introduces nothing this
-		// extractor could read, and matching one line would locate a block that is not
-		// the block.
-		if lo < 0 && reBlockStart.MatchString(l) && i+1 < len(lines) && reBlockMatch.MatchString(lines[i+1]) {
-			lo = i + 2
-			continue
-		}
-		if lo >= 0 && reFallthrough.MatchString(l) {
-			hi = i
-			break
-		}
+	block, err := mllex.FindBlock(strings.Split(src, "\n"))
+	if err != nil {
+		// Not an unrecognized *arm* — the block itself is gone. Distinguished because the
+		// diagnosis differs: this is "upstream moved the lexer", not "upstream changed one
+		// arm". Wrapped as ErrVacuous so this package's own error vocabulary is unchanged by
+		// the refactor; mllex.ErrNoBlock stays readable underneath for a caller that wants it.
+		return nil, fmt.Errorf("%w: %w", ErrVacuous, err)
 	}
-	if lo < 0 || hi < 0 {
-		// Not an unrecognized *arm* — the block itself is gone. Distinguished from
-		// errUnrecognized because the diagnosis differs: this is "upstream moved the
-		// lexer", not "upstream changed one arm". Same split as opcodegen's locate
-		// failure.
-		return nil, fmt.Errorf("%w: could not locate `| keyword as s` / `{ match s with` .. `| _ -> unknown lexbuf` (found %d..%d)",
-			ErrVacuous, lo, hi)
+	raw, err := mllex.Arms(strings.Split(src, "\n"), block)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", errUnrecognized, err)
 	}
 
-	var arms []Arm
-	for i := lo; i < hi; i++ {
-		got, err := parseArm(lines, i)
-		if err != nil {
-			return nil, err
+	arms := make([]Arm, 0, len(raw))
+	for _, a := range raw {
+		km := reKind.FindStringSubmatch(a.Body)
+		if km == nil {
+			// A keyword whose token kind could not be read. Erroring rather than emitting the
+			// arm with an empty Kind is the same choice as errUnrecognized itself: a row saying
+			// "this keyword lexes to nothing" would be a *narrower* claim than the authority's,
+			// made silently, and a consumer would read it as a keyword that is not a token.
+			return nil, fmt.Errorf("%w: lexer.mll:%d: no token constructor in %q (keyword %q)",
+				errUnrecognized, a.Line, a.Body, a.Keyword)
 		}
-		if got != nil {
-			arms = append(arms, *got)
-		}
+		arms = append(arms, Arm{Keyword: a.Keyword, Kind: Kind(km[1]), Line: a.Line})
 	}
 
-	t := &Table{SourceSHA: sha, Arms: arms, fallthroughLine: hi + 1}
+	t := &Table{SourceSHA: sha, Arms: arms, fallthroughLine: block.Fallthrough}
 	slices.SortFunc(t.Arms, func(a, b Arm) int { return strings.Compare(a.Keyword, b.Keyword) })
 	if err := t.checkFloor(); err != nil {
 		return nil, err
@@ -99,53 +98,6 @@ func Extract(src, sha string) (*Table, error) {
 		return nil, err
 	}
 	return t, nil
-}
-
-// parseArm reads the arm at lines[i], or reports that the line is not an arm.
-//
-// Lines that are not arms yield nothing. Lines that *look* like arms and cannot be
-// understood are errUnrecognized — never skipped, which is the property that makes this
-// extraction trustworthy in a way a careful reading is not.
-func parseArm(lines []string, i int) (*Arm, error) {
-	line := lines[i]
-	m := reArm.FindStringSubmatch(line)
-	if m == nil {
-		// Only complain about lines that plausibly *are* arms. A blank line, or a
-		// constructor continuing the previous arm, is not an unrecognized arm — it is
-		// not an arm. The discriminator is a leading `| "`, which is the head shape:
-		// anything else inside this block is a continuation, and a continuation whose
-		// own arm was read is already accounted for.
-		if strings.HasPrefix(strings.TrimSpace(line), `| "`) {
-			return nil, fmt.Errorf("%w: lexer.mll:%d: %s", errUnrecognized, i+1, strings.TrimSpace(line))
-		}
-		return nil, nil
-	}
-
-	kw, rhs := m[1], strings.TrimSpace(m[2])
-	// Fourteen arms at bdd7164 put their constructor on the following line (the
-	// `v128.load*_splat`/`_lane` family and the five `const` forms). Read forward for
-	// the kind rather than treating the arm as unreadable — but bounded by the next
-	// arm's arrival, so a genuinely empty arm is an error rather than inheriting its
-	// successor's constructor.
-	for j := i + 1; rhs == "" && j < len(lines); j++ {
-		t := strings.TrimSpace(lines[j])
-		if t == "" || strings.HasPrefix(t, `| `) {
-			break
-		}
-		rhs = t
-	}
-
-	km := reKind.FindStringSubmatch(rhs)
-	if km == nil {
-		// A keyword whose token kind could not be read. Erroring rather than emitting
-		// the arm with an empty Kind is the same choice as errUnrecognized itself: a
-		// row that says "this keyword lexes to nothing" would be a *narrower* claim
-		// than the authority's, made silently, and a consumer would read it as a
-		// keyword that is not a token.
-		return nil, fmt.Errorf("%w: lexer.mll:%d: no token constructor in %q (keyword %q)",
-			errUnrecognized, i+1, rhs, kw)
-	}
-	return &Arm{Keyword: kw, Kind: Kind(km[1]), Line: i + 1}, nil
 }
 
 // checkDuplicates catches a keyword extracted twice, which would otherwise show up as a
