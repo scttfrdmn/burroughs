@@ -32,8 +32,16 @@ weakly-ordered platform.
   transcribed by hand. Getting any one of those three wrong yields a plausible value for a valid
   module, which is an accept-direction defect the suite scores green by construction (§9 G-3).
 
-  **The board: pass 17923 → 26307, exec fail 8713 → 440, unsupported 32764 → 32377, files
-  253 → 254.** The
+  **The board: pass 17923 → 26307, exec fail 8713 → 440, unsupported 32764 → 32377, gated
+  957 → 1031, files 253 → 254 — and it sums.** +8384 pass is the largest single earn in the
+  project's history, and a movement this size is not understood by silhouette, so the arithmetic
+  is stated rather than implied: `8384 = 8057` (fail drop) `+ 387` (unsupported drop) `+ 14` (new
+  commands) `− 74` (gated growth). The subtracted term is the one worth writing out — all 74 new
+  declines are `kind=invoke`, the Kind this PR added, so they are new *questions* rather than new
+  answers and they take 74 off what the pass column could otherwise claim. Against the
+  pre-registered 8,424 the delivery is short by **40**, that cohort being the
+  `assert_trap (module)` forms: predicted as conversions, delivered as 34 exec fails needing
+  element segments or a start function. The 289 residue came out **exact**. The
   `2d i32.load8_u` bucket went **8001 → 0** and with it the whole load/store region. The 440 that
   remain partition to exactly 440 and are named at `execFailCeiling`: 291 opcode arms this phase
   does not have, 48 downstream of the missing `fc 0a`/`fc 0b`, 41 naming linking, 34
@@ -71,6 +79,16 @@ weakly-ordered platform.
   253 → 254, the one place this PR moves the denominator. `54 − 40 = 14` would have called an
   admission a conversion; the difference was measured by set-differencing the `assert_trap` command
   keys against `b11a664`.
+
+  ***A conversion lowers the column; an admission raises the denominator*** — two operations with
+  different honest signatures, and the pair is now board vocabulary, recorded at `Result.Total`
+  where the columns' meanings already live. A conversion moves a command the harness already saw:
+  one column falls, another rises, the command count does not move. An admission makes a command
+  *exist*: the count rises, `Total()` rises, nothing falls. Both read as progress and only one
+  drains anything, so a delta quoted without saying which it is cannot be checked. The practical
+  test, reasoning-by-subtraction being precisely what failed here: **difference the command keys
+  against the previous revision, never subtract totals** — totals agree with both stories, key sets
+  do not.
 
 - **`binary.Module.ImportedMems`**, the memory index space's offset, sharing `importedCount` with
   `ImportedFuncs`. The same rule as its sibling and it had to be paid for separately, which is the

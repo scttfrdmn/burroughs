@@ -814,6 +814,31 @@ type Failure struct {
 // whenever a *component* lands rather than when a *verdict* is earned. The
 // denominator is over what was asked. TestDenominatorExcludesUnaskedCommands is
 // the control that says so, because a comment cannot fail.
+//
+// # A conversion lowers the column; an admission raises the denominator
+//
+// The vocabulary for reading a movement of these numbers, and the two operations have
+// **different honest signatures**, which is the whole reason to name them apart:
+//
+//   - A **conversion** takes a command the harness already saw and moves it between
+//     columns. `Unsupported` (or `Gated`) falls, `Pass` or `Fail` rises, and `Total()`
+//     rises by the same amount. The command count does not move.
+//   - An **admission** makes a command *exist*. A form the parser did not emit, or a file
+//     `boardFiles` did not select, arrives — so the command count rises, `Total()` rises,
+//     and nothing falls anywhere.
+//
+// Both look like progress and only one drains a column, so a delta quoted without saying
+// which it is cannot be checked. The distinction is not academic: it was minted by getting
+// it wrong. 0015 made 54 `assert_trap`-wrapping-a-module forms scorable, 40 of which are a
+// conversion off `Unsupported`; the remaining 14 are `data1.wast`, a file that held no
+// scorable command and was therefore **not on the board at all**, so its vectors are an
+// admission and the board's file count moved 253 → 254. `54 − 40 = 14` produces the right
+// number by arithmetic while calling an admission a conversion, and the ceiling's comment
+// said exactly that until the two sets were actually differenced.
+//
+// The practical test, since reasoning-by-subtraction is what fails here: **difference the
+// command keys against the previous revision** rather than subtracting totals. Totals agree
+// with both stories; the key sets do not.
 func (r *Result) Total() int { return r.Pass + r.Fail }
 
 // gate records a feature decline: the counter and the line, in one call.
