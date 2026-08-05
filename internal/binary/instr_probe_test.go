@@ -2,6 +2,7 @@ package binary
 
 import (
 	"errors"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -309,5 +310,114 @@ func TestBlockTypeAlternationIsTheAuthority(t *testing.T) {
 	r = &reader{b: []byte{0x7B}, eof: ErrPayloadEnd}
 	if err := simd.decodeBlockType(r); err != nil {
 		t.Errorf("v128 blocktype with SIMD on: got %v, want accept", err)
+	}
+}
+
+// TestDecodeCostIsProportionalToCompressedSize is grave #138's control, and it is a
+// **resource** assertion because no verdict assertion can express the defect.
+//
+// # Why not a committed crasher
+//
+// The standing rule is that crashers are committed — `testdata/fuzz` is the graveyard's
+// executable annex. This defect fails both of that rule's preconditions and the exception was
+// ruled explicitly (Scott, PR #137): the input CI wrote does **not** reproduce as a
+// single-input replay, because one worker holding 2.6 GiB completes fine and returns `ok`; only
+// four concurrently exceeded the runner. Committed as a seed it would tax every `make check`
+// 2.66 GiB of peak RSS (measured, `/usr/bin/time -l`) in exchange for asserting nothing. The
+// refined rule: *a crasher is committed when its replay asserts the defect; when it cannot, the
+// regression guard is a property assertion instead.*
+//
+// # The property
+//
+// A module declaring N locals is `O(image)` to decode, not `O(N)`. The old `decodeLocals`
+// flattened into `make([]ValType, 0, total)`, so a five-byte LEB naming 0xFFFFFFFE bought 4.00
+// GiB from a 30-byte image; the wire form's runs are now retained instead, and the sum check
+// stayed exactly where it was because it was never the defect.
+//
+// Asserted as a **ratio against the declared count**, not as an absolute byte budget. An
+// absolute figure would be a bound on today's allocator behaviour and would drift with any
+// unrelated retention change in this package; the ratio is the property the grave is about, and
+// it fails by three orders of magnitude the moment anything expands a count. The rows span 2^16
+// to 2^31 so the *scaling* is what is measured — a single row cannot distinguish "proportional
+// to the image" from "proportional to N with a small constant", which is precisely the reading
+// that would let the defect back in.
+func TestDecodeCostIsProportionalToCompressedSize(t *testing.T) {
+	// A minimal module whose one function body declares `nlocals` locals of one type. Built
+	// here rather than taken from the suite: no vector declares billions of locals *and* is
+	// accepted, because the interesting count is one below a bound the suite only probes from
+	// above (binary.wast:159 and :175 are the ≥2^32 rejections). Synthetic, and this is the
+	// reason.
+	build := func(nlocals uint32) []byte {
+		body := append([]byte{0x01}, ulebBytes(nlocals)...) // one group, `nlocals` of them
+		body = append(body, byte(I32), 0x0b)                // i32, then END
+
+		code := append([]byte{0x01}, ulebBytes(uint32(len(body)))...)
+		code = append(code, body...)
+
+		img := []byte{0x00, 'a', 's', 'm', 0x01, 0x00, 0x00, 0x00}
+		for _, s := range []struct {
+			id      byte
+			payload []byte
+		}{
+			{1, []byte{0x01, 0x60, 0x00, 0x00}}, // type: one `(func)`
+			{3, []byte{0x01, 0x00}},             // func: one function, type 0
+			{10, code},
+		} {
+			img = append(img, s.id)
+			img = append(img, ulebBytes(uint32(len(s.payload)))...)
+			img = append(img, s.payload...)
+		}
+		return img
+	}
+
+	// The ceiling: 64 bytes of heap per byte of image. Generous by design — this is not a
+	// measurement of the decoder's constant factor, it is a bound that separates "proportional
+	// to the image" from "proportional to a declared count", and those differ by ~10^7 at the
+	// top row. A tight budget here would be a control that fails on unrelated work, which is
+	// the wall-clock-budget mistake in a different unit.
+	const heapPerImageByte = 64
+
+	for _, nlocals := range []uint32{1 << 16, 1 << 20, 1 << 24, 1 << 28, 1<<31 - 1} {
+		img := build(nlocals)
+
+		var before, after runtime.MemStats
+		runtime.GC()
+		runtime.ReadMemStats(&before)
+		m, err := DecodeModule(img)
+		runtime.ReadMemStats(&after)
+		alloc := after.TotalAlloc - before.TotalAlloc
+
+		// Accepting is half the assertion, and it is the half that keeps the fix honest.
+		// Every one of these modules is **well-formed**: the sum is below 2^32, so the
+		// reference decodes them all. Refusing one to save the memory would be the
+		// accept-direction defect (§9 G-3) — strictly worse than the resource cost, and
+		// invisible on a board whose vectors only probe the rejecting side of this bound.
+		if err != nil {
+			t.Errorf("%d locals: got %v, want accept — the sum is below 2^32, so this module "+
+				"is well-formed and refusing it trades a resource bug for an accept-direction one",
+				nlocals, err)
+			continue
+		}
+		// And the groups are retained rather than expanded, which is the mechanism the
+		// budget above is a consequence of. Asserted separately so a failure says *which*
+		// property broke: a budget alone would report "too much memory" for what is
+		// actually "the wire form stopped being retained".
+		if got := len(m.Funcs[0].Locals); got != 1 {
+			t.Errorf("%d locals: retained %d groups, want 1 — the image declares one run and "+
+				"the decoder must not expand it", nlocals, got)
+		}
+		if got := m.Funcs[0].TotalLocals(); got != uint64(nlocals) {
+			t.Errorf("%d locals: TotalLocals is %d — the flat count must survive the "+
+				"compression, or consumers sizing frames from it are wrong by the ratio",
+				nlocals, got)
+		}
+
+		if budget := uint64(len(img)) * heapPerImageByte; alloc > budget {
+			t.Errorf("%d locals: decoding a %d-byte image allocated %d bytes, budget %d — "+
+				"that is proportional to the declared count rather than to the image, which "+
+				"is grave #138: a 30-byte module bought 4.00 GiB",
+				nlocals, len(img), alloc, budget)
+		}
+		t.Logf("%10d locals: image %d bytes, allocated %d bytes", nlocals, len(img), alloc)
 	}
 }

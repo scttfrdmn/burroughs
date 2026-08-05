@@ -377,8 +377,17 @@ func (p *parser) constImmRetained(mnemonic Token) error {
 // `typeIdx` is resolved in stage 2 like every other signature, so it is a thunk rather than a
 // number: `deferSignature` already owns the type-interning question and this must not answer it a
 // second time. `locals` is the *flattened* valtype vector — one entry per local, not per run —
-// because `binary.Func.Locals` is flattened on the other side and the RLE is applied on the way
-// out. Comparing flattened is what makes the round trip's comparison meaningful.
+// because the text source spells locals individually (`(local i32 i32)` is two entries) and the
+// RLE is applied on the way out by funcLocalBytes.
+//
+// **It is deliberately still flat now that `binary.Func.Locals` is not** (#138). The old reason
+// given here was that the decoder flattened too, so comparing flat made the round trip
+// meaningful; that reason expired and the field did not, because the *source* is what this
+// struct holds and the source is a list. The parser has no count to be talked into: a text
+// module declaring a million locals writes a million tokens, so this vector's size is bounded by
+// the input's size — which is exactly the property the decoder lost when it expanded a five-byte
+// LEB. Same shape, different exposure, and worth stating so the next reader does not
+// "consistency-fix" this into groups and inherit a round-trip that cannot see run boundaries.
 type textFunc struct {
 	typeIdx func() (uint32, error)
 	// locals are unresolved, because `(local (ref null $t))` may name a type defined later —
@@ -571,9 +580,17 @@ const opEnd byte = 0x0b
 // :238 should find the same shape rather than an equivalent one.
 //
 // The input is flattened (one entry per local) and the output is RLE, which is the asymmetry
-// `textFunc.locals` documents: `binary.Func.Locals` is flattened on the decode side, so the round
-// trip compares flattened vectors and the RLE is purely an encoding detail. A comparison against
-// the RLE form would be comparing our own grouping choice to itself.
+// `textFunc.locals` documents.
+//
+// **The round trip now compares the RLE, and that is a strengthening rather than a bookkeeping
+// change** (#138). While the decoder flattened, the comparison could not distinguish "wrote one
+// run of two" from "wrote two runs of one" — both decode to the same flat vector, and only one is
+// what `combine` produces. The reason given here for that being fine was that the RLE is "purely
+// an encoding detail" and comparing it would compare our grouping choice to itself; the second
+// half was true and the first was not, since the grouping is `encode.ml:238`'s and therefore the
+// reference's rather than ours. With `binary.Func.Locals` retaining runs, the decoder is an
+// independent reader of them, so the round trip checks the fold's output against what the format
+// says those bytes mean. encode_test.go's three-group case is where that bites.
 func writeLocals(w *writer, locals []byte) {
 	type run struct {
 		n uint32

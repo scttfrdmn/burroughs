@@ -189,6 +189,26 @@ var (
 	trapBadConvert  = &Trap{Reason: "invalid conversion to integer"}
 )
 
+// maxFrameLocals is the most locals this engine will build a frame for: 2^24, so 128 MiB of
+// slots at eight bytes each.
+//
+// **An engine limit with a stated basis, which is the difference between a bound and a round
+// number.** The spec's own limit is 2^32 (the decoder's `too many locals`), and honouring it
+// literally means a well-formed module can demand a 32 GiB frame — the execution-side half of
+// grave #138, which the decoder no longer pays and which does not vanish by being moved. The
+// figure is chosen so that the refusal cannot be mistaken for a policy about reasonable code:
+// 16.7 million locals in one function is four orders of magnitude past anything a compiler
+// emits, so a module refused here was constructed to be refused.
+//
+// It is deliberately **not** derived from available memory. A ceiling that varies by host
+// makes the engine's verdict depend on where it runs, and a module that executes on the dev
+// box and is refused in CI is the least debuggable failure this package could offer. Fixed,
+// stated, and the same everywhere.
+//
+// When #9 lands this stays: the validator's job is to reject invalid modules, and this module
+// is valid. It is an engine capability limit, which is why it reports ErrUnsupported.
+const maxFrameLocals = 1 << 24
+
 // ErrUnsupportedOp is the engine saying it has no arm for an instruction.
 //
 // **Not a verdict on the module, and the distinction is the whole reason it is a separate
@@ -271,8 +291,26 @@ func (in *Instance) Invoke(name string, args ...Value) ([]Value, error) {
 	// the parallel array joins the frame for the value stack's reason (0002's pinned
 	// consequence), keyed by the same index: the validator knows each local's type, so each
 	// index uses exactly one of the two arrays.
-	nLocals := len(ft.Params) + len(fn.Locals)
-	locals := make([]uint64, nLocals)
+	//
+	// **This is where the flat local vector is paid for, and where it is bounded** (#138). The
+	// decoder retains the wire form — `(count, valtype)` runs — so `len(fn.Locals)` counts
+	// *groups* and the flat total comes from `TotalLocals`. Getting that wrong is a live
+	// hazard rather than a hypothetical: `len` compiles, is off by the compression ratio, and
+	// would size the frame for three groups where a body declares a million locals.
+	//
+	// The bound is this engine's, not the spec's. A body declaring 0xFFFFFFFE locals is a
+	// well-formed module the reference runs, and eight bytes a slot makes its frame 32 GiB —
+	// so the refusal is ErrUnsupported (an engine limit this phase has), never
+	// ErrNotValidated (which would blame the module) and never a trap (which would claim a
+	// spec outcome the spec does not give). The ceiling is deliberately generous: it exists to
+	// stop an allocation no host can serve, not to express a policy about reasonable
+	// functions.
+	total := fn.TotalLocals() + uint64(len(ft.Params))
+	if total > maxFrameLocals {
+		return nil, fmt.Errorf("%w: %q declares %d locals, and this engine's frame ceiling is %d",
+			ErrUnsupported, name, total, maxFrameLocals)
+	}
+	locals := make([]uint64, total)
 	for i, p := range ft.Params {
 		if p.IsRef() {
 			return nil, fmt.Errorf("%w: parameter %d of %q is %s", ErrUnsupportedOp, i, name, p)
@@ -282,10 +320,19 @@ func (in *Instance) Invoke(name string, args ...Value) ([]Value, error) {
 		}
 		locals[i] = args[i].Bits
 	}
-	for i, l := range fn.Locals {
-		if l.IsRef() {
-			return nil, fmt.Errorf("%w: local %d of %q is %s", ErrUnsupportedOp, i, name, l)
+	// Iterated rather than indexed, because the flat reading is what the ref check is about
+	// and materializing it to get one is what #138 was. `EachLocal` yields per local without
+	// allocating; the early return is the iterator's own stop signal.
+	var refErr error
+	fn.EachLocal(func(idx uint32, vt binary.ValType) bool {
+		if vt.IsRef() {
+			refErr = fmt.Errorf("%w: local %d of %q is %s", ErrUnsupportedOp, idx, name, vt)
+			return false
 		}
+		return true
+	})
+	if refErr != nil {
+		return nil, refErr
 	}
 
 	st := &stack{

@@ -186,16 +186,93 @@ type CompType struct {
 type Func struct {
 	TypeIndex uint32
 
-	// Locals is the flattened local vector: one entry per local, not one per declared
-	// group. The binary format encodes runs (`count, valtype`), and a body declaring
-	// 0xFFFFFFFF of them is legal *encoding* while being rejected by the `too many
-	// locals` sum check — so flattening happens only after that check has passed, and
-	// `decodeLocals` is where both live.
-	Locals []ValType
+	// Locals is the declared local **groups**, one entry per `(count, valtype)` run in the
+	// image — *not* one entry per local.
+	//
+	// # It was the flattened vector, and 30 bytes bought a 4 GiB lunch
+	//
+	// The wire form is runs, and this field used to hold them expanded: one `ValType` per
+	// local, flattened by `decodeLocals` once the `too many locals` sum check passed. That
+	// check is the reference's (`total >= 1<<32`) and it is right about the *verdict* — but
+	// `ValType` is a byte, so a body declaring `0xFFFFFFFE` locals is a **legal** module
+	// that the old field expanded into 4.00 GiB from a 30-byte image, measured. Grave #138.
+	//
+	// **No vector could see it, in either direction**: the module is spec-legal, this engine
+	// agreed with the reference on accepting it, and the only witness was a resource
+	// measurement. The suite is the oracle for verdicts and is silent on cost by
+	// construction, which is why the fuzzer found it and three years of boards would not
+	// have. The hazard was even *stated* one comment away — the old prose explained that
+	// flattening waits for the sum check so four billion entries are not allocated for a
+	// module the next line refuses, which is true of `0xFFFFFFFF` and silent about
+	// `0xFFFFFFFE`, the neighbour that next line **accepts**. The rule was right; only its
+	// extent was wrong, and a boundary comment that does not state its extent reads as a
+	// proof. (Ruling: Scott, PR #137.)
+	//
+	// # So retention is the wire form, which is the truer reading anyway
+	//
+	// Keeping runs is not merely the cheap fix. The image says "n of this type" and this now
+	// says the same thing, so decode cost is proportional to the *compressed* size — the
+	// decoder stops paying execution's rent. A consumer that genuinely needs 4Gi slots bills
+	// itself, where the cost can be bounded or refused on execution's terms — `interp` does
+	// exactly that, and it refuses as an **engine limit** rather than as a decode error or a
+	// trap. Not a trap specifically: a trap is a spec-defined outcome, so reporting one would
+	// have this engine claim the module traps when the spec says it runs. The module is
+	// well-formed and this phase cannot run it, which is precisely the third category.
+	//
+	// `TotalLocals` is the flat count, and `EachLocal` iterates the flat reading for the
+	// consumers that want one — both without materializing anything.
+	Locals []LocalGroup
 
 	// Body is the internal form: `[]Instr` with immediates pre-decoded and branch
 	// targets resolved to indices in this slice (0002, Q1 option B).
 	Body []Instr
+}
+
+// LocalGroup is one `(count, valtype)` run of a body's local declarations, exactly as the
+// image spells it.
+//
+// **Count is a uint32 and deliberately not narrowed**, because narrowing it here would move
+// the `too many locals` verdict out of the decoder and into this type's constructor — and
+// the verdict belongs where the reference puts it, on the 64-bit sum across all groups. A
+// single group's count is legal up to 0xFFFFFFFF; it is the *sum* that is bounded.
+type LocalGroup struct {
+	Count uint32
+	Type  ValType
+}
+
+// TotalLocals is the flat local count: the sum of the groups' counts.
+//
+// Returns a uint64 because that is the width the sum is *computed* at — `decodeLocals`
+// rejects a sum at or above 2^32, so every retained Func's total fits in 32 bits, and
+// returning the wider type keeps this function honest for a hand-built Func that never went
+// through the decoder. A consumer that needs an int says so at its own call site, where the
+// bound it is checking against lives.
+func (f *Func) TotalLocals() uint64 {
+	var total uint64
+	for _, g := range f.Locals {
+		total += uint64(g.Count)
+	}
+	return total
+}
+
+// EachLocal yields every local's type in index order — the flat reading, without the flat
+// slice.
+//
+// An iterator rather than a `[]ValType` accessor, and that is the whole point of #138: an
+// accessor returning the flattened vector would put the 4 GiB allocation back, one call
+// deeper and harder to see. Anything wanting the flat reading gets it a value at a time and
+// pays only for what it consumes; a consumer that must materialize slots checks its own
+// bound against TotalLocals *first* and then fills them.
+func (f *Func) EachLocal(yield func(idx uint32, vt ValType) bool) {
+	var idx uint32
+	for _, g := range f.Locals {
+		for range g.Count {
+			if !yield(idx, g.Type) {
+				return
+			}
+			idx++
+		}
+	}
 }
 
 // Instr is one instruction in the internal form.

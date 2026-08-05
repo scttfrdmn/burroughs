@@ -1973,6 +1973,53 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **A 20-byte module allocated 2.64 GiB: `decodeLocals` expanded a declared count before
+  anything bounded it** ([grave #138](https://github.com/scttfrdmn/burroughs/issues/138)). The
+  local declarations are run-length on the wire (`count, valtype`) and the decoder flattened them
+  into one `ValType` per local. The guard was `total >= 1<<32` — the reference's bound, and right
+  about the *verdict* — so `0xFFFFFFFE` locals was **admitted** and, at a byte per slot, a 30-byte
+  image decoded successfully into **4.00 GiB**. Found by `fuzz-smoke` on CI, where four workers
+  each holding gigabytes exhausted a 16 GB runner; the failure surfaced as `fuzzing process hung
+  or terminated unexpectedly: exit status 2`.
+
+  **`binary.Func.Locals` now retains the wire form** — `[]LocalGroup`, one entry per run — with
+  `TotalLocals()` for the flat count and `EachLocal()` iterating the flat reading without
+  materializing it. Decode cost is proportional to the *compressed* size; the sum check stayed
+  exactly where it was, because it was never the defect. The flat vector is paid for by the one
+  consumer that needs slots, `interp`'s frame builder, and bounded there by `maxFrameLocals`
+  (2^24, so 128 MiB of slots) reported as `ErrUnsupported` — an engine limit, since the module is
+  well-formed and the spec gives no trap for it.
+
+  **Verdict-preserving, and the board proves it: 26307 / 5349 / 32377 / 1031, unchanged.** That is
+  the point rather than a footnote — every one of these modules is spec-legal, so refusing them to
+  save the memory would trade a resource bug for an accept-direction one (§9 G-3), which is
+  strictly worse and invisible on a board whose vectors only probe this bound from above
+  (`binary.wast:159`, `:175`). Measured effect on the target that found it: **3M executions in
+  7.4s at 222 MiB peak, up from 2.5M in 59s before the kill** — the old code was spending its
+  throughput expanding local counts, 46k → 465k execs/sec.
+
+  Two lessons, and the second is the one worth carrying. First: *a count check that is right about
+  the verdict can still be wrong about the resources*, and no vector can see the difference —
+  the suite is the oracle for verdicts and silent on cost by construction. Second: **the rule was
+  right; only its extent was wrong.** The hazard was *stated at the site* — the old comment
+  explained that flattening waits for the sum check so four billion entries are not allocated for
+  a module the next line refuses — and that is true of `0xFFFFFFFF` and silent about
+  `0xFFFFFFFE`, the neighbour one line later that the check **accepts**. A boundary comment that
+  does not state its extent reads as a proof, which is why review confirmed it. Boundary comments
+  now state their extent.
+
+  The regression guard is a **property assertion, not a committed crasher**, and that refines the
+  standing rule rather than breaking it: the input does not reproduce as a single-input replay (one
+  worker at 2.6 GiB returns `ok`) and as a seed it would tax every `make check` 2.66 GiB of peak
+  RSS while asserting nothing. Refined form — *a crasher is committed when its replay asserts the
+  defect; when it cannot, the guard is a property assertion instead.*
+  `TestDecodeCostIsProportionalToCompressedSize` bounds heap against **image** size across 2^16 to
+  2^31 declared locals, so the *scaling* is what is measured; a single row cannot tell
+  "proportional to the image" from "proportional to N with a small constant".
+  `TestFrameLocalsCeilingRefusesRatherThanAllocating` covers the execution half. Both were
+  falsified before landing — the first fails on all five rows with the old flattening restored, the
+  second on exactly the two rows past the ceiling.
+
 - **A control's printed figures and its comment's figures are two witnesses, and only one gets
   re-measured** ([grave #132](https://github.com/scttfrdmn/burroughs/issues/132)).
   `TestRetainedFormOverAcceptedModules` logs its population every run and *also* states it in prose;
