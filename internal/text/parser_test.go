@@ -432,8 +432,21 @@ func TestModuleAcceptDirection(t *testing.T) {
 			"the UTF-8 check is at name/var and not in the lexer"},
 		{`(module (data "" "" ""))`, "string_list concatenating empties"},
 
-		{`(module (elem))`, "elem:1158 with an empty elem_list"},
-		{`(module (elem $e))`, "elem with bindidx"},
+		// `(elem)` and `(elem $e)` sat here claiming "elem:1158 with an empty elem_list", and the
+		// reference has no such derivation: `elem_list`'s two arms are `elemkind elemidx_list` and
+		// `reftype elemexpr_list` (:1152-1156), whose heads — `FUNC` and reftype's thirteen arms — each
+		// consume a token, so `elem_list` is not nullable and neither of these is a sentence. The rows
+		// that *do* reach an empty element list keep an explicit head, below. What settled it was a
+		// nullability fixpoint over the whole `.mly` rather than a third reading of the two productions:
+		// 50 of 137 nonterminals are nullable and `elem_list`, `offset`, `expr` and `reftype` are not.
+		// (#143. The first two attempts at that instrument reported *every* nonterminal nullable and
+		// then all 137 again — a spurious ε arm from layout — which is the vacuity law: `nullable=false`
+		// out of an extractor that found zero arms is not an answer.)
+		{`(module (table 1 funcref) (elem (i32.const 0)))`, "elem:1175, the offset sugar over an " +
+			"empty elemidx_list — idx_list:500 IS nullable, and this is the one arm of five that " +
+			"reaches an empty element list (29 corpus rows, elem.wast:35/:39)"},
+		{`(module (table 1 funcref) (elem $a (offset (i32.const 0))))`, "the same arm with bindidx " +
+			"and the explicit `(offset …)` spelling"},
 		{`(module (elem func))`, "elem_list:1153 + elemkind:1136, empty idx list"},
 		{`(module (elem func 0 1 $f))`, "elemidx_list:1147"},
 		{`(module (elem declare func $f))`, "elem:1168"},
@@ -531,7 +544,13 @@ func TestModuleRejectDirection(t *testing.T) {
 		{`(module (memory $m 1) (memory $m 1))`, "duplicate memory $m", "bind_abs:174"},
 		{`(module (table $t 1 funcref) (table $t 1 funcref))`, "duplicate table $t", "bind_abs:174"},
 		{`(module (data $d) (data $d))`, "duplicate data segment $d", "bind_data:193 — two words"},
-		{`(module (elem $e) (elem $e))`, "duplicate elem segment $e", "bind_elem:194 — two words"},
+		// `func` after each bindidx, not a bare `(elem $e)`: this row is about `bind_elem`, and a
+		// carrier that is itself a syntax error tests the wrong rejection (#143 — it *did* pass, on
+		// "unexpected token", which is the shape a partition check catches and an `errors.Is` does not).
+		{
+			`(module (elem $e func) (elem $e func))`, "duplicate elem segment $e",
+			"bind_elem:194 — two words",
+		},
 		{`(module (tag $t) (tag $t))`, "duplicate tag $t", "bind_abs:174"},
 		{
 			`(module (func (param $x i32) (local $x i32)))`, "duplicate local $x",
@@ -1162,7 +1181,10 @@ func TestIndexSpacesAreIndependent(t *testing.T) {
 		`(memory $x 1)`,
 		`(table $x 1 funcref)`,
 		`(data $x)`,
-		`(elem $x)`,
+		// `func` after the bindidx: `elem_list` is not nullable, so a bare `(elem $x)` is a syntax
+		// error and every pair containing it failed for that reason rather than for a shared map —
+		// seven rows of this cross-product asserting nothing about index spaces (#143).
+		`(elem $x func)`,
 		`(tag $x)`,
 	}
 	// Imports first would trip the ordering check, so definitions only, and in an order the
@@ -2107,12 +2129,32 @@ func TestElemListArmsAreNotShadowedByTheOffsetSugar(t *testing.T) {
 				"are both present in the table",
 		},
 
-		// The empty elem_list, which is well-formed because `reftype elemexpr_list` reaches an
-		// empty list — the vacuity row: if `(elem)` did not parse, several rows above would be
-		// asserting something narrower than they claim.
+		// The empty element list, on the one arm that reaches it. This row was `(elem)` and was the
+		// table's *vacuity* row, on the reasoning that several rows above would assert something
+		// narrower than they claim if the empty shape did not parse at all. The shape was right and the
+		// spelling was wrong, which is worse than either mistake alone: `(elem)` parsed, so the row was
+		// green, and it was green because this parser had an arm the reference does not have.
+		//
+		// **The `why` field said the wrong thing for as long as the row existed, and it said it the way
+		// the graveyard's worst cases do: by citing a real line for a conclusion the line does not
+		// support.** Verbatim, because the wrong belief is the part worth keeping — *"`(elem)` is
+		// well-formed — `elemkind` has no empty arm but `reftype elemexpr_list` reaches an empty list
+		// (parser.mly:1144)"*. Every clause of that is true except the inference: `elemexpr_list` does
+		// derive empty at :1144, and the **`reftype` in front of it does not** (:376-389, thirteen arms,
+		// every one consuming a token), so `elem_list` derives nothing empty. The spec agrees
+		// independently — `elemlist ::= rt:reftype e*:list(elemexpr)`, §6.6.9 — and a resolving citation
+		// check passes on the sentence, because the line exists and says what it is quoted as saying.
+		// Only reading the *other* symbol in the production falsifies it.
+		//
+		// The empty list is reachable, one level up and in exactly one of the five `elem` arms: :1175 is
+		// `offset elemidx_list`, and `elemidx_list` is `idx_list`, which **is** nullable (:500). So the
+		// row keeps its job with a spelling the reference derives, and it now also pins that the
+		// offset-sugar branch's `RParen` case exists — 29 corpus rows take it (#143).
 		{
-			"empty elem_list", "(elem)",
-			"synthetic: `(elem)` is well-formed — `elemkind` has no empty arm but `reftype elemexpr_list` reaches an empty list (parser.mly:1144). elem.wast:10 writes `(elem funcref)`, the nearest spelling, but never the bare form",
+			"empty elemidx_list after an offset", "(elem (i32.const 0))",
+			"elem.wast:39 — elem:1175's `offset elemidx_list` over an empty idx_list (parser.mly:500), " +
+				"the only one of the five arms that reaches an empty element list; the sibling " +
+				"`tableElemSugar` accepts the same emptiness at table_fields:1216",
 		},
 	}
 

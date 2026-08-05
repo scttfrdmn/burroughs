@@ -685,12 +685,151 @@ func (p *parser) idxValue() (idxRef, error) {
 
 // idxList parses `idx_list` (parser.mly:499-501): zero or more indices.
 func (p *parser) idxList() error {
+	_, err := p.idxListValues()
+	return err
+}
+
+// idxListValues is idxList returning what it read, for `elemidx_list`.
+//
+// The recognizer twin above stays because two of `idxList`'s three callers — a subtype's supertype
+// list and `br_table`'s labels — read indices this position does not resolve; `idxValue`/`idx`'s
+// split, one level up.
+func (p *parser) idxListValues() ([]idxRef, error) {
+	var refs []idxRef
 	for p.c.at(NatTok) || p.c.at(VarTok) {
-		if err := p.idx(); err != nil {
+		r, err := p.idxValue()
+		if err != nil {
+			return nil, err
+		}
+		refs = append(refs, r)
+	}
+	return refs, nil
+}
+
+// elemIdxList parses `elemidx_list` (parser.mly:1147-1150) and expands it the way the reference
+// does: into one `ref.func x` constant expression per index.
+//
+// **The expansion is the reference's, transcribed rather than invented**, and it is the load-bearing
+// half of `textElem`'s derived-form argument. `elemidx_list` is *not* a second element
+// representation — its semantic action is
+//
+//	let f = function {at; _} as x -> [ref_func x @@@ at] @@@ at in
+//	fun c -> List.map f ($1 c func)
+//
+// so `(elem func $a $b)` and `(elem (ref func) (ref.func $a) (ref.func $b))` build the *same*
+// `Elem` node and differ only in the reftype they pair it with. Expanding here means the encoder has
+// one list to ask `is_elem_index` about, and the answer for these is true by construction — which is
+// how `(elem func …)` reaches flag 0 without the parser remembering that it was spelled with
+// `elemkind`.
+//
+// The indices resolve against the **func** space and may forward-reference, which is why each lands
+// in a sink through `retainIdx` rather than being encoded here: `elem.wast:12`'s
+// `(elem (i32.const 0) $f)` precedes `(func $f)`.
+func (p *parser) elemIdxList() ([]instrSink, error) {
+	refs, err := p.idxListValues()
+	if err != nil {
+		return nil, err
+	}
+	// The **mode**, not `p.retaining()`, for `intoSink`'s reason (grave #144): this runs at
+	// module-field scope, where no enclosing sink exists and the two questions come apart. Asking
+	// `retaining()` here returned no elements on a parse that was retaining.
+	if !p.retain {
+		return nil, nil
+	}
+	elems := make([]instrSink, 0, len(refs))
+	for _, r := range refs {
+		s, err := p.elemIdxSink(r)
+		if err != nil {
+			return nil, err
+		}
+		elems = append(elems, s)
+	}
+	return elems, nil
+}
+
+// refFuncSpelling is the mnemonic `elemidx_list`'s expansion synthesizes, named once because three
+// derivations key on it: the opcode (`opBytes`), the lookup category (`keywords` → `idxLookupKinds`),
+// and the writer-side predicate (`elemIdxOf`).
+const refFuncSpelling = "ref.func"
+
+// refFuncMnemonic is the synthetic `ref.func` token `elemidx_list`'s expansion needs, with its
+// keyword read out of the generated table rather than written here.
+//
+// **The indirection through `keywords` is the point, not ceremony.** `retainIdx` looks the category
+// up by `mnemonic.Keyword`, and a `keywordKind` typed as a literal string would compile whether or
+// not it matched what the lexer produces for the same spelling.
+//
+// The hazard is real and this comment used to describe it wrongly, in a way worth recording because
+// the wrong version was the reassuring one. It said an unmatched keyword would resolve indices "in
+// whatever space `idxLookupKinds[""]` names, which is `catType`'s zero value and not a refusal."
+// Printed: `idxLookupKinds[""]` is **`catNone` (0)**, `catType` is 5, and `idxSpaceFor(catNone)`
+// returns **nil** — so an *unrecognized* keyword is refused, loudly, with `cannot yet encode a
+// symbolic index on ref.func`. Wrong constant, wrong outcome, and the error was in the direction of
+// overstating the danger of the case that is actually safe.
+//
+// What is genuinely unsafe is the case the old sentence obscured: a keyword that is wrong but **is**
+// in `idxLookupKinds` gets a space, and the wrong one. Substituting `TABLE_GET` resolves a func name
+// against the table space — `unknown table $f` where the module has no table, and a *valid module
+// denoting a different function* where it has one. That is the silent half, and it is what
+// TestElemIndexFormNeedsExactlyRefFunc's first row is built around. Asking the table is asking the
+// same authority the real `ref.func` token comes from.
+func refFuncMnemonic() Token {
+	kind, ok := keywords[refFuncSpelling]
+	if !ok {
+		// Unreachable: `ref.func` is `lexer.mll:327` and the table is generated from it, which
+		// TestElemIndexFormNeedsExactlyRefFunc pins from the other end by round-tripping a segment
+		// that takes the index form. A missing row here would resolve every `(elem func $f)` index
+		// in the wrong space rather than refusing it.
+		panic("text: " + refFuncSpelling + " is not in the generated keyword table, so an element " +
+			"index list cannot be expanded")
+	}
+	return Token{Kind: KeywordTok, Keyword: kind, Text: refFuncSpelling}
+}
+
+// elemIdxSink builds the one-instruction `ref.func x` expression `elemidx_list` expands an index into.
+//
+// It goes through `retainIdx` rather than encoding the index directly, because that is the one place
+// that knows a func index may forward-reference and must defer — see its comment for why deferring
+// only the spaces that need it is a correctness requirement rather than an optimization. So this
+// borrows the instruction-building machinery for an instruction the text never spelled, which is
+// `sugarZeroOffset`'s situation and the reason that function exists next door; the difference is that
+// this one's immediate is not a constant, so it cannot be built without the parser's state.
+//
+// **The `ref.func` token is synthesized from the generated table, not written as a literal**, and
+// which of the two is used matters: `retainIdx` routes by `idxLookupKinds[mnemonic.Keyword]`, so a
+// token carrying the wrong keyword — or none — resolves the index in the wrong space or refuses it.
+// `refFuncMnemonic` reads the spelling's kind out of `keywords.go`, which is the authority both
+// halves of that lookup already derive from; a hand-typed `"REF_FUNC"` would be a third copy of a
+// generated fact, and the copy that is wrong is the one nothing checks.
+//
+// It has no source position, because there is no source text: the reference's expansion is
+// `ref_func x` with the *index's* location (`[ref_func x @@@ at]`, parser.mly:1149), and `retainIdx`
+// quotes `r.tok` for the errors it raises — which is that same location, and the one a reader needs.
+func (p *parser) elemIdxSink(r idxRef) (instrSink, error) {
+	op, ok := opBytes(refFuncSpelling)
+	if !ok {
+		// Unreachable for `elemIdxOf`'s reason, and pinned by the same control: `ref.func` is in
+		// the generated opcode table.
+		panic("text: ref.func has no opcode, so an element index list cannot be expanded")
+	}
+	mnemonic := refFuncMnemonic()
+	// The save-and-restore around `p.imm` is `plaininstr`'s, copied rather than re-derived: the
+	// immediate accumulator is a field, so a nested instruction that did not clear it would append to
+	// whatever the enclosing instruction had built. There is no enclosing instruction at a module
+	// field, which makes the saved value nil here — the same standing `retainedOffset`'s swap has, and
+	// written as a swap for the same reason, so the nil-ness stays a fact about the grammar rather
+	// than an assumption.
+	saved := p.imm
+	p.imm = nil
+	defer func() { p.imm = saved }()
+	return p.intoSink(func() error {
+		if err := p.retainIdx(mnemonic, r); err != nil {
 			return err
 		}
-	}
-	return nil
+		p.emit(instr{op: op, imm: p.imm, patch: p.immPatch})
+		p.immPatch = nil
+		return nil
+	})
 }
 
 // labelIdx parses an `idx` in a label position, resolving it (#80).

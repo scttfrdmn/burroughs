@@ -1,6 +1,7 @@
 package text
 
 import (
+	"bytes"
 	"fmt"
 	"slices"
 )
@@ -288,6 +289,217 @@ type resolvedData struct {
 	bytes  []byte
 }
 
+// textElem is one element segment as the parse read it: the mode, an unresolved table index, the
+// retained offset, and the element list in whichever of the two forms the text used.
+//
+// **`table` is unresolved for `textData.mem`'s reason**, and the argument transfers without change:
+// `encode.ml`'s `elem` splits its active arms on the *resolved* index — `Active ({it = 0l; _}, c)`
+// takes the `0x00`/`0x04` form and `Active (x, c)` the `0x02`/`0x06` form (:1068-1082) — so the
+// question is "is this index zero", never "did the text write a `(table …)`". A symbolic
+// `(table $t)` naming table 0 is the case that makes it more than pedantic.
+//
+// **One element list, not two, and the wire form is *derived* rather than remembered — which is the
+// opposite of what this comment said when it was written.** The claim was that the reference's
+// discriminator cannot be reconstructed here, so the two spellings had to be kept apart as a
+// retained flag. That is false, and reading `encode.ml`'s executable rather than reasoning from the
+// grammar is what said so:
+//
+//	if is_elem_kind rt && List.for_all is_elem_index cs then (* the index forms, flags 0/1/2/3 *)
+//	else (* the expression forms, flags 4/5/6/7 *)                             (encode.ml:1064-1084)
+//
+// Neither half of that predicate asks which grammar arm ran. `is_elem_kind` is `(NoNull, FuncHT)`
+// (:1044-1046) — a question about the reftype's *nullability*, and `valType.null` retains exactly
+// that, because a text valType is a parsed type and not the wire byte. (`binary.ValType` is the byte
+// that loses it; the confusion was between the two representations, one package apart.)
+// `is_elem_index` is `[{it = RefFunc _}]` — a question about each element *expression's shape*, and
+// `elemidx_list` builds precisely those: `List.map (fun x -> [ref_func x])` (parser.mly:1147-1150).
+//
+// So the grammar's two spellings are not the format's two forms, and keeping a flag would encode the
+// *spelling*. Measured over the corpus — 1385 `(elem` forms across the 265 `.wast` files under
+// `third_party/spec/test`, which is the population every count in this paragraph is against — that
+// mis-encodes both directions:
+//
+//   - `(elem funcref (ref.func …))` — 450 forms, the commonest spelling — reads as
+//     `reftype elemexpr_list`, and `funcref` is `(Null, FuncHT)`, so `is_elem_kind` is **false** and
+//     the reference writes the expression family. A spelling-keyed flag writes the index family.
+//   - `(elem (ref func) (ref.func 0))` — 4 forms, `elem.wast:539` among them — reads the same arm,
+//     and `(ref func)` is `(NoNull, FuncHT)`, so the predicate is **true** and the reference writes
+//     the *index* family. A spelling-keyed flag writes the expression family.
+//
+// **The two counts were 683 and 8 until they were re-run, and the correction is the point of naming
+// the population.** Neither figure was reproducible: the census that produced them globbed a
+// different file set and binned `(elem $f)` under a `table` parent as an anonymous segment. Nothing
+// downstream moved — the argument is that the predicate asks about content, and it needs the
+// *existence* of both directions rather than their sizes — which is exactly the condition under which
+// a number goes unchecked. Stated with its population so the next reader can re-run it.
+//
+// Both spellings would decode clean, denoting the same module with different bytes. The same defect
+// `textData.mem` documents at length, one section over: the discriminator is a question about
+// *content*, never about what the text spelled. See `encodeElems` for why the "and would diverge from
+// wabt" clause this paragraph used to carry was measuring a feature gate rather than a producer.
+//
+// The 0016 sentence that stands is the general one, and it is what forces this shape: **retention is
+// forced by consumers, but shaped by the grammar.** The grammar's element list is
+// `elemexpr_list`, a list of constant expressions — `elemidx_list` is *sugar that expands into one*
+// — so one list of expressions is the wire form, and the encoder derives the flag from it.
+type textElem struct {
+	mode elemMode
+	// table is the table index, meaningless unless the mode is active. The zero value is the sugar
+	// arm's default, the reference's `Active (0l @@ $sloc, …)`.
+	table idxRef
+	// offset is the active arm's offset expression, retained at the cursor by elemOffset.
+	offset instrSink
+	// elemType is the segment's element type. The default is `funcref` — `(Null, FuncHT)`, spelled
+	// by the abbreviation — because that is what the two `elemkind`/`elemidx_list` arms mean
+	// (parser.mly:1136, :1175), and *not* a zero value standing in for "unwritten": the whole point
+	// of the derivation above is that `funcref` and `(ref func)` are different types choosing
+	// different flags, so a default that could not tell them apart would be the bug.
+	elemType valType
+	// elems is the element list, one retained constant expression per element, in source order.
+	//
+	// The index spelling `(elem func $a $b)` lands here too, as the synthesized `ref.func` sink
+	// `elemidx_list` expands it into (`elemIdxSink`). That is the reference's own expansion rather
+	// than a normalization invented here, which is what makes `is_elem_index` answerable on the
+	// other side.
+	elems []instrSink
+}
+
+// elemKindFuncref is `elemkind`'s only value: `(NoNull, FuncHT)`, the reference's `FUNC { (NoNull,
+// FuncHT) }` (parser.mly:1136) and the `let rt = (NoNull, FuncHT) in` the bare-index sugar states
+// outright (:1177).
+//
+// **A named constant rather than a literal at the three sites that mean it**, because it is exactly
+// `is_elem_kind`'s true case (encode.ml:1044-1046) and one letter of it decides the wire form: written
+// `null: true` it is `funcref`, which `is_elem_kind` rejects, and every `(elem func $f)` in the corpus
+// would take flag 4 instead of flag 0 — 423 occurrences of the `elemkind` spelling plus 118 of the
+// bare-index sugar. There is no spelling of that mistake the suite can see: both images decode, and
+// both denote the same module.
+//
+// Note it is *not* the type `funcref` spells, and the two are one field apart — see
+// `abbreviatedReftypes`, where `kwFuncref` expands to `(Null, FuncHT)`. A text `(elem funcref
+// (ref.func 0))` and a text `(elem func 0)` denote the same segment and encode differently, which is
+// the whole content of `textElem`'s derivation argument.
+var elemKindFuncref = valType{heap: heapRef{abs: kwFunc}}
+
+// elemMode is an element segment's mode: the three arms of the reference's `segmentmode`.
+//
+// Three where `textData` has two, for the reason binary.ElemMode records: `Declarative` is an
+// *error* for a data segment and a real mode for an element one, with its own spelling in the text
+// grammar (`(elem declare …)`, parser.mly:1167).
+type elemMode byte
+
+const (
+	// elemActive is the zero value deliberately, matching wire flags 0 — the mode the smallest
+	// encoding means, so a segment whose mode nothing wrote reads correctly.
+	elemActive elemMode = iota
+	elemPassive
+	elemDeclarative
+)
+
+// resolvedElem is an element segment after stage 2: the table index resolved, the offset and every
+// element expression encoded, so the writer cannot fail.
+//
+// Distinct from `textElem` for `resolvedData`'s reason — an offset or an element expression can hold
+// a `global.get $g` naming a global defined later, so its bytes are not knowable at the cursor, and
+// a writer that resolved inline would have to abandon a half-written section 9.
+// **The element list is kept in *both* renderings, and that is the encode-side face of the form
+// derivation `textElem` documents.** A segment taking one of the index forms writes
+// `vec elem_index cs`, a vector of bare function indices with no `ref.func` and no terminator; one
+// taking an expression form writes `vec const cs`, a vector of encoded expressions. The flag decides
+// which, and the flag is not knowable until every element is resolved — so both renderings are
+// produced in stage 2 and the writer picks, on the discipline every other section here follows: once
+// bytes start being written, nothing can fail.
+type resolvedElem struct {
+	mode     elemMode
+	table    uint32
+	offset   []byte
+	elemType resolvedVal
+	// exprs is one encoded const expression per element, each **including** its `0x0b` terminator —
+	// `vec const cs` (encode.ml:1078), where `const` is `list instr c.it; end_ ()`.
+	exprs [][]byte
+	// funcs is the same list rendered as `elem_index` would render it: for each element, the encoded
+	// function index if that element is exactly `ref.func x`, and `isIdx` false otherwise.
+	//
+	// This is `is_elem_index`/`elem_index` (encode.ml:1052-1060) answered where the expression's
+	// instructions are still in hand, rather than re-derived at the writer from the encoded bytes — a
+	// writer that pattern-matched `d2 00 0b` back apart to recover `0` would be a second decoder
+	// living inside the encoder.
+	funcs []elemIdx
+}
+
+// elemIdx is one element's `is_elem_index`/`elem_index` answer: whether the element is exactly
+// `ref.func x`, and the encoded `x` when it is.
+//
+// **The index is kept as *bytes*, and that is what makes this a projection rather than a decode.**
+// `elem_index` is `idx x` (encode.ml:1059) and `idx` is `u32 x.it` (:102) — the identical encoding
+// `ref.func`'s own immediate gets, since that arm is `op 0xd2; idx x` (:415). So the bytes the index
+// form writes are byte-for-byte the immediate the expression form already holds, and the two
+// renderings differ only in what surrounds them: the index form drops the opcode and the terminator.
+// Keeping the LEB means nothing here parses one, which is the cheaper *and* the safer of the two —
+// the numeric value is never needed, so a reader that could disagree with the writer is never
+// written.
+//
+// A struct rather than a `[][]byte` plus a flag, because the predicate is **per element** and the
+// reference folds it with `List.for_all` — a segment mixing `(ref.func 0)` with `(ref.null func)` has
+// a true answer for one element and a false one for the other, and `bulk.wast:12` is exactly that
+// module. The fold is the writer's; keeping the per-element answer is what lets it run.
+type elemIdx struct {
+	// imm is the encoded function index — the same LEB bytes as the `ref.func` immediate, nil unless
+	// isIdx.
+	imm   []byte
+	isIdx bool
+}
+
+// resolvedVal is a valType with its heap reference resolved to an index — comparable with ==,
+// which is the whole point of having a second representation.
+type resolvedVal struct {
+	num   string
+	null  bool
+	abs   keywordKind
+	idx   uint32
+	isIdx bool
+}
+
+// isElemKind is `is_elem_kind` (encode.ml:1044-1046): whether this segment's element type is exactly
+// `(NoNull, FuncHT)`, the type `(ref func)` spells and `funcref` does not.
+//
+// **A method on `resolvedElem` rather than on `resolvedVal`, because it is a question about a segment's
+// eligibility for the index forms and not a general fact about a type.** The distinction is not
+// pedantry: `isFuncref` below is the *other* nullability, wanted by flag 0x04's guard, and two
+// same-shaped predicates on the same struct differing only in a bool are exactly the pair a reader
+// merges by accident. Keeping them apart at the type they are asked *about* makes the merge visible.
+func (e resolvedElem) isElemKind() bool {
+	return !e.elemType.null && e.elemType.abs == kwFunc && !e.elemType.isIdx && e.elemType.num == ""
+}
+
+// allElemIndex is `List.for_all is_elem_index cs` (encode.ml:1052-1055, folded at :1064): whether every
+// element expression is exactly `ref.func x`.
+//
+// **The empty list is true, and that is the reference's `for_all` rather than a convenience.** A
+// segment with no elements takes the *index* family — `(elem func)` writes flag 1 with an empty
+// vector — because `for_all` over `[]` is vacuously true in OCaml as in the definition of the
+// quantifier. So the 29 corpus rows that reach an empty element list, and `(elem func)` beside them,
+// all encode in four bytes rather than five. Stated because a hand-written loop returning false on
+// empty is the easy inversion, and no vector distinguishes the two: both decode to a segment with no
+// elements, one of them from bytes the reference never writes.
+func (e resolvedElem) allElemIndex() bool {
+	for _, f := range e.funcs {
+		if !f.isIdx {
+			return false
+		}
+	}
+	return true
+}
+
+// isFuncref is `rt = (Null, FuncHT)` — flag 0x04's guard (encode.ml:1079), and the complement of
+// `isElemKind` on the one field that matters.
+//
+// The two are not each other's negation over all types, which is why both exist: `externref` is
+// neither, and a segment holding one at table 0 takes 0x06 rather than either short form.
+func (v resolvedVal) isFuncref() bool {
+	return v.null && v.abs == kwFunc && !v.isIdx && v.num == ""
+}
+
 // resolvedTable is a table definition whose element type has been resolved — what the encoder writes.
 //
 // Distinct from `tabType` for exactly the reason `resolvedComp` is distinct from `compType`: one is
@@ -311,16 +523,6 @@ type idxRef struct {
 	isVar bool
 	name  string // the decoded identifier, when isVar
 	idx   uint32 // the parsed index, when !isVar
-}
-
-// resolvedVal is a valType with its heap reference resolved to an index — comparable with ==,
-// which is the whole point of having a second representation.
-type resolvedVal struct {
-	num   string
-	null  bool
-	abs   keywordKind
-	idx   uint32
-	isIdx bool
 }
 
 // String renders a resolved value type in the *text* format's spelling.
@@ -481,6 +683,102 @@ func (c *context) defineData(d textData) {
 		c.dataDefs[i].offset = off
 		return nil
 	})
+}
+
+// defineElem records one element segment, deferring its table index and its element indices to
+// stage 2 (#8, 0016).
+//
+// **`defineData`'s shape, copied rather than re-derived** — *lessons are indexed by shape* — and the
+// forward-reference argument is the same one, with a second instance of it: not only can the table
+// index name a table defined later, but so can every *element* index name a function defined later,
+// which `elem.wast:12`'s `(elem (i32.const 0) $f)` before `(func $f)` does. Resolving at the cursor
+// would reject those in the accept direction, where the suite has nothing to say.
+//
+// The offset's and each element expression's instructions are **not** deferred here — they were
+// retained at the cursor by elemOffset and elemexpr, for `defineData`'s reason: an instruction's
+// position in an expression is the one thing that cannot go in a thunk. This thunk resolves indices
+// and encodes the retained lists; nothing about their shape is decided in stage 2.
+func (c *context) defineElem(e textElem) {
+	i := len(c.elemDefs)
+	c.elemDefs = append(c.elemDefs, resolvedElem{mode: e.mode})
+	c.deferOp(func() error {
+		if e.mode == elemActive {
+			idx, err := c.tables.resolveSpaceIdx(e.table)
+			if err != nil {
+				return err
+			}
+			c.elemDefs[i].table = idx
+			off, err := c.constExprBytes(e.offset)
+			if err != nil {
+				return err
+			}
+			c.elemDefs[i].offset = off
+		}
+		et, err := c.resolveVal(e.elemType)
+		if err != nil {
+			return err
+		}
+		c.elemDefs[i].elemType = et
+		// Each element is rendered **both** ways, because which rendering the wire takes is a
+		// question about the whole list and cannot be answered per element — see `resolvedElem`.
+		for _, sink := range e.elems {
+			b, err := c.constExprBytes(sink)
+			if err != nil {
+				return err
+			}
+			c.elemDefs[i].exprs = append(c.elemDefs[i].exprs, b)
+			c.elemDefs[i].funcs = append(c.elemDefs[i].funcs, elemIdxOf(sink))
+		}
+		return nil
+	})
+}
+
+// elemIdxOf is `is_elem_index` and `elem_index` in one answer (encode.ml:1052-1060): whether this
+// element is *exactly* `ref.func x`, and the `x` when it is.
+//
+// **`len == 1` is the reference's own test and it is a test on the instruction list, not on the
+// bytes.** `[{it = RefFunc x; _}]` matches a one-instruction expression and nothing else, so
+// `(item (ref.func 0) (ref.func 0))` — a two-instruction constant expression, ill-typed but
+// well-formed to the grammar — takes the expression form, and `(item)` with no instructions does too.
+// The terminator is not in the list (`constExprBytes` appends it), which is why this counts 1 where
+// the interpreter's `constExprRef` counts 2 on the decoded side: two representations of the same
+// expression, one before the terminator is written and one after it is read.
+//
+// A symbolic `$f` is an unresolved index at the cursor and a resolved one here, which is the whole
+// reason this runs inside the thunk: `retainIdx` deferred it through `patch`, so the bytes exist only
+// after the patch runs. Rather than decode the patched immediate back, this re-runs the same
+// resolution the patch does — which is not a second reading of the protocol, because both go through
+// the same `instr.patch` closure. The alternative, pattern-matching `d2 <leb>` out of the encoded
+// bytes, would put a decoder in the encoder.
+func elemIdxOf(s instrSink) elemIdx {
+	if len(s.instrs) != 1 {
+		return elemIdx{}
+	}
+	in := s.instrs[0]
+	op, ok := opBytes("ref.func")
+	if !ok {
+		// Unreachable: `ref.func` is in the generated table (opcodes.go, 0xd2), which
+		// TestElemIndexFormNeedsExactlyRefFunc pins by round-tripping a segment that takes the
+		// index form. A false answer here would silently move every index-form segment to the
+		// expression form — a legal image, different bytes, and no vector to say so.
+		panic("text: ref.func has no opcode, so an element segment's wire form cannot be derived")
+	}
+	if !bytes.Equal(in.op, op) {
+		return elemIdx{}
+	}
+	imm := in.imm
+	if in.patch != nil {
+		b, err := in.patch()
+		if err != nil {
+			// The same resolution `defineElem`'s own `constExprBytes` call is about to run and
+			// report, so this arm cannot be the first to see the error: an unbound `$f` fails
+			// there with the token quoted. Answering "not an index" here leaves the expression
+			// form selected for an element that is about to be rejected anyway.
+			return elemIdx{}
+		}
+		imm = b
+	}
+	return elemIdx{imm: imm, isIdx: true}
 }
 
 // constExprBytes encodes a retained const expression, terminator included.

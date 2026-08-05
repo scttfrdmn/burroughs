@@ -414,6 +414,15 @@ func (m *Module) ImportedFuncs() int { return m.importedCount(ExternFunc) }
 // $mem3's page count, and 22 vectors across two files agreed on the wrong answer.
 func (m *Module) ImportedMems() int { return m.importedCount(ExternMemory) }
 
+// ImportedTables counts the table imports, which is the offset defined tables start at in the
+// table index space.
+//
+// The third of these, and it needed no new reasoning — which is the point of importedCount being
+// shared. The 22-vector lesson ImportedMems records is a fact about *every* extern kind's index
+// space, so an interpreter sizing its table slice by `len(Tables)` alone would read the wrong
+// table for every module that imports one, exactly as it read the wrong memory.
+func (m *Module) ImportedTables() int { return m.importedCount(ExternTable) }
+
 // importedCount counts the imports of one extern kind.
 //
 // Shared rather than written once per kind: two loops differing only in a constant is the
