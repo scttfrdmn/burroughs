@@ -40,29 +40,186 @@ import (
 //
 // Every absent opcode is `ErrUnsupportedOp` naming its own bytes, so the board's fail bucket
 // for this layer is keyed by opcode and reads as a work list.
-func (in *Instance) run(fn *binary.Func, locals []uint64, st *stack) error {
+//
+// `results` is the arity of the implicit function-body label — what a `return`, and a branch to
+// the outermost depth, truncates the stack to. Passed in rather than read from `fn.TypeIndex`
+// because one caller has no type: `constExprValue` builds a `binary.Func` around an offset
+// expression, whose zero TypeIndex would name a real and unrelated type. See returnFrom.
+func (in *Instance) run(fn *binary.Func, locals []uint64, st *stack, results int) error {
 	body := fn.Body
-	// **Not `for pc := range len(body)`, and intrange is suppressed rather than obeyed.** The
-	// three-clause form is the one a branch can write to: `br`/`br_if`/`br_table` set `pc` to a
-	// target and let the `pc++` carry it forward, which is the whole reason this walk indexes
-	// the slice instead of consuming it (see the header). A range-over-int loop variable cannot
-	// be assigned to that effect, so modernizing here would have to be undone by #7's successor
-	// — the spirit clause: the linter serves the engine's design, not the reverse.
-	for pc := 0; pc < len(body); pc++ { //nolint:intrange // pc is a branch target; see above (#7)
+	// **Not `for pc := range len(body)`**, because a branch writes to `pc`: the arms below set it
+	// to a target and let the `pc++` carry it forward, which is why this walk indexes the slice
+	// instead of consuming it.
+	//
+	// It carried `//nolint:intrange` for exactly that reason and no longer needs one — the
+	// assignments make `intrange` stop firing on its own, so `nolintlint` reported the directive
+	// as unused. That is the honest end for a suppression: it was a claim about a design the code
+	// could not yet demonstrate, and the code now demonstrates it. Removed rather than kept for
+	// documentation, since a directive that suppresses nothing is a suppression wearing a
+	// disguise; the prose above is where the reason belongs.
+	//
+	// ctrl is the control stack: one entry per *active* block, loop, or if. Nil until the
+	// first structural instruction, so a straight-line body allocates nothing — which is
+	// most bodies, and the reason this is not sized from the body the way the value stack is.
+	var ctrl []label
+	for pc := 0; pc < len(body); pc++ {
 		ins := body[pc]
 		if ins.Prefix != 0x00 {
 			return unsupported(ins)
 		}
 		switch ins.Op {
-		// ---- the four that are not arithmetic ------------------------------------
+		// ---- structured control flow ---------------------------------------------
+		//
+		// See control.go for label semantics, the loop-versus-block continuation split,
+		// and why target resolution happens at block entry rather than at build time.
 
-		case 0x0b: // end
-			// The function's terminating END, and in this opcode set it can only be
-			// that: every construct that puts an END anywhere else — block, loop, if,
-			// try_table — is refused by the default arm before its END is reached. So
-			// halting here is exact rather than approximate, and it stops being exact
-			// the moment a structural arm is added, which is why it says so.
-			return nil
+		case opBlock, opLoop:
+			end, err := matchEnd(body, pc)
+			if err != nil {
+				return err
+			}
+			// `blockResults`, not `results`: this block's result count and the *function's*
+			// (this method's parameter) are different facts, and one name for both is how a
+			// branch to the outermost depth would come to truncate to a block's arity. Caught
+			// by `govet`'s shadow check, which is the linter doing the job the spirit clause
+			// reserves the suppression for — here the finding is a real ambiguity, not a
+			// design fight.
+			params, blockResults, err := in.blockArity(ins.Imm0)
+			if err != nil {
+				return err
+			}
+			// **A loop's continuation is its own header's successor and a block's is past
+			// its END** — the one asymmetry in this construct. And the arity a *branch*
+			// sees differs with it: branching to a loop re-enters it and so supplies its
+			// parameters, while branching to a block leaves it and so yields its results.
+			l := label{cont: end + 1, arity: blockResults}
+			if ins.Op == opLoop {
+				l = label{cont: pc, arity: params}
+			}
+			// The height excludes the operands the block itself consumes, so a branch
+			// truncating to height+arity cannot eat its enclosing frame's values.
+			if len(st.num) < params {
+				return fmt.Errorf("%w: block takes %d parameters with %d values on the stack",
+					ErrNotValidated, params, len(st.num))
+			}
+			l.height = len(st.num) - params
+			ctrl = append(ctrl, l)
+
+		case opIf:
+			end, err := matchEnd(body, pc)
+			if err != nil {
+				return err
+			}
+			params, blockResults, err := in.blockArity(ins.Imm0)
+			if err != nil {
+				return err
+			}
+			if err := st.needNum(1); err != nil {
+				return err
+			}
+			cond := st.popI32()
+			if len(st.num) < params {
+				return fmt.Errorf("%w: if takes %d parameters with %d values on the stack",
+					ErrNotValidated, params, len(st.num))
+			}
+			// The label is pushed for **both** arms and for the no-else case, because `br 0`
+			// inside either arm exits the whole `if`. Its continuation is past the END, like
+			// a block's: an `if` is not re-enterable.
+			ctrl = append(ctrl, label{cont: end + 1, arity: blockResults, height: len(st.num) - params})
+			if cond != 0 {
+				break // fall into the then-arm
+			}
+			// False, so jump to the else-arm if there is one. `elseOf` matches only at
+			// depth 1, so a nested `if`'s ELSE cannot be mistaken for this one's.
+			if els, ok := elseOf(body, pc, end); ok {
+				pc = els // the loop's pc++ lands on the first instruction of the else-arm
+				break
+			}
+			// No else-arm: an `if` without one yields nothing, so the whole construct is
+			// skipped and its label popped — the END that would pop it is never reached.
+			ctrl = ctrl[:len(ctrl)-1]
+			pc = end
+
+		case opElse:
+			// Reached only by *falling out of* a then-arm that ran to completion, never by
+			// the jump above — which lands past the ELSE. So this is the then-arm's exit,
+			// and it must skip the else-arm rather than execute both.
+			//
+			// **The label is popped here, because the END that would pop it is jumped over.**
+			// Same shape as opIf's no-else path: `cont` is *past* the END, so landing there
+			// means the END never executes. This arm previously said the opposite — "the
+			// label stays on the control stack: the END past the else-arm is what pops it" —
+			// which described a mechanism the same line then skipped, and left one label per
+			// taken then-arm on the stack. The function's own terminating END then saw a
+			// non-empty `ctrl`, took itself for a block's END, and the body ran off its end:
+			// `function body ended without END` on a valid module, an accept-direction
+			// defect (grave #134).
+			//
+			// It survived 20 of 22 rows of the control written for it because the *encoder*
+			// refused them all; the two rows that could reach it are exactly the two with a
+			// taken then-arm and an else-arm present. Which is the falsifiability law's own
+			// blind spot — a green that survives the bug it names — cleared by the artifact
+			// the control was waiting on rather than by more control.
+			if len(ctrl) == 0 {
+				return fmt.Errorf("%w: ELSE outside any if", ErrNotValidated)
+			}
+			pc = ctrl[len(ctrl)-1].cont - 1 // cont is past the END; pc++ restores it
+			ctrl = ctrl[:len(ctrl)-1]
+
+		case opBr:
+			// **Label `len(ctrl)` is the function body itself, and it is a return.** The
+			// spec makes a function body an implicit block with the function's result type,
+			// so `br 0` in a body with no enclosing block is legal and means return — a
+			// reading that has to be here rather than in `branch`, because `ctrl` holds only
+			// the *explicit* labels and the implicit one has no entry to look up. An earlier
+			// draft of this arm invented a helper to answer the same question from the
+			// wrong end (was the level zero?), which is a different question and gets `br 0`
+			// inside one enclosing block wrong.
+			if ins.Imm0 == uint64(len(ctrl)) {
+				return returnFrom(st, results)
+			}
+			target, level, err := in.branch(st, ctrl, ins.Imm0)
+			if err != nil {
+				return err
+			}
+			ctrl = ctrl[:level]
+			pc = target - 1 // the loop's pc++ lands on the target
+
+		case opBrIf:
+			if err := st.needNum(1); err != nil {
+				return err
+			}
+			if st.popI32() == 0 {
+				break // not taken: fall through, and the operand is already consumed
+			}
+			if ins.Imm0 == uint64(len(ctrl)) {
+				return returnFrom(st, results) // taken, and the target is the function body — see opBr
+			}
+			target, level, err := in.branch(st, ctrl, ins.Imm0)
+			if err != nil {
+				return err
+			}
+			ctrl = ctrl[:level]
+			pc = target - 1
+
+		case opReturn:
+			// The results are on top of the stack in order, and everything below them is
+			// scratch this frame is done with — so the stack is truncated to the function's
+			// arity, which is what `eval.ml:1069`'s `take n vs0` does. See returnFrom for the
+			// arm this replaces and for what its comment asserted (grave #135).
+			return returnFrom(st, results)
+
+		case opEnd:
+			// **Two meanings, and the control stack is what tells them apart** — which is
+			// why the arm that used to say "in this opcode set END can only be the
+			// function's terminator" is gone: that was true only while nothing structural
+			// existed, and it said so.
+			if len(ctrl) == 0 {
+				return nil // the function's own terminating END
+			}
+			// A block's END, reached by falling out of its body rather than by branching.
+			// The block's results are already on the stack; nothing to move.
+			ctrl = ctrl[:len(ctrl)-1]
 
 		case 0x00: // unreachable
 			return trapUnreachable
@@ -74,6 +231,39 @@ func (in *Instance) run(fn *binary.Func, locals []uint64, st *stack) error {
 				return err
 			}
 			st.popNum()
+
+		case opSelect, opSelectT:
+			// **Both encodings, one arm, and the reason is that the difference is entirely a
+			// validation-time one.** `0x1c` carries a `vec valtype` naming the operand type, and
+			// `eval.ml:193-197` matches `Select _` — the wildcard is the reference discarding the
+			// annotation, picking by the condition and nothing else. It exists so the validator
+			// can type a `select` over reference operands, which is not decidable from the stack.
+			// So an arm keying on the opcode would be inventing a distinction the reference does
+			// not have.
+			//
+			// It is also the arm the decoder could not support otherwise: `immVecValType` reads
+			// the types and drops them (instr.go), so `Instr` does not carry the annotation and
+			// this arm could not branch on it if it wanted to.
+			//
+			// **Numeric slots only, and that is a real restriction rather than a simplification.**
+			// A `select` over `externref` operands moves values on `st.refs`, which is empty
+			// throughout v0 — no reference opcode exists to have put anything there — so such a
+			// module cannot reach here with operands to move. When the first reference opcode
+			// lands (#7's successor) this arm needs the refs case, and it will be reachable then;
+			// stated here because a silent numeric-only select is the accept-direction shape.
+			if err := st.needNum(3); err != nil {
+				return err
+			}
+			cond := st.popI32()
+			b := st.popNum()
+			a := st.popNum()
+			// `if v then v1 else v2` with the *first* operand as the true arm — the two are
+			// popped in reverse, so `a` is the one written first in the text.
+			if cond != 0 {
+				st.pushNum(a)
+			} else {
+				st.pushNum(b)
+			}
 
 		// ---- locals --------------------------------------------------------------
 		//

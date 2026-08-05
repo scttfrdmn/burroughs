@@ -136,6 +136,110 @@ func (p *parser) appendImm(b []byte) {
 	p.imm = append(p.imm, b...)
 }
 
+// intoSink runs a reader with a fresh sink installed and returns what it emitted.
+//
+// The swap-and-restore is `labelReset`/`labelRestore`'s discipline for the instruction sink, and it
+// exists because two productions need an instruction to land *before* text that was read earlier: a
+// folded leader (`expr1`) and a block opener, whose blocktype is not known until its body has been
+// read (see orderedTypeUse for why the body comes first). A writer cannot seek backwards; a nested
+// sink spliced by the caller can.
+//
+// **One function rather than the swap written at each site.** `expr1`'s plain arm had it inline and
+// was the only site; the block family adds four more, and five hand-written swaps are five places to
+// forget the restore — *one concept, one trigger* (#82). The restore is unconditional rather than
+// deferred so the sink's value can be returned, which is what the caller splices.
+//
+// Not retaining is not a special case that skips the read: the reader still runs, because recognizing
+// is what the nil-sink path exists to do. It returns an empty sink, which `emitSink` then drops.
+func (p *parser) intoSink(read func() error) (instrSink, error) {
+	if !p.retaining() {
+		return instrSink{}, read()
+	}
+	var nested instrSink
+	outer := p.sink
+	p.sink = &nested
+	err := read()
+	p.sink = outer
+	return nested, err
+}
+
+// emitSink appends a nested sink's instructions to the active one, or does nothing when there is
+// none — `emit`'s bulk twin, nil-tolerant for the same reason.
+func (p *parser) emitSink(s *instrSink) {
+	if p.sink == nil {
+		return
+	}
+	p.sink.splice(s)
+}
+
+// blockArms is a block-family body split where its *encoding* needs a delimiter, rather than where
+// the grammar puts a paren.
+//
+// Two fields because `If` is the one arm the binary format writes with an internal opcode: `op 0x04;
+// blocktype; list instr es1; if es2 <> [] then op 0x05; list instr es2; end_ ()` (encode.ml:252-256).
+// `block`, `loop` and `try_table` fill `body` alone and leave `els` empty, which is exactly the state
+// that suppresses the ELSE byte — so the three-arm case and the else-less `if` need no special
+// handling, they are the same state.
+//
+// **`els` being empty is the reference's condition, and it is not "was `else` written".** `if …
+// else end` writes the keyword and an empty `instr_list`, so `es2` is `[]` and no `0x05` is emitted;
+// an encoder keying on the keyword would emit a byte the reference does not. The two spellings
+// encode identically, which is the reference's behaviour and not a simplification here.
+type blockArms struct {
+	// body is the whole body for block/loop/try_table, or the then-arm for `if`.
+	body instrSink
+	// els is the `if`'s else-arm, empty when there is none or when it is written and empty.
+	els instrSink
+}
+
+// blockTail wraps a block body reader so its instructions land in an arm instead of in the enclosing
+// sequence.
+//
+// The tail is what `orderedTypeUse` calls before it records the signature, and the body must not be
+// emitted where it is read: the opener precedes it in the image and its blocktype immediate is not
+// known until the signature has been recorded. So the body is collected and the caller splices.
+//
+// `if`'s folded arm does **not** go through this — see ifBody, whose operands belong to the
+// *enclosing* sequence rather than to either arm.
+func (p *parser) blockTail(arms *blockArms, read func() error) func() error {
+	return func() error {
+		var err error
+		arms.body, err = p.intoSink(read)
+		return err
+	}
+}
+
+// emitBlock writes one block-family instruction: the opener with its blocktype, the arms, and END
+// (encode.ml:250-256).
+//
+// **The END is this encoder's to add, exactly as `writeCodeSection`'s per-body terminator is.**
+// `end_ ()` closes every arm of the family, and the text spells it for the flat forms only — a folded
+// `(block)` has no `end` token at all. Both spellings encode the same byte, so it is emitted here for
+// both rather than at the site that happened to read a keyword.
+//
+// The opener's opcode comes from the generated table under the keyword's own text, so this function
+// states no opcode of its own except the two delimiters — which have no mnemonic to look up (see
+// opElse). `block`, `loop` and `if` are all unambiguous rows, so the lookup cannot fail for the three
+// keywords that reach here; the refusal is written anyway, because "cannot fail" is a claim about
+// today's table and `opBytes`' other callers all state it the same way.
+func (p *parser) emitBlock(kw Token, slot *blockTypeSlot, ft funcType, arms *blockArms) error {
+	if !p.retaining() {
+		return nil
+	}
+	op, ok := opBytes(kw.Text)
+	if !ok {
+		return errf(kw, "cannot yet encode the %s instruction (#8)", kw.Text)
+	}
+	p.emit(instr{op: op, patch: p.blockTypeBytes(slot, ft, kw)})
+	p.emitSink(&arms.body)
+	if len(arms.els.instrs) > 0 {
+		p.emit(instr{op: []byte{opElse}})
+		p.emitSink(&arms.els)
+	}
+	p.emit(instr{op: []byte{opEnd}})
+	return nil
+}
+
 // refuseUnencodable is the instruction frontier: it errors when retaining and does nothing
 // otherwise.
 //
@@ -571,6 +675,22 @@ func writeCodeSection(w *writer, funcs []encodedFunc) {
 // existed, for three commits (#114/#115/#116); `TestEveryCitedTestNameResolves` is what said so.
 const opEnd byte = 0x0b
 
+// opElse is the `else` opcode separating an `if`'s two arms.
+//
+// **It has no row in the generated table, and the absence is structural rather than an omission.**
+// `opcodes.go` is joined from the reference's grammar and lexer on *constructor names*
+// (decision 0014), and `optable.go`'s rows for `0x05` and `0x0b` carry a `reason` — "misplaced ELSE
+// opcode", "misplaced END opcode" — with **no mnemonic**, because neither byte is an instruction the
+// text grammar spells. `else` and `end` are delimiters of a production, not members of
+// `plaininstr`. So there is nothing for the join to key on and `mnemonicOpcodes` cannot have a row
+// for either; a literal here is the only honest source, exactly as it is for `opEnd`.
+//
+// Cross-checked the same behavioural way, and the discriminator is *specific to this byte*:
+// `TestElseOpcodeMatchesTheDecodersOpinion` asks the decoder which bytes are legal inside an `if`
+// and illegal inside a `block`, and finds exactly one — measured over all 256, count 1. That is a
+// sharper question than "does a body containing this byte decode", which `nop` also passes.
+const opElse byte = 0x05
+
 // writeLocals writes a function's locals as the run-length-encoded vector the format requires.
 //
 // `encode.ml:238-242` is a **right fold**: `combine` merges a local into the head run when the
@@ -621,6 +741,162 @@ func encodeLocalIdx(v uint32) []byte {
 	w.u32(v)
 	return w.b
 }
+
+// The two `select` opcodes, which `opBytes` cannot supply and which are named here for that reason.
+//
+// **`ambiguousOpcodes` holds both and cannot say which is which.** The generated table joins on
+// *constructor* names (decision 0014) and the reference has one constructor, `select`, for both
+// encodings — so the row is `{{0x00, 0x1b, "select"}, {0x00, 0x1c, "select"}}` and nothing in it
+// distinguishes the annotated form from the bare one. Reading the pair positionally would be
+// depending on the order `OpsOf` happened to append them in, which is `decode.ml`'s arm order and
+// is not a fact the table states. So the two bytes are named here, and the table is used as
+// *corroboration* rather than as the source: TestSelectOpcodesMatchTheGeneratedTable asserts the
+// pair is exactly these two, so a table that changed would fail rather than be silently overridden.
+//
+// Which byte carries the vector is a behavioural fact and is checked as one
+// (TestSelectOpcodesMatchTheDecodersOpinion): a body of just `0x1b` decodes, and a body of just
+// `0x1c` is `unexpected end of section or function`, because `0x1c` is followed by `vec valtype ts`
+// (encode.ml:249). Measured against the decoder, not read off a comment.
+const (
+	// opSelect is `Select None` — no immediates (encode.ml:248).
+	opSelect byte = 0x1b
+	// opSelectT is `Select (Some ts)`, followed by `vec valtype ts` (encode.ml:249).
+	opSelectT byte = 0x1c
+)
+
+// selectOpByte chooses between the two, on whether a `(result …)` was **written**.
+//
+// **Not on whether it contained anything.** `selectinstr_results_instr_list` (parser.mly:682-686)
+// returns `true, snd $3 c @ ts, es` for the parenthesized arm and `false, [], $1 c` otherwise, and
+// `select (if b then (Some ts) else None)` spends `b` — so `select (result)` is `Some []`, which
+// encodes as `0x1c` with a zero-length vector. A predicate of `len(results) > 0` would encode that
+// as a bare `0x1b`: a *different instruction*, decoding clean and validating differently. Hence the
+// boolean travels beside the slice from the reader to here rather than being recovered from it.
+//
+// `(result)` with an empty valtype list is legal text — `valtype_list` has an empty arm
+// (:396-398) — and no vector in the corpus writes it, which is exactly why the flag is the rule and
+// the length is not.
+func selectOpByte(wrote bool) []byte {
+	if wrote {
+		return []byte{opSelectT}
+	}
+	return []byte{opSelect}
+}
+
+// selectResultBytes encodes `select (result …)`'s `vec valtype ts` (encode.ml:249), in the deferred
+// phase.
+//
+// **Deferred for `funcLocalBytes`' reason, not for a new one.** A result may be `(ref null $t)`
+// naming a type defined later in the field list, so resolving at the cursor would reject a legal
+// module — the accept-direction failure this package's index resolutions are already split over. So
+// this is reached through `instr.patch`, and the *encodability* question is asked here with the
+// resolution because `valTypeByte` answers both and splitting them would be a second place knowing
+// which types have bytes.
+//
+// It refuses per result and quotes the ordinal, which is `funcLocalBytes`' shape for the same reason:
+// that is what a reader edits.
+func (p *parser) selectResultBytes(results []valType, tok Token) ([]byte, error) {
+	var w writer
+	w.u32(uint32(len(results)))
+	for i, v := range results {
+		rv, err := p.ctx.resolveVal(v)
+		if err != nil {
+			return nil, err
+		}
+		b, ok := valTypeByte(rv)
+		if !ok {
+			return nil, errf(tok, "cannot yet encode select result %d: %s needs a parameterized "+
+				"reference encoding, which arrives with the GC gate (#8)", i, rv)
+		}
+		w.byte1(b)
+	}
+	return w.b, nil
+}
+
+// blockTypeIdxBytes encodes a blocktype's type-index form: an **s33**, not a u32.
+//
+// `blocktype` is `typeuse s33 (Idx x.it)` (encode.ml:229-230), and `s33 i = s64 (extend_i32_s i)`
+// (:68) — so the index is sign-extended from 32 bits and written as a *signed* LEB. That is not a
+// stylistic difference from `encodeLocalIdx`: the two encodings agree for indices below 64 and
+// diverge at 64, where a u32 writes one byte (`0x40`) and an s33 writes two (`0xc0 0x00`). And
+// `0x40` is precisely the empty-blocktype marker, so a u32 here would encode `(block (type 64) …)`
+// as a block with no signature at all — a well-formed module denoting something else, on a module
+// with 64 types, which no vector in the corpus reaches.
+//
+// The sign extension is `int64(int32(idx))`, which is a no-op for every index the format admits
+// (an index is a u32 and only its low 31 bits can be a legal one) and is written the reference's
+// way regardless: the alternative is a cast that is *incidentally* right, which is the kind of
+// agreement that stops being true when the input changes.
+func blockTypeIdxBytes(idx uint32) []byte {
+	var w writer
+	w.s64(int64(int32(idx)))
+	return w.b
+}
+
+// blockTypeSlot is a blocktype's stage-2 result: the interned index, or the fact that this
+// signature needed none.
+//
+// `interned` is **not** derivable from `idx`, which is why it is a field: index 0 is legal, so a
+// zero value cannot mean "no type". It is the same reason `deferSignature`'s slot carries `filled`
+// beside its index, and the same hazard — a premature or absent read encoding a *legal* index and
+// decoding clean.
+type blockTypeSlot struct {
+	idx      uint32
+	interned bool
+	filled   bool
+}
+
+// blockTypeBytes returns the opener's immediate thunk: the three forms of `blocktype`
+// (encode.ml:229-232), chosen by what stage 2 actually did.
+//
+// **The choice is read from the interner's own answer rather than recomputed here.** `interned` is
+// set by the same call that decided whether to append to the type space, so the encoder cannot
+// disagree with the space about whether a type exists — see internBlockImplicit. Recomputing
+// `inlineBlockType()` at this site would be the second copy that rule exists to prevent.
+//
+// Deferred because the index is a stage-2 fact (a `(type $t)` may name a type defined later, and an
+// implicit signature's slot is not known until every explicit type is in the table), and because a
+// single result may be `(ref null $t)` whose resolution is deferred for the same reason
+// `funcLocalBytes` is.
+//
+// The unfilled case reports rather than returning a plausible zero, exactly as `deferSignature`'s
+// thunk does: `0x40`-versus-index is the difference between a block with no signature and a block
+// naming type 0, both of which decode.
+func (p *parser) blockTypeBytes(slot *blockTypeSlot, ft funcType, tok Token) func() ([]byte, error) {
+	return func() ([]byte, error) {
+		if !slot.filled {
+			return nil, errf(tok, "internal: blocktype read before stage 2 resolved it")
+		}
+		if slot.interned {
+			return blockTypeIdxBytes(slot.idx), nil
+		}
+		// `ValBlockType None` — the `([], [])` arm.
+		if len(ft.results) == 0 {
+			return []byte{blockTypeEmptyByte}, nil
+		}
+		// `ValBlockType (Some t)` — `([], [t])`, written as a bare `valtype` byte and **not** as an
+		// s33: `blocktype`'s third arm is `valtype t` (encode.ml:232), and the valtype encodings are
+		// the negative s7 forms whose byte is what `valTypeByte` returns.
+		rv, err := p.ctx.resolveVal(ft.results[0])
+		if err != nil {
+			return nil, err
+		}
+		b, ok := valTypeByte(rv)
+		if !ok {
+			return nil, errf(tok, "cannot yet encode a block whose result is %s: it needs a "+
+				"parameterized reference encoding, which arrives with the GC gate (#8)", rv)
+		}
+		return []byte{b}, nil
+	}
+}
+
+// blockTypeEmptyByte is `s33(-0x40)` — the `ValBlockType None` form (encode.ml:231).
+//
+// A single byte rather than a call to `sleb`, and the equivalence is asserted rather than assumed:
+// `-0x40` is `0x40` in one signed LEB byte (its bit 6 is set, so it sign-extends to -64, which is
+// the off-by-one `writer.sleb`'s own comment describes). TestBlockTypeFormsMatchTheReference pins
+// this against the writer, so the literal cannot drift from the encoder that would compute it.
+const blockTypeEmptyByte byte = 0x40
 
 // constImmBytes encodes an `iN.const`/`fN.const` immediate from its token.
 //

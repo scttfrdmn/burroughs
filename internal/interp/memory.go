@@ -223,7 +223,10 @@ func (in *Instance) initData(seg *binary.DataSegment) error {
 func (in *Instance) constExprValue(expr []binary.Instr) (uint64, error) {
 	fn := &binary.Func{Body: expr}
 	st := &stack{num: make([]uint64, 0, len(expr))}
-	if err := in.run(fn, nil, st); err != nil {
+	// Arity 1: a const expression yields exactly the one value the check below reads, and it
+	// is the implicit label's arity for a `return` inside one — legal, since `decode.ml:983`'s
+	// const production is the full instruction grammar.
+	if err := in.run(fn, nil, st, 1); err != nil {
 		return 0, err
 	}
 	if len(st.num) != 1 {

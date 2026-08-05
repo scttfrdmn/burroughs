@@ -120,6 +120,22 @@ type funcType struct {
 // directly.
 func (ft funcType) isEmpty() bool { return len(ft.params) == 0 && len(ft.results) == 0 }
 
+// inlineBlockType reports whether this signature is one a blocktype can spell *without* a type
+// index — the reference's `([], [])` and `([], [t])` arms (parser.mly:746-751).
+//
+// **Named because two different mechanisms consult it and must agree.** The interner uses it to
+// decide whether to append to the type space (declareBlockImplicit) and the encoder uses it to
+// decide whether the opener's immediate is a `0x40`/valtype byte or an `s33` index — and an
+// encoder that wrote an index where nothing was interned would name a slot the module never
+// declared. One predicate, so the disagreement is unrepresentable rather than merely unlikely.
+//
+// Distinct from isEmpty, which is the `([], [])` case alone: a `(result i32)` block is *not* empty
+// and still needs no type. Conflating them would intern a type for the commonest spelling in the
+// corpus and shift every later implicit index.
+func (ft funcType) inlineBlockType() bool {
+	return len(ft.params) == 0 && len(ft.results) <= 1
+}
+
 // compType is a composite type (parser.mly:446-449). Only the func case carries content: a struct
 // or array type is a `non-function type` to every consumer here, and its fields are never compared.
 type compType struct {
@@ -664,23 +680,26 @@ func (c *context) inlineFuncType(ft resolvedFunc) uint32 {
 	return uint32(len(c.typeCtx) - 1)
 }
 
-// declareImplicit is `inline_functype` reached from a parse-time signature: resolve, then intern.
+// internImplicit is `inline_functype` reached from a parse-time signature: resolve, then intern,
+// and report which slot it landed in.
 //
 // Every caller is a `deferOp`, so this runs in stage 2 where the explicit table is complete —
-// which is what makes "reuse a structurally equal existing one" answerable at all. The index is
-// discarded for the reason inlineFuncType's comment gives; the *length* change is the effect.
-func (c *context) declareImplicit(ft funcType) error {
-	_, err := c.internImplicit(ft)
-	return err
-}
-
-// internImplicit is declareImplicit for the one caller that needs the number.
+// which is what makes "reuse a structurally equal existing one" answerable at all. An imported
+// func or tag's descriptor **is** a type index (encode.ml:203/191), so the sugar arm `(import "a"
+// "b" (func (param i32)))` has to know which slot was produced; see inlineFuncType on why the
+// number is part of the signature even where a caller discards it.
 //
-// An imported func or tag's descriptor **is** a type index (encode.ml:203/191), so the sugar arm
-// `(import "a" "b" (func (param i32)))` has to know which slot `inline_functype` produced. Two
-// functions rather than one returning value, because every other caller genuinely discards and
-// `declareImplicit`'s comment is the record of why — turning them all into `_, err :=` would spread
-// a fact about one call site across five.
+// # The error-only twin, and why it is gone
+//
+// A `declareImplicit` stood here as the face for the callers that discard, its comment arguing that
+// two functions beat one because "every other caller genuinely discards and turning them all into
+// `_, err :=` would spread a fact about one call site across five". The block family (#7) spent the
+// last of those five: every remaining caller reads the index, `declareImplicit`'s caller count went
+// to zero, and `deadcode` said so. **The premise expired rather than the reasoning being wrong** —
+// which is the shape worth recording, because the same paragraph appears verbatim on two sibling
+// pairings in this file and one of those (checkExplicit) went the same way in the same PR. A pairing
+// justified by a caller majority is a pairing with an expiry date, and the honest close is to delete
+// the unused face rather than keep it as documentation of a distribution that no longer holds.
 func (c *context) internImplicit(ft funcType) (uint32, error) {
 	rf, err := c.resolveFunc(ft)
 	if err != nil {
@@ -689,7 +708,8 @@ func (c *context) internImplicit(ft funcType) (uint32, error) {
 	return c.inlineFuncType(rf), nil
 }
 
-// inlineFuncTypeExplicit is the reference's `inline_functype_explicit` (parser.mly:237-247).
+// checkExplicit is the reference's `inline_functype_explicit` (parser.mly:237-247), returning the
+// index it resolved.
 //
 // **The two lookups a typeuse performs are separately timed, and only one of them is skipped.**
 // `typeuse` is `LPAR TYPE idx RPAR { fun c -> $3 c type_ }` (:470-471) and `idx`'s VAR arm is
@@ -706,18 +726,12 @@ func (c *context) internImplicit(ft funcType) (uint32, error) {
 //
 // See funcType.isEmpty for the two vectors that pin the deferral of the range check in both
 // directions on one module.
-func (c *context) inlineFuncTypeExplicit(r idxRef, ft funcType) error {
-	_, err := c.checkExplicit(r, ft)
-	return err
-}
-
-// checkExplicit is inlineFuncTypeExplicit for the caller that needs the index.
 //
-// The same split as declareImplicit/internImplicit and for the same reason on the same field: the
-// reference's `inline_functype_explicit` **returns `x`** (parser.mly:247, the bare `x` after the
+// The reference's `inline_functype_explicit` **returns `x`** (parser.mly:247, the bare `x` after the
 // conditional), and `func_fields`'s inline-import arm spends it — `ExternFuncT (Idx y.it)` at :979.
-// So an imported func's descriptor is this index, in both the typeuse and the sugar spelling, which
-// is why both halves of the pairing now have a value-returning face.
+// So an imported func's descriptor is this index, in both the typeuse and the sugar spelling. Its
+// error-only twin `inlineFuncTypeExplicit` was deleted when the block family took its last caller;
+// see internImplicit for why that is the premise expiring rather than the reasoning failing.
 //
 // The index is `r`'s resolved value and is returned **even when the comparison is deferred**, which
 // is the reference's shape exactly: the early return skips `func_type c x`, not the identity of the
@@ -746,8 +760,9 @@ func (c *context) checkExplicit(r idxRef, ft funcType) (uint32, error) {
 	return idx, nil
 }
 
-// declareBlockImplicit is the block family's sugar arm, which interns *conditionally*
-// (parser.mly:746-751, and identically at :770-:776 / :872-:877 / :909-:914).
+// internBlockImplicit is the block family's sugar arm, which interns *conditionally*
+// (parser.mly:746-751, and identically at :770-:776 / :872-:877 / :909-:914), reporting the index
+// and — because this arm may not produce one at all — whether there *is* an index.
 //
 //	match ft with
 //	| ([], []) -> ValBlockType None
@@ -763,11 +778,27 @@ func (c *context) checkExplicit(r idxRef, ft funcType) (uint32, error) {
 //
 // `(block)` and `(block (result i32))` are the overwhelmingly common spellings in the corpus, so a
 // version of this that always interned would shift indices in most files that have a block at all.
-func (c *context) declareBlockImplicit(ft funcType) error {
-	if len(ft.params) == 0 && len(ft.results) <= 1 {
-		return nil
+//
+// The third return is the whole reason this is not internImplicit with a condition in front of it.
+// The blocktype encoder has to choose between three forms — `0x40`, a valtype byte, and an `s33`
+// type index (encode.ml:229-232) — and the condition selecting the third is *exactly* the condition
+// under which a type was interned. Two copies of `len(params) == 0 && len(results) <= 1` would be
+// two places deciding one fact, and a drift between them is an opener whose immediate names a type
+// index the space never grew: a well-formed module denoting a different function, which the suite
+// scores green by construction (§9 G-3). So the interner answers both questions in one call and the
+// encoder asks rather than re-derives.
+//
+// It was the third of three error-only/value-returning pairings in this file, copied rather than
+// re-derived (*lessons are indexed by shape*) — and **all three lost their error-only face in this
+// PR**, to the same cause: the block family took the last discarding caller of each. Three
+// simultaneous expiries is the tell that the shape was a phase of the encoder rather than a
+// property of the interner. See internImplicit.
+func (c *context) internBlockImplicit(ft funcType) (idx uint32, interned bool, err error) {
+	if ft.inlineBlockType() {
+		return 0, false, nil
 	}
-	return c.declareImplicit(ft)
+	i, err := c.internImplicit(ft)
+	return i, true, err
 }
 
 // idxRefFromToken builds a idxRef from a heaptype's index token.

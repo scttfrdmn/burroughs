@@ -73,6 +73,25 @@ func sectionPayload(m *binary.Module, id binary.SectionID) ([]byte, bool) {
 	return nil, false
 }
 
+// blockTypeImm and blockTypeValTypeImm are the packed `Imm0` words a want column states for a
+// structural instruction — the empty form, and the single-valtype form.
+//
+// **Written as literals here, not read out of `binary`, because the packing constants are
+// deliberately unexported** (`BlockType`'s comment: the rule is that package's fact, and exporting
+// the constants would put the decoding in every consumer). A `want` column needs the *forward*
+// direction, which no exported function supplies, so these two are a second reading of
+// `module.go:247-253` — `1 << 33` for empty, `1 << 34 | uint64(t)` for a valtype — and they are
+// checked against `binary.BlockType` by TestBlockTypeFormsMatchTheReference rather than trusted.
+// A literal that has drifted from the packing would otherwise make every block row below wrong in
+// the same direction, which is the failure mode a want column exists to not have.
+//
+// Note what neither can be: **0**. An `Imm0` of 0 is type index 0, a legal and different
+// blocktype, so `(block)` cannot be written as `{Op: 0x02}` and a row that did would be asserting
+// a signature the text does not name.
+const blockTypeImm uint64 = 1 << 33
+
+func blockTypeValTypeImm(t binary.ValType) uint64 { return 1<<34 | uint64(t) }
+
 func decodeForTest(t *testing.T, b []byte) *binary.Module {
 	t.Helper()
 	d := &binary.Decoder{Features: binary.Features{
@@ -844,6 +863,323 @@ var encodableModules = []struct {
 			{TypeIndex: 0, Body: []binary.Instr{{Op: 0x0b}}},
 		},
 	},
+	// # The block family and select (#7)
+	//
+	// **`Imm0` on a structural instruction is the *packed* blocktype, not a type index**, which is
+	// what `blockTypeImm` below spells out: `binary.BlockType` unpacks three disjoint cases from one
+	// word, and the empty form is `1 << 33` rather than 0. A want column writing `Imm0: 0` for
+	// `(block)` would be asserting a block whose signature is type 0 — a legal, different module.
+	//
+	// Every row below is one where a plausible encoder differs. A dropped opener, a `u32` blocktype,
+	// an ELSE emitted for an empty else-arm, a missing END, an opener spliced *after* its body: each
+	// produces a module that decodes clean and computes something else, and the suite scores all of
+	// them green by construction, every vector containing a block being one it expects to work
+	// (§9 G-3). The interpreter's semantic rows live in `internal/interp`'s
+	// TestControlFlowSemantics — this table's question is the bytes.
+	{
+		src:  `(module (func block end))`,
+		want: []binary.CompType{{Kind: binary.CompFunc}},
+		wantFuncs: []binary.Func{{TypeIndex: 0, Body: []binary.Instr{
+			{Op: 0x02, Imm0: blockTypeImm}, // block, empty blocktype
+			{Op: 0x0b},                     // the block's END, which the text does spell
+			{Op: 0x0b},                     // the function's, which it does not
+		}}},
+	},
+	// The **folded** spelling of the identical module. Two productions, one image — and the row that
+	// catches a folded arm emitting its opener in the wrong place, since `expr1` reaches
+	// `foldedBlock` and the row above reaches `blockinstr`. Neither form's END is spelled here: the
+	// flat one writes `end` and the folded one writes `)`, and both encode `0x0b`.
+	{
+		src:  `(module (func (block)))`,
+		want: []binary.CompType{{Kind: binary.CompFunc}},
+		wantFuncs: []binary.Func{{TypeIndex: 0, Body: []binary.Instr{
+			{Op: 0x02, Imm0: blockTypeImm}, {Op: 0x0b}, {Op: 0x0b},
+		}}},
+	},
+	// `loop`, whose only difference from `block` on the wire is the opcode — and whose difference in
+	// *meaning* (a branch re-enters) is the interpreter's. Here to pin the opcode: an encoder reading
+	// one keyword's row for both would pass every block row and fail this one.
+	{
+		src:  `(module (func loop end) (func (loop)))`,
+		want: []binary.CompType{{Kind: binary.CompFunc}},
+		wantFuncs: []binary.Func{
+			{TypeIndex: 0, Body: []binary.Instr{{Op: 0x03, Imm0: blockTypeImm}, {Op: 0x0b}, {Op: 0x0b}}},
+			{TypeIndex: 0, Body: []binary.Instr{{Op: 0x03, Imm0: blockTypeImm}, {Op: 0x0b}, {Op: 0x0b}}},
+		},
+	},
+	// **A block with a body, which is the shape a dropped opener makes dangerous rather than merely
+	// incomplete.** Without the opener this is `41 01 1a 41 02 1a 0b` — the block gone, its contents
+	// kept, decoding clean. That was `TestEveryStructuralInstructionIsRefused`'s row while the
+	// construct was refused; it is here now, asserting the opener is *present* and in front of the
+	// body rather than behind it.
+	{
+		src:  `(module (func block i32.const 1 drop end i32.const 2 drop))`,
+		want: []binary.CompType{{Kind: binary.CompFunc}},
+		wantFuncs: []binary.Func{{TypeIndex: 0, Body: []binary.Instr{
+			{Op: 0x02, Imm0: blockTypeImm},
+			{Op: 0x41, Imm0: 1},
+			{Op: 0x1a},
+			{Op: 0x0b}, // the block's END, before the trailing instructions
+			{Op: 0x41, Imm0: 2},
+			{Op: 0x1a},
+			{Op: 0x0b},
+		}}},
+	},
+	{
+		src:  `(module (func (block (i32.const 1) drop) (i32.const 2) drop))`,
+		want: []binary.CompType{{Kind: binary.CompFunc}},
+		wantFuncs: []binary.Func{{TypeIndex: 0, Body: []binary.Instr{
+			{Op: 0x02, Imm0: blockTypeImm},
+			{Op: 0x41, Imm0: 1},
+			{Op: 0x1a},
+			{Op: 0x0b},
+			{Op: 0x41, Imm0: 2},
+			{Op: 0x1a},
+			{Op: 0x0b},
+		}}},
+	},
+	// **The single-result blocktype: a bare valtype byte, and `([], [t])` interns nothing.** The type
+	// section stays at one entry — the function's own `[] -> []`-shaped signature — which is the
+	// assertion that `inlineBlockType` is being consulted: an encoder interning unconditionally would
+	// produce two types here and write an index where a valtype byte belongs.
+	{
+		src:  `(module (func (block (result i32) (i32.const 1) drop)))`,
+		want: []binary.CompType{{Kind: binary.CompFunc}},
+		wantFuncs: []binary.Func{{TypeIndex: 0, Body: []binary.Instr{
+			{Op: 0x02, Imm0: blockTypeValTypeImm(binary.I32)},
+			{Op: 0x41, Imm0: 1},
+			{Op: 0x1a},
+			{Op: 0x0b},
+			{Op: 0x0b},
+		}}},
+	},
+	// **A block with params, which is the arm that *does* intern** — `([], [])` and `([], [t])` are
+	// the only two inline forms, so `(param i32)` falls through to `inline_functype` and the
+	// blocktype is a type index. Two types in the section: the function's, then the block's, in that
+	// order because the function's signature is recorded by `funcField` before the body is read.
+	//
+	// `Imm0: 1` is a *bare* index rather than a tagged word, which is the packing's own doing:
+	// `blockTypeEmpty`/`blockTypeValType` sit above 2^32 so an index needs no tag. So this row also
+	// pins that the empty form is not index 0.
+	{
+		src: `(module (func (result i32) (i32.const 1) (block (param i32) (result i32))))`,
+		want: []binary.CompType{
+			{Kind: binary.CompFunc, Func: binary.FuncType{Results: []binary.ValType{binary.I32}}},
+			{Kind: binary.CompFunc, Func: binary.FuncType{
+				Params:  []binary.ValType{binary.I32},
+				Results: []binary.ValType{binary.I32},
+			}},
+		},
+		wantFuncs: []binary.Func{{TypeIndex: 0, Body: []binary.Instr{
+			{Op: 0x41, Imm0: 1},
+			{Op: 0x02, Imm0: 1}, // the interned type index, not a tagged blocktype
+			{Op: 0x0b},
+			{Op: 0x0b},
+		}}},
+	},
+	// **An explicit `(type $t)` blocktype encodes the index even when the signature is inline-able.**
+	// `block`'s first arm is `VarBlockType x` with no `([], [t])` case in front of it
+	// (parser.mly:741-744), so this is `0x02 00` and not `0x02 7f` — two well-formed modules that
+	// validate the same and differ in bytes, which is precisely where an encoder collapsing the
+	// spelling would be wrong and invisible.
+	{
+		src: `(module (type $t (func (result i32))) (func (result i32) (block (type $t) (i32.const 1))))`,
+		want: []binary.CompType{
+			{Kind: binary.CompFunc, Func: binary.FuncType{Results: []binary.ValType{binary.I32}}},
+		},
+		wantFuncs: []binary.Func{{TypeIndex: 0, Body: []binary.Instr{
+			{Op: 0x02, Imm0: 0}, // type index 0, written as an s33 — not the 0x40 empty marker
+			{Op: 0x41, Imm0: 1},
+			{Op: 0x0b},
+			{Op: 0x0b},
+		}}},
+	},
+	// **`if` with no else-arm emits no ELSE byte.** `encode.ml`'s condition is `if es2 <> [] then op
+	// 0x05` (:254), so the absence is the reference's and not an omission — an encoder emitting it
+	// unconditionally produces a *different* instruction sequence that still decodes.
+	{
+		src:  `(module (func i32.const 0 if end))`,
+		want: []binary.CompType{{Kind: binary.CompFunc}},
+		wantFuncs: []binary.Func{{TypeIndex: 0, Body: []binary.Instr{
+			{Op: 0x41, Imm0: 0},
+			{Op: 0x04, Imm0: blockTypeImm},
+			{Op: 0x0b},
+			{Op: 0x0b},
+		}}},
+	},
+	// **`if … else … end` with an *empty* else-arm also emits no ELSE**, which is the row that
+	// separates the reference's condition from the tempting one. The keyword is written and `es2` is
+	// still `[]`, so this module is byte-identical to the row above — an encoder keying on "was
+	// `else` spelled" emits `0x05` here and disagrees with the reference.
+	{
+		src:  `(module (func i32.const 0 if else end))`,
+		want: []binary.CompType{{Kind: binary.CompFunc}},
+		wantFuncs: []binary.Func{{TypeIndex: 0, Body: []binary.Instr{
+			{Op: 0x41, Imm0: 0},
+			{Op: 0x04, Imm0: blockTypeImm},
+			{Op: 0x0b},
+			{Op: 0x0b},
+		}}},
+	},
+	// A **non-empty** else-arm, which is the row that makes the two above more than a tautology: an
+	// encoder that never emitted `0x05` passes both of them and fails here. Both arms carry an
+	// instruction so a swap between them is visible.
+	{
+		src: `(module (func (result i32) i32.const 0 if (result i32) i32.const 1 else i32.const 2 end))`,
+		want: []binary.CompType{
+			{Kind: binary.CompFunc, Func: binary.FuncType{Results: []binary.ValType{binary.I32}}},
+		},
+		wantFuncs: []binary.Func{{TypeIndex: 0, Body: []binary.Instr{
+			{Op: 0x41, Imm0: 0},
+			{Op: 0x04, Imm0: blockTypeValTypeImm(binary.I32)},
+			{Op: 0x41, Imm0: 1}, // the then-arm
+			{Op: 0x05},          // ELSE
+			{Op: 0x41, Imm0: 2}, // the else-arm
+			{Op: 0x0b},
+			{Op: 0x0b},
+		}}},
+	},
+	// **The folded `if`: its condition operands precede the opener, its arms follow it.** `if_`'s
+	// three components go to three places (`[], $3 c', $7 c'`, parser.mly:893) and this is the row
+	// that says so — a reader diverting the whole tail into the then-arm would emit `04 7f 41 00 …`,
+	// the condition *inside* the block, which decodes clean and evaluates it in the wrong frame.
+	// Byte-identical to the flat row above, which is what makes the pair a control on both readers.
+	{
+		src: `(module (func (result i32) (if (result i32) (i32.const 0) (then (i32.const 1)) (else (i32.const 2)))))`,
+		want: []binary.CompType{
+			{Kind: binary.CompFunc, Func: binary.FuncType{Results: []binary.ValType{binary.I32}}},
+		},
+		wantFuncs: []binary.Func{{TypeIndex: 0, Body: []binary.Instr{
+			{Op: 0x41, Imm0: 0}, // the condition, ahead of the opener
+			{Op: 0x04, Imm0: blockTypeValTypeImm(binary.I32)},
+			{Op: 0x41, Imm0: 1},
+			{Op: 0x05},
+			{Op: 0x41, Imm0: 2},
+			{Op: 0x0b},
+			{Op: 0x0b},
+		}}},
+	},
+	// The folded one-armed sugar (:896), whose else-arm is absent rather than empty — the third
+	// spelling that must produce no `0x05`.
+	{
+		src:  `(module (func (if (i32.const 0) (then (nop)))))`,
+		want: []binary.CompType{{Kind: binary.CompFunc}},
+		wantFuncs: []binary.Func{{TypeIndex: 0, Body: []binary.Instr{
+			{Op: 0x41, Imm0: 0},
+			{Op: 0x04, Imm0: blockTypeImm},
+			{Op: 0x01}, // nop
+			{Op: 0x0b},
+			{Op: 0x0b},
+		}}},
+	},
+	// **A nested block's implicit type interns before its enclosing one's**, which is the ordering
+	// `orderedTypeUse` calls its tail for — and the row that makes the indices in the blocktypes
+	// witness it. The inner `(param i32)` is type 1 and the outer `(param i64)` type 2; reversed,
+	// both blocks would name a signature they do not have, and every module here would still decode.
+	// TestNestedBlockTypeInternsBeforeItsEnclosingOne asserts the same order from the type table;
+	// this asserts it from the *instruction stream*, which is the half a table check cannot see.
+	{
+		src: `(module (func (i64.const 0) (block (param i64) (i32.const 0) (block (param i32) drop) drop)))`,
+		want: []binary.CompType{
+			{Kind: binary.CompFunc},
+			{Kind: binary.CompFunc, Func: binary.FuncType{Params: []binary.ValType{binary.I32}}},
+			{Kind: binary.CompFunc, Func: binary.FuncType{Params: []binary.ValType{binary.I64}}},
+		},
+		wantFuncs: []binary.Func{{TypeIndex: 0, Body: []binary.Instr{
+			{Op: 0x42, Imm0: 0},
+			{Op: 0x02, Imm0: 2}, // the outer block: interned second
+			{Op: 0x41, Imm0: 0},
+			{Op: 0x02, Imm0: 1}, // the inner: interned first
+			{Op: 0x1a},
+			{Op: 0x0b}, // the inner block's END
+			{Op: 0x1a},
+			{Op: 0x0b},
+			{Op: 0x0b},
+		}}},
+	},
+	// **A symbolic label, both spellings**, which `labelIdx`'s comment pre-registered as owed to this
+	// PR: in build mode only the NAT arm was reachable before the block family encoded, so `(block $l
+	// (br $l))` is the first module-level row where a *named* label resolves. `br 0` targets the
+	// block; a reader that skipped the push would report `unknown label` on a legal module, and one
+	// that resolved against the wrong depth would encode `br 1` — a return.
+	{
+		src:  `(module (func block $l br $l end) (func (block $l (br $l))))`,
+		want: []binary.CompType{{Kind: binary.CompFunc}},
+		wantFuncs: []binary.Func{
+			{TypeIndex: 0, Body: []binary.Instr{
+				{Op: 0x02, Imm0: blockTypeImm}, {Op: 0x0c, Imm0: 0}, {Op: 0x0b}, {Op: 0x0b},
+			}},
+			{TypeIndex: 0, Body: []binary.Instr{
+				{Op: 0x02, Imm0: blockTypeImm}, {Op: 0x0c, Imm0: 0}, {Op: 0x0b}, {Op: 0x0b},
+			}},
+		},
+	},
+	// **`select`'s two opcodes, chosen on whether `(result …)` was written and not on what it
+	// contained.** The bare form is `0x1b`; the annotated form is `0x1c` plus `vec valtype`.
+	{
+		src: `(module (func (result i32) i32.const 1 i32.const 2 i32.const 0 select))`,
+		want: []binary.CompType{
+			{Kind: binary.CompFunc, Func: binary.FuncType{Results: []binary.ValType{binary.I32}}},
+		},
+		wantFuncs: []binary.Func{{TypeIndex: 0, Body: []binary.Instr{
+			{Op: 0x41, Imm0: 1},
+			{Op: 0x41, Imm0: 2},
+			{Op: 0x41, Imm0: 0},
+			{Op: 0x1b},
+			{Op: 0x0b},
+		}}},
+	},
+	{
+		src: `(module (func (result i32) i32.const 1 i32.const 2 i32.const 0 select (result i32)))`,
+		want: []binary.CompType{
+			{Kind: binary.CompFunc, Func: binary.FuncType{Results: []binary.ValType{binary.I32}}},
+		},
+		wantFuncs: []binary.Func{{TypeIndex: 0, Body: []binary.Instr{
+			{Op: 0x41, Imm0: 1},
+			{Op: 0x41, Imm0: 2},
+			{Op: 0x41, Imm0: 0},
+			{Op: 0x1c},
+			{Op: 0x0b},
+		}}},
+	},
+	// **`select (result)` — a written but *empty* result list, which is `Some []` and therefore
+	// `0x1c` with a zero-length vector.** This is the row `selectOpByte`'s "not on whether it
+	// contained anything" exists for: a `len(results) > 0` predicate encodes this as a bare `0x1b`,
+	// a *different instruction* that decodes clean and validates differently. `valtype_list` has an
+	// empty arm (:396-398), so the spelling is legal and no vector uses it.
+	//
+	// Nothing in the decoded body distinguishes the vector's length — `immVecValType` reads the
+	// types and drops them — so the opcode is the whole observable, which is exactly why the
+	// wrong predicate would be invisible without this row.
+	{
+		src: `(module (func (result i32) i32.const 1 i32.const 2 i32.const 0 select (result)))`,
+		want: []binary.CompType{
+			{Kind: binary.CompFunc, Func: binary.FuncType{Results: []binary.ValType{binary.I32}}},
+		},
+		wantFuncs: []binary.Func{{TypeIndex: 0, Body: []binary.Instr{
+			{Op: 0x41, Imm0: 1},
+			{Op: 0x41, Imm0: 2},
+			{Op: 0x41, Imm0: 0},
+			{Op: 0x1c},
+			{Op: 0x0b},
+		}}},
+	},
+	// The folded spelling, whose operands are `expr_list` rather than `instr_list` (:837-840 against
+	// :682-686) and which must produce the identical body.
+	{
+		src: `(module (func (result i32) (select (i32.const 1) (i32.const 2) (i32.const 0))))`,
+		want: []binary.CompType{
+			{Kind: binary.CompFunc, Func: binary.FuncType{Results: []binary.ValType{binary.I32}}},
+		},
+		wantFuncs: []binary.Func{{TypeIndex: 0, Body: []binary.Instr{
+			{Op: 0x41, Imm0: 1},
+			{Op: 0x41, Imm0: 2},
+			{Op: 0x41, Imm0: 0},
+			{Op: 0x1b},
+			{Op: 0x0b},
+		}}},
+	},
+
 	// An **imported** func occupies index 0, so the defined func's `call 0` names the import and not
 	// itself. Section 3 lists only the defined one — the import's type index is the descriptor's —
 	// which is the split `Funcs` being "one entry per *defined* function" states.
@@ -1269,8 +1605,8 @@ func dataFill(n int) []byte { return []byte(strings.Repeat("a", n)) }
 // a check. The fully independent witness is the wabt corpus, at module level, which is #67's other
 // half; this is the part that can be asserted inside the package.
 func TestEncodeRoundTripsThroughTheDecoder(t *testing.T) {
-	// Vacuity, and **per partition rather than one total**. The table is 91 rows, of which 21 assert a
-	// function body; a single floor lets the func half go to zero and be absorbed by the other 70,
+	// Vacuity, and **per partition rather than one total**. The table is 132 rows, of which 43 assert a
+	// function body; a single floor lets the func half go to zero and be absorbed by the other 89,
 	// which is the empty-half-hiding-behind-a-full-one defect (grave #105) with a table for a
 	// partner. So the code section's rows are counted separately from the table's size.
 	//
@@ -1287,8 +1623,13 @@ func TestEncodeRoundTripsThroughTheDecoder(t *testing.T) {
 	// total-only floor would let all 21 of them go while the other 92 held the number up. That is the
 	// empty-half-behind-a-full-one shape (grave #105) exactly, and the reason it gets a counter rather
 	// than trust is that this partition is the one whose loss is invisible everywhere else.
-	if len(encodableModules) < 105 {
-		t.Fatalf("encodableModules has %d rows, want >=105 (113 at this commit): a table this check "+
+	//
+	// **Raised with the block family (#7): 113→132 rows, 24→43 with a body.** The func floor moves
+	// nineteen because that is what the block family added, and leaving it at 22 would have put a
+	// half-empty partition back inside the slack it was raised out of — a floor never complains about
+	// slack, which is why moving it is part of the same edit and not a follow-up.
+	if len(encodableModules) < 124 {
+		t.Fatalf("encodableModules has %d rows, want >=124 (132 at this commit): a table this check "+
 			"reads is a table whose size is part of the assertion, since a comparison over an empty "+
 			"set succeeds", len(encodableModules))
 	}
@@ -1304,8 +1645,8 @@ func TestEncodeRoundTripsThroughTheDecoder(t *testing.T) {
 			withDataCount++
 		}
 	}
-	if withFuncs < 22 {
-		t.Fatalf("only %d of %d encodableModules rows assert a function body, want >=22 (24 at this "+
+	if withFuncs < 40 {
+		t.Fatalf("only %d of %d encodableModules rows assert a function body, want >=40 (43 at this "+
 			"commit): the code section is the newest and least-covered half of this table, and a "+
 			"total-only floor would let its rows go to zero behind the other sections'",
 			withFuncs, len(encodableModules))

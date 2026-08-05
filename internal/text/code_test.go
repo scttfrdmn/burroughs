@@ -62,6 +62,292 @@ func TestEndOpcodeMatchesTheDecodersOpinion(t *testing.T) {
 	}
 }
 
+// TestElseOpcodeMatchesTheDecodersOpinion pins `opElse` the same way, and its discriminator is
+// sharper than the END test's because a lone byte cannot identify this one.
+//
+// `else` is legal *inside an `if`* and illegal inside a `block`, which is a two-module question. The
+// looser form — "does a body containing this byte decode" — is passed by `nop`, `i32.const`'s opcode
+// with its immediate, and every other zero-immediate instruction, so it would leave `opElse` free to
+// be any of dozens of values and stay green. Asking both modules narrows the answer to one byte, and
+// the loop below asserts that: **exactly one** value of 256 is accepted by the `if` and rejected by
+// the `block`, measured rather than assumed.
+//
+// Hand-assembled for the END test's reason with one addition: no wat source can put an `else` in a
+// `block`, so the illegal half of the question has no text spelling at all.
+func TestElseOpcodeMatchesTheDecodersOpinion(t *testing.T) {
+	// `opener blocktype-empty candidate end end` — the outer END is the function's, the inner one
+	// closes the construct. `0x40` is the empty blocktype; see blockTypeEmptyByte.
+	build := func(opener, candidate byte) []byte {
+		return []byte{
+			0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, // preamble
+			0x01, 0x04, 0x01, 0x60, 0x00, 0x00, // type: [] -> []
+			0x03, 0x02, 0x01, 0x00, // function: one func, type 0
+			0x0a, 0x08, 0x01, 0x06, 0x00, // code: one body, no locals
+			opener, blockTypeEmptyByte, candidate, opEnd, opEnd,
+		}
+	}
+	// `if` needs its condition on the stack, so the opener is preceded by an `i32.const 0`. Written
+	// as its own builder rather than a flag, because the two modules differ in length and the length
+	// prefix is hand-written.
+	buildIf := func(candidate byte) []byte {
+		return []byte{
+			0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+			0x01, 0x04, 0x01, 0x60, 0x00, 0x00,
+			0x03, 0x02, 0x01, 0x00,
+			0x0a, 0x0a, 0x01, 0x08, 0x00,
+			0x41, 0x00, // i32.const 0
+			0x04, blockTypeEmptyByte, candidate, opEnd, opEnd,
+		}
+	}
+
+	// The vacuity half, in both directions. Without the first, "the `if` accepts it" is satisfied by
+	// a hand-assembly that is accepted for some other reason; without the second, the *block* module
+	// might be malformed independently of the candidate byte and every candidate would look
+	// discriminating.
+	if _, err := binary.DecodeModule(buildIf(opElse)); err != nil {
+		t.Fatalf("an `if` containing opElse (%#x) does not decode: %v — either opElse is the wrong "+
+			"byte or this hand-assembly is wrong, and the count below proves nothing either way",
+			opElse, err)
+	}
+	if _, err := binary.DecodeModule(build(0x02, 0x01)); err != nil { // block · nop · end
+		t.Fatalf("a `block` containing nop does not decode: %v — the block builder is wrong, so the "+
+			"negative half of the discriminator below is measuring the builder", err)
+	}
+
+	// Scoped to the space, and the assertion is on the *count*: a discriminator that admitted two
+	// bytes would not identify `else` at all, and one that admitted none would mean the question is
+	// the wrong one. Exactly one, and it is opElse.
+	var discriminating []byte
+	for b := range 256 {
+		_, inIf := binary.DecodeModule(buildIf(byte(b)))
+		_, inBlock := binary.DecodeModule(build(0x02, byte(b)))
+		if inIf == nil && inBlock != nil {
+			discriminating = append(discriminating, byte(b))
+		}
+	}
+	if len(discriminating) != 1 || discriminating[0] != opElse {
+		t.Errorf("bytes legal in an `if` and illegal in a `block`: % #x, want exactly [%#x] — the "+
+			"decoder's opinion of which byte separates an if's arms", discriminating, opElse)
+	}
+}
+
+// TestBlockTypeFormsMatchTheReference pins the three blocktype forms against the decoder's unpacking,
+// which is where a width error hides.
+//
+// **The forms are an `s33`, and the tempting writer is a `u32`** — `blockTypeIdxBytes` says why at
+// length. The two agree for every index below 64 and diverge at 64, where a u32 emits the single byte
+// `0x40`: precisely the empty-blocktype marker. So an encoder using the wrong writer produces, for
+// `(block (type 64) …)`, a block with *no signature*, which decodes clean and validates differently.
+// That is the accept-direction class in its purest form — no `assert_malformed` vector can report a
+// module that was accepted — and 64 is the one value where a control has to look.
+//
+// Asked through `binary.BlockType`, the decoder's own unpacker, rather than by comparing bytes to a
+// second table of expected bytes: the question is what the *decoder* reads back, and a byte
+// comparison would agree with a wrong constant as readily as with a right one.
+func TestBlockTypeFormsMatchTheReference(t *testing.T) {
+	// A module with `n+1` types so index `n` exists, then a body of `block <bt> end`. The type
+	// section's entries are all `[] -> []`, which is legal but not what the blocktype *means* here —
+	// nothing validates, and the question is only what byte sequence the decoder reads back.
+	build := func(types int, bt []byte) []byte {
+		var w writer
+		w.bytes(binary.Magic[:])
+		w.u32le(binary.Version)
+		w.section(secType, func(b *writer) {
+			b.vec(types, func(bw *writer, _ int) { bw.byte1(0x60); bw.u32(0); bw.u32(0) })
+		})
+		w.section(secFunction, func(b *writer) { b.vec(1, func(bw *writer, _ int) { bw.u32(0) }) })
+		w.section(secCode, func(b *writer) {
+			b.vec(1, func(bw *writer, _ int) {
+				var fb writer
+				fb.u32(0) // no locals
+				fb.byte1(0x02)
+				fb.bytes(bt)
+				fb.byte1(opEnd)
+				fb.byte1(opEnd)
+				bw.u32(uint32(len(fb.b)))
+				bw.bytes(fb.b)
+			})
+		})
+		return w.b
+	}
+	// The first instruction of the one function's body, unpacked.
+	blockTypeOf := func(t *testing.T, img []byte) (uint32, binary.ValType, bool) {
+		t.Helper()
+		m, err := binary.DecodeModule(img)
+		if err != nil {
+			t.Fatalf("hand-assembled module does not decode: %v", err)
+		}
+		if len(m.Funcs) != 1 || len(m.Funcs[0].Body) == 0 {
+			t.Fatalf("expected one function with a body, got %d funcs", len(m.Funcs))
+		}
+		return binary.BlockType(m.Funcs[0].Body[0].Imm0)
+	}
+
+	t.Run("empty", func(t *testing.T) {
+		idx, vt, empty := blockTypeOf(t, build(1, []byte{blockTypeEmptyByte}))
+		if !empty {
+			t.Errorf("blockTypeEmptyByte (%#x) decodes as idx=%d valtype=%v, want the empty form",
+				blockTypeEmptyByte, idx, vt)
+		}
+	})
+
+	// The **forward** direction of the same packing, which is what `encodableModules`' want columns
+	// state and which no exported function supplies — see blockTypeImm's comment. Checked here
+	// because this is the test that already holds the decoder's unpacker: a drifted literal would
+	// otherwise make every block row in that table wrong in the same direction, and a want column
+	// wrong in the encoder's own direction agrees with a wrong encoder.
+	t.Run("packed Imm0 literals", func(t *testing.T) {
+		if idx, vt, empty := binary.BlockType(blockTypeImm); !empty {
+			t.Errorf("blockTypeImm (%#x) unpacks as idx=%d valtype=%v empty=false, want the empty form",
+				blockTypeImm, idx, vt)
+		}
+		for _, want := range []binary.ValType{binary.I32, binary.I64, binary.F32, binary.F64, binary.FuncRef} {
+			imm := blockTypeValTypeImm(want)
+			idx, vt, empty := binary.BlockType(imm)
+			if empty || vt != want {
+				t.Errorf("blockTypeValTypeImm(%v) = %#x, which unpacks as idx=%d valtype=%v empty=%v",
+					want, imm, idx, vt, empty)
+			}
+		}
+		// And neither literal may collide with a type index, which is the disjointness the tags
+		// living above 2^32 buys — asserted rather than assumed, since a want column of `Imm0: 0`
+		// for `(block)` is exactly the mistake this rules out.
+		if idx, _, empty := binary.BlockType(0); empty || idx != 0 {
+			t.Errorf("Imm0 0 unpacks as idx=%d empty=%v, want type index 0 — so the empty blocktype "+
+				"cannot be written as a zero want column", idx, empty)
+		}
+	})
+
+	t.Run("single result", func(t *testing.T) {
+		// The `([], [t])` arm, written as a bare valtype byte and not as an s33 — see
+		// blockTypeBytes. `i32` is 0x7f, which as a signed LEB is -1, so a reader treating this
+		// arm as an index would see a negative one.
+		b, ok := valTypeByte(resolvedVal{num: "i32"})
+		if !ok {
+			t.Fatalf("i32 has no valtype byte, so this package cannot encode any block result")
+		}
+		idx, vt, empty := blockTypeOf(t, build(1, []byte{b}))
+		if empty || vt != binary.I32 {
+			t.Errorf("a bare %#x decodes as idx=%d valtype=%v empty=%v, want the i32 valtype form",
+				b, idx, vt, empty)
+		}
+	})
+
+	// The index form at both sides of the divergence. 63 is where s33 and u32 agree, so it proves
+	// the *form* is right; 64 is where they differ, and it is the row a u32 writer fails.
+	for _, idx := range []uint32{0, 1, 63, 64, 65, 127, 128} {
+		t.Run(fmt.Sprintf("index %d", idx), func(t *testing.T) {
+			got, vt, empty := blockTypeOf(t, build(int(idx)+1, blockTypeIdxBytes(idx)))
+			if empty || got != idx {
+				t.Errorf("blockTypeIdxBytes(%d) = % #x, which decodes as idx=%d valtype=%v empty=%v",
+					idx, blockTypeIdxBytes(idx), got, vt, empty)
+			}
+		})
+	}
+
+	// The falsification, stated as a row rather than left to a reviewer: index 64 written as a u32
+	// *is* the empty marker, so the wrong writer is not merely imprecise — it encodes a different
+	// blocktype that decodes clean. Asserted here so the divergence is a checked fact and not a
+	// claim in blockTypeIdxBytes' comment.
+	if !slices.Equal(encodeLocalIdx(64), []byte{blockTypeEmptyByte}) {
+		t.Errorf("encodeLocalIdx(64) = % #x, want % #x — the premise blockTypeIdxBytes exists for",
+			encodeLocalIdx(64), []byte{blockTypeEmptyByte})
+	}
+	if slices.Equal(blockTypeIdxBytes(64), encodeLocalIdx(64)) {
+		t.Errorf("blockTypeIdxBytes(64) = % #x agrees with the u32 writer, so the s33 form is not "+
+			"being written", blockTypeIdxBytes(64))
+	}
+}
+
+// TestSelectOpcodesMatchTheGeneratedTable is the corroboration `opSelect`/`opSelectT` are named
+// against, and it asserts exactly what the table can say — no more.
+//
+// **The table holds both bytes and cannot say which is which.** `ambiguousOpcodes["select"]` is a
+// slice whose order is `decode.ml`'s arm order as `OpsOf` happened to append it, and `Ambiguity` is
+// sorted by *constructor*, so the pair's internal order is not a fact `opcodes.go` states. Reading
+// `[0]` as the bare form would be depending on it anyway. So this checks the *set* — the two named
+// constants are exactly the two encodings the reference gives the mnemonic — and
+// TestSelectOpcodesMatchTheDecodersOpinion is what distinguishes them, from the decoder.
+//
+// The mnemonic's presence in `ambiguousOpcodes` is asserted too, and that is the half that catches a
+// generator change: if the reference stopped giving `select` two encodings the map would lose the key
+// and the set comparison below would silently compare against nothing — the empty-set agreement
+// (decision 0007).
+func TestSelectOpcodesMatchTheGeneratedTable(t *testing.T) {
+	got, ok := ambiguousOpcodes["select"]
+	if !ok {
+		t.Fatalf("`select` is not in ambiguousOpcodes, so the two-encoding premise opSelect and "+
+			"opSelectT are named on no longer holds: %d ambiguous mnemonics", len(ambiguousOpcodes))
+	}
+	codes := make([]byte, 0, len(got))
+	for _, e := range got {
+		if e.prefix != 0x00 {
+			t.Errorf("select encoding % #x has a prefix, which neither named constant can carry", e)
+			continue
+		}
+		codes = append(codes, byte(e.code))
+	}
+	slices.Sort(codes)
+	want := []byte{opSelect, opSelectT}
+	slices.Sort(want)
+	if !slices.Equal(codes, want) {
+		t.Errorf("ambiguousOpcodes[select] carries % #x, want the set % #x", codes, want)
+	}
+}
+
+// TestSelectOpcodesMatchTheDecodersOpinion distinguishes the two select bytes, which the table cannot.
+//
+// The discriminator is the immediate: `0x1b` takes none and `0x1c` is followed by `vec valtype`
+// (encode.ml:248-249). So a one-instruction body of the bare byte decodes for one of them and is
+// truncated for the other, and that is a question about the *decoder* rather than about a table.
+//
+// **Both directions, because either alone is satisfied by the wrong assignment.** If the constants
+// were swapped, `opSelect` alone would fail to decode and `opSelectT` followed by a vector would
+// fail too — but a control checking only "opSelect decodes bare" would pass with any zero-immediate
+// opcode substituted, and one checking only the vector form would pass for any opcode taking a
+// vector. Pinning both to the *same pair of bytes* is what makes the assignment the only one that
+// satisfies it.
+func TestSelectOpcodesMatchTheDecodersOpinion(t *testing.T) {
+	build := func(body ...byte) []byte {
+		var w writer
+		w.bytes(binary.Magic[:])
+		w.u32le(binary.Version)
+		w.section(secType, func(b *writer) {
+			b.vec(1, func(bw *writer, _ int) { bw.byte1(0x60); bw.u32(0); bw.u32(0) })
+		})
+		w.section(secFunction, func(b *writer) { b.vec(1, func(bw *writer, _ int) { bw.u32(0) }) })
+		w.section(secCode, func(b *writer) {
+			b.vec(1, func(bw *writer, _ int) {
+				var fb writer
+				fb.u32(0)
+				fb.bytes(body)
+				fb.byte1(opEnd)
+				bw.u32(uint32(len(fb.b)))
+				bw.bytes(fb.b)
+			})
+		})
+		return w.b
+	}
+
+	if _, err := binary.DecodeModule(build(opSelect)); err != nil {
+		t.Errorf("opSelect (%#x) alone does not decode, so it is not the immediate-less form: %v",
+			opSelect, err)
+	}
+	if _, err := binary.DecodeModule(build(opSelectT)); err == nil {
+		t.Errorf("opSelectT (%#x) alone decodes, so it takes no result vector — the two constants "+
+			"are assigned the wrong way round", opSelectT)
+	}
+	// `0x1c` with its vector, both lengths that matter: one type, and the **empty** vector, which is
+	// the `select (result)` spelling selectOpByte exists for. If the empty case did not decode,
+	// `len(results) > 0` would be a defensible predicate; it does, so it is not.
+	for _, vec := range [][]byte{{0x01, 0x7f}, {0x00}} {
+		img := build(append([]byte{opSelectT}, vec...)...)
+		if _, err := binary.DecodeModule(img); err != nil {
+			t.Errorf("opSelectT with vector % #x does not decode: %v", vec, err)
+		}
+	}
+}
+
 // TestIdxLookupKindsMatchTheReference is the drift control on `idxLookupKinds`, the hand-written
 // mnemonic→index-category table.
 //

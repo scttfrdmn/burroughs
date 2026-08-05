@@ -722,13 +722,21 @@ func (p *parser) idxList() error {
 // encoded as a `0`, the absence of a lookup being about *resolution*, not about retention. Reading
 // the early return as "nothing to do here" is what produced the bug.
 //
-// **In build mode only the NAT arm is currently reachable**, and saying so is what keeps the symbolic
-// half from reading as tested. A symbolic label needs an enclosing block to bind it, and every block
-// form refuses at `refuseUnencodable` before its body is parsed — probed over all seven spellings
-// (`block`/`loop`/`if`/`try_table`, folded and flat), all seven refusing at the block. So the
-// symbolic arm's retention is written from the reference and controlled at `lookupLabel`'s own level
-// (TestLabelIndexCountsAnonymousLevels), not through any module; it becomes reachable with #63/#64's
-// blocktype encoding, and that is where its module-level row belongs.
+// **The symbolic arm was unreachable in build mode until the block family encoded, and it is
+// reachable now.** The paragraph here used to record the unreachability, because saying so was what
+// kept the symbolic half from reading as tested: a symbolic label needs an enclosing block to bind
+// it, and every block form refused at `refuseUnencodable` before its body was parsed — probed over
+// all seven spellings (`block`/`loop`/`if`/`try_table`, folded and flat), all seven refusing at the
+// block. It also named where the module-level row would belong once a blocktype could be written,
+// which is the obligation this discharges: `encodableModules` now carries `(block $l (br $l))` in
+// both spellings, asserting `0x0c 00` — a resolution against the wrong depth encodes `br 1`, a
+// return, on a module that decodes clean. Re-probed rather than assumed: of the eight
+// keyword-by-spelling combinations, six now encode a symbolic label and the two `try_table` ones
+// still refuse (`vec catch` has no encoding, #7).
+//
+// The retention itself remains controlled at `lookupLabel`'s own level too
+// (TestLabelIndexCountsAnonymousLevels), which is the level that sees an anonymous block's
+// contribution to the count — a thing no single module row distinguishes.
 func (p *parser) labelIdx() error {
 	r, err := p.idxValue()
 	if err != nil {
