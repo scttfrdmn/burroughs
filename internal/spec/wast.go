@@ -50,6 +50,21 @@ type Command struct {
 	// runners do the same, and it lets "alignment" work as a prefix of
 	// "alignment must be a power of two" without special casing.
 	Expect string
+
+	// Invoke names the exported function an `assert_return` calls, with Args as its
+	// arguments and Results as the expected return values.
+	//
+	// Three fields rather than one action struct, because the harness reads exactly one
+	// action shape — `(invoke "name" arg*)` — and a struct would be a place for the other
+	// script actions (`get`, `invoke $M`) to be half-modelled. When one of those becomes
+	// askable it arrives as its own Kind, which is where the classification decision is
+	// visible.
+	//
+	// Empty for every other Kind. Args is nil for a nullary call, which is the common
+	// shape: 6560 of the answerable population take no arguments.
+	Invoke  string
+	Args    []Val
+	Results []Val
 }
 
 // Kind classifies a directive. Phase 1 recognizes the module and malformed
@@ -63,6 +78,7 @@ const (
 	KindModuleQuote                     // (module quote "...")
 	KindAssertMalformedText             // (assert_malformed (module quote ...) "text")
 	KindModuleText                      // (module <wat body>) — source retained, #69
+	KindAssertReturn                    // (assert_return (invoke "f" arg*) result*) — #7
 	KindUnsupported                     // anything phase 1 cannot execute
 )
 
@@ -78,6 +94,8 @@ func (k Kind) String() string {
 		return "assert_malformed (quote)"
 	case KindModuleText:
 		return "module text"
+	case KindAssertReturn:
+		return "assert_return"
 	default:
 		return "unsupported"
 	}
@@ -102,6 +120,29 @@ const (
 	// verdict waits on it fails with a bucket, which is the work plan, not a fourth
 	// column.
 	CapWatReader Capability = "wat-reader"
+
+	// CapInterpreter is the execution loop — the thing that turns a decoded module and an
+	// export name into values (#7).
+	//
+	// **Declared and never registered**, which is the opposite of CapWatReader's history and
+	// deliberately so. wat-reader was *registered* while its component did not exist, held
+	// 1236 vectors in the fourth column, and retired when the reader landed. This capability
+	// is born on the day its component runs, so it goes straight to the declared side and the
+	// fourth column never sees it — guard 6's two arms are exclusive, so declaring it and
+	// registering it would be the retirement-skipped failure at birth rather than at
+	// retirement.
+	//
+	// That is not a loophole in guard 2. Guard 2 requires a needed capability to be
+	// *accounted for*, as a tracked debt or as a declared component; a capability that has
+	// its component wants the second, and registering a debt that was never owed would make
+	// the registry overstate the engine's outstanding work — which
+	// TestEveryNeededCapabilityIsRegistered's used-members loop fails on directly.
+	//
+	// Its population is not the whole `assert_return` corpus: classify admits only the shapes
+	// the loop can be *asked* about, and everything else stays unsupported with its head
+	// recorded. That is the classification seam (see assertReturn), and it is why this
+	// capability's arrival moves the unsupported column rather than creating a debt anywhere.
+	CapInterpreter Capability = "interpreter"
 )
 
 // capEntry is a registry entry: what tracks the gap, and what ends it.
@@ -149,6 +190,13 @@ var capabilityIssues = map[Capability]capEntry{}
 // capabilityIssues entry, and TestNoCapabilityOutlivesItsComponent fails if only one of
 // the two happens. CapWatReader arrived by exactly that motion.
 //
+// CapInterpreter arrived by the *other* motion, and the difference is worth having written
+// down because it is the shape a capability should have from now on: it was never
+// registered, because its component landed in the commit that named it. A registry entry is
+// for a gap that has to be *tracked over time*, and there was no interval here to track — so
+// the honest history is one line in this map and no line in the other, rather than an entry
+// born and retired in the same breath.
+//
 // A declaration here is a claim about the *engine*, and the run loop refuses to honour a
 // claim with nothing behind it: a declared capability whose component is not wired into
 // the run panics rather than scoring, which is where TestQuoteFormsHaveTheirReader's
@@ -157,7 +205,8 @@ var capabilityIssues = map[Capability]capEntry{}
 // name, which is the drift a stale test-name citation causes: it reads as a second,
 // missing control. Swept with #88.)
 var engineCapabilities = map[Capability]bool{
-	CapWatReader: true,
+	CapWatReader:   true,
+	CapInterpreter: true,
 }
 
 // EngineCapabilities returns the capabilities the engine has, sorted. Board runners
@@ -328,8 +377,79 @@ func classify(n node, src []byte) Command {
 			}
 		}
 		return Command{Kind: KindUnsupported, Line: n.line, Head: head}
+
+	case "assert_return":
+		if c, ok := assertReturn(n); ok {
+			return c
+		}
+		return Command{Kind: KindUnsupported, Line: n.line, Head: head}
 	}
 	return Command{Kind: KindUnsupported, Line: n.line, Head: head}
+}
+
+// assertReturn reads `(assert_return (invoke "name" arg*) result*)`, reporting false for
+// every other shape the head admits.
+//
+// # The classification seam
+//
+// This function is where the `assert_return` population divides, and the division is what
+// makes the interpreter's arrival move the unsupported column instead of creating a debt in
+// the fourth. What it admits is a *narrow* shape — one unnamed `invoke`, scalar constant
+// arguments, scalar-or-NaN-class expected results — and everything else stays
+// KindUnsupported with its head recorded, where the column names it. The forms deliberately
+// left out, each measured over the corpus rather than guessed:
+//
+//   - `(invoke $M "f" …)`, a named module: **0** in the answerable population, and admitting
+//     it would need module-name state the run loop does not keep.
+//   - `(either …)` results, the relaxed-SIMD non-determinism form: **0** answerable, all of
+//     them in bulk and relaxed-SIMD files.
+//   - `(get "g")` actions, v128 constants, reference constants: their own strata.
+//
+// A shape this declines is *not* a fail. The vector is valid; the harness simply cannot ask
+// it yet, which is precisely the Unsupported/Fail distinction Result documents.
+//
+// # Why the whole form is read here rather than in the run loop
+//
+// Reading `(invoke …)` at classification time is what lets Needs be computed from the
+// command — guard 1 of decision 0010 — and it is also what keeps the run loop free of
+// grammar. A run loop that parsed nodes would be a second place that knows the constant
+// grammar, and the readers in value.go are the first.
+func assertReturn(n node) (Command, bool) {
+	no := Command{Kind: KindUnsupported, Line: n.line, Head: n.head()}
+	if len(n.list) < 2 || !n.list[1].isList() || n.list[1].head() != "invoke" {
+		return no, false
+	}
+	act := n.list[1]
+	// `(invoke "name" arg*)`. A `$name` before the string is the module-selecting form,
+	// declined above — checked structurally (element 1 is not a string) rather than by
+	// looking for a `$`, so any other shape upstream adds is declined too rather than
+	// misread.
+	if len(act.list) < 2 || !act.list[1].isS {
+		return no, false
+	}
+	c := Command{
+		Kind: KindAssertReturn, Line: n.line, Head: n.head(),
+		Invoke: string(act.list[1].str), Needs: CapInterpreter,
+	}
+	for _, a := range act.list[2:] {
+		v, ok := readConst(a)
+		if !ok || v.NaN != NaNNone {
+			// A NaN *class* in an argument position is not a value that can be passed —
+			// it is a predicate. The asymmetry is enforced here rather than in the
+			// matcher, because it is a statement about which vectors are askable, and
+			// that is this function's subject.
+			return no, false
+		}
+		c.Args = append(c.Args, v)
+	}
+	for _, e := range n.list[2:] {
+		v, ok := readConst(e)
+		if !ok {
+			return no, false
+		}
+		c.Results = append(c.Results, v)
+	}
+	return c, true
 }
 
 // binaryModule extracts the image from (module [$name] binary "..." "..."),
@@ -490,11 +610,93 @@ type Result struct {
 	// which vectors are allowed to land here.
 	Gated int
 
+	// GatedAt is the line of every vector counted in Gated.
+	//
+	// **The count alone made the per-vector control unable to reach its own population.**
+	// TestGatedVectors had to re-derive the set by calling the decoder itself
+	// (`isGated(decode(c.Module))`), which works only for vectors whose decline happens at
+	// `c.Module` — and the interpreter added a second path, instantiation, where a *text*
+	// module is declined and there is no `c.Module` to ask about. 17 of the 33 declines were
+	// outside the trigger's reach, so the allowlist covered half its population and said
+	// nothing about the other half. *Coverage is to a trigger what a vacuity check is to a
+	// comparison* (grave #78), and a re-derived trigger is how a control comes to be pointed
+	// at a different set than the one it claims.
+	//
+	// So the run loop records what it counted, and the control reads that instead of asking a
+	// second oracle the same question. `len(GatedAt) == Gated` is pinned by TestGatedVectors,
+	// as its first assertion before it reads the lines — a parallel count and a parallel list
+	// are exactly the two-places-know-one-fact shape, so the agreement is asserted rather than
+	// assumed.
+	//
+	// The sentence above named TestGatedLinesAccountForEveryDecline, which has never existed:
+	// the assertion is real and lives in TestGatedVectors, so the *name* was invented while
+	// describing a control correctly. Caught by TestEveryCitedTestNameResolves on this PR — the
+	// #93 mechanism finding exactly the class it was widened for.
+	GatedAt []int
+
 	// Failures, bucketed by expected spec text. The bucket key names exactly
 	// which check is missing or wrong, which makes the board a priority queue:
 	// the biggest bucket is the next issue to take, and a bucket reaching zero
 	// is a PR's measure of done (CLAUDE.md, Disciplines).
 	Buckets map[string][]Failure
+}
+
+// Stratum names the engine component a failure is charged to — the fail column's
+// partition key.
+//
+// **It replaced Failure.Kind as that key, and the reason is a defect the interpreter
+// exposed rather than a refactor.** Kind worked while every failure was caused by the
+// command it was reported against, so "which layer" and "which command" were one question
+// with one answer. An `assert_return` whose module failed to produce an instance breaks that
+// identity: the *command* is an assert_return and the *defect* belongs to whatever front end
+// could not build the module — 13991 of them at the interpreter's arrival, every one the
+// text encoder's frontier (#8), and all of them would have been charged to the execution
+// layer by a Kind-derived switch. That is *an error from the wrong layer is evidence about
+// where structure was lost*, aimed at the instrument instead of at the engine, and it is the
+// same shape as #69's accident where KindModuleText fell into a `default` arm and reported 13
+// text reds as decoder reds.
+//
+// So the run loop states the stratum rather than letting a reader derive it, and there is no
+// zero-value default: StratumUnset is a loud failure in the partition check, because a layer
+// assigned by omission is exactly how the previous two mixups happened.
+type Stratum byte
+
+const (
+	// StratumUnset is the zero value and is never valid. Its purpose is to fail loudly.
+	StratumUnset Stratum = iota
+	// StratumBinary is the binary decoder.
+	StratumBinary
+	// StratumText is the wat reader — ReadModule, the entry point the board scores for
+	// module and assert_malformed forms.
+	StratumText
+	// StratumEncode is the wat *encoder* — EncodeModule, reached only through
+	// instantiation. Separate from StratumText because they are separate entry points
+	// with separate frontiers: ReadModule answers 253 files' module forms with 0 reds,
+	// while EncodeModule cannot yet emit most instruction bodies. Folding them together
+	// would raise the reader's ceiling by 13991 and destroy its value as a regression
+	// detector — one instrument per component, or neither is an instrument.
+	StratumEncode
+	// StratumExec is the interpreter.
+	StratumExec
+)
+
+func (s Stratum) String() string {
+	switch s {
+	case StratumBinary:
+		return "binary"
+	case StratumText:
+		return "text"
+	case StratumEncode:
+		return "encode"
+	case StratumExec:
+		return "exec"
+	default:
+		// StratumUnset, and anything a future Stratum adds before its arm lands. Spelled
+		// as the default rather than as a named arm so that a new stratum renders *something*
+		// in a failure message instead of an empty string — the board's own switch over
+		// Stratum is the place that must be exhaustive, and it errors loudly on unset.
+		return "unset"
+	}
 }
 
 // Failure is one assertion that did not hold.
@@ -503,21 +705,12 @@ type Failure struct {
 	Expect string
 	Got    string // the engine's error text, or "" if it accepted the module
 
-	// Kind is the command's Kind, and it is here because the fail column now spans two
-	// languages. Before the wat reader every failure came from the decoder, so "601
-	// fail" and "601 decoder defects" were the same sentence; after it, 600 of them are
-	// text-layer vectors whose grammar is not written yet and 1 is a genuine decoder
-	// defect (binary-gc.wast:1). A ceiling that cannot tell those apart lets the
-	// decoder's column stop being an instrument — a new decoder defect would arrive as
-	// 602 among 601, which is the invisibility decision 0010 was written to prevent,
-	// one layer over.
-	//
-	// Bucketing by expected spec text is the right *work-plan* key and the wrong
-	// *partition* key here: the two layers share strings (`malformed UTF-8 encoding`
-	// appears on both sides), so a string test would score members of one partition as
-	// the other. **When a partition's members share a value, discriminate on the field
-	// that partitions** — the Kind, which is structural and cannot collide.
+	// Kind is the command's Kind — what was being scored, not who is at fault. Retained
+	// for reporting; Stratum is the partition key. See Stratum for why the two separated.
 	Kind Kind
+
+	// Stratum is the component the failure is charged to.
+	Stratum Stratum
 }
 
 // Total is the number of assertions actually executed — the denominator of the
@@ -539,6 +732,16 @@ type Failure struct {
 // denominator is over what was asked. TestDenominatorExcludesUnaskedCommands is
 // the control that says so, because a comment cannot fail.
 func (r *Result) Total() int { return r.Pass + r.Fail }
+
+// gate records a feature decline: the counter and the line, in one call.
+//
+// One method rather than two statements at five sites, because a count and a list of the
+// things counted are one fact in two places and the fifth site is where they would have
+// drifted. See Result.GatedAt.
+func (r *Result) gate(c Command) {
+	r.Gated++
+	r.GatedAt = append(r.GatedAt, c.Line)
+}
 
 // UnimplementedByCapabilityBySize returns the capabilities blocking the fourth
 // verdict, largest first — the same work-plan ordering as the other two columns.
@@ -664,84 +867,178 @@ type ReadTextFunc func(src []byte) error
 // the harness guessing at the taxonomy it is supposed to be checking.
 type GatedFunc func(error) bool
 
-// gated is set by the caller via Script.RunGated. When nil, no error is gated
-// and the board behaves exactly as before.
-// has is the set of capabilities the engine declares. Empty is the honest default:
-// a caller that says nothing about its components has none beyond the decoder, so a
-// command needing one is scored `unimplemented` rather than silently attempted. The
-// failure mode this avoids is a new run entry point forgetting to declare and
-// thereby converting the fourth verdict into a fail.
-// readText is the wat entry point. Nil means the caller declared no reader, which is
-// only consistent with not declaring CapWatReader — the run loop panics on the
-// combination rather than scoring, because a declared capability with no component
-// behind it is the registry running ahead of the engine.
+// Instance is a module the engine has made executable, opaque to the harness.
+//
+// `any`, and the emptiness is the neutrality rule (contract §0) rather than laziness: the
+// harness's job is to hold the thing between a module command and the `assert_return`s that
+// follow it, and to hold it without being able to look inside. An interface with methods
+// would be this package describing the engine's shape, which is the import it is forbidden
+// to make wearing a type's clothes.
+type Instance any
+
+// InstantiateFunc turns a module command into something InvokeFunc can be called on, or
+// reports why it could not.
+//
+// It takes the whole Command rather than a payload, and that is the classification being
+// *handed over* rather than re-derived: the Kind already says which language the bytes are,
+// so the caller switches on a decision the harness made instead of on a flag the harness
+// invented. It is also why a third module language would not change this signature — the
+// argument against `func(image, src []byte)` is the same one that separated DecodeFunc from
+// ReadTextFunc, and a two-payload func with one nil is that flag by another route.
+//
+// **Its error is not a verdict.** The module command has already been scored by Decode or
+// ReadText; this call exists only to carry a handle forward. An error here means the
+// following `assert_return`s have nothing to run against, and the run loop reports that as
+// its own bucket rather than as a decode failure counted twice.
+//
+// **It returns the Stratum on the error path, and that is the caller's to state rather than
+// the harness's to derive.** Instantiation is more than one step — a text module is encoded
+// and then decoded — so which component failed is not a function of the Command's Kind, and
+// deriving it here would assign a layer by omission. That is the mistake Stratum was
+// introduced to stop making; the caller performed the steps, so the caller says which one
+// broke. The value is ignored when err is nil.
+type InstantiateFunc func(c Command) (Instance, Stratum, error)
+
+// InvokeFunc calls an exported function and returns its results.
+//
+// Values cross as []Val — the harness's own type — for the reason ValKind is not
+// binary.ValType: a signature naming the engine's value type would make this package
+// depend on the engine's type system, and the whole point of the injection is that it does
+// not. The caller converts, being the one place that legitimately knows both.
+type InvokeFunc func(in Instance, name string, args []Val) ([]Val, error)
+
+// Engine is the set of entry points the run loop calls, and the capabilities the caller
+// declares on the engine's behalf.
+//
+// **A struct rather than parameters, and the reason is a hazard rather than a taste.**
+// RunWith took `(DecodeFunc, ReadTextFunc, GatedFunc, ...Capability)`, and the first two are
+// both `func([]byte) error`: transposing them compiles, runs, and scores every module
+// command against the wrong language — a silent board rather than an error. Two more entry
+// points arrived with the interpreter (#7), making four positional funcs of which three
+// share a shape, so the argument list stopped being able to say what it meant. Named fields
+// cannot be transposed.
+//
+// Zero values are meaningful and are the honest defaults. A nil entry point is a component
+// the caller does not have, and Has empty means no capability beyond the decoder — so a
+// command needing one is scored `unimplemented` rather than silently attempted. The failure
+// mode this avoids is a new run entry point forgetting to declare and thereby converting the
+// fourth verdict into a fail.
+//
+// A declared capability whose component is nil panics rather than scoring, because a
+// declaration with nothing behind it is the registry running ahead of the engine.
+type Engine struct {
+	Decode   DecodeFunc
+	ReadText ReadTextFunc
+	IsGated  GatedFunc
+
+	// Instantiate and Invoke are the interpreter's two halves, and they are separate
+	// fields because they are separate obligations: an engine can decode a module without
+	// being able to run it, which is exactly the state this repo was in until #7. Both are
+	// required by CapInterpreter and the run loop checks both.
+	Instantiate InstantiateFunc
+	Invoke      InvokeFunc
+
+	// Has is what the engine declares. Board runners pass EngineCapabilities(); tests
+	// pass a narrower set to exercise the gap.
+	Has []Capability
+}
+
+// runOpts is Engine with Has resolved to a set.
 type runOpts struct {
-	isGated  GatedFunc
-	readText ReadTextFunc
-	has      map[Capability]bool
+	Engine
+	has map[Capability]bool
 }
 
 // Run executes a script's assertions against a decoder, scoring every gate as
 // though it were on — no error is treated as a gate decline.
 //
-// It declares no capabilities and supplies no wat reader, so a script containing a
+// It declares no capabilities and supplies no other component, so a script containing a
 // quote form panics: the engine has CapWatReader, and a caller that neither declares
 // it nor hands over a reader is asking the loop to score a vector against nothing. That
 // is deliberate rather than a limitation — this is the minimal form for unit tests over
 // synthetic byte-string scripts, and silently scoring such a vector `unimplemented`
 // would resurrect a drained column from a forgotten argument.
 func (s *Script) Run(decode DecodeFunc) *Result {
-	return s.run(decode, runOpts{})
+	return s.RunWith(Engine{Decode: decode})
 }
 
-// RunGated executes a script and separates gate declines from verdicts. isGated
-// reports whether an error means the engine refused to answer because a feature
-// gate is off; those vectors land in Result.Gated instead of Pass or Fail.
+// RunGated executes a script against the engine's *declared* capabilities, separating
+// gate declines from verdicts. Engine.IsGated reports whether an error means the engine
+// refused to answer because a feature gate is off; those vectors land in Result.Gated
+// instead of Pass or Fail.
 //
-// Capabilities come from engineCapabilities, not from the caller: this is the board's
-// runner, and the board must score against what the engine declares rather than
-// against what a call site remembered to pass. Adding the wat reader to that
-// declaration moved the board without touching this function, which was the claim
-// this comment made before it happened.
+// Capabilities come from engineCapabilities and **any Has the caller set is overwritten**,
+// not merged: this is the board's runner, and the board must score against what the engine
+// declares rather than against what a call site remembered to pass. Adding the wat reader to
+// that declaration moved the board without touching this function, which was the claim this
+// comment made before it happened — and the interpreter's did it a second time.
 //
-// readText joined the signature when CapWatReader was declared, and it is a required
-// parameter rather than an option for the same reason the capability set is derived:
-// a board runner that can be called without the component it declares would score
-// 1236 vectors against a nil entry point. The run loop panics on that combination, so
-// the compiler and the loop between them make the omission impossible to ship.
-func (s *Script) RunGated(decode DecodeFunc, readText ReadTextFunc, isGated GatedFunc) *Result {
-	return s.RunWith(decode, readText, isGated, EngineCapabilities()...)
+// The components themselves are the caller's to supply, and a declared capability with a nil
+// component panics in the run loop rather than scoring. So the derivation covers the half
+// that gets forgotten (which capabilities count) and the loop covers the half a struct
+// literal can omit silently (which components exist).
+func (s *Script) RunGated(e Engine) *Result {
+	e.Has = EngineCapabilities()
+	return s.RunWith(e)
 }
 
-// RunWith executes a script with an explicit set of engine capabilities. A command
-// whose Needs is not in have is scored Unimplemented (decision 0010).
+// RunWith executes a script against an explicitly described engine. A command whose Needs
+// is not in e.Has is scored Unimplemented (decision 0010).
 //
-// This was the seam the wat reader arrived through: it joined engineCapabilities and
-// 1236 vectors moved out of the fourth column. The default stays empty rather than
-// "everything the harness knows about" — the latter would score vectors against
-// components that do not exist, and the next capability will be in exactly the
-// position wat-reader was.
+// This was the seam the wat reader arrived through, and the interpreter after it: each
+// joined engineCapabilities and its population moved out of the fourth column. The default
+// stays empty rather than "everything the harness knows about" — the latter would score
+// vectors against components that do not exist, and the next capability will be in exactly
+// the position wat-reader was.
 //
-// The explicit-argument form stays for tests that need to declare a capability the
-// engine cannot honour — a capability with no registered entry, or one whose component
-// was not passed in — which must panic rather than score.
-func (s *Script) RunWith(decode DecodeFunc, readText ReadTextFunc, isGated GatedFunc, have ...Capability) *Result {
-	set := make(map[Capability]bool, len(have))
-	for _, c := range have {
+// The explicit form stays for tests that need to declare a capability the engine cannot
+// honour — a capability with no registered entry, or one whose component was left nil —
+// which must panic rather than score.
+func (s *Script) RunWith(e Engine) *Result {
+	set := make(map[Capability]bool, len(e.Has))
+	for _, c := range e.Has {
 		set[c] = true
 	}
-	return s.run(decode, runOpts{isGated: isGated, readText: readText, has: set})
+	return s.run(runOpts{Engine: e, has: set})
 }
 
-func (s *Script) run(decode DecodeFunc, opts runOpts) *Result {
+func (s *Script) run(opts runOpts) *Result {
 	r := &Result{
 		Path: s.Path, Buckets: map[string][]Failure{},
 		UnsupportedByHead:         map[string]int{},
 		UnimplementedByCapability: map[Capability]int{},
 	}
 	isGated := func(err error) bool {
-		return err != nil && opts.isGated != nil && opts.isGated(err)
+		return err != nil && opts.IsGated != nil && opts.IsGated(err)
 	}
+	// cur is the instance the *most recent* module command produced, which is what an
+	// `assert_return` runs against.
+	//
+	// **"Most recent" is measured, not assumed.** The reference's script semantics let an
+	// action name a module — `(invoke $M "f" …)` — and a classifier ignoring the name would
+	// invoke the wrong module and score whatever came out. There are **0** such actions in
+	// the answerable population, and 7 answerable vectors sit after a `(register …)` in the
+	// same file, which affects imports rather than which module an unnamed invoke selects. So
+	// one slot is the whole state, and the day a named action becomes askable it arrives as
+	// its own Kind, where the classification decision is visible.
+	//
+	// curErr carries *why* there is no instance, so a run of assert_returns after a module
+	// that failed to instantiate reports the cause once per vector rather than an anonymous
+	// nil — and curStratum carries *whose* fault it was, which is what keeps 13991 encoder
+	// frontiers out of the interpreter's ceiling. See Stratum.
+	//
+	// curGated is the third state a module command can leave behind, and it is *not*
+	// derivable from the other two. A gate decline is not a defect, so an assert_return
+	// after one is a question the engine was never asked — but the module command already
+	// consumed its own decline into Result.Gated, and `cur == nil` cannot distinguish "the
+	// module was declined" from "the module was broken". Without this flag the 17 memory64
+	// vectors measured here would be *fails*, which is the third verdict leaking into the
+	// fail column one command downstream: correct behaviour marked red, and marked red in
+	// the interpreter's brand-new ceiling.
+	var cur Instance
+	var curErr error
+	curStratum := StratumUnset
+	curGated := false
 	for _, c := range s.Commands {
 		// The capability gap, computed before the verdict switch and ahead of every
 		// Kind: a command needing a component the engine lacks gets no verdict at all,
@@ -784,7 +1081,7 @@ func (s *Script) run(decode DecodeFunc, opts runOpts) *Result {
 		}
 		switch c.Kind {
 		case KindAssertMalformed:
-			err := decode(c.Module)
+			err := opts.Decode(c.Module)
 			got := ""
 			if err != nil {
 				got = err.Error()
@@ -795,7 +1092,7 @@ func (s *Script) run(decode DecodeFunc, opts runOpts) *Result {
 			// errors are feature-named and spec strings are not, that collision is
 			// unlikely rather than impossible. Order makes it impossible.
 			if isGated(err) {
-				r.Gated++
+				r.gate(c)
 				continue
 			}
 			// Substring matching, per decision 0003.
@@ -806,6 +1103,7 @@ func (s *Script) run(decode DecodeFunc, opts runOpts) *Result {
 			r.Fail++
 			r.Buckets[c.Expect] = append(r.Buckets[c.Expect], Failure{
 				Line: c.Line, Expect: c.Expect, Got: got, Kind: c.Kind,
+				Stratum: StratumBinary,
 			})
 
 		case KindModuleBinary:
@@ -813,19 +1111,28 @@ func (s *Script) run(decode DecodeFunc, opts runOpts) *Result {
 			// *valid*. Phase 1 only decodes, so this is a decode-must-succeed
 			// check — a weaker claim than the suite makes, and the honest thing
 			// is to score it rather than skip it.
-			err := decode(c.Module)
+			err := opts.Decode(c.Module)
 			if isGated(err) {
-				r.Gated++
+				// The instance is cleared on a gate decline too. An `assert_return`
+				// following a declined module must not run against the *previous*
+				// module's instance — it would score a real verdict from the wrong
+				// program, which is worse than reporting no instance.
+				cur, curErr, curStratum, curGated = nil, errNoInstance(c, "gate declined the module"), StratumBinary, true
+				r.gate(c)
 				continue
 			}
 			if err != nil {
+				cur, curErr, curStratum, curGated = nil, err, StratumBinary, false
 				r.Fail++
 				const key = "(module binary ...) must decode"
 				r.Buckets[key] = append(r.Buckets[key], Failure{
 					Line: c.Line, Expect: key, Got: err.Error(), Kind: c.Kind,
+					Stratum: StratumBinary,
 				})
 				continue
 			}
+			cur, curStratum, curErr = opts.instantiate(c)
+			curGated = isGated(curErr)
 			r.Pass++
 
 		case KindModuleQuote, KindModuleText, KindAssertMalformedText:
@@ -837,13 +1144,18 @@ func (s *Script) run(decode DecodeFunc, opts runOpts) *Result {
 			// caller declaring the capability without supplying the component. The risk the
 			// original named (the registry running ahead of the engine) survives its
 			// original subject, so the control is re-pointed rather than retired.
-			if opts.readText == nil {
+			if opts.ReadText == nil {
 				panic(fmt.Sprintf("%s:%d: CapWatReader declared but no ReadTextFunc was "+
 					"supplied; the capability registry is ahead of the engine", s.Path, c.Line))
 			}
-			err := opts.readText(c.Source)
+			err := opts.ReadText(c.Source)
 			if isGated(err) {
-				r.Gated++
+				// StratumText, not StratumBinary: the decline came out of ReadText. The
+				// binary arm above stamps StratumBinary for the same reason, and the two
+				// lines are otherwise identical, which is exactly the transposition hazard
+				// that named the layer at the site instead of deriving it.
+				cur, curErr, curStratum, curGated = nil, errNoInstance(c, "gate declined the module"), StratumText, true
+				r.gate(c)
 				continue
 			}
 			if c.Kind == KindModuleQuote || c.Kind == KindModuleText {
@@ -865,6 +1177,7 @@ func (s *Script) run(decode DecodeFunc, opts runOpts) *Result {
 				// the old ones. *Bucketed failures are the work plan*, and a plan needs to
 				// name which population it is about.
 				if err != nil {
+					cur, curErr, curStratum, curGated = nil, err, StratumText, false
 					r.Fail++
 					key := "(module quote ...) must read"
 					if c.Kind == KindModuleText {
@@ -872,9 +1185,20 @@ func (s *Script) run(decode DecodeFunc, opts runOpts) *Result {
 					}
 					r.Buckets[key] = append(r.Buckets[key], Failure{
 						Line: c.Line, Expect: key, Got: err.Error(), Kind: c.Kind,
+						Stratum: StratumText,
 					})
 					continue
 				}
+				// **The module command keeps its pass and the decline is carried forward.**
+				// A gate decline arriving from instantiation is not a verdict on the front
+				// end — ReadModule accepted the source, which is the right answer and is
+				// #124's ruling that the text front end stays gate-blind. Scoring the module
+				// command as `gated` here would move a pass the reader earned into the third
+				// verdict; scoring the downstream assert_return as `fail` would mark correct
+				// behaviour red. So the front end is scored on its own answer and the
+				// decline travels to the vector whose question it actually blocks.
+				cur, curStratum, curErr = opts.instantiate(c)
+				curGated = isGated(curErr)
 				r.Pass++
 				continue
 			}
@@ -893,7 +1217,119 @@ func (s *Script) run(decode DecodeFunc, opts runOpts) *Result {
 			r.Fail++
 			r.Buckets[c.Expect] = append(r.Buckets[c.Expect], Failure{
 				Line: c.Line, Expect: c.Expect, Got: got, Kind: c.Kind,
+				Stratum: StratumText,
 			})
+
+		case KindAssertReturn:
+			// Reachable only when a caller declares CapInterpreter, and the same
+			// re-pointed tripwire the text kinds carry: a declaration with no component
+			// is the registry ahead of the engine, and it must stop rather than score.
+			// Both halves are named, because an engine that can instantiate and not
+			// invoke is a real intermediate state and a nil deref is not a diagnosis.
+			if opts.Instantiate == nil || opts.Invoke == nil {
+				panic(fmt.Sprintf("%s:%d: CapInterpreter declared but no %s was supplied; "+
+					"the capability registry is ahead of the engine", s.Path, c.Line,
+					map[bool]string{true: "InstantiateFunc", false: "InvokeFunc"}[opts.Instantiate == nil]))
+			}
+			// No instance: the module command that should have produced one failed, was
+			// gate-declined, or never appeared. **Its own bucket, never the invoke's** —
+			// the module's failure is already counted where it happened, and charging the
+			// same defect to the interpreter's column would make this layer's work plan
+			// name a component that is not broken. *An error from the wrong layer is
+			// evidence about where structure was lost*, and here the harness knows the
+			// layer exactly, so it says so.
+			if cur == nil && curGated {
+				// The module this vector needs was declined for a feature, so the
+				// question was never asked — the same reason the module arms above
+				// count a decline rather than a failure, one command downstream.
+				// Checked *before* the fail branch for the reason a gate decline is
+				// checked before the substring match on the malformed arms: order is
+				// what makes the collision impossible rather than merely unlikely.
+				r.gate(c)
+				continue
+			}
+			if cur == nil {
+				r.Fail++
+				got := "no preceding module command produced an instance"
+				if curErr != nil {
+					got = curErr.Error()
+				}
+				// **Keyed by the failing module's error, and charged to its stratum**, not
+				// to a single "no instance" key charged to exec. That single key was
+				// written first and measured 13991 — one bucket, naming nothing, blaming
+				// the interpreter for the wat encoder's frontier. Keyed this way the same
+				// population reads as the encoder's opcode work list, which is what a work
+				// plan is for.
+				st := curStratum
+				if st == StratumUnset {
+					// No module command at all preceded this vector: nothing failed, the
+					// harness simply has nothing. Charged to exec as the layer that could
+					// not answer, and it stays a fail rather than becoming unsupported —
+					// classify already said the question is askable.
+					st = StratumExec
+				}
+				key := "no instance: " + got
+				r.Buckets[key] = append(r.Buckets[key], Failure{
+					Line: c.Line, Expect: "an instance from the preceding module command",
+					Got: got, Kind: c.Kind, Stratum: st,
+				})
+				continue
+			}
+			out, err := opts.Invoke(cur, c.Invoke, c.Args)
+			if isGated(err) {
+				r.gate(c)
+				continue
+			}
+			if err != nil {
+				r.Fail++
+				// Bucketed by the *engine's* error text rather than by a fixed key, which
+				// is the one place this arm's key differs from every other arm's and it is
+				// deliberate. Elsewhere the suite supplies an expected string and that
+				// string is the work plan; here the vector expects a *value*, so there is
+				// no expected string to bucket by and a single key would produce one
+				// bucket of thousands naming nothing. The engine's error is what
+				// partitions the work — `unsupported opcode 6a` is an issue, "invoke
+				// failed" is not.
+				//
+				// Untrimmed on purpose: `ErrUnsupportedOp` renders its own bytes, so the
+				// bucket keys are per-opcode and the column reads as the opcode work list
+				// exec.go's header promises.
+				key := err.Error()
+				r.Buckets[key] = append(r.Buckets[key], Failure{
+					Line: c.Line, Expect: fmt.Sprintf("%s(%s) = %s", c.Invoke, joinVals(c.Args), joinVals(c.Results)),
+					Got: key, Kind: c.Kind, Stratum: StratumExec,
+				})
+				continue
+			}
+			// Arity first, and as its own bucket: a result-count mismatch is a different
+			// defect from a wrong value, and folding it into the value comparison would
+			// report "want i32 1, got nothing" where the truth is that the engine returned
+			// two values.
+			if len(out) != len(c.Results) {
+				r.Fail++
+				const key = "assert_return result arity"
+				r.Buckets[key] = append(r.Buckets[key], Failure{
+					Line:    c.Line,
+					Expect:  fmt.Sprintf("%d results (%s)", len(c.Results), joinVals(c.Results)),
+					Got:     fmt.Sprintf("%d results (%s)", len(out), joinVals(out)),
+					Kind:    c.Kind,
+					Stratum: StratumExec,
+				})
+				continue
+			}
+			if bad := firstMismatch(c.Results, out); bad >= 0 {
+				r.Fail++
+				const key = "assert_return value mismatch"
+				r.Buckets[key] = append(r.Buckets[key], Failure{
+					Line:    c.Line,
+					Expect:  fmt.Sprintf("result %d of %s: %s", bad, c.Invoke, c.Results[bad]),
+					Got:     out[bad].String(),
+					Kind:    c.Kind,
+					Stratum: StratumExec,
+				})
+				continue
+			}
+			r.Pass++
 
 		default:
 			r.Unsupported++
@@ -918,4 +1354,67 @@ func (s *Script) run(decode DecodeFunc, opts runOpts) *Result {
 		}
 	}
 	return r
+}
+
+// instantiate calls the caller's InstantiateFunc, or reports that there is none.
+//
+// Nil is legitimate and common: every caller that scores only module and malformed forms
+// supplies no interpreter, and the module commands in those runs must still score. So a
+// missing InstantiateFunc leaves `cur` nil with a stated reason rather than panicking — the
+// panic belongs where a *declared* capability meets a nil component, which is the
+// KindAssertReturn arm, because that is where the declaration is being relied on.
+func (o runOpts) instantiate(c Command) (Instance, Stratum, error) {
+	// The stratum for the harness's *own* failures to instantiate. StratumExec is right
+	// here and wrong for the caller's errors: a missing InstantiateFunc is the interpreter
+	// being absent, where an encoder frontier is the encoder's.
+	if o.Instantiate == nil {
+		return nil, StratumExec, errNoInstance(c, "this run supplied no InstantiateFunc")
+	}
+	in, st, err := o.Instantiate(c)
+	if err != nil {
+		if st == StratumUnset {
+			// A caller that returns an error without naming its layer gets StratumExec
+			// rather than a silent zero, and the partition check names it. Charging it to
+			// exec is deliberately the *conservative* direction: it lands in the newest
+			// column, where an unexplained red is most likely to be looked at, rather than
+			// in a front end whose ceiling is 0 and whose blame would read as a regression.
+			st = StratumExec
+		}
+		return nil, st, err
+	}
+	if in == nil {
+		// A nil instance with a nil error would make the no-instance bucket report
+		// "instantiate succeeded" as the reason there is nothing to run — a lying
+		// witness. Normalized to an error at the boundary, so the bucket's Got is
+		// always a cause.
+		return nil, StratumExec, errNoInstance(c, "InstantiateFunc returned a nil instance and a nil error")
+	}
+	return in, StratumUnset, nil
+}
+
+func errNoInstance(c Command, why string) error {
+	return fmt.Errorf("no instance from the %s at line %d: %s", c.Kind, c.Line, why)
+}
+
+// firstMismatch returns the index of the first result that does not satisfy its
+// expectation, or -1.
+//
+// The *index* rather than a bool, so the failure names which result differed. A vector
+// returning several values with the third wrong is common in `const.wast`, and "want 1 2 3,
+// got 1 2 4" makes the reader do the diff the harness already did.
+func firstMismatch(want, got []Val) int {
+	for i := range want {
+		if !want[i].Matches(got[i]) {
+			return i
+		}
+	}
+	return -1
+}
+
+func joinVals(vs []Val) string {
+	parts := make([]string, len(vs))
+	for i, v := range vs {
+		parts[i] = v.String()
+	}
+	return strings.Join(parts, ", ")
 }

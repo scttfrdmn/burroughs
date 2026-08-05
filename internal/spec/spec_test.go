@@ -12,6 +12,7 @@ import (
 
 	"github.com/scttfrdmn/burroughs/internal/binary"
 	"github.com/scttfrdmn/burroughs/internal/gen"
+	"github.com/scttfrdmn/burroughs/internal/interp"
 	"github.com/scttfrdmn/burroughs/internal/testenv"
 	"github.com/scttfrdmn/burroughs/internal/text"
 )
@@ -174,8 +175,155 @@ func readText(src []byte) error { return text.ReadModule(src) }
 // the thing it exists to check.
 func isGated(err error) bool { return errors.Is(err, binary.ErrFeatureDisabled) }
 
+// instantiate is the interpreter's module entry point: it turns a scored module command into
+// something invoke can be called on.
+//
+// **It decodes a second time, and that is not waste.** The module arm has already asked
+// `decode` whether the image is well-formed — that is the *verdict*, and its answer is a
+// board number. This call wants the decoded module itself, which DecodeFunc deliberately
+// does not return: `func([]byte) error` is the shape it is because a harness holding a
+// `*binary.Module` would be a harness that imports the engine's representation. So the
+// duplication buys the neutrality, and it buys it at a cost the board can afford (one extra
+// decode per module command, ~2100 of them).
+//
+// The text path re-encodes rather than re-reading: `text.ReadModule` is error-only by design
+// (0011), so EncodeModule is the only path from wat source to an image. That is the same
+// second call the board's readText already made, for the same reason.
+func instantiate(c Command) (Instance, Stratum, error) {
+	return instantiateWith(binary.Features{}, c)
+}
+
+// instantiateWith is instantiate under a stated gate set.
+//
+// **The gate set has to reach this path, and the all-gates-on lane is what proved it.** The
+// lane replaces Engine.Decode and nothing else, so while this function called
+// `binary.DecodeModule` — the default-features helper — a module reaching the interpreter
+// through instantiation was decoded with every gate *off* no matter what the lane asked for.
+// 17 memory64 vectors were declined in the lane whose defining property is that nothing is
+// declined: `Gated must be 0` failed, naming the two files, which is the structural bound
+// working exactly as decision 0010's ruling says it must. A per-vector allowlist would have
+// absorbed them silently.
+//
+// Note which instrument found it. TestGatedVectors keys on `decode(c.Module)` and cannot see
+// this path at all — a text module has no `c.Module` — so the per-vector control was blind by
+// construction and the *structural* one was not. That is the argument for the all-on lane
+// restated by measurement rather than by claim.
+func instantiateWith(f binary.Features, c Command) (Instance, Stratum, error) {
+	image := c.Module
+	stratum := StratumBinary
+	if c.Kind != KindModuleBinary {
+		// **StratumEncode, not StratumText.** The module arm already asked ReadModule and
+		// scored its answer; this is EncodeModule, a different entry point with a different
+		// frontier, and charging its 13991 unemitted instruction bodies to the reader's
+		// column would raise a ceiling that is 0 and destroy the only instrument watching
+		// the reader for regressions.
+		stratum = StratumEncode
+		img, err := text.EncodeModule(c.Source)
+		if err != nil {
+			return nil, stratum, err
+		}
+		image = img
+		// Past the encoder, a failure is the decoder's — reading its own output.
+		stratum = StratumBinary
+	}
+	m, err := (&binary.Decoder{Features: f}).DecodeModule(image)
+	if err != nil {
+		return nil, stratum, err
+	}
+	return interp.New(m), StratumUnset, nil
+}
+
+// invoke is the interpreter's call entry point, and it is where the two value models meet.
+//
+// This function is the *one* legitimate place that knows both `spec.Val` and
+// `interp.Value` — the glue the ValKind doc comment names. The conversion is a bit-pattern
+// copy plus a type-tag map in both directions and nothing else: no float arithmetic, no
+// re-parsing, no NaN normalization. Anything cleverer here would be the harness recomputing
+// a value it was handed, which is how a comparator starts agreeing with itself.
+func invoke(in Instance, name string, args []Val) ([]Val, error) {
+	inst, ok := in.(*interp.Instance)
+	if !ok {
+		return nil, fmt.Errorf("instance is %T, not *interp.Instance", in)
+	}
+	vs := make([]interp.Value, len(args))
+	for i, a := range args {
+		t, ok := valType(a.Kind)
+		if !ok {
+			return nil, fmt.Errorf("argument %d has kind %v, which has no binary.ValType", i, a.Kind)
+		}
+		vs[i] = interp.Value{Type: t, Bits: a.Bits}
+	}
+	out, err := inst.Invoke(name, vs...)
+	if err != nil {
+		return nil, err
+	}
+	res := make([]Val, len(out))
+	for i, o := range out {
+		k, ok := valKind(o.Type)
+		if !ok {
+			// A result type the harness cannot name. Reported rather than mapped to a
+			// default, because a silent coercion here would make every v128 result
+			// compare as an i32 and the mismatch bucket would name the wrong defect.
+			return nil, fmt.Errorf("result %d has type %v, which the harness cannot represent", i, o.Type)
+		}
+		res[i] = Val{Kind: k, Bits: o.Bits}
+	}
+	return res, nil
+}
+
+// valType and valKind are the two directions of the value-type map, written as explicit
+// switches over both enums rather than as an arithmetic offset.
+//
+// A `binary.ValType(0x7f - k)` trick would work today and silently break the day either enum
+// gains a member — the enumerated-literal defect in its most tempting form, since the two
+// orderings genuinely do correspond right now. Both functions report `ok` rather than
+// defaulting, so an unmappable type is a named failure at the boundary.
+func valType(k ValKind) (binary.ValType, bool) {
+	switch k {
+	case KindI32:
+		return binary.I32, true
+	case KindI64:
+		return binary.I64, true
+	case KindF32:
+		return binary.F32, true
+	case KindF64:
+		return binary.F64, true
+	}
+	return binary.NoValType, false
+}
+
+func valKind(t binary.ValType) (ValKind, bool) {
+	switch t {
+	case binary.I32:
+		return KindI32, true
+	case binary.I64:
+		return KindI64, true
+	case binary.F32:
+		return KindF32, true
+	case binary.F64:
+		return KindF64, true
+	default:
+		// V128, FuncRef, ExternRef, NoValType: types the *harness* cannot name (see
+		// ValKind's four members). Reported as `false` so the caller says so rather than
+		// coercing — a silent map to KindI32 would make every v128 result compare as an
+		// i32 and bucket the wrong defect.
+		return 0, false
+	}
+}
+
+// engine is the board's engine description, in one place so that every board test scores
+// against the same set of components. A test that wants a narrower engine builds its own
+// Engine literal, which is visible at the call site rather than hidden in a positional
+// argument.
+func engine() Engine {
+	return Engine{
+		Decode: decode, ReadText: readText, IsGated: isGated,
+		Instantiate: instantiate, Invoke: invoke,
+	}
+}
+
 // run scores a script with gate declines separated from verdicts.
-func run(s *Script) *Result { return s.RunGated(decode, readText, isGated) }
+func run(s *Script) *Result { return s.RunGated(engine()) }
 
 // requireSuite gates every board test on the corpus actually being there.
 //
@@ -479,6 +627,47 @@ func TestGatedVectors(t *testing.T) {
 		"binary-gc.wast": {
 			1: "gc: an array type's fieldtype, whose mutability byte is what the vector asserts",
 		},
+
+		// # The interpreter's arrival opened a second decline path, and these are its 17
+		//
+		// Every entry is an `assert_return` whose module carries an **i64 index type** —
+		// `(memory i64 0)` at memory_grow64.wast:1 and :34, `(table $t64 i64 0 externref)` at
+		// table_grow64.wast:2 — which is memory64's defining feature. With the gate off the
+		// decoder must reject the module, so the vector's question is never asked and `gated`
+		// is the only honest verdict for it.
+		//
+		// **They are here because the trigger could reach them, and it could not before.**
+		// These declines happen at *instantiation*, on a wat module with no `c.Module` for the
+		// old re-derived trigger to decode — so they were invisible to this allowlist while
+		// being scored as **fails** one command downstream, in the interpreter's column, for a
+		// feature decision that is not the interpreter's. Two defects with one cause; see the
+		// GatedAt doc comment.
+		//
+		// Verified by reading the two module headers rather than by trusting that 17 declines
+		// in two files share one cause. Both are passed in the all-gates-on lane, where the
+		// memory64 gate is on and the vectors answer on the merits — so the parked verdict is
+		// earned there rather than deferred everywhere.
+		"memory_grow64.wast": {
+			41: "memory64: (memory i64 0) — an i64 index type",
+			42: "memory64: (memory i64 0) — an i64 index type",
+			43: "memory64: (memory i64 0) — an i64 index type",
+			44: "memory64: (memory i64 0) — an i64 index type",
+			45: "memory64: (memory i64 0) — an i64 index type",
+			46: "memory64: (memory i64 0) — an i64 index type",
+			53: "memory64: (memory i64 0) — an i64 index type",
+			54: "memory64: (memory i64 0) — an i64 index type",
+			55: "memory64: (memory i64 0) — an i64 index type",
+			56: "memory64: (memory i64 0) — an i64 index type",
+			57: "memory64: (memory i64 0) — an i64 index type",
+			58: "memory64: (memory i64 0) — an i64 index type",
+			59: "memory64: (memory i64 0) — an i64 index type",
+			60: "memory64: (memory i64 0) — an i64 index type",
+		},
+		"table_grow64.wast": {
+			12: "memory64: (table $t64 i64 0 externref) — an i64 index type",
+			17: "memory64: (table $t64 i64 0 externref) — an i64 index type",
+			25: "memory64: (table $t64 i64 0 externref) — an i64 index type",
+		},
 	}
 
 	files := boardFiles(t)
@@ -488,30 +677,34 @@ func TestGatedVectors(t *testing.T) {
 			t.Errorf("%s: parse: %v", f, err)
 			continue
 		}
-		// Re-run per command so a decline can be attributed to a line.
-		for _, c := range s.Commands {
-			if c.Kind == KindUnsupported {
-				continue
-			}
-			if !isGated(decode(c.Module)) {
-				continue
-			}
-			if _, ok := allowed[f][c.Line]; !ok {
+		// **Read off the board's own count, not re-derived by asking the decoder.**
+		//
+		// This loop used to be `for _, c := range s.Commands { if isGated(decode(c.Module))
+		// ... }`, which is a *second* trigger for the same concept — and it under-matched. It
+		// can only see a decline that happens at `c.Module`, so when the interpreter added the
+		// instantiation path (a **text** module declined for memory64, with no `c.Module` to
+		// ask about) 17 of the board's 33 declines were outside its reach entirely. The
+		// allowlist looked complete while covering half its population, and the 17 were
+		// simultaneously *fails* one command downstream. One concept, one trigger (#82); the
+		// run loop counts, and the control reads what it counted.
+		r := run(s)
+		if len(r.GatedAt) != r.Gated {
+			t.Errorf("%s: Gated is %d but GatedAt has %d lines; the counter and the list "+
+				"disagree, so this control is reading a subset it cannot name", f, r.Gated, len(r.GatedAt))
+		}
+		declined := make(map[int]bool, len(r.GatedAt))
+		for _, line := range r.GatedAt {
+			declined[line] = true
+			if _, ok := allowed[f][line]; !ok {
 				t.Errorf("%s:%d declined by a feature gate but is not in the allowed set;\n"+
 					"\tif the gate is right, add it with the feature named; if not, the decoder is over-gating and hiding a failure",
-					f, c.Line)
+					f, line)
 			}
 		}
 		// The reverse: a stale entry would claim a decline that no longer happens,
 		// overstating how much the gates are doing.
 		for line := range allowed[f] {
-			var found bool
-			for _, c := range s.Commands {
-				if c.Line == line && isGated(decode(c.Module)) {
-					found = true
-				}
-			}
-			if !found {
+			if !declined[line] {
 				t.Errorf("%s:%d is in the allowed-gated set but is no longer declined; remove the entry", f, line)
 			}
 		}
@@ -771,7 +964,8 @@ func allFeaturesOn(t *testing.T) binary.Features {
 func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	requireSuite(t)
 
-	d := &binary.Decoder{Features: allFeaturesOn(t)}
+	allOn := allFeaturesOn(t)
+	d := &binary.Decoder{Features: allOn}
 	decodeAllOn := func(image []byte) error {
 		_, err := d.DecodeModule(image)
 		return err
@@ -788,7 +982,14 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 		// Still RunGated, deliberately: the point is to *measure* Gated and require
 		// it to be zero. Using Run would fold declines into Fail and the requirement
 		// would be unfalsifiable — the counter it asserts on could not be nonzero.
-		r := s.RunGated(decodeAllOn, readText, isGated)
+		e := engine()
+		e.Decode = decodeAllOn
+		// The instantiation path takes the lane's gates too — see instantiateWith for
+		// why this line exists and what its absence cost.
+		e.Instantiate = func(c Command) (Instance, Stratum, error) {
+			return instantiateWith(allOn, c)
+		}
+		r := s.RunGated(e)
 		t.Log("\n" + r.Board())
 		totalPass, totalFail, totalGated = totalPass+r.Pass, totalFail+r.Fail, totalGated+r.Gated
 
@@ -839,7 +1040,14 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	// **Now slack-checked** (decision 0013): a floor that drifts 3380 behind its
 	// measurement is a failure, not a habit lapse. boardBound asserts both directions, and
 	// the error it raises on the upper side names the raise it wants.
-	const allOnPassFloor = 4178
+	// **4178 → 17939, and the gap to the default lane's 17923 is the 16 this lane is for.**
+	// The interpreter raises both floors by the same 13761; what makes this lane's number
+	// larger is the same set of gated vectors it always was, now including the 17 memory64
+	// modules that reach the interpreter through instantiation. Those 17 are `gated` on the
+	// default board and *answered* here, which is the deferral-cannot-become-a-disappearance
+	// property working on a path it could not previously see — see instantiateWith for the bug
+	// this lane caught in the course of it.
+	const allOnPassFloor = 17939
 	boardBound(t, "allOnPassFloor", totalPass, allOnPassFloor, boardBoundSlack, floorBound,
 		"a gated feature regressed, which the Gated==0 assertion above cannot see: with every "+
 			"gate on, a broken feature turns a pass into a fail and leaves Gated at zero")
@@ -976,7 +1184,18 @@ func TestPhase1Files(t *testing.T) {
 	// capability that lands moves the actual further below the ceiling, so the gap grows on
 	// exactly the schedule of ordinary progress. boardBound measures the distance in the
 	// direction that applies to a ceiling.
-	const unsupportedCeiling = 60872
+	//
+	// **60872 → 32764, and this is the first time this number has fallen for the reason it
+	// was built to measure.** Both previous movements were the corpus growing; this one is
+	// 28108 vectors *answered*, because `assert_return` stopped being a head the classifier
+	// records and became a command the harness can ask. The whole fall is one head: 52638
+	// assert_return commands were unsupported, 24530 still are — the shapes assertReturn
+	// declines, which it declines structurally and says so at each arm — and 28108 now get a
+	// verdict. Nothing else moved; the corpus is the same 253 files.
+	//
+	// The lowering is the record of the progress, per the standing rule, and it is lowered
+	// **in the PR that drained it** rather than left as slack for a later reader to notice.
+	const unsupportedCeiling = 32764
 	boardBound(t, "unsupportedCeiling", totalUnsup, unsupportedCeiling, boardBoundSlack, ceilingBound,
 		"either a capability regressed or the corpus moved; both need an explanation rather "+
 			"than a raised ceiling")
@@ -1038,55 +1257,81 @@ func TestPhase1Files(t *testing.T) {
 	// would be the disappearance guard 6 exists to prevent, one layer up.
 	//
 	// What would have been invisible is a single ceiling of 601, which is why the
-	// ceiling is now **two ceilings over a structural partition**: a new decoder defect
-	// arrives as `binaryFail 2 > 1` regardless of what the text column is doing. The
-	// partition is on Failure.Kind rather than on the bucket string because the two
-	// layers share strings — `malformed UTF-8 encoding` is a bucket on both sides — and
-	// *when a partition's members share a value, an equality on that value is not a
-	// partition check*.
+	// ceiling is now **four ceilings over a structural partition**: a new decoder defect
+	// arrives as `binaryFail 1 > 0` regardless of what the other three columns are doing.
+	// The partition is not on the bucket string because the layers share strings —
+	// `malformed UTF-8 encoding` is a bucket on both front ends — and *when a partition's
+	// members share a value, an equality on that value is not a partition check*.
+	//
+	// **The key is Failure.Stratum, not Failure.Kind, and the change of key is #7's first
+	// finding rather than a refactor.** Kind worked as the partition key for exactly as
+	// long as every failure was caused by the command it was reported against. An
+	// `assert_return` breaks that identity: the *command* is an assert_return, and the
+	// *defect* belongs to whichever component failed to produce the instance. Measured at
+	// this revision, **13991 of the 14347 fails are `assert_return`s whose module never
+	// instantiated, and every one of them is text.EncodeModule's instruction frontier
+	// (#8)** — so a Kind-keyed switch would have charged 13991 encoder gaps to the
+	// interpreter's brand-new ceiling and reported the wrong stratum as broken on the day
+	// the interpreter landed. That is the same defect as #69's `default` arm, one layer
+	// deeper: not a Kind assigned to the wrong column, but a *column that cannot be
+	// derived from Kind at all*.
+	//
+	// So the stratum is **stated at the failure site** by the code that knows which entry
+	// point returned the error, never derived here. Deriving it is precisely what put 13
+	// text reds in the decoder's column in #69.
 	//
 	// Falsified in both directions before being trusted, per the print-don't-trust rule:
-	// with the operands of the Kind test swapped, binaryFail reads 600 and textFail 1,
-	// and both arms fail. That is the check TestSectionSizeBothSigns's grave (#34) asks
+	// with StratumEncode's arm folded into StratumExec, execFail reads 14347 and encodeFail
+	// 0, and both arms fail. That is the check TestSectionSizeBothSigns's grave (#34) asks
 	// for — a partition test verified against the partition, not against its labels.
-	// **Both arms are named, and neither is a `default`.** This switch used to send the
-	// text kinds one way and everything else to `default`, and #69 broke it in the one run
-	// before this rewrite: KindModuleText landed in `default`, so 13 *text* reds were
-	// reported as **decoder** failures and tripped binaryFailCeiling at 14. The instrument
-	// whose entire purpose is keeping the two layers apart mixed them — *an error from the
-	// wrong layer is evidence about where structure was lost*, pointed at a test rather
-	// than at the engine.
 	//
-	// A `default` arm is what made that silent: it absorbs every Kind added later and
-	// assigns it a layer by omission. So both arms are explicit and an unrecognized kind is
-	// a **loud failure** rather than a decoder failure. That is the same move as the
-	// unregistered-capability panic — a classification the harness did not decide is a stop,
-	// not a quietly larger number.
-	binaryFail, textFail := 0, 0
+	// **Every arm is named and none is a `default`.** A `default` absorbs every stratum
+	// added later and assigns it a layer by omission; StratumUnset is a loud failure rather
+	// than a quietly larger number, which is the same move as the unregistered-capability
+	// panic.
+	binaryFail, textFail, encodeFail, execFail := 0, 0, 0, 0
 	for _, fs := range aggBuckets {
 		for _, f := range fs {
-			switch f.Kind {
-			case KindModuleQuote, KindModuleText, KindAssertMalformedText:
-				textFail++
-			case KindModuleBinary, KindAssertMalformed:
+			switch f.Stratum {
+			case StratumBinary:
 				binaryFail++
-			case KindUnsupported:
+			case StratumText:
+				textFail++
+			case StratumEncode:
+				// **A column of its own, not folded into StratumText** (#8). ReadModule
+				// answers 253 files' module forms with 0 reds; EncodeModule cannot yet emit
+				// most instruction bodies. Folding them would raise the reader's ceiling
+				// from 0 to 13991 and destroy the only instrument watching the reader for
+				// regressions — one instrument per component, or neither is an instrument.
+				encodeFail++
+			case StratumExec:
+				// **A fourth partition, not a third arm on an existing one** (#7). The
+				// others are the front ends; this is the execution layer, and merging it
+				// into any of them would charge one layer's reds to another layer's ceiling.
+				execFail++
+			case StratumUnset:
+				t.Errorf("failure at line %d (%q, kind %v) carries no stratum — the site "+
+					"that reported it did not say which component failed, so its red would "+
+					"be charged to whichever ceiling this switch defaulted to",
+					f.Line, f.Expect, f.Kind)
+			default:
+				t.Errorf("failure of unhandled stratum %v at line %d (%q) — a new Stratum "+
+					"was added without a ceiling under it", f.Stratum, f.Line, f.Expect)
+			}
+			if f.Kind == KindUnsupported {
 				t.Errorf("a KindUnsupported command produced a failure bucket entry at "+
 					"line %d (%q); unsupported commands are not scored, so this is the "+
 					"run loop losing track of a verdict", f.Line, f.Expect)
-			default:
-				t.Errorf("failure of unhandled kind %v at line %d (%q) — a new Kind was "+
-					"added without assigning it to the binary or text arm, so its "+
-					"failures would have been charged to whichever ceiling this switch "+
-					"defaulted to", f.Kind, f.Line, f.Expect)
 			}
 		}
 	}
-	if binaryFail+textFail != totalFail {
-		t.Errorf("fail partition sums to %d but the column is %d; a failure escaped both "+
-			"arms, so one of the two ceilings below is watching a subset it cannot name",
-			binaryFail+textFail, totalFail)
+	if binaryFail+textFail+encodeFail+execFail != totalFail {
+		t.Errorf("fail partition sums to %d but the column is %d; a failure escaped every "+
+			"arm, so one of the four ceilings below is watching a subset it cannot name",
+			binaryFail+textFail+encodeFail+execFail, totalFail)
 	}
+	t.Logf("  fail by stratum: binary %d, text %d, encode %d, exec %d",
+		binaryFail, textFail, encodeFail, execFail)
 
 	// **0 at the measured revision, and it was 1 for the whole life of this ceiling.**
 	// The one member was binary-gc.wast:1, reported as "malformed function type: 0x5e"
@@ -1490,6 +1735,75 @@ func TestPhase1Files(t *testing.T) {
 	boardBound(t, "textFailCeiling", textFail, textFailCeiling, 0, ceilingBound,
 		"either the reader regressed on vectors it used to answer, or the corpus moved")
 
+	// # The encoder's ceiling — 13974, and it is the largest single number on the board
+	//
+	// **This column exists because the interpreter's arrival created it, and it is the reason
+	// Stratum replaced Kind as the partition key.** Every member is an `assert_return` whose
+	// module `text.EncodeModule` could not emit, so the vector reaches the interpreter with no
+	// instance to run against. The command is an assert_return; the defect is the encoder's.
+	// Charged by Kind, all 13974 would have landed on `execFail` and reported the interpreter
+	// as 40× more broken than it is, on the day it was born.
+	//
+	// A **work plan with a ceiling**, not a defect count — the same shape textFailCeiling had
+	// at 391. The buckets printed above are the order to take them in, and they are keyed by
+	// the encoder's own message, so the column reads as #8's instruction work list:
+	//
+	//	8661  i32.load8_u immediates      1067  call_indirect        1054  block
+	//	 600  loop                         405  ref.null              336  if
+	//	 318  select                       312  i64.load8_u           221  table.init
+	//	 201  memory.init                  148  i32.store8            120  i32.store
+	//	 103  f32.load                     103  f64.load               49  i32.load
+	//	  42  return_call_indirect          41  br_table               23  array.copy
+	//	  23  array.init_data           …and 17 more, all #8, plus 3 for #77
+	//
+	// The memory-instruction buckets dominate because `address*.wast` and `memory_copy*.wast`
+	// are per-offset sweeps: 4320 vectors each in the two memory_copy files.
+	//
+	// **Separate from textFailCeiling, and the separation is load-bearing.** `text.ReadModule`
+	// answers all 253 files' module forms with **0** reds; `text.EncodeModule` cannot emit most
+	// instruction bodies. Folding them would take the reader's ceiling from 0 to 13974 and
+	// destroy the only instrument watching the reader for regressions — one instrument per
+	// component, or neither is an instrument. They are two entry points in one package, which
+	// is exactly the case a Kind-keyed partition cannot express and a stated stratum can.
+	//
+	// Slack 0 like the two above: it may only fall, and it falls as #8 lands.
+	const encodeFailCeiling = 13974
+	boardBound(t, "encodeFailCeiling", encodeFail, encodeFailCeiling, 0, ceilingBound,
+		"the wat encoder lost ground: either it stopped emitting an instruction it used to "+
+			"emit, or the corpus moved. This ceiling is deliberately not shared with the text "+
+			"column so an encoder regression cannot hide behind ReadModule's zero")
+
+	// # The interpreter's ceiling — 356, the whole of it #7's opcode work list
+	//
+	// **The first ceiling this project has had over executed code.** Every member is a vector
+	// that reached `interp.Invoke` and got an error, bucketed by that error's own text, which
+	// `ErrUnsupportedOp` renders with its bytes — so the column is per-opcode and reads as the
+	// arms exec.go's switch still owes:
+	//
+	//	86  3f memory.size    52  40 memory.grow   26  0f return    7  23 global.get
+	//	25  fc 03             24  fc 04            24  fc 06       23  fc 07
+	//	22  fc 00             22  fc 02            21  fc 01       19  fc 05
+	//	 3  fc 10              2  10 call
+	//
+	// Two things this ceiling is *not*. It is not the interpreter's total exposure: 13974
+	// vectors never reach it at all, held upstream by encodeFailCeiling, so this number will
+	// **rise** as #8 lands and more modules instantiate. That is the honest direction and it is
+	// stated here so the rise is not read as a regression — but a ceiling cannot express "may
+	// rise for a good reason", so when #8 moves it this constant is re-based *with the
+	// instruction that unblocked it named*, exactly as textFailCeiling was re-based stepwise.
+	//
+	// And it is not a defect count either. `interp: no arm for opcode 3f` is a stratum boundary
+	// honestly declared, the same category as the text reader's named boundaries — a vector the
+	// engine reached and could not answer, reported as a fail with a bucket rather than hidden
+	// behind a fourth verdict. *Bucketed failures are the work plan.*
+	//
+	// Slack 0.
+	const execFailCeiling = 356
+	boardBound(t, "execFailCeiling", execFail, execFailCeiling, 0, ceilingBound,
+		"the interpreter answered fewer vectors than it did: either an opcode arm regressed or "+
+			"a value comparison started disagreeing. A *rise* caused by #8 unblocking more "+
+			"modules is legitimate and gets this constant re-based with the instruction named")
+
 	// Pass floor over the whole board, the counterpart to TestBinaryWast's per-file
 	// floor.
 	//
@@ -1638,7 +1952,31 @@ func TestPhase1Files(t *testing.T) {
 	// rejected and the file's leading must-succeed module went with it. Same over-rejection shape
 	// as the `foldedBlock` measurement two paragraphs up, and the same reason it is visible here:
 	// one rejected legal module is one pass, and rejecting legal input is what this floor watches.
-	const passFloor = 4162
+	// # 4162 → 17923, and 13761 of those are values the engine computed
+	//
+	// **The first movement on this floor that is not about a front end.** Every raise above was
+	// a rejector installed or an over-rejection repaired; this one is 13761 `assert_return`
+	// vectors where a function ran and returned the bits the suite asked for. The floor's
+	// character changes with it: up to here it watched for over-rejection, and it now watches
+	// for that *plus* an interpreter that starts computing a different answer.
+	//
+	// The number is not decomposed further because the decomposition that matters is the
+	// **fail** side's — an interpreter that returns a wrong value produces a member of
+	// `assert_return value mismatch`, and there are **0** of those. That zero is the sharper
+	// claim: 13761 vectors compared bit-for-bit against expectations read by an independent
+	// literal reader (see value.go for why the reader is independent, and grave #106 for the
+	// echo it exists to avoid), and not one disagreed.
+	//
+	// Falsified by perturbing `binI32`'s 0x6a arm to `a + b + 1`, and the measurement corrected
+	// this paragraph's first draft. It predicted the bucket would fill "while this floor barely
+	// moves" — reasoning from the 13761-vector slack rather than from the mechanism, and wrong,
+	// because a floor fails on *any* drop regardless of slack. What actually ran: 10 vectors
+	// into `assert_return value mismatch`, `execFail` 356 → 366 tripping execFailCeiling, and
+	// this floor 17923 → 17913, failing. Three instruments, three fails, and the sharpest is
+	// the ceiling — 10 against a bound of 356 versus 10 against a floor of 17923. Stated
+	// because a floor that claims to be the evidence for a property it is the weakest witness
+	// to is overclaiming.
+	const passFloor = 17923
 	boardBound(t, "passFloor", totalPass, passFloor, boardBoundSlack, floorBound,
 		"a regression in a grammar that used to answer, or the corpus moved")
 }
@@ -1906,7 +2244,7 @@ func TestQuoteFormsHaveTheirReader(t *testing.T) {
 				t.Errorf("panic does not name the missing component: %v", v)
 			}
 		}()
-		_ = s.RunWith(decode, nil, isGated, CapWatReader)
+		_ = s.RunWith(Engine{Decode: decode, IsGated: isGated, Has: []Capability{CapWatReader}})
 	}()
 }
 

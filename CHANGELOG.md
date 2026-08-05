@@ -21,6 +21,54 @@ weakly-ordered platform.
 
 ### Added
 
+- **`internal/interp`: the interpreter, and the first instruction Burroughs ever executed**
+  ([#7](https://github.com/scttfrdmn/burroughs/issues/7), 0002). Decoder → internal form →
+  execution, over the 139-opcode numeric core: constants, locals, drop/nop/unreachable, the full i32
+  and i64 arithmetic and comparison sets, the f32/f64 sets, and the conversions. The board's fourth
+  column stops being hypothetical — **`assert_return` falls 52638 → 24530 unsupported**, and the
+  whole 60872 → 32764 movement in the unsupported column is that one head.
+
+  The opcode set is what a measurement recommended rather than what was easy. The numeric core makes
+  **13671** `assert_return` commands answerable; adding all of block/loop/if/br/br_if/br_table/
+  return/call/call_indirect takes that to **13699**, `select` adds **zero**, and globals add **7** —
+  so the structural instructions are not what the board is waiting on. The remaining ~38900 sit
+  behind the text encoder's instruction frontier (#8) and behind v128 and reference types.
+
+  0002's three pinned choices are implemented as pinned, each with its measurement at the site: a
+  **giant switch** rather than a closure table (21.5µs and 72 B/op against the switch's 11.9µs — the
+  form that looks like a dispatch table is both slower and allocating on the workload §1 names, and
+  `internal/interp/dispatchbench` keeps the reproducer so the negative is not re-derived); `[]Instr`
+  **is** the program, walked by an index a branch target will write to, with no second lowering; and
+  the value stack is **bare `uint64` slots plus a pinned parallel reference array**, empty throughout
+  v0 and declared rather than discovered.
+
+  **Three error kinds, because the suite scores them in opposite directions.** `Trap` carries the
+  spec's own trap texts (an `assert_trap` matches against them); `ErrUnsupportedOp` names the
+  engine's own gap by opcode, so the fail bucket for this layer reads as a work list keyed by
+  instruction; `ErrNotValidated` is the layering debt for what #9 would have rejected, and it must
+  never render as a spec verdict — `type mismatch` is the validator's string, and reporting it from
+  here would put #9's answer where #9 cannot be tested from. `Instantiate` **cannot fail** for the
+  same reason: every failure a real instantiation reports is a validation verdict.
+
+- **`spec.TestHarnessAndEngineLiteralReadersAgree`: the second opinion, cross-checked over the
+  corpus's own spellings** ([#7](https://github.com/scttfrdmn/burroughs/issues/7), 0007). The harness
+  reads an `assert_return`'s expected literal with `readConst`, derived independently from the
+  reference's fxx.ml/ixx.ml; `internal/text` reads the module's constants with its own. 13670 of the
+  13671 answerable vectors get their module from wat source, so without a cross-check a conversion
+  bug would shift both sides together and the vector would pass by construction — grave #106's shape,
+  landing hardest on `const.wast` and `float_literals.wast`, whose entire purpose is literal
+  conversion.
+
+  It compares on **6498 distinct `(TYPE.const LEXEME)` spellings read verbatim out of the `.wast`
+  files**, each compiled into a one-instruction module whose return value *is* the engine's
+  conversion of that exact text. The rejected design rendered a `Val` back to a lexeme and
+  round-tripped it, which exercises one canonical form per value and never `0xa0ff.f141a59a`,
+  `nan:0x200000`, `1_000_000` or `+0x1p-149` — the spellings that matter. Comparison is on `Bits`,
+  never `Matches`, because `Matches` admits the NaN classes and would let a payload disagreement pass
+  as a class agreement. A legality disagreement is an **error, not a skip**: a spelling the harness
+  converts and the engine rejects is an over-rejection, the class no reject-direction corpus can
+  falsify. It found grave #125 on its first run.
+
 - **`internal/text/code.go`: the code section and its companion the function section — #8's largest
   bucket, and #7's door** ([#8](https://github.com/scttfrdmn/burroughs/issues/8), 0011 part 2). The
   parser starts *retaining*: every reader in `instr.go` was called for its error and its value
@@ -1757,6 +1805,37 @@ weakly-ordered platform.
   skip ([#29](https://github.com/scttfrdmn/burroughs/issues/29)).
 
 ### Fixed
+
+- **`i32.const` did not occupy its slot: the four `const` opcodes shared one arm, and 114 spellings
+  converted wrongly with the board unmoved**
+  ([grave #125](https://github.com/scttfrdmn/burroughs/issues/125)). The decoder stages an s32
+  immediate **sign-extended to 64 bits** (`immS32`), while an i32 slot is defined as the low 32 bits
+  with the high bits *zero* — `i32.const -1` is `0xFFFFFFFF`, not `0xFFFFFFFFFFFFFFFF`. One
+  `case 0x41, 0x42, 0x43, 0x44` pushing `Imm0` unexamined is correct for three of them and wrong for
+  the fourth, on every negative constant.
+
+  **The board could not see it, and that is the entry's point.** 114 of the corpus's 6498 distinct
+  const spellings were wrong and the pass count moved by nothing: 17923/14330/32764 before the fix
+  and after it, byte-identical. Two reasons compounded — the vectors that would have compared a
+  negative i32 were already failing on the encoder's instruction frontier (#8), and the ones that were
+  not compare against `spec.readIntLit`, a *second* reader that was right. So the defect was
+  simultaneously live and invisible, which is exactly the accept-direction class §9 G-3 names and the
+  reason two independently-derived literal readers are worth their duplication. What found it was
+  `TestHarnessAndEngineLiteralReadersAgree` on its first run. The engine agreeing with itself is not
+  evidence.
+
+  **The tell was a comment asserting the property its code lacked.** The arm's own header said the
+  decoder stages i32.const sign-extended *and* that pushing `Imm0` unexamined was correct — two claims
+  that cannot both hold — so every reviewer who checked the code against its documentation found
+  agreement. *The defect stated as the rule*, which is the strongest camouflage a bug can wear.
+
+  The reproducer is `TestI32ConstOccupiesItsSlotZeroExtended`, partitioned by *observation path* out
+  of the slot rather than by input, because a fix that truncated at `Invoke` would satisfy a
+  boundary-only assertion and leave the stack wrong. Falsifying it corrected the test's own
+  documentation: the draft called `i64.extend_i32_u` the sharpest witness, and reintroducing the
+  defect showed it green — `extend_i32_u` goes through `popI32`, which truncates, so every path
+  through the `popI32`/`pushI32` helpers was protected all along. Three rows fail (direct,
+  through-a-local, the hex spelling), the rest mark where the damage stopped.
 
 - **Two accept-direction defects in the code section, both caught by the wabt corpus at one byte and
   invisible to all 4162 vectors** ([#8](https://github.com/scttfrdmn/burroughs/issues/8),

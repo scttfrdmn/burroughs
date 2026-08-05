@@ -164,12 +164,12 @@ func TestParseAnnotationTokenSoup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-	r := s.RunWith(
-		func([]byte) error { return nil },
-		func([]byte) error { return nil },
-		func(error) bool { return false },
-		CapWatReader,
-	)
+	r := s.RunWith(Engine{
+		Decode:   func([]byte) error { return nil },
+		ReadText: func([]byte) error { return nil },
+		IsGated:  func(error) bool { return false },
+		Has:      []Capability{CapWatReader},
+	})
 	if r.Pass != 1 || r.Unsupported != 0 {
 		t.Errorf("got %d pass, %d unsupported; want 1/0 — the bare module form is scored "+
 			"since #69", r.Pass, r.Unsupported)
@@ -243,7 +243,13 @@ func TestClassifyAndRun(t *testing.T) {
 		// can now ask this question, which is exactly what separates the fourth
 		// verdict from the third.
 		KindAssertMalformedText,
-		KindUnsupported, // assert_return is phase 2
+		// And the same sentence a second time, for the interpreter (#7). This was
+		// KindUnsupported with the comment "assert_return is phase 2" from the harness's
+		// first commit until an instruction executed; it is now the narrow invoke shape
+		// assertReturn admits, carrying Needs: CapInterpreter. The expectation changing
+		// here is the classification seam moving, which is what a capability landing looks
+		// like from the classifier's side.
+		KindAssertReturn,
 	}
 	for i, k := range want {
 		if s.Commands[i].Kind != k {
@@ -260,30 +266,59 @@ func TestClassifyAndRun(t *testing.T) {
 	if len(s.Commands[3].Source) == 0 {
 		t.Error("quote command carried no Source; the run loop would have nothing to read")
 	}
+	if got := s.Commands[4].Needs; got != CapInterpreter {
+		t.Errorf("assert_return Needs = %q, want %q", got, CapInterpreter)
+	}
+	// The action, read at classification time rather than at run time — which is what lets
+	// Needs be *derived* from the command (guard 1) and keeps the run loop free of grammar.
+	if got := s.Commands[4].Invoke; got != "f" {
+		t.Errorf("assert_return Invoke = %q, want %q", got, "f")
+	}
+	if got := s.Commands[4].Results; len(got) != 1 || got[0] != (Val{Kind: KindI32, Bits: 1}) {
+		t.Errorf("assert_return Results = %v, want [i32 1]", got)
+	}
 
-	// A decoder that satisfies both malformed assertions and the valid module, and a
-	// reader that produces the expected text for the quote form.
+	// A decoder that satisfies both malformed assertions and the valid module, a reader
+	// that produces the expected text for the quote form, and a stub interpreter that
+	// answers the invoke.
 	//
-	// The reader is *supplied* here where the pre-retirement version of this test used
-	// the bare Run: a caller that declares CapWatReader and hands over nothing panics
-	// rather than scoring, which is the tripwire re-pointed at the case still available
+	// Every component is *supplied* here where the pre-retirement version of this test used
+	// the bare Run: a caller that declares a capability and hands over nothing panics rather
+	// than scoring, which is the tripwire re-pointed at the case still available
 	// (TestQuoteFormsHaveTheirReader asserts that panic directly).
-	r := s.RunWith(func(image []byte) error {
-		if len(image) < 8 {
-			return errString("unexpected end")
-		}
-		if !bytes.Equal(image[:4], []byte{0x00, 'a', 's', 'm'}) {
-			return errString("magic header not detected")
-		}
-		return nil
-	}, func([]byte) error { return errString("unexpected token") }, nil, CapWatReader)
-	// 4 pass, 1 unsupported (assert_return), 0 unimplemented. The quote vector's
-	// verdict is the retirement: it was `unimplemented` while no reader existed, and a
-	// component landing without draining its column is the disappearance guard 6 exists
-	// to prevent (decision 0010).
-	if r.Pass != 4 || r.Fail != 0 || r.Unsupported != 1 || r.Unimplemented != 0 {
-		t.Errorf("got %d pass, %d fail, %d unsupported, %d unimplemented; want 4/0/1/0",
-			r.Pass, r.Fail, r.Unsupported, r.Unimplemented)
+	//
+	// The interpreter is a stub rather than the real one, deliberately: this test's subject
+	// is *classification and scoring*, and a real `interp.Instance` would make it fail
+	// whenever the engine's opcode coverage moved. The board tests are where the real engine
+	// is scored.
+	r := s.RunWith(Engine{
+		Decode: func(image []byte) error {
+			if len(image) < 8 {
+				return errString("unexpected end")
+			}
+			if !bytes.Equal(image[:4], []byte{0x00, 'a', 's', 'm'}) {
+				return errString("magic header not detected")
+			}
+			return nil
+		},
+		ReadText:    func([]byte) error { return errString("unexpected token") },
+		Instantiate: func(Command) (Instance, Stratum, error) { return "stub", StratumUnset, nil },
+		Invoke: func(_ Instance, name string, _ []Val) ([]Val, error) {
+			if name != "f" {
+				return nil, errString("unknown export " + name)
+			}
+			return []Val{{Kind: KindI32, Bits: 1}}, nil
+		},
+		Has: []Capability{CapWatReader, CapInterpreter},
+	})
+	// 5 pass, 0 unsupported, 0 unimplemented. Two retirements are visible in that line:
+	// the quote vector, which was `unimplemented` while no reader existed, and the
+	// assert_return, which was `unsupported` until the interpreter landed. A component
+	// landing without draining its column is the disappearance guard 6 exists to prevent
+	// (decision 0010).
+	if r.Pass != 5 || r.Fail != 0 || r.Unsupported != 0 || r.Unimplemented != 0 {
+		t.Errorf("got %d pass, %d fail, %d unsupported, %d unimplemented; want 5/0/0/0\n%s",
+			r.Pass, r.Fail, r.Unsupported, r.Unimplemented, r.Board())
 	}
 	if len(r.UnimplementedByCapability) != 0 {
 		t.Errorf("fourth verdict populated after retirement: %v", r.UnimplementedByCapability)
