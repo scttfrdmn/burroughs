@@ -1,6 +1,7 @@
 package interp
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/scttfrdmn/burroughs/internal/binary"
@@ -225,3 +226,80 @@ func TestI64AndFloatConstsArePushedVerbatim(t *testing.T) {
 func negZero32() float32 { var z float32; return -1 / (1 / z) }
 
 func negZero64() float64 { var z float64; return -1 / (1 / z) }
+
+// TestFrameLocalsCeilingRefusesRatherThanAllocating is grave #138's execution-side half.
+//
+// The decoder no longer expands a local count, so the flat vector's cost moved here — to the one
+// consumer that genuinely needs slots. Moving a hazard is not fixing it, and this is the assertion
+// that it was bounded rather than relocated: a body declaring 0xFFFFFFFE locals is a **well-formed
+// module the reference runs**, and at eight bytes a slot its frame is 32 GiB.
+//
+// # What each half of the partition is for
+//
+// The refusal must be an *engine limit*, and the three candidate errors are not
+// interchangeable — this is the same distinction ErrUnsupported was carved for:
+//
+//   - ErrNotValidated would blame the module, and the module is valid.
+//   - A Trap would claim a spec-defined outcome the spec does not give for this module.
+//   - ErrUnsupported names the engine's own ceiling, which is the true fact.
+//
+// So the sentinel is asserted, not just the failure. A test checking only `err != nil` would pass
+// on all three and the board's buckets would key on a wrong cause — the bucketed-failures
+// discipline pointed at this layer.
+//
+// The accepting row is the half with teeth in the other direction: a ceiling that refused
+// *everything* would also pass an err-is-not-nil test, and 1024 locals is an ordinary function.
+// Built by hand rather than through `run1`, because the point is a count no text source can spell
+// without also being megabytes of tokens — which is exactly the asymmetry the grave is about.
+func TestFrameLocalsCeilingRefusesRatherThanAllocating(t *testing.T) {
+	// A module whose single exported function declares `n` locals in one group. Hand-built
+	// (see above), and the body is a bare END so nothing but the frame is exercised.
+	build := func(n uint32) *binary.Module {
+		return &binary.Module{
+			Types: []binary.CompType{{Kind: binary.CompFunc}},
+			Funcs: []binary.Func{{
+				TypeIndex: 0,
+				Locals:    []binary.LocalGroup{{Count: n, Type: binary.I32}},
+				Body:      []binary.Instr{{Op: 0x0b}},
+			}},
+			Exports: []binary.Export{{Name: "c", Kind: binary.ExternFunc, Index: 0}},
+		}
+	}
+
+	for _, tc := range []struct {
+		name    string
+		n       uint32
+		wantErr error
+	}{
+		// An ordinary function. Well inside the ceiling, and its presence is what stops a
+		// blanket refusal from passing this test.
+		{name: "ordinary", n: 1024, wantErr: nil},
+		// Exactly at the ceiling, which must still run: the bound is inclusive, and an
+		// off-by-one here refuses a module the previous row's reasoning says is fine.
+		{name: "at the ceiling", n: maxFrameLocals, wantErr: nil},
+		// One past it. The smallest input that must be refused — a ceiling tested only at
+		// 2^32 would pass with the bound set anywhere in between.
+		{name: "one past the ceiling", n: maxFrameLocals + 1, wantErr: ErrUnsupported},
+		// The grave's own figure: 4Gi-2 locals, a 32 GiB frame. Legal, and refused.
+		{name: "the grave's count", n: 1<<32 - 2, wantErr: ErrUnsupported},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			in, trap := Instantiate(build(tc.n))
+			if trap != nil {
+				t.Fatalf("instantiate: %v — this module declares no memory, so a trap here is "+
+					"a finding about instantiation rather than about the frame ceiling", trap)
+			}
+			_, err := in.Invoke("c")
+			switch {
+			case tc.wantErr == nil && err != nil:
+				t.Errorf("%d locals: got %v, want it to run — a ceiling that refuses an "+
+					"ordinary function is a policy about reasonable code, not a bound on an "+
+					"allocation no host can serve", tc.n, err)
+			case tc.wantErr != nil && !errors.Is(err, tc.wantErr):
+				t.Errorf("%d locals: got %v, want %v — the refusal must name the engine's "+
+					"limit, since the module is well-formed (ErrNotValidated would blame it) "+
+					"and the spec gives no trap here", tc.n, err, tc.wantErr)
+			}
+		})
+	}
+}

@@ -1259,23 +1259,34 @@ func (d *Decoder) decodeFuncBody(r *reader) error {
 //     0xFFFFFFFF + 2 and :175's four groups of 0x40000000 are `too many locals`. A sum
 //     accumulated at 32 bits would wrap and accept both.
 //
-// It returns the **flattened** local vector — one entry per local, not one per declared
-// group — and the flattening happens only after the sum check has passed. That order is
-// forced rather than tidy: a body may legally declare 0xFFFFFFFF locals in *encoding*
-// while being rejected by `too many locals`, so flattening first would allocate four
-// billion entries for a module the next line refuses. binary.wast:159 and :175 are that
-// vector.
-func (d *Decoder) decodeLocals(r *reader) ([]ValType, error) {
+// It returns the declared **groups**, one per `(count, valtype)` run — the wire form, not a
+// flattened vector.
+//
+// # It used to flatten, and that was grave #138
+//
+// The old body allocated `make([]ValType, 0, total)` and appended `count` copies per group,
+// after the sum check. The prose here argued the *order* was load-bearing — flatten only
+// once `too many locals` has had its say, so that a body declaring 0xFFFFFFFF locals does
+// not allocate four billion entries for a module the next line refuses, which
+// `binary.wast:159` and `:175` are the vectors for.
+//
+// Every word of that was true and it defended the wrong side of the boundary. The check
+// rejects `>= 1<<32`; `0xFFFFFFFE` is **admitted**, and at one byte per `ValType` that is a
+// 30-byte image decoding successfully into 4.00 GiB. The sum check was doing verdict work
+// and was silently credited with resource work it never did. *A count check that is right
+// about the verdict can still be wrong about the resources* — and the comment reading as a
+// proof is what kept it invisible through review.
+//
+// The sum check stays exactly as it was, because it was never the defect: it is the
+// reference's bound, it is the suite's answer for :159 and :175, and those two vectors still
+// pin it. What changed is that nothing downstream expands the count.
+func (d *Decoder) decodeLocals(r *reader) ([]LocalGroup, error) {
 	n, err := r.u32()
 	if err != nil {
 		return nil, err
 	}
-	type group struct {
-		count uint32
-		vt    ValType
-	}
 	var (
-		groups []group
+		groups []LocalGroup
 		total  uint64
 	)
 	for range n {
@@ -1287,16 +1298,13 @@ func (d *Decoder) decodeLocals(r *reader) ([]ValType, error) {
 			return nil, err
 		}
 		total += uint64(count)
-		groups = append(groups, group{count, d.valType})
+		groups = append(groups, LocalGroup{Count: count, Type: d.valType})
 	}
+	// Computed at 64 bits and compared against 2^32, per the two vectors above. Note this is
+	// now the *only* place a local count is aggregated: with the flattening gone, the sum is
+	// a verdict and nothing else, which is what it always should have been.
 	if total >= 1<<32 {
 		return nil, fmt.Errorf("%w: %d", ErrTooManyLocals, total)
 	}
-	locals := make([]ValType, 0, total)
-	for _, g := range groups {
-		for range g.count {
-			locals = append(locals, g.vt)
-		}
-	}
-	return locals, nil
+	return groups, nil
 }

@@ -741,21 +741,29 @@ var encodableModules = []struct {
 			{TypeIndex: 0, Body: []binary.Instr{{Op: 0x0b}}},
 		},
 	},
-	// **Locals, declared in three groups and decoded as five.** The wire form is run-length
-	// (`count, valtype`, encode.ml:238-242) and `decodeLocals` flattens, so the want column states the
-	// flat reading: an RLE that dropped a run's count would decode to three.
+	// **Locals, declared in three groups totalling five, and the groups are now the assertion.**
+	// The wire form is run-length (`count, valtype`, encode.ml:238-242) and the decoder retains
+	// it as such since #138, so the want column states the *runs* — which is strictly more than
+	// the flat reading it replaced. This case used to want
+	// `{I32, I32, I64, F32, F32}` and could not distinguish "emitted 2×i32" from "emitted i32
+	// twice"; both flatten identically, and only one is the RLE the format specifies. An
+	// emitter that wrote five singleton groups now fails here and used to pass.
 	{
 		src:  `(module (func (local i32 i32) (local i64) (local f32 f32)))`,
 		want: []binary.CompType{{Kind: binary.CompFunc}},
 		wantFuncs: []binary.Func{{
 			TypeIndex: 0,
-			Locals:    []binary.ValType{binary.I32, binary.I32, binary.I64, binary.F32, binary.F32},
-			Body:      []binary.Instr{{Op: 0x0b}},
+			Locals: []binary.LocalGroup{
+				{Count: 2, Type: binary.I32},
+				{Count: 1, Type: binary.I64},
+				{Count: 2, Type: binary.F32},
+			},
+			Body: []binary.Instr{{Op: 0x0b}},
 		}},
 	},
 	// **Params are not locals in the wire form.** They occupy the same index space at *validation*,
 	// but the code section declares only the declared locals — so a func with two params and one local
-	// has `Locals` of length one, and `local.get 2` reaches that local. An emitter that wrote the
+	// declares one group of one, and `local.get 2` reaches that local. An emitter that wrote the
 	// params into the locals vector would double them and still round-trip.
 	{
 		src: `(module (func (param i32 i64) (local f64) (local.get 2) drop))`,
@@ -764,7 +772,7 @@ var encodableModules = []struct {
 		}}},
 		wantFuncs: []binary.Func{{
 			TypeIndex: 0,
-			Locals:    []binary.ValType{binary.F64},
+			Locals:    []binary.LocalGroup{{Count: 1, Type: binary.F64}},
 			Body: []binary.Instr{
 				{Op: 0x20, Imm0: 2}, // local.get 2 — the local, one past the two params
 				{Op: 0x1a},          // drop
@@ -783,7 +791,7 @@ var encodableModules = []struct {
 		}}},
 		wantFuncs: []binary.Func{{
 			TypeIndex: 0,
-			Locals:    []binary.ValType{binary.I32},
+			Locals:    []binary.LocalGroup{{Count: 1, Type: binary.I32}},
 			Body: []binary.Instr{
 				{Op: 0x20, Imm0: 1}, // $y, the local
 				{Op: 0x20, Imm0: 0}, // $x, the param
@@ -1413,8 +1421,11 @@ func TestEncodeRoundTripsThroughTheDecoder(t *testing.T) {
 						"type indices, not of positions", i, got.TypeIndex, want.TypeIndex)
 				}
 				if !slices.Equal(got.Locals, want.Locals) {
-					t.Errorf("func %d has locals %v, want %v: the wire form is run-length and the "+
-						"decoder flattens, so this is the flat reading", i, got.Locals, want.Locals)
+					t.Errorf("func %d has locals %v, want %v: both sides are the wire form's "+
+						"run-length groups since #138, so a mismatch in the *counts* means the RLE "+
+						"fold disagrees with the reference's `combine` (encode.ml:238) — which the "+
+						"old flat comparison could not see, five singleton runs and one run of five "+
+						"flattening alike", i, got.Locals, want.Locals)
 				}
 				if !slices.Equal(got.Body, want.Body) {
 					t.Errorf("func %d has body %+v, want %+v: a body whose instructions are in the "+
