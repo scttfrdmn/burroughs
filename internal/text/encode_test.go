@@ -46,7 +46,7 @@ import (
 // at, and not the Threads case, which no input can reach.
 //
 // **MultiMemory joined the list the same way — by a row failing, not by reasoning ahead.** The memarg
-// row carrying an explicit memory index (#128) was written with a comment claiming bit 6 needed no
+// row carrying an explicit memory index (#8) was written with a comment claiming bit 6 needed no
 // gate to *decode*, on the ground that `memopIndex` records its decline rather than returning it. The
 // row then failed at this function: `release()` returns the recorded decline once the body's grammar
 // completes, so a deferred decline is still a decline. Third derivation of one rule and third time the
@@ -883,7 +883,7 @@ var encodableModules = []struct {
 		},
 	},
 
-	// # The memarg rows (#128), and **only two of its three fields are here**
+	// # The memarg rows (#8), and **only two of its three fields are here**
 	//
 	// `decodeMemop` stages the offset in `Imm0` and the memory index in `Imm1` and
 	// **discards the alignment** — its own comment says so, on the ground that alignment is a
@@ -992,7 +992,7 @@ func TestEncodeRoundTripsThroughTheDecoder(t *testing.T) {
 	// The floor was 12 against 84 rows for five sections' worth of growth — a bound so far from what
 	// it bounds that it ran, agreed, and said nothing. Set close enough to the real counts to notice a
 	// deletion, and loose enough that adding a row is not a failure. **Both floors move with the
-	// table in the same PR that grows it**, or the distance re-opens: #128 added seven rows (84→91,
+	// table in the same PR that grows it**, or the distance re-opens: the memarg rows (#8) added seven (84→91,
 	// 14→21) and a floor left at 70/12 would have gone straight back into the vacuum it was raised
 	// out of, silently, because a floor never complains about slack.
 	if len(encodableModules) < 85 {

@@ -208,7 +208,7 @@ var encodableShapes = map[immShape]bool{
 	immIdxOpt:    true,
 	immIdxIdxOpt: true,
 	immNum:       true,
-	immMemarg:    true, // tier 2 (#128): retainMemarg, over the generated naturalAlign table
+	immMemarg:    true, // tier 2 (#8): retainMemarg, over the generated naturalAlign table
 }
 
 // idxRetained parses one index immediate and retains it, resolving in the category the mnemonic's

@@ -9,7 +9,8 @@
 //
 //	#78   keywordgen   solved it: the arm-head regexp stops at `->`, body read forward
 //	#105  opgen        reintroduced it: 411 rows where 436 were measured, silent
-//	#128  memarggen    would have been the third, and was met preventively
+//	—     memarggen    would have been the third, and was met preventively (no grave: it
+//	                   did not happen)
 //
 // The third was avoided by *reading the sibling first*, which is the ruling on #108
 // working exactly as written. But avoidance is personal and does not survive the next
