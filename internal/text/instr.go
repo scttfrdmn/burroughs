@@ -421,15 +421,22 @@ func (p *parser) immediates(shape immShape, mnemonic Token) error {
 	// `BR_ON_CAST` shares `immIdxReftype2` with nothing — splitting the shape enum by category would
 	// double three arms to encode one bit.
 	if labelTakingKinds[mnemonic.Keyword] {
-		if err := p.labelIdx(); err != nil {
-			return err
-		}
 		switch shape {
-		case immIdx: // BR, BR_IF, BR_ON_NULL — the label was the whole immediate
-			return nil
-		case immIdxIdxList: // BR_TABLE: `idx idx_list`, and *every* member is a label (:563-565)
-			return p.labelIdxList()
+		case immIdx: // BR, BR_IF, BR_ON_NULL — the label is the whole immediate
+			return p.labelIdx()
+		case immIdxIdxList:
+			// **BR_TABLE reads its whole label sequence as one unit**, and this is the arm that
+			// no longer shares the leading `labelIdx` read with the other two. Its immediates are
+			// not the concatenation of what it reads: the encoding is `vec(labelidx) labelidx`,
+			// so a count the parser does not have yet precedes the members and the last written
+			// label is the *default* rather than a member. Retaining the first label on sight —
+			// which is what a shared leading read forces — writes that label where the count
+			// belongs. See brTable.
+			return p.brTable()
 		case immIdxReftype2: // BR_ON_CAST: `idx reftype reftype`, the label then two types (:567)
+			if err := p.labelIdx(); err != nil {
+				return err
+			}
 			if _, err := p.reftype(); err != nil {
 				return err
 			}
@@ -516,9 +523,14 @@ func (p *parser) immediates(shape immShape, mnemonic Token) error {
 		_, err := p.reftype()
 		return err
 	case immIdxIdxList:
-		// `br_table` takes one idx then `idx_list` (:497), whose empty arm is why the loop's
-		// exit is "no idx here" rather than an error. idxList is #62's and already loops on
-		// exactly that lookahead.
+		// **Unreachable, and named rather than deleted.** `BR_TABLE` is this shape's only
+		// mnemonic and it is label-taking, so the branch above answers it and this arm cannot be
+		// entered — the same standing that `immIdx`'s arm has for `BR`/`BR_IF`, which are also
+		// label-taking and also served upstream. Deleting it would make the shape's presence in
+		// `shapeOf` depend on the label branch's membership: a mnemonic dropped from
+		// `labelTakingKinds` would then reach the closing panic rather than a reader. So the arm
+		// stays as the shape's non-label reading — `br_table` takes one idx then `idx_list`
+		// (:497), whose empty arm is why the loop exits on "no idx here" rather than erroring.
 		if err := p.idx(); err != nil {
 			return err
 		}

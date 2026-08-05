@@ -21,6 +21,40 @@ weakly-ordered platform.
 
 ### Added
 
+- **`br_table`, both halves: the label vector is retained, encoded, and executed**
+  ([#8](https://github.com/scttfrdmn/burroughs/issues/8), decision
+  [0016](docs/decisions/0016-unbounded-immediates-live-beside-the-body.md)). The first immediate
+  this engine keeps that does not fit `Instr`'s two words. It lives in a **side table beside the
+  body** — `Func.Labels`, keyed by instruction index — rather than in a `[]uint32` field on every
+  instruction, which would tax a megabyte-scale Go guest 24 bytes per instruction to serve one
+  opcode in 256. Read through `LabelVector`, whose second result keeps "no vector" distinct from
+  "an empty vector": a `br_table` with zero labels is legal and means *every* index takes the
+  default.
+
+  **The wire form is not the written form, in three ways, and the encoder does all three.** The
+  text is `idx idx_list` — no count, no separator, never empty — while the encoding is
+  `vec(labelidx) labelidx`: a count the parser does not yet have precedes the members, and the
+  **last written** label is the default rather than a member (`Lib.List.split_last`). So
+  `br_table 0` is an *empty* table plus default 0, three immediate bytes and not two. Each
+  transformation has a round-trip row whose unique catch was measured rather than asserted —
+  including one that catches a *deduplicating* encoder, the defect the other two are blind to.
+
+  Execution follows the reference exactly where it is easy to get wrong: the operand is
+  **unsigned** and out of range takes the default rather than trapping (`eval.ml:298-301` is
+  `I32.ge_u`), and the index is popped **before** the branch, so the selected label's arity counts
+  what is left below it. Reading the operand as signed sends −1 into the vector's tail; both
+  readings are pinned by a row that a wrong engine answers with a different number.
+
+  **The board: pass 26567 → 26833, fail 4635 → 4319, gated 1485 → 1535, `unsupported` unmoved at
+  32377.** The bucket this drained held **1330** and is now **0**, of which 266 became passes — and
+  the other 1064 are accounted for individually rather than described, a full bucket-set diff
+  showing exactly three nonzero deltas: **+1006** to `cannot yet encode the call_indirect
+  instruction`, **+8** to `interp: no arm for opcode 10` (`call`), and +50 to `gated`. That is the
+  **dependency closure**: `br_table.wast`'s own module calls `call_indirect`, so the file is still
+  1/147 with every fail re-keyed to the instruction it now waits on. The 50 new gate entries are
+  `align0`'s multi-memory memarg flags and `align64`'s i64 index type, their causes read off the
+  engine's own decline strings and the decoder's memory census rather than off the files' names.
+
 - **The `assert_return value mismatch` bucket is pinned as downstream of a failed setup, so an
   arithmetic defect cannot hide in it** ([#140](https://github.com/scttfrdmn/burroughs/issues/140)).
   The board keys that bucket by a fixed string, a vector wanting a *value* having no expected error

@@ -6,7 +6,7 @@ import (
 	"github.com/scttfrdmn/burroughs/internal/binary"
 )
 
-// The structured control flow arms: block, loop, if/else, br, br_if, return (#7).
+// The structured control flow arms: block, loop, if/else, br, br_if, br_table, return (#7).
 //
 // # Target resolution: what this does, and the debt it takes
 //
@@ -41,14 +41,17 @@ import (
 //
 // # What is absent, and named so the next author does not read it as done
 //
-// `br_table` (0x0e) is **not** here. Its label vector is unbounded, so it does not fit `Instr`'s
-// two words, and the decoder discards it today with a comment naming this issue as the consumer
-// (`instr.go`, `immVecIdx`). Retaining it needs a side array keyed by instruction index — a
-// retention change with its own measurement (31 further suite modules) — and doing it inside a
-// PR about the block family would be the encoder-first mistake in miniature: a representation
-// grown for one consumer's convenience. Likewise `call`/`call_indirect` (0x10/0x11): the first
-// needs a frame stack, the second needs tables and element segments that `binary.Module` does
-// not retain at all.
+// `br_table` (0x0e) **is** here now — its arm is in exec.go and its label vector is retained in
+// `Func.Labels`, the side table keyed by instruction index that 0016 records. The paragraph this
+// replaces said it was absent and deferred the retention, which was true for one PR; keeping the
+// sentence would have made this file assert the opposite of what the engine does. What the
+// retention did *not* do is settle #136: the side table holds the labels as written, and the
+// block-pairing question above is still resolved at block entry.
+//
+// Still absent: `call`/`call_indirect` (0x10/0x11). The first needs a frame stack, the second
+// needs tables and element segments that `binary.Module` does not retain at all — and that
+// retention is shaped by the wire form rather than by `call_indirect`'s convenience, because
+// `table.init` and active-elem instantiation are its later consumers.
 
 // label is one entry on the control stack: an active block, loop, or if.
 type label struct {

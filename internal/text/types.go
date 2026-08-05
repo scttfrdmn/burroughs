@@ -738,20 +738,33 @@ func (p *parser) idxList() error {
 // (TestLabelIndexCountsAnonymousLevels), which is the level that sees an anonymous block's
 // contribution to the count — a thing no single module row distinguishes.
 func (p *parser) labelIdx() error {
-	r, err := p.idxValue()
-	if err != nil {
-		return err
-	}
-	if !r.isVar {
-		// The NAT arm: a width check, already made, and no lookup — but the written index is
-		// still the immediate.
-		return p.retainLabelIdx(r.idx)
-	}
-	depth, err := p.ctx.labels.lookupLabel(r.tok, r.name)
+	depth, err := p.labelIdxValue()
 	if err != nil {
 		return err
 	}
 	return p.retainLabelIdx(depth)
+}
+
+// labelIdxValue is labelIdx returning the resolved depth instead of retaining it.
+//
+// The split exists because `br_table` cannot retain its labels as it reads them: the wire form is
+// `vec(labelidx) labelidx`, so the count precedes the members and the *last* written label is the
+// default rather than a member (see brTable). A reader that appended each depth on sight would be
+// committed to an encoding before it knew how many there were.
+//
+// Both arms are idxValue's, and only the symbolic one resolves — the whole content of labelIdx's
+// comment above, which is why the resolution lives here and labelIdx is the retaining wrapper.
+func (p *parser) labelIdxValue() (uint32, error) {
+	r, err := p.idxValue()
+	if err != nil {
+		return 0, err
+	}
+	if !r.isVar {
+		// The NAT arm: a width check, already made, and no lookup — but the written index is
+		// still the immediate.
+		return r.idx, nil
+	}
+	return p.ctx.labels.lookupLabel(r.tok, r.name)
 }
 
 // retainLabelIdx appends a resolved label index to the current instruction's immediates.
@@ -779,13 +792,20 @@ func (p *parser) retainLabelIdx(depth uint32) error {
 // **Both vectors that fall to #80 are `br_table`, and both name the label in the *first* position**
 // — so a reader that resolved only the first index would score 2/2 here and silently accept
 // `(block $l (br_table $l $nope))`. The control has a row for the tail for exactly that reason.
-func (p *parser) labelIdxList() error {
+//
+// **It returns the depths rather than retaining them**, because its one caller buffers: `br_table`'s
+// encoding needs a count before its members and takes the sequence's *last* element as the default,
+// so nothing can be appended until the tail has ended. See brTable for the three transformations.
+func (p *parser) labelIdxList() ([]uint32, error) {
+	var depths []uint32
 	for p.c.at(NatTok) || p.c.at(VarTok) {
-		if err := p.labelIdx(); err != nil {
-			return err
+		d, err := p.labelIdxValue()
+		if err != nil {
+			return nil, err
 		}
+		depths = append(depths, d)
 	}
-	return nil
+	return depths, nil
 }
 
 // bindidx parses a binding occurrence of an identifier (parser.mly:507-508) and returns its

@@ -31,6 +31,28 @@ func encodeDecodeInvoke(src string) ([]Value, error) {
 	return in.Invoke("c")
 }
 
+// brTableSwitch is a three-way `br_table` whose arms are distinguishable by their answers: index 0
+// yields 10, index 1 yields 20, and anything the table does not answer yields 30.
+//
+// A helper rather than four copies of the body, because the rows that use it differ *only* in the
+// index and the whole content of the family is which arm ran. Keeping the table fixed across the
+// rows is what makes a selection error read as one row moving rather than as four unrelated
+// numbers.
+//
+// The labels are written `$zero $one $out` and the **last written one is the default**
+// (`Lib.List.split_last`, parser.mly:563-565), so the table is `[$zero, $one]` and `$out` is what
+// an out-of-range index takes. Branching to a block lands past its END, so each arm is the code
+// following the block that names it.
+func brTableSwitch(index string) string {
+	return `(block $out
+	           (block $one
+	             (block $zero
+	               (br_table $zero $one $out ` + index + `))
+	             (return (i32.const 10)))
+	           (return (i32.const 20)))
+	         (i32.const 30)`
+}
+
 // TestControlFlowSemantics pins the block family through the encode→decode→invoke path.
 //
 // **Every row is a case where a plausible implementation gives a different answer**, which is the
@@ -249,6 +271,97 @@ func TestControlFlowSemantics(t *testing.T) {
 			name: "return from inside two blocks",
 			src:  `(block (block (i32.const 16) (return))) (unreachable)`,
 			want: 16,
+		},
+
+		// ---- br_table: the vector, the default, and the operand's sign -------------------
+		//
+		// The three rows below share one body, a three-way switch, and differ only in the index.
+		// Written that way because the wrong implementations this family admits are *selection*
+		// errors: they pick a different label for the same table, so the discriminator is which
+		// arm ran and holding the table fixed is what makes that readable. Each arm writes a
+		// distinct value, so no two labels are confusable.
+		//
+		// `br_table $zero $one $out` writes three labels, and **the last written one is the
+		// default** (`Lib.List.split_last`, parser.mly:563-565) — so the table is `[$zero, $one]`
+		// with default `$out`. An encoder that took the *first* written label as the default
+		// encodes the table shifted by one, and row `index 0` then answers 20 instead of 10.
+		{
+			name: "br_table index 0 takes the first table entry",
+			src:  brTableSwitch(`(i32.const 0)`),
+			want: 10,
+		},
+		{
+			name: "br_table index 1 takes the second table entry",
+			src:  brTableSwitch(`(i32.const 1)`),
+			want: 20,
+		},
+		{
+			// **Out of range is the default, not a trap and not a clamp**: `eval.ml:298-301` is
+			// `if I32.ge_u i (length xs) then x else nth xs i`. Index 2 is one past a two-entry
+			// table, so it is the first index the vector does not answer — a `<=` bound reads
+			// past the end here and an implementation that trapped would fail the row.
+			name: "br_table out of range takes the default",
+			src:  brTableSwitch(`(i32.const 2)`),
+			want: 30,
+		},
+		{
+			// **The operand is unsigned.** `-1` is `0xffffffff`, which `I32.ge_u` puts far out of
+			// range, so it is the default. An implementation comparing signed reads it as less
+			// than the length and indexes the vector at -1 — a panic or a wild read, and either
+			// way this row is the only one in the family that can tell.
+			name: "br_table reads its operand as unsigned",
+			src:  brTableSwitch(`(i32.const -1)`),
+			want: 30,
+		},
+		{
+			// **`br_table 0` is an *empty* table plus default 0**, which is three bytes and not
+			// two: the text has no count and the sequence is never empty, so the one written
+			// label is the default and the vector is empty. Every index takes it — 5 here, which
+			// no table entry could answer. An encoder that wrote the label as a table *entry*
+			// with no default leaves the decoder reading the following opcode as the default.
+			name: "br_table with an empty table always takes the default",
+			src:  `(block (br_table 0 (i32.const 5)) (unreachable)) (i32.const 6)`,
+			want: 6,
+		},
+		{
+			// **The index is popped before the branch, so the label's arity counts what is left
+			// below it.** Two values are pushed inside a `(result i32)` block and the branch keeps
+			// one. An implementation that truncated before consuming the index keeps the *index*
+			// as the block's result and answers 0.
+			name: "br_table pops the index before it branches",
+			src:  `(block (result i32) (i32.const 7) (i32.const 8) (br_table 0 (i32.const 0)))`,
+			want: 8,
+		},
+		{
+			// The implicit function-body label, reached through `br_table`'s default — the fourth
+			// site that resolves to it, and it has to truncate like the other three (grave #135).
+			// One value is stranded below the result.
+			name: "br_table to the implicit function label truncates too",
+			src:  `(i32.const 1) (i32.const 2) (br_table 0 (i32.const 0))`,
+			want: 2,
+		},
+		{
+			// **A selected label is a real label, so selecting a loop re-enters it.** The table is
+			// `[$l]` with default `$done`: while the counter is below 4 the operand is 0, in range,
+			// so the *table entry* re-enters the loop; at 4 it is 1, out of range, and the default
+			// exits. An implementation that resolved every br_table target as a block's
+			// continuation leaves the loop on the first pass and answers 1.
+			//
+			// **The loop is on the table side deliberately, so that a wrong engine terminates.**
+			// The mirror arrangement — default re-enters, table exits — reads the same and spins
+			// forever under any defect that ignores the vector, which costs a whole test binary to
+			// a `panic: test timed out` naming no row. Measured: two of the four mutations tried
+			// against this row hung it in that spelling and both report a value in this one. A row
+			// whose failure mode is a hang is a worse witness than one whose failure mode is a
+			// number, even when it is technically red.
+			name: "br_table can select a loop, and re-enters it",
+			src: `(local i32)
+			      (block $done
+			        (loop $l
+			          (local.set 0 (i32.add (local.get 0) (i32.const 1)))
+			          (br_table $l $done (i32.ge_s (local.get 0) (i32.const 4)))))
+			      (local.get 0)`,
+			want: 4,
 		},
 
 		// ---- select: the operand order, which is the only way to get it wrong ------------

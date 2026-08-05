@@ -313,6 +313,12 @@ var encodableShapes = map[immShape]bool{
 	immIdxIdxOpt: true,
 	immNum:       true,
 	immMemarg:    true, // tier 2 (#8): retainMemarg, over the generated naturalAlign table
+
+	// `br_table`, whose immediates are the one case in this map that is not a concatenation of
+	// what the parser read: see brTable for the count, the split_last, and why the sequence is
+	// never empty. Admitted with the interpreter arm rather than with the block family, because an
+	// encoder that can write `br_table` into a module nothing can execute buys no vectors.
+	immIdxIdxList: true,
 }
 
 // idxRetained parses one index immediate and retains it, resolving in the category the mnemonic's
@@ -473,6 +479,61 @@ func (p *parser) constImmRetained(mnemonic Token) error {
 		return errf(t, "internal: %s passed the range check and failed to encode", t.Text)
 	}
 	p.appendImm(b)
+	return nil
+}
+
+// brTable reads `br_table`'s whole label sequence and encodes it as the wire form.
+//
+// **The wire form is not the written form, and that is this function's entire content.** The text is
+// `br_table l1 … ln default` — one `idx` then an `idx_list` (parser.mly:497, :563-565) with *no
+// count* and no marker separating the members from the default. The encoding is
+// `op 0x0e; vec labelidx; labelidx` (encode.ml:250-ish, `BrTable (xs, x) → op 0x0e; vec idx xs;
+// idx x`), so three transformations happen between them:
+//
+//   - **The last written label is the default**, not a member: the reference is
+//     `Lib.List.split_last ($2 c label :: $3 c label)`, which splits the *whole* sequence and takes
+//     its final element. So `br_table 0 1 2` is a two-member vector `[0 1]` with default `2`, and a
+//     reader that treated the first index as the default (the shape the grammar's `idx idx_list`
+//     invites) would encode `br_table 2 1 0`.
+//   - **A count precedes the members**, which the parser does not have until the sequence ends.
+//     This is why `br_table` cannot share the leading `labelIdx` read with `br` and `br_if`: an
+//     index retained on sight lands where the count belongs.
+//   - **The sequence is never empty.** `idx idx_list` requires at least one index, and that one is
+//     the default — `br_table 0` encodes as an empty vector plus default 0, three bytes rather
+//     than two. An emitter writing only what it saw would produce a two-byte instruction the
+//     decoder reads as `br_table` with a *count* of 0 and then no default at all, consuming the
+//     next instruction's opcode as one.
+//
+// The labels are resolved as they are read (`labelIdxValue`) rather than retained as references: a
+// label's scope is lexical and the enclosing blocks are on the stack *now*, which is #80's reason
+// and does not change with the buffering.
+//
+// Not retaining is not a special case that skips the read — the recognizer path still parses the
+// whole sequence, and only the encoding is suppressed.
+func (p *parser) brTable() error {
+	// The leading `idx` is mandatory; the tail is `idx_list`, whose empty arm is the lookahead.
+	first, err := p.labelIdxValue()
+	if err != nil {
+		return err
+	}
+	// **Appended per label, never sized from a count**, there being no count in the text to be
+	// talked into: the vector's length is bounded by the tokens read, exactly as `textFunc.locals`
+	// is (see its comment on #138's exposure).
+	tail, err := p.labelIdxList()
+	if err != nil {
+		return err
+	}
+	depths := append([]uint32{first}, tail...)
+	if !p.retaining() {
+		return nil
+	}
+	// split_last: the members are everything but the last, the default is the last.
+	labels, deflt := depths[:len(depths)-1], depths[len(depths)-1]
+	p.appendImm(encodeLocalIdx(uint32(len(labels))))
+	for _, d := range labels {
+		p.appendImm(encodeLocalIdx(d))
+	}
+	p.appendImm(encodeLocalIdx(deflt))
 	return nil
 }
 

@@ -226,6 +226,46 @@ type Func struct {
 	// Body is the internal form: `[]Instr` with immediates pre-decoded and branch
 	// targets resolved to indices in this slice (0002, Q1 option B).
 	Body []Instr
+
+	// Labels holds the unbounded immediates that do not fit `Instr`'s two words, keyed by the
+	// instruction's index in Body. Today that is `br_table`'s label vector and nothing else.
+	//
+	// **A side table rather than a field on Instr, and the reason is 0002's arithmetic** (0016).
+	// A `[]uint32` on Instr is 24 bytes on every instruction of every module to serve one
+	// opcode in 256; on a megabyte-scale Go guest — §1's workload, the one the engine is
+	// designed to — that is a tax the rewrite's win cannot absorb. This map costs nothing for
+	// the overwhelming majority of functions, which contain no `br_table` at all.
+	//
+	// **Nil is the normal case and reading a missing key is not an error.** A nil map yields nil
+	// for every lookup, which is the right answer for an instruction that has no label vector.
+	// Consumers go through `LabelVector` rather than indexing directly, so the "no vector" and
+	// "empty vector" cases stay distinguishable — a `br_table` with zero labels is legal and
+	// means *every* index takes the default.
+	//
+	// **The vector is the wire form: label indices in written order, default excluded.** The
+	// default lives in the instruction's `Imm0` — measured by decoding a `br_table 0 1` with
+	// default `1` and printing the fields, because `immVecIdx` stages no word and so `immIdx` is
+	// this opcode's *first* staged immediate rather than its second. Reasoning from the table
+	// row's field order gives `Imm1` and is wrong. Keeping the
+	// written order and the written length rather than a resolved target array is deliberate —
+	// resolving a label index to a body offset needs the enclosing block structure and needs the
+	// index to be *in range*, which is #9's judgement, and the text encoder needs the length as
+	// written. Same rule `LocalGroup` follows: retention is forced by a consumer, but its shape
+	// comes from the grammar, because the first consumer is rarely the last.
+	Labels map[int][]uint32
+}
+
+// LabelVector returns the label vector retained for the instruction at index i, and whether one
+// was retained at all.
+//
+// The two-result form is the whole reason this is a method: `f.Labels[i]` cannot distinguish a
+// `br_table` whose vector is empty — legal, and meaning every index takes the default — from an
+// instruction that is not a `br_table` and has no vector. Those are different facts, and a
+// consumer that conflates them executes a `br_table` as though its labels were absent rather
+// than empty.
+func (f *Func) LabelVector(i int) ([]uint32, bool) {
+	v, ok := f.Labels[i]
+	return v, ok
 }
 
 // LocalGroup is one `(count, valtype)` run of a body's local declarations, exactly as the

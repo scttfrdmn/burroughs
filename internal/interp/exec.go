@@ -202,6 +202,34 @@ func (in *Instance) run(fn *binary.Func, locals []uint64, st *stack, results int
 			ctrl = ctrl[:level]
 			pc = target - 1
 
+		case opBrTable:
+			// The operand is an **unsigned** index into the label vector, and out of range is
+			// the default rather than a trap: `eval.ml:298-301` is
+			// `if I32.ge_u i (Lib.List32.length xs) then … x else … (Lib.List32.nth xs i)`.
+			// Reading it as signed would send a negative index into the vector's tail.
+			if err := st.needNum(1); err != nil {
+				return err
+			}
+			i := uint32(st.popNum())
+			depth := ins.Imm0 // the default target, which br_table stages first (0016)
+			if labels, ok := fn.LabelVector(pc); ok && i < uint32(len(labels)) {
+				depth = uint64(labels[i])
+			}
+			// **The operand is popped before the branch, and that ordering is the spec's.**
+			// `br_table`'s stack surgery is a plain `br` to the selected label *after* the
+			// index is consumed, so the label's arity counts what is left below it. Popping
+			// after would let the index survive as one of the block's results on any label
+			// whose arity is non-zero.
+			if depth == uint64(len(ctrl)) {
+				return returnFrom(st, results) // the function body, as in opBr
+			}
+			target, level, err := in.branch(st, ctrl, depth)
+			if err != nil {
+				return err
+			}
+			ctrl = ctrl[:level]
+			pc = target - 1
+
 		case opReturn:
 			// The results are on top of the stack in order, and everything below them is
 			// scratch this frame is done with — so the stack is truncated to the function's
