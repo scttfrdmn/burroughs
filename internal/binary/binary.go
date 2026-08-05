@@ -382,6 +382,11 @@ type Module struct {
 	// Start is the start section's function index, valid only when HasStart.
 	Start    uint32
 	HasStart bool
+
+	// Datas is the data section's segments, in index order — the index `data.drop` and
+	// `memory.init` name. Retained as of 0015; see DataSegment for why it was error-only
+	// until #7 became its consumer.
+	Datas []DataSegment
 }
 
 // ImportedFuncs counts the function imports, which is the offset defined functions
@@ -390,10 +395,28 @@ type Module struct {
 // Computed rather than stored, because a stored count is a second place knowing a fact
 // Imports already holds — and the two would drift exactly when a new import kind
 // arrives. The loop is over a slice that is empty for most modules.
-func (m *Module) ImportedFuncs() int {
+func (m *Module) ImportedFuncs() int { return m.importedCount(ExternFunc) }
+
+// ImportedMems counts the memory imports, which is the offset defined memories start at
+// in the memory index space.
+//
+// **The same rule as ImportedFuncs, and it had to be paid for separately.** Every extern
+// kind has one index space shared between its imports and its definitions, imports first —
+// so an interpreter sizing its memory table by `len(Memories)` alone reads the wrong memory
+// for every module that imports one, silently. Measured on `memory_grow.wast`, whose module
+// imports two memories and then defines `$mem3 3`: `memory.size $mem1` returned 3, which is
+// $mem3's page count, and 22 vectors across two files agreed on the wrong answer.
+func (m *Module) ImportedMems() int { return m.importedCount(ExternMemory) }
+
+// importedCount counts the imports of one extern kind.
+//
+// Shared rather than written once per kind: two loops differing only in a constant is the
+// two-places-know-one-fact shape, and the fact here (imports occupy the low indices of their
+// kind's space) is one fact about all five kinds.
+func (m *Module) importedCount(k ExternKind) int {
 	n := 0
 	for _, im := range m.Imports {
-		if im.Kind == ExternFunc {
+		if im.Kind == k {
 			n++
 		}
 	}

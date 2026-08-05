@@ -446,7 +446,11 @@ func TestSegmentKindStringsAreAtTheirSites(t *testing.T) {
 			ErrMalformedElemKind, // 0x00 is the only defined kind
 		},
 		{
-			"the data segment's leading u32", d.decodeDataSegmentMode,
+			// Adapted, not weakened, when 0015 made decodeDataSegmentMode return the
+			// segment it staged: the mode read is still the thing under test and its
+			// error is still the assertion, so only the discarded value is new.
+			"the data segment's leading u32",
+			func(r *reader) error { _, err := d.decodeDataSegmentMode(r); return err },
 			[]byte{0x03},
 			ErrMalformedDataSegKind, // 0..2
 		},

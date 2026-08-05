@@ -34,8 +34,17 @@ const endOp = 0x0B
 // # The population, measured rather than assumed
 //
 // The binary path's *accept* population is small and that is a fact about the suite, not a
-// gap here: **74 accepted modules across 253 files, carrying 4 function bodies and 18
-// instructions total** (measured, printed below every run). The corpus's binary modules are
+// gap here: **74 accepted modules across the 257 vendored files, carrying 27 function bodies
+// and 47 instructions total** (measured, printed below every run). Two corrections in one
+// sentence, both found by sweeping a *different* number: it said "253 files" while the loop
+// below walks `suitePaths` — every vendored file, 257, not the 253 the board then selected —
+// and it said "4 bodies and 18 instructions", the values when #98 wrote it, against 27 and 47
+// now. The instruction grammars landing is what moved them, and nothing said so because the
+// figures are prose beside a control that *prints* the live ones every run. **A number a
+// control prints and a number its comment states are two witnesses, and only one of them is
+// re-measured.** The floors below are the same drift wearing a bound's clothes — `instrs ≥ 15`
+// against an actual 47 — and they are left at their values with the distance named here rather
+// than re-pinned in a PR about the interpreter (#132). The corpus's binary modules are
 // overwhelmingly `assert_malformed` fodder — deliberately broken images — and its executable
 // content is in text modules. That asymmetry is why 0011's ruling sequences the internal
 // form before the text encoder, and why the interpreter's real oracle arrives with the text

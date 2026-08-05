@@ -907,6 +907,10 @@ func (c *instrCtx) decodeMemop(r *reader) error {
 // shadow, two enabled linters pointing opposite ways. Narrowing the scope is the fix both
 // were asking for (decision 0005's spirit clause). Retention is what made this conditional
 // read start producing a value at all, so the shape arrived with the retention.
+//
+// The precedent still holds and its subject has moved: decodeDataSegmentMode now *returns* a
+// DataSegment (0015), so its own split is load-bearing for retention rather than only for the
+// linters. Noted because a citation to a shape outlives the shape unless someone says so.
 func (c *instrCtx) memopIndex(r *reader, flags uint32) (uint64, error) {
 	if flags&0x40 == 0 {
 		return 0, nil

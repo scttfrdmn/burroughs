@@ -79,6 +79,8 @@ const (
 	KindAssertMalformedText             // (assert_malformed (module quote ...) "text")
 	KindModuleText                      // (module <wat body>) — source retained, #69
 	KindAssertReturn                    // (assert_return (invoke "f" arg*) result*) — #7
+	KindInvoke                          // (invoke "f" arg*) at top level — a state mutation, #7
+	KindAssertTrapModule                // (assert_trap (module …) "text") — instantiation traps, 0015
 	KindUnsupported                     // anything phase 1 cannot execute
 )
 
@@ -96,6 +98,10 @@ func (k Kind) String() string {
 		return "module text"
 	case KindAssertReturn:
 		return "assert_return"
+	case KindInvoke:
+		return "invoke"
+	case KindAssertTrapModule:
+		return "assert_trap (module)"
 	default:
 		return "unsupported"
 	}
@@ -365,12 +371,19 @@ func classify(n node, src []byte) Command {
 					Expect: string(n.list[2].str),
 				}
 			}
-			if src, ok := quoteModule(n.list[1]); ok {
+			// `quoted`, matching the module arm above — and the shadow this avoids is the
+			// one that arm's own comment already names ("letting the second shadow the
+			// first would put two different sources under one name in the one function that
+			// has to keep them apart"). It was written there and violated here, four
+			// arms down, which is the defect-stated-as-the-rule shape at its cheapest:
+			// review reads the warning and the violation as agreement. `govet`'s shadow
+			// check is what noticed, not a reader.
+			if quoted, ok := quoteModule(n.list[1]); ok {
 				return Command{
 					Kind:   KindAssertMalformedText,
 					Line:   n.line,
 					Head:   head,
-					Source: src,
+					Source: quoted,
 					Expect: string(n.list[2].str),
 					Needs:  CapWatReader,
 				}
@@ -380,6 +393,61 @@ func classify(n node, src []byte) Command {
 
 	case "assert_return":
 		if c, ok := assertReturn(n); ok {
+			return c
+		}
+		return Command{Kind: KindUnsupported, Line: n.line, Head: head}
+
+	case "assert_trap":
+		// **Only the module-wrapping shape, and the narrowness is the whole point.**
+		// `assert_trap` has two populations: `(assert_trap (invoke …) "text")`, the great
+		// majority, waiting on the interpreter's trapping paths, and `(assert_trap (module …)
+		// "text")`, which is what 0015 was written for — a module that traps *while coming to
+		// life*, with no invoke anywhere in the form. This arm admits the second and leaves
+		// the first in the unsupported column where it is visible.
+		//
+		// Split this way because the two need different engine surfaces: the action shape
+		// needs an instance and then a trapping call, the module shape needs instantiation
+		// itself to be able to trap, which is the return-type change 0015 records. Admitting
+		// both here would have made one Kind that two different components answer.
+		//
+		// **The module-wrapping population is 54, not the 14 this arm was written for**, and
+		// the correction came from measuring the corpus rather than from reading `data1.wast`:
+		// 14 in data1, 14 in data.wast, 12 in elem.wast, 13 across linking*.wast and
+		// start.wast. 0015 cited data1's 14 because that is the file the design question came
+		// from, and a premise measured over the same sample the reader looks at is an echo
+		// (grave #106). The 40 outside data1 need element segments, linking, or a start
+		// function, so they will not pass here yet — they *fail* honestly rather than sitting
+		// unclassified, which is the point of admitting the shape rather than the file.
+		if len(n.list) == 3 && n.list[1].isList() && n.list[2].isS &&
+			n.list[1].head() == "module" {
+			// A wat-bodied module only: all 54 are the bare `(module <fields>)` form —
+			// measured, no `binary` or `quote` variant of this shape exists in the corpus.
+			if kw := moduleFormKeyword(n.list[1]); kw == "" {
+				return Command{
+					Kind: KindAssertTrapModule, Line: n.line, Head: head,
+					Source: n.list[1].span(src), Expect: string(n.list[2].str),
+					Needs: CapInterpreter,
+				}
+			}
+		}
+		return Command{Kind: KindUnsupported, Line: n.line, Head: head}
+
+	case "invoke":
+		// A top-level `(invoke "f" arg*)`: a call made for its **effect**, with no
+		// expectation attached. Scoring it unsupported was correct while nothing had
+		// effects, and became a defect the moment memory did — the mutation silently did
+		// not happen and the *following* `assert_return` read stale memory, so 73 vectors
+		// across five files reported the interpreter computing a wrong value when it had
+		// simply never been given the setup. `float_memory.wast:17` is the shape:
+		// `(invoke "reset")` between two loads, where skipping it makes the second load
+		// return the first one's NaN.
+		//
+		// That is *a skip is not a verdict* with the roles swapped — here the skip did not
+		// pass by asking nothing, it made a neighbouring vector fail by answering a
+		// question nobody had set up. A harness that drops a state mutation is not neutral
+		// about the vectors after it.
+		if c, ok := invokeAction(n); ok {
+			c.Kind, c.Line, c.Head = KindInvoke, n.line, head
 			return c
 		}
 		return Command{Kind: KindUnsupported, Line: n.line, Head: head}
@@ -416,21 +484,43 @@ func classify(n node, src []byte) Command {
 // grammar, and the readers in value.go are the first.
 func assertReturn(n node) (Command, bool) {
 	no := Command{Kind: KindUnsupported, Line: n.line, Head: n.head()}
-	if len(n.list) < 2 || !n.list[1].isList() || n.list[1].head() != "invoke" {
+	if len(n.list) < 2 || !n.list[1].isList() {
 		return no, false
 	}
-	act := n.list[1]
+	c, ok := invokeAction(n.list[1])
+	if !ok {
+		return no, false
+	}
+	c.Kind, c.Line, c.Head = KindAssertReturn, n.line, n.head()
+	for _, e := range n.list[2:] {
+		v, ok := readConst(e)
+		if !ok {
+			return no, false
+		}
+		c.Results = append(c.Results, v)
+	}
+	return c, true
+}
+
+// invokeAction reads an `(invoke "name" arg*)` action into the Invoke/Args fields, leaving Kind,
+// Line and Head to the caller.
+//
+// **One reader for the action, because a top-level `(invoke …)` is the same grammar.** It was
+// split out of assertReturn when bare invokes became answerable, rather than copied: the arms
+// that decline the module-selecting form and NaN-class arguments are decisions about which
+// vectors are askable, and two copies of them would be two answers to that question. Same
+// motive as `importedCount` — graves #78, #105 and #106 are all one fact in two places.
+func invokeAction(act node) (Command, bool) {
+	if act.head() != "invoke" {
+		return Command{}, false
+	}
 	// `(invoke "name" arg*)`. A `$name` before the string is the module-selecting form,
-	// declined above — checked structurally (element 1 is not a string) rather than by
-	// looking for a `$`, so any other shape upstream adds is declined too rather than
-	// misread.
+	// declined — checked structurally (element 1 is not a string) rather than by looking
+	// for a `$`, so any other shape upstream adds is declined too rather than misread.
 	if len(act.list) < 2 || !act.list[1].isS {
-		return no, false
+		return Command{}, false
 	}
-	c := Command{
-		Kind: KindAssertReturn, Line: n.line, Head: n.head(),
-		Invoke: string(act.list[1].str), Needs: CapInterpreter,
-	}
+	c := Command{Invoke: string(act.list[1].str), Needs: CapInterpreter}
 	for _, a := range act.list[2:] {
 		v, ok := readConst(a)
 		if !ok || v.NaN != NaNNone {
@@ -438,16 +528,9 @@ func assertReturn(n node) (Command, bool) {
 			// it is a predicate. The asymmetry is enforced here rather than in the
 			// matcher, because it is a statement about which vectors are askable, and
 			// that is this function's subject.
-			return no, false
+			return Command{}, false
 		}
 		c.Args = append(c.Args, v)
-	}
-	for _, e := range n.list[2:] {
-		v, ok := readConst(e)
-		if !ok {
-			return no, false
-		}
-		c.Results = append(c.Results, v)
 	}
 	return c, true
 }
@@ -671,7 +754,7 @@ const (
 	StratumText
 	// StratumEncode is the wat *encoder* — EncodeModule, reached only through
 	// instantiation. Separate from StratumText because they are separate entry points
-	// with separate frontiers: ReadModule answers 253 files' module forms with 0 reds,
+	// with separate frontiers: ReadModule answers 254 files' module forms with 0 reds,
 	// while EncodeModule cannot yet emit most instruction bodies. Folding them together
 	// would raise the reader's ceiling by 13775 and destroy its value as a regression
 	// detector — one instrument per component, or neither is an instrument.
@@ -1220,7 +1303,61 @@ func (s *Script) run(opts runOpts) *Result {
 				Stratum: StratumText,
 			})
 
-		case KindAssertReturn:
+		case KindAssertTrapModule:
+			// `(assert_trap (module …) "text")`: the module must come to life and die doing
+			// it, with the spec's own trap string. 0015's Kind, and the reason instantiation
+			// returns `*Trap` at all.
+			//
+			// **It does not touch `cur`, and that is deliberate.** A trapping module produces
+			// no instance, and neither does one that fails to trap — the vector says nothing
+			// about what the *next* command should run against. Assigning `cur = nil` here
+			// would silently invalidate the surrounding script's state; leaving it alone means
+			// a file that interleaves these with real modules keeps whichever instance it had.
+			// Measured: all 54 of these forms stand alone, so the choice is invisible today
+			// and would be a real defect the first time it was not.
+			if opts.Instantiate == nil {
+				panic(fmt.Sprintf("%s:%d: CapInterpreter declared but no InstantiateFunc was "+
+					"supplied; the capability registry is ahead of the engine", s.Path, c.Line))
+			}
+			_, _, err := opts.instantiate(c)
+			if isGated(err) {
+				r.gate(c)
+				continue
+			}
+			got := ""
+			if err != nil {
+				got = err.Error()
+			}
+			// Substring matching, per decision 0003 — the same rule both malformed arms use.
+			// The expected string here is the spec's trap text (`out of bounds memory
+			// access`), which `Trap.Error` renders verbatim for exactly this reason: a second
+			// spelling would be the engine's testimony disagreeing with itself.
+			if err != nil && strings.Contains(got, c.Expect) {
+				r.Pass++
+				continue
+			}
+			r.Fail++
+			// **Keyed by the expected text**, so the bucket names what the suite wanted rather
+			// than what the engine said. The 40 of these outside `data1.wast` need element
+			// segments, linking or a start function, and they will land in *this* key with the
+			// front end's error as their Got — visible, and distinguishable from a real
+			// disagreement about the trap by reading the Got.
+			key := "assert_trap (module) expected: " + c.Expect
+			if got == "" {
+				got = "the module instantiated without trapping"
+			}
+			r.Buckets[key] = append(r.Buckets[key], Failure{
+				Line: c.Line, Expect: c.Expect, Got: got, Kind: c.Kind,
+				Stratum: StratumExec,
+			})
+
+		case KindAssertReturn, KindInvoke:
+			// **Two kinds, one arm, and the sharing is the point.** A bare `(invoke …)` is an
+			// assert_return with no expectation: it needs the same instance, the same
+			// no-instance accounting, the same gate handling, and the same error bucketing,
+			// and it differs only in having nothing to compare afterwards. A second arm would
+			// be a second copy of all of that, drifting from this one on the next change.
+			//
 			// Reachable only when a caller declares CapInterpreter, and the same
 			// re-pointed tripwire the text kinds carry: a declaration with no component
 			// is the registry ahead of the engine, and it must stop rather than score.
@@ -1299,6 +1436,16 @@ func (s *Script) run(opts runOpts) *Result {
 					Line: c.Line, Expect: fmt.Sprintf("%s(%s) = %s", c.Invoke, joinVals(c.Args), joinVals(c.Results)),
 					Got: key, Kind: c.Kind, Stratum: StratumExec,
 				})
+				continue
+			}
+			if c.Kind == KindInvoke {
+				// The call succeeded and there is nothing to compare. It counts as a pass
+				// rather than being dropped, because the vector *was* asked and answered:
+				// the suite writes a bare invoke to assert that the call completes without
+				// trapping, so "it ran" is the whole expectation. Dropping it would leave
+				// the denominator claiming the command was never asked, which is the
+				// opposite of what happened.
+				r.Pass++
 				continue
 			}
 			// Arity first, and as its own bucket: a result-count mismatch is a different

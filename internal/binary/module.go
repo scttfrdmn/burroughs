@@ -322,6 +322,30 @@ type Limits struct {
 	Min    uint64
 	Max    uint64
 	HasMax bool
+
+	// Addr64 is set when the flags byte selected the memory64 address type (the 0x04-0x07
+	// range), making this memory's or table's addresses i64 rather than i32.
+	//
+	// **On Limits rather than on Memory, because it is read from the limits flags** — the
+	// same byte HasMax comes from — and because table64 will want the identical field from
+	// the identical position.
+	//
+	// Retained as of 0015 because it governs the **size** limit, not the effective-address
+	// computation. `memory.ml:27`'s `valid_size` caps an i32 memory at `0xffff` pages and an
+	// i64 memory at nothing, and both `alloc` and `grow` consult it — so the width decides
+	// which allocations and which `memory.grow` deltas are legal.
+	//
+	// It is deliberately *not* consulted when computing an address, and the first draft of
+	// this comment said the opposite: `value.ml:292` **zero-extends** an i32 index to 64
+	// bits (`extend_i32_u`) and `effective_address` then adds the static offset in 64 bits
+	// with an unsigned-overflow check. There is no 32-bit wrapping at any width, so an
+	// address path that branched on this field would be inventing a distinction the
+	// reference does not make. Read from the executable rather than from the word
+	// "memory64" — comments and ADRs are testimony, and the executable outranks.
+	//
+	// It cannot be recovered later: the flags are gone, and `Min > 1<<32` is the wrong
+	// question because a memory64 of one page is still 64-bit addressed.
+	Addr64 bool
 }
 
 // Table is one table: its element type and limits.
@@ -330,7 +354,53 @@ type Table struct {
 	Limits   Limits
 }
 
-// Memory is one memory: its limits.
+// Memory is one memory: its limits, which carry its address type (see Limits.Addr64).
 type Memory struct {
 	Limits Limits
+}
+
+// DataSegment is one data segment: where it goes, and what goes there.
+//
+// **Retained as of 0015**, which is the consumer-forced retention pre-registered when the wat
+// encoder's round-trip witness was found blind: `decodeDataSegment` was error-only, so nothing
+// in the codebase could represent a module's data, so the only available witness was
+// byte-level over `Section.Payload`. #7 executing memory tests is the consumer that knocked.
+type DataSegment struct {
+	// Passive is set for the 0x01 mode: the segment is not copied at instantiation and is
+	// only reachable through `memory.init`. Active segments (modes 0x00 and 0x02) are
+	// copied at time zero and may trap doing it.
+	Passive bool
+
+	// MemIndex is the memory the segment initializes, 0 for the implicit-index mode.
+	// Meaningless when Passive.
+	MemIndex uint32
+
+	// Offset is the offset constant expression, in the same internal form as a function
+	// body — one form for both, for Global.Init's reason. Nil when Passive.
+	Offset []Instr
+
+	// Init is the segment's bytes, aliasing the decoder's image (the in-place posture).
+	// Never nil for a segment that decoded, and empty is legal: `(data "")` is a real
+	// module in memory64.wast.
+	Init []byte
+}
+
+// OpMnemonic returns the reference's constructor name for a single-byte opcode, and whether the
+// table has a row for it.
+//
+// **Exported so that a consumer's hand-written table can be cross-checked against this one**,
+// which decision 0014 already made legitimate by promoting the mnemonic from "a label" to a
+// fact. The consumer it exists for is `internal/interp`'s `memops`: the load/store family's
+// width, signedness, and slot type are all recoverable from `i64_load16_s`, so a control can
+// parse the name and compare, rather than trusting 23 hand-written rows whose errors would be
+// accept-direction and invisible on the board (§9 G-3).
+//
+// Single-byte only, because that is the region the consumer needs; a prefixed accessor is worth
+// adding when something asks, not before.
+func OpMnemonic(op uint32) (string, bool) {
+	info, ok := opTable[op]
+	if !ok {
+		return "", false
+	}
+	return info.mnemonic, true
 }

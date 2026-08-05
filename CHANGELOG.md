@@ -21,6 +21,61 @@ weakly-ordered platform.
 
 ### Added
 
+- **`internal/interp`: linear memory — loads, stores, `memory.size`, `memory.grow`, and
+  instantiation that can trap** ([#7](https://github.com/scttfrdmn/burroughs/issues/7)). The engine
+  has a memory. `memory` is a flat `[]byte` grown by reallocation, which is `memory.ml`'s own shape
+  and what §1's workload wants — a Go guest that loads once and runs for hours has a steady state of
+  one contiguous slice with no per-access indirection. The load/store family is a **table** rather
+  than 23 switch arms (`memop`), machine-checked against the generated opcode table's mnemonics:
+  `i64_load16_s` parses to (8-byte slot, 2-byte access, signed) and is compared, so the widths and
+  sign-extension flags are *derived* from an authority with a conformance record instead of
+  transcribed by hand. Getting any one of those three wrong yields a plausible value for a valid
+  module, which is an accept-direction defect the suite scores green by construction (§9 G-3).
+
+  **The board: pass 17923 → 26307, exec fail 8713 → 440, unsupported 32764 → 32377, files
+  253 → 254.** The
+  `2d i32.load8_u` bucket went **8001 → 0** and with it the whole load/store region. The 440 that
+  remain partition to exactly 440 and are named at `execFailCeiling`: 291 opcode arms this phase
+  does not have, 48 downstream of the missing `fc 0a`/`fc 0b`, 41 naming linking, 34
+  `assert_trap (module)` forms awaiting element segments or a start function, 26 `memory.copy` and
+  `memory.fill` reached directly.
+
+  **The gain was measured rather than quoted, and the census was wrong in both directions.**
+  Pre-registered: ~8,424 payable, 289 residue. The 289 came out exact — and two buckets appeared
+  that the census had not predicted, 95 value mismatches and 41 memory-index errors, where 95 had
+  been **zero**. Quoting the 8,000 without them would have been the flattering half of a
+  measurement. Of the 95: **22 were the memory index space being shared between imports and
+  definitions, imports first.** Sizing the table `len(m.Memories)` made `memory.size $mem1` return
+  `$mem3`'s page count — not an unimplemented import reported honestly, a *wrong answer about a
+  different memory*, and green on 22 vectors across two files by construction. The other 73 were the
+  harness's: a bare top-level `(invoke …)` was never run, so a following `assert_return` read a
+  memory nobody had stored to. Both fixed; the 48 remaining are the `fc 0a`/`fc 0b` line above.
+
+  **Instantiation gained a trapping path without gaining an opinion**
+  ([0015](docs/decisions/0015-instantiation-is-execution-at-time-zero.md)): copying an active data
+  segment out of bounds is a *runtime event*, so `Instantiate` returns `*Trap` and a verdict cannot
+  travel through it even by mistake. Two kinds of failure, two channels — verdicts belong to the
+  validator forever, traps belong to execution, and instantiation is execution at time zero. The
+  taxonomy is the suite's rather than this engine's, which is what settled it: the corpus contains
+  54 `assert_trap` forms wrapping a bare `(module …)`, of which `data1.wast` is 14.
+
+- **`internal/spec`: two harness Kinds — bare `(invoke …)` and `assert_trap` wrapping a module.**
+  `KindInvoke` shares an arm with `KindAssertReturn` because a bare invoke *is* an assert_return
+  with no expectation. It drains the `invoke` unsupported head 357 → 10. **A harness that drops a
+  state mutation is not neutral about the vectors after it** — this is *a skip is not a verdict*
+  with the roles swapped: the skip passed by asking nothing and made a *neighbouring* vector fail.
+  `KindAssertTrapModule` admits the bare-wat module-wrapping shape and accounts for the other 40 of
+  the 387 unsupported drop. All **54** such forms are on the board and only **40** are that drop,
+  because the remaining 14 are `data1.wast` — every form in it is this shape, so it held no scorable
+  command, `boardFiles` did not select it, and its 14 arrive as new commands **in a new file**:
+  253 → 254, the one place this PR moves the denominator. `54 − 40 = 14` would have called an
+  admission a conversion; the difference was measured by set-differencing the `assert_trap` command
+  keys against `b11a664`.
+
+- **`binary.Module.ImportedMems`**, the memory index space's offset, sharing `importedCount` with
+  `ImportedFuncs`. The same rule as its sibling and it had to be paid for separately, which is the
+  lessons-indexed-by-shape rule arriving as a bill.
+
 - **`internal/text`: the data section, the data count section, and the memory field's inline-data
   sugar** ([#8](https://github.com/scttfrdmn/burroughs/issues/8)). Section 11's three arms are
   discriminated on the *resolved* memory index per `encode.ml:1092`, so `(data (memory 0) …)` and
@@ -56,6 +111,12 @@ weakly-ordered platform.
   (#7 will force it, when the interpreter's memory tests need them), so the round trip cannot see
   this section at all and the witnesses are byte-level over `Section.Payload`. Saying so keeps the
   round trip's silence from impersonating a check.
+
+  *(Superseded within this same `[Unreleased]`, one entry later: #7's memory work forced the
+  retention on exactly the predicted schedule, so `Datas` now exists and this section is no longer
+  witness-blind. Left standing rather than edited — the prediction and its due date are the part
+  worth keeping, and an entry rewritten to match the present cannot show that a filed expectation
+  came in.)*
 
   `internal/testenv` licenses a fifth reference authority, `interpreter/syntax/free.ml` — the
   authority for *which index spaces an instruction references*, which neither `decode.ml` nor
@@ -1893,6 +1954,22 @@ weakly-ordered platform.
   skip ([#29](https://github.com/scttfrdmn/burroughs/issues/29)).
 
 ### Fixed
+
+- **A control's printed figures and its comment's figures are two witnesses, and only one gets
+  re-measured** ([grave #132](https://github.com/scttfrdmn/burroughs/issues/132)).
+  `TestRetainedFormOverAcceptedModules` logs its population every run and *also* states it in prose;
+  the prose said "74 accepted modules across 253 files, carrying 4 function bodies and 18
+  instructions" while the log has printed **27 bodies and 47 instructions** since the instruction
+  grammars landed, and the file count was never right at all — that loop walks `suitePaths`, every
+  vendored file (**257**), not the board-selected set. Found while sweeping a *different* number, the
+  board's own 253 → 254.
+
+  Nobody re-read it because the truth was printed beside it: a figure a control reports live and a
+  figure its comment asserts are two claims about one fact, and only the first is re-derived every
+  board. The prose is corrected here; the **floors** carrying the same stale values (`instrs ≥ 15`
+  against an actual 47 — an unasserted distance) are filed rather than raised, because re-pinning
+  four bounds is instrument work and this PR is the product work that walked past them. What the
+  issue owns is the sweep, the class being wider than one file.
 
 - **Two gate-allowlist reasons stated a memory count nobody re-derived: three memories documented as
   five and as four** ([grave #129](https://github.com/scttfrdmn/burroughs/issues/129)).
