@@ -536,6 +536,46 @@ type context struct {
 	// consulting any space. Only the module-field spelling reaches resolveSpaceIdx.
 	exports []textExport
 
+	// The retained data segments, in source order — the emitter's input for sections 11 and 12 (#8).
+	// Written by `defineData`, which owns the argument for the stage-2 split.
+	//
+	// **Both spellings land here**, as with imports and exports: the `(data …)` field and the
+	// `(memory <addrtype> (data …))` sugar, which produces a `Data` in the very arm that produces a
+	// `Memory` (parser.mly:1126-1131). A list holding one spelling would be short by every occurrence
+	// of the other, and for this pair the sugar's omission is worse than a missing segment — the
+	// memory it sizes would be emitted with `min`/`max` pages and no bytes in it.
+	dataDefs []resolvedData
+
+	// datasSeen counts every data segment the *grammar* saw, for the withdrawal check.
+	//
+	// `importsSeen`'s instrument, and its argument applies unchanged: incremented in `noteData`, which
+	// both spellings pass through, so this number is the grammar's and `len(dataDefs)` is the
+	// emitter's. Counting inside `defineData` would compare a number against itself.
+	datasSeen int
+
+	// sawDataRef records that some instruction referenced the **data index space**, which is section
+	// 12's emission condition (#8).
+	//
+	// **Not `len(dataDefs) > 0`, and the difference is a live defect in both directions.**
+	// `data_count_section` is guarded by `Free.((module_ m).datas <> Set.empty)` (encode.ml:1109) and
+	// `free.ml`'s `data` for a *segment* is `segmentmode memories mode` (:217) — a segment
+	// contributes **nothing** to the `datas` set. The set is fed only by instructions:
+	// `MemoryInit (x,y)` (:165), `DataDrop x` (:166), `ArrayNewData` (:175), `ArrayInitData` (:181).
+	// So a segment-only module gets no section 12, and a segment-*less* module with a `data.drop`
+	// gets one.
+	//
+	// Measured before it was written, and the reject direction is real today:
+	// `(module (func (data.drop 0)))` encoded to a code section holding `fc 09 00` and no section 12,
+	// which `binary.DecodeModule` rejects with `data count section required` — the decoder's mirror of
+	// this same set, `dataRefOps` in internal/binary/instr.go, derived from the same four `free.ml`
+	// lines. So the two sides of the round trip are read off one authority rather than agreeing by
+	// luck; TestSectionTwelveConditionIsTheReferences pins the set against the reference.
+	//
+	// A bool rather than a count, because the condition is set non-emptiness — `<> Set.empty` — and a
+	// count would invite the false reading that section 12's *payload* is the number of references.
+	// The payload is `List.length datas`, the segment count.
+	sawDataRef bool
+
 	// importsSeen counts every import the *grammar* saw, for the withdrawal check.
 	//
 	// Incremented in `noteImport`, which is the one place both spellings already pass through —
@@ -870,6 +910,14 @@ func (c *context) noteImport(t Token) {
 // section 7 comes after every definition section, so an export can never precede a definition it
 // names. The counter is the whole content, which is why this is one line and its sibling is six.
 func (c *context) noteExport() { c.exportsSeen++ }
+
+// noteData counts a data segment the grammar saw, for section 11's withdrawal check.
+//
+// Called from the two `(data` recognizers — `dataField`'s `lpar` and `memoryDataSugar`'s — which are
+// exactly the two places a spelling could withdraw the frontier and forget to retain. That is not
+// hypothetical for this pair: the sugar arm parsed its payload and discarded it for as long as
+// section 11 did not exist, and every board was green.
+func (c *context) noteData() { c.datasSeen++ }
 
 // importOrderErr returns the ordering error, if any. Called once the module's field list is
 // complete, because a definition only qualifies if an import follows it.

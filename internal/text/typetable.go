@@ -227,6 +227,51 @@ type textExport struct {
 	idx  uint32
 }
 
+// textData is one retained data segment: its mode, its memory index, its offset expression and its
+// payload — section 11's content (#8).
+//
+// **`passive` is a field rather than a nil-offset test**, because an *active* segment may legally have
+// an empty offset expression. `offset` is `LPAR OFFSET constexpr RPAR` and `constexpr` is `instr_list`
+// (parser.mly:1091, :950), so `(data (offset) "")` parses with zero instructions — and reading
+// nil-ness as "passive" would encode that as `0x01`, a passive segment, where the reference writes
+// `0x00` with an empty const expr. Same module shape, different segment mode, decoding clean.
+//
+// **`mem` is unresolved, and that is what makes the arm discriminator honest.** `encode.ml`'s `data`
+// splits on the *resolved* index — `Active ({it = 0l; _}, c)` takes the two-byte `0x00` form and
+// `Active (x, c)` the three-byte `0x02` form (:1096-1101) — so the question is "is this index zero",
+// never "did the text write a `(memory …)`". `(data (memory 0) (offset (i32.const 0)) "")` and
+// `(data (offset (i32.const 0)) "")` are therefore the *same* encoding, and a `haveMem`-style
+// discriminator (which this type's first draft carried) would emit `0x02 00` for the first: a legal
+// image, a byte longer, denoting the same module — and a gratuitous divergence from every other
+// producer, wabt included, which #67's corpus compares against. A symbolic `(memory $m)` naming
+// memory 0 is the case that makes the distinction more than pedantic: it can only be answered after
+// resolution.
+type textData struct {
+	passive bool
+	// mem is the memory index, meaningless when passive. The zero value is the sugar arm's default,
+	// which is exactly the reference's `Active (0l @@ $sloc, …)` (parser.mly:1105) — an `idxRef` with
+	// `isVar` false and `idx` 0 resolves to 0, so the default needs no separate flag.
+	mem    idxRef
+	offset instrSink
+	bytes  []byte
+}
+
+// resolvedData is a data segment after stage 2: the memory index resolved and the offset's
+// instructions encoded, so the writer cannot fail.
+//
+// Distinct from `textData` for `resolvedTable`'s reason and `encodedFunc`'s: the offset can hold a
+// `global.get $g` naming a global defined later, so its bytes are not knowable at the cursor, and a
+// writer that resolved inline would have to abandon a half-written section 11.
+type resolvedData struct {
+	passive bool
+	mem     uint32
+	// offset is the const expression's bytes **including** its `0x0b` terminator — `const c` is
+	// `list instr c.it; end_ ()` (encode.ml:912-913), the same explicit terminator a function body
+	// gets and which the text does not spell.
+	offset []byte
+	bytes  []byte
+}
+
 // resolvedTable is a table definition whose element type has been resolved — what the encoder writes.
 //
 // Distinct from `tabType` for exactly the reason `resolvedComp` is distinct from `compType`: one is
@@ -384,6 +429,76 @@ func (c *context) defineImport(module, name string, fill func() (importDesc, err
 		c.imports[i].desc = d
 		return nil
 	})
+}
+
+// defineData records one data segment, deferring its memory index to stage 2 (#8).
+//
+// **Slot appended at the parse position, filled by a thunk** — `defineImport`'s shape, copied rather
+// than re-derived (*lessons are indexed by shape*), and load-bearing here for the export arm's reason
+// rather than the import arm's: a data segment's memory index forward-references, because
+// `module_fields1` evaluates every data field inside the second `fun () ->`. Measured on the
+// reference's grammar, not assumed — `(module (data (memory $m) (offset (i32.const 0)) "") (memory $m 1))`
+// binds `$m` after the segment reads it, and resolving at the cursor would reject it. Accept
+// direction, and the suite has nothing to say: `data.wast`'s `unknown memory` vectors are all
+// numeric, hence `assert_invalid` and the validator's (§9 G-3).
+//
+// The **offset's own instructions** are not deferred here, because they were already retained at the
+// cursor by `dataOffset` — an instruction's *position* in the expression is the one thing that cannot
+// go in a thunk (`instr`'s comment), and each instruction's symbolic index defers individually
+// through `instr.patch`. So this thunk resolves the segment's memory index and encodes the retained
+// list; nothing about the list's shape is decided in stage 2.
+func (c *context) defineData(d textData) {
+	i := len(c.dataDefs)
+	c.dataDefs = append(c.dataDefs, resolvedData{passive: d.passive, bytes: d.bytes})
+	c.deferOp(func() error {
+		if !d.passive {
+			idx, err := c.memories.resolveSpaceIdx(d.mem)
+			if err != nil {
+				return err
+			}
+			c.dataDefs[i].mem = idx
+		}
+		off, err := c.constExprBytes(d.offset)
+		if err != nil {
+			return err
+		}
+		c.dataDefs[i].offset = off
+		return nil
+	})
+}
+
+// constExprBytes encodes a retained const expression, terminator included.
+//
+// `const c` is `list instr c.it; end_ ()` (encode.ml:912-913), so the `0x0b` is the encoder's and not
+// the text's — the same explicit terminator `writeCodeSection` appends to every body, and for the
+// same reason: `constexpr` has no `end` token in the grammar.
+//
+// **The same patch protocol a function body uses**, read off the one loop in `resolveFuncs` rather
+// than reinvented: a patch *replaces* the immediates rather than appending to them, which is the
+// property `retainIdx` refuses a second deferred index to preserve. Two loops now know that
+// protocol, which is a drift risk with a name — `TestConstExprBytesMatchesABodysEncoding` holds them
+// to the same output for the same instruction list, so the second reader cannot quietly grow a third
+// interpretation of `patch`.
+//
+// A passive segment has no offset and calls this with an empty sink, which correctly yields a bare
+// `0x0b`; the caller does not write it, so the byte is never emitted. Stated because "encodes to one
+// byte rather than zero" reads like a defect until you know nobody consumes it.
+func (c *context) constExprBytes(s instrSink) ([]byte, error) {
+	var w writer
+	for _, in := range s.instrs {
+		w.bytes(in.op)
+		imm := in.imm
+		if in.patch != nil {
+			b, err := in.patch()
+			if err != nil {
+				return nil, err
+			}
+			imm = b
+		}
+		w.bytes(imm)
+	}
+	w.byte1(opEnd)
+	return w.b, nil
 }
 
 // defineExport records one export, deferring the index resolution to stage 2.

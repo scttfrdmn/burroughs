@@ -860,11 +860,25 @@ func (p *parser) name() (string, error) {
 //
 // **No decode.** This is the production that makes `(data "\ef\ff\fe")` legal, and the reason
 // a blanket UTF-8 check on string tokens would be wrong about the grammar while passing every
-// vector the suite has. The bytes are not accumulated because nothing under 0011 consumes them;
-// when the encoder arrives it wants exactly this concatenation.
-func (p *parser) stringList() error {
+// vector the suite has.
+//
+// **The concatenation is now returned**, which is the sentence that stood here arriving:
+// "the bytes are not accumulated because nothing under 0011 consumes them; when the encoder
+// arrives it wants exactly this concatenation." Section 11 is that encoder, and it wants exactly
+// this — `Data ($4, …)` is `string_list`'s value verbatim (parser.mly:1096) and `data`'s payload is
+// `string bs` (encode.ml:1094). The interval in which the discard was honest is what the quoted
+// sentence records: retention grows out of a section's grammar when that section is written (0006),
+// and before section 11 there was no grammar asking.
+//
+// Unconditional rather than gated on `p.retain`, unlike the instruction sink. The bytes come from
+// `Token.Value`, which the lexer already unescaped and allocated for every string token in both
+// modes — so a mode branch here would save one append per segment and add a value that is nil in
+// one mode and not the other, which is a thing to be wrong about for no gain. There is no error
+// path, so there is no error return: an always-nil error is a branch no caller can take.
+func (p *parser) stringList() []byte {
+	var out []byte
 	for p.c.at(StringTok) {
-		p.c.next()
+		out = append(out, p.c.next().Value...)
 	}
-	return nil
+	return out
 }

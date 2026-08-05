@@ -187,6 +187,32 @@ const RefEncodeML = "third_party/spec/interpreter/binary/encode.ml"
 // deliberately not a shared symbol.
 const MinRefEncodeBytes = 20000
 
+// RefFreeML is the reference interpreter's *free-variable* pass, relative to the repo root.
+//
+// The authority for a question neither decode.ml nor encode.ml answers alone: **which
+// index spaces an instruction references.** `encode.ml` guards the data count section on
+// `Free.((module_ m).datas <> Set.empty)` (:1109) and stops there — the set's membership is
+// computed here, and it is fed by four instruction arms (:165, 166, 175, 181) while a data
+// *segment* contributes nothing (:217). So "does this module need a data count section" is
+// answerable only by reading this file, and both sides of this project's round trip depend
+// on the answer: internal/binary requires the section for those opcodes and internal/text
+// emits it for them.
+//
+// Registered when the first control compared against it
+// (TestSectionTwelveConditionIsTheReferences). `dataRefOps` in internal/binary has cited
+// four of its lines since #22 with nothing resolving them, which is the same
+// citation-without-a-resolver shape RefEncodeML's comment records one authority earlier.
+const RefFreeML = "third_party/spec/interpreter/syntax/free.ml"
+
+// MinRefFreeBytes is the floor for free.ml, which is 7508 bytes at bdd7164.
+//
+// **Nowhere near the other four's 20000, and that is the argument for per-file constants
+// arriving as a measurement rather than as a principle.** free.ml is a sixth the size of
+// decode.ml; a shared floor would have been either vacuous for this file or a false failure
+// for it, and the "happens to match at this revision" coincidence the constants above are
+// separate to guard against has now actually ended.
+const MinRefFreeBytes = 5000
+
 // refFloors is the size floor per reference file, keyed by the path constants above.
 //
 // A map rather than a parameter on RequireSpecRef, deliberately: a floor passed at the
@@ -201,6 +227,7 @@ var refFloors = map[string]int{
 	RefLexerMLL:  MinRefLexerBytes,
 	RefParserMLY: MinRefParserBytes,
 	RefEncodeML:  MinRefEncodeBytes,
+	RefFreeML:    MinRefFreeBytes,
 }
 
 // LicensedRefPaths returns every reference file this package licenses as an authority.
