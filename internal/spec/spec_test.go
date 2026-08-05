@@ -762,6 +762,47 @@ func TestGatedVectors(t *testing.T) {
 		// check below stayed silent throughout, which is the load-bearing negative: it says the
 		// vectors these join are still declined, so the 74 are additions to a live list and not
 		// a list going stale in place.
+		// # The block family's 454, from 24 module heads no entry here had ever named
+		//
+		// #7's `block`/`loop`/`if`/`select` work landed on both sides at once — the encoder emits the
+		// four structural opcodes and `select`'s two, the interpreter executes them — so **711 vectors
+		// that used to stop short now reach a verdict**: 257 became passes and 454 reached a gate.
+		// The columns close exactly, which is the check rather than the claim: fail 5349 → 4638 is
+		// −711, pass 26307 → 26564 is +257, gated 1031 → 1485 is +454, and 257 + 454 = 711. Nothing
+		// went missing and nothing was moved sideways into a quieter column.
+		//
+		// Three features, none of them this PR's: `memory64`'s 315, `simd`'s 102, and multi-memory's
+		// 37. The engine is right in all three cases and configured not to read what it correctly
+		// wrote; every one is answered on the merits in the all-gates-on lane.
+		//
+		// **None of the 454 could inherit a reason, which is what makes this batch different from the
+		// 74 above.** They stand behind 24 module heads that had never appeared in this list at all —
+		// a module whose vectors all used to fail at the encoder contributes no sibling to inherit
+		// from — so each of the 24 reasons is read fresh. Read from the **decoder with every gate on**
+		// and printed (`len(Memories)` plus memory imports, `Limits.Addr64`, and a count of body
+		// instructions whose `Instr.Prefix` is 0xfd), never from the source text: grave #129 is what
+		// counting `(memory` in a `.wast` file costs.
+		//
+		// That probe was wrong once, in the direction the discipline names. Its first version asked
+		// `in.Op == 0xfd` and reported **v128instr=0** for all seven simd modules — a suspiciously
+		// clean zero, and the tell was that it was *exactly* zero on files named for the feature. The
+		// prefix does not live in `Op`; `Instr.Prefix` carries it (module.go:231), and the seven
+		// modules hold 72 to 136 v128 instructions each. The instrument was blind, not the modules
+		// empty.
+		//
+		// Verified the way the 74 were, and the verification found a second blind instrument. The
+		// before/after extraction was first written as a regexp over the source lines and reported
+		// **1030 → 1484**; the same extraction done over the **AST** reports **1031 → 1485**, because
+		// `binary-gc.wast` and `memory-multi.wast` are hyphenated and the pattern's character class
+		// was not. Both readings agreed on the delta (+454) and on the load-bearing negative — zero
+		// pre-existing rows changed, zero removed, and the added key set is *identical* to the set
+		// the control named — but a comparator that cannot see three of its rows is not the
+		// comparator to certify an edit with, so the numbers quoted here are the AST's. Which also
+		// re-dates the paragraph above: its "963 pre-existing entries" was the same undercount and is
+		// **957** measured properly. Its conclusion stands; its figure was a regex's.
+		//
+		// The reverse check below stayed silent throughout — the vectors these join are still
+		// declined, so this is a live list growing rather than a stale one being padded.
 		"address0.wast": {
 			105: "multi-memory: 2 memories at :3, so a memarg carries flags bit 6",
 			106: "multi-memory: 2 memories at :3, so a memarg carries flags bit 6",
@@ -1271,6 +1312,25 @@ func TestGatedVectors(t *testing.T) {
 			216: "memory64: (memory i64 1) at :1 — an i64 index type",
 			217: "memory64: (memory i64 1) at :1 — an i64 index type",
 		},
+		"float_exprs0.wast": {
+			25: "multi-memory: 3 memories at :1, so a memarg carries flags bit 6",
+			26: "multi-memory: 3 memories at :1, so a memarg carries flags bit 6",
+			27: "multi-memory: 3 memories at :1, so a memarg carries flags bit 6",
+			28: "multi-memory: 3 memories at :1, so a memarg carries flags bit 6",
+			29: "multi-memory: 3 memories at :1, so a memarg carries flags bit 6",
+			30: "multi-memory: 3 memories at :1, so a memarg carries flags bit 6",
+			31: "multi-memory: 3 memories at :1, so a memarg carries flags bit 6",
+			32: "multi-memory: 3 memories at :1, so a memarg carries flags bit 6",
+			33: "multi-memory: 3 memories at :1, so a memarg carries flags bit 6",
+			34: "multi-memory: 3 memories at :1, so a memarg carries flags bit 6",
+			35: "multi-memory: 3 memories at :1, so a memarg carries flags bit 6",
+			36: "multi-memory: 3 memories at :1, so a memarg carries flags bit 6",
+			37: "multi-memory: 3 memories at :1, so a memarg carries flags bit 6",
+		},
+		"float_exprs1.wast": {
+			103: "multi-memory: 9 memories at :4, so a memarg carries flags bit 6",
+			104: "multi-memory: 9 memories at :4, so a memarg carries flags bit 6",
+		},
 		"float_memory0.wast": {
 			20: "multi-memory: 6 memories at :5, so a memarg carries flags bit 6",
 			21: "multi-memory: 6 memories at :5, so a memarg carries flags bit 6",
@@ -1418,9 +1478,51 @@ func TestGatedVectors(t *testing.T) {
 			42: "multi-memory: 2 memories at :26, so a memarg carries flags bit 6",
 		},
 		"memory64.wast": {
-			12: "memory64: (memory i64 (data)) at :11 — an i64 index type",
-			14: "memory64: (memory i64 (data \"\")) at :13 — an i64 index type",
-			16: "memory64: (memory i64 (data \"x\")) at :15 — an i64 index type",
+			12:  "memory64: (memory i64 (data)) at :11 — an i64 index type",
+			14:  "memory64: (memory i64 (data \"\")) at :13 — an i64 index type",
+			16:  "memory64: (memory i64 (data \"x\")) at :15 — an i64 index type",
+			159: "memory64: an addr64 memory (min 1, no max) at :71 — an i64 index type",
+			160: "memory64: an addr64 memory (min 1, no max) at :71 — an i64 index type",
+			162: "memory64: an addr64 memory (min 1, no max) at :71 — an i64 index type",
+			163: "memory64: an addr64 memory (min 1, no max) at :71 — an i64 index type",
+			164: "memory64: an addr64 memory (min 1, no max) at :71 — an i64 index type",
+			165: "memory64: an addr64 memory (min 1, no max) at :71 — an i64 index type",
+			167: "memory64: an addr64 memory (min 1, no max) at :71 — an i64 index type",
+			168: "memory64: an addr64 memory (min 1, no max) at :71 — an i64 index type",
+			169: "memory64: an addr64 memory (min 1, no max) at :71 — an i64 index type",
+			170: "memory64: an addr64 memory (min 1, no max) at :71 — an i64 index type",
+			172: "memory64: an addr64 memory (min 1, no max) at :71 — an i64 index type",
+			173: "memory64: an addr64 memory (min 1, no max) at :71 — an i64 index type",
+			174: "memory64: an addr64 memory (min 1, no max) at :71 — an i64 index type",
+			175: "memory64: an addr64 memory (min 1, no max) at :71 — an i64 index type",
+			176: "memory64: an addr64 memory (min 1, no max) at :71 — an i64 index type",
+			177: "memory64: an addr64 memory (min 1, no max) at :71 — an i64 index type",
+			178: "memory64: an addr64 memory (min 1, no max) at :71 — an i64 index type",
+			179: "memory64: an addr64 memory (min 1, no max) at :71 — an i64 index type",
+			181: "memory64: an addr64 memory (min 1, no max) at :71 — an i64 index type",
+			182: "memory64: an addr64 memory (min 1, no max) at :71 — an i64 index type",
+			183: "memory64: an addr64 memory (min 1, no max) at :71 — an i64 index type",
+			184: "memory64: an addr64 memory (min 1, no max) at :71 — an i64 index type",
+			185: "memory64: an addr64 memory (min 1, no max) at :71 — an i64 index type",
+			186: "memory64: an addr64 memory (min 1, no max) at :71 — an i64 index type",
+			188: "memory64: an addr64 memory (min 1, no max) at :71 — an i64 index type",
+			189: "memory64: an addr64 memory (min 1, no max) at :71 — an i64 index type",
+			190: "memory64: an addr64 memory (min 1, no max) at :71 — an i64 index type",
+			191: "memory64: an addr64 memory (min 1, no max) at :71 — an i64 index type",
+			192: "memory64: an addr64 memory (min 1, no max) at :71 — an i64 index type",
+			193: "memory64: an addr64 memory (min 1, no max) at :71 — an i64 index type",
+			195: "memory64: an addr64 memory (min 1, no max) at :71 — an i64 index type",
+			196: "memory64: an addr64 memory (min 1, no max) at :71 — an i64 index type",
+			197: "memory64: an addr64 memory (min 1, no max) at :71 — an i64 index type",
+			198: "memory64: an addr64 memory (min 1, no max) at :71 — an i64 index type",
+			199: "memory64: an addr64 memory (min 1, no max) at :71 — an i64 index type",
+			200: "memory64: an addr64 memory (min 1, no max) at :71 — an i64 index type",
+			201: "memory64: an addr64 memory (min 1, no max) at :71 — an i64 index type",
+			202: "memory64: an addr64 memory (min 1, no max) at :71 — an i64 index type",
+			203: "memory64: an addr64 memory (min 1, no max) at :71 — an i64 index type",
+			204: "memory64: an addr64 memory (min 1, no max) at :71 — an i64 index type",
+			205: "memory64: an addr64 memory (min 1, no max) at :71 — an i64 index type",
+			206: "memory64: an addr64 memory (min 1, no max) at :71 — an i64 index type",
 		},
 		"memory_copy0.wast": {
 			19: "multi-memory: 4 memories at :2, so a memarg carries flags bit 6",
@@ -1699,9 +1801,252 @@ func TestGatedVectors(t *testing.T) {
 			338:  "memory64: (memory (export \"memory0\") i64 1 1) at :300 — an i64 index type",
 			339:  "memory64: (memory (export \"memory0\") i64 1 1) at :300 — an i64 index type",
 			340:  "memory64: (memory (export \"memory0\") i64 1 1) at :300 — an i64 index type",
+			4780: "memory64: an addr64 memory (min 1, max 1) at :4763 — an i64 index type",
+			4782: "memory64: an addr64 memory (min 1, max 1) at :4763 — an i64 index type",
+			4784: "memory64: an addr64 memory (min 1, max 1) at :4763 — an i64 index type",
+			4786: "memory64: an addr64 memory (min 1, max 1) at :4763 — an i64 index type",
+			4806: "memory64: an addr64 memory (min 1, max 1) at :4789 — an i64 index type",
+			4808: "memory64: an addr64 memory (min 1, max 1) at :4789 — an i64 index type",
+			4810: "memory64: an addr64 memory (min 1, max 1) at :4789 — an i64 index type",
+			4812: "memory64: an addr64 memory (min 1, max 1) at :4789 — an i64 index type",
+			4857: "memory64: an addr64 memory (min 1, max 1) at :4839 — an i64 index type",
+			4859: "memory64: an addr64 memory (min 1, max 1) at :4839 — an i64 index type",
+			4861: "memory64: an addr64 memory (min 1, max 1) at :4839 — an i64 index type",
 			4867: "memory64: (memory i64 1 1) at :4863 — an i64 index type",
 			4879: "memory64: (memory i64 1 1) at :4875 — an i64 index type",
 			4891: "memory64: (memory i64 1 1) at :4887 — an i64 index type",
+			5115: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5117: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5119: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5121: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5123: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5125: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5127: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5129: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5131: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5133: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5135: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5137: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5139: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5141: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5143: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5145: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5147: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5149: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5151: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5153: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5155: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5157: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5159: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5161: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5163: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5165: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5167: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5169: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5171: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5173: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5175: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5177: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5179: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5181: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5183: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5185: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5187: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5189: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5191: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5193: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5195: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5197: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5199: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5201: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5203: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5205: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5207: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5209: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5211: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5213: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5215: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5217: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5219: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5221: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5223: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5225: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5227: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5229: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5231: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5233: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5235: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5237: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5239: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5241: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5243: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5245: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5247: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5249: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5251: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5253: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5255: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5257: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5259: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5261: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5263: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5265: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5267: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5269: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5271: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5273: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5275: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5277: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5279: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5281: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5283: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5285: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5287: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5289: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5291: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5293: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5295: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5297: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5299: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5301: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5303: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5305: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5307: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5309: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5311: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5313: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5315: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5317: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5319: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5321: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5323: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5325: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5327: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5329: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5331: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5333: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5335: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5337: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5339: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5341: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5343: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5345: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5347: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5349: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5351: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5353: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5355: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5357: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5359: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5361: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5363: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5365: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5367: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5369: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5371: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5373: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5375: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5377: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5379: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5381: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5383: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5385: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5387: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5389: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5391: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5393: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5395: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5397: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5399: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5401: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5403: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5405: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5407: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5409: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5411: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5413: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5415: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5417: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5419: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5421: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5423: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5425: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5427: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5429: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5431: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5433: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5435: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5437: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5439: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5441: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5443: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5445: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5447: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5449: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5451: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5453: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5455: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5457: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5459: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5461: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5463: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5465: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5467: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5469: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5471: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5473: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5475: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5477: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5479: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5481: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5483: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5485: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5487: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5489: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5491: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5493: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5495: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5497: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5499: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5501: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5503: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5505: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5507: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5509: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5511: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5513: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5515: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5517: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5519: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5521: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5523: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5525: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5527: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5529: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5531: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5533: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5535: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5537: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5539: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5541: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5543: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5545: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5547: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5549: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5551: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5553: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5555: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5557: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5559: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5561: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5563: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5565: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5567: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5569: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5571: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5573: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5575: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
+			5577: "memory64: an addr64 memory (min 1, max 1) at :4899 — an i64 index type",
 		},
 		"memory_fill0.wast": {
 			18: "multi-memory: 3 memories at :2, so a memarg carries flags bit 6",
@@ -1717,6 +2062,27 @@ func TestGatedVectors(t *testing.T) {
 			36: "multi-memory: 3 memories at :2, so a memarg carries flags bit 6",
 			37: "multi-memory: 3 memories at :2, so a memarg carries flags bit 6",
 			40: "multi-memory: 3 memories at :2, so a memarg carries flags bit 6",
+		},
+		"memory_fill64.wast": {
+			22:  "memory64: an addr64 memory (min 1, max 1) at :6 — an i64 index type",
+			24:  "memory64: an addr64 memory (min 1, max 1) at :6 — an i64 index type",
+			26:  "memory64: an addr64 memory (min 1, max 1) at :6 — an i64 index type",
+			80:  "memory64: an addr64 memory (min 1, max 1) at :64 — an i64 index type",
+			82:  "memory64: an addr64 memory (min 1, max 1) at :64 — an i64 index type",
+			100: "memory64: an addr64 memory (min 1, max 1) at :84 — an i64 index type",
+			136: "memory64: an addr64 memory (min 1, max 1) at :120 — an i64 index type",
+			138: "memory64: an addr64 memory (min 1, max 1) at :120 — an i64 index type",
+			140: "memory64: an addr64 memory (min 1, max 1) at :120 — an i64 index type",
+			142: "memory64: an addr64 memory (min 1, max 1) at :120 — an i64 index type",
+			162: "memory64: an addr64 memory (min 1, max 1) at :145 — an i64 index type",
+			164: "memory64: an addr64 memory (min 1, max 1) at :145 — an i64 index type",
+			166: "memory64: an addr64 memory (min 1, max 1) at :145 — an i64 index type",
+			168: "memory64: an addr64 memory (min 1, max 1) at :145 — an i64 index type",
+			170: "memory64: an addr64 memory (min 1, max 1) at :145 — an i64 index type",
+			172: "memory64: an addr64 memory (min 1, max 1) at :145 — an i64 index type",
+			641: "memory64: an addr64 memory (min 1, max 1) at :621 — an i64 index type",
+			663: "memory64: an addr64 memory (min 1, max 1) at :643 — an i64 index type",
+			685: "memory64: an addr64 memory (min 1, max 1) at :665 — an i64 index type",
 		},
 		"memory_grow64.wast": {
 			14: "memory64: (memory i64 0) at :1 — an i64 index type",
@@ -1747,6 +2113,17 @@ func TestGatedVectors(t *testing.T) {
 			58: "memory64: (memory i64 0 10) at :48 — an i64 index type",
 			59: "memory64: (memory i64 0 10) at :48 — an i64 index type",
 			60: "memory64: (memory i64 0 10) at :48 — an i64 index type",
+			85: "memory64: an addr64 memory (min 1, no max) at :64 — an i64 index type",
+			86: "memory64: an addr64 memory (min 1, no max) at :64 — an i64 index type",
+			87: "memory64: an addr64 memory (min 1, no max) at :64 — an i64 index type",
+			88: "memory64: an addr64 memory (min 1, no max) at :64 — an i64 index type",
+			89: "memory64: an addr64 memory (min 1, no max) at :64 — an i64 index type",
+			90: "memory64: an addr64 memory (min 1, no max) at :64 — an i64 index type",
+			91: "memory64: an addr64 memory (min 1, no max) at :64 — an i64 index type",
+			92: "memory64: an addr64 memory (min 1, no max) at :64 — an i64 index type",
+			93: "memory64: an addr64 memory (min 1, no max) at :64 — an i64 index type",
+			94: "memory64: an addr64 memory (min 1, no max) at :64 — an i64 index type",
+			95: "memory64: an addr64 memory (min 1, no max) at :64 — an i64 index type",
 		},
 		"memory_init64.wast": {
 			17:  "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
@@ -1811,6 +2188,122 @@ func TestGatedVectors(t *testing.T) {
 			268: "memory64: (memory i64 1) at :34 — an i64 index type",
 			269: "memory64: (memory i64 1) at :34 — an i64 index type",
 		},
+		"simd_bit_shift.wast": {
+			949: "SIMD: 72 v128 instructions in function bodies at :658",
+			950: "SIMD: 72 v128 instructions in function bodies at :658",
+			951: "SIMD: 72 v128 instructions in function bodies at :658",
+			952: "SIMD: 72 v128 instructions in function bodies at :658",
+			953: "SIMD: 72 v128 instructions in function bodies at :658",
+			954: "SIMD: 72 v128 instructions in function bodies at :658",
+			955: "SIMD: 72 v128 instructions in function bodies at :658",
+			956: "SIMD: 72 v128 instructions in function bodies at :658",
+			957: "SIMD: 72 v128 instructions in function bodies at :658",
+			958: "SIMD: 72 v128 instructions in function bodies at :658",
+			959: "SIMD: 72 v128 instructions in function bodies at :658",
+			960: "SIMD: 72 v128 instructions in function bodies at :658",
+			961: "SIMD: 72 v128 instructions in function bodies at :658",
+			962: "SIMD: 72 v128 instructions in function bodies at :658",
+			963: "SIMD: 72 v128 instructions in function bodies at :658",
+			964: "SIMD: 72 v128 instructions in function bodies at :658",
+			965: "SIMD: 72 v128 instructions in function bodies at :658",
+			966: "SIMD: 72 v128 instructions in function bodies at :658",
+			967: "SIMD: 72 v128 instructions in function bodies at :658",
+			968: "SIMD: 72 v128 instructions in function bodies at :658",
+			969: "SIMD: 72 v128 instructions in function bodies at :658",
+			970: "SIMD: 72 v128 instructions in function bodies at :658",
+			971: "SIMD: 72 v128 instructions in function bodies at :658",
+			972: "SIMD: 72 v128 instructions in function bodies at :658",
+		},
+		"simd_bitwise.wast": {
+			700: "SIMD: 136 v128 instructions in function bodies at :429",
+			701: "SIMD: 136 v128 instructions in function bodies at :429",
+			702: "SIMD: 136 v128 instructions in function bodies at :429",
+			703: "SIMD: 136 v128 instructions in function bodies at :429",
+			704: "SIMD: 136 v128 instructions in function bodies at :429",
+			705: "SIMD: 136 v128 instructions in function bodies at :429",
+			706: "SIMD: 136 v128 instructions in function bodies at :429",
+			707: "SIMD: 136 v128 instructions in function bodies at :429",
+			708: "SIMD: 136 v128 instructions in function bodies at :429",
+			709: "SIMD: 136 v128 instructions in function bodies at :429",
+			710: "SIMD: 136 v128 instructions in function bodies at :429",
+			711: "SIMD: 136 v128 instructions in function bodies at :429",
+			712: "SIMD: 136 v128 instructions in function bodies at :429",
+		},
+		"simd_f32x4_cmp.wast": {
+			8056: "SIMD: 123 v128 instructions in function bodies at :7799",
+			8057: "SIMD: 123 v128 instructions in function bodies at :7799",
+			8058: "SIMD: 123 v128 instructions in function bodies at :7799",
+			8059: "SIMD: 123 v128 instructions in function bodies at :7799",
+			8060: "SIMD: 123 v128 instructions in function bodies at :7799",
+			8061: "SIMD: 123 v128 instructions in function bodies at :7799",
+			8062: "SIMD: 123 v128 instructions in function bodies at :7799",
+			8063: "SIMD: 123 v128 instructions in function bodies at :7799",
+			8064: "SIMD: 123 v128 instructions in function bodies at :7799",
+			8065: "SIMD: 123 v128 instructions in function bodies at :7799",
+			8066: "SIMD: 123 v128 instructions in function bodies at :7799",
+			8067: "SIMD: 123 v128 instructions in function bodies at :7799",
+			8068: "SIMD: 123 v128 instructions in function bodies at :7799",
+		},
+		"simd_f64x2_cmp.wast": {
+			8325: "SIMD: 123 v128 instructions in function bodies at :8069",
+			8326: "SIMD: 123 v128 instructions in function bodies at :8069",
+			8327: "SIMD: 123 v128 instructions in function bodies at :8069",
+			8328: "SIMD: 123 v128 instructions in function bodies at :8069",
+			8329: "SIMD: 123 v128 instructions in function bodies at :8069",
+			8330: "SIMD: 123 v128 instructions in function bodies at :8069",
+			8331: "SIMD: 123 v128 instructions in function bodies at :8069",
+			8332: "SIMD: 123 v128 instructions in function bodies at :8069",
+			8333: "SIMD: 123 v128 instructions in function bodies at :8069",
+			8334: "SIMD: 123 v128 instructions in function bodies at :8069",
+			8335: "SIMD: 123 v128 instructions in function bodies at :8069",
+			8336: "SIMD: 123 v128 instructions in function bodies at :8069",
+			8337: "SIMD: 123 v128 instructions in function bodies at :8069",
+		},
+		"simd_i16x8_cmp.wast": {
+			1725: "SIMD: 123 v128 instructions in function bodies at :1469",
+			1726: "SIMD: 123 v128 instructions in function bodies at :1469",
+			1727: "SIMD: 123 v128 instructions in function bodies at :1469",
+			1728: "SIMD: 123 v128 instructions in function bodies at :1469",
+			1729: "SIMD: 123 v128 instructions in function bodies at :1469",
+			1730: "SIMD: 123 v128 instructions in function bodies at :1469",
+			1731: "SIMD: 123 v128 instructions in function bodies at :1469",
+			1732: "SIMD: 123 v128 instructions in function bodies at :1469",
+			1733: "SIMD: 123 v128 instructions in function bodies at :1469",
+			1734: "SIMD: 123 v128 instructions in function bodies at :1469",
+			1735: "SIMD: 123 v128 instructions in function bodies at :1469",
+			1736: "SIMD: 123 v128 instructions in function bodies at :1469",
+			1737: "SIMD: 123 v128 instructions in function bodies at :1469",
+		},
+		"simd_i32x4_cmp.wast": {
+			1731: "SIMD: 123 v128 instructions in function bodies at :1475",
+			1732: "SIMD: 123 v128 instructions in function bodies at :1475",
+			1733: "SIMD: 123 v128 instructions in function bodies at :1475",
+			1734: "SIMD: 123 v128 instructions in function bodies at :1475",
+			1735: "SIMD: 123 v128 instructions in function bodies at :1475",
+			1736: "SIMD: 123 v128 instructions in function bodies at :1475",
+			1737: "SIMD: 123 v128 instructions in function bodies at :1475",
+			1738: "SIMD: 123 v128 instructions in function bodies at :1475",
+			1739: "SIMD: 123 v128 instructions in function bodies at :1475",
+			1740: "SIMD: 123 v128 instructions in function bodies at :1475",
+			1741: "SIMD: 123 v128 instructions in function bodies at :1475",
+			1742: "SIMD: 123 v128 instructions in function bodies at :1475",
+			1743: "SIMD: 123 v128 instructions in function bodies at :1475",
+		},
+		"simd_i8x16_cmp.wast": {
+			1671: "SIMD: 123 v128 instructions in function bodies at :1415",
+			1672: "SIMD: 123 v128 instructions in function bodies at :1415",
+			1673: "SIMD: 123 v128 instructions in function bodies at :1415",
+			1674: "SIMD: 123 v128 instructions in function bodies at :1415",
+			1675: "SIMD: 123 v128 instructions in function bodies at :1415",
+			1676: "SIMD: 123 v128 instructions in function bodies at :1415",
+			1677: "SIMD: 123 v128 instructions in function bodies at :1415",
+			1678: "SIMD: 123 v128 instructions in function bodies at :1415",
+			1679: "SIMD: 123 v128 instructions in function bodies at :1415",
+			1680: "SIMD: 123 v128 instructions in function bodies at :1415",
+			1681: "SIMD: 123 v128 instructions in function bodies at :1415",
+			1682: "SIMD: 123 v128 instructions in function bodies at :1415",
+			1683: "SIMD: 123 v128 instructions in function bodies at :1415",
+		},
 		"simd_load.wast": {
 			44: "SIMD: a v128 instruction in a function body at :34",
 		},
@@ -1825,6 +2318,30 @@ func TestGatedVectors(t *testing.T) {
 			50: "multi-memory: 2 memories at :30, so a memarg carries flags bit 6",
 			51: "multi-memory: 2 memories at :30, so a memarg carries flags bit 6",
 			52: "multi-memory: 2 memories at :30, so a memarg carries flags bit 6",
+		},
+		"store2.wast": {
+			43: "multi-memory: 2 memories (1 imported) at :6, so a memarg carries flags bit 6",
+			44: "multi-memory: 2 memories (1 imported) at :6, so a memarg carries flags bit 6",
+			45: "multi-memory: 2 memories (1 imported) at :6, so a memarg carries flags bit 6",
+			46: "multi-memory: 2 memories (1 imported) at :6, so a memarg carries flags bit 6",
+			47: "multi-memory: 2 memories (1 imported) at :6, so a memarg carries flags bit 6",
+			48: "multi-memory: 2 memories (1 imported) at :6, so a memarg carries flags bit 6",
+			49: "multi-memory: 2 memories (1 imported) at :6, so a memarg carries flags bit 6",
+			50: "multi-memory: 2 memories (1 imported) at :6, so a memarg carries flags bit 6",
+			51: "multi-memory: 2 memories (1 imported) at :6, so a memarg carries flags bit 6",
+			52: "multi-memory: 2 memories (1 imported) at :6, so a memarg carries flags bit 6",
+			53: "multi-memory: 2 memories (1 imported) at :6, so a memarg carries flags bit 6",
+			55: "multi-memory: 2 memories (1 imported) at :6, so a memarg carries flags bit 6",
+			56: "multi-memory: 2 memories (1 imported) at :6, so a memarg carries flags bit 6",
+			57: "multi-memory: 2 memories (1 imported) at :6, so a memarg carries flags bit 6",
+			58: "multi-memory: 2 memories (1 imported) at :6, so a memarg carries flags bit 6",
+			59: "multi-memory: 2 memories (1 imported) at :6, so a memarg carries flags bit 6",
+			60: "multi-memory: 2 memories (1 imported) at :6, so a memarg carries flags bit 6",
+			61: "multi-memory: 2 memories (1 imported) at :6, so a memarg carries flags bit 6",
+			62: "multi-memory: 2 memories (1 imported) at :6, so a memarg carries flags bit 6",
+			63: "multi-memory: 2 memories (1 imported) at :6, so a memarg carries flags bit 6",
+			64: "multi-memory: 2 memories (1 imported) at :6, so a memarg carries flags bit 6",
+			65: "multi-memory: 2 memories (1 imported) at :6, so a memarg carries flags bit 6",
 		},
 		"table_grow64.wast": {
 			12: "memory64: (table $t64 i64 0 externref) at :1 — an i64 index type",
@@ -2222,7 +2739,17 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	// disappearance property as arithmetic rather than as a claim: every parked vector is
 	// accounted for in this lane, and the 201 stay honestly red until their feature works.
 	// Quoting 830 as the population would have implied 201 vectors vanished.
-	const allOnPassFloor = 27137
+	// **27137 → 27486, and the gap to the default lane's 26567 is 919.** #7's block family raises
+	// both floors; the arithmetic above holds at the new numbers and is worth re-running rather
+	// than assumed, because the gated population grew by 454 in the same PR: 1485 declines become
+	// **919 passes and 566 fails** here, and fail moves 4635 → 5201 to match. 919 + 566 = 1485.
+	//
+	// Re-measured rather than adjusted, and the difference was not zero: this floor read **27483**
+	// before grave #135 was fixed and reads 27486 after, the same +3 `comments.wast` modules the
+	// default lane gained. Arithmetic on the earlier reading would have set a floor three below
+	// the measurement and been indistinguishable from a correct one on the board — a floor is only
+	// as honest as the run it was read from.
+	const allOnPassFloor = 27486
 	boardBound(t, "allOnPassFloor", totalPass, allOnPassFloor, boardBoundSlack, floorBound,
 		"a gated feature regressed, which the Gated==0 assertion above cannot see: with every "+
 			"gate on, a broken feature turns a pass into a fail and leaves Gated at zero")
@@ -3093,7 +3620,57 @@ func TestPhase1Files(t *testing.T) {
 	// then overtaken: it rose 356 → 441 → 8713 exactly as written, and then the arms arrived and
 	// it fell by 8273. A forecast that came true twice and was then made obsolete by the work it
 	// was forecasting is the record worth keeping.
-	const execFailCeiling = 440
+	//
+	// # Re-based 440 → 662 by the block family, and 232 of the rise is downstream reading
+	//
+	// `block`/`loop`/`if`/`select` on both sides (#7) instantiate modules whose exports are a
+	// `loop` around an `if` — `memory_copy.wast`'s `checkRange` is the shape — so vectors that
+	// could not be built before now run and read memory. The rise is legitimate under this
+	// constant's own instruction, and the instruction is named: **+227 `memory_copy.wast` and +5
+	// `memory_fill.wast` value mismatches**, +7 `10 call`, +9 `fc 0b`, −26 `0f return`.
+	//
+	// It partitions to exactly 662, read off the buckets rather than reasoned toward:
+	//
+	//	309  opcode arms this phase does not have, `no arm for opcode` and nothing else: `10
+	//	     call` 81, the `fc 00`–`fc 07` saturating conversions 180, `fc 0a`/`fc 0b` 35, `23
+	//	     global.get` 9, `fc 09`/`fc 10` 4.
+	//	280  `assert_return value mismatch`, every one downstream of a setup invoke that failed
+	//	     — see below, where that is measured rather than claimed.
+	//	 52  `memory %d is imported, and linking is not implemented (contract §3)` — the
+	//	     ErrUnsupported category, naming linking rather than blaming a table.
+	//	 21  the encoder's frontier charged here because instantiation is where it is met: 20
+	//	     `(elem …)` and 1 `(start …)`, both #8's.
+	//
+	// **That is a partition by *cause*, and it is not the bucket list the board prints**, which
+	// is a distinction worth stating because reading one against the other looks like a
+	// discrepancy and is not. 34 of the 662 arrive under `assert_trap (module) expected: …`
+	// keys — the vector wanted a trap from a bare module form, so the *key* names the trap it
+	// wanted and the cause is in `Got`. Unfolded: the 16 + 2 + 2 under those keys are `(elem …)`
+	// encoder reds, the 7 + 2 + 1 + 1 are imported memories, and 2 are `23 global.get`, which is
+	// why that opcode reads 7 by key and 9 by cause. A census that had quoted the keys would
+	// have reported four buckets short and one opcode light.
+	//
+	// **All 280 value mismatches stand behind a setup `(invoke "test")` that itself fails**, and
+	// that is measured rather than asserted: a probe grouped every mismatch under its preceding
+	// module head and asked whether that module's own top-level invoke succeeded. 280 of 280
+	// downstream, 0 not. A vector whose setup traps on `no arm for opcode fc 0a` then reads a
+	// memory nobody copied into — the same downstream shape the 48 above already had, four times
+	// larger because more of those modules now build.
+	//
+	// The "0 not" was interrogated rather than quoted, because *exactly zero* on an agreement is
+	// the cleanest tell there is: the classifier was falsified by making it record no setup
+	// failures, and it flipped all 280 to "not downstream". It can distinguish both ways.
+	//
+	// **`0f return`'s 26 went to zero, and three of them are grave #135 rather than a new arm.**
+	// The bucket drained because the arm arrived — that part is ordinary. What is not: the arm's
+	// first version did not truncate the stack to the function's result arity, where
+	// `eval.ml:1069` is `take n vs0`, so `(i32.const 1) (return (i32.const 2))` left two values
+	// and `Invoke`'s arity check rejected a **valid** module as unvalidated. Three `comments.wast`
+	// vectors failed exactly that way — a new head, `module reached the interpreter unvalidated`,
+	// which is how it was found: the census printed it, and a *layering-debt* error on a module
+	// the reference accepts is not a debt. An accept-direction defect the suite scores green by
+	// construction everywhere else, and its comment asserted the property the code lacked.
+	const execFailCeiling = 662
 	boardBound(t, "execFailCeiling", execFail, execFailCeiling, 0, ceilingBound,
 		"the interpreter answered fewer vectors than it did: either an opcode arm regressed or "+
 			"a value comparison started disagreeing. A *rise* caused by #8 unblocking more "+
@@ -3288,7 +3865,22 @@ func TestPhase1Files(t *testing.T) {
 	// (fixed, class now 0), 73 were the harness never running a bare top-level `(invoke …)` — the
 	// engine right, the jig not having set the state up — and the 48 that remain are all
 	// downstream of the missing `fc 0a`/`fc 0b` arms and say so.
-	const passFloor = 26307
+	// # Re-based 26307 → 26567 by the block family, and +3 of the 260 are a grave
+	//
+	// `block`/`loop`/`if`/`br`/`br_if`/`return`/`select` on both sides (#7). **+257 from the
+	// family and +3 from grave #135**, which is stated apart because the two are different kinds
+	// of gain: the 257 are vectors that could not be built or could not be run before, and the 3
+	// are `comments.wast` modules this engine was *rejecting* — a `return` that did not truncate
+	// the value stack left extra values behind, and `Invoke`'s arity check then called a valid
+	// module unvalidated. Accept-direction, so no `assert_invalid` vector could have found it;
+	// the reject-direction board could not either, since it scored them as fails under a
+	// perfectly honest-looking layering-debt string.
+	//
+	// The other side of the same motion is the exec ceiling below, 440 → 662: vectors that now
+	// instantiate and run reach value comparisons they could not reach before. A rise here and a
+	// rise there is one fact this time rather than opposite views of one — the family unblocked
+	// both the vectors that agree and the vectors whose remaining gap is an opcode.
+	const passFloor = 26567
 	boardBound(t, "passFloor", totalPass, passFloor, boardBoundSlack, floorBound,
 		"a regression in a grammar that used to answer, or the corpus moved")
 }

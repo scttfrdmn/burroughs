@@ -1832,11 +1832,11 @@ func (p *parser) flatSelectOrCall() (bool, error) {
 	switch t.Keyword {
 	case kwSelect:
 		// `select`'s opcode depends on whether a result type was written (0x1b or 0x1c), which is
-		// `ambiguousOpcodes`' whole content — and its `instr_list` tail is encodable, so the same
-		// dropped-instruction hazard blockinstr's refusal describes applies.
-		if err := p.refuseUnencodable(t, "the select instruction"); err != nil {
-			return true, err
-		}
+		// `ambiguousOpcodes`' whole content — so it is not a lookup, and `opBytes` refuses the whole
+		// mnemonic rather than guess. It is decidable here all the same, and that is the point of the
+		// arm: the choice is **syntactic** (was `(result …)` written?), not a question about the
+		// operands' types, so this stratum has the fact `opBytes` lacks. `ref.test`/`ref.cast`, the
+		// other two ambiguous mnemonics, genuinely need validation's knowledge and stay refused.
 		return true, p.selectResults(p.instrList)
 	case kwCallIndirect, kwReturnCallIndirect:
 		// Two immediates in *reversed* order — `CallIndirect (x, y) → op 0x11; idx y; idx x`
@@ -1996,15 +1996,20 @@ func (p *parser) blockinstr() (bool, error) {
 	default:
 		return false, nil
 	}
-	// **Refused before the body is read, not after.** A block's own opcode has a blocktype immediate
-	// this file does not encode, and its body's instructions *are* encodable — so emitting the body
-	// while dropping the block would produce a function whose control flow is gone and which decodes
-	// clean. Refusing here means the body is still parsed (the error propagates, so nothing downstream
-	// runs) and no half-encoded function can exist. See refuseUnencodable.
-	if err := p.refuseUnencodable(t, "the "+t.Text+" instruction"); err != nil {
-		return true, err
+	// **Refused before the body is read, not after.** `try_table`'s opcode carries a `vec catch`
+	// (encode.ml:257) this file has no encoding for, and its body's instructions *are* encodable — so
+	// emitting the body while dropping the opener would produce a function whose control flow is gone
+	// and which decodes clean. Refusing here means the body is still parsed (the error propagates, so
+	// nothing downstream runs) and no half-encoded function can exist. See refuseUnencodable.
+	//
+	// `block`, `loop` and `if` are past this frontier and are emitted below; the fourth arm stays
+	// behind it, and the refusal is narrowed to it rather than removed.
+	if t.Keyword == kwTryTable {
+		if err := p.refuseUnencodable(t, "the "+t.Text+" instruction"); err != nil {
+			return true, err
+		}
 	}
-	p.c.next()
+	kw := p.c.next()
 
 	label, err := p.labelingOpt()
 	if err != nil {
@@ -2020,12 +2025,30 @@ func (p *parser) blockinstr() (bool, error) {
 	// carries that, and the push here is still the body's — see its header.
 	p.ctx.pushLabel(label)
 	defer p.ctx.labels.labelPop()
+	var (
+		arms blockArms
+		ft   funcType
+		slot *blockTypeSlot
+	)
 	if t.Keyword == kwTryTable {
-		if err := p.handlerBlock(); err != nil {
+		// **Its own name, not `err`**, which is the reading both linters accept: the outer `err` is
+		// live from labelingOpt above and reassigned by the else-branch, so `err :=` here is a
+		// shadow (`govet`) and `err =` is a sloppy reassignment (`gocritic`). The two findings
+		// point at each other, and the way out is that these really are different errors — the same
+		// resolution memAccess reached for `resolveErr`. Nothing is currently wrong with any
+		// spelling, since this arm returns immediately; two variables spelled `err` in one function
+		// is how a later edit comes to test the wrong one.
+		if bodyErr := p.handlerBlock(); bodyErr != nil {
+			return true, bodyErr
+		}
+	} else {
+		// The body is collected rather than emitted, because the opener precedes it in the image and
+		// its blocktype is not known until the signature is recorded — which happens *after* the body
+		// is read (see orderedTypeUse). blockTail is the collection; emitBlock below is the ordering.
+		ft, slot, err = p.blockSignatureSlot(p.blockTail(&arms, p.instrList))
+		if err != nil {
 			return true, err
 		}
-	} else if err := p.block(); err != nil {
-		return true, err
 	}
 
 	// `if … else …` is a fifth arm rather than an option on the third (:732-:735), and it carries
@@ -2033,10 +2056,13 @@ func (p *parser) blockinstr() (bool, error) {
 	// the reference checks them against the same opener by concatenating them (`$5 @ $8`).
 	if t.Keyword == kwIf && p.c.atKeyword(kwElse) {
 		p.c.next()
-		if err := p.labelingEndOpt(label); err != nil {
-			return true, err
+		// `endErr`, for the try_table arm's reason: a distinct error gets a distinct name rather
+		// than shadowing or reassigning the one blockSignatureSlot wrote.
+		if endErr := p.labelingEndOpt(label); endErr != nil {
+			return true, endErr
 		}
-		if err := p.instrList(); err != nil {
+		arms.els, err = p.intoSink(p.instrList)
+		if err != nil {
 			return true, err
 		}
 	}
@@ -2046,7 +2072,20 @@ func (p *parser) blockinstr() (bool, error) {
 		return true, p.unexpected()
 	}
 	p.c.next()
-	return true, p.labelingEndOpt(label)
+	if err := p.labelingEndOpt(label); err != nil {
+		return true, err
+	}
+	if t.Keyword == kwTryTable {
+		// Refused above, so retention never reaches here for this arm — and it emits nothing, since
+		// nothing was collected. Stated as a return rather than left to `slot == nil`, because a nil
+		// slot reaching blockTypeBytes would be a panic where this is a frontier.
+		return true, nil
+	}
+	// The `end` token is consumed and its label checked before anything is emitted: emission is the
+	// last act of a *successful* parse, so a malformed tail cannot leave a partial construct in the
+	// sink. The END *byte* is emitBlock's regardless of whether the text spelled the keyword — the
+	// folded form does not.
+	return true, p.emitBlock(kw, slot, ft, &arms)
 }
 
 // atBlockTerminator reports whether the cursor is on a token that ends an enclosing block's
@@ -2156,19 +2195,16 @@ func (p *parser) labelingEndOpt(label string) error {
 	return nil
 }
 
-// block parses `block` (parser.mly:740-752): an optional typeuse, then `(param …)`/`(result …)`
-// lists, then the instruction sequence.
+// blockSignature reads the part `block` and `handler_block` have in common: `typeuse?` then the
+// `(param …)*` and `(result …)*` lists, and **then the body, through the tail it is handed**.
 //
 // The three are ordered and each is optional, which `block_param_body` (:754) and
 // `block_result_body` (:760) express as right-recursive lists — `(param)` may repeat, then
 // `(result)` may repeat, then `instr_list`. A `(param)` *after* a `(result)` is not in the
-// grammar, so it falls out of the loops and is reported by instrList's fallthrough.
-func (p *parser) block() error {
-	return p.blockSignature(p.instrList)
-}
-
-// blockSignature reads the part `block` and `handler_block` have in common: `typeuse?` then the
-// `(param …)*` and `(result …)*` lists, and **then the body, through the tail it is handed**.
+// grammar, so it falls out of the loops and is reported by instrList's fallthrough. (Those two
+// sentences described a `p.block()` wrapper that stood here as the `block` production's own face
+// and was deleted when blockinstr took the slot-returning form for #7's opener emission; the facts
+// are the production's, not the wrapper's, so they moved rather than went with it.)
 //
 // Shared rather than written twice because the reference's two chains are the same shape — compare
 // `block_param_body`/`block_result_body` (:754-:764) with
@@ -2206,7 +2242,22 @@ func (p *parser) block() error {
 // difference — an index shift is invisible until a numeric typeuse names a shifted index — which is
 // exactly why the order is taken from the grammar rather than from the board.
 func (p *parser) blockSignature(tail func() error) error {
-	return p.orderedTypeUse(blockchain, tail)
+	_, _, err := p.blockSignatureSlot(tail)
+	return err
+}
+
+// blockSignatureSlot is blockSignature for the callers that must *encode* the blocktype: the two
+// productions that emit a block opener, where blockSignature's error-only face is what the ones that
+// only recognize keep using.
+//
+// The pairing is typetable.go's — `declareImplicit`/`internImplicit`,
+// `inlineFuncTypeExplicit`/`checkExplicit`, `declareBlockImplicit`/`internBlockImplicit` — copied
+// rather than re-derived (*lessons are indexed by shape*). Two returns because the encoder needs both
+// halves and they are not the same fact: the slot carries what stage 2 resolved, and the signature
+// carries the single result an inline blocktype spells as a bare valtype byte, which is never
+// interned and so has no slot to be read from.
+func (p *parser) blockSignatureSlot(tail func() error) (funcType, *blockTypeSlot, error) {
+	return p.orderedTypeUseSlot(blockchain, tail)
 }
 
 // signatureKind says how a shared-chain site interns an inline signature when no typeuse was
@@ -2272,12 +2323,19 @@ const (
 // upstairs calls *the defect stated as the rule*: print it, don't reason about it. See
 // TestNestedBlockTypeInternsBeforeItsEnclosingOne.
 func (p *parser) orderedTypeUse(kind signatureKind, tail func() error) error {
+	_, _, err := p.orderedTypeUseSlot(kind, tail)
+	return err
+}
+
+// orderedTypeUseSlot is orderedTypeUse plus what the blocktype encoder needs: the signature it read
+// and the slot stage 2 will fill. See blockSignatureSlot for the pairing.
+func (p *parser) orderedTypeUseSlot(kind signatureKind, tail func() error) (funcType, *blockTypeSlot, error) {
 	use, haveUse := idxRef{}, false
 	if p.atTypeuse() {
 		var err error
 		use, err = p.typeuse()
 		if err != nil {
-			return err
+			return funcType{}, nil, err
 		}
 		haveUse = true
 	}
@@ -2287,40 +2345,77 @@ func (p *parser) orderedTypeUse(kind signatureKind, tail func() error) error {
 	// reference rejects, which is the accept-direction defect these vectors exist to catch.
 	for p.c.at(LParen) && p.c.peek2Keyword(kwParam) {
 		if err := p.lpar(kwParam); err != nil {
-			return err
+			return funcType{}, nil, err
 		}
 		vs, err := p.valtypeList()
 		if err != nil {
-			return err
+			return funcType{}, nil, err
 		}
 		ft.params = append(ft.params, vs...)
 		if err := p.rpar(); err != nil {
-			return err
+			return funcType{}, nil, err
 		}
 	}
 	rs, err := p.functypeResult()
 	if err != nil {
-		return err
+		return funcType{}, nil, err
 	}
 	ft.results = rs
 	if err := tail(); err != nil {
-		return err
+		return funcType{}, nil, err
 	}
-	p.deferBlockSignature(kind, use, haveUse, ft)
-	return nil
+	return ft, p.deferBlockSignature(kind, use, haveUse, ft), nil
 }
 
 // deferBlockSignature is deferSignature for the shared chain, differing only in the sugar arm's
 // conditional interning. See signatureKind, and declareBlockImplicit for why the condition exists.
-func (p *parser) deferBlockSignature(kind signatureKind, use idxRef, haveUse bool, ft funcType) {
+//
+// **It returns the slot rather than only recording the check**, for the reason deferSignature's
+// header gives at length: the block opener's immediate is the index the helper produced, and the value
+// must arrive through a slot the deferred op fills rather than from a second call. `inline_functype`
+// *appends*, so calling it again for the encoder would intern a duplicate type and the defect would be
+// invisible here — surfacing as a type-section count, which is exactly the hazard deferSignature was
+// written against. Same slot-plus-thunk shape, third instance.
+//
+// The slot is returned unconditionally, including for the two arms whose signature is not a block's.
+// A `callchain` site has no blocktype to encode and discards it; refusing to hand one over would mean
+// this function knowing which callers encode, which is the caller's business and already carried by
+// `kind`.
+func (p *parser) deferBlockSignature(kind signatureKind, use idxRef, haveUse bool, ft funcType) *blockTypeSlot {
+	slot := &blockTypeSlot{}
 	switch {
 	case haveUse:
-		p.ctx.deferOp(func() error { return p.ctx.inlineFuncTypeExplicit(use, ft) })
+		p.ctx.deferOp(func() error {
+			idx, err := p.ctx.checkExplicit(use, ft)
+			if err != nil {
+				return err
+			}
+			// A written typeuse always names an index, so `interned` is true whatever the inline
+			// signature was: `VarBlockType x` is the arm (parser.mly:743), with no `([], [t])` case in
+			// front of it. `(block (type $t) (result i32) …)` encodes the index, not the valtype byte.
+			*slot = blockTypeSlot{idx: idx, interned: true, filled: true}
+			return nil
+		})
 	case kind == blockchain:
-		p.ctx.deferOp(func() error { return p.ctx.declareBlockImplicit(ft) })
+		p.ctx.deferOp(func() error {
+			idx, interned, err := p.ctx.internBlockImplicit(ft)
+			if err != nil {
+				return err
+			}
+			*slot = blockTypeSlot{idx: idx, interned: interned, filled: true}
+			return nil
+		})
 	default:
-		p.ctx.deferOp(func() error { return p.ctx.declareImplicit(ft) })
+		p.ctx.deferOp(func() error {
+			idx, err := p.ctx.internImplicit(ft)
+			if err != nil {
+				return err
+			}
+			*slot = blockTypeSlot{idx: idx, interned: true, filled: true}
+			return nil
+		})
 	}
+	return slot
 }
 
 // handlerBlock parses `handler_block` (:853-:864) — `try_table`'s block, whose body is preceded by
@@ -2358,8 +2453,20 @@ func (p *parser) handlerBlock() error {
 // block cannot mismatch its own end label — it has none. That is why this takes the label and
 // discards it where `blockinstr` threads it through: the binding still happens (a `$l` here scopes
 // over the body for `br`), and the *comparison* has no second operand.
+//
+// **The END byte is emitted here even though no `end` token was read**, which is the encoding half of
+// that same asymmetry: `end_ ()` closes `Block`/`Loop`/`If` in `encode.ml` regardless of spelling
+// (:250-256), so the two forms produce identical bytes and the terminator belongs to the encoder.
+// Reading it off the token stream would emit it for the flat form only.
+//
+// **No leader-splice manoeuvre, and that is a property of `if_` rather than a shortcut.** `expr1`'s
+// plain arm has to collect its leader into a nested sink and splice it after the operands, because the
+// leader is parsed first and emitted last. Here the opener is emitted last already — `emitBlock` runs
+// after the tail — so a folded `if`'s condition operands, which `ifBody` writes into the *enclosing*
+// sink, land ahead of the opcode by construction. What needs diverting is the opposite half: the
+// arms, which are read before the opener is emitted and must follow it.
 func (p *parser) foldedBlock(leader keywordKind) error {
-	p.c.next() // the keyword
+	kw := p.c.next() // the keyword
 	label, err := p.labelingOpt()
 	if err != nil {
 		return err
@@ -2370,22 +2477,39 @@ func (p *parser) foldedBlock(leader keywordKind) error {
 	// a reader that skipped the push would reject it — accept-direction, so no vector reports it.
 	p.ctx.pushLabel(label)
 	defer p.ctx.labels.labelPop()
-	var body func() error
+	var (
+		arms blockArms
+		body func() error
+	)
 	switch leader {
 	case kwIf:
-		body = p.ifBody
+		// `if`'s tail is the one that fills *both* arms, and the one whose reader cannot be wrapped by
+		// blockTail: its operand loop belongs to the enclosing sequence while its two `(then …)`/
+		// `(else …)` lists belong to the arms. So the split happens inside ifBody, which is handed the
+		// arms rather than diverted wholesale.
+		body = func() error { return p.ifArms(&arms) }
 	case kwTryTable:
 		body = p.handlerClauses
 	default:
 		// `block` and `loop`, whose tail is a plain `instr_list` (:741/:748). Unreachable for
 		// anything else — expr1 dispatched here on exactly these four leaders — and a default
 		// rather than a fifth case because the caller owns the domain.
-		body = p.instrList
+		body = p.blockTail(&arms, p.instrList)
 	}
-	return p.blockSignature(body)
+	ft, slot, err := p.blockSignatureSlot(body)
+	if err != nil {
+		return err
+	}
+	if leader == kwTryTable {
+		// Refused by expr1 before it dispatched here, so retention never reaches this line — and
+		// nothing was collected to emit. See blockinstr's matching return for why it is a statement
+		// rather than a nil-slot check.
+		return nil
+	}
+	return p.emitBlock(kw, slot, ft, &arms)
 }
 
-// ifBody parses `if_` (parser.mly:891-898), the folded `if`'s tail: any number of folded operands
+// ifArms parses `if_` (parser.mly:891-898), the folded `if`'s tail: any number of folded operands
 // pushing the condition, then `(then …)` and optionally `(else …)`.
 //
 // **`(then …)` is mandatory and that is the whole reason this is not `instrList`.** The production's
@@ -2397,7 +2521,14 @@ func (p *parser) foldedBlock(leader keywordKind) error {
 // The operand loop must stop at `(then`, not consume it: `then` is a keyword that starts no
 // instruction, so `expr` declines it and leaves the paren — the same peek2-without-consuming
 // contract that lets `(func (param i32))` survive.
-func (p *parser) ifBody() error {
+//
+// **The three lists it reads go to three different places, which is why this takes the arms rather
+// than being wrapped by blockTail.** The production's own return says so: `[], $3 c', $7 c'` (:893) is
+// a triple, and the sugar arms return an *empty* first component while the recursive arm accumulates
+// operands into it (`es @ es0`, :892). Those operands are the condition — they execute before the `if`
+// opcode and belong to the enclosing sequence — while `(then …)` and `(else …)` are the arms the
+// opcode delimits. So the loop writes through to the active sink and only the two lists are diverted.
+func (p *parser) ifArms(arms *blockArms) error {
 	for {
 		read, err := p.expr()
 		if err != nil {
@@ -2410,21 +2541,27 @@ func (p *parser) ifBody() error {
 	if err := p.lpar(kwThen); err != nil {
 		return err
 	}
-	if err := p.instrList(); err != nil {
+	body, err := p.intoSink(p.instrList)
+	if err != nil {
 		return err
 	}
-	if err := p.rpar(); err != nil {
-		return err
+	arms.body = body
+	// `thenErr`/`elseErr` rather than a second `err`: the one above is live and these are different
+	// errors, which is the same reading blockinstr's `bodyErr` takes for the same pair of findings.
+	if thenErr := p.rpar(); thenErr != nil {
+		return thenErr
 	}
 	if !p.c.at(LParen) || !p.c.peek2Keyword(kwElse) {
 		return nil // the one-armed sugar arm, :896
 	}
-	if err := p.lpar(kwElse); err != nil {
+	if elseErr := p.lpar(kwElse); elseErr != nil {
+		return elseErr
+	}
+	els, err := p.intoSink(p.instrList)
+	if err != nil {
 		return err
 	}
-	if err := p.instrList(); err != nil {
-		return err
-	}
+	arms.els = els
 	return p.rpar()
 }
 
@@ -2472,12 +2609,42 @@ func (p *parser) callexprType() error {
 // beside the missing `(param)`: the results go into `select (Some ts)` directly (:678), never through
 // `inline_functype`. So `select` is the one member of the extended family that leaves the type space
 // alone entirely — not blockchain with an empty param list, and not a conditional intern either.
+//
+// **The instruction is emitted *after* the tail, because `select` is its sequence's last member.**
+// Both arms cons it onto the tail's list — `select (…) :: es` (:678-680) and `es, select (…)`
+// (:815-816) — so the operands precede it in emission order exactly as a folded plain instruction's
+// do, and the manoeuvre is `expr1`'s: the tail writes into the active sink and this appends
+// afterwards. No nested sink is needed, since nothing was emitted before the tail ran.
+//
+// The *whether* flag is now retained (see selectOpByte), which this function was previously the
+// place that threw away: `_, err := p.functypeResult()` discarded the slice, and the flag was never
+// computed at all because a recognizer does not need it.
 func (p *parser) selectResults(tail func() error) error {
-	p.c.next() // SELECT
-	if _, err := p.functypeResult(); err != nil {
+	kw := p.c.next() // SELECT
+	// The flag is read from the cursor rather than from the slice, for selectOpByte's reason: a
+	// written `(result)` with no valtypes yields an empty slice and must still encode as `0x1c`.
+	// `functypeResult`'s loop condition is this same peek, which is what makes the two agree.
+	wrote := p.c.at(LParen) && p.c.peek2Keyword(kwResult)
+	results, err := p.functypeResult()
+	if err != nil {
 		return err
 	}
-	return tail()
+	if err := tail(); err != nil {
+		return err
+	}
+	if !p.retaining() {
+		return nil
+	}
+	// The vector's valtypes may name a forward-referenced type, so they resolve in stage 2 through
+	// `patch` — the same slot the `call $f` arm uses, and the reason `instr` has the field at all.
+	// The bare form has no immediates and needs no patch, so it does not take one: a patch that
+	// returned an empty slice would work and would put a thunk where a constant belongs.
+	in := instr{op: selectOpByte(wrote)}
+	if wrote {
+		in.patch = func() ([]byte, error) { return p.selectResultBytes(results, kw) }
+	}
+	p.emit(in)
+	return nil
 }
 
 // handlerClauses parses `try_block_handler_body` (parser.mly:917-929): the `(catch …)` clauses that
@@ -2615,16 +2782,19 @@ func (p *parser) expr() (bool, error) {
 func (p *parser) expr1(leader keywordKind) error {
 	switch leader {
 	case kwBlock, kwLoop, kwIf, kwTryTable:
-		// The folded spelling of the same refusal `blockinstr` makes, at the other production. Two
-		// sites because the reference has two productions, not because the reason differs.
-		if err := p.refuseUnencodable(p.c.peek(), "the "+p.c.peek().Text+" instruction"); err != nil {
-			return err
+		// The folded spelling of the same refusal `blockinstr` makes, at the other production, and
+		// narrowed to the same one arm: `try_table`'s `vec catch` has no encoding here. Two sites
+		// because the reference has two productions, not because the reason differs.
+		if leader == kwTryTable {
+			if err := p.refuseUnencodable(p.c.peek(), "the "+p.c.peek().Text+" instruction"); err != nil {
+				return err
+			}
 		}
 		return p.foldedBlock(leader)
 	case kwSelect:
-		if err := p.refuseUnencodable(p.c.peek(), "the select instruction"); err != nil {
-			return err
-		}
+		// The folded spelling of the same instruction, differing only in its tail — `expr_list`
+		// against `instr_list` (:837-840 against :682-686). See flatSelectOrCall's arm for why the
+		// opcode choice is decidable at this stratum where `opBytes` refuses it.
 		return p.selectResults(p.exprList)
 	case kwCallIndirect, kwReturnCallIndirect:
 		if err := p.refuseUnencodable(p.c.peek(), "the "+p.c.peek().Text+" instruction"); err != nil {

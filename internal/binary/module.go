@@ -329,6 +329,31 @@ const (
 	blockTypeValType uint64 = 1 << 34
 )
 
+// BlockType reads a structural instruction's `Imm0` back into the three cases the
+// encoding above packs into it.
+//
+// **An accessor rather than exported constants, because the packing is this package's fact
+// and not its consumers'.** The interpreter needs a block's arity — how many values the
+// block yields, so `br` can keep exactly that many and discard the rest — and it needs to
+// ask without knowing that the tags live at bits 33 and 34. Exporting the two constants
+// would put the decoding rule in every consumer that reads a blocktype, which is the
+// two-places-know-one-fact shape; a function keeps it here, where `decodeBlockType` writes
+// it, so the writer and the reader cannot drift.
+//
+// The three returns are disjoint by construction and the caller must branch on them in this
+// order — `empty` first, then `valType`, then `typeIdx` — because only the tags distinguish
+// a tagged word from an index, and an index of 0 is legal.
+func BlockType(imm0 uint64) (typeIdx uint32, valType ValType, empty bool) {
+	switch {
+	case imm0 == blockTypeEmpty:
+		return 0, 0, true
+	case imm0&blockTypeValType != 0:
+		return 0, ValType(imm0 & 0xFF), false
+	default:
+		return uint32(imm0), 0, false
+	}
+}
+
 // Global is one global: its type, mutability, and initializer.
 type Global struct {
 	Type    ValType

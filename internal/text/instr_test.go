@@ -895,40 +895,35 @@ func TestEveryUnencodableShapeIsRefused(t *testing.T) {
 // TestEveryStructuralInstructionIsRefused is the other half of the instruction frontier, and it is a
 // separate test because these instructions are not in `plaininstrShapes` at all.
 //
-// `block`, `loop`, `if`, `try_table`, `select` and `call_indirect` are their own productions — the
-// block family opens a scope, `select` and `call_indirect` carry a typeuse — so no shape table covers
-// them and the derivation above cannot reach them. They are also the *dangerous* ones: a `block` has
-// no opcode in this tier while its **body** is fully encodable, so dropping it silently keeps the
-// contents and loses the control flow. That is what makes the frontier a refusal rather than a skip,
-// and it is the case the deleted-guard probe demonstrated.
+// `try_table` and `call_indirect` are their own productions — one opens a scope with a `vec catch`,
+// the other carries a typeuse — so no shape table covers them and the derivation above cannot reach
+// them. They are also the *dangerous* ones: a `try_table` has no opcode in this tier while its **body**
+// is fully encodable, so dropping it silently keeps the contents and loses the control flow. That is
+// what makes the frontier a refusal rather than a skip, and it is the case the deleted-guard probe
+// demonstrated.
 //
 // Both spellings of each, flat and folded, because they are **different productions with different
 // refusal sites**: `blockinstr` and `expr1`'s block arm, `flatSelectOrCall` and `expr1`'s select and
 // call_indirect arms. Deleting `blockinstr`'s guard leaves the folded form refused, so a one-spelling
 // table would have called that repaired.
+//
+// **The table shrank when the frontier moved, and the rows it lost went somewhere.** `block`, `loop`,
+// `if` and `select` are encoded now (#7), so their rows here would assert the opposite of the truth —
+// and a refusal test whose subject becomes encodable is not deleted, it is *re-pointed*: the same
+// spellings are round-tripped by `encodableModules`, where the dangerous case is checked in the
+// direction that now applies (the block *present* in the image with its blocktype, rather than absent).
+// `try_table` keeps both spellings here because `vec catch` remains unencoded, which is why this test
+// still has a subject rather than becoming vacuous.
 func TestEveryStructuralInstructionIsRefused(t *testing.T) {
 	for _, src := range []string{
-		// The block family, flat.
-		`(module (func block end))`,
-		`(module (func loop end))`,
-		`(module (func i32.const 0 if end))`,
-		`(module (func i32.const 0 if else end))`,
+		// try_table, flat and folded — the block-family arm still behind the frontier.
 		`(module (func try_table end))`,
-		// The block family, folded — `expr1`'s arms.
-		`(module (func (block)))`,
-		`(module (func (loop)))`,
-		`(module (func (if (i32.const 0) (then))))`,
 		`(module (func (try_table)))`,
-		// A block whose *body* is entirely encodable, which is the shape that makes a dropped block
-		// dangerous rather than merely incomplete: `41 01 1a 41 02 1a 0b`, the block gone and its
-		// contents kept.
-		`(module (func block i32.const 1 drop end i32.const 2 drop))`,
-		`(module (func (block (i32.const 1) drop) (i32.const 2) drop))`,
-		// select: its opcode depends on whether a result type was written (0x1b or 0x1c), which is
-		// `ambiguousOpcodes`' whole content.
-		`(module (func (result i32) i32.const 1 i32.const 2 i32.const 0 select))`,
-		`(module (func (result i32) i32.const 1 i32.const 2 i32.const 0 select (result i32)))`,
-		`(module (func (result i32) (select (i32.const 1) (i32.const 2) (i32.const 0))))`,
+		// A try_table whose *body* is entirely encodable, which is the shape that makes a dropped
+		// opener dangerous rather than merely incomplete: `41 01 1a 41 02 1a 0b`, the construct gone
+		// and its contents kept.
+		`(module (func try_table i32.const 1 drop end i32.const 2 drop))`,
+		`(module (func (try_table (i32.const 1) drop) (i32.const 2) drop))`,
 		// call_indirect: `encode.ml:583` writes `idx y; idx x`, reversing the text's order.
 		`(module (table 0 funcref) (func i32.const 0 call_indirect))`,
 		`(module (table 0 funcref) (func (call_indirect (i32.const 0))))`,

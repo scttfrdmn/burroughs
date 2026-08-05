@@ -343,7 +343,7 @@ func (in *Instance) Invoke(name string, args ...Value) ([]Value, error) {
 		// call in the hot loop would spend what the measurement bought.
 		num: make([]uint64, 0, len(fn.Body)),
 	}
-	if err := in.run(fn, locals, st); err != nil {
+	if err := in.run(fn, locals, st, len(ft.Results)); err != nil {
 		return nil, err
 	}
 	if len(st.num) != len(ft.Results) {

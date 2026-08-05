@@ -21,6 +21,39 @@ weakly-ordered platform.
 
 ### Added
 
+- **The block family, both halves: `block`, `loop`, `if`/`else`, `br`, `br_if`, `return` and
+  `select` encode *and* execute** ([#7](https://github.com/scttfrdmn/burroughs/issues/7),
+  [#8](https://github.com/scttfrdmn/burroughs/issues/8)). The interpreter is no longer straight-line.
+  A control stack of labels, one entry per active construct; `matchEnd` finds a construct's extent by
+  paren-free nesting depth; `elseOf` matches an ELSE at depth 1 only, so a nested `if`'s ELSE cannot
+  be taken for the outer one's. **The one asymmetry is the continuation**: a loop's is its own header
+  and a block's is past its END, and the arity a branch sees follows it — branching to a loop supplies
+  its *parameters*, branching to a block yields its *results*. Both directions are pinned by a row
+  that a wrong reading fails rather than mis-answers.
+
+  **Taken as one mechanism because taking half of it drains nothing.** The encoder half alone converts
+  encode fails into exec fails; the interpreter half alone has nothing to run, since `internal/text`
+  refused every module with a block in it. The scope was recorded on #7 before the work started —
+  *the PR takes both halves or it is not worth taking* — and `call_indirect` was measured **out** of
+  it on the same rule: executing it needs a table index space and element segments `binary.Module`
+  does not retain, so it stays behind #8's frontier with its reason at the refusal site.
+
+  **The board: pass 26307 → 26567, exec fail 440 → 662, encode fail 4693 → 3973, gated 1031 → 1485,
+  `unsupported` unmoved at 32377.** The pass column's +260 is two things and they are stated apart:
+  **+257** from the family and **+3** from grave #135 below. The exec ceiling *rising* is the same
+  motion seen from the other side — vectors that could not be built before now instantiate and run.
+  The +222 is `+227 memory_copy.wast` and `+5 memory_fill.wast` value mismatches (their `checkRange`
+  export is a `loop` around an `if`, so nothing in those files could be built at all), `+7 10 call`,
+  `+9 fc 0b`, and `−26 0f return`. The 662 partition to exactly 662 by cause: 309
+  opcode arms this phase does not have, 280 value mismatches (every one measured to stand behind a
+  failed setup invoke, and the classifier falsified to prove it distinguishes), 52 naming linking, 21
+  the encoder's frontier met at instantiation.
+
+  **The gate allowlist grew by 454, from 24 module heads no entry had ever named** — memory64 315,
+  SIMD 102, multi-memory 37. None could inherit an existing entry: these modules had never reached
+  the decoder, because the text encoder refused them at a block. The verdict arithmetic closes
+  without slack: fail −711 = pass +257 + gated +454.
+
 - **`internal/interp`: linear memory — loads, stores, `memory.size`, `memory.grow`, and
   instantiation that can trap** ([#7](https://github.com/scttfrdmn/burroughs/issues/7)). The engine
   has a memory. `memory` is a flat `[]byte` grown by reallocation, which is `memory.ml`'s own shape
@@ -2019,6 +2052,39 @@ weakly-ordered platform.
   `TestFrameLocalsCeilingRefusesRatherThanAllocating` covers the execution half. Both were
   falsified before landing — the first fails on all five rows with the old flattening restored, the
   second on exactly the two rows past the ceiling.
+
+- **A `return` did not truncate the value stack, so a valid module was rejected as unvalidated**
+  ([grave #135](https://github.com/scttfrdmn/burroughs/issues/135)). `eval.ml:1069` is
+  `take n vs0` — a return truncates to the frame's arity, exactly as a branch to a label does,
+  because a function body *is* an implicit labelled block whose arity is the function's result count.
+  The arm returned without touching the stack, so `(i32.const 1) (return (i32.const 2))` in a
+  `(result i32)` function left two values and `Invoke`'s arity check then reported
+  `module reached the interpreter unvalidated` on a module the reference accepts. Three sites shared
+  the defect: `opReturn`, `opBr` at the outermost depth, and `opBrIf` in the taken case at that depth.
+
+  **The defect was stated as the rule**, which is why review could not find it: the arm's comment
+  argued that "the values below the results belong to no one once this function is done" — true of
+  the *frame*, false of the arity check, which counts what is left. Accept-direction, so no
+  `assert_invalid` vector could see it; the reject-direction board could not either, because it
+  scored the three `comments.wast` modules as fails under a perfectly honest-looking layering-debt
+  string. Found by reading the reference while draining the `0f return` bucket — a new error head
+  appearing on a module the reference accepts is not a layering debt. Fixed at all three sites, and
+  the four new rows in `TestControlFlowSemantics` were each watched to fail under the reverted arm.
+
+- **An `else` popped no label, so a taken then-arm leaked one and the function body ran off its end**
+  ([grave #134](https://github.com/scttfrdmn/burroughs/issues/134)). `opElse` is reached only by
+  *falling out of* a then-arm that ran to completion, and its `cont` is past the END — so the END
+  that would pop the label is jumped over and the pop has to happen at the ELSE. The arm asserted
+  the opposite in its comment ("the label stays on the control stack: the END past the else-arm is
+  what pops it") and described a mechanism the same line then skipped, leaving one label per taken
+  then-arm. The function's own terminating END then saw a non-empty `ctrl`, took itself for a block's
+  END, and the body ran past its last instruction: `function body ended without END` on a valid
+  module.
+
+  **It survived 20 of 22 rows of the control written for it**, because the encoder refused all 20;
+  the two rows that could reach it are exactly the two with a taken then-arm *and* an else-arm
+  present. The falsifiability law's own blind spot — a green that survives the bug it names — and it
+  was cleared by the artifact the control was waiting on rather than by more control.
 
 - **A control's printed figures and its comment's figures are two witnesses, and only one gets
   re-measured** ([grave #132](https://github.com/scttfrdmn/burroughs/issues/132)).
