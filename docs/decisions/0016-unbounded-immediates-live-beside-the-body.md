@@ -1,13 +1,18 @@
 # 0016 — unbounded immediates live beside the body, keyed by instruction index
 
-Date: 2026-08-05 · Status: **proposed** — awaiting Scott's call on the shape
+Date: 2026-08-05 · Status: **accepted** — option B, stamped by Scott on #142
 
-> Scott ordered the `br_table` work and ruled the split (two PRs, `br_table` first). He has **not**
-> ruled on the retention *shape* below, so this record is `proposed` and the PR flags it. The one
-> sentence he did rule — *retention is forced by consumers, but shaped by the grammar* — is quoted
-> where it applies and is the ground option B stands on. An ADR marked accepted on a stamp nobody
-> gave is a fabricated citation about the project's own governance, which is worse than a wrong
-> option.
+> **A status field is a citation to an approval, and approvals are artifacts with provenance.**
+> (Ruling: Scott, #142.) So this record's history is kept rather than overwritten: it stood at
+> `proposed` while it had no stamp, because Scott had ordered the `br_table` work and ruled the
+> split without ruling on the retention *shape*, and *an ADR marked accepted on a stamp nobody gave
+> is a fabricated citation about the project's own governance* — worse than a wrong option, because
+> a wrong option is arguable and a forged provenance is not. The stamp exists now: option B, "on
+> exactly the basis it quotes", which is the one sentence Scott had already ruled — *retention is
+> forced by consumers, but shaped by the grammar* — and which is quoted below where it applies.
+>
+> Doctrine by demonstration, per the same ruling: the way to hold a decision open is to hold its
+> *status* open, and the way to close it is a stamp that can be pointed at.
 
 `Instr` is two words, deliberately (0002, and grave #100 on why packing rather than growing).
 Some immediates are **unbounded**: `br_table`'s label vector, `try_table`'s catch clauses,

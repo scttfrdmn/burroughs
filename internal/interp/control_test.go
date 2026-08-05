@@ -351,9 +351,12 @@ func TestControlFlowSemantics(t *testing.T) {
 			// The mirror arrangement — default re-enters, table exits — reads the same and spins
 			// forever under any defect that ignores the vector, which costs a whole test binary to
 			// a `panic: test timed out` naming no row. Measured: two of the four mutations tried
-			// against this row hung it in that spelling and both report a value in this one. A row
-			// whose failure mode is a hang is a worse witness than one whose failure mode is a
-			// number, even when it is technically red.
+			// against this row hung it in that spelling and both report a value in this one.
+			//
+			// *A control must fail, never hang — a timeout names no row*, and a mutation that
+			// wedges the harness is the zero-progress defect wearing a test's clothes. Which
+			// arrangement hangs is not deducible from reading it, so the mutations were run.
+			// (Ruling: Scott, PR #142.)
 			name: "br_table can select a loop, and re-enters it",
 			src: `(local i32)
 			      (block $done

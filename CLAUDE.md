@@ -528,6 +528,26 @@ the choice, and consequences once Scott has called it.
   that is not the test being wrong, it is the control being **stillborn**, and it is the most
   valuable outcome the exercise has. A lookup across two differently-keyed maps is a no-op
   wearing a predicate's clothes. (Ruling: Scott, PR #108.)
+  - **A control must fail, never hang — a timeout names no row.** The birth requirement's
+    second failure mode, and it is not stillbirth: the control fires, it is technically red, and it
+    is *worse* than red, because `panic: test timed out` identifies no case and takes the whole test
+    binary with it. `br_table`'s loop row was first written with the **default** re-entering the
+    loop, so two of four mutations — ignore the vector, read the labels as absolute depths — never
+    left the loop and wedged the harness; reversed so the *table entry* is the loop, both report a
+    number. A mutation that wedges the harness is the **zero-progress defect wearing a test's
+    clothes**, and the sibling law is the parser one: a loop whose exit condition can be lost
+    proves nothing by not returning. So when a row's subject is a loop, arrange it so a wrong engine
+    *terminates and answers wrongly* — and confirm that by running the mutation, since which
+    arrangement hangs is not deducible from reading it. (Ruling: Scott, PR #142.)
+- **A status field is a citation to an approval, and approvals are artifacts with provenance.** So
+  an ADR's `Status:` is held open until a stamp exists to point at, and *an ADR marked accepted on
+  a stamp nobody gave is a fabricated citation about the project's own governance* — worse than a
+  wrong option, since a wrong option is arguable and a forged provenance is not. The actor states
+  the case and flags it; a principal's stamp is what closes it, and then the record keeps **both**
+  the stamp and the interval it spent open. This is the cite-issues-not-PRs discipline pointed at
+  the project's own decisions rather than at its code: same defect (a citation nobody can resolve
+  to the thing it claims), same remedy (name the artifact, not the intention). Doctrine by
+  demonstration — 0016 sat `proposed` through the PR that implemented it. (Ruling: Scott, PR #142.)
 - **Unreachability is a grave only when it's silent.** Declared and tracked,
   it's a TODO with an audit trail — scaffolding wearing a name tag, not a
   missing check wearing a disguise. The test is whether the deferral was
