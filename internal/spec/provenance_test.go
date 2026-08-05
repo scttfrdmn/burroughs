@@ -51,13 +51,16 @@ func TestFixtureProvenance(t *testing.T) {
 	// A byte-slice literal: {0x00, 0x61, ...}. Braces, hex bytes, commas only.
 	lit := regexp.MustCompile(`\{((?:\s*0x[0-9a-fA-F]{2}\s*,?)*)\}`)
 
-	var checked, checkedFragments, synthetic int
+	var checked, checkedFragments, synthetic, derived int
 	for _, f := range files {
 		src, err := os.ReadFile(f)
 		if err != nil {
 			t.Fatalf("read %s: %v", f, err)
 		}
-		for i, line := range strings.Split(string(src), "\n") {
+		lines := strings.Split(string(src), "\n")
+		derivedRows := derivedRowsIn(lines)
+		derived += len(derivedRows)
+		for i, line := range lines {
 			lineNo := i + 1
 			m := cite.FindStringSubmatch(line)
 			if m == nil {
@@ -65,10 +68,11 @@ func TestFixtureProvenance(t *testing.T) {
 				// anyway — an uncited vector is exactly what this test hunts.
 				if lm := lit.FindStringSubmatch(line); lm != nil {
 					b := parseHexBytes(lm[1])
-					if len(b) >= 8 && !strings.Contains(line, "synthetic") {
+					if len(b) >= 8 && !strings.Contains(line, "synthetic") && !derivedRows[lineNo] {
 						if _, ok := suite[string(b)]; !ok {
 							t.Errorf("%s:%d: uncited %d-byte vector % x not found in the suite;\n"+
-								"\tadd a `// <file>.wast:N` citation, or mark it `synthetic` with a reason",
+								"\tadd a `// <file>.wast:N` citation, mark it `synthetic` with a reason, "+
+								"or declare it `derived from <file>.wast:N,M` in the preceding comment",
 								f, lineNo, len(b), b)
 						}
 					}
@@ -127,9 +131,93 @@ func TestFixtureProvenance(t *testing.T) {
 	if checkedFragments == 0 {
 		t.Fatal("no fragment citations checked — the fragment path is dead, so its own control is vacuous")
 	}
-	t.Logf("verified %d cited module images, %d cited fragments, %d declared synthetic",
-		checked, checkedFragments, synthetic)
+	// The derived exemption gets a vacuity floor for the same reason the two paths above do:
+	// `derivedRowsIn` returning zero for every file would silence the category's exemption
+	// *and* look identical to a clean board, because an exemption that matches nothing
+	// exempts nothing and reports nothing. One is the honest floor — the count is small by
+	// nature, since a derivation is rare — and it fires if the scanner stops matching.
+	if derived == 0 {
+		t.Fatal("no derived rows recognised — the `derived from` exemption matches nothing, so it is either dead or drifted")
+	}
+	t.Logf("verified %d cited module images, %d cited fragments, %d declared synthetic, %d exempt as derived",
+		checked, checkedFragments, synthetic, derived)
 }
+
+// derivedRowsIn maps the line numbers a `derived from` declaration covers.
+//
+// **The third provenance category needed this arm and did not have it** (#37 ruled the
+// category in; the uncited-literal check above predates the ruling and knew only "cited or
+// synthetic"). A derived vector deliberately differs from every suite image — that is what
+// makes it derived — so it can carry neither a citation nor the `synthetic` word, and an
+// eight-byte derived literal was reported as an uncited fixture. *A ruling retroactively
+// falsifies prose written before it*, and this is the code half of the same sweep.
+//
+// **The scope is the one construct the declaration introduces, not the file and not a brace
+// span**, and both narrowings were forced by printing what the walker claimed rather than
+// reading it. A file-wide exemption would let one honest derivation excuse every hand-typed
+// vector after it — the laundering channel the category's own rules exist to prevent. And a
+// naive brace walk is worse than it looks: the first version followed braces to depth zero, and
+// a `derived from` in a **function's doc comment** therefore exempted the entire function body,
+// 27 lines of `TestConstExprDefersTheConstVerdict` included. The tell was the count — 41 lines
+// exempt from three declarations, which is *a suspiciously unclean result*, the same instrument
+// reading a perfect zero would have been.
+//
+// So the span is the *byte-literal lines* the declaration introduces and nothing else: comment
+// lines are walked through, a `func`/`type` line ends the search (a declaration above one is
+// documenting the construct, not exempting a vector), and collection stops at the first
+// byte-free line **after** the bytes have started.
+//
+// The bound on the search before the bytes start is a **line budget, not a syntactic guess**,
+// and that too was measured: the first version allowed exactly one `{`-suffixed opening line,
+// which gofumpt then broke by splitting a table row onto four lines — the byte literal moved two
+// lines further from its comment and the exemption silently stopped covering it. A rule that a
+// formatter can invalidate is not a rule, and *the formatter is not a review topic*, so the
+// walker tolerates a small run of byte-free lines rather than pattern-matching the shapes it
+// expects to see.
+func derivedRowsIn(lines []string) map[int]bool {
+	// The gap a declaration may sit above its literal, in byte-free non-comment lines. Small
+	// enough that the next unrelated vector in a table cannot be reached — the neighbouring
+	// row is two lines away in the tightest formatting — and large enough to survive gofumpt
+	// exploding a composite-literal row.
+	const maxGap = 3
+	out := map[int]bool{}
+	for i, line := range lines {
+		if derivedPremises.FindStringIndex(line) == nil {
+			continue
+		}
+		claiming, gap := false, 0
+		for j := i + 1; j < len(lines); j++ {
+			l := strings.TrimSpace(lines[j])
+			if !claiming {
+				if strings.HasPrefix(l, "//") || l == "" {
+					continue // still in the comment block
+				}
+				// A declaration sitting above a func or type is documenting *it*. Nothing to
+				// exempt: the vectors inside carry their own provenance, and claiming them
+				// here is exactly the over-reach the count caught.
+				if strings.HasPrefix(l, "func ") || strings.HasPrefix(l, "type ") {
+					break
+				}
+			}
+			if !hexByte.MatchString(l) {
+				if claiming {
+					break // past the literal
+				}
+				if gap++; gap > maxGap {
+					break // the declaration introduces no literal
+				}
+				continue
+			}
+			claiming = true
+			out[j+1] = true
+		}
+	}
+	return out
+}
+
+// hexByte matches a line holding at least one `0x` byte literal — the shape a derived vector's
+// lines have, and the discriminator that keeps a span from running past its literal.
+var hexByte = regexp.MustCompile(`0x[0-9a-fA-F]{2}`)
 
 // derivedPremises is a regexp over a `derived from <file>.wast:N[,N...]` declaration.
 var derivedPremises = regexp.MustCompile(`derived from ([a-zA-Z0-9_.-]+\.wast):([\d,: ]+)`)

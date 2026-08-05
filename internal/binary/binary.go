@@ -349,9 +349,10 @@ type Section struct {
 // meant to cross-check.
 //
 // Retention is partial and every gap is named. The sections whose grammars exist but
-// whose contents are not yet kept — element and data segments, tags — say so at their
-// decode sites and cite #7, which is the declared-and-tracked form of "not done" (#6
-// ruling) rather than a silent omission. Nothing reads a field that is never written,
+// whose contents are not yet kept — tags — say so at their decode sites and cite #7,
+// which is the declared-and-tracked form of "not done" (#6 ruling) rather than a silent
+// omission. Data segments were such a gap until 0015 and element segments until 0016;
+// both are retained now, so this sentence names what is left rather than what it once did. Nothing reads a field that is never written,
 // which is the property `deadcode` is checking.
 type Module struct {
 	Version  uint32
@@ -382,6 +383,11 @@ type Module struct {
 	// Start is the start section's function index, valid only when HasStart.
 	Start    uint32
 	HasStart bool
+
+	// Elems is the element section's segments, in index order — the index `table.init` and
+	// `elem.drop` name. Retained under 0016's shape rule; see ElemSegment for why its two
+	// element forms are kept apart where the reference normalizes them.
+	Elems []ElemSegment
 
 	// Datas is the data section's segments, in index order — the index `data.drop` and
 	// `memory.init` name. Retained as of 0015; see DataSegment for why it was error-only

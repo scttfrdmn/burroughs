@@ -44,6 +44,12 @@ func (d *Decoder) decodeGlobal(r *reader) error {
 // read as a reftype (malformed reference type). Two different errors from two
 // different fields of the same segment, which is the check on whether the flag bits
 // were decoded or guessed.
+//
+// Retaining under 0016: the mode, the table index, the offset, the element type and the
+// element vector are staged into an ElemSegment and appended to the module's index order,
+// where all five used to be read and dropped. The consumers are `call_indirect` needing a
+// table with something in it, `table.init` naming a segment by index, and the wat encoder's
+// elem-section writer (#8). See ElemSegment for why the two element forms stay distinct.
 func (d *Decoder) decodeElemSegment(r *reader) error {
 	flags, err := r.u32()
 	if err != nil {
@@ -57,16 +63,31 @@ func (d *Decoder) decodeElemSegment(r *reader) error {
 		explicit = 1 << 1 // table index present (active) / declarative (passive)
 		exprs    = 1 << 2 // elements are const-exprs, not func indices
 	)
-	active := flags&passive == 0
-	if active {
+	seg := ElemSegment{ByExpr: flags&exprs != 0}
+	// The two bits together select the reference's three `segmentmode` arms, and a switch
+	// rather than a chain because that is what they are — three cases of one classification,
+	// not a condition with exceptions.
+	switch {
+	case flags&passive == 0: // active: flags 0, 2, 4, 6
 		if flags&explicit != 0 { // table index only when bit 1 is set
-			if err := discardIndex(r); err != nil {
+			// Retained where it used to be discarded, and *recorded rather than checked* for
+			// DataSegment.MemIndex's reason: whether it names a table the module has is #9's
+			// question, and elem.wast turns on the difference — `(elem (table 3) …)` against
+			// one table is a module that fails to instantiate, not one that is malformed.
+			if seg.TableIndex, err = r.u32(); err != nil {
 				return err
 			}
 		}
-		if err := d.decodeConstExpr(r); err != nil { // offset
+		if seg.Offset, err = d.decodeConstExprKeep(r); err != nil { // offset
 			return err
 		}
+	case flags&explicit != 0:
+		// Bit 1 with bit 0 means declarative — flags 3 and 7. The reference's third
+		// segmentmode arm, which the data section does not have (encode.ml's `data` asserts
+		// on it) and which the text grammar's `elem` does.
+		seg.Mode = ElemDeclarative
+	default: // passive: flags 1, 5
+		seg.Mode = ElemPassive
 	}
 	// The element type field is present iff bit 0 or bit 1 is set, and bit 2 selects
 	// its encoding: an elemkind byte (0x00, the only defined one) when the elements
@@ -89,11 +110,19 @@ func (d *Decoder) decodeElemSegment(r *reader) error {
 	// for a table of every observed encoding over a rule inferred from the first
 	// vector that fails. The two forms with no type field are exactly the two that
 	// default to table 0 with funcref elements.
+	// The default when no type field is present, and it is the *decoded* default rather
+	// than a zero value: flags 0 and 4 are funcref segments whose type the wire omits, so
+	// leaving ElemType at NoValType would make the field say "unrepresentable" about a
+	// module that plainly declared funcref. That is grave #36's class in a field — an engine
+	// reporting a value its input never held — which decodeRefType's NoValType arm exists to
+	// avoid in the other direction.
+	seg.ElemType = FuncRef
 	if flags&(passive|explicit) != 0 {
 		if flags&exprs != 0 {
 			if err := d.decodeRefType(r); err != nil {
 				return err
 			}
+			seg.ElemType = d.valType
 		} else {
 			kind, err := r.byte()
 			if err != nil {
@@ -102,13 +131,37 @@ func (d *Decoder) decodeElemSegment(r *reader) error {
 			if kind != 0x00 {
 				return fmt.Errorf("%w: %#02x", ErrMalformedElemKind, kind)
 			}
+			// 0x00 is the only defined elemkind and it means funcref, so nothing to read
+			// off: seg.ElemType already says so.
 		}
 	}
-	elem := discardIndex
-	if flags&exprs != 0 {
-		elem = d.decodeConstExpr
+	// **Appended per element, never preallocated from the declared count** — grave #138's law,
+	// as 0016 property 2 requires. `decodeVec` allocates nothing and each element consumes
+	// bytes, so a vector claiming 0xFFFFFFFE members runs out of image long before it would
+	// allocate; `make([]uint32, 0, n)` here is 16 GiB from a five-byte immediate.
+	elem := func(r *reader) error {
+		idx, err := r.u32()
+		if err != nil {
+			return err
+		}
+		seg.Funcs = append(seg.Funcs, idx)
+		return nil
 	}
-	return d.decodeVec(r, elem)
+	if seg.ByExpr {
+		elem = func(r *reader) error {
+			e, err := d.decodeConstExprKeep(r)
+			if err != nil {
+				return err
+			}
+			seg.Exprs = append(seg.Exprs, e)
+			return nil
+		}
+	}
+	if err := d.decodeVec(r, elem); err != nil {
+		return err
+	}
+	d.mod().Elems = append(d.mod().Elems, seg)
+	return nil
 }
 
 // decodeDataSegment reads one data segment: an optional memory index and offset
