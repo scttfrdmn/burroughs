@@ -1193,7 +1193,59 @@ func TestGatedVectors(t *testing.T) {
 			577: "memory64: (memory i64 1) at :539 — an i64 index type",
 			578: "memory64: (memory i64 1) at :539 — an i64 index type",
 		},
+		"align0.wast": {
+			39: "multi-memory: 3 memories at :3, so a memarg carries flags bit 6",
+			40: "multi-memory: 3 memories at :3, so a memarg carries flags bit 6",
+			41: "multi-memory: 3 memories at :3, so a memarg carries flags bit 6",
+			42: "multi-memory: 3 memories at :3, so a memarg carries flags bit 6",
+		},
 		"align64.wast": {
+			802: "memory64: (memory i64 1) at :458 — an i64 index type",
+			803: "memory64: (memory i64 1) at :458 — an i64 index type",
+			804: "memory64: (memory i64 1) at :458 — an i64 index type",
+			805: "memory64: (memory i64 1) at :458 — an i64 index type",
+			807: "memory64: (memory i64 1) at :458 — an i64 index type",
+			808: "memory64: (memory i64 1) at :458 — an i64 index type",
+			809: "memory64: (memory i64 1) at :458 — an i64 index type",
+			810: "memory64: (memory i64 1) at :458 — an i64 index type",
+			811: "memory64: (memory i64 1) at :458 — an i64 index type",
+			813: "memory64: (memory i64 1) at :458 — an i64 index type",
+			814: "memory64: (memory i64 1) at :458 — an i64 index type",
+			815: "memory64: (memory i64 1) at :458 — an i64 index type",
+			816: "memory64: (memory i64 1) at :458 — an i64 index type",
+			817: "memory64: (memory i64 1) at :458 — an i64 index type",
+			818: "memory64: (memory i64 1) at :458 — an i64 index type",
+			819: "memory64: (memory i64 1) at :458 — an i64 index type",
+			820: "memory64: (memory i64 1) at :458 — an i64 index type",
+			821: "memory64: (memory i64 1) at :458 — an i64 index type",
+			822: "memory64: (memory i64 1) at :458 — an i64 index type",
+			823: "memory64: (memory i64 1) at :458 — an i64 index type",
+			824: "memory64: (memory i64 1) at :458 — an i64 index type",
+			825: "memory64: (memory i64 1) at :458 — an i64 index type",
+			826: "memory64: (memory i64 1) at :458 — an i64 index type",
+			828: "memory64: (memory i64 1) at :458 — an i64 index type",
+			829: "memory64: (memory i64 1) at :458 — an i64 index type",
+			830: "memory64: (memory i64 1) at :458 — an i64 index type",
+			831: "memory64: (memory i64 1) at :458 — an i64 index type",
+			832: "memory64: (memory i64 1) at :458 — an i64 index type",
+			833: "memory64: (memory i64 1) at :458 — an i64 index type",
+			834: "memory64: (memory i64 1) at :458 — an i64 index type",
+			835: "memory64: (memory i64 1) at :458 — an i64 index type",
+			836: "memory64: (memory i64 1) at :458 — an i64 index type",
+			837: "memory64: (memory i64 1) at :458 — an i64 index type",
+			838: "memory64: (memory i64 1) at :458 — an i64 index type",
+			839: "memory64: (memory i64 1) at :458 — an i64 index type",
+			840: "memory64: (memory i64 1) at :458 — an i64 index type",
+			841: "memory64: (memory i64 1) at :458 — an i64 index type",
+			842: "memory64: (memory i64 1) at :458 — an i64 index type",
+			843: "memory64: (memory i64 1) at :458 — an i64 index type",
+			844: "memory64: (memory i64 1) at :458 — an i64 index type",
+			845: "memory64: (memory i64 1) at :458 — an i64 index type",
+			846: "memory64: (memory i64 1) at :458 — an i64 index type",
+			847: "memory64: (memory i64 1) at :458 — an i64 index type",
+			848: "memory64: (memory i64 1) at :458 — an i64 index type",
+			849: "memory64: (memory i64 1) at :458 — an i64 index type",
+			850: "memory64: (memory i64 1) at :458 — an i64 index type",
 			866: "memory64: (memory i64 1) at :854 — an i64 index type",
 		},
 		"bulk64.wast": {
@@ -2749,7 +2801,19 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	// default lane gained. Arithmetic on the earlier reading would have set a floor three below
 	// the measurement and been indistinguishable from a correct one on the board — a floor is only
 	// as honest as the run it was read from.
-	const allOnPassFloor = 27486
+	// **27486 → 27802, and the gap to the default lane's 26833 is 969.** `br_table` (#8, 0016)
+	// raises both floors, and the deferral arithmetic is re-run at the new numbers rather than
+	// assumed to hold: the default board's **1535** `gated` declines become **969 passes and 566
+	// fails** here, and fail moves 4319 → 4885 to match. 969 + 566 = 1535, so every parked vector
+	// is answered on the merits in this lane and the 566 stay honestly red until their feature
+	// works.
+	//
+	// The gated population grew by 50 in this PR — `align0`'s multi-memory memarg flags and
+	// `align64`'s i64 index type — and the fail side absorbed none of them: 566 before and 566
+	// after. Worth stating, because the number *not* moving is the reason to re-run the
+	// arithmetic rather than adjust it: the previous PR's 566 and this one's are different
+	// populations that happen to be the same size.
+	const allOnPassFloor = 27802
 	boardBound(t, "allOnPassFloor", totalPass, allOnPassFloor, boardBoundSlack, floorBound,
 		"a gated feature regressed, which the Gated==0 assertion above cannot see: with every "+
 			"gate on, a broken feature turns a pass into a fail and leaves Gated at zero")
@@ -3670,7 +3734,17 @@ func TestPhase1Files(t *testing.T) {
 	// which is how it was found: the census printed it, and a *layering-debt* error on a module
 	// the reference accepts is not a debt. An accept-direction defect the suite scores green by
 	// construction everywhere else, and its comment asserted the property the code lacked.
-	const execFailCeiling = 662
+	// **Re-based 662 → 670 by `br_table`, and the +8 is the legitimate rise this constant's own
+	// message licenses**: #8 unblocked modules that now instantiate and run, so they reach an
+	// opcode this engine has no arm for. The instruction is named, as that message requires —
+	// all 8 are `interp: no arm for opcode 10`, which is `call`. Measured as a bucket-set diff
+	// against the pre-PR board rather than inferred from the total: three deltas, and this is the
+	// only one that lands here.
+	//
+	// A rise is not automatically legitimate, which is why the partition is the evidence: had the
+	// 8 arrived under a value-mismatch or an `unvalidated` head, the same +8 would have been a
+	// regression in an arm that used to answer, and the total alone cannot tell those apart.
+	const execFailCeiling = 670
 	boardBound(t, "execFailCeiling", execFail, execFailCeiling, 0, ceilingBound,
 		"the interpreter answered fewer vectors than it did: either an opcode arm regressed or "+
 			"a value comparison started disagreeing. A *rise* caused by #8 unblocking more "+
@@ -3880,7 +3954,26 @@ func TestPhase1Files(t *testing.T) {
 	// instantiate and run reach value comparisons they could not reach before. A rise here and a
 	// rise there is one fact this time rather than opposite views of one — the family unblocked
 	// both the vectors that agree and the vectors whose remaining gap is an opcode.
-	const passFloor = 26567
+	// # Re-based 26567 → 26833 by `br_table`, and the +266 is a fifth of what the bucket held
+	//
+	// `br_table` end to end (#8, decision 0016): the label vector retained in `Func.Labels`, the
+	// interpreter's `0x0e` arm, and the encoder's three text-to-wire transformations. The bucket
+	// `cannot yet encode the br_table instruction's immediates (#8)` held **1330** and is now
+	// **0** — and 266 of those became passes, which is the number worth stating precisely because
+	// it is not 1330.
+	//
+	// **The other 1064 are accounted for individually rather than described**, a full bucket-set
+	// diff showing exactly three nonzero deltas: **+1006** to `cannot yet encode the
+	// call_indirect instruction (#8)`, **+8** to `interp: no arm for opcode 10`, and +50 to
+	// `gated` (see TestGatedVectors' new `align0`/`align64` entries, whose causes were read off
+	// the engine's own decline strings). 266 + 1006 + 8 + 50 = 1330.
+	//
+	// That is the **dependency closure**, and it is why this landed as its own PR: `br_table.wast`'s
+	// own module calls `call_indirect`, so the file is still 1/147 with all 146 fails re-keyed to
+	// the instruction it now waits on. A forecast that quoted 1330 for this PR would have been
+	// counting vectors blocked on the *next* one — the bucket estimated the reward, and the
+	// mechanism partition estimated the job.
+	const passFloor = 26833
 	boardBound(t, "passFloor", totalPass, passFloor, boardBoundSlack, floorBound,
 		"a regression in a grammar that used to answer, or the corpus moved")
 }

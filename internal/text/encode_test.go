@@ -1180,6 +1180,77 @@ var encodableModules = []struct {
 		}}},
 	},
 
+	// # `br_table`, whose written form and wire form differ in three ways (0016)
+	//
+	// The text is `idx idx_list` — no count, no separator, and never empty — while the encoding is
+	// `vec(labelidx) labelidx`. So a count the parser does not yet have precedes the members, and the
+	// **last written** label is the default rather than a member (`Lib.List.split_last`,
+	// parser.mly:563-565). Three transformations, and the want columns below are read from the
+	// *encoding* rather than from this encoder: `Imm0` is the default, `Labels` is the table.
+	//
+	// **`Imm0` and not `Imm1`, measured rather than reasoned.** `immVecIdx` stages no word, so the
+	// default is this opcode's first staged immediate; reading the table row's field order gives
+	// `Imm1` and is wrong — see `binary.Func.Labels`.
+	//
+	// One written label, which is an **empty** table with that label as the default: three
+	// immediate bytes (`0e 00 00`), not two. An encoder that wrote the label as a table entry with no
+	// default produces `0e 01 00` and the decoder reads the following `0x0b` as the default —
+	// accepting, and a different module.
+	{
+		src:  `(module (func (block (br_table 0 (i32.const 0)))))`,
+		want: []binary.CompType{{Kind: binary.CompFunc}},
+		wantFuncs: []binary.Func{{TypeIndex: 0, Body: []binary.Instr{
+			{Op: 0x02, Imm0: blockTypeImm},
+			{Op: 0x41, Imm0: 0},
+			{Op: 0x0e, Imm0: 0}, // default 0, and no table
+			{Op: 0x0b},
+			{Op: 0x0b},
+		}, Labels: map[int][]uint32{2: {}}}},
+	},
+	// **Three labels whose written order is not symmetric, which is what makes the split visible.**
+	// `br_table $a $b $a` from inside two blocks writes depths `1 0 1`, so the table is `[1, 0]` and
+	// the default is `1`. Every plausible misreading gives a different answer here and the same
+	// answer on a uniform table: taking the *first* label as the default gives table `[0, 1]`, an
+	// encoder that kept all three as members gives a three-entry table, and one that reversed the
+	// vector gives `[0, 1]` with the right default. The `Labels` column is the only witness — `Op`
+	// and both `Imm` words are identical in the first and third cases.
+	{
+		src:  `(module (func (block $a (block $b (br_table $a $b $a (i32.const 0))))))`,
+		want: []binary.CompType{{Kind: binary.CompFunc}},
+		wantFuncs: []binary.Func{{TypeIndex: 0, Body: []binary.Instr{
+			{Op: 0x02, Imm0: blockTypeImm},
+			{Op: 0x02, Imm0: blockTypeImm},
+			{Op: 0x41, Imm0: 0},
+			{Op: 0x0e, Imm0: 1}, // the last written label, $a at depth 1
+			{Op: 0x0b},
+			{Op: 0x0b},
+			{Op: 0x0b},
+		}, Labels: map[int][]uint32{3: {1, 0}}}},
+	},
+	// **Three identical labels, and this row's own catch is a *deduplicating* encoder** — the one
+	// defect the two rows above are blind to, because a table of distinct depths has nothing to
+	// collapse. `[0, 0]` with default `0` is legal and means two indices and the default all target
+	// the same block; an encoder that treated the vector as a set writes a one-entry table, which
+	// decodes clean and sends index 1 to the default. Measured against a `compact`-style probe: this
+	// row failed and the other two passed.
+	//
+	// The reason it is *not* the count witness — which is what the first draft of this comment
+	// claimed — is that writing `len(depths)` for `len(depths)-1` consumes the terminating END as the
+	// default and fails all three rows on `unexpected end of section or function`. A count error is
+	// caught by every row here, so no row needs to be selected for it, and a comment claiming
+	// otherwise would send the next author to the wrong row when this one goes red.
+	{
+		src:  `(module (func (block (br_table 0 0 0 (i32.const 0)))))`,
+		want: []binary.CompType{{Kind: binary.CompFunc}},
+		wantFuncs: []binary.Func{{TypeIndex: 0, Body: []binary.Instr{
+			{Op: 0x02, Imm0: blockTypeImm},
+			{Op: 0x41, Imm0: 0},
+			{Op: 0x0e, Imm0: 0},
+			{Op: 0x0b},
+			{Op: 0x0b},
+		}, Labels: map[int][]uint32{2: {0, 0}}}},
+	},
+
 	// An **imported** func occupies index 0, so the defined func's `call 0` names the import and not
 	// itself. Section 3 lists only the defined one — the import's type index is the descriptor's —
 	// which is the split `Funcs` being "one entry per *defined* function" states.
@@ -1628,12 +1699,15 @@ func TestEncodeRoundTripsThroughTheDecoder(t *testing.T) {
 	// nineteen because that is what the block family added, and leaving it at 22 would have put a
 	// half-empty partition back inside the slack it was raised out of — a floor never complains about
 	// slack, which is why moving it is part of the same edit and not a follow-up.
-	if len(encodableModules) < 124 {
-		t.Fatalf("encodableModules has %d rows, want >=124 (132 at this commit): a table this check "+
+	//
+	// **Raised with `br_table` (#8): 132→135 rows, 43→46 with a body, and a new partition at 3.**
+	// Three rows and three floors moved in the same edit, for the reason above.
+	if len(encodableModules) < 127 {
+		t.Fatalf("encodableModules has %d rows, want >=127 (135 at this commit): a table this check "+
 			"reads is a table whose size is part of the assertion, since a comparison over an empty "+
 			"set succeeds", len(encodableModules))
 	}
-	withFuncs, withData, withDataCount := 0, 0, 0
+	withFuncs, withData, withDataCount, withLabels := 0, 0, 0, 0
 	for _, tc := range encodableModules {
 		if len(tc.wantFuncs) > 0 {
 			withFuncs++
@@ -1644,12 +1718,30 @@ func TestEncodeRoundTripsThroughTheDecoder(t *testing.T) {
 		if tc.wantDataCountSec != nil {
 			withDataCount++
 		}
+		if slices.ContainsFunc(tc.wantFuncs, func(f binary.Func) bool { return f.Labels != nil }) {
+			withLabels++
+		}
 	}
-	if withFuncs < 40 {
-		t.Fatalf("only %d of %d encodableModules rows assert a function body, want >=40 (43 at this "+
+	if withFuncs < 43 {
+		t.Fatalf("only %d of %d encodableModules rows assert a function body, want >=43 (46 at this "+
 			"commit): the code section is the newest and least-covered half of this table, and a "+
 			"total-only floor would let its rows go to zero behind the other sections'",
 			withFuncs, len(encodableModules))
+	}
+	// Its own floor, because the label side table is a partition of the code rows that the body
+	// comparison **structurally cannot see**: `Func.Labels` is a map keyed by instruction index, and
+	// an encoder that dropped every label vector produces byte-identical `Instr` values. Losing these
+	// three rows leaves `br_table`'s three transformations — the count, the split_last default, and
+	// the never-empty sequence — asserted by nothing, behind 43 body rows holding the number up.
+	// Three is the minimum, and each row's unique catch was measured rather than asserted: the empty
+	// table catches an encoder that writes no vector at all, the asymmetric one catches the
+	// split_last default and the vector's order, and the uniform one catches a deduplicating
+	// encoder. Every row catches a wrong count.
+	if withLabels < 3 {
+		t.Fatalf("only %d of %d encodableModules rows assert a label vector, want >=3 (3 at this "+
+			"commit): `Func.Labels` is invisible to the body comparison, so these rows are the only "+
+			"instrument over `br_table`'s three text-to-wire transformations (0016)",
+			withLabels, len(encodableModules))
 	}
 	if withData < 19 {
 		t.Fatalf("only %d of %d encodableModules rows assert a data section payload, want >=19 (21 at "+
@@ -1773,6 +1865,30 @@ func TestEncodeRoundTripsThroughTheDecoder(t *testing.T) {
 						"wrong order decodes clean and computes something else, which is the "+
 						"accept-direction defect no suite vector can see (§9 G-3)",
 						i, got.Body, want.Body)
+				}
+				// **The label side table, which `Body` structurally cannot see.** `br_table`'s
+				// vector lives in `Func.Labels` keyed by instruction index (0016), so the body
+				// comparison above agrees for an encoder that wrote the labels in the wrong order,
+				// wrote the wrong count, or wrote the default as a table entry — the instruction's
+				// `Op` and two words are identical in every one of those cases. Compared per
+				// instruction index rather than as two maps so a failure names the instruction, and
+				// **through `LabelVector`** so "no vector" and "an empty vector" stay distinct: an
+				// empty table is legal and means every index takes the default.
+				for j := range max(len(got.Body), len(want.Body)) {
+					gotV, gotOK := got.LabelVector(j)
+					wantV, wantOK := want.LabelVector(j)
+					switch {
+					case gotOK != wantOK:
+						t.Errorf("func %d instruction %d: retained a label vector = %v, want %v: "+
+							"the presence of a vector is a fact about which opcode was written, "+
+							"and the body comparison above cannot see it", i, j, gotOK, wantOK)
+					case gotOK && !slices.Equal(gotV, wantV):
+						t.Errorf("func %d instruction %d has label vector %v, want %v: the "+
+							"written order and the written length are both the wire form's, and "+
+							"the default is *not* a member of this vector (0016) — an encoder that "+
+							"took the first written label as the default encodes the table "+
+							"shifted by one and every other column here agrees", i, j, gotV, wantV)
+					}
 				}
 			}
 

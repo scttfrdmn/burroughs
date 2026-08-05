@@ -290,10 +290,14 @@ func (d *Decoder) decodePayload(sid SectionID, size uint32, r *reader) (bool, er
 // exist — is the validator's question, not the decoder's; here the only claim is
 // that a well-formed u32 occupies those bytes.
 //
-// Still the right reader at the sites that keep it — a subtype's declared supertypes, a
-// br_table's label vector, an explicit memory index — where the index is read to prove
-// the field is well-formed and nothing yet consumes its value. Those are #7's remaining
-// gaps, named at their call sites.
+// Still the right reader at the sites that keep it — a subtype's declared supertypes, an
+// explicit memory index — where the index is read to prove the field is well-formed and
+// nothing yet consumes its value. Those are #7's remaining gaps, named at their call sites.
+//
+// **`br_table`'s label vector no longer keeps it** (0016): the labels are retained, so that arm
+// reads the same `r.u32()` and appends the value instead of dropping it. The accept and reject
+// behaviour is therefore unchanged by construction — same reader, same width, same errors — which
+// is what makes the retention invisible to the 4162 rejection vectors.
 func discardIndex(r *reader) error {
 	_, err := r.u32()
 	return err

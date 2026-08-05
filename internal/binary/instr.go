@@ -222,6 +222,24 @@ type instrCtx struct {
 	// an opcode with no immediates, which is a distinction the interpreter needs the
 	// moment it dispatches on more than one arm.
 	immN int
+
+	// labels stages the current instruction's unbounded immediate — `br_table`'s label
+	// vector — for the same reason imm0/imm1 are staged: the arm that reads it does not know
+	// the instruction's index, and `emit` does.
+	//
+	// **Distinguished from nil by `hasLabels`, not by length.** A `br_table` with zero labels
+	// is legal and means every index takes the default, so `len(labels) == 0` cannot serve as
+	// "no vector was read" — the same distinction `LabelVector`'s two results carry through to
+	// consumers. Conflating them would execute a legal instruction as though its immediate
+	// were absent.
+	labels    []uint32
+	hasLabels bool
+
+	// labelsOut is where emit files a staged vector, or nil when this read is recognizing
+	// only. Parallel to `out` and nil in exactly the same cases: a const-expression site read
+	// to prove its bytes are well-formed has no consumer for a label vector either, and
+	// `br_table` is not const-legal in any case.
+	labelsOut *map[int][]uint32
 }
 
 // emit appends one decoded instruction to the retained sequence and clears the staging
@@ -232,9 +250,27 @@ type instrCtx struct {
 // immediates were read would be an instruction the module might not contain.
 func (c *instrCtx) emit(prefix byte, op uint32) {
 	if c.out != nil {
+		// The index is taken *before* the append, which is what makes it the index of the
+		// instruction being emitted rather than of the next one. A staged label vector is
+		// filed under it, so the key and the instruction cannot disagree: both come from the
+		// same append.
+		idx := len(*c.out)
 		*c.out = append(*c.out, Instr{Op: op, Prefix: prefix, Imm0: c.imm0, Imm1: c.imm1})
+		if c.hasLabels && c.labelsOut != nil {
+			if *c.labelsOut == nil {
+				*c.labelsOut = map[int][]uint32{}
+			}
+			// A nil vector is stored as an empty non-nil one, so `LabelVector`'s second
+			// result stays the only thing that says "no vector" — see its comment.
+			v := c.labels
+			if v == nil {
+				v = []uint32{}
+			}
+			(*c.labelsOut)[idx] = v
+		}
 	}
 	c.imm0, c.imm1, c.immN = 0, 0, 0
+	c.labels, c.hasLabels = nil, false
 }
 
 // stage records one immediate for the instruction being read, in field order.
@@ -805,14 +841,39 @@ func (c *instrCtx) imm(r *reader, im imm) error {
 		// select's optional result-type vector. The types are read and dropped: nothing
 		// consumes them, `select` needs its arity from the *stack* at validation time, and
 		// a vector does not fit two words (#7).
+		//
+		// **"Does not fit two words" is no longer the whole reason, and 0016 is why.** The side
+		// table beside the body is where an unbounded immediate goes when it has a consumer, so
+		// what keeps this one discarded is the *absence* of one, not the absence of a mechanism.
+		// A `[]uint32` shape would not serve it in any case — these are valtypes — so the
+		// retention it wants is its own field, on the day #9 needs the annotation.
 		return c.d.decodeVec(r, c.d.decodeValType)
 	case immVecIdx:
-		// br_table's label vector. Not retained — a label list is unbounded, so it cannot
-		// live in Instr, and the place it belongs is a side array indexed by instruction
-		// once br_table has a consumer (#7). Declared here rather than discovered later.
-		return c.d.decodeVec(r, discardIndex)
+		// br_table's label vector, retained in the side table `emit` files it into (0016).
+		// It cannot live in Instr's two words, and it now has a consumer — the interpreter's
+		// br_table arm and the text encoder's, #8.
+		//
+		// **Appended per element, never preallocated from the declared count**, and that is
+		// grave #138's law applied before the defect rather than after it. `decodeVec` reads
+		// a u32 count and then requires each element to consume bytes, so a huge count is
+		// bounded by the *image*: a vector claiming 0xFFFFFFFE labels runs out of input long
+		// before it allocates. A `make([]uint32, 0, n)` here would reintroduce exactly #138's
+		// shape — a count check right about the verdict and wrong about the resources — at
+		// four bytes per phantom label, which is 16 GiB from a five-byte immediate.
+		c.hasLabels = true
+		return c.d.decodeVec(r, func(r *reader) error {
+			l, err := r.u32()
+			if err != nil {
+				return err
+			}
+			c.labels = append(c.labels, l)
+			return nil
+		})
 	case immCatchVec:
-		// try_table's handler clauses, likewise unbounded and likewise EH-gated (#7).
+		// try_table's handler clauses, likewise unbounded and likewise EH-gated (#7) — and
+		// likewise waiting on a consumer rather than on a mechanism, now that 0016 has built one
+		// for `br_table`. A clause is a tag index plus a label, so this wants a side table of its
+		// own shape rather than a share of `Labels`; the day EH executes is the day to build it.
 		return c.d.decodeVec(r, decodeCatch)
 	case immMemop:
 		return c.decodeMemop(r)
@@ -1217,7 +1278,8 @@ func (d *Decoder) decodeFuncBody(r *reader) error {
 		return err
 	}
 	var body []Instr
-	c := &instrCtx{d: d, nonConst: -1, out: &body}
+	var labels map[int][]uint32
+	c := &instrCtx{d: d, nonConst: -1, out: &body, labelsOut: &labels}
 	if err := c.block(r); err != nil {
 		return err
 	}
@@ -1244,7 +1306,7 @@ func (d *Decoder) decodeFuncBody(r *reader) error {
 	// to reject. The zip with the function section's type indices happens in finishFuncs,
 	// because the other half is not available until both sections are read — see
 	// Decoder.funcTypeIdx.
-	d.mod().Funcs = append(d.mod().Funcs, Func{Locals: locals, Body: body})
+	d.mod().Funcs = append(d.mod().Funcs, Func{Locals: locals, Body: body, Labels: labels})
 	return nil
 }
 
