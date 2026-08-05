@@ -21,6 +21,23 @@ weakly-ordered platform.
 
 ### Added
 
+- **The `assert_return value mismatch` bucket is pinned as downstream of a failed setup, so an
+  arithmetic defect cannot hide in it** ([#140](https://github.com/scttfrdmn/burroughs/issues/140)).
+  The board keys that bucket by a fixed string, a vector wanting a *value* having no expected error
+  text to bucket by — so one name covers both "the engine computed a wrong answer" and "the engine
+  never ran the code that would have written the right one", which are opposite work plans. The
+  bucket grew 48 → 280, read as a family with a shared semantic root, and **the measurement killed
+  that reading**: 280 mismatches in 16 modules, every one of them behind its own module's failed
+  setup `(invoke …)`, 280 of 280 `i32 want / i32 got`, and the 62 failing setups all naming
+  mechanism — `fc 0a` 22, `fc 0b` 13, `memory.init` 10, `table.init` 10, `call_indirect` 7. The
+  bucket scales with modules *admitted*, not with executed surface. It is now a claim rather than a
+  comment: when it breaks, the engine returned a wrong value on a module whose setup ran, and that
+  arrives as a red board with line numbers instead of an argument. Two instruments were corrected on
+  the way — a discriminator reading the shape of `Got` was **backwards**, because `checkRange`
+  returns an index and non-zero is the *un-copied* signature; and a whole-file scope was unanimous
+  because it could not dissent, repaired to per-module span and pinned by
+  `TestMismatchClassifierCanDissent`.
+
 - **The block family, both halves: `block`, `loop`, `if`/`else`, `br`, `br_if`, `return` and
   `select` encode *and* execute** ([#7](https://github.com/scttfrdmn/burroughs/issues/7),
   [#8](https://github.com/scttfrdmn/burroughs/issues/8)). The interpreter is no longer straight-line.
