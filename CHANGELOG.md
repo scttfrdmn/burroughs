@@ -23,7 +23,7 @@ weakly-ordered platform.
 
 - **`internal/text`: the memarg emitter, and the default alignment table it needs**
   ([#8](https://github.com/scttfrdmn/burroughs/issues/8),
-  [#127](https://github.com/scttfrdmn/burroughs/pull/127), 0007). The load/store immediate — flags
+  [#128](https://github.com/scttfrdmn/burroughs/pull/128), 0007). The load/store immediate — flags
   byte, optional memory index, offset — is `encode.ml:221`'s `memop`, and it is the largest single
   immediate shape on the board's biggest wall: **fail falls 14330 → 14216**, the encode stratum
   **13974 → 13775**, and twelve load/store buckets appear for the first time in the *execution*

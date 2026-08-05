@@ -22,7 +22,7 @@ func lexerSource(t *testing.T) []string {
 
 // TestWrappedArmsAreRecovered is this package's reason to exist, stated as a measurement.
 //
-// **The wrapped-arm shape has cost three graves** (#78 keywordgen, #105 opgen, and #127 would
+// **The wrapped-arm shape has cost three graves** (#78 keywordgen, #105 opgen, and #128 would
 // have been the third) and the defect is always the same: a regexp requiring a non-empty body
 // after `->` silently drops every arm whose constructor sits on the following line. Silently is
 // the operative word — the extraction succeeds, the count is short, and nothing says so. #105 was

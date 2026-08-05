@@ -243,7 +243,7 @@ func TestUnderscorePlacementIsTheLexersJob(t *testing.T) {
 // comment names: this reader owns "must be a power of two", and the validator owns "must not be
 // larger than natural".
 //
-// **The exponent column is asserted too, and it is the half no vector covers** (#127). The bytes
+// **The exponent column is asserted too, and it is the half no vector covers** (#128). The bytes
 // this value reaches are a flags field a decoder accepts whatever it holds, so `align=4` writing 4
 // instead of 2 encodes a legal image denoting a different access width — the accept-direction class,
 // and `log2_unsigned` is the one line of arithmetic between the text and the field. `align=0x10`

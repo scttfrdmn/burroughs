@@ -9,24 +9,37 @@
 //
 //	#78   keywordgen   solved it: the arm-head regexp stops at `->`, body read forward
 //	#105  opgen        reintroduced it: 411 rows where 436 were measured, silent
-//	#127  memarggen    would have been the third, and was met preventively
+//	#128  memarggen    would have been the third, and was met preventively
 //
 // The third was avoided by *reading the sibling first*, which is the ruling on #108
-// working exactly as written.
-//
-// **A note on `#127`, because the number is a citation and this one was right by luck.**
-// It was written into these comments during the work and *then* became this PR's number
-// — GitHub shares one sequence between issues and PRs, so it resolves, but it resolved to
-// nothing at the moment it was typed. That is the fiction-citation class (#114, #115) in
-// its issue-number half, which #116 has open and which has no local oracle: `constWalk`
-// was caught because a package's identifiers can be enumerated, and `#NN` cannot be
-// resolved without the network. Recorded here rather than silently corrected, since the
-// value of the near-miss is that it shows the class is live in a place the current sweep
-// cannot reach. But avoidance is personal and does not survive the next
+// working exactly as written. But avoidance is personal and does not survive the next
 // author, so Scott's consolidation clause applies: at three occurrences the shape becomes
 // **one shared helper both generators and the new one call**, so a fourth occurrence is
 // structurally impossible rather than individually dodged. Lessons indexed by shape, now
 // enforced by shape.
+//
+// # An issue-number citation with no local oracle, caught twice by accident
+//
+// The table above cited `#127` for two days and was **wrong both times, in opposite
+// directions**, which is worth the paragraph because #116 has this class open and cannot
+// yet check it.
+//
+// First it was fiction: the number was typed into these comments during the work, before
+// any such PR existed, and resolved to nothing. Then it became right by luck — GitHub
+// shares one sequence between issues and PRs, and the PR opened for this work happened to
+// take 127. Then it went wrong again in a *different* way: #126's merge deleted the base
+// branch, GitHub auto-closed #127 and refused to reopen it, and the work landed as #128 —
+// so a number that resolved perfectly now pointed at a closed, superseded PR. A resolving
+// citation aimed at the wrong one of two is exactly the drifted-fixture-citation defect,
+// and it is invisible to a resolver that only asks whether the target exists.
+//
+// **What makes this the hard half of the class**: `constWalk` (grave #116's sibling) was
+// catchable because a package's identifiers can be enumerated locally, and `#NN` cannot be
+// resolved without the network — so neither error was findable by any control this repo
+// has. Both were found by a human noticing, which is not a mechanism. Recorded rather
+// than quietly corrected, because the value of a near-miss is that it locates a live gap:
+// an issue-number checker needs an oracle the local tree does not contain, and until #116
+// supplies one, prose citing `#NN` for *the current change* is a claim nothing verifies.
 //
 // **`gen` was the wrong home, and its own doc says so**: "This package holds the two facts
 // that are about the repository — where the pin lives, how generated source is formatted —

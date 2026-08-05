@@ -656,7 +656,7 @@ func TestGatedVectors(t *testing.T) {
 		// earned there rather than deferred everywhere.
 		// # The memarg emitter's 114, which is the same mechanism widened by one instruction shape
 		//
-		// #127 taught the encoder to write load and store immediates, so 199 modules that used to
+		// #128 taught the encoder to write load and store immediates, so 199 modules that used to
 		// stop at `cannot yet encode` now reach the decoder — and 114 of their vectors reach a gate
 		// there. **They are all `gated` for one of two features and neither is the encoder's**: a
 		// module declaring `(memory i64 …)` is memory64, and a module with two or more memories
@@ -1914,7 +1914,7 @@ func TestPhase1Files(t *testing.T) {
 	//	 201  memory.init                  42  return_call_indirect   41  br_table
 	//	  23  array.copy                   23  array.init_data    …and 24 more, all #8, plus 3 for #77
 	//
-	// **The memarg buckets are gone, and #127 is what removed them** (13974 → 13775). The nine
+	// **The memarg buckets are gone, and #128 is what removed them** (13974 → 13775). The nine
 	// load/store buckets this list used to lead with — `8661 i32.load8_u immediates`, `312
 	// i64.load8_u`, `148 i32.store8`, `120 i32.store`, `103 f32.load`, `103 f64.load`, `49
 	// i32.load` and two smaller — are absent, because the emitter now writes the shape. The
@@ -1956,7 +1956,7 @@ func TestPhase1Files(t *testing.T) {
 	//	 4  38 i32.store8      4  39 i32.store16    4  3b i64.store16
 	//	 4  3d i64.store32     4  3e f64.store      3  fc 10         2  28 i32.load
 	//
-	// **Re-based 356 → 441 by #127, and the +85 is accounted per opcode rather than asserted.**
+	// **Re-based 356 → 441 by #128, and the +85 is accounted per opcode rather than asserted.**
 	// The memarg emitter made 199 encode-stratum modules instantiate, so vectors that used to stop
 	// upstream now reach `Invoke`: `10 call` +43, the load/store region `28`/`2d`/`36`–`3e` +41 (all
 	// twelve of those buckets are *new*), `40 memory.grow` +1. Measured by diffing this column

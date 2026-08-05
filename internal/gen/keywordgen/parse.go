@@ -54,7 +54,7 @@ const Floor = 400
 //
 // **The block locating and the arm rejoining are `mllex`'s**, not this package's, and the
 // consolidation is Scott's ruling on the third occurrence of the wrapped-arm shape (#78 here,
-// #105 in opgen, #127 avoided in memarggen by reading this file first). Avoidance is personal
+// #105 in opgen, #128 avoided in memarggen by reading this file first). Avoidance is personal
 // and does not survive the next author; one shared reader makes a fourth occurrence structural
 // rather than lucky. What stays here is what this generator's grammar knows — reading a *token
 // constructor* out of an arm's body — because that is genuinely different per consumer.
