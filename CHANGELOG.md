@@ -21,6 +21,43 @@ weakly-ordered platform.
 
 ### Added
 
+- **The interpreter executes the eight saturating truncations, `fc 00`–`fc 07`**
+  ([#7](https://github.com/scttfrdmn/burroughs/issues/7)). `i32`/`i64.trunc_sat_f{32,64}_{s,u}` —
+  the same three-way range analysis as the trapping `0xa8`–`0xb1`, with the verdicts replaced:
+  NaN → 0, below the low bound → the minimum, at or above the high bound → the maximum
+  (`convert.ml:97-143`, `:198-248`). They are **total functions**, so the helpers have no error
+  return at all; giving them one would be the `memory.grow` mistake, since `conversions.wast`
+  asserts every case as `assert_return` and a trap would convert passing vectors into trap answers.
+  `TestTruncSatNeverTraps` is the signature stated as a control.
+
+  **The NaN test comes first, and its control is architecture-dependent.** Every comparison against
+  a NaN is false, so a NaN reaching the range tests falls through to the conversion — which Go
+  leaves implementation-dependent, and the two gated arches disagree: `int32(NaN)` is `0` on arm64
+  and `-2147483648` on amd64. Deleting the check is therefore invisible on an Apple laptop and
+  fails four rows in CI. The falsification pass found this by running the mutation on both, and the
+  numbers are in the test's comment rather than a claim that the rows fail.
+
+  **This is the first prefixed instruction to execute**, which is one structural hazard: `Instr.Op`
+  holds the *sub*-opcode, so `fc 00` and `unreachable` are both `Op == 0x00`. The prefix is consumed
+  by a gate in `exec.go` that dispatches 0xfc to its own switch and still sends every other prefix
+  to `unsupported`; `TestPrefixedInstructionIsNotDispatchedByOpAlone` asserts both directions,
+  because a wrong engine passes either one alone.
+
+  Two of the implementation's own comments were **measured false and corrected before landing**: the
+  unsigned low arm's witness is `-1.0`, not `-0.5` (Go truncates `-0.5` to negative zero, which is
+  not `< 0`, so the `(-1, 0)` vectors pass with the arm deleted), and `int64(d)` above 2^63 does not
+  yield the sign bit as drafted — it saturates to max on this host. Both were prose asserting a
+  mechanism instead of reporting one.
+
+  Board: pass **28414 → 28594** (+180), exec fail **1199 → 1019**, encode unmoved at 1353, gated
+  unmoved at 1721; `unsupported` **unmoved at 32377**. All eight buckets are absent, not smaller.
+  Set-differenced on `(file, line)`: **180 departed, 0 arrived, 0 same-key-new-reason** — the zero
+  in the third category interrogated per grave
+  [#106](https://github.com/scttfrdmn/burroughs/issues/106) rather than quoted, since it joined
+  2372 live pairs and detects a change on a synthetic one. The flat account is the finding: these
+  vectors have nothing behind them, where `global.get`'s had linking and further opcodes. All 180
+  are in `conversions.wast`, which goes **347/527 → 527/527**.
+
 - **The interpreter executes `global.get` and `global.set`**
   ([#7](https://github.com/scttfrdmn/burroughs/issues/7)). The 76 arrivals the previous entry
   named, answered. A global's storage is **two slots and a declared type** — a `uint64` and a
