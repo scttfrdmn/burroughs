@@ -423,6 +423,17 @@ func (m *Module) ImportedMems() int { return m.importedCount(ExternMemory) }
 // table for every module that imports one, exactly as it read the wrong memory.
 func (m *Module) ImportedTables() int { return m.importedCount(ExternTable) }
 
+// ImportedGlobals counts the global imports, which is the offset defined globals start at in the
+// global index space.
+//
+// The fourth, and like the third it needed no new reasoning — which is what a shared
+// `importedCount` is for. The lesson ImportedMems records (22 vectors agreeing on the wrong
+// memory's answer) applies here with a sharper edge, because a global's *initializer* can read an
+// earlier global: an interpreter sizing its slice by `len(Globals)` alone would make `(global i32
+// (global.get 0))` read a defined global where the module named an imported one, and
+// `global.wast:344` is a module whose global 0 is exactly an import.
+func (m *Module) ImportedGlobals() int { return m.importedCount(ExternGlobal) }
+
 // importedCount counts the imports of one extern kind.
 //
 // Shared rather than written once per kind: two loops differing only in a constant is the

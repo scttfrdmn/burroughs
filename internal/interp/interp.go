@@ -67,6 +67,16 @@ type Instance struct {
 	// three-line addition rather than a second design.
 	tables []*table
 
+	// globals is the global index space, in index order — imports first, then definitions, for
+	// mems's reason and by the same measured lesson, which transfers without new argument (see
+	// `binary.ImportedGlobals`). Nothing new is decided here either: nil slot, reserved not
+	// omitted, reason stated on the field.
+	//
+	// A slice of pointers rather than values, and that *is* a decision: `global.set` mutates a
+	// slot in place, so a value slice would need indexing at every write and `globalFor` could
+	// not hand out something writable. The nil-slot convention needs the pointer anyway.
+	globals []*global
+
 	// deferred holds the validation-shaped failures instantiation met and could not report,
 	// because 0015's trap channel may not carry a verdict.
 	//
@@ -99,10 +109,43 @@ func Instantiate(m *binary.Module) (*Instance, *Trap) {
 	// measurement is what made it concrete rather than cautionary: 22 vectors, all "passing"
 	// with the wrong memory's answer.
 	memOff, tabOff := m.ImportedMems(), m.ImportedTables()
+	globOff := m.ImportedGlobals()
 	in := &Instance{
-		mod:    m,
-		mems:   make([]*memory, memOff+len(m.Memories)),
-		tables: make([]*table, tabOff+len(m.Tables)),
+		mod:     m,
+		mems:    make([]*memory, memOff+len(m.Memories)),
+		tables:  make([]*table, tabOff+len(m.Tables)),
+		globals: make([]*global, globOff+len(m.Globals)),
+	}
+	// **Globals first, and the position comes from the reference's fold rather than from
+	// convenience.** `eval.ml:1310-1318` runs `init_global` *before* `init_table` and
+	// `init_memory`, and it matters for a reason no ordering of the other three has: a global's
+	// initializer is a const-expr that may read an *earlier global*, and a table's or memory's
+	// segment offset may read a global too. So globals must be complete before anything else is
+	// evaluated, and each global must see the ones below it.
+	//
+	// That second half is why this loop fills `in.globals[globOff+i]` as it goes rather than
+	// building a slice and assigning at the end: `newGlobal` evaluates against `in`, so the slot
+	// for global N must be visible while global N+1's initializer runs.
+	//
+	// **Falsified rather than asserted, and the prediction was wrong in the engine's favour.**
+	// This comment first said an allocate-then-evaluate engine "would answer 0 for `(global i32
+	// (global.get 0))`" — a wrong value. Running that mutation says otherwise: the slot is still
+	// nil when the next initializer reads it, so `globalFor`'s nil-slot arm fires and the module
+	// reports `global 0 was declared but not initialized` through the deferred channel. So the
+	// nil-slot convention converts what would have been a silent wrong answer into a loud one,
+	// which is the convention paying for itself in a place it was not designed for. Recorded
+	// because the wrong version was the plausible one: a reader checking the code against the
+	// claim would have found agreement, which is the defect-stated-as-the-rule shape.
+	for i := range m.Globals {
+		g, err := in.newGlobal(m.Globals[i])
+		if err != nil {
+			if t := asTrap(err); t != nil {
+				return nil, t
+			}
+			in.deferred = errors.Join(in.deferred, err)
+			continue
+		}
+		in.globals[globOff+i] = g
 	}
 	for i := range m.Tables {
 		tab, err := newTable(m.Tables[i])
