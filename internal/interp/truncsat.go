@@ -6,8 +6,8 @@ import (
 	"github.com/scttfrdmn/burroughs/internal/binary"
 )
 
-// execFC dispatches the 0xfc region: the eight saturating truncations, and — once their arms
-// land — bulk memory and table operations.
+// execFC dispatches the 0xfc region: the eight saturating truncations, plus the three bulk
+// operations whose arms live in `bulk.go`.
 //
 // **A separate switch rather than arms in the main one, because `Op` is the sub-opcode.**
 // `fc 00` and `unreachable` are both `Op == 0x00`, so a single switch would need every arm to
@@ -31,6 +31,15 @@ func (in *Instance) execFC(ins binary.Instr, st *stack) error {
 			return err
 		}
 		st.pushI64(truncSatToI64(ins.Op, st))
+
+	case 0x0a: // memory.copy
+		return in.execMemoryCopy(ins, st)
+
+	case 0x0b: // memory.fill
+		return in.execMemoryFill(ins, st)
+
+	case 0x0e: // table.copy
+		return in.execTableCopy(ins, st)
 
 	default:
 		return unsupported(ins)

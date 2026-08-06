@@ -219,13 +219,24 @@ func (in *Instance) callIndirect(ins binary.Instr, st *stack, depth int) error {
 	// The index operand is an **i32 read unsigned**, and widening it to 64 bits before the bounds
 	// test is what makes the test right: a table64's index is genuinely 64-bit
 	// (`addr_of_num`), and truncating would wrap a large index into a legal slot.
+	//
+	// Through `tableAddr` rather than open-coding the two lines, which is what stood here: the
+	// width decision belongs to one function or it belongs to two that can disagree, and
+	// `table.copy` needing the same narrowing is what made the second copy visible. One concept,
+	// one trigger — see `tableAddr` for why the i32 branch is an identity on every input this
+	// engine can present, and why it is kept anyway.
+	//
+	// **The lines removed from here were unreachable too, and that was measured after the
+	// retrofit rather than assumed by analogy.** Collapsing `tableAddr` to `return slot` leaves
+	// both boards identical (29005/1961, exec 608) and this package green, so the narrowing that
+	// stood at this call site was as unobservable as the one in `bulk.go` — for the same reason,
+	// `pushI32` having already zero-extended the operand. The comment above about a large index
+	// wrapping into a legal slot describes what would happen *if* a raw i64 could arrive here; it
+	// cannot today, and memory64 is when that changes.
 	if needErr := st.needNum(1); needErr != nil {
 		return needErr
 	}
-	i := st.popNum()
-	if !tab.limits.Addr64 {
-		i = uint64(uint32(i))
-	}
+	i := tableAddr(tab, st.popNum())
 	r, err := tab.load(i) // `undefined element i` when out of bounds
 	if err != nil {
 		return err
