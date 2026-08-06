@@ -183,8 +183,11 @@ func (in *Instance) execTableCopy(ins binary.Instr, st *stack) error {
 // that silently depends on another function's zero-extension is the two-places-know-one-fact
 // shape (#78/#105/#106) — stating the dependence here is the cheap half of not having it.
 //
-// A free function rather than a method because `call.go:226` open-codes the same two lines for
-// `call_indirect`. Retrofitting that call site is a follow-up, not this arm's business.
+// A free function rather than a method because `call_indirect` needs the same narrowing, and it
+// now calls this instead of open-coding it. The retrofit landed in the same PR rather than as the
+// follow-up this comment first deferred: the whole reason the function is free is to have one
+// place, and leaving the second copy in place for a later PR would be the two-places-know-one-fact
+// shape kept deliberately for the length of a queue.
 func tableAddr(t *table, slot uint64) uint64 {
 	if t.limits.Addr64 {
 		return slot

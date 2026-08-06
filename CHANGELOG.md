@@ -65,6 +65,13 @@ weakly-ordered platform.
   downstream** — the classifier's first dissent on real data, and a verdict it could not have
   delivered before the trio landed because the setups would have masked it.
 
+  **`call_indirect`'s index narrowing routes through `tableAddr` too**, the two open-coded lines
+  at its call site being the same width decision. Removing the duplicate is what a free function
+  was for; deferring it would have kept a second place knowing one fact for the length of a queue.
+  The retrofit is behaviour-identical on both lanes, and collapsing `tableAddr` to `return slot`
+  leaves both boards green — so the lines removed from `call.go` were as unobservable as the ones
+  in `bulk.go`, for the same `pushI32` reason, which is now recorded at that site.
+
   Board: pass **28594 → 29005** (+411), exec fail **1019 → 608**, encode unmoved at 1353, gated
   unmoved at 1721; `unsupported` **unmoved at 32377**. Set-differenced on `(file, line)`: **411
   departed, 0 arrived, 60 same-key-new-reason.** The 60 are one finding — all of them in
