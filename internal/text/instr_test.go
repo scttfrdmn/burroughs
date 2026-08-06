@@ -912,10 +912,20 @@ func TestEveryUnencodableShapeIsRefused(t *testing.T) {
 // and a refusal test whose subject becomes encodable is not deleted, it is *re-pointed*: the same
 // spellings are round-tripped by `encodableModules`, where the dangerous case is checked in the
 // direction that now applies (the block *present* in the image with its blocktype, rather than absent).
+//
+// **`call_indirect` and `return_call_indirect` left the same way, by the same rule** (#8): both
+// spellings of both mnemonics are now in `encodableModules`, where the immediate *order* — the thing
+// that made them dangerous — is asserted in both directions. `return_call_indirect` is the one that
+// cannot go there, because the decoder gates it (`return_call_indirect: feature gate disabled`) and
+// every round-trip row decodes what it wrote; so its re-pointing is the gate itself, which is the
+// stronger control. A row asserting a refusal it no longer earns would be the opposite of an honest
+// board.
+//
 // `try_table` keeps both spellings here because `vec catch` remains unencoded, which is why this test
-// still has a subject rather than becoming vacuous.
+// still has a subject rather than becoming vacuous. When it goes, this test goes with it — and the
+// vacuity floor below is what makes that a decision rather than a silent drift.
 func TestEveryStructuralInstructionIsRefused(t *testing.T) {
-	for _, src := range []string{
+	srcs := []string{
 		// try_table, flat and folded — the block-family arm still behind the frontier.
 		`(module (func try_table end))`,
 		`(module (func (try_table)))`,
@@ -924,11 +934,19 @@ func TestEveryStructuralInstructionIsRefused(t *testing.T) {
 		// and its contents kept.
 		`(module (func try_table i32.const 1 drop end i32.const 2 drop))`,
 		`(module (func (try_table (i32.const 1) drop) (i32.const 2) drop))`,
-		// call_indirect: `encode.ml:583` writes `idx y; idx x`, reversing the text's order.
-		`(module (table 0 funcref) (func i32.const 0 call_indirect))`,
-		`(module (table 0 funcref) (func (call_indirect (i32.const 0))))`,
-		`(module (table 0 funcref) (func i32.const 0 return_call_indirect))`,
-	} {
+	}
+	// **A refusal test that runs out of subjects passes by asserting nothing**, which is the vacuity
+	// law at a table that is *designed* to shrink: every row here is a row the frontier is trying to
+	// delete, so this test's own success condition trends toward an empty loop. Four is what remains
+	// after `call_indirect` left, and the pair-per-construct structure is why it is not two — deleting
+	// one spelling of `try_table` is exactly the mistake the header says a one-spelling table would
+	// have called repaired.
+	if len(srcs) < 4 {
+		t.Fatalf("this test has %d rows, want >=4: a frontier test's table shrinks as the frontier "+
+			"moves, so an empty loop is its natural end state and passes silently. If `try_table` is "+
+			"encodable now, delete this test and say so — do not let it thin out", len(srcs))
+	}
+	for _, src := range srcs {
 		t.Run(src, func(t *testing.T) {
 			if err := ReadModule([]byte(src)); err != nil {
 				t.Fatalf("the parser rejects this module, so it is the wrong vector for a frontier "+

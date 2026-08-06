@@ -45,7 +45,22 @@ import (
 // the outermost depth, truncates the stack to. Passed in rather than read from `fn.TypeIndex`
 // because one caller has no type: `constExprValue` builds a `binary.Func` around an offset
 // expression, whose zero TypeIndex would name a real and unrelated type. See returnFrom.
+//
+// # run versus runFrame
+//
+// `run` is the depth-zero entry point — the boundary, and the const-expression callers — and
+// `runFrame` is the same loop with a call depth threaded through it. Two names rather than one with
+// a `0` at every call site, because the depth is the *only* thing that distinguishes them and a
+// literal zero at a boundary call reads as an accident: a caller passing 0 from inside a frame would
+// reset the exhaustion budget, which is a bug no vector can see (the budget's whole purpose is a
+// case that does not terminate).
 func (in *Instance) run(fn *binary.Func, locals []uint64, st *stack, results int) error {
+	return in.runFrame(fn, locals, st, results, 0)
+}
+
+// runFrame is `run` at a known call depth. See run for the loop's design; `depth` counts the frames
+// below this one and is what `callBudget` bounds.
+func (in *Instance) runFrame(fn *binary.Func, locals []uint64, st *stack, results, depth int) error {
 	body := fn.Body
 	// **Not `for pc := range len(body)`**, because a branch writes to `pc`: the arms below set it
 	// to a target and let the `pc++` carry it forward, which is why this walk indexes the slice
@@ -235,6 +250,41 @@ func (in *Instance) run(fn *binary.Func, locals []uint64, st *stack, results int
 			// scratch this frame is done with — so the stack is truncated to the function's
 			// arity, which is what `eval.ml:1069`'s `take n vs0` does. See returnFrom for the
 			// arm this replaces and for what its comment asserted (grave #135).
+			return returnFrom(st, results)
+
+		// ---- calls ---------------------------------------------------------------
+		//
+		// See call.go for the frame-building half, the exhaustion budget, and why
+		// `call_indirect`'s three failures are checked in the reference's order.
+
+		case opCall:
+			if err := in.call(uint32(ins.Imm0), st, depth); err != nil {
+				return err
+			}
+
+		case opCallIndirect:
+			if err := in.callIndirect(ins, st, depth); err != nil {
+				return err
+			}
+
+		case opReturnCallIndirect:
+			// **A tail call, and this arm does not make it one.** The reference's
+			// `ReturnCallIndirect` (`eval.ml:298-305`) steps a plain `CallIndirect` and then
+			// wraps the result in `ReturningInvoke`, which replaces the current frame instead
+			// of nesting under it. Here the call nests and the frame then returns, which is
+			// *observationally identical* for every vector except one class: unbounded tail
+			// recursion, which the spec requires to run forever and this arm exhausts.
+			//
+			// Stated rather than left silent because the difference is invisible on the
+			// board — `return_call_indirect.wast` has no unbounded-recursion vector, so all 42
+			// rows pass either way — and a proper tail call needs the explicit frame stack
+			// `call`'s comment defers to v1. That is the shape of a declared shortfall: the
+			// gate is off by default, so nothing reaches here unless the all-gates-on lane
+			// puts it here, and when it does it answers on the merits for everything the suite
+			// asks.
+			if err := in.callIndirect(ins, st, depth); err != nil {
+				return err
+			}
 			return returnFrom(st, results)
 
 		case opEnd:

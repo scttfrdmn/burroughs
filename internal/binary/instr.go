@@ -429,9 +429,13 @@ func (d *Decoder) decodeConstExpr(r *reader) error {
 //
 // The retaining twin of decodeConstExpr, and a separate entry point rather than a bool
 // parameter on one, because the two have different *callers* rather than different
-// behaviour: a global's initializer has a consumer, an element segment's offset does not
-// yet (#7). Sharing the body means the grammar has one definition site — the property
+// behaviour. Sharing the body means the grammar has one definition site — the property
 // grave #83 keeps being about.
+//
+// The split has held while the callers moved to this side one at a time: a global's initializer
+// first, then a data segment's offset (0015), then an element segment's offset *and* its
+// expression-form elements (0016). The non-retaining twin now has exactly one caller left, and
+// when that goes the bool this refused to take will not need to exist either.
 func (d *Decoder) decodeConstExprKeep(r *reader) ([]Instr, error) {
 	return d.constExpr(r, true)
 }

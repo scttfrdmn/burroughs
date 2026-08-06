@@ -153,6 +153,17 @@ var encodableModules = []struct {
 	wantImports []binary.Import
 	wantExports []binary.Export
 	wantFuncs   []binary.Func
+	// wantElemSec is section 9's payload: the segment count, then each segment. nil means no section 9.
+	//
+	// Bytes for `wantDataSec`'s reason, and section 9's case is the stronger one. **This comment used
+	// to say `decodeElemSection` "retains nothing into" `ElemSegment`, which was already false when it
+	// was written** (`module.go:560`, retained under 0016) — see the `withElem` floor below for the
+	// measurement that replaced it. What survives the correction is the operative half: the retained
+	// struct normalizes flags 0/2 and 4/6 to identical values, so an encoder that wrote the
+	// explicit-table form where the implicit one belongs, or an elemkind byte where a reftype belongs,
+	// decodes clean and every other column here agrees. These rows are the only instrument over the
+	// flag byte, which is why they get their own floor below.
+	wantElemSec []byte
 	// wantDataSec is section 11's payload: the segment count, then each segment. nil means no
 	// section 11.
 	wantDataSec []byte
@@ -1179,6 +1190,206 @@ var encodableModules = []struct {
 			{Op: 0x0b},
 		}}},
 	},
+	// **The pair that separates the two placements, which every row above is blind to** (grave #145).
+	// The four `select` rows above all write it as the sequence's last instruction, where "emit before
+	// the tail" and "emit after the tail" produce identical bytes because the tail is empty — so a
+	// reader emitting a *flat* select after its `instr_list` was green on all four while denoting a
+	// different program for every flat select with anything after it.
+	//
+	// A `drop` and an `i32.const` follow, and the two spellings put them in opposite places: flat is
+	// `select :: [drop; i32.const 9]` (:678-680), folded is `[operands] @ [select]` then the drop and
+	// the const as the enclosing sequence's own members. Confirmed against `wat2wasm --enable-all`,
+	// which writes `1b 1a 41 09` for the flat source where this encoder wrote `1a 41 09 1b`.
+	//
+	// **The suite *does* have the spelling — select.wast:582, `unreachable select nop` — and that is
+	// the more interesting fact, because it means the vector was being run and passing.** The first
+	// draft of this comment called the row derived on the strength of a grep that found every
+	// occurrence final or folded; the grep was measuring text with a pattern that excluded `(select`
+	// and therefore also excluded the flat rows written beside folded ones. *Measure with the
+	// instrument, not a regex.*
+	//
+	// What blinds the board is the vector's *shape*, not its absence. select.wast:577's "Flat syntax"
+	// block is a bare `(module …)` with no assertion attached, so the harness asks only whether it
+	// decodes and validates — and every instruction in it follows `unreachable`, which is dead code
+	// the validator accepts in either order. So the suite exercises this production and cannot see the
+	// answer, which is the accept-direction case §9 G-3 names and a sharper version of it: not a
+	// missing vector but a *present* one whose oracle stops short.
+	//
+	// The order below is wabt's, on this row's own source: `1b 1a 41 09` where this encoder wrote
+	// `1a 41 09 1b`.
+	{
+		src: `(module (func (result i32) i32.const 1 i32.const 2 i32.const 0 select drop i32.const 9))`,
+		want: []binary.CompType{
+			{Kind: binary.CompFunc, Func: binary.FuncType{Results: []binary.ValType{binary.I32}}},
+		},
+		wantFuncs: []binary.Func{{TypeIndex: 0, Body: []binary.Instr{
+			{Op: 0x41, Imm0: 1},
+			{Op: 0x41, Imm0: 2},
+			{Op: 0x41, Imm0: 0},
+			{Op: 0x1b}, // before the drop, because the drop is the select's `instr_list` tail
+			{Op: 0x1a},
+			{Op: 0x41, Imm0: 9},
+			{Op: 0x0b},
+		}}},
+	},
+	// The folded twin, and it is what stops the fix from being "reverse both" — the same argument
+	// `expr1`'s plain arm makes at its own splice. Here the operands are the tail and the select
+	// follows them, so the drop and the const are the *function's* instructions rather than the
+	// select's, and they still come after.
+	{
+		src: `(module (func (result i32) (select (i32.const 1) (i32.const 2) (i32.const 0)) drop i32.const 9))`,
+		want: []binary.CompType{
+			{Kind: binary.CompFunc, Func: binary.FuncType{Results: []binary.ValType{binary.I32}}},
+		},
+		wantFuncs: []binary.Func{{TypeIndex: 0, Body: []binary.Instr{
+			{Op: 0x41, Imm0: 1},
+			{Op: 0x41, Imm0: 2},
+			{Op: 0x41, Imm0: 0},
+			{Op: 0x1b},
+			{Op: 0x1a},
+			{Op: 0x41, Imm0: 9},
+			{Op: 0x0b},
+		}}},
+	},
+
+	// # `call_indirect`, whose two immediates are written in one order and encoded in the other (#8)
+	//
+	// `CallIndirect (x, y) → op 0x11; idx y; idx x` (encode.ml:275): `x` is the table, `y` the type, so
+	// the **type index precedes the table index on the wire** while the text writes the table first and
+	// usually omits it. Every row's want column is read from the *encoding* rather than from this
+	// encoder, and corroborated byte-for-byte against `wat2wasm --enable-all`.
+	//
+	// **A swapped pair is invisible on the majority spelling, which is why one row uses index 1 for
+	// each side separately.** Both immediates are u32 LEBs, so a transposition decodes clean and calls
+	// through the wrong table with the wrong type; and for the common `(table 1 funcref)` plus one type
+	// it is `11 00 00` either way. So there is a row whose *table* is 1 and type 0, and a row whose
+	// *type* is 1 and table 0 — a transposition fails exactly one of them in each direction, where
+	// either alone would look like a plausible reading.
+	//
+	// The bare spelling: an omitted table index is the sugar arm's `0l` (parser.mly:693), and the
+	// omitted signature interns the empty functype, which is type 0 here because the func's own
+	// signature interned it first.
+	{
+		src:  `(module (table 1 funcref) (func i32.const 0 call_indirect))`,
+		want: []binary.CompType{{Kind: binary.CompFunc}},
+		wantTabs: []binary.Table{
+			{ElemType: binary.FuncRef, Limits: binary.Limits{Min: 1}},
+		},
+		wantFuncs: []binary.Func{{TypeIndex: 0, Body: []binary.Instr{
+			{Op: 0x41, Imm0: 0},
+			{Op: 0x11, Imm0: 0, Imm1: 0}, // type 0, table 0
+			{Op: 0x0b},
+		}}},
+	},
+	// **Type 1, table 0** — the inline `(result i32)` interns a second type, and `callchain` interns
+	// unconditionally where a block's `([], [t])` would not (:709 against :746). So `Imm0` is 1 and
+	// `Imm1` is 0, and a reader that swapped them would encode `11 00 01`: a call through table 1,
+	// which this module does not have, on a module the decoder still accepts because the table index
+	// is not validated here.
+	{
+		src: `(module (table 1 funcref) (func i32.const 0 call_indirect (result i32) drop))`,
+		want: []binary.CompType{
+			{Kind: binary.CompFunc},
+			{Kind: binary.CompFunc, Func: binary.FuncType{Results: []binary.ValType{binary.I32}}},
+		},
+		wantTabs: []binary.Table{
+			{ElemType: binary.FuncRef, Limits: binary.Limits{Min: 1}},
+		},
+		wantFuncs: []binary.Func{{TypeIndex: 0, Body: []binary.Instr{
+			{Op: 0x41, Imm0: 0},
+			{Op: 0x11, Imm0: 1, Imm1: 0}, // type 1, table 0
+			{Op: 0x1a},
+			{Op: 0x0b},
+		}}},
+	},
+	// **Type 0, table 1** — the other direction, and the row that makes the pair a bidirectional
+	// control rather than two assertions. A symbolic table index too, so the resolution runs: `$b` is
+	// the second table, and its space is resolved in stage 2 by `callIndirectImm` rather than at the
+	// cursor, because a patch replaces the immediates and cannot be half-built.
+	{
+		src: `(module (table 0 funcref) (table $b 1 funcref) (type $t (func)) ` +
+			`(func i32.const 0 call_indirect $b (type $t)))`,
+		want: []binary.CompType{{Kind: binary.CompFunc}},
+		wantTabs: []binary.Table{
+			{ElemType: binary.FuncRef, Limits: binary.Limits{Min: 0}},
+			{ElemType: binary.FuncRef, Limits: binary.Limits{Min: 1}},
+		},
+		wantFuncs: []binary.Func{{TypeIndex: 0, Body: []binary.Instr{
+			{Op: 0x41, Imm0: 0},
+			{Op: 0x11, Imm0: 0, Imm1: 1}, // type 0, table 1
+			{Op: 0x0b},
+		}}},
+	},
+	// The written signature's params, which the `(result i32)` row alone cannot distinguish from a
+	// results-only chain: `(param i32) (result i32)` interns `[i32] → [i32]`, so a chain that dropped
+	// its params would intern `[] → [i32]` and encode a *legal* type index naming the wrong functype.
+	{
+		src: `(module (table 1 funcref) (func i32.const 7 i32.const 0 ` +
+			`call_indirect (param i32) (result i32) drop))`,
+		want: []binary.CompType{
+			{Kind: binary.CompFunc},
+			{Kind: binary.CompFunc, Func: binary.FuncType{
+				Params:  []binary.ValType{binary.I32},
+				Results: []binary.ValType{binary.I32},
+			}},
+		},
+		wantTabs: []binary.Table{
+			{ElemType: binary.FuncRef, Limits: binary.Limits{Min: 1}},
+		},
+		wantFuncs: []binary.Func{{TypeIndex: 0, Body: []binary.Instr{
+			{Op: 0x41, Imm0: 7},
+			{Op: 0x41, Imm0: 0},
+			{Op: 0x11, Imm0: 1, Imm1: 0},
+			{Op: 0x1a},
+			{Op: 0x0b},
+		}}},
+	},
+	// **The placement pair, the same control the flat/folded `select` rows carry** (grave #145): all
+	// four arms of `callinstr_instr_list` end in `… :: es` (:689-701) where the folded arms are
+	// `es, call_indirect (…)` (:817-823), so a flat `call_indirect` precedes what follows it and a
+	// folded one follows its operands. Both spellings below encode identically, and wabt agrees on
+	// both — which is what makes the fix "one placement per production" rather than "reverse both".
+	//
+	// This is the row that would have inherited #145 verbatim had the select defect not been fixed
+	// first: the shared emitter was the reason it was found.
+	{
+		src: `(module (table 1 funcref) (type $t (func (result i32))) ` +
+			`(func i32.const 0 call_indirect (type $t) drop i32.const 9 drop))`,
+		want: []binary.CompType{
+			{Kind: binary.CompFunc, Func: binary.FuncType{Results: []binary.ValType{binary.I32}}},
+			{Kind: binary.CompFunc},
+		},
+		wantTabs: []binary.Table{
+			{ElemType: binary.FuncRef, Limits: binary.Limits{Min: 1}},
+		},
+		wantFuncs: []binary.Func{{TypeIndex: 1, Body: []binary.Instr{
+			{Op: 0x41, Imm0: 0},
+			{Op: 0x11, Imm0: 0, Imm1: 0}, // before the drop, its `instr_list` tail
+			{Op: 0x1a},
+			{Op: 0x41, Imm0: 9},
+			{Op: 0x1a},
+			{Op: 0x0b},
+		}}},
+	},
+	{
+		src: `(module (table 1 funcref) (type $t (func (result i32))) ` +
+			`(func (call_indirect (type $t) (i32.const 0)) drop i32.const 9 drop))`,
+		want: []binary.CompType{
+			{Kind: binary.CompFunc, Func: binary.FuncType{Results: []binary.ValType{binary.I32}}},
+			{Kind: binary.CompFunc},
+		},
+		wantTabs: []binary.Table{
+			{ElemType: binary.FuncRef, Limits: binary.Limits{Min: 1}},
+		},
+		wantFuncs: []binary.Func{{TypeIndex: 1, Body: []binary.Instr{
+			{Op: 0x41, Imm0: 0}, // the operand, which is the folded arm's tail
+			{Op: 0x11, Imm0: 0, Imm1: 0},
+			{Op: 0x1a},
+			{Op: 0x41, Imm0: 9},
+			{Op: 0x1a},
+			{Op: 0x0b},
+		}}},
+	},
 
 	// # `br_table`, whose written form and wire form differ in three ways (0016)
 	//
@@ -1440,8 +1651,9 @@ var encodableModules = []struct {
 
 	// # The data and data count sections (#8)
 	//
-	// Asserted as payload bytes, per the table header — nothing retains data segments, so these rows
-	// are the *only* instrument over section 11, and every column above is blind to it.
+	// Asserted as payload bytes, per the table header — the mode byte does not survive into
+	// `binary.Module.Datas` (modes 0 and 2 decode identically; measured at the `withData` floor), so
+	// these rows are the only instrument over it, and every column above is blind to that distinction.
 	//
 	// **The mode flag is the resolved index, not the spelling**, which is the first three rows: an
 	// explicit `(memory 0)` and the sugar collapse to the identical two-byte `0x00` form, because
@@ -1650,6 +1862,200 @@ var encodableModules = []struct {
 		wantDataSec:      []byte{0x01, 0x00, 0x41, 0x00, 0x0b, 0x01, 'a'},
 		wantDataCountSec: []byte{0x01},
 	},
+
+	// # Section 9, all eight arms (#8, 0016)
+	//
+	// Every payload here is written by hand from `encode.ml`'s `elem` (:1062-1084), which is the second
+	// reading this table exists to be. Nothing calls `encodeElems` to find out what it should say —
+	// reconstructing a flag with a helper that branched on the mode would be an echo of the code under
+	// test (grave #106), and the flag *is* the thing most easily got wrong.
+	//
+	// The eight arms split into two families of four, and which family a segment takes is a question
+	// about its **content**: `is_elem_kind rt && for_all is_elem_index cs`. So the pairs below that look
+	// like spelling variants are not — `(elem func $f)` and `(elem funcref (ref.func $f))` denote the
+	// same segment and encode differently, one 0x01 and one 0x05, because `funcref` is nullable and
+	// `(ref func)` is not. Those two rows are the table's central assertion and the reason
+	// `encodeElems`' derivation is not decorative.
+	//
+	// Read alongside `TestEncodeMatchesTheReferenceOnElemFlags`, which is the same fact from the other
+	// direction: this table asserts the bytes for eleven modules, that test asserts the *flag* over the
+	// cross product of mode, reftype and element shape, so an arm that is right here and wrong for a
+	// mode this table does not spell fails there.
+
+	// Arm 1, flag 0x01 — passive, elemkind, index form. The commonest shape in the corpus after the
+	// abbreviated reftype, 482 of 1383 `(elem` forms.
+	{src: `(module (elem func))`, wantElemSec: []byte{0x01, 0x01, 0x00, 0x00}},
+	{
+		src:         `(module (func) (elem func 0))`,
+		want:        []binary.CompType{{Kind: binary.CompFunc}},
+		wantFuncs:   []binary.Func{{TypeIndex: 0, Body: []binary.Instr{{Op: 0x0b}}}},
+		wantElemSec: []byte{0x01, 0x01, 0x00, 0x01, 0x00},
+	},
+	// A **symbolic** func index in the element list, which is `retainIdx`'s `catFunc` path through
+	// `immPatch` — the segment is parsed before the func it names, so the index is not knowable at the
+	// cursor and a row with a literal `0` could not tell a working deferral from an eager one.
+	{
+		src:         `(module (elem func $f $f) (func $f))`,
+		want:        []binary.CompType{{Kind: binary.CompFunc}},
+		wantFuncs:   []binary.Func{{TypeIndex: 0, Body: []binary.Instr{{Op: 0x0b}}}},
+		wantElemSec: []byte{0x01, 0x01, 0x00, 0x02, 0x00, 0x00},
+	},
+	// Arm 2, flag 0x00 — active at table 0, index form, and **no elemkind byte in the payload**: the
+	// short active form omits it (`u32 0x00l; const c; vec elem_index cs`, :1069-1070). A row that
+	// expected 0x00 twice would pass an encoder that wrote the elemkind unconditionally, and the two
+	// zeroes would be indistinguishable by eye — which is why the count is spelled out here.
+	{
+		src:         `(module (table 1 funcref) (func) (elem (i32.const 0) 0))`,
+		want:        []binary.CompType{{Kind: binary.CompFunc}},
+		wantTabs:    []binary.Table{{ElemType: binary.FuncRef, Limits: binary.Limits{Min: 1}}},
+		wantFuncs:   []binary.Func{{TypeIndex: 0, Body: []binary.Instr{{Op: 0x0b}}}},
+		wantElemSec: []byte{0x01, 0x00, 0x41, 0x00, 0x0b, 0x01, 0x00},
+	},
+	// The same arm with an **empty** element list, which is the one shape of five that reaches an empty
+	// list (`elemidx_list` is `idx_list`, nullable at parser.mly:500) and 29 corpus rows write. It also
+	// pins `allElemIndex`'s vacuous truth: an empty list takes the *index* family, so this is flag 0x00
+	// and not 0x04.
+	{
+		src:         `(module (table 1 funcref) (elem (i32.const 0)))`,
+		wantTabs:    []binary.Table{{ElemType: binary.FuncRef, Limits: binary.Limits{Min: 1}}},
+		wantElemSec: []byte{0x01, 0x00, 0x41, 0x00, 0x0b, 0x00},
+	},
+	// Arm 3, flag 0x02 — active at a **non-zero** table, index form: `idx x; const c; elem_kind rt; vec`
+	// (:1071-1073), so this is the one arm whose payload carries the table index *and* the elemkind, in
+	// that order with the offset between them. Two tables so index 1 exists.
+	{
+		src:  `(module (table 1 funcref) (table $t 1 funcref) (func) (elem (table $t) (i32.const 0) func 0))`,
+		want: []binary.CompType{{Kind: binary.CompFunc}},
+		wantTabs: []binary.Table{
+			{ElemType: binary.FuncRef, Limits: binary.Limits{Min: 1}},
+			{ElemType: binary.FuncRef, Limits: binary.Limits{Min: 1}},
+		},
+		wantFuncs:   []binary.Func{{TypeIndex: 0, Body: []binary.Instr{{Op: 0x0b}}}},
+		wantElemSec: []byte{0x01, 0x02, 0x01, 0x41, 0x00, 0x0b, 0x00, 0x01, 0x00},
+	},
+	// A `(table 0)` spelled explicitly, which must produce the **same bytes** as arm 2's row above: the
+	// discriminator is the resolved index, never whether the text wrote a tableuse. `encodeDatas` makes
+	// the identical claim for `(data (memory 0) …)` and this is section 9's half of it.
+	{
+		src:         `(module (table 1 funcref) (func) (elem (table 0) (i32.const 0) func 0))`,
+		want:        []binary.CompType{{Kind: binary.CompFunc}},
+		wantTabs:    []binary.Table{{ElemType: binary.FuncRef, Limits: binary.Limits{Min: 1}}},
+		wantFuncs:   []binary.Func{{TypeIndex: 0, Body: []binary.Instr{{Op: 0x0b}}}},
+		wantElemSec: []byte{0x01, 0x00, 0x41, 0x00, 0x0b, 0x01, 0x00},
+	},
+	// Arm 4, flag 0x03 — declarative, index form.
+	{
+		src:         `(module (elem declare func $f) (func $f))`,
+		want:        []binary.CompType{{Kind: binary.CompFunc}},
+		wantFuncs:   []binary.Func{{TypeIndex: 0, Body: []binary.Instr{{Op: 0x0b}}}},
+		wantElemSec: []byte{0x01, 0x03, 0x00, 0x01, 0x00},
+	},
+	// Arm 5, flag 0x05 — passive, **expression** form, and this row is the pair to the flag-0x01 row at
+	// the top. `(elem funcref (ref.func 0))` and `(elem func 0)` denote one segment; `funcref` is
+	// `(Null, FuncHT)`, so `is_elem_kind` is false and the whole family changes. The payload carries a
+	// **reftype** byte (0x70) where the index form carried an elemkind (0x00), and each element is a full
+	// const expression — `d2 00 0b`, `ref.func 0` then `end` — where the index form wrote a bare LEB.
+	//
+	// **An element expression is not length-prefixed, and this row's want column said it was.** The bytes
+	// here were `05 70 01 03 d2 00 0b` — a `0x03` size in front of the expression — copied from the data
+	// segment's shape one section over, where the payload genuinely is `vec byte`. `const c` is
+	// `list instr c.it; end_ ()` (encode.ml:912-913): the instructions, then `0x0b`, and nothing sizing
+	// them. Only the *code* section's bodies are sized, through `gap32`. wabt 1.0.41 `--enable-all`
+	// writes `09 07 01 05 70 01 d2 00 0b` for this module, agreeing to the byte.
+	//
+	// Worth the paragraph because it is the failure mode a hand-written want column exists to catch and
+	// also the one it can cause: the encoder was right and the fixture was wrong, so the red board was
+	// the fixture's error, and had the fixture been generated from the encoder both would have agreed on
+	// the invented prefix. What settled it was the reference's executable, neither side of the test.
+	{
+		src:         `(module (func) (elem funcref (ref.func 0)))`,
+		want:        []binary.CompType{{Kind: binary.CompFunc}},
+		wantFuncs:   []binary.Func{{TypeIndex: 0, Body: []binary.Instr{{Op: 0x0b}}}},
+		wantElemSec: []byte{0x01, 0x05, 0x70, 0x01, 0xd2, 0x00, 0x0b},
+	},
+	// A segment **mixing** a one-instruction element with a two-instruction one, which is the row that
+	// forces `for_all` to be a fold rather than a decision made on the first element: element 0
+	// satisfies `is_elem_index` and element 1 does not, so the whole segment takes the expression family
+	// even though its type is `funcref` either way. A `funcs`-vs-`exprs` choice keyed on element 0
+	// passes every other row here.
+	//
+	// **`(item (ref.func 0) (ref.func 0))` rather than `(ref.null func)`, and the swap is the frontier's
+	// doing rather than a preference.** `ref.null` takes a heaptype immediate, a shape deliberately
+	// outside `encodableShapes`, so the first draft of this row asked `EncodeModule` for a module the
+	// encoder refuses — the fixture reaching past a boundary this PR does not move, not a defect in it.
+	// The `(item …)` spelling keeps every instruction inside the frontier while failing
+	// `is_elem_index` for the reason that predicate actually names: `[{it = RefFunc _}]` matches a list
+	// of length *one*, so two `ref.func`s fail it where one passes. Ill-typed, and irrelevant that it is
+	// — the encoder writes what the grammar admits and validation is #9's. wabt 1.0.41 `--enable-all
+	// --no-check` writes `01 05 70 01 d2 00 d2 00 0b` for it, which is this row's want column.
+	{
+		src:         `(module (func) (elem funcref (ref.func 0) (item (ref.func 0) (ref.func 0))))`,
+		want:        []binary.CompType{{Kind: binary.CompFunc}},
+		wantFuncs:   []binary.Func{{TypeIndex: 0, Body: []binary.Instr{{Op: 0x0b}}}},
+		wantElemSec: []byte{0x01, 0x05, 0x70, 0x02, 0xd2, 0x00, 0x0b, 0xd2, 0x00, 0xd2, 0x00, 0x0b},
+	},
+	// Arm 6, flag 0x04 — active at table 0, expression form, **and the guard**: available only when the
+	// reftype is exactly `funcref` (`when rt = (Null, FuncHT)`, :1079), because 0x04's payload has no
+	// reftype field. The element is the two-instruction `(item …)` above, which fails `is_elem_index`,
+	// so the segment cannot take flag 0x00 and this is the arm that remains.
+	{
+		src:         `(module (func) (table 1 funcref) (elem (i32.const 0) funcref (item (ref.func 0) (ref.func 0))))`,
+		want:        []binary.CompType{{Kind: binary.CompFunc}},
+		wantFuncs:   []binary.Func{{TypeIndex: 0, Body: []binary.Instr{{Op: 0x0b}}}},
+		wantTabs:    []binary.Table{{ElemType: binary.FuncRef, Limits: binary.Limits{Min: 1}}},
+		wantElemSec: []byte{0x01, 0x04, 0x41, 0x00, 0x0b, 0x01, 0xd2, 0x00, 0xd2, 0x00, 0x0b},
+	},
+	// Arm 7, flag 0x07 — declarative, expression form.
+	{
+		src:         `(module (func) (elem declare funcref (ref.func 0)))`,
+		want:        []binary.CompType{{Kind: binary.CompFunc}},
+		wantFuncs:   []binary.Func{{TypeIndex: 0, Body: []binary.Instr{{Op: 0x0b}}}},
+		wantElemSec: []byte{0x01, 0x07, 0x70, 0x01, 0xd2, 0x00, 0x0b},
+	},
+	// Arm 8, flag 0x06 — active at a non-zero table, expression form: `idx x; const c; reftype rt; vec`
+	// (:1081), the mirror of arm 3 with a reftype where the elemkind was, and the same field order.
+	{
+		src: `(module (func) (table 1 funcref) (table $t 1 funcref) ` +
+			`(elem (table $t) (i32.const 0) funcref (item (ref.func 0) (ref.func 0))))`,
+		want:      []binary.CompType{{Kind: binary.CompFunc}},
+		wantFuncs: []binary.Func{{TypeIndex: 0, Body: []binary.Instr{{Op: 0x0b}}}},
+		wantTabs: []binary.Table{
+			{ElemType: binary.FuncRef, Limits: binary.Limits{Min: 1}},
+			{ElemType: binary.FuncRef, Limits: binary.Limits{Min: 1}},
+		},
+		wantElemSec: []byte{0x01, 0x06, 0x01, 0x41, 0x00, 0x0b, 0x70, 0x01, 0xd2, 0x00, 0xd2, 0x00, 0x0b},
+	},
+	// Two segments, so the section's own vector count is asserted by something other than 1 — and in
+	// source order, which is the order the *table* is initialized in and therefore semantic.
+	{
+		src:         `(module (func) (elem func 0) (elem declare func 0))`,
+		want:        []binary.CompType{{Kind: binary.CompFunc}},
+		wantFuncs:   []binary.Func{{TypeIndex: 0, Body: []binary.Instr{{Op: 0x0b}}}},
+		wantElemSec: []byte{0x02, 0x01, 0x00, 0x01, 0x00, 0x03, 0x00, 0x01, 0x00},
+	},
+	// The `(table … (elem …))` sugar, which defines a table *and* a segment from one field: the table is
+	// sized `min = max = len(einit)` (parser.mly:1216-1222) and the segment is active at that table with
+	// a synthesized zero offset. Two rows because the sugar's two arms differ in the element list's form,
+	// and the encoded flag differs with it — the idx-list arm is `(NoNull, FuncHT)` by the action's own
+	// `let rt`, the elemexpr arm takes whatever reftype was written.
+	//
+	// This is the row the section-9 withdrawal check is a live control for: the arm must `defineElem` as
+	// well as `defineTable`, and before it did, the table's size came out of an element count whose
+	// elements went nowhere.
+	{
+		src:         `(module (func) (table funcref (elem 0 0)))`,
+		want:        []binary.CompType{{Kind: binary.CompFunc}},
+		wantTabs:    []binary.Table{{ElemType: binary.FuncRef, Limits: binary.Limits{Min: 2, Max: 2, HasMax: true}}},
+		wantFuncs:   []binary.Func{{TypeIndex: 0, Body: []binary.Instr{{Op: 0x0b}}}},
+		wantElemSec: []byte{0x01, 0x00, 0x41, 0x00, 0x0b, 0x02, 0x00, 0x00},
+	},
+	{
+		src:         `(module (func) (table funcref (elem (ref.func 0))))`,
+		want:        []binary.CompType{{Kind: binary.CompFunc}},
+		wantTabs:    []binary.Table{{ElemType: binary.FuncRef, Limits: binary.Limits{Min: 1, Max: 1, HasMax: true}}},
+		wantFuncs:   []binary.Func{{TypeIndex: 0, Body: []binary.Instr{{Op: 0x0b}}}},
+		wantElemSec: []byte{0x01, 0x04, 0x41, 0x00, 0x0b, 0x01, 0xd2, 0x00, 0x0b},
+	},
 }
 
 // dataFill is the payload the two page-boundary rows above expect, stated as an argument rather than
@@ -1689,9 +2095,10 @@ func TestEncodeRoundTripsThroughTheDecoder(t *testing.T) {
 	// out of, silently, because a floor never complains about slack.
 	//
 	// **A partition gets its own floor as soon as it exists**, which section 11's rows are the third
-	// application of. The data rows are the *only* instrument over section 11 — nothing retains data
-	// segments, so `wantDataSec` is not one column among many but the whole assertion — and a
-	// total-only floor would let all 21 of them go while the other 92 held the number up. That is the
+	// application of. The data rows are the *only* instrument over section 11's mode byte — modes 0
+	// and 2 decode to identical `DataSegment` values, so `wantDataSec` is the whole assertion over the
+	// one fact the round trip drops — and a total-only floor would let all 21 of them go while the
+	// other 92 held the number up. That is the
 	// empty-half-behind-a-full-one shape (grave #105) exactly, and the reason it gets a counter rather
 	// than trust is that this partition is the one whose loss is invisible everywhere else.
 	//
@@ -1702,18 +2109,30 @@ func TestEncodeRoundTripsThroughTheDecoder(t *testing.T) {
 	//
 	// **Raised with `br_table` (#8): 132→135 rows, 43→46 with a body, and a new partition at 3.**
 	// Three rows and three floors moved in the same edit, for the reason above.
-	if len(encodableModules) < 127 {
-		t.Fatalf("encodableModules has %d rows, want >=127 (135 at this commit): a table this check "+
+	//
+	// **Raised again at 153 rows / 62 bodies, and the gap is the confession**: the table grew from 135
+	// to 153 across the element-segment and instruction work while these numbers sat still, so the
+	// distance the paragraph above says to close had quietly re-opened to 26 rows and 19 bodies. A
+	// floor never complains about slack — that is the whole of its blind spot — so the only thing that
+	// keeps it honest is moving it in the PR that grows the table, and the rule was written here and
+	// then not followed. Recorded rather than silently corrected, because the *pattern* of drift is
+	// what a reader needs: the instruction is "in the same edit", and the failure mode is that nothing
+	// fails when it isn't.
+	if len(encodableModules) < 146 {
+		t.Fatalf("encodableModules has %d rows, want >=146 (153 at this commit): a table this check "+
 			"reads is a table whose size is part of the assertion, since a comparison over an empty "+
 			"set succeeds", len(encodableModules))
 	}
-	withFuncs, withData, withDataCount, withLabels := 0, 0, 0, 0
+	withFuncs, withData, withDataCount, withLabels, withElem := 0, 0, 0, 0, 0
 	for _, tc := range encodableModules {
 		if len(tc.wantFuncs) > 0 {
 			withFuncs++
 		}
 		if tc.wantDataSec != nil {
 			withData++
+		}
+		if tc.wantElemSec != nil {
+			withElem++
 		}
 		if tc.wantDataCountSec != nil {
 			withDataCount++
@@ -1722,11 +2141,38 @@ func TestEncodeRoundTripsThroughTheDecoder(t *testing.T) {
 			withLabels++
 		}
 	}
-	if withFuncs < 43 {
-		t.Fatalf("only %d of %d encodableModules rows assert a function body, want >=43 (46 at this "+
+	if withFuncs < 58 {
+		t.Fatalf("only %d of %d encodableModules rows assert a function body, want >=58 (62 at this "+
 			"commit): the code section is the newest and least-covered half of this table, and a "+
 			"total-only floor would let its rows go to zero behind the other sections'",
 			withFuncs, len(encodableModules))
+	}
+	// **Its own floor, and it is the one this function *computed and did not assert*** — `withElem`
+	// was counted in the loop above and then read by nothing, which is a counter with no consumer: the
+	// shape of a floor that was going to be written and wasn't. An unasserted count is strictly worse
+	// than an absent one, because the loop reads as though the partition is covered.
+	//
+	// Section 9 needs it because **the retained struct does not determine the flag byte**, which is a
+	// narrower claim than the one this comment used to make and is the true one. It said "nothing
+	// retains element segments either"; `binary.Module.Elems` has existed since 165e77e
+	// (`module.go:560`), so that sentence was false at the moment it was written and the floor's
+	// stated reason was fiction while the floor itself was sound. What is actually unrecoverable was
+	// measured by decoding one segment under each of the eight legal flags and printing the struct:
+	//
+	//	flags 0 and 2 → Mode:active Tbl:0 ByExpr:false ElemType:funcref nFuncs:1  — identical
+	//	flags 4 and 6 → Mode:active Tbl:0 ByExpr:true  ElemType:funcref nExprs:1  — identical
+	//
+	// The implicit-table and explicit-table encodings of an active segment naming table 0 normalize
+	// to the same value, exactly as `encode.ml` chooses between them, so a comparison against `Elems`
+	// scores flag 0 and flag 2 the same and *cannot* see an encoder that emits the longer form.
+	// These rows' byte-level `wantElemSec` is the only instrument that can. They are also the only
+	// place the two elemkind/reftype encodings are pinned. Sixteen rows behind 137 others is exactly
+	// the empty-half-behind-a-full-one shape (grave #105).
+	if withElem < 14 {
+		t.Fatalf("only %d of %d encodableModules rows assert an element section payload, want >=14 "+
+			"(16 at this commit): flags 0/2 and 4/6 decode to identical `ElemSegment` values, so "+
+			"these rows are the only instrument over section 9's flag byte, elemkinds and reftypes "+
+			"— and this count was computed and unasserted before now", withElem, len(encodableModules))
 	}
 	// Its own floor, because the label side table is a partition of the code rows that the body
 	// comparison **structurally cannot see**: `Func.Labels` is a map keyed by instruction index, and
@@ -1743,11 +2189,19 @@ func TestEncodeRoundTripsThroughTheDecoder(t *testing.T) {
 			"instrument over `br_table`'s three text-to-wire transformations (0016)",
 			withLabels, len(encodableModules))
 	}
+	// The data floor's reason is the element floor's, measured the same way and with the same
+	// correction: it said "nothing retains data segments (#7)", and `binary.Module.Datas` has
+	// existed since 0015 — the ADR that retained it is cited three lines from the claim. What the
+	// struct cannot recover is the *mode byte*: decoding one segment under each legal mode prints
+	// `Passive:false Mem:0 nOffset:2` for **both** mode 0 (implicit memory) and mode 2 (explicit
+	// memory 0), so a comparison against `Datas` cannot see an encoder that writes the longer form.
+	// Only these rows' byte-level `wantDataSec` can. Same shape as section 9's flags 0/2, because it
+	// is the same normalization in `encode.ml`.
 	if withData < 19 {
 		t.Fatalf("only %d of %d encodableModules rows assert a data section payload, want >=19 (21 at "+
-			"this commit): these rows are the only instrument over section 11, since nothing retains "+
-			"data segments (#7) — losing them leaves the section emitted and unchecked",
-			withData, len(encodableModules))
+			"this commit): modes 0 and 2 decode to identical `DataSegment` values, so these rows are "+
+			"the only instrument over section 11's mode byte — losing them leaves the section emitted "+
+			"and unchecked", withData, len(encodableModules))
 	}
 	// Its own floor at 2, small but not foldable into the one above: section 12's *condition* is a
 	// question about instructions rather than segments, so a row asserting a data section says nothing
@@ -1817,6 +2271,7 @@ func TestEncodeRoundTripsThroughTheDecoder(t *testing.T) {
 				what string
 				want []byte
 			}{
+				{binary.SectionElement, "element", tc.wantElemSec},
 				{binary.SectionData, "data", tc.wantDataSec},
 				{binary.SectionDataCount, "data count", tc.wantDataCountSec},
 			} {
@@ -1827,15 +2282,14 @@ func TestEncodeRoundTripsThroughTheDecoder(t *testing.T) {
 						"should have none: an unexpected section 11 or 12 is a decode failure on "+
 						"any real consumer, not a harmless extra", b, s.what, got)
 				case s.want != nil && !found:
-					t.Errorf("encoded % x, which carries no %s section: want payload % x. The "+
-						"round trip above cannot see this — nothing retains data segments (#7) — "+
-						"so a dropped section 11 is invisible to every other column here",
-						b, s.what, s.want)
+					t.Errorf("encoded % x, which carries no %s section: want payload % x. No other "+
+						"column in this table asserts sections 9, 11 or 12, so a dropped one is "+
+						"invisible to the round trip above", b, s.what, s.want)
 				case s.want != nil && !slices.Equal(got, s.want):
-					t.Errorf("the %s section's payload is % x, want % x: the mode flag, the memory "+
-						"index and the offset expression are all unretained by the decoder, so a "+
-						"wrong one decodes clean and denotes a different module",
-						s.what, got, s.want)
+					t.Errorf("the %s section's payload is % x, want % x: the mode byte does not "+
+						"survive decoding — modes 0 and 2, and element flags 0 and 2, produce "+
+						"identical segment values — so the longer form decodes clean and denotes a "+
+						"module this comparison would score correct", s.what, got, s.want)
 				}
 			}
 
@@ -2300,7 +2754,6 @@ func TestEncodeRefusesWhatItCannotWrite(t *testing.T) {
 		{`(module (start 0) (func))`, "(start …) field"},
 		// `(module (data "abc"))` was here and is now in `encodableModules`, which is what section 11
 		// *is* — the same move `(module (func))` made when the code section landed.
-		{`(module (elem))`, "(elem …) field"},
 		{`(module (tag))`, "(tag …) field"},
 		{`(module (type (struct)))`, "struct or array"},
 		{`(module (type (array (mut i32))))`, "struct or array"},
@@ -2341,8 +2794,6 @@ func TestEncodeRefusesWhatItCannotWrite(t *testing.T) {
 		// The `(import …)` field has no inline-export arm at all (:1250), so there was never a row for
 		// it — the asymmetry is the grammar's, and `importField`'s unconditional withdrawal is why it
 		// never needed the lookahead the other five have now lost.
-		{`(module (table funcref (elem)))`, "(table …) field"}, // + an implicit elem segment
-		{`(module (table i64 funcref (elem)))`, "(table …) field"},
 		// An initializer expr. This row read `"(func …) field"` until the code section landed, because
 		// the func was refused before the table was reached — so what it *checked* was the func
 		// frontier, and the table's own arm was never the thing under test. Now the func encodes and
@@ -2378,33 +2829,43 @@ func TestEncodeRefusesWhatItCannotWrite(t *testing.T) {
 		// unencodable field is the one whose name must appear in the message, never the encodable
 		// field that follows it.
 		//
-		// **The leader was `(func)`, then `(data "abc")`, and is now `(elem)` — re-pointed twice for the
-		// same reason.** This is the tripwire-re-pointing rule (#33) at test-row scale, and the second
-		// application is the one that proves it is a rule rather than a one-off: the rows name a *risk*
-		// — a later field withdrawing an earlier field's refusal — and each landing section dissolves
-		// whichever leader it implements without touching the risk. `func` moved to follower when the
-		// code section landed; `data` follows it now that section 11 does. Deleting the rows instead
-		// would have retired a live control twice on a technicality.
+		// **The leader was `(func)`, then `(data "abc")`, then `(elem)`, and is now `(global …)` —
+		// re-pointed three times for the same reason.** This is the tripwire-re-pointing rule (#33) at
+		// test-row scale, and the third application is the one that makes it routine rather than
+		// remarkable: the rows name a *risk* — a later field withdrawing an earlier field's refusal — and
+		// each landing section dissolves whichever leader it implements without touching the risk. `func`
+		// moved to follower when the code section landed; `data` when section 11 did; `elem` now that
+		// section 9 does. Deleting the rows instead would have retired a live control three times on a
+		// technicality, and the instruction the previous version of this comment left — "re-point again,
+		// not delete" — is what is being carried out here.
 		//
-		// `(elem)` is the leader that remains, and the ones after it are `(global …)`, `(start …)`,
-		// `(tag)`. When section 9 lands, this comment's instruction is to re-point again, not to delete.
-		{`(module (elem) (memory 1))`, "(elem …) field"},
-		{`(module (elem) (table 1 funcref))`, "(elem …) field"},
-		{`(module (table funcref (elem)) (memory 1))`, "(table …) field"},
+		// `(global …)` is the leader now, and the ones left after it are `(start …)` and `(tag)`. When the
+		// global section lands, re-point again to whichever of those remains.
+		{`(module (global i32 (i32.const 0)) (memory 1))`, "(global …) field"},
+		{`(module (global i32 (i32.const 0)) (table 1 funcref))`, "(global …) field"},
 		{`(module (tag) (memory 1) (table 1 funcref))`, "(tag …) field"},
 		// **A `(data …)` field as the *follower*, which is where its departure makes it a better
 		// witness than it was as a leader.** `dataField` has three arms and every one of them calls
 		// `clearNonTypeField` after its closing paren, so it is the newest candidate for clearing a
 		// record that is not its own — and the sugar arm clears one too. Falsified by dropping the
-		// offset comparison in `clearNonTypeField`: these three encode, emitting a module whose elem or
+		// offset comparison in `clearNonTypeField`: these three encode, emitting a module whose global or
 		// tag is gone.
-		{`(module (elem) (data "abc"))`, "(elem …) field"},
+		{`(module (global i32 (i32.const 0)) (data "abc"))`, "(global …) field"},
 		{`(module (tag) (memory 1) (data (i32.const 0) "x"))`, "(tag …) field"},
-		{`(module (elem) (memory (data "x")))`, "(elem …) field"},
+		{`(module (global i32 (i32.const 0)) (memory (data "x")))`, "(global …) field"},
+		// **`(elem …)` as a follower, and it is the sharpest of them**, which is the dividend of its
+		// promotion out of this table. Five arms, each calling `clearNonTypeField` after its own closing
+		// paren — more distinct withdrawal sites than any other field has — plus the `(table … (elem …))`
+		// sugar, whose arm withdraws once for two definitions. Every one of those is a place to clear a
+		// record belonging to the `(global …)` in front of it.
+		{`(module (global i32 (i32.const 0)) (elem func))`, "(global …) field"},
+		{`(module (global i32 (i32.const 0)) (elem (i32.const 0)))`, "(global …) field"},
+		{`(module (global i32 (i32.const 0)) (elem declare func))`, "(global …) field"},
+		{`(module (global i32 (i32.const 0)) (table funcref (elem)))`, "(global …) field"},
 		// `func` as a follower, unchanged: `funcField`'s tail calls `noteDefined` and
 		// `clearNonTypeField` after retaining its body, and unlike the memory and table arms it reaches
 		// that call on every well-formed func.
-		{`(module (elem) (func))`, "(elem …) field"},
+		{`(module (global i32 (i32.const 0)) (func))`, "(global …) field"},
 		{`(module (tag) (func) (memory 1))`, "(tag …) field"},
 
 		// # The typeuse frontier, which is a *wrong index* rather than a missing section
@@ -2819,4 +3280,234 @@ func externKindBytes(tb testing.TB, src, head, sample, suffix string) map[string
 		out[space] = b
 	}
 	return out
+}
+
+// TestEncodeMatchesTheReferenceOnElemFlags is section 9's cross-product control, and it is the
+// instrument grave #146 was found by: the eleven-row arm table in `encodableModules` asserts whole
+// payloads for eleven *modules*, this asserts the **flag** for every cell of mode × reftype ×
+// element shape, so an arm that is right for the spellings that table happens to write and wrong for
+// a cell it does not is caught here.
+//
+// # Why the flag alone, and why that is not a weaker assertion
+//
+// The flag is the whole classification: `elem` (encode.ml:1062-1084) is one `if` over two families
+// of four, and every field after the flag follows from which arm was taken. So the flag is where the
+// derivation is decided, and it is also the one field the *round trip cannot see* — `ElemSegment`
+// retains `{Mode, TableIndex, ByExpr, ElemType, …}`, from which the flag is not recoverable:
+// **flags 0 and 2-at-table-0 decode to identical segments, as do 4 and 6-with-funcref-at-table-0**
+// (measured, not reasoned — a probe decoding all eight arms printed two pairs of identical structs).
+// An encoder that wrote 0x02 with an explicit `00` table index where the reference writes 0x00
+// round-trips clean and denotes the same module in *more bytes than the reference emits*, which is
+// exactly the kind of divergence #67's corpus comparator would report as a finding.
+//
+// Asserting bytes past the flag would duplicate `encodableModules` while adding a want column per
+// cell — 140 hand-written payloads, which is where a table stops being a second reading and starts
+// being a transcription. The eleven rows there carry the payloads; this carries the classification.
+//
+// # The grid is the two predicates crossed with the mode, and every axis is a predicate's domain
+//
+// `is_elem_kind rt` (:1044) asks about the reftype's **nullability** and `for_all is_elem_index cs`
+// (:1052, folded at :1064) asks about every element's **shape** — so the axes are chosen to be each
+// predicate's own partition rather than a sample of spellings:
+//
+//   - **reftype**: `(ref func)` passes `is_elem_kind`; `(ref null func)` and its abbreviation
+//     `funcref` fail it on nullability and pass 0x04's guard (`rt = (Null, FuncHT)`, :1079);
+//     `externref` fails both, which is the third case those two guards are not each other's
+//     negation over. The two funcref spellings are both here because they must produce the *same*
+//     flag and a table listing one could not say so.
+//   - **element shape**: empty (vacuously all-index, the inversion a hand-written loop gets wrong),
+//     one bare `(ref.func 0)`, an `(item (ref.func 0))` that must encode identically to the bare
+//     one, two bare ones so the fold is not a decision on element 0, a single `(item …)` holding
+//     *two* instructions (fails `is_elem_index`, whose pattern is a list of length one), a
+//     **mixed** segment whose first element passes and second fails — the row that forces `for_all`
+//     to be a fold — and an `(item (i32.const 0))`, ill-typed and irrelevant that it is, since the
+//     encoder writes what the grammar admits and validation is #9's.
+//   - **mode**: passive, active at table 0, active at a non-zero table, declarative. Active-at-0 is
+//     spelled `(i32.const 0)` with no tableuse and active-at-1 as `(table $t) (i32.const 0)`, so
+//     the discriminator under test is the *resolved* index.
+//
+// 4 modes × 5 reftypes × 7 shapes = 140 cells, of which 100 have an expected flag and 40 are the #8
+// frontier's (below).
+//
+// # The want column is a switch over the reference's text, not a call to the encoder
+//
+// `wantFlag` is a second reading of `elem`'s two `match`es, written from the OCaml with each arm's
+// line cited. That is the standing rule for this file and it has a specific teeth here: a helper
+// that asked `isElemKind`/`allElemIndex` would be an echo of the code under test (grave #106) —
+// those are the two predicates whose *conjunction* is the defect #146 was, so a want column
+// computed from them would have agreed with the bug.
+//
+// # The frontier cells are asserted as refusals, not skipped
+//
+// 40 cells cannot encode today and each is refused with #8's message. **The split is 28 + 12, and
+// the arithmetic was got wrong the first time — the counters below are what said so.** `(ref
+// extern)` is refused in all 28 of its cells (4 modes × 7 shapes), since it fails `is_elem_kind` and
+// therefore always writes a reftype `valTypeByte` has no byte for. The other 12 are `(ref func)` ×
+// the three non-index shapes × 4 modes, and they are #146's fix speaking: such a segment *passes*
+// `is_elem_kind` and so looks exempt, then routes to the expression family and needs the very byte
+// that is missing. Those 12 are exactly the population the pre-#146 exemption wrongly cleared, and
+// three of them were the panic.
+//
+// A cell that changes category — refused becoming encoded, or the reverse — fails here, which is
+// what makes this table an account of where the frontier *is* rather than a list of what works.
+//
+// # What the falsification pass found, including the probe that passed
+//
+// Three defects were introduced and watched. Two fail here and passed the whole package before this
+// test existed, which is the argument for it:
+//
+//   - **Dropping flag 0x04's `isFuncref` guard** fails seven cells — `externref` at table 0, every
+//     shape — because an `externref` segment written as 0x04 has *no reftype field* and decodes as a
+//     funcref segment. A wrong image that decodes clean, and the round trip agrees with it.
+//   - **Restoring #146** (the frontier exempting on `isElemKind()` alone) fails at
+//     `passive (ref func) one item of two ref.func` with the **panic** itself, which is the grave
+//     reproduced by the instrument its comment names.
+//   - **Making the writer route on `isElemKind()` alone** changes *nothing observable* — and that is
+//     a finding rather than a gap. The writer's conjunction differs from its first half on exactly
+//     the 12 cells the frontier refuses, so the second half is unreachable today and stays so until
+//     the GC gate admits those cells. Stated rather than left as a hole: this control cannot see
+//     `encodeElems`' half of the pair, only `encodableOrErr`'s, and the day #8's frontier moves is
+//     the day the twelve cells become flag assertions and the writer's half becomes falsifiable.
+func TestEncodeMatchesTheReferenceOnElemFlags(t *testing.T) {
+	modes := []struct {
+		name, prefix string
+		mode         binary.ElemMode
+		table        uint32
+	}{
+		{"passive", "", binary.ElemPassive, 0},
+		{"active at table 0", "(i32.const 0) ", binary.ElemActive, 0},
+		{"active at table 1", "(table $t) (i32.const 0) ", binary.ElemActive, 1},
+		{"declarative", "declare ", binary.ElemDeclarative, 0},
+	}
+	// null and abs are the reference's `rt` pair, stated per spelling so `wantFlag` can ask the
+	// reference's own questions of it rather than this package's predicates.
+	reftypes := []struct {
+		spelling string
+		null     bool
+		abs      string
+	}{
+		{"(ref func)", false, "func"},
+		{"(ref null func)", true, "func"},
+		{"funcref", true, "func"}, // the abbreviation of the row above; must agree with it
+		{"externref", true, "extern"},
+		{"(ref extern)", false, "extern"},
+	}
+	// allIndex is `for_all is_elem_index` read off the *text*: whether every element is written as
+	// exactly one `ref.func`. Empty is true, which is OCaml's `for_all` over `[]`.
+	shapes := []struct {
+		name, elems string
+		allIndex    bool
+	}{
+		{"empty", "", true},
+		{"one bare ref.func", " (ref.func 0)", true},
+		{"one ref.func in an item", " (item (ref.func 0))", true},
+		{"two bare ref.func", " (ref.func 0) (ref.func 0)", true},
+		{"one item of two ref.func", " (item (ref.func 0) (ref.func 0))", false},
+		{"a bare one then an item of two", " (ref.func 0) (item (ref.func 0) (ref.func 0))", false},
+		{"one item of i32.const", " (item (i32.const 0))", false},
+	}
+
+	// wantFlag is `elem`'s two matches, transcribed. Returns false for a cell this encoder refuses,
+	// which is a fact about the frontier rather than about the reference — hence the separate return
+	// rather than a sentinel flag value.
+	wantFlag := func(mode binary.ElemMode, table uint32, null bool, abs string, allIndex bool) (byte, bool) {
+		isElemKind := !null && abs == "func" // encode.ml:1044-1046
+		if isElemKind && allIndex {
+			switch mode { // :1065-1074
+			case binary.ElemPassive:
+				return 0x01, true
+			case binary.ElemDeclarative:
+				return 0x03, true
+			default:
+				if table == 0 {
+					return 0x00, true
+				}
+				return 0x02, true
+			}
+		}
+		// The expression family writes a reftype, and `valTypeByte` has one only for the two
+		// unparameterized reference types — so every cell here whose type is not `funcref` or
+		// `externref` is the #8 frontier, including the `(ref func)` cells that fell through the
+		// `if` above. Grave #146 is precisely this line having been absent.
+		if !null {
+			return 0, false
+		}
+		switch mode { // :1076-1084
+		case binary.ElemPassive:
+			return 0x05, true
+		case binary.ElemDeclarative:
+			return 0x07, true
+		default:
+			if table == 0 && abs == "func" { // the 0x04 guard, :1079
+				return 0x04, true
+			}
+			return 0x06, true
+		}
+	}
+
+	encoded, refused := 0, 0
+	for _, m := range modes {
+		for _, rt := range reftypes {
+			for _, sh := range shapes {
+				// Two tables so index 1 exists, and one func so `(ref.func 0)` names something.
+				src := "(module (func) (table 1 funcref) (table $t 1 funcref) (elem " +
+					m.prefix + rt.spelling + sh.elems + "))"
+				want, encodable := wantFlag(m.mode, m.table, rt.null, rt.abs, sh.allIndex)
+				t.Run(m.name+" "+rt.spelling+" "+sh.name, func(t *testing.T) {
+					b, err := EncodeModule([]byte(src))
+					if !encodable {
+						refused++
+						if err == nil {
+							t.Fatalf("%s encoded; its element type needs a parameterized reference "+
+								"byte valTypeByte has no entry for, so this cell is the #8 frontier "+
+								"and an encoding of it is a wrong image or a panic away from one", src)
+						}
+						if !strings.Contains(err.Error(), "parameterized reference") {
+							t.Errorf("%s was refused as %q, want #8's frontier message: a cell that "+
+								"changes *which* refusal it gets has moved category without saying so",
+								src, err)
+						}
+						return
+					}
+					encoded++
+					if err != nil {
+						t.Fatalf("EncodeModule refused %s: %v", src, err)
+					}
+					i := bytesIndex(b, secElem)
+					if i < 0 {
+						t.Fatalf("the encoder produced % x with no element section (id %d)", b, secElem)
+					}
+					// id, size, segment count, then the flag.
+					if len(b) < i+4 {
+						t.Fatalf("the element section in % x is truncated", b)
+					}
+					if got, wantCount := b[i+2], byte(0x01); got != wantCount {
+						t.Fatalf("the element section in % x declares %d segments, want %d",
+							b, got, wantCount)
+					}
+					if got := b[i+3]; got != want {
+						t.Errorf("%s encodes flag %#02x, want %#02x — the flag is the whole family "+
+							"choice and it is *not* recoverable from a round trip: flags 0 and 2 at "+
+							"table 0 decode to identical ElemSegments, as do 4 and 6 with funcref",
+							src, got, want)
+					}
+				})
+			}
+		}
+	}
+	// Vacuity floors, per category rather than one total: 100 encoded cells behind 40 refused ones is
+	// the empty-half-behind-a-full-one shape (grave #105), and a frontier that swallowed the whole
+	// grid would leave every flag assertion above unrun while the loop still iterated 140 times.
+	//
+	// **Exact counts rather than floors, because the exact numbers are knowable here** — the grid's
+	// extent is 4 × 5 × 7 and the frontier's shape is derivable, so a floor would be the looser
+	// instrument used where the sharper one is in hand (grave #105's other half). They earned it
+	// immediately: the first version of this check wanted 84 and 28, arithmetic that forgot the
+	// twelve `(ref func)` × non-index cells, and the failure is what corrected the paragraph above.
+	if encoded != 100 || refused != 40 {
+		t.Errorf("exercised %d encoded cells and %d refused ones, want 100 and 40 (4 modes × 5 "+
+			"reftypes × 7 shapes = 140; the refusals are (ref extern)'s 28 plus (ref func)'s 12 "+
+			"non-index-shape cells): a shifted split means an axis lost a member or the frontier "+
+			"moved, and either way the count is the only thing that says so", encoded, refused)
+	}
 }

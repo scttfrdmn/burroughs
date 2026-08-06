@@ -21,6 +21,43 @@ weakly-ordered platform.
 
 ### Added
 
+- **`call`, `call_indirect`, and `return_call_indirect` execute; element segments are retained and
+  encoded** ([#7](https://github.com/scttfrdmn/burroughs/issues/7),
+  [#8](https://github.com/scttfrdmn/burroughs/issues/8), decision
+  [0016](docs/decisions/0016-unbounded-immediates-live-beside-the-body.md)). The largest bucket on
+  the board, and it needed a table with something in it — so `decodeElemSegment`, which validated
+  and discarded all five of its fields, now stages an `ElemSegment` in the module's index order,
+  and the wat encoder writes all eight element flags.
+
+  **A wasm frame is a Go frame**, which is 0002's giant-switch reasoning applied to calls: the
+  recursion costs nothing per *instruction*, where an explicit `[]callFrame` pays at every
+  dispatch. It has a known expiry — v1's stack switching (contract §7) cannot capture a
+  continuation out of the Go stack — and the expiry is a phase rather than a defect. Exhaustion is
+  the reference's counter (`flags.ml:9`), not a stack probe, because `assert_exhaustion` is written
+  against a counter's behaviour; the budget is **10000** rather than the reference's 256, since
+  nothing in the spec bounds recursion at 256 and a Go guest's own depth routinely exceeds it (§1's
+  thesis workload deciding, as in 0002).
+
+  `call_indirect`'s three failures are checked in the reference's order — bounds, then null, then
+  type — and the order is not stylistic: checking nullness first reports `uninitialized element`
+  for an out-of-range index on **every table this engine builds**, because a fresh table is
+  null-filled. The type test is **structural** (`Match.match_deftype`, which reduces to equality
+  for MVP functypes), so a call naming `$b` accepts a function declared with a structurally
+  identical `$a` — 2 vectors in `type-rec.wast`, and the accept direction no rejection corpus can
+  see. The two immediates are **type first, table second** on the wire (`encode.ml:275` is
+  `op 0x11; idx y; idx x`), the reverse of how the text reads them, pinned by a fixture whose two
+  tables are both filled so an inverted reading transposes the *answers* rather than trapping.
+
+  **The board: pass 26833 → 27451, fail 4319 → 3682, gated 1535 → 1554, `unsupported` unmoved at
+  32377** over 254 files. The 2255-vector `call_indirect` bucket is drained; the columns close
+  exactly (−637 fail = +618 pass, +19 gated), while the *bucket* flow overshoots by 18 because
+  other buckets drained in the same motion. Of the drain, 469 moved to the exec/encode strata
+  rather than to pass — 420 blocked on linking, 57 on the missing `fc 0e` (`table.copy`) arm, and
+  the rest on later frontiers — each counted from the harness's own `Failure.Stratum` classifier
+  rather than from a message prefix, which is the distinction grave
+  [#129](https://github.com/scttfrdmn/burroughs/issues/129) exists for and which a first attempt
+  got 6 short of.
+
 - **`br_table`, both halves: the label vector is retained, encoded, and executed**
   ([#8](https://github.com/scttfrdmn/burroughs/issues/8), decision
   [0016](docs/decisions/0016-unbounded-immediates-live-beside-the-body.md)). The first immediate
@@ -2056,6 +2093,41 @@ weakly-ordered platform.
   skip ([#29](https://github.com/scttfrdmn/burroughs/issues/29)).
 
 ### Fixed
+
+- **A one-of-two-conditions exemption panicked in the arm that asserts two callers agree**
+  ([grave #146](https://github.com/scttfrdmn/burroughs/issues/146)). `encodableOrErr` exempts
+  element segments that write an `elemkind` byte rather than a reftype, and asked only
+  `isElemKind()` — while the writer's family test is `isElemKind() && allElemIndex()`. A
+  `(ref func)` segment holding an element that is not exactly `ref.func x` was therefore exempted
+  from the frontier check and then routed to the *expression* family, which calls `w.valType` on a
+  type `valTypeByte` refuses: not a wrong image but a **panic**, on three spellings the grammar
+  admits. The exemption is now the writer's conjunction verbatim. **A predicate reconstructed from
+  one of two conditions is the under-matching trigger defect
+  ([#78](https://github.com/scttfrdmn/burroughs/issues/78)) wearing a skip instead of a guard**,
+  and it fails the same way: silently, producing no finding, until the population it wrongly
+  exempts is reached. Found by enumerating mode × reftype × element shape, which became
+  `TestEncodeMatchesTheReferenceOnElemFlags`.
+
+- **A sink installer asked whether a sink was already installed, silently dropping every element**
+  ([grave #144](https://github.com/scttfrdmn/burroughs/issues/144)) and **a flat
+  `select`/`call_indirect` emitted after its tail, denoting a different program**
+  ([grave #145](https://github.com/scttfrdmn/burroughs/issues/145)).
+
+- **The `indirect call type mismatch` trap quoted a type in the wrong notation, and its comment
+  cited a vector that says nothing about it**
+  ([grave #147](https://github.com/scttfrdmn/burroughs/issues/147)). `funcTypeString` rendered the
+  **wat** spelling — `(func (param i32) (result i32))` — while its doc comment claimed that was
+  `string_of_deftype`'s and that empty clauses were "dropped". Both halves were false: the
+  reference is `"func " ^ string_of_resulttype ts1 ^ " -> " ^ string_of_resulttype ts2`
+  (`types.ml:382-383`) and `string_of_resulttype` brackets **unconditionally** (`:361-362`), so the
+  empty functype is `func [] -> []`, not `(func)`. All 25 mismatch vectors stop at the sentinel, so
+  nothing in the suite reads a character of it — grave
+  [#36](https://github.com/scttfrdmn/burroughs/issues/36)'s territory exactly, and the reason the
+  fix is to agree with an *external authority* rather than to invent locally. The comment also
+  claimed `call_indirect.wast:552` "wants" the tail; that line is a `fib-i64` assert_return, and
+  the citation was invented in the direction of claiming oracle cover for the half of the message
+  that has none. `TestFuncTypeStringIsTheReferenceSpelling` pins the algorithm, empty case
+  included.
 
 - **A 20-byte module allocated 2.64 GiB: `decodeLocals` expanded a declared count before
   anything bounded it** ([grave #138](https://github.com/scttfrdmn/burroughs/issues/138)). The

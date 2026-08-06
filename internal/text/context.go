@@ -546,6 +546,23 @@ type context struct {
 	// memory it sizes would be emitted with `min`/`max` pages and no bytes in it.
 	dataDefs []resolvedData
 
+	// The retained element segments, in source order — the emitter's input for section 9 (#8, 0016).
+	// Written by `defineElem`, which owns the argument for the stage-2 split.
+	//
+	// **Both spellings land here**, as with data segments: the `(elem …)` field and the
+	// `(table <type> (elem …))` sugar, which produces an `Elem` in the very arm that produces a
+	// `Table` (parser.mly:1188-1196). The sugar's omission would be worse than a missing segment for
+	// data's reason — the table it sizes would be emitted with limits and nothing in it.
+	elemDefs []resolvedElem
+
+	// elemsSeen counts every element segment the *grammar* saw, for the withdrawal check.
+	//
+	// `datasSeen`'s instrument on its sibling section, and its argument applies unchanged:
+	// incremented in `noteElem`, which both spellings pass through, so this number is the grammar's
+	// and `len(elemDefs)` is the emitter's. Counting inside `defineElem` would compare a number
+	// against itself.
+	elemsSeen int
+
 	// datasSeen counts every data segment the *grammar* saw, for the withdrawal check.
 	//
 	// `importsSeen`'s instrument, and its argument applies unchanged: incremented in `noteData`, which
@@ -918,6 +935,13 @@ func (c *context) noteExport() { c.exportsSeen++ }
 // hypothetical for this pair: the sugar arm parsed its payload and discarded it for as long as
 // section 11 did not exist, and every board was green.
 func (c *context) noteData() { c.datasSeen++ }
+
+// noteElem counts an element segment the grammar saw, for section 9's withdrawal check.
+//
+// Called from the two `(elem` recognizers — `elemField`'s `lpar` and `tableElemSugar`'s — for
+// `noteData`'s reason, and with the same history one section over: the table sugar parsed its element
+// list and discarded it for as long as section 9 did not exist.
+func (c *context) noteElem() { c.elemsSeen++ }
 
 // importOrderErr returns the ordering error, if any. Called once the module's field list is
 // complete, because a definition only qualifies if an import follows it.

@@ -1,8 +1,11 @@
 package text
 
 import (
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/scttfrdmn/burroughs/internal/binary"
 )
 
 // The controls for the deferred type-resolution phase (#64's second half).
@@ -712,5 +715,167 @@ func TestExterntypeTakesTypeuseXorFunctype(t *testing.T) {
 				"message here claims externtype calls inline_functype_explicit, and it does not",
 				src, err)
 		}
+	}
+}
+
+// TestElemIndexFormNeedsExactlyRefFunc is the control `elemIdxOf` and `refFuncMnemonic` both cite,
+// and its subject is the synthesized instruction those two are built out of: `elemidx_list`'s
+// expansion writes a `ref.func` the source never spelled, so *nothing in the text* says whether it
+// was built right.
+//
+// # Three facts, three failure modes, and each one is a legal module
+//
+// `(elem func $f)` expands to `[ref_func x]` (parser.mly:1149), and the expansion is assembled from
+// three generated lookups. All three fail in the accept direction:
+//
+//   - **the opcode**, `opBytes("ref.func")` → `0xd2`. If it were absent both sites panic (`ref.func
+//     has no opcode`), and that is what a *wrong* table looks like; but a table that had 0xd2 under
+//     another spelling would encode the wrong instruction with no complaint.
+//   - **the keyword**, `keywords["ref.func"]` → `REF_FUNC`, which is how `retainIdx` picks the index
+//     space (`idxLookupKinds[mnemonic.Keyword]`). A wrong keyword resolves `$f` against a *different
+//     space*, and this is the one that produces the quietest defect: `$f` bound in both the func and
+//     the table space encodes a different, entirely valid index.
+//   - **the round trip through `elemIdxOf`**, which is the same three facts read back on the way out:
+//     it re-derives `0xd2`, compares it against the built instruction, and answers `is_elem_index`.
+//     A false answer there moves the segment to the *expression* family — flag 5 instead of 1, more
+//     bytes, same meaning, no vector to say so.
+//
+// # What the two comments claimed, measured
+//
+// `refFuncMnemonic`'s comment said a misspelled `keywordKind` would leave the index resolving "in
+// whatever `idxLookupKinds[""]` names, which is `catType`'s zero value and not a refusal." Printed:
+// `idxLookupKinds[""]` is `catNone` (0, not `catType`'s 5), and `idxSpaceFor(catNone)` returns nil —
+// so an *unrecognized* keyword is refused, with `cannot yet encode a symbolic index on ref.func`.
+// The comment named the wrong constant and the wrong outcome for that case.
+//
+// It is right about the hazard all the same, and the probe that shows it is the one this test is
+// built on: a keyword that is wrong but **is** in `idxLookupKinds` gets a space, and the wrong one.
+// Substituting `TABLE_GET` resolves `$f` against the table space — `unknown table $f` where the
+// module has no table, and worse where it has one. That is the case worth a control, so the rows
+// below carry a module where a name is bound in *both* spaces at different indices.
+//
+// # This is not covered by `encodableModules`' rows, and the gap was measured
+//
+// Two rows there (`(elem func $f $f)`, `(elem declare func $f)`) do fail under both keyword
+// substitutions, so the *symbolic* path has some cover. What they cannot see is which space was
+// consulted when the answer happens to be right: a `$f` bound only in the func space produces
+// `unknown table $f`, a loud error, where a `$f` bound in both produces a wrong index and silence.
+// The `$x`-in-two-spaces row below is the discriminator, and no row in that table has one.
+func TestElemIndexFormNeedsExactlyRefFunc(t *testing.T) {
+	// The generated facts, asserted directly, so a failure names which lookup drifted rather than
+	// arriving as a panic out of a module encode.
+	if op, ok := opBytes(refFuncSpelling); !ok || len(op) != 1 || op[0] != 0xd2 {
+		t.Errorf("opBytes(%q) = % x, %v; want [d2], true (opcodes.go, generated from lexer.mll:327). "+
+			"Both `elemIdxOf` and `elemIdxSink` panic on the !ok path, so this is the assertion that "+
+			"distinguishes a missing row from a wrong byte", refFuncSpelling, op, ok)
+	}
+	kind, ok := keywords[refFuncSpelling]
+	if !ok {
+		t.Fatalf("keywords has no %q row, so `refFuncMnemonic` panics and no `(elem func …)` with a "+
+			"symbolic index can be expanded", refFuncSpelling)
+	}
+	if got := idxLookupKinds[kind]; got != catFunc {
+		t.Errorf("idxLookupKinds[%s] = %d, want catFunc (%d): this is the lookup that decides which "+
+			"space a synthesized `ref.func`'s index resolves against, and a wrong space yields a "+
+			"valid module denoting different functions", kind, got, catFunc)
+	}
+
+	// The whole path, end to end. Each row's want column is the section 9 payload, written from
+	// `encode.ml`'s index-form arms by hand — the flag, the elemkind, then the vector of bare LEBs.
+	// One row wants a *refusal* instead, and says at its site why a refusal is the only witness it
+	// can have.
+	for _, c := range []struct {
+		what, src string
+		want      []byte
+		wantErr   string // when set, the row asserts EncodeModule declines and the message contains this
+	}{
+		{
+			// The discriminator: `$x` is func index 1 *and* table index 0, so a resolution against
+			// the wrong space encodes `00` where `01` belongs — a module that decodes clean, whose
+			// table is initialized from the wrong function. `unknown table $x` cannot be the failure
+			// here, because the name is bound in both spaces.
+			"a name bound in the func and table spaces at different indices",
+			`(module (func) (func $x) (table $x 1 funcref) (elem func $x))`,
+			[]byte{0x01, 0x01, 0x00, 0x01, 0x01},
+			"",
+		},
+		{
+			// Forward reference: the segment precedes the func, so the index cannot be known at the
+			// cursor and `retainIdx` defers through `immPatch` — `elemIdxOf` then re-runs the patch
+			// to answer `is_elem_index`. A deferral that never resolved leaves an empty immediate,
+			// and the flag would still be 1.
+			"a forward-referenced symbolic index",
+			`(module (elem func $f) (func $f))`,
+			[]byte{0x01, 0x01, 0x00, 0x01, 0x00},
+			"",
+		},
+		{
+			// The numeric arm, which takes no lookup at all — so it is the row that stays green under
+			// every keyword substitution, and it is here as the partition's protected side.
+			"a numeric index",
+			`(module (func) (elem func 0))`,
+			[]byte{0x01, 0x01, 0x00, 0x01, 0x00},
+			"",
+		},
+		{
+			// `(item)` with no instructions: `is_elem_index`'s pattern is a list of length one, so an
+			// empty expression fails it and the segment takes the *expression* family — a flag with an
+			// elemtype and a bare `0x0b`, not flag 1. The row that says `elemIdxOf`'s
+			// `len(s.instrs) != 1` is a length test and not a `> 1` test, which `(elem func)` alone
+			// cannot catch because an empty *segment* is vacuously all-index (OCaml `for_all` over
+			// `[]`) while an empty *element* is not an index.
+			//
+			// **The elemtype is `(ref func)` and not `funcref`, and the difference is the whole row.**
+			// The obvious spelling — `(elem funcref (item))` — is **stillborn**: `is_elem_kind` is
+			// `(NoNull, FuncHT)`, so a nullable `funcref` fails the *kind* half of encode.ml:1064's
+			// conjunction before `allElemIndex` is ever consulted, and the segment takes flag 5 for a
+			// reason that has nothing to do with the length test. Measured, not reasoned: under an
+			// inversion that makes an empty element vacuously an index, `(elem funcref (item))`
+			// encodes `01 05 70 01 0b` either way. It was carrying that spelling and passing.
+			//
+			// So the witness is a **refusal**, and that is not a weaker assertion here — it is the
+			// only one available. With `(ref func)` the two answers are distinguishable at the
+			// encoder's own frontier: answering "not an index" takes flag 5, which must write the
+			// elemtype and meets #8's unwritten parameterized-reftype encoding; answering "index"
+			// takes flag 1, whose elemkind is a bare `0x00` and needs no such thing. Under the
+			// inversion this row emits `09 04 01 01 00 01` — flag 1, and a section whose declared
+			// size is one byte short of what it wrote, so the *decoder* catches it too. At HEAD it
+			// is declined. A row asserting a payload could not tell those apart, because the correct
+			// behaviour has no payload to assert.
+			"an element with no instructions is not an index, so it needs the expression form (#8)",
+			`(module (func) (elem (ref func) (item)))`,
+			nil,
+			"needs a parameterized reference encoding",
+		},
+	} {
+		t.Run(c.what, func(t *testing.T) {
+			b, err := EncodeModule([]byte(c.src))
+			if c.wantErr != "" {
+				if err == nil {
+					t.Fatalf("EncodeModule(%s) produced % x, want a decline containing %q — this "+
+						"segment's one element is not an index, so it must take the expression form, "+
+						"and the expression form's elemtype is what this engine cannot yet write",
+						c.src, b, c.wantErr)
+				}
+				if !strings.Contains(err.Error(), c.wantErr) {
+					t.Errorf("EncodeModule(%s) declined as %v, want a message containing %q — a "+
+						"decline for a *different* reason would pass a check on error-ness alone "+
+						"while saying nothing about which wire family was chosen", c.src, err, c.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("EncodeModule(%s): %v", c.src, err)
+			}
+			got, found := sectionPayload(decodeForTest(t, b), binary.SectionElement)
+			if !found {
+				t.Fatalf("the encoder produced % x with no element section", b)
+			}
+			if !slices.Equal(got, c.want) {
+				t.Errorf("%s encodes section 9 as % x, want % x — an element index resolved in the "+
+					"wrong space, or a segment moved to the wrong family, is a *valid* module either "+
+					"way, so this payload is the only witness", c.src, got, c.want)
+			}
+		})
 	}
 }

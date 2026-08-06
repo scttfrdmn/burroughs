@@ -501,6 +501,95 @@ type Memory struct {
 	Limits Limits
 }
 
+// ElemMode is an element segment's mode: the three arms of the reference's `segmentmode`
+// (ast.ml:305-308), which the wire's eight flag values select among.
+//
+// Three arms and not a `Passive bool`, which is where DataSegment stops. A data segment has
+// two modes because the reference's `Declarative` arm is an *error* for data
+// (`illegal declarative data segment`); for elements it is mode 3 and mode 7, and the text
+// grammar has an arm for it (parser.mly:1167, elem.wast:573). So the shape that was adequate
+// next door is not adequate here, which is why this is not a copy of it.
+type ElemMode byte
+
+const (
+	// ElemActive is the zero value deliberately: wire flags 0 is active-with-implicit-table,
+	// so a segment whose mode nothing wrote reads as the mode the smallest encoding means.
+	ElemActive ElemMode = iota
+
+	// ElemPassive is flags 1 and 5: not copied at instantiation, reachable only through
+	// `table.init`.
+	ElemPassive
+
+	// ElemDeclarative is flags 3 and 7: not copied and not reachable, existing only so that
+	// `ref.func` may name the functions in it. Its elements are still retained, because
+	// forward-declaring *which* functions is the segment's entire content.
+	ElemDeclarative
+)
+
+func (m ElemMode) String() string {
+	switch m {
+	case ElemActive:
+		return "active"
+	case ElemPassive:
+		return "passive"
+	case ElemDeclarative:
+		return "declarative"
+	}
+	return "unknown"
+}
+
+// ElemSegment is one element segment: where it goes, what type its elements are, and the
+// elements themselves in whichever of the two forms the wire used.
+//
+// **Retained under 0016's rule that shape follows the wire form, not the consumer**, and the
+// place that bites is `ByExpr`. The reference does *not* keep the two element forms apart: it
+// normalizes a function index into a one-instruction `[ref_func x]` const-expr
+// (decode.ml:1150-1152) and recovers the distinction at encode time by asking whether every
+// expression has that shape (encode.ml:1052-1054). That recovery is **not available here**, and
+// the reason is measured rather than assumed: it turns on the reftype's *nullability* —
+// `is_elem_kind` accepts `(NoNull, FuncHT)` and rejects `(Null, FuncHT)` — and this engine's
+// ValType is a byte with no nullability bit, so both collapse to FuncRef.
+//
+// The suite has the pair that makes that concrete, and it annotates it itself:
+// elem.wast:259 is `\00\41\00\0b\01\00` commented `(i32.const 0) func 0`, and elem.wast:327 is
+// `\04\41\00\0b\01\d2\00\0b` commented `(i32.const 0) (ref.func 0)` — the same active-at-table-0
+// segment holding the same single function, once as an index and once as an expression.
+// Normalized, they are one value and an encoder must guess which bytes to write back. Kept
+// apart, the round trip is exact. Same property as LocalGroup keeping `(count, type)`
+// runs — flattening cannot distinguish one run of two from two runs of one.
+type ElemSegment struct {
+	// Mode is which of the three segment modes this is; TableIndex and Offset are
+	// meaningful only for ElemActive.
+	Mode ElemMode
+
+	// TableIndex is the table the segment initializes, 0 for the implicit-index modes.
+	// **Recorded, not checked** — whether it names a table the module has is #9's question,
+	// for the reason DataSegment.MemIndex gives.
+	TableIndex uint32
+
+	// Offset is the offset constant expression, in the same internal form as a function body.
+	// Nil unless Mode is ElemActive.
+	Offset []Instr
+
+	// ElemType is the element type: FuncRef for the elemkind forms, whatever the reftype
+	// says for the expression forms. NoValType when the reftype was a GC form this ValType
+	// cannot represent (the all-gates-on lane reaches that).
+	ElemType ValType
+
+	// ByExpr distinguishes the two element encodings — wire bit 2. It is a field rather than
+	// a derived predicate because both slices are empty for a zero-element segment, which is
+	// legal in either form, and `len(Exprs) > 0` would then answer "index form" for a
+	// perfectly good empty expression segment. Same distinction 0016's LabelVector keeps with
+	// its second result: absent and empty are different facts.
+	ByExpr bool
+
+	// Funcs is the element vector in function-index form; nil when ByExpr.
+	Funcs []uint32
+
+	// Exprs is the element vector in const-expr form; nil unless ByExpr.
+	Exprs [][]Instr
+}
+
 // DataSegment is one data segment: where it goes, and what goes there.
 //
 // **Retained as of 0015**, which is the consumer-forced retention pre-registered when the wat

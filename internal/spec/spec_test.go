@@ -648,6 +648,12 @@ func TestGatedVectors(t *testing.T) {
 			544: "gc/function-references: the 0x40 table form with an initializer",
 			561: "gc/function-references: the 0x40 table form with an initializer",
 			578: "gc/function-references: the 0x40 table form with an initializer",
+			// The four extended-const offsets — see the section 9 / call_indirect batch below
+			// for why the feature is the *offset expression's* and not the segment's.
+			1065: "extended-const: (offset (i32.add …)) in an element segment at :1057",
+			1076: "extended-const: (offset (i32.add …)) in an element segment at :1068",
+			1087: "extended-const: (offset (i32.add …)) in an element segment at :1079",
+			1109: "extended-const: (offset (i32.add …)) in an element segment at :1092",
 		},
 
 		// The board's last `fail` became a `gated`, which is the gates doctrine working
@@ -2400,6 +2406,69 @@ func TestGatedVectors(t *testing.T) {
 			17: "memory64: (table $t64 i64 0 externref) at :1 — an i64 index type",
 			25: "memory64: (table $t64 i64 0 externref) at :1 — an i64 index type",
 		},
+
+		// # The element section's and call_indirect's 19, four of them behind a feature this
+		// # engine has never met
+		//
+		// Section 9 plus `call_indirect` (#8, 0016) taught the encoder to write element segments
+		// and the two indirect-call opcodes, so **637 vectors that used to stop at `cannot yet
+		// encode` now reach a verdict**: 618 became passes and 19 reached a gate. The columns
+		// close exactly, which is the check rather than the claim: fail 4319 → 3682 is −637,
+		// pass 26833 → 27451 is +618, gated 1535 → 1554 is +19, and 618 + 19 = 637.
+		//
+		// Every one of the 19 was a **fail** at 165e77e, quoting one of two encoder refusals —
+		// `cannot yet encode the call_indirect instruction (#8)` for seven of them and `cannot
+		// yet encode this (elem …) field` for twelve. That is the same movement the memarg and
+		// data-section batches above record: the emitter is right and the decoder is configured
+		// not to read what it correctly wrote.
+		//
+		// **`extended-const` is new to this list, and it is the one reason here that is not
+		// about a table.** `elem.wast:1057` and its three siblings put `(i32.add (i32.const 1)
+		// (i32.const 2))` in an element segment's offset — an arithmetic constant expression,
+		// which is the extended-const proposal's whole content — so the offset is what the gate
+		// declines, not the segment. Worth separating because the file is `elem.wast` and the
+		// vectors are `call_in_table` invokes: neither the file's name nor the vector's shape
+		// names the feature, and only the error string does.
+		//
+		// Read from **the decoder with every gate on** and printed, never from the source text
+		// (grave #129): `len(m.Tables)`, a count of `Limits.Addr64`, and `len(m.Elems)`. The
+		// four `elem.wast` modules are `tables=1 addr64=0 elems=1` — no i64 anywhere, which is
+		// how the extended-const attribution was separated from a memory64 guess — and all
+		// eight `table_copy64.wast` modules are `tables=2 addr64=2 elems=4`.
+		//
+		// **`imports.wast:97` and `:98` attribute to a module 62 lines earlier, and that was
+		// checked rather than accepted.** A gated verdict inherited from a stale `curGated`
+		// would be a harness defect wearing a gate's name, so the command list was printed:
+		// between :35 and :97 this file has no other module command, and :35's head carries
+		// `(tag (import "test" "tag-i32") (param i32))` — exception handling. The distance is
+		// the module's length, not a leak.
+		// The four extended-const lines join the `elem.wast` entry above rather than opening a
+		// second one — one file, one map, or the reverse check reads a subset it cannot name.
+		"imports.wast": {
+			97: "exception handling: (tag (import \"test\" \"tag-i32\") …) at :35",
+			98: "exception handling: (tag (import \"test\" \"tag-i32\") …) at :35",
+		},
+		"call_indirect64.wast": {
+			26: "memory64: an i64-indexed table at :3 — tables=1 addr64=1, all gates on",
+		},
+		"table_copy64.wast": {
+			1794: "memory64: (table $t0 i64 30 30 funcref) at :1771 — tables=2 addr64=2",
+			1819: "memory64: (table $t0 i64 30 30 funcref) at :1796 — tables=2 addr64=2",
+			1869: "memory64: (table $t0 i64 30 30 funcref) at :1846 — tables=2 addr64=2",
+			1919: "memory64: (table $t0 i64 30 30 funcref) at :1896 — tables=2 addr64=2",
+			2069: "memory64: (table $t0 i64 30 30 funcref) at :2046 — tables=2 addr64=2",
+			2094: "memory64: (table $t0 i64 30 30 funcref) at :2071 — tables=2 addr64=2",
+			2144: "memory64: (table $t0 i64 30 30 funcref) at :2121 — tables=2 addr64=2",
+			2194: "memory64: (table $t0 i64 30 30 funcref) at :2171 — tables=2 addr64=2",
+		},
+		"table_get64.wast": {
+			30: "memory64: (table $t2 i64 2 externref) at :1 — tables=2 addr64=2",
+			31: "memory64: (table $t2 i64 2 externref) at :1 — tables=2 addr64=2",
+		},
+		"table_set64.wast": {
+			36: "memory64: (table $t2 i64 2 externref) at :1 — tables=2 addr64=2",
+			37: "memory64: (table $t2 i64 2 externref) at :1 — tables=2 addr64=2",
+		},
 	}
 
 	files := boardFiles(t)
@@ -2813,7 +2882,32 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	// after. Worth stating, because the number *not* moving is the reason to re-run the
 	// arithmetic rather than adjust it: the previous PR's 566 and this one's are different
 	// populations that happen to be the same size.
-	const allOnPassFloor = 27802
+	// **27802 → 28497, and the gap to the default lane's 27451 is 1046.** Section 9 and
+	// `call_indirect` (#8, 0016) raise both floors, and the deferral arithmetic is re-run at the
+	// new numbers rather than assumed to hold: the default board's **1554** `gated` declines
+	// become **1046 passes and 508 fails** here, and fail moves 3682 → 4190 to match.
+	// 1046 + 508 = 1554, so every parked vector is answered on the merits in this lane and the
+	// 508 stay honestly red until their feature works.
+	//
+	// **The fail side moved for the first time in three PRs — 566 → 508 — and −58 is a net of
+	// two movements in opposite directions, not 58 vectors improving.** The previous three
+	// entries all read 566, which invited the reading that the number is structural; it is not.
+	// Measured by set-differencing the failing (file, line) keys against 165e77e rather than
+	// inferred from the total, which is the arithmetic that would have hidden the second half:
+	//
+	//	−73  `interp: no arm for opcode 10` — **plain `call`, not `call_indirect`.** These are
+	//	     memory64 and SIMD modules whose vectors are ordinary direct calls; they decode in
+	//	     this lane, and until this PR the interpreter had no `call` arm to run them with.
+	//	+15  vectors that now get *further* and stop at the next missing arm: 8 at `fc 0e`
+	//	     (`table.copy`), 4 at `0x25` (`table.get`), 1 at `0x23` (`global.get`), and 2 at the
+	//	     linking refusal. A fail moving to a later cause is still a fail, and quoting only
+	//	     the −73 would have implied the queue shortened by more than it did.
+	//
+	// −73 + 15 = −58. The first draft of this paragraph asserted the cause was `call_indirect`
+	// on i64-indexed tables — plausible in a PR about `call_indirect`, in a lane whose gated
+	// population is mostly memory64, and **wrong**: the diff says `0x10`. A cause guessed from
+	// the PR's own subject is the reading that flatters the work, which is the one to measure.
+	const allOnPassFloor = 28497
 	boardBound(t, "allOnPassFloor", totalPass, allOnPassFloor, boardBoundSlack, floorBound,
 		"a gated feature regressed, which the Gated==0 assertion above cannot see: with every "+
 			"gate on, a broken feature turns a pass into a fail and leaves Gated at zero")
@@ -3744,7 +3838,74 @@ func TestPhase1Files(t *testing.T) {
 	// A rise is not automatically legitimate, which is why the partition is the evidence: had the
 	// 8 arrived under a value-mismatch or an `unvalidated` head, the same +8 would have been a
 	// regression in an arm that used to answer, and the total alone cannot tell those apart.
-	const execFailCeiling = 670
+	// # Re-based 670 → 1139 by `call_indirect`, and the +469 is a net of two movements
+	//
+	// The largest single rise this constant has taken, and legitimate under its own message: the
+	// `call_indirect` arms mean `table_copy.wast` and `table_copy64.wast` instantiate for the
+	// first time, so those two files' 938 encoder reds became 394 passes and 536 exec reds. A
+	// ceiling that rises because a *front end* stopped blocking the interpreter is this constant
+	// working as documented — but "legitimate" is a claim about the partition, not about the
+	// direction, so the partition is what is recorded.
+	//
+	// **+469 net = +565 arriving in 9 files, −96 leaving 10.** Both halves are stated because the
+	// total hides the second: quoting +469 as "the new work's reds" would credit this PR with a
+	// 96-vector improvement it also earned and never mention it.
+	//
+	//	+272  table_copy.wast     encode 469 → 0, exec 0 → 272 — the file went 52/521 to 249/521
+	//	+264  table_copy64.wast   the same module set with i64 tables, 52/521 → 249/521
+	//	 +16  bulk.wast           encode 47 → 31, exec 31 → 47 — the 16 `call_indirect` reds moved
+	//	  +4  imports.wast        encode 6 → 0, exec 19 → 23
+	//	  +9  five table_*.wast   table_set 2, table_get 2, table_init 2, table_init64 2, table_grow 1
+	//	 −68  endianness.wast     exec 68 → 0, all of them `no arm for opcode 10` — plain `call`
+	//	 −28  nine others         func 8, elem 6, forward 4, fac 3, linking 2, memory_trap 2, three at 1
+	//
+	// And by *cause*, which is a different partition from the board's bucket keys (see the note
+	// above on why reading one against the other looks like a discrepancy). The three classes
+	// that were zero before this PR:
+	//
+	//	420  `table slot N names function N, which is an import, and linking is not implemented`
+	//	     — **the honest §3 decline, and the reason the two table_copy files are 249 and not
+	//	     521.** Their modules import five functions from a registered module and put them in
+	//	     tables, so every `call_indirect` through those slots meets linking. Not a defect and
+	//	     not this PR's to fix; it is #7's linking work, and it is the single largest class in
+	//	     the exec column now.
+	//	 47  `no arm for opcode fc 0e` — `table.copy`, which those files' setup functions call.
+	//	 57  `trap: uninitialized element N` — **downstream of the 47, not of the 420**, and that
+	//	     distinction was checked rather than assumed: the vectors are `assert_return`s whose
+	//	     setup is `(invoke "test")`, and "test" is a `table.copy` that traps on the missing
+	//	     arm. So the slots it should have filled read empty and the call traps. Read at
+	//	     table_copy.wast:590 and bulk.wast:307 with the failures printed beside them, because
+	//	     "uninitialized element" next to 420 linking declines is exactly the coincidence that
+	//	     invites the wrong parent.
+	//
+	// The remaining classes, and the whole table sums rather than gestures — every nonzero delta,
+	// with nothing rolled into an "and others":
+	//
+	//	+420  §3 linking, table slot          −89  no arm for opcode 10 (`call`, the arm landed)
+	//	 +57  trap: uninitialized element N   −18  encoder frontier at instantiation, 21 → 3
+	//	 +47  no arm for opcode fc 0e          +4  no arm for opcode 25 (`table.get`)
+	//	 +28  value mismatch, 280 → 308        +4  no arm for opcode fc 0d (`table.init`)
+	//	 +11  §3 linking, table                +1  no arm for opcode d2 (`ref.func`)
+	//	  +3  §3 linking, function             +1  the elem-expr `0x23` decline
+	//
+	// 420 + 57 + 47 + 28 + 11 + 3 + 4 + 4 + 1 + 1 − 89 − 18 = **+469**, against a measured
+	// 670 → 1139. The value-mismatch rise is +28 in the two table_copy files and +4 in bulk, less
+	// −4 elsewhere, and all of it downstream of the same missing `fc 0e`.
+	//
+	// A first draft of that sum was assembled from the per-file column by hand and came out
+	// wrong in three places at once — it omitted the +11 and +3 linking classes entirely, called
+	// `0x25` two instead of four, and still printed a total of 469 because the total was the one
+	// figure carried over rather than recomputed. A sum that closes because its bottom line was
+	// copied is not a partition, and the only reason it did not stand is that the diff was re-run
+	// against the class table instead of proofread.
+	//
+	// The per-file and per-cause figures were read off `Failure.Stratum` and `Failure.Got` by a
+	// throwaway probe, not off the printed bucket keys. A first pass had used the `no instance:`
+	// prefix as a proxy for StratumEncode and came out 6 short — the prefix is a rendering
+	// convention and the stratum is the classifier's own field, so the proxy disagreed on six
+	// vectors whose message shape does not match their charge. Grave #129's rule, earning its
+	// keep: measure with the instrument, never with a regexp over its output.
+	const execFailCeiling = 1139
 	boardBound(t, "execFailCeiling", execFail, execFailCeiling, 0, ceilingBound,
 		"the interpreter answered fewer vectors than it did: either an opcode arm regressed or "+
 			"a value comparison started disagreeing. A *rise* caused by #8 unblocking more "+
@@ -3973,7 +4134,36 @@ func TestPhase1Files(t *testing.T) {
 	// the instruction it now waits on. A forecast that quoted 1330 for this PR would have been
 	// counting vectors blocked on the *next* one — the bucket estimated the reward, and the
 	// mechanism partition estimated the job.
-	const passFloor = 26833
+	// # Re-based 26833 → 27451 by `call_indirect`, and 618 of a 2255-vector bucket
+	//
+	// `call_indirect` and `return_call_indirect` end to end (#8, decision 0016) plus the element
+	// section the indirect call needs to have anything to dispatch through. The two buckets
+	// `cannot yet encode the call_indirect instruction (#8)` (2213) and `…return_call_indirect…`
+	// (42) are both **0**; 618 of those 2255 became passes.
+	//
+	// **The other 1637 are accounted for individually**, a full cause diff rather than a
+	// description: +469 to the exec column (partitioned on execFailCeiling above, where the
+	// largest class is 420 honest §3 linking declines in the two table_copy files), +996 re-keyed
+	// to `(global …)` — the next unwritten section, since the encoder's frontier message names
+	// the sections it *does* write and the vectors move to the first one it does not — +190 to
+	// `ref.null`'s immediates, and the rest across smaller #8 frontiers. 618 + 469 + 996 + 190 =
+	// 2273, which overshoots 2255 by 18 because 18 of the arrivals came from *other* buckets
+	// draining in the same motion, not from this one.
+	//
+	// That last clause is the reason the arithmetic is written out rather than summarized: a
+	// bucket-to-bucket flow does not conserve, because more than one bucket moved. The columns
+	// are what conserve — fail 4319 → 3682 (−637) against pass +618 and gated +19, and 618 + 19 =
+	// 637 exactly. When a per-bucket sum and a per-column sum disagree, the column is the
+	// conserved quantity and the bucket flow is a story about it.
+	//
+	// The file-level shape, since 618 across 16 files is not 618 across the board: +197 each in
+	// `table_copy.wast` and `table_copy64.wast`, +95 `left-to-right.wast`, +68 `endianness.wast`,
+	// +16 `func_ptrs.wast`, +12 `func.wast`, +11 `elem.wast`, +7 `call_indirect.wast`, and 15
+	// spread over eight more. `call_indirect.wast` itself is 21/128 — its own file is the *least*
+	// improved of the large ones, because its remaining 107 reds are `(global …)` and `ref.null`
+	// frontiers rather than the instruction it is named for. A PR that quoted its own file's
+	// gain would have reported 7.
+	const passFloor = 27451
 	boardBound(t, "passFloor", totalPass, passFloor, boardBoundSlack, floorBound,
 		"a regression in a grammar that used to answer, or the corpus moved")
 }

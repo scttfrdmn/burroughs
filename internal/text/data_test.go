@@ -8,7 +8,7 @@ import (
 	"github.com/scttfrdmn/burroughs/internal/testenv"
 )
 
-// TestDataOffsetRestoresTheOuterSink is `dataOffset`'s swap-and-restore, falsified at birth.
+// TestRetainedOffsetRestoresTheOuterSink is `retainedOffset`'s swap-and-restore, falsified at birth.
 //
 // **The prose at that site was wrong about why the restore matters, and probing is what said so.** It
 // claimed the saved sink "is genuinely non-nil in one case", which reads like the interesting half of
@@ -32,9 +32,9 @@ import (
 //     report *"this (table …) field"*. An error from the wrong layer, this project's standing tell for
 //     lost structure — and the half worth having, because the leak is otherwise invisible: four of the
 //     six probed modules encode byte-identically with and without the restore.
-func TestDataOffsetRestoresTheOuterSink(t *testing.T) {
+func TestRetainedOffsetRestoresTheOuterSink(t *testing.T) {
 	// Half one: the sink is clear when the field is done. Every arm that installs one, since the
-	// spellings reach `dataOffset` by three different paths in `dataField` plus the sugar's.
+	// spellings reach `retainedOffset` by three different paths in `dataField` plus the sugar's.
 	for _, src := range []string{
 		`(module (memory 1) (data (i32.const 0) "a"))`,
 		`(module (memory 1) (data (offset (i32.const 0)) "a"))`,
@@ -48,7 +48,7 @@ func TestDataOffsetRestoresTheOuterSink(t *testing.T) {
 				t.Fatalf("parse: %v", err)
 			}
 			if p.sink != nil {
-				t.Errorf("p.sink is %v after the parse, want nil: dataOffset installed a sink for the "+
+				t.Errorf("p.sink is %v after the parse, want nil: retainedOffset installed a sink for the "+
 					"offset expression and did not restore it, so every module field after this one "+
 					"parses as though it were inside a function body", p.sink)
 			}
@@ -71,7 +71,7 @@ func TestDataOffsetRestoresTheOuterSink(t *testing.T) {
 	}
 	if got := err.Error(); !strings.Contains(got, "(table …) field") {
 		t.Errorf("refusal is %q, want it to name the (table …) field.\n\tAn instruction-level refusal "+
-			"here means dataOffset's sink outlived its field: p.retaining() is true at module-field "+
+			"here means retainedOffset's sink outlived its field: p.retaining() is true at module-field "+
 			"level, so refuseUnencodable answers before encodableOrErr can. That is an error from the "+
 			"wrong layer — the tell for lost structure — and it is the only externally visible symptom "+
 			"of the leak.", got)

@@ -60,6 +60,13 @@ type Instance struct {
 	// failures; it stopped at the import boundary because nothing had crossed it yet.
 	mems []*memory
 
+	// tables is the table index space, in index order — imports first, then definitions, for
+	// mems's reason and by the same measured lesson. Nothing new is being decided here: the
+	// nil-slot rule, the reserved-not-omitted rule, and the reason both are stated on the field
+	// rather than at the constructor all transfer intact, which is what makes this a
+	// three-line addition rather than a second design.
+	tables []*table
+
 	// deferred holds the validation-shaped failures instantiation met and could not report,
 	// because 0015's trap channel may not carry a verdict.
 	//
@@ -91,8 +98,23 @@ func Instantiate(m *binary.Module) (*Instance, *Trap) {
 	// pass. That last clause was written before the import offset was measured, and the
 	// measurement is what made it concrete rather than cautionary: 22 vectors, all "passing"
 	// with the wrong memory's answer.
-	off := m.ImportedMems()
-	in := &Instance{mod: m, mems: make([]*memory, off+len(m.Memories))}
+	memOff, tabOff := m.ImportedMems(), m.ImportedTables()
+	in := &Instance{
+		mod:    m,
+		mems:   make([]*memory, memOff+len(m.Memories)),
+		tables: make([]*table, tabOff+len(m.Tables)),
+	}
+	for i := range m.Tables {
+		tab, err := newTable(m.Tables[i])
+		if err != nil {
+			if t := asTrap(err); t != nil {
+				return nil, t
+			}
+			in.deferred = errors.Join(in.deferred, err)
+			continue
+		}
+		in.tables[tabOff+i] = tab
+	}
 	for i := range m.Memories {
 		mem, err := newMemory(m.Memories[i])
 		if err != nil {
@@ -106,7 +128,34 @@ func Instantiate(m *binary.Module) (*Instance, *Trap) {
 			in.deferred = errors.Join(in.deferred, err)
 			continue
 		}
-		in.mems[off+i] = mem
+		in.mems[memOff+i] = mem
+	}
+	// **Elements before data, which is the reference's order** — `eval.ml:1316-1317` builds
+	// `es_elem @ es_data @ es_start` and evaluates the concatenation, so every active element
+	// segment is copied before any data segment is.
+	//
+	// It is observable, and *not* by the mechanism first written here. The plausible-sounding
+	// claim was that a module whose table and memory segments both overrun would report the
+	// table's trap, so a data-first engine would quote the wrong event — measured, and there are
+	// **zero** such vectors: of the six `assert_trap (module …)` forms holding both an `(elem` and
+	// a `(data`, two trap on the elem, two on the data, two on a start function, and none on
+	// both. That comment would have cited a discriminator the corpus does not contain.
+	//
+	// What does discriminate is the **persisted side effect**: `linking.wast:413` has an
+	// in-bounds elem at index 7 and an out-of-bounds data segment, traps on the memory, and is
+	// followed by `(assert_return (invoke $Mt "call" (i32.const 7)) (i32.const 0))` — the table
+	// write survives the failed instantiation, which is only true if it happened first. A
+	// data-first engine passes the trap vector and fails the line after it.
+	//
+	// Both halves of that are the same lesson from opposite sides: the order is load-bearing, and
+	// the reason it is load-bearing had to be looked up rather than reasoned out.
+	for i := range m.Elems {
+		if err := in.initElem(&m.Elems[i]); err != nil {
+			if t := asTrap(err); t != nil {
+				return nil, t
+			}
+			in.deferred = errors.Join(in.deferred, err)
+		}
 	}
 	for i := range m.Datas {
 		if err := in.initData(&m.Datas[i]); err != nil {

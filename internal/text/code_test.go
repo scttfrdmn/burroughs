@@ -521,3 +521,150 @@ func TestRefCategoryNamesCoversEveryCategory(t *testing.T) {
 			"table's gap", missing)
 	}
 }
+
+// TestIntoSinkGatesOnTheModeNotTheSink is grave #144: `intoSink`, whose job is to *install* a sink,
+// asked whether one was *already* installed.
+//
+// The two questions — `p.retain` (this parse is building a module) and `p.retaining()` (a sink is
+// installed right now) — agree at every site inside a function body, because `funcField` installs the
+// outer sink before any of them runs. That was every caller until section 9. At **module-field scope**
+// they come apart: nothing installs a sink there, `retainedOffset` installs one for the offset alone
+// and restores it before the element list is read, so `elemIdxSink` and `elemexprRetained` took the
+// not-retaining short-circuit and returned empty sinks on a parse that was retaining.
+//
+// **What makes it worth a control rather than a one-line fix is the shape of the symptom.** Every
+// segment's flag, offset, table index and reftype came out correct and only the element *contents*
+// vanished, so `(module (func) (elem func 0))` wrote `01 01 00 00` — a legal section 9 declaring a
+// segment with zero elements. It decodes clean and denotes a different module. That is the
+// accept-direction class no `assert_malformed` can see (§9 G-3), and the only reason the board went
+// red is that `wantElemSec` is a **hand-written** want column; a fixture generated from the encoder
+// would have agreed with the defect.
+//
+// Watched die by reverting the condition in all three places (`intoSink`, `elemIdxList`, and the
+// `p.retain` read that replaced them): every row below reports zero elements where it wants some.
+//
+// **Scoped to the space rather than to the row that failed.** The subject is not `(elem …)` — it is
+// *any* retention at module-field scope, a category section 9 is merely the first member of. The
+// table sugar is here because its `min = max = len(einit)` arithmetic converts the same bug into a
+// wrong table *type*, which is a second observable for one defect; and the two-element rows are here
+// because a length-one list cannot distinguish "one element retained" from "the count is written from
+// the parse and the elements from the sink".
+//
+// **The element *count* is the wrong observable for half the grave, and the falsification is what said
+// so.** The two gates fail differently: `elemIdxList`'s returns a nil slice, so the count goes to zero
+// and a count check sees it — but `intoSink`'s returns an *empty sink per element*, so the count is
+// right and every element is zero bytes long. Reverting `intoSink` alone left all ten rows **green** on
+// a count-only assertion, which is a control passing while the defect it was written for is present.
+// So each row states its expected *bytes*, and the count survives as the cheaper half of the same
+// check. This is the difference between a floor and an exact count, in a place where the exact figure
+// was available for the asking.
+func TestIntoSinkGatesOnTheModeNotTheSink(t *testing.T) {
+	// Each row states the bytes each element must encode to, which is the observable that sees both
+	// gates; `elems` is the count, redundant with `len(wantExprs)` and stated anyway because a row
+	// whose two columns disagree is a row that was edited carelessly.
+	for _, tc := range []struct {
+		src   string
+		elems int
+		// wantExprs is each element's constant expression as `defineElem` renders it, terminator
+		// included. `d2 00 0b` is `ref.func 0` then `end`; a bare `0b` is an element whose
+		// instructions went to an empty sink, which is `intoSink`'s half of the grave.
+		wantExprs []string
+		// tabMin is the table size the sugar derives from the element count, or 0 when the row has
+		// no sugar. This is the second observable: the parser computes it from `len(elems)` at the
+		// cursor, so an empty list is a `(table 0 0 funcref)` in the image.
+		tabMin uint64
+	}{
+		// The index-list arms, which reach `elemIdxSink` — one nested sink per synthesized
+		// `ref.func`, and the path `elemIdxList`'s own gate guarded.
+		{src: `(module (func) (elem func 0))`, elems: 1, wantExprs: []string{"d2 00 0b"}},
+		{src: `(module (func) (elem func 0 0))`, elems: 2, wantExprs: []string{"d2 00 0b", "d2 00 0b"}},
+		{src: `(module (func) (elem declare func 0 0))`, elems: 2, wantExprs: []string{"d2 00 0b", "d2 00 0b"}},
+		{
+			src: `(module (func) (table 1 funcref) (elem (i32.const 0) 0 0))`, elems: 2,
+			wantExprs: []string{"d2 00 0b", "d2 00 0b"},
+		},
+		// The expression arms, which reach `elemexprRetained` — `intoSink` directly. These are the rows
+		// a count-only assertion could not see.
+		{src: `(module (func) (elem funcref (ref.func 0)))`, elems: 1, wantExprs: []string{"d2 00 0b"}},
+		{
+			src: `(module (func) (elem funcref (ref.func 0) (ref.func 0)))`, elems: 2,
+			wantExprs: []string{"d2 00 0b", "d2 00 0b"},
+		},
+		// Two instructions in *one* element, so the row also pins that the boundary between elements is
+		// the sink's and not the instruction's: a shared sink would report one element of six bytes here
+		// and the row above would report one element where it wants two.
+		{
+			src: `(module (func) (elem funcref (item (ref.func 0) (ref.func 0))))`, elems: 1,
+			wantExprs: []string{"d2 00 d2 00 0b"},
+		},
+		{
+			src: `(module (func) (elem declare funcref (ref.func 0) (ref.func 0)))`, elems: 2,
+			wantExprs: []string{"d2 00 0b", "d2 00 0b"},
+		},
+		// The `(table … (elem …))` sugar, both arms: the element count is observable *twice*, once as
+		// the segment's vector and once as the table's own min and max.
+		{
+			src: `(module (func) (table funcref (elem 0 0)))`, elems: 2,
+			wantExprs: []string{"d2 00 0b", "d2 00 0b"}, tabMin: 2,
+		},
+		{
+			src: `(module (func) (table funcref (elem (ref.func 0))))`, elems: 1,
+			wantExprs: []string{"d2 00 0b"}, tabMin: 1,
+		},
+	} {
+		t.Run(tc.src, func(t *testing.T) {
+			p, err := parseModule([]byte(tc.src), build)
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			// **No `runDeferred` call here, and the first draft of this test had one.** `parseModule`
+			// runs the deferred thunks itself, at the end of `moduleFields`, so calling it again runs
+			// every thunk twice — and `defineElem` *appends* to `exprs` and `funcs`, so the second pass
+			// doubles them. The symptom was every row reporting exactly 2N where it wanted N, which
+			// reads like a duplicate-emission bug in the encoder and is an artefact of the instrument.
+			// Worth the note because "exactly double" is the tell, and it points at the harness rather
+			// than at the subject: a defect in the code under test would have no reason to land on a
+			// clean factor.
+			if len(p.ctx.elemDefs) != 1 {
+				t.Fatalf("%d element segments retained, want 1", len(p.ctx.elemDefs))
+			}
+			if len(tc.wantExprs) != tc.elems {
+				t.Fatalf("the row wants %d elements and lists %d expressions: a row disagreeing with "+
+					"itself asserts whichever column is read first", tc.elems, len(tc.wantExprs))
+			}
+			e := p.ctx.elemDefs[0]
+			// Both renderings are filled by `defineElem`, whichever the wire ends up taking, so both
+			// are checked — a gate fixed for one and not the other is a live half of the same grave.
+			if len(e.exprs) != tc.elems || len(e.funcs) != tc.elems {
+				t.Fatalf("the segment holds %d expressions and %d indices, want %d of each.\n\t"+
+					"Zero here is grave #144's elemIdxList half: a retention reader at module-field "+
+					"scope asked p.retaining() — is a sink installed — where the question is p.retain, "+
+					"the parse's mode. The flag and offset are still right, so the image decodes clean "+
+					"and denotes a module with an empty segment.", len(e.exprs), len(e.funcs), tc.elems)
+			}
+			// The bytes, which is the half a count cannot see: `intoSink`'s gate yields an *empty sink
+			// per element*, so the count is right and each expression is a bare terminator.
+			for i, want := range tc.wantExprs {
+				if got := fmt.Sprintf("% x", e.exprs[i]); got != want {
+					t.Errorf("element %d encodes to %q, want %q.\n\tA bare \"0b\" is grave #144's "+
+						"intoSink half — the element's instructions went into a sink that was never "+
+						"installed, so the segment has the right number of elements and none of them "+
+						"has any content. No count check can see this.", i, got, want)
+				}
+			}
+			if tc.tabMin == 0 {
+				return
+			}
+			if len(p.ctx.tabDefs) != 1 {
+				t.Fatalf("%d tables retained, want 1", len(p.ctx.tabDefs))
+			}
+			// The sugar's second observable: `min = max = len(einit)` (parser.mly:1216-1222) is
+			// computed at the cursor from the very slice the gate emptied.
+			if got := p.ctx.tabDefs[0].lim; got.min != tc.tabMin || got.max != tc.tabMin || !got.hasMax {
+				t.Errorf("the sugar's table is %+v, want min=max=%d with hasMax: the size is derived "+
+					"from len(einit), so an empty element list writes a zero-sized table — the same "+
+					"grave observed as a wrong table type rather than a short vector", got, tc.tabMin)
+			}
+		})
+	}
+}

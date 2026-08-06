@@ -1400,7 +1400,7 @@ func (p *parser) tableField() error {
 	// `addrtype reftype (elem …)` sugar (parser.mly:1205/1216) versus `addrtype limits
 	// reftype`: the sugar has no limits, so a reftype where a nat would be is the tell.
 	if p.atReftypeStart() {
-		return p.tableElemSugar()
+		return p.tableElemSugar(kw, idx, addr64)
 	}
 	lim, err := p.limits()
 	if err != nil {
@@ -1435,46 +1435,88 @@ func (p *parser) tableField() error {
 // Extracted for the reason `memoryDataSugar` records: inline, its nested arms held `tableField`'s
 // outer `err` live and pitted `shadow` against `sloppyReassign`.
 //
-// Nothing retained: this arm's table is sized from an elem segment the emitter cannot write, so there
-// is nothing to retain it for. **The reference resolves the reftype here too** — the arm is `$2 c`, a
-// lookup — so `(table (ref null $undefined) (elem))` is a module we accept and upstream rejects.
-// Declared and tracked as **#111**, which measures every accepting site and holds the
-// scope-to-the-space requirement for the control: fixed here, it would be one site of one shape
-// repaired inside a PR about section emitters, with the rest left silently green. The issue's table
-// was stale by four rows from the import section until the export section PR re-ran the probe and
-// corrected it there — `importedGlobal` and `importedTable` resolve, across both spellings each — and
-// this arm is one of the six that still accept.
-func (p *parser) tableElemSugar() error {
-	if _, err := p.reftype(); err != nil {
+// **Both halves are retained now (#8, 0016), where this comment used to say "nothing retained: this
+// arm's table is sized from an elem segment the emitter cannot write".** The table and the segment come
+// out of one field, and the reason they cannot be split is arithmetic: the table's limits are
+// `min = max = len(einit)` (parser.mly:1216-1222), so retaining the table without the segment writes a
+// table whose size was computed from elements that went nowhere — a table of two nulls where the text
+// said two functions, decoding clean. That module is what this arm emitted for as long as the frontier
+// held it back, and the section-9 withdrawal check in `encodableOrErr` is the control that would have
+// caught it: this arm is the reason that check is live rather than a tripwire.
+//
+// **The reference resolves the reftype here too** — the arm is `$2 c`, a lookup — so
+// `(table (ref null $undefined) (elem))` is a module we accept and upstream rejects. Declared and
+// tracked as **#111**, which measures every accepting site and holds the scope-to-the-space requirement
+// for the control: fixed here, it would be one site of one shape repaired inside a PR about section
+// emitters, with the rest left silently green. The issue's table was stale by four rows from the import
+// section until the export section PR re-ran the probe and corrected it there — `importedGlobal` and
+// `importedTable` resolve, across both spellings each — and this arm is one of the six that still
+// accept.
+//
+// The two arms differ in the element list's form *and* in the element type, and the second difference is
+// not a detail: the `elemidx_list` arm states `let rt = (NoNull, FuncHT)` in its own action (:1217)
+// where the `elemexpr` arm takes `$2 c`, the reftype the text wrote. So `(table funcref (elem 0))` and
+// `(table funcref (elem (ref.func 0)))` have *different* element types — `(NoNull, FuncHT)` and
+// `(Null, FuncHT)` — and take flags 0x00 and 0x04. The table's own `RefType` is `$2 c` in both.
+func (p *parser) tableElemSugar(kw Token, idx uint32, addr64 bool) error {
+	rt, err := p.reftype()
+	if err != nil {
 		return err
 	}
 	if err := p.lpar(kwElem); err != nil {
 		return err
 	}
-	p.ctx.elems.bindAnon() // the sugar's implicit elem segment
+	p.ctx.noteElem()
 	// Both sugar arms' contents are instruction-level: elemexpr_list or elemidx_list. The
 	// idx list is reachable here; an `(item …)` or folded expr is #63's — the folded arm
 	// by the defect-ownership ruling on #63, which put `expr1`'s minimal arm there.
+	//
+	// **Each arm carries its own error and the reftype's is dead by here**, which is
+	// `importedExternType`'s standoff avoided rather than met: reusing the outer `err` across
+	// these arms is what makes `govet`'s `shadow` and `gocritic`'s `sloppyReassign` want
+	// opposite things, and the two of them are describing one fact — an error held live across
+	// arms that have no business in it.
+	var (
+		elems    []instrSink
+		elemType = rt
+	)
 	if p.c.at(NatTok) || p.c.at(VarTok) || p.c.at(RParen) {
 		// elemidx_list (parser.mly:1147), whose idx_list has an empty arm — so
-		// `(table funcref (elem))` is well-formed.
-		if err := p.idxList(); err != nil {
+		// `(table funcref (elem))` is well-formed. The element type is the action's own
+		// `(NoNull, FuncHT)`, not the reftype the table was given.
+		list, err := p.elemIdxList()
+		if err != nil {
 			return err
 		}
-		if err := p.rpar(); err != nil {
+		elems, elemType = list, elemKindFuncref
+	} else {
+		list, err := p.elemexprListRetained() // parser.mly:1205
+		if err != nil {
 			return err
 		}
-		p.ctx.markDefined(importTable)
-		return p.rpar()
-	}
-	if err := p.elemexprList(); err != nil { // parser.mly:1205
-		return err
+		elems = list
 	}
 	if err := p.rpar(); err != nil {
 		return err
 	}
+	p.ctx.elems.bindAnon() // the sugar's implicit elem segment
 	p.ctx.markDefined(importTable)
-	return p.rpar()
+	if err := p.rpar(); err != nil {
+		return err
+	}
+	// After the closing paren, on `memoryDataSugar`'s rule, and in the reference's own order: the table
+	// first, then the segment that sizes it.
+	n := uint64(len(elems))
+	p.ctx.defineTable(tabType{addr64: addr64, lim: limits{min: n, max: n, hasMax: true}, elem: rt})
+	p.ctx.noteDefined(importTable)
+	p.ctx.defineElem(textElem{
+		table:    idxRef{idx: idx},
+		offset:   sugarZeroOffset(addr64),
+		elemType: elemType,
+		elems:    elems,
+	})
+	p.ctx.clearNonTypeField(kw)
+	return nil
 }
 
 // dataField parses `data` (parser.mly:1095-1107) and retains it as section 11's content (#8).
@@ -1491,8 +1533,8 @@ func (p *parser) tableElemSugar() error {
 // function body. The reference does exactly this — the offset arms at :1102/:1105 build const
 // exprs that `module_fields1`'s second closure resolves — so the sink following the grammar out of
 // the func body is consumer-forced retention under 0006's rule, not a widening of it. See
-// `dataOffset` for the swap-and-restore, whose falsification is
-// TestDataOffsetRestoresTheOuterSink.
+// `retainedOffset` for the swap-and-restore, whose falsification is
+// TestRetainedOffsetRestoresTheOuterSink.
 func (p *parser) dataField() error {
 	kw := p.c.peek2()
 	if err := p.lpar(kwData); err != nil {
@@ -1507,7 +1549,7 @@ func (p *parser) dataField() error {
 		if err != nil {
 			return err
 		}
-		off, err := p.dataOffset()
+		off, err := p.retainedOffset()
 		if err != nil {
 			return err
 		}
@@ -1528,7 +1570,7 @@ func (p *parser) dataField() error {
 		// `idxRef` resolving to 0. Not a separate flag: `data`'s `0x00` and `0x02` arms split on the
 		// *resolved* index, so an explicit `(memory 0)` and this default are the same encoding, and
 		// `textData`'s comment has why the first draft's flag was wrong.
-		off, err := p.dataOffset()
+		off, err := p.retainedOffset()
 		if err != nil {
 			return err
 		}
@@ -1572,7 +1614,36 @@ func (p *parser) memoryUse() (idxRef, error) {
 	return mem, nil
 }
 
-// dataOffset parses a data segment's offset, retaining the instructions it holds.
+// tableUse parses `table_use` (parser.mly:1182): `LPAR TABLE var RPAR`.
+//
+// **The second consumer memoryUse's comment named, arriving.** That comment said "`elem`'s
+// `table_use` is its sibling, and #63's `memory.init` takes the same shape" — so this is not a
+// speculative extraction, it is the sibling the note was left for. Same four lines, one keyword
+// apart, and the two are deliberately *not* one parameterized helper: `memory_use` and `table_use`
+// are separate named productions in the reference, and collapsing them would put a keyword argument
+// where the grammar has two rules.
+//
+// It exists as a function rather than inline in elemField's tableuse arm for a second reason, which
+// is what forced it out of that arm: inlined, its `rpar` sat inside the live range of the outer
+// `err` that the retention below reads, so `govet`'s `shadow` wanted `err =` and `gocritic`'s
+// `sloppyReassign` wanted `err :=`. That standoff is `importedExternType`'s, verbatim — two curated
+// linters describing one fact, an error held live across an arm with no business in it — and the
+// ruling there was to remove the subject rather than suppress either linter.
+func (p *parser) tableUse() (idxRef, error) {
+	if err := p.lpar(kwTable); err != nil {
+		return idxRef{}, err
+	}
+	tab, err := p.idxValue()
+	if err != nil {
+		return idxRef{}, err
+	}
+	if err := p.rpar(); err != nil {
+		return idxRef{}, err
+	}
+	return tab, nil
+}
+
+// retainedOffset parses a segment's offset, retaining the instructions it holds.
 //
 // **This is the one place the instruction sink is installed outside a function body**, and the escape
 // is grammar-forced: section 11's own grammar puts a constant expression in a module field
@@ -1581,6 +1652,16 @@ func (p *parser) memoryUse() (idxRef, error) {
 // running normally rather than an exception to it — the retention is grown from what this section's
 // grammar requires and no wider — and the reference resolves these same const exprs in
 // `module_fields1`'s second closure, so the shape is transcribed rather than invented.
+//
+// **It was `dataOffset`, and section 9 is what expired the name rather than a preference about
+// naming.** An element segment's active arms take the *same* `offset` production and want the same
+// retention, so the second consumer arrived reading identically to the first — and the shape this
+// project has a grave for (#78/#105) is the one where that reads as a fact about the caller and gets
+// re-derived next door. The first draft of the elem wiring did exactly that: a verbatim copy named
+// `elemOffset`, which is *one concept, one trigger* (#82) broken in the same session as the rule was
+// quoted. What makes one reader correct here is that nothing in the body was ever about data —
+// `offset` is one production, and the swap is about being at module-field level, which both callers
+// are.
 //
 // The swap-and-restore is `funcField`'s, copied rather than re-derived (*lessons are indexed by
 // shape*). **The saved value is always nil, and this comment said otherwise until it was measured.**
@@ -1593,7 +1674,7 @@ func (p *parser) memoryUse() (idxRef, error) {
 //
 // The correction matters because a control written to the old claim would have hunted for a non-nil
 // outer sink, found no input producing one, and been stillborn. Falsified as
-// TestDataOffsetRestoresTheOuterSink instead, in the direction that exists: deleting the restore
+// TestRetainedOffsetRestoresTheOuterSink instead, in the direction that exists: deleting the restore
 // leaks the offset's `i32.const 0` into module-field scope, and the visible symptom is a *later*
 // field refusing at the wrong layer — `(table 1 funcref (ref.null func))` reporting the ref.null
 // instruction where it must report the `(table …)` field.
@@ -1601,7 +1682,7 @@ func (p *parser) memoryUse() (idxRef, error) {
 // **Only when the mode says to retain**, on `funcField`'s argument: a `ReadModule` parse must leave
 // the sink nil so `refuseUnencodable` stays silent and the recognizer answers exactly what it
 // answered before section 11 existed.
-func (p *parser) dataOffset() (instrSink, error) {
+func (p *parser) retainedOffset() (instrSink, error) {
 	var off instrSink
 	outerSink := p.sink
 	if p.retain {
@@ -1616,35 +1697,61 @@ func (p *parser) dataOffset() (instrSink, error) {
 
 // elemField parses `elem` (parser.mly:1158-1180).
 //
-// Five arms and every non-passive one holds an offset or an elemexpr, so this stratum reaches
-// the passive `elemkind elemidx_list` arm — `(elem func $a $b)` — and the declarative arm, and
-// stops at the rest.
+// **All five arms are now retained and encodable (#8, 0016)**, where the paragraph here used to say
+// that "every non-passive one holds an offset or an elemexpr, so this stratum reaches the passive
+// `elemkind elemidx_list` arm and the declarative arm, and stops at the rest". The offsets and the
+// element expressions are what changed: `retainedOffset` keeps the first and `elemexprRetained` keeps
+// the second, one sink per element.
+//
+// The arms differ in exactly three things — the **mode**, the **table index**, and whether there is
+// an offset — and they share the element list, which is why the tail is one call and not five. The
+// mode is what the reference's three `segmentmode` values carry (`Passive`, `Active`, `Declarative`),
+// and none of the five arms is a fourth mode: two of them are *sugar for* `Active` with table 0.
 func (p *parser) elemField() error {
+	kw := p.c.peek2()
 	if err := p.lpar(kwElem); err != nil {
 		return err
 	}
 	if _, err := p.bindidxOpt(&p.ctx.elems); err != nil {
 		return err
 	}
+	p.ctx.noteElem()
 	if p.c.atKeyword(kwDeclare) {
 		p.c.next()
-	} else if p.c.at(LParen) && p.c.peek2Keyword(kwTable) { // tableuse, parser.mly:1182
-		if err := p.lpar(kwTable); err != nil {
-			return err
-		}
-		if err := p.idx(); err != nil {
+		e, err := p.elemListRetained()
+		if err != nil {
 			return err
 		}
 		if err := p.rpar(); err != nil {
 			return err
 		}
-		if err := p.offset(); err != nil { // parser.mly:1164
+		// **After the closing paren**, on `memoryField`'s tail's rule: a field that errors out
+		// mid-way must leave no trace, or section 9's count disagrees with the grammar's on a module
+		// that never finished parsing.
+		e.mode = elemDeclarative
+		p.ctx.defineElem(e)
+		p.ctx.clearNonTypeField(kw)
+		return nil
+	} else if p.c.at(LParen) && p.c.peek2Keyword(kwTable) { // tableuse, parser.mly:1182
+		tab, err := p.tableUse()
+		if err != nil {
 			return err
 		}
-		if err := p.elemList(); err != nil {
+		off, err := p.retainedOffset() // parser.mly:1164
+		if err != nil {
 			return err
 		}
-		return p.rpar()
+		e, err := p.elemListRetained()
+		if err != nil {
+			return err
+		}
+		if err := p.rpar(); err != nil {
+			return err
+		}
+		e.table, e.offset = tab, off
+		p.ctx.defineElem(e)
+		p.ctx.clearNonTypeField(kw)
+		return nil
 	}
 	if p.c.at(LParen) && !p.c.peek2Keyword(kwItem) && !p.atReftypeStart() {
 		// The offset sugar (parser.mly:1171/:1175): `offset elem_list` or `offset elemidx_list`.
@@ -1687,49 +1794,127 @@ func (p *parser) elemField() error {
 		// future arm could make the position reachable, and the deletion would be invisible until it
 		// did. The measurement above stays as the record of what this condition does *not* do, which
 		// is what makes keeping it a statement rather than a habit.
-		if err := p.offset(); err != nil {
+		off, err := p.retainedOffset()
+		if err != nil {
 			return err
 		}
-		// `elemidx_list` (:1147) is the second sugar arm and is just `idx_list`, so a bare index
-		// list after the offset is legal and needs no elemkind.
-		if p.c.at(NatTok) || p.c.at(VarTok) {
-			if err := p.idxList(); err != nil {
-				return err
-			}
-			return p.rpar()
-		}
-		if err := p.elemList(); err != nil {
+		e, err := p.offsetSugarElems()
+		if err != nil {
 			return err
 		}
-		return p.rpar()
-	}
-	if err := p.elemList(); err != nil {
-		return err
-	}
-	return p.rpar()
-}
-
-// elemList parses `elem_list` (parser.mly:1152-1156): `elemkind elemidx_list`, or
-// `reftype elemexpr_list`.
-//
-// Split out of elemField because four of the five `elem` arms end with one, and inlining it four
-// times is how the arms drift apart. The empty case is real — `(elem)` is well-formed, since
-// `elemkind` has no empty arm but `reftype elemexpr_list` reaches an empty list.
-func (p *parser) elemList() error {
-	if p.c.atKeyword(kwFunc) { // elemkind, parser.mly:1136
-		p.c.next()
-		return p.idxList()
-	}
-	if p.atReftypeStart() {
-		if _, err := p.reftype(); err != nil {
+		if err := p.rpar(); err != nil {
 			return err
 		}
-		return p.elemexprList()
-	}
-	if p.c.at(RParen) {
+		e.offset = off
+		p.ctx.defineElem(e)
+		p.ctx.clearNonTypeField(kw)
 		return nil
 	}
-	return p.expectedInstr()
+	// The passive arm (parser.mly:1159), which is the one with no offset and no table.
+	e, err := p.elemListRetained()
+	if err != nil {
+		return err
+	}
+	if err := p.rpar(); err != nil {
+		return err
+	}
+	e.mode = elemPassive
+	p.ctx.defineElem(e)
+	p.ctx.clearNonTypeField(kw)
+	return nil
+}
+
+// offsetSugarElems parses what follows the offset in `elem`'s offset-sugar arms: either
+// `elemidx_list` (parser.mly:1175) or `elem_list` (:1171).
+//
+// **The two sub-arms differ only in the element list, so the tail is the caller's** — the offset,
+// the closing paren, and the `defineElem` are one sequence in `elemField` rather than duplicated per
+// sub-arm, which is `elemListRetained`'s own argument applied one level down.
+//
+// It is a function rather than two inlined branches because inlined they sat inside the live range
+// of the offset's `err`: `govet`'s `shadow` wanted `err =` and `gocritic`'s `sloppyReassign` wanted
+// `err :=`, which is `importedExternType`'s standoff exactly. Two curated linters wanting opposite
+// things is one fact about an error held live across an arm with no business in it, and the ruling
+// there was to remove the subject rather than suppress either.
+//
+// `elemidx_list` (:1147) is the second sugar arm and is just `idx_list`, so a bare index list after
+// the offset is legal and needs no elemkind.
+//
+// **Its element type is `(NoNull, FuncHT)` and this arm is the reason that is not an implementation
+// detail.** The reference's action states it outright — `let rt = (NoNull, FuncHT) in` (:1177) —
+// which is `is_elem_kind`, so `(elem (i32.const 0) $f)` takes flag **0** while the visually similar
+// `(elem (i32.const 0) funcref (ref.func $f))` takes flag 4. Two arms, two reftypes, two encodings,
+// and only the reftype says which.
+//
+// **`RParen` is in the condition because `idx_list` has an empty arm (parser.mly:500), and this is
+// the *only* arm of the five that reaches an empty element list** — `elem_list`'s two arms both start
+// with a mandatory token, so `(elem (i32.const 0))` is well-formed while `(elem)` is not (#143). 29
+// corpus rows take this route, `elem.wast:35` and `:39` among them, every one of them an offset with
+// nothing after it. Note the sibling: `tableElemSugar` had this condition right from the start, in
+// the same file, for the same reason about the same production — the empty case was mis-sited as an
+// `elem_list` arm and only reading the reference's `idx_list` said which level owns it.
+func (p *parser) offsetSugarElems() (textElem, error) {
+	if p.c.at(NatTok) || p.c.at(VarTok) || p.c.at(RParen) {
+		elems, err := p.elemIdxList()
+		if err != nil {
+			return textElem{}, err
+		}
+		return textElem{elemType: elemKindFuncref, elems: elems}, nil
+	}
+	return p.elemListRetained()
+}
+
+// elemListRetained parses `elem_list` (parser.mly:1152-1156) and returns the segment it denotes: its
+// element type and its element expressions.
+//
+// Split out of elemField because four of the five `elem` arms end with one, and inlining it four
+// times is how the arms drift apart. There was a recognizer twin, `elemList`, returning bare `error`;
+// once every arm retained, nothing called it and `deadcode` said so.
+//
+// Split as a value-returning twin rather than by threading state through the recognizer, on
+// `idxValue`/`idx`'s shape — see `elemexprListRetained`, whose argument this shares.
+//
+// **A `textElem` rather than a `(valType, []instrSink)` pair, and the reason is the caller count.**
+// Four of `elemField`'s five arms end with one of these and each then sets one or two more fields —
+// the mode, the table, the offset — so returning the struct lets every arm read as "the list, plus
+// what my arm adds", which is exactly what the reference's arms are: `fun () -> let rt, cs = $4 c in
+// Elem (rt, cs, Passive)` and its three siblings differ only in the third argument (parser.mly:1158-
+// 1180).
+//
+// The two arms are where the element *type* comes from, and it decides the wire form rather than
+// decorating it — `elemKindFuncref` versus whatever `reftype` read. See `textElem` for the derivation
+// and for the two directions in which remembering the spelling instead would mis-encode.
+func (p *parser) elemListRetained() (textElem, error) {
+	if p.c.atKeyword(kwFunc) { // elemkind, parser.mly:1136
+		p.c.next()
+		elems, err := p.elemIdxList()
+		if err != nil {
+			return textElem{}, err
+		}
+		return textElem{elemType: elemKindFuncref, elems: elems}, nil
+	}
+	if p.atReftypeStart() {
+		rt, err := p.reftype()
+		if err != nil {
+			return textElem{}, err
+		}
+		elems, err := p.elemexprListRetained()
+		if err != nil {
+			return textElem{}, err
+		}
+		return textElem{elemType: rt, elems: elems}, nil
+	}
+	// **No empty arm, and the `RParen` case that used to sit here was a forged one (#143).** Both of
+	// `elem_list`'s arms begin with a mandatory token — `elemkind` is `FUNC` (parser.mly:1136) and
+	// `reftype`'s thirteen arms each consume at least one (:376-389) — so `elem_list` derives nothing
+	// empty, and the spec agrees: `elemlist ::= rt:reftype e*:list(elemexpr)`, reftype mandatory
+	// (§6.6.9). An empty case *is* reachable in the grammar, but one level up and in exactly one arm:
+	// arm 5 is `offset elemidx_list` and `elemidx_list` is `idx_list`, which does have an empty arm
+	// (:500). That is where the case now lives, in `elemField`, so `(elem (i32.const 0))` stays legal
+	// (29 corpus rows) while `(elem)`, `(elem $x)`, `(elem declare)` and `(elem (table 0) (i32.const 0))`
+	// are rejected again — no reference arm reaches an empty list without an offset in front of it, and
+	// none reaches one after a `tableuse` at all.
+	return textElem{}, p.expectedInstr()
 }
 
 // startField parses `start` (parser.mly:1304-1306) and applies the multiple-start check.
@@ -1837,25 +2022,16 @@ func (p *parser) flatSelectOrCall() (bool, error) {
 		// arm: the choice is **syntactic** (was `(result …)` written?), not a question about the
 		// operands' types, so this stratum has the fact `opBytes` lacks. `ref.test`/`ref.cast`, the
 		// other two ambiguous mnemonics, genuinely need validation's knowledge and stay refused.
-		return true, p.selectResults(p.instrList)
+		//
+		// `beforeTail`, and the tail is everything after the select rather than its operands
+		// (grave #145): `(select … ) :: es` at :678-680 conses onto the front of the `instr_list`
+		// this arm's chain bottoms out in.
+		return true, p.selectResults(beforeTail, p.instrList)
 	case kwCallIndirect, kwReturnCallIndirect:
-		// Two immediates in *reversed* order — `CallIndirect (x, y) → op 0x11; idx y; idx x`
-		// (encode.ml:583) writes the type index before the table index, where the text writes the
-		// table first. Out of this tier, and refused rather than guessed.
-		if err := p.refuseUnencodable(t, "the "+t.Text+" instruction"); err != nil {
-			return true, err
-		}
-		p.c.next() // the keyword
-		// The table index is a sugar arm (:693/:699), not an `idx_opt`: a NAT or VAR here is the
-		// index, and anything else starts the type chain.
-		if p.c.at(NatTok) || p.c.at(VarTok) {
-			if err := p.idx(); err != nil {
-				return true, err
-			}
-		}
-		// callchain: `callinstr_type_instr_list`'s sugar arm interns unconditionally (:709),
-		// as `callexpr_type`'s does.
-		return true, p.orderedTypeUse(callchain, p.instrList)
+		// `beforeTail` for the same reason the select arm above takes it: all four arms of
+		// `callinstr_instr_list` (:689-701) end in `… :: es`, where `es` is the rest of the
+		// enclosing sequence.
+		return true, p.callIndirectInstr(beforeTail, p.instrList)
 	default:
 		// Every other keyword is `instr1`'s, which the caller tries next. Named as a default
 		// rather than left to fall through so `exhaustive` sees a real fallback: this switch
@@ -1931,23 +2107,53 @@ func (p *parser) elemexpr() (bool, error) {
 	return p.expr()
 }
 
-// elemexprList parses `elemexpr_list` (parser.mly:1143-1145): zero or more elemexprs.
-func (p *parser) elemexprList() error {
+// elemexprRetained parses one `elemexpr` into its own sink, so the element's instructions are kept
+// apart from its neighbours'.
+//
+// **A sink per element, not one sink for the list**, and the format is why: `vec const cs` writes a
+// count and then one terminated expression per element (encode.ml:1078), so a shared sink would
+// concatenate two elements' instructions into a single expression and emit a vector of one. The
+// boundary between elements is information the wire carries and the text does not spell, which is
+// exactly the kind of fact `intoSink` exists to preserve — the block family uses it for the same
+// reason one layer down.
+func (p *parser) elemexprRetained() (bool, instrSink, error) {
+	var read bool
+	s, err := p.intoSink(func() error {
+		var e error
+		read, e = p.elemexpr()
+		return e
+	})
+	return read, s, err
+}
+
+// elemexprListRetained parses `elemexpr_list` (parser.mly:1143-1145) — zero or more elemexprs —
+// returning each element's retained expression.
+//
+// **There was a recognizer twin, `elemexprList`, returning bare `error`; once the table sugar retained
+// both its halves nothing called it and `unused` said so.** That is the second time this exact pair
+// has collapsed in this file — `elemList` went the same way when every `elem` arm started retaining —
+// and the reason is the same both times: the "recognizer wants the reads and none of the values"
+// argument holds only while some caller is a recognizer, and section 9 left none. The value-returning
+// reader serves both modes on its own, because `intoSink` returns an empty sink when the parse's mode
+// says not to retain, so a `ReadModule` parse gets exactly the reads.
+func (p *parser) elemexprListRetained() ([]instrSink, error) {
+	var elems []instrSink
 	for {
-		read, err := p.elemexpr()
+		read, s, err := p.elemexprRetained()
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if !read {
 			break
 		}
+		elems = append(elems, s)
 	}
 	if !p.c.at(RParen) {
 		// A `(` this stratum could not read as an elemexpr: #64's, and reported as the boundary
 		// rather than as a syntax error.
-		return p.expectedInstr()
+		return nil, p.expectedInstr()
 	}
-	return nil
+	return elems, nil
 }
 
 // instr1 parses one instruction (parser.mly:552-554), reporting whether it read one.
@@ -2257,7 +2463,7 @@ func (p *parser) blockSignature(tail func() error) error {
 // carries the single result an inline blocktype spells as a bare valtype byte, which is never
 // interned and so has no slot to be read from.
 func (p *parser) blockSignatureSlot(tail func() error) (funcType, *blockTypeSlot, error) {
-	return p.orderedTypeUseSlot(blockchain, tail)
+	return p.orderedTypeUse(blockchain, tail)
 }
 
 // signatureKind says how a shared-chain site interns an inline signature when no typeuse was
@@ -2322,14 +2528,14 @@ const (
 // A comment describing an intent the code does not implement, which is the shape the grave-#63 note
 // upstairs calls *the defect stated as the rule*: print it, don't reason about it. See
 // TestNestedBlockTypeInternsBeforeItsEnclosingOne.
-func (p *parser) orderedTypeUse(kind signatureKind, tail func() error) error {
-	_, _, err := p.orderedTypeUseSlot(kind, tail)
-	return err
-}
-
-// orderedTypeUseSlot is orderedTypeUse plus what the blocktype encoder needs: the signature it read
-// and the slot stage 2 will fill. See blockSignatureSlot for the pairing.
-func (p *parser) orderedTypeUseSlot(kind signatureKind, tail func() error) (funcType, *blockTypeSlot, error) {
+//
+// **It returns the signature and the slot because the blocktype encoder needs both**, and it used to
+// be two functions — an error-only `orderedTypeUse` wrapping this one. The wrapper's last caller left
+// when the code section began writing blocktype immediates, at which point it was dead code whose
+// *doc comment* was cited from nine places. Deleting it would have left nine dangling identifier
+// citations, so the name moved here instead of the prose moving there: the reader that every one of
+// those comments describes is this one. See blockSignatureSlot for the pairing.
+func (p *parser) orderedTypeUse(kind signatureKind, tail func() error) (funcType, *blockTypeSlot, error) {
 	use, haveUse := idxRef{}, false
 	if p.atTypeuse() {
 		var err error
@@ -2565,13 +2771,44 @@ func (p *parser) ifArms(arms *blockArms) error {
 	return p.rpar()
 }
 
-// callexprType parses `callexpr_type` (parser.mly:842-848) and the two chains under it,
-// `callexpr_params` (:851) and `callexpr_results` (:858).
+// callIndirectInstr parses `call_indirect`/`return_call_indirect` in either spelling and emits it:
+// `callinstr_instr_list` (parser.mly:689-701) for the flat form, `expr1`'s four arms (:817-823) for
+// the folded one. The leader is unconsumed on entry.
 //
-// Structurally the same ordered chain as `blockSignature` — optional `typeuse`, then `(param …)*`,
-// then `(result …)*` — and **shared with it**, through `orderedTypeUse`, with the tail passed as a
-// parameter: `callexpr_results` ends in `expr_list` (:860), the folded operands, where
-// `block_result_body` ends in `instr_list`.
+// **One reader for eight productions, and the eight collapse to three parameters.** The reference
+// spells out `{CALL_INDIRECT, RETURN_CALL_INDIRECT} × {idx written, sugar} × {flat, folded}` because
+// menhir decides by lookahead; here the mnemonic picks the opcode, a peek decides whether a table
+// index was written, and the placement is the caller's. Writing them separately would put the
+// immediate *order* below in eight places, which is the one thing about this instruction that is easy
+// to get wrong and impossible for the suite to see.
+//
+// # The immediates are written in the opposite order from the text
+//
+// `CallIndirect (x, y) → op 0x11; idx y; idx x` (encode.ml:275) — `x` is the table and `y` the type,
+// so the **type index comes first on the wire** while the text writes the table first (and usually
+// omits it). `ReturnCallIndirect` at :278 repeats it. Measured rather than read off the arm:
+// `wat2wasm --enable-all` on `(call_indirect 1 (type $t2) …)` with type 2 and table 1 emits
+// `11 02 01`.
+//
+// Getting this backwards writes a legal module: both immediates are u32 LEBs, so a swapped pair
+// decodes clean and calls through the wrong table with the wrong type — and it is *invisible* for
+// every module whose table and type indices are both 0, which is nearly every `call_indirect` in the
+// suite. That is why the round-trip rows for this use index 1 for one of them.
+//
+// # Why both immediates go through one patch
+//
+// The type index is a **stage-2 fact**: `callchain` interns unconditionally (:709/:847), and an
+// explicit `(type $t)` may name a type defined after this function. The table index resolves at the
+// cursor. So the pair cannot be built with `appendImm` for one and `patch` for the other —
+// `resolveFuncs` lets a patch *replace* the immediates rather than append to them, which
+// `retainIdx`'s "cannot yet encode a deferred index after another immediate" refusal is the other
+// face of. One closure computes both, in wire order, which is also the only shape that makes the
+// order a single statement.
+//
+// Structurally the signature half is the same ordered chain as `blockSignature` — optional `typeuse`,
+// then `(param …)*`, then `(result …)*` — and **shared with it**, through `orderedTypeUse`, with the
+// tail passed as a parameter: `callexpr_results` ends in `expr_list` (:860), the folded operands,
+// where `block_result_body` ends in `instr_list`.
 //
 // That was not always so, and the correction is the point. This comment used to say the chains were
 // *not* shared, "because they bottom out differently", and cited TestOrderedTypeUseChainsAgree as
@@ -2592,8 +2829,94 @@ func (p *parser) ifArms(arms *blockArms) error {
 // `([], [t])` case — so `(call_indirect (result i32) …)` creates a type where `(block (result i32))`
 // does not. Hence callchain rather than blockchain, and see signatureKind for why that is a
 // parameter and not read off the tail.
-func (p *parser) callexprType() error {
-	return p.orderedTypeUse(callchain, p.exprList)
+func (p *parser) callIndirectInstr(place instrPlacement, tail func() error) error {
+	kw := p.c.next() // CALL_INDIRECT or RETURN_CALL_INDIRECT
+	// The table index is a **sugar arm** (:693/:699 flat, :819/:823 folded), not an `idx_opt`: a NAT
+	// or VAR here is the table, and anything else starts the type chain. Defaulted to `0l` by the
+	// sugar arms, and defaulted the same way here — the wire form has no optional field, so the
+	// absent index is a written zero rather than an omission.
+	tab := idxRef{}
+	if p.c.at(NatTok) || p.c.at(VarTok) {
+		var err error
+		tab, err = p.idxValue()
+		if err != nil {
+			return err
+		}
+	}
+	// The tail runs *inside* the chain — `callinstr_results_instr_list` bottoms out in it (:722) —
+	// which is what makes the signature intern after the body, per orderedTypeUse's evaluation-order
+	// paragraph. So the chain is read with the tail, and the instruction is placed around it below.
+	//
+	// A nested sink is what reconciles that with `beforeTail`: the tail has already been emitted by
+	// the time the slot exists, and a flat `call_indirect` must precede it. `placeInstr` cannot help
+	// here — it *calls* the tail — so the diversion happens at this level and the collected tail is
+	// spliced on the side the placement names.
+	var (
+		slot    *blockTypeSlot
+		nested  instrSink
+		chainer = func() error {
+			var err error
+			nested, err = p.intoSink(tail)
+			return err
+		}
+	)
+	_, slot, err := p.orderedTypeUse(callchain, chainer)
+	if err != nil {
+		return err
+	}
+	if !p.retaining() {
+		return nil
+	}
+	op, ok := opBytes(kw.Text)
+	if !ok {
+		// Both mnemonics are unambiguous rows, so this cannot fire on today's table; written for
+		// `opBytes`' other callers' reason — "cannot fail" is a claim about a generated file.
+		return errf(kw, "cannot yet encode the %s instruction (#8)", kw.Text)
+	}
+	in := instr{op: op, patch: p.callIndirectImm(slot, tab, kw)}
+	if place == beforeTail {
+		p.emit(in)
+		p.emitSink(&nested)
+		return nil
+	}
+	p.emitSink(&nested)
+	p.emit(in)
+	return nil
+}
+
+// callIndirectImm is the immediate thunk: the type index then the table index, which is the wire
+// order and the reverse of the written one (encode.ml:275/:278).
+//
+// Both indices are resolved here rather than one at the cursor, for `callIndirectInstr`'s stated
+// reason — a patch replaces the immediates, so a pair cannot be split across the two mechanisms. The
+// table's resolution is *no later* for it: `catTable` is a space whose definitions precede the code
+// section in the image, so resolving it in stage 2 gives the same answer the cursor would, and grave
+// #130's both-orders question is unaffected.
+func (p *parser) callIndirectImm(slot *blockTypeSlot, tab idxRef, kw Token) func() ([]byte, error) {
+	return func() ([]byte, error) {
+		if !slot.filled {
+			return nil, errf(kw, "internal: %s's type read before stage 2 resolved it", kw.Text)
+		}
+		if !slot.interned {
+			// `callchain` interns unconditionally, so this is unreachable — and it is an error
+			// rather than a fallback because the alternative is `blockTypeEmptyByte`, a *legal*
+			// blocktype byte that would encode `call_indirect` with type index 0x40. Declared and
+			// tracked (#6's ruling) at the one site that could produce it.
+			return nil, errf(kw, "internal: %s's signature interned no type", kw.Text)
+		}
+		var w writer
+		w.u32(slot.idx)
+		idx := tab.idx
+		if tab.isVar {
+			var err error
+			idx, err = p.ctx.tables.resolveSpaceIdx(tab)
+			if err != nil {
+				return nil, err
+			}
+		}
+		w.u32(idx)
+		return w.b, nil
+	}
 }
 
 // selectResults parses the `(result …)*` chain both `select` forms carry, then the given tail:
@@ -2610,16 +2933,17 @@ func (p *parser) callexprType() error {
 // `inline_functype`. So `select` is the one member of the extended family that leaves the type space
 // alone entirely — not blockchain with an empty param list, and not a conditional intern either.
 //
-// **The instruction is emitted *after* the tail, because `select` is its sequence's last member.**
-// Both arms cons it onto the tail's list — `select (…) :: es` (:678-680) and `es, select (…)`
-// (:815-816) — so the operands precede it in emission order exactly as a folded plain instruction's
-// do, and the manoeuvre is `expr1`'s: the tail writes into the active sink and this appends
-// afterwards. No nested sink is needed, since nothing was emitted before the tail ran.
+// **Where the instruction goes relative to its tail is the caller's, and the two arms disagree** —
+// grave #145. The productions are `select (…) :: es` (:678-680) and `es, select (…)` (:815-816), and
+// those are opposite: the flat arm's `es` is the `instr_list` that *follows* it in the source, so the
+// select comes first, while the folded arm's `es` is its operand `expr_list`, so the select comes
+// last. This function emitted after the tail for both, which is right for the folded arm and puts a
+// flat select behind everything that follows it. See instrPlacement.
 //
 // The *whether* flag is now retained (see selectOpByte), which this function was previously the
 // place that threw away: `_, err := p.functypeResult()` discarded the slice, and the flag was never
 // computed at all because a recognizer does not need it.
-func (p *parser) selectResults(tail func() error) error {
+func (p *parser) selectResults(place instrPlacement, tail func() error) error {
 	kw := p.c.next() // SELECT
 	// The flag is read from the cursor rather than from the slice, for selectOpByte's reason: a
 	// written `(result)` with no valtypes yields an empty slice and must still encode as `0x1c`.
@@ -2629,12 +2953,6 @@ func (p *parser) selectResults(tail func() error) error {
 	if err != nil {
 		return err
 	}
-	if err := tail(); err != nil {
-		return err
-	}
-	if !p.retaining() {
-		return nil
-	}
 	// The vector's valtypes may name a forward-referenced type, so they resolve in stage 2 through
 	// `patch` — the same slot the `call $f` arm uses, and the reason `instr` has the field at all.
 	// The bare form has no immediates and needs no patch, so it does not take one: a patch that
@@ -2642,6 +2960,46 @@ func (p *parser) selectResults(tail func() error) error {
 	in := instr{op: selectOpByte(wrote)}
 	if wrote {
 		in.patch = func() ([]byte, error) { return p.selectResultBytes(results, kw) }
+	}
+	return p.placeInstr(place, in, tail)
+}
+
+// instrPlacement says whether an instruction is emitted before or after the tail production it
+// carries — the fact grave #145 is made of.
+//
+// **A parameter because the reference's two productions disagree, and the disagreement is invisible
+// in the common case.** `select`, `call_indirect` and `return_call_indirect` each have a flat form
+// whose tail is the *rest of the enclosing sequence* and a folded form whose tail is its own
+// operands, and the semantic actions cons the instruction onto opposite ends: `(select …) :: es`
+// against `es, select (…)`. So the two forms of one instruction have opposite emission orders, and
+// the reason a single emission point survived review is that a flat `select` written last — which is
+// every flat `select` in the round-trip table and nearly every one in the suite — has an empty tail,
+// where both orders coincide.
+//
+// Not inferred from the tail function, though the correlation holds today (`instrList` is flat,
+// `exprList` is folded): that is `signatureKind`'s reasoning at the sibling site, and the same
+// argument applies with more force here, since `instrList` is also the tail of the *folded* block
+// family. Two facts that happen to agree are two parameters.
+type instrPlacement int
+
+const (
+	beforeTail instrPlacement = iota // flat: the tail is what follows the instruction in the source
+	afterTail                        // folded: the tail is the instruction's operands
+)
+
+// placeInstr runs a tail and emits an instruction on the side of it the placement names.
+//
+// The `beforeTail` half needs no nested sink — it emits and then lets the tail append after, which is
+// the ordinary direction a writer moves. It is `afterTail` that would need one if anything had been
+// emitted before the tail ran, and nothing has: the instruction is built from tokens read before it,
+// not written. That asymmetry is why this is four lines rather than an `intoSink` call.
+func (p *parser) placeInstr(place instrPlacement, in instr, tail func() error) error {
+	if place == beforeTail {
+		p.emit(in)
+		return tail()
+	}
+	if err := tail(); err != nil {
+		return err
 	}
 	p.emit(in)
 	return nil
@@ -2795,20 +3153,14 @@ func (p *parser) expr1(leader keywordKind) error {
 		// The folded spelling of the same instruction, differing only in its tail — `expr_list`
 		// against `instr_list` (:837-840 against :682-686). See flatSelectOrCall's arm for why the
 		// opcode choice is decidable at this stratum where `opBytes` refuses it.
-		return p.selectResults(p.exprList)
+		//
+		// `afterTail`, the opposite of that arm's, because here `es` is the operand list and the
+		// select follows it — `es, select (…)` (:815-816). See instrPlacement (grave #145).
+		return p.selectResults(afterTail, p.exprList)
 	case kwCallIndirect, kwReturnCallIndirect:
-		if err := p.refuseUnencodable(p.c.peek(), "the "+p.c.peek().Text+" instruction"); err != nil {
-			return err
-		}
-		p.c.next() // the keyword
-		// `idx` is optional here as a *sugar arm* (:819/:823), not as an `idx_opt`: the table
-		// index may be a NAT or a VAR, and anything else starts `callexpr_type`.
-		if p.c.at(NatTok) || p.c.at(VarTok) {
-			if err := p.idx(); err != nil {
-				return err
-			}
-		}
-		return p.callexprType()
+		// `afterTail`, the folded arms' order: `es, call_indirect (…) x` (:817-823), where `es` is
+		// the operand list. Otherwise identical to the flat arm — see callIndirectInstr.
+		return p.callIndirectInstr(afterTail, p.exprList)
 	default:
 		// Falls out of the switch to the first arm below. Written as an empty default rather than
 		// left implicit because `exhaustive` reads a bare fall-through as an unhandled enum, and
@@ -2826,6 +3178,15 @@ func (p *parser) expr1(leader keywordKind) error {
 	// work. Pinned by TestEncodeRoundTripsThroughTheDecoder, whose two-deep folded row and its flat
 	// twin state the body's instruction order in the want column; reversing this splice fails the
 	// folded row with `i32.add` leading, and the flat row is what stops the fix being "reverse both".
+	//
+	// **`retaining()` and not `p.retain` here, which is the opposite of `intoSink`'s fix (grave #144)
+	// and is correct for the reason that grave names.** This swap *consumes* an installed sink rather
+	// than establishing one: the last line is `p.sink.splice(&leaderSink)`, which needs a non-nil outer
+	// sink to splice into, and `expr1` reaches this arm only from inside a function body where
+	// `funcField` installed one. So the question really is "is a sink installed", and asking the mode
+	// instead would nil-dereference on any future module-field-scope caller — the same conflation
+	// failing in the other direction. Stated because the sweep after #144 had to decide this site on
+	// its merits, and a reader repeating that sweep should not have to re-derive the answer.
 	if !p.retaining() {
 		if _, err := p.plaininstr(); err != nil {
 			return err

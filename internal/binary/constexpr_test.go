@@ -2,6 +2,7 @@ package binary
 
 import (
 	"errors"
+	"reflect"
 	"testing"
 )
 
@@ -218,12 +219,18 @@ func TestDataSegmentContentsAreNotAName(t *testing.T) {
 // expressions) failing in two different fields — one an opcode, one a reftype. A
 // decoder that guessed the field layout could still get one of them right, so both
 // are asserted, along with the forms that carry a table index and an elemkind byte.
+//
+// **Each accepting row now also states what was retained** (0016), because a verdict alone
+// cannot see the retention: every one of these rows passed identically when all five fields
+// were read and dropped, which is precisely why `discardIndex`'s replacement is invisible to
+// the rejection corpus. The `want` column is where a mode misclassified, a table index read
+// from the wrong offset, or an element vector filed under the wrong form becomes visible.
 func TestElemSegmentFlagFields(t *testing.T) {
-	d := &Decoder{}
 	for _, tc := range []struct {
 		name string
 		in   []byte
 		ok   bool
+		want *ElemSegment // asserted when ok; nil skips the retention check
 	}{
 		// Every flag form the suite encodes, transcribed from elem.wast rather than
 		// reasoned about — this table *is* the derivation of the type-field presence
@@ -235,29 +242,131 @@ func TestElemSegmentFlagFields(t *testing.T) {
 		// that line — and earned its keep immediately, since two of the seven were
 		// several lines off when first written. A transcription is the hazard the file
 		// exists for; declaring these unverifiable would have been the wrong repair.
-		{"flags 0: active table 0, func indices", []byte{0x00, 0x41, 0x00, 0x0B, 0x01, 0x00}, true},                // elem.wast:259
-		{"flags 1: passive, elemkind, func indices", []byte{0x01, 0x00, 0x01, 0x00}, true},                         // elem.wast:276
-		{"flags 2: active explicit table, elemkind", []byte{0x02, 0x00, 0x41, 0x00, 0x0B, 0x00, 0x01, 0x00}, true}, // elem.wast:293
-		{"flags 3: declarative, elemkind", []byte{0x03, 0x00, 0x01, 0x00}, true},                                   // elem.wast:310
-		// flags 4 carries NO type field — the row that kills `flags != 0`.
-		{"flags 4: active table 0, element exprs, no type byte", []byte{0x04, 0x41, 0x00, 0x0B, 0x01, 0xD2, 0x00, 0x0B}, true}, // elem.wast:327
+		// The `want` values are **printed, not reasoned**: each was read off the decoder's
+		// actual output before being written here, which is how `Offset` came to include its
+		// terminating END rather than stopping before it. A hand-reasoned expectation would
+		// have omitted the `{Op: opEnd}` and the row would have been wrong about the engine
+		// while looking right about the format.
+		{
+			"flags 0: active table 0, func indices", []byte{0x00, 0x41, 0x00, 0x0B, 0x01, 0x00}, true, // elem.wast:259
+			&ElemSegment{Mode: ElemActive, ElemType: FuncRef, Offset: i32ConstZero, Funcs: []uint32{0}},
+		},
+		{
+			"flags 1: passive, elemkind, func indices", []byte{0x01, 0x00, 0x01, 0x00}, true, // elem.wast:276
+			&ElemSegment{Mode: ElemPassive, ElemType: FuncRef, Funcs: []uint32{0}},
+		},
+		{
+			"flags 2: active explicit table, elemkind", []byte{0x02, 0x00, 0x41, 0x00, 0x0B, 0x00, 0x01, 0x00}, true, // elem.wast:293
+			&ElemSegment{Mode: ElemActive, ElemType: FuncRef, Offset: i32ConstZero, Funcs: []uint32{0}},
+		},
+		// derived from elem.wast:293 — the suite's flags-2 vector names **table 0**, which is
+		// also what every implicit-index form defaults to, so it cannot distinguish a decoder
+		// that reads the index from one that skips the field and leaves the zero value. The
+		// premise is that :293's shape is the flags-2 encoding; the inference is that changing
+		// its index byte changes only TableIndex. That makes this the row where a table index
+		// read from the wrong offset fails, and it is the pair `MemIndex` already has next door.
+		{
+			"flags 2 with a nonzero table index",
+			[]byte{0x02, 0x03, 0x41, 0x00, 0x0B, 0x00, 0x01, 0x00},
+			true,
+			&ElemSegment{Mode: ElemActive, TableIndex: 3, ElemType: FuncRef, Offset: i32ConstZero, Funcs: []uint32{0}},
+		},
+		{
+			"flags 3: declarative, elemkind", []byte{0x03, 0x00, 0x01, 0x00}, true, // elem.wast:310
+			&ElemSegment{Mode: ElemDeclarative, ElemType: FuncRef, Funcs: []uint32{0}},
+		},
+		// flags 4 carries NO type field — the row that kills `flags != 0`. It is also the
+		// retention half of ElemSegment's argument: the same segment as flags 0 above, same
+		// table, same single function, and the two must not decode to the same value.
+		{
+			"flags 4: active table 0, element exprs, no type byte", []byte{0x04, 0x41, 0x00, 0x0B, 0x01, 0xD2, 0x00, 0x0B}, true, // elem.wast:327
+			&ElemSegment{
+				Mode: ElemActive, ElemType: FuncRef, Offset: i32ConstZero, ByExpr: true,
+				Exprs: [][]Instr{{{Op: 0xD2}, {Op: opEnd}}}, // ref.func 0, end
+			},
+		},
 		// flags 5 carries one — the row that kills `flags&explicit != 0`.
-		{"flags 5: passive, reftype, element exprs", []byte{0x05, 0x70, 0x01, 0xD2, 0x00, 0x0B}, true}, // elem.wast:360
-		{"flags 5 with ref.null funcref", []byte{0x05, 0x70, 0x01, 0xD0, 0x70, 0x0B}, true},            // elem.wast:376
+		{
+			"flags 5: passive, reftype, element exprs", []byte{0x05, 0x70, 0x01, 0xD2, 0x00, 0x0B}, true, // elem.wast:360
+			&ElemSegment{
+				Mode: ElemPassive, ElemType: FuncRef, ByExpr: true,
+				Exprs: [][]Instr{{{Op: 0xD2}, {Op: opEnd}}},
+			},
+		},
+		// `ref.null`'s heap type is **not** in the retained instruction, and this row is where
+		// that is stated rather than discovered later: `Imm0` is 0, not `FuncRef`. The want was
+		// first written as `Imm0: uint64(FuncRef)` by reasoning from the immediate's name, and
+		// the print said otherwise — `immHeapType` reads the heaptype and stages no word
+		// (instr.go's arm ends `return c.d.decodeHeapType(r)`), so `ref.null func` and
+		// `ref.null extern` are the same two words. That is a retention gap of exactly the kind
+		// 0016 governs and it is *not* fixed here; it is filed, because nothing in this PR's
+		// path consumes a null's type — a funcref table's nulls are funcref nulls. Asserting
+		// the true value keeps the row honest about what the engine keeps.
+		{
+			"flags 5 with ref.null funcref", []byte{0x05, 0x70, 0x01, 0xD0, 0x70, 0x0B}, true, // elem.wast:376
+			&ElemSegment{
+				Mode: ElemPassive, ElemType: FuncRef, ByExpr: true,
+				Exprs: [][]Instr{{{Op: 0xD0}, {Op: opEnd}}},
+			},
+		},
 		// binary.wast:373 — flags 5 with a non-reftype where the reftype goes.
-		{"flags 5 with valtype i32 as the reftype", []byte{0x05, 0x7F, 0x01, 0xD2, 0x00, 0x0B}, false},
-		{"flags 8 is not a legal flag value", []byte{0x08}, false},
+		{"flags 5 with valtype i32 as the reftype", []byte{0x05, 0x7F, 0x01, 0xD2, 0x00, 0x0B}, false, nil},
+		{"flags 8 is not a legal flag value", []byte{0x08}, false, nil},
+		// The row that rejects **inside** the element vector, and the only one that can:
+		// every other rejecting row here fails at the flags byte or the reftype, before the
+		// vector read exists to be interrupted. Without it the "retained 0 segments after
+		// rejecting" assertion below is *stillborn* — an append moved above the vector read
+		// leaves the check green, which is what happened when the falsification was run.
+		//
+		// derived from binary.wast:359,360,361 — the suite writes this segment across three
+		// source lines (`"\05\70"`, `"\01"`, `"\f3\00\0b"`, the last commented "bad opcode,
+		// index 0, end"), and a fragment citation resolves to *one* line by construction, so
+		// no single citation can verify a six-byte fixture. The premises are those three
+		// lines; the inference is that a `(module binary ...)` concatenates its string
+		// literals, which is the same entailment the module-image path already relies on.
+		// Marking it `synthetic` would have been the easier lie: these bytes are transcribed,
+		// and transcription is the hazard the provenance file exists for.
+		{"flags 5, one element, illegal opcode", []byte{0x05, 0x70, 0x01, 0xF3, 0x00, 0x0B}, false, nil},
 	} {
+		d := &Decoder{}
 		r := &reader{b: tc.in, eof: ErrPayloadEnd}
 		err := d.decodeElemSegment(r)
 		if tc.ok && err != nil {
 			t.Errorf("%s: got %v, want accept", tc.name, err)
+			continue
 		}
-		if !tc.ok && err == nil {
-			t.Errorf("%s: accepted, want rejection", tc.name)
+		if !tc.ok {
+			if err == nil {
+				t.Errorf("%s: accepted, want rejection", tc.name)
+			}
+			// A rejected segment must not be *filed*. Appending before the vector read would
+			// leave a half-decoded segment in the module's index order, which shifts every
+			// later `table.init` index — an accept-direction consequence of a reject-direction
+			// bug, and nothing else here would see it.
+			if got := len(d.mod().Elems); got != 0 {
+				t.Errorf("%s: retained %d segments after rejecting; want 0", tc.name, got)
+			}
+			continue
+		}
+		if tc.want == nil {
+			t.Errorf("%s: accepting row with no want — every accepted segment states what it retained", tc.name)
+			continue
+		}
+		if len(d.mod().Elems) != 1 {
+			t.Errorf("%s: retained %d segments, want exactly 1", tc.name, len(d.mod().Elems))
+			continue
+		}
+		if got := d.mod().Elems[0]; !reflect.DeepEqual(got, *tc.want) {
+			t.Errorf("%s:\n got %+v\nwant %+v", tc.name, got, *tc.want)
 		}
 	}
 }
+
+// i32ConstZero is the offset expression every active row above carries: `i32.const 0` then
+// END. Shared because it is the same six-byte prefix in the suite's vectors, and written as
+// two instructions because that is what the decoder produced when printed — the END is part
+// of the retained expression, exactly as it is for a global's initializer.
+var i32ConstZero = []Instr{{Op: 0x41}, {Op: opEnd}}
 
 // TestSlebIsNotUlebWithACast pins the signed LEB reader's two-sided range check.
 //

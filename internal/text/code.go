@@ -120,11 +120,23 @@ func (p *parser) emit(in instr) {
 	p.sink.add(in)
 }
 
-// retaining reports whether instructions are being kept.
+// retaining reports whether instructions are being kept — whether a sink is installed **right now**.
 //
 // Read by the arms that must *refuse* rather than skip: an immediate shape this file cannot encode
 // has to fail the encode while still parsing cleanly for the recognizer, so it asks this instead of
 // checking for nil itself at four sites.
+//
+// **Not the same question as `p.retain`, and grave #144 is the cost of the two being conflated.**
+// `p.retain` is the parse's *mode* — this parse is building a module — and it is true for the whole
+// parse. This is true only where a sink is installed, which is inside a function body and, for the
+// span of one offset expression, inside `retainedOffset`. The two agree at every site that *inherits*
+// a sink from an enclosing instruction, which is why they were interchangeable for three sections;
+// they come apart at module-field scope, where nothing installs one.
+//
+// So the rule, stated where both are in view: a reader that **consumes** an installed sink asks this,
+// and a reader that **establishes** retention asks `p.retain`. `intoSink` is the second kind and
+// asked the first — a function gating on the condition it exists to create, which is silently a no-op
+// wherever the condition does not already hold.
 func (p *parser) retaining() bool { return p.sink != nil }
 
 // appendImm adds encoded immediate bytes to the instruction being built, or does nothing when not
@@ -151,8 +163,33 @@ func (p *parser) appendImm(b []byte) {
 //
 // Not retaining is not a special case that skips the read: the reader still runs, because recognizing
 // is what the nil-sink path exists to do. It returns an empty sink, which `emitSink` then drops.
+//
+// **The condition is the mode, `p.retain`, and it was `p.retaining()` — a function that installs a
+// sink asking whether one is already installed (grave #144).** The two questions agree everywhere a
+// sink is inherited from an enclosing instruction, which was every caller until section 9: five sites
+// inside a function body, where `funcField` installed the outer sink before any of them ran. At
+// module-field scope they diverge, because nothing installs a sink there — `retainedOffset` installs
+// one for the offset alone and restores it before the element list is read — so `elemIdxSink` and
+// `elemexprRetained` took the short-circuit and returned empty sinks on a parse that was retaining.
+// The visible symptom was `01 01 00 00` for `(module (func) (elem func 0))`: correct flag, correct
+// elemkind, and a vector of zero. The table sugar's `min = max = len(einit)` made it unmistakable by
+// writing `{Min:0 Max:0}` for a two-element segment.
+//
+// `retainedOffset` gates on the mode and has since it was `dataOffset`, three functions away and for
+// this reason — so this is *lessons are indexed by shape* (#105) with the sibling's version sitting
+// in the same package: the mode-versus-sink distinction had already been met and solved, and asking
+// `retaining()` here re-derived it wrong. The rule says read the sibling before writing the reader,
+// and the sibling is `retainedOffset`.
+//
+// Falsified as TestIntoSinkGatesOnTheModeNotTheSink, and **the two gates fail differently, which is
+// why that control asserts bytes rather than counts.** Reverting this one yields an empty sink *per
+// element*, so a segment keeps the right number of elements and each is a bare `0x0b` terminator;
+// reverting `elemIdxList`'s yields a nil slice and no elements at all. A count-only assertion sees
+// the second and is green for the first — measured, on ten rows. Either way the flags, offsets and
+// reftypes stay correct, so the image is legal and denotes a different module: the accept-direction
+// shape no `assert_malformed` can see.
 func (p *parser) intoSink(read func() error) (instrSink, error) {
-	if !p.retaining() {
+	if !p.retain {
 		return instrSink{}, read()
 	}
 	var nested instrSink

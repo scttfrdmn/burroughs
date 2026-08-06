@@ -42,16 +42,17 @@ import (
 //
 // A struct rather than a bare `any` or a pointer, because a reference is *two* facts — whether it is
 // null, and what it points at — and `nil` cannot carry the first without conflating `ref.null func`
-// with an absent slot. v0 pushes none of these; the type exists so that the array it lives in has an
-// element type chosen by the design rather than by the first opcode that needs one.
+// with an absent slot. The stack still pushes none of these; the type exists so that the array it
+// lives in has an element type chosen by the design rather than by the first opcode that needs one.
 //
-// **Declared-and-tracked, with the suppression naming its retirement** (#6's ruling, and the
-// `reader.u64` precedent at binary.go:678): `unused` is right that nothing constructs one, and the
-// intended ending is a real consumer retiring the nolint — `ref.null func` is the first — never an
-// allowlist entry outliving it. Deleting it and re-deriving the element type from the first opcode
-// that needs a reference is precisely what 0002 pinned this to prevent.
-//
-//nolint:unused // pinned by 0002 before its first consumer; retired by the first reference opcode (#7)
+// **The declared-and-tracked suppression is spent, and it is worth recording that it was spent by a
+// consumer it did not predict.** The nolint read "retired by the first reference opcode (#7)", and no
+// reference opcode has an arm yet — what constructs a `ref` is `table.go`'s element-segment
+// initialization, which fills a new table with nulls and evaluates `ref.func`/`ref.null` out of a
+// segment's expressions without any of them ever reaching the stack. So the *type* found its
+// consumer one layer below the one named. That is the intended ending either way (#6's ruling, and
+// the `reader.u64` precedent at binary.go:678): a deferral retired by a production caller, never by
+// a suppression outliving its reason. `stack.refs` is still unpushed, which is #7's half.
 type ref struct {
 	// Null is whether this is a null reference. Separate from Addr being zero, because address
 	// zero is a legitimate function index and `ref.null func` is a *value*, not an absence.

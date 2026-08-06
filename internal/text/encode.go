@@ -125,6 +125,7 @@ const (
 	secTable     byte = 4
 	secMemory    byte = 5
 	secExport    byte = 7
+	secElem      byte = 9
 	secCode      byte = 10
 	secData      byte = 11
 	secDataCount byte = 12
@@ -263,6 +264,12 @@ func (p *parser) encode() ([]byte, error) {
 	if len(p.ctx.exports) > 0 {
 		w.section(secExport, p.encodeExports)
 	}
+	// Section 9 sits between export and data count, which is `module_`'s order (encode.ml:1150-1161)
+	// and here happens to be id order too — the two places the format departs from it are 12-before-10
+	// and 11-after, below.
+	if len(p.ctx.elemDefs) > 0 {
+		w.section(secElem, p.encodeElems)
+	}
 	// **Section 12 before section 10, and section 11 after it** — `module_`'s order (encode.ml:1156-1161),
 	// which is the format's rather than the writer's: a code section preceding a data count section is
 	// malformed (`binary.wast:1194`), because the count is what lets a body's `data.drop` be validated
@@ -314,7 +321,7 @@ func (p *parser) encodableOrErr() error {
 		// papered over — naming the arm needs the arm threaded into the record, and the field is
 		// what a reader edits.
 		return errf(p.ctx.firstNonType, "cannot yet encode this (%s …) field: the emitter writes "+
-			"the type, import, function, table, memory, export, code, data and data count "+
+			"the type, import, function, table, memory, export, element, code, data and data count "+
 			"sections (#8)", p.ctx.firstNonType.Text)
 	}
 	// **The withdrawal check.** Every *defined* memory and table must have been retained, or a
@@ -408,6 +415,57 @@ func (p *parser) encodableOrErr() error {
 	if got, want := len(p.ctx.dataDefs), p.ctx.datasSeen; got != want {
 		return fmt.Errorf("text: internal: %d data segments retained, %d parsed — a spelling withdrew "+
 			"the encoder's frontier without recording its content (#8)", got, want)
+	}
+	// The same check for section 9, and it fires today for section 11's reason: `elemsSeen` is the
+	// grammar's, incremented in `noteElem` at the `(elem` recognizer, and `len(elemDefs)` is the
+	// emitter's, appended by `defineElem`. The two numbers come from different code, so a spelling that
+	// parses a segment without retaining it is a section 9 short by one entry.
+	//
+	// **`tableElemSugar` is the reason this is a live control rather than a tripwire.** That arm defines
+	// a table *sized from* an element segment and is the sixth `(elem` in the grammar — the one that is
+	// not an `elem` field — so it must both `noteElem` and `defineElem`, and its size arithmetic has no
+	// source token to be wrong about. Falsified by deleting its `defineElem` call:
+	// `(module (table funcref (elem 0)))` then emits a table of one element with nothing in it — a
+	// module that decodes clean and whose table is all nulls — and this fires with `0 element segments
+	// retained, 1 parsed`.
+	if got, want := len(p.ctx.elemDefs), p.ctx.elemsSeen; got != want {
+		return fmt.Errorf("text: internal: %d element segments retained, %d parsed — a spelling "+
+			"withdrew the encoder's frontier without recording its content (#8)", got, want)
+	}
+	// An element segment's type is the same frontier as a table's: `(elem (ref func) (ref.func 0))` and
+	// `(elem externref …)` need bytes `valTypeByte` does not have, and `elem.wast` writes both. Asked
+	// through the one predicate so this cannot disagree with what `encodeElems` will write.
+	//
+	// **The exemption is the writer's family test verbatim, and it has to be — grave #146.** A segment
+	// taking one of the four *index* forms writes an `elemkind` byte instead of a reftype, so its type
+	// needs no `valTypeByte` entry; every other segment writes a reftype and does. Which family a
+	// segment takes is `isElemKind() && allElemIndex()` in `encodeElems`, and this exemption asked only
+	// the first half — so a `(ref func)` segment whose elements fail `is_elem_index` was exempted here
+	// and then routed to the *expression* family by the writer, which called `w.valType` on a type
+	// `valTypeByte` refuses. Not a wrong image: a **panic**, out of the arm whose whole job is to say
+	// the two callers cannot disagree, on three spellings the grammar admits
+	// (`(elem (ref func) (item (ref.func 0) (ref.func 0)))` and its active and declarative twins).
+	//
+	// The lesson is the one this file already states as *one concept, one trigger* and got wrong by
+	// stating the concept twice: the exemption is not "segments that pass `isElemKind`", it is
+	// "segments the writer routes to the index family", and only the writer's own conjunction says
+	// which those are. A predicate reconstructed from one of two conditions is the under-matching
+	// trigger defect (#78) in a skip rather than in a guard, and it fails the same way — silently,
+	// producing no finding, until the population it wrongly exempts is actually reached.
+	//
+	// What kept it quiet: the two conditions differ only on a segment that is `(ref func)`-typed *and*
+	// holds an element that is not exactly `ref.func x`, and the eleven-row arm table one file over
+	// spells `(ref func)` only with bare-index elements. Found by enumerating mode × reftype × element
+	// shape rather than by reading — TestEncodeMatchesTheReferenceOnElemFlags, which is what that
+	// enumeration became.
+	for i, e := range p.ctx.elemDefs {
+		if e.isElemKind() && e.allElemIndex() {
+			continue // the index family: writes an elemkind byte, not a reftype
+		}
+		if _, ok := valTypeByte(e.elemType); !ok {
+			return fmt.Errorf("cannot yet encode element segment %d: element type %s needs a "+
+				"parameterized reference encoding, which arrives with the GC gate (#8)", i, e.elemType)
+		}
 	}
 	for i, t := range p.ctx.tabDefs {
 		if _, ok := valTypeByte(t.elem); !ok {
@@ -659,6 +717,127 @@ func (p *parser) encodeDatas(w *writer) {
 		}
 		w.byteVec(d.bytes)
 	})
+}
+
+// encodeElems writes section 9: one entry per element segment, in source order (#8).
+//
+// **Eight arms, and the choice between the two families of four is derived from the segment's
+// *content* rather than from the text's spelling** — `textElem`'s comment carries that derivation and
+// this is the half that acts on it:
+//
+//	if is_elem_kind rt && List.for_all is_elem_index cs then  (* index forms   0/1/2/3 *)
+//	else                                                      (* expression forms 4/5/6/7 *)
+//
+// `is_elem_kind rt` is `rt = (NoNull, FuncHT)` (encode.ml:1044-1046), a question about the reftype's
+// **nullability** — so `funcref` fails it and `(ref func)` passes, and the two spellings of what looks
+// like one type take different flags. `is_elem_index` is `[{it = RefFunc _}]` (:1052-1055), a question
+// about each element expression's **shape**, folded with `for_all`; `resolvedElem.funcs` holds the
+// per-element answer because a segment may mix `(ref.func 0)` with `(ref.null func)` and
+// `bulk.wast:12` does exactly that.
+//
+// Then the mode selects within the family, on the **resolved** table index rather than on whether the
+// text wrote a `(table …)` — `encodeDatas`' discriminator, for its reason:
+//
+//	index      forms: Passive 0x01 · Active 0 0x00 · Active x 0x02 · Declarative 0x03
+//	expression forms: Passive 0x05 · Active 0 0x04 · Active x 0x06 · Declarative 0x07
+//
+// **0x04 carries a guard the other seven do not, and dropping it writes a wrong module that decodes
+// clean.** The reference's arm is `Active ({it = 0l}, c) when rt = (Null, FuncHT)` (:1079), so the
+// short active form is available only to a segment whose element type is exactly `funcref` — every
+// other reftype at table 0 falls through to `Active (x, c)` and writes 0x06, table index and all.
+// That is not redundancy: 0x04's payload has no reftype field, so a `(elem (i32.const 0) externref
+// (ref.null extern))` written as 0x04 would decode as a *funcref* segment. The fall-through is what
+// the reference means by putting the guard on the arm rather than on the family.
+//
+// **wabt agrees with the reference, and the two false claims this paragraph carried before are worth
+// keeping as the record of how a producer comparison goes wrong.** wabt 1.0.41 `--enable-all` writes
+// `09 07 01 05 70 01 d2 00 0b` for `(module (func) (elem funcref (ref.func 0)))` — `05 70 …`, the
+// reference's expression form to the byte — and takes the index form for `(elem (ref func) …)`, which
+// is right because `(ref func)` is `(NoNull, FuncHT)` and `is_elem_kind` is a question about
+// nullability.
+//
+// The first version argued the flag choice *from* "every other producer including wabt". The second
+// recorded the opposite, "all five `funcref`-spelled expression forms disagree … 452 of the corpus's
+// 1383 `(elem` forms are on that divergence", and claimed wabt rejects `(elem (ref func) …)` outright.
+// The second was measured, which is why it was believed — **and it was measured with the proposals
+// off**, where wabt has no funcref/`(ref func)` distinction to make: it collapses `funcref` to the
+// index form and rejects `(ref func)` as unrecognized syntax. Re-run with `--enable-all`, all three
+// spellings agree. A feature-gate artefact was read as a producer disagreement, and a corpus count
+// was computed on top of it.
+//
+// Both errors point the same way — *the measurement was of a differently-configured instrument* — and
+// neither ever bore on the choice, since the reference implementation is the authority for what the
+// bytes mean whatever wabt does. That is the lesson worth the space: the first claim was
+// corroborating decoration on a conclusion that stands without it, the second was corroborating
+// decoration with the sign flipped, and a fact nothing rests on gets stated as confidently as one
+// that carries weight. So #67's corpus comparator is expected to *agree* on section 9, and a
+// disagreement there is a finding rather than a known style difference.
+//
+// Cannot fail, on every other section's discipline: `defineElem`'s thunks resolved the table index and
+// encoded the offset and every element in stage 2, and `encodableOrErr` refused what has no byte.
+func (p *parser) encodeElems(w *writer) {
+	w.vec(len(p.ctx.elemDefs), func(w *writer, i int) {
+		e := p.ctx.elemDefs[i]
+		if e.isElemKind() && e.allElemIndex() {
+			switch {
+			case e.mode == elemPassive:
+				w.u32(0x01)
+				w.elemKind(e.elemType)
+			case e.mode == elemDeclarative:
+				w.u32(0x03)
+				w.elemKind(e.elemType)
+			case e.table == 0:
+				w.u32(0x00)
+				w.bytes(e.offset)
+			default:
+				w.u32(0x02)
+				w.u32(e.table)
+				w.bytes(e.offset)
+				w.elemKind(e.elemType)
+			}
+			w.vec(len(e.funcs), func(w *writer, j int) { w.bytes(e.funcs[j].imm) })
+			return
+		}
+		switch {
+		case e.mode == elemPassive:
+			w.u32(0x05)
+			w.valType(e.elemType)
+		case e.mode == elemDeclarative:
+			w.u32(0x07)
+			w.valType(e.elemType)
+		case e.table == 0 && e.elemType.isFuncref():
+			w.u32(0x04)
+			w.bytes(e.offset)
+		default:
+			w.u32(0x06)
+			w.u32(e.table)
+			w.bytes(e.offset)
+			w.valType(e.elemType)
+		}
+		w.vec(len(e.exprs), func(w *writer, j int) { w.bytes(e.exprs[j]) })
+	})
+}
+
+// elemKind writes the `elemkind` byte, which is 0x00 and is *not* a reftype byte.
+//
+// `elem_kind` is `function (NoNull, FuncHT) -> byte 0x00 | _ -> assert false` (encode.ml:1048-1050) —
+// so the byte is a constant and the function exists to assert its precondition. Kept as a method with
+// the argument rather than inlined as `w.byte1(0x00)` for exactly the reason the reference keeps the
+// match: the four index-form arms reach it only under `is_elem_kind`, and 0x00 written for any other
+// reftype is a segment claiming to hold funcrefs. The panic is `valType`'s: a disagreement between the
+// arm selection and this precondition is an internal inconsistency, not a bad input.
+//
+// Note which field this is: the index forms carry an *elemkind* where the expression forms carry a
+// *reftype*, two different one-byte encodings of the same idea at the same offset — `funcref` is 0x70
+// as a reftype and 0x00 as an elemkind. Writing one where the other belongs is a segment whose element
+// type decodes to something the text never said, which is why `w.elemKind` and `w.valType` are
+// separate methods and each arm above names the one its form takes.
+func (w *writer) elemKind(v resolvedVal) {
+	if v.null || v.abs != kwFunc || v.isIdx || v.num != "" {
+		panic("text: elemKind called for " + v.String() + ", which is not (NoNull, FuncHT) — the " +
+			"index-form arms are guarded by is_elem_kind and this is that guard's other half")
+	}
+	w.byte1(0x00)
 }
 
 // encodeDataCount writes section 12: the segment count and nothing else.
