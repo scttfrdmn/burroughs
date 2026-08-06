@@ -357,42 +357,80 @@ var encodableShapes = map[immShape]bool{
 	// encoder that can write `br_table` into a module nothing can execute buys no vectors.
 	immIdxIdxList: true,
 
-	// **`ref.null`, and it is the one entry here whose shape is only *partly* encodable** — every
-	// other member of this map writes every immediate its shape admits. A heaptype is twelve
-	// keywords plus a type index (parser.mly:361-372) and exactly two of those thirteen have an
-	// unparameterized encoding, so `heaptypeRetained` admits `func` and `extern` and refuses the
-	// rest at the cursor.
+	// **`ref.null`, and it is no longer the partial entry it was admitted as.** The paragraph here
+	// said this was "the one entry whose shape is only *partly* encodable" — twelve keywords plus a
+	// type index (parser.mly:361-374) of which two had an unparameterized encoding — and that was
+	// true for the two PRs it stood. `heapTypeBytes` now writes the whole production: twelve
+	// `s7` singletons from `absoluteHeaptypeBytes` and the index form as a `typeuse s33`. The
+	// remaining `false` is a thirteenth heap type, which is a red board rather than a frontier.
 	//
-	// That partiality is why the refusal lives in the reader rather than in `encodableOrErr`: the
-	// eleven unencodable spellings have a *token* to point at, and a frontier message with a
-	// source position is worth more than one naming a field number. Same division the code section
-	// already uses — a func's signature is refused in `encodableOrErr`'s type loop and its body at
-	// the cursor.
+	// **The refusal that stayed at the reader is the *deferral* one, and it is a different fact.**
+	// `heaptypeRetained` still reports at the cursor when a symbolic index cannot resolve there,
+	// because that is where the token is, and a frontier message with a source position is worth
+	// more than one naming a field number. Same division the code section already uses — a func's
+	// signature is refused in `encodableOrErr`'s type loop and its body at the cursor.
 	//
 	// Admitted for #8's global-section work: `(global funcref (ref.null func))` is `global.wast`'s
-	// opening line, and the section and this shape each blocked it independently.
+	// opening line, and the section and this shape each blocked it independently. Widened to the
+	// whole production for the board's largest bucket — **609** vectors across six keys, of which
+	// 301 were the index form (#8).
+	//
+	// **Those 609 converted nothing, and the reason is worth keeping here rather than in a PR
+	// description.** The board's fail column is *unmoved* — 1699 before and after, encode stratum
+	// 994 both — because every one of the 609 re-bucketed into a sibling frontier one layer up:
+	// +446 into `needs a parameterized reference encoding` (a table's or global's or type's
+	// *reftype*, `valTypeByte`) and +163 into `ref.test`/`ref.cast`/`br_on_cast` immediates. The
+	// bucket was **shadowing**: `ref.null` is the first refusal a GC vector meets, so its key was
+	// counting vectors that need three or four other things as well.
+	//
+	// So the bucket-size-estimates-the-reward rule cuts in its over-promise direction here, and
+	// harder than the 18-quoted-4-reachable case that made it: not "some members are blocked on
+	// another mechanism" but *all* of them, with the arm nonetheless correct and required. A key
+	// naming the **first** refusal in a chain is an upper bound on the reward and says nothing about
+	// the rest of the chain — partitioning by mechanism cannot see that, because the partition is
+	// over the failures the board can *see*, and the second refusal is invisible until the first is
+	// gone. What would have seen it: asking, before starting, what the vectors in the bucket *are*.
+	// `br_table.wast` 146, `ref_eq.wast` 82, `ref_test.wast` 68, `i31.wast` 61 — GC files throughout,
+	// where a `ref.null` is one token in a module that also declares `(ref null $t)` fields.
 	immHeaptype: true,
 }
 
 // heaptypeRetained reads `ref.null`'s heap type immediate and encodes it.
 //
-// **The immediate is a bare `heaptype`, not a `reftype`, and the one-byte agreement between them is
+// **The immediate is a bare `heaptype`, not a `reftype`, and the twelve-form agreement between them is
 // a trap rather than a convenience.** `RefNull t -> op 0xd0; heaptype t` (encode.ml:414): a heaptype
-// has no nullability field, because the *instruction* is the null. The two productions write the same
-// byte for the only two forms this encoder admits — 0x70 func, 0x6F extern — and diverge everywhere
-// else, `reftype` prefixing `-0x1d`/`-0x1c` before recursing into `heaptype` (encode.ml:139-151). So
-// a reader that used `reftype` here would be right on every module this encoder can currently write
-// and wrong on the first one it cannot, which is the shape that gets found late.
+// has no nullability field, because the *instruction* is the null. The two productions write the
+// identical byte for all twelve absolute forms — `reftype`'s abbreviation arms *are* `heaptype`'s
+// singletons — and diverge on `null` and on the index form, where `reftype` prefixes `-0x1d`/`-0x1c`
+// before recursing (encode.ml:137-151). So a reader that used `reftype` here would be right on every
+// module whose heap type is absolute and wrong on the first `(ref.null $t)`, which is the shape that
+// gets found late.
 //
-// It also governs the *diagnostic*: the refusal renders through `heapString`, not `String`, because
-// a heap type quoted in reftype spelling claims a nullability the source never wrote. That is grave
+// It also governs the *diagnostic*: a refusal renders through `heapString`, not `String`, because a
+// heap type quoted in reftype spelling claims a nullability the source never wrote. That is grave
 // #36's invented-evidence class in the half of a message no expected string reads, and it is the
 // reason `heapString` exists as a second method rather than a flag on the first.
 //
-// The resolution is at the cursor rather than deferred, and the asymmetry with `defineGlobal` is the
-// space's rather than a choice: a type index heaptype is *refused* either way, so there is nothing a
-// deferral could buy — unlike a globaltype's valtype, which may forward-reference and must resolve
-// in stage 2 to render its index at all.
+// # The symbolic index defers, and that is the type space's own design rather than a widening
+//
+// The paragraph here used to say resolution is "at the cursor rather than deferred", on the ground
+// that "a type index heaptype is *refused* either way, so there is nothing a deferral could buy".
+// The premise expired when `heapTypeBytes` grew the index form, and the conclusion has to go with it:
+// with the form encodable, resolving `$t` at the cursor rejects
+// `(module (func (drop (ref.null $t))) (type $t (func)))` — a **valid** module, measured as rejected
+// with `unknown type $t` before this change.
+//
+// It is grave #130's class, and this is the one category where the deferral is not an extension of
+// scope but the documented design: the type space *permits forward references by construction*
+// (mutually recursive types), which is why `heaptype` returns its token unresolved at all and why
+// `typetable.go`'s whole deferred phase exists. Resolving here would be the defect that file's header
+// warns about. The corpus does not distinguish the two — a sweep of all 254 `.wast` files finds
+// **zero** `ref.null $t` preceding its `(type $t …)`, so this is accept-direction and invisible
+// (§9 G-3), and `TestRefNullHeaptypeResolvesInBothFieldOrders` is a derived vector saying so.
+//
+// A **numeric** index needs no deferral — `resolveTypeIdx` returns it unchanged, the reference's `idx`
+// NAT arm being `nat32 $1` with no lookup — so it takes the cursor path with the absolute forms, and
+// the split is by *arm* rather than by category.
 func (p *parser) heaptypeRetained(mnemonic Token) error {
 	tok := p.c.peek()
 	h, err := p.heaptype()
@@ -402,19 +440,52 @@ func (p *parser) heaptypeRetained(mnemonic Token) error {
 	if !p.retaining() {
 		return nil
 	}
+	if h.abs == "" && h.tok.Kind == VarTok {
+		// The forward-referencing arm. `retainIdxIn`'s `catFunc` shape, copied rather than
+		// re-derived — including both of its guards, which are structural here rather than
+		// reachable: `ref.null` has exactly one immediate, so neither a second patch nor a
+		// preceding immediate can exist. They are asserted anyway, because the invariant a patch
+		// *replaces* the immediates is the thing `resolveFuncs` relies on, and a shape that grew a
+		// second immediate would otherwise silently drop it.
+		if p.immPatch != nil || len(p.imm) != 0 {
+			return errf(tok, "cannot yet encode a deferred heap type beside another immediate (#8)")
+		}
+		p.immPatch = func() ([]byte, error) {
+			return p.heaptypeBytesOf(mnemonic, h, tok)
+		}
+		return nil
+	}
+	b, err := p.heaptypeBytesOf(mnemonic, h, tok)
+	if err != nil {
+		return err
+	}
+	p.appendImm(b)
+	return nil
+}
+
+// heaptypeBytesOf resolves and encodes one heap type, at whichever stage its caller runs in.
+//
+// One function for both timings, so the *encoding* cannot differ between the deferred arm and the
+// cursor arm — two copies of a resolve-then-encode pair is the two-places-know-one-fact shape, and
+// here the fact is which bytes a heap type is.
+func (p *parser) heaptypeBytesOf(mnemonic Token, h heapRef, tok Token) ([]byte, error) {
 	rv, err := p.ctx.resolveVal(valType{heap: h})
 	if err != nil {
 		// A type index naming nothing: the module is ill-formed and the resolver's message says so
 		// with the token, so it is returned rather than converted into a frontier report.
-		return err
+		return nil, err
 	}
-	b, ok := heapTypeByte(rv)
+	b, ok := heapTypeBytes(rv)
 	if !ok {
-		return p.refuseUnencodable(tok, "the heap type "+rv.heapString()+" as "+mnemonic.Text+
-			"'s immediate")
+		// A thirteenth heap type, added to `absoluteHeaptypes` without a byte — see
+		// `heapTypeBytes`. Reported as a frontier rather than panicked, because the honest verdict
+		// for a form this encoder has no byte for is a declined module, and
+		// `TestEveryAbsoluteHeaptypeHasAByte` is what keeps this arm from being how the omission is
+		// discovered.
+		return nil, errf(tok, "cannot yet encode the heap type %s as %s's immediate (#8)",
+			rv.heapString(), mnemonic.Text)
 	}
-	p.appendImm([]byte{b})
-	return nil
+	return b, nil
 }
 
 // idxRetained parses one index immediate and retains it, resolving in the category the mnemonic's
@@ -1018,21 +1089,28 @@ func (p *parser) selectResultBytes(results []valType, tok Token) ([]byte, error)
 	return w.b, nil
 }
 
-// blockTypeIdxBytes encodes a blocktype's type-index form: an **s33**, not a u32.
+// typeuseIdxBytes encodes a `typeuse s33` (encode.ml:108 with :68): an **s33**, not a u32.
 //
-// `blocktype` is `typeuse s33 (Idx x.it)` (encode.ml:229-230), and `s33 i = s64 (extend_i32_s i)`
-// (:68) — so the index is sign-extended from 32 bits and written as a *signed* LEB. That is not a
-// stylistic difference from `encodeLocalIdx`: the two encodings agree for indices below 64 and
-// diverge at 64, where a u32 writes one byte (`0x40`) and an s33 writes two (`0xc0 0x00`). And
-// `0x40` is precisely the empty-blocktype marker, so a u32 here would encode `(block (type 64) …)`
-// as a block with no signature at all — a well-formed module denoting something else, on a module
-// with 64 types, which no vector in the corpus reaches.
+// `s33 i = s64 (extend_i32_s i)` (:68) and `typeuse idx = function Idx x -> idx x` (:108) — so the
+// index is sign-extended from 32 bits and written as a *signed* LEB. That is not a stylistic
+// difference from `encodeLocalIdx`: the two encodings agree for indices below 64 and diverge at 64,
+// where a u32 writes one byte (`0x40`) and an s33 writes two (`0xc0 0x00`).
+//
+// **Two productions use it and the blocktype one is where the divergence bites**, which is why the
+// lesson stays written here rather than moving with the name. `blocktype` is
+// `typeuse s33 (Idx x.it)` (:229-230), and `0x40` is precisely the empty-blocktype marker — so a u32
+// there would encode `(block (type 64) …)` as a block with no signature at all: a well-formed module
+// denoting something else, on a module with 64 types, which no vector in the corpus reaches.
+// `heaptype`'s `UseHT ut -> typeuse s33 ut` (:133) is the second caller, and it is the *same*
+// production rather than a same-shaped one — a second copy of this three-line function would be
+// grave #105's re-derivation, where a sibling next door is a place to read and not a place to
+// invent. It was named `typeuseIdxBytes` while it had one caller; the rename came with the second.
 //
 // The sign extension is `int64(int32(idx))`, which is a no-op for every index the format admits
 // (an index is a u32 and only its low 31 bits can be a legal one) and is written the reference's
 // way regardless: the alternative is a cast that is *incidentally* right, which is the kind of
 // agreement that stops being true when the input changes.
-func blockTypeIdxBytes(idx uint32) []byte {
+func typeuseIdxBytes(idx uint32) []byte {
 	var w writer
 	w.s64(int64(int32(idx)))
 	return w.b
@@ -1073,7 +1151,7 @@ func (p *parser) blockTypeBytes(slot *blockTypeSlot, ft funcType, tok Token) fun
 			return nil, errf(tok, "internal: blocktype read before stage 2 resolved it")
 		}
 		if slot.interned {
-			return blockTypeIdxBytes(slot.idx), nil
+			return typeuseIdxBytes(slot.idx), nil
 		}
 		// `ValBlockType None` — the `([], [])` arm.
 		if len(ft.results) == 0 {

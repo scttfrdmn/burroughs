@@ -21,6 +21,39 @@ weakly-ordered platform.
 
 ### Added
 
+- **The text encoder writes `ref.null`'s heap type — the whole `heaptype` production, all thirteen
+  forms** ([#8](https://github.com/scttfrdmn/burroughs/issues/8)). It previously answered `func` and
+  `extern`, the two Wasm 2.0 forms, which made `ref.null` the one entry in `encodableShapes` that was
+  only partly encodable. The twelve absolute forms are now a byte table machine-checked against
+  `encode.ml`'s own arms, and the thirteenth — a **type index** — is a `typeuse s33` rather than a
+  byte, the same production the blocktype writer uses and the reason `blockTypeIdxBytes` is now
+  `typeuseIdxBytes` with two callers instead of a second copy of itself.
+
+  **A heaptype is not a reftype, and the two agree on twelve of thirteen forms**, which is what makes
+  calling the wrong one undetectable on a corpus: `reftype`'s abbreviation arms *are* `heaptype`'s
+  singletons, so `funcref` and `func` are both `0x70`, and they diverge only on `null` and on the
+  bare index. `ref.null`'s immediate has no nullability of its own — the instruction is the null — so
+  it gets its own writer and its own diagnostic spelling.
+
+  Ten of the twelve forms are GC's, so the decoder declines them with a *feature-named* error while
+  the gate is off: the module is written and then honestly gated, rather than refused one layer up
+  where that would spoof the decoder's configuration.
+
+  **This converts no vectors, and the board says so — 1699 fail before and after.** The 609-vector
+  bucket this was taken for was *shadowing*: `ref.null` is the first refusal a GC vector meets, so
+  all 609 re-bucketed one layer up into the reftype frontier (+446) and the cast-immediate frontier
+  (+163) rather than passing. The arm is right and required, and the estimate was an upper bound on
+  a chain rather than a count of reachable work.
+
+- **A symbolic type index in `ref.null` resolves in the deferred phase, so field order no longer
+  matters** ([#8](https://github.com/scttfrdmn/burroughs/issues/8)).
+  `(module (func (drop (ref.null $t))) (type $t (func)))` is a valid module that the encoder
+  rejected with `unknown type $t` — measured, not hypothesized. The type space permits forward
+  references by construction, which is why `heaptype` returns its token unresolved at all. No corpus
+  vector distinguishes the two orders (a sweep of all 254 `.wast` files finds zero uses preceding
+  their declaration), so this is an accept-direction defect the suite scores green by construction
+  and it lands with a *derived* vector asserting both orders produce the identical image.
+
 - **The text encoder emits `table.init` and `memory.init`, and the interpreter executes them with
   `elem.drop` and `data.drop` — `fc 0c`, `fc 08`, `fc 0d`, `fc 09`**
   ([#8](https://github.com/scttfrdmn/burroughs/issues/8),

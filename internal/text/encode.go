@@ -986,16 +986,53 @@ func valTypeByte(v resolvedVal) (byte, bool) {
 	}
 }
 
-// heapTypeByte is the encoding of one resolved heap type, and its encodability predicate — the
+// absoluteHeaptypeBytes is `heaptype`'s twelve keyword arms as the bytes encode.ml writes
+// (:121-132), keyed by the kind `heaptype` returns.
+//
+// **A table here rather than in `internal/binary`, because `binary.ValType` deliberately cannot hold
+// ten of these** — `module.go`'s comment says so and the sentinel `NoValType` is what it writes
+// instead, so there is no constant to reference and a `switch` would be twelve arms hand-copied from
+// the same place this map is. `FuncRef`/`ExternRef` are referenced rather than re-spelled precisely
+// because they *do* exist over there, which keeps the two arms the corpus reaches honest against the
+// decoder's own names.
+//
+// The bytes are the s7 encodings of the reference's negative forms: `s7 i` writes `i land 0x7f` for
+// `-64 <= i < 64` (:59-61), so `-0x12` is `0x6e`. Written as the *byte* rather than as a signed value
+// plus a conversion, for `ValType`'s stated reason — the encoding is the identity, and a second
+// representation with a conversion between them is a second place to disagree.
+//
+// **Machine-checked against the authority**, by `TestAbsoluteHeaptypeBytesAgreeWithEncodeML`: a wrong
+// byte here writes a *well-formed* module denoting a different type, which every `assert_malformed`
+// in the corpus scores green by construction (§9 G-3), and the twelve differ from each other by one
+// nibble. Hand-trusting a twelve-row table of adjacent bytes is the accept-direction hazard in its
+// cheapest form — `authority-for-accept-direction-facts`, and `externKindByte`'s tripwire is the
+// shape copied rather than re-derived.
+var absoluteHeaptypeBytes = map[keywordKind]byte{
+	kwAny:      0x6e,                   // -0x12
+	kwEq:       0x6d,                   // -0x13
+	kwI31:      0x6c,                   // -0x14
+	kwStruct:   0x6b,                   // -0x15
+	kwArray:    0x6a,                   // -0x16
+	kwNone:     0x71,                   // -0x0f
+	kwFunc:     byte(binary.FuncRef),   // -0x10
+	kwNofunc:   0x73,                   // -0x0d
+	kwExn:      0x69,                   // -0x17
+	kwNoexn:    0x74,                   // -0x0c
+	kwExtern:   byte(binary.ExternRef), // -0x11
+	kwNoextern: 0x72,                   // -0x0e
+}
+
+// heapTypeBytes is the encoding of one resolved heap type, and its encodability predicate — the
 // `heaptype` half of what `valTypeByte` does for `reftype` (#8).
 //
-// **A heaptype is not a reftype, and the two are one byte at the same offset**, which is the
-// `elemKind`-versus-`valType` distinction one production lower down. `reftype`'s twelve abbreviation
-// arms *are* `s7` singletons (encode.ml:139-150) and its general arms prefix `-0x1d`/`-0x1c` before
-// recursing into `heaptype` (:150-151) — so `funcref` as a reftype is 0x70 and `func` as a heaptype is
-// also 0x70, while `(ref null func)` as a *reftype* is 0x70 and its heap type is the same byte read at
-// a different level. Two encodings agreeing on two values is what makes calling the wrong one
-// undetectable on the corpus: they diverge only on `null`, which a heaptype has no field for.
+// **A heaptype is not a reftype, and the two agree byte for byte on twelve of thirteen forms**, which
+// is the `elemKind`-versus-`valType` distinction one production lower down and is *worse* than a
+// partial overlap. `reftype`'s twelve abbreviation arms are the same `s7` singletons this writes
+// (encode.ml:137-148) and its general arms prefix `-0x1d`/`-0x1c` before recursing into `heaptype`
+// (:150-151) — so `funcref` as a reftype is 0x70 and `func` as a heaptype is also 0x70. The two
+// productions diverge on exactly two things: `null`, which a heaptype has no field for, and the
+// *index* form, which `reftype` reaches only through a prefix and this writes bare. Two encodings
+// agreeing on nearly everything is what makes calling the wrong one undetectable on a corpus.
 //
 // So the argument for a separate function is not the byte table, it is the **question**. `ref.null`'s
 // immediate is a bare heaptype (`op 0xd0; heaptype t`, :414) with no nullability of its own — the
@@ -1004,24 +1041,41 @@ func valTypeByte(v resolvedVal) (byte, bool) {
 // one resolver, and `null` is whatever `heaptype`'s caller left there; this reads `abs`/`isIdx` and
 // deliberately ignores it.
 //
-// **Ungated domain is `func` and `extern`, the same two `valTypeByte` writes**, and for the same
-// reason: the other ten are GC's, which `decodeRefType` declines with the gate off, and the `isIdx`
-// form needs `typeuse s33`. Frontier by construction rather than by enumeration.
-func heapTypeByte(v resolvedVal) (byte, bool) {
-	if v.num != "" || v.isIdx {
-		return 0, false
+// # Bytes rather than a byte, and the frontier that closed
+//
+// **The index form is a `typeuse s33`, not a byte** (`UseHT ut -> typeuse s33 ut`, :133), so the
+// return type is a slice — and that is what retired this function's old shape. It used to answer
+// `(byte, bool)` with `func` and `extern` as the whole domain, which made `immHeaptype` the one entry
+// in `encodableShapes` that was only *partly* encodable; the domain is now the entire production, and
+// that map's comment records the change.
+//
+// The `bool` stays, and its one reachable cause is a **thirteenth heap type**: a kind added to
+// `absoluteHeaptypes` (types.go) without a byte here. That is declared-and-tracked rather than
+// unreachable-and-silent, and `TestEveryAbsoluteHeaptypeHasAByte` is what makes the omission a red
+// board instead of a refused module — derived from the parser's own list, never from a second
+// enumeration.
+//
+// **What the encoder writes is not what the default board accepts, and that is the layering working.**
+// Ten of the twelve forms and every index form are GC's, so `decodeHeapType` declines them with a
+// feature-named error while the gate is off (`sections.go`) — the module is *written* and then
+// honestly *gated*, which is the ruling in "gates never manufacture malformedness" seen from the
+// producing side. An encoder that refused them instead would be spoofing the decoder's configuration
+// one layer up, and would leave the all-gates-on lane with nothing to answer on the merits.
+func heapTypeBytes(v resolvedVal) ([]byte, bool) {
+	if v.num != "" {
+		// Unreachable from `heaptype`, which has no numtype arm, and answered rather than
+		// panicked: `resolvedVal` is one type serving both productions, so this is the field that
+		// says "you asked the reftype question here".
+		return nil, false
 	}
-	switch v.abs {
-	case kwFunc:
-		return byte(binary.FuncRef), true
-	case kwExtern:
-		return byte(binary.ExternRef), true
-	default:
-		// `valTypeByte`'s fallback, for its stated reason — the two arms above are the whole
-		// ungated set, so one answer is right for everything else and ten identical arms would go
-		// stale at the eleventh.
-		return 0, false
+	if v.isIdx {
+		return typeuseIdxBytes(v.idx), true
 	}
+	b, ok := absoluteHeaptypeBytes[v.abs]
+	if !ok {
+		return nil, false
+	}
+	return []byte{b}, true
 }
 
 // valType writes one resolved value type.
