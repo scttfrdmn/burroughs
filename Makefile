@@ -5,7 +5,7 @@ GO ?= go
 # anything globally.
 TOOL = $(GO) tool -modfile=tools/go.mod
 
-.PHONY: all build test vet fmt lint check vuln deadcode fuzz bench spec-tests spec-ref tidy conformance strict opcodes opcode-drift keywords keyword-drift opcodes-text opcodes-text-drift memarg memarg-drift gate-census xcorpus
+.PHONY: all build test vet fmt lint check vuln deadcode fuzz bench ratio spec-tests spec-ref tidy conformance strict opcodes opcode-drift keywords keyword-drift opcodes-text opcodes-text-drift memarg memarg-drift gate-census xcorpus
 
 # The default gate. `check` is what must be green before a report — it is the
 # local mirror of CI, so a surprise in CI means a bug in this line, not a bug in
@@ -134,6 +134,18 @@ bench:
 	@echo
 	@echo "baseline comparison: $(TOOL) benchstat old.txt new.txt"
 	@$(TOOL) benchstat new.txt
+
+# The engine/instrument ratio every PR's Board line quotes (#117). RATIO defaults to
+# the trailing window; pass a rev or a range for one PR:
+#   make ratio RATIO=HEAD              make ratio RATIO="--window 6 <rev>"
+#
+# **Not part of `check`, deliberately.** #117 measured this figure and ruled it a quoted
+# context number rather than a bound — it is dominated by PR size, so any threshold on it
+# is a threshold on diff length. A target makes the command reachable; a `check`
+# dependency would make it a gate, which is the thing the ruling declined.
+RATIO ?= --window 6
+ratio:
+	@./scripts/ratio.sh $(RATIO)
 
 # The engine module only. Deliberately NOT tools/go.mod: a tool modfile has no
 # packages of its own, so tidy pulls in the tools' transitive test dependencies

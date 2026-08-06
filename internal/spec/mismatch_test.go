@@ -90,10 +90,26 @@ func TestValueMismatchBucketIsEmptyAndSaysWhoWroteAnyRow(t *testing.T) {
 	//
 	// The vacuity check below used to fire on an empty bucket and instruct its reader to retire this
 	// file — an instruction written when a drained bucket could only mean the census had lost its
-	// subject. The bucket drained (308 → 0 on the default lane, 609 → 0 with every gate on) and the
+	// subject. It is preserved verbatim here rather than deleted, because an overridden instruction
+	// that leaves no trace is the stale-claim defect run backwards: the next reader would find a file
+	// asserting the opposite of what its history says and no record of the ruling in between.
+	//
+	//	no value mismatches on the board: this test's subject does not exist, which is a
+	//	finding about the instrument and not about the engine — if the bucket really drained,
+	//	retire this file and say so in the PR rather than leaving a green that asserts nothing
+	//
+	// The bucket drained (308 → 0 on the default lane, 609 → 0 with every gate on) and the
 	// instruction is **not** followed, because *a tripwire whose subject dissolves is re-pointed,
 	// never closed*: the risk this file names is "the engine returns a wrong value on a module that
 	// ran", and that risk did not go anywhere. Only its current population did.
+	//
+	// **A file's local instruction does not outrank the project's law of record**, and that
+	// precedence is the ruling rather than this author's reading (Scott, on the PR that drained the
+	// bucket). The self-retirement order was authored before the tripwire law existed, or without
+	// consulting it; a file obeys the project, not itself. What makes the override safe rather than
+	// presumptuous is that the inverted assertion was **watched die** — see the paragraph below on
+	// the `k+1` mutation — so what replaced the instruction is a live control and not a green with
+	// better manners, which is precisely what the instruction existed to prevent.
 	//
 	// So the direction inverts. An empty bucket is now the **expected** state and a *non*-empty one
 	// is the finding — which is strictly the stronger claim, since every row that appears from here
