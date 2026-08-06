@@ -1,0 +1,193 @@
+package interp
+
+import (
+	"github.com/scttfrdmn/burroughs/internal/binary"
+)
+
+// The bulk memory and table operations: `fc 0a` memory.copy, `fc 0b` memory.fill, `fc 0e`
+// table.copy.
+//
+// # One shape, three instances, and the shape is the reference's
+//
+// All three read `Num n :: Num s :: Num d` (or `n :: k :: i` for fill) off the stack, check
+// bounds on every region they will touch, exit on a zero length, and then move bytes or refs.
+// `eval.ml:549` (MemoryFill), `:567` (MemoryCopy), `:395` (TableCopy) are that sequence three
+// times, and the *order* of the first two steps is load-bearing — see `outOfBounds`.
+//
+// The reference expresses the move as a self-recursive rewrite: it emits a one-element
+// load/store plus a re-entry with `n-1`, so a fill of 64 KiB is 65536 administrative steps. That
+// is an interpreter written for clarity in a language with cheap tail calls, and reproducing it
+// here would be transcription over translation — §1's workload is a Go guest running for hours,
+// and a `memory.fill` that costs a stack frame per byte is the one place in this family where
+// the difference is measurable. Go's `copy` and the `for`-range fill compute the same function,
+// which is what makes the divergence a translation rather than a liberty.
+//
+// # Go's `copy` handles overlap, so the reference's two directions collapse to one call
+//
+// `MemoryCopy` branches on `I64.le_u d s`: copy forward from the low end when the destination is
+// at or below the source, backward from the high end when it is above. That branch exists
+// because a byte-at-a-time forward copy with `d > s` overwrites source bytes before reading
+// them. Go's builtin says "the source and destination may overlap" — a `memmove`, not a
+// `memcpy` — so a single `copy` is correct in both directions and the branch is *absent by
+// construction* rather than forgotten.
+//
+// It is asserted anyway. `memory_copy.wast:263` copies 10←12 and `:305` copies 12←10, both with
+// read-backs, so the suite covers both directions; the reason the arm below has no `d > s` case
+// is a property of `copy`, and a property nothing exercises is a claim. See
+// TestBulkCopyHandlesOverlapInBothDirections.
+//
+// # No zero-length fast path
+//
+// Deliberately, and stated here because it is the arm's least obvious line: see `outOfBounds`.
+
+// execMemoryFill is `fc 0b` — `memory.fill x`, `eval.ml:549`.
+//
+// The value operand is an i32 whose low byte is stored (`Pack8` in the reference's Store), so
+// `memory.fill` with 0x1234 writes 0x34. That truncation is the operand's semantics, not the
+// engine's convenience, and the suite states it in a comment of its own: `bulk.wast:34` is
+// ";; Fill value is stored as a byte", filling with `0xbbaa` and reading back `0xaa` twice
+// (`:35`-`:37`). Without the narrowing a Go `byte()` conversion is the only thing standing
+// between `0xbbaa` and a panic-free wrong answer, which is why the row exists.
+func (in *Instance) execMemoryFill(ins binary.Instr, st *stack) error {
+	mem, err := in.memoryFor("instruction", ins.Imm0)
+	if err != nil {
+		return err
+	}
+	if err := st.needNum(3); err != nil {
+		return err
+	}
+	// `Num n :: Num k :: Num i :: vs'` — the topmost operand is the length, so it pops first.
+	n := mem.addr(st.popNum())
+	k := byte(st.popNum())
+	i := mem.addr(st.popNum())
+
+	if outOfBounds(i, n, uint64(len(mem.bytes))) {
+		return trapOOB
+	}
+	if n == 0 {
+		return nil
+	}
+	// `clear`-then-set would be two passes; the range form is one and is what the compiler
+	// recognizes as a memset.
+	dst := mem.bytes[i : i+n]
+	for j := range dst {
+		dst[j] = k
+	}
+	return nil
+}
+
+// execMemoryCopy is `fc 0a` — `memory.copy x y`, `eval.ml:567`.
+//
+// **Two memories, two indices, and `x` is the destination.** `decode.ml:671` is
+// `let x = at idx s in let y = at idx s in memory_copy x y`, so the first immediate on the wire
+// is the destination — printed rather than inferred: `(table.copy 1 0)` encodes as `fc 0e 01 00`
+// with `Imm0=1`, and the memory form stages identically. Reversing them is invisible in v0,
+// where the multi-memory gate is off and both indices are 0 on every vector the suite has, which
+// is exactly why the order is cited to the decoder rather than to a passing board.
+func (in *Instance) execMemoryCopy(ins binary.Instr, st *stack) error {
+	dstMem, err := in.memoryFor("instruction", ins.Imm0)
+	if err != nil {
+		return err
+	}
+	srcMem, err := in.memoryFor("instruction", ins.Imm1)
+	if err != nil {
+		return err
+	}
+	if err := st.needNum(3); err != nil {
+		return err
+	}
+	// `Num n :: Num s :: Num d :: vs'`. The length's width is `min at1 at2` per
+	// `valid.ml:704`; narrowing it by the destination's is the same value whenever the two
+	// agree, which is every module v0 admits, and the memory64 gate is where that stops being
+	// true.
+	n := dstMem.addr(st.popNum())
+	s := srcMem.addr(st.popNum())
+	d := dstMem.addr(st.popNum())
+
+	// **Both regions are checked before either is touched**, and both traps are the same
+	// string, so the only observable difference is that a failed copy leaves memory untouched —
+	// which `memory_copy.wast:350` asserts by trapping a 40-byte copy at 65516 and then reading
+	// the destination back across `:353`-onward. (A first draft cited `:428`, which is an
+	// unrelated read-back inside the generated 8 KiB block; the line was checked and replaced.)
+	if outOfBounds(d, n, uint64(len(dstMem.bytes))) ||
+		outOfBounds(s, n, uint64(len(srcMem.bytes))) {
+		return trapOOB
+	}
+	if n == 0 {
+		return nil
+	}
+	copy(dstMem.bytes[d:d+n], srcMem.bytes[s:s+n])
+	return nil
+}
+
+// execTableCopy is `fc 0e` — `table.copy x y`, `eval.ml:395`.
+//
+// The same arm over `[]ref` instead of `[]byte`, with two differences that are not cosmetic:
+// the trap string is the table one (`out of bounds table access`, a distinct message the harness
+// matches verbatim), and the bound is `Table.size` in *elements* where memory's is `bound` in
+// bytes.
+//
+// The element-type compatibility check is `valid.ml:635`'s and belongs to validation (#9), not
+// here: a `table.copy` between mismatched reftypes is an *invalid module*, so admitting it in v0
+// is the standing layering debt rather than a semantic choice made in this arm.
+func (in *Instance) execTableCopy(ins binary.Instr, st *stack) error {
+	dstTab, err := in.tableFor("instruction", ins.Imm0)
+	if err != nil {
+		return err
+	}
+	srcTab, err := in.tableFor("instruction", ins.Imm1)
+	if err != nil {
+		return err
+	}
+	if err := st.needNum(3); err != nil {
+		return err
+	}
+	n := tableAddr(dstTab, st.popNum())
+	s := tableAddr(srcTab, st.popNum())
+	d := tableAddr(dstTab, st.popNum())
+
+	if outOfBounds(d, n, dstTab.size()) || outOfBounds(s, n, srcTab.size()) {
+		return trapOOBTable
+	}
+	if n == 0 {
+		return nil
+	}
+	copy(dstTab.slots[d:d+n], srcTab.slots[s:s+n])
+	return nil
+}
+
+// tableAddr narrows a popped slot to the table's index width — `memory.addr`'s twin, and
+// `table.ml:45`'s `addr_of_num`: zero-extension for an i32-indexed table, the slot itself for an
+// i64-indexed one.
+//
+// **The i32 arm is provably unobservable today, and this is the declared-and-tracked form of
+// that** rather than a claim that it does work. Every producer of an i32 slot in this engine goes
+// through `pushI32`, which is `uint64(uint32(v))` — the zero-extension is already done, and
+// `value.go:167` says so as the function's whole purpose. So `uint64(uint32(slot))` here is the
+// identity on every input the interpreter can present, and replacing it with `return slot`, or
+// with a *sign*-extension, changes no answer.
+//
+// That was measured rather than assumed, and measuring it is what caught a stillborn control: a
+// test previously named here — it asserted a trap on `I32(-1)` table indices — was written first
+// and **passed with this narrowing deleted**, and passed again with `outOfBounds`'s wrap arm
+// deleted at the same time. It is described rather than cited because it no longer exists, and a
+// citation to a deleted test is the class TestEveryCitedTestNameResolves catches (#116). Calling the arm directly with a raw `0xffffffffffffffff` slot panics as expected;
+// through the real front end the value never arrives, because `i32.const -1` stages `Imm0` as
+// `0xffffffffffffffff` and `exec.go:457` pushes it through `pushI32`, which narrows it. The test
+// is gone; this paragraph is what replaced it.
+//
+// It is kept, for two reasons that are not "defensiveness". First, `memory.addr` one file over is
+// the same identity for the same reason and is equally load-bearing the moment memory64 lands:
+// the arm exists so the *width* decision has a home, and deleting it would leave the i64 case
+// with nowhere to be written. Second, the invariant it leans on belongs to `pushI32`, and an arm
+// that silently depends on another function's zero-extension is the two-places-know-one-fact
+// shape (#78/#105/#106) — stating the dependence here is the cheap half of not having it.
+//
+// A free function rather than a method because `call.go:226` open-codes the same two lines for
+// `call_indirect`. Retrofitting that call site is a follow-up, not this arm's business.
+func tableAddr(t *table, slot uint64) uint64 {
+	if t.limits.Addr64 {
+		return slot
+	}
+	return uint64(uint32(slot))
+}

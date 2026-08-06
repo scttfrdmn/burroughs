@@ -11,7 +11,15 @@ import (
 	"testing"
 )
 
-// The `assert_return value mismatch` bucket, partitioned by cause and pinned as a claim.
+// The `assert_return value mismatch` bucket: **asserted empty**, and partitioned by cause when it
+// is not.
+//
+// It was named TestEveryValueMismatchIsDownstreamOfAFailedSetup while the bucket had 280 rows and
+// the claim was about their authorship. The bucket is now at zero, so the assertion is the count and
+// the partition is the diagnosis that runs only if a row appears — see the inversion note in the
+// body for why the file was re-pointed rather than retired. The old name is recorded here because a
+// test renamed silently makes every citation to it unresolvable, and the history is the point of
+// keeping the rest of this comment intact below.
 //
 // # Why this bucket needs an instrument and not an argument
 //
@@ -73,18 +81,53 @@ import (
 // failures, so it returned `downstream` for everything — reproducing the expected answer while
 // being structurally incapable of any other. Exactly zero disagreement on an agreement is the
 // tell, and the repair is scope: per-module span, which can dissent and is proven to below.
-func TestEveryValueMismatchIsDownstreamOfAFailedSetup(t *testing.T) {
+func TestValueMismatchBucketIsEmptyAndSaysWhoWroteAnyRow(t *testing.T) {
 	requireSuite(t)
 
 	rows, byFile := mismatchRows(t)
 
-	// The vacuity check, because a partition of nothing prints a tidy empty table and agrees with
-	// every hypothesis. An empty bucket would make the claim below vacuously true.
+	// **The bucket is at zero, and this is the re-pointing rather than the retirement.**
+	//
+	// The vacuity check below used to fire on an empty bucket and instruct its reader to retire this
+	// file — an instruction written when a drained bucket could only mean the census had lost its
+	// subject. The bucket drained (308 → 0 on the default lane, 609 → 0 with every gate on) and the
+	// instruction is **not** followed, because *a tripwire whose subject dissolves is re-pointed,
+	// never closed*: the risk this file names is "the engine returns a wrong value on a module that
+	// ran", and that risk did not go anywhere. Only its current population did.
+	//
+	// So the direction inverts. An empty bucket is now the **expected** state and a *non*-empty one
+	// is the finding — which is strictly the stronger claim, since every row that appears from here
+	// on has no missing arm to hide behind. The classifier below still runs when rows exist and
+	// still partitions them; TestMismatchClassifierCanDissent is what keeps it alive across the
+	// interval where it has nothing to classify, and that test was written for exactly this
+	// eventuality (it asserts on synthetic states "independent of whatever the corpus happens to
+	// contain this month").
+	//
+	// How it drained, measured on `(file, line)` keys: **284 of the 308 became passes** and 24
+	// stayed red under the linking frontier — the bulk trio's arms landing (`fc 0a`, `fc 0b`,
+	// `fc 0e`), which were three of the five causes this file's own table names as the work. That is
+	// a bucket answered rather than reclassified, and it is the outcome the census was built to
+	// point at.
+	//
+	// **The inverted direction was watched die, and the classifier dissented for the first time on
+	// real data.** Mutating `execMemoryFill` to write `k+1`: 239 rows appear, and the partition reads
+	// `0 downstream / 239 not downstream` — the arm below fires with "the engine ran a module's setup
+	// successfully and then returned a wrong value", which is the verdict this file exists to
+	// deliver and had never once delivered. Before the trio landed, that same mutation would have
+	// been masked in every module whose setup also failed, which is the blind spot named further
+	// down; it is no longer masked, because the setups now succeed. The census got sharper by the
+	// bucket draining, which is the argument against retiring it stated as a measurement.
 	if len(rows) == 0 {
-		t.Fatalf("no value mismatches on the board: this test's subject does not exist, which is a\n" +
-			"finding about the instrument and not about the engine — if the bucket really drained,\n" +
-			"retire this file and say so in the PR rather than leaving a green that asserts nothing")
+		t.Logf("value mismatches: 0 — the expected state; see the comment above for why this is a\n" +
+			"re-pointing and not a retirement, and TestMismatchClassifierCanDissent for what keeps\n" +
+			"the classifier falsifiable while its population is empty")
+		return
 	}
+	t.Errorf("%d value mismatches on the board, where the expected count is 0.\n"+
+		"The bucket drained at the bulk trio (308 → 0), so a row here no longer has a missing arm to\n"+
+		"hide behind: it is either a genuine wrong answer or a newly-admitted module whose setup\n"+
+		"fails for a cause not yet on the work plan. The partition below says which — read the\n"+
+		"`author of the wrong value` lines first.", len(rows))
 	t.Logf("value mismatches: %d across %d files", len(rows), len(byFile))
 	for _, k := range sortedByCount(byFile) {
 		t.Logf("  %5d  %s", byFile[k], k)

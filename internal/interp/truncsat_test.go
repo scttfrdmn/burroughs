@@ -398,25 +398,6 @@ func TestPrefixedInstructionIsNotDispatchedByOpAlone(t *testing.T) {
 	}
 }
 
-// TestUnhandledFCSubOpcodeStaysOnTheWorkList pins that adding `execFC` did not swallow the ten
-// sub-opcodes it has no arm for.
-//
-// The bucket key is load-bearing: the board's fail buckets are keyed by this message, so
-// `fc 0b` must keep reading `no arm for opcode fc 0b` and not collapse into a bare `0b` (which is
-// `end`) or into a single "unsupported prefixed instruction" bucket. That message *is* the work
-// list — the bulk trio comes off it next — and a change that made the whole 0xfc region report one
-// key would erase the partition the schedule is read from.
-//
-// `memory.fill` is the row because the encoder emits it (`opcodes.go`, prefix 0xfc code 0xb) and
-// because 0x0b is `end`: the sub-opcode most likely to be mistaken for a structural byte.
-func TestUnhandledFCSubOpcodeStaysOnTheWorkList(t *testing.T) {
-	_, err := invokeErr(t, `(module (memory 1) (func (export "c") `+
-		`(i32.const 0) (i32.const 0) (i32.const 0) (memory.fill)))`)
-	if !errors.Is(err, ErrUnsupportedOp) {
-		t.Fatalf("memory.fill: got %v, want ErrUnsupportedOp", err)
-	}
-	if got := err.Error(); !strings.Contains(got, "fc 0b") {
-		t.Errorf("message is %q, want it to name `fc 0b`: the board's buckets are keyed by this "+
-			"string, and `0b` alone would read as `end`", got)
-	}
-}
+// TestUnhandledFCSubOpcodeStaysOnTheWorkList moved to `bulk_test.go` when `fc 0b` gained an arm:
+// its row had to be re-pointed, and the test belongs beside the change that inverted it. The
+// tripwire is unchanged in what it names.

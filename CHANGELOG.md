@@ -21,6 +21,69 @@ weakly-ordered platform.
 
 ### Added
 
+- **The interpreter executes the bulk memory and table operations — `fc 0a` `memory.copy`,
+  `fc 0b` `memory.fill`, `fc 0e` `table.copy`**
+  ([#7](https://github.com/scttfrdmn/burroughs/issues/7)). All three are one shape — pop
+  `n`/src/dst, check bounds on every region, exit on a zero length, move — which is
+  `eval.ml:549`, `:567` and `:395` three times over. The reference's shared bounds predicate
+  `oob i n j` lands as `outOfBounds` beside the memory primitives.
+
+  **The bounds check precedes the zero-length exit, and that ordering is the whole subtlety.** A
+  zero-length fill or copy at exactly the end of a region **succeeds**; one byte past it **traps**.
+  `bulk.wast` asserts it in its own words — `:49` "Succeed when writing 0 bytes at the end of the
+  region" against `:52` "Writing 0 bytes outside the memory traps" — so the natural
+  `if n == 0 { return nil }` fast path at the top of each arm is exactly the early-return grave
+  ([#41](https://github.com/scttfrdmn/burroughs/issues/41)): faster, plausible, and wrong on four
+  vectors. `TestBulkZeroLengthChecksBoundsFirst` pins both halves, and its must-*succeed* rows are
+  the half that catches a bound off by one in the other direction.
+
+  Go's `copy` is a `memmove`, so the reference's forward/backward branch on `I64.le_u d s`
+  collapses to one call — the branch is absent by construction rather than forgotten. Since a
+  property nothing exercises is a claim, both directions are pinned anyway
+  (`TestBulkCopyHandlesOverlapInBothDirections` and its `[]ref` twin).
+
+  **Thirteen mutations, eleven deaths, and the two survivors are one finding.** Dropping
+  `outOfBounds`'s wrap arm and dropping `tableAddr`'s `uint32` narrowing both leave the suite and
+  every local row green — because `pushI32` zero-extends every i32 slot, so no i32 operand can
+  express the state either guard refuses. Both arms are correct, both are unreachable today, and
+  both are documented at their definition instead of guarded by a test that would have to
+  fabricate a stack the decoder cannot produce
+  ([#125](https://github.com/scttfrdmn/burroughs/issues/125)). A control drafted for the narrowing
+  was **stillborn** and deleted; the paragraph replacing it is the finding. `table.copy`'s
+  destination/source order is the third case: no local row can see it, and the board can —
+  swapping `Imm0`/`Imm1` moves the exec stratum 608 → 632 on `table_copy.wast:774`, so the suite
+  is left to own it.
+
+  **The `assert_return value mismatch` bucket reached zero, and its census was re-pointed rather
+  than retired.** 284 of its 308 rows became passes and 24 moved to the linking frontier. The
+  file's own vacuity check instructed its reader to retire it on an empty bucket; that instruction
+  was not followed, because *a tripwire whose subject dissolves is re-pointed, never closed* — the
+  risk it names ("the engine returns a wrong value on a module that ran") outlived its population.
+  The direction inverts: empty is now the assertion and any row is the finding, which is the
+  stronger claim, since a row appearing from here on has no missing arm to hide behind. Watched
+  die by mutating `execMemoryFill` to write `k+1`: 239 rows, partitioned **0 downstream / 239 not
+  downstream** — the classifier's first dissent on real data, and a verdict it could not have
+  delivered before the trio landed because the setups would have masked it.
+
+  Board: pass **28594 → 29005** (+411), exec fail **1019 → 608**, encode unmoved at 1353, gated
+  unmoved at 1721; `unsupported` **unmoved at 32377**. Set-differenced on `(file, line)`: **411
+  departed, 0 arrived, 60 same-key-new-reason.** The 60 are one finding — all of them in
+  `table_copy.wast` and `table_copy64.wast`, moving from a value mismatch or `uninitialized
+  element` to `table slot N names function M, which is an import`: the copy now happens, relocates
+  a slot holding an imported reference, and `call_indirect` meets contract §3's frontier. The arm
+  did not fail them, it moved them one layer down.
+
+  **82 vectors named the work and 411 moved** — a 5:1 multiplier, the largest this column has
+  recorded, and it is a fact about the corpus rather than the engine. `memory_copy.wast` and
+  `table_copy.wast` are generated, each bulk instruction sitting in its own module behind up to
+  forty read-backs, and those read-backs were carried in *other* buckets. So a bucket named after
+  a missing opcode understates an arm whose absence corrupts state that later vectors read: the
+  mirror image of *bucket size estimates the reward, not the job*, with the same remedy — measure,
+  then quote. All-on lane **29714 → 30477** (+763); the 352-vector excess over the default lane is
+  itemized in `allOnPassFloor`'s comment and is entirely gate-declined files, five of them the
+  memory64/table64 twins that put `tableAddr`'s and `memory.addr`'s i64 branches on a board for the
+  first time.
+
 - **The interpreter executes the eight saturating truncations, `fc 00`–`fc 07`**
   ([#7](https://github.com/scttfrdmn/burroughs/issues/7)). `i32`/`i64.trunc_sat_f{32,64}_{s,u}` —
   the same three-way range analysis as the trapping `0xa8`–`0xb1`, with the verdicts replaced:

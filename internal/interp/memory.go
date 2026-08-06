@@ -108,6 +108,26 @@ func effectiveAddress(idx, offset uint64) (uint64, error) {
 	return ea, nil
 }
 
+// outOfBounds is `eval.ml:159`'s `oob i n j` — `lt_u (add i n) i || gt_u (add i n) j` — the
+// bounds predicate the bulk operations share with each other and with `table.blit`.
+//
+// Two tests, and the first is not decoration: `i + n` can wrap when both are near 2^64, and
+// without the wrap check a wrapped end lands below `j` and admits exactly the access this
+// refuses. `read`/`write` express the same bound in the subtraction form (`i > j - n`) because
+// they have a `len` in hand and it cannot overflow there; here the reference's form is
+// transcribed directly, since these arms' `n` is an *operand* rather than an instruction width.
+//
+// **A zero-length run at exactly `j` is in bounds and one byte past it is not**, which is the
+// whole reason the bulk arms cannot open with an `if n == 0 { return nil }` fast path: the
+// reference tests `oob` *before* its `n = 0` exit (`eval.ml:549`, `:567`, `:395`), and
+// `bulk.wast` says so in its own words — `:49` "Succeed when writing 0 bytes at the end of the
+// region" against `:52` "Writing 0 bytes outside the memory traps". That is the early-return
+// grave's shape (#41): a fast path that skips the check it was placed in front of.
+func outOfBounds(i, n, j uint64) bool {
+	end := i + n
+	return end < i || end > j
+}
+
 // read returns n bytes at the effective address, or traps.
 //
 // The bound check is against the *end* of the access and is written so it cannot itself
