@@ -3109,7 +3109,14 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	// on, modules whose *only* remaining refusal was the global field or a `ref.null` immediate now
 	// decode, and this lane has the gated population the default lane declines before the encoder is
 	// ever reached.
-	const allOnPassFloor = 29516
+	// **`global.get`/`global.set` (#7): 29516 → 29534, +18, all of it exec→pass with zero arrivals.**
+	// Two more than the default lane's +16, and the two were **identified rather than attributed to
+	// the lane's usual reason**: `load2.wast:193` and `load64.wast:192`, both `global.set` vectors in
+	// modules the default lane declines at the gate — multi-memory and memory64 respectively, which
+	// are two of the 167 entries registered in TestGatedVectors' allowlist one PR ago. So the +2 is a
+	// gate opening, not a feature behaving differently under full features, and this lane's excess
+	// over the default one has a name for once instead of a category.
+	const allOnPassFloor = 29534
 	boardBound(t, "allOnPassFloor", totalPass, allOnPassFloor, boardBoundSlack, floorBound,
 		"a gated feature regressed, which the Gated==0 assertion above cannot see: with every "+
 			"gate on, a broken feature turns a pass into a fail and leaves Gated at zero")
@@ -4130,7 +4137,37 @@ func TestPhase1Files(t *testing.T) {
 	// **The `global.get`/`global.set` arrivals name the next interpreter work, and naming it is the
 	// point of measuring per-opcode**: 20 vectors are now blocked on two arms this PR deliberately
 	// did not write, in a column that used to be blocked on the encoder instead.
-	const execFailCeiling = 1215
+	//
+	// **`global.get`/`global.set` (#7): 1215 → 1199, −16, and the two buckets are gone rather than
+	// smaller** — `no arm for opcode 23` (15) and `opcode 24` (14) are both **absent** from the
+	// after-state, which is a bucket reaching zero and therefore this PR's measure of done.
+	//
+	// The −16 is smaller than the 29 those buckets held, and the 13-vector difference is the
+	// interesting half: those vectors are **still fails, at the same (file, line), for a different
+	// reason**. A key-difference cannot see that — it reports 16 departures and 0 arrivals and would
+	// let a reader conclude 29 − 16 = 13 vectors vanished from the board. So the surviving keys were
+	// joined on (file, line) and their causes compared pairwise, and the two buckets partition
+	// differently:
+	//
+	//	opcode 24 (14):  all 14 departed. `global.set`'s vectors had nothing behind them.
+	//	opcode 23 (15):   2 departed, **13 changed cause** — `global.get` is reached by modules
+	//	                  with further unimplemented ground beyond it:
+	//	                    9  ⇒ §3 linking, `global N is imported` (globals 0..6, one import chain)
+	//	                    3  ⇒ no arm for opcode 26 — `table_set`, read out of optable.go rather
+	//	                       than guessed from the byte's neighbourhood, a first draft of this
+	//	                       line having called it `local.set` on nothing but proximity
+	//	                    1  ⇒ no arm for opcode d1 — `ref_is_null`
+	//
+	// 16 departed + 13 changed cause = 29, which closes against the two buckets exactly. **The
+	// in-place cause change is the reading the key-difference is blind to**, and it is the mirror of
+	// #151's pure-arrival signature: there, arrivals with zero departures meant a frontier draining;
+	// here, departures with zero arrivals *plus* thirteen silent re-causings means an arm landed and
+	// the queue behind it was deeper than one bucket key showed. Quoting only the −16 would have
+	// implied 29 vectors' worth of progress for 16 vectors' worth.
+	//
+	// Nothing moved in the other strata: encode held at 1353 in both revisions, and arrivals were
+	// **zero** — so no vector regressed into the exec column to pay for the gain.
+	const execFailCeiling = 1199
 	boardBound(t, "execFailCeiling", execFail, execFailCeiling, 0, ceilingBound,
 		"the interpreter answered fewer vectors than it did: either an opcode arm regressed or "+
 			"a value comparison started disagreeing. A *rise* caused by #8 unblocking more "+
@@ -4413,7 +4450,20 @@ func TestPhase1Files(t *testing.T) {
 	// `block.wast`, +36 `load.wast`, and 18 over four more. `call_indirect.wast` gaining 106 in a PR
 	// about the global section is the same lesson #148 recorded from the other side: its remaining
 	// reds were never about `call_indirect`.
-	const passFloor = 28398
+	//
+	// **`global.get`/`global.set` (#7): 28398 → 28414, +16, and all sixteen are exec→pass.** The
+	// gain equals the exec column's fall exactly (1215 → 1199) with encode unmoved at 1353, so no
+	// vector paid for another: this is the arithmetic that distinguishes an arm landing from a
+	// reclassification. Set-differenced on `(file, line)` keys, arrivals were **zero**.
+	//
+	// The +16 lands thinly across eleven files — 3 `nop.wast`, 2 each in `stack.wast`, `select.wast`
+	// and `if.wast`, 1 each in seven more — which is the signature of an opcode used *incidentally*
+	// rather than of a feature file draining. `global.wast` itself gains none of the sixteen: it
+	// reaches 16/18 with its last two fails on the encoder's `(table …)` field, a different
+	// frontier, so the file named after the feature is not where the feature's arm paid off. See
+	// execFailCeiling for the other half of this account — 13 further vectors changed cause without
+	// changing verdict, which the pass column cannot show.
+	const passFloor = 28414
 	boardBound(t, "passFloor", totalPass, passFloor, boardBoundSlack, floorBound,
 		"a regression in a grammar that used to answer, or the corpus moved")
 }

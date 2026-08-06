@@ -26,13 +26,23 @@
 // reference type is executable, which is the *whole* point — it is cheap now and GC-precision
 // surgery later.
 //
-// v0 executes no reference-typed instruction, so `refs` is allocated and never pushed to. That is
-// declared rather than left to be discovered: an empty parallel array is exactly what "pinned before
-// its first consumer" looks like, and a reader finding it unused should read this paragraph rather
-// than delete it (#6's declared-and-tracked ruling; #7 tracks the growth).
+// **The array is live as of `global.get`, and this paragraph is kept in the past tense rather than
+// deleted.** It read: *"v0 executes no reference-typed instruction, so `refs` is allocated and never
+// pushed to … a reader finding it unused should read this paragraph rather than delete it (#6's
+// declared-and-tracked ruling; #7 tracks the growth)."* That was true for the whole interval it was
+// written for, and the record of a deferral that was honoured is worth more than a tidy file — the
+// pin was made before any consumer existed and it held, which is the claim the paragraph was making.
+//
+// What retired it is `global.get` of an externref (`global.wast:30`, `get-r`): the first slot this
+// engine pushes onto `refs` and pops back off. Note the shape, because it is the second time this
+// exact deferral was spent by an unpredicted consumer — `ref` the *type* was first constructed by
+// element-segment initialization, not by a reference opcode, and `refs` the *array* is first pushed
+// by a global, not by `ref.null`. A pin's retirement condition is a guess about which consumer
+// arrives first; the pin itself is not.
 package interp
 
 import (
+	"fmt"
 	"math"
 
 	"github.com/scttfrdmn/burroughs/internal/binary"
@@ -52,7 +62,12 @@ import (
 // segment's expressions without any of them ever reaching the stack. So the *type* found its
 // consumer one layer below the one named. That is the intended ending either way (#6's ruling, and
 // the `reader.u64` precedent at binary.go:678): a deferral retired by a production caller, never by
-// a suppression outliving its reason. `stack.refs` is still unpushed, which is #7's half.
+// a suppression outliving its reason.
+//
+// That last sentence read *"`stack.refs` is still unpushed, which is #7's half"* — true when written
+// and now spent too, by `global.get` of an externref. Both halves of the pin therefore retired to
+// production callers and neither retired to the consumer its comment predicted, which is the
+// paragraph in the package doc above.
 type ref struct {
 	// Null is whether this is a null reference. Separate from Addr being zero, because address
 	// zero is a legitimate function index and `ref.null func` is a *value*, not an absence.
@@ -82,11 +97,15 @@ type stack struct {
 	// business, which is what `math.Float64bits` and friends are for below.
 	num []uint64
 
-	// refs holds every reference slot. Empty throughout v0 — see the package comment for why it
-	// exists anyway, which is the reason not to delete it. Suppressed for `ref`'s reason and
-	// retired by the same event.
+	// refs holds every reference slot.
 	//
-	//nolint:unused // pinned by 0002 before its first consumer; retired by the first reference opcode (#7)
+	// **No longer empty, and the suppression is gone rather than kept.** It carried
+	// `//nolint:unused // pinned by 0002 before its first consumer; retired by the first
+	// reference opcode (#7)` — a claim about a design the code could not yet demonstrate — and
+	// `global.get` of an externref is that first consumer, so the directive is deleted rather
+	// than left to suppress nothing. That is the honest end for a suppression, and the same
+	// end `pc`'s `intrange` directive came to one file over: the prose keeps the reason, the
+	// directive does not outlive its subject.
 	refs []ref
 }
 
@@ -112,6 +131,37 @@ func (s *stack) popNum() uint64 {
 	v := s.num[len(s.num)-1]
 	s.num = s.num[:len(s.num)-1]
 	return v
+}
+
+// pushRef pushes a reference slot, and popRef pops one.
+//
+// The reference half of `pushNum`/`popNum`, deliberately written to the same contract: the pop
+// does **not** check depth, because underflow is `type mismatch` and that verdict is #9's (see
+// popNum, which states the reasoning this pair inherits rather than restating it). Callers that
+// cannot rely on a validator call needRef first, exactly as the numeric arms call needNum.
+//
+// These are the first writers to `refs` since 0002 pinned it — the event that field's comment
+// named as its retirement condition for the `unused` suppression.
+func (s *stack) pushRef(r ref) { s.refs = append(s.refs, r) }
+
+func (s *stack) popRef() ref {
+	r := s.refs[len(s.refs)-1]
+	s.refs = s.refs[:len(s.refs)-1]
+	return r
+}
+
+// needRef is needNum for the reference array.
+//
+// **A separate check, not a shared one taking a length**, because the two arrays are one logical
+// stack with *independent* depths (see the stack type): a single helper reading one array would
+// answer the other's question wrongly, and the invariant a validated module gives is per-array.
+// The message names references so that a shortfall is not read as a missing numeric operand.
+func (s *stack) needRef(n int) error {
+	if len(s.refs) < n {
+		return fmt.Errorf("%w: stack has %d references, an instruction wanted %d",
+			ErrNotValidated, len(s.refs), n)
+	}
+	return nil
 }
 
 // pushI32 pushes an i32, zero-extended into its slot.

@@ -374,6 +374,35 @@ func (in *Instance) runFrame(fn *binary.Func, locals []uint64, st *stack, result
 			// Peek, not pop-then-push: tee leaves the value on the stack.
 			locals[ins.Imm0] = st.num[len(st.num)-1]
 
+		// ---- globals -------------------------------------------------------------
+		//
+		// Imm0 is the global index, staged by immIdx — the same immediate shape as the
+		// locals above, and deliberately *not* the same resolution: a local index is
+		// bounded by the frame, a global index by the module's global index space, and
+		// `globalFor` is the one place that knows the second (global.go).
+		//
+		// Both arms dispatch numeric-versus-reference inside `global.get`/`set` rather
+		// than here, because which half of the stack a global uses is a property of the
+		// global's declared type, not of the opcode.
+
+		case 0x23: // global.get
+			g, err := in.globalFor("instruction", ins.Imm0)
+			if err != nil {
+				return err
+			}
+			g.get(st)
+
+		case 0x24: // global.set
+			g, err := in.globalFor("instruction", ins.Imm0)
+			if err != nil {
+				return err
+			}
+			// No immutability check: that is `global.set`'s validation verdict and #9's to
+			// issue. See globalFor for why the `mutable` field is recorded and unread.
+			if err := g.set(st); err != nil {
+				return err
+			}
+
 		// ---- constants -----------------------------------------------------------
 		//
 		// **Three arms push Imm0 unexamined; i32.const truncates, and the split is the

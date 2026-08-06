@@ -21,6 +21,38 @@ weakly-ordered platform.
 
 ### Added
 
+- **The interpreter executes `global.get` and `global.set`**
+  ([#7](https://github.com/scttfrdmn/burroughs/issues/7)). The 76 arrivals the previous entry
+  named, answered. A global's storage is **two slots and a declared type** — a `uint64` and a
+  `ref` — which is `stack`'s split for 0002's reason rather than a new decision: `global.get` of
+  an externref must push onto the reference array, and a `uint64` holding a reference is invisible
+  to the collector. Which slot is live is decided by the *declared type*, never by inspecting the
+  bits, because a null reference and the integer zero are the same eight bytes.
+
+  **Instantiation now fills globals before tables and memories**, and the order is load-bearing
+  rather than tidy. `eval.ml:1296`'s fold runs globals ahead of both, and `init_global` evaluates
+  each initializer against the **partially built** instance (`eval.ml:1206`), so `(global i32
+  (global.get 0))` reads a global initialized one step earlier and a table's segment offset can
+  read a global. An allocate-then-evaluate engine gets a different answer; probing the mutation
+  showed it reports *"global 0 was declared but not initialized"* rather than a silent zero, which
+  is the nil-slot convention turning a wrong value into a loud one.
+
+  Immutability is **not** checked here: `global is immutable` is an `assert_invalid` string, so
+  the verdict is [#9](https://github.com/scttfrdmn/burroughs/issues/9)'s and the `mutable` field
+  is recorded and unread. `TestImmutableGlobalIsNotRefusedHere` asserts the *absence* — a tripwire
+  that starts failing the day the validator lands, which is how it should be found.
+
+  This spends the last of 0002's reference-stack pin: `stack.refs` has its first writer, and both
+  halves of the pin retired to consumers their own comments did not predict — the `ref` *type* to
+  element-segment initialization, the `refs` *array* to a global rather than to `ref.null`.
+
+  Board: pass **28398 → 28414** (+16), exec fail **1215 → 1199**, encode unmoved at 1353, gated
+  unmoved at 1721; `unsupported` **unmoved at 32377**. Both buckets reach zero — `no arm for
+  opcode 23` (15) and `opcode 24` (14) are absent, not smaller. The 29 they held is not the 16
+  gained: **13 vectors changed cause without changing verdict**, hitting §3 linking (9),
+  `table_set` (3) and `ref_is_null` (1) behind the arm that landed. Set-differenced on `(file,
+  line)` keys, so departures are 16 and arrivals **zero**.
+
 - **The wat encoder writes the global section, and `ref.null` writes its heap type**
   ([#8](https://github.com/scttfrdmn/burroughs/issues/8)). The two frontiers behind 47% of the
   fail column, and they interlock: nearly every `(global funcref …)` in the suite is initialized
