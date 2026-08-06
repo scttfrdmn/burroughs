@@ -21,6 +21,29 @@ weakly-ordered platform.
 
 ### Added
 
+- **The wat encoder writes the global section, and `ref.null` writes its heap type**
+  ([#8](https://github.com/scttfrdmn/burroughs/issues/8)). The two frontiers behind 47% of the
+  fail column, and they interlock: nearly every `(global funcref …)` in the suite is initialized
+  by a `ref.null`. Section 6 is `vec(globaltype expr)` where `globaltype` writes **valtype then
+  mutability** — the reverse of both the OCaml constructor order and the text's `(mut i32)`
+  spelling, so the byte order comes from `encode.ml:193` rather than from either surface form.
+
+  **`heaptype` is not `reftype`**, one byte at the same offset: `ref.null`'s immediate is a *bare*
+  heap type with no nullability field, and the two productions agree only on func `0x70` and
+  extern `0x6f`. Rendering one in the other's spelling would assert a nullability the grammar
+  never supplied — grave [#36](https://github.com/scttfrdmn/burroughs/issues/36)'s
+  invented-evidence class, so `TestRefNullEncodesItsHeapType` pins the emitted bytes directly.
+  It has to: the *decoder* does not retain the heap type yet, so `ref.null func` and `ref.null
+  extern` decode to identical instruction pairs and no structured comparison can tell `d0 70`
+  from `d0 6f`.
+
+  Board: fail **3682 → 2568**, pass **27451 → 28398** (+947), gated **+167** — the column
+  conserves exactly, and the 1114 departures partition 966 `(global …)` + 148 `ref.null`. The
+  +167 are the drain's own consequence: vectors carried forward to the *next* frontier, a feature
+  gate, and registered per-vector in `TestGatedVectors` with each root module's gate string
+  probed rather than inferred. Exec fail rose 1139 → **1215** on 76 arrivals and zero departures
+  — `global.get`/`global.set` reaching the interpreter, which names the next work.
+
 - **`call`, `call_indirect`, and `return_call_indirect` execute; element segments are retained and
   encoded** ([#7](https://github.com/scttfrdmn/burroughs/issues/7),
   [#8](https://github.com/scttfrdmn/burroughs/issues/8), decision

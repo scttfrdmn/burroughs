@@ -356,6 +356,65 @@ var encodableShapes = map[immShape]bool{
 	// never empty. Admitted with the interpreter arm rather than with the block family, because an
 	// encoder that can write `br_table` into a module nothing can execute buys no vectors.
 	immIdxIdxList: true,
+
+	// **`ref.null`, and it is the one entry here whose shape is only *partly* encodable** — every
+	// other member of this map writes every immediate its shape admits. A heaptype is twelve
+	// keywords plus a type index (parser.mly:361-372) and exactly two of those thirteen have an
+	// unparameterized encoding, so `heaptypeRetained` admits `func` and `extern` and refuses the
+	// rest at the cursor.
+	//
+	// That partiality is why the refusal lives in the reader rather than in `encodableOrErr`: the
+	// eleven unencodable spellings have a *token* to point at, and a frontier message with a
+	// source position is worth more than one naming a field number. Same division the code section
+	// already uses — a func's signature is refused in `encodableOrErr`'s type loop and its body at
+	// the cursor.
+	//
+	// Admitted for #8's global-section work: `(global funcref (ref.null func))` is `global.wast`'s
+	// opening line, and the section and this shape each blocked it independently.
+	immHeaptype: true,
+}
+
+// heaptypeRetained reads `ref.null`'s heap type immediate and encodes it.
+//
+// **The immediate is a bare `heaptype`, not a `reftype`, and the one-byte agreement between them is
+// a trap rather than a convenience.** `RefNull t -> op 0xd0; heaptype t` (encode.ml:414): a heaptype
+// has no nullability field, because the *instruction* is the null. The two productions write the same
+// byte for the only two forms this encoder admits — 0x70 func, 0x6F extern — and diverge everywhere
+// else, `reftype` prefixing `-0x1d`/`-0x1c` before recursing into `heaptype` (encode.ml:139-151). So
+// a reader that used `reftype` here would be right on every module this encoder can currently write
+// and wrong on the first one it cannot, which is the shape that gets found late.
+//
+// It also governs the *diagnostic*: the refusal renders through `heapString`, not `String`, because
+// a heap type quoted in reftype spelling claims a nullability the source never wrote. That is grave
+// #36's invented-evidence class in the half of a message no expected string reads, and it is the
+// reason `heapString` exists as a second method rather than a flag on the first.
+//
+// The resolution is at the cursor rather than deferred, and the asymmetry with `defineGlobal` is the
+// space's rather than a choice: a type index heaptype is *refused* either way, so there is nothing a
+// deferral could buy — unlike a globaltype's valtype, which may forward-reference and must resolve
+// in stage 2 to render its index at all.
+func (p *parser) heaptypeRetained(mnemonic Token) error {
+	tok := p.c.peek()
+	h, err := p.heaptype()
+	if err != nil {
+		return err
+	}
+	if !p.retaining() {
+		return nil
+	}
+	rv, err := p.ctx.resolveVal(valType{heap: h})
+	if err != nil {
+		// A type index naming nothing: the module is ill-formed and the resolver's message says so
+		// with the token, so it is returned rather than converted into a frontier report.
+		return err
+	}
+	b, ok := heapTypeByte(rv)
+	if !ok {
+		return p.refuseUnencodable(tok, "the heap type "+rv.heapString()+" as "+mnemonic.Text+
+			"'s immediate")
+	}
+	p.appendImm([]byte{b})
+	return nil
 }
 
 // idxRetained parses one index immediate and retains it, resolving in the category the mnemonic's

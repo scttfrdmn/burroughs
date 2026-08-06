@@ -2465,6 +2465,202 @@ func TestGatedVectors(t *testing.T) {
 			30: "memory64: (table $t2 i64 2 externref) at :1 — tables=2 addr64=2",
 			31: "memory64: (table $t2 i64 2 externref) at :1 — tables=2 addr64=2",
 		},
+		// **The 167 arrivals from the encoder's global section (#8).** These four files
+		// have no prior entry: every one of their scorable commands was `fail` or
+		// `unsupported` before the (global …) field and ref.null's heaptype landed, and
+		// draining that bucket carried them forward to the *next* frontier — a feature
+		// gate. So the +167 gated is a measured consequence of pass +947, not a board
+		// getting quietly emptier: fail 3682 → 2568 = pass +947 + gated +167.
+		//
+		// The features are **probed, not inferred**. This control keys on `decode(c.Module)`
+		// and, as its own note above says, cannot see these — they are `curGated`
+		// propagations from a root module the harness declined, so asking the decoder here
+		// under-matches. A throwaway walker printed each root's *reported* gate string, and
+		// the four roots resolved to three distinct features; the module facts quoted below
+		// were then read out of the vectors. Two guesses made while writing this entry were
+		// wrong and caught by that reading — `table_size64`'s first table is `externref`,
+		// not funcref, and `global.wast:3` is the module's opening line, not its
+		// extended-const initializer. Which is the print-don't-trust rule earning its keep
+		// on an allowlist reason rather than on an error message.
+		//
+		// All three gates are *right*, so these are allowlisted rather than treated as
+		// over-gating; all 167 are simultaneously answered on the merits in the all-on lane
+		// (allOnPassFloor 28497 → 29516), so the deferral cannot become a disappearance.
+		"global.wast": {
+			204: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
+			205: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
+			208: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
+			209: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
+			210: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
+			211: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
+			212: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
+			213: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
+			214: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
+			215: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
+			217: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
+			218: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
+			219: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
+			220: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
+			222: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
+			223: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
+			225: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
+			226: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
+			228: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
+			229: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
+			230: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
+			231: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
+			233: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
+			234: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
+			237: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
+			238: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
+			239: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
+			240: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
+			243: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
+			244: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
+			245: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
+			247: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
+			248: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
+			249: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
+			251: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
+			252: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
+			253: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
+			255: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
+			256: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
+			258: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
+			259: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
+			261: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
+			262: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
+			265: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
+			266: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
+			267: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
+			268: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
+			270: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
+			272: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
+			273: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
+			274: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
+			276: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
+			277: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
+			278: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
+			280: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
+			281: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
+			282: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
+		},
+		"load2.wast": {
+			162: "multi-memory: 4 memories at :1, so a memarg carries flags bit 6",
+			164: "multi-memory: 4 memories at :1, so a memarg carries flags bit 6",
+			165: "multi-memory: 4 memories at :1, so a memarg carries flags bit 6",
+			166: "multi-memory: 4 memories at :1, so a memarg carries flags bit 6",
+			168: "multi-memory: 4 memories at :1, so a memarg carries flags bit 6",
+			169: "multi-memory: 4 memories at :1, so a memarg carries flags bit 6",
+			170: "multi-memory: 4 memories at :1, so a memarg carries flags bit 6",
+			172: "multi-memory: 4 memories at :1, so a memarg carries flags bit 6",
+			174: "multi-memory: 4 memories at :1, so a memarg carries flags bit 6",
+			175: "multi-memory: 4 memories at :1, so a memarg carries flags bit 6",
+			176: "multi-memory: 4 memories at :1, so a memarg carries flags bit 6",
+			178: "multi-memory: 4 memories at :1, so a memarg carries flags bit 6",
+			179: "multi-memory: 4 memories at :1, so a memarg carries flags bit 6",
+			180: "multi-memory: 4 memories at :1, so a memarg carries flags bit 6",
+			182: "multi-memory: 4 memories at :1, so a memarg carries flags bit 6",
+			183: "multi-memory: 4 memories at :1, so a memarg carries flags bit 6",
+			184: "multi-memory: 4 memories at :1, so a memarg carries flags bit 6",
+			186: "multi-memory: 4 memories at :1, so a memarg carries flags bit 6",
+			187: "multi-memory: 4 memories at :1, so a memarg carries flags bit 6",
+			188: "multi-memory: 4 memories at :1, so a memarg carries flags bit 6",
+			189: "multi-memory: 4 memories at :1, so a memarg carries flags bit 6",
+			191: "multi-memory: 4 memories at :1, so a memarg carries flags bit 6",
+			192: "multi-memory: 4 memories at :1, so a memarg carries flags bit 6",
+			193: "multi-memory: 4 memories at :1, so a memarg carries flags bit 6",
+			195: "multi-memory: 4 memories at :1, so a memarg carries flags bit 6",
+			196: "multi-memory: 4 memories at :1, so a memarg carries flags bit 6",
+			197: "multi-memory: 4 memories at :1, so a memarg carries flags bit 6",
+			198: "multi-memory: 4 memories at :1, so a memarg carries flags bit 6",
+			199: "multi-memory: 4 memories at :1, so a memarg carries flags bit 6",
+			200: "multi-memory: 4 memories at :1, so a memarg carries flags bit 6",
+			202: "multi-memory: 4 memories at :1, so a memarg carries flags bit 6",
+			204: "multi-memory: 4 memories at :1, so a memarg carries flags bit 6",
+			205: "multi-memory: 4 memories at :1, so a memarg carries flags bit 6",
+			207: "multi-memory: 4 memories at :1, so a memarg carries flags bit 6",
+			209: "multi-memory: 4 memories at :1, so a memarg carries flags bit 6",
+			210: "multi-memory: 4 memories at :1, so a memarg carries flags bit 6",
+			212: "multi-memory: 4 memories at :1, so a memarg carries flags bit 6",
+		},
+		"load64.wast": {
+			161: "memory64: (memory i64 1) at :4 — an i64 index type",
+			163: "memory64: (memory i64 1) at :4 — an i64 index type",
+			164: "memory64: (memory i64 1) at :4 — an i64 index type",
+			165: "memory64: (memory i64 1) at :4 — an i64 index type",
+			167: "memory64: (memory i64 1) at :4 — an i64 index type",
+			168: "memory64: (memory i64 1) at :4 — an i64 index type",
+			169: "memory64: (memory i64 1) at :4 — an i64 index type",
+			171: "memory64: (memory i64 1) at :4 — an i64 index type",
+			173: "memory64: (memory i64 1) at :4 — an i64 index type",
+			174: "memory64: (memory i64 1) at :4 — an i64 index type",
+			175: "memory64: (memory i64 1) at :4 — an i64 index type",
+			177: "memory64: (memory i64 1) at :4 — an i64 index type",
+			178: "memory64: (memory i64 1) at :4 — an i64 index type",
+			179: "memory64: (memory i64 1) at :4 — an i64 index type",
+			181: "memory64: (memory i64 1) at :4 — an i64 index type",
+			182: "memory64: (memory i64 1) at :4 — an i64 index type",
+			183: "memory64: (memory i64 1) at :4 — an i64 index type",
+			185: "memory64: (memory i64 1) at :4 — an i64 index type",
+			186: "memory64: (memory i64 1) at :4 — an i64 index type",
+			187: "memory64: (memory i64 1) at :4 — an i64 index type",
+			188: "memory64: (memory i64 1) at :4 — an i64 index type",
+			190: "memory64: (memory i64 1) at :4 — an i64 index type",
+			191: "memory64: (memory i64 1) at :4 — an i64 index type",
+			192: "memory64: (memory i64 1) at :4 — an i64 index type",
+			194: "memory64: (memory i64 1) at :4 — an i64 index type",
+			195: "memory64: (memory i64 1) at :4 — an i64 index type",
+			196: "memory64: (memory i64 1) at :4 — an i64 index type",
+			197: "memory64: (memory i64 1) at :4 — an i64 index type",
+			198: "memory64: (memory i64 1) at :4 — an i64 index type",
+			199: "memory64: (memory i64 1) at :4 — an i64 index type",
+			201: "memory64: (memory i64 1) at :4 — an i64 index type",
+			203: "memory64: (memory i64 1) at :4 — an i64 index type",
+			204: "memory64: (memory i64 1) at :4 — an i64 index type",
+			206: "memory64: (memory i64 1) at :4 — an i64 index type",
+			208: "memory64: (memory i64 1) at :4 — an i64 index type",
+			209: "memory64: (memory i64 1) at :4 — an i64 index type",
+			211: "memory64: (memory i64 1) at :4 — an i64 index type",
+		},
+		"table_size64.wast": {
+			26: "memory64: (table $t0 i64 0 externref) at :2 — tables=4 addr64=4",
+			27: "memory64: (table $t0 i64 0 externref) at :2 — tables=4 addr64=4",
+			28: "memory64: (table $t0 i64 0 externref) at :2 — tables=4 addr64=4",
+			29: "memory64: (table $t0 i64 0 externref) at :2 — tables=4 addr64=4",
+			30: "memory64: (table $t0 i64 0 externref) at :2 — tables=4 addr64=4",
+			31: "memory64: (table $t0 i64 0 externref) at :2 — tables=4 addr64=4",
+			32: "memory64: (table $t0 i64 0 externref) at :2 — tables=4 addr64=4",
+			34: "memory64: (table $t0 i64 0 externref) at :2 — tables=4 addr64=4",
+			35: "memory64: (table $t0 i64 0 externref) at :2 — tables=4 addr64=4",
+			36: "memory64: (table $t0 i64 0 externref) at :2 — tables=4 addr64=4",
+			37: "memory64: (table $t0 i64 0 externref) at :2 — tables=4 addr64=4",
+			38: "memory64: (table $t0 i64 0 externref) at :2 — tables=4 addr64=4",
+			39: "memory64: (table $t0 i64 0 externref) at :2 — tables=4 addr64=4",
+			40: "memory64: (table $t0 i64 0 externref) at :2 — tables=4 addr64=4",
+			42: "memory64: (table $t0 i64 0 externref) at :2 — tables=4 addr64=4",
+			43: "memory64: (table $t0 i64 0 externref) at :2 — tables=4 addr64=4",
+			44: "memory64: (table $t0 i64 0 externref) at :2 — tables=4 addr64=4",
+			45: "memory64: (table $t0 i64 0 externref) at :2 — tables=4 addr64=4",
+			46: "memory64: (table $t0 i64 0 externref) at :2 — tables=4 addr64=4",
+			47: "memory64: (table $t0 i64 0 externref) at :2 — tables=4 addr64=4",
+			48: "memory64: (table $t0 i64 0 externref) at :2 — tables=4 addr64=4",
+			49: "memory64: (table $t0 i64 0 externref) at :2 — tables=4 addr64=4",
+			50: "memory64: (table $t0 i64 0 externref) at :2 — tables=4 addr64=4",
+			51: "memory64: (table $t0 i64 0 externref) at :2 — tables=4 addr64=4",
+			52: "memory64: (table $t0 i64 0 externref) at :2 — tables=4 addr64=4",
+			54: "memory64: (table $t0 i64 0 externref) at :2 — tables=4 addr64=4",
+			55: "memory64: (table $t0 i64 0 externref) at :2 — tables=4 addr64=4",
+			56: "memory64: (table $t0 i64 0 externref) at :2 — tables=4 addr64=4",
+			57: "memory64: (table $t0 i64 0 externref) at :2 — tables=4 addr64=4",
+			58: "memory64: (table $t0 i64 0 externref) at :2 — tables=4 addr64=4",
+			59: "memory64: (table $t0 i64 0 externref) at :2 — tables=4 addr64=4",
+			60: "memory64: (table $t0 i64 0 externref) at :2 — tables=4 addr64=4",
+			61: "memory64: (table $t0 i64 0 externref) at :2 — tables=4 addr64=4",
+			62: "memory64: (table $t0 i64 0 externref) at :2 — tables=4 addr64=4",
+			63: "memory64: (table $t0 i64 0 externref) at :2 — tables=4 addr64=4",
+			64: "memory64: (table $t0 i64 0 externref) at :2 — tables=4 addr64=4",
+		},
 		"table_set64.wast": {
 			36: "memory64: (table $t2 i64 2 externref) at :1 — tables=2 addr64=2",
 			37: "memory64: (table $t2 i64 2 externref) at :1 — tables=2 addr64=2",
@@ -2907,7 +3103,13 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	// on i64-indexed tables — plausible in a PR about `call_indirect`, in a lane whose gated
 	// population is mostly memory64, and **wrong**: the diff says `0x10`. A cause guessed from
 	// the PR's own subject is the reading that flatters the work, which is the one to measure.
-	const allOnPassFloor = 28497
+	// **Section 6 and `ref.null`'s heaptype (#8): +1019, and the whole of it is fail→pass** — 4190
+	// fail became 3171, exactly the pass gain, so no vector changed category in any other direction.
+	// The all-on lane moves more than the default lane's +947 for the reason it always does: with GC
+	// on, modules whose *only* remaining refusal was the global field or a `ref.null` immediate now
+	// decode, and this lane has the gated population the default lane declines before the encoder is
+	// ever reached.
+	const allOnPassFloor = 29516
 	boardBound(t, "allOnPassFloor", totalPass, allOnPassFloor, boardBoundSlack, floorBound,
 		"a gated feature regressed, which the Gated==0 assertion above cannot see: with every "+
 			"gate on, a broken feature turns a pass into a fail and leaves Gated at zero")
@@ -3905,7 +4107,30 @@ func TestPhase1Files(t *testing.T) {
 	// convention and the stratum is the classifier's own field, so the proxy disagreed on six
 	// vectors whose message shape does not match their charge. Grave #129's rule, earning its
 	// keep: measure with the instrument, never with a regexp over its output.
-	const execFailCeiling = 1139
+	// **Section 6 and `ref.null` (#8): 1139 → 1215, +76, and every one of them is an arrival with
+	// *zero departures*** — set-differenced on `(file, line)` keys through `Failure.Stratum`, not
+	// inferred from the total. That asymmetry is the signature of a frontier draining rather than of
+	// an interpreter regressing: modules that could not be encoded now reach the interpreter and stop
+	// at the first opcode with no arm, which is a red moving from `encode` to `exec` and is exactly
+	// what a ceiling on this column must not read as a defect.
+	//
+	//	+30  no arm for opcode d0 (`ref.null` — the instruction this PR taught the *encoder* to
+	//	     write, which is the tidiest illustration of the class: writing it is what let the
+	//	     interpreter be asked about it, and the interpreter has no arm)
+	//	+20  no arm for opcode fc 10 (`table.size`)
+	//	+14  no arm for opcode 24 (`global.set`)
+	//	 +6  no arm for opcode d2 (`ref.func`)
+	//	 +6  no arm for opcode 23 (`global.get`)
+	//
+	// 30 + 20 + 14 + 6 + 6 = **+76**, and it lands in three files above all others: 36 in
+	// `table_size.wast`, 14 in `table_grow.wast`, 10 in `ref_func.wast`. Those are files whose
+	// modules are almost entirely globals and table operations, so the global section is the whole
+	// of what was blocking them.
+	//
+	// **The `global.get`/`global.set` arrivals name the next interpreter work, and naming it is the
+	// point of measuring per-opcode**: 20 vectors are now blocked on two arms this PR deliberately
+	// did not write, in a column that used to be blocked on the encoder instead.
+	const execFailCeiling = 1215
 	boardBound(t, "execFailCeiling", execFail, execFailCeiling, 0, ceilingBound,
 		"the interpreter answered fewer vectors than it did: either an opcode arm regressed or "+
 			"a value comparison started disagreeing. A *rise* caused by #8 unblocking more "+
@@ -4163,7 +4388,32 @@ func TestPhase1Files(t *testing.T) {
 	// improved of the large ones, because its remaining 107 reds are `(global …)` and `ref.null`
 	// frontiers rather than the instruction it is named for. A PR that quoted its own file's
 	// gain would have reported 7.
-	const passFloor = 27451
+	// **Section 6 plus `ref.null`'s heaptype (#8): 27451 → 28398, +947.** The columns conserve and
+	// that is the check the bucket flow is a story about: fail 3682 → 2568 (−1114) against pass +947
+	// and gated +167, and 947 + 167 = 1114 exactly.
+	//
+	// The −1114 is *the whole* of two buckets leaving the board, set-differenced on `(file, line)`
+	// keys rather than netted out of the total: **966 `(global …)` field** and **148 `ref.null`
+	// immediates**, 966 + 148 = 1114. Both buckets go to zero; nothing partial remains of either.
+	//
+	// The predecessor PR (#148) forecast these at 996 and 190 while re-keying them, and both were
+	// **over** — by 30 and 42. Worth recording rather than quietly correcting, because the direction
+	// is informative: a bucket keyed on a module's *first* refusal is an upper bound on what draining
+	// it pays, since some of its members have a second unencodable construct behind the first. Here
+	// the residue is the GC-parameterized cases — 39 `heap type N as ref.null's immediate` and 6
+	// `global N: type (ref N)` — which stay red under the default lane's gates and are now charged
+	// to *their own* buckets rather than to these two.
+	//
+	// The +167 gated is not a side effect to wave at: those are vectors that got far enough to meet
+	// a declined feature, which is a gate reporting honestly on a module it can finally see.
+	//
+	// The file-level shape, since 947 across 16 files is not 947 across the board: +121 `if.wast`,
+	// +110 `select.wast`, +106 `call_indirect.wast`, +87 `br_if.wast`, +80 `nop.wast`, +77
+	// `loop.wast`, +76 `br.wast`, +68 `call.wast`, +63 `return.wast`, +54 `local_tee.wast`, +51
+	// `block.wast`, +36 `load.wast`, and 18 over four more. `call_indirect.wast` gaining 106 in a PR
+	// about the global section is the same lesson #148 recorded from the other side: its remaining
+	// reds were never about `call_indirect`.
+	const passFloor = 28398
 	boardBound(t, "passFloor", totalPass, passFloor, boardBoundSlack, floorBound,
 		"a regression in a grammar that used to answer, or the corpus moved")
 }

@@ -153,6 +153,16 @@ var encodableModules = []struct {
 	wantImports []binary.Import
 	wantExports []binary.Export
 	wantFuncs   []binary.Func
+	// wantGlobals is section 6's *defined* globals, in source order. An imported global is not here —
+	// it is a `wantImports` row — which is the population split `context.globalDefs` records.
+	//
+	// **A structured column rather than payload bytes, and the difference from sections 9 and 11 is that
+	// `binary.Global` loses nothing.** Type, mutability and the whole initializer are retained
+	// (`constexpr.go:30`), and section 6 has no mode flag, no index and no family choice for a normalizing
+	// pair of encodings to hide inside — so there is no fact here that decoding discards, which is the
+	// exact condition the byte columns exist for. Asserting bytes anyway would be pinning this encoder's
+	// LEB widths, which writer.go's header says is not the criterion.
+	wantGlobals []binary.Global
 	// wantElemSec is section 9's payload: the segment count, then each segment. nil means no section 9.
 	//
 	// Bytes for `wantDataSec`'s reason, and section 9's case is the stronger one. **This comment used
@@ -318,6 +328,150 @@ var encodableModules = []struct {
 		{ElemType: binary.FuncRef, Limits: binary.Limits{Min: 1}},
 		{ElemType: binary.ExternRef, Limits: binary.Limits{Min: 2}},
 	}},
+
+	// # Globals (#8)
+	//
+	// The want column is read from the wat, and for a global that means three independent facts: the
+	// valtype, the mutability byte, and the initializer's instructions. Every row states all three,
+	// because the two bytes are written in the *reverse* of the text's order and an encoder that
+	// transposed them writes `00 7f` — which the decoder reads as an `i32`-typed… no, as a *valtype*
+	// `0x00`, and rejects. The lucky failure; `mutability` inverted is the unlucky one, and only this
+	// column sees it.
+	{
+		src:         `(module (global i32 (i32.const 7)))`,
+		wantGlobals: []binary.Global{{Type: binary.I32, Init: []binary.Instr{{Op: 0x41, Imm0: 7}, {Op: 0x0b}}}},
+	},
+	// `(mut …)`, the other value of the one byte this section has an arm for. Written beside the
+	// immutable row rather than alone, because `mutability` writing a constant would pass either row on
+	// its own — the pair is the assertion.
+	{
+		src: `(module (global (mut i64) (i64.const 0)))`,
+		wantGlobals: []binary.Global{
+			{Type: binary.I64, Mutable: true, Init: []binary.Instr{{Op: 0x42, Imm0: 0}, {Op: 0x0b}}},
+		},
+	},
+	// A named global: the name is a parse-time binding and must leave no trace in the image.
+	{
+		src:         `(module (global $g f32 (f32.const 0)))`,
+		wantGlobals: []binary.Global{{Type: binary.F32, Init: []binary.Instr{{Op: 0x43, Imm0: 0}, {Op: 0x0b}}}},
+	},
+	// **Two globals, which is the row a shared initializer sink fails.** Written with the prediction that
+	// a shared sink would concatenate both expressions into the *first* global's initializer and leave
+	// the second a bare terminator; the mutation was run and the print said the opposite — the
+	// accumulation lands in global **1**, which gets `i32.const 1, i32.const 2, end` while global 0 keeps
+	// its own single expression. Obvious in hindsight (each global's slot is filled with the sink as it
+	// stood when *that* field closed, so the later one carries the arrears) and not obvious enough to
+	// have been written correctly from reading the code, which is the whole content of print-don't-trust.
+	// The row catches it either way; the comment was the thing that was wrong, and a comment asserting
+	// the wrong failure mode sends the next reader to the wrong mechanism.
+	//
+	// The count stays right in both directions, which is what makes this invisible to every other
+	// column: a vector of two whose contents have moved. Same shape `elemexprRetained`'s per-element
+	// sink exists to prevent one layer down.
+	{
+		src: `(module (global i32 (i32.const 1)) (global i32 (i32.const 2)))`,
+		wantGlobals: []binary.Global{
+			{Type: binary.I32, Init: []binary.Instr{{Op: 0x41, Imm0: 1}, {Op: 0x0b}}},
+			{Type: binary.I32, Init: []binary.Instr{{Op: 0x41, Imm0: 2}, {Op: 0x0b}}},
+		},
+	},
+	// A `global.get` initializer naming an **imported** global, which is the only index a defined
+	// global's initializer may legally name (`valid.ml`'s const context) — and the row that makes
+	// `defineGlobal`'s deferral do work: the immediate is resolved in stage 2 through `instr.patch`.
+	{
+		src:  `(module (import "m" "g" (global i32)) (global i32 (global.get 0)))`,
+		want: nil,
+		wantImports: []binary.Import{
+			{Module: "m", Name: "g", Kind: binary.ExternGlobal},
+		},
+		wantGlobals: []binary.Global{
+			{Type: binary.I32, Init: []binary.Instr{{Op: 0x23, Imm0: 0}, {Op: 0x0b}}},
+		},
+	},
+	// The **symbolic** form of the row above, which is what the deferral is actually for: `$i` is bound
+	// by the import that precedes it here, but the resolution runs in stage 2 either way, and this is the
+	// spelling under which a cursor-time resolution would be visible as `unknown global`.
+	{
+		src: `(module (import "m" "g" (global $i i32)) (global $g i32 (global.get $i)))`,
+		wantImports: []binary.Import{
+			{Module: "m", Name: "g", Kind: binary.ExternGlobal},
+		},
+		wantGlobals: []binary.Global{
+			{Type: binary.I32, Init: []binary.Instr{{Op: 0x23, Imm0: 0}, {Op: 0x0b}}},
+		},
+	},
+	// An **empty** initializer, which `constexpr` being `instr_list` makes well-formed grammatically —
+	// the arity is validation's complaint. It encodes to a bare `0x0b`, which the decoder reads back as a
+	// one-instruction body, and that is what the reference writes for the same text. Here because "a
+	// global with no initializer" is the case an encoder that skipped the empty sink would produce for
+	// *every* global.
+	{
+		src:         `(module (global i32))`,
+		wantGlobals: []binary.Global{{Type: binary.I32, Init: []binary.Instr{{Op: 0x0b}}}},
+	},
+	// A `funcref` global holding `ref.null func` — **the row where this PR's two halves meet.** The
+	// heaptype immediate is `heaptypeRetained`'s and the section is `encodeGlobals`', and neither alone
+	// encodes this module: `(global funcref (ref.null func))` is the spelling `global.wast` opens with,
+	// and it was refused twice over before this PR.
+	//
+	// **`Imm0` is 0 and not the heap type, which is a retention gap and not a typo in this row.**
+	// `immHeapType`'s arm validates the heaptype and stages no word (`instr.go:831` ends
+	// `return c.d.decodeHeapType(r)`), so `ref.null func` and `ref.null extern` decode to the *same two
+	// instructions* and the pair below differs only in its `Type`. That is filed under 0016 and was
+	// already stated at `constexpr_test.go:296`, where the want was first written as `uint64(FuncRef)` by
+	// reasoning from the immediate's name and the print said otherwise — so this row is the second site
+	// to make the same wrong guess, and copying the sibling's *assertion* rather than re-deriving it is
+	// what the shape-indexed-lessons rule asks for. Consequence worth naming: these two rows cannot tell
+	// a `d0 70` from a `d0 6f` in the initializer, and only the byte-level probe in
+	// `TestRefNullEncodesItsHeapType` can. That is why that test exists as well as these rows.
+	{
+		src: `(module (global funcref (ref.null func)))`,
+		wantGlobals: []binary.Global{
+			{Type: binary.FuncRef, Init: []binary.Instr{{Op: 0xd0}, {Op: 0x0b}}},
+		},
+	},
+	{
+		src: `(module (global externref (ref.null extern)))`,
+		wantGlobals: []binary.Global{
+			{Type: binary.ExternRef, Init: []binary.Instr{{Op: 0xd0}, {Op: 0x0b}}},
+		},
+	},
+	// A defined global **and** an imported one, so the population split is asserted rather than assumed:
+	// section 6 carries one entry and section 2 the other, and an emitter that put the import in
+	// `globalDefs` would write a global with no initializer and an index space one too long.
+	//
+	// **Written first with two *defined* globals under this comment**, which asserted nothing the
+	// two-globals row above does not — a case labelled for a partition it is not a member of, which is
+	// grave #34 exactly, and caught here the way that grave says to catch it: by reading the src against
+	// the label rather than the label against itself.
+	{
+		src: `(module (import "m" "g" (global (mut i32))) (global i32 (i32.const 4)))`,
+		wantImports: []binary.Import{
+			{Module: "m", Name: "g", Kind: binary.ExternGlobal},
+		},
+		wantGlobals: []binary.Global{
+			{Type: binary.I32, Init: []binary.Instr{{Op: 0x41, Imm0: 4}, {Op: 0x0b}}},
+		},
+	},
+	// The inline-import spelling, paired with the `(import … (global …))` rows below for the reason every
+	// other sugar pair here is: `(global (import "m" "g") i32)` and the field form are the *same import*,
+	// and a mutability or kind byte written correctly in one spelling and wrongly in the other would
+	// round-trip for every vector that used the working one. No section 6 at all — the arm produces an
+	// `Import` and no `Global` (parser.mly:1082-1085).
+	{
+		src: `(module (global (import "m" "g") (mut i64)))`,
+		wantImports: []binary.Import{
+			{Module: "m", Name: "g", Kind: binary.ExternGlobal},
+		},
+	},
+	// An inline **export** on a defined global, which is the third spelling that touches section 6 and
+	// the one whose frontier withdrawal is newest: `inlineExports` runs before either arm, so the export
+	// names this global's own index whether or not the field turns out to be an import.
+	{
+		src:         `(module (global (export "g") i32 (i32.const 5)))`,
+		wantExports: []binary.Export{{Name: "g", Kind: binary.ExternGlobal, Index: 0}},
+		wantGlobals: []binary.Global{{Type: binary.I32, Init: []binary.Instr{{Op: 0x41, Imm0: 5}, {Op: 0x0b}}}},
+	},
 
 	// # Imports (#8)
 	//
@@ -2118,15 +2272,21 @@ func TestEncodeRoundTripsThroughTheDecoder(t *testing.T) {
 	// then not followed. Recorded rather than silently corrected, because the *pattern* of drift is
 	// what a reader needs: the instruction is "in the same edit", and the failure mode is that nothing
 	// fails when it isn't.
-	if len(encodableModules) < 146 {
-		t.Fatalf("encodableModules has %d rows, want >=146 (153 at this commit): a table this check "+
+	// **Raised with section 6 (#8): 153→171 rows, 62→68 bodies, and a new partition at 11.** Moved in
+	// the same edit that grew the table, which is what the paragraph above asks for and what the
+	// paragraph above records not having been done last time.
+	if len(encodableModules) < 164 {
+		t.Fatalf("encodableModules has %d rows, want >=164 (171 at this commit): a table this check "+
 			"reads is a table whose size is part of the assertion, since a comparison over an empty "+
 			"set succeeds", len(encodableModules))
 	}
-	withFuncs, withData, withDataCount, withLabels, withElem := 0, 0, 0, 0, 0
+	withFuncs, withData, withDataCount, withLabels, withElem, withGlobals := 0, 0, 0, 0, 0, 0
 	for _, tc := range encodableModules {
 		if len(tc.wantFuncs) > 0 {
 			withFuncs++
+		}
+		if len(tc.wantGlobals) > 0 {
+			withGlobals++
 		}
 		if tc.wantDataSec != nil {
 			withData++
@@ -2141,11 +2301,30 @@ func TestEncodeRoundTripsThroughTheDecoder(t *testing.T) {
 			withLabels++
 		}
 	}
-	if withFuncs < 58 {
-		t.Fatalf("only %d of %d encodableModules rows assert a function body, want >=58 (62 at this "+
+	if withFuncs < 64 {
+		t.Fatalf("only %d of %d encodableModules rows assert a function body, want >=64 (68 at this "+
 			"commit): the code section is the newest and least-covered half of this table, and a "+
 			"total-only floor would let its rows go to zero behind the other sections'",
 			withFuncs, len(encodableModules))
+	}
+	// Section 6's own floor, and **its reason is the opposite of section 9's and 11's**, which is worth
+	// stating because the three sit together and a reader will assume one argument covers all of them.
+	// The byte-column floors exist because decoding *discards* a fact (the flag byte, the mode byte);
+	// this one exists because `binary.Global` discards nothing, so `wantGlobals` is a structural column
+	// and its risk is not invisibility but **absorption** — eleven rows behind 160 others is the
+	// empty-half-behind-a-full-one shape (grave #105) regardless of what the column asserts. What these
+	// rows are the only instrument over is the mutability byte and the *reversed* field order
+	// (`valtype` then `mutability`, encode.ml:193-194), neither of which any other partition touches.
+	//
+	// A floor and not an exact count, on the criterion the floors rule states: the number of round-trip
+	// rows a section deserves is a judgement about coverage, not a derivable quantity, so there is no
+	// sharper instrument being passed over here. Where an exact count *is* knowable it is pinned instead
+	// — `TestRefNullEncodesItsHeapType` is exhaustive over the two encodable heaptypes.
+	if withGlobals < 9 {
+		t.Fatalf("only %d of %d encodableModules rows assert a global section, want >=9 (11 at this "+
+			"commit): these rows are the only instrument over the mutability byte and over section 6's "+
+			"reversed field order, and a total-only floor would let them go behind the other sections'",
+			withGlobals, len(encodableModules))
 	}
 	// **Its own floor, and it is the one this function *computed and did not assert*** — `withElem`
 	// was counted in the loop above and then read by nothing, which is a counter with no consumer: the
@@ -2249,6 +2428,25 @@ func TestEncodeRoundTripsThroughTheDecoder(t *testing.T) {
 			for i, want := range tc.wantImports {
 				if got := m.Imports[i]; got != want {
 					t.Errorf("import %d is %+v, want %+v", i, got, want)
+				}
+			}
+			if len(m.Globals) != len(tc.wantGlobals) {
+				t.Fatalf("encoded % x, which decodes to %d defined globals, want %d: %v",
+					b, len(m.Globals), len(tc.wantGlobals), m.Globals)
+			}
+			for i, want := range tc.wantGlobals {
+				got := m.Globals[i]
+				if got.Type != want.Type || got.Mutable != want.Mutable {
+					t.Errorf("global %d is type %v mutable=%v, want type %v mutable=%v: the two bytes "+
+						"are written in the *binary* order (valtype then mutability, encode.ml:193) "+
+						"which is the reverse of the text's `(mut i32)`", i, got.Type, got.Mutable,
+						want.Type, want.Mutable)
+				}
+				if !slices.Equal(got.Init, want.Init) {
+					t.Errorf("global %d has initializer %+v, want %+v: an initializer written into the "+
+						"wrong global's expression, or run together with its neighbour's, decodes clean "+
+						"and denotes a different module — the accept-direction defect no suite vector "+
+						"can see (§9 G-3)", i, got.Init, want.Init)
 				}
 			}
 			if len(m.Exports) != len(tc.wantExports) {
@@ -2750,7 +2948,9 @@ func TestEncodeRefusesWhatItCannotWrite(t *testing.T) {
 		// `(module (func))` was here and is now in `encodableModules`, which is what the code section
 		// *is*. The `(start 0)` row below still needs a func to be well-formed and is still refused —
 		// by the start field, now, rather than by the func that precedes it.
-		{`(module (global i32 (i32.const 0)))`, "(global …) field"},
+		//
+		// `(module (global i32 (i32.const 0)))` was here and is now in `encodableModules`, which is what
+		// section 6 *is* — the fourth field to make that move, after `func`, `data` and `elem`.
 		{`(module (start 0) (func))`, "(start …) field"},
 		// `(module (data "abc"))` was here and is now in `encodableModules`, which is what section 11
 		// *is* — the same move `(module (func))` made when the code section landed.
@@ -2814,6 +3014,47 @@ func TestEncodeRefusesWhatItCannotWrite(t *testing.T) {
 		// on this module is entirely inside a string the suite never reads.
 		{`(module (table 1 (ref null $t)) (type $t (func)))`, "element type (ref null 0)"},
 
+		// # A global's *type* frontier, which needed an empty initializer to be reachable at all
+		//
+		// **These five rows exist because the check they exercise was live and untested, and the
+		// falsification is what said so** — disabling `encodableOrErr`'s per-global `valTypeByte` loop
+		// changed no verdict anywhere in this file. Not stillborn, which is the other failure mode: the
+		// check fires on real input, as a probe confirmed. It was simply asserted by nothing, which is the
+		// same board and the same blindness.
+		//
+		// **What the re-run mutation then established is that this frontier is not the last line, and
+		// the discovery is a dividend of running the mutation rather than reasoning about it.** With the
+		// loop disabled, `(module (global anyref))` fails here — but the other four *panic* in
+		// `w.valType`, which carries a backstop reading "encodableOrErr and valType disagree about a
+		// table they share". So the type check's job is not to prevent a wrong byte; the emitter already
+		// refuses to write one. Its job is to turn a panic into a **frontier message with a field number
+		// and a type in it**, which is a report a reader can act on. That reframes what these rows
+		// assert, and it is why the two index rows are pinned on the *message* text: dropping `g.typ.val`
+		// from the format string fails exactly those two and nothing else in the file — the verdict half
+		// is held up by a panic the mutation would otherwise let pass for a pass.
+		//
+		// The reason is an ordering neither mechanism's code would suggest: a global has two unencodable
+		// halves and the *initializer* is refused first, at the cursor, so `(global anyref (ref.null any))`
+		// reports `the heap type any` and never reaches the type loop. Every spelling that exercises the
+		// type check therefore has to omit the initializer — which `constexpr` being `instr_list` makes
+		// well-formed — and that is why `(global anyref)` is a row here rather than a curiosity. The
+		// general shape is worth the paragraph: **when a construct has two frontiers, the rows for the
+		// later one must defeat the earlier one, and which is earlier is a fact about execution order that
+		// only running it establishes.**
+		//
+		// Both mutability spellings, because `globaltype`'s arms are `valtype` and `(mut valtype)`
+		// (parser.mly:1075-1077) and a check reached through one arm alone would pass the other.
+		{`(module (global anyref))`, "needs a parameterized reference"},
+		{`(module (global (mut anyref)))`, "needs a parameterized reference"},
+		{`(module (global (ref func)))`, "needs a parameterized reference"},
+		// A **type index** valtype, and the pair that makes `defineGlobal`'s deferral testable at all:
+		// both orders refuse, so the verdict cannot see the deferral — replacing it with eager resolution
+		// keeps both rows green. What it changes is the message, which becomes `type (ref null )` on the
+		// second row: an unresolved index rendered as nothing, the fabricated-evidence class (grave #36).
+		// Same argument as the table rows above, and the same reason it is the message that is pinned.
+		{`(module (type $t (func)) (global (ref null $t)))`, "type (ref null 0) needs"},
+		{`(module (global (ref null $t)) (type $t (func)))`, "type (ref null 0) needs"},
+
 		// # An encodable field *after* an unencodable one — the withdrawal's identity check
 		//
 		// **These four rows exist because the check they falsify was unfalsifiable without them, and
@@ -2829,43 +3070,58 @@ func TestEncodeRefusesWhatItCannotWrite(t *testing.T) {
 		// unencodable field is the one whose name must appear in the message, never the encodable
 		// field that follows it.
 		//
-		// **The leader was `(func)`, then `(data "abc")`, then `(elem)`, and is now `(global …)` —
-		// re-pointed three times for the same reason.** This is the tripwire-re-pointing rule (#33) at
-		// test-row scale, and the third application is the one that makes it routine rather than
+		// **The leader was `(func)`, then `(data "abc")`, then `(elem)`, then `(global …)`, and is now
+		// `(start 0)` — re-pointed four times for the same reason.** This is the tripwire-re-pointing
+		// rule (#33) at test-row scale, and by the fourth application it is routine rather than
 		// remarkable: the rows name a *risk* — a later field withdrawing an earlier field's refusal — and
 		// each landing section dissolves whichever leader it implements without touching the risk. `func`
-		// moved to follower when the code section landed; `data` when section 11 did; `elem` now that
-		// section 9 does. Deleting the rows instead would have retired a live control three times on a
-		// technicality, and the instruction the previous version of this comment left — "re-point again,
-		// not delete" — is what is being carried out here.
+		// moved to follower when the code section landed; `data` when section 11 did; `elem` when section
+		// 9 did; `global` now that section 6 does. Deleting the rows instead would have retired a live
+		// control four times on a technicality, and the instruction the previous version of this comment
+		// left — "re-point again, not delete" — is what is being carried out here.
 		//
-		// `(global …)` is the leader now, and the ones left after it are `(start …)` and `(tag)`. When the
-		// global section lands, re-point again to whichever of those remains.
-		{`(module (global i32 (i32.const 0)) (memory 1))`, "(global …) field"},
-		{`(module (global i32 (i32.const 0)) (table 1 funcref))`, "(global …) field"},
+		// **`(start 0)` and `(tag)` are the only leaders left, and that is now worth stating as a
+		// countdown rather than as an instruction.** Two fields remain unencodable; when the second of
+		// them lands there will be *no* unencodable field to lead with, and this control's subject
+		// dissolves with no re-pointing available. The risk does not: `clearNonTypeField`'s offset
+		// comparison will still be the only thing standing between a later field and an earlier field's
+		// record. So the re-pointing that will be required then is not to another field but to another
+		// *frontier* — the per-arm rows above (`(table 1 (ref func))`, the typeuse rows below) are
+		// refusals that outlive every section, and the leader becomes one of those. Named here because a
+		// tripwire whose next re-pointing is not obvious is one that gets closed instead.
+		{`(module (start 0) (memory 1) (func))`, "(start …) field"},
+		{`(module (start 0) (table 1 funcref) (func))`, "(start …) field"},
 		{`(module (tag) (memory 1) (table 1 funcref))`, "(tag …) field"},
 		// **A `(data …)` field as the *follower*, which is where its departure makes it a better
 		// witness than it was as a leader.** `dataField` has three arms and every one of them calls
 		// `clearNonTypeField` after its closing paren, so it is the newest candidate for clearing a
 		// record that is not its own — and the sugar arm clears one too. Falsified by dropping the
-		// offset comparison in `clearNonTypeField`: these three encode, emitting a module whose global or
+		// offset comparison in `clearNonTypeField`: these three encode, emitting a module whose start or
 		// tag is gone.
-		{`(module (global i32 (i32.const 0)) (data "abc"))`, "(global …) field"},
+		{`(module (start 0) (data "abc") (func))`, "(start …) field"},
 		{`(module (tag) (memory 1) (data (i32.const 0) "x"))`, "(tag …) field"},
-		{`(module (global i32 (i32.const 0)) (memory (data "x")))`, "(global …) field"},
+		{`(module (start 0) (memory (data "x")) (func))`, "(start …) field"},
 		// **`(elem …)` as a follower, and it is the sharpest of them**, which is the dividend of its
 		// promotion out of this table. Five arms, each calling `clearNonTypeField` after its own closing
 		// paren — more distinct withdrawal sites than any other field has — plus the `(table … (elem …))`
 		// sugar, whose arm withdraws once for two definitions. Every one of those is a place to clear a
-		// record belonging to the `(global …)` in front of it.
-		{`(module (global i32 (i32.const 0)) (elem func))`, "(global …) field"},
-		{`(module (global i32 (i32.const 0)) (elem (i32.const 0)))`, "(global …) field"},
-		{`(module (global i32 (i32.const 0)) (elem declare func))`, "(global …) field"},
-		{`(module (global i32 (i32.const 0)) (table funcref (elem)))`, "(global …) field"},
+		// record belonging to the `(start 0)` in front of it.
+		{`(module (start 0) (elem func) (func))`, "(start …) field"},
+		{`(module (start 0) (elem (i32.const 0)) (func))`, "(start …) field"},
+		{`(module (start 0) (elem declare func) (func))`, "(start …) field"},
+		{`(module (start 0) (table funcref (elem)) (func))`, "(start …) field"},
+		// **`(global …)` as a follower, which is where its promotion out of this table makes it a
+		// witness.** `globalField`'s defining arm is the newest `clearNonTypeField` caller in the file,
+		// and it is the one whose withdrawal now runs on every well-formed global rather than never —
+		// so the record it could clear wrongly is the `(start 0)`'s in front of it. Both spellings,
+		// because the import arm withdraws through `importField`'s path and the defining arm through its
+		// own tail, and they are different call sites.
+		{`(module (start 0) (global i32 (i32.const 0)) (func))`, "(start …) field"},
+		{`(module (start 0) (global (import "m" "g") i32) (func))`, "(start …) field"},
 		// `func` as a follower, unchanged: `funcField`'s tail calls `noteDefined` and
 		// `clearNonTypeField` after retaining its body, and unlike the memory and table arms it reaches
 		// that call on every well-formed func.
-		{`(module (global i32 (i32.const 0)) (func))`, "(global …) field"},
+		{`(module (start 0) (func))`, "(start …) field"},
 		{`(module (tag) (func) (memory 1))`, "(tag …) field"},
 
 		// # The typeuse frontier, which is a *wrong index* rather than a missing section
@@ -3141,6 +3397,80 @@ func TestEveryAbbreviatedReftypeExpandsAsItsTableClaims(t *testing.T) {
 	if len(seen) != len(wantDenotes) {
 		t.Errorf("exercised %d of %d abbreviations; the loop is over the table, so a spelling "+
 			"missing from it is an arm nothing tested", len(seen), len(wantDenotes))
+	}
+}
+
+// TestRefNullEncodesItsHeapType pins the one byte `wantGlobals` structurally cannot see.
+//
+// **The gap is a retention gap, not a test-style preference.** `immHeapType` validates the heaptype
+// and stages no immediate word (`instr.go:831`), so `ref.null func` and `ref.null extern` decode to
+// the *identical* two instructions — `{Op: 0xd0}, {Op: 0x0b}` — and every round-trip row in
+// `encodableModules` therefore agrees with an encoder that wrote the wrong heaptype byte, or the same
+// byte for both. Filed under 0016; the encoder is not waiting on it, because the byte is checkable
+// directly. This is the byte column's own justification applied one field lower down: assert bytes
+// exactly where decoding discards a fact, and nowhere else.
+//
+// The refusal half is here for grave #36's reason and is the reason `heapString` exists separately
+// from `String`: a heaptype has no nullability field, so rendering one in reftype spelling
+// (`(ref null any)` for the heaptype `any`) asserts a fact the grammar never supplied — the right
+// verdict quoting evidence the input did not contain. `encode.ml:414` is the authority for the
+// immediate being a bare `heaptype`: `RefNull t -> op 0xd0; heaptype t`.
+func TestRefNullEncodesItsHeapType(t *testing.T) {
+	// The two heap types with an unparameterized encoding, and their bytes from encode.ml's
+	// `heaptype` arms — 0x70 func, 0x6F extern, the same two values reftype shares with it, which is
+	// precisely why these two rows cannot distinguish the readers and the refusals below can.
+	for _, tc := range []struct {
+		src      string
+		wantInit []byte
+	}{
+		{`(module (global funcref (ref.null func)))`, []byte{0xd0, 0x70, 0x0b}},
+		{`(module (global externref (ref.null extern)))`, []byte{0xd0, 0x6f, 0x0b}},
+	} {
+		b, err := EncodeModule([]byte(tc.src))
+		if err != nil {
+			t.Errorf("EncodeModule(%s) = %v; both halves of this PR are needed for this module and "+
+				"both have landed", tc.src, err)
+			continue
+		}
+		i := bytesIndex(b, secGlobal)
+		if i < 0 {
+			t.Errorf("no global section in the encoding of %s", tc.src)
+			continue
+		}
+		// i, size, count, valtype, mutability, then the initializer through the section's end.
+		size, n := uvarint(b[i+1:])
+		got := b[i+1+n+3 : i+1+n+int(size)]
+		if !slices.Equal(got, tc.wantInit) {
+			t.Errorf("%s encodes its initializer as % x, want % x — the heap type byte is invisible "+
+				"to every structural column here, because the decoder retains no immediate for it",
+				tc.src, got, tc.wantInit)
+		}
+	}
+
+	// The refused spellings, checked for **heaptype** rendering rather than reftype. A message reading
+	// `the reference type (ref null any)` would be describing a construct the source never wrote.
+	for _, tc := range []struct {
+		src      string
+		contains string
+	}{
+		{`(module (global anyref (ref.null any)))`, "the heap type any"},
+		{`(module (global anyref (ref.null none)))`, "the heap type none"},
+		{`(module (global funcref (ref.null nofunc)))`, "the heap type nofunc"},
+		// A **type index** heaptype, which is `heaptype`'s first branch and the one `reftype` has no
+		// arm for at all (#88's under-accept half, from the other side).
+		{`(module (type $t (func)) (global funcref (ref.null $t)))`, "the heap type 0"},
+	} {
+		_, err := EncodeModule([]byte(tc.src))
+		if err == nil {
+			t.Errorf("EncodeModule(%s) succeeded; only func and extern have an unparameterized "+
+				"heaptype encoding today", tc.src)
+			continue
+		}
+		if !strings.Contains(err.Error(), tc.contains) {
+			t.Errorf("EncodeModule(%s) = %q, want it to name %q — a heap type rendered in reftype "+
+				"spelling claims a nullability the grammar has no field for (grave #36)",
+				tc.src, err, tc.contains)
+		}
 	}
 }
 

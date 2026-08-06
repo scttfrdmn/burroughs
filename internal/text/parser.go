@@ -397,7 +397,9 @@ func (p *parser) externtype() (func() (importDesc, error), error) {
 		if _, err := p.bindidxOpt(&p.ctx.globals); err != nil {
 			return nil, err
 		}
-		f, err := p.importedGlobal()
+		// The type is dropped here and kept by the other caller: an `(import … (global …))` has no
+		// initializer, so its globaltype is only ever read through the descriptor.
+		_, f, err := p.importedGlobal()
 		if err != nil {
 			return nil, err
 		}
@@ -465,12 +467,18 @@ func (p *parser) externFuncDesc(kind importKind, idx func() (uint32, error)) fun
 // It closes the other two of #111's four newly-rejecting modules, for the same reason
 // `importedTable` closes its two — see that comment for the measurement and for why the count moved
 // by four rather than by the two a per-site reading predicts.
-func (p *parser) importedGlobal() (func() (importDesc, error), error) {
+// **It returns the parsed `globalType` as well as the thunk, and the pair is the point.** Both arms of
+// `global_fields` read a `globaltype` and only one of them is an import, so the defining arm needs the
+// *value* while the import arm needs the *descriptor* — and the helper stays the one reader either way.
+// The alternative, a second `p.globaltype()` call in `globalField`'s defining arm, is one production
+// with two readers, which is the shape #82's *one concept, one trigger* forbids and the shape grave
+// #105 was filed for.
+func (p *parser) importedGlobal() (globalType, func() (importDesc, error), error) {
 	gt, err := p.globaltype()
 	if err != nil {
-		return nil, err
+		return globalType{}, nil, err
 	}
-	return func() (importDesc, error) {
+	return gt, func() (importDesc, error) {
 		rv, err := p.ctx.resolveVal(gt.val)
 		if err != nil {
 			return importDesc{}, err
@@ -1113,6 +1121,15 @@ func (p *parser) tagField() error {
 // was the second place the old stratum boundary showed. Both arms now complete: measured, not
 // assumed, since a sentence about which of two spellings parses is the kind that goes stale
 // silently.
+//
+// **Both arms now *encode*, which is section 6 landing (#8).** The defining arm's initializer is read
+// into its own sink rather than into the enclosing one, for `elemexprRetained`'s reason: a const
+// expression is a self-contained `const c` with its own terminator (encode.ml:993), so instructions
+// belonging to one global must not run together with a neighbour's. `intoSink` gates on the *mode*
+// rather than on whether a sink is installed, which is grave #144 — and it matters here for the same
+// reason it mattered at module-field scope then: nothing installs a sink at this level, so asking
+// `retaining()` would return an empty sink on a parse that is retaining and emit `(global i32
+// (i32.const 7))` as a bare `0x0b` — a global with no initializer, decoding clean.
 func (p *parser) globalField() error {
 	kw := p.c.peek2()
 	if err := p.lpar(kwGlobal); err != nil {
@@ -1131,24 +1148,34 @@ func (p *parser) globalField() error {
 	if err != nil {
 		return err
 	}
-	fill, err := p.importedGlobal()
+	gt, fill, err := p.importedGlobal()
 	if err != nil {
 		return err
 	}
 	if imp.have {
 		return p.inlineImportTail(imp, kw, fill)
 	}
-	// The defining arm keeps parsing and stays unencodable: a defined global needs a global section
-	// and an initializer expression, and neither exists (#8's remaining arms). The thunk goes unused
-	// here — the *type* was still parsed by the same helper both arms use, which is the reference's
-	// shape too (`globaltype` appears in both :1080 and :1082).
+	// The defining arm. The *type* came from the same helper both arms use, which is the reference's
+	// shape too (`globaltype` appears at both :1080 and :1082) — only the thunk is the import's, and it
+	// goes unused here.
 	p.ctx.markDefined(importGlobal)
 	// constexpr is instr_list (parser.mly:951), so `(global i32)` with no initializer is
-	// well-formed *grammatically* — the arity is validation's complaint, not the parser's.
-	if err := p.instrList(); err != nil {
+	// well-formed *grammatically* — the arity is validation's complaint, not the parser's. It encodes
+	// to a bare `0x0b`, which is what the reference writes for the same input.
+	init, err := p.intoSink(p.instrList)
+	if err != nil {
 		return err
 	}
-	return p.rpar()
+	if err := p.rpar(); err != nil {
+		return err
+	}
+	// **After the closing paren**, on `memoryField`'s tail's rule: a field that errors out mid-way must
+	// leave no trace, or section 6's count disagrees with the grammar's on a module that never finished
+	// parsing.
+	p.ctx.defineGlobal(textGlobal{typ: gt, init: init})
+	p.ctx.noteDefined(importGlobal)
+	p.ctx.clearNonTypeField(kw)
+	return nil
 }
 
 // importedExternType parses an inline import's type and closes the field.

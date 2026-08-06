@@ -124,6 +124,7 @@ const (
 	secFunction  byte = 3
 	secTable     byte = 4
 	secMemory    byte = 5
+	secGlobal    byte = 6
 	secExport    byte = 7
 	secElem      byte = 9
 	secCode      byte = 10
@@ -261,6 +262,12 @@ func (p *parser) encode() ([]byte, error) {
 	if len(p.ctx.memDefs) > 0 {
 		w.section(secMemory, p.encodeMemories)
 	}
+	// Section 6 between memory and export, which is both `module_`'s order (encode.ml:1145-1150) and id
+	// order — the tag section sits between them in the reference and has no emitter here, so its absence
+	// changes nothing about the two neighbours.
+	if len(p.ctx.globalDefs) > 0 {
+		w.section(secGlobal, p.encodeGlobals)
+	}
 	if len(p.ctx.exports) > 0 {
 		w.section(secExport, p.encodeExports)
 	}
@@ -368,6 +375,13 @@ func (p *parser) encodableOrErr() error {
 		// `p.funcs = append(…)` line: `(module (func))` then emits an 8-byte bare preamble and this
 		// fires with `0 function definitions retained, 1 defined`.
 		{importFunc, len(p.funcs)},
+		// **The global row can fire, and unlike the func row's it does so on a spelling that exists.**
+		// `globalField` has two arms — the defining one, which reaches `defineGlobal`, and the inline-import
+		// one, which returns through `inlineImportTail` and records nothing here — so a third arm, or a
+		// mis-placed `noteDefined`, is a section 6 short by one entry. Falsified by deleting the
+		// `defineGlobal` call: `(module (global i32 (i32.const 0)))` then emits an 8-byte bare preamble and
+		// this fires with `0 global definitions retained, 1 defined`.
+		{importGlobal, len(p.ctx.globalDefs)},
 	} {
 		if got, want := k.retained, int(p.ctx.defCount[k.kind]); got != want {
 			return fmt.Errorf("text: internal: %d %s definitions retained, %d defined — an arm "+
@@ -471,6 +485,22 @@ func (p *parser) encodableOrErr() error {
 		if _, ok := valTypeByte(t.elem); !ok {
 			return fmt.Errorf("cannot yet encode table %d: element type %s needs a parameterized "+
 				"reference encoding, which arrives with the GC gate (#8)", i, t.elem)
+		}
+	}
+	// A defined global's type is the same frontier, and it is the *widest* of the three: a globaltype's
+	// valtype is any valtype at all — `(global anyref (ref.null any))` and `(global (ref func) …)` are
+	// both well-formed text — where a table's is a reftype and an element segment's likewise. Asked
+	// through `valTypeByte`, the one predicate, so this cannot disagree with what `encodeGlobals` writes.
+	//
+	// The *initializer* needs no check here: its instructions are refused at the cursor by
+	// `refuseUnencodable`, which is where an unencodable instruction has a token to point at, and the
+	// frontier record it sets is what the `haveNonType` check above reports. So the two halves of a
+	// global are refused by two different mechanisms, and that is the same division the code section uses
+	// — a func's signature is checked in the type loop below and its body at the cursor.
+	for i, g := range p.ctx.globalDefs {
+		if _, ok := valTypeByte(g.typ.val); !ok {
+			return fmt.Errorf("cannot yet encode global %d: type %s needs a parameterized reference "+
+				"encoding, which arrives with the GC gate (#8)", i, g.typ.val)
 		}
 	}
 	// An import's descriptor can hold a valtype in two of its five forms, and both are the same
@@ -667,6 +697,30 @@ func (p *parser) encodeTables(w *writer) {
 		t := p.ctx.tabDefs[i]
 		w.valType(t.elem)
 		w.limits(t.addr64, t.lim)
+	})
+}
+
+// encodeGlobals writes section 6: one entry per *defined* global, in source order (#8).
+//
+// `globaltype gt; const c` (encode.ml:991-993), which is three bytes' worth of decisions and no arms:
+// no mode flag, no index, and no family choice — section 6 is the simplest of the segment-shaped
+// sections precisely because a global is not a segment.
+//
+// **The field order is `valtype` then `mutability`** (`GlobalT (mut, t) -> valtype t; mutability mut`,
+// :193-194), which is the reverse of the OCaml constructor's own argument order and the reverse of the
+// text's `(mut i32)` spelling. So the tell for getting it wrong is the same one `encodeTables`
+// records: the decoder reads the first byte as a valtype, and `00`/`01` is `malformed value type`
+// rather than a plausible other module. The lucky failure — but `w.mutability` writing the wrong value
+// is the unlucky one, which is why that byte has its own function with its own direction argument.
+//
+// Cannot fail, on every other section's discipline: `defineGlobal`'s thunk resolved the type and
+// encoded the initializer in stage 2, and `encodableOrErr` refused anything left.
+func (p *parser) encodeGlobals(w *writer) {
+	w.vec(len(p.ctx.globalDefs), func(w *writer, i int) {
+		g := p.ctx.globalDefs[i]
+		w.valType(g.typ.val)
+		w.mutability(g.typ.mut)
+		w.bytes(g.init)
 	})
 }
 
@@ -928,6 +982,44 @@ func valTypeByte(v resolvedVal) (byte, bool) {
 		// would be ten arms with identical bodies that go stale the day an eleventh is added —
 		// deriving the domain instead of listing it, the same reason `heapWat`'s control ranges
 		// over `absoluteHeaptypes`. `TestEncodeRefusesWhatItCannotWrite` covers this path.
+		return 0, false
+	}
+}
+
+// heapTypeByte is the encoding of one resolved heap type, and its encodability predicate — the
+// `heaptype` half of what `valTypeByte` does for `reftype` (#8).
+//
+// **A heaptype is not a reftype, and the two are one byte at the same offset**, which is the
+// `elemKind`-versus-`valType` distinction one production lower down. `reftype`'s twelve abbreviation
+// arms *are* `s7` singletons (encode.ml:139-150) and its general arms prefix `-0x1d`/`-0x1c` before
+// recursing into `heaptype` (:150-151) — so `funcref` as a reftype is 0x70 and `func` as a heaptype is
+// also 0x70, while `(ref null func)` as a *reftype* is 0x70 and its heap type is the same byte read at
+// a different level. Two encodings agreeing on two values is what makes calling the wrong one
+// undetectable on the corpus: they diverge only on `null`, which a heaptype has no field for.
+//
+// So the argument for a separate function is not the byte table, it is the **question**. `ref.null`'s
+// immediate is a bare heaptype (`op 0xd0; heaptype t`, :414) with no nullability of its own — the
+// instruction *is* the null — and routing it through `valTypeByte` would ask a question with a `null`
+// field the grammar never supplied. The value arrives as a `resolvedVal` because `resolveVal` is the
+// one resolver, and `null` is whatever `heaptype`'s caller left there; this reads `abs`/`isIdx` and
+// deliberately ignores it.
+//
+// **Ungated domain is `func` and `extern`, the same two `valTypeByte` writes**, and for the same
+// reason: the other ten are GC's, which `decodeRefType` declines with the gate off, and the `isIdx`
+// form needs `typeuse s33`. Frontier by construction rather than by enumeration.
+func heapTypeByte(v resolvedVal) (byte, bool) {
+	if v.num != "" || v.isIdx {
+		return 0, false
+	}
+	switch v.abs {
+	case kwFunc:
+		return byte(binary.FuncRef), true
+	case kwExtern:
+		return byte(binary.ExternRef), true
+	default:
+		// `valTypeByte`'s fallback, for its stated reason — the two arms above are the whole
+		// ungated set, so one answer is right for everything else and ten identical arms would go
+		// stale at the eleventh.
 		return 0, false
 	}
 }

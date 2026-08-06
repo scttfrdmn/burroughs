@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"slices"
+	"strconv"
 )
 
 // The type index space's *content*, and the deferred phase that reads it.
@@ -192,6 +193,37 @@ type globalType struct {
 type resolvedGlobal struct {
 	val resolvedVal
 	mut bool
+}
+
+// textGlobal is one *defined* global as the parse read it: its type and its initializer (#8).
+//
+// **Two fields because `global` is two things**: `let Global (gt, c) = g.it in globaltype gt; const c`
+// (encode.ml:991-993). The type is unresolved for `globalType`'s reason — a `(ref null $t)` may name a
+// type defined later — and the initializer is an `instrSink` rather than bytes because an
+// instruction's *position* in the expression is the one thing that cannot be recovered in stage 2
+// (`instr`'s comment). Each instruction's own symbolic index still defers individually, through
+// `instr.patch`.
+//
+// Distinct from `resolvedGlobal` above, which is the *type* pair the import descriptor holds: an
+// imported global has a globaltype and no initializer, and merging them would put a field in the
+// import's descriptor that is meaningless for every import — the split `textData`/`resolvedData` and
+// `tabType`/`resolvedTable` both make, for the same reason.
+type textGlobal struct {
+	typ  globalType
+	init instrSink
+}
+
+// resolvedGlobalDef is a defined global after stage 2: the type resolved and the initializer encoded,
+// so the writer cannot fail.
+//
+// The pairing is the reference's — `globaltype gt; const c` — and the fields are in that order
+// because section 6's bytes are.
+type resolvedGlobalDef struct {
+	typ resolvedGlobal
+	// init is the const expression's bytes **including** its `0x0b` terminator, exactly as
+	// `resolvedData.offset` holds an offset's: `const c` is `list instr c.it; end_ ()`
+	// (encode.ml:912-913), and `constexpr` has no `end` token in the text.
+	init []byte
 }
 
 // importDesc is one import's descriptor: the kind, and whichever of the five payloads that kind
@@ -558,6 +590,32 @@ func (v resolvedVal) String() string {
 	return "(ref " + name + ")"
 }
 
+// heapString renders a resolved value type as a *bare heap type* — `func`, not `(ref func)`.
+//
+// **A separate renderer because `String` above is wrong for this position, not merely verbose.**
+// `ref.null`'s immediate is a bare `heaptype` (encode.ml:414), which has no nullability field, so
+// `String`'s spelling names a *reftype* — and for a heap type read out of `heaptype`, `null` holds
+// whatever that production's caller happened to leave there. A message reading "the heap type
+// `(ref func)`" quotes a construct at the wrong level and asserts a nullability the grammar never
+// supplied: the invented-evidence shape (grave #36), in the half of an error no expected string
+// covers.
+//
+// The two are deliberately kept as separate methods on the same struct rather than one with a flag,
+// for the reason `isElemKind` and `isFuncref` are: two renderings differing only in whether one
+// field is read are exactly the pair a later reader merges by accident, and keeping them apart at
+// the *question* makes the merge visible.
+//
+// The `num` arm cannot arise — `resolveVal` only produces `num` from `valType.num`, and a heaptype
+// carries none — so it is folded into the index arm rather than given a branch that no input
+// reaches. The index arm prints the number for the reason `String`'s comment gives: the identifier
+// is gone by resolution, by design.
+func (v resolvedVal) heapString() string {
+	if v.abs == "" {
+		return strconv.FormatUint(uint64(v.idx), 10)
+	}
+	return heapWat(v.abs)
+}
+
 // resolvedFunc is a functype whose value types are all resolved.
 type resolvedFunc struct {
 	params  []resolvedVal
@@ -619,6 +677,45 @@ func (c *context) defineTable(tt tabType) {
 			return err
 		}
 		c.tabDefs[i].elem = rv
+		return nil
+	})
+}
+
+// defineGlobal records a defined global, deferring its type and its initializer to stage 2 (#8).
+//
+// **`defineData`'s shape, copied rather than re-derived** — *lessons are indexed by shape* (#105) — and
+// both halves of the deferral are load-bearing for reasons the siblings already argue:
+//
+//   - the **type** can name a type index that forward-references, which is `defineTable`'s argument
+//     verbatim (`(global (ref null $t) …) (type $t (func))`), so resolving at the cursor would reject a
+//     valid module in the direction no vector speaks to (§9 G-3);
+//   - the **initializer** can be `global.get $g` naming an *imported* global bound later in the field
+//     list, and `global.wast:9`'s `(global $x (mut i32) (global.get $y))` shape is the reference's own
+//     — `module_fields1` evaluates every global field inside the second `fun () ->`, so `$y` need not be
+//     bound when the initializer is read.
+//
+// The initializer's instructions were retained at the *cursor*, by `globalField` calling `intoSink`,
+// and this thunk only encodes them: an instruction's position in the expression cannot go in a thunk
+// (`instr`'s comment), and each instruction's own symbolic index defers individually through
+// `instr.patch`. Same division of labour as `defineData`'s offset.
+//
+// **Defined globals only.** An imported global occupies the global index space and belongs to section
+// 2 — the population split `defineMemory`'s comment names, and the reason the import path builds a
+// `resolvedGlobal` through `importedGlobal` instead of arriving here.
+func (c *context) defineGlobal(g textGlobal) {
+	i := len(c.globalDefs)
+	c.globalDefs = append(c.globalDefs, resolvedGlobalDef{})
+	c.deferOp(func() error {
+		rv, err := c.resolveVal(g.typ.val)
+		if err != nil {
+			return err
+		}
+		c.globalDefs[i].typ = resolvedGlobal{val: rv, mut: g.typ.mut}
+		init, err := c.constExprBytes(g.init)
+		if err != nil {
+			return err
+		}
+		c.globalDefs[i].init = init
 		return nil
 	})
 }
