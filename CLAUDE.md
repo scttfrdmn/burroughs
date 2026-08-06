@@ -385,6 +385,19 @@ the choice, and consequences once Scott has called it.
     question belongs upstream with Scott — or is not this project's question. Directional
     silence is how a general-purpose runtime gets built by accident, one locally
     reasonable choice at a time.
+  - **No host-linking at v0, because the oracle never asks for it.** Doctrine, and it is a
+    *measured* negative rather than a deferral by taste: contract §3's host-import
+    machinery would answer **521** of the board's 3401 fails, and every one of those is an
+    import satisfied by *another module in the same script* or by `spectest` — not by a Go
+    host function. The suite has no vector that imports from an embedder, because a
+    conformance corpus cannot: it would have to specify the embedder. So the §3 API surface
+    that the thesis makes this engine's most Go-shaped feature is the one thing the oracle
+    is structurally incapable of scoring, and building it at v0 would be design in the
+    load-bearing spot with no witness (0006). What the 521 actually want is a *script-level
+    module registry* — `register`, and `(invoke $M …)` — which is harness work with an ADR
+    of its own, waiting for its consumer. State the negative when a recon returns one: an
+    unrecorded "we looked and there was nothing there" gets re-looked-for. (Ruling: Scott,
+    on the linking-frontier recon, #157.)
 - **Decision-before-code.** Design choices get `docs/decisions/NNNN-*.md`
   (context, options, choice, consequences) *before* implementation.
   Decisions Scott must make are flagged in reports, not made for him.

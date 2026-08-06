@@ -81,6 +81,7 @@ const (
 	KindAssertReturn                    // (assert_return (invoke "f" arg*) result*) — #7
 	KindInvoke                          // (invoke "f" arg*) at top level — a state mutation, #7
 	KindAssertTrapModule                // (assert_trap (module …) "text") — instantiation traps, 0015
+	KindAssertTrapAction                // (assert_trap (invoke "f" arg*) "text") — a trapping call, #157
 	KindUnsupported                     // anything phase 1 cannot execute
 )
 
@@ -102,6 +103,8 @@ func (k Kind) String() string {
 		return "invoke"
 	case KindAssertTrapModule:
 		return "assert_trap (module)"
+	case KindAssertTrapAction:
+		return "assert_trap (invoke)"
 	default:
 		return "unsupported"
 	}
@@ -398,17 +401,23 @@ func classify(n node, src []byte) Command {
 		return Command{Kind: KindUnsupported, Line: n.line, Head: head}
 
 	case "assert_trap":
-		// **Only the module-wrapping shape, and the narrowness is the whole point.**
-		// `assert_trap` has two populations: `(assert_trap (invoke …) "text")`, the great
-		// majority, waiting on the interpreter's trapping paths, and `(assert_trap (module …)
-		// "text")`, which is what 0015 was written for — a module that traps *while coming to
-		// life*, with no invoke anywhere in the form. This arm admits the second and leaves
-		// the first in the unsupported column where it is visible.
+		// **Two populations, two Kinds, and the split is why there are two.** `assert_trap`
+		// wraps either a module — `(assert_trap (module …) "text")`, a module that traps
+		// *while coming to life*, which is what 0015 was written for — or an action,
+		// `(assert_trap (invoke "f" arg*) "text")`, a call that traps once an instance
+		// exists. They need different engine surfaces: the action shape needs an instance
+		// and then a trapping call, the module shape needs instantiation itself to be able
+		// to trap, which is the return-type change 0015 records. One Kind for both would be
+		// one Kind two different components answer.
 		//
-		// Split this way because the two need different engine surfaces: the action shape
-		// needs an instance and then a trapping call, the module shape needs instantiation
-		// itself to be able to trap, which is the return-type change 0015 records. Admitting
-		// both here would have made one Kind that two different components answer.
+		// The action shape sat in the unsupported column deliberately while the interpreter
+		// had no trapping paths worth asking about, and this arm's comment said so. **That
+		// sentence outlived its subject**: the trapping paths landed with the bulk trio, and
+		// a recon (#157) put the population at 4903 commands of which 4876 are
+		// classifiable under the rules already here and 2893 pass. A classification seam
+		// left where a component used to be is a column that stops meaning "cannot ask" and
+		// starts meaning "did not ask" — which is the disappearance decision 0010's guards
+		// exist to prevent, arriving through the third column instead of the fourth.
 		//
 		// **The module-wrapping population is 54, not the 14 this arm was written for**, and
 		// the correction came from measuring the corpus rather than from reading `data1.wast`:
@@ -418,16 +427,55 @@ func classify(n node, src []byte) Command {
 		// (grave #106). The 40 outside data1 need element segments, linking, or a start
 		// function, so they will not pass here yet — they *fail* honestly rather than sitting
 		// unclassified, which is the point of admitting the shape rather than the file.
-		if len(n.list) == 3 && n.list[1].isList() && n.list[2].isS &&
-			n.list[1].head() == "module" {
-			// A wat-bodied module only: all 54 are the bare `(module <fields>)` form —
-			// measured, no `binary` or `quote` variant of this shape exists in the corpus.
-			if kw := moduleFormKeyword(n.list[1]); kw == "" {
-				return Command{
-					Kind: KindAssertTrapModule, Line: n.line, Head: head,
-					Source: n.list[1].span(src), Expect: string(n.list[2].str),
-					Needs: CapInterpreter,
+		if len(n.list) == 3 && n.list[1].isList() && n.list[2].isS {
+			if n.list[1].head() == "module" {
+				// A wat-bodied module only: all 54 are the bare `(module <fields>)` form —
+				// measured, no `binary` or `quote` variant of this shape exists in the corpus.
+				if kw := moduleFormKeyword(n.list[1]); kw == "" {
+					return Command{
+						Kind: KindAssertTrapModule, Line: n.line, Head: head,
+						Source: n.list[1].span(src), Expect: string(n.list[2].str),
+						Needs: CapInterpreter,
+					}
 				}
+				// No second `return` for a declined module form: `invokeAction` is keyed on
+				// the head atom, so a `(module definition …)` falls through it and out the
+				// bottom of this arm unsupported anyway. Written with the explicit return
+				// first and **removed after the mutation that should have killed it did
+				// not** — a branch no falsification can reach is a no-op wearing a guard's
+				// clothes, which is the stillborn-control shape (#108) in engine code rather
+				// than in a test.
+			}
+			// The action shape, read by the **same** `invokeAction` the `assert_return` and
+			// bare-`invoke` arms use, so the three agree by construction about which actions
+			// are askable rather than by three authors agreeing. The declines it carries are
+			// decisions about the corpus — the module-selecting `(invoke $M …)` form, NaN-class
+			// arguments — and a copy of them here would be a second answer to that question.
+			// Graves #78, #105 and #106 are all one fact in two places; this arm is where the
+			// fourth one would have gone.
+			//
+			// **47 fall out here, not the recon's 27, and the correction is the recon's own
+			// blind spot rather than a change in the corpus.** Measured through this function —
+			// `invokeAction` asked directly over every `assert_trap` node — the declines are 20
+			// naming a module with `(invoke $M …)` and **27** carrying an argument `readConst`
+			// cannot read (`ref.extern`, `ref.null`), against a population of **4923**. The
+			// recon's population probe required element 1 to be a string, which is
+			// `invokeAction`'s *own* accept condition, so it could not count the twenty forms
+			// that fail on exactly that test: premise and subject shared an assumption, and both
+			// halves of its 4903/27 were short by the same 20. That is grave #106's shape in a
+			// census — *a premise measured over the same sample the code reads is an echo* — and
+			// the figures here come from the code path, printed. They stay unsupported with the
+			// head recorded.
+			//
+			// **No results to read**, which is the one field this shape does not share with
+			// `assert_return`: a trapping call returns nothing, so the expectation is the trap
+			// text in `Expect` and `Results` stays nil. That is also why the run loop's arm
+			// cannot be shared with `KindAssertReturn` the way `KindInvoke`'s is — the two
+			// disagree about whether an error is the answer or the failure.
+			if c, ok := invokeAction(n.list[1]); ok {
+				c.Kind, c.Line, c.Head = KindAssertTrapAction, n.line, head
+				c.Expect = string(n.list[2].str)
+				return c
 			}
 		}
 		return Command{Kind: KindUnsupported, Line: n.line, Head: head}
@@ -975,6 +1023,24 @@ type ReadTextFunc func(src []byte) error
 // the harness guessing at the taxonomy it is supposed to be checking.
 type GatedFunc func(error) bool
 
+// TrapFunc reports whether an engine error is a *trap* — the guest program dying the way
+// the spec says it may — rather than a verdict, a gate decline, or a component the engine
+// does not have yet.
+//
+// **Injected for GatedFunc's reason, and it is the same hazard one Kind over.** An
+// `assert_trap` supplies the trap text it wants and the arm matches it as a substring, so a
+// *non-trap* error quoting that phrase would score a pass the engine never earned. The
+// malformed arms make that collision impossible by asking `isGated` before matching rather
+// than by hoping feature names never collide with spec strings; this is the same move, and
+// without it the collision is invisible on the board by construction — the vector is green,
+// the trap never happened, and no expected string in the corpus reaches far enough to say
+// so (contract §9 G-3).
+//
+// A predicate rather than a `trap: ` prefix test, because the prefix is the *engine's*
+// rendering convention and this package may not know it (contract §0). The caller holds
+// both type systems and answers with `errors.As`.
+type TrapFunc func(error) bool
+
 // Instance is a module the engine has made executable, opaque to the harness.
 //
 // `any`, and the emptiness is the neutrality rule (contract §0) rather than laziness: the
@@ -1038,6 +1104,13 @@ type Engine struct {
 	Decode   DecodeFunc
 	ReadText ReadTextFunc
 	IsGated  GatedFunc
+
+	// IsTrap is required by the assert_trap action arm and by nothing else, so it is nil
+	// for every caller that scores only module and malformed forms. A nil IsTrap makes the
+	// arm score no pass at all rather than falling back to a text test: a harness that
+	// cannot tell a trap from an error has not been given what it needs to judge a trap,
+	// and quietly judging anyway is the accept-direction defect the field exists to close.
+	IsTrap TrapFunc
 
 	// Instantiate and Invoke are the interpreter's two halves, and they are separate
 	// fields because they are separate obligations: an engine can decode a module without
@@ -1118,6 +1191,13 @@ func (s *Script) run(opts runOpts) *Result {
 	}
 	isGated := func(err error) bool {
 		return err != nil && opts.IsGated != nil && opts.IsGated(err)
+	}
+	// A nil IsTrap answers "no", so an assert_trap action scores a *fail* rather than a
+	// pass — see Engine.IsTrap. Same defaulting as isGated above and the opposite
+	// consequence, which is the honest direction in both cases: an absent predicate makes
+	// the harness decline to award, never decline to notice.
+	isTrap := func(err error) bool {
+		return err != nil && opts.IsTrap != nil && opts.IsTrap(err)
 	}
 	// cur is the instance the *most recent* module command produced, which is what an
 	// `assert_return` runs against.
@@ -1376,12 +1456,20 @@ func (s *Script) run(opts runOpts) *Result {
 				Stratum: StratumExec,
 			})
 
-		case KindAssertReturn, KindInvoke:
-			// **Two kinds, one arm, and the sharing is the point.** A bare `(invoke …)` is an
-			// assert_return with no expectation: it needs the same instance, the same
-			// no-instance accounting, the same gate handling, and the same error bucketing,
-			// and it differs only in having nothing to compare afterwards. A second arm would
-			// be a second copy of all of that, drifting from this one on the next change.
+		case KindAssertReturn, KindInvoke, KindAssertTrapAction:
+			// **Three kinds, one arm, and the sharing is the point.** All three call an
+			// exported function on the current instance, so they need the same instance, the
+			// same no-instance accounting, the same gate handling, and the same panic on a
+			// declared-but-absent component. A bare `(invoke …)` is an assert_return with no
+			// expectation; an `assert_trap` action is one whose expectation is an error. A
+			// separate arm would be a second copy of all the state handling, drifting from
+			// this one on the next change.
+			//
+			// They part company at exactly one line — whether a non-nil error from Invoke is
+			// the answer or the failure — and that branch is below, ahead of the error
+			// bucketing, for the same reason the gate check precedes the substring match on
+			// the malformed arms: order is what makes the two readings impossible to confuse
+			// rather than merely unlikely to be.
 			//
 			// Reachable only when a caller declares CapInterpreter, and the same
 			// re-pointed tripwire the text kinds carry: a declaration with no component
@@ -1392,6 +1480,19 @@ func (s *Script) run(opts runOpts) *Result {
 				panic(fmt.Sprintf("%s:%d: CapInterpreter declared but no %s was supplied; "+
 					"the capability registry is ahead of the engine", s.Path, c.Line,
 					map[bool]string{true: "InstantiateFunc", false: "InvokeFunc"}[opts.Instantiate == nil]))
+			}
+			// The third component, required by this Kind alone. **A panic rather than the
+			// nil-predicate default**, which reads as a contradiction of Engine.IsTrap's
+			// comment and is the resolution of it: the default keeps a *missing* predicate
+			// from awarding passes, and this keeps a missing predicate from silently failing
+			// 4876 vectors the engine can answer. Both are the same rule — the harness never
+			// degrades quietly — and a caller who declares the interpreter and hands over no
+			// trap predicate is in the registry-ahead-of-the-engine state the other two
+			// halves already name. *Silent degradation is a skip one step quieter.*
+			if c.Kind == KindAssertTrapAction && opts.IsTrap == nil {
+				panic(fmt.Sprintf("%s:%d: CapInterpreter declared but no TrapFunc was supplied; "+
+					"an assert_trap action cannot be judged without one, and judging it anyway "+
+					"would score a non-trap error as a trap", s.Path, c.Line))
 			}
 			// No instance: the module command that should have produced one failed, was
 			// gate-declined, or never appeared. **Its own bucket, never the invoke's** —
@@ -1440,6 +1541,61 @@ func (s *Script) run(opts runOpts) *Result {
 			out, err := opts.Invoke(cur, c.Invoke, c.Args)
 			if isGated(err) {
 				r.gate(c)
+				continue
+			}
+			if c.Kind == KindAssertTrapAction {
+				// The trap *is* the expected result: an error is required, it must be a real
+				// trap, and its text must contain the spec's expected string — matched as a
+				// substring per decision 0003, the same rule every other expected-text arm
+				// uses, against a string `Trap.Error` renders verbatim for exactly this
+				// reason.
+				//
+				// **`isTrap` before the substring match**, which is the malformed arms' gate
+				// ordering pointed at a different collision and is the whole reason TrapFunc
+				// is injected. A non-trap error quoting the expected phrase would otherwise
+				// score a pass the engine never earned, and no expected string in the corpus
+				// reaches far enough to notice. The recon (#157) measured 0 such passes in
+				// today's engine, which is a fact about today's engine; this line is what
+				// makes it a fact about the harness.
+				got := ""
+				if err != nil {
+					got = err.Error()
+				}
+				if err != nil && isTrap(err) && strings.Contains(got, c.Expect) {
+					r.Pass++
+					continue
+				}
+				r.Fail++
+				// Three failure modes, three keys, because they are three different findings
+				// and one key would make the column name none of them:
+				//
+				//   - **No error at all**: the call ran and returned values where the suite
+				//     wants a trap. That is a *semantic* disagreement — the engine computed
+				//     something the spec says is impossible — and it is the reading of this
+				//     population most worth surfacing, so it is keyed by the expectation and
+				//     carries the values in its Got.
+				//   - **An error that is not a trap**: almost always a missing arm or the
+				//     linking debt, and keyed by the engine's own text so it partitions into
+				//     the opcode work list the way the assert_return arm's does.
+				//   - **A trap with the wrong text**: keyed by the expectation, since what the
+				//     suite wanted is the work plan and the engine's text is in the Got beside
+				//     it. Distinguished from the first case by the key's suffix rather than
+				//     folded into it, because "trapped wrongly" is a much smaller job than
+				//     "did not trap".
+				key := "assert_trap (invoke) expected: " + c.Expect
+				switch {
+				case err == nil:
+					got = fmt.Sprintf("the call returned %d results (%s) without trapping",
+						len(out), joinVals(out))
+				case !isTrap(err):
+					key = got
+				default:
+					key += " (trapped with other text)"
+				}
+				r.Buckets[key] = append(r.Buckets[key], Failure{
+					Line: c.Line, Expect: c.Expect, Got: got, Kind: c.Kind,
+					Stratum: StratumExec,
+				})
 				continue
 			}
 			if err != nil {
