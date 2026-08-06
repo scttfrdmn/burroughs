@@ -210,38 +210,55 @@ func (in *Instance) tableFor(what string, idx uint64) (*table, error) {
 	return in.tables[idx], nil
 }
 
-// initElem copies one active element segment into its table at time zero.
+// runElem performs one element segment's instantiation-time effect — `run_elem`
+// (`eval.ml:1264-1277`), whose three modes emit three different instruction sequences:
 //
-// **Passive and declarative segments are copied nowhere, which is `run_elem`'s own shape**
-// (`eval.ml:1263-1273`): Passive emits no instructions at all, Active emits the offset expression
-// followed by `table.init` then `elem.drop`, and Declarative emits only the drop. So this early
-// return is a statement about instantiation and not about retention — the decoder keeps all three
-// modes' elements, because `ref.func` may name a declarative segment's functions and `table.init`
-// may name a passive one's.
+//	Passive      -> []
+//	Active (y,c) -> c; i32.const 0; i32.const len; table.init y x; elem.drop x
+//	Declarative  -> elem.drop x
 //
-// The element *dropping* the reference does after each copy is not modelled: `elem.drop` frees a
-// segment so `table.init` cannot read it twice, and neither instruction has an arm yet. Stated
-// rather than left to be noticed, because a passive segment that is never dropped is
-// indistinguishable from a correct one until `table.init` exists (#7).
-func (in *Instance) initElem(seg *binary.ElemSegment) error {
-	if seg.Mode != binary.ElemActive {
+// So **two of the three modes drop, and only Passive survives instantiation with contents.** The
+// copy is `blit` rather than a literal `table.init` because the operands are known here — offset
+// from the segment's own const-expr, source 0, length the whole segment — and staging three
+// constants onto a stack to re-derive them would be transcription over translation. What is *not*
+// a liberty is the drop: it is an observable state change, and `bulk.wast:250-270` is the vector
+// that observes it (see segment.go).
+//
+// The earlier shape of this function returned early for the two non-active modes and modelled no
+// drop at all, with a comment saying so and citing #7. That deferral is discharged here: the drop
+// is the reason `table.init` cannot land without it.
+func (in *Instance) runElem(idx int, seg *binary.ElemSegment) error {
+	if seg.Mode == binary.ElemPassive {
 		return nil
 	}
-	tab, err := in.tableFor("element segment", uint64(seg.TableIndex))
+	// **A trapping copy does not drop, and the ordering below is the reference's rather than a
+	// convenience.** The drop is a *later instruction* in `run_elem`'s sequence, so a trapping
+	// `TableInit` aborts before it. Whether that is observable is a separate question with a
+	// measured answer: through this module's own exports it is not, because the trap propagates
+	// out of instantiation and the instance never runs — but `linking.wast:413` is the pattern
+	// where a failed instantiation's *earlier* side effects are asserted from the next command, so
+	// the class is observable and this one is not distinguished from it by inspection.
+	inst, err := in.elemFor("element segment", uint64(idx))
 	if err != nil {
 		return err
 	}
-	off, err := in.constExprValue(seg.Offset)
-	if err != nil {
-		return err
+	if seg.Mode == binary.ElemActive {
+		tab, err := in.tableFor("element segment", uint64(seg.TableIndex))
+		if err != nil {
+			return err
+		}
+		off, err := in.constExprValue(seg.Offset)
+		if err != nil {
+			return err
+		}
+		// Offset 0 with an empty segment is in bounds for a zero-length table, which blit gets
+		// right for free — the same freebie write gets, and for the same reason.
+		if err := tab.blit(off, inst.refs); err != nil {
+			return err
+		}
 	}
-	rs, err := in.segmentRefs(seg)
-	if err != nil {
-		return err
-	}
-	// Offset 0 with an empty segment is in bounds for a zero-length table, which blit gets
-	// right for free — the same freebie write gets, and for the same reason.
-	return tab.blit(off, rs)
+	inst.drop()
+	return nil
 }
 
 // segmentRefs evaluates a segment's elements to reference values, in whichever of the two forms

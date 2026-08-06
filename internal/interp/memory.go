@@ -197,8 +197,16 @@ func (m *memory) grow(delta uint64) int64 {
 	return int64(old)
 }
 
-// initData copies one active data segment into its memory at instantiation — the trapping half
-// of 0015.
+// runData performs one data segment's instantiation-time effect — `run_data`
+// (`eval.ml:1278-1291`), the trapping half of 0015.
+//
+// **Two modes, not three, and one of them drops.** A data segment is Passive (no effect) or
+// Active (copy, then `data.drop`); the reference's Declarative arm is `assert false` for data,
+// which is why `DataSegment.Passive` is a bool where `ElemMode` is an enum. So this is
+// `runElem`'s shape minus the declarative case, and the drop is load-bearing for the same
+// reason — `bulk.wast:153-173` is the memory twin of the `init_passive`/`drop_passive` pattern,
+// with `:172` asserting `out of bounds memory access` for a one-byte init out of a dropped
+// segment.
 //
 // **The trap is the point.** `data1.wast` is 14 vectors of `assert_trap` wrapping a bare module,
 // every one expecting `out of bounds memory access`, none of them invoking anything: a segment
@@ -216,9 +224,13 @@ func (m *memory) grow(delta uint64) int64 {
 // *reserved-but-empty* slot, so as soon as import slots became reachable a data segment aimed at
 // an imported memory dereferenced nil and panicked. Two places knowing "how to turn a memory
 // index into a memory" is the shape that produced graves #78, #105 and #106; there is now one.
-func (in *Instance) initData(seg *binary.DataSegment) error {
+func (in *Instance) runData(idx int, seg *binary.DataSegment) error {
 	if seg.Passive {
 		return nil
+	}
+	inst, err := in.dataFor("data segment", uint64(idx))
+	if err != nil {
+		return err
 	}
 	mem, err := in.memoryFor("data segment", uint64(seg.MemIndex))
 	if err != nil {
@@ -230,7 +242,13 @@ func (in *Instance) initData(seg *binary.DataSegment) error {
 	}
 	// Offset 0 with an empty segment is in bounds for a zero-length memory, which `write`
 	// gets right for free: `n == 0` makes the extent check `ea > len`, and ea is 0.
-	return mem.write(off, 0, seg.Init)
+	//
+	// A trapping copy does not drop, for `runElem`'s reason and with the same ordering.
+	if err := mem.write(off, 0, inst.bytes); err != nil {
+		return err
+	}
+	inst.drop()
+	return nil
 }
 
 // constExprValue evaluates a data segment's offset expression to an address.

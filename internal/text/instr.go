@@ -189,6 +189,17 @@ const (
 	catTable
 	catData
 	catElem
+
+	// catFieldOfType is `struct.get`/`struct.set`'s second index: the field space **of the struct
+	// type the first index names**, not a module-level space at all (`field` at parser.mly:162 is
+	// `Lib.List32.nth c.types.fields x`). It is in the enum because `idxPairLookupKinds` must be able
+	// to *name* it — the alternative is a missing row, which reads as an omission rather than as a
+	// space this stratum does not have (#6). `idxSpaceFor` returns nil for it, which is a refusal.
+	//
+	// Never a *first* category, so `refCategoryNames` has no entry and the single-index control never
+	// meets it. That asymmetry is deliberate and is asserted rather than assumed — see
+	// TestFieldOfTypeIsNeverAFirstCategory.
+	catFieldOfType
 )
 
 // idxLookupKinds is the lookup category each `plaininstr` arm's **first** index takes.
@@ -249,6 +260,118 @@ var idxLookupKinds = map[keywordKind]idxCategory{
 	"THROW": catTag,
 }
 
+// initReversedKinds are the mnemonics whose two index immediates are encoded in the **reverse** of
+// the written order.
+//
+// Read off `encode.ml`, which is the only authority for it — the *grammar* says which space each
+// written index resolves in and says nothing at all about emission order, so this fact lives in a
+// different file from `idxPairLookupKinds` and needs its own control. Four arms in the reference
+// reverse:
+//
+//	CallIndirect       (x, y) -> op 0x11;          idx y; idx x   (:275)
+//	ReturnCallIndirect (x, y) -> op 0x13;          idx y; idx x   (:278)
+//	TableInit          (x, y) -> op 0xfc; 0x0cl;   idx y; idx x   (:294)
+//	MemoryInit         (x, y) -> op 0xfc; 0x08l;   idx y; idx x   (:411)
+//
+// and the seven other two-index arms (`TableCopy`, `MemoryCopy`, and the five `fb` array forms) do
+// not. Only two are here: the `call_indirect` pair does not route through `retainIdxPair` at all,
+// its immediates being built by `callIndirectImm`'s patch because a typeuse must be interned in
+// stage 2 — and *that* function already reverses, with its own citation to these same lines. Two
+// places knowing one fact is the #78/#105/#106 shape, so the drift control names all four reversing
+// arms and states which mechanism carries each; the alternative (routing `call_indirect` through
+// here) would put a patch-shaped resolution behind a cursor-shaped API for the sake of a set.
+//
+// **Scoped to the space** by the control rather than by this map: the test extracts every
+// `idx <var>; idx <var>` arm from `encode.ml` and requires the reversing ones to be exactly these
+// four, so an upstream arm that starts or stops reversing fails the board.
+var initReversedKinds = map[keywordKind]bool{
+	"TABLE_INIT":  true,
+	"MEMORY_INIT": true,
+}
+
+// idxPair is the two lookup categories a two-index `plaininstr` arm passes, in **written** order.
+type idxPair struct{ first, second idxCategory }
+
+// idxPairLookupKinds is the fact `idxLookupKinds` deliberately defers: for an arm that passes *two*
+// lookup categories, both of them.
+//
+// **The two tables disagree about the same kind, and the disagreement is the point.**
+// `idxLookupKinds` records the category a *written* index takes, which for `table.init` is the
+// **sugar** arm's — `TABLE_INIT idx { table_init (0l @@ …) ($2 c elem) }` (parser.mly:589), so one
+// written index is an `elem`. This table records the **two-index** arm — `TABLE_INIT idx idx
+// { table_init ($2 c table) ($3 c elem) }` (:587-588) — so `first` is `catTable` where the other
+// table says `catElem`. Neither is wrong; they answer different questions, and a reader that
+// consulted one for the other's question would resolve `table.init $t $e`'s first index in the
+// element space: a legal image denoting a different instruction, invisible to the suite (§9 G-3).
+//
+// **Scoped to the space, not to the slice** (#33's widening rule): all eight arms are listed,
+// including the five `fb` array forms this stratum cannot encode at all, so an arm arriving upstream
+// lands as a failure rather than as an omission. TestIdxPairLookupKindsMatchTheReference is the
+// authority, and it reads the *arm with the most* categories where the single-index control reads
+// the arm with the fewest — the same extraction, the opposite selector.
+//
+// **`table.copy` and `memory.copy` are absent, and that is not an oversight.** Their arms read
+// `idx_idx_opt`, which passes one lookup to *both* indices (`$1 c lookup, $2 c lookup`, :497), so
+// the reference itself names one category for the pair and `idxLookupKinds` already holds it. A row
+// here would be a second copy of that one fact.
+var idxPairLookupKinds = map[keywordKind]idxPair{
+	// The two whose second arm is sugar. `MEMORY_INIT idx idx` is
+	// `memory_init ($2 c memory) ($3 c data)` (:607).
+	"TABLE_INIT":  {catTable, catElem},
+	"MEMORY_INIT": {catMemory, catData},
+
+	// The five `fb` array arms (:70-78 of the production), all `type_` first. Listed because the
+	// table is scoped to the space; refused at `encodableShapes` long before a category is consulted.
+	"ARRAY_COPY":      {catType, catType},
+	"ARRAY_NEW_ELEM":  {catType, catElem},
+	"ARRAY_NEW_DATA":  {catType, catData},
+	"ARRAY_INIT_ELEM": {catType, catElem},
+	"ARRAY_INIT_DATA": {catType, catData},
+
+	// `br_table`'s first label and the first member of its list take the same category, and
+	// `idxList` resolves the rest — a row all the same, because the extractor sees two `c label`
+	// in the arm and an unexplained omission is the unreachable-error pattern in a table's clothes.
+	"BR_TABLE": {catLabel, catLabel},
+
+	// **The two whose second space is not in the enum**, and they are `catFieldOfType` rather than
+	// absent for #6's reason: `STRUCT_GET idx idx` is
+	// `let x = $2 c type_ in $1 x ($3 c (field x.it)).it` (:622), whose second lookup is
+	// `(field x.it)` — the field space *of the type the first index just named* (`field` at :162 is
+	// `Lib.List32.nth c.types.fields x`), one space per struct type rather than one module-wide
+	// space. So there is nothing for `idxSpaceFor` to return, and a row saying so is what keeps
+	// the omission from reading as a gap.
+	//
+	// These two are why the pair control cannot reuse the single-index control's extractor. That one
+	// matches `c <word>` against a ten-way alternation of the module-level space names; `(field
+	// x.it)` is not a word in that alternation, so the alternation instrument finds **8** two-lookup
+	// arms and a positional `$N c <expr>` instrument finds **10** — the discrepancy being exactly
+	// these two kinds. A suspiciously clean agreement between two supposedly independent readings of
+	// the same file is the tell grave #106 was filed for; here the two readings *disagree*, and the
+	// disagreement is the finding. See TestIdxPairLookupKindsMatchTheReference, which uses the
+	// positional reader for exactly this reason — and which now asserts the discrimination rather
+	// than a count, because the 8 is also the pair floor and a floor cannot see a 2-of-10 loss.
+	//
+	// **This sentence said 9 until the extractor was written and printed 10.** A number typed ahead
+	// of the instrument that measures it, in prose whose whole subject is two instruments disagreeing
+	// by exactly the amount the wrong figure understated.
+	"STRUCT_GET": {catType, catFieldOfType},
+	"STRUCT_SET": {catType, catFieldOfType},
+}
+
+// pairCategories returns the categories a two-index arm's indices resolve against.
+//
+// The fallback is the copy arms' case, stated above: one category for both indices, held in
+// `idxLookupKinds`. Written as a lookup with a fallback rather than as rows in `idxPairLookupKinds`
+// so the pair table stays exactly the set the reference gives two lookups, which is what its drift
+// control can check.
+func pairCategories(k keywordKind) idxPair {
+	if p, ok := idxPairLookupKinds[k]; ok {
+		return p
+	}
+	cat := idxLookupKinds[k]
+	return idxPair{cat, cat}
+}
+
 // idxSpaceFor returns the index space a category resolves against, or nil when this stratum cannot
 // resolve it yet.
 //
@@ -276,9 +399,10 @@ func (p *parser) idxSpaceFor(cat idxCategory) *space {
 		return &p.ctx.datas
 	case catElem:
 		return &p.ctx.elems
-	case catLabel, catNone:
+	case catLabel, catNone, catFieldOfType:
 		// A label is resolved by `labelIdx` against the lexical label stack, not by a space —
 		// see labelTakingKinds. catNone reaches here only from a shape with no index.
+		// catFieldOfType has no module-level space to be: see its constant.
 		return nil
 	}
 	return nil

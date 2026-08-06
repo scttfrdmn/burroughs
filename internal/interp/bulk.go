@@ -4,15 +4,31 @@ import (
 	"github.com/scttfrdmn/burroughs/internal/binary"
 )
 
-// The bulk memory and table operations: `fc 0a` memory.copy, `fc 0b` memory.fill, `fc 0e`
-// table.copy.
+// The bulk memory and table operations: `fc 08` memory.init, `fc 09` data.drop, `fc 0a`
+// memory.copy, `fc 0b` memory.fill, `fc 0c` table.init, `fc 0d` elem.drop, `fc 0e` table.copy.
 //
-// # One shape, three instances, and the shape is the reference's
+// # One shape, five instances, and the shape is the reference's
 //
-// All three read `Num n :: Num s :: Num d` (or `n :: k :: i` for fill) off the stack, check
-// bounds on every region they will touch, exit on a zero length, and then move bytes or refs.
-// `eval.ml:549` (MemoryFill), `:567` (MemoryCopy), `:395` (TableCopy) are that sequence three
-// times, and the *order* of the first two steps is load-bearing — see `outOfBounds`.
+// The five that move data all read `Num n :: Num s :: Num d` (or `n :: k :: i` for fill) off the
+// stack, check bounds on every region they will touch, exit on a zero length, and then move bytes
+// or refs. `eval.ml:549` (MemoryFill), `:567` (MemoryCopy), `:395` (TableCopy), `:427`
+// (TableInit), `:603` (MemoryInit) are that sequence five times, and the *order* of the first two
+// steps is load-bearing — see `outOfBounds`.
+//
+// The two drops are not that shape at all: `ElemDrop` and `DataDrop` pop nothing, check nothing,
+// and empty a segment (`:446`, `:624`). They are here because they are the same *segment state*
+// as the two `init`s and meaningless apart from them — see segment.go on why `table.init` cannot
+// land without them.
+//
+// # The `init` pair differs from the `copy` pair in the one way that reverses an immediate
+//
+// `memory.init x y` and `table.init x y` name the destination *first* in the text and second in
+// the encoding — `TableInit (x, y) -> op 0xfc; u32 0x0cl; idx y; idx x` (`encode.ml:294`),
+// `MemoryInit` likewise at `:411`, against `TableCopy`'s in-order `idx x; idx y` at `:293`. So on
+// the wire `Imm0` is the **segment** and `Imm1` is the table or memory, which is the opposite
+// assignment from the copy arms three functions down, and the decoder's `0x0cl -> let y = at idx s
+// in let x = at idx s in table_init x y` (`decode.ml:674`) is where that reversal is read back.
+// The arms below therefore resolve `Imm1` as the destination, and it is not a typo.
 //
 // The reference expresses the move as a self-recursive rewrite: it emits a one-element
 // load/store plus a re-entry with `n-1`, so a fill of 64 KiB is 65536 administrative steps. That
@@ -153,6 +169,124 @@ func (in *Instance) execTableCopy(ins binary.Instr, st *stack) error {
 		return nil
 	}
 	copy(dstTab.slots[d:d+n], srcTab.slots[s:s+n])
+	return nil
+}
+
+// execTableInit is `fc 0c` — `table.init x y`, `eval.ml:427`.
+//
+//	| TableInit (x, y), Num n :: Num s :: Num d :: vs' ->
+//	  if table_oob c.frame x d n || elem_oob c.frame y s n then Trap Table.Bounds
+//	  else if n = 0 then vs'
+//
+// **`Imm1` is the table and `Imm0` is the element segment** — the reversal this file's header
+// derives from `encode.ml:294` and `decode.ml:674`. Resolving them the other way round is the
+// mutation that must move a board figure, not an argument (see bulk_test.go's ledger).
+//
+// Both regions are checked before either is touched and *before* the zero-length exit, which is
+// `outOfBounds`'s standing note: a zero-length init at exactly the segment's end is legal and one
+// element past it traps. `bulk.wast:265` and `:268` are that pair for the *dropped* segment case,
+// where the segment's size is 0 so every non-zero length is out of bounds.
+//
+// The destination bound is the table's size in elements and the source bound is the segment's, so
+// the two `outOfBounds` calls take different `j` — the shape `execTableCopy` has with two tables.
+func (in *Instance) execTableInit(ins binary.Instr, st *stack) error {
+	tab, err := in.tableFor("instruction", ins.Imm1)
+	if err != nil {
+		return err
+	}
+	seg, err := in.elemFor("instruction", ins.Imm0)
+	if err != nil {
+		return err
+	}
+	if err := st.needNum(3); err != nil {
+		return err
+	}
+	// `Num n :: Num s :: Num d :: vs'` — the length pops first.
+	//
+	// **Only the destination takes the table's width, and `table.init` differs from
+	// `table.copy` in exactly that.** `valid.ml:641` types this
+	// `[numtype_of_addrtype at; I32T; I32T]`: the destination is the table's address type, and
+	// the source index and **the length** are i32 whatever the table is — where
+	// `table.copy`'s length is `numtype_of_addrtype (min at1 at2)` (`:632`), a real address
+	// type. A segment is indexed rather than addressed, so its own bound has no width, and the
+	// length is bounded by the *segment* side of the pair.
+	//
+	// So `s` and `n` are popped as-is. They arrive already zero-extended — `pushI32` is
+	// `uint64(uint32(v))`, which is what `addr_of_num`'s `extend_i32_u` does at `eval.ml:427`'s
+	// `addr_of_num n` — and running them through `tableAddr` would be the identity on every
+	// input while stating a width claim the type rule contradicts. That claim was written here
+	// first and the validator was read second; `table_init64.wast` is 774 of this bucket's
+	// vectors, so the file that would have made it visible is the one this arm exists for.
+	n := st.popNum()
+	s := st.popNum()
+	d := tableAddr(tab, st.popNum())
+
+	if outOfBounds(d, n, tab.size()) || outOfBounds(s, n, seg.size()) {
+		return trapOOBTable
+	}
+	if n == 0 {
+		return nil
+	}
+	copy(tab.slots[d:d+n], seg.refs[s:s+n])
+	return nil
+}
+
+// execMemoryInit is `fc 08` — `memory.init x y`, `eval.ml:603`. execTableInit over bytes, with
+// memory's trap string and the same immediate reversal (`encode.ml:411`, `decode.ml:669`).
+//
+// `bulk.wast:172` is the vector that makes the drop observable on this side: a one-byte
+// `memory.init` out of a segment the module's own instantiation already dropped, expecting `out of
+// bounds memory access`.
+func (in *Instance) execMemoryInit(ins binary.Instr, st *stack) error {
+	mem, err := in.memoryFor("instruction", ins.Imm1)
+	if err != nil {
+		return err
+	}
+	seg, err := in.dataFor("instruction", ins.Imm0)
+	if err != nil {
+		return err
+	}
+	if err := st.needNum(3); err != nil {
+		return err
+	}
+	// `valid.ml:706` is `[numtype_of_addrtype at; I32T; I32T]` — destination in the memory's
+	// address type, source and length i32 — for execTableInit's stated reason.
+	n := st.popNum()
+	s := st.popNum()
+	d := mem.addr(st.popNum())
+
+	if outOfBounds(d, n, uint64(len(mem.bytes))) || outOfBounds(s, n, seg.size()) {
+		return trapOOB
+	}
+	if n == 0 {
+		return nil
+	}
+	copy(mem.bytes[d:d+n], seg.bytes[s:s+n])
+	return nil
+}
+
+// execElemDrop is `fc 0d` — `elem.drop x`, `eval.ml:446`: `Elem.drop (elem c.frame.inst x)`.
+//
+// **Pops nothing, checks nothing, traps never.** Dropping an already-dropped segment is legal and
+// does nothing (`bulk.wast:261` drops twice), which segment.go's `elemInstance` gets for free by
+// making the dropped state a value rather than a flag. The only failure channel is the index
+// resolution, which is the layering debt for a module #9 would have rejected.
+func (in *Instance) execElemDrop(ins binary.Instr) error {
+	seg, err := in.elemFor("instruction", ins.Imm0)
+	if err != nil {
+		return err
+	}
+	seg.drop()
+	return nil
+}
+
+// execDataDrop is `fc 09` — `data.drop x`, `eval.ml:624`. execElemDrop's twin.
+func (in *Instance) execDataDrop(ins binary.Instr) error {
+	seg, err := in.dataFor("instruction", ins.Imm0)
+	if err != nil {
+		return err
+	}
+	seg.drop()
 	return nil
 }
 

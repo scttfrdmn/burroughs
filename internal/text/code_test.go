@@ -2,6 +2,7 @@ package text
 
 import (
 	"fmt"
+	"maps"
 	"regexp"
 	"slices"
 	"strings"
@@ -667,4 +668,473 @@ func TestIntoSinkGatesOnTheModeNotTheSink(t *testing.T) {
 			}
 		})
 	}
+}
+
+// positionalLookups extracts, per `plaininstr` arm, the lookup expressions the arm's semantic action
+// passes — **positionally**, `$N c <expr>`, where `<expr>` is a word or a parenthesised expression.
+//
+// # Why a second extractor rather than a parameter on the first one
+//
+// `TestIdxLookupKindsMatchTheReference`'s reader matches `c <word>` against a ten-way alternation of
+// the module-level space names. That is the right instrument for its question and structurally
+// incapable of answering this one: `struct.get`'s second lookup is `$3 c (field x.it)` (parser.mly:622),
+// and `(field x.it)` is not a word in the alternation, so the alternation reader sees **one** lookup in
+// an arm that passes two. Measured, both readers counting the same way: the alternation finds 8
+// two-lookup arms and this finds **10**, and the two extra are exactly `STRUCT_GET` and `STRUCT_SET`.
+//
+// The disagreement is the finding, and it is why this extractor exists rather than a widened
+// alternation. A pattern loose enough to catch `(field x.it)` is loose enough to catch any
+// parenthesised expression in any action, which is how a category the enum has no name for gets
+// invented — the exact hazard the alternation was written narrow for. Anchoring on `$N c` instead
+// keeps the looseness on the *argument* while the `$N c` prefix stays the discriminator.
+//
+// **The prose in `idxPairLookupKinds` said this instrument finds 9 and it finds 10** — a number typed
+// before the extractor existed, and the count is now printed by the extractor's own vacuity floor
+// rather than asserted in a sentence. Same class as `plaininstrArms`' hand tally: a figure nobody ran.
+func positionalLookups(t *testing.T) map[keywordKind][][]string {
+	t.Helper()
+	src := testenv.RequireSpecRef(t, testenv.RefParserMLY)
+	body := productionBody(t, src, "plaininstr")
+
+	// `$N c <expr>`. The argument alternative is ordered parenthesised-first, because Go's regexp is
+	// leftmost-first among alternatives at a position and a bare-word branch tried first would match
+	// nothing at `(` and skip the lookup entirely.
+	re := regexp.MustCompile(`\$\d+\s+c\s+(\([^)]*\)|[a-z_][a-z_0-9]*)`)
+
+	perKind := map[keywordKind][][]string{}
+	arms := 0
+	for chunk := range strings.SplitSeq(body, "\n  | ") {
+		fields := strings.Fields(chunk)
+		if len(fields) == 0 {
+			continue
+		}
+		kind := keywordKind(fields[0])
+		if kind != keywordKind(strings.ToUpper(string(kind))) {
+			continue // a lowercase leader is a nonterminal, not a mnemonic arm
+		}
+		var cats []string
+		for _, m := range re.FindAllStringSubmatch(chunk, -1) {
+			cats = append(cats, m[1])
+		}
+		if len(cats) == 0 {
+			continue
+		}
+		arms++
+		perKind[kind] = append(perKind[kind], cats)
+	}
+
+	// Vacuity, per partition rather than one total, and the partitions here are *arms*, *kinds*, and
+	// *two-lookup arms* — three, because the third is this reader's whole subject and the first two can
+	// be healthy while it is zero. A reader that stopped seeing the second lookup of every arm leaves
+	// arms and kinds at their full 49/47 and the pair set empty, and every comparison below would then
+	// agree with an empty set. **49 arms over 47 kinds with 10 two-lookup arms at bdd7164**, printed by
+	// the extractor. The floors sit under those so an arm arriving upstream does not fail the control.
+	pairs := 0
+	for _, armCats := range perKind {
+		for _, cats := range armCats {
+			if len(cats) >= 2 {
+				pairs++
+			}
+		}
+	}
+	if arms < 40 || len(perKind) < 38 || pairs < 8 {
+		t.Fatalf("the positional reader found %d lookup-passing arms over %d kinds with %d passing two, "+
+			"want >=40, >=38 and >=8 (49/47/10 at bdd7164): it is not seeing the production's actions, "+
+			"and the two-lookup floor is the one that matters here — the other two can be full while "+
+			"this reader's actual subject is empty", arms, len(perKind), pairs)
+	}
+
+	// **The floor above cannot tell this reader from the alternation reader, and that is what the
+	// falsification exercise found.** Stubbing the regexp to the alternation pattern yields *exactly*
+	// 8 two-lookup arms — the floor's own value — so the degraded reader passed the floor and then
+	// reported drift in `idxPairLookupKinds`, which is a control's blind spot presented as the
+	// subject's defect. A floor bounds the catastrophic case (the regexp matching nothing) and cannot
+	// see a 2-of-10 silent loss; the exact instrument has to sit beside it, and here the exact fact is
+	// not a frozen count but the **discrimination** this extractor was written for: the field
+	// expression must actually be among the lookups it returns. That is derived from the reference, so
+	// it does not freeze at a revision the way `pairs == 10` would.
+	if !slices.ContainsFunc(slices.Collect(maps.Values(perKind)), func(armCats [][]string) bool {
+		return slices.ContainsFunc(armCats, func(cats []string) bool { return slices.Contains(cats, "(field x.it)") })
+	}) {
+		t.Fatalf("the positional reader returned %d two-lookup arms and none of them passes a "+
+			"parenthesised lookup expression, so it is behaving as the alternation reader in "+
+			"TestIdxLookupKindsMatchTheReference does — which is the one thing this extractor exists "+
+			"not to do. The pair floor above cannot see this: the degraded reader finds exactly 8, "+
+			"which is the floor", pairs)
+	}
+	return perKind
+}
+
+// TestIdxPairLookupKindsMatchTheReference is the drift control on `idxPairLookupKinds`: for every arm
+// the reference gives *two* lookup categories, both of them, in written order.
+//
+// **The opposite selector from the single-index control, over the same production.** That one takes the
+// arm with the *fewest* categories, because the category a written index takes is the sugar arm's;
+// this takes the arm with the **most**, because the pair is a fact about the two-index spelling.
+// `TABLE_INIT` is the row where they disagree — `catElem` there, `{catTable, catElem}` here — and a
+// control that shared a selector would have to call one of the two tables drifted.
+//
+// The defect it exists to catch is `retainIdxPair`'s: a wrong *second* category resolves
+// `table.init $t $e`'s element index in the table space, emitting a legal image that denotes a
+// different instruction. §9 G-3 — every `unknown elem` vector in the corpus is an `assert_invalid`
+// with a numeric index, which consults no space at all, so the suite scores this green by construction.
+//
+// **Watched die**, in both directions and per direction rather than once: transposing
+// `TABLE_INIT`'s pair to `{catElem, catTable}` fails direction one naming both positions; deleting the
+// `ARRAY_COPY` row fails direction two; and stubbing the extractor's regexp to the alternation pattern
+// fails the pair floor in `positionalLookups` rather than reporting drift, which is the vacuity check
+// doing its job instead of this test doing it wrongly.
+func TestIdxPairLookupKindsMatchTheReference(t *testing.T) {
+	perKind := positionalLookups(t)
+
+	// The pair a two-index spelling takes: from the arm passing the *most* categories. Where a kind has
+	// one arm, that arm; where it has two (the sugar kinds), the two-index one.
+	pairs := map[keywordKind][]string{}
+	for kind, armCats := range perKind {
+		most := slices.MaxFunc(armCats, func(a, b []string) int { return len(a) - len(b) })
+		if len(most) >= 2 {
+			pairs[kind] = most
+		}
+	}
+
+	// Direction one: every row names the two categories the reference's arm actually passes, in order.
+	for kind, want := range idxPairLookupKinds {
+		got, ok := pairs[kind]
+		if !ok {
+			t.Errorf("idxPairLookupKinds has a row for %s, which passes no *two* lookup categories in "+
+				"any `plaininstr` arm (its arms pass %v): either the kind is misspelled — in which case "+
+				"`pairCategories` silently falls back to the single-category table and both indices "+
+				"resolve in one space — or upstream changed the arm", kind, perKind[kind])
+			continue
+		}
+		for i, w := range []idxCategory{want.first, want.second} {
+			refName := refPairCategoryNames[w]
+			if refName == "" {
+				t.Errorf("refPairCategoryNames has no spelling for %s's category %d, so this control "+
+					"is comparing the reference against \"\": see "+
+					"TestRefPairCategoryNamesCoversEveryCategory", kind, i)
+				continue
+			}
+			if got[i] != refName {
+				t.Errorf("idxPairLookupKinds resolves %s's index %d against %q, but its reference arm "+
+					"passes %q (arm: %v): a wrong category here emits a *different, valid* module, "+
+					"which no suite vector reports", kind, i, refName, got[i], got)
+			}
+		}
+	}
+
+	// Direction two, scoped to the space rather than to the tier this section encodes: an arm the
+	// reference gives two categories and the table omits. There is no exemption map, because unlike the
+	// single-index table there is nothing a missing row could honestly mean — `pairCategories` falls
+	// back to *one* category for both indices, which for a genuinely two-space arm is the accept-
+	// direction defect itself. The `table.copy`/`memory.copy` case is not an omission: their arm passes
+	// one lookup to both indices and so never appears in `pairs` at all.
+	for kind := range pairs {
+		if _, ok := idxPairLookupKinds[kind]; !ok {
+			t.Errorf("the reference's %s arm passes two lookup categories %v and idxPairLookupKinds has "+
+				"no row for it, so pairCategories falls back to idxLookupKinds' single category for "+
+				"*both* indices — resolving the second index in the first's space", kind, pairs[kind])
+		}
+	}
+}
+
+// refPairCategoryNames is `refCategoryNames` plus the one spelling only the pair control can meet.
+//
+// A second map rather than an entry added to the first, and the reason is that map's own comment:
+// `catFieldOfType` is **never a first category**, so `refCategoryNames` deliberately has no row for it
+// and `TestFieldOfTypeIsNeverAFirstCategory` asserts the asymmetry. Adding it there to save a map would
+// delete the fact that test checks.
+var refPairCategoryNames = func() map[idxCategory]string {
+	m := map[idxCategory]string{
+		// The reference does not name a *space* here: `$3 c (field x.it)` passes the field space of the
+		// type `$2` just named (`field` at parser.mly:162 is `Lib.List32.nth c.types.fields x`). So the
+		// spelling this control compares against is the expression, verbatim — there is no word to use,
+		// which is the whole reason the positional extractor exists.
+		catFieldOfType: "(field x.it)",
+	}
+	for cat, name := range refCategoryNames {
+		m[cat] = name
+	}
+	return m
+}()
+
+// TestRefPairCategoryNamesCoversEveryCategory is TestRefCategoryNamesCoversEveryCategory for the pair
+// table's vocabulary, and it exists for the identical reason: a missing spelling yields `""`, which
+// compares unequal to every real one, so a gap in the *control's* vocabulary would be reported as
+// drift in the table under test. A control's blind spot reported as the subject's defect is worse than
+// no control.
+func TestRefPairCategoryNamesCoversEveryCategory(t *testing.T) {
+	used := map[idxCategory]bool{}
+	for _, p := range idxPairLookupKinds {
+		used[p.first] = true
+		used[p.second] = true
+	}
+	if len(used) < 5 {
+		t.Fatalf("only %d distinct categories appear in idxPairLookupKinds, too few to be the real set "+
+			"(6 at bdd7164 — type, table, memory, data, elem, fieldOfType, and label from br_table makes "+
+			"7): the table did not load and this check is comparing nothing", len(used))
+	}
+	var missing []string
+	for cat := range used {
+		if refPairCategoryNames[cat] == "" {
+			missing = append(missing, fmt.Sprintf("idxCategory(%d)", cat))
+		}
+	}
+	slices.Sort(missing)
+	if len(missing) > 0 {
+		t.Errorf("refPairCategoryNames has no entry for %v, so TestIdxPairLookupKindsMatchTheReference "+
+			"compares the reference's spelling against \"\" and reports drift that is really this "+
+			"table's gap", missing)
+	}
+}
+
+// TestFieldOfTypeIsNeverAFirstCategory asserts the asymmetry `catFieldOfType`'s constant claims: it is
+// a *second* index's category and never a first one.
+//
+// **Cited by name in instr.go before it existed** — the dangling-identifier class (#114/#115/#116),
+// and the reason the citation was worth keeping rather than deleting is that the sentence it appears in
+// states a real invariant three other things depend on: `refCategoryNames` has no row for the category,
+// `idxSpaceFor` returns nil for it, and `retainIdxIn` therefore never has to resolve it. If some future
+// arm passed `(field x.it)` first, all three would be silently wrong at once — the single-index control
+// would compare against `""` and report drift in `idxLookupKinds`, which is a defect reported against
+// the wrong table.
+//
+// **Scoped to the space, not to today's two kinds.** The subject is the *reference*, not
+// `idxPairLookupKinds`: the check reads every arm's lookups from the same extractor and asserts no arm
+// passes the field expression in position 0. Asserting it over this package's tables instead would be
+// asking the transcription whether the transcription is right.
+//
+// Watched die by inverting the position test (`i == 0` to `i != 0`), which reports both `STRUCT_GET`
+// and `STRUCT_SET`; and by pointing `fieldExpr` at `type_`, a category that *is* passed first, which
+// reports **15** arms. The mutation's expected count was written as 49 and measured at 15 — 49 is the
+// number of lookup-passing arms, and only the fifteen `catType` ones pass `type_`. Recorded rather
+// than quietly corrected, because a mutation whose expected value is a guess proves the control fired
+// and not that it fired *on what the sentence claims*.
+func TestFieldOfTypeIsNeverAFirstCategory(t *testing.T) {
+	const fieldExpr = "(field x.it)"
+
+	// The `refPairCategoryNames` round trip first, because the constant it comes from is what this test
+	// is really about: if the spelling drifted, the loop below would search for a string the extractor
+	// never yields and pass by finding nothing — a green from a typo, which is this control's own
+	// vacuity case.
+	if refPairCategoryNames[catFieldOfType] != fieldExpr {
+		t.Fatalf("refPairCategoryNames spells catFieldOfType %q and this test searches for %q: they must "+
+			"agree, or the search below matches nothing and passes vacuously",
+			refPairCategoryNames[catFieldOfType], fieldExpr)
+	}
+
+	seen := 0
+	for kind, armCats := range positionalLookups(t) {
+		for _, cats := range armCats {
+			for i, cat := range cats {
+				if cat != fieldExpr {
+					continue
+				}
+				seen++
+				if i == 0 {
+					t.Errorf("the reference's %s arm passes %s as its **first** lookup (arm: %v), which "+
+						"catFieldOfType's constant says never happens. Three things assume it: "+
+						"refCategoryNames has no row for the category, idxSpaceFor returns nil for it, "+
+						"and retainIdxIn never resolves it — so this arm makes the single-index control "+
+						"compare against \"\" and report drift in idxLookupKinds, which is not the "+
+						"table at fault", kind, fieldExpr, cats)
+				}
+			}
+		}
+	}
+	// Vacuity: the invariant is about a category that must actually occur. Zero occurrences means the
+	// loop asserted nothing — an extractor change, or the reference dropping `struct.get`/`struct.set`.
+	if seen < 2 {
+		t.Errorf("found %s in %d arm positions, want at least 2 (STRUCT_GET and STRUCT_SET at bdd7164): "+
+			"a category that never appears cannot be checked for the position it never takes, so this "+
+			"control asserted nothing", fieldExpr, seen)
+	}
+}
+
+// TestInitReversedKindsMatchTheReference is the drift control on `initReversedKinds`, and its authority
+// is `encode.ml` rather than `parser.mly` — the fact under test is *emission order*, which the grammar
+// does not state at all.
+//
+// # Scoped to the space by extraction, which is what the map's comment promises
+//
+// Not "check the two rows are right": the control reads **every** `idx <var>; idx <var>` arm in
+// `encode.ml` — 14 at bdd7164 — pairs each with its constructor's argument order, and requires the
+// reversing set to be exactly the four the map's comment names. So an upstream arm that starts or stops
+// reversing fails the board whether or not this package encodes it yet.
+//
+// # Four reverse and two are in the map, which is not a discrepancy
+//
+//	CallIndirect       (x, y) -> op 0x11;        idx y; idx x   (:275)
+//	ReturnCallIndirect (x, y) -> op 0x13;        idx y; idx x   (:278)
+//	TableInit          (x, y) -> op 0xfc; 0x0cl; idx y; idx x   (:294)
+//	MemoryInit         (x, y) -> op 0xfc; 0x08l; idx y; idx x   (:411)
+//
+// The `call_indirect` pair does not route through `retainIdxPair` — a typeuse must be interned in
+// stage 2, so its immediates are built by `callIndirectImm`'s patch, which reverses on its own. Two
+// places knowing one fact is the #78/#105/#106 shape, and the mitigation is that **this control names
+// all four and states which mechanism carries each**: a reversal removed from `callIndirectImm` fails
+// here, because the arm is still in the reference and the map is still not expected to hold it.
+//
+// # A wrong verdict here is invisible to the suite in one direction and loud in the other
+//
+// `table.init 1 0` with the pair transposed emits `fc 0c 00 01` instead of `fc 0c 01 00`: a legal image
+// naming segment 1 into table 0 where the text said segment 0 into table 1. §9 G-3 — it decodes clean,
+// and it only reddens a vector when the two indices happen to address things whose contents differ.
+// That is why the authority is read rather than the board consulted.
+//
+// **Watched die** five ways: adding `TABLE_COPY` to the map (fails first on the missing `refCtorNames`
+// row, and once that is supplied, on the arm emitting in order); deleting `TABLE_INIT` (fails "the
+// reference reverses X and neither mechanism is credited"); crediting `MemoryInit` to
+// `reversedByOtherMechanism` while it is still in `initReversedKinds` (fails on disjointness); stubbing
+// the arm regexp to match nothing (fails the arm floor rather than reporting agreement); and stubbing
+// the *head* regexp, which fails on the unparsed-arm branch naming all fourteen arms rather than
+// quietly emptying both sets.
+//
+// The `TABLE_INIT` deletion is worth one more sentence, because the first attempt at it **passed and
+// the control was right to pass**: the mutation script's pattern matched `initSugarKinds`, which holds
+// a byte-identical `"TABLE_INIT":  true,` line one screen up, so it deleted a row in a different map
+// and `initReversedKinds` was untouched. Printed the diff rather than trusting the edit, which is the
+// field-attribution-is-not-first-match rule pointed at a mutation instead of at a generator. A
+// falsification that passes is either a stillborn control or a mutation that did not apply, and the two
+// are indistinguishable without looking.
+func TestInitReversedKindsMatchTheReference(t *testing.T) {
+	src := testenv.RequireSpecRef(t, testenv.RefEncodeML)
+
+	// One arm's head — `Constructor (a, b) ->` — and its emission pair. Split on the instruction
+	// match's arm separator rather than by line, because an arm can wrap: `BrOnCast`'s spans three
+	// lines at bdd7164, and a line-oriented reader is the #78/#80/#105 shape this project has paid for
+	// three times. Note the head pattern excludes `->` from the argument group for exactly that reason
+	// — the wrapped-arm defect `keywordgen` solved and `opgen` re-earned.
+	rePair := regexp.MustCompile(`idx\s+([a-z_][a-z_0-9]*)\s*;\s*idx\s+([a-z_][a-z_0-9]*)`)
+	reHead := regexp.MustCompile(`^([A-Z][A-Za-z0-9_]*)\s*\(([^->]*)\)\s*->`)
+
+	// reference constructor name → mnemonic kind, for the arms this package's tables can speak about.
+	// Absent constructors are reported by name below rather than skipped: an arm that reverses and has
+	// no row here is exactly the upstream change the control is scoped to catch.
+	reversing, inOrder := map[string]bool{}, map[string]bool{}
+	arms := 0
+	for chunk := range strings.SplitSeq(src, "\n    | ") {
+		m := rePair.FindStringSubmatch(chunk)
+		if m == nil {
+			continue
+		}
+		head := reHead.FindStringSubmatch(strings.TrimSpace(chunk))
+		if head == nil {
+			// An `idx x; idx y` in something that is not a constructor arm. Counted as unparsed rather
+			// than ignored, because a head pattern that stopped matching would otherwise silently empty
+			// both sets while the arm floor stayed green.
+			t.Errorf("an arm emits an index pair and its head does not parse: %q — the head pattern has "+
+				"drifted, and every arm past it is invisible to this control",
+				strings.TrimSpace(strings.Split(chunk, "\n")[0]))
+			continue
+		}
+		arms++
+		ctor, args := head[1], strings.Split(strings.ReplaceAll(head[2], " ", ""), ",")
+		if len(args) != 2 {
+			continue // `BrTable (xs, x)` emits `vec idx xs; idx x`, which is not an index *pair*
+		}
+		switch {
+		case m[1] == args[1] && m[2] == args[0]:
+			reversing[ctor] = true
+		case m[1] == args[0] && m[2] == args[1]:
+			inOrder[ctor] = true
+		default:
+			t.Errorf("%s's constructor takes (%s, %s) and it emits (%s, %s), which is neither the "+
+				"written order nor its reverse: the arm now does something this control cannot classify",
+				ctor, args[0], args[1], m[1], m[2])
+		}
+	}
+
+	// Vacuity, per partition: arms *and* each verdict, because a reader that matched every arm and
+	// classified none — or classified all of them one way — leaves the comparisons below agreeing with
+	// an empty set. **14 index-pair arms at bdd7164, 4 reversing and 8 in order** (the other two being
+	// `BrTable`'s vec-and-default and nothing else). Floors under those.
+	if arms < 10 || len(reversing) < 3 || len(inOrder) < 5 {
+		t.Fatalf("read %d index-pair arms from encode.ml, %d reversing and %d in order; want >=10, >=3 "+
+			"and >=5 (14/4/8 at bdd7164). Both verdict floors are needed: an arm reader that classified "+
+			"everything one way would leave the other set empty and every check below would compare "+
+			"against nothing", arms, len(reversing), len(inOrder))
+	}
+
+	// The reference's constructor name for each mnemonic this package reverses. Derived from the map
+	// under test rather than listed, so a kind added there arrives here as a missing name rather than
+	// as a silent pass.
+	for kind := range initReversedKinds {
+		ctor, ok := refCtorNames[kind]
+		if !ok {
+			t.Errorf("initReversedKinds claims %s reverses and refCtorNames has no reference "+
+				"constructor for it, so this control cannot check the row at all", kind)
+			continue
+		}
+		if inOrder[ctor] {
+			t.Errorf("initReversedKinds says %s reverses its index pair; encode.ml's %s arm emits them "+
+				"in the constructor's own order. retainIdxPair would transpose a correct emission — "+
+				"`table.init 1 0` becoming segment 1 into table 0, a legal image denoting a different "+
+				"instruction", kind, ctor)
+		}
+		if !reversing[ctor] {
+			t.Errorf("initReversedKinds claims %s reverses and encode.ml's %s arm does not appear in "+
+				"the reversing set at all (reversing: %v)", kind, ctor, slices.Sorted(maps.Keys(reversing)))
+		}
+	}
+
+	// The direction scoped to the space: every arm the *reference* reverses is accounted for by one of
+	// the two mechanisms. A reversal credited to neither is the case where this package emits the pair
+	// in the wrong order and nothing says so.
+	credited := map[string]bool{}
+	for kind := range initReversedKinds {
+		credited[refCtorNames[kind]] = true
+	}
+	for ctor := range reversedByOtherMechanism {
+		if credited[ctor] {
+			t.Errorf("%s is credited to both initReversedKinds and reversedByOtherMechanism. The two "+
+				"sets must be disjoint: two places knowing one fact is the #78/#105/#106 shape, and a "+
+				"kind in both means the reversal is applied twice or the note is stale", ctor)
+			continue
+		}
+		credited[ctor] = true
+	}
+	for ctor := range reversing {
+		if !credited[ctor] {
+			t.Errorf("encode.ml's %s arm emits its index pair reversed and neither mechanism is "+
+				"credited with it: add a row to initReversedKinds if retainIdxPair encodes the "+
+				"mnemonic, or name it in reversedByOtherMechanism with the function that reverses it. "+
+				"An uncredited reversal means the pair is emitted in written order — a legal image "+
+				"denoting a different instruction (§9 G-3)", ctor)
+		}
+	}
+	// And the mirror: a name in either set that the reference no longer reverses. Without this, an
+	// upstream arm that *stopped* reversing would leave a stale row applying a transposition the
+	// reference does not.
+	for ctor := range reversedByOtherMechanism {
+		if !reversing[ctor] {
+			t.Errorf("reversedByOtherMechanism names %s and encode.ml's arm for it no longer reverses "+
+				"(in order: %v): the mechanism it cites is now transposing a correct pair",
+				ctor, slices.Sorted(maps.Keys(inOrder)))
+		}
+	}
+}
+
+// refCtorNames maps this package's mnemonic kind to `encode.ml`'s constructor name — the reference's
+// own vocabulary for the arm, so the control above reads it rather than translating twice.
+//
+// Only the kinds `initReversedKinds` can hold: the map is a *vocabulary* for that set, and a row for a
+// mnemonic nothing asks about would be an unused claim. The control reports a missing name rather than
+// defaulting, per refCategoryNames' argument one table over.
+var refCtorNames = map[keywordKind]string{
+	"TABLE_INIT":  "TableInit",
+	"MEMORY_INIT": "MemoryInit",
+}
+
+// reversedByOtherMechanism are the reference's reversing arms that `retainIdxPair` does not encode,
+// each carrying the function that reverses them instead.
+//
+// This is the declared-and-tracked shape (#6) applied to a *set difference*: the reference reverses
+// four arms and `initReversedKinds` holds two, and the honest way to state that is a named exemption
+// rather than a control scoped to the two. `callIndirectImm` (parser.go) reverses both of these itself,
+// because a typeuse must be interned in stage 2 and a patch cannot be half-built — see
+// `initReversedKinds`' comment for why routing them through the cursor was declined.
+var reversedByOtherMechanism = map[string]string{
+	"CallIndirect":       "callIndirectImm, which writes the type index then the table index",
+	"ReturnCallIndirect": "callIndirectImm, shared with call_indirect",
 }
