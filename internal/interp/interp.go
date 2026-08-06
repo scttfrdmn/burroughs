@@ -46,9 +46,9 @@ type Instance struct {
 
 	// mems is the memory index space, in index order — **imports first, then definitions**,
 	// which is the space's shape and not a convenience. A slot is nil when there is nothing
-	// to put in it: an imported memory (linking is contract §3, so v0 has no supplier) or a
-	// declared one whose allocation failed for a reason that is #9's rather than a trap's.
-	// See Instantiate on why a nil slot beats a shorter slice.
+	// to put in it: an imported memory that no supplier filled, or a declared one whose
+	// allocation failed for a reason that is #9's rather than a trap's. See Instantiate on why
+	// a nil slot beats a shorter slice.
 	//
 	// **The import slots are reserved rather than omitted, and the difference is 22 vectors.**
 	// The first draft sized this `len(m.Memories)` and argued in this comment that a module
@@ -94,6 +94,19 @@ type Instance struct {
 	elems []*elemInstance
 	datas []*dataInstance
 
+	// funcs is the *imported* function range only — length `ImportedFuncs()`, indexed by
+	// function index directly, with a nil slot for an import nothing supplied.
+	//
+	// **Asymmetric with mems/tables/globals, and the asymmetry is the index space's own.** For
+	// those three the imports and the definitions share one slice because both need a runtime
+	// object. A defined function needs none: `binary.Module.DefinedFunc(idx)` already resolves
+	// the definition side from the image, subtracting the import offset itself. So a
+	// full-length slice here would be `ImportedFuncs()` entries followed by nils that nothing
+	// reads, and the nil would then mean two different things — "not linked" below the offset
+	// and "look in the module" above it. Half a slice with one meaning beats a whole slice
+	// with two.
+	funcs []*Extern
+
 	// deferred holds the validation-shaped failures instantiation met and could not report,
 	// because 0015's trap channel may not carry a verdict.
 	//
@@ -116,25 +129,42 @@ type Instance struct {
 // getting a non-nil trap has a module that came to life and died doing it, which is exactly what
 // `assert_trap` wrapping a module form asserts.
 func Instantiate(m *binary.Module) (*Instance, *Trap) {
+	in, trap, err := InstantiateLinked(m, nil)
+	if err != nil {
+		// Unreachable with a nil resolver: the only error `link` produces is a kind
+		// mismatch, and nothing can mismatch when nothing is supplied. Joined onto
+		// `deferred` rather than dropped or panicked on, because an error constant with no
+		// reachable path is a missing check wearing a disguise (grave 0003) — and a
+		// `//nolint`-worthy panic here would assert a property of a *sibling function* that
+		// a future arm could falsify silently.
+		//
+		// It cannot reach `in`, which is nil on this path, so it is reported by the only
+		// channel this signature has left.
+		return nil, &Trap{Reason: "link failed with no imports supplied: " + err.Error()}
+	}
+	return in, trap
+}
+
+// build allocates and initializes an instance whose import slots are already filled.
+//
+// **Split out of Instantiate rather than duplicated**, so the linked and unlinked paths
+// cannot disagree about the reference's evaluation order — globals before tables before
+// memories, elements before data, allocation before copying. That ordering is load-bearing
+// four separate ways (see the comments below, each with the vector that proves it), and a
+// second copy of it is four opportunities to drift.
+func (in *Instance) build() *Trap {
+	m := in.mod
+	memOff, tabOff := m.ImportedMems(), m.ImportedTables()
+	globOff := m.ImportedGlobals()
 	// One slot per memory *index*, filled positionally and **never skipped**: the imported
-	// memories first — nil, since v0 has no linker — then the defined ones at the offset the
-	// index space gives them. A failed allocation likewise leaves a nil slot rather than
+	// memories first — already filled by `link` if a resolver supplied them, still nil if
+	// nothing did — then the defined ones at the offset the index space gives them. A failed allocation likewise leaves a nil slot rather than
 	// shortening the slice, because appending only the successes would shift every later
 	// memory's index — the same defect `Module.Types` keeps struct and array slots to avoid,
 	// and one no board could see, since the affected vectors are ones the suite expects to
 	// pass. That last clause was written before the import offset was measured, and the
 	// measurement is what made it concrete rather than cautionary: 22 vectors, all "passing"
 	// with the wrong memory's answer.
-	memOff, tabOff := m.ImportedMems(), m.ImportedTables()
-	globOff := m.ImportedGlobals()
-	in := &Instance{
-		mod:     m,
-		mems:    make([]*memory, memOff+len(m.Memories)),
-		tables:  make([]*table, tabOff+len(m.Tables)),
-		globals: make([]*global, globOff+len(m.Globals)),
-		elems:   make([]*elemInstance, len(m.Elems)),
-		datas:   make([]*dataInstance, len(m.Datas)),
-	}
 	// **Globals first, and the position comes from the reference's fold rather than from
 	// convenience.** `eval.ml:1310-1318` runs `init_global` *before* `init_table` and
 	// `init_memory`, and it matters for a reason no ordering of the other three has: a global's
@@ -159,7 +189,7 @@ func Instantiate(m *binary.Module) (*Instance, *Trap) {
 		g, err := in.newGlobal(m.Globals[i])
 		if err != nil {
 			if t := asTrap(err); t != nil {
-				return nil, t
+				return t
 			}
 			in.deferred = errors.Join(in.deferred, err)
 			continue
@@ -170,7 +200,7 @@ func Instantiate(m *binary.Module) (*Instance, *Trap) {
 		tab, err := newTable(m.Tables[i])
 		if err != nil {
 			if t := asTrap(err); t != nil {
-				return nil, t
+				return t
 			}
 			in.deferred = errors.Join(in.deferred, err)
 			continue
@@ -181,7 +211,7 @@ func Instantiate(m *binary.Module) (*Instance, *Trap) {
 		mem, err := newMemory(m.Memories[i])
 		if err != nil {
 			if t := asTrap(err); t != nil {
-				return nil, t
+				return t
 			}
 			// A verdict-shaped failure, which cannot travel this channel (0015). It is
 			// **retained, not dropped**: silent degradation is a skip one step quieter,
@@ -224,7 +254,7 @@ func Instantiate(m *binary.Module) (*Instance, *Trap) {
 		seg, err := in.allocElem(&m.Elems[i])
 		if err != nil {
 			if t := asTrap(err); t != nil {
-				return nil, t
+				return t
 			}
 			// The slot is filled with an *empty* instance rather than left nil, per the field's
 			// comment: a later `table.init` then reports out-of-bounds instead of panicking, and
@@ -240,7 +270,7 @@ func Instantiate(m *binary.Module) (*Instance, *Trap) {
 	for i := range m.Elems {
 		if err := in.runElem(i, &m.Elems[i]); err != nil {
 			if t := asTrap(err); t != nil {
-				return nil, t
+				return t
 			}
 			in.deferred = errors.Join(in.deferred, err)
 		}
@@ -248,12 +278,12 @@ func Instantiate(m *binary.Module) (*Instance, *Trap) {
 	for i := range m.Datas {
 		if err := in.runData(i, &m.Datas[i]); err != nil {
 			if t := asTrap(err); t != nil {
-				return nil, t
+				return t
 			}
 			in.deferred = errors.Join(in.deferred, err)
 		}
 	}
-	return in, nil
+	return nil
 }
 
 // Deferred reports the failures instantiation met that could not travel the trap channel, or nil.
@@ -261,8 +291,8 @@ func Instantiate(m *binary.Module) (*Instance, *Trap) {
 // **Exported because a caller can otherwise be told "nothing went wrong" when something did.**
 // A trap answers "this module died coming to life"; a nil trap is *not* the same claim as "this
 // module came to life completely". Between them sits the case this accessor exists for: an active
-// data segment that could not be copied because its target memory is imported and v0 has no
-// linker. Instantiation cannot trap for that — the reason is not a runtime event — and it cannot
+// data segment that could not be copied because its target memory is imported and nothing
+// supplied it. Instantiation cannot trap for that — the reason is not a runtime event — and it cannot
 // return a verdict either (0015), so the instance comes back usable with the shortfall recorded.
 //
 // Found on the board, which is the only reason it is exported: `data1.wast`'s :80, :117 and :136
@@ -381,10 +411,18 @@ var ErrNotValidated = errors.New("interp: module reached the interpreter unvalid
 //
 // **The third category, and it exists because the first two would have lied.** A module importing
 // a memory is well-formed (not ErrNotValidated) and the instruction reaching for it is a real
-// arm that this engine has (not ErrUnsupportedOp); what is missing is *linking*, which is
-// contract §3 and v2-or-later work. Reporting either sibling would have named the wrong gap — one
-// blames the module, the other blames a table — and the board's buckets are a work plan only
-// while each key names the thing actually missing.
+// arm that this engine has (not ErrUnsupportedOp); what is missing is the *supplier*. Reporting
+// either sibling would have named the wrong gap — one blames the module, the other blames a
+// table — and the board's buckets are a work plan only while each key names the thing actually
+// missing.
+//
+// **The gap this names narrowed and did not close**, which is why the category survived the
+// linker. It said "what is missing is *linking*, which is contract §3 and v2-or-later work",
+// and a script-level registry falsified the second half of that sentence: `InstantiateLinked`
+// fills the slot, so the reached-import case is now specifically an import *nothing supplied*
+// — an unregistered module, or a supplier whose own instantiation failed. Still this category
+// and not ErrNotValidated, because such a module is well-formed and the engine's shortfall is
+// a component it does not have (a host-import surface, §3) rather than a fault in the module.
 //
 // Like ErrUnsupportedOp it is reported when the feature is *reached*, so a module that imports a
 // memory and never touches it still runs.
@@ -406,13 +444,34 @@ func (in *Instance) Invoke(name string, args ...Value) ([]Value, error) {
 	if !ok {
 		return nil, fmt.Errorf("interp: no exported function %q", name)
 	}
+	return in.invokeIndex(idx, name, args)
+}
+
+// invokeIndex is Invoke past the name lookup: the boundary call to a function *index*.
+//
+// **Split out because an exported import makes the name and the index belong to different
+// instances.** The name is the importer's, the body is the supplier's, and every check below —
+// arity, parameter types, the frame ceiling — is a property of the *body*. So the delegation has
+// to happen after the name resolves and before anything is checked, which is precisely this seam.
+// `name` travels along for the error messages only: a host that asked for `"call"` should be told
+// about `"call"`, not about whatever index it turned out to be two instances away.
+func (in *Instance) invokeIndex(idx uint32, name string, args []Value) ([]Value, error) {
 	fn, ok := in.mod.DefinedFunc(idx)
 	if !ok {
-		// An exported *import*. The index is in the imported range, so there is no body
-		// here to run — linking is contract §3 and not this phase. Reported as an
-		// engine gap rather than a module fault, because the module is fine.
-		return nil, fmt.Errorf("%w: exported function %q is an import (index %d)",
-			ErrUnsupportedOp, name, idx)
+		// **An exported *import*, which is a name this module passes through** — `Mt` in
+		// `linking.wast` exports `call` and re-exports imports beside it, and a script may
+		// invoke either. Resolved by delegating to the supplier's own boundary rather than by
+		// building a frame here: the callee's parameter checks, its frame ceiling, and its
+		// result ordering are all the supplier instance's, and a second copy of that logic on
+		// this path is a second place for it to be wrong.
+		//
+		// The recursion terminates for `callImport`'s reason: a supplier is instantiated
+		// before its importer, so a re-export chain cannot cycle.
+		ext, ierr := in.importedFunc(idx)
+		if ierr != nil {
+			return nil, ierr
+		}
+		return ext.fnInst.invokeIndex(ext.fnIdx, name, args)
 	}
 	ft, err := in.funcType(fn)
 	if err != nil {

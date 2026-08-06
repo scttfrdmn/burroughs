@@ -93,11 +93,11 @@ func (in *Instance) call(idx uint32, st *stack, depth int) error {
 	fn, ok := in.mod.DefinedFunc(idx)
 	if !ok {
 		if idx < uint32(in.mod.ImportedFuncs()) {
-			// An imported function, which is linking — contract §3, not this phase. Reported
-			// as the engine gap it is rather than as a module fault, on `tableFor`'s rule:
-			// nothing is wrong with the module.
-			return fmt.Errorf("%w: function %d is an import, and linking is not implemented (contract §3)",
-				ErrUnsupported, idx)
+			// An imported function. If a supplier filled the slot the call **crosses into
+			// that instance**; if not, this is still contract §3's gap, reported as the
+			// engine gap it is rather than as a module fault (`tableFor`'s rule: nothing is
+			// wrong with the module).
+			return in.callImport(idx, st, depth)
 		}
 		// Past the end of the index space, which is #9's `unknown function`.
 		return fmt.Errorf("%w: call names function %d of %d",
@@ -108,6 +108,45 @@ func (in *Instance) call(idx uint32, st *stack, depth int) error {
 		return err
 	}
 	return in.invoke(fn, ft, st, depth)
+}
+
+// callImport calls a function that reached this instance through an import.
+//
+// **The crossing is a change of receiver and nothing else** — the operands stay on the caller's
+// stack and the results come back onto it, exactly as for a module-local call, because
+// `eval.ml`'s `Func.FuncInst` carries its own instance and `invoke` reads locals from the frame
+// rather than from the caller. What changes is which instance the callee's `memory`,
+// `global.get` and `call` resolve against, which is the entire content of linking at this layer.
+//
+// **`depth` is passed through unincremented, and that is deliberate.** The budget counts wasm
+// *frames*, and resolving an import builds none: the frame arrives when the callee's own `invoke`
+// increments. Incrementing here would make a chain of re-exported imports cost budget for
+// re-exports, so two scripts with the same call graph and different export plumbing would exhaust
+// at different depths. An import chain cannot cycle — a supplier is instantiated before its
+// importer — so the pass-through cannot lose the bound.
+func (in *Instance) callImport(idx uint32, st *stack, depth int) error {
+	ext, err := in.importedFunc(idx)
+	if err != nil {
+		return err
+	}
+	return ext.fnInst.call(ext.fnIdx, st, depth)
+}
+
+// importedFunc resolves an imported function index to whatever fills its slot.
+//
+// **The unfilled slot keeps its old *behaviour* verbatim** — an unlinked module degrades to
+// exactly what it did before there was a linker — but not its old words. The draft of this
+// comment argued for keeping the message too, so the 624-vector bucket would not split mid-drain,
+// and that argument was sound and is now spent: the drain measured **624 → 13** under the old
+// string, so the key has served its purpose, and holding `linking is not implemented` past that
+// point would be the engine testifying to an absence that no longer exists (grave #36). See
+// memoryFor, where the same swap is argued at length for the same four sites.
+func (in *Instance) importedFunc(idx uint32) (*Extern, error) {
+	if int(idx) >= len(in.funcs) || in.funcs[idx] == nil {
+		return nil, fmt.Errorf("%w: function %d is an import nothing supplied (contract §3)",
+			ErrUnsupported, idx)
+	}
+	return in.funcs[idx], nil
 }
 
 // invoke builds the callee's frame and runs it, the arguments coming off the shared stack.
@@ -244,16 +283,42 @@ func (in *Instance) callIndirect(ins binary.Instr, st *stack, depth int) error {
 	if r.Null {
 		return uninitializedElem(i)
 	}
+	// **`target` is the instance the callee's body belongs to, and it is `in` for every
+	// module-local function.** A table slot may name an imported function, and that function's
+	// frame must run against *its own* instance — its memory, its globals, its tables — so the
+	// receiver of `invoke` is resolved here rather than assumed. Getting this wrong is invisible
+	// on the whole numeric corpus and wrong on `linking.wast`'s `Mt`/`Nt` pairs, where the callee
+	// reads a global the caller does not have.
+	target := in
 	fn, ok := in.mod.DefinedFunc(r.Addr)
 	if !ok {
-		if r.Addr < uint32(in.mod.ImportedFuncs()) {
-			return fmt.Errorf("%w: table slot %d names function %d, which is an import, and linking is not implemented (contract §3)",
-				ErrUnsupported, i, r.Addr)
+		if r.Addr >= uint32(in.mod.ImportedFuncs()) {
+			return fmt.Errorf("%w: table slot %d names function %d of %d",
+				ErrNotValidated, i, r.Addr, in.mod.ImportedFuncs()+len(in.mod.Funcs))
 		}
-		return fmt.Errorf("%w: table slot %d names function %d of %d",
-			ErrNotValidated, i, r.Addr, in.mod.ImportedFuncs()+len(in.mod.Funcs))
+		// **Resolved here and then type-checked *below*, sharing the defined path's check.**
+		// `call` names a function statically and the validator has agreed its signature; this
+		// opcode names a *type index* and must compare it against the callee's actual type at
+		// run time. So the import is turned into a `(instance, defined function)` pair and then
+		// falls into the same comparison the defined case uses — one trap message, one
+		// `sameFuncType` call, because two copies of a check the suite reads by substring are
+		// two places to spell it differently.
+		ext, ierr := in.importedFunc(r.Addr)
+		if ierr != nil {
+			return fmt.Errorf("%w (table slot %d)", ierr, i)
+		}
+		target = ext.fnInst
+		fn, ok = target.mod.DefinedFunc(ext.fnIdx)
+		if !ok {
+			// Unreachable while `Export` resolves re-exported imports through to their
+			// definer, which is the invariant `Instance.funcs` is documented to hold. Stated
+			// as a reachable check rather than a panic, per grave 0003: this asserts a
+			// property of a *sibling function*, and a future arm could falsify it silently.
+			return fmt.Errorf("%w: table slot %d resolves to function %d of a supplier that does not define it",
+				ErrNotValidated, i, ext.fnIdx)
+		}
 	}
-	ft, err := in.funcType(fn)
+	ft, err := target.funcType(fn)
 	if err != nil {
 		return err
 	}
@@ -281,7 +346,7 @@ func (in *Instance) callIndirect(ins binary.Instr, st *stack, depth int) error {
 	if depth >= callBudget {
 		return trapExhaustion
 	}
-	return in.invoke(fn, ft, st, depth)
+	return target.invoke(fn, ft, st, depth)
 }
 
 // declaredFuncType resolves a type index to a functype — `funcType`'s other half, reaching the

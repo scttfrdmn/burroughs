@@ -218,8 +218,30 @@ func isTrap(err error) bool {
 // The text path re-encodes rather than re-reading: `text.ReadModule` is error-only by design
 // (0011), so EncodeModule is the only path from wat source to an image. That is the same
 // second call the board's readText already made, for the same reason.
-func instantiate(c Command) (Instance, Stratum, error) {
-	return instantiateWith(binary.Features{}, c)
+// **Its `registry` parameter is the whole of the linking wire-up on this side**, and it is why
+// this is a LinkedInstantiateFunc rather than the plain kind: the harness owns the name→instance
+// map and this function owns the conversion into `interp.Imports`, being the one place that
+// legitimately knows both `spec.Instance` and `*interp.Instance`. Same seam `invoke` cuts for
+// values, for the same reason.
+func instantiateLinked(c Command, registry map[string]Instance) (Instance, Stratum, error) {
+	return instantiateWith(binary.Features{}, c, registry)
+}
+
+// imports turns the harness's registry into the engine's resolver.
+//
+// **The type assertion's failure is a refusal, not a panic**, which matters because it is the
+// one place a foreign Instance could reach the engine: a registry entry the harness put there
+// is always ours, but the map crosses a public boundary, and answering "no such export" for a
+// thing that is not an instance is the honest reading — the import genuinely cannot be
+// satisfied from it. A panic here would convert a caller's mistake into a harness crash mid-board.
+func imports(registry map[string]Instance) interp.Imports {
+	return func(module, name string) (interp.Extern, bool) {
+		in, ok := registry[module].(*interp.Instance)
+		if !ok {
+			return interp.Extern{}, false
+		}
+		return in.Export(name)
+	}
 }
 
 // instantiateWith is instantiate under a stated gate set.
@@ -237,7 +259,12 @@ func instantiate(c Command) (Instance, Stratum, error) {
 // this path at all — a text module has no `c.Module` — so the per-vector control was blind by
 // construction and the *structural* one was not. That is the argument for the all-on lane
 // restated by measurement rather than by claim.
-func instantiateWith(f binary.Features, c Command) (Instance, Stratum, error) {
+// **The registry threads through rather than being read here** for the reason above: this
+// function is about gates, and linking is a second axis. A caller that has no registry passes
+// an empty map, which is not a special case — it is the accurate statement that nothing has
+// been registered yet, and `interp.InstantiateLinked` under a resolver that answers no to
+// everything is exactly the pre-0017 behaviour it replaces.
+func instantiateWith(f binary.Features, c Command, registry map[string]Instance) (Instance, Stratum, error) {
 	image := c.Module
 	stratum := StratumBinary
 	if c.Kind != KindModuleBinary {
@@ -264,7 +291,15 @@ func instantiateWith(f binary.Features, c Command) (Instance, Stratum, error) {
 	// module that came to life and died doing it — which is exactly what `data1.wast`'s 14
 	// `assert_trap`-wrapping-a-module vectors assert. Charged to StratumExec because the
 	// interpreter is the component that produced it.
-	in, trap := interp.Instantiate(m)
+	// **The link failure is a third channel, and it is neither of the other two** (0015): a
+	// module whose import cannot be resolved never came to life, so it is not a trap, and the
+	// image was well-formed, so it is not the decoder's. Charged to StratumExec because the
+	// interpreter is the component that reported it, and reported verbatim because
+	// `assert_unlinkable` matches on the text.
+	in, trap, err := interp.InstantiateLinked(m, imports(registry))
+	if err != nil {
+		return nil, StratumExec, err
+	}
 	if trap != nil {
 		return nil, StratumExec, trap
 	}
@@ -366,10 +401,19 @@ func valKind(t binary.ValType) (ValKind, bool) {
 // against the same set of components. A test that wants a narrower engine builds its own
 // Engine literal, which is visible at the call site rather than hidden in a positional
 // argument.
+//
+// **It supplies InstantiateLinked and leaves Instantiate nil, deliberately — one spelling per
+// engine.** `instantiateRaw` prefers the linked func when both are set, so supplying both would
+// leave a field that reads as live and is never called, and a lane or test that then overrode
+// only that field would change nothing while appearing to change the gates. That is not
+// hypothetical: it is the bug `instantiateWith`'s comment records, and the two-field version of
+// this literal would have reintroduced it in a new place. Engine keeps both fields because a
+// caller without a linker is a real configuration (sexpr_test's stubs are one); the board is not
+// that caller.
 func engine() Engine {
 	return Engine{
 		Decode: decode, ReadText: readText, IsGated: isGated, IsTrap: isTrap,
-		Instantiate: instantiate, Invoke: invoke,
+		Invoke: invoke, InstantiateLinked: instantiateLinked,
 	}
 }
 
@@ -3045,6 +3089,14 @@ func TestGatedVectors(t *testing.T) {
 		"imports.wast": {
 			97: "exception handling: (tag (import \"test\" \"tag-i32\") …) at :35",
 			98: "exception handling: (tag (import \"test\" \"tag-i32\") …) at :35",
+			// Five assert_unlinkable vectors whose module under test carries a `(tag …)`
+			// field — the registry's arm made them askable, and the gate declines them one
+			// layer earlier than the linker would. See the batch note below.
+			239: "exception handling: (tag (import \"test\" \"unknown\")) — the module under test",
+			243: "exception handling: (tag (import \"test\" \"tag\") (param f32)) — the module under test",
+			247: "exception handling: (tag (import \"test\" \"tag-i32\")) — the module under test",
+			251: "exception handling: (tag (import \"test\" \"tag-i32\") (param f32)) — the module under test",
+			255: "exception handling: (tag (import \"test\" \"func-i32\") (param f32)) — the module under test",
 		},
 		"call_indirect64.wast": {
 			26: "memory64: an i64-indexed table at :3 — tables=1 addr64=1, all gates on",
@@ -3528,6 +3580,98 @@ func TestGatedVectors(t *testing.T) {
 			567: "memory64: an i64 index type at :503 — the module this action runs against",
 			568: "memory64: an i64 index type at :503 — the module this action runs against",
 		},
+
+		// # The registry's 50, and the two partitions that have to agree
+		//
+		// 0017 Q1 gave the run loop a `register`/`assert_unlinkable`/`(invoke $M …)` triple, so
+		// **50 commands that were previously fails or unaskable now reach a feature gate**. Every
+		// one is a decline the engine already made elsewhere arriving at a *new* command shape:
+		// no gate changed, three new arms did.
+		//
+		// **Two independent partitions, quoted because agreeing is the check.** By feature —
+		// exception handling **7**, multi-memory **13**, memory64 **30**. By the arm that made the
+		// command askable — `assert_unlinkable` **33**, `register` **7**, `(invoke $M …)` **10**.
+		// Both sum to 50, and they cross-cut (memory64 supplies 26 unlinkables and 4 registers),
+		// so a miscount in either would have to be matched by a compensating one in the other.
+		// That is what the sum is for; a single total agrees with any story.
+		//
+		// **The gate strings are read from the run loop, not from the source text.** A throwaway
+		// `gateProbe` hook on `Result.gate` printed the error every decline carried — grave #129's
+		// rule, and it earned its keep here: the seven `register` declines report the *preceding
+		// module's* string, which no amount of reading the register line would show. The modules
+		// each entry names were then read out of the vector.
+		//
+		// **What is deliberately *not* in this list is the shape worth checking.** Four
+		// `memory64-imports.wast` unlinkables (`:56`, `:64`, `:158`, `:166`) and
+		// `linking1.wast:43` are 32-bit *importers* — nothing in the module under test is
+		// declined, so they instantiate, meet a supplier whose register was gate-declined, and
+		// fail honestly with `unknown import`. The board keeps them red on purpose: they are
+		// answered on the merits in the all-on lane, which is what stops a deferral from becoming
+		// a disappearance (0010). A version of this list that swept them in would have emptied
+		// five vectors by fiat, and the tell is that the importer's own type is 32-bit.
+		"tag.wast": {
+			48: "exception handling: (tag (import \"M\" \"tag\") (type $t2)) — the module under test",
+			59: "exception handling: (tag (import \"M\" \"tag\") (type $t)) — the module under test",
+		},
+		// `$Mm` at :1 declares three memories, so `i32.load8_u $mem1` in its exported `load`
+		// carries memarg flags bit 6; `$Nm` at :14 has two (one imported) and the same shape.
+		// The register at :12 inherits `$Mm`'s decline — a register whose module was declined is
+		// gated rather than failed, which is the stratum ledger's finding and not a guess.
+		"linking1.wast": {
+			12: "multi-memory: 3 memories at :1, so `i32.load8_u $mem1` carries memarg flags bit 6",
+			27: "multi-memory: $Mm at :1 — 3 memories, the module this action runs against",
+			28: "multi-memory: $Nm at :14 — 2 memories (1 imported), the module this action runs against",
+			29: "multi-memory: $Nm at :14 — 2 memories (1 imported), the module this action runs against",
+			40: "multi-memory: $Mm at :1 — 3 memories, the module this action runs against",
+			41: "multi-memory: $Nm at :14 — 2 memories (1 imported), the module this action runs against",
+			42: "multi-memory: $Nm at :14 — 2 memories (1 imported), the module this action runs against",
+		},
+		"linking2.wast": {
+			12: "multi-memory: 3 memories at :1, so `i32.load8_u $mem1` carries memarg flags bit 6",
+		},
+		"linking3.wast": {
+			12: "multi-memory: 3 memories at :1, so `i32.load8_u $mem1` carries memarg flags bit 6",
+			23: "multi-memory: $Mm at :1 — 3 memories, the module this action runs against",
+			36: "multi-memory: $Mm at :1 — 3 memories, the module this action runs against",
+			37: "multi-memory: $Mm at :1 — 3 memories, the module this action runs against",
+			49: "multi-memory: $Mm at :1 — 3 memories, the module this action runs against",
+		},
+		// Four registers whose supplier module declares an i64 table or memory, and 26
+		// `assert_unlinkable` vectors whose **module under test** declares one. The split is the
+		// importer's own index type: an i64 importer never reaches the linker, a 32-bit importer
+		// does (see the four exclusions in the batch note above).
+		"memory64-imports.wast": {
+			11:  "memory64: (table (export \"table64-10-inf\") i64 10 funcref) at :10",
+			13:  "memory64: (table (export \"table64-10-20\") i64 10 20 funcref) at :12",
+			15:  "memory64: (memory (export \"memory64-2-inf\") i64 2) at :14",
+			17:  "memory64: (memory (export \"memory64-2-4\") i64 2 4) at :16",
+			36:  "memory64: (table i64 12 funcref) — the module under test",
+			40:  "memory64: (table i64 10 20 funcref) — the module under test",
+			44:  "memory64: (table i64 12 20 funcref) — the module under test",
+			48:  "memory64: (table i64 10 18 funcref) — the module under test",
+			52:  "memory64: (table i64 10 funcref) — the module under test, against a 32-bit supplier",
+			60:  "memory64: (table i64 10 20 funcref) — the module under test, against a 32-bit supplier",
+			82:  "memory64: (memory i64 0 1) — the module under test",
+			86:  "memory64: (memory i64 0 2) — the module under test",
+			90:  "memory64: (memory i64 0 3) — the module under test",
+			94:  "memory64: (memory i64 2 3) — the module under test",
+			98:  "memory64: (memory i64 3) — the module under test",
+			102: "memory64: (memory i64 0 1) — the module under test",
+			106: "memory64: (memory i64 0 2) — the module under test",
+			110: "memory64: (memory i64 0 3) — the module under test",
+			114: "memory64: (memory i64 2 2) — the module under test",
+			118: "memory64: (memory i64 2 3) — the module under test",
+			122: "memory64: (memory i64 3 3) — the module under test",
+			126: "memory64: (memory i64 3 4) — the module under test",
+			130: "memory64: (memory i64 3 5) — the module under test",
+			134: "memory64: (memory i64 4 4) — the module under test",
+			138: "memory64: (memory i64 4 5) — the module under test",
+			142: "memory64: (memory i64 3) — the module under test",
+			146: "memory64: (memory i64 4) — the module under test",
+			150: "memory64: (memory i64 5) — the module under test",
+			154: "memory64: (memory i64 2) — the module under test, against a 32-bit supplier",
+			162: "memory64: (memory i64 2 4) — the module under test, against a 32-bit supplier",
+		},
 	}
 
 	files := boardFiles(t)
@@ -3846,8 +3990,15 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 		e.Decode = decodeAllOn
 		// The instantiation path takes the lane's gates too — see instantiateWith for
 		// why this line exists and what its absence cost.
-		e.Instantiate = func(c Command) (Instance, Stratum, error) {
-			return instantiateWith(allOn, c)
+		//
+		// **The field overridden is the one `engine()` supplies**, which is now InstantiateLinked
+		// rather than Instantiate. Writing `e.Instantiate` here instead would compile, read as
+		// though it set the gates, and be called by nothing — `instantiateRaw` prefers the linked
+		// func — so it would be this comment's own bug in a new field. A lane overrides the
+		// spelling the engine actually uses, and the way to know which that is is to read
+		// `engine()` rather than to assume the plain name is the live one.
+		e.InstantiateLinked = func(c Command, registry map[string]Instance) (Instance, Stratum, error) {
+			return instantiateWith(allOn, c, registry)
 		}
 		r := s.RunGated(e)
 		t.Log("\n" + r.Board())
@@ -4056,7 +4207,33 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	// verdict on the default board is licensed by this lane answering on the merits — it does,
 	// and for 21 of them the merits are a *different* unbuilt feature. That is a decline that
 	// cannot become a disappearance: they are red in this lane until §3 linking exists.
-	const allOnPassFloor = 35533
+	//
+	// # 35533 → 36428, +895 against the default lane's +741, and the excess is one population
+	//
+	// The registry (0017 Q1). Fail 2030 → 1485 with **749 departures and 204 arrivals**, measured
+	// in this lane rather than carried over — the standing reminder above having been earned twice.
+	// The lane divergence is 154, and it is the 21 vectors this floor's previous entry left red
+	// *plus* the rest of the §3 table-slot frontier: `table slot N names function M, which is an
+	// import` was this lane's largest single reason, and a registry is what supplies those imports.
+	// So the feature this lane was holding red for is the one that landed, which is the cleanest
+	// case a divergence can have.
+	//
+	// **Two same-key-new-reason rows, and they are the ones worth naming.** `imports.wast:97-98`
+	// changed from the §3 sentinel to `unknown import: "test" "func-i64->i64"` — the `"test"`
+	// module's register fails on its `(tag …)` fields (#8), so the cascade is honest and the
+	// *reason* improved: a wrong-layer message ("this engine has no linker") became a right-layer
+	// one ("nothing supplied this name"). Zero other rows changed cause, so nothing regressed
+	// under cover of the fall.
+	//
+	// **22 of the 204 arrivals are named `assert_return`s, and 19 of those are Q2's funcref-identity
+	// defect showing in this lane too.** `linking.wast:342-353` is the paradigm: `$Ot` imports
+	// `$Mt`'s table and writes its *own* functions into it with an element segment, so a
+	// `call_indirect` through that table must resolve in the module that supplied the funcref.
+	// Reported as `i32 4` and `i32 4294967292` against expectations of the same shape — plausible
+	// small integers, which is exactly why the class is invisible without the flow account. Same
+	// defect as the default lane's 23 (see execFailCeiling), filed as **#163**, and this lane sees
+	// more of it because GC-on modules reach further into `elem.wast` and `table_grow.wast`.
+	const allOnPassFloor = 36428
 	boardBound(t, "allOnPassFloor", totalPass, allOnPassFloor, boardBoundSlack, floorBound,
 		"a gated feature regressed, which the Gated==0 assertion above cannot see: with every "+
 			"gate on, a broken feature turns a pass into a fail and leaves Gated at zero")
@@ -4080,7 +4257,15 @@ func TestVerdictsPartitionCommands(t *testing.T) {
 			continue
 		}
 		r := run(s)
-		if got, want := r.Pass+r.Fail+r.Unsupported+r.Gated+r.Unimplemented, len(s.Commands); got != want {
+		// **Six terms, and the sixth was added because this control found it missing.**
+		// `Bound` counts a `register` that bound a name — a command whose success is a state
+		// change and not a verdict, so it scores nothing and must still be *accounted*. The
+		// distinction is the whole point of this test: 45 registers across 24 files summed
+		// short here while every other board number looked correct, which is precisely the
+		// "adding a verdict is a chance to lose vectors" event the doc comment above was
+		// written in advance of. It caught the sixth outcome the same way it was written to
+		// catch the fifth.
+		if got, want := r.Pass+r.Fail+r.Unsupported+r.Gated+r.Unimplemented+r.Bound, len(s.Commands); got != want {
 			t.Errorf("%s: verdicts sum to %d but the script has %d commands; %d vectors are unaccounted for",
 				f, got, want, want-got)
 		}
@@ -4276,7 +4461,34 @@ func TestPhase1Files(t *testing.T) {
 	// Product work by Scott's stamp and in his words: *for a conformance engine, a missing harness
 	// Kind is a hole in the measuring column itself — the phase's product is the board's truth, and
 	// this drains the column that defines the phase.*
-	const unsupportedCeiling = 27501
+	//
+	// # 27501 → 27099, and the −402 decomposes exactly
+	//
+	// Three command shapes the classifier declined, admitted together because they are one
+	// grammar — the script-level module registry of 0017's Q1 — and the drain is the sum of their
+	// populations with no remainder:
+	//
+	//	 78  `(register "name" $M?)`         KindRegister
+	//	200  `(assert_unlinkable (module …) "text")`  KindAssertUnlinkable
+	//	124  module-named actions            KindNamedInvoke / KindNamedAssertReturn / KindNamedAssertTrap
+	//	---
+	//	402
+	//
+	// **The exactness is the check, not the claim.** Every command this PR admits reached a
+	// verdict, so the drain closes against the other columns: pass +696, fail −389, gated +50, and
+	// 696 − 389 + 50 = 357 is *not* 402 — the difference is 45, which is the board's total command
+	// count *falling* (65064 → 65019), because `register` is the first Kind whose successful
+	// outcome is neither pass nor fail. A register binds a name and scores nothing; there is
+	// nothing for it to be right or wrong about, and inventing a pass for it would be the board
+	// buying a count with a command that asked no question. So 78 admitted registers contribute
+	// 33 verdicts (23 encode-column fails + 3 exec fails + 7 gated) and 45 silences.
+	//
+	// The 124 is the measured pair rather than one number, per the census law: **132** module-named
+	// actions exist, **124** classify, and the 8 short are one twenty-line stretch of
+	// `elem.wast:1016-1030` declining on `ref.extern` — 2 on an argument, 6 on an expected result.
+	// Keying the census on arguments alone said 110-of-110 admitted and was wrong by six; see
+	// `namedInvokeAction` in wast.go for the correction and why both halves have to be counted.
+	const unsupportedCeiling = 27099
 	boardBound(t, "unsupportedCeiling", totalUnsup, unsupportedCeiling, boardBoundSlack, ceilingBound,
 		"either a capability regressed or the corpus moved; both need an explanation rather "+
 			"than a raised ceiling")
@@ -4902,7 +5114,21 @@ func TestPhase1Files(t *testing.T) {
 	// would have been off by exactly that five and looked like it closed anyway, since 1458 + 244 +
 	// 79 also sums to 1781. That coincidence is the reason the flows are written out: two wrong
 	// terms summing correctly is not a check.
-	const encodeFailCeiling = 994
+	//
+	// # Re-based 994 → 1017, and this is the check the 4693 → 4909 note said to run
+	//
+	// The rise is **0 departures, 23 arrivals**, set-differenced on `(file, line)` — and all 23
+	// arrivals are `KindRegister`, a population that did not exist before this PR. That is the
+	// precedent above repeating exactly: a `(register "M" $M)` whose `$M` is a `(module …)` the
+	// encoder cannot emit now *asks* the encoder a question it was previously never asked, and is
+	// honestly charged here. Nothing the encoder used to emit stopped being emitted, which is what
+	// "0 departures" says and what the ceiling's own message cannot.
+	//
+	// Written this way because the note above pre-registered the check as *"the check to run the
+	// next time this rises"* — the Kind split, plus departures separately from arrivals — and a
+	// rebase that quoted only the net +23 would have been indistinguishable from an encoder losing
+	// 23 vectors it used to emit. Slack stays 0.
+	const encodeFailCeiling = 1017
 	boardBound(t, "encodeFailCeiling", encodeFail, encodeFailCeiling, 0, ceilingBound,
 		"the wat encoder lost ground: either it stopped emitting an instruction it used to "+
 			"emit, or the corpus moved. This ceiling is deliberately not shared with the text "+
@@ -5259,7 +5485,47 @@ func TestPhase1Files(t *testing.T) {
 	// is red, so nothing regressed under cover of the rise. The column's largest reason is now
 	// the §3 table-slot frontier at 540 of 705 — which is the next bucket this stratum offers and
 	// is not takeable at v0.
-	const execFailCeiling = 705
+	//
+	// # 705 → 248, the largest fall this column has taken, and its own arrivals need the account
+	//
+	// The registry (0017 Q1) drains the §3 frontier the note above called untakeable: **624 → 13**
+	// on the sentinel bucket, because a script-level `register` supplies from *another module in
+	// the same script* rather than from a Go host, which is the whole content of 0017's measured
+	// negative. The 13 that remain are gate-declined suppliers whose registers bind nothing.
+	//
+	// **The four sections above quote `linking is not implemented`, and that string is retired**
+	// — stated here rather than edited there, because those sections are the board as it read at
+	// the time and a re-based ceiling's history is the part worth keeping verbatim. The engine
+	// now says `is an import nothing supplied (contract §3)` at all four sites, the swap being
+	// forced by grave #36: an engine with a linker cannot testify that it has none. Recorded so
+	// that a reader grepping the retired text finds a resolved rewording rather than a bucket key
+	// that silently stopped matching, which is the failure mode a rewording mid-drain has.
+	// TestUnsatisfiedImportKeepsItsSentinel pins the four sites to one wording.
+	//
+	// Flows, not the net, because both directions moved: **621 departures, 209 arrivals** at the
+	// Q1 measurement, then a second motion of **46 departures, 1 arrival** for the link-error
+	// wording below. Arrivals partition 167 `assert_unlinkable` + 37 named assert_return + 3
+	// register + 2 named assert_trap — every one a Kind that did not reach this stratum before,
+	// so nothing pre-existing changed column, and the ceiling's own message is satisfied on the
+	// terms it states.
+	//
+	// **23 of the arriving assert_returns are `assert_return value mismatch`, and they are a real
+	// defect rather than benign churn.** Probed rather than assumed: a supplier exports a table
+	// whose slot 0 funcrefs its own func returning 11, an importer imports that table with a decoy
+	// func 0 returning 99 and `call_indirect`s slot 0 — **got 99, want 11**. A table slot's funcref
+	// carries a bare module-local index, so a cross-instance call resolves in the *importer*. That
+	// is 0017's Q2 exactly, now reachable for the first time because nothing could hold another
+	// instance's table until Q1 landed, and it is an accept-direction defect (§9 G-3) that scores
+	// green whenever the two instances happen to agree. Filed as **#163** with both reproducers
+	// rather than fixed here: widening `ref` is Q2's PR, and the seam is where the ADR put it.
+	//
+	// The largest remaining reason is `assert_unlinkable` at 124 of 248, whose next layer is the
+	// **decoder retaining import descriptors** (**#164**) — `sections.go` reads a non-func import's
+	// limits, table type or global type and drops them, so the linker can compare *kinds* and
+	// cannot compare types. Those 124 want `incompatible import type` for a matching kind with a
+	// mismatched signature, limit or mutability, which is a representation change rather than a
+	// harness one and therefore the next artifact this stratum names.
+	const execFailCeiling = 248
 	boardBound(t, "execFailCeiling", execFail, execFailCeiling, 0, ceilingBound,
 		"the interpreter answered fewer vectors than it did: either an opcode arm regressed or "+
 			"a value comparison started disagreeing. A *rise* caused by #8 unblocking more "+
@@ -5626,7 +5892,42 @@ func TestPhase1Files(t *testing.T) {
 	// unsupported column exactly where it was. This is product work by the phase rule (an
 	// interpreter arm and its encoder), so the column being flat is a fact about *which* column
 	// measures this kind of progress, not a confession of overhead.
-	const passFloor = 33356
+	//
+	// # 33356 → 34097, +741, and this time the unsupported column moves with it
+	//
+	// The registry (0017 Q1) is an **admission** and a **conversion** in one PR, which is the
+	// vocabulary Total() defines and the reason both columns move: 402 commands the classifier
+	// declined now exist as questions (`unsupportedCeiling`, −402), and the linker answers vectors
+	// that were already being asked (`execFailCeiling`, 705 → 248).
+	//
+	// The +741 is 696 from Q1 plus 45 from the link-error wording, and the second figure is the
+	// one worth stating separately: the linker's two failure messages were **invented strings where
+	// the spec has two of its own**, `unknown import` and `incompatible import type` (`eval.ml`'s
+	// two `Link.error` cases). `assert_unlinkable` is the arm where that is *oracle-covered* — its
+	// expected text is the whole sentinel, not a prefix — so 29 vectors were failing on the wording
+	// alone while the verdict underneath was right. Grave #36's fabricated evidence in the one
+	// place the suite can see it (#38's refinement), and the fix is 46 departures against 1
+	// arrival.
+	//
+	// **The single arrival is a coincidental pass becoming an honest fail, and it is the more
+	// interesting half.** `linking3.wast:39` expects `out of bounds table access` from a module
+	// importing `"Mm" "mem1"`; `$Mm` is gate-declined on this board, so the import is unsatisfied.
+	// The old code left the slot nil and instantiated anyway, reached the element segment, and
+	// trapped out of bounds — the expected string, arrived at through a module the spec says is
+	// unlinkable. Refusing at link time converts it to a named fail. A pass given back rather than
+	// netted out, for the reason the `− 1` above records: a green earned by the engine being wrong
+	// twice is not a green.
+	//
+	// 66 of the resulting `unknown import` fails are **cascades** — the name *is* registered in the
+	// script, but the register bound nothing — and zero are genuine unknowns, which is the register
+	// arm's predicted cluster now arriving with an attributable cause instead of silently. 49
+	// cascade from an encoder frontier (35 from `imports.wast`'s `(tag …)` fields alone) and **17
+	// from a gate-declined supplier**. The 17 stay honest fails rather than being gated: verified
+	// against the structural control, the all-on lane reports **0** `unknown import` fails across
+	// `linking{1,2,3}.wast` and `memory64-imports.wast`, so each of the 17 is simultaneously
+	// answered on the merits and cannot become a disappearance — which is exactly what
+	// TestAllGatesOnLeavesNothingGated is for and why the deferral did not need a second mechanism.
+	const passFloor = 34097
 	boardBound(t, "passFloor", totalPass, passFloor, boardBoundSlack, floorBound,
 		"a regression in a grammar that used to answer, or the corpus moved")
 }

@@ -197,11 +197,13 @@ func (in *Instance) tableFor(what string, idx uint64) (*table, error) {
 		// A reserved slot with nothing in it, and the two reasons are reported apart because
 		// they are different facts about the engine — memoryFor's split, and discriminated the
 		// same way, by the *import offset* rather than by whether `deferred` happens to be set.
-		// Below the offset is an imported table, which v0 cannot supply and where nothing went
-		// wrong with the module; above it, a declared table whose allocation failed for a
-		// verdict-shaped reason, quoted rather than paraphrased.
+		// Below the offset is an imported table nothing supplied, where nothing went wrong with
+		// the module; above it, a declared table whose allocation failed for a verdict-shaped
+		// reason, quoted rather than paraphrased. The *logic* is unchanged by linking arriving,
+		// for the reason memoryFor states at length: a filled slot never reaches here. The
+		// message changed for memoryFor's other reason — it claimed the engine has no linker.
 		if idx < uint64(in.mod.ImportedTables()) {
-			return nil, fmt.Errorf("%w: table %d is imported, and linking is not implemented (contract §3)",
+			return nil, fmt.Errorf("%w: table %d is an import nothing supplied (contract §3)",
 				ErrUnsupported, idx)
 		}
 		return nil, fmt.Errorf("%w: table %d was declared but not allocated: %w",

@@ -60,11 +60,42 @@ type Command struct {
 	// askable it arrives as its own Kind, which is where the classification decision is
 	// visible.
 	//
+	// **That promise was redeemed rather than reinterpreted**, and the shape is Scott's
+	// ruling on it: `(invoke $M …)` is KindNamedAction, read by its own function, and
+	// `invokeAction` was not widened. The unnamed form's three arms are untouched, which is
+	// what the ruling means by confining the blast radius. `(get …)` is still half-modelled
+	// and therefore still absent — see the `get` arm in classify for its count and what it
+	// waits on.
+	//
 	// Empty for every other Kind. Args is nil for a nullary call, which is the common
 	// shape: 6560 of the answerable population take no arguments.
 	Invoke  string
 	Args    []Val
 	Results []Val
+
+	// Target is the script-level `$name` of the module an action selects, empty when the
+	// action runs against the most recent module command.
+	//
+	// **Keyed by the script identifier, which is a different map from Register's** — one
+	// module can have either, both, or neither (decision 0017, part 2). Merging them would
+	// make `(register "a" $M)` mean that `(invoke $M …)` and `(invoke "a" …)` name the same
+	// thing, and the second form does not exist.
+	Target string
+
+	// Name is the module's own `$name` as written, empty for the 2195 unnamed forms.
+	//
+	// Recorded on module commands rather than derived at use, because the run loop is where
+	// the binding happens and the grammar is classify's business. 52 module forms carry one.
+	Name string
+
+	// Register is the export-name string a `(register "n" [$m])` command binds, and Target
+	// carries the optional `$m`. Empty for every other Kind.
+	//
+	// Its own field rather than reusing Invoke, though both hold a string from the script:
+	// `Invoke` is a name *inside* a module and this is a name *between* modules, so a shared
+	// field would put two namespaces under one identifier — the same argument that keeps
+	// Module and Source apart.
+	Register string
 }
 
 // Kind classifies a directive. Phase 1 recognizes the module and malformed
@@ -82,6 +113,11 @@ const (
 	KindInvoke                          // (invoke "f" arg*) at top level — a state mutation, #7
 	KindAssertTrapModule                // (assert_trap (module …) "text") — instantiation traps, 0015
 	KindAssertTrapAction                // (assert_trap (invoke "f" arg*) "text") — a trapping call, #157
+	KindRegister                        // (register "n" [$m]) — binds a module into the registry, 0017
+	KindAssertUnlinkable                // (assert_unlinkable (module …) "text") — linking must fail, 0017
+	KindNamedAssertReturn               // (assert_return (invoke $M "f" arg*) result*) — 0017
+	KindNamedAssertTrap                 // (assert_trap (invoke $M "f" arg*) "text") — 0017
+	KindNamedInvoke                     // (invoke $M "f" arg*) at top level — 0017
 	KindUnsupported                     // anything phase 1 cannot execute
 )
 
@@ -105,9 +141,56 @@ func (k Kind) String() string {
 		return "assert_trap (module)"
 	case KindAssertTrapAction:
 		return "assert_trap (invoke)"
+	case KindRegister:
+		return "register"
+	case KindAssertUnlinkable:
+		return "assert_unlinkable"
+	case KindNamedAssertReturn:
+		return "assert_return (invoke $M)"
+	case KindNamedAssertTrap:
+		return "assert_trap (invoke $M)"
+	case KindNamedInvoke:
+		return "invoke $M"
 	default:
 		return "unsupported"
 	}
+}
+
+// The three questions the run loop's shared action arm asks about a Kind, as predicates
+// rather than as equality tests spelled at each site.
+//
+// **Two axes crossed, which is why there are six action Kinds and not three.** An action
+// selects a module (unnamed, or `$M`) and carries an expectation (values, a trap, nothing),
+// and those are independent facts — `(assert_trap (invoke $M "f") "…")` is real, and so is
+// every other cell. Scott's ruling was that the named form arrives as its own Kind rather
+// than widening the unnamed reader, and a Kind per cell is what that costs; the alternative
+// was one `KindNamedAction` discriminated by which of Expect/Results happened to be empty,
+// which is a flag by another route and ambiguous besides — `(assert_return (invoke $M "f"))`
+// with zero expected results exists.
+//
+// Predicates rather than literals at the use sites because the arm asks each question in more
+// than one place, and *one concept, one trigger*: a seventh action Kind is admitted by
+// extending one of these, not by finding every `c.Kind ==` in the loop.
+func (k Kind) selectsModule() bool {
+	switch k {
+	case KindNamedAssertReturn, KindNamedAssertTrap, KindNamedInvoke:
+		return true
+	default:
+		// A real fallback rather than a shrug, which is the condition `.golangci.yml`'s
+		// `default-signifies-exhaustive` attaches to writing one: *every* other Kind runs
+		// against the current instance, including Kinds not yet invented, so the negative is
+		// the honest default and enumerating the eleven others here would be a list to forget
+		// to extend. Contrast the run loop's own switch, where a missing Kind must be loud.
+		return false
+	}
+}
+
+func (k Kind) wantsTrap() bool {
+	return k == KindAssertTrapAction || k == KindNamedAssertTrap
+}
+
+func (k Kind) wantsNothing() bool {
+	return k == KindInvoke || k == KindNamedInvoke
 }
 
 // Capability is an engine component a command may require before it can be
@@ -304,8 +387,12 @@ func classify(n node, src []byte) Command {
 	head := n.head()
 	switch head {
 	case "module":
+		// The module's own `$name`, read once for all three forms: it is a property of the
+		// `(module …)` head rather than of which language the body is in, which is why it is
+		// read before the forms divide. Empty for the 2195 unnamed forms.
+		name, _ := scriptName(nodeAt(n, 1))
 		if img, ok := binaryModule(n); ok {
-			return Command{Kind: KindModuleBinary, Line: n.line, Head: head, Module: img}
+			return Command{Kind: KindModuleBinary, Line: n.line, Head: head, Module: img, Name: name}
 		}
 		// Named `quoted`, not `src`: the parameter above is the *script's* bytes and this is
 		// the *module's*, and letting the second shadow the first would put two different
@@ -313,7 +400,7 @@ func classify(n node, src []byte) Command {
 		if quoted, ok := quoteModule(n); ok {
 			return Command{
 				Kind: KindModuleQuote, Line: n.line, Head: head,
-				Source: quoted, Needs: CapWatReader,
+				Source: quoted, Needs: CapWatReader, Name: name,
 			}
 		}
 		// (module ...) with a bare wat body. **Askable since #69**, and the sentence that
@@ -359,7 +446,7 @@ func classify(n node, src []byte) Command {
 		}
 		return Command{
 			Kind: KindModuleText, Line: n.line, Head: head,
-			Source: n.span(src), Needs: CapWatReader,
+			Source: n.span(src), Needs: CapWatReader, Name: name,
 		}
 
 	case "assert_malformed":
@@ -389,6 +476,55 @@ func classify(n node, src []byte) Command {
 					Source: quoted,
 					Expect: string(n.list[2].str),
 					Needs:  CapWatReader,
+				}
+			}
+		}
+		return Command{Kind: KindUnsupported, Line: n.line, Head: head}
+
+	case "register":
+		// `(register "n" [$m])`: the module `$m` — or the most recent one, when the name is
+		// omitted — becomes importable under the module name `"n"`. `runner.ml:314-355`'s
+		// `registry`, and decision 0017 part 1.
+		//
+		// **A command with no verdict**, which no other Kind here is: it asserts nothing, so it
+		// can neither pass nor fail. It was `unsupported` until now and that was honest while
+		// nothing consumed it — 78 commands across 33 files, of which 54 omit the `$name` and 24
+		// carry one. What made it stop being honest is that the *importing* modules downstream
+		// are 605-and-counting fails whose bucket text names linking: an unrun `register` is a
+		// skip whose cost is borne by other vectors, which is the bare-`invoke` lesson (#7)
+		// exactly — *a harness that drops a state mutation is not neutral about the vectors
+		// after it*.
+		//
+		// So it is scored as neither: the run loop performs it and counts nothing. See the arm.
+		if c, ok := registerCommand(n); ok {
+			// Kind/Line/Head stamped here rather than inside the reader, matching every other
+			// arm — and **the first draft returned `c` bare**, which compiled, ran, and scored
+			// all 78 as `KindModuleBinary` with a nil image, because `Kind`'s zero value is a
+			// *valid member* rather than an unset marker. The board said `78 (module binary ...)
+			// must decode` / `unexpected end`, an error naming a layer the input never reached.
+			// See TestNoReaderLeavesKindAtItsZeroValue for the control that now catches the shape.
+			c.Kind, c.Line, c.Head = KindRegister, n.line, head
+			return c
+		}
+		return Command{Kind: KindUnsupported, Line: n.line, Head: head}
+
+	case "assert_unlinkable":
+		// `(assert_unlinkable (module …) "text")`: the module is well-formed and valid, and
+		// linking it must fail with the spec's text. 200 commands, of which **184 want
+		// `incompatible import type` and 16 want `unknown import`** — measured over the corpus,
+		// and the split is the whole reason this Kind can be scored at all: both verdicts come
+		// out of the linker, so neither needs the validator.
+		//
+		// **It reads the module through the text path only**, because all 200 are the bare
+		// `(module <fields>)` form — measured, no binary or quote variant of this shape exists —
+		// which is the same measurement `KindAssertTrapModule` rests on and the same reason it
+		// carries `Source` rather than `Module`.
+		if len(n.list) == 3 && n.list[1].isList() && n.list[2].isS && n.list[1].head() == "module" {
+			if kw := moduleFormKeyword(n.list[1]); kw == "" {
+				return Command{
+					Kind: KindAssertUnlinkable, Line: n.line, Head: head,
+					Source: n.list[1].span(src), Expect: string(n.list[2].str),
+					Needs: CapInterpreter,
 				}
 			}
 		}
@@ -477,6 +613,16 @@ func classify(n node, src []byte) Command {
 				c.Expect = string(n.list[2].str)
 				return c
 			}
+			// **The 20 module-naming declines that arm's comment measures, now admitted** — and
+			// the shape is Scott's ruling: a *second reader*, not a widened first one. The
+			// numbers above are the record of what this line converts, and they stay as written
+			// rather than being edited down, because a comment that quietly loses the population
+			// it once declined is how a measurement stops being checkable.
+			if c, ok := namedInvokeAction(n.list[1]); ok {
+				c.Kind, c.Line, c.Head = KindNamedAssertTrap, n.line, head
+				c.Expect = string(n.list[2].str)
+				return c
+			}
 		}
 		return Command{Kind: KindUnsupported, Line: n.line, Head: head}
 
@@ -498,9 +644,111 @@ func classify(n node, src []byte) Command {
 			c.Kind, c.Line, c.Head = KindInvoke, n.line, head
 			return c
 		}
+		// The 2 top-level `(invoke $M …)` commands, which are the same state mutation aimed at a
+		// named module. Small population, admitted for the reason the bare form was: an
+		// unperformed mutation is charged to whatever vector reads the state next.
+		if c, ok := namedInvokeAction(n); ok {
+			c.Kind, c.Line, c.Head = KindNamedInvoke, n.line, head
+			return c
+		}
 		return Command{Kind: KindUnsupported, Line: n.line, Head: head}
 	}
 	return Command{Kind: KindUnsupported, Line: n.line, Head: head}
+}
+
+// registerCommand reads `(register "n" [$m])`.
+//
+// Both shapes, and the optional `$m` is what the two maps of decision 0017 part 2 are for: the
+// string is the *module name* an import will ask for, the `$m` is the *script identifier* of
+// the module being bound. Written into different fields, because they are different namespaces
+// — see Command.Register.
+func registerCommand(n node) (Command, bool) {
+	if n.head() != "register" || len(n.list) < 2 || len(n.list) > 3 || !n.list[1].isS {
+		return Command{}, false
+	}
+	c := Command{Register: string(n.list[1].str), Needs: CapInterpreter}
+	if len(n.list) == 3 {
+		name, ok := scriptName(n.list[2])
+		if !ok {
+			return Command{}, false
+		}
+		c.Target = name
+	}
+	return c, true
+}
+
+// namedInvokeAction reads `(invoke $M "name" arg*)` into Target/Invoke/Args.
+//
+// **A second reader beside invokeAction rather than a widening of it, on Scott's ruling**, and
+// the reasons he gave are worth keeping at the site because the cheaper-looking move is the one
+// declined: widening would make one function answer two questions (does this action name a
+// module, and is it askable), which is the one-authority law at function scale, and three arms
+// share that reader so a new Kind confines the blast radius.
+//
+// **What it deliberately shares is the argument grammar**, by calling `readConst` under the same
+// NaN-class rule — the fact that would be worth *nothing* duplicated, since which values are
+// passable is one decision and graves #78/#105/#106 are all one fact in two places. So the split
+// is at the shape and the join is at the values, which is the same seam `stringModule` cuts.
+//
+// Population, measured through this function rather than by grep: **132** `(invoke $M …)` forms,
+// 110 under `assert_return`, 20 under `assert_trap`, 2 at top level — of which **124 classify**
+// (102 / 20 / 2) and 8 do not. All 8 are in one twenty-line stretch of `elem.wast:1016-1030`, and
+// all 8 decline on `ref.extern`: **2** on an argument, through this function's `readConst` loop,
+// and **6** on an expected *result*, through `assertReturn`'s. Both counts are 0017's Q2 — a
+// funcref or externref needs an instance to name — so this seam is where the split was drawn and
+// the eight are the measurement that says the split is where the corpus puts it.
+//
+// **Both numbers, because keying the census on one of them undercounts.** The pair is quoted
+// rather than the raw total for the reason the *previous* draft of this comment got it wrong: it
+// said 130-of-132 args-readable and read as though 130 vectors were admitted, when the arguments
+// are only half the gate. Expected and Got are different facts and a census keyed on either alone
+// is short — here by exactly the 6 whose arguments were fine and whose results were not.
+func namedInvokeAction(act node) (Command, bool) {
+	if act.head() != "invoke" || len(act.list) < 3 {
+		return Command{}, false
+	}
+	name, ok := scriptName(act.list[1])
+	if !ok || !act.list[2].isS {
+		return Command{}, false
+	}
+	c := Command{Target: name, Invoke: string(act.list[2].str), Needs: CapInterpreter}
+	for _, a := range act.list[3:] {
+		v, ok := readConst(a)
+		if !ok || v.NaN != NaNNone {
+			return Command{}, false
+		}
+		c.Args = append(c.Args, v)
+	}
+	return c, true
+}
+
+// scriptName reads a `$name` atom, reporting false for anything else.
+//
+// **Checked positively — it must be an atom starting with `$` — where the unnamed readers check
+// negatively**, that element 1 is not a string. The asymmetry is deliberate and it is the
+// accept/reject direction again: a decline may safely be broad, because a shape nobody
+// recognizes stays visible in the unsupported column with its head recorded; an *admission*
+// must be narrow, because a wrong reading of an admitted shape produces a confident verdict
+// about the wrong module. So the reader that says no uses the loose test and the reader that
+// says yes uses the strict one.
+func scriptName(n node) (string, bool) {
+	if n.isList() || n.isS || !strings.HasPrefix(n.atom, "$") {
+		return "", false
+	}
+	return n.atom, true
+}
+
+// nodeAt is n's i'th element, or a zero node when there is none.
+//
+// A helper rather than a bounds check at each site, because the alternative is
+// `len(n.list) > 1 && …` repeated beside every optional-element read, and the zero node
+// answers false to every predicate scriptName asks — an absent element and a wrong-shaped one
+// are the same answer here, which is what makes collapsing them safe rather than convenient.
+func nodeAt(n node, i int) node {
+	if i >= len(n.list) {
+		return node{}
+	}
+	return n.list[i]
 }
 
 // assertReturn reads `(assert_return (invoke "name" arg*) result*)`, reporting false for
@@ -515,11 +763,20 @@ func classify(n node, src []byte) Command {
 // KindUnsupported with its head recorded, where the column names it. The forms deliberately
 // left out, each measured over the corpus rather than guessed:
 //
-//   - `(invoke $M "f" …)`, a named module: **0** in the answerable population, and admitting
-//     it would need module-name state the run loop does not keep.
 //   - `(either …)` results, the relaxed-SIMD non-determinism form: **0** answerable, all of
 //     them in bulk and relaxed-SIMD files.
 //   - `(get "g")` actions, v128 constants, reference constants: their own strata.
+//
+// The list used to open with `(invoke $M "f" …)`, on the ground that it was **0** in the
+// answerable population and "would need module-name state the run loop does not keep". Both
+// halves were true and both have expired: the state is the registry (decision 0017), and the
+// count was 0 only because *nothing after such a vector could run either*. It is **102 of 110**
+// here now, admitted through a Kind of its own — the 8 short are `elem.wast:1016-1030`'s
+// `ref.extern` forms, 6 of which decline on the results loop *below* rather than on the action
+// reader, which is why the figure is stated as a pair. See namedInvokeAction for the breakdown.
+// The sentence is quoted rather than deleted because a declined-shape list is a record of what was
+// measured when, and an entry that vanishes leaves the reader unable to tell a resolved decline
+// from an unnoticed one.
 //
 // A shape this declines is *not* a fail. The vector is valid; the harness simply cannot ask
 // it yet, which is precisely the Unsupported/Fail distinction Result documents.
@@ -530,16 +787,24 @@ func classify(n node, src []byte) Command {
 // command — guard 1 of decision 0010 — and it is also what keeps the run loop free of
 // grammar. A run loop that parsed nodes would be a second place that knows the constant
 // grammar, and the readers in value.go are the first.
+//
+// The two action shapes are read by their own readers and the *results* by one loop below,
+// which is where the seam falls: what differs between them is which module the call selects,
+// and what is identical is what the call is expected to return.
 func assertReturn(n node) (Command, bool) {
 	no := Command{Kind: KindUnsupported, Line: n.line, Head: n.head()}
 	if len(n.list) < 2 || !n.list[1].isList() {
 		return no, false
 	}
 	c, ok := invokeAction(n.list[1])
+	kind := KindAssertReturn
 	if !ok {
-		return no, false
+		if c, ok = namedInvokeAction(n.list[1]); !ok {
+			return no, false
+		}
+		kind = KindNamedAssertReturn
 	}
-	c.Kind, c.Line, c.Head = KindAssertReturn, n.line, n.head()
+	c.Kind, c.Line, c.Head = kind, n.line, n.head()
 	for _, e := range n.list[2:] {
 		v, ok := readConst(e)
 		if !ok {
@@ -765,6 +1030,26 @@ type Result struct {
 	// #93 mechanism finding exactly the class it was widened for.
 	GatedAt []int
 
+	// Bound counts `(register "name" $M?)` commands that successfully bound a name.
+	//
+	// **A sixth term because a register asks no question, and "not scored" must not be
+	// allowed to mean "not accounted".** A register is the one command whose successful
+	// outcome is a *state change* rather than a verdict: it binds an export name to an
+	// instance and asserts nothing, so pass and fail are both invented verdicts and
+	// `Unsupported` is the same fiction pointed the other way (the harness *can* ask; there
+	// is simply nothing to ask). Counting it nowhere was the first draft, and
+	// TestVerdictsPartitionCommands caught it immediately — 45 commands, across 24 files,
+	// summing short of the command count. That is the partition control doing exactly what
+	// its comment says it exists for: *adding a verdict is a chance to lose vectors*, and a
+	// sixth outcome is an added verdict whether or not it scores anything.
+	//
+	// Excluded from Total() for Gated's and Unsupported's reason — the denominator is over
+	// questions asked — so a script full of registers cannot inflate a pass rate. The
+	// **failing** register is a different fact and stays in Fail: it means a name the script
+	// will import from later is bound to nothing, and the vectors that then report `unknown
+	// import` are a cluster whose cause is that failure. See the KindRegister arm.
+	Bound int
+
 	// Failures, bucketed by expected spec text. The bucket key names exactly
 	// which check is missing or wrong, which makes the board a priority queue:
 	// the biggest bucket is the next issue to take, and a bucket reaching zero
@@ -966,6 +1251,13 @@ func (r *Result) Board() string {
 	if r.Unimplemented > 0 {
 		fmt.Fprintf(&b, ", %d unimplemented", r.Unimplemented)
 	}
+	// Rendered so the board's own line sums to the command count, which is what
+	// TestVerdictsPartitionCommands asserts and what an unrendered sixth term would
+	// quietly break for a human reading a Board line. Called "bound" rather than a
+	// verdict word because it is not one: N names now resolve.
+	if r.Bound > 0 {
+		fmt.Fprintf(&b, ", %d bound", r.Bound)
+	}
 	if len(r.Buckets) > 0 {
 		b.WriteString("\n  failures bucketed by expected spec text (largest first):")
 		for _, k := range r.BucketsBySize() {
@@ -1073,6 +1365,27 @@ type Instance any
 // broke. The value is ignored when err is nil.
 type InstantiateFunc func(c Command) (Instance, Stratum, error)
 
+// LinkedInstantiateFunc is InstantiateFunc with the script's registry supplied.
+//
+// **A second field rather than a widened first one**, and unlike the named-action Kinds this
+// is not a ruling but the same argument one level down: an engine that can instantiate a
+// closed module cannot necessarily link an open one, so they are separate obligations and a
+// nil here is a caller that has the one and not the other. Every existing caller keeps
+// working, which is the property that matters — `sexpr_test.go`'s four Engine literals score
+// module and malformed forms and have no business acquiring a linker.
+//
+// # Why the registry crosses as a map of Instance and not as a resolver
+//
+// The engine's own resolver type is `func(module, name string) (Extern, bool)`, and `Extern`
+// is the engine's type — naming it in this signature is the import this package is forbidden
+// to make. So the harness hands over what it owns (names → opaque instances) and the caller,
+// which legitimately knows both sides, builds the resolver. That is the same seam InvokeFunc
+// cuts for values: *the conversion happens in the one place that knows both type systems*.
+//
+// Nothing is passed for "the most recent module": an unnamed import in a script resolves
+// through the registry only, which is `runner.ml`'s behaviour and not a simplification.
+type LinkedInstantiateFunc func(c Command, registry map[string]Instance) (Instance, Stratum, error)
+
 // InvokeFunc calls an exported function and returns its results.
 //
 // Values cross as []Val — the harness's own type — for the reason ValKind is not
@@ -1118,6 +1431,23 @@ type Engine struct {
 	// required by CapInterpreter and the run loop checks both.
 	Instantiate InstantiateFunc
 	Invoke      InvokeFunc
+
+	// InstantiateLinked is Instantiate with the registry, required by the `register` and
+	// `assert_unlinkable` arms and by every module command in a script that has a registry.
+	//
+	// **A nil one is not a degradation to Instantiate, it is the linker being absent**, and the
+	// run loop says so per arm rather than silently falling back: an `assert_unlinkable` scored
+	// through the unlinked path would be asking whether a module instantiates *without* its
+	// imports, which every one of the 200 does not, so the arm would report 200 passes it never
+	// earned. That is the accept-direction defect this field exists to make impossible — the
+	// same argument Engine.IsTrap makes about a missing trap predicate, and it lands on the
+	// opposite default for the same reason: never award, and never quietly decline to notice.
+	//
+	// Module commands *do* fall back, and the difference is which way the error points: a
+	// module instantiated without its registry reports the §3 sentinel and its dependents fail
+	// in a named bucket, which is exactly today's board. So a caller with no linker sees the
+	// board it had, and a caller with one drains it.
+	InstantiateLinked LinkedInstantiateFunc
 
 	// Has is what the engine declares. Board runners pass EngineCapabilities(); tests
 	// pass a narrower set to exercise the gap.
@@ -1200,15 +1530,20 @@ func (s *Script) run(opts runOpts) *Result {
 		return err != nil && opts.IsTrap != nil && opts.IsTrap(err)
 	}
 	// cur is the instance the *most recent* module command produced, which is what an
-	// `assert_return` runs against.
+	// unnamed `assert_return` runs against.
 	//
-	// **"Most recent" is measured, not assumed.** The reference's script semantics let an
-	// action name a module — `(invoke $M "f" …)` — and a classifier ignoring the name would
-	// invoke the wrong module and score whatever came out. There are **0** such actions in
-	// the answerable population, and 7 answerable vectors sit after a `(register …)` in the
-	// same file, which affects imports rather than which module an unnamed invoke selects. So
-	// one slot is the whole state, and the day a named action becomes askable it arrives as
-	// its own Kind, where the classification decision is visible.
+	// **One slot is no longer the whole state, and the sentence that used to say so has been
+	// redeemed rather than deleted.** It read:
+	//
+	//	There are **0** such actions in the answerable population … So one slot is the whole
+	//	state, and the day a named action becomes askable it arrives as its own Kind, where
+	//	the classification decision is visible.
+	//
+	// That day is this one. The 0 was true and was a *consequence* of the missing state rather
+	// than evidence against needing it — with no registry, nothing after such a vector could
+	// run either — and the instruction it left is the one that was followed: the named action
+	// arrived as its own Kind (Scott's ruling), so `cur` keeps its meaning exactly and the two
+	// maps below carry what it never could.
 	//
 	// curErr carries *why* there is no instance, so a run of assert_returns after a module
 	// that failed to instantiate reports the cause once per vector rather than an anonymous
@@ -1227,6 +1562,34 @@ func (s *Script) run(opts runOpts) *Result {
 	var curErr error
 	curStratum := StratumUnset
 	curGated := false
+	// The two maps of decision 0017, and they are two because they are keyed by two different
+	// namespaces: `registry` by the *module name* an import asks for, written by `register`,
+	// and `named` by the script `$name`, written by every module command that carries one. One
+	// module may be in both, either, or neither. Merging them would make `(register "a" $M)`
+	// imply that `(invoke $M …)` and `(invoke "a" …)` name the same thing, and the second form
+	// does not exist in the grammar at all.
+	//
+	// `spectest` is in `registry` before the loop starts and is not special-cased anywhere
+	// else — part 3 of the decision, and the reason the resolver has no builtin arm.
+	registry := opts.spectestRegistry(s.Path)
+	named := map[string]Instance{}
+	// A named action's failures carry *why* its module has no instance, for the reason `curErr`
+	// exists: "no instance for $M" names nothing, and this run loop knows whether the module
+	// failed, was declined, or never appeared.
+	namedErr := map[string]error{}
+	namedStratum := map[string]Stratum{}
+	namedGated := map[string]bool{}
+	// remember stamps a module command's outcome into whichever slots it owns. Every module
+	// arm calls it exactly once, which is what keeps `cur` and `named` from disagreeing about
+	// the same command — four arms each assigning five variables is the shape that drifts.
+	remember := func(c Command, in Instance, st Stratum, err error, gated bool) {
+		cur, curStratum, curErr, curGated = in, st, err, gated
+		if c.Name == "" {
+			return
+		}
+		named[c.Name], namedStratum[c.Name] = in, st
+		namedErr[c.Name], namedGated[c.Name] = err, gated
+	}
 	for _, c := range s.Commands {
 		// The capability gap, computed before the verdict switch and ahead of every
 		// Kind: a command needing a component the engine lacks gets no verdict at all,
@@ -1305,12 +1668,12 @@ func (s *Script) run(opts runOpts) *Result {
 				// following a declined module must not run against the *previous*
 				// module's instance — it would score a real verdict from the wrong
 				// program, which is worse than reporting no instance.
-				cur, curErr, curStratum, curGated = nil, errNoInstance(c, "gate declined the module"), StratumBinary, true
+				remember(c, nil, StratumBinary, errNoInstance(c, "gate declined the module"), true)
 				r.gate(c)
 				continue
 			}
 			if err != nil {
-				cur, curErr, curStratum, curGated = nil, err, StratumBinary, false
+				remember(c, nil, StratumBinary, err, false)
 				r.Fail++
 				const key = "(module binary ...) must decode"
 				r.Buckets[key] = append(r.Buckets[key], Failure{
@@ -1319,8 +1682,8 @@ func (s *Script) run(opts runOpts) *Result {
 				})
 				continue
 			}
-			cur, curStratum, curErr = opts.instantiate(c)
-			curGated = isGated(curErr)
+			in, st, ierr := opts.instantiate(c, registry)
+			remember(c, in, st, ierr, isGated(ierr))
 			r.Pass++
 
 		case KindModuleQuote, KindModuleText, KindAssertMalformedText:
@@ -1342,7 +1705,7 @@ func (s *Script) run(opts runOpts) *Result {
 				// binary arm above stamps StratumBinary for the same reason, and the two
 				// lines are otherwise identical, which is exactly the transposition hazard
 				// that named the layer at the site instead of deriving it.
-				cur, curErr, curStratum, curGated = nil, errNoInstance(c, "gate declined the module"), StratumText, true
+				remember(c, nil, StratumText, errNoInstance(c, "gate declined the module"), true)
 				r.gate(c)
 				continue
 			}
@@ -1365,7 +1728,7 @@ func (s *Script) run(opts runOpts) *Result {
 				// the old ones. *Bucketed failures are the work plan*, and a plan needs to
 				// name which population it is about.
 				if err != nil {
-					cur, curErr, curStratum, curGated = nil, err, StratumText, false
+					remember(c, nil, StratumText, err, false)
 					r.Fail++
 					key := "(module quote ...) must read"
 					if c.Kind == KindModuleText {
@@ -1385,8 +1748,8 @@ func (s *Script) run(opts runOpts) *Result {
 				// verdict; scoring the downstream assert_return as `fail` would mark correct
 				// behaviour red. So the front end is scored on its own answer and the
 				// decline travels to the vector whose question it actually blocks.
-				cur, curStratum, curErr = opts.instantiate(c)
-				curGated = isGated(curErr)
+				in, st, ierr := opts.instantiate(c, registry)
+				remember(c, in, st, ierr, isGated(ierr))
 				r.Pass++
 				continue
 			}
@@ -1420,11 +1783,15 @@ func (s *Script) run(opts runOpts) *Result {
 			// a file that interleaves these with real modules keeps whichever instance it had.
 			// Measured: all 54 of these forms stand alone, so the choice is invisible today
 			// and would be a real defect the first time it was not.
-			if opts.Instantiate == nil {
+			// **Either instantiation func satisfies this**, for the reason the action arm's
+			// twin check states: they are two spellings of one capability, and asking only
+			// about the plain one would panic on a caller that supplied the linked one — a
+			// harness crash for a configuration that is strictly more capable.
+			if opts.Instantiate == nil && opts.InstantiateLinked == nil {
 				panic(fmt.Sprintf("%s:%d: CapInterpreter declared but no InstantiateFunc was "+
 					"supplied; the capability registry is ahead of the engine", s.Path, c.Line))
 			}
-			_, _, err := opts.instantiate(c)
+			_, _, err := opts.instantiate(c, registry)
 			if isGated(err) {
 				r.gate(c)
 				continue
@@ -1456,30 +1823,172 @@ func (s *Script) run(opts runOpts) *Result {
 				Stratum: StratumExec,
 			})
 
-		case KindAssertReturn, KindInvoke, KindAssertTrapAction:
-			// **Three kinds, one arm, and the sharing is the point.** All three call an
-			// exported function on the current instance, so they need the same instance, the
-			// same no-instance accounting, the same gate handling, and the same panic on a
-			// declared-but-absent component. A bare `(invoke …)` is an assert_return with no
-			// expectation; an `assert_trap` action is one whose expectation is an error. A
-			// separate arm would be a second copy of all the state handling, drifting from
-			// this one on the next change.
+		case KindRegister:
+			// `(register "n" [$m])` binds a module into the registry, and it is **the one arm
+			// whose success is a state change rather than a verdict**.
 			//
-			// They part company at exactly one line — whether a non-nil error from Invoke is
-			// the answer or the failure — and that branch is below, ahead of the error
-			// bucketing, for the same reason the gate check precedes the substring match on
-			// the malformed arms: order is what makes the two readings impossible to confuse
-			// rather than merely unlikely to be.
+			// Scoring it pass or fail would be an invented verdict either way: it asserts
+			// nothing, so a pass is a pass nobody claimed and a fail is a defect nobody alleged.
+			// Counting it as `unsupported` — which is what happened until this Kind existed — is
+			// the same fiction pointed the other way, since the harness *can* ask and there is
+			// nothing to ask. So the 45 registers that bind touch **no scoring** counter and the
+			// denominators do not move.
+			//
+			// **They are nonetheless counted, in `Bound`, and that correction came from a
+			// control rather than from review.** This comment's first draft said the arm "touches
+			// no counter at all" and meant it as a virtue; TestVerdictsPartitionCommands then
+			// failed across 24 files, because *unscored* and *unaccounted* are different things
+			// and the partition asserts the second. A sixth outcome is an added verdict as far as
+			// the arithmetic is concerned, whether or not it scores. See Result.Bound.
+			//
+			// The **`assert_unlinkable` arm is where a missing linker is caught**, not here: a
+			// register with no linker binds an instance nobody will resolve against, which is
+			// harmless, where an unlinkable vector with no linker would award a pass.
+			if in, ok := registerTarget(c, cur, named); ok {
+				registry[c.Register] = in
+				r.Bound++
+				continue
+			}
+			// The module the register names produced no instance. **Not scored, and not silent
+			// either** — this is a *state* failure whose cost lands on whichever import resolves
+			// against the missing name later, and that vector will report `unknown import` with
+			// no idea why. So the name is bound to nothing (the map keeps no entry) and the
+			// bucket names the register itself, charged to the stratum of the module that failed.
+			//
+			// It is a fail rather than a no-op because the alternative was measured and is worse:
+			// a register whose module failed silently produces a *cluster* of downstream
+			// `unknown import` failures naming the wrong component, which is the wrong-layer
+			// error the harness exists to avoid attributing.
+			got := "no module command produced an instance to register"
+			st := StratumExec
+			gated := false
+			if c.Target != "" {
+				if err := namedErr[c.Target]; err != nil {
+					got, st, gated = err.Error(), namedStratum[c.Target], namedGated[c.Target]
+				} else {
+					got = "no module named " + c.Target + " precedes this register"
+				}
+			} else if curErr != nil {
+				got, st, gated = curErr.Error(), curStratum, curGated
+			}
+			// **A register whose module was *declined* is gated, not failed**, and the distinction
+			// is the same one the module arms already draw: a decline is the engine refusing to
+			// answer, so charging it to Fail would report a feature this build does not have as a
+			// defect in this build. Measured — all 7 of these are exactly that: 3 in
+			// `linking{1,2,3}.wast` on the multi-memory memarg bit and 4 in
+			// `memory64-imports.wast` on memory64, each register naming a module the decoder
+			// declined one command earlier, which the module command itself already scored `gated`.
+			//
+			// Found by the stratum ledger rather than by the total: `binary 7` against a ceiling of
+			// 0 is what said so, and it said so *because* the binary column's ceiling is not shared
+			// with the others. A shared column would have absorbed seven declines into an
+			// encoder-sized number and reported nothing.
+			if gated {
+				r.gate(c)
+				continue
+			}
+			r.Fail++
+			if st == StratumUnset {
+				st = StratumExec
+			}
+			key := "register: " + got
+			r.Buckets[key] = append(r.Buckets[key], Failure{
+				Line: c.Line, Expect: "an instance to bind as module " + c.Register,
+				Got: got, Kind: c.Kind, Stratum: st,
+			})
+
+		case KindAssertUnlinkable:
+			// `(assert_unlinkable (module …) "text")`: the module reads and validates, and
+			// **linking it must fail** with the spec's text. 200 vectors, 184 wanting
+			// `incompatible import type` and 16 wanting `unknown import`.
+			//
+			// **The linker's absence is a panic here and a fallback everywhere else**, which is
+			// the one asymmetry in this file worth defending at its site. A module command with
+			// no linker degrades honestly: it reports the §3 sentinel and its dependents fail in
+			// a named bucket. This arm cannot degrade, because instantiating an unlinkable module
+			// *without* its imports fails for a different reason and would satisfy nothing —
+			// worse, a substring match against the engine's §3 text could coincide with the
+			// expected string and award a pass the linker never earned. So the component is
+			// required, in the same words the other three tripwires use.
+			if opts.InstantiateLinked == nil {
+				panic(fmt.Sprintf("%s:%d: CapInterpreter declared but no LinkedInstantiateFunc "+
+					"was supplied; an assert_unlinkable cannot be judged without one, and judging "+
+					"it through the unlinked path would score a §3 refusal as a link failure",
+					s.Path, c.Line))
+			}
+			// **`cur` is untouched**, for `KindAssertTrapModule`'s reason: an unlinkable module
+			// produces no instance and says nothing about what the next command runs against.
+			_, _, err := opts.instantiate(c, registry)
+			if isGated(err) {
+				r.gate(c)
+				continue
+			}
+			got := ""
+			if err != nil {
+				got = err.Error()
+			}
+			// Substring matching per decision 0003, the same rule every expected-text arm uses.
+			//
+			// **Deliberately not asking whether the error is a link failure specifically**, which
+			// is the opposite of what the assert_trap arm does with `isTrap` — and the asymmetry
+			// is the corpus rather than an oversight. A trap and a non-trap error are both
+			// *runtime* outcomes that a substring match cannot tell apart, so that arm needs a
+			// predicate. Here the two expected strings (`incompatible import type`, `unknown
+			// import`) are phrases only the linker produces, so the text *is* the discriminator.
+			// Stated because the next reader will notice the missing predicate: if a vector ever
+			// expects a string the engine can also produce elsewhere, this arm needs one.
+			if err != nil && strings.Contains(got, c.Expect) {
+				r.Pass++
+				continue
+			}
+			r.Fail++
+			key := "assert_unlinkable expected: " + c.Expect
+			if got == "" {
+				got = "the module linked and instantiated successfully"
+			}
+			r.Buckets[key] = append(r.Buckets[key], Failure{
+				Line: c.Line, Expect: c.Expect, Got: got, Kind: c.Kind,
+				Stratum: StratumExec,
+			})
+
+		case KindAssertReturn, KindInvoke, KindAssertTrapAction,
+			KindNamedAssertReturn, KindNamedInvoke, KindNamedAssertTrap:
+			// **Six kinds, one arm, and the sharing is the point.** All six call an exported
+			// function on an instance, so they need the same instance lookup, the same
+			// no-instance accounting, the same gate handling, and the same panic on a
+			// declared-but-absent component. A bare `(invoke …)` is an assert_return with no
+			// expectation; an `assert_trap` action is one whose expectation is an error; the
+			// three named forms differ only in *which* instance. A separate arm would be a
+			// second copy of all the state handling, drifting from this one on the next change.
+			//
+			// **It was three, and the named Kinds joining it rather than forking it is the
+			// answer to the obvious objection to Scott's ruling.** Six Kinds sounds like six
+			// arms; the ruling's cost is paid in `classify`, where the two *readers* are
+			// genuinely separate, and it is refunded here, where the difference between naming
+			// a module and not naming one is two lines. The one-authority law cuts both ways:
+			// one reader per grammar, one arm per behaviour.
+			//
+			// They part company at exactly two places — which instance the call runs against,
+			// and whether a non-nil error from Invoke is the answer or the failure — and both
+			// branches are ahead of the accounting they affect, for the same reason the gate
+			// check precedes the substring match on the malformed arms: order is what makes the
+			// readings impossible to confuse rather than merely unlikely to be.
 			//
 			// Reachable only when a caller declares CapInterpreter, and the same
 			// re-pointed tripwire the text kinds carry: a declaration with no component
 			// is the registry ahead of the engine, and it must stop rather than score.
 			// Both halves are named, because an engine that can instantiate and not
 			// invoke is a real intermediate state and a nil deref is not a diagnosis.
-			if opts.Instantiate == nil || opts.Invoke == nil {
+			//
+			// **Either instantiation entry point satisfies the first half**, which is the one
+			// place the two fields are interchangeable: this check asks whether the engine can
+			// build a module at all, and a caller with only the linked form can. Writing
+			// `opts.Instantiate == nil` alone here would panic on a caller that supplied the
+			// better of the two — a tripwire firing on the state it exists to certify.
+			if (opts.Instantiate == nil && opts.InstantiateLinked == nil) || opts.Invoke == nil {
 				panic(fmt.Sprintf("%s:%d: CapInterpreter declared but no %s was supplied; "+
 					"the capability registry is ahead of the engine", s.Path, c.Line,
-					map[bool]string{true: "InstantiateFunc", false: "InvokeFunc"}[opts.Instantiate == nil]))
+					map[bool]string{true: "InstantiateFunc", false: "InvokeFunc"}[opts.Invoke != nil]))
 			}
 			// The third component, required by this Kind alone. **A panic rather than the
 			// nil-predicate default**, which reads as a contradiction of Engine.IsTrap's
@@ -1489,10 +1998,30 @@ func (s *Script) run(opts runOpts) *Result {
 			// degrades quietly — and a caller who declares the interpreter and hands over no
 			// trap predicate is in the registry-ahead-of-the-engine state the other two
 			// halves already name. *Silent degradation is a skip one step quieter.*
-			if c.Kind == KindAssertTrapAction && opts.IsTrap == nil {
+			if c.Kind.wantsTrap() && opts.IsTrap == nil {
 				panic(fmt.Sprintf("%s:%d: CapInterpreter declared but no TrapFunc was supplied; "+
 					"an assert_trap action cannot be judged without one, and judging it anyway "+
 					"would score a non-trap error as a trap", s.Path, c.Line))
+			}
+			// **Which instance the action selects, which is the one thing the named Kinds
+			// changed here.** An unnamed action runs against the most recent module command's
+			// instance; a named one looks up its `$M`. The three state facts travel together
+			// because all three arms below read all three — an instance, why there isn't one,
+			// and whose fault that is.
+			target, targetErr, targetStratum, targetGated := cur, curErr, curStratum, curGated
+			if c.Kind.selectsModule() {
+				target, targetGated = named[c.Target], namedGated[c.Target]
+				targetErr, targetStratum = namedErr[c.Target], namedStratum[c.Target]
+				if target == nil && targetErr == nil {
+					// **No module of that name in this script**, which is a different fact from
+					// "the module failed" and gets its own words: the first is a harness or
+					// corpus problem, the second is an engine one, and a shared message would
+					// make a script the harness mis-read look like an engine that cannot build
+					// modules. Measured at 0 over the corpus, which is what makes it worth
+					// stating rather than worth omitting — a branch that never fires and says
+					// nothing when it does is how a misclassification hides.
+					targetErr = fmt.Errorf("no module named %s precedes this action", c.Target)
+				}
 			}
 			// No instance: the module command that should have produced one failed, was
 			// gate-declined, or never appeared. **Its own bucket, never the invoke's** —
@@ -1501,7 +2030,7 @@ func (s *Script) run(opts runOpts) *Result {
 			// name a component that is not broken. *An error from the wrong layer is
 			// evidence about where structure was lost*, and here the harness knows the
 			// layer exactly, so it says so.
-			if cur == nil && curGated {
+			if target == nil && targetGated {
 				// The module this vector needs was declined for a feature, so the
 				// question was never asked — the same reason the module arms above
 				// count a decline rather than a failure, one command downstream.
@@ -1511,11 +2040,11 @@ func (s *Script) run(opts runOpts) *Result {
 				r.gate(c)
 				continue
 			}
-			if cur == nil {
+			if target == nil {
 				r.Fail++
 				got := "no preceding module command produced an instance"
-				if curErr != nil {
-					got = curErr.Error()
+				if targetErr != nil {
+					got = targetErr.Error()
 				}
 				// **Keyed by the failing module's error, and charged to its stratum**, not
 				// to a single "no instance" key charged to exec. That single key was
@@ -1523,7 +2052,7 @@ func (s *Script) run(opts runOpts) *Result {
 				// the interpreter for the wat encoder's frontier. Keyed this way the same
 				// population reads as the encoder's opcode work list, which is what a work
 				// plan is for.
-				st := curStratum
+				st := targetStratum
 				if st == StratumUnset {
 					// No module command at all preceded this vector: nothing failed, the
 					// harness simply has nothing. Charged to exec as the layer that could
@@ -1538,12 +2067,12 @@ func (s *Script) run(opts runOpts) *Result {
 				})
 				continue
 			}
-			out, err := opts.Invoke(cur, c.Invoke, c.Args)
+			out, err := opts.Invoke(target, c.Invoke, c.Args)
 			if isGated(err) {
 				r.gate(c)
 				continue
 			}
-			if c.Kind == KindAssertTrapAction {
+			if c.Kind.wantsTrap() {
 				// The trap *is* the expected result: an error is required, it must be a real
 				// trap, and its text must contain the spec's expected string — matched as a
 				// substring per decision 0003, the same rule every other expected-text arm
@@ -1619,7 +2148,7 @@ func (s *Script) run(opts runOpts) *Result {
 				})
 				continue
 			}
-			if c.Kind == KindInvoke {
+			if c.Kind.wantsNothing() {
 				// The call succeeded and there is nothing to compare. It counts as a pass
 				// rather than being dropped, because the vector *was* asked and answered:
 				// the suite writes a bare invoke to assert that the call completes without
@@ -1684,21 +2213,28 @@ func (s *Script) run(opts runOpts) *Result {
 	return r
 }
 
-// instantiate calls the caller's InstantiateFunc, or reports that there is none.
+// instantiate calls the caller's instantiation entry point, or reports that there is none.
 //
 // Nil is legitimate and common: every caller that scores only module and malformed forms
 // supplies no interpreter, and the module commands in those runs must still score. So a
 // missing InstantiateFunc leaves `cur` nil with a stated reason rather than panicking — the
 // panic belongs where a *declared* capability meets a nil component, which is the
 // KindAssertReturn arm, because that is where the declaration is being relied on.
-func (o runOpts) instantiate(c Command) (Instance, Stratum, error) {
+//
+// **The linked entry point is preferred when the caller has one, and the fallback is not a
+// degradation.** A module instantiated without the registry reports the §3 sentinel and its
+// dependents fail in a named bucket, which is precisely the board before this change — so a
+// caller with no linker keeps the board it had. The arms that must *not* fall back
+// (`assert_unlinkable`) check the field themselves, because there the fallback would award
+// passes: see the arm.
+func (o runOpts) instantiate(c Command, registry map[string]Instance) (Instance, Stratum, error) {
 	// The stratum for the harness's *own* failures to instantiate. StratumExec is right
 	// here and wrong for the caller's errors: a missing InstantiateFunc is the interpreter
 	// being absent, where an encoder frontier is the encoder's.
-	if o.Instantiate == nil {
+	if o.Instantiate == nil && o.InstantiateLinked == nil {
 		return nil, StratumExec, errNoInstance(c, "this run supplied no InstantiateFunc")
 	}
-	in, st, err := o.Instantiate(c)
+	in, st, err := o.instantiateRaw(c, registry)
 	if err != nil {
 		if st == StratumUnset {
 			// A caller that returns an error without naming its layer gets StratumExec
@@ -1718,6 +2254,169 @@ func (o runOpts) instantiate(c Command) (Instance, Stratum, error) {
 		return nil, StratumExec, errNoInstance(c, "InstantiateFunc returned a nil instance and a nil error")
 	}
 	return in, StratumUnset, nil
+}
+
+// instantiateRaw picks the entry point. Split out so the normalization above — unset stratum,
+// nil-instance-with-nil-error — applies identically to both, rather than being written twice
+// and drifting on the next change.
+func (o runOpts) instantiateRaw(c Command, registry map[string]Instance) (Instance, Stratum, error) {
+	if o.InstantiateLinked != nil {
+		return o.InstantiateLinked(c, registry)
+	}
+	return o.Instantiate(c)
+}
+
+// spectestBuiltin is the `spectest` module the suite's imports are resolved against, as wat
+// source, transcribed from `interpreter/host/spectest.ml`.
+//
+// **Synthesized as wat and instantiated through the same path every other module takes**
+// (decision 0017 part 3), rather than hand-built as an engine structure. Two reasons, and the
+// second is the one that decided it: a hand-built instance would need the engine's internal
+// types, which is the import this package cannot make, and — more to the point — a builtin
+// that skips the front end is a builtin the board's own encoder and decoder never see. If
+// `spectest` reaches the interpreter by a private door, then 174 import sites are resolved
+// against a module the rest of the pipeline has never agreed to. This way it is scored by
+// construction: a front end that cannot read this source fails loudly at the first script that
+// imports it, rather than resolving against a phantom.
+//
+// **14 exports, and the count is asserted rather than described** — every value here is a
+// constant off the reference, and the corpus asks for all 14 across 174 sites:
+//
+//   - four globals (`:13-16`): `global_i32`/`global_i64` hold **666**, `global_f32`/`global_f64`
+//     hold **666.6**. Immutable, which is what `imports.wast`'s mutability vectors check.
+//   - seven `print_*` (`:42-45`): each takes its named parameters and returns nothing. The
+//     bodies are empty rather than printing, because the suite never reads the output — the
+//     reference writes to stdout and no vector asserts on it.
+//   - `table` and `table64`, 10..20 funcref (`:22-28`), all slots null.
+//   - `memory`, 1..2 pages (`:30-32`).
+//
+// The corpus's fifteenth `spectest` name is `unknown`, asked for at 5 sites, and it is
+// deliberately **absent**: those five are `assert_unlinkable` vectors whose expectation is
+// `unknown import`, so exporting it would convert five passes into five failures. A missing
+// export is load-bearing here, which is why it is stated — an absence nobody wrote down is an
+// absence someone helpfully fixes.
+//
+// `table64` is in this list because the *count* was checked against the reference's `lookup`
+// arms rather than against the corpus's import sites: a first draft had 13 exports and passed
+// every board vector, because `table64` is imported exactly once. A floor is what says so
+// (TestSpectestExportsEveryNameTheCorpusAsksFor).
+//
+// **And `table64` is why the export set is gate-dependent rather than constant**, which is the
+// one thing about this fixture that a reader will not guess. Its `i64` index type *is* the
+// memory64 proposal, so on the default board the fixture's own source does not decode —
+// `memory64: feature gate disabled`, from the harness's own module, panicking every script that
+// imports spectest. Found by running it, which is the only way this could have been found: no
+// vector fails, the whole board does.
+//
+// What makes 13-on-default honest rather than a quiet loss is that **the absence is
+// unobservable exactly where it occurs**: the corpus imports `spectest.table64` at one site,
+// `table64.wast:13`, and that vector's *own* module declares an `i64` table, so it is declined
+// at its own decode on the same gate. The export exists precisely when the feature that lets
+// anything ask for it exists. That is a partition, not a fallback with better manners — and
+// because the difference between "partition" and "fallback" is whether anyone checked, both
+// branches are pinned by count and the unobservability is asserted rather than argued.
+const spectestFields = `
+	(global (export "global_i32") i32 (i32.const 666))
+	(global (export "global_i64") i64 (i64.const 666))
+	(global (export "global_f32") f32 (f32.const 666.6))
+	(global (export "global_f64") f64 (f64.const 666.6))
+	(table (export "table") 10 20 funcref)
+	(memory (export "memory") 1 2)
+	(func (export "print"))
+	(func (export "print_i32") (param i32))
+	(func (export "print_i64") (param i64))
+	(func (export "print_f32") (param f32))
+	(func (export "print_f64") (param f64))
+	(func (export "print_i32_f32") (param i32 f32))
+	(func (export "print_f64_f64") (param f64 f64))`
+
+// spectestTable64Field is spectest's fourteenth export, held apart because it is gated.
+const spectestTable64Field = `
+	(table (export "table64") i64 10 20 funcref)`
+
+// spectestSource composes the fixture. Composed rather than written out twice: two full copies
+// differing in one line is the drifted-fixture defect pre-installed, and the thing that must
+// stay identical between the branches is the other thirteen exports.
+func spectestSource(withTable64 bool) string {
+	src := "(module" + spectestFields
+	if withTable64 {
+		src += spectestTable64Field
+	}
+	return src + ")"
+}
+
+// spectestRegistry is the registry a script starts with: `spectest` bound under its name, and
+// nothing else.
+//
+// It returns an empty map when the caller has no linker, rather than skipping the
+// instantiation and returning nil: a nil map reads correctly here (every lookup misses) but
+// the *distinction* matters at the one place it does not — a caller with a linker whose
+// spectest failed to build must not silently look like a caller with no registry, so that case
+// panics. The registry running ahead of the engine is the shape those panics all have.
+func (o runOpts) spectestRegistry(path string) map[string]Instance {
+	reg := map[string]Instance{}
+	if o.InstantiateLinked == nil {
+		return reg
+	}
+	build := func(withTable64 bool) (Instance, error) {
+		c := Command{
+			Kind: KindModuleText, Head: "module",
+			Source: []byte(spectestSource(withTable64)), Needs: CapWatReader,
+		}
+		// Instantiated with an *empty* registry rather than with `reg` itself: `spectest`
+		// imports nothing, so passing the map it is about to be written into would be a cycle
+		// waiting for its first typo. Measured off the reference — `spectest.ml` has no imports
+		// at all.
+		in, _, err := o.instantiate(c, map[string]Instance{})
+		return in, err
+	}
+	exports := 14
+	in, err := build(true)
+	// **The gate is read off the engine's own answer, not guessed from the lane.** This function
+	// has no view of `binary.Features` — that is the engine's business and importing it here is
+	// the boundary this package exists to keep — so the question it can ask is the one it already
+	// asks of every vector: was this a decline? A decline drops the gated export and requires the
+	// thirteen to build; any other error is a defect in the fixture.
+	if err != nil && o.IsGated != nil && o.IsGated(err) {
+		exports = 13
+		in, err = build(false)
+	}
+	if err != nil {
+		// **A panic, and it is the registry-ahead-of-the-engine control again**, aimed at the
+		// one input in this package the corpus does not supply. Every other module the loop
+		// instantiates comes from a vector, so a failure is a board number; this one is *ours*,
+		// so a failure is a defect in this file and scoring it would charge the harness's own
+		// broken source to the engine's fail column — 174 import sites resolving against
+		// nothing, reported as an engine that cannot link.
+		//
+		// **The message names which branch failed**, because the two are different defects: 14
+		// failing means the fixture or the gated path is broken, 13 failing means the fixture is
+		// broken outright and the gate was a red herring that would otherwise be the first thing
+		// the reader chased. An error from a retry, reported without saying it was a retry, is the
+		// wrong-layer tell one level up from the code that would have to diagnose it.
+		panic(fmt.Sprintf("%s: the harness's own %d-export spectest module failed to instantiate: "+
+			"%v; 174 import sites resolve against it, so this is a defect in spectestFields "+
+			"rather than a board number", path, exports, err))
+	}
+	reg["spectest"] = in
+	return reg
+}
+
+// registerTarget resolves which instance a `(register "n" [$m])` binds.
+//
+// The two shapes read from the two maps' worth of state: a named register takes the instance
+// of that `$name`, an unnamed one takes the most recent module command's. `runner.ml:314`'s
+// `register` is `let x = match x_opt with Some x -> x | None -> !last_module`, which is this.
+//
+// A separate function rather than four lines in the arm because the arm's *failure* path needs
+// to say which of the two cases it was in, and a reader following that path should be able to
+// see the success case in one piece.
+func registerTarget(c Command, cur Instance, named map[string]Instance) (Instance, bool) {
+	if c.Target == "" {
+		return cur, cur != nil
+	}
+	in, ok := named[c.Target]
+	return in, ok && in != nil
 }
 
 func errNoInstance(c Command, why string) error {

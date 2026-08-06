@@ -54,6 +54,41 @@ weakly-ordered platform.
   their declaration), so this is an accept-direction defect the suite scores green by construction
   and it lands with a *derived* vector asserting both orders produce the identical image.
 
+- **Same-script linking: `register`, the five module-naming command Kinds, and
+  `InstantiateLinked` — 605 fails become 13**
+  ([#157](https://github.com/scttfrdmn/burroughs/issues/157),
+  [#7](https://github.com/scttfrdmn/burroughs/issues/7)). Decision 0017's first half, and it is a
+  *harness* mechanism with an engine entry point rather than contract §3's host-import surface:
+  the registry is a `map[string]Instance` the run loop threads through the script, so every import
+  it satisfies is answered by **another module in the same file** or by `spectest`. The negative
+  0017 records is what made that the right shape — re-measured on the current board, **605 of 1265
+  fails** wanted an import and **zero** of them wanted a Go host function, so the §3 API the
+  thesis makes this engine's most Go-shaped feature is still the one thing the corpus cannot
+  score.
+
+  Two maps, not one, because they are two namespaces: `registry` keyed by the *module name* an
+  import asks for and written only by `(register …)`, `named` keyed by the script `$name` and
+  written by every module command that carries one. A module may be in both, either, or neither.
+  Merging them would make `(register "a" $M)` imply that `(invoke "a" …)` is a legal action, and
+  that form is not in the grammar at all.
+
+  `spectest` is **synthesized as wat and instantiated through the same door every vector's module
+  takes** (0017 part 3), which is why the resolver has no builtin arm — 174 import sites resolve
+  against it. Its own instantiation failure is a `panic` rather than a fail: the source is *ours*,
+  so charging it to the engine's column would report a broken fixture as an engine that cannot
+  link. The 14-export build is retried at 13 when the engine *declines* the `table64` export, the
+  gate being read off the engine's own answer rather than guessed from the lane, and the panic
+  names which of the two builds failed.
+
+  `assert_unlinkable` scores 200 vectors and **requires the linker rather than degrading to the
+  unlinked path** — the one asymmetry in the run loop, defended at its site: instantiating an
+  unlinkable module *without* its imports fails for a different reason whose text could contain
+  the expected string, which would award 200 passes nothing earned.
+
+  `Instantiate` is now `InstantiateLinked` with a nil resolver rather than a second body, and
+  `Imports` is a func rather than a map because resolution is the *script's* semantics, not the
+  interpreter's.
+
 - **The text encoder emits `table.init` and `memory.init`, and the interpreter executes them with
   `elem.drop` and `data.drop` — `fc 0c`, `fc 08`, `fc 0d`, `fc 09`**
   ([#8](https://github.com/scttfrdmn/burroughs/issues/8),
@@ -2081,6 +2116,24 @@ weakly-ordered platform.
   behind**. That makes #53's done-when checkable by CI instead of by a reviewer.
 
 ### Changed
+
+- **The §3 sentinel's doc names a narrowed gap rather than a missing linker, and six live "v0 has
+  no linker" sentences were repointed**
+  ([#157](https://github.com/scttfrdmn/burroughs/issues/157)). A ruling retroactively falsifies the
+  prose written before it, so accepting the registry includes finding the sentences it orphaned:
+  `ErrUnsupported` said "what is missing is *linking*, which is contract §3 and v2-or-later work",
+  and `InstantiateLinked` falsified the second half of that clause. The category survives, because
+  a module whose import *nothing supplied* is still well-formed and the engine's shortfall is
+  still a component it does not have — but the gap is now specifically an unregistered module or a
+  supplier whose own instantiation failed. The engine's four sites say `is an import nothing
+  supplied (contract §3)` where they said `linking is not implemented`, the swap forced by grave
+  #36: an engine with a linker cannot testify that it has none.
+
+  The four archived board quotes in `spec_test.go` keep the retired string **verbatim** and the
+  retirement is stated in the current section instead. A re-based ceiling's history is the part
+  worth keeping unedited, and a reader grepping the old text should find a resolved rewording
+  rather than a bucket key that silently stopped matching — which is the failure mode a rewording
+  mid-drain has.
 
 - **The instrument-to-engine ratio is a quoted figure and not a threshold, because the
   recalibration measured it and found it is mostly a function of PR size**
