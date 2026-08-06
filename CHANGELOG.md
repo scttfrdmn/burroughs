@@ -1919,6 +1919,40 @@ weakly-ordered platform.
 
 ### Changed
 
+- **The instrument-to-engine ratio is a quoted figure and not a threshold, because the
+  recalibration measured it and found it is mostly a function of PR size**
+  ([#117](https://github.com/scttfrdmn/burroughs/issues/117)). `scripts/ratio.sh` is the recorded
+  command — the comparator is fixed by ruling and takes no arguments, which is the point — and it
+  reproduces #113's published 1:6.6 exactly, which is how the methodology was pinned rather than
+  re-chosen.
+
+  Both series are quoted with their eras named. The uniform comparator barely moves the two
+  windows that made the rule: **1:1.8 → 1:2.0** and **1:5.1 → 1:5.1**, the deltas exactly
+  compensating at ±137 and ±5 lines, with `internal/spec/wast.go` and `sexpr.go` the only
+  reclassified files. The old comparator is identified rather than guessed at: dropping
+  `internal/spec` from the script's instrument list reproduces the published **463 / 2347**
+  exactly, so the two definitions differ by that one directory and nothing else. The issue
+  predicted `internal/gen` would be the main mover and for those
+  windows it is not — they predate the generators. Where it bites is 0014, **1:0.4 ad-hoc versus
+  1:2.9 uniform**. So the drift the old series recorded survives its own recalibration.
+
+  What does not survive is reading the quotient as a rate. Over 31 first-parent merges,
+  ρ(engine lines, ratio) = **−0.55** and instrument lines fit **486 + 0.79 × engine**: a fixed
+  ≈490-line instrument cost per PR plus four-fifths of a line thereafter, which alone predicts
+  1:5.7 at 100 engine lines and 1:1.0 at 2000. Every candidate threshold is therefore a disguised
+  minimum-diff-size rule — at 1:3.0 the two worst offenders are an 18-engine-line board-bounds PR
+  and a 28-line UTF-8 partition, and #113's 1:6.6 exceeds the model for its size by 0.56 of a
+  residual standard deviation. A gate firing on #113 fires on its being 127 lines long. R² is
+  0.51, so the fit is a description of the corpus and not a predictor.
+
+  **Scott's era-band hypothesis was tested and is not supported.** Partitioned by the package
+  receiving the engine lines: `interp` **1:1.7**, `text` **1:1.5**, `binary` **1:2.0**, with the
+  arm era in the middle and per-era residuals of +28 / +61 / −155 lines against a 458-line sd.
+  The four-crossing streak is those PRs being *small* — 190 to 297 engine lines against a corpus
+  median of 344 — not costly to certify. The same finding in era clothes; recorded because a
+  hypothesis measurement killed is worth more written than omitted.
+
+
 - **`internal/gen/mllex`: the `lexer.mll` arm reader is one implementation, and the three generators
   call it** ([#105](https://github.com/scttfrdmn/burroughs/issues/105)). `keywordgen`, `opgen` and the
   new `memarggen` each read the same authority's arm heads, and the wrapped-arm defect that cost grave
@@ -2255,6 +2289,22 @@ weakly-ordered platform.
   skip ([#29](https://github.com/scttfrdmn/burroughs/issues/29)).
 
 ### Fixed
+
+- **A rename row's path broke the ratio classifier, and two independently wrong readings agreed
+  to within 0.1** ([#117](https://github.com/scttfrdmn/burroughs/issues/117)). `git diff
+  --numstat` renders a rename as `internal/{text/internal => gen}/keywordgen/emit.go` — a single
+  field containing spaces, braces, and no usable prefix. The first draft split on awk's default
+  FS and shredded it into three fields; the cross-checking probe split on tabs correctly and then
+  classified the brace form as **engine**, because it does not literally begin `internal/gen/`.
+  Both were wrong in the same direction on the same eleven rows.
+
+  What caught it was the *disagreement*, not either reading: 0014 came out 1:2.8 from the script
+  against 1:2.7 from the probe, a 0.1 gap between two supposedly equivalent instruments, on the
+  one merge in forty that contains rename rows. Had the two mistakes coincided exactly, a wrong
+  figure would have shipped with a confirmation attached. `destination()` now resolves the row to
+  the path the code lives at, and the three quoted windows are unaffected because none of them
+  contains that merge — which is itself the reason the defect was survivable long enough to find.
+
 
 - **A one-of-two-conditions exemption panicked in the arm that asserts two callers agree**
   ([grave #146](https://github.com/scttfrdmn/burroughs/issues/146)). `encodableOrErr` exempts

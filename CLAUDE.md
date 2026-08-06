@@ -76,10 +76,15 @@ than described:
 
 - **`unsupported` delta** (`60872 → N`, or **`unmoved`** stated in that word), and when
   unmoved, the product work this PR is overhead *for*.
-- **engine / instrument lines** for the diff (non-test `.go` versus `_test.go`), which is
-  the ratio the *product* rule above is enforced by. Its purpose is to make the
+- **engine / instrument lines** for the diff, from `make ratio RATIO=<rev>`
+  (`scripts/ratio.sh`) under the uniform comparator ruled on #113 — *not* the "non-test `.go` versus `_test.go`" split this line
+  used to describe, which counted generators as engine. Its purpose is to make the
   wheel-spinning visible *per PR* rather than only in a trailing window — the 1:1.8 →
-  1:5.1 drift was invisible precisely because each PR was individually defensible.
+  1:5.1 drift (ad-hoc comparator, and **1:2.0 → 1:5.1** recomputed uniform) was invisible
+  precisely because each PR was individually defensible. **Quoted, never compared to a
+  threshold**: #117 measured the trailing 31 merges and found the figure is dominated by PR
+  size, so a bound on it is a bound on diff length. The rule it serves is the two-consecutive-
+  instrument-PRs stop condition, which the ratio informs rather than triggers.
 
 Two principals review: **Scott** (owner, all decisions) and **chat-Claude**
 (contract author, architecture review). Scott reviews in the GitHub UI and
@@ -233,10 +238,13 @@ the choice, and consequences once Scott has called it.
     The general form covers instruments not yet invented, which is why it is worth having
     above the two specific ones. (Compression: Scott, PR #113.)
   - **Instrument-to-engine ratio is quoted, not felt.** Measured over the trailing six
-    merges it went **1:1.8 → 1:5.1** (engine 2007→463 lines, test 3681→2347) while the
-    unsupported column did not move at all. That is the number that made this rule; a
-    ratio worsening while the column stands still is the definition of spinning, and it
-    was invisible because every individual PR was defensible.
+    merges it went **1:1.8 → 1:5.1** (engine 2007→463 lines, test 3681→2347 — the ad-hoc
+    comparator of that era; uniform, **1:2.0 → 1:5.1**) while the unsupported column did not
+    move at all. That is the number that made this rule; a ratio worsening **while the column
+    stands still** is the definition of spinning, and it was invisible because every
+    individual PR was defensible. Note which half of that sentence carries the weight: #117's
+    measurement found the ratio alone is mostly a size artefact, so *the conjunction with a
+    flat unsupported column is the signal* and the quotient by itself is context.
     - **The comparator is uniform and fixed: engine = code in the module path;
       instrument = tests, generators, harness. No per-file pleading, ever.** *A ratio
       whose comparator moves per-PR measures advocacy instead of drift* — which is
@@ -256,6 +264,58 @@ the choice, and consequences once Scott has called it.
       when he ordered it — a threshold asserted without its trailing window re-measured
       would be the number-you-haven't-run that era-marking these figures exists to avoid.
       (Ruling: Scott, PR #113.)
+    - **The recalibration ran, and the answer is no number: the ratio is a size artefact, so
+      it is quoted and never compared to a bound.** `make ratio` (`scripts/ratio.sh`) is the
+      recorded command, deliberately *not* a `check` dependency — a script CI runs is a gate
+      whatever it is called, and a gate is what this ruling declines. The eras, both series,
+      and the derivation:
+
+      | window | ad-hoc comparator | uniform comparator |
+      | --- | --- | --- |
+      | six merges ending `06f64dc` | 2007 / 3681 = **1:1.8** | 1870 / 3818 = **1:2.0** |
+      | six merges ending `5b5e4c9` | 463 / 2347 = **1:5.1** | 458 / 2352 = **1:5.1** |
+      | six merges ending `72b4f53` (current) | — | 3439 / 4532 = **1:1.3** |
+
+      The comparator change barely moves these two windows — the deltas are ±137 and ±5
+      lines, exactly compensating, and the only reclassified files are `internal/spec/wast.go`
+      and `sexpr.go`. That is not a reading of the old figures but a *reproduction* of them:
+      dropping `internal/spec` from the script's instrument list yields **463 / 2347**, the
+      published ad-hoc pair to the line, which identifies the old comparator exactly rather
+      than approximately. A recalibration that cannot re-derive the number it replaces has
+      compared two things it does not know the difference between. The issue predicted `internal/gen` would be the main mover and for
+      *those* windows it is not, because they predate the generators; where it bites is
+      0014 (`6376b27`), which reads **1:0.4** ad-hoc and **1:2.9** uniform. So the old
+      series survives its own recalibration and the drift it recorded was real.
+
+      What does not survive is reading a ratio as a *rate*. Over 31 first-parent merges with
+      engine lines, ρ(engine lines, ratio) = **−0.55** and the fit is
+      **instrument = 486 + 0.79 × engine** — a fixed ≈490-line instrument cost per PR plus
+      four-fifths of a line thereafter. That model predicts 1:5.7 at 100 engine lines and
+      1:1.0 at 2000, from one behaviour. **So every candidate threshold is a disguised
+      minimum-PR-size rule**: at 1:3.0 it flags six merges of which the worst two are #92's
+      board bounds (1:38.8, **18** engine lines) and the UTF-8 partition (1:17.9, **28**
+      lines) — small PRs, not spinning ones — and #113's 1:6.6 sits above the model's 1:4.6
+      for its size by 257 lines, **0.56** of a residual sd. A gate that fires on #113 fires on
+      its being **127 lines long**. The stated failure mode is therefore concrete rather than
+      hypothetical: a numeric threshold would train the habit of padding engine diffs or
+      batching arms until the quotient clears it, which is the metric eating the work.
+      And the fit explains only **half** the variance (R² = 0.51, residual sd 458 lines),
+      so it is a description of the corpus, not a predictor — quoting it as an expectation
+      would be the second-order-honesty error one level in.
+    - **Era-band hypothesis: tested, not supported.** Scott's read on the fourth crossing was
+      that the interpreter-arm era may simply run hotter than the encoder era. Partitioned by
+      the package that received the engine lines, the aggregate is `interp` **1:1.7** (n=5),
+      `text` **1:1.5** (n=18), `binary` **1:2.0** (n=8) — indistinguishable, and the arm era
+      is the *middle* one. With size controlled, mean residuals are `interp` **+28**,
+      `text` **+61**, `binary` **−155** lines against a 458-line sd: nothing. The apparent
+      streak is the four crossing PRs being *small* — 190, 242, 270, 297 engine lines against
+      a corpus median of 344, right where the fixed instrument cost dominates — which is the
+      same finding as above wearing era clothes. Recorded because a hypothesis that
+      measurement killed is worth more written down than omitted, and because the reason four
+      tokens got granted in a row is now known: it is not that the arms are expensive to
+      certify, it is that an arm is a *small* piece of work and the per-PR instrument floor
+      does not shrink with it. (Measurement: #117. Ruling: pending Scott, who ordered it; the
+      case is stated, not closed by the actor.)
   - **Two consecutive instrument-only PRs is a stop condition.** Not a soft
     preference — stop and take product work, or get Scott's word to continue. The
     ratchet only turns one way otherwise, because control work is always available,
@@ -702,6 +762,19 @@ the choice, and consequences once Scott has called it.
   take the biggest bucket, then **partition it by mechanism before estimating it**,
   and say in the PR which members were reachable and which are waiting on what. A
   bucket quoted as a single number is a plan that has not been made yet.
+  - **And the estimate errs in *both* directions, so the census rule is symmetric: a bucket named
+    after a missing opcode understates an arm whose absence corrupts state that later vectors
+    read.** The over-promise half above (18 quoted, 4 reachable) had its mirror measured on the
+    bulk trio: three `no arm for opcode` buckets held **82** vectors and the arms moved **411**.
+    The other 329 sat in `assert_return value mismatch` and `trap: uninitialized element N`,
+    because `memory_copy.wast` and `table_copy.wast` are generated with up to forty read-backs per
+    instruction, and a read-back's expected string names a *value* — so the board cannot key it to
+    the opcode that will answer it. Under- and over-promise are now both paid for with data, and
+    the remedy is the same one in both directions: partition by mechanism, then quote the
+    measurement rather than the bucket. A corollary worth stating because it is where the asymmetry
+    lives — an arm that only *computes* moves its own bucket, while an arm that **writes state**
+    moves every bucket downstream of that state, so the multiplier is predictable in kind if never
+    in size. (Ruling: Scott, PR #155.)
 - **An error from the wrong layer is evidence about where structure was lost.**
   When a lower grammar is missing, its bytes do not vanish — they leak upward and
   get misread by whatever grammar *is* running, so the error names a field the
