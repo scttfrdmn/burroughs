@@ -21,6 +21,45 @@ weakly-ordered platform.
 
 ### Added
 
+- **The harness asks `(assert_trap (invoke "f" arg*) "text")` — a trapping call is now a
+  scorable command** ([#157](https://github.com/scttfrdmn/burroughs/issues/157)). The classifier
+  had a Kind for `assert_trap` wrapping a *module* (instantiation trapping, 0015) and none for the
+  far commoner form wrapping an *action*, so **4923** commands reached the run loop as
+  `unsupported` and were never asked. 4876 classify; the 47 that do not are the shapes
+  `invokeAction` declines structurally — 20 naming a module with `(invoke $M …)`, 27 taking a
+  reference-typed argument — and they stay in the unsupported column rather than being admitted
+  as questions the harness cannot phrase. **Zero engine lines.**
+
+  The action is read by the **same** `invokeAction` that `assert_return` and bare `invoke` use.
+  Copying it would have been the re-derived-shape grave
+  ([#105](https://github.com/scttfrdmn/burroughs/issues/105)) a fourth time; sharing it means the
+  `$M` and NaN-class declines are one decision in one place.
+
+  **`Engine.IsTrap` is injected for the reason `Engine.IsGated` is.** The harness must not sniff
+  error text, so it cannot ask whether a message starts with `trap: ` — and it must not, because a
+  *non-trap* error whose message happens to contain the expected phrase would score a pass
+  invisibly on the board (contract §9 G-3, the accept direction the suite cannot falsify). The run
+  loop asks the predicate **before** the substring match, which makes that impossible rather than
+  unlikely. Falsified in both directions: `TestAssertTrapActionScoring`'s imposter row uses an
+  error whose text is deliberately *identical* to the real trap's, so an arm that sniffed would
+  pass the row for the wrong reason.
+
+  **A no-op branch was found by its own falsification not failing.** The arm's first draft
+  returned `unsupported` early for a declined `(module definition …)` form; the mutation that
+  should have killed that branch left every control green, because `invokeAction` is keyed on the
+  head atom and such a node falls through it anyway. Removed, with the stillbirth recorded at the
+  site — *a control isn't born until it has been watched die*
+  ([#108](https://github.com/scttfrdmn/burroughs/issues/108)) applies to engine branches too.
+
+  **The recon's own census was wrong, in the direction its rules predict.** It quoted the
+  population as 4903 with 27 declines; asked through `invokeAction` itself the answer is 4923 with
+  47. The recon's probe required the action's element 1 to be a string — which is `invokeAction`'s
+  *own* accept condition — so it was structurally unable to see the twenty `(invoke $M …)` forms
+  that fail on that exact test, and both halves of its figure were short by the same twenty. Grave
+  [#106](https://github.com/scttfrdmn/burroughs/issues/106) in a census: *a premise measured over
+  the same sample the code reads is an echo*. The classifier count is the drain's own arithmetic
+  (4876) and was never in doubt; what was wrong is the number quoted *beside* it.
+
 - **The interpreter executes the bulk memory and table operations — `fc 0a` `memory.copy`,
   `fc 0b` `memory.fill`, `fc 0e` `table.copy`**
   ([#7](https://github.com/scttfrdmn/burroughs/issues/7)). All three are one shape — pop

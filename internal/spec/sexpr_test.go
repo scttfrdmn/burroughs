@@ -2,6 +2,9 @@ package spec
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -487,4 +490,206 @@ func TestScriptModuleFormsAreNotWatBodies(t *testing.T) {
 			t.Errorf("%s\n  classified %v, want %v", c.src, got, c.want)
 		}
 	}
+}
+
+// TestAssertTrapSplitsByWrappedForm pins the classifier's `assert_trap` partition: the two
+// populations get the two Kinds, and every other shape stays unsupported.
+//
+// **Checked against the partition rather than against the case labels** (grave #34): the
+// partition is "what does `assert_trap` wrap", so the accept direction needs both members —
+// a module form and an action form — and the reject direction needs the shapes that resemble
+// each. A test naming a partition and covering one side of it is the coverage defect that
+// grave was filed for, and here the two sides are answered by *different Kinds*, so getting
+// one arm right says nothing about the other.
+//
+// The `$M` and reference-argument rows are the 27 of 4903 the recon measured as declines.
+// They are here because a decline is a claim about which vectors are askable, and the day one
+// becomes askable this test is where the classification decision has to be made visible.
+func TestAssertTrapSplitsByWrappedForm(t *testing.T) {
+	cases := []struct {
+		src    string
+		want   Kind
+		expect string // Expect, for the shapes that carry one
+		invoke string
+	}{
+		// The action population — 4876 commands, #157's by-product.
+		{
+			`(assert_trap (invoke "f") "integer divide by zero")`,
+			KindAssertTrapAction, "integer divide by zero", "f",
+		},
+		{
+			`(assert_trap (invoke "g" (i32.const 1) (i64.const 2)) "out of bounds memory access")`,
+			KindAssertTrapAction, "out of bounds memory access", "g",
+		},
+		// The module population — 0015's Kind. Unchanged by the split, which is the point of
+		// including it: the action arm must not shadow it.
+		{
+			`(assert_trap (module (memory 1) (data (i32.const 0) "x")) "out of bounds memory access")`,
+			KindAssertTrapModule, "out of bounds memory access", "",
+		},
+		// Declines. A module-selecting action needs script state the run loop does not keep;
+		// a reference-typed argument is not a value readConst can name.
+		{`(assert_trap (invoke $M "f") "unreachable")`, KindUnsupported, "", ""},
+		{`(assert_trap (invoke "f" (ref.null func)) "unreachable")`, KindUnsupported, "", ""},
+		// A `get` action is a different action grammar and its own stratum.
+		{`(assert_trap (get "g") "unreachable")`, KindUnsupported, "", ""},
+		// A module form the keyword check declines — the script grammar, not a wat body.
+		{`(assert_trap (module definition (memory 1)) "unreachable")`, KindUnsupported, "", ""},
+		// Arity: the form is `(assert_trap <action> "text")`, and neither a missing text nor
+		// a missing action is that.
+		{`(assert_trap (invoke "f"))`, KindUnsupported, "", ""},
+		{`(assert_trap "integer divide by zero")`, KindUnsupported, "", ""},
+	}
+	for _, c := range cases {
+		s, err := Parse("t.wast", []byte(c.src))
+		if err != nil {
+			t.Fatalf("Parse(%q): %v", c.src, err)
+		}
+		if len(s.Commands) != 1 {
+			t.Fatalf("Parse(%q) gave %d commands, want 1", c.src, len(s.Commands))
+		}
+		got := s.Commands[0]
+		if got.Kind != c.want {
+			t.Errorf("%s\n  classified %v, want %v", c.src, got.Kind, c.want)
+			continue
+		}
+		if got.Expect != c.expect {
+			t.Errorf("%s\n  Expect = %q, want %q", c.src, got.Expect, c.expect)
+		}
+		if got.Invoke != c.invoke {
+			t.Errorf("%s\n  Invoke = %q, want %q", c.src, got.Invoke, c.invoke)
+		}
+		// Every admitted shape needs the interpreter, and the declines need nothing: a
+		// decline that carried a capability would land in the fourth column, which is the
+		// disappearance guard 6 forbids.
+		wantNeeds := CapInterpreter
+		if c.want == KindUnsupported {
+			wantNeeds = CapNone
+		}
+		if got.Needs != wantNeeds {
+			t.Errorf("%s\n  Needs = %q, want %q", c.src, got.Needs, wantNeeds)
+		}
+	}
+}
+
+// TestAssertTrapActionScoring falsifies the run loop's arm in **both directions**, which is
+// the condition this Kind landed under: a wrong-text trap must not pass, and — the half no
+// suite vector can see — an error that is not a trap must not pass either.
+//
+// The second half is contract §9 G-3 in miniature. The suite's expected string for one of
+// these vectors stops at the trap text, so a harness that scored *any* error quoting that
+// text would be green on all 2893 of them; the recon measured 0 such passes in today's
+// engine, and this row is what makes that a property of the harness rather than a property
+// of one afternoon's engine. The row was watched fail: with `isTrap(err)` removed from the
+// pass condition, the `plausible imposter` case scores a pass and this test reports it.
+func TestAssertTrapActionScoring(t *testing.T) {
+	// A trap and a non-trap, distinguished by type rather than by text — the two error
+	// values are deliberately spelled with the *same* text, because a difference in text
+	// would let the arm pass this test by sniffing.
+	type trapErr struct{ error }
+	const text = "out of bounds memory access"
+	trap := trapErr{errString(text)}
+	imposter := errString(text)
+
+	cases := []struct {
+		name string
+		err  error
+		out  []Val
+		pass bool
+		key  string
+	}{
+		{"a real trap with the expected text", trap, nil, true, ""},
+		{"a real trap wrapping the expected text", trapErr{errString("trap: " + text + " at 4")}, nil, true, ""},
+		{
+			// The accept-direction row. Same text, not a trap.
+			"a plausible imposter: the right text, the wrong kind of error",
+			imposter, nil, false, text,
+		},
+		{
+			"a real trap with the wrong text",
+			trapErr{errString("integer divide by zero")},
+			nil, false,
+			"assert_trap (invoke) expected: " + text + " (trapped with other text)",
+		},
+		{
+			// The semantic disagreement: the engine computed a value where the spec says
+			// the program dies.
+			"no trap at all", nil,
+			[]Val{{Kind: KindI32, Bits: 7}},
+			false,
+			"assert_trap (invoke) expected: " + text,
+		},
+	}
+	for _, c := range cases {
+		src := `(module binary "\00asm\01\00\00\00")` + "\n" +
+			`(assert_trap (invoke "f") "` + text + `")`
+		s, err := Parse("t.wast", []byte(src))
+		if err != nil {
+			t.Fatalf("%s: parse: %v", c.name, err)
+		}
+		r := s.RunWith(Engine{
+			Decode:  func([]byte) error { return nil },
+			IsGated: func(error) bool { return false },
+			// errors.As rather than a type assertion, matching the board's own isTrap
+			// (spec_test.go): the fake must discriminate the way the real predicate does,
+			// or the row certifies an arm against a predicate no engine will supply.
+			IsTrap:      func(e error) bool { var te trapErr; return errors.As(e, &te) },
+			Instantiate: func(Command) (Instance, Stratum, error) { return "stub", StratumUnset, nil },
+			Invoke: func(Instance, string, []Val) ([]Val, error) {
+				return c.out, c.err
+			},
+			Has: []Capability{CapInterpreter},
+		})
+		// The module command is one pass in every case; the assertion is the second.
+		if c.pass {
+			if r.Pass != 2 || r.Fail != 0 {
+				t.Errorf("%s: got %d pass / %d fail, want 2/0\n%s", c.name, r.Pass, r.Fail, r.Board())
+			}
+			continue
+		}
+		if r.Pass != 1 || r.Fail != 1 {
+			t.Errorf("%s: got %d pass / %d fail, want 1/1 — this shape must not score a pass\n%s",
+				c.name, r.Pass, r.Fail, r.Board())
+			continue
+		}
+		// The bucket key, asserted rather than only the count: the three failure modes are
+		// three different findings and a test that reads only the total cannot tell them
+		// apart, which is the `errors.Is`-is-not-a-partition-check lesson (grave #34).
+		if len(r.Buckets[c.key]) != 1 {
+			t.Errorf("%s: no failure under key %q; got keys %v", c.name, c.key, r.BucketsBySize())
+		}
+	}
+}
+
+// TestAssertTrapActionNeedsATrapPredicate is the third component's tripwire, the same shape
+// the other two carry: a caller that declares CapInterpreter and hands over no TrapFunc must
+// stop rather than score.
+//
+// **The panic is the assertion, and the message is asserted with it.** Without the message
+// check this would pass on the nil-predicate default silently failing the vector — a green
+// from the wrong mechanism, which is exactly how TestQuoteFormsHaveTheirReader's sibling was
+// nearly stillborn.
+func TestAssertTrapActionNeedsATrapPredicate(t *testing.T) {
+	src := `(module binary "\00asm\01\00\00\00")` + "\n" +
+		`(assert_trap (invoke "f") "unreachable")`
+	s, err := Parse("t.wast", []byte(src))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	defer func() {
+		switch v := recover(); {
+		case v == nil:
+			t.Error("declaring CapInterpreter with no TrapFunc did not panic; an assert_trap " +
+				"action would be judged by a predicate that answers no to everything, which " +
+				"fails 4876 vectors the engine can answer and says nothing about why")
+		case !strings.Contains(fmt.Sprint(v), "no TrapFunc was supplied"):
+			t.Errorf("panic does not name the missing component: %v", v)
+		}
+	}()
+	_ = s.RunWith(Engine{
+		Decode:      func([]byte) error { return nil },
+		Instantiate: func(Command) (Instance, Stratum, error) { return "stub", StratumUnset, nil },
+		Invoke:      func(Instance, string, []Val) ([]Val, error) { return nil, nil },
+		Has:         []Capability{CapInterpreter},
+	})
 }
