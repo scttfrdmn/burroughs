@@ -83,8 +83,11 @@ than described:
   1:5.1 drift (ad-hoc comparator, and **1:2.0 → 1:5.1** recomputed uniform) was invisible
   precisely because each PR was individually defensible. **Quoted, never compared to a
   threshold**: #117 measured the trailing 31 merges and found the figure is dominated by PR
-  size, so a bound on it is a bound on diff length. The rule it serves is the two-consecutive-
-  instrument-PRs stop condition, which the ratio informs rather than triggers.
+  size, so a bound on it is a bound on diff length. It is a **separate instrument from** the
+  two-consecutive-instrument-PRs stop condition, which counts a PR's *purpose* and not its
+  line-majority (#159's refinement, below): the ratio neither triggers that counter nor is
+  discharged by it, and is quoted every PR precisely so a purpose-classified product PR that is
+  also drifting stays visible.
 
 Two principals review: **Scott** (owner, all decisions) and **chat-Claude**
 (contract author, architecture review). Scott reviews in the GitHub UI and
@@ -320,6 +323,27 @@ the choice, and consequences once Scott has called it.
     preference — stop and take product work, or get Scott's word to continue. The
     ratchet only turns one way otherwise, because control work is always available,
     always passes review, and always produces a clean green.
+    - **The counter counts PRs whose *purpose* is non-product, not PRs whose line-majority is
+      instrument.** The refinement was forced by #159, which lands `table.init`/`memory.init` end
+      to end — board strata moving on engine answers, 1702 fails drained — and reads **1:1.4**, so
+      the letter of the old rule made it instrument-heavy and two-consecutive with #158. That is
+      the counter misfiring on its own purpose: the stop condition exists to prevent drift *into
+      meta*, and a PR landing engine capability is product whatever its falsification bill. The
+      last four arm PRs' ratios had already demonstrated it — an arm is a *small* piece of work
+      and the per-PR instrument floor does not shrink with it (#117's fit, above), so a
+      line-majority test on an arm PR is the disguised minimum-PR-size rule wearing the stop
+      condition's clothes.
+      - **The classification is named in the PR body and is challengeable — which is what keeps
+        it from being self-serving**, the actor-never-classifies-the-actor rule being live and
+        unrepealed. Two things do that work: the naming obligation makes the claim reviewable at
+        the moment it is made rather than reconstructible afterwards, and **the line ratio keeps
+        its own separate instrument** — it is still quoted every PR, never compared to a
+        threshold, so a purpose-classified product PR that is *also* drifting is still visible in
+        the figure. The exemption rule below is untouched: a purpose classification is not an
+        exemption, it is a statement about what the PR *is*, and where the two readings differ
+        the actor states the case and a principal rules. Scott holds the veto line on this
+        refinement as on every governance edit. (Ruling: Scott, PR #159, on the agent's own flag;
+        #159 is product and the counter resets.)
     - **Exemptions are spent only by a principal's explicit order or stamp, never by
       self-classification.** "This PR wasn't elective" is a defence *every* drifting PR
       can plead, and every PR in the 1:1.8 → 1:5.1 drift could have pleaded it — so it
@@ -589,6 +613,22 @@ the choice, and consequences once Scott has called it.
   floor **per partition, never one total**: 400 passes on one authority's 436 alone when the
   other finds zero, an empty half absorbed by a full one, which is the vacuity law with a
   partner to hide behind. (Ruling: Scott, PR #108; grave #105.)
+  - **A floor equal to the failure mode's output certifies the failure.** So a floor is derived
+    from the *authority*, never frozen at what the current reader happens to produce. #159's
+    specimen: the positional `plaininstr` reader's pair floor was set at **8**, which is exactly
+    what the *degraded* reader yields — the alternation pattern finds 8 two-lookup arms where the
+    positional one finds 10, the two extra being `STRUCT_GET`/`STRUCT_SET` whose second lookup is
+    `$3 c (field x.it)`, not a word in the alternation. Stub the extractor down to the weaker
+    pattern and the floor waves it through, having been set to the number the bug produces. What
+    makes this worse than an ordinary loose floor is the **misdirection**: the run did go red, so
+    the control looked alive — *the drift report was true, the attribution was the lie*. It named
+    drift in `idxPairLookupKinds` (the two struct kinds now missing) when the defect was in the
+    reader, so a reader following the failure message repairs the subject to match a broken
+    instrument. A control's blind spot presenting as its subject's defect is strictly harder to
+    catch than silence. The remedy is a **discrimination check** beside the floor — assert the
+    reader exhibits the capability that distinguishes it from its degradation (here: at least one
+    matched lookup is a parenthesised expression), because a count cannot separate two readers
+    whose counts overlap. (Ruling: Scott, PR #159, naming the law from the finding.)
 - **A suspiciously clean result is a tell, and *exactly zero* is the cleanest one.** 0014's
   premise — overlap 0, **gap 0** between two authorities — was measured by a probe scoped to
   `plaininstr`, one of five instruction-building productions, which is *the same scope the
@@ -622,6 +662,24 @@ the choice, and consequences once Scott has called it.
     proves nothing by not returning. So when a row's subject is a loop, arrange it so a wrong engine
     *terminates and answers wrongly* — and confirm that by running the mutation, since which
     arrangement hangs is not deducible from reading it. (Ruling: Scott, PR #142.)
+  - **Print the diff: a falsification that passes is either a stillborn control or a mutation that
+    did not apply, and nothing else tells the two apart.** So the method is now *edit, print the
+    diff, then run* — permanently, not as a habit for suspicious cases. The specimen is #159's
+    `TABLE_INIT` deletion, which **passed on its first attempt and the control was right to pass**:
+    the mutation script's pattern matched `initSugarKinds`, which holds a byte-identical
+    `"TABLE_INIT":  true,` line one screen above the intended map, so a row in a *different* table
+    was deleted and the subject was never touched. Read as a stillbirth, that outcome retires a
+    working control; read as a non-application, it costs one anchored retry (`(var
+    initReversedKinds = map\[keywordKind\]bool\{\n)`), after which the control failed correctly.
+    Note which way the ambiguity is dangerous — the two readings differ in *what you go and change
+    next*, and the flattering one is the one that says the control is at fault.
+    - **And field attribution is not first-match, wherever a mechanism edits or reads a named row
+      — the gated allowlist, fix sites, and now the mutation scripts themselves.** The rule already
+      governed generators (`gateFor`'s narrowest-match, `gatemap.go`) on the argument that an
+      answer depending on slice order is a load-bearing invisible ordering; #159 showed a
+      *falsification harness* is the same kind of mechanism, because a pattern that names a row by
+      its text alone will find whichever copy comes first. Anchor on the containing declaration,
+      not on the row. (Ruling: Scott, PR #159, from the mutation findings.)
 - **A status field is a citation to an approval, and approvals are artifacts with provenance.** So
   an ADR's `Status:` is held open until a stamp exists to point at, and *an ADR marked accepted on
   a stamp nobody gave is a fabricated citation about the project's own governance* — worse than a
