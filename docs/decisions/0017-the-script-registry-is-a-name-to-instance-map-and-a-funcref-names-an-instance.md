@@ -233,3 +233,68 @@ It does not implement contract §3. There is no host-function surface, no `Linke
 Go embedder to supply an import — and the negative is *stated* rather than left implied, because an
 unrecorded "we looked and there was nothing there" gets re-looked-for (the ruling on #157). The
 engine will need all of it at v1; the suite will never ask for any of it.
+
+## Correction, appended 2026-08-06 — the census is 624, not 605
+
+**Era stamp: the figures above were measured by *key partition*; this section re-measures the same
+board by *two-axis cross-tab*.** The body is preserved, per Scott's ruling on the census law
+(*records append-corrected, stale claims wear pointers*): editing 605 into 624 would fabricate a
+history in which this ADR always knew the right number, and the real history is worth more — the
+gap is exactly the blind spot the body's own residual-risk paragraph predicted, so the record shows
+its instrument being upgraded rather than merely asserting an answer.
+
+**The law this applies, minted by Scott on this measurement: *Expected and Got are different facts,
+and keying a census on either alone undercounts.***
+
+Re-measured on `main` at `85e1d08`, same corpus pin, by a throwaway probe that cross-tabs each
+sentinel-bearing `Failure` on **both** axes — whether the *bucket key* carries the sentinel, and
+which engine site the *`Got`* names. Residual 0 on both. The probe was deleted; the numbers are
+the product.
+
+| mechanism | key-visible (as published) | key-hidden | **corrected** | site |
+| --- | --- | --- | --- | --- |
+| `call_indirect` reaching a table slot naming an imported function | 540 | 0 | **540** | `call.go:250` |
+| an imported memory | 44 | 11 | **55** | `memory.go:300` |
+| an imported table | 11 | 6 | **17** | `table.go:204` |
+| an imported global | 7 | 2 | **9** | `global.go:87` |
+| `call` naming an imported function directly | 3 | 0 | **3** | `call.go:99` |
+| **total** | **605** | **19** | **624** | |
+
+**Why the 19 hid, and it is a mechanism rather than an oversight.** All nineteen are
+`assert_trap (module)` commands — a module command whose *expectation* is a trap. `Result.Buckets`
+keys such a failure by the **`Expect`** (`assert_trap (module) expected: out of bounds memory
+access` ×13, `… table access` ×6), so the §3 sentinel appears only in the `Got`. A census that
+partitions on the bucket key therefore cannot see them *by construction*: it is not that the probe
+looked and missed, it is that the axis it read does not carry the fact. By file: `data.wast` 4,
+`data1.wast` 4, `elem.wast` 4, `linking.wast` 4, `linking1.wast` 2, `linking3.wast` 1.
+
+**Direction of the error, stated because it matters for how the figure was used.** The undercount
+is 3.0%, it is *concentrated entirely in the three non-func mechanisms* — memory 44→55 is +25%,
+table 11→17 is +55%, global 7→9 is +29% — and the 540 that dominates the total is unaffected. So
+every conclusion the body draws is unchanged and two are strengthened: the consumer is larger than
+claimed, and the mechanism partition's *shape* survives, which is the property the body asserted.
+Nothing here revises the decision; it revises one number and sharpens the instrument that produced
+it.
+
+**The body's own caveat predicted this, in these words:** *"the honest residual risk is the one
+partition-by-mechanism is structurally blind to — a second refusal invisible until the first is
+gone."* That paragraph was written about a *second refusal behind* the §3 decline and the blind spot
+turned out to be one axis over — a second *key* in front of it — but the class it named is the class
+that fired. Recorded rather than smoothed, because a caveat that half-predicts its own failure is
+the most useful sentence in a census.
+
+**A second defect, found by appending rather than by measuring, and recorded for the same reason.**
+The body's census prose reads *"over four mechanisms"* above a table with **five** rows. The table is
+right and sums to 605; the total is right; only the word is wrong, and no arithmetic depends on it —
+which is precisely why it survived review. It is the same shape as the figure above it: a claim whose
+checkable half was checked and whose uncheckable half was not, in a document arguing that a census
+needs both axes. Left in place, wearing this pointer.
+
+**Where the superseded 605 still stands in the body**, so this section can serve as its index rather
+than the body carrying inline edits: the census heading and its table, the up-from-#157 paragraph,
+the shadow-check paragraph, the Q1 consumer count, and both Consequences mentions. Every one of them
+is sound as an argument — the corrected total moves each figure the same direction by 3.0% and
+reverses no conclusion. **Flagged for Scott:** whether those six sites should also carry inline
+`(→ 624)` pointers is his call, not the actor's; a pointer preserves the history that editing would
+fabricate, but *placing* one is still a hand in the body, and the rule as given was "never edit the
+body".
