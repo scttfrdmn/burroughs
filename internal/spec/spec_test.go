@@ -3116,7 +3116,18 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	// are two of the 167 entries registered in TestGatedVectors' allowlist one PR ago. So the +2 is a
 	// gate opening, not a feature behaving differently under full features, and this lane's excess
 	// over the default one has a name for once instead of a category.
-	const allOnPassFloor = 29534
+	//
+	// **The saturating truncations (#7): 29534 → 29714, +180 — the *same* figure as the default
+	// lane.** Both revisions were measured in this lane rather than the delta being carried over
+	// from the other one, because "the lanes agree" is a claim and the previous entry above is a
+	// standing reminder that they usually do not.
+	//
+	// The agreement has a reason worth naming: `conversions.wast` declares no gated feature, so the
+	// gate configuration has nothing to say about any of the 180. That is the negative case for the
+	// entry above it — there the excess was two named vectors in gate-declined modules, here the
+	// excess is zero because the file is gate-blind — and a lane divergence of zero is only
+	// informative once the mechanism that would produce one has been checked for.
+	const allOnPassFloor = 29714
 	boardBound(t, "allOnPassFloor", totalPass, allOnPassFloor, boardBoundSlack, floorBound,
 		"a gated feature regressed, which the Gated==0 assertion above cannot see: with every "+
 			"gate on, a broken feature turns a pass into a fail and leaves Gated at zero")
@@ -3296,6 +3307,25 @@ func TestPhase1Files(t *testing.T) {
 	//
 	// 347 + 40 = 387, which is why the two lines are quoted rather than the total alone. The 10
 	// `invoke` commands still unsupported are the shapes classify declines structurally.
+	//
+	// # 32377, unmoved, twice in a row — and by now that is a prediction rather than a report
+	//
+	// The saturating truncations (#7) left this column **unmoved**, as `global.get`/`global.set` did
+	// before them, and the second consecutive zero is what turns the pattern into a stated rule:
+	// *unsupported counts commands the harness cannot ask; the fail columns count questions the
+	// engine cannot answer.* An interpreter arm answers a question that was already being asked, so
+	// it moves pass and fail by 180 each and cannot touch this number by construction. Only a front
+	// end admitting a grammar moves it — which is what the two entries above record, both of them
+	// classifier work rather than engine work.
+	//
+	// That seam is why this PR does not lower the ceiling and is not overhead for anything: the
+	// column's own recon (#153) priced its largest stratum and found the answer is **not** an
+	// interpreter arm. 24,147 of the remaining 24,530 are one value form, `v128.const`, and teaching
+	// the script reader to admit it would move those vectors from this column into `fail` as "no
+	// instance" — because zero of them sit behind a module that instantiates today. *A column
+	// drained into the wrong column is not progress.* The chain is #8's v128 immediates, then the
+	// SIMD gate, then instantiation, with the script reader last, and it is scoped as its own arc
+	// rather than smuggled into a PR about conversions.
 	const unsupportedCeiling = 32377
 	boardBound(t, "unsupportedCeiling", totalUnsup, unsupportedCeiling, boardBoundSlack, ceilingBound,
 		"either a capability regressed or the corpus moved; both need an explanation rather "+
@@ -4167,7 +4197,33 @@ func TestPhase1Files(t *testing.T) {
 	//
 	// Nothing moved in the other strata: encode held at 1353 in both revisions, and arrivals were
 	// **zero** — so no vector regressed into the exec column to pay for the gain.
-	const execFailCeiling = 1199
+	//
+	// **The saturating truncations (#7): 1199 → 1019, −180, and all eight buckets are absent rather
+	// than smaller.** `fc 00`..`fc 07` held 22/21/22/25/24/19/24/23 = 180 before and none of the
+	// eight appears in the after-state, so this is eight buckets reaching zero in one PR.
+	//
+	// The three-way account is the flattest one this taxonomy can produce, and that is the finding
+	// rather than a formality: **180 departed, 0 arrived, 0 same-key-new-reason.** 2552 − 180 + 0 =
+	// 2372, which closes against the measured column exactly.
+	//
+	// **The zero in the third category was interrogated, not quoted** (#106): a perfect zero is
+	// where an instrument reports its own blindness, and this is the same comparison that found 13
+	// re-causings one PR ago. It joined **2372 pairs** — every surviving key — and found all 2372
+	// causes byte-identical; run against a synthetic pair with one altered cause it reports the
+	// change. So the comparison is live and the zero is a fact about `trunc_sat`, not about the
+	// probe. The fact it states is a topological one: these vectors have **nothing behind them**.
+	// `conversions.wast`'s trunc_sat functions are one instruction over a parameter, so the arm was
+	// the last thing missing — where `global.get` sat in modules with linking and further opcodes
+	// beyond it, which is why that PR's 29 held only 16.
+	//
+	// All 180 are in **one file**, `conversions.wast`, which goes 347/527 → **527/527, zero fail**.
+	// That is the exact inverse of #152's file-level signature ("the file named after the feature is
+	// not where the feature paid off") and worth stating in the same words: here the feature's own
+	// file is the *only* place it paid off. A per-opcode arm's blast radius is a fact about how the
+	// suite groups vectors, not a rule, and the two PRs bracket both ends of it.
+	//
+	// Encode held at 1353 across both revisions again, so nothing was borrowed from another stratum.
+	const execFailCeiling = 1019
 	boardBound(t, "execFailCeiling", execFail, execFailCeiling, 0, ceilingBound,
 		"the interpreter answered fewer vectors than it did: either an opcode arm regressed or "+
 			"a value comparison started disagreeing. A *rise* caused by #8 unblocking more "+
@@ -4463,7 +4519,16 @@ func TestPhase1Files(t *testing.T) {
 	// frontier, so the file named after the feature is not where the feature's arm paid off. See
 	// execFailCeiling for the other half of this account — 13 further vectors changed cause without
 	// changing verdict, which the pass column cannot show.
-	const passFloor = 28414
+	//
+	// **The saturating truncations (#7): 28414 → 28594, +180, all of it exec→pass.** The gain equals
+	// the exec column's fall exactly (1199 → 1019) with encode unmoved at 1353, and unlike the
+	// globals PR the set-difference needs no third category to close: 180 departed, 0 arrived, 0
+	// re-caused. See execFailCeiling for why the flat account is itself the finding.
+	//
+	// All 180 land in `conversions.wast`, which reaches **527/527**. One file, one bucket family,
+	// eight buckets to zero — the concentrated case, where #152 was the diffuse one (+16 across
+	// eleven files, none of them `global.wast`).
+	const passFloor = 28594
 	boardBound(t, "passFloor", totalPass, passFloor, boardBoundSlack, floorBound,
 		"a regression in a grammar that used to answer, or the corpus moved")
 }

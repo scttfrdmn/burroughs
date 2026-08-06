@@ -79,7 +79,21 @@ func (in *Instance) runFrame(fn *binary.Func, locals []uint64, st *stack, result
 	var ctrl []label
 	for pc := 0; pc < len(body); pc++ {
 		ins := body[pc]
+		// **A prefixed instruction is dispatched separately, never by falling into the switch
+		// below**, and this is the one structural hazard in adding the first prefixed arm.
+		// `Op` holds the *sub*-opcode, so `fc 00` and `unreachable` are both `Op == 0x00`:
+		// letting a prefixed instruction reach the main switch would execute
+		// `i32.trunc_sat_f32_s` as a trap and `fc 0b` as `end`. The prefix is therefore
+		// consumed here, and every unhandled prefix still lands on `unsupported` exactly as
+		// before — the arm that used to catch *all* prefixed instructions now catches all but
+		// one region, which is the only behavioural change to this line.
 		if ins.Prefix != 0x00 {
+			if ins.Prefix == 0xfc {
+				if err := in.execFC(ins, st); err != nil {
+					return err
+				}
+				continue
+			}
 			return unsupported(ins)
 		}
 		switch ins.Op {
