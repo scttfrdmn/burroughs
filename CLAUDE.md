@@ -398,6 +398,16 @@ the choice, and consequences once Scott has called it.
     of its own, waiting for its consumer. State the negative when a recon returns one: an
     unrecorded "we looked and there was nothing there" gets re-looked-for. (Ruling: Scott,
     on the linking-frontier recon, #157.)
+    - **The 521-of-3401 pair is era-stamped, and the ruling is what survives re-measurement.**
+      Re-measured on 0017 against the current board: **605 of 1699**, four mechanisms, residual
+      zero — the absolute rose because interpreter arms landed and the denominator fell because
+      #158 drained 4876, so *both* figures moved and neither is the one quoted here. What did not
+      move is the load-bearing negative: still zero vectors needing a host-supplied import, now
+      confirmed by a second instrument (874 import sites, 678 same-file `register` + 174
+      `spectest` + 22 `assert_invalid`). A doctrine whose quantities rot while its ruling holds
+      gets its quantities dated rather than deleted, per the second-order-honesty rule — quoting
+      521 today would be a number nobody re-ran. The ADR is **0017**; its consumer knocked twice
+      (#161's frontier and the 105 reclassified §3 slots), which is what took it off "waiting".
 - **Decision-before-code.** Design choices get `docs/decisions/NNNN-*.md`
   (context, options, choice, consequences) *before* implementation.
   Decisions Scott must make are flagged in reports, not made for him.
