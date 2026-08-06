@@ -788,6 +788,35 @@ the choice, and consequences once Scott has called it.
     lives — an arm that only *computes* moves its own bucket, while an arm that **writes state**
     moves every bucket downstream of that state, so the multiplier is predictable in kind if never
     in size. (Ruling: Scott, PR #155.)
+  - **And there is a third outcome that is neither over- nor under-payment: a bucket whose members
+    share a *deeper* blocker **re-keys rather than pays**.** The taxonomy is now complete, one
+    measured specimen each: an *embedded construct* overpays its bucket (export's 39-paid-55); a
+    *sole blocker* pays par (control flow's 90.5%); a *shared deeper blocker* pays **zero** while
+    the bucket still drains — #161's `ref.null` heaptype arm emptied a 609-vector bucket and moved
+    no column in either lane, all 609 arriving in sibling keys one layer up (+446 parameterized
+    reftype, +163 cast immediates, closure exact, 0 unclassified). The arm was correct and required;
+    the bucket was **shadowing**, because `ref.null` is the first refusal a GC vector meets and its
+    key was counting vectors that need three or four other things as well.
+    - **Partitioning by mechanism cannot see this, which is why the remedy is a different
+      instrument.** The partition is over the failures the board *reports*, and the second refusal
+      in a chain is invisible until the first is gone — so the standing remedy for both earlier
+      clauses is structurally blind to this one. **The co-blocking probe is therefore standard
+      pre-selection: bucket size × sole-blocker fraction = expected pay, measured *before* the
+      bucket is chosen.** The instrument has existed since the control-flow recon; what changes is
+      that it runs **first**, which converts a re-key surprise into a re-key forecast. Cheapest
+      sufficient version when the full probe is overkill: list the bucket's files and read one
+      vector — `br_table.wast` 146, `ref_eq.wast` 82, `i31.wast` 61 would have said "GC files, and
+      a `ref.null` is one token in a module that also declares `(ref null $t)` fields" before any
+      code was written.
+    - **A zero-delta PR is an account, not an alibi, and what makes it one is that the
+      redistribution *sums*.** #161's body is the standard: every changed key itemized, departures
+      and arrivals equal, residual forced to zero and stated, unclassified arrivals counted (and
+      zero). An itemization that reaches its total by having the right number of terms is the defect
+      #155's memarg batch was corrected for; a zero-delta claim without exhaustive closure is that
+      defect with nothing to check it. Measure with the harness (`run(s).Buckets`), never a grep over
+      the board log — bucket keys can contain embedded newlines, and a line-oriented sum split them
+      into 1697 and 1672 against a true 1699 three times in one session, with a `join` artifact
+      briefly reading as a real ±9 behavioural change. (Ruling: Scott, PR #161.)
 - **An error from the wrong layer is evidence about where structure was lost.**
   When a lower grammar is missing, its bytes do not vanish — they leak upward and
   get misread by whatever grammar *is* running, so the error names a field the

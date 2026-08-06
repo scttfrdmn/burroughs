@@ -392,6 +392,11 @@ var encodableShapes = map[immShape]bool{
 	// gone. What would have seen it: asking, before starting, what the vectors in the bucket *are*.
 	// `br_table.wast` 146, `ref_eq.wast` 82, `ref_test.wast` 68, `i31.wast` 61 — GC files throughout,
 	// where a `ref.null` is one token in a module that also declares `(ref null $t)` fields.
+	//
+	// This is now a *rule* rather than a lesson at one site: the census rule's third clause, and the
+	// **co-blocking probe runs before a bucket is selected** — bucket size × sole-blocker fraction =
+	// expected pay. Written here as the specimen the clause was measured on, not as the statement of
+	// it (ruling: Scott, on this arm's board).
 	immHeaptype: true,
 }
 
