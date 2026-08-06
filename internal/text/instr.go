@@ -545,8 +545,7 @@ func (p *parser) immediates(shape immShape, mnemonic Token) error {
 		_, err := p.reftype()
 		return err
 	case immHeaptype:
-		_, err := p.heaptype()
-		return err
+		return p.heaptypeRetained(mnemonic)
 	case immIdxNat32:
 		if err := p.idx(); err != nil {
 			return err

@@ -555,6 +555,15 @@ type context struct {
 	// data's reason — the table it sizes would be emitted with limits and nothing in it.
 	elemDefs []resolvedElem
 
+	// The retained *defined* globals, in source order — the emitter's input for section 6 (#8).
+	// Written by `defineGlobal`, which owns the argument for the stage-2 split.
+	//
+	// **Unlike imports, exports, data and elem, this list holds one spelling.** `global_fields`'
+	// inline-import arm produces an `Import` and no `Global` (parser.mly:1082-1085), so an imported
+	// global never reaches here — the same split `memDefs` and `tabDefs` record. What the two
+	// spellings do share is the *index space*, which `globalField` binds before either arm runs.
+	globalDefs []resolvedGlobalDef
+
 	// elemsSeen counts every element segment the *grammar* saw, for the withdrawal check.
 	//
 	// `datasSeen`'s instrument on its sibling section, and its argument applies unchanged:
