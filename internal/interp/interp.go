@@ -77,6 +77,23 @@ type Instance struct {
 	// not hand out something writable. The nil-slot convention needs the pointer anyway.
 	globals []*global
 
+	// elems and datas are the element and data segments' *runtime* instances, in index order
+	// and one per segment in the image — see segment.go for why the image is not enough, and
+	// for the observable `bulk.wast` vector that makes the drop state load-bearing.
+	//
+	// **No import offset and no nil slots**, and neither is an oversight. There is no import
+	// kind for a segment — `ast.ml`'s `externtype` is func/table/memory/global/tag — so these
+	// spaces are module-local and every index in them names something the module declared. The
+	// mems/tables nil-slot convention exists for imports and failed allocations, and a segment
+	// has neither: `allocElem` can fail (an element expression this phase cannot evaluate), and
+	// that failure goes to `deferred` with the *slot filled* by an empty instance, so a later
+	// `table.init` reads an empty segment rather than dereferencing nil. That is a weaker
+	// guarantee than the tables' and it is stated rather than assumed: the empty instance makes
+	// the arm answer "out of bounds" where the truth is "unevaluated", which `deferred` carries
+	// and `Deferred()` reports.
+	elems []*elemInstance
+	datas []*dataInstance
+
 	// deferred holds the validation-shaped failures instantiation met and could not report,
 	// because 0015's trap channel may not carry a verdict.
 	//
@@ -115,6 +132,8 @@ func Instantiate(m *binary.Module) (*Instance, *Trap) {
 		mems:    make([]*memory, memOff+len(m.Memories)),
 		tables:  make([]*table, tabOff+len(m.Tables)),
 		globals: make([]*global, globOff+len(m.Globals)),
+		elems:   make([]*elemInstance, len(m.Elems)),
+		datas:   make([]*dataInstance, len(m.Datas)),
 	}
 	// **Globals first, and the position comes from the reference's fold rather than from
 	// convenience.** `eval.ml:1310-1318` runs `init_global` *before* `init_table` and
@@ -192,8 +211,34 @@ func Instantiate(m *binary.Module) (*Instance, *Trap) {
 	//
 	// Both halves of that are the same lesson from opposite sides: the order is load-bearing, and
 	// the reason it is load-bearing had to be looked up rather than reasoned out.
+	//
+	// **Allocation is a separate pass from copying, which is also the reference's shape and is
+	// load-bearing for a second reason.** `init` runs `init_list init_data` and `init_list
+	// init_elem` over *every* segment (`eval.ml:1317-1318`) and only then evaluates
+	// `es_elem @ es_data @ es_start`, so all segment instances exist before the first copy. Merging
+	// the two passes would make an active segment's instance unobservable — `run_elem` drops it
+	// immediately after copying, so there would be nothing for the *next* segment's failure to
+	// leave behind, and more to the point a `table.init` naming segment 3 from inside segment 1's
+	// offset expression would find an unallocated slot. Two passes, in the reference's order.
 	for i := range m.Elems {
-		if err := in.initElem(&m.Elems[i]); err != nil {
+		seg, err := in.allocElem(&m.Elems[i])
+		if err != nil {
+			if t := asTrap(err); t != nil {
+				return nil, t
+			}
+			// The slot is filled with an *empty* instance rather than left nil, per the field's
+			// comment: a later `table.init` then reports out-of-bounds instead of panicking, and
+			// the real reason travels on `deferred`.
+			in.deferred = errors.Join(in.deferred, err)
+			seg = &elemInstance{}
+		}
+		in.elems[i] = seg
+	}
+	for i := range m.Datas {
+		in.datas[i] = &dataInstance{bytes: m.Datas[i].Init}
+	}
+	for i := range m.Elems {
+		if err := in.runElem(i, &m.Elems[i]); err != nil {
 			if t := asTrap(err); t != nil {
 				return nil, t
 			}
@@ -201,7 +246,7 @@ func Instantiate(m *binary.Module) (*Instance, *Trap) {
 		}
 	}
 	for i := range m.Datas {
-		if err := in.initData(&m.Datas[i]); err != nil {
+		if err := in.runData(i, &m.Datas[i]); err != nil {
 			if t := asTrap(err); t != nil {
 				return nil, t
 			}

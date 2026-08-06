@@ -444,6 +444,16 @@ func (p *parser) idxRetained(mnemonic Token) error {
 // happened to be current at the end of the parse, which is the last one. That is an
 // accept-direction defect and would score green on every vector in the corpus.
 func (p *parser) retainIdx(mnemonic Token, r idxRef) error {
+	return p.retainIdxIn(mnemonic, r, idxLookupKinds[mnemonic.Keyword])
+}
+
+// retainIdxIn is retainIdx with the category given rather than looked up.
+//
+// The split exists because a **two-index** arm's indices resolve in two *different* spaces —
+// `table.init $t $e` is a table then an element segment — so the category cannot be a property of
+// the mnemonic there. `idxLookupKinds` holds only the first, and deliberately: see
+// `idxPairLookupKinds`, which holds both and disagrees with it about the same kind for a reason.
+func (p *parser) retainIdxIn(mnemonic Token, r idxRef, cat idxCategory) error {
 	if !p.retaining() {
 		return nil
 	}
@@ -451,7 +461,6 @@ func (p *parser) retainIdx(mnemonic Token, r idxRef) error {
 		p.appendImm(encodeLocalIdx(r.idx))
 		return nil
 	}
-	cat := idxLookupKinds[mnemonic.Keyword]
 	space := p.idxSpaceFor(cat)
 	if space == nil {
 		return errf(r.tok, "cannot yet encode a symbolic index on %s (#8)", mnemonic.Text)
@@ -519,37 +528,76 @@ func (p *parser) retainIdx(mnemonic Token, r idxRef) error {
 	return nil
 }
 
-// retainIdxPair encodes the one-or-two index immediates of an `idx_idx_opt` arm.
+// retainIdxPair encodes the one-or-two index immediates of an `idx_idx_opt` or `init`-sugar arm.
 //
-// **The written index is not always the first one encoded.** `memory.init`'s sugar arm writes only
-// the *data* index and defaults the memory to 0 — `memory_init (0l @@ …) ($2 c data)`
-// (parser.mly:588) — while `encode.ml` writes `MemoryInit (x, y) → op 0xfc; u32 0x08l; idx y;
-// idx x` (:598), reversing them again. `table.init` repeats the pattern with `elem`. Two reversals
-// that cancel for the two-index spelling and do not for the sugar one, which is precisely the kind
-// of thing that encodes a well-formed module denoting something else.
+// # Written order is not wire order, and only for two of the four mnemonics
 //
-// Rather than implement four sugar/order combinations for arms in a tier this section does not
-// reach, it refuses them by name and encodes only the in-order pair (`memory.copy`, `table.copy`)
-// that the slice contains. The refusal is stated at the mnemonic, so the frontier is legible.
+// `encode.ml` writes the `init` pair **reversed** and the `copy` pair in order:
+//
+//	TableInit  (x, y) -> op 0xfc; u32 0x0cl; idx y; idx x   (:294)
+//	MemoryInit (x, y) -> op 0xfc; u32 0x08l; idx y; idx x   (:411)
+//	TableCopy  (x, y) -> op 0xfc; u32 0x0el; idx x; idx y   (:293)
+//	MemoryCopy (x, y) -> op 0xfc; u32 0x0al; idx x; idx y   (:410)
+//
+// and `decode.ml` reads them back the same way — `0x0cl -> let y = at idx s in let x = at idx s in
+// table_init x y` (:674) against `0x0el -> let x = … let y = …` (:676). So for `table.init` and
+// `memory.init` the *segment* index is written second and encoded first. The reversal is not a
+// property of the shape: two mnemonics sharing this function reverse and two do not, which is why
+// the order is keyed by mnemonic below rather than assumed from the arm.
+//
+// # The sugar arm defaults the index that is encoded second
+//
+// `TABLE_INIT idx` is `table_init (0l @@ $loc($1)) ($2 c elem)` (parser.mly:589) — the one written
+// index is the **elem**, and the table defaults to 0. `MEMORY_INIT idx` is the same with `data`
+// (:609). Composed with the reversal, the sugar arm's single written index is therefore the
+// **first** immediate on the wire and the defaulted 0 is the second: two reversals that cancel for
+// the two-index spelling and do not cancel for the sugar one. Getting that backwards emits
+// `(table.init 3)` as "segment 0 into table 3" — a well-formed image denoting a different
+// instruction, and one no suite vector can report (§9 G-3), since both spellings decode cleanly.
+//
+// `idx_idx_opt`'s own empty arm (`memory.copy` with nothing written) is handled by the caller, which
+// writes two explicit zeroes; there is no one-index spelling of the copy forms at all.
+//
+// # Each index resolves in its own space
+//
+// `table.init $t $e` is a table then an element segment (`table_init ($2 c table) ($3 c elem)`,
+// :587-588), so a single mnemonic-wide category is wrong here in a way it is not for `table.copy`
+// (whose `idx_idx_opt` passes one lookup to both). `pairCategories` holds the pair; the refusal
+// this function used to open with — "both the argument reversal and the sugar default apply, and
+// neither is exercised by the slice" — was the honest answer while neither table existed.
 func (p *parser) retainIdxPair(mnemonic Token, first, second idxRef, havePair bool) error {
 	if !p.retaining() {
 		return nil
 	}
-	if initSugarKinds[mnemonic.Keyword] {
-		// `memory.init`/`table.init`: both the argument reversal and the sugar default apply, and
-		// neither is exercised by the slice. Refused rather than guessed.
-		return errf(mnemonic, "cannot yet encode %s (#8)", mnemonic.Text)
+	cats := pairCategories(mnemonic.Keyword)
+	if !havePair {
+		if !initSugarKinds[mnemonic.Keyword] {
+			// `memory.copy 0` — one index written where the encoding wants two. The reference's
+			// `idx_idx_opt` (:495-497) has no one-index arm for these mnemonics, so this cannot
+			// arise from legal text; a refusal rather than a padded zero keeps the impossible case
+			// loud.
+			return errf(mnemonic, "cannot yet encode %s with one index (#8)", mnemonic.Text)
+		}
+		// The sugar arm. The written index is the **second** category — elem for `table.init`,
+		// data for `memory.init` — and it is written **first** on the wire, the defaulted table or
+		// memory index 0 following it.
+		if err := p.retainIdxIn(mnemonic, first, cats.second); err != nil {
+			return err
+		}
+		p.appendImm(encodeLocalIdx(0))
+		return nil
 	}
-	if err := p.retainIdx(mnemonic, first); err != nil {
+	if initReversedKinds[mnemonic.Keyword] {
+		// Second written, first encoded.
+		if err := p.retainIdxIn(mnemonic, second, cats.second); err != nil {
+			return err
+		}
+		return p.retainIdxIn(mnemonic, first, cats.first)
+	}
+	if err := p.retainIdxIn(mnemonic, first, cats.first); err != nil {
 		return err
 	}
-	if !havePair {
-		// `memory.copy 0` — one index written where the encoding wants two. The reference's
-		// `idx_idx_opt` (:494) has no one-index arm for these mnemonics, so this cannot arise from
-		// legal text; a refusal rather than a padded zero keeps the impossible case loud.
-		return errf(mnemonic, "cannot yet encode %s with one index (#8)", mnemonic.Text)
-	}
-	return p.retainIdx(mnemonic, second)
+	return p.retainIdxIn(mnemonic, second, cats.second)
 }
 
 // constImmRetained is constImm plus the encoded immediate.

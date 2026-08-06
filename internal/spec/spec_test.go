@@ -1394,6 +1394,23 @@ func TestGatedVectors(t *testing.T) {
 			106: "memory64: (memory i64 1 1) at :45 — an i64 index type",
 			109: "memory64: an i64 index type at :45 — the module this action runs against",
 			112: "memory64: an i64 index type at :45 — the module this action runs against",
+			131: "memory64: (memory i64 1) at :117 — an i64 index type",
+			132: "memory64: (memory i64 1) at :117 — an i64 index type",
+			133: "memory64: (memory i64 1) at :117 — an i64 index type",
+			134: "memory64: (memory i64 1) at :117 — an i64 index type",
+			137: "memory64: (memory i64 1) at :117 — an i64 index type",
+			140: "memory64: an i64 index type at :117 — the module this action runs against",
+			142: "memory64: (memory i64 1) at :117 — an i64 index type",
+			143: "memory64: (memory i64 1) at :117 — an i64 index type",
+			146: "memory64: (memory i64 1) at :117 — an i64 index type",
+			147: "memory64: (memory i64 1) at :117 — an i64 index type",
+			150: "memory64: an i64 index type at :117 — the module this action runs against",
+			153: "memory64: an i64 index type at :117 — the module this action runs against",
+			158: "memory64: (memory i64 1) at :117 — an i64 index type",
+			176: "memory64: (memory i64 1) at :161 — an i64 index type",
+			177: "memory64: (memory i64 1) at :161 — an i64 index type",
+			178: "memory64: (memory i64 1) at :161 — an i64 index type",
+			179: "memory64: (memory i64 1) at :161 — an i64 index type",
 		},
 		"endianness64.wast": {
 			133: "memory64: (memory i64 1) at :1 — an i64 index type",
@@ -2335,7 +2352,129 @@ func TestGatedVectors(t *testing.T) {
 			46:  "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
 			47:  "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
 			48:  "memory64: (memory (export \"memory0\") i64 1 1) at :6 — an i64 index type",
+			61:  "memory64: (memory (export \"memory0\") i64 1 1) at :50 — an i64 index type",
+			63:  "memory64: (memory (export \"memory0\") i64 1 1) at :50 — an i64 index type",
+			64:  "memory64: (memory (export \"memory0\") i64 1 1) at :50 — an i64 index type",
+			65:  "memory64: (memory (export \"memory0\") i64 1 1) at :50 — an i64 index type",
+			66:  "memory64: (memory (export \"memory0\") i64 1 1) at :50 — an i64 index type",
+			67:  "memory64: (memory (export \"memory0\") i64 1 1) at :50 — an i64 index type",
+			68:  "memory64: (memory (export \"memory0\") i64 1 1) at :50 — an i64 index type",
+			69:  "memory64: (memory (export \"memory0\") i64 1 1) at :50 — an i64 index type",
+			70:  "memory64: (memory (export \"memory0\") i64 1 1) at :50 — an i64 index type",
+			71:  "memory64: (memory (export \"memory0\") i64 1 1) at :50 — an i64 index type",
+			72:  "memory64: (memory (export \"memory0\") i64 1 1) at :50 — an i64 index type",
+			73:  "memory64: (memory (export \"memory0\") i64 1 1) at :50 — an i64 index type",
+			74:  "memory64: (memory (export \"memory0\") i64 1 1) at :50 — an i64 index type",
+			75:  "memory64: (memory (export \"memory0\") i64 1 1) at :50 — an i64 index type",
+			76:  "memory64: (memory (export \"memory0\") i64 1 1) at :50 — an i64 index type",
+			77:  "memory64: (memory (export \"memory0\") i64 1 1) at :50 — an i64 index type",
+			78:  "memory64: (memory (export \"memory0\") i64 1 1) at :50 — an i64 index type",
+			79:  "memory64: (memory (export \"memory0\") i64 1 1) at :50 — an i64 index type",
+			80:  "memory64: (memory (export \"memory0\") i64 1 1) at :50 — an i64 index type",
+			81:  "memory64: (memory (export \"memory0\") i64 1 1) at :50 — an i64 index type",
+			82:  "memory64: (memory (export \"memory0\") i64 1 1) at :50 — an i64 index type",
+			83:  "memory64: (memory (export \"memory0\") i64 1 1) at :50 — an i64 index type",
+			84:  "memory64: (memory (export \"memory0\") i64 1 1) at :50 — an i64 index type",
+			85:  "memory64: (memory (export \"memory0\") i64 1 1) at :50 — an i64 index type",
+			86:  "memory64: (memory (export \"memory0\") i64 1 1) at :50 — an i64 index type",
+			87:  "memory64: (memory (export \"memory0\") i64 1 1) at :50 — an i64 index type",
+			88:  "memory64: (memory (export \"memory0\") i64 1 1) at :50 — an i64 index type",
+			89:  "memory64: (memory (export \"memory0\") i64 1 1) at :50 — an i64 index type",
+			90:  "memory64: (memory (export \"memory0\") i64 1 1) at :50 — an i64 index type",
+			91:  "memory64: (memory (export \"memory0\") i64 1 1) at :50 — an i64 index type",
+			92:  "memory64: (memory (export \"memory0\") i64 1 1) at :50 — an i64 index type",
+			105: "memory64: (memory (export \"memory0\") i64 1 1) at :94 — an i64 index type",
+			107: "memory64: (memory (export \"memory0\") i64 1 1) at :94 — an i64 index type",
+			108: "memory64: (memory (export \"memory0\") i64 1 1) at :94 — an i64 index type",
+			109: "memory64: (memory (export \"memory0\") i64 1 1) at :94 — an i64 index type",
+			110: "memory64: (memory (export \"memory0\") i64 1 1) at :94 — an i64 index type",
+			111: "memory64: (memory (export \"memory0\") i64 1 1) at :94 — an i64 index type",
+			112: "memory64: (memory (export \"memory0\") i64 1 1) at :94 — an i64 index type",
+			113: "memory64: (memory (export \"memory0\") i64 1 1) at :94 — an i64 index type",
+			114: "memory64: (memory (export \"memory0\") i64 1 1) at :94 — an i64 index type",
+			115: "memory64: (memory (export \"memory0\") i64 1 1) at :94 — an i64 index type",
+			116: "memory64: (memory (export \"memory0\") i64 1 1) at :94 — an i64 index type",
+			117: "memory64: (memory (export \"memory0\") i64 1 1) at :94 — an i64 index type",
+			118: "memory64: (memory (export \"memory0\") i64 1 1) at :94 — an i64 index type",
+			119: "memory64: (memory (export \"memory0\") i64 1 1) at :94 — an i64 index type",
+			120: "memory64: (memory (export \"memory0\") i64 1 1) at :94 — an i64 index type",
+			121: "memory64: (memory (export \"memory0\") i64 1 1) at :94 — an i64 index type",
+			122: "memory64: (memory (export \"memory0\") i64 1 1) at :94 — an i64 index type",
+			123: "memory64: (memory (export \"memory0\") i64 1 1) at :94 — an i64 index type",
+			124: "memory64: (memory (export \"memory0\") i64 1 1) at :94 — an i64 index type",
+			125: "memory64: (memory (export \"memory0\") i64 1 1) at :94 — an i64 index type",
+			126: "memory64: (memory (export \"memory0\") i64 1 1) at :94 — an i64 index type",
+			127: "memory64: (memory (export \"memory0\") i64 1 1) at :94 — an i64 index type",
+			128: "memory64: (memory (export \"memory0\") i64 1 1) at :94 — an i64 index type",
+			129: "memory64: (memory (export \"memory0\") i64 1 1) at :94 — an i64 index type",
+			130: "memory64: (memory (export \"memory0\") i64 1 1) at :94 — an i64 index type",
+			131: "memory64: (memory (export \"memory0\") i64 1 1) at :94 — an i64 index type",
+			132: "memory64: (memory (export \"memory0\") i64 1 1) at :94 — an i64 index type",
+			133: "memory64: (memory (export \"memory0\") i64 1 1) at :94 — an i64 index type",
+			134: "memory64: (memory (export \"memory0\") i64 1 1) at :94 — an i64 index type",
+			135: "memory64: (memory (export \"memory0\") i64 1 1) at :94 — an i64 index type",
+			136: "memory64: (memory (export \"memory0\") i64 1 1) at :94 — an i64 index type",
+			157: "memory64: (memory (export \"memory0\") i64 1 1) at :138 — an i64 index type",
+			159: "memory64: (memory (export \"memory0\") i64 1 1) at :138 — an i64 index type",
+			160: "memory64: (memory (export \"memory0\") i64 1 1) at :138 — an i64 index type",
+			161: "memory64: (memory (export \"memory0\") i64 1 1) at :138 — an i64 index type",
+			162: "memory64: (memory (export \"memory0\") i64 1 1) at :138 — an i64 index type",
+			163: "memory64: (memory (export \"memory0\") i64 1 1) at :138 — an i64 index type",
+			164: "memory64: (memory (export \"memory0\") i64 1 1) at :138 — an i64 index type",
+			165: "memory64: (memory (export \"memory0\") i64 1 1) at :138 — an i64 index type",
+			166: "memory64: (memory (export \"memory0\") i64 1 1) at :138 — an i64 index type",
+			167: "memory64: (memory (export \"memory0\") i64 1 1) at :138 — an i64 index type",
+			168: "memory64: (memory (export \"memory0\") i64 1 1) at :138 — an i64 index type",
+			169: "memory64: (memory (export \"memory0\") i64 1 1) at :138 — an i64 index type",
+			170: "memory64: (memory (export \"memory0\") i64 1 1) at :138 — an i64 index type",
+			171: "memory64: (memory (export \"memory0\") i64 1 1) at :138 — an i64 index type",
+			172: "memory64: (memory (export \"memory0\") i64 1 1) at :138 — an i64 index type",
+			173: "memory64: (memory (export \"memory0\") i64 1 1) at :138 — an i64 index type",
+			174: "memory64: (memory (export \"memory0\") i64 1 1) at :138 — an i64 index type",
+			175: "memory64: (memory (export \"memory0\") i64 1 1) at :138 — an i64 index type",
+			176: "memory64: (memory (export \"memory0\") i64 1 1) at :138 — an i64 index type",
+			177: "memory64: (memory (export \"memory0\") i64 1 1) at :138 — an i64 index type",
+			178: "memory64: (memory (export \"memory0\") i64 1 1) at :138 — an i64 index type",
+			179: "memory64: (memory (export \"memory0\") i64 1 1) at :138 — an i64 index type",
+			180: "memory64: (memory (export \"memory0\") i64 1 1) at :138 — an i64 index type",
+			181: "memory64: (memory (export \"memory0\") i64 1 1) at :138 — an i64 index type",
+			182: "memory64: (memory (export \"memory0\") i64 1 1) at :138 — an i64 index type",
+			183: "memory64: (memory (export \"memory0\") i64 1 1) at :138 — an i64 index type",
+			184: "memory64: (memory (export \"memory0\") i64 1 1) at :138 — an i64 index type",
+			185: "memory64: (memory (export \"memory0\") i64 1 1) at :138 — an i64 index type",
+			186: "memory64: (memory (export \"memory0\") i64 1 1) at :138 — an i64 index type",
+			187: "memory64: (memory (export \"memory0\") i64 1 1) at :138 — an i64 index type",
+			188: "memory64: (memory (export \"memory0\") i64 1 1) at :138 — an i64 index type",
 			209: "memory64: (memory i64 1) at :203 — an i64 index type",
+			216: "memory64: (memory i64 1) at :211 — an i64 index type",
+			224: "memory64: an i64 index type at :218 — the module this action runs against",
+			232: "memory64: (memory i64 1) at :226 — an i64 index type",
+			240: "memory64: an i64 index type at :234 — the module this action runs against",
+			248: "memory64: (memory i64 1) at :242 — an i64 index type",
+			256: "memory64: an i64 index type at :250 — the module this action runs against",
+			263: "memory64: an i64 index type at :258 — the module this action runs against",
+			285: "memory64: (memory i64 1) at :279 — an i64 index type",
+			292: "memory64: an i64 index type at :287 — the module this action runs against",
+			299: "memory64: an i64 index type at :294 — the module this action runs against",
+			306: "memory64: an i64 index type at :301 — the module this action runs against",
+			313: "memory64: an i64 index type at :308 — the module this action runs against",
+			320: "memory64: (memory i64 1) at :315 — an i64 index type",
+			327: "memory64: an i64 index type at :322 — the module this action runs against",
+			334: "memory64: (memory i64 1) at :329 — an i64 index type",
+			341: "memory64: (memory i64 1) at :336 — an i64 index type",
+			348: "memory64: an i64 index type at :343 — the module this action runs against",
+			872: "memory64: an i64 index type at :854 — the module this action runs against",
+			875: "memory64: (memory i64 1 1) at :854 — an i64 index type",
+			895: "memory64: an i64 index type at :877 — the module this action runs against",
+			898: "memory64: (memory i64 1 1) at :877 — an i64 index type",
+			918: "memory64: an i64 index type at :900 — the module this action runs against",
+			921: "memory64: (memory i64 1 1) at :900 — an i64 index type",
+			941: "memory64: an i64 index type at :923 — the module this action runs against",
+			944: "memory64: (memory i64 1 1) at :923 — an i64 index type",
+			964: "memory64: an i64 index type at :946 — the module this action runs against",
+			967: "memory64: (memory i64 1) at :946 — an i64 index type",
+			987: "memory64: an i64 index type at :969 — the module this action runs against",
+			990: "memory64: (memory i64 1) at :969 — an i64 index type",
 		},
 		"memory_redundancy64.wast": {
 			59: "memory64: (memory i64 1 1) at :5 — an i64 index type",
@@ -3239,6 +3378,156 @@ func TestGatedVectors(t *testing.T) {
 			56: "function-references: call_ref / return_call_ref at :1 — the module this action runs against",
 			58: "function-references: call_ref / return_call_ref at :1 — the module this action runs against",
 		},
+		// # The bulk-segment batch's 244, every one of which was a *fail* an hour ago
+		//
+		// `table.init` and `memory.init` landed on both sides at once — the encoder learned the
+		// two-index pair and the interpreter grew the four arms plus segment instances (#8, #7)
+		// — so 1458 vectors that used to stop at `cannot yet encode` reached a verdict and 244
+		// of them reached a gate instead. The columns close, which is the check rather than the
+		// claim: fail 3401 → 1699 is −1702, pass 31898 → 33356 is +1458, gated 2264 → 2508 is
+		// +244, and 1458 + 244 = 1702.
+		//
+		// **Their prior verdict was measured, not assumed.** Each of the 244 was scored at the
+		// parent revision and every one was a `fail` quoting one of exactly two strings:
+		// `cannot yet encode memory.init (#8)` for 151 and `cannot yet encode table.init (#8)`
+		// for 93. So this is the same movement the memarg, data-section, block-family and
+		// element-section batches above record — the emitter is right and the decoder is
+		// configured not to read what it correctly wrote — and none of the 244 is a pass that
+		// went quiet.
+		//
+		// **The feature strings are probed, and the field attribution is the part that needed
+		// it.** Every reason here is derived from the decline the harness actually reported at
+		// the module command each line runs against, so the two features are the engine's own
+		// words rather than a guess from the filename: `memory64: feature gate disabled` for
+		// 232 and `memarg flags bit 6, an explicit memory index — decodeMemop` for 12. The
+		// second is the one a filename would have got wrong. `memory_init0.wast` is named for
+		// `memory.init`, whose immediates are *not* a memarg — it is gated because the module
+		// declares **four** memories, so the `i32.load8_u $mem2` in its read-back function
+		// carries flags bit 6. The feature is multi-memory and the instruction that trips it is
+		// a load, neither of which the file's name or the vector's shape says.
+		//
+		// **The declaring field is chosen by which one carries `i64`, not by document order.**
+		// `table_init64.wast:385` declares `(table $t0 30 30 funcref)` first and the i64-indexed
+		// `(table $t2 i64 30 30 funcref)` third, so a first-match extraction would have named a
+		// table that is not why the module is declined — the same shape as the extended-const
+		// attribution above, where the file is `elem.wast` and the feature is the offset's.
+		//
+		// Two of the four files are new here and two merge into existing blocks (`bulk64.wast`,
+		// `memory_init64.wast`) — one file, one map, or the reverse check reads a subset it
+		// cannot name.
+		//
+		// All 244 answer on the merits in the all-gates-on lane, which is what keeps the parked
+		// verdict earned rather than deferred: TestAllGatesOnLeavesNothingGated is the control,
+		// and its floor moves in this PR for exactly these vectors.
+		"memory_init0.wast": {
+			19: "multi-memory: 4 memories at :2, so a memarg carries flags bit 6",
+			20: "multi-memory: 4 memories at :2, so a memarg carries flags bit 6",
+			21: "multi-memory: 4 memories at :2, so a memarg carries flags bit 6",
+			22: "multi-memory: 4 memories at :2, so a memarg carries flags bit 6",
+			25: "multi-memory: 4 memories at :2, so a memarg carries flags bit 6",
+			28: "multi-memory: a memarg carrying flags bit 6 at :2 — the module this action runs against",
+			30: "multi-memory: 4 memories at :2, so a memarg carries flags bit 6",
+			31: "multi-memory: 4 memories at :2, so a memarg carries flags bit 6",
+			34: "multi-memory: 4 memories at :2, so a memarg carries flags bit 6",
+			35: "multi-memory: 4 memories at :2, so a memarg carries flags bit 6",
+			38: "multi-memory: a memarg carrying flags bit 6 at :2 — the module this action runs against",
+			40: "multi-memory: a memarg carrying flags bit 6 at :2 — the module this action runs against",
+		},
+		"table_init64.wast": {
+			412: "memory64: (table $t2 i64 30 30 funcref) at :385 — an i64 index type",
+			413: "memory64: an i64 index type at :385 — the module this action runs against",
+			414: "memory64: an i64 index type at :385 — the module this action runs against",
+			415: "memory64: (table $t2 i64 30 30 funcref) at :385 — an i64 index type",
+			416: "memory64: (table $t2 i64 30 30 funcref) at :385 — an i64 index type",
+			417: "memory64: (table $t2 i64 30 30 funcref) at :385 — an i64 index type",
+			418: "memory64: (table $t2 i64 30 30 funcref) at :385 — an i64 index type",
+			419: "memory64: an i64 index type at :385 — the module this action runs against",
+			420: "memory64: (table $t2 i64 30 30 funcref) at :385 — an i64 index type",
+			421: "memory64: (table $t2 i64 30 30 funcref) at :385 — an i64 index type",
+			422: "memory64: (table $t2 i64 30 30 funcref) at :385 — an i64 index type",
+			423: "memory64: (table $t2 i64 30 30 funcref) at :385 — an i64 index type",
+			424: "memory64: an i64 index type at :385 — the module this action runs against",
+			425: "memory64: (table $t2 i64 30 30 funcref) at :385 — an i64 index type",
+			426: "memory64: (table $t2 i64 30 30 funcref) at :385 — an i64 index type",
+			427: "memory64: (table $t2 i64 30 30 funcref) at :385 — an i64 index type",
+			428: "memory64: (table $t2 i64 30 30 funcref) at :385 — an i64 index type",
+			429: "memory64: (table $t2 i64 30 30 funcref) at :385 — an i64 index type",
+			430: "memory64: an i64 index type at :385 — the module this action runs against",
+			431: "memory64: an i64 index type at :385 — the module this action runs against",
+			432: "memory64: an i64 index type at :385 — the module this action runs against",
+			433: "memory64: an i64 index type at :385 — the module this action runs against",
+			434: "memory64: an i64 index type at :385 — the module this action runs against",
+			435: "memory64: an i64 index type at :385 — the module this action runs against",
+			436: "memory64: an i64 index type at :385 — the module this action runs against",
+			437: "memory64: an i64 index type at :385 — the module this action runs against",
+			438: "memory64: an i64 index type at :385 — the module this action runs against",
+			439: "memory64: an i64 index type at :385 — the module this action runs against",
+			440: "memory64: an i64 index type at :385 — the module this action runs against",
+			441: "memory64: an i64 index type at :385 — the module this action runs against",
+			442: "memory64: an i64 index type at :385 — the module this action runs against",
+			471: "memory64: (table $t2 i64 30 30 funcref) at :444 — an i64 index type",
+			472: "memory64: an i64 index type at :444 — the module this action runs against",
+			473: "memory64: an i64 index type at :444 — the module this action runs against",
+			474: "memory64: (table $t2 i64 30 30 funcref) at :444 — an i64 index type",
+			475: "memory64: (table $t2 i64 30 30 funcref) at :444 — an i64 index type",
+			476: "memory64: (table $t2 i64 30 30 funcref) at :444 — an i64 index type",
+			477: "memory64: (table $t2 i64 30 30 funcref) at :444 — an i64 index type",
+			478: "memory64: an i64 index type at :444 — the module this action runs against",
+			479: "memory64: an i64 index type at :444 — the module this action runs against",
+			480: "memory64: an i64 index type at :444 — the module this action runs against",
+			481: "memory64: an i64 index type at :444 — the module this action runs against",
+			482: "memory64: an i64 index type at :444 — the module this action runs against",
+			483: "memory64: an i64 index type at :444 — the module this action runs against",
+			484: "memory64: (table $t2 i64 30 30 funcref) at :444 — an i64 index type",
+			485: "memory64: (table $t2 i64 30 30 funcref) at :444 — an i64 index type",
+			486: "memory64: (table $t2 i64 30 30 funcref) at :444 — an i64 index type",
+			487: "memory64: (table $t2 i64 30 30 funcref) at :444 — an i64 index type",
+			488: "memory64: (table $t2 i64 30 30 funcref) at :444 — an i64 index type",
+			489: "memory64: (table $t2 i64 30 30 funcref) at :444 — an i64 index type",
+			490: "memory64: an i64 index type at :444 — the module this action runs against",
+			491: "memory64: an i64 index type at :444 — the module this action runs against",
+			492: "memory64: an i64 index type at :444 — the module this action runs against",
+			493: "memory64: an i64 index type at :444 — the module this action runs against",
+			494: "memory64: an i64 index type at :444 — the module this action runs against",
+			495: "memory64: an i64 index type at :444 — the module this action runs against",
+			496: "memory64: an i64 index type at :444 — the module this action runs against",
+			497: "memory64: an i64 index type at :444 — the module this action runs against",
+			498: "memory64: an i64 index type at :444 — the module this action runs against",
+			499: "memory64: an i64 index type at :444 — the module this action runs against",
+			500: "memory64: an i64 index type at :444 — the module this action runs against",
+			501: "memory64: an i64 index type at :444 — the module this action runs against",
+			538: "memory64: (table $t2 i64 30 30 funcref) at :503 — an i64 index type",
+			539: "memory64: an i64 index type at :503 — the module this action runs against",
+			540: "memory64: an i64 index type at :503 — the module this action runs against",
+			541: "memory64: (table $t2 i64 30 30 funcref) at :503 — an i64 index type",
+			542: "memory64: (table $t2 i64 30 30 funcref) at :503 — an i64 index type",
+			543: "memory64: (table $t2 i64 30 30 funcref) at :503 — an i64 index type",
+			544: "memory64: (table $t2 i64 30 30 funcref) at :503 — an i64 index type",
+			545: "memory64: an i64 index type at :503 — the module this action runs against",
+			546: "memory64: (table $t2 i64 30 30 funcref) at :503 — an i64 index type",
+			547: "memory64: (table $t2 i64 30 30 funcref) at :503 — an i64 index type",
+			548: "memory64: (table $t2 i64 30 30 funcref) at :503 — an i64 index type",
+			549: "memory64: (table $t2 i64 30 30 funcref) at :503 — an i64 index type",
+			550: "memory64: an i64 index type at :503 — the module this action runs against",
+			551: "memory64: (table $t2 i64 30 30 funcref) at :503 — an i64 index type",
+			552: "memory64: an i64 index type at :503 — the module this action runs against",
+			553: "memory64: (table $t2 i64 30 30 funcref) at :503 — an i64 index type",
+			554: "memory64: (table $t2 i64 30 30 funcref) at :503 — an i64 index type",
+			555: "memory64: (table $t2 i64 30 30 funcref) at :503 — an i64 index type",
+			556: "memory64: (table $t2 i64 30 30 funcref) at :503 — an i64 index type",
+			557: "memory64: an i64 index type at :503 — the module this action runs against",
+			558: "memory64: (table $t2 i64 30 30 funcref) at :503 — an i64 index type",
+			559: "memory64: an i64 index type at :503 — the module this action runs against",
+			560: "memory64: (table $t2 i64 30 30 funcref) at :503 — an i64 index type",
+			561: "memory64: an i64 index type at :503 — the module this action runs against",
+			562: "memory64: (table $t2 i64 30 30 funcref) at :503 — an i64 index type",
+			563: "memory64: (table $t2 i64 30 30 funcref) at :503 — an i64 index type",
+			564: "memory64: an i64 index type at :503 — the module this action runs against",
+			565: "memory64: an i64 index type at :503 — the module this action runs against",
+			566: "memory64: an i64 index type at :503 — the module this action runs against",
+			567: "memory64: an i64 index type at :503 — the module this action runs against",
+			568: "memory64: an i64 index type at :503 — the module this action runs against",
+		},
 	}
 
 	files := boardFiles(t)
@@ -3734,7 +4023,40 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	// decision 0010 intends: a vector parked in `gated` on the default board is simultaneously
 	// being scored here, so the 543 allowlist entries added in TestGatedVectors cannot become a
 	// disappearance. This lane's fail is 3712.
-	const allOnPassFloor = 33851
+	//
+	// **The bulk-segment batch (#8, #7): 33851 → 35533, +1682 against the default lane's +1458,
+	// and the divergence goes *both* ways for once.** Fail 3712 → 2030 is −1682, so this lane's
+	// columns close with no arrivals and no gated (which must be 0 here by construction). The
+	// two lanes' pass deltas differ by 224, and it is not one population:
+	//
+	//	+244  vectors the default lane declines at a gate and this lane answers on the merits —
+	//	      the 244 registered in TestGatedVectors' allowlist in this PR. Measured as the
+	//	      *same* set rather than as an equal count: all 244 were fails in this lane too, and
+	//	      223 of them are passes here now.
+	//	 −21  `table_init64.wast` vectors that depart the default lane's fail column and stay in
+	//	      this one, because with memory64 on the module instantiates far enough to hit the
+	//	      **table-slot linking frontier** (`table slot N names function M, which is an
+	//	      import`, contract §3) — a later refusal, not a pass. Set-differenced, and they are
+	//	      exactly the 21 of the 244 that still fail here.
+	//	  +1  `memory_init64.wast:209`, which this lane already had past the encoder before this
+	//	      PR (its module is memory64) and which was failing at `no arm for opcode fc 09`. The
+	//	      default lane never saw it, so it cannot appear in that lane's delta — the one term
+	//	      here that *adds* to this lane rather than subtracting from it.
+	//
+	// 244 − 21 + 1 = 224, and 1682 − 1458 = 224. It closes, and the sign on that last term is
+	// where a first draft got it wrong: written as `−1` the itemization came to 222, and the
+	// two-vector gap was then explained away as a bucket-key collision in `global.wast` — a
+	// cause invented to absorb a residue, which measurement falsified immediately. Every lane's
+	// dump has **zero** duplicate `(file, line)` rows and **zero** arrivals, so the fail-column
+	// departures are 1702 and 1682 and differ by 20 = 21 − 1. An itemization that reaches the
+	// total by having the right number of terms is what the memarg batch above was corrected
+	// for; this one reached the wrong total, and the invented cause was the tell.
+	//
+	// **223 of the 244 pass here and 21 fail here, and the 21 are the honest kind.** A gated
+	// verdict on the default board is licensed by this lane answering on the merits — it does,
+	// and for 21 of them the merits are a *different* unbuilt feature. That is a decline that
+	// cannot become a disappearance: they are red in this lane until §3 linking exists.
+	const allOnPassFloor = 35533
 	boardBound(t, "allOnPassFloor", totalPass, allOnPassFloor, boardBoundSlack, floorBound,
 		"a gated feature regressed, which the Gated==0 assertion above cannot see: with every "+
 			"gate on, a broken feature turns a pass into a fail and leaves Gated at zero")
@@ -4558,7 +4880,29 @@ func TestPhase1Files(t *testing.T) {
 	// at once; the Kind split above is the one that answers the question this bound was for, and
 	// it is written here as the check to run the next time this rises rather than as a fact about
 	// this rise. Same shape as the exec ceiling's own note that it would rise as #8 landed.
-	const encodeFailCeiling = 4909
+	//
+	// # 4909 → 994, and this is the fall the slack-0 direction exists to accept
+	//
+	// The bulk-segment pair (#8) is the largest single drain this column has taken: **1781
+	// departures, 0 arrivals**, set-differenced on `(file, line)`, against the intermediate
+	// revision this PR is measured from (2775). Every departing vector quoted one of exactly two
+	// refusals — `cannot yet encode memory.init (#8)` and `cannot yet encode table.init (#8)` —
+	// and the retirement of those two strings is the whole of the movement. The Kind partition
+	// the note above asks for is not needed here because the direction is down and the population
+	// did not grow; what replaces it is the departure/arrival split, which is the same question
+	// (did anything come *in*) asked of a falling column.
+	//
+	// Where the 1781 went is the cross-check the exec ceiling holds the other end of, and it is
+	// written in *flows* rather than in column deltas because those are different numbers here:
+	// **1453 became passes, 244 became `gated`** (TestGatedVectors' new allowlist entries, all 244
+	// of them encode-column fails at the parent), **and 84 moved to the exec column** — 1453 + 244
+	// + 84 = 1781, nothing lost. The exec column's *net* is +79 rather than +84 because five of its
+	// own members left in the same motion (the two drop arms), and those five are why the pass
+	// column reads +1458 against this bucket's 1453. A drain quoted against net column movement
+	// would have been off by exactly that five and looked like it closed anyway, since 1458 + 244 +
+	// 79 also sums to 1781. That coincidence is the reason the flows are written out: two wrong
+	// terms summing correctly is not a check.
+	const encodeFailCeiling = 994
 	boardBound(t, "encodeFailCeiling", encodeFail, encodeFailCeiling, 0, ceilingBound,
 		"the wat encoder lost ground: either it stopped emitting an instruction it used to "+
 			"emit, or the corpus moved. This ceiling is deliberately not shared with the text "+
@@ -4892,7 +5236,30 @@ func TestPhase1Files(t *testing.T) {
 	// linking — 6 `table 0 is imported`, 3 `memory 0 is imported`, all in `imports.wast` and
 	// `imports2.wast`. So two thirds of this rise is queued behind work the project has already
 	// declined for this phase (linking) or has a bucket for (the fc/25 arms).
-	const execFailCeiling = 626
+	//
+	// # 626 → 705, +79, and this is the reclassification the ceiling's own message anticipates
+	//
+	// `table.init`/`memory.init` on both sides (#8, #7) drained 1781 vectors out of the encode
+	// column, and vectors that used to die *before* reaching an instance now reach the
+	// interpreter — so a stratum whose members are "vectors that got as far as exec" grows by
+	// construction when the encoder stops refusing. The ceiling's message licenses exactly this
+	// and asks for the instruction named; the accounting is the instruction plus a set difference,
+	// because a rise is where a regression would hide most comfortably:
+	//
+	//	+84  arrivals, **all one reason**: `table slot N names function M, which is an import,
+	//	     and linking is not implemented (contract §3)`, 42 in `table_init.wast` and 42 in
+	//	     `table_init64.wast`. These modules import functions and put them in a table's
+	//	     element segments, so instantiation now gets far enough to meet §3 — the frontier the
+	//	     project has already declined for v0 (no host-linking at v0), not a defect.
+	//	 −5  departures, and they are precisely the two drop arms this PR adds: `fc 09`
+	//	     (`memory_init.wast:209`) and `fc 0d` (`table_init.wast:435`, `:507`,
+	//	     `table_init64.wast:620`, `:692`), all quoting `no arm for opcode`.
+	//
+	// 84 − 5 = 79, and **0 same-key-new-reason**: no vector already in this column changed why it
+	// is red, so nothing regressed under cover of the rise. The column's largest reason is now
+	// the §3 table-slot frontier at 540 of 705 — which is the next bucket this stratum offers and
+	// is not takeable at v0.
+	const execFailCeiling = 705
 	boardBound(t, "execFailCeiling", execFail, execFailCeiling, 0, ceilingBound,
 		"the interpreter answered fewer vectors than it did: either an opcode arm regressed or "+
 			"a value comparison started disagreeing. A *rise* caused by #8 unblocking more "+
@@ -5234,7 +5601,32 @@ func TestPhase1Files(t *testing.T) {
 	// cannot falsify — so the run loop asks `Engine.IsTrap` *before* the substring match. The
 	// recon measured the coincidence count at zero against this engine; injecting the predicate is
 	// what makes it zero against every future one.
-	const passFloor = 31898
+	//
+	// **The bulk-segment pair, `table.init`/`memory.init` end to end (#8, #7): 31898 → 33356,
+	// +1458.** Encoder emission for both instructions plus their `elem.drop`/`data.drop` arms, so
+	// the columns move in the encode-drain shape rather than the arm shape: **fail 3401 → 1699
+	// (−1702)** against **pass +1458 and gated +244**, and 1458 + 244 = 1702 exactly.
+	//
+	// The +244 gated is the largest single batch this board has admitted, and it is not the pass
+	// column's leftovers: every one of the 244 was a *fail* at the parent — 151 quoting `cannot yet
+	// encode memory.init (#8)` and 93 `cannot yet encode table.init (#8)` — so these are modules
+	// the encoder can now build well enough for a declined feature to be reached and reported.
+	// Probed rather than inferred from filenames: 232 are memory64, 12 multi-memory. See
+	// TestGatedVectors for the per-file account and for why `memory_init0.wast` is a multi-memory
+	// file despite its name.
+	//
+	// The 1458 splits 1453 out of the encode column and 5 out of exec, which is the whole of the
+	// drop arms' contribution — see encodeFailCeiling for why that five is written separately
+	// rather than netted, and execFailCeiling for the 84 arrivals it is entangled with.
+	//
+	// **`unsupportedCeiling` is unmoved at 27501**, in that word, and the reason is structural
+	// rather than a shortfall: every vector this PR touched was already being *asked* and already
+	// answering `fail`. An encoder frontier is a fail, not an unsupported — the classifier declined
+	// nothing new and admitted nothing new — so a PR that drains 1702 fails can leave the
+	// unsupported column exactly where it was. This is product work by the phase rule (an
+	// interpreter arm and its encoder), so the column being flat is a fact about *which* column
+	// measures this kind of progress, not a confession of overhead.
+	const passFloor = 33356
 	boardBound(t, "passFloor", totalPass, passFloor, boardBoundSlack, floorBound,
 		"a regression in a grammar that used to answer, or the corpus moved")
 }

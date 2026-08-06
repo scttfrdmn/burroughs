@@ -21,6 +21,97 @@ weakly-ordered platform.
 
 ### Added
 
+- **The text encoder emits `table.init` and `memory.init`, and the interpreter executes them with
+  `elem.drop` and `data.drop` — `fc 0c`, `fc 08`, `fc 0d`, `fc 09`**
+  ([#8](https://github.com/scttfrdmn/burroughs/issues/8),
+  [#7](https://github.com/scttfrdmn/burroughs/issues/7)). Both halves in one PR because they are
+  not separable: an arm without drop state is a *different instruction*, since `run_elem`
+  (`eval.ml:1264-1276`) emits `TableInit` followed by **`ElemDrop`** for every active segment, so a
+  module's own segments are already empty before any exported function can reach them.
+  `bulk.wast:250-270` asserts exactly that — `init_active` with length 0 succeeds, length 1 traps —
+  and an engine that skipped the drop would answer by copying a reference the reference cannot see.
+  The segment instances (`elemInstance`, `dataInstance`) are the reference's `Value.ref_ list ref`
+  and `string ref`: one mutable cell each, `drop seg = seg := []`.
+
+  **The two immediates are encoded in the reverse of the written order, and only for these two of
+  the four mnemonics that share the code path.** `encode.ml:294` and `:411` write `idx y; idx x`
+  where `TableCopy` (`:293`) and `MemoryCopy` (`:410`) write them in order, and `decode.ml:674`
+  reads them back the same way — so the *segment* index is written second and emitted first. The
+  sugar arm reverses again and the two cancel: `TABLE_INIT idx` is
+  `table_init (0l @@ …) ($2 c elem)` (`parser.mly:589`), so its one written index is the element
+  segment and it lands *first* on the wire with the defaulted table index 0 behind it. Getting
+  either backwards emits a well-formed image denoting a different instruction — contract §9 G-3,
+  invisible to the suite — which is why `TestInitReversedKindsMatchTheReference` reads all fourteen
+  of `encode.ml`'s index-pair arms and requires the reversing set to be exactly the four the
+  reference reverses, crediting `call_indirect`'s two to `callIndirectImm` by name rather than
+  scoping the control to the two this path encodes.
+
+  **`table.init`'s length is i32 whatever the table's address type is, and `table.copy`'s is not.**
+  `valid.ml:641` types the arm `[numtype_of_addrtype at; I32T; I32T]` — only the destination takes
+  the table's width — against `:632`, where the copy's length is a real address type. A segment is
+  *indexed* rather than addressed, so its bound has no width. The first draft ran the length
+  through `tableAddr` on the symmetry argument and the validator was read second;
+  `table_init64.wast` is 774 vectors, so the file that would have exposed it is the one the arm
+  exists for.
+
+  Two accept-direction controls the suite cannot supply landed with it, both derived from
+  `parser.mly` and both scoped to the whole production rather than to this tier:
+  `TestIdxPairLookupKindsMatchTheReference` (every arm passing two lookup categories, in written
+  order — a wrong *second* category resolves `table.init $t $e`'s element index in the table space)
+  and `TestFieldOfTypeIsNeverAFirstCategory`, whose name `instr.go` had been citing before it
+  existed ([#116](https://github.com/scttfrdmn/burroughs/issues/116)'s class).
+
+  **A vacuity floor that could not tell its own instrument from the weaker one.** The pair
+  extractor exists because the single-index control's reader — a ten-way alternation of space names
+  — cannot see `struct.get`'s `$3 c (field x.it)`, so it finds 8 two-lookup arms where the
+  positional reader finds 10. The floor was set at 8, which is **exactly** what the degraded reader
+  yields: stubbing the regexp to the alternation pattern passed the floor and then reported drift in
+  the table under test, a control's blind spot presented as the subject's defect. The floor now sits
+  beside an exact check — the field expression must actually appear among the lookups — which is
+  *floors bound the catastrophic case; only an exact instrument sees a small silent loss*
+  ([#108](https://github.com/scttfrdmn/burroughs/issues/108)) found by the falsification exercise
+  rather than by review. The prose in `idxPairLookupKinds` had said 9, a figure typed before the
+  instrument that measures it.
+
+  **Ten mutations, and two of the findings are about the mutations rather than the controls.** The
+  `TABLE_INIT` deletion **passed** on its first attempt and the control was right to pass: the
+  script's pattern matched `initSugarKinds`, which holds a byte-identical `"TABLE_INIT":  true,`
+  line, so a row in a different map was deleted and the subject was untouched — field attribution is
+  not first-match, pointed at a mutation instead of at a generator. And the field-position
+  mutation's expected count was written as 49 and measured at **15**, 49 being the number of
+  lookup-passing arms while only the fifteen `catType` ones pass `type_`. Both are recorded at their
+  sites: a falsification that passes is either a stillborn control or a mutation that did not apply,
+  and the two are indistinguishable without printing the diff.
+
+  A `load` method on `elemInstance` was deleted as a `deadcode` classification: `eval.ml:427`
+  bounds-checks the whole extent before reading, so `execTableInit` does the copy in one slice
+  expression and there is no per-element read. The tell was the asymmetry rather than the finding —
+  `dataInstance` has no twin and never needed one — which makes it a method written from the
+  reference's shape rather than from a consumer's requirement (0006).
+
+  Board: pass **31898 → 33356** (+1458), fail **3401 → 1699** (−1702), gated **2264 → 2508** (+244),
+  and 1458 + 244 = 1702 exactly. `unsupported` **unmoved at 27501**, and structurally so: every
+  vector touched was already being asked and already answering `fail`, an encoder frontier being a
+  fail rather than an unsupported. Stratum: encode **2775 → 994**, exec **626 → 705**.
+  Set-differenced on `(file, line)` keys, the encode drain is **1781 departures, 0 arrivals** — the
+  largest this column has taken — flowing 1453 to pass, 244 to gated, 84 to exec.
+
+  **The +244 gated is the largest batch this board has admitted and every one of them was a
+  *fail*.** 151 quoted `cannot yet encode memory.init (#8)` and 93 `cannot yet encode
+  table.init (#8)`: modules the encoder can now build well enough for a declined feature to be
+  *reached*. Probed rather than read off filenames — 232 memory64, 12 multi-memory — because
+  `memory_init0.wast` is a multi-memory file despite its name, gated by its `(i32.load8_u $mem2 …)`
+  read-back carrying memarg flags bit 6 against four declared memories, not by the instruction it is
+  named for. All 244 are honestly **red** in the all-on lane where they are not gated, which is the
+  structural bound that keeps a deferral from becoming a disappearance: 223 pass there and 21 stay
+  failed at contract §3's table-slot linking frontier.
+
+  Exec **rose** by 79, which is reclassification and not a regression: **84 arrivals, all one
+  reason** — `table slot N names function M, which is an import, and linking is not implemented
+  (contract §3)`, 42 in `table_init.wast` and 42 in `table_init64.wast` — against **5 departures**
+  that are exactly this PR's drop arms, and **0 same-key-new-reason**. All-on lane **33851 → 35533**
+  (+1682).
+
 - **The harness asks `(assert_trap (invoke "f" arg*) "text")` — a trapping call is now a
   scorable command** ([#157](https://github.com/scttfrdmn/burroughs/issues/157)). The classifier
   had a Kind for `assert_trap` wrapping a *module* (instantiation trapping, 0015) and none for the

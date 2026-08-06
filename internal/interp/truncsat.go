@@ -6,8 +6,8 @@ import (
 	"github.com/scttfrdmn/burroughs/internal/binary"
 )
 
-// execFC dispatches the 0xfc region: the eight saturating truncations, plus the three bulk
-// operations whose arms live in `bulk.go`.
+// execFC dispatches the 0xfc region: the eight saturating truncations, plus the seven bulk and
+// segment operations whose arms live in `bulk.go`.
 //
 // **A separate switch rather than arms in the main one, because `Op` is the sub-opcode.**
 // `fc 00` and `unreachable` are both `Op == 0x00`, so a single switch would need every arm to
@@ -16,8 +16,11 @@ import (
 // condition on each arm.
 //
 // Unhandled sub-opcodes fall through to `unsupported`, which renders them as `fc NN` — the
-// board's existing bucket keys, unchanged, so the ten arms this function does not yet have stay
-// visible as the work list they are.
+// board's existing bucket keys, unchanged, so the arms this function does not yet have stay
+// visible as the work list they are. Counted rather than described: `opTableFC` has 18 entries,
+// this switch answers 15, and the three left are `0x0f` table.grow, `0x10` table.size, `0x11`
+// table.fill. (The count in an earlier draft of this paragraph said "ten" and was never derived
+// from the table — a number nobody ran, which is the class this project keeps finding.)
 func (in *Instance) execFC(ins binary.Instr, st *stack) error {
 	switch ins.Op {
 	case 0x00, 0x01, 0x02, 0x03: // i32.trunc_sat_f{32,64}_{s,u}
@@ -32,11 +35,25 @@ func (in *Instance) execFC(ins binary.Instr, st *stack) error {
 		}
 		st.pushI64(truncSatToI64(ins.Op, st))
 
+	case 0x08: // memory.init
+		return in.execMemoryInit(ins, st)
+
+	case 0x09: // data.drop
+		// No `st`: the drops pop nothing, and a stack parameter they ignore would be a
+		// signature claiming an operand the instruction does not have.
+		return in.execDataDrop(ins)
+
 	case 0x0a: // memory.copy
 		return in.execMemoryCopy(ins, st)
 
 	case 0x0b: // memory.fill
 		return in.execMemoryFill(ins, st)
+
+	case 0x0c: // table.init
+		return in.execTableInit(ins, st)
+
+	case 0x0d: // elem.drop
+		return in.execElemDrop(ins)
 
 	case 0x0e: // table.copy
 		return in.execTableCopy(ins, st)
