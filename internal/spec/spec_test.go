@@ -655,15 +655,16 @@ func TestGatedVectors(t *testing.T) {
 		// there rather than deferred everywhere: a decline that cannot become a
 		// disappearance.
 		"elem.wast": {
-			// The four extended-const offsets — see the section 9 / call_indirect batch below
-			// for why the feature is the *offset expression's* and not the segment's.
-			453:  "gc/function-references: the 0x40 table form with an initializer",
-			470:  "gc/function-references: the 0x40 table form with an initializer",
-			487:  "gc/function-references: the 0x40 table form with an initializer",
-			504:  "gc/function-references: the 0x40 table form with an initializer",
-			544:  "gc/function-references: the 0x40 table form with an initializer",
-			561:  "gc/function-references: the 0x40 table form with an initializer",
-			578:  "gc/function-references: the 0x40 table form with an initializer",
+			453: "gc/function-references: the 0x40 table form with an initializer",
+			470: "gc/function-references: the 0x40 table form with an initializer",
+			487: "gc/function-references: the 0x40 table form with an initializer",
+			504: "gc/function-references: the 0x40 table form with an initializer",
+			544: "gc/function-references: the 0x40 table form with an initializer",
+			561: "gc/function-references: the 0x40 table form with an initializer",
+			578: "gc/function-references: the 0x40 table form with an initializer",
+			// The four extended-const offsets, each now followed by the `assert_trap (invoke …)`
+			// that runs against its module (#157) — see the section 9 / call_indirect batch
+			// below for why the feature is the *offset expression's* and not the segment's.
 			1065: "extended-const: (offset (i32.add …)) in an element segment at :1057",
 			1066: "extended-const: an arithmetic constant expression at :1057 — the module this action runs against",
 			1076: "extended-const: (offset (i32.add …)) in an element segment at :1068",
