@@ -2,6 +2,7 @@ package interp
 
 import (
 	"fmt"
+	"strconv"
 
 	"github.com/scttfrdmn/burroughs/internal/binary"
 )
@@ -238,6 +239,16 @@ func (in *Instance) link(imp Imports) error {
 			return fmt.Errorf("%w: incompatible import type: %q %q is a %s but the supplier offers a %s",
 				ErrLinkFailed, im.Module, im.Name, im.Kind, ext.Kind)
 		}
+		if detail := in.importTypeMismatch(im, ext); detail != "" {
+			// `incompatible import type` again, for a name that resolves to the *right kind*
+			// with the wrong signature, limits or mutability — `match_externtype`'s other
+			// failure mode (match.ml), and the one #164 exists for: a matching kind was
+			// already enough to pass every vector above, so 124 modules the spec refuses
+			// were being accepted (§9 G-3's accept-direction blind spot, closed rather than
+			// left for the corpus to never ask about).
+			return fmt.Errorf("%w: incompatible import type: %q %q %s",
+				ErrLinkFailed, im.Module, im.Name, detail)
+		}
 		switch im.Kind {
 		case binary.ExternMemory:
 			in.mems[slot] = ext.mem
@@ -257,6 +268,102 @@ func (in *Instance) link(imp Imports) error {
 		}
 	}
 	return nil
+}
+
+// importTypeMismatch reports why im and ext disagree on their *type*, once they already agree on
+// kind — `match_externtype`'s four kind-specific rules (match.ml), MVP-reduced the way
+// sameFuncType reduces match_deftype: byte equality on ValType rather than reftype subtyping,
+// which is right for the twelve ungated forms this decoder ever admits and a declared gap under
+// GC (sameFuncType's own comment states the identical reduction).
+//
+// Returns "" when the types match, and otherwise the spec's phrasing —
+// "expected ..., got ..." — the wording eval.ml's Link.error uses, so the caller's sentinel plus
+// this detail reproduces the reference's message rather than inventing a shape of its own.
+func (in *Instance) importTypeMismatch(im *binary.Import, ext Extern) string {
+	switch im.Kind {
+	case binary.ExternFunc:
+		want, err := in.declaredFuncType(uint64(im.Index))
+		if err != nil {
+			// #9's layering debt, not a link fact — an import naming a type the decoder
+			// accepted but the validator would not have. Reported as a mismatch anyway: an
+			// import this engine cannot even state a type for cannot be said to match.
+			return "an unresolvable declared type: " + err.Error()
+		}
+		fn, ok := ext.fnInst.mod.DefinedFunc(ext.fnIdx)
+		if !ok {
+			// Unreachable while Export resolves re-exported imports through to their
+			// definer (call.go's identical check on the call_indirect path states the
+			// invariant at length). Stated as a reachable check rather than a panic, per
+			// grave 0003.
+			return "a supplier that does not define its own export"
+		}
+		got, err := ext.fnInst.funcType(fn)
+		if err != nil {
+			return "an unresolvable supplied type: " + err.Error()
+		}
+		if sameFuncType(want, got) {
+			return ""
+		}
+		return fmt.Sprintf("expected %s, got %s", funcTypeString(want), funcTypeString(got))
+	case binary.ExternMemory:
+		if matchLimits(im.Memory.Limits, ext.mem.limits) {
+			return ""
+		}
+		return fmt.Sprintf("expected memory %s, got %s",
+			limitsString(im.Memory.Limits), limitsString(ext.mem.limits))
+	case binary.ExternTable:
+		if im.Table.ElemType == ext.tab.elemType && matchLimits(im.Table.Limits, ext.tab.limits) {
+			return ""
+		}
+		return fmt.Sprintf("expected table %s %s, got table %s %s",
+			limitsString(im.Table.Limits), im.Table.ElemType,
+			limitsString(ext.tab.limits), ext.tab.elemType)
+	case binary.ExternGlobal:
+		if im.GlobalType == ext.glob.typ && im.GlobalMutable == ext.glob.mutable {
+			return ""
+		}
+		return fmt.Sprintf("expected global %s %s, got global %s %s",
+			mutString(im.GlobalMutable), im.GlobalType, mutString(ext.glob.mutable), ext.glob.typ)
+	case binary.ExternTag:
+		// A tag import has no slot and no type to compare (the field-filling switches in
+		// link and Export both say why): exception handling's gate is off, so nothing in
+		// this engine can build a tag Extern for the kind check above to even reach this
+		// far with.
+	}
+	return ""
+}
+
+// matchLimits is match.ml's match_limits: an importer's declared bound is satisfied by a
+// supplier whose actual minimum is at least as generous and whose actual maximum is at least as
+// tight — a supplier that promises *more* room than declared, never less. lim1 is the importer's
+// declaration, lim2 the supplier's actual limits, matching the reference's parameter order and
+// the direction imports.wast's accept vectors pin (a memory declared min 0 max unbounded accepts
+// a supplier of min 2 max 4; the reverse does not).
+func matchLimits(lim1, lim2 binary.Limits) bool {
+	if lim1.Min > lim2.Min {
+		return false
+	}
+	if !lim1.HasMax {
+		return true
+	}
+	return lim2.HasMax && lim2.Max <= lim1.Max
+}
+
+// limitsString and mutString spell a limits pair and a mutability flag the way the reference's
+// string_of_limits and string_of_mut do, for the same reason funcTypeString exists: the detail
+// half of a message the suite does not read past its sentinel is still ours to keep honest.
+func limitsString(lim binary.Limits) string {
+	if lim.HasMax {
+		return fmt.Sprintf("%d %d", lim.Min, lim.Max)
+	}
+	return strconv.FormatUint(lim.Min, 10)
+}
+
+func mutString(mutable bool) string {
+	if mutable {
+		return "mut"
+	}
+	return "const"
 }
 
 // ErrLinkFailed is a link failure: an import the supplier answered with the wrong kind.

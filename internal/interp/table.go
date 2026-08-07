@@ -86,6 +86,12 @@ type table struct {
 	// max and the index width to decide whether a delta is legal, and `table.grow` is the next
 	// opcode to want it.
 	limits binary.Limits
+
+	// elemType is the table's declared element type, kept so link (#164) can compare an
+	// importer's declared reftype against what the supplier actually built — a funcref table
+	// offered where an externref one was declared is `incompatible import type`, and nothing
+	// inside the slots (every one starts null) can tell the two apart.
+	elemType binary.ValType
 }
 
 // newTable allocates a table at its declared minimum, every slot null.
@@ -123,7 +129,7 @@ func newTable(t binary.Table) (*table, error) {
 	for i := range slots {
 		slots[i] = ref{Null: true}
 	}
-	return &table{slots: slots, limits: lim}, nil
+	return &table{slots: slots, limits: lim, elemType: t.ElemType}, nil
 }
 
 // refSize bounds one slot's size in bytes for the allocation check above. Named so the bound

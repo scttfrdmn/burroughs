@@ -5519,13 +5519,49 @@ func TestPhase1Files(t *testing.T) {
 	// green whenever the two instances happen to agree. Filed as **#163** with both reproducers
 	// rather than fixed here: widening `ref` is Q2's PR, and the seam is where the ADR put it.
 	//
-	// The largest remaining reason is `assert_unlinkable` at 124 of 248, whose next layer is the
-	// **decoder retaining import descriptors** (**#164**) — `sections.go` reads a non-func import's
-	// limits, table type or global type and drops them, so the linker can compare *kinds* and
-	// cannot compare types. Those 124 want `incompatible import type` for a matching kind with a
-	// mismatched signature, limit or mutability, which is a representation change rather than a
-	// harness one and therefore the next artifact this stratum names.
-	const execFailCeiling = 248
+	// **#164 landed: 248 → 211, and the 124-vector `assert_unlinkable` bucket is 86.** The decoder
+	// now retains a non-func import's table type, memory limits or global type/mutability
+	// (`binary.Import`'s Table/Memory/GlobalType/GlobalMutable fields) instead of reading and
+	// dropping them, and `Instance.link` compares them — `sameFuncType` for a func import's own
+	// signature, `matchLimits` (the reference's `match_limits`, min/max in opposite directions) for
+	// table and memory, byte equality for a global's type and mutability.
+	//
+	// **The 124 has a full account, measured by joining the pre- and post-fix bucket dumps rather
+	// than read off either board alone** (a bare diff of totals cannot distinguish a conversion
+	// from a co-incidental re-key): of the 124, **42** are this fix's target and **38 of those 42
+	// convert to pass**. The other **4** stay in the bucket — `type-subtyping.wast`'s `rec`/`sub`
+	// rows, where a func import's declared type is a *nominal subtype* rather than a plain
+	// signature, and `sameFuncType`'s structural-equality reduction cannot see that (its own doc
+	// comment already declares the gap; GC's gate gates the construct that would exercise it more
+	// than this one file does). The remaining **82** were never reachable by this fix: **35** are
+	// blocked by an EH-gated register target (`imports.wast`'s `test` module exports a `(tag …)`,
+	// so it never decodes with the gate off and every import from it reads `unknown import` rather
+	// than `incompatible import type`), **14** by a GC-gated register target (`Mref_ex`/
+	// `Mtable_ex`/`M`, same mechanism, GC's gate), **4** by a Memory64-gated register target
+	// (`test-table64-*`/`test-memory64-*`), and **29** by a GC-gated *import descriptor* — the
+	// importing module's own declared type is a reftype the encoder cannot yet emit, so these fail
+	// to encode rather than to link. **38 converted + 4 still-failing-in-scope + 35 + 14 + 4 + 29 =
+	// 124**, closed with no residual.
+	//
+	// **`table_grow.wast` moves independently of the 124, by +1 net, and it is not a regression.**
+	// Two of its rows (:124, :130) were `interp: no arm for opcode d0`/`fc 10` and re-key to two
+	// new import-type-mismatch buckets — the same underlying cause read through a sharper
+	// instrument, since `table.grow`'s absence means the table these vectors chain through never
+	// actually grows, so the *next* module's declared size genuinely mismatches the actual one. A
+	// third row (:123) is a brand-new fail one command earlier in the same chain: the `register`
+	// commands's own module fails to link for the identical reason, caught one step sooner than
+	// line 124 caught it. Verified by joining the two boards' full bucket dumps (40 departures, 3
+	// arrivals, net −37, matching the board's 1265→1228 exactly) rather than trusting either
+	// board's printed total alone.
+	//
+	// One genuine defect found in the making: `memory.grow` reallocated a memory's bytes without
+	// updating its retained `Limits.Min`, so a grown memory re-exported for another instance to
+	// import reported its stale pre-growth minimum — `imports4.wast:19-37` pins the corpus's own
+	// vector for exactly this, in its own comment ("imported memory limits should match, because
+	// external memory size is 2 now"). Fixed alongside #164 because the new type check is what
+	// made it observable; `table.grow`'s absence means the table side of the same defect cannot be
+	// measured yet.
+	const execFailCeiling = 211
 	boardBound(t, "execFailCeiling", execFail, execFailCeiling, 0, ceilingBound,
 		"the interpreter answered fewer vectors than it did: either an opcode arm regressed or "+
 			"a value comparison started disagreeing. A *rise* caused by #8 unblocking more "+

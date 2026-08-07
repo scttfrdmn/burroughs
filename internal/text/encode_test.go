@@ -382,7 +382,7 @@ var encodableModules = []struct {
 		src:  `(module (import "m" "g" (global i32)) (global i32 (global.get 0)))`,
 		want: nil,
 		wantImports: []binary.Import{
-			{Module: "m", Name: "g", Kind: binary.ExternGlobal},
+			{Module: "m", Name: "g", Kind: binary.ExternGlobal, GlobalType: binary.I32},
 		},
 		wantGlobals: []binary.Global{
 			{Type: binary.I32, Init: []binary.Instr{{Op: 0x23, Imm0: 0}, {Op: 0x0b}}},
@@ -394,7 +394,7 @@ var encodableModules = []struct {
 	{
 		src: `(module (import "m" "g" (global $i i32)) (global $g i32 (global.get $i)))`,
 		wantImports: []binary.Import{
-			{Module: "m", Name: "g", Kind: binary.ExternGlobal},
+			{Module: "m", Name: "g", Kind: binary.ExternGlobal, GlobalType: binary.I32},
 		},
 		wantGlobals: []binary.Global{
 			{Type: binary.I32, Init: []binary.Instr{{Op: 0x23, Imm0: 0}, {Op: 0x0b}}},
@@ -447,7 +447,7 @@ var encodableModules = []struct {
 	{
 		src: `(module (import "m" "g" (global (mut i32))) (global i32 (i32.const 4)))`,
 		wantImports: []binary.Import{
-			{Module: "m", Name: "g", Kind: binary.ExternGlobal},
+			{Module: "m", Name: "g", Kind: binary.ExternGlobal, GlobalType: binary.I32, GlobalMutable: true},
 		},
 		wantGlobals: []binary.Global{
 			{Type: binary.I32, Init: []binary.Instr{{Op: 0x41, Imm0: 4}, {Op: 0x0b}}},
@@ -461,7 +461,7 @@ var encodableModules = []struct {
 	{
 		src: `(module (global (import "m" "g") (mut i64)))`,
 		wantImports: []binary.Import{
-			{Module: "m", Name: "g", Kind: binary.ExternGlobal},
+			{Module: "m", Name: "g", Kind: binary.ExternGlobal, GlobalType: binary.I64, GlobalMutable: true},
 		},
 	},
 	// An inline **export** on a defined global, which is the third spelling that touches section 6 and
@@ -475,12 +475,12 @@ var encodableModules = []struct {
 
 	// # Imports (#8)
 	//
-	// **What the want column can and cannot state here is set by `binary.Import`, and the gap is
-	// where the kind-byte assertion lives.** The decoder retains `{Module, Name, Kind, Index}` and
-	// reads the non-func descriptors for well-formedness only (`decodeImport`'s closing comment), so a
-	// row cannot state an imported memory's limits — but it *can* state the `Kind`, and that is the
-	// field `externKindByte` would get wrong under a cast, since `importKind`'s order and the binary
-	// kind bytes agree on nothing. A transposed kind byte decodes clean and lands in this column.
+	// **What the want column states here is set by `binary.Import`.** The decoder retains
+	// `{Module, Name, Kind, Index}` for a func import and the full descriptor — `Table`, `Memory`,
+	// `GlobalType`/`GlobalMutable` — for the other three kinds (#164), so most rows below state the
+	// `Kind` alone only because their source text declares no limits or mutability worth pinning a
+	// second time; where a row's own point is a byte the round trip could get wrong (a transposed
+	// kind, a dropped limit, a swapped mutability bit), the full descriptor is stated.
 	//
 	// Every row is the `(import …)` field spelling; the sugar spellings are below, paired with these.
 	//
@@ -551,27 +551,29 @@ var encodableModules = []struct {
 			{Module: "m", Name: "f", Kind: binary.ExternFunc, Index: 0},
 		},
 	},
-	// The four non-func kinds, each in the `(import …)` field spelling. The `Kind` column is the
-	// assertion; the descriptors are read and dropped by the decoder.
+	// The four non-func kinds, each in the `(import …)` field spelling.
 	{
-		src:         `(module (import "m" "x" (memory 1)))`,
-		wantImports: []binary.Import{{Module: "m", Name: "x", Kind: binary.ExternMemory}},
+		src: `(module (import "m" "x" (memory 1)))`,
+		wantImports: []binary.Import{
+			{Module: "m", Name: "x", Kind: binary.ExternMemory, Memory: binary.Memory{Limits: binary.Limits{Min: 1}}},
+		},
 	},
 	{
-		src:         `(module (import "m" "x" (table 1 funcref)))`,
-		wantImports: []binary.Import{{Module: "m", Name: "x", Kind: binary.ExternTable}},
+		src: `(module (import "m" "x" (table 1 funcref)))`,
+		wantImports: []binary.Import{
+			{Module: "m", Name: "x", Kind: binary.ExternTable, Table: binary.Table{ElemType: binary.FuncRef, Limits: binary.Limits{Min: 1}}},
+		},
 	},
 	// Both mutabilities, because the byte is one bit of difference and `(global i32)` versus
-	// `(global (mut i32))` are different modules. The decoder drops the mutability, so these two rows
-	// assert only that both *decode* — the byte itself is pinned by the byte-level probe below, which
-	// is the same division of labour as the address-type flag bit.
+	// `(global (mut i32))` are different modules — the byte itself is also pinned by the byte-level
+	// probe below, which is the same division of labour as the address-type flag bit.
 	{
 		src:         `(module (import "m" "g" (global i32)))`,
-		wantImports: []binary.Import{{Module: "m", Name: "g", Kind: binary.ExternGlobal}},
+		wantImports: []binary.Import{{Module: "m", Name: "g", Kind: binary.ExternGlobal, GlobalType: binary.I32}},
 	},
 	{
 		src:         `(module (import "m" "g" (global (mut i64))))`,
-		wantImports: []binary.Import{{Module: "m", Name: "g", Kind: binary.ExternGlobal}},
+		wantImports: []binary.Import{{Module: "m", Name: "g", Kind: binary.ExternGlobal, GlobalType: binary.I64, GlobalMutable: true}},
 	},
 	// A tag import: kind 0x04, an attribute byte, and a type index. Its signature interns a type, so
 	// the type section is asserted too — and `ExceptionHandling` is on in decodeForTest for exactly
@@ -588,22 +590,26 @@ var encodableModules = []struct {
 	{
 		src: `(module (import "a" "1" (memory 1)) (import "b" "2" (table 1 funcref)))`,
 		wantImports: []binary.Import{
-			{Module: "a", Name: "1", Kind: binary.ExternMemory},
-			{Module: "b", Name: "2", Kind: binary.ExternTable},
+			{Module: "a", Name: "1", Kind: binary.ExternMemory, Memory: binary.Memory{Limits: binary.Limits{Min: 1}}},
+			{Module: "b", Name: "2", Kind: binary.ExternTable, Table: binary.Table{ElemType: binary.FuncRef, Limits: binary.Limits{Min: 1}}},
 		},
 	},
 	// Empty names, which are legal and are the suite's own shape at imports.wast:677. A `name` writer
 	// that omitted a zero-length vector's length byte would produce a shorter image that decodes as
 	// something else entirely.
 	{
-		src:         `(module (import "" "" (memory 1)))`,
-		wantImports: []binary.Import{{Module: "", Name: "", Kind: binary.ExternMemory}},
+		src: `(module (import "" "" (memory 1)))`,
+		wantImports: []binary.Import{
+			{Module: "", Name: "", Kind: binary.ExternMemory, Memory: binary.Memory{Limits: binary.Limits{Min: 1}}},
+		},
 	},
 	// An escaped name, so the *decoded* bytes reach the image rather than the source spelling — the
 	// same assertion decodedName's accept half makes at the unit level, here end to end.
 	{
-		src:         `(module (import "\41" "\42" (memory 1)))`,
-		wantImports: []binary.Import{{Module: "A", Name: "B", Kind: binary.ExternMemory}},
+		src: `(module (import "\41" "\42" (memory 1)))`,
+		wantImports: []binary.Import{
+			{Module: "A", Name: "B", Kind: binary.ExternMemory, Memory: binary.Memory{Limits: binary.Limits{Min: 1}}},
+		},
 	},
 	// A UTF-8 name past ASCII: `name` writes a byte count, not a character count, so a rune-counted
 	// length would produce a truncated vector here and decode as garbage.
@@ -612,8 +618,10 @@ var encodableModules = []struct {
 	// hexdigit` arm) — no `\x` prefix. The first draft wrote `\xa9` in C/Python spelling and the lexer
 	// rejected it with `illegal escape`, which is the lexer being right about a syntax I invented.
 	{
-		src:         `(module (import "m\c3\a9" "\e2\82\ac" (memory 1)))`,
-		wantImports: []binary.Import{{Module: "mé", Name: "€", Kind: binary.ExternMemory}},
+		src: `(module (import "m\c3\a9" "\e2\82\ac" (memory 1)))`,
+		wantImports: []binary.Import{
+			{Module: "mé", Name: "€", Kind: binary.ExternMemory, Memory: binary.Memory{Limits: binary.Limits{Min: 1}}},
+		},
 	},
 
 	// # The inline-import sugar spellings, paired with the field spellings above
@@ -651,21 +659,27 @@ var encodableModules = []struct {
 	},
 	{
 		src:         `(module (global (import "m" "g") i32))`,
-		wantImports: []binary.Import{{Module: "m", Name: "g", Kind: binary.ExternGlobal}},
+		wantImports: []binary.Import{{Module: "m", Name: "g", Kind: binary.ExternGlobal, GlobalType: binary.I32}},
 	},
 	{
-		src:         `(module (memory (import "m" "x") 1))`,
-		wantImports: []binary.Import{{Module: "m", Name: "x", Kind: binary.ExternMemory}},
+		src: `(module (memory (import "m" "x") 1))`,
+		wantImports: []binary.Import{
+			{Module: "m", Name: "x", Kind: binary.ExternMemory, Memory: binary.Memory{Limits: binary.Limits{Min: 1}}},
+		},
 	},
 	{
-		src:         `(module (table (import "m" "x") 1 funcref))`,
-		wantImports: []binary.Import{{Module: "m", Name: "x", Kind: binary.ExternTable}},
+		src: `(module (table (import "m" "x") 1 funcref))`,
+		wantImports: []binary.Import{
+			{Module: "m", Name: "x", Kind: binary.ExternTable, Table: binary.Table{ElemType: binary.FuncRef, Limits: binary.Limits{Min: 1}}},
+		},
 	},
 	// A named inline import: the identifier binds a parse-time name into the index space and must
 	// leave no trace in the image, exactly as on a definition.
 	{
-		src:         `(module (memory $m (import "m" "x") 1))`,
-		wantImports: []binary.Import{{Module: "m", Name: "x", Kind: binary.ExternMemory}},
+		src: `(module (memory $m (import "m" "x") 1))`,
+		wantImports: []binary.Import{
+			{Module: "m", Name: "x", Kind: binary.ExternMemory, Memory: binary.Memory{Limits: binary.Limits{Min: 1}}},
+		},
 	},
 
 	// # An import and a definition of the same kind, which is where index spaces are load-bearing
@@ -675,16 +689,20 @@ var encodableModules = []struct {
 	// import, one memory, and an emitter that put the imported memory in section 5 would produce two
 	// memories here.
 	{
-		src:         `(module (import "m" "x" (memory 1)) (memory 2 3))`,
-		wantMems:    []binary.Memory{{Limits: binary.Limits{Min: 2, Max: 3, HasMax: true}}},
-		wantImports: []binary.Import{{Module: "m", Name: "x", Kind: binary.ExternMemory}},
+		src:      `(module (import "m" "x" (memory 1)) (memory 2 3))`,
+		wantMems: []binary.Memory{{Limits: binary.Limits{Min: 2, Max: 3, HasMax: true}}},
+		wantImports: []binary.Import{
+			{Module: "m", Name: "x", Kind: binary.ExternMemory, Memory: binary.Memory{Limits: binary.Limits{Min: 1}}},
+		},
 	},
 	// The same for tables, in both spellings at once, so the two sugar arms and the definition arm are
 	// distinguished in one module.
 	{
-		src:         `(module (table (import "m" "x") 1 funcref) (table 2 externref))`,
-		wantTabs:    []binary.Table{{ElemType: binary.ExternRef, Limits: binary.Limits{Min: 2}}},
-		wantImports: []binary.Import{{Module: "m", Name: "x", Kind: binary.ExternTable}},
+		src:      `(module (table (import "m" "x") 1 funcref) (table 2 externref))`,
+		wantTabs: []binary.Table{{ElemType: binary.ExternRef, Limits: binary.Limits{Min: 2}}},
+		wantImports: []binary.Import{
+			{Module: "m", Name: "x", Kind: binary.ExternTable, Table: binary.Table{ElemType: binary.FuncRef, Limits: binary.Limits{Min: 1}}},
+		},
 	},
 
 	// # The four sections together, so section *order* is asserted
@@ -707,9 +725,11 @@ var encodableModules = []struct {
 		want: []binary.CompType{
 			{Kind: binary.CompFunc, Func: binary.FuncType{Params: []binary.ValType{binary.I32}}},
 		},
-		wantTabs:    []binary.Table{{ElemType: binary.FuncRef, Limits: binary.Limits{Min: 1}}},
-		wantMems:    []binary.Memory{{Limits: binary.Limits{Min: 1}}},
-		wantImports: []binary.Import{{Module: "m", Name: "x", Kind: binary.ExternMemory}},
+		wantTabs: []binary.Table{{ElemType: binary.FuncRef, Limits: binary.Limits{Min: 1}}},
+		wantMems: []binary.Memory{{Limits: binary.Limits{Min: 1}}},
+		wantImports: []binary.Import{
+			{Module: "m", Name: "x", Kind: binary.ExternMemory, Memory: binary.Memory{Limits: binary.Limits{Min: 2}}},
+		},
 	},
 
 	// # The export section (id 7)
@@ -736,7 +756,7 @@ var encodableModules = []struct {
 	},
 	{
 		src:         `(module (import "m" "g" (global i32)) (export "g" (global 0)))`,
-		wantImports: []binary.Import{{Module: "m", Name: "g", Kind: binary.ExternGlobal}},
+		wantImports: []binary.Import{{Module: "m", Name: "g", Kind: binary.ExternGlobal, GlobalType: binary.I32}},
 		wantExports: []binary.Export{{Name: "g", Kind: binary.ExternGlobal, Index: 0}},
 	},
 	{
@@ -764,7 +784,9 @@ var encodableModules = []struct {
 		wantMems: []binary.Memory{
 			{Limits: binary.Limits{Min: 1}}, {Limits: binary.Limits{Min: 2}},
 		},
-		wantImports: []binary.Import{{Module: "m", Name: "x", Kind: binary.ExternMemory}},
+		wantImports: []binary.Import{
+			{Module: "m", Name: "x", Kind: binary.ExternMemory, Memory: binary.Memory{Limits: binary.Limits{Min: 3}}},
+		},
 		wantExports: []binary.Export{{Name: "b", Kind: binary.ExternMemory, Index: 2}},
 	},
 	// Source order is section order, and an empty name is legal (`exports.wast` exports `""`). Three
@@ -820,21 +842,25 @@ var encodableModules = []struct {
 	// emitter that skipped imports when numbering would write 0 here and be right by accident, so the
 	// pair below adds a defined memory ahead of nothing and an import ahead of the export.
 	{
-		src:         `(module (memory (export "m") (import "m" "x") 1))`,
-		wantImports: []binary.Import{{Module: "m", Name: "x", Kind: binary.ExternMemory}},
+		src: `(module (memory (export "m") (import "m" "x") 1))`,
+		wantImports: []binary.Import{
+			{Module: "m", Name: "x", Kind: binary.ExternMemory, Memory: binary.Memory{Limits: binary.Limits{Min: 1}}},
+		},
 		wantExports: []binary.Export{{Name: "m", Kind: binary.ExternMemory, Index: 0}},
 	},
 	{
 		src: `(module (import "m" "a" (memory 1)) (memory (export "second") (import "m" "b") 2))`,
 		wantImports: []binary.Import{
-			{Module: "m", Name: "a", Kind: binary.ExternMemory},
-			{Module: "m", Name: "b", Kind: binary.ExternMemory},
+			{Module: "m", Name: "a", Kind: binary.ExternMemory, Memory: binary.Memory{Limits: binary.Limits{Min: 1}}},
+			{Module: "m", Name: "b", Kind: binary.ExternMemory, Memory: binary.Memory{Limits: binary.Limits{Min: 2}}},
 		},
 		wantExports: []binary.Export{{Name: "second", Kind: binary.ExternMemory, Index: 1}},
 	},
 	{
-		src:         `(module (global (export "g") (import "m" "g") i32))`,
-		wantImports: []binary.Import{{Module: "m", Name: "g", Kind: binary.ExternGlobal}},
+		src: `(module (global (export "g") (import "m" "g") i32))`,
+		wantImports: []binary.Import{
+			{Module: "m", Name: "g", Kind: binary.ExternGlobal, GlobalType: binary.I32},
+		},
 		wantExports: []binary.Export{{Name: "g", Kind: binary.ExternGlobal, Index: 0}},
 	},
 	{

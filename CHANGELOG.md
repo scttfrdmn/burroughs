@@ -21,6 +21,43 @@ weakly-ordered platform.
 
 ### Added
 
+- **The decoder retains a non-func import's descriptor, and the linker compares types instead of
+  only kinds** ([#164](https://github.com/scttfrdmn/burroughs/issues/164)). `decodeImport` used to
+  read a table's element type and limits, a memory's limits, or a global's type and mutability and
+  then discard them — `binary.Import` now carries `Table`, `Memory`, `GlobalType` and
+  `GlobalMutable`, and `Instance.link` compares them against what the supplier actually built:
+  `sameFuncType` (already used by `call_indirect`) for a func import's own signature, `matchLimits`
+  for table and memory limits (the reference's `match_limits`, min and max compared in opposite
+  directions — a supplier may offer *more* room than declared, never less), and byte equality for a
+  global's type and mutability.
+
+  **42 `assert_unlinkable` vectors were accepting a module the spec refuses**, table/memory limit
+  mismatches and global type/mutability mismatches scoring green because a matching *kind* was
+  already enough to link — an accept-direction gap (§9 G-3) the suite's rejection-only vectors could
+  not have found without the linker checking anything: `TestImportTypeMismatchIsRejectedPerKind` and
+  its accept-direction counterpart `TestImportTypeMatchLinksPerKind` cover both readings per kind,
+  each row falsified individually. **38 of the 42 convert to pass; 4 remain** — `type-subtyping.wast`'s
+  `rec`/`sub` rows declare a func import's type as a *nominal subtype* rather than a plain signature,
+  which `sameFuncType`'s structural-equality reduction cannot see (its own doc comment already
+  declares the gap under GC). The other 82 of the original 124-vector bucket were never reachable by
+  this fix: 35 are blocked by an EH-gated register target, 14 by a GC-gated one, 4 by a
+  Memory64-gated one (same mechanism — the module a `register` names never decodes, so every import
+  from it reads `unknown import` rather than `incompatible import type`), and 29 by a GC-gated
+  *import descriptor* on the importer's own side. Measured by joining the pre- and post-fix bucket
+  dumps rather than reading either board's total alone: 38+4+35+14+4+29 = 124, no residual.
+
+  `table_grow.wast` moves independently by +1 net, and it is not a regression: two rows re-key from
+  an opcode-missing bucket to an import-type-mismatch one (same cause, sharper instrument — the
+  table never actually grows without a `table.grow` arm, so the next module's declared size
+  genuinely mismatches), and a third is a new fail one command earlier in the same chain, caught
+  sooner rather than differently.
+
+  Found in the making: `memory.grow` reallocated a memory's bytes without updating its retained
+  `Limits.Min`, so a grown memory re-exported for another instance to import reported its stale
+  pre-growth minimum. `imports4.wast`'s own comment names the corpus vector this breaks — "imported
+  memory limits should match, because external memory size is 2 now" — and `TestGrownMemoryReexportsItsCurrentSize`
+  pins it directly, falsified by removing the one-line fix.
+
 - **The text encoder writes `ref.null`'s heap type — the whole `heaptype` production, all thirteen
   forms** ([#8](https://github.com/scttfrdmn/burroughs/issues/8)). It previously answered `func` and
   `extern`, the two Wasm 2.0 forms, which made `ref.null` the one entry in `encodableShapes` that was
