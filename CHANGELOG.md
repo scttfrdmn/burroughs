@@ -36,9 +36,21 @@ weakly-ordered platform.
   already enough to link — an accept-direction gap (§9 G-3) the suite's rejection-only vectors could
   not have found without the linker checking anything: `TestImportTypeMismatchIsRejectedPerKind` and
   its accept-direction counterpart `TestImportTypeMatchLinksPerKind` cover both readings per kind,
-  each row falsified individually. 37 of the 42 convert; three (`table_grow.wast`) are still blocked
-  on the missing `table.grow` interpreter arm and land in that fail bucket instead of pass — a
-  co-blocked vector re-keys rather than pays, per the pre-selection probe's own taxonomy.
+  each row falsified individually. **38 of the 42 convert to pass; 4 remain** — `type-subtyping.wast`'s
+  `rec`/`sub` rows declare a func import's type as a *nominal subtype* rather than a plain signature,
+  which `sameFuncType`'s structural-equality reduction cannot see (its own doc comment already
+  declares the gap under GC). The other 82 of the original 124-vector bucket were never reachable by
+  this fix: 35 are blocked by an EH-gated register target, 14 by a GC-gated one, 4 by a
+  Memory64-gated one (same mechanism — the module a `register` names never decodes, so every import
+  from it reads `unknown import` rather than `incompatible import type`), and 29 by a GC-gated
+  *import descriptor* on the importer's own side. Measured by joining the pre- and post-fix bucket
+  dumps rather than reading either board's total alone: 38+4+35+14+4+29 = 124, no residual.
+
+  `table_grow.wast` moves independently by +1 net, and it is not a regression: two rows re-key from
+  an opcode-missing bucket to an import-type-mismatch one (same cause, sharper instrument — the
+  table never actually grows without a `table.grow` arm, so the next module's declared size
+  genuinely mismatches), and a third is a new fail one command earlier in the same chain, caught
+  sooner rather than differently.
 
   Found in the making: `memory.grow` reallocated a memory's bytes without updating its retained
   `Limits.Min`, so a grown memory re-exported for another instance to import reported its stale
