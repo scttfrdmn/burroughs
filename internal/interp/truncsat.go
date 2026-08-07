@@ -17,10 +17,10 @@ import (
 //
 // Unhandled sub-opcodes fall through to `unsupported`, which renders them as `fc NN` — the
 // board's existing bucket keys, unchanged, so the arms this function does not yet have stay
-// visible as the work list they are. Counted rather than described: `opTableFC` has 18 entries,
-// this switch answers 15, and the three left are `0x0f` table.grow, `0x10` table.size, `0x11`
-// table.fill. (The count in an earlier draft of this paragraph said "ten" and was never derived
-// from the table — a number nobody ran, which is the class this project keeps finding.)
+// visible as the work list they are. Counted rather than described: `opTableFC` has 18 entries
+// and this switch now answers all 18. (The count in an earlier draft of this paragraph said
+// "ten" and was never derived from the table — a number nobody ran, which is the class this
+// project keeps finding.)
 func (in *Instance) execFC(ins binary.Instr, st *stack) error {
 	switch ins.Op {
 	case 0x00, 0x01, 0x02, 0x03: // i32.trunc_sat_f{32,64}_{s,u}
@@ -57,6 +57,62 @@ func (in *Instance) execFC(ins binary.Instr, st *stack) error {
 
 	case 0x0e: // table.copy
 		return in.execTableCopy(ins, st)
+
+	case 0x10: // table.size — `eval.ml:363-365`, and the only sub-opcode in this switch that
+		// pushes rather than pops: `size` reads the slice's length back rather than keeping a
+		// counter (table.go's own comment on `size`, the same rule `memory.size` follows).
+		//
+		// **Width follows the table's address type, `memory.size`'s rule exactly**
+		// (`num_of_addr`, `eval.ml:365`) — a table64's size is an i64, gated off by default
+		// (`table_size64.wast`) but live in the all-gates-on lane, which is why the split is
+		// written even though the default board never takes the i64 branch.
+		tab, err := in.tableFor("instruction", ins.Imm0)
+		if err != nil {
+			return err
+		}
+		if tab.limits.Addr64 {
+			st.pushI64(int64(tab.size()))
+		} else {
+			st.pushI32(int32(uint32(tab.size())))
+		}
+
+	case 0x0f: // table.grow — `eval.ml:366-373`
+		tab, err := in.tableFor("instruction", ins.Imm0)
+		if err != nil {
+			return err
+		}
+		if err := st.needNum(1); err != nil {
+			return err
+		}
+		if err := st.needRef(1); err != nil {
+			return err
+		}
+		// The two operands live in separate arrays (`num`, `refs`), so there is no shared
+		// ordering to get backwards the way `callIndirect`'s Imm0/Imm1 has — popping the ref
+		// before or after the delta reads the same two values either way, since each pop
+		// only ever touches its own array.
+		r := st.popRef()
+		if tab.limits.Addr64 {
+			st.pushI64(tab.grow(uint64(st.popI64()), r))
+		} else {
+			st.pushI32(int32(tab.grow(uint64(uint32(st.popI32())), r)))
+		}
+
+	case 0x11: // table.fill — `eval.ml:375-392`
+		tab, err := in.tableFor("instruction", ins.Imm0)
+		if err != nil {
+			return err
+		}
+		if err := st.needNum(2); err != nil {
+			return err
+		}
+		if err := st.needRef(1); err != nil {
+			return err
+		}
+		n := tableAddr(tab, st.popNum())
+		r := st.popRef()
+		i := tableAddr(tab, st.popNum())
+		return tab.fill(i, n, r)
 
 	default:
 		return unsupported(ins)

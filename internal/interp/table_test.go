@@ -181,3 +181,231 @@ func TestElemExprIndexReachesTheRef(t *testing.T) {
 			"reported, because defaulting to null makes it `uninitialized element` at the call")
 	}
 }
+
+// TestTableGetSetRoundTrip pins the six arms added for #7's opcode-arm stream: table.get,
+// table.set, table.size, ref.null, ref.is_null, ref.func. Every value stays inside the wasm
+// body rather than crossing `Instance.Invoke`'s Go boundary, which refuses a ref-typed
+// parameter or result (interp.go's own check) — the same reason every corpus vector for these
+// opcodes frames a ref value as a local born from `ref.null`/`ref.func`, never as an argument.
+func TestTableGetSetRoundTrip(t *testing.T) {
+	in := invoke1t(t, `(module
+		(table $t 2 funcref)
+		(func $eleven (result i32) (i32.const 11))
+		(elem (table $t) (i32.const 0) func $eleven)
+
+		(func (export "size") (result i32) (table.size $t))
+		(func (export "is-null-0") (result i32) (ref.is_null (table.get $t (i32.const 0))))
+		(func (export "is-null-1") (result i32) (ref.is_null (table.get $t (i32.const 1))))
+		(func (export "call-0") (result i32) (call_indirect (type 0) (i32.const 0)))
+		(func (export "set-and-call") (result i32)
+			(table.set $t (i32.const 1) (ref.func $eleven))
+			(call_indirect (type 0) (i32.const 1))
+		))`)
+
+	rows := []struct {
+		fn   string
+		want int32
+	}{
+		{"size", 2},
+		{"is-null-0", 0}, // slot 0: the elem segment's ref.func, not null
+		{"is-null-1", 1}, // slot 1: unfilled, null
+		{"call-0", 11},
+	}
+	for _, r := range rows {
+		got, err := in.Invoke(r.fn)
+		if err != nil {
+			t.Errorf("%s: %v", r.fn, err)
+			continue
+		}
+		if len(got) != 1 || int32(got[0].Bits) != r.want {
+			t.Errorf("%s = %v, want %d", r.fn, got, r.want)
+		}
+	}
+
+	// table.set followed by table.get through call_indirect: a slot filled by ref.func at
+	// runtime (not by an element segment) must be callable, which is the write half table.get
+	// alone cannot exercise.
+	got, err := in.Invoke("set-and-call")
+	if err != nil {
+		t.Fatalf("set-and-call: %v", err)
+	}
+	if len(got) != 1 || int32(got[0].Bits) != 11 {
+		t.Errorf("set-and-call = %v, want 11", got)
+	}
+}
+
+// TestTableGetSetOutOfBoundsReportsTheTableSentinel pins the reject direction and the sentinel
+// each opcode's own text uses — table.get's is table.ml's plain `Bounds` ("out of bounds table
+// access"), which grave-shape reasoning could plausibly confuse with call_indirect's
+// `undefined element N` (both are the same underlying bounds check, wrapped with different
+// text at different call sites in the reference). Falsified by routing table.get through
+// `load` instead of `get` and confirming the wrong sentinel appears.
+func TestTableGetSetOutOfBoundsReportsTheTableSentinel(t *testing.T) {
+	in, trap := instantiate1(t, `(module
+		(table $t 1 funcref)
+		(func (export "get") (result funcref) (table.get $t (i32.const 5)))
+		(func (export "set") (table.set $t (i32.const 5) (ref.null func))))`)
+	if trap != nil {
+		t.Fatalf("trap: %v", trap)
+	}
+	for _, fn := range []string{"get", "set"} {
+		_, err := in.Invoke(fn)
+		if err == nil {
+			t.Fatalf("%s: want a trap for an out-of-bounds index", fn)
+		}
+		if !strings.Contains(err.Error(), "out of bounds table access") {
+			t.Errorf("%s: %v, want \"out of bounds table access\" (not call_indirect's "+
+				"\"undefined element\", the sibling sentinel for the same bounds check)", fn, err)
+		}
+	}
+}
+
+// TestTableGrowFillRoundTrip pins table.grow and table.fill: grow appends n slots filled with
+// the given ref and returns the pre-growth size, fill overwrites an existing run. Both stay
+// within Invoke's boundary via ref.null/ref.func locals, per the same rule the round-trip test
+// above states.
+func TestTableGrowFillRoundTrip(t *testing.T) {
+	in := invoke1t(t, `(module
+		(table $t 1 funcref)
+		(func $eleven (result i32) (i32.const 11))
+
+		(func (export "grow") (result i32) (table.grow $t (ref.null func) (i32.const 3)))
+		(func (export "size") (result i32) (table.size $t))
+		(func (export "fill-with-eleven") (table.fill $t (i32.const 1) (ref.func $eleven) (i32.const 3)))
+		(func (export "call") (param $i i32) (result i32) (call_indirect (type 0) (local.get $i))))`)
+
+	got, err := in.Invoke("grow")
+	if err != nil {
+		t.Fatalf("grow: %v", err)
+	}
+	if len(got) != 1 || int32(got[0].Bits) != 1 {
+		t.Fatalf("grow = %v, want 1 (the pre-growth size)", got)
+	}
+
+	got, err = in.Invoke("size")
+	if err != nil {
+		t.Fatalf("size: %v", err)
+	}
+	if len(got) != 1 || int32(got[0].Bits) != 4 {
+		t.Fatalf("size = %v, want 4 (1 + 3 grown)", got)
+	}
+
+	if _, err := in.Invoke("fill-with-eleven"); err != nil {
+		t.Fatalf("fill-with-eleven: %v", err)
+	}
+	for _, i := range []int32{1, 2, 3} {
+		got, err := in.Invoke("call", I32(i))
+		if err != nil {
+			t.Errorf("call(%d): %v", i, err)
+			continue
+		}
+		if len(got) != 1 || int32(got[0].Bits) != 11 {
+			t.Errorf("call(%d) = %v, want 11 — table.fill did not reach slot %d", i, got, i)
+		}
+	}
+	// Slot 0 was never filled and must stay null — fill's own bound (i=1, n=3) must not have
+	// been rounded or off-by-one into slot 0.
+	if _, err := in.Invoke("call", I32(0)); err == nil {
+		t.Error("call(0): want a trap, slot 0 was never filled and table.fill must not have reached it")
+	}
+}
+
+// TestTableFillOutOfBoundsReportsTheTableSentinel pins fill's reject direction, which the
+// round-trip test above never exercises (every row it fills is in bounds). `n` extends past the
+// table's declared size, so the whole run must be refused before any slot is written — verified
+// by checking a slot *inside* the requested range stayed untouched, which is the corpus's own
+// pattern for table.fill's atomicity (`eval.ml`'s bound check runs before the store loop, never
+// mid-loop).
+func TestTableFillOutOfBoundsReportsTheTableSentinel(t *testing.T) {
+	in := invoke1t(t, `(module
+		(table $t 2 funcref)
+		(func $eleven (result i32) (i32.const 11))
+		(func (export "fill") (table.fill $t (i32.const 1) (ref.func $eleven) (i32.const 5)))
+		(func (export "call") (param $i i32) (result i32) (call_indirect (type 0) (local.get $i))))`)
+
+	if _, err := in.Invoke("fill"); err == nil {
+		t.Fatal("fill: want a trap, n=5 from offset 1 exceeds the table's size of 2")
+	} else if !strings.Contains(err.Error(), "out of bounds table access") {
+		t.Errorf("fill: %v, want \"out of bounds table access\"", err)
+	}
+
+	// The whole run must be refused before any slot is written — slot 1 is inside the table's
+	// bounds and inside the requested (out-of-bounds) run, and must still be untouched.
+	if _, err := in.Invoke("call", I32(1)); err == nil {
+		t.Error("call(1): want a trap, an out-of-bounds fill must not have written slot 1 " +
+			"before discovering the overrun")
+	}
+}
+
+// TestTableGrowFailureReturnsMinusOneNotATrap pins table.grow's total-function contract, the
+// same shape memory.grow's own control names: growing past the declared maximum reports -1 in
+// the result rather than trapping, so a table.grow that traps on overflow would convert
+// assert_return vectors into assert_trap answers on the wrong channel.
+func TestTableGrowFailureReturnsMinusOneNotATrap(t *testing.T) {
+	in := invoke1t(t, `(module
+		(table $t 1 2 funcref)
+		(func (export "grow") (param $n i32) (result i32) (table.grow $t (ref.null func) (local.get $n))))`)
+
+	got, err := in.Invoke("grow", I32(5))
+	if err != nil {
+		t.Fatalf("grow(5): got an error, want -1 in the result: %v", err)
+	}
+	if len(got) != 1 || int32(got[0].Bits) != -1 {
+		t.Errorf("grow(5) = %v, want -1 (5 exceeds the declared max of 2)", got)
+	}
+}
+
+// TestCallCheckesArityPerStack is the control for the grave this PR's own arms found: `invoke`'s
+// post-call arity check counted only `st.num`'s delta, so *every* function returning a ref-typed
+// value reported "declares 1 results and left 0 values on the stack" regardless of whether the
+// ref side was correct — `table_get.wast`'s `is_null-funcref` (`ref.is_null (call $f3 …)`, `$f3`
+// returning `funcref`) is the corpus's own specimen, unreachable before this PR because nothing
+// produced a ref-typed result through plain `call`/`call_indirect` until `table.get`/`ref.func`
+// had arms.
+//
+// Two rows, one per array, so a fix that repairs only one side is still caught: a function
+// returning a numeric value round-trips through `call` (pins `st.num`'s count did not break),
+// and a function returning a ref value does too (pins the fix, `st.refs`'s count).
+func TestCallCheckesArityPerStack(t *testing.T) {
+	in := invoke1t(t, `(module
+		(table $t 1 funcref)
+		(func $eleven (result i32) (i32.const 11))
+		(elem (table $t) (i32.const 0) func $eleven)
+
+		(func $getnum (result i32) (i32.const 5))
+		(func $getref (result funcref) (table.get $t (i32.const 0)))
+
+		(func (export "num") (result i32) (call $getnum))
+		(func (export "ref-is-null") (result i32) (ref.is_null (call $getref))))`)
+
+	got, err := in.Invoke("num")
+	if err != nil {
+		t.Fatalf("num: %v", err)
+	}
+	if len(got) != 1 || int32(got[0].Bits) != 5 {
+		t.Errorf("num = %v, want 5", got)
+	}
+
+	got, err = in.Invoke("ref-is-null")
+	if err != nil {
+		t.Fatalf("ref-is-null: %v", err)
+	}
+	if len(got) != 1 || int32(got[0].Bits) != 0 {
+		t.Errorf("ref-is-null = %v, want 0 (the elem segment filled slot 0, so it is not null)", got)
+	}
+}
+
+// invoke1t is instantiate1 requiring success, the local shorthand this file's new rows share —
+// distinct from memory_test.go's invoke1, which instantiates from source and invokes in one
+// call; here every row invokes more than once against the same instance.
+func invoke1t(t *testing.T, src string) *Instance {
+	t.Helper()
+	in, trap := instantiate1(t, src)
+	if trap != nil {
+		t.Fatalf("instantiate: %v", trap)
+	}
+	if err := in.Deferred(); err != nil {
+		t.Fatalf("instantiate fell short: %v", err)
+	}
+	return in
+}

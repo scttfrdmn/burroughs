@@ -20,18 +20,22 @@ import (
 // learn the shape, not to borrow its numbers.
 const maxElems32 = 0xffff_ffff
 
-// The two reference-producing opcodes an element expression can hold, named for control.go's
-// reason: a bare 0xd0 in a switch arm is a byte, and these are a family.
+// The three reference opcodes, named for control.go's reason: a bare 0xd0 in a switch arm is a
+// byte, and these are a family. `opRefNull`/`opRefFunc` are also the two an element expression
+// can hold; `opRefIsNull` joins them here rather than getting a second, one-entry block, since
+// all three answer to the same "which byte is this" question and a reader checking one checks
+// all three for free.
 //
 // **A third copy of a fact `internal/binary`'s generated table already holds**, so it takes the
 // same treatment `opSelect`/`opSelectT` took rather than a fresh justification:
 // TestElemExprOpcodesAgreeWithTheDecoder asks the decoder — the authority both copies derive
 // from — and discriminates by the immediate, which is what makes a swapped pair fail. Sharing
-// instead would mean exporting an opcode set from `binary` for two bytes, putting a table in the
-// load-bearing spot for a two-line consumer.
+// instead would mean exporting an opcode set from `binary` for three bytes, putting a table in
+// the load-bearing spot for a three-line consumer.
 const (
-	opRefNull = 0xd0
-	opRefFunc = 0xd2
+	opRefNull   = 0xd0
+	opRefIsNull = 0xd1
+	opRefFunc   = 0xd2
 )
 
 // trapOOBTable is the spec's out-of-bounds text for a table — `eval.ml:23`'s `table_error`,
@@ -152,18 +156,107 @@ func validTableSize(lim binary.Limits, n uint64) bool {
 // (`table.ml:36-37`).
 func (t *table) size() uint64 { return uint64(len(t.slots)) }
 
-// load reads slot i, trapping `undefined element i` when it is out of bounds.
+// load reads slot i for `call_indirect`'s dispatch, trapping `undefined element i` when it is
+// out of bounds — `any_ref`'s wrapper (`eval.ml:122-124`), which is the string only `func_ref`
+// (line 274, `call_indirect`'s own resolution) ever produces. It does **not** trap for a null
+// slot; `func_ref` is the one that turns a `NullRef` into `uninitialized element`
+// (`eval.ml:126-129`), one layer up from here, which is why this function's own job stops at
+// "in bounds or not".
 //
-// It does **not** trap for a null slot, and that split is the reference's: `any_ref` maps
-// Table.Bounds to `undefined element` and hands the value back whatever it is, while `func_ref`
-// is the one that turns a NullRef into `uninitialized element` (`eval.ml:122-131`). Two callers,
-// two questions — `table.get` pushes a null happily, `call_indirect` traps on it — so a load
-// that refused nulls would give the wrong trap to one of them.
+// **`table.get` does NOT call this**, despite an earlier version of this comment claiming it
+// did. `TableGet` (`eval.ml:353-357`) calls `Table.load` — the same runtime primitive `load`
+// here models — but catches its bounds exception through `table_error`, which is `"out of
+// bounds table access"`: a different string from the same failure, because the reference
+// wraps one shared primitive differently at each call site rather than sharing a wrapper. `get`
+// below is that second wrapper.
 func (t *table) load(i uint64) (ref, error) {
 	if i >= t.size() {
 		return ref{}, undefinedElem(i)
 	}
 	return t.slots[i], nil
+}
+
+// get reads slot i for `table.get`, trapping `out of bounds table access` when it is out of
+// bounds — `Table.load`'s `Bounds` through `table_error`, the wrapper `load` above is not.
+// Unlike `call_indirect`'s dispatch, `table.get` returns a null slot as a value rather than
+// resolving it further, so there is no second question for a `func_ref`-shaped wrapper to ask.
+func (t *table) get(i uint64) (ref, error) {
+	if i >= t.size() {
+		return ref{}, trapOOBTable
+	}
+	return t.slots[i], nil
+}
+
+// store writes r into slot i, trapping `out of bounds table access` when i is out of bounds —
+// `table.ml:69-73`'s `store`, whose `Bounds` maps through `table_error` to that string (the same
+// sentinel `blit`'s overrun uses, since both are the same exception).
+//
+// **No reftype check against the table's declared element type.** The reference's `store` also
+// raises `Type` when the value's reftype does not match the table's (`Match.match_reftype`), but
+// that is a static fact the validator has already agreed on every accepted module (#9) — nothing
+// this decoder admits can reach here with a mismatched type, so enforcing it again would assert a
+// property no vector can falsify wrong. `Table.Type`'s only reachable caller in the reference is
+// `store`'s own guard; `load` and `blit` have no such check because *they* never receive a value
+// to compare.
+func (t *table) store(i uint64, r ref) error {
+	if i >= t.size() {
+		return trapOOBTable
+	}
+	t.slots[i] = r
+	return nil
+}
+
+// grow appends delta slots filled with r, reporting the pre-growth size or -1 on failure —
+// `table.ml:50-58`'s `grow`, `memory.grow`'s twin one file over and for the identical reason:
+// `table.grow` does not trap, it reports failure in the result, so SizeOverflow/SizeLimit become
+// -1 here rather than errors. Returning an error would turn every failed grow into a trap and
+// answer `table_grow.wast`'s negative rows with the wrong verdict.
+//
+// **`limits.Min` grows with the table, for `memory.grow`'s reason exactly** (memory.go's own
+// comment): `type_of` — read at import-match time — must see the *current* size, or a table
+// grown and then re-exported reports its stale pre-growth minimum to an importer whose
+// declaration matches reality. `table_grow.wast`'s own corpus vectors are the sibling of
+// `imports4.wast`'s memory case, not yet measured because this arm did not exist to grow
+// anything for them to see.
+func (t *table) grow(delta uint64, r ref) int64 {
+	old := t.size()
+	newSize := old + delta
+	if newSize < old { // 64-bit wrap: `I64.gt_u old_size new_size`
+		return -1
+	}
+	if !validTableSize(t.limits, newSize) {
+		return -1
+	}
+	if t.limits.HasMax && newSize > t.limits.Max {
+		return -1
+	}
+	if newSize > math.MaxInt/refSize {
+		return -1
+	}
+	grown := make([]ref, newSize)
+	copy(grown, t.slots)
+	for i := old; i < newSize; i++ {
+		grown[i] = r
+	}
+	t.slots = grown
+	t.limits.Min = newSize
+	return int64(old)
+}
+
+// fill writes r into n consecutive slots starting at i, trapping `out of bounds table access`
+// when the run does not fit — `table.ml:80-84`'s bound, the same `blit` already checks, stated
+// directly rather than filling and catching an overrun mid-loop. `TableFill`'s reference
+// (`eval.ml:375-392`) is a recursive store-then-recurse; a loop over the reference's own bound
+// check is the same effect without staging n synthetic instructions to re-enter this opcode.
+func (t *table) fill(i, n uint64, r ref) error {
+	end := i + n
+	if end < i || end > t.size() { // `lt_u (add i n) i || gt_u (add i n) j`
+		return trapOOBTable
+	}
+	for k := i; k < end; k++ {
+		t.slots[k] = r
+	}
+	return nil
 }
 
 // blit stores rs at offset, trapping `out of bounds table access` when the run does not fit —

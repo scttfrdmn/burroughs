@@ -4,6 +4,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/scttfrdmn/burroughs/internal/binary"
 )
 
 // The bulk trio's controls, partitioned by the mistake each catches rather than by opcode: a
@@ -521,28 +523,38 @@ func TestBulkTableCopyTrapsWithTheTableString(t *testing.T) {
 // interpreter against a stack state the decoder cannot produce, which is grave #125's shape and
 // buys a green for a defect that does not exist.
 
-// TestUnhandledFCSubOpcodeStaysOnTheWorkList's subject moved, so the test is re-pointed rather
-// than deleted — a tripwire names a risk, not a code shape (the #33 ruling).
+// TestUnhandledFCSubOpcodeStaysOnTheWorkList's subject dissolved rather than moved this time, so
+// the re-pointing is structural rather than a row swap — a tripwire names a risk, not a code
+// shape (the #33 ruling), and the risk survives even where every row that used to carry it is
+// gone.
 //
-// The risk is that `execFC`'s `default` stops rendering unhandled sub-opcodes as `fc NN` and
+// The risk is that `execFC`'s `default` stops rendering an unhandled sub-opcode as `fc NN` and
 // collapses the region into one bucket or, worse, into a bare `NN` that reads as a single-byte
 // opcode. The board's fail buckets are keyed by that message and the work list is read off them,
 // so a change that erased the partition would erase the schedule.
 //
-// **`memory.fill` was this test's row until this PR and can no longer be**, because `fc 0b` now
-// has an arm. That inversion is the tripwire firing correctly: the bucket *moved* rather than
-// vanished, and 13 vectors left `no arm for opcode fc 0b` for pass. The row is now `fc 10`
-// (`table.size`), the next unhandled sub-opcode on the board, chosen for the same reason `0b`
-// was: 0x10 is `i32.eqz` as a single byte, so a lost prefix is a plausible-looking wrong
-// instruction rather than a crash.
+// **This PR is the one that drains the region, not just moves the row within it.** `fc 0b`
+// (memory.fill) retired the first row this test held, and `fc 10` (table.size, filed alongside
+// `fc 0f`/`fc 11`) retires the second — `opTableFC` has 18 entries and `execFC` now answers all
+// 18, so there is no nineteenth unhandled sub-opcode to name. `0xfd`'s region is not a
+// replacement candidate: SIMD is declined at *decode* time when its gate is off
+// (`gatemap.go:180`), so a v128 module never reaches an interpreter switch at all on the default
+// board, and the two regions are not the same risk.
+//
+// **So the row moves off the corpus and onto a direct call**, which is the only way left to
+// present `execFC` with a sub-opcode it does not have: the decoder itself rejects anything
+// outside `opTableFC`'s 18 entries as malformed (`prefixRegion`, `instr.go:148`), so no module
+// this engine accepts can carry one. `0x12` is one past the table's last entry and is
+// unreachable from any accepted module — the same "cannot happen through the front door, still
+// worth asserting at the back door" shape `TestElemExprIndexReachesTheRef` uses for
+// `constExprRef`.
 func TestUnhandledFCSubOpcodeStaysOnTheWorkList(t *testing.T) {
-	_, err := invokeErr(t, `(module (table 1 funcref) (func (export "c") (result i32) `+
-		`(table.size)))`)
+	err := (&Instance{}).execFC(binary.Instr{Prefix: 0xfc, Op: 0x12}, &stack{})
 	if !errors.Is(err, ErrUnsupportedOp) {
-		t.Fatalf("table.size: got %v, want ErrUnsupportedOp", err)
+		t.Fatalf("fc 12: got %v, want ErrUnsupportedOp", err)
 	}
-	if got := err.Error(); !strings.Contains(got, "fc 10") {
-		t.Errorf("message is %q, want it to name `fc 10`: the board's buckets are keyed by this "+
-			"string, and `10` alone would read as `i32.eqz`", got)
+	if got := err.Error(); !strings.Contains(got, "fc 12") {
+		t.Errorf("message is %q, want it to name `fc 12`: the board's buckets are keyed by this "+
+			"string, and `12` alone would read as `return_call`", got)
 	}
 }
