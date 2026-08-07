@@ -23,7 +23,8 @@ reported unsupported 27627 against the board's 27501, which is a census of a dif
 the counts are quoted from. Scoped to `boardFiles`, the totals reconcile (fail 1699, unsupported
 27501). The probe was deleted; the numbers are the product.
 
-**Fail column — 605 vectors carry the §3 sentinel**, over four mechanisms, residual **0**:
+**Fail column — 605 vectors carry the §3 sentinel** (→ 624; see the correction appended below), over
+four mechanisms, residual **0**:
 
 | mechanism | fails | site |
 | --- | --- | --- |
@@ -33,7 +34,7 @@ the counts are quoted from. Scoped to `boardFiles`, the totals reconcile (fail 1
 | an imported global | 7 | `global.go:87` |
 | `call` naming an imported function directly | 3 | `call.go:99` |
 
-The 605 is up from #157's 531 and #149's 486 because the interpreter has landed arms since; the
+The 605 (→ 624) is up from #157's 531 and #149's 486 because the interpreter has landed arms since; the
 partition is unchanged in shape, and the mechanism sum closing to zero is asserted rather than
 eyeballed. By file, it is two files and a tail: `table_copy.wast` 228, `table_copy64.wast` 228,
 `table_init.wast` 42, `table_init64.wast` 42, `imports.wast` 31, `memory_grow.wast` 20, then nine
@@ -76,7 +77,7 @@ constant, and there is no host-function machinery to design — and correcting a
 ### The pre-selection probe, run first per the standing rule
 
 Bucket size × sole-blocker fraction, measured before the bucket is chosen. The cheap variant — the
-whole bucket profile of every file holding a §3 fail — says the 605 is **not** a shadow:
+whole bucket profile of every file holding a §3 fail — says the 605 (→ 624) is **not** a shadow:
 
 ```
   table_copy.wast     pass=1499 fail=228 unsup=1  gated=0    other buckets: none
@@ -125,7 +126,7 @@ here is `runner.ml`'s, so the shape is two maps and a pre-registered builtin.
 - **A — in `internal/spec`, the harness (chosen).** `register` is a *script* command; it has no
   binary encoding and no presence in a module. An engine-side registry would be contract §3's API
   surface, which the doctrine in `CLAUDE.md` declines at v0 on a measured negative: §3 would answer
-  605 of 1699 fails and **every one of them** is satisfied by another module in the same script or
+  605 (→ 624) of 1699 fails and **every one of them** is satisfied by another module in the same script or
   by `spectest`, never by a Go host function. Building the §3 surface now is design in the
   load-bearing spot with no witness (0006), because the oracle is structurally incapable of scoring
   it — a conformance corpus cannot specify an embedder.
@@ -197,7 +198,7 @@ refuses to compare funcrefs for equality — so the identity that matters is not
 
 ## Consequences
 
-- **The 605 fails and the 278 unsupported commands become answerable**, and the honest statement of
+- **The 605 (→ 624) fails and the 278 unsupported commands become answerable**, and the honest statement of
   reward is that these are two different jobs with two different unlocks: the harness registry
   (Q1) admits `register`, `assert_unlinkable`, and the 142 module-named actions; the funcref
   representation (Q2) is what makes the 540 `call_indirect` fails *correct* rather than merely
@@ -221,7 +222,7 @@ refuses to compare funcrefs for equality — so the identity that matters is not
   builds around rather than against. What it adds is that the *script-level* machinery beside it has
   605 + 278, and that the two are different mechanisms — which the doctrine already said, in the
   clause naming the script-level registry as "harness work with an ADR of its own, waiting for its
-  consumer". This is that ADR; the consumer knocked twice.
+  consumer". This is that ADR; the consumer knocked twice. (605 → 624.)
 - **`interp.Value` stays reference-free.** The boundary type deliberately holds no reference values
   (`value.go:213-233`, 0006's load-bearing-spot rule), and nothing here changes that: the harness
   reads a funcref only as an `assert_return` expectation, which `spec.Val` already models. Widening
@@ -290,11 +291,11 @@ which is precisely why it survived review. It is the same shape as the figure ab
 checkable half was checked and whose uncheckable half was not, in a document arguing that a census
 needs both axes. Left in place, wearing this pointer.
 
-**Where the superseded 605 still stands in the body**, so this section can serve as its index rather
-than the body carrying inline edits: the census heading and its table, the up-from-#157 paragraph,
-the shadow-check paragraph, the Q1 consumer count, and both Consequences mentions. Every one of them
-is sound as an argument — the corrected total moves each figure the same direction by 3.0% and
-reverses no conclusion. **Flagged for Scott:** whether those six sites should also carry inline
-`(→ 624)` pointers is his call, not the actor's; a pointer preserves the history that editing would
-fabricate, but *placing* one is still a hand in the body, and the rule as given was "never edit the
+**Where the superseded 605 still stands in the body, now each wearing a `(→ 624)` pointer**: the
+census heading and its table, the up-from-#157 paragraph, the shadow-check paragraph, the Q1
+consumer count, and both Consequences mentions — six sites, per Scott's ruling that this is exactly
+what *stale claims wear pointers* prescribes. Every one of them is sound as an argument — the
+corrected total moves each figure the same direction by 3.0% and reverses no conclusion — and the
+pointer, not an edit, is what carries a reader from the stale figure to this section without
+rewriting the history that produced it. The rule as given was "never edit the
 body".
