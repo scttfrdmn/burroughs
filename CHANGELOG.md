@@ -21,6 +21,33 @@ weakly-ordered platform.
 
 ### Added
 
+- **Six table and reference opcodes: `table.get`, `table.set`, `table.size`, `table.grow`,
+  `table.fill`, `ref.null`, `ref.is_null`, `ref.func`** ([#7](https://github.com/scttfrdmn/burroughs/issues/7)).
+  `opTableFC`'s 18 sub-opcodes are now all answered (`table.grow`/`table.size`/`table.fill` were
+  the last three), and the main switch's three reference-family gaps are closed. `table.get`
+  reports `"out of bounds table access"` — a distinct wrapper from `call_indirect`'s
+  `"undefined element N"` over the same underlying bounds check, the reference's own choice
+  (`eval.ml`'s `Table.load` wrapped by `table_error` for `TableGet`, by `any_ref`'s own text only
+  for `func_ref`'s dispatch) rather than a shared string. `table.grow` is total — failure reports
+  `-1` in the result rather than trapping, `memory.grow`'s contract exactly — and grows the
+  table's own retained `Limits.Min`, `memory.grow`'s #164 fix ported to the sibling type before a
+  vector could expose the same staleness twice.
+
+  **A second defect found in the making, upstream of any table opcode**: `Instance.invoke`'s
+  post-call arity check counted only the numeric stack's delta against the callee's declared
+  result count, so *any* function returning a ref-typed value reported "declares 1 results and
+  left 0 values on the stack" — right for a numeric callee, wrong unconditionally for a
+  ref-returning one, since a ref result lands on the parallel reference stack the check never
+  read. Unreachable before this PR: nothing produced a ref-typed function result through `call`
+  or `call_indirect` until `table.get`/`ref.func` existed to be called through.
+  `table_get.wast`'s `is_null-funcref` is the corpus's own specimen. Fixed by counting the
+  callee's results per kind and checking each stack against its own count.
+
+  `execFailCeiling`: 196 → 118. `TestUnhandledFCSubOpcodeStaysOnTheWorkList`'s subject dissolved
+  rather than moved — with `opTableFC` fully drained there is no nineteenth unhandled sub-opcode
+  left on the corpus to re-point the tripwire to, so it now calls `execFC` directly with a
+  sub-opcode the decoder itself can never admit into an accepted module.
+
 - **A funcref names the instance its function index belongs to, and `call_indirect` resolves
   through it instead of through the caller** ([grave #163](https://github.com/scttfrdmn/burroughs/issues/163),
   0017 Q2). `ref` was `{Null bool; Addr uint32}`, and `Addr` was read as an index into the

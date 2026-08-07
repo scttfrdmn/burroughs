@@ -203,13 +203,33 @@ func (in *Instance) invoke(fn *binary.Func, ft *binary.FuncType, st *stack, dept
 	// reports a mismatched count. `run`'s own `returnFrom` truncates on an explicit return, so the
 	// case this catches is a body falling off its end with extra values — #9's arity question,
 	// arriving late.
-	base := len(st.num)
+	//
+	// **Two arrays, two deltas — checking only `st.num` reported every ref-typed result as
+	// missing, unconditionally.** `table.get`/`ref.func`/`ref.null` had no arms until #7's
+	// opcode-arm stream reached them, so nothing before that could call a function returning a
+	// funcref/externref through `call` or `call_indirect` (both funnel through here) and observe
+	// this: `table_get.wast`'s `is_null-funcref` is `ref.is_null (call $f3 …)`, where `$f3`
+	// returns a `funcref` and left it correctly on `st.refs` — but `len(st.num)-base` read `0`
+	// against a declared arity of `1` every time, regardless of what actually happened on the ref
+	// side. Counting `ft.Results` by kind and checking each array against its own count is what
+	// `#9`'s arity question actually asks; one array can be exactly right while the other is
+	// wrong, and a shared counter cannot tell the two apart.
+	numBase, refBase := len(st.num), len(st.refs)
 	if err := in.runFrame(fn, locals, st, len(ft.Results), depth+1); err != nil {
 		return err
 	}
-	if got := len(st.num) - base; got != len(ft.Results) {
-		return fmt.Errorf("%w: a called function declares %d results and left %d values on the stack",
-			ErrNotValidated, len(ft.Results), got)
+	wantNum, wantRef := 0, 0
+	for _, r := range ft.Results {
+		if r.IsRef() {
+			wantRef++
+		} else {
+			wantNum++
+		}
+	}
+	if gotNum, gotRef := len(st.num)-numBase, len(st.refs)-refBase; gotNum != wantNum || gotRef != wantRef {
+		return fmt.Errorf("%w: a called function declares %d results (%d numeric, %d reference) "+
+			"and left %d numeric, %d reference values on the stack",
+			ErrNotValidated, len(ft.Results), wantNum, wantRef, gotNum, gotRef)
 	}
 	return nil
 }

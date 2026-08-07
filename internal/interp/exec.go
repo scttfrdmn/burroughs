@@ -417,6 +417,62 @@ func (in *Instance) runFrame(fn *binary.Func, locals []uint64, st *stack, result
 				return err
 			}
 
+		// ---- tables and references ------------------------------------------------
+		//
+		// The six opcodes general execution had no arm for: `table.get`/`table.set` read and
+		// write a slot each, `table.size` reports the element count, and the three `ref.*`
+		// opcodes construct or inspect a reference value rather than touch a table at all.
+		// Grouped because they are the population `ref.Inst` (grave #163) exists for — every
+		// one either produces a `ref` or consumes one, and a `ref.func` produced here and
+		// stored into an imported table is exactly the cross-instance case that fix names.
+
+		case 0x25: // table.get — `eval.ml:353-356`
+			tab, terr := in.tableFor("instruction", ins.Imm0)
+			if terr != nil {
+				return terr
+			}
+			if err := st.needNum(1); err != nil {
+				return err
+			}
+			r, err := tab.get(tableAddr(tab, st.popNum()))
+			if err != nil {
+				return err
+			}
+			st.pushRef(r)
+
+		case 0x26: // table.set — `eval.ml:358-361`
+			tab, err := in.tableFor("instruction", ins.Imm0)
+			if err != nil {
+				return err
+			}
+			if err := st.needRef(1); err != nil {
+				return err
+			}
+			r := st.popRef()
+			if err := st.needNum(1); err != nil {
+				return err
+			}
+			if err := tab.store(tableAddr(tab, st.popNum()), r); err != nil {
+				return err
+			}
+
+		case opRefNull: // 0xd0 — `eval.ml:629-630`. The heaptype immediate names the static
+			// type and stages no word (immHeapType), so every ref.null is this one value
+			// regardless of which of the thirteen heaptypes it named — the same retention
+			// gap constExprRef's comment already declares, not a new one.
+			st.pushRef(ref{Null: true})
+
+		case opRefIsNull: // 0xd1 — `eval.ml:636-640`
+			if err := st.needRef(1); err != nil {
+				return err
+			}
+			st.pushBool(st.popRef().Null)
+
+		case opRefFunc: // 0xd2 — `eval.ml:632-634`. The index is a function index in *this*
+			// instance's space by construction (`func c.frame.inst x`), so the ref this
+			// produces is always in-frame, never a cross-instance name arriving pre-formed.
+			st.pushRef(ref{Addr: uint32(ins.Imm0), Inst: in})
+
 		// ---- constants -----------------------------------------------------------
 		//
 		// **Three arms push Imm0 unexamined; i32.const truncates, and the split is the

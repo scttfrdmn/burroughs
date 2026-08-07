@@ -5567,7 +5567,35 @@ func TestPhase1Files(t *testing.T) {
 	// through it rather than through the caller — `mismatch_test.go`'s `expectedMismatches`
 	// carries the per-row account (15 rows removed, all in that one bucket, the other 7 named
 	// mismatches unmoved and unrelated: 5 multi-memory, 2 `#8`'s missing `(start …)` field).
-	const execFailCeiling = 196
+	//
+	// **#7's opcode-arm stream: 196 → 118.** Six arms this stream had been missing —
+	// `table.get`/`table.set` (0x25/0x26), `table.size`/`table.grow`/`table.fill` (`fc 10`/`0f`/
+	// `0x11`), `ref.null`/`ref.is_null`/`ref.func` (0xd0/0xd1/0xd2) — closed `opTableFC`'s region
+	// completely (all 18 sub-opcodes now answered) and retired the main switch's three
+	// reference-family gaps. `TestUnhandledFCSubOpcodeStaysOnTheWorkList`'s subject dissolved
+	// rather than moved this time: with the region drained, the tripwire re-points to a direct
+	// `execFC` call naming a sub-opcode the decoder itself can never admit, since there is no
+	// nineteenth unhandled row left on the corpus to name.
+	//
+	// **A second genuine defect found in the making, upstream of any table opcode**: `invoke`'s
+	// post-call arity check counted only `st.num`'s delta against `len(ft.Results)`, so *every*
+	// function returning a ref-typed value reported "declares 1 results and left 0 values on the
+	// stack" — right for a numeric-returning callee, wrong unconditionally for a ref-returning
+	// one, because a ref result lands on `st.refs` and the check never looked there. Unreachable
+	// before this PR: nothing produced a ref-typed function result through plain `call`/
+	// `call_indirect` until `table.get`/`ref.func` had arms to be called *through*.
+	// `table_get.wast`'s `is_null-funcref` (`ref.is_null (call $f3 …)`, `$f3` returning
+	// `funcref`) is the corpus's own specimen. Fixed by counting `ft.Results` per kind and
+	// checking each stack against its own count — `TestCallCheckesArityPerStack` pins both
+	// directions, falsified by reverting to the shared counter and watching the exact error
+	// message reappear.
+	//
+	// Two rows re-key rather than pay, both already-registered causes gaining a table.get/
+	// table.grow-shaped member: `table_get.wast:30` and the two `table_grow.wast` rows are all
+	// the harness's own `readConst` being unable to parse a `ref.null`/`ref.extern` action
+	// argument, so the setup invoke that would write the table never runs and the later read is
+	// honestly reporting the un-written state.
+	const execFailCeiling = 118
 	boardBound(t, "execFailCeiling", execFail, execFailCeiling, 0, ceilingBound,
 		"the interpreter answered fewer vectors than it did: either an opcode arm regressed or "+
 			"a value comparison started disagreeing. A *rise* caused by #8 unblocking more "+
