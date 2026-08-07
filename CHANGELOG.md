@@ -21,6 +21,35 @@ weakly-ordered platform.
 
 ### Added
 
+- **A funcref names the instance its function index belongs to, and `call_indirect` resolves
+  through it instead of through the caller** ([grave #163](https://github.com/scttfrdmn/burroughs/issues/163),
+  0017 Q2). `ref` was `{Null bool; Addr uint32}`, and `Addr` was read as an index into the
+  *calling* instance's function space — correct for a module-local table, wrong the moment a
+  table slot could hold a funcref another instance's element segment wrote into it (0017 Q1's
+  registry made that possible for the first time). `ref` now carries `Inst *Instance`, set at
+  every construction site to the instance whose index space `Addr` names — `segmentRefs`'
+  index-form arm and `constExprRef`'s `ref.func` arm, both already `*Instance` methods — and
+  `callIndirect` resolves `r.Addr` against `r.Inst` rather than against the caller.
+
+  **The issue's own synthetic reproducer names the defect precisely**: a supplier's table slot 0
+  funcrefs its own function returning 11; an importer imports that table, declares a decoy
+  function 0 returning 99, and calls slot 0 — the old code returned 99 (the importer's own
+  function at that index) instead of 11. `linking.wast:342-353` is the corpus's version, `$Ot`
+  writing its own functions into `$Mt`'s imported table. This is accept-direction (§9 G-3) in the
+  most literal sense: the wrong answers are plausible small integers, and the vectors score green
+  whenever the two instances happen to agree at an index, which most cross-instance modules in
+  the corpus do most of the time — found by writing the flow account and probing, not by reading
+  a failure. `TestCallIndirectResolvesTheFuncrefsOriginatingInstance` and
+  `TestCallIndirectAfterCrossInstanceElemWrite` pin both reproducers, each falsified by reverting
+  the resolution and confirming the exact wrong numbers (99, 4) reappear.
+
+  `execFailCeiling`: 211 → 196, all 15 departures from `assert_return value mismatch` and zero
+  arrivals elsewhere (measured by joining the full pre- and post-fix bucket dumps, not by reading
+  either board's total). `mismatch_test.go`'s per-row registry — pre-existing, and the reason this
+  session didn't have to rediscover which rows were which — drops its 15 Q2 entries and keeps its
+  7 unrelated ones (5 blocked by the `MultiMemory` gate, 2 by `#8`'s missing `(start …)` encoder
+  support) exactly as they were.
+
 - **The decoder retains a non-func import's descriptor, and the linker compares types instead of
   only kinds** ([#164](https://github.com/scttfrdmn/burroughs/issues/164)). `decodeImport` used to
   read a table's element type and limits, a memory's limits, or a global's type and mutability and

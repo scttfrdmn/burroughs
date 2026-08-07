@@ -684,3 +684,90 @@ func TestGrownMemoryReexportsItsCurrentSize(t *testing.T) {
 		t.Error("importing above the grown size: link accepted a mismatched import")
 	}
 }
+
+// TestCallIndirectResolvesTheFuncrefsOriginatingInstance is grave #163's control (0017 Q2), the
+// issue's own synthetic reproducer verbatim: a supplier's table slot 0 funcrefs its own func
+// returning 11; an importer imports that table, declares a *decoy* func 0 returning 99, and
+// `call_indirect`s slot 0. Before the fix this returned 99 — the importer's own function at
+// index 0 — because `ref.Addr` was resolved against `in.mod` (the caller) rather than against
+// the instance whose element segment wrote the slot.
+//
+// **The whole point of this row is that the two instances disagree.** `TestImportSlotIndicesAreCountedPerKind`
+// and its neighbours build suppliers and importers whose values happen to coincide or are chosen
+// so a wrong slot answers a *plausible* number; here the two funcs at index 0 return different,
+// arbitrary constants specifically so that resolving in the wrong module is loud rather than
+// merely wrong-in-general. A fixture where the two instances agree cannot fail (§9 G-3) — the
+// issue names this explicitly, and it is why the corpus itself scores this defect green almost
+// everywhere despite `linking.wast`'s `$Mt`/`$Ot` pair exercising the identical mechanism.
+func TestCallIndirectResolvesTheFuncrefsOriginatingInstance(t *testing.T) {
+	sup := supplier(t, `(module
+		(func $eleven (result i32) (i32.const 11))
+		(table (export "tab") 1 funcref)
+		(elem (i32.const 0) $eleven))`)
+
+	imp, trap, err := link1(t, `(module
+		(type $t (func (result i32)))
+		(table (import "s" "tab") 1 funcref)
+		(func $ninetynine (result i32) (i32.const 99))
+		(elem declare func $ninetynine)
+		(func (export "call") (result i32) (call_indirect (type $t) (i32.const 0))))`,
+		exportsOf(sup))
+	if err != nil {
+		t.Fatalf("link: %v", err)
+	}
+	if trap != nil {
+		t.Fatalf("instantiate trapped: %v", trap)
+	}
+
+	got, err := imp.Invoke("call")
+	if err != nil {
+		t.Fatalf("call: %v", err)
+	}
+	if len(got) != 1 || int32(got[0].Bits) != 11 {
+		t.Errorf("call_indirect through an imported table = %v, want 11 (the supplier's own "+
+			"function) — 99 would mean the slot resolved in the importer's index space instead "+
+			"of the instance that wrote it", got)
+	}
+}
+
+// TestCallIndirectAfterCrossInstanceElemWrite is linking.wast:342-353's own shape, pinned
+// directly: `$Ot` imports `$Mt`'s table and writes its *own* functions into it with an active
+// element segment, so `$Mt`'s `call_indirect` through that shared table must resolve `$Ot`'s
+// functions in `$Ot`, even though the call itself originates in `$Mt`. This is the corpus vector
+// the synthetic reproducer above is a reduction of; kept as its own row because it exercises the
+// write path (an *importer's* segment filling a *supplier's* table) rather than the read path
+// alone.
+func TestCallIndirectAfterCrossInstanceElemWrite(t *testing.T) {
+	mt := supplier(t, `(module
+		(type (func (result i32)))
+		(table (export "tab") 5 funcref)
+		(func $g (result i32) (i32.const 4))
+		(func (export "call") (param i32) (result i32) (call_indirect (type 0) (local.get 0))))`)
+
+	ot, trap, err := link1(t, `(module
+		(type (func (result i32)))
+		(table (import "Mt" "tab") 5 funcref)
+		(elem (i32.const 1) $i)
+		(func $i (result i32) (i32.const 6)))`,
+		exportsOf(mt))
+	if err != nil {
+		t.Fatalf("link: %v", err)
+	}
+	if trap != nil {
+		t.Fatalf("instantiate trapped: %v", trap)
+	}
+	if derr := ot.Deferred(); derr != nil {
+		t.Fatalf("Ot deferred: %v", derr)
+	}
+
+	// $Mt's own call, through the table $Ot wrote into.
+	got, err := mt.Invoke("call", I32(1))
+	if err != nil {
+		t.Fatalf("Mt.call(1): %v", err)
+	}
+	if len(got) != 1 || int32(got[0].Bits) != 6 {
+		t.Errorf("Mt.call(1) = %v, want 6 ($Ot's function $i) — 4 would mean the slot resolved "+
+			"in Mt's own index space (its function $g) instead of Ot's, the instance whose "+
+			"element segment wrote the slot", got)
+	}
+}

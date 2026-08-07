@@ -147,16 +147,22 @@ func TestElemExprOpcodesAgreeWithTheDecoder(t *testing.T) {
 // because a partition needs its protected side — it marks where the damage from such a change
 // would *not* reach, which is every element segment naming function 0.
 func TestElemExprIndexReachesTheRef(t *testing.T) {
+	// **Not `&Instance{}` per row, on purpose (0017 Q2, grave #163).** `constExprRef` now sets
+	// `Inst` to the instance it evaluates against — that is the fix's whole shape — so a `ref`
+	// pins its own struct only against a shared, named instance, and a fresh `&Instance{}` per
+	// call would silently pass by comparing against whatever pointer that row happened to
+	// allocate rather than asserting the field at all.
+	in := &Instance{}
 	for _, c := range []struct {
 		what string
 		expr []binary.Instr
 		want ref
 	}{
-		{"ref.func 0", []binary.Instr{{Op: opRefFunc, Imm0: 0}, {Op: opEnd}}, ref{Addr: 0}},
-		{"ref.func 7", []binary.Instr{{Op: opRefFunc, Imm0: 7}, {Op: opEnd}}, ref{Addr: 7}},
+		{"ref.func 0", []binary.Instr{{Op: opRefFunc, Imm0: 0}, {Op: opEnd}}, ref{Addr: 0, Inst: in}},
+		{"ref.func 7", []binary.Instr{{Op: opRefFunc, Imm0: 7}, {Op: opEnd}}, ref{Addr: 7, Inst: in}},
 		{"ref.null", []binary.Instr{{Op: opRefNull}, {Op: opEnd}}, ref{Null: true}},
 	} {
-		got, err := (&Instance{}).constExprRef(c.expr)
+		got, err := in.constExprRef(c.expr)
 		if err != nil {
 			t.Errorf("%s: %v", c.what, err)
 			continue
@@ -170,7 +176,7 @@ func TestElemExprIndexReachesTheRef(t *testing.T) {
 	// is `uninitialized element` at the call, which is a wrong trap and not a missing feature.
 	// `global.get` is the form the suite has that this does not run — elem.wast has segments
 	// initialized from an imported global.
-	if _, err := (&Instance{}).constExprRef([]binary.Instr{{Op: 0x23}, {Op: opEnd}}); err == nil {
+	if _, err := in.constExprRef([]binary.Instr{{Op: 0x23}, {Op: opEnd}}); err == nil {
 		t.Error("a `global.get` element expression evaluated silently; an unevaluated form must be " +
 			"reported, because defaulting to null makes it `uninitialized element` at the call")
 	}

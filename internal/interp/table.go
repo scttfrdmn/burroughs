@@ -283,7 +283,7 @@ func (in *Instance) segmentRefs(seg *binary.ElemSegment) ([]ref, error) {
 	if !seg.ByExpr {
 		rs := make([]ref, len(seg.Funcs))
 		for i, x := range seg.Funcs {
-			rs[i] = ref{Addr: x}
+			rs[i] = ref{Addr: x, Inst: in}
 		}
 		return rs, nil
 	}
@@ -327,7 +327,7 @@ func (in *Instance) constExprRef(expr []binary.Instr) (ref, error) {
 			// rather than fixed here.
 			return ref{Null: true}, nil
 		case opRefFunc:
-			return ref{Addr: uint32(expr[0].Imm0)}, nil
+			return ref{Addr: uint32(expr[0].Imm0), Inst: in}, nil
 		}
 	}
 	return ref{}, fmt.Errorf("%w: an element expression this engine does not evaluate yet (%d instructions, leading opcode %#02x)",
