@@ -456,15 +456,17 @@ func TestImportedMemoryOccupiesItsIndex(t *testing.T) {
 	}
 	_, err := in.Invoke("size0")
 	if err == nil {
-		t.Fatal("memory.size against an imported memory succeeded; with no linker there is nothing to report a size for")
+		t.Fatal("memory.size against an unsupplied imported memory succeeded; nothing filled that slot, so there is no size to report")
 	}
 	if !errors.Is(err, ErrUnsupported) {
 		t.Errorf("err = %v, want ErrUnsupported: an imported memory is a missing engine component, not a fault in a well-formed module", err)
 	}
-	// The error names linking rather than an index or an opcode, because the board's buckets
-	// are a work plan only while each key names the thing actually missing.
-	if !strings.Contains(err.Error(), "linking is not implemented") {
-		t.Errorf("err = %q, want it to name linking", err)
+	// The error names the unsupplied import rather than an index or an opcode, because the
+	// board's buckets are a work plan only while each key names the thing actually missing.
+	// It read `linking is not implemented` until the linker landed and made that false; the
+	// wording's four sites are pinned together in TestUnsatisfiedImportKeepsItsSentinel.
+	if !strings.Contains(err.Error(), "is an import nothing supplied") {
+		t.Errorf("err = %q, want it to name the unsupplied import", err)
 	}
 }
 
@@ -524,7 +526,7 @@ func TestMemoryIndexSpaceCountsImportsFirst(t *testing.T) {
 			}
 			for i := range c.wantImports {
 				if in.mems[i] != nil {
-					t.Errorf("slot %d is an import and should be nil; v0 has no linker", i)
+					t.Errorf("slot %d is an import and should be nil; this row goes through Instantiate, which supplies nothing", i)
 				}
 			}
 			for i := c.wantImports; i < len(in.mems); i++ {

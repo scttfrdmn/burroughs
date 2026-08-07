@@ -133,18 +133,70 @@ func TestValueMismatchBucketIsEmptyAndSaysWhoWroteAnyRow(t *testing.T) {
 	// been masked in every module whose setup also failed, which is the blind spot named further
 	// down; it is no longer masked, because the setups now succeed. The census got sharper by the
 	// bucket draining, which is the argument against retiring it stated as a measurement.
+	// **The bucket is no longer empty, and the answer is a per-row registry rather than a raised
+	// count.** 0017 Q1's registry admitted a population of cross-module vectors, and 22 of them
+	// return a wrong value. A count would have been the cheaper move and is the wrong one: the
+	// three causes below have three different work plans, and a single number cannot say which of
+	// them a future change fixed or broke. So each row is named with the mechanism that authored
+	// it, on TestGatedVectors' shape and for its reason — an unexplained entry is a suppression
+	// wearing a disguise.
+	//
+	// The direction the comment above inverted stands: an *unlisted* row is the finding. What
+	// changed is that "expected" is now a set rather than the empty set.
+	//
+	// **Three causes, and the second lane is what separated them.** With every gate on the bucket
+	// holds **17**, so the 5 that vanish there are gate cascades and the 17 that survive are real.
+	// Of those 17, two are the encoder and 15 are one engine defect. Both partitions sum, and they
+	// cross-cut: `linking.wast` contributes to all three.
+	//
+	//	15  Q2's funcref identity (0017)  — a table slot's funcref carries a bare module-local
+	//	                                    index, so a `call_indirect` through an imported table
+	//	                                    resolves in the wrong instance
+	//	 5  multi-memory gate cascade     — the module that *writes* the memory is declined, so the
+	//	                                    reader's honest answer is a wrong one
+	//	 2  encoder: no (start …) field   — the module that would write the memory cannot be emitted
+	//
+	// **The 15 are a filed accept-direction defect, not an excused row.** The identity confusion is
+	// invisible whenever the two instances agree about an index, which is why no rejection vector
+	// can score it (§9 G-3) and why it is quoted with its arithmetic here: `linking.wast:410`
+	// expects `0` from `$f` and gets `4`, which is `$Mt`'s funcidx 0 (`$g`, `i32.const 4`) — the
+	// same *number* the wrong instance holds at the same index. Q2 is where 0017 put the widening
+	// and this is the population that will collect it.
 	if len(rows) == 0 {
-		t.Logf("value mismatches: 0 — the expected state; see the comment above for why this is a\n" +
-			"re-pointing and not a retirement, and TestMismatchClassifierCanDissent for what keeps\n" +
-			"the classifier falsifiable while its population is empty")
+		t.Errorf("value mismatches: 0, where %d rows are registered below.\n"+
+			"Every registered row names a live defect or frontier, so an empty bucket means either\n"+
+			"one of the three causes was fixed without this list being updated, or the corpus moved.\n"+
+			"Neither is a green: retire the entries that are genuinely answered and say so in the PR.",
+			countMismatchRegistry())
 		return
 	}
-	t.Errorf("%d value mismatches on the board, where the expected count is 0.\n"+
-		"The bucket drained at the bulk trio (308 → 0), so a row here no longer has a missing arm to\n"+
-		"hide behind: it is either a genuine wrong answer or a newly-admitted module whose setup\n"+
-		"fails for a cause not yet on the work plan. The partition below says which — read the\n"+
-		"`author of the wrong value` lines first.", len(rows))
 	t.Logf("value mismatches: %d across %d files", len(rows), len(byFile))
+
+	// The forward direction: a row nobody diagnosed.
+	for _, r := range rows {
+		if _, ok := expectedMismatches[r.file][r.line]; !ok {
+			t.Errorf("%s:%d is a value mismatch with no registered cause (want %s, got %s).\n"+
+				"\tA row here has no missing arm to hide behind: diagnose it against the all-gates-on\n"+
+				"\tlane first — surviving there means the engine, vanishing there means a gate cascade.",
+				r.file, r.line, r.expect, r.got)
+		}
+	}
+	// The reverse, which is the direction that matters more: a registered row that stopped
+	// mismatching is a defect *fixed* and a list gone stale, and a stale list overstates how much
+	// of this bucket is understood.
+	seen := map[string]bool{}
+	for _, r := range rows {
+		seen[fmt.Sprintf("%s:%d", r.file, r.line)] = true
+	}
+	for f, lines := range expectedMismatches {
+		for line, why := range lines {
+			if !seen[fmt.Sprintf("%s:%d", f, line)] {
+				t.Errorf("%s:%d is registered as a value mismatch (%s) but no longer mismatches;\n"+
+					"\tremove the entry — and if its cause is answered, the other rows sharing that\n"+
+					"\tcause should have moved too", f, line, why)
+			}
+		}
+	}
 	for _, k := range sortedByCount(byFile) {
 		t.Logf("  %5d  %s", byFile[k], k)
 	}
@@ -193,18 +245,30 @@ func TestValueMismatchBucketIsEmptyAndSaysWhoWroteAnyRow(t *testing.T) {
 		len(rows)-len(orphans), len(spans))
 	t.Logf("  %5d  not downstream", len(orphans))
 
+	// **The orphan count is printed, and the assertion it used to carry has moved above.** It
+	// asserted that no mismatch stands on a module whose setup succeeded, and the registry's 22
+	// are all exactly that: **0 downstream, 22 not**, which is the arm firing for the reason it
+	// was written and delivering a verdict this file had never delivered before the trio landed.
+	//
+	// Erroring here *as well* would report the same 22 rows twice under two claims — once as
+	// undiagnosed and once as not-downstream — so the diagnosis is the assertion and the
+	// discriminator is the *evidence* for it. That is the ordering the header's own history asks
+	// for: the discriminator's job was always to answer "which work plan", and it has, so what
+	// survives is the answer keyed per row rather than a second count of the same population.
+	//
+	// The classifier keeps its teeth without asserting here — `TestMismatchClassifierCanDissent`
+	// falsifies it on synthetic states, which is exactly what that test was written to do "across
+	// the interval where it has nothing to classify". This is now the interval where it has
+	// something to classify and nothing to *veto*.
 	if len(orphans) > 0 {
-		t.Errorf("%d value mismatches are NOT downstream of a failed setup invoke.\n"+
-			"That means the engine ran a module's setup successfully and then returned a wrong\n"+
-			"value — an arithmetic or semantic defect, not a missing arm, and the first of its kind\n"+
-			"here since the graves closed. Partition these by opcode before anything else:",
-			len(orphans))
+		t.Logf("%d of these stand on a module whose setup succeeded — a wrong value rather than a\n"+
+			"missing arm, which the registry above diagnoses per row:", len(orphans))
 		for i, r := range orphans {
 			if i >= 40 {
 				t.Logf("  … and %d more", len(orphans)-40)
 				break
 			}
-			t.Errorf("  %s:%d  want %s  got %s", r.file, r.line, r.expect, r.got)
+			t.Logf("  %s:%d  want %s  got %s", r.file, r.line, r.expect, r.got)
 		}
 	}
 }
@@ -266,6 +330,70 @@ func TestMismatchClassifierCanDissent(t *testing.T) {
 				"manufactured", line)
 		}
 	}
+}
+
+// expectedMismatches is every value mismatch on the default board, with the mechanism that
+// authored it — file → line → cause.
+//
+// **Read from both lanes and printed, never inferred from the value.** The first version of this
+// file's discriminator guessed from the shape of `Got` and was backwards (see the header), so each
+// row's cause here is established by two measurements: whether it survives the all-gates-on lane,
+// and what the module upstream of it actually reported. The arithmetic that identifies the funcref
+// rows is quoted at the call site above.
+var expectedMismatches = map[string]map[int]string{
+	// `$M` at :1 owns one memory; the module at :10 imports it and declares a second, so its
+	// memargs carry flags bit 6 and multi-memory declines it. Its data segment is what would
+	// write 1..5 into `$M`'s memory, so `$M` honestly reads 0. Gone with every gate on, which is
+	// how the cause was separated from the funcref rows.
+	"load1.wast": {
+		25: "multi-memory: the writer module at :10 is declined, so $M's memory was never written",
+		26: "multi-memory: the writer module at :10 is declined, so $M's memory was never written",
+		27: "multi-memory: the writer module at :10 is declined, so $M's memory was never written",
+		28: "multi-memory: the writer module at :10 is declined, so $M's memory was never written",
+		29: "multi-memory: the writer module at :10 is declined, so $M's memory was never written",
+	},
+	// `$module2` and `$module3` import `$module1`'s table and write their own functions into it.
+	// A `call_indirect` in `$module1` through those slots must resolve in the *supplier*, and
+	// resolves locally instead: slot 7 holds `$module2`'s funcidx 0, read as `$module1`'s
+	// `$const-i32-a` (65) where 67 was wanted.
+	"elem.wast": {
+		959: "Q2 funcref identity (0017): $module2's elem at :951 writes a module-local funcidx",
+		960: "Q2 funcref identity (0017): $module2's elem at :952 writes a module-local funcidx",
+		972: "Q2 funcref identity (0017): $module3's elem at :964 writes a module-local funcidx",
+		973: "Q2 funcref identity (0017): $module3's elem at :965 writes a module-local funcidx",
+		974: "Q2 funcref identity (0017): $module3's elem at :965 writes a module-local funcidx",
+	},
+	// The paradigm file. `$Nt` and `$Ot` both put their own functions into `$Mt`'s imported table;
+	// `:410` and `:423` are the same defect reached through a *trapping* module whose element
+	// segment persists, which is why they sit apart from the `:342-353` block.
+	"linking.wast": {
+		342: "Q2 funcref identity (0017): $Ot's elem at :331 writes a module-local funcidx",
+		344: "Q2 funcref identity (0017): $Ot's elem at :331 writes a module-local funcidx",
+		345: "Q2 funcref identity (0017): $Ot's elem at :331 writes a module-local funcidx",
+		347: "Q2 funcref identity (0017): $Ot's elem at :331 writes a module-local funcidx",
+		350: "Q2 funcref identity (0017): $Ot's elem at :331 writes a module-local funcidx",
+		351: "Q2 funcref identity (0017): $Ot's elem at :331 writes a module-local funcidx",
+		353: "Q2 funcref identity (0017): $Ot's elem at :331 writes a module-local funcidx",
+		410: "Q2 funcref identity (0017): the persisted elem at :404 resolves to $Mt's funcidx 0 ($g, 4)",
+		423: "Q2 funcref identity (0017): the persisted elem at :421 resolves to $Mt's funcidx 0 ($g, 4)",
+		609: "encoder: the module at :592 carries (start $main), which the emitter cannot write (#8)",
+	},
+	"linking0.wast": {
+		42: "Q2 funcref identity (0017): the persisted elem at :34 resolves to $Mt's funcidx 0 ($g, 4)",
+	},
+	"linking3.wast": {
+		82: "encoder: the module at :65 carries (start $main), which the emitter cannot write (#8)",
+	},
+}
+
+// countMismatchRegistry is the registry's size, for the vacuity message. A literal would be a
+// second place holding the same fact, which is the shape three graves in this repo share.
+func countMismatchRegistry() int {
+	n := 0
+	for _, lines := range expectedMismatches {
+		n += len(lines)
+	}
+	return n
 }
 
 type mismatchRow struct {

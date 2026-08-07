@@ -63,8 +63,11 @@ func TestGlobalInitializerSeesEarlierGlobals(t *testing.T) {
 // resolve every defined global one slot low.
 //
 // The import slot must be **reserved and empty**: reserved so the defined global lands at index 1,
-// empty because v0 has no linker. Both halves are asserted, since a slice of the right length whose
-// slot 0 held the *defined* global would satisfy a length check and answer the wrong global.
+// empty because this row goes through `Instantiate`, which supplies nothing. Both halves are
+// asserted, since a slice of the right length whose slot 0 held the *defined* global would satisfy
+// a length check and answer the wrong global. The reason for the emptiness changed when the linker
+// landed — it was "v0 has no linker" — and the *reservation* is what the row is about either way:
+// `InstantiateLinked` fills this slot precisely because it was reserved.
 func TestGlobalIndexSpacePutsImportsFirst(t *testing.T) {
 	m := &binary.Module{
 		Imports: []binary.Import{{Kind: binary.ExternGlobal, Module: "m", Name: "g"}},
@@ -74,10 +77,10 @@ func TestGlobalIndexSpacePutsImportsFirst(t *testing.T) {
 	if len(in.globals) != 2 {
 		t.Fatalf("global index space is %d wide, want 2 (one import, one definition)", len(in.globals))
 	}
-	// Slot 0 is the import: reserved, nil, and reported as the missing *linker* rather than as a
+	// Slot 0 is the import: reserved, nil, and reported as an *unsupplied import* rather than as a
 	// bad module — the two facts globalFor keeps apart.
 	if _, err := in.globalFor("test", 0); !errors.Is(err, ErrUnsupported) {
-		t.Errorf("global 0 (imported): got %v, want ErrUnsupported naming linking", err)
+		t.Errorf("global 0 (imported): got %v, want ErrUnsupported naming the unsupplied import", err)
 	}
 	// Slot 1 is the definition, at the offset the import consumed.
 	g, err := in.globalFor("test", 1)

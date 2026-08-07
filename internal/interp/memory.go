@@ -292,12 +292,28 @@ func (in *Instance) memoryFor(what string, idx uint64) (*memory, error) {
 	if in.mems[idx] == nil {
 		// A reserved slot with nothing in it, and the two reasons are reported apart because
 		// they are different facts about the engine. An index below the import offset is an
-		// **imported** memory, which v0 cannot supply (contract §3) — nothing went wrong with
-		// the module. Above it, a declared memory whose allocation failed for a verdict-shaped
-		// reason, and the reason is quoted rather than paraphrased: without it this reads
-		// "memory %d exists but is nil", which tells the reader nothing about their module.
+		// **imported** memory *nothing supplied* — nothing went wrong with the module. Above
+		// it, a declared memory whose allocation failed for a verdict-shaped reason, and the
+		// reason is quoted rather than paraphrased: without it this reads "memory %d exists but
+		// is nil", which tells the reader nothing about their module.
+		//
+		// **This arm is now the unlinked case rather than the only case, and no line of the
+		// *logic* changed to become that.** `InstantiateLinked` fills the reserved slot, so a
+		// supplied memory reaches the check below and is simply returned — supplying an import is
+		// *filling*, never restructuring an index space, which is what the reserved-not-omitted
+		// convention bought (22 vectors, see Instance.mems). The sentence that used to say v0
+		// "cannot supply" this was true when written and is the prose a landing falsifies.
+		//
+		// **The message did change, and it had to**: it said `linking is not implemented`, which
+		// this engine falsifies the moment it links, and an error naming a component's absence
+		// while the component runs is the fabricated-evidence grave (#36) — the right verdict
+		// quoting a fact the engine does not hold. The bucket-preservation argument that licensed
+		// keeping it verbatim was discharged when the drain was measured: **624 → 13** under the
+		// old string, so the key it protected has served its one purpose, and the 13 that remain
+		// are unsupplied imports rather than an engine without a linker. Still ErrUnsupported —
+		// "this phase does not run a module whose import went unsupplied" is true and is §3's.
 		if idx < uint64(in.mod.ImportedMems()) {
-			return nil, fmt.Errorf("%w: memory %d is imported, and linking is not implemented (contract §3)",
+			return nil, fmt.Errorf("%w: memory %d is an import nothing supplied (contract §3)",
 				ErrUnsupported, idx)
 		}
 		return nil, fmt.Errorf("%w: memory %d was declared but not allocated: %w",

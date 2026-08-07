@@ -978,10 +978,19 @@ func (d *Decoder) decodeImport(r *reader) error {
 	default:
 		return fmt.Errorf("%w: %#02x", ErrMalformedImportKind, kind)
 	}
-	// The non-func descriptors are read and dropped (#7). Index is the type index for a
-	// function import and unset for the others, which is what its comment says; a
-	// consumer that needs an imported table's type is the reason to retain one, and no
-	// such consumer exists yet.
+	// The non-func descriptors are read and dropped. Index is the type index for a function
+	// import and unset for the others, which is what its comment says.
+	//
+	// **The consumer this deferral was waiting for has arrived, so the citation moved to the
+	// work it now names: #164, not #7.** The condition stated here was "a consumer that needs
+	// an imported table's type is the reason to retain one, and no such consumer exists yet",
+	// and `Instance.link` is that consumer — it can compare an import's *kind* against a
+	// supplied extern and cannot compare their types, because the type is not here to compare.
+	// 124 `assert_unlinkable` vectors want `incompatible import type` for exactly that: a
+	// matching kind with a mismatched signature, limit or mutability. Retained as a deferral
+	// rather than fixed in the linker's own PR, and re-pointed rather than deleted, because a
+	// tracking number that no longer leads to the work reads as tracked (the declared-and-tracked
+	// test, on `ErrTrailingData`).
 	d.mod().Imports = append(d.mod().Imports, im)
 	return nil
 }

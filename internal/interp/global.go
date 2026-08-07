@@ -80,11 +80,12 @@ func (in *Instance) globalFor(what string, idx uint64) (*global, error) {
 	if in.globals[idx] == nil {
 		// A reserved slot with nothing in it, reported by *which* nothing — memoryFor's
 		// split, and it transfers unchanged because the index space's shape is the same
-		// fact for every extern kind. Below the import offset is an imported global, which
-		// v0 has no linker to supply; above it, a declared global whose initializer failed
-		// for a reason the trap channel could not carry.
+		// fact for every extern kind. Below the import offset is an imported global nothing
+		// supplied; above it, a declared global whose initializer failed for a reason the trap
+		// channel could not carry. The logic is unchanged by linking arriving and the message is
+		// not, both for memoryFor's reasons.
 		if idx < uint64(in.mod.ImportedGlobals()) {
-			return nil, fmt.Errorf("%w: global %d is imported, and linking is not implemented (contract §3)",
+			return nil, fmt.Errorf("%w: global %d is an import nothing supplied (contract §3)",
 				ErrUnsupported, idx)
 		}
 		return nil, fmt.Errorf("%w: global %d was declared but not initialized: %w",

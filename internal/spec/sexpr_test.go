@@ -4,8 +4,14 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/scttfrdmn/burroughs/internal/binary"
+	"github.com/scttfrdmn/burroughs/internal/text"
 )
 
 // Unit tests for the reader itself, so a parser bug is distinguishable from a
@@ -505,40 +511,54 @@ func TestScriptModuleFormsAreNotWatBodies(t *testing.T) {
 // The `$M` and reference-argument rows are the 27 of 4903 the recon measured as declines.
 // They are here because a decline is a claim about which vectors are askable, and the day one
 // becomes askable this test is where the classification decision has to be made visible.
+//
+// **That day arrived, and the row moved rather than being deleted.** The registry (0017 Q1)
+// makes `(assert_trap (invoke $M …) …)` askable, so `$M` is now `KindNamedAssertTrap` and the
+// row asserts the new Kind — which is the sentence above being *collected* rather than merely
+// vindicated: a decline row that becomes an accept row is the one artefact that proves the
+// classification decision was made deliberately instead of drifting in. The reference-argument
+// row is untouched, because `readConst` still cannot name a `ref.null func`, and keeping the
+// two rows adjacent is what shows the two declines had different causes all along.
 func TestAssertTrapSplitsByWrappedForm(t *testing.T) {
 	cases := []struct {
 		src    string
 		want   Kind
 		expect string // Expect, for the shapes that carry one
 		invoke string
+		target string // the module `$name` an action selects, empty for the current instance
 	}{
 		// The action population — 4876 commands, #157's by-product.
 		{
 			`(assert_trap (invoke "f") "integer divide by zero")`,
-			KindAssertTrapAction, "integer divide by zero", "f",
+			KindAssertTrapAction, "integer divide by zero", "f", "",
 		},
 		{
 			`(assert_trap (invoke "g" (i32.const 1) (i64.const 2)) "out of bounds memory access")`,
-			KindAssertTrapAction, "out of bounds memory access", "g",
+			KindAssertTrapAction, "out of bounds memory access", "g", "",
 		},
 		// The module population — 0015's Kind. Unchanged by the split, which is the point of
 		// including it: the action arm must not shadow it.
 		{
 			`(assert_trap (module (memory 1) (data (i32.const 0) "x")) "out of bounds memory access")`,
-			KindAssertTrapModule, "out of bounds memory access", "",
+			KindAssertTrapModule, "out of bounds memory access", "", "",
 		},
-		// Declines. A module-selecting action needs script state the run loop does not keep;
-		// a reference-typed argument is not a value readConst can name.
-		{`(assert_trap (invoke $M "f") "unreachable")`, KindUnsupported, "", ""},
-		{`(assert_trap (invoke "f" (ref.null func)) "unreachable")`, KindUnsupported, "", ""},
+		// The module-named population — 20 commands, and this row was a decline until the
+		// registry gave the run loop script state to select an instance with.
+		{
+			`(assert_trap (invoke $M "f") "unreachable")`,
+			KindNamedAssertTrap, "unreachable", "f", "$M",
+		},
+		// Still a decline, and for its own reason: a reference-typed argument is not a value
+		// readConst can name. Adjacent to the row above so the two causes stay distinguishable.
+		{`(assert_trap (invoke "f" (ref.null func)) "unreachable")`, KindUnsupported, "", "", ""},
 		// A `get` action is a different action grammar and its own stratum.
-		{`(assert_trap (get "g") "unreachable")`, KindUnsupported, "", ""},
+		{`(assert_trap (get "g") "unreachable")`, KindUnsupported, "", "", ""},
 		// A module form the keyword check declines — the script grammar, not a wat body.
-		{`(assert_trap (module definition (memory 1)) "unreachable")`, KindUnsupported, "", ""},
+		{`(assert_trap (module definition (memory 1)) "unreachable")`, KindUnsupported, "", "", ""},
 		// Arity: the form is `(assert_trap <action> "text")`, and neither a missing text nor
 		// a missing action is that.
-		{`(assert_trap (invoke "f"))`, KindUnsupported, "", ""},
-		{`(assert_trap "integer divide by zero")`, KindUnsupported, "", ""},
+		{`(assert_trap (invoke "f"))`, KindUnsupported, "", "", ""},
+		{`(assert_trap "integer divide by zero")`, KindUnsupported, "", "", ""},
 	}
 	for _, c := range cases {
 		s, err := Parse("t.wast", []byte(c.src))
@@ -558,6 +578,15 @@ func TestAssertTrapSplitsByWrappedForm(t *testing.T) {
 		}
 		if got.Invoke != c.invoke {
 			t.Errorf("%s\n  Invoke = %q, want %q", c.src, got.Invoke, c.invoke)
+		}
+		// **Target is asserted, not just Kind, because Kind alone cannot fail on it.** A
+		// reader that stamped KindNamedAssertTrap and dropped the `$M` would produce the
+		// right Kind and run against whatever instance happened to be current — a wrong
+		// answer from a right-looking classification, and the exact shape the six-Kind split
+		// exists to keep separable. The unnamed rows assert it *empty* for the same reason:
+		// a reader that filled Target unconditionally would silently redirect them.
+		if got.Target != c.target {
+			t.Errorf("%s\n  Target = %q, want %q", c.src, got.Target, c.target)
 		}
 		// Every admitted shape needs the interpreter, and the declines need nothing: a
 		// decline that carried a capability would land in the fourth column, which is the
@@ -691,5 +720,824 @@ func TestAssertTrapActionNeedsATrapPredicate(t *testing.T) {
 		Instantiate: func(Command) (Instance, Stratum, error) { return "stub", StratumUnset, nil },
 		Invoke:      func(Instance, string, []Val) ([]Val, error) { return nil, nil },
 		Has:         []Capability{CapInterpreter},
+	})
+}
+
+// TestNoReaderLeavesKindAtItsZeroValue is the control the `register` arm's grave names: a reader
+// that returns its Command bare, without stamping Kind, scores the vector as `KindModuleBinary`.
+//
+// **The defect it catches is a zero value that is a valid member.** `Kind` is an iota enum whose
+// zero is `KindModuleBinary` rather than an unset marker, so a reader that forgets the stamp
+// produces a Command that classifies, runs, and fails in the *decoder* — 78 registers reported as
+// `(module binary ...) must decode` / `unexpected end`, an error naming a layer the input never
+// reached. That is the wrong-layer tell, and no board number distinguishes it from a real decoder
+// regression: the count and the bucket key both look like a decoder frontier.
+//
+// # Scoped to every classified Kind, not to the reader that had the bug
+//
+// A control scoped to today's sample inherits today's blind spot, and the sample here is
+// "whichever arm was written last". So this asserts over the whole corpus and over the whole
+// enum: **no command whose head is not `module` may carry `KindModuleBinary`**, which is the
+// property the missed stamp violates for every arm at once, present and future. The complement
+// is asserted with it — the commands that *are* binary module forms all carry a non-empty image —
+// because a Kind stamped right and a payload read right are two facts, and the zero-value defect
+// produces the first without the second.
+//
+// Falsified by removing the stamp from the `register` arm (`c.Kind, c.Line, c.Head = …` → `c.Line,
+// c.Head = …`): 78 rows report `head "register" carries KindModuleBinary`, naming the file and
+// line rather than the decoder.
+func TestNoReaderLeavesKindAtItsZeroValue(t *testing.T) {
+	requireSuite(t)
+
+	// The heads a `KindModuleBinary` may legitimately have. One entry, and it is a set rather
+	// than an equality test because `classify` keys on the head atom: a second module-form head
+	// added upstream should widen this deliberately rather than fail mysteriously.
+	binaryHeads := map[string]bool{"module": true}
+
+	classified, binaries := 0, 0
+	for _, f := range boardFiles(t) {
+		s, err := ParseFile(filepath.Join(suiteDir, f))
+		if err != nil {
+			t.Errorf("%s: parse: %v", f, err)
+			continue
+		}
+		for _, c := range s.Commands {
+			if c.Kind == KindUnsupported {
+				continue
+			}
+			classified++
+			if c.Kind != KindModuleBinary {
+				continue
+			}
+			binaries++
+			if !binaryHeads[c.Head] {
+				t.Errorf("%s:%d: head %q carries KindModuleBinary, which is Kind's *zero value* —\n"+
+					"\tthe reader for this head returned its Command without stamping Kind, so the vector\n"+
+					"\tis about to be scored as a binary module and fail in the decoder (see the register arm)",
+					f, c.Line, c.Head)
+			}
+			// The payload half: a Kind stamped right with nothing read is the same defect one
+			// field over, and a missing stamp produces exactly that — an image-less binary form.
+			if len(c.Module) == 0 {
+				t.Errorf("%s:%d: KindModuleBinary with an empty image; the head is %q",
+					f, c.Line, c.Head)
+			}
+		}
+	}
+	// The vacuity guard, and it is two floors rather than one total: a corpus that parsed to
+	// nothing would agree with every assertion above, and so would one whose binary forms all
+	// vanished while the other Kinds stayed. Sized from the measured census (37965 classified,
+	// 88 binary module forms) with room to move. Watched fire by ranging over
+	// `boardFiles(t)[:0]`, which reports `0 classified commands and 0 binary module forms` —
+	// breaking the assertion above could never have found this, which is the whole reason the
+	// floors are here rather than a non-nil check.
+	if classified < 30000 || binaries < 80 {
+		t.Errorf("the loop saw %d classified commands and %d binary module forms, want >=30000 and >=80;\n"+
+			"\ta run over an empty or truncated corpus agrees with every assertion above",
+			classified, binaries)
+	}
+	t.Logf("%d classified commands, %d binary module forms, all under head %v", classified, binaries, "module")
+}
+
+// TestSpectestExportsEveryNameTheCorpusAsksFor is the floor the `spectestFields` comment names,
+// and its subject is a *count* rather than an error.
+//
+// **The defect it exists for was met: a 13-export first draft passed every board vector.** The
+// missing name was `table64`, imported at exactly one site — `table64.wast:13` — so the absence
+// was worth one vector, and one vector is inside the noise of any board line. `err == nil` is not
+// the assertion, because the fixture instantiating is not the claim; the claim is that the 174
+// import sites in the corpus have something to resolve against.
+//
+// # 14 or 13, per gate state, both pinned
+//
+// The export set is gate-dependent, which is the one thing about this fixture a reader will not
+// guess: `table64`'s `i64` index type *is* the memory64 proposal, so on the default board the
+// fixture's own source does not decode. Both branches are asserted, because the difference between
+// a partition and a fallback-with-better-manners is whether anyone checked:
+//
+//   - with memory64 on, 14 exports, `table64` among them;
+//   - with it off, 13, and `table64` absent.
+//
+// **And the absence is asserted to be unobservable**, which is what makes 13 honest rather than a
+// quiet loss: the corpus asks for `spectest.table64` at one site whose *own* module declares an
+// i64 table, so it is declined at its own decode on the same gate. The export exists exactly when
+// something can ask for it. That is measured here rather than argued — the site is looked up in
+// the corpus and its module checked — because an unobservability nobody re-measured is a claim.
+//
+// # The names come from the corpus, not from a list
+//
+// Derive the domain, never enumerate it: the wanted set is read out of every `(import "spectest"
+// "name" …)` in the vendored suite, so a fifteenth name added upstream fails this test instead of
+// being silently unresolvable. The one name deliberately *not* supplied is `unknown`, asked for at
+// 5 sites, all `assert_unlinkable` vectors expecting `unknown import` — exporting it would convert
+// five passes into five failures, so it is excluded here with that reason rather than by omission.
+//
+// Falsified three ways, each watched fail:
+//
+//   - deleting `(table (export "table64") i64 10 20 funcref)` from `spectestTable64Field`:
+//     `memory64 on: 13 exports, want 14` and `table64 is missing`;
+//   - deleting `(func (export "print_i32_f32") (param i32 f32))` from `spectestFields`:
+//     both branches report the count *and* `print_i32_f32 is asked for at 3 sites and not
+//     exported`, which is the corpus-derived half doing the work a count alone cannot;
+//   - adding `(func (export "unknown"))`: `unknown is exported, which converts 5
+//     assert_unlinkable passes into failures`.
+func TestSpectestExportsEveryNameTheCorpusAsksFor(t *testing.T) {
+	requireSuite(t)
+
+	// # What the corpus asks for, read through the package's own parser
+	//
+	// Through `newParser` rather than a grep, because the question is which imports *exist* and
+	// that is a grammar question — a regexp measures text, the reader measures nodes. Every
+	// `(import "spectest" "n" …)` at any depth, since the form sits inside module bodies.
+	wanted := map[string]int{}
+	paths, err := filepath.Glob(filepath.Join(suiteDir, "*.wast"))
+	if err != nil {
+		t.Fatalf("glob: %v", err)
+	}
+	table64Sites := []string{}
+	for _, p := range paths {
+		src, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatalf("%s: %v", p, err)
+		}
+		nodes, err := newParser(src).parseAll()
+		if err != nil {
+			// A file this package cannot parse asks for nothing measurable, and it is a
+			// different test's subject. Logged rather than skipped silently.
+			t.Logf("%s: parse: %v (contributes no import sites)", filepath.Base(p), err)
+			continue
+		}
+		for _, top := range nodes {
+			forEachNode(top, func(n node) {
+				if n.head() != "import" || len(n.list) < 3 || !n.list[1].isS || !n.list[2].isS {
+					return
+				}
+				if string(n.list[1].str) != "spectest" {
+					return
+				}
+				name := string(n.list[2].str)
+				wanted[name]++
+				if name == "table64" {
+					table64Sites = append(table64Sites, fmt.Sprintf("%s:%d", filepath.Base(p), n.line))
+				}
+			})
+		}
+	}
+	// The vacuity guard on the *derivation*: an empty wanted set would make every assertion
+	// below agree with an empty fixture. Sized from the measured census — 174 sites over 15
+	// names — and asserted on both, because one name asked for 174 times would satisfy a total.
+	// Watched fire by ranging over `paths[:0]`: `0 spectest imports over 0 names`.
+	sites := 0
+	for _, n := range wanted {
+		sites += n
+	}
+	if sites < 170 || len(wanted) < 15 {
+		t.Fatalf("the corpus asks for %d spectest imports over %d names, want >=170 and >=15;\n"+
+			"\tan empty derivation agrees with any fixture", sites, len(wanted))
+	}
+
+	// `unknown` is the one name whose absence is load-bearing. Excluded here with its reason, so
+	// the loop below does not demand it and a future reader does not helpfully add it.
+	const notSupplied = "unknown"
+	if wanted[notSupplied] == 0 {
+		t.Errorf("no vector imports spectest.%s any more; the deliberate omission in spectestFields "+
+			"has lost its subject and should be re-pointed or dropped", notSupplied)
+	}
+
+	for _, lane := range []struct {
+		what        string
+		feat        binary.Features
+		wantExports int
+		wantTable64 bool
+	}{
+		{"memory64 on", allFeaturesOn(t), 14, true},
+		{"memory64 off", binary.Features{}, 13, false},
+	} {
+		t.Run(lane.what, func(t *testing.T) {
+			// The source is composed by the same function the registry uses, and which branch to
+			// ask for is read off the *engine's* answer the way `spectestRegistry` reads it: try
+			// 14, fall back to 13 on a decline. Hardcoding `spectestSource(lane.wantTable64)`
+			// would assert the fixture against this test's own belief about the gate rather than
+			// against the decoder's, which is the echo shape (grave #106).
+			m, exports := decodeSpectest(t, lane.feat, true)
+			if m == nil {
+				m, exports = decodeSpectest(t, lane.feat, false)
+			}
+			if m == nil {
+				t.Fatalf("neither the 14- nor the 13-export fixture decodes under %s", lane.what)
+			}
+			if exports != lane.wantExports {
+				t.Errorf("%s: %d exports, want %d — spectestFields lost or gained a name, and a "+
+					"missing one is worth as little as a single vector (table64's is worth exactly one)",
+					lane.what, exports, lane.wantExports)
+			}
+			have := map[string]bool{}
+			for _, e := range m.Exports {
+				have[e.Name] = true
+			}
+			if have["table64"] != lane.wantTable64 {
+				t.Errorf("%s: table64 exported = %v, want %v", lane.what, have["table64"], lane.wantTable64)
+			}
+			if have[notSupplied] {
+				t.Errorf("%s: %s is exported, which converts %d assert_unlinkable passes into failures — "+
+					"those vectors expect `unknown import`", lane.what, notSupplied, wanted[notSupplied])
+			}
+			// Every name the corpus asks for, except the two whose status is stated above.
+			for name, n := range wanted {
+				if name == notSupplied || name == "table64" {
+					continue
+				}
+				if !have[name] {
+					t.Errorf("%s: %s is asked for at %d sites and not exported; those imports resolve "+
+						"against nothing", lane.what, name, n)
+				}
+			}
+		})
+	}
+
+	// # The unobservability of the 13-export branch, measured
+	//
+	// The claim is that dropping `table64` costs nothing because the only vector that asks for it
+	// is itself declined on the same gate. Checked rather than asserted: the site is located above
+	// from the corpus, and its module must fail to decode with memory64 off.
+	if len(table64Sites) != 1 {
+		t.Errorf("spectest.table64 is imported at %d sites (%v), want 1; the 13-export branch's "+
+			"unobservability argument was measured against one site and does not survive a second",
+			len(table64Sites), table64Sites)
+	}
+	for _, f := range boardFiles(t) {
+		if f != "table64.wast" {
+			continue
+		}
+		s, err := ParseFile(filepath.Join(suiteDir, f))
+		if err != nil {
+			t.Fatalf("%s: parse: %v", f, err)
+		}
+		found := false
+		for _, c := range s.Commands {
+			if c.Kind != KindModuleText || c.Line != 13 {
+				continue
+			}
+			found = true
+			// Through both front-end steps the board takes, since either could be the one that
+			// declines and only the *pair* answers "can this vector ask for table64". The
+			// encode failing is itself a decline for this purpose, which is why it is not a
+			// fatal: a vector that cannot be emitted cannot import anything either.
+			img, eerr := text.EncodeModule(c.Source)
+			if eerr != nil {
+				t.Logf("%s:%d does not encode (%v), so it cannot ask for spectest.table64 either", f, c.Line, eerr)
+				continue
+			}
+			if _, derr := (&binary.Decoder{}).DecodeModule(img); derr == nil {
+				t.Errorf("%s:%d decodes with memory64 off, so it *can* ask for spectest.table64 "+
+					"while the 13-export fixture does not supply it — the export's absence is "+
+					"observable and the branch is a silent loss rather than a partition", f, c.Line)
+			}
+		}
+		if !found {
+			t.Errorf("%s has no module command at line 13; the site this argument rests on has moved, "+
+				"so the unobservability is unmeasured rather than false", f)
+		}
+	}
+}
+
+// decodeSpectest decodes one branch of the fixture under the given features, reporting a nil
+// module when the branch is declined. Split out so the two lanes ask identically.
+func decodeSpectest(t *testing.T, f binary.Features, withTable64 bool) (*binary.Module, int) {
+	t.Helper()
+	img, err := text.EncodeModule([]byte(spectestSource(withTable64)))
+	if err != nil {
+		return nil, 0
+	}
+	m, err := (&binary.Decoder{Features: f}).DecodeModule(img)
+	if err != nil {
+		return nil, 0
+	}
+	return m, len(m.Exports)
+}
+
+// forEachNode visits n and every node below it.
+//
+// Here rather than in sexpr.go because it exists for controls that census the corpus, and a
+// traversal the run loop does not need is not the reader's API. Named for what it does rather
+// than for the one caller, since the *next* census is the reason it is a function.
+func forEachNode(n node, f func(node)) {
+	f(n)
+	for _, c := range n.list {
+		forEachNode(c, f)
+	}
+}
+
+// registryProbe is a stub engine that records the registry each instantiate call received.
+//
+// **The registry is state, and state is invisible to a board number** — which is the whole
+// reason the controls below use a probe rather than a count. A script's registry is built
+// command by command and read by whatever imports later; a run that scores 5/0 says nothing
+// about *which name was bound to which instance when*, and every registry defect worth having
+// a control for lives in that gap. So the probe records the map as it was at each call, and the
+// assertions are about the sequence.
+//
+// Instances are strings, since `Instance` is `any` and a name is what the assertions compare.
+type registryProbe struct {
+	// seen is one entry per instantiate call: the line, and the registry's keys at that moment.
+	seen []probeCall
+	// fail names module sources that must not produce an instance, so a register whose target
+	// failed can be exercised without needing a module the real engine rejects.
+	fail map[string]error
+}
+
+type probeCall struct {
+	line int
+	keys []string
+	// mods is the registry's *contents*, name → instance, because a key present with the wrong
+	// instance behind it is a different defect from a key absent and the two must not share an
+	// assertion (grave #34: errors.Is is not a partition check).
+	mods map[string]string
+}
+
+func (p *registryProbe) engine() Engine {
+	return Engine{
+		Decode:   func([]byte) error { return nil },
+		ReadText: func([]byte) error { return nil },
+		IsGated:  func(error) bool { return false },
+		IsTrap:   func(error) bool { return false },
+		InstantiateLinked: func(c Command, registry map[string]Instance) (Instance, Stratum, error) {
+			keys := make([]string, 0, len(registry))
+			mods := map[string]string{}
+			for k, v := range registry {
+				keys = append(keys, k)
+				mods[k], _ = v.(string)
+			}
+			slices.Sort(keys)
+			p.seen = append(p.seen, probeCall{line: c.Line, keys: keys, mods: mods})
+			if err := p.fail[string(c.Source)]; err != nil {
+				return nil, StratumExec, err
+			}
+			// The instance *is* the module's own source, so an assertion can say which module
+			// a name resolved to rather than only that something was there.
+			return string(c.Source), StratumUnset, nil
+		},
+		Invoke: func(Instance, string, []Val) ([]Val, error) { return nil, nil },
+		Has:    []Capability{CapWatReader, CapInterpreter},
+	}
+}
+
+// scriptCalls returns the probe's calls with the `spectest` bootstrap dropped, and asserts the
+// bootstrap's own property on the way past.
+//
+// **The bootstrap is a call on this path, not beside it** — 0017 part 3 synthesizes `spectest`
+// as wat and instantiates it through the same door every vector's module takes, precisely so the
+// front end sees it. So a probe over any script records `len(script modules) + 1` calls, and
+// this is where that surprise is stated once rather than being absorbed by an off-by-one in
+// three tests. Found by writing an accumulation test that expected 3 and got 4.
+//
+// The bootstrap is identified by its **empty registry** rather than by being first, because
+// position is a coincidence and the empty map is the property `spectestRegistry` documents: it
+// passes `map[string]Instance{}` rather than `reg` itself, so a typo cannot make the fixture
+// import from the map it is about to be written into.
+//
+// **That assertion needs the cycle's other half to fire, which is worth stating rather than
+// leaving as an apparent falsification.** Changing `o.instantiate(c, map[string]Instance{})` to
+// `o.instantiate(c, reg)` alone does *not* fail this — `reg` is empty at that moment, so the two
+// spellings are indistinguishable, and the mutation is honest about the code being currently
+// equivalent. It fires when `reg` is also seeded (`{"spectest": "placeholder"}`), reporting
+// `registry [spectest], want empty`. So this row guards the *pair*: it catches the day the map
+// stops being empty at the call, which is the only day the cycle is reachable. Recorded because
+// a mutation that passes is a fact about the control, and hiding it would leave a reader
+// believing a single-line change is covered when it is the two together that are.
+func (p *registryProbe) scriptCalls(t *testing.T) []probeCall {
+	t.Helper()
+	if len(p.seen) == 0 {
+		t.Fatal("the probe recorded no instantiate calls at all; the run loop never reached a " +
+			"module command, so every assertion below would agree with an empty script")
+	}
+	boot, rest := p.seen[0], p.seen[1:]
+	if len(boot.keys) != 0 {
+		t.Errorf("the spectest bootstrap was instantiated with registry %v, want empty: it is "+
+			"built with a fresh map rather than the one it is written into, so a typo in its own "+
+			"source cannot make it import from itself", boot.keys)
+	}
+	for _, c := range rest {
+		if len(c.keys) == 0 {
+			t.Errorf("a script module at line %d was instantiated with an empty registry; only the "+
+				"spectest bootstrap may be, and it is the first call", c.line)
+		}
+	}
+	return rest
+}
+
+// lastCall returns the registry as it stood at the final instantiate, which is what every
+// "was the name bound by then" question is really asking.
+func (p *registryProbe) lastCall(t *testing.T) probeCall {
+	t.Helper()
+	calls := p.scriptCalls(t)
+	if len(calls) == 0 {
+		t.Fatal("the probe recorded no script module commands, only the spectest bootstrap")
+	}
+	return calls[len(calls)-1]
+}
+
+// TestRegisterBindsUnderItsStringNameNotItsScriptName is the registry's central control, and its
+// subject is the **two namespaces** decision 0017 part 2 separates.
+//
+// `(register "a" $M)` binds the *string* `"a"`, and `(invoke $M …)` names the *identifier* `$M`.
+// One module can carry either, both, or neither, so merging the maps would make the two forms
+// name the same thing — and the second form does not exist. A single-map harness passes every
+// vector in which a module's `$name` and its registered string happen to be spelled alike, which
+// is most of `linking.wast`, so this is an accept-direction defect that the corpus scores green
+// by coincidence (§9 G-3).
+//
+// **Deliberately spelled apart in the fixture**: `$M` registers as `"other"`, so a harness
+// keying the registry on `Name` binds `"M"` and the importer finds nothing. A fixture whose two
+// names agree cannot fail this test, which is the shape-of-what-survives tell.
+//
+// Falsified by running both mutations, and **the numbers are quoted from the runs because the
+// first prediction written here was wrong in both of them**:
+//
+//   - `registry[c.Register] = in` → `registry[c.Name] = in` reports the registry as
+//     `[ spectest]` — the *empty string*, not `[M spectest]` as predicted, because a
+//     `(register …)` command carries no `Name` at all: `Name` is a module command's field. So
+//     the mutation binds `""` and every import of `"other"` misses. Both the key row and the
+//     `mods` row fire.
+//   - `registerTarget`'s `named[c.Target]` → `cur` **passed on the first attempt**, which is the
+//     stillbirth the decoy above exists for: with `$M` immediately preceding its own register,
+//     the two readings coincide. With the decoy between them the row reports
+//     `registry["other"] is "(module $Decoy …)"` — and it is the `mods` assertion that catches
+//     it, the keys being identical either way, which is why contents are asserted separately.
+//
+// `Bound` is asserted here but falsified elsewhere: dropping `r.Bound++` is
+// TestVerdictsPartitionCommands' finding, since a register accounted nowhere breaks the
+// partition, and that control already exists.
+func TestRegisterBindsUnderItsStringNameNotItsScriptName(t *testing.T) {
+	// **A decoy module stands between `$M` and its register, and it is load-bearing.** Without
+	// it `cur` and `named["$M"]` are the same instance, so a harness reading the wrong one of
+	// the two agrees on every assertion — measured, not supposed: the `registerTarget` mutation
+	// below *passed* against a three-line fixture, which is a stillborn control, and the decoy
+	// is what separates the two readings.
+	const src = `(module $M (memory (export "m") 1))
+(module $Decoy (memory (export "m") 3))
+(register "other" $M)
+(module (import "other" "m" (memory 1)))`
+	s, err := Parse("t.wast", []byte(src))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	p := &registryProbe{}
+	r := s.RunWith(p.engine())
+	if r.Bound != 1 {
+		t.Errorf("Bound = %d, want 1: the register bound no name, so the importer below "+
+			"resolved against an empty registry\n%s", r.Bound, r.Board())
+	}
+	// The importer's call is the one that matters: it is the only one that reads the binding.
+	last := p.lastCall(t)
+	if !slices.Contains(last.keys, "other") {
+		t.Errorf("at the importer (line %d) the registry holds %v, want key %q — the register "+
+			"bound under the module's script name instead of its export-name string, so every "+
+			"import of %q resolves against nothing",
+			last.line, last.keys, "other", "other")
+	}
+	if slices.Contains(last.keys, "M") {
+		t.Errorf("the registry holds key %q: the script identifier leaked into the export-name "+
+			"namespace, which makes (invoke $M …) and (invoke \"M\" …) name one thing", "M")
+	}
+	// The *contents*, not only the key: a register that bound the right name to the wrong
+	// instance is a separate defect and a keys-only assertion cannot see it.
+	if got := last.mods["other"]; !strings.Contains(got, "$M") {
+		t.Errorf("registry[%q] is %q, want the source of $M — the register bound a name to some "+
+			"other module's instance, so imports resolve to the wrong exports", "other", got)
+	}
+}
+
+// TestRegisterWhoseModuleFailedBindsNothing pins the arm's failure path, and the property is an
+// **absence**: a name whose module produced no instance must not appear in the registry at all.
+//
+// The alternative — binding the name to a nil instance — is what makes this worth a control
+// rather than a comment. A nil in the map satisfies every `ok` from a map read, so the importer
+// downstream gets `(nil, true)`, and the engine is handed an instance that is not one. That is
+// the nil-instance-with-nil-error normalization at `instantiateRaw`, one layer out, and the two
+// are separate because the map read is a different door.
+//
+// The register is also scored `Fail` rather than passed over, and both halves are asserted: the
+// count says the harness noticed, the key says it named the register rather than blaming the
+// import cluster that follows. *An error from the wrong layer is evidence about where structure
+// was lost* — a silent register produces a cluster of `unknown import`s naming the linker.
+//
+// Falsified two ways:
+//
+//   - making the arm bind unconditionally (`registry[c.Register] = in` ahead of the `ok` check):
+//     the registry holds `broken` and this reports it, where `Bound` alone stays 0 and says
+//     nothing, since the failing path does not increment it either way.
+//   - dropping the `r.Fail++` and its bucket: `Fail = 0, want 1` plus the missing key, and
+//     TestVerdictsPartitionCommands fails alongside — the register would be accounted nowhere.
+func TestRegisterWhoseModuleFailedBindsNothing(t *testing.T) {
+	const bad = `(module $B (memory 1))`
+	src := bad + "\n" + `(register "broken" $B)` + "\n" +
+		`(module (import "broken" "m" (memory 1)))`
+	s, err := Parse("t.wast", []byte(src))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	p := &registryProbe{fail: map[string]error{bad: errString("this module was refused")}}
+	r := s.RunWith(p.engine())
+	if r.Bound != 0 {
+		t.Errorf("Bound = %d, want 0: a register whose module failed counted as a binding", r.Bound)
+	}
+	if r.Fail != 1 {
+		t.Errorf("Fail = %d, want 1 — the failing register, charged to itself\n%s", r.Fail, r.Board())
+	}
+	// Keyed by the register rather than by the import cluster it causes.
+	const key = "register: this module was refused"
+	if len(r.Buckets[key]) != 1 {
+		t.Errorf("no failure under %q; got keys %v — the register failed without naming itself, "+
+			"so the cost lands on whichever import resolves against the missing name next",
+			key, r.BucketsBySize())
+	}
+	last := p.lastCall(t)
+	if slices.Contains(last.keys, "broken") {
+		t.Errorf("the registry holds %q after its module failed (keys %v); a name bound to a nil "+
+			"instance reads as bound to every map lookup, so the importer is handed a non-instance "+
+			"instead of reporting an unknown import", "broken", last.keys)
+	}
+}
+
+// TestRegistryAccumulatesAcrossAScript pins the property `linking.wast` depends on and no single
+// register can show: the registry a module is instantiated with holds **every name bound before
+// it**, and nothing bound after.
+//
+// **Both directions, because a wrong one is plausible in each.** A harness that rebuilt the
+// registry per command would hand the third module only the third name; one that pre-scanned the
+// script would hand the first module a name registered below it, which is worse — it would score
+// a forward reference as linkable, and the suite has vectors asserting that a module cannot
+// import from a module registered later. The corpus registers as it goes (`linking.wast`), so
+// only the *sequence* separates the two readings.
+//
+// Falsified by resetting the registry to `{"spectest": boot}` at the top of the run loop — the
+// forget-earlier-bindings mutation — which reports both later rows: `at line 3 the registry holds
+// [spectest], want [a spectest]` and the same at line 5. Note which mutation was *not* used:
+// re-calling `opts.spectestRegistry` per command also fails, but it re-instantiates the fixture
+// each time and so fails on the call *count* and on scriptCalls' bootstrap row instead — a red
+// that names a different property than the one under test, which is no falsification at all.
+func TestRegistryAccumulatesAcrossAScript(t *testing.T) {
+	const src = `(module $A (memory (export "m") 1))
+(register "a" $A)
+(module $B (memory (export "m") 1))
+(register "b" $B)
+(module (import "a" "m" (memory 1)) (import "b" "m" (memory 1)))`
+	s, err := Parse("t.wast", []byte(src))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	p := &registryProbe{}
+	if r := s.RunWith(p.engine()); r.Bound != 2 {
+		t.Fatalf("Bound = %d, want 2\n%s", r.Bound, r.Board())
+	}
+	// Three module commands, and each one's registry is asserted — the middle one is the row
+	// that separates accumulation from a pre-scan. `spectest` is in all three, bound before the
+	// loop starts (0017 part 3); its own instantiate call is dropped and checked by scriptCalls.
+	want := [][]string{
+		{"spectest"},           // $A: nothing registered yet
+		{"a", "spectest"},      // $B: only $A's name, never its own or a later one
+		{"a", "b", "spectest"}, // the importer: both
+	}
+	calls := p.scriptCalls(t)
+	if len(calls) != len(want) {
+		t.Fatalf("the probe recorded %d script instantiate calls, want %d: %v", len(calls), len(want), calls)
+	}
+	for i, w := range want {
+		if !slices.Equal(calls[i].keys, w) {
+			t.Errorf("at line %d the registry holds %v, want %v — a registry rebuilt per command "+
+				"loses earlier names, and one pre-scanned from the whole script would let a module "+
+				"import from a module registered below it",
+				calls[i].line, calls[i].keys, w)
+		}
+	}
+}
+
+// TestNamedActionRunsAgainstItsTargetNotTheCurrentInstance is the named Kinds' control, and its
+// property is the one thing the three of them added to the shared arm: **which instance**.
+//
+// A harness that stamped the Kind and ignored `Target` runs the action against `cur`, which is a
+// wrong answer wearing a right classification. It is an accept-direction defect (§9 G-3) in the
+// most literal way available: the vectors it breaks are `assert_return`s, so the suite scores it
+// green whenever the named module and the current one happen to agree on the value — which is
+// most of `linking.wast`, where the modules are near-copies of each other.
+//
+// **The fixture makes the two disagree by construction.** `$A` and `$B` export the same name and
+// return different values, `$B` is current, and the action names `$A`. So an ignored `Target`
+// answers 2 where the vector wants 1, and this control is exactly the difference between the two
+// instances. A fixture whose modules agree cannot fail it.
+//
+// All three named Kinds are covered, since they reach the shared arm by three classify paths and
+// share nothing before it — `assert_return` and `assert_trap` differ in whether an error is the
+// answer, and a bare `invoke` in having no expectation at all, so getting one right says nothing
+// about the others (the partition rule, grave #34).
+//
+// Falsified by neutering the selection — `if c.Kind.selectsModule()` → `if false` — which reports
+// `3 pass / 2 fail` and names all three commands. Quoted from the run: the assert_return lands in
+// `assert_return value mismatch` as `i32 1` wanted against `i32 2` got, the assert_trap in
+// `assert_trap (invoke) expected: answered by $A`, and **the bare invoke is caught only by the
+// probe** — it still scores a pass, having no expectation to disappoint, and the three `call N ran
+// against "(module $B …)"` lines are the whole of its evidence. That is why `invoked` is asserted
+// beside the count rather than instead of it: a Kind whose vectors assert nothing needs a witness
+// that is not the board.
+func TestNamedActionRunsAgainstItsTargetNotTheCurrentInstance(t *testing.T) {
+	// A stub engine whose Invoke answers from the *instance*, which is what makes the target
+	// observable: the instance is its module's source, so the value depends on which one was
+	// selected. `$A` answers 1, `$B` answers 2, and `$B` is the current module.
+	const src = `(module $A (func (export "f") (result i32) (i32.const 1)))
+(module $B (func (export "f") (result i32) (i32.const 2)))
+(assert_return (invoke $A "f") (i32.const 1))
+(assert_trap (invoke $A "f") "answered by $A")
+(invoke $A "f")`
+	s, err := Parse("t.wast", []byte(src))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	// Kinds asserted before the run: a fixture misclassified into the *unnamed* Kinds would
+	// select `cur` legitimately and score a green that says nothing.
+	wantKinds := []Kind{
+		KindModuleText, KindModuleText,
+		KindNamedAssertReturn, KindNamedAssertTrap, KindNamedInvoke,
+	}
+	if len(s.Commands) != len(wantKinds) {
+		t.Fatalf("got %d commands, want %d", len(s.Commands), len(wantKinds))
+	}
+	for i, k := range wantKinds {
+		if s.Commands[i].Kind != k {
+			t.Fatalf("command %d is %v, want %v — the fixture is not exercising the named arm",
+				i, s.Commands[i].Kind, k)
+		}
+	}
+	// invoked records which instance each call ran against, so the bare `(invoke $A …)` — which
+	// asserts nothing and so cannot fail on a value — is still covered.
+	var invoked []string
+	answer := func(in Instance, _ string, _ []Val) ([]Val, error) {
+		src, _ := in.(string)
+		invoked = append(invoked, src)
+		if strings.Contains(src, "$A") {
+			return []Val{{Kind: KindI32, Bits: 1}}, nil
+		}
+		return []Val{{Kind: KindI32, Bits: 2}}, nil
+	}
+	p := &registryProbe{}
+	e := p.engine()
+	e.Invoke = answer
+	// The assert_trap row wants an error, and the trap's text names the answering instance so a
+	// wrong selection is a wrong *string* rather than only a wrong count.
+	e.IsTrap = func(error) bool { return true }
+	r := s.RunWith(e)
+	// 2 modules + 3 actions. The assert_trap is the one deliberate fail: this stub does not trap,
+	// so the vector cannot pass, and its *bucket* is what carries the finding.
+	if r.Pass != 4 || r.Fail != 1 {
+		t.Errorf("got %d pass / %d fail, want 4/1\n%s", r.Pass, r.Fail, r.Board())
+	}
+	if len(r.Buckets["assert_return value mismatch"]) != 0 {
+		t.Errorf("the named assert_return answered the wrong value: %v — the action ran against "+
+			"the current instance ($B) rather than its target ($A)",
+			r.Buckets["assert_return value mismatch"])
+	}
+	// Every call ran against $A, which is the property stated directly rather than inferred from
+	// the pass count: the bare invoke has no expectation, so nothing else can see its target.
+	if len(invoked) != 3 {
+		t.Fatalf("Invoke was called %d times, want 3: %v", len(invoked), invoked)
+	}
+	for i, got := range invoked {
+		if !strings.Contains(got, "$A") {
+			t.Errorf("call %d ran against %q, want $A's instance — a named action that ignores "+
+				"Target runs against whatever module came last, which is a wrong answer from a "+
+				"right-looking classification", i, got)
+		}
+	}
+}
+
+// TestAssertUnlinkableNeedsTheLinkerAndScoresBothWays is the unlinkable arm's control, and the
+// two halves are separate defects.
+//
+// **The reject half is oracle-covered and the accept half is not.** 200 vectors assert that a
+// module fails to link with a named string, so a harness that scored the *wrong* text as a pass
+// would be caught by the board — but a harness that scored a module which linked *successfully*
+// as a pass would not be, because no vector in the corpus is a successfully-linking module under
+// `assert_unlinkable`. That is §9 G-3, and it is the row worth the fixture.
+//
+// **The panic is the third assertion, and it is the asymmetry the arm defends at its site.** Every
+// other arm falls back to the unlinked entry point when there is no linker; this one cannot, since
+// instantiating an unlinkable module *without* its imports fails for a different reason and its
+// text could coincide with the expectation — 200 passes nobody earned. So a caller declaring
+// CapInterpreter with a nil InstantiateLinked must stop rather than score, and the panic message
+// is asserted with the panic: without the message check this would pass on any panic at all,
+// which is how TestQuoteFormsHaveTheirReader's sibling was nearly stillborn.
+//
+// Falsified by running mutations, and **one of the four was a no-op, which is the finding worth
+// keeping**: dropping the `err != nil` conjunct from `err != nil && strings.Contains(got,
+// c.Expect)` changes nothing, because `got` is `""` exactly when `err` is nil and
+// `strings.Contains("", "unknown import")` is already false. The conjunct is redundant for every
+// vector in the corpus — all 200 expect a non-empty string — so it is *defensive against an empty
+// `Expect`*, not the thing that rejects a successful link. Recorded because a comment claiming
+// that mutation falsifies this row would be a citation to a run that says otherwise, and because
+// a reader deleting the conjunct as dead weight should find out here that the board will not tell
+// them. The three that do fire:
+//
+//   - `err != nil &&` → `err == nil ||`: the accept row reports `1 pass / 0 fail` and no bucket.
+//     This is the accept-direction assertion, and the mutation is the shape a harness written
+//     "an assertion about linking, so a clean link is the interesting case" would have.
+//   - the whole conjunction → `err != nil`: the wrong-text row reports `1 pass / 0 fail`.
+//   - removing the nil-linker panic: the fourth subtest reports no panic.
+func TestAssertUnlinkableNeedsTheLinkerAndScoresBothWays(t *testing.T) {
+	const mod = `(module (import "m" "f" (func)))`
+	for _, c := range []struct {
+		name string
+		err  error
+		pass bool
+	}{
+		{"the expected link failure", errString("unknown import: \"m\" \"f\""), true},
+		{"a link failure with the wrong text", errString("incompatible import type"), false},
+		// The accept-direction row: nothing in the corpus can produce it, so nothing but this
+		// fixture will ever notice a harness that scores it green.
+		{"the module linked successfully", nil, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s, err := Parse("t.wast", []byte(`(assert_unlinkable `+mod+` "unknown import")`))
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			if got := s.Commands[0].Kind; got != KindAssertUnlinkable {
+				t.Fatalf("classified %v, want KindAssertUnlinkable", got)
+			}
+			r := s.RunWith(Engine{
+				Decode:   func([]byte) error { return nil },
+				ReadText: func([]byte) error { return nil },
+				IsGated:  func(error) bool { return false },
+				IsTrap:   func(error) bool { return false },
+				InstantiateLinked: func(cmd Command, _ map[string]Instance) (Instance, Stratum, error) {
+					// **The spectest bootstrap comes through this same door** (0017 part 3), and a
+					// stub that failed every call would panic in spectestRegistry before the vector
+					// was ever judged — which is how this row was first written, and the panic is
+					// the harness protecting its own fixture exactly as documented. Discriminated
+					// on the *source* rather than on call order, since a positional stub would
+					// invert silently the day the bootstrap moves.
+					if !bytes.Contains(cmd.Source, []byte(`"m" "f"`)) {
+						return "spectest", StratumUnset, nil
+					}
+					if c.err != nil {
+						return nil, StratumExec, c.err
+					}
+					return "linked", StratumUnset, nil
+				},
+				Invoke: func(Instance, string, []Val) ([]Val, error) { return nil, nil },
+				Has:    []Capability{CapWatReader, CapInterpreter},
+			})
+			wantPass, wantFail := 0, 1
+			if c.pass {
+				wantPass, wantFail = 1, 0
+			}
+			if r.Pass != wantPass || r.Fail != wantFail {
+				t.Errorf("got %d pass / %d fail, want %d/%d\n%s",
+					r.Pass, r.Fail, wantPass, wantFail, r.Board())
+			}
+			if c.pass {
+				return
+			}
+			// The bucket, because the two failing rows are two findings and a count cannot
+			// tell them apart. The successful-link row's Got is asserted specifically: a
+			// harness reporting an empty Got here would say "expected unknown import, got
+			// nothing", which reads as a missing error rather than as a module that linked.
+			const key = "assert_unlinkable expected: unknown import"
+			b := r.Buckets[key]
+			if len(b) != 1 {
+				t.Fatalf("no failure under %q; got keys %v", key, r.BucketsBySize())
+			}
+			wantGot := "incompatible import type"
+			if c.err == nil {
+				wantGot = "the module linked and instantiated successfully"
+			}
+			if b[0].Got != wantGot {
+				t.Errorf("Got = %q, want %q", b[0].Got, wantGot)
+			}
+		})
+	}
+	t.Run("a nil linker panics rather than scoring", func(t *testing.T) {
+		s, err := Parse("t.wast", []byte(`(assert_unlinkable `+mod+` "unknown import")`))
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		defer func() {
+			switch v := recover(); {
+			case v == nil:
+				t.Error("declaring CapInterpreter with no LinkedInstantiateFunc did not panic; the " +
+					"200 unlinkable vectors would be judged through the unlinked path, where a §3 " +
+					"refusal's text can coincide with the expectation and award a pass")
+			case !strings.Contains(fmt.Sprint(v), "no LinkedInstantiateFunc"):
+				t.Errorf("panic does not name the missing component: %v", v)
+			}
+		}()
+		_ = s.RunWith(Engine{
+			Decode:      func([]byte) error { return nil },
+			ReadText:    func([]byte) error { return nil },
+			IsGated:     func(error) bool { return false },
+			IsTrap:      func(error) bool { return false },
+			Instantiate: func(Command) (Instance, Stratum, error) { return "stub", StratumUnset, nil },
+			Invoke:      func(Instance, string, []Val) ([]Val, error) { return nil, nil },
+			Has:         []Capability{CapWatReader, CapInterpreter},
+		})
 	})
 }
