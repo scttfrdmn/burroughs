@@ -2135,6 +2135,48 @@ weakly-ordered platform.
   rather than a bucket key that silently stopped matching — which is the failure mode a rewording
   mid-drain has.
 
+- **The instrument-PR stop condition counts *purpose*, not line-majority** — Scott's refinement on
+  the flag [#159](https://github.com/scttfrdmn/burroughs/pull/159) raised. #159 lands
+  `table.init`/`memory.init` end to end, drains 1702 fails, and reads **1:1.4**; by the old rule's
+  letter that made it instrument-heavy and two-consecutive with #158, which is the counter misfiring
+  on its own purpose. The stop condition exists to prevent drift *into meta*, so a PR that lands
+  engine capability is product whatever its falsification bill — and #117's fit already predicted
+  this, an arm being a *small* piece of work against a per-PR instrument floor that does not shrink
+  with it, so a line-majority test on an arm PR is the disguised minimum-diff-size rule wearing the
+  stop condition's clothes.
+
+  What keeps the refinement from being self-serving is stated with it, the
+  actor-never-classifies-the-actor rule being live: the classification is **named in the PR body and
+  challengeable**, and the **line ratio keeps its own separate instrument** — still quoted every PR,
+  still never compared to a threshold — so a purpose-classified product PR that is *also* drifting
+  stays visible in the figure. A purpose classification is not an exemption, and the exemption rule
+  is untouched. Scott holds the veto line, as on every governance edit; **#159 is product and the
+  counter resets**.
+
+- **Two instrument-craft laws named from #159's own findings**, both about a control that reports the
+  wrong subject rather than staying silent.
+
+  **A floor equal to the failure mode's output certifies the failure**, so a floor derives from the
+  *authority* and never freezes at what the current reader happens to produce. The positional
+  `plaininstr` reader's pair floor was set at **8**, exactly what the degraded alternation reader
+  yields — 8 two-lookup arms against the positional reader's 10, the two extra being
+  `STRUCT_GET`/`STRUCT_SET`, whose second lookup `$3 c (field x.it)` is not a word in the
+  alternation. The misdirection is what makes it worse than a merely loose floor: stubbing the
+  regexp *did* go red, so the control looked alive, and it reported drift in `idxPairLookupKinds`
+  when the defect was in the reader — *the drift report was true, the attribution was the lie*. A
+  reader following that message repairs the subject to match a broken instrument. The remedy is a
+  **discrimination check** beside the floor, asserting the capability that separates the reader from
+  its degradation, because a count cannot separate two readers whose counts overlap.
+
+  **Print the diff**, permanently, as the discriminator between a stillborn control and a mutation
+  that did not apply — nothing else tells the two apart, and the two readings differ in what you go
+  and change next, with the flattering one blaming the control. #159's `TABLE_INIT` deletion passed
+  on its first attempt and the control was *right* to pass: the pattern matched `initSugarKinds`,
+  which holds a byte-identical `"TABLE_INIT":  true,` line one screen above the intended map, so a
+  row in a different table was deleted. **Field attribution is not first-match** therefore extends
+  from generators (`gateFor`'s narrowest-match) to the gated allowlist, fix sites, and the mutation
+  scripts themselves: anchor on the containing declaration, not on the row.
+
 - **The instrument-to-engine ratio is a quoted figure and not a threshold, because the
   recalibration measured it and found it is mostly a function of PR size**
   ([#117](https://github.com/scttfrdmn/burroughs/issues/117)). `scripts/ratio.sh` is the recorded
