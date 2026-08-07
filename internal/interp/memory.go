@@ -194,6 +194,14 @@ func (m *memory) grow(delta uint64) int64 {
 	grown := make([]byte, n)
 	copy(grown, m.bytes)
 	m.bytes = grown
+	// **The declared type grows with the memory, and it is mutable for exactly this
+	// reason.** `memory.ml:64`'s `grow` sets `mem.ty <- MemoryT (at, lim')` with `lim'.min`
+	// the new size — `type_of` (called at import-match time, `instance.ml:76`) reads that
+	// field back, so a memory this instance re-exports after growing must satisfy an
+	// importer against its *current* size, not the size it had when this instance was
+	// built. `imports4.wast:22-37` pins exactly this, in its own comment: "imported memory
+	// limits should match, because external memory size is 2 now."
+	m.limits.Min = newSize
 	return int64(old)
 }
 

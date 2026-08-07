@@ -418,6 +418,20 @@ type Import struct {
 	// function does, and that ordering is the validator's and the interpreter's to rely
 	// on.
 	Index uint32
+
+	// Table, Memory, GlobalType and GlobalMutable carry the descriptor for kinds
+	// 0x01-0x03 — exactly the fields `decodeTableForm`/`decodeLimits`/`decodeGlobalType`
+	// already read and used to discard (#164). Only the fields matching Kind are
+	// meaningful; the rest are zero.
+	//
+	// A func import needs no such field because its descriptor *is* a type index into the
+	// module's own type space, already carried in Index — the linker resolves it through
+	// Module.Types like any other type-indexed use, rather than duplicating the functype
+	// here.
+	Table         Table
+	Memory        Memory
+	GlobalType    ValType
+	GlobalMutable bool
 }
 
 // Export is one export: a name and what it names.

@@ -5519,13 +5519,30 @@ func TestPhase1Files(t *testing.T) {
 	// green whenever the two instances happen to agree. Filed as **#163** with both reproducers
 	// rather than fixed here: widening `ref` is Q2's PR, and the seam is where the ADR put it.
 	//
-	// The largest remaining reason is `assert_unlinkable` at 124 of 248, whose next layer is the
-	// **decoder retaining import descriptors** (**#164**) — `sections.go` reads a non-func import's
-	// limits, table type or global type and drops them, so the linker can compare *kinds* and
-	// cannot compare types. Those 124 want `incompatible import type` for a matching kind with a
-	// mismatched signature, limit or mutability, which is a representation change rather than a
-	// harness one and therefore the next artifact this stratum names.
-	const execFailCeiling = 248
+	// **#164 landed: 248 → 211, and the 124-vector `assert_unlinkable` bucket is 86.** The decoder
+	// now retains a non-func import's table type, memory limits or global type/mutability
+	// (`binary.Import`'s Table/Memory/GlobalType/GlobalMutable fields) instead of reading and
+	// dropping them, and `Instance.link` compares them — `sameFuncType` for a func import's own
+	// signature, `matchLimits` (the reference's `match_limits`, min/max in opposite directions) for
+	// table and memory, byte equality for a global's type and mutability. 37 rows converted rather
+	// than the estimated 42: three (`table_grow.wast`) are still blocked on the missing
+	// `table.grow` arm and moved to a different fail bucket rather than to pass, which the
+	// pre-selection probe's own taxonomy calls out — a co-blocked vector re-keys, it does not pay.
+	//
+	// One genuine defect found in the making: `memory.grow` reallocated a memory's bytes without
+	// updating its retained `Limits.Min`, so a grown memory re-exported for another instance to
+	// import reported its stale pre-growth minimum — `imports4.wast:19-37` pins the corpus's own
+	// vector for exactly this, in its own comment ("imported memory limits should match, because
+	// external memory size is 2 now"). Fixed alongside #164 because the new type check is what
+	// made it observable; `table.grow`'s absence means the table side of the same defect cannot be
+	// measured yet.
+	//
+	// The remaining 86 `assert_unlinkable` rows are downstream of two separate blockers neither of
+	// which #164 touches: a `register`ed module whose own export uses an EH tag (so it never
+	// decodes with the gate off, and every import from it reads `unknown import` rather than
+	// `incompatible import type`), and GC-gated reftypes in an import's own declared type. Neither
+	// is this stratum's next artifact; both are the GC/EH gates named below.
+	const execFailCeiling = 211
 	boardBound(t, "execFailCeiling", execFail, execFailCeiling, 0, ceilingBound,
 		"the interpreter answered fewer vectors than it did: either an opcode arm regressed or "+
 			"a value comparison started disagreeing. A *rise* caused by #8 unblocking more "+

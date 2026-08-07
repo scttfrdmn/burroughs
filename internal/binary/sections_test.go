@@ -387,6 +387,72 @@ func TestFuncTypeFormIsASignedLEB(t *testing.T) {
 	}
 }
 
+// TestImportDescriptorsAreRetained pins #164's representation change directly at the decoder,
+// independent of the linker that consumes it: a table, memory and global import each keep their
+// full descriptor rather than only their kind byte, which is what decodeImport reads and used to
+// discard.
+//
+// Hand-built rather than routed through the text encoder, because internal/text imports
+// internal/binary and this file is `package binary` (white-box) — importing text here would be
+// the cycle grave #125 already exists to avoid at the opposite seam.
+func TestImportDescriptorsAreRetained(t *testing.T) {
+	name := func(s string) []byte {
+		return append(ulebBytes(uint32(len(s))), []byte(s)...)
+	}
+	var imports []byte
+	imports = append(imports, name("m")...)
+	imports = append(imports, name("t")...)
+	imports = append(imports, 0x01)  // table
+	imports = append(imports, 0x70)  // funcref
+	imports = append(imports, 0x01)  // limits: has max
+	imports = append(imports, 3, 10) // min 3, max 10
+	imports = append(imports, name("m")...)
+	imports = append(imports, name("mm")...)
+	imports = append(imports, 0x02) // memory
+	imports = append(imports, 0x01) // limits: has max
+	imports = append(imports, 2, 4) // min 2, max 4
+	imports = append(imports, name("m")...)
+	imports = append(imports, name("g")...)
+	imports = append(imports, 0x03) // global
+	imports = append(imports, 0x7F) // i32
+	imports = append(imports, 0x01) // mut
+
+	img := []byte{0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00}
+	payload := append([]byte{0x03}, imports...) // 3 imports
+	img = append(img, 0x02)
+	img = append(img, ulebBytes(uint32(len(payload)))...)
+	img = append(img, payload...)
+
+	m, err := DecodeModule(img)
+	if err != nil {
+		t.Fatalf("DecodeModule: %v", err)
+	}
+	if len(m.Imports) != 3 {
+		t.Fatalf("got %d imports, want 3", len(m.Imports))
+	}
+
+	tab := m.Imports[0]
+	if tab.Table.ElemType != FuncRef {
+		t.Errorf("table import: ElemType = %v, want FuncRef", tab.Table.ElemType)
+	}
+	if tab.Table.Limits.Min != 3 || !tab.Table.Limits.HasMax || tab.Table.Limits.Max != 10 {
+		t.Errorf("table import: Limits = %+v, want {Min:3 HasMax:true Max:10}", tab.Table.Limits)
+	}
+
+	mem := m.Imports[1]
+	if mem.Memory.Limits.Min != 2 || !mem.Memory.Limits.HasMax || mem.Memory.Limits.Max != 4 {
+		t.Errorf("memory import: Limits = %+v, want {Min:2 HasMax:true Max:4}", mem.Memory.Limits)
+	}
+
+	glob := m.Imports[2]
+	if glob.GlobalType != I32 {
+		t.Errorf("global import: GlobalType = %v, want I32", glob.GlobalType)
+	}
+	if !glob.GlobalMutable {
+		t.Error("global import: GlobalMutable = false, want true")
+	}
+}
+
 // TestMalformedImportKind pins the import descriptor's kind byte.
 func TestMalformedImportKind(t *testing.T) {
 	for _, in := range [][]byte{

@@ -954,15 +954,15 @@ func (d *Decoder) decodeImport(r *reader) error {
 		// land in m.Tables. Both occupy the table index space, but the section holds
 		// definitions and an import is not one — merging them would make the two
 		// populations indistinguishable to every later consumer.
-		if _, err = d.decodeTableForm(r); err != nil {
+		if im.Table, err = d.decodeTableForm(r); err != nil {
 			return err
 		}
 	case 0x02:
-		if _, err = d.decodeLimits(r); err != nil {
+		if im.Memory.Limits, err = d.decodeLimits(r); err != nil {
 			return err
 		}
 	case 0x03:
-		if _, _, err = d.decodeGlobalType(r); err != nil {
+		if im.GlobalType, im.GlobalMutable, err = d.decodeGlobalType(r); err != nil {
 			return err
 		}
 	case 0x04: // tag
@@ -978,19 +978,10 @@ func (d *Decoder) decodeImport(r *reader) error {
 	default:
 		return fmt.Errorf("%w: %#02x", ErrMalformedImportKind, kind)
 	}
-	// The non-func descriptors are read and dropped. Index is the type index for a function
-	// import and unset for the others, which is what its comment says.
-	//
-	// **The consumer this deferral was waiting for has arrived, so the citation moved to the
-	// work it now names: #164, not #7.** The condition stated here was "a consumer that needs
-	// an imported table's type is the reason to retain one, and no such consumer exists yet",
-	// and `Instance.link` is that consumer — it can compare an import's *kind* against a
-	// supplied extern and cannot compare their types, because the type is not here to compare.
-	// 124 `assert_unlinkable` vectors want `incompatible import type` for exactly that: a
-	// matching kind with a mismatched signature, limit or mutability. Retained as a deferral
-	// rather than fixed in the linker's own PR, and re-pointed rather than deleted, because a
-	// tracking number that no longer leads to the work reads as tracked (the declared-and-tracked
-	// test, on `ErrTrailingData`).
+	// The non-func descriptors are now retained (im.Table/im.Memory/im.GlobalType/
+	// im.GlobalMutable, #164) rather than read and dropped — Instance.link is the consumer
+	// that needed them, to compare an import's *type* against a supplied extern and not
+	// only its kind.
 	d.mod().Imports = append(d.mod().Imports, im)
 	return nil
 }
