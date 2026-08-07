@@ -3,6 +3,7 @@ package binary
 import (
 	"errors"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"testing"
 )
@@ -334,13 +335,38 @@ func TestBlockTypeAlternationIsTheAuthority(t *testing.T) {
 // GiB from a 30-byte image; the wire form's runs are now retained instead, and the sum check
 // stayed exactly where it was because it was never the defect.
 //
-// Asserted as a **ratio against the declared count**, not as an absolute byte budget. An
-// absolute figure would be a bound on today's allocator behaviour and would drift with any
-// unrelated retention change in this package; the ratio is the property the grave is about, and
-// it fails by three orders of magnitude the moment anything expands a count. The rows span 2^16
-// to 2^31 so the *scaling* is what is measured — a single row cannot distinguish "proportional
-// to the image" from "proportional to N with a small constant", which is precisely the reading
-// that would let the defect back in.
+// Asserted as a **relation across rows** — allocation stays flat as N scales — never as a
+// per-row byte budget. The paragraph that used to stand here recited that law correctly and the
+// code beneath it did the opposite (`budget := len(img) * 64`, an absolute figure), which is
+// grave #166: *the comment knew and the code didn't*, so review verified code against claims and
+// the two concurred. Both of that budget's failure modes are the reason the shape changed:
+//
+//   - **It measured the process, not the decoder.** `TotalAlloc` is process-global, so a window
+//     around one `DecodeModule` charges it for whatever else allocated meanwhile. Rows at 2^16
+//     and 2^20 build the *same 28-byte image* and so shared an identical 1792-byte budget, with
+//     ~890 bytes of real signal beneath it — about one stray 5 KB allocation from a false red,
+//     and on #165's run the 2^16 row reported 6208 bytes while every larger row reported 888.
+//   - **It never computed the comparison its own argument rested on.** Five rows each checked
+//     against their own ceiling is five single-row measurements, and a single row cannot
+//     distinguish "proportional to the image" from "proportional to N with a small constant" —
+//     the reading that lets the defect back in. The *flatness* is the property.
+//
+// So the rows span 2^16 to 2^31 and the assertion is that the largest allocates no more than a
+// small multiple of the smallest, across a 32767x sweep in N. Measured both ways rather than
+// argued: flat, every row reads **888 bytes** — ratio 1.00, five rows, no spread at all. With the
+// flattening `make([]ValType, 0, total)` reintroduced after the sum check the rows read 66424 /
+// 1049464 / 16778104 / 268436344 / 2147484536, and the control fails at **32329.9x against a
+// tolerance of 8** in 6.8s, naming both endpoints and both image lengths.
+//
+// That ratio corrects a figure this comment carried when it was written: the argued value was
+// ~10^6, from ~2 GiB over ~900 bytes, and it is wrong because under the defect the *bottom* row
+// inflates too — 65536 locals is already 66 KB, so the true separation is ~3x10^4. The
+// conclusion is unchanged and the arithmetic was not: four orders of magnitude of margin over a
+// tolerance of 8 is the same verdict as six. Recorded because the number was quoted before it was
+// run, which is the habit this file exists to break, and because a corrected figure with its
+// derivation is worth more than a deleted one.
+//
+// Budget by the quantity the purpose names (#28): the purpose is a relation, so is the budget.
 func TestDecodeCostIsProportionalToCompressedSize(t *testing.T) {
 	// A minimal module whose one function body declares `nlocals` locals of one type. Built
 	// here rather than taken from the suite: no vector declares billions of locals *and* is
@@ -370,23 +396,68 @@ func TestDecodeCostIsProportionalToCompressedSize(t *testing.T) {
 		return img
 	}
 
-	// The ceiling: 64 bytes of heap per byte of image. Generous by design — this is not a
-	// measurement of the decoder's constant factor, it is a bound that separates "proportional
-	// to the image" from "proportional to a declared count", and those differ by ~10^7 at the
-	// top row. A tight budget here would be a control that fails on unrelated work, which is
-	// the wall-clock-budget mistake in a different unit.
-	const heapPerImageByte = 64
+	// One decode's allocation, in bytes, taken as the **minimum over repeats**. Three noise
+	// defences, because the quantity is read off a process-global counter:
+	//
+	//   - the minimum, not the mean or a single reading: unrelated allocation inside the window
+	//     can only ever push a sample *up*, so the floor is the closest estimate of the decode's
+	//     own cost. This is what the old single reading got wrong — its one sample happened to be
+	//     the contaminated one, and with nothing to compare against it had no way to know.
+	//   - a discarded warm-up decode, so first-call lazy initialisation is not charged to row one.
+	//     On #165's run the 2^16 row was the first to decode anything and read 7x every later row.
+	//   - automatic GC off for the duration, so the collector cannot run background work inside a
+	//     window; an *explicit* `runtime.GC()` still fires before each window, which is what keeps
+	//     peak RSS to one decode's live set rather than the sum of nine. That second half is
+	//     load-bearing under falsification rather than tidiness, and it was measured both ways
+	//     (`/usr/bin/time -l`, defect reintroduced): **2.16 GiB peak with the explicit collect,
+	//     8.68 GiB without** — one decode's live set against several, and the larger figure is
+	//     past what a CI runner has. A control that gets OOM-killed names no row, which is the
+	//     same "fail, never hang" failure the br_table loop row was rearranged for.
+	//
+	// `TotalAlloc` is cumulative and never decremented, so collecting between windows changes the
+	// peak without touching the deltas. Repeats are cheap once the property holds: the retained
+	// form makes every decode here ~900 bytes.
+	allocFor := func(nlocals uint32) (alloc uint64, img []byte, m *Module, err error) {
+		img = build(nlocals)
+
+		if m, err = DecodeModule(img); err != nil { // warm-up, deliberately unmeasured
+			return 0, img, m, err
+		}
+
+		defer debug.SetGCPercent(debug.SetGCPercent(-1))
+
+		alloc = ^uint64(0)
+		for range 8 {
+			var before, after runtime.MemStats
+			runtime.GC()
+			runtime.ReadMemStats(&before)
+			m, err = DecodeModule(img)
+			runtime.ReadMemStats(&after)
+			if err != nil {
+				return 0, img, m, err
+			}
+			alloc = min(alloc, after.TotalAlloc-before.TotalAlloc)
+		}
+		return alloc, img, m, nil
+	}
+
+	// The tolerance: the widest row may allocate 8x the narrowest row's bytes. It is a *ratio
+	// between rows*, so allocator noise and any future change to the decoder's constant factor
+	// move both ends together and cancel; what cannot cancel is expansion, which separates them by
+	// ~3x10^4 (measured, above). Eight is two orders of magnitude clear of the spread it must
+	// tolerate — none, in fact: the five rows are identical at 888 bytes — and four orders clear of
+	// the defect it must catch. The wide gap is the point, not slack.
+	const flatnessTolerance = 8
+
+	type row struct {
+		nlocals uint32
+		imgLen  int
+		alloc   uint64
+	}
+	var rows []row
 
 	for _, nlocals := range []uint32{1 << 16, 1 << 20, 1 << 24, 1 << 28, 1<<31 - 1} {
-		img := build(nlocals)
-
-		var before, after runtime.MemStats
-		runtime.GC()
-		runtime.ReadMemStats(&before)
-		m, err := DecodeModule(img)
-		runtime.ReadMemStats(&after)
-		alloc := after.TotalAlloc - before.TotalAlloc
-
+		alloc, img, m, err := allocFor(nlocals)
 		// Accepting is half the assertion, and it is the half that keeps the fix honest.
 		// Every one of these modules is **well-formed**: the sum is below 2^32, so the
 		// reference decodes them all. Refusing one to save the memory would be the
@@ -399,8 +470,8 @@ func TestDecodeCostIsProportionalToCompressedSize(t *testing.T) {
 			continue
 		}
 		// And the groups are retained rather than expanded, which is the mechanism the
-		// budget above is a consequence of. Asserted separately so a failure says *which*
-		// property broke: a budget alone would report "too much memory" for what is
+		// flatness above is a consequence of. Asserted separately so a failure says *which*
+		// property broke: a ratio alone would report "too much memory" for what is
 		// actually "the wire form stopped being retained".
 		if got := len(m.Funcs[0].Locals); got != 1 {
 			t.Errorf("%d locals: retained %d groups, want 1 — the image declares one run and "+
@@ -412,12 +483,54 @@ func TestDecodeCostIsProportionalToCompressedSize(t *testing.T) {
 				nlocals, got)
 		}
 
-		if budget := uint64(len(img)) * heapPerImageByte; alloc > budget {
-			t.Errorf("%d locals: decoding a %d-byte image allocated %d bytes, budget %d — "+
-				"that is proportional to the declared count rather than to the image, which "+
-				"is grave #138: a 30-byte module bought 4.00 GiB",
-				nlocals, len(img), alloc, budget)
-		}
+		rows = append(rows, row{nlocals, len(img), alloc})
 		t.Logf("%10d locals: image %d bytes, allocated %d bytes", nlocals, len(img), alloc)
+	}
+
+	// A comparison against an empty set succeeds, so the relation gets a vacuity check: the
+	// sweep is what makes the ratio mean anything, and a loop that `continue`d every row would
+	// otherwise leave this test green having compared nothing.
+	if len(rows) < 2 {
+		t.Fatalf("measured %d rows, want all 5 — a flatness assertion needs at least two "+
+			"points, and with fewer this test agrees with everything", len(rows))
+	}
+
+	// The extremes over *all* rows, not `rows[0]` and `rows[len(rows)-1]`. The doc comment above
+	// promises "the largest allocates no more than a small multiple of the smallest", and a
+	// first-to-last comparison would be a different, weaker claim wearing that sentence — which is
+	// the defect this whole redesign exists to remove, so it does not get reintroduced one level
+	// down. It also matters in fact: nothing guarantees allocation is monotone in N, and a middle
+	// row ballooning while the last stayed flat is a perfectly good expansion bug that a
+	// first-to-last check reads as flat.
+	lo, hi := rows[0], rows[0]
+	for _, r := range rows[1:] {
+		if r.alloc < lo.alloc {
+			lo = r
+		}
+		if r.alloc > hi.alloc {
+			hi = r
+		}
+	}
+	if lo.alloc == 0 {
+		t.Fatalf("the %d-locals row allocated 0 bytes, which is not a decode — the measurement "+
+			"is broken rather than the property satisfied", lo.nlocals)
+	}
+	// The relation, and the whole point of the redesign: the widest row is compared to the
+	// *narrowest row*, not to a figure derived from its own image length.
+	if hi.alloc > lo.alloc*flatnessTolerance {
+		// The spread is between the extreme *allocations*, and the sweep is over the extreme
+		// *declared counts* — two different pairs of rows, so they are reported as two separate
+		// facts rather than divided into one number. Printing `hi.nlocals/lo.nlocals` as "the
+		// sweep" would be arithmetic on whichever rows happened to be extreme in the other
+		// quantity, which is a figure about nothing.
+		t.Errorf("allocation is not flat as N scales: %d locals allocated %d bytes and %d locals "+
+			"allocated %d bytes — a %.1fx spread, tolerance %dx, over a sweep from %d to %d "+
+			"declared locals. That is proportional to the declared count rather than to the "+
+			"image, which is grave #138: a 30-byte module bought 4.00 GiB. The two images are "+
+			"%d and %d bytes, so the image cannot explain it.",
+			lo.nlocals, lo.alloc, hi.nlocals, hi.alloc,
+			float64(hi.alloc)/float64(lo.alloc), flatnessTolerance,
+			rows[0].nlocals, rows[len(rows)-1].nlocals,
+			lo.imgLen, hi.imgLen)
 	}
 }
