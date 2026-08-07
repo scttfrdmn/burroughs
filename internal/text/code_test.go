@@ -135,7 +135,7 @@ func TestElseOpcodeMatchesTheDecodersOpinion(t *testing.T) {
 // TestBlockTypeFormsMatchTheReference pins the three blocktype forms against the decoder's unpacking,
 // which is where a width error hides.
 //
-// **The forms are an `s33`, and the tempting writer is a `u32`** — `blockTypeIdxBytes` says why at
+// **The forms are an `s33`, and the tempting writer is a `u32`** — `typeuseIdxBytes` says why at
 // length. The two agree for every index below 64 and diverge at 64, where a u32 emits the single byte
 // `0x40`: precisely the empty-blocktype marker. So an encoder using the wrong writer produces, for
 // `(block (type 64) …)`, a block with *no signature*, which decodes clean and validates differently.
@@ -238,10 +238,10 @@ func TestBlockTypeFormsMatchTheReference(t *testing.T) {
 	// the *form* is right; 64 is where they differ, and it is the row a u32 writer fails.
 	for _, idx := range []uint32{0, 1, 63, 64, 65, 127, 128} {
 		t.Run(fmt.Sprintf("index %d", idx), func(t *testing.T) {
-			got, vt, empty := blockTypeOf(t, build(int(idx)+1, blockTypeIdxBytes(idx)))
+			got, vt, empty := blockTypeOf(t, build(int(idx)+1, typeuseIdxBytes(idx)))
 			if empty || got != idx {
-				t.Errorf("blockTypeIdxBytes(%d) = % #x, which decodes as idx=%d valtype=%v empty=%v",
-					idx, blockTypeIdxBytes(idx), got, vt, empty)
+				t.Errorf("typeuseIdxBytes(%d) = % #x, which decodes as idx=%d valtype=%v empty=%v",
+					idx, typeuseIdxBytes(idx), got, vt, empty)
 			}
 		})
 	}
@@ -249,14 +249,14 @@ func TestBlockTypeFormsMatchTheReference(t *testing.T) {
 	// The falsification, stated as a row rather than left to a reviewer: index 64 written as a u32
 	// *is* the empty marker, so the wrong writer is not merely imprecise — it encodes a different
 	// blocktype that decodes clean. Asserted here so the divergence is a checked fact and not a
-	// claim in blockTypeIdxBytes' comment.
+	// claim in typeuseIdxBytes' comment.
 	if !slices.Equal(encodeLocalIdx(64), []byte{blockTypeEmptyByte}) {
-		t.Errorf("encodeLocalIdx(64) = % #x, want % #x — the premise blockTypeIdxBytes exists for",
+		t.Errorf("encodeLocalIdx(64) = % #x, want % #x — the premise typeuseIdxBytes exists for",
 			encodeLocalIdx(64), []byte{blockTypeEmptyByte})
 	}
-	if slices.Equal(blockTypeIdxBytes(64), encodeLocalIdx(64)) {
-		t.Errorf("blockTypeIdxBytes(64) = % #x agrees with the u32 writer, so the s33 form is not "+
-			"being written", blockTypeIdxBytes(64))
+	if slices.Equal(typeuseIdxBytes(64), encodeLocalIdx(64)) {
+		t.Errorf("typeuseIdxBytes(64) = % #x agrees with the u32 writer, so the s33 form is not "+
+			"being written", typeuseIdxBytes(64))
 	}
 }
 

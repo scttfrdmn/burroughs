@@ -3410,67 +3410,349 @@ func TestEveryAbbreviatedReftypeExpandsAsItsTableClaims(t *testing.T) {
 // directly. This is the byte column's own justification applied one field lower down: assert bytes
 // exactly where decoding discards a fact, and nowhere else.
 //
-// The refusal half is here for grave #36's reason and is the reason `heapString` exists separately
-// from `String`: a heaptype has no nullability field, so rendering one in reftype spelling
-// (`(ref null any)` for the heaptype `any`) asserts a fact the grammar never supplied — the right
-// verdict quoting evidence the input did not contain. `encode.ml:414` is the authority for the
-// immediate being a bare `heaptype`: `RefNull t -> op 0xd0; heaptype t`.
+// **The refusal half is gone and the exhaustive half replaced it (#8).** It used to assert that ten
+// of the twelve absolute forms and the index form were *declined*, which was the frontier while
+// `heapTypeByte` answered `func` and `extern`; `heapTypeBytes` writes the whole production, so those
+// rows now name a boundary that does not exist. Kept as a note rather than deleted, because the reason
+// the refusal was asserted is still live one level down: the twelve bytes differ by one nibble and
+// nothing in the corpus can see a wrong one, which is what `TestAbsoluteHeaptypeBytesAgreeWithEncodeML`
+// is for. The `heapString`-versus-`String` distinction it also pinned has moved to
+// `TestRefNullNamesAnUnencodableHeapTypeAsAHeapType`, which reaches the arm through the table.
+//
+// `encode.ml:414` is the authority for the immediate being a bare `heaptype`:
+// `RefNull t -> op 0xd0; heaptype t`.
 func TestRefNullEncodesItsHeapType(t *testing.T) {
-	// The two heap types with an unparameterized encoding, and their bytes from encode.ml's
-	// `heaptype` arms — 0x70 func, 0x6F extern, the same two values reftype shares with it, which is
-	// precisely why these two rows cannot distinguish the readers and the refusals below can.
-	for _, tc := range []struct {
-		src      string
-		wantInit []byte
-	}{
-		{`(module (global funcref (ref.null func)))`, []byte{0xd0, 0x70, 0x0b}},
-		{`(module (global externref (ref.null extern)))`, []byte{0xd0, 0x6f, 0x0b}},
-	} {
-		b, err := EncodeModule([]byte(tc.src))
+	// **Every heaptype the production admits, derived from the parser's own list** rather than from a
+	// second enumeration here — so a thirteenth form is a red board on the day it is added, which is
+	// `heapTypeBytes`' stated contract. The expected byte comes from `absoluteHeaptypeBytes`, which is
+	// the engine's table and would agree with itself; what makes that legitimate is that the *table*
+	// is checked against encode.ml by TestAbsoluteHeaptypeBytesAgreeWithEncodeML. This row asserts the
+	// byte reaches the image, not what the byte is — two questions, two controls, neither standing in
+	// for the other.
+	//
+	// A `funcref` global for `func` and `externref` for the rest is the one column that cannot be
+	// derived: `(global anyref …)` needs a *reftype* the encoder still declines (`valTypeByte`), so
+	// the global's declared type is deliberately mismatched with its initializer for ten of the
+	// twelve. Ill-typed, and irrelevant that it is — the encoder writes what the grammar admits and
+	// validation is #9's, exactly as `encodableModules`' two-`ref.func` element row already reasons.
+	for _, k := range absoluteHeaptypes {
+		want, ok := absoluteHeaptypeBytes[k]
+		if !ok {
+			t.Errorf("no byte for the absolute heap type %q; every member of absoluteHeaptypes needs "+
+				"one — see TestEveryAbsoluteHeaptypeHasAByte, which is the control for this", k)
+			continue
+		}
+		valty := "externref"
+		if k == kwFunc {
+			valty = "funcref"
+		}
+		src := fmt.Sprintf(`(module (global %s (ref.null %s)))`, valty, heapWat(k))
+		got, err := globalInitBytes(EncodeModule([]byte(src)))
 		if err != nil {
-			t.Errorf("EncodeModule(%s) = %v; both halves of this PR are needed for this module and "+
-				"both have landed", tc.src, err)
+			t.Errorf("EncodeModule(%s): %v", src, err)
 			continue
 		}
-		i := bytesIndex(b, secGlobal)
-		if i < 0 {
-			t.Errorf("no global section in the encoding of %s", tc.src)
-			continue
-		}
-		// i, size, count, valtype, mutability, then the initializer through the section's end.
-		size, n := uvarint(b[i+1:])
-		got := b[i+1+n+3 : i+1+n+int(size)]
-		if !slices.Equal(got, tc.wantInit) {
+		if wantInit := []byte{0xd0, want, 0x0b}; !slices.Equal(got, wantInit) {
 			t.Errorf("%s encodes its initializer as % x, want % x — the heap type byte is invisible "+
-				"to every structural column here, because the decoder retains no immediate for it",
-				tc.src, got, tc.wantInit)
+				"to every structural column in encodableModules, because the decoder retains no "+
+				"immediate for it", src, got, wantInit)
 		}
 	}
 
-	// The refused spellings, checked for **heaptype** rendering rather than reftype. A message reading
-	// `the reference type (ref null any)` would be describing a construct the source never wrote.
+	// The **index** form, which is `heaptype`'s first branch and a `typeuse s33` rather than a byte
+	// (encode.ml:133). Two indices, and the second is the load-bearing one: 64 is where s33 and u32
+	// diverge, so a `u32` writer passes index 0 and writes one byte where two belong. The module
+	// declares 65 types to make index 64 legal, which is the same construction
+	// TestBlockTypeFormsMatchTheReference uses for the blocktype half of this production.
 	for _, tc := range []struct {
-		src      string
-		contains string
+		types    int
+		idx      uint32
+		wantInit []byte
 	}{
-		{`(module (global anyref (ref.null any)))`, "the heap type any"},
-		{`(module (global anyref (ref.null none)))`, "the heap type none"},
-		{`(module (global funcref (ref.null nofunc)))`, "the heap type nofunc"},
-		// A **type index** heaptype, which is `heaptype`'s first branch and the one `reftype` has no
-		// arm for at all (#88's under-accept half, from the other side).
-		{`(module (type $t (func)) (global funcref (ref.null $t)))`, "the heap type 0"},
+		{1, 0, []byte{0xd0, 0x00, 0x0b}},
+		{65, 64, []byte{0xd0, 0xc0, 0x00, 0x0b}},
 	} {
-		_, err := EncodeModule([]byte(tc.src))
-		if err == nil {
-			t.Errorf("EncodeModule(%s) succeeded; only func and extern have an unparameterized "+
-				"heaptype encoding today", tc.src)
+		var src strings.Builder
+		src.WriteString("(module")
+		for range tc.types {
+			src.WriteString(" (type (func))")
+		}
+		fmt.Fprintf(&src, " (global funcref (ref.null %d)))", tc.idx)
+		got, err := globalInitBytes(EncodeModule([]byte(src.String())))
+		if err != nil {
+			t.Errorf("EncodeModule(… (ref.null %d) …): %v", tc.idx, err)
 			continue
 		}
-		if !strings.Contains(err.Error(), tc.contains) {
-			t.Errorf("EncodeModule(%s) = %q, want it to name %q — a heap type rendered in reftype "+
-				"spelling claims a nullability the grammar has no field for (grave #36)",
-				tc.src, err, tc.contains)
+		if !slices.Equal(got, tc.wantInit) {
+			t.Errorf("(ref.null %d) encodes as % x, want % x — the index form is `typeuse s33`, and "+
+				"a u32 writer agrees with it on every index below 64", tc.idx, got, tc.wantInit)
 		}
+	}
+}
+
+// globalInitBytes extracts a single-global module's initializer bytes from an encoding.
+//
+// Takes `EncodeModule`'s pair so a caller reads as one line; the error is returned rather than
+// asserted here, because "the encode failed" and "the section is missing" are different findings and
+// the caller's message names which module it was asking about.
+func globalInitBytes(b []byte, err error) ([]byte, error) {
+	if err != nil {
+		return nil, err
+	}
+	i := bytesIndex(b, secGlobal)
+	if i < 0 {
+		return nil, errors.New("no global section")
+	}
+	// i, size, count, valtype, mutability, then the initializer through the section's end.
+	size, n := uvarint(b[i+1:])
+	if n <= 0 || int(size) < 4 {
+		return nil, fmt.Errorf("malformed global section size %d", size)
+	}
+	return b[i+1+n+3 : i+1+n+int(size)], nil
+}
+
+// heaptypeArmRE matches one arm of encode.ml's `heaptype` match, capturing the constructor and the
+// signed form it writes: `| AnyHT -> s7 (-0x12)`.
+//
+// Written to the head only, per keywordgen's wrapped-arm lesson (grave #105) — and the
+// `UseHT ut -> typeuse s33 ut` arm is deliberately *not* matched, because it writes no `s7` at all:
+// an arm outside the set being compared should be absent rather than matched with an empty capture.
+// The count check below is what turns its absence into a stated 12-of-13 rather than a silent one.
+var heaptypeArmRE = regexp.MustCompile(`(?m)^\s*\|\s*(\w+)\s*->\s*s7\s*\(-(0x[0-9a-fA-F]+)\)`)
+
+// TestAbsoluteHeaptypeBytesAgreeWithEncodeML machine-checks `absoluteHeaptypeBytes` against the
+// authority, which is the only oracle this table has.
+//
+// **The corpus cannot see a wrong byte in it.** A heaptype byte reaches the image as `ref.null`'s
+// immediate, so a swapped pair — `any` for `eq`, one nibble apart — writes a *well-formed* module
+// denoting a different type: no `assert_malformed` fires, and every `assert_return` that would notice
+// is behind the GC gate this build leaves off. That is §9 G-3's accept direction in its cheapest form,
+// and the standing rule is that such a fact is machine-checked against the reference rather than
+// hand-trusted (`authority-for-accept-direction-facts`). `TestExternKindByteAgreesForBothSections` is
+// the shape copied rather than re-derived (grave #105).
+//
+// Three assertions, three questions:
+//
+//   - the extraction found **twelve** arms, which is the vacuity floor — two empty sets agree
+//     perfectly, and a moved `let heaptype` or a changed indentation is exactly how that arrives
+//     (grave #78's class, and the sibling of the empty-table finding in #106);
+//   - every extracted arm is in the engine's table with the same byte, which is the engine's half;
+//   - the engine's table has no arm the reference does not, which is the direction a one-sided
+//     comparison misses: an invented thirteenth entry would pass the loop above.
+//
+// The conversion is `-form & 0x7f`, which is `s7`'s own definition (`i land 0x7f` for
+// `-64 <= i < 64`, encode.ml:59-61) rather than a re-derivation — all twelve forms are in that range,
+// and the test asserts it instead of assuming it, since a form outside it encodes to two bytes and
+// this table holds one.
+func TestAbsoluteHeaptypeBytesAgreeWithEncodeML(t *testing.T) {
+	src := testenv.RequireSpecRef(t, testenv.RefEncodeML)
+
+	i := strings.Index(src, "let heaptype = function")
+	if i < 0 {
+		t.Fatalf("could not locate `let heaptype = function` in encode.ml; it is cited by " +
+			"absoluteHeaptypeBytes and heaptypeRetained, and a citation that no longer resolves is " +
+			"this drift")
+	}
+	// Bounded at the next top-level `let`, which is where every arm list in this file ends. `reftype`
+	// follows immediately and writes the **same twelve bytes** from differently-named arms, so a
+	// region running past the bound is reading two productions while claiming to read one.
+	//
+	// The sentinel below is what makes that claim checkable, and it is *not* redundant with the count:
+	// removing the bound leaves the count at exactly 12 and the test green, because `reftype` spells
+	// its arms as tuples (`| (Null, AnyHT) ->`) which `(\w+)` cannot match. Measured, by removing the
+	// bound and running it. That is a coincidence of the reference's spelling rather than a property —
+	// a future `| AnyRT -> s7 (-0x12)` in some third production would match — so the region asserts
+	// its own extent instead of leaning on the arm pattern to be selective. A count floor answers
+	// "did the extraction happen"; only this answers "did it read the right arms".
+	rest := src[i:]
+	if j := strings.Index(rest[1:], "\n  let "); j >= 0 {
+		rest = rest[:j+1]
+	}
+	if strings.Contains(rest, "(Null, AnyHT)") {
+		t.Fatalf("the heaptype region extends into `reftype`; the two write the same twelve bytes " +
+			"from different constructors, so the extracted arms are not the production this table " +
+			"claims to follow")
+	}
+
+	found := map[string]byte{}
+	for _, m := range heaptypeArmRE.FindAllStringSubmatch(rest, -1) {
+		ctor, hex := m[1], m[2]
+		var form int
+		if _, err := fmt.Sscanf(hex, "0x%x", &form); err != nil {
+			t.Errorf("could not parse the form %q in heaptype's %s arm: %v", hex, ctor, err)
+			continue
+		}
+		if form >= 64 {
+			t.Errorf("heaptype's %s arm writes s7 (-%#x), which is outside s7's single-byte range; "+
+				"absoluteHeaptypeBytes holds one byte per form and cannot represent it", ctor, form)
+			continue
+		}
+		found[ctor] = byte(-form & 0x7f)
+	}
+	if len(found) != 12 {
+		t.Fatalf("extracted %d heaptype arms from encode.ml, want 12 (the thirteenth, UseHT, writes "+
+			"a typeuse rather than an s7 and is deliberately unmatched); an empty or short "+
+			"extraction agrees with anything, so this is a broken reader rather than a finding: %v",
+			len(found), found)
+	}
+
+	// The reference's constructor names against the parser's kinds. Spelled out because the two
+	// vocabularies genuinely differ — `NoFuncHT` is `nofunc`, `NoneHT` is `none` — and a derivation
+	// (strip `HT`, lower-case) would be a *third* claim about naming with nothing checking it, which
+	// is `heapWat`'s own measured lesson: lower-casing a name is right often enough to be trusted and
+	// wrong often enough to be a defect.
+	kindOf := map[string]keywordKind{
+		"AnyHT": kwAny, "EqHT": kwEq, "I31HT": kwI31, "StructHT": kwStruct, "ArrayHT": kwArray,
+		"NoneHT": kwNone, "FuncHT": kwFunc, "NoFuncHT": kwNofunc, "ExnHT": kwExn,
+		"NoExnHT": kwNoexn, "ExternHT": kwExtern, "NoExternHT": kwNoextern,
+	}
+	matched := map[keywordKind]bool{}
+	for ctor, want := range found {
+		k, ok := kindOf[ctor]
+		if !ok {
+			t.Errorf("encode.ml's heaptype has a %s arm this test cannot name a kind for; a "+
+				"thirteenth heap type needs absoluteHeaptypeBytes, absoluteHeaptypes and this map "+
+				"widened together", ctor)
+			continue
+		}
+		got, ok := absoluteHeaptypeBytes[k]
+		if !ok {
+			t.Errorf("encode.ml writes %s as %#02x and absoluteHeaptypeBytes has no entry for %q",
+				ctor, want, k)
+			continue
+		}
+		if got != want {
+			t.Errorf("absoluteHeaptypeBytes[%q] = %#02x, encode.ml's %s arm writes %#02x — a wrong "+
+				"byte here emits a well-formed module denoting a different heap type, which no "+
+				"assert_malformed in the corpus can report", k, got, ctor, want)
+		}
+		matched[k] = true
+	}
+	// The other direction: an entry the reference has no arm for. Without this the comparison is
+	// one-sided, and an invented thirteenth row would sit in the table unremarked.
+	for k := range absoluteHeaptypeBytes {
+		if !matched[k] {
+			t.Errorf("absoluteHeaptypeBytes has an entry for %q that no encode.ml heaptype arm "+
+				"matched; the table claims a form the reference does not encode", k)
+		}
+	}
+}
+
+// TestEveryAbsoluteHeaptypeHasAByte is the control `heapTypeBytes`' remaining `false` cites.
+//
+// A thirteenth heap type added to `absoluteHeaptypes` (types.go) without a byte in
+// `absoluteHeaptypeBytes` would make `(ref.null <it>)` a *refused module* — a frontier report for a
+// form the encoder simply forgot, which reads as a deferral and is an omission. So the two tables are
+// held together the way `atHeaptypeStart` and `heaptype` are: over the parser's own list, never over a
+// fresh enumeration, so coverage grows with the thing controlled (*derive the domain, never enumerate
+// it*).
+//
+// The floor is the vacuity check: a `range` over an empty list asserts nothing, and this file's other
+// twelve-row controls read the same list.
+func TestEveryAbsoluteHeaptypeHasAByte(t *testing.T) {
+	if len(absoluteHeaptypes) != 12 {
+		t.Fatalf("absoluteHeaptypes holds %d kinds, want 12; a range over a short list is a control "+
+			"that agrees by asking less", len(absoluteHeaptypes))
+	}
+	for _, k := range absoluteHeaptypes {
+		if _, ok := absoluteHeaptypeBytes[k]; !ok {
+			t.Errorf("absoluteHeaptypes holds %q and absoluteHeaptypeBytes has no byte for it, so "+
+				"(ref.null %s) is refused as unencodable rather than emitted — an omission wearing "+
+				"a frontier's clothes", k, heapWat(k))
+		}
+	}
+}
+
+// TestRefNullNamesAnUnencodableHeapTypeAsAHeapType keeps grave #36's rendering lesson reachable now
+// that no *spelling* of a heap type is refused.
+//
+// The old refusal rows in TestRefNullEncodesItsHeapType were the only thing exercising
+// `heapString`-versus-`String`, and they are gone with the frontier. The arm they covered survives —
+// `heaptypeBytesOf` reports it for a kind with no byte — so the message is checked by reaching that
+// arm the only way left: through the table, with an entry removed. That is the falsification method
+// used as a *control*, and it is legitimate here for the same reason the birth requirement is: the arm
+// is unreachable from any source text, so a test that could not construct the state would be
+// asserting a message nothing produces.
+//
+// What is asserted is the *level*: `func` and not `(ref null func)`. A heaptype has no nullability
+// field, so reftype spelling in this position asserts a fact the grammar never supplied — the right
+// verdict quoting evidence the input did not contain, in the half of an error no expected string
+// covers.
+func TestRefNullNamesAnUnencodableHeapTypeAsAHeapType(t *testing.T) {
+	saved, ok := absoluteHeaptypeBytes[kwI31]
+	if !ok {
+		t.Fatal("absoluteHeaptypeBytes has no i31 entry to remove; this test constructs the " +
+			"no-byte state by deleting one, and TestEveryAbsoluteHeaptypeHasAByte is the control " +
+			"that would already be red")
+	}
+	delete(absoluteHeaptypeBytes, kwI31)
+	defer func() { absoluteHeaptypeBytes[kwI31] = saved }()
+
+	const src = `(module (global externref (ref.null i31)))`
+	_, err := EncodeModule([]byte(src))
+	if err == nil {
+		t.Fatalf("EncodeModule(%s) succeeded with i31 removed from absoluteHeaptypeBytes; the "+
+			"no-byte arm in heaptypeBytesOf is not reached, so this test asserts nothing", src)
+	}
+	if want := "the heap type i31"; !strings.Contains(err.Error(), want) {
+		t.Errorf("EncodeModule(%s) = %q, want it to name %q — a heap type rendered in reftype "+
+			"spelling (`(ref null i31)`) claims a nullability the grammar has no field for "+
+			"(grave #36)", src, err, want)
+	}
+}
+
+// TestRefNullHeaptypeResolvesInBothFieldOrders is the derived vector for the deferral
+// `heaptypeRetained` grew, and it is derived because the corpus cannot state it.
+//
+// # Provenance: derived
+//
+// Premises, both checkable:
+//
+//   - `heaptype`'s index arm is `UseHT (Idx ($1 c type_).it)` inside a `fun c ->`
+//     (parser.mly:373), so it resolves in the enclosing thunk — the reference's stage 2, after every
+//     name is bound. `imports.wast:62-64` is the *cited* corpus for that staging in another position
+//     (a func's typeuse forward-referencing its type), which typetable.go's header quotes.
+//   - `module_fields` admits any field order in the source (parser.mly:1309), so a `(type $t …)`
+//     after a use of `$t` is well-formed text.
+//
+// Inference: `(module (func (drop (ref.null $t))) (type $t (func)))` is a valid module, and an
+// encoder resolving `$t` at the cursor rejects it. **Measured** at the commit before this one:
+// `unknown type $t`.
+//
+// The corpus cannot supply this row — a sweep of all 254 vendored `.wast` files finds zero
+// `ref.null $t` preceding its `(type $t …)` — which is grave #130's shape exactly: an
+// accept-direction defect in field ordering, invisible because every vector happens to declare
+// before it uses. Both orders are asserted, and they must produce the **identical** image: the two
+// spellings denote the same module, so a difference is a defect whichever direction it points.
+func TestRefNullHeaptypeResolvesInBothFieldOrders(t *testing.T) {
+	const (
+		declFirst = `(module (type $t (func)) (func (drop (ref.null $t))))`
+		useFirst  = `(module (func (drop (ref.null $t))) (type $t (func)))`
+	)
+	a, err := EncodeModule([]byte(declFirst))
+	if err != nil {
+		t.Fatalf("EncodeModule(%s) = %v; the declare-first order was already encodable", declFirst, err)
+	}
+	b, err := EncodeModule([]byte(useFirst))
+	if err != nil {
+		t.Fatalf("EncodeModule(%s) = %v — a valid module rejected: `module_fields` admits any field "+
+			"order, and the type space permits forward references by construction, which is why "+
+			"heaptype returns its token unresolved (grave #130's class)", useFirst, err)
+	}
+	if !slices.Equal(a, b) {
+		t.Errorf("the two field orders encode differently:\n\tdecl-first % x\n\tuse-first  % x\n"+
+			"they denote the same module, so any difference is a defect whichever way it points", a, b)
+	}
+	// A numeric index takes the cursor path rather than the deferred one, so both arms of
+	// `heaptypeRetained`'s split are exercised — and it must agree with the symbolic spelling, the
+	// two being the same index after resolution.
+	n, err := EncodeModule([]byte(`(module (type (func)) (func (drop (ref.null 0))))`))
+	if err != nil {
+		t.Fatalf("EncodeModule with a numeric heaptype index = %v", err)
+	}
+	if !slices.Equal(a, n) {
+		t.Errorf("the symbolic and numeric spellings of type index 0 encode differently:\n"+
+			"\t$t % x\n\t0  % x\nthe deferred arm and the cursor arm must produce one encoding", a, n)
 	}
 }
 
