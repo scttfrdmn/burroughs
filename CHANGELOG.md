@@ -2453,6 +2453,42 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **An absolute byte budget wearing a ratio's doc comment: grave #138's control could not see the
+  property it names** ([grave #166](https://github.com/scttfrdmn/burroughs/issues/166)).
+  `TestDecodeCostIsProportionalToCompressedSize` opened with a paragraph explaining, correctly, that
+  the assertion is *a ratio against the declared count* rather than an absolute figure, because an
+  absolute one "would be a bound on today's allocator behaviour". The code beneath it was
+  `budget := uint64(len(img)) * heapPerImageByte` — an absolute figure, per row. **The comment knew
+  and the code didn't**, which is the purest instance yet of *the defect stated as the rule*: review
+  verifies code against claims, and here the claim was the thing being violated, so every reading
+  concurred.
+
+  Two consequences, and the second is the one that matters. The budget was **process-global** —
+  `TotalAlloc` around a single `DecodeModule` charges the decoder for whatever else allocated in the
+  window — and the 2^16 and 2^20 rows build the *same 28-byte image*, so both carried an identical
+  1792-byte ceiling over ~890 bytes of real signal. One stray 5 KB allocation from a false red, and
+  on an unrelated PR's run that is exactly what happened: 6208 bytes on the first row, 888 on every
+  other. The failure message then blamed allocation proportional to the declared count while its own
+  adjacent rows disproved that — the *rows declaring up to 32768x more locals all read 888* — so the
+  instrument was wrong about its own cause. And the comparison the doc's argument rested on was
+  **never computed**: five rows each checked against their own ceiling is five single-row
+  measurements, and one row cannot distinguish "proportional to the image" from "proportional to N
+  with a small constant", which is the reading that lets the defect back in.
+
+  The repair asserts **the relation across rows** — allocation stays flat as N scales — comparing the
+  widest row to the narrowest over all five rather than each row to a figure derived from itself
+  (ruling: Scott, on the grave). A budget with headroom would only relocate the flip threshold while
+  still measuring the process's weather. Flat, the rows are **identical at 888 bytes**; with the
+  flattening `make([]ValType, 0, total)` reintroduced they read 66424 through 2147484536 and the
+  control fails at **32329.9x against a tolerance of 8**, naming both endpoints. Noise isolation is
+  minimum-over-eight-repeats (contamination can only push a sample up), a discarded warm-up decode,
+  and automatic GC off with an explicit collect per window — that last measured both ways, since it
+  holds peak RSS to **2.16 GiB instead of 8.68 GiB** under falsification, and a control that gets
+  OOM-killed names no row. All three guards, including the vacuity floor and the zero-allocation
+  check, were watched die individually. *Budget by the quantity the purpose names*
+  ([#28](https://github.com/scttfrdmn/burroughs/issues/28)) — the purpose is a relation, so the
+  budget is one.
+
 - **A rename row's path broke the ratio classifier, and two independently wrong readings agreed
   to within 0.1** ([#117](https://github.com/scttfrdmn/burroughs/issues/117)). `git diff
   --numstat` renders a rename as `internal/{text/internal => gen}/keywordgen/emit.go` — a single
