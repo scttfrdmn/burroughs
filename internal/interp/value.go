@@ -77,6 +77,27 @@ type ref struct {
 	// function index for `funcref`, and for the GC types an object handle this package does not
 	// have yet.
 	Addr uint32
+
+	// Inst is the instance Addr's index space belongs to (0017 Q2, grave #163). A funcref is a
+	// *pair* — which instance, which index — because index 3 names two different functions once
+	// one instance's table can hold a slot another instance's element segment filled. Nil for a
+	// null reference, since there is nothing to name; every non-null construction site sets it
+	// to the instance whose index space Addr was read from, which is always in scope at
+	// construction (segmentRefs and constExprRef are both *Instance methods).
+	//
+	// This is option A of the three the ADR priced: `ref{Null, Addr}` gains an `*Instance`
+	// field, matching `instance.ml:21`'s `funcinst = moduleinst … Func.t` — the reference's
+	// funcref carries its module instance too. Rejected: a flat store with Addr indexing into it
+	// (denser, but makes Addr mean something the module cannot resolve on its own — the
+	// premature-generality option 0016 also declined) and copying the callee's Func into the
+	// slot (wrong once the callee reads its own memory or globals, not merely slower).
+	//
+	// **The GC-precision pin this field is *for*.** 0002 requires references to live in a
+	// parallel array so the collector can trace them (package doc above); Inst is the first
+	// thing that array has ever held that the collector genuinely must trace, an *Instance
+	// outliving the frame that pushed it. A funcref surviving in a table after its originating
+	// instance's own call frames have returned is the ordinary case, not an edge one.
+	Inst *Instance
 }
 
 // stack is the value stack: 0002 Q3's bare `uint64` slots plus the pinned parallel reference array.

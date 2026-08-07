@@ -5561,7 +5561,13 @@ func TestPhase1Files(t *testing.T) {
 	// external memory size is 2 now"). Fixed alongside #164 because the new type check is what
 	// made it observable; `table.grow`'s absence means the table side of the same defect cannot be
 	// measured yet.
-	const execFailCeiling = 211
+	//
+	// **#163 landed: 211 → 196.** 0017 Q2 (grave #163): `ref` gained an `Inst *Instance` field
+	// naming the instance a funcref's index space belongs to, and `call_indirect` resolves
+	// through it rather than through the caller — `mismatch_test.go`'s `expectedMismatches`
+	// carries the per-row account (15 rows removed, all in that one bucket, the other 7 named
+	// mismatches unmoved and unrelated: 5 multi-memory, 2 `#8`'s missing `(start …)` field).
+	const execFailCeiling = 196
 	boardBound(t, "execFailCeiling", execFail, execFailCeiling, 0, ceilingBound,
 		"the interpreter answered fewer vectors than it did: either an opcode arm regressed or "+
 			"a value comparison started disagreeing. A *rise* caused by #8 unblocking more "+

@@ -283,18 +283,23 @@ func (in *Instance) callIndirect(ins binary.Instr, st *stack, depth int) error {
 	if r.Null {
 		return uninitializedElem(i)
 	}
-	// **`target` is the instance the callee's body belongs to, and it is `in` for every
-	// module-local function.** A table slot may name an imported function, and that function's
-	// frame must run against *its own* instance — its memory, its globals, its tables — so the
-	// receiver of `invoke` is resolved here rather than assumed. Getting this wrong is invisible
-	// on the whole numeric corpus and wrong on `linking.wast`'s `Mt`/`Nt` pairs, where the callee
-	// reads a global the caller does not have.
-	target := in
-	fn, ok := in.mod.DefinedFunc(r.Addr)
+	// **`target` is the instance the callee's body belongs to, resolved through `r.Inst` and
+	// never through `in` (grave #163, 0017 Q2).** A table slot may hold *another instance's*
+	// funcref — `r.Inst` is the instance whose index space `r.Addr` was read from when the
+	// element segment that filled this slot was evaluated, which is `in` for a module-local
+	// function and a different instance whenever this table was imported and someone else's
+	// segment wrote into it. Resolving `r.Addr` against `in.mod` instead would land on whatever
+	// function `in` happens to have at that index — the exact defect the issue's synthetic
+	// reproducer isolates (a decoy function at the same index, `got 99, want 11`) and the exact
+	// vector `linking.wast:342-353` pins: `$Ot` writes its own functions into `$Mt`'s table, and
+	// `$Mt.call` must resolve them against `$Ot`, not against itself. Getting this right is
+	// invisible on the whole numeric corpus and wrong on any cross-instance table.
+	target := r.Inst
+	fn, ok := target.mod.DefinedFunc(r.Addr)
 	if !ok {
-		if r.Addr >= uint32(in.mod.ImportedFuncs()) {
+		if r.Addr >= uint32(target.mod.ImportedFuncs()) {
 			return fmt.Errorf("%w: table slot %d names function %d of %d",
-				ErrNotValidated, i, r.Addr, in.mod.ImportedFuncs()+len(in.mod.Funcs))
+				ErrNotValidated, i, r.Addr, target.mod.ImportedFuncs()+len(target.mod.Funcs))
 		}
 		// **Resolved here and then type-checked *below*, sharing the defined path's check.**
 		// `call` names a function statically and the validator has agreed its signature; this
@@ -303,7 +308,13 @@ func (in *Instance) callIndirect(ins binary.Instr, st *stack, depth int) error {
 		// falls into the same comparison the defined case uses — one trap message, one
 		// `sameFuncType` call, because two copies of a check the suite reads by substring are
 		// two places to spell it differently.
-		ext, ierr := in.importedFunc(r.Addr)
+		//
+		// **`target.importedFunc`, not `in.importedFunc`** — the import slot being resolved is
+		// the *naming* instance's own import, one level of indirection past `r.Inst` when the
+		// funcref chains through more than one `register`. `r.Inst` is the instance whose
+		// segment wrote this slot, and if that instance's own function 0 is itself an import,
+		// its resolution lives in its own `funcs` slice, not in `in`'s.
+		ext, ierr := target.importedFunc(r.Addr)
 		if ierr != nil {
 			return fmt.Errorf("%w (table slot %d)", ierr, i)
 		}

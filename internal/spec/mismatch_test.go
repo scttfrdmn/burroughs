@@ -162,6 +162,12 @@ func TestValueMismatchBucketIsEmptyAndSaysWhoWroteAnyRow(t *testing.T) {
 	// expects `0` from `$f` and gets `4`, which is `$Mt`'s funcidx 0 (`$g`, `i32.const 4`) — the
 	// same *number* the wrong instance holds at the same index. Q2 is where 0017 put the widening
 	// and this is the population that will collect it.
+	//
+	// **Landed, grave #163.** The 15 are gone from `expectedMismatches` above and this paragraph
+	// stays, era-stamped, because it is the record of what the bucket looked like with the defect
+	// still live — the same "append rather than edit" rule the ADR's own census correction
+	// follows. The bucket now holds the 7 that remain: 5 multi-memory, 2 encoder, both unrelated
+	// to Q2 and unmoved by it.
 	if len(rows) == 0 {
 		t.Errorf("value mismatches: 0, where %d rows are registered below.\n"+
 			"Every registered row names a live defect or frontier, so an empty bucket means either\n"+
@@ -352,34 +358,14 @@ var expectedMismatches = map[string]map[int]string{
 		28: "multi-memory: the writer module at :10 is declined, so $M's memory was never written",
 		29: "multi-memory: the writer module at :10 is declined, so $M's memory was never written",
 	},
-	// `$module2` and `$module3` import `$module1`'s table and write their own functions into it.
-	// A `call_indirect` in `$module1` through those slots must resolve in the *supplier*, and
-	// resolves locally instead: slot 7 holds `$module2`'s funcidx 0, read as `$module1`'s
-	// `$const-i32-a` (65) where 67 was wanted.
-	"elem.wast": {
-		959: "Q2 funcref identity (0017): $module2's elem at :951 writes a module-local funcidx",
-		960: "Q2 funcref identity (0017): $module2's elem at :952 writes a module-local funcidx",
-		972: "Q2 funcref identity (0017): $module3's elem at :964 writes a module-local funcidx",
-		973: "Q2 funcref identity (0017): $module3's elem at :965 writes a module-local funcidx",
-		974: "Q2 funcref identity (0017): $module3's elem at :965 writes a module-local funcidx",
-	},
-	// The paradigm file. `$Nt` and `$Ot` both put their own functions into `$Mt`'s imported table;
-	// `:410` and `:423` are the same defect reached through a *trapping* module whose element
-	// segment persists, which is why they sit apart from the `:342-353` block.
+	// The paradigm file. `:609` is the encoder gap; the nine Q2 rows this map held through
+	// linking.wast:342-353/410/423, elem.wast:959/960/972/973/974 and linking0.wast:42 are gone
+	// — grave #163 (0017 Q2): `ref` gained an `Inst *Instance` field naming the instance a
+	// funcref's index belongs to, and `call_indirect` resolves through it instead of through
+	// the caller. Confirmed by the full-board bucket join, not by re-reading this file: 1228 →
+	// 1213, all 15 departures from `assert_return value mismatch`, zero arrivals elsewhere.
 	"linking.wast": {
-		342: "Q2 funcref identity (0017): $Ot's elem at :331 writes a module-local funcidx",
-		344: "Q2 funcref identity (0017): $Ot's elem at :331 writes a module-local funcidx",
-		345: "Q2 funcref identity (0017): $Ot's elem at :331 writes a module-local funcidx",
-		347: "Q2 funcref identity (0017): $Ot's elem at :331 writes a module-local funcidx",
-		350: "Q2 funcref identity (0017): $Ot's elem at :331 writes a module-local funcidx",
-		351: "Q2 funcref identity (0017): $Ot's elem at :331 writes a module-local funcidx",
-		353: "Q2 funcref identity (0017): $Ot's elem at :331 writes a module-local funcidx",
-		410: "Q2 funcref identity (0017): the persisted elem at :404 resolves to $Mt's funcidx 0 ($g, 4)",
-		423: "Q2 funcref identity (0017): the persisted elem at :421 resolves to $Mt's funcidx 0 ($g, 4)",
 		609: "encoder: the module at :592 carries (start $main), which the emitter cannot write (#8)",
-	},
-	"linking0.wast": {
-		42: "Q2 funcref identity (0017): the persisted elem at :34 resolves to $Mt's funcidx 0 ($g, 4)",
 	},
 	"linking3.wast": {
 		82: "encoder: the module at :65 carries (start $main), which the emitter cannot write (#8)",
