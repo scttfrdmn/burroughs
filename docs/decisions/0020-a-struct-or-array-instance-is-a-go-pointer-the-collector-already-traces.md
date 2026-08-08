@@ -1,12 +1,30 @@
 # 0020 — A struct or array instance is a Go pointer the collector already traces
 
-Date: 2026-08-08 · Status: **proposed** — no stamp exists yet
+Date: 2026-08-08 · Status: **accepted** — option C, stamped by Scott on PR #177
 
-> Held open per the ruling on #142. Ordered by Scott on 0019's acceptance (PR #176): heap-object
-> representation earns its own document now, on the 0017 authoring bar — a measured, real
-> consumer (zero `0xfb` dispatch today, `struct.new` waiting on `CompType.Fields`) and a choice
-> that propagates into 0002's GC-traceability pin, the value model, and every struct/array arm to
-> come. The option below is offered for his stamp and has not received one.
+> Held at `proposed` while it had no stamp, per the ruling on #142. Ordered by Scott on 0019's
+> acceptance (PR #176): heap-object representation earns its own document now, on the 0017
+> authoring bar — a measured, real consumer (zero `0xfb` dispatch today, `struct.new` waiting on
+> `CompType.Fields`) and a choice that propagates into 0002's GC-traceability pin, the value model,
+> and every struct/array arm to come.
+>
+> The stamp names why option C is the right one on this project's own terms rather than in the
+> abstract: it services the GC-traceability pin 0002 already pinned, rather than reopening it —
+> `Obj *gcObj` is a fourth field the collector traces exactly as it already traces `Inst
+> *Instance`, no new array, no new exemption. `ref.eq` as bare pointer comparison is not a
+> shortcut taken for convenience; it is the reference's own default (`eq_ref' = ref (==)`,
+> unoverridden in `aggr.ml`) *earning* the cheap implementation rather than the cheap
+> implementation getting lucky — the citation is what makes the free performance trustworthy
+> instead of coincidental. And both rejections hold on precedent already spent elsewhere in this
+> campaign: option A repeats `ref.Inst`'s own reason for rejecting an index-into-owner shape for
+> funcrefs, and option B repeats 0017 Q2's correctness rejection of copy-on-read — neither needed
+> a fresh argument because the shape of the mistake was already on file.
+>
+> **Four for four.** Value type (0018), subtyping (0019), heap objects (0020), and probe
+> discipline (the co-blocking check run ahead of every candidate implementation PR, standing since
+> the recon) are the campaign's whole decision phase, closed with this stamp. The 928-vector
+> figure the recon opened with is no longer a design question sitting on top of a to-do list; it is
+> the to-do list, now with a constitution to build against. The ladder is implementation from here.
 
 Filed against **#172** (the GC-gate recon) and milestone **v0.2.0 GC gate**, the fourth decision
 in the sequence 0018/0019 named but did not resolve: `ValType` (0018) supplies the type a runtime
