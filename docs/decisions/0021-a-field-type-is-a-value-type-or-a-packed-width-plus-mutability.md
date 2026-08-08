@@ -1,15 +1,34 @@
 # 0021 — A field type is a value type or a packed width, plus mutability
 
-Date: 2026-08-08 · Status: **proposed** — no stamp exists yet
+Date: 2026-08-08 · Status: **accepted** — option C, stamped by Scott on PR #184
 
-> Held open per the ruling on #142. Filed against #183's measurement: the largest remaining
-> GC-attributable frontier (126 vectors, 110-of-126 sole-mechanism) is `CompType.Fields`
-> retention, and both 0018 and 0019 named this exact decision as a deferred companion —
-> 0018's own consequences section calls it "a companion representation decision at the
-> *type-definition* level, not the *value-slot* level"; 0020's `gcObj.typ` cites
-> `*binary.CompType` "on the assumption that decision lands with a `Fields []FieldType` (or
-> equivalent) the decoder retains." The option below is offered for Scott's stamp and has
-> not received one.
+> Held at `proposed` while it had no stamp, per the ruling on #142. Filed against #183's
+> measurement: the largest remaining GC-attributable frontier (126 vectors, 110-of-126
+> sole-mechanism) is `CompType.Fields` retention, and both 0018 and 0019 named this exact
+> decision as a deferred companion — 0018's own consequences section calls it "a companion
+> representation decision at the *type-definition* level, not the *value-slot* level"; 0020's
+> `gcObj.typ` cites `*binary.CompType` "on the assumption that decision lands with a `Fields
+> []FieldType` (or equivalent) the decoder retains."
+>
+> The stamp singles out two arguments for their permanent weight. The extended-sentinel
+> rejection (option A) is affirmed as type theory, not merely engineering convenience:
+> **`i8`/`i16` are not value types at all — they unpack to `i32` on every read** — so folding
+> them into `ValType.kind` would not extend the type, it would corrupt 0018's kind-is-the-
+> wire-byte invariant with two kinds no instruction can actually carry as a value. The
+> spec's own storage-versus-value distinction (`storagetype` versus `valtype`, two different
+> productions) maps to two Go types here, which is the grammar's own boundary respected
+> rather than flattened. And excluding field *names* by the wire-form authority is 0016's
+> `LocalGroup` law cited at exactly its precedential weight: a field name has no wire
+> representation, so retention owes it nothing, and the exclusion is not a shortcut but the
+> same rule applied a second time.
+>
+> Noted as the meta-observation the ADR corpus itself demonstrates: **this decision's
+> authoring bar was met by its own predecessors' deferral pointers** — 0018's consequences
+> section and 0020's `gcObj.typ` forward reference both named this decision before it
+> existed, so when #183's probe measured a real consumer at 126 vectors, the document's
+> filing was closer to inevitable than to a fresh judgment call. The deferred-items-as-
+> pointers convention is compounding: each decision's honestly-stated edges become the next
+> decision's citations, and the corpus is starting to generate its own agenda.
 
 Filed against **#183** (the co-blocking probe that measured this frontier) and milestone
 **v0.2.0 GC gate**.
