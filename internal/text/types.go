@@ -236,20 +236,26 @@ func (p *parser) globaltype() (globalType, error) {
 //
 // **The packed width is read off the token's own spelling, `i8` versus `i16`, the same authority
 // `addrtype` already reads a NUMTYPE token's text for** — PACKTYPE is a lexer *class* covering
-// both, so the kind alone cannot tell them apart. A width outside {8, 16} cannot occur: the
-// lexer's PACKTYPE class has exactly these two members (kinds.go's comment on kwPacktype), so
-// there is no third spelling to be wrong about. The value type case returns an unresolved
-// `valType`, for `globaltype`'s own reason: a struct or array field may name a type index that
-// forward-references — `(type $a (struct (field (ref $b)))) (type $b (struct))` is 0021's own
-// worked example — so resolution happens in the deferred phase, not here.
+// both, so the kind alone cannot tell them apart. Following `addrtype`'s own precedent exactly:
+// that function rejects any NUMTYPE spelling that is not `i32`/`i64` with `malformed address
+// type` rather than defaulting one of the two, because a keyword class is a fact about the
+// *lexer* and a class's membership is not this function's to assume stays at two. A spelling
+// this function does not recognize is a real defect: it means kinds.go's keyword table grew a
+// third PACKTYPE entry with no corresponding case here, which must fail loudly rather than
+// silently report `i8`. The value type case returns an unresolved `valType`, for `globaltype`'s
+// own reason: a struct or array field may name a type index that forward-references — `(type $a
+// (struct (field (ref $b)))) (type $b (struct))` is 0021's own worked example — so resolution
+// happens in the deferred phase, not here.
 func (p *parser) storagetype() (storageType, error) {
 	if p.c.atKeyword(kwPacktype) {
 		tok := p.c.next()
-		width := byte(8)
-		if tok.Text == "i16" {
-			width = 16
+		switch tok.Text {
+		case "i8":
+			return storageType{packed: true, width: 8}, nil
+		case "i16":
+			return storageType{packed: true, width: 16}, nil
 		}
-		return storageType{packed: true, width: width}, nil
+		return storageType{}, errAt(tok, "malformed storage type")
 	}
 	v, err := p.valtype()
 	return storageType{val: v}, err
