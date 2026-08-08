@@ -1,11 +1,28 @@
 # 0019 — Runtime type tests are events; subsumption is #9's, whenever #9 exists
 
-Date: 2026-08-08 · Status: **proposed** — no stamp exists yet
+Date: 2026-08-08 · Status: **accepted** — stamped by Scott on PR #175
 
-> Held open per the ruling on #142: *a status field is a citation to an approval, and approvals
-> are artifacts with provenance.* Scott ordered this the second of the recon's two forced-question
-> ADRs (0018's acceptance, PR #174); the option below is offered for his stamp and has not received
-> one.
+> Held at `proposed` while it had no stamp, per the ruling on #142. The stamp names the structural
+> improvement the design earns beyond the line it draws: using the validator's own comparison
+> functions at runtime types gives the subtype relation **one comparator with two callers** —
+> execution today, #9 whenever it exists — rather than a runtime approximation that could drift
+> from the eventual validator's truth. `sameFuncType` widening into the declared-supertype walk,
+> rather than growing a second comparator for casts, is the one-authority law paying #164's
+> 4-vector debt as the same motion.
+>
+> On the flagged question — whether heap-object representation earns its own ADR now or waits for
+> the implementation PR that needs it — **its own ADR, authored now: filed as 0020.** The
+> criterion is the one this campaign runs on: a decision earns a document when multiple defensible
+> shapes exist and the choice propagates, and this one propagates into 0002's GC-traceability pin,
+> the value model, and every struct/array arm to come — 0002-scale, never made ambient inside an
+> implementation PR where it would be reviewed as code style instead of as architecture. The
+> consumer is measured and real (zero `0xfb` dispatch, `struct.new` waiting on `CompType.Fields`),
+> which is 0017's own bar for authoring, met exactly.
+>
+> Also on the record: the recon (#172) conflated "how much subtyping" with "subtyping over what
+> value," and tracing this design forward caught the conflation and split it into a fourth
+> decision, named rather than silently absorbed. The map got corrected by travel, which is what a
+> map is for.
 
 Filed against **#172** (the GC-gate recon) and milestone **v0.2.0 GC gate**, downstream of
 **0018** (accepted): the wide `ValType` that decision supplies is what this ADR's relation is
