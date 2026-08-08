@@ -21,6 +21,43 @@ weakly-ordered platform.
 
 ### Added
 
+- **The text encoder writes a struct's or array's field list**: decision
+  [0021](docs/decisions/0021-a-field-type-is-a-value-type-or-a-packed-width-plus-mutability.md)'s
+  encoder-side implementation (option C), completing the pair the decoder-side PR (#186)
+  opened. `internal/text/types.go`'s `storagetype`/`fieldtype`/`fieldtypeList`/`structtype`/
+  `arraytype`/`comptype` stop discarding what they parse: `storageType`/`fieldType` are new
+  unresolved shapes mirroring `binary.StorageType`/`FieldType`, and `compType` grows a `kind
+  compKind` (three states — `compFunc`/`compStruct`/`compArray`, replacing the old `isFunc
+  bool`, mirroring `binary.CompKind`) plus `fields []fieldType`. The deferred phase
+  (`runDeferred`/`resolveFields`/`resolveStorage`, `internal/text/typetable.go`) resolves
+  each field's storage exactly as a functype's param resolves — a `(field (ref $t))` may
+  forward-reference a type defined later in the same field list, through the same
+  `resolveVal`/`resolveTypeIdx` machinery — producing `resolvedComp{kind, ft, fields
+  []resolvedField}`. The encoder (`internal/text/encode.go`) gains `tagStruct`/`tagArray`
+  (0x5f/0x5e) beside the existing `tagFunc`, and `w.fieldType`/`w.storageType` write a
+  struct's `vec(fieldtype)` or an array's bare fieldtype (no count, matching `arraytype`'s
+  own arity) — a full value type through the existing `valTypeBytes`, or one of the two
+  packed forms (`0x78`/`0x77`, the `-0x08`/`-0x09` fold). `encodableOrErr`'s former
+  unconditional struct/array refusal now asks the same per-field `valTypeBytes` question a
+  functype's param already answers; packed storage always has a byte, so the practical
+  effect is that a struct or array type no longer refuses outright. Field *names* stay out
+  of scope, unchanged from the decoder-side PR (no wire representation, 0016's `LocalGroup`
+  precedent), as does the `struct.get`/`array.get`-family instruction-immediate encoding
+  capacity (#183's separately-tracked two-blocker chain — `struct.wast`'s 18 fails are all
+  behind that blocker and this PR does not touch them) and any `internal/interp` consumer
+  (0020's later PR). No gating change. Board: default lane fail 734 → 606 (-128: the "fields
+  are not retained" bucket empties completely, 126 vectors — 117 + 6 + 3 by the split
+  `no instance`/`register` messages carried, reconciling to the 110-of-126 sole-mechanism
+  estimate plus the 16 partially-shadowed ones, all landing as expected), gated 2959 → 3087
+  (+128, the freed vectors that need GC on to actually decode); all-gates-on fail 1024 → 1017
+  (-7, `array.wast`'s residual — the other 119 of the freed 126 land as new *passes* in that
+  lane, since GC is already on there), pass 36877 → 36878, gated stays 0. `unsupported`
+  unmoved at 27099 (default lane) — every moved vector was already in `fail`/`gated`, not
+  `unsupported`. Verified against the merged decoder directly (`TestStructAndArrayFieldsRoundTrip`):
+  a struct with mixed packed/full-valtype fields and mixed mutability, and an array's single
+  field, encoded then decoded through `(&binary.Decoder{Features: binary.Features{GC:
+  true}}).DecodeModule`, asserting the decoded `CompType.Fields` matches what the text named.
+
 - **`binary.CompType` retains a struct's or array's field list**: decision
   [0021](docs/decisions/0021-a-field-type-is-a-value-type-or-a-packed-width-plus-mutability.md)'s
   decoder-side implementation (option C). Two new types — `StorageType` (a full `ValType`,

@@ -138,11 +138,63 @@ func (ft funcType) inlineBlockType() bool {
 	return len(ft.params) == 0 && len(ft.results) <= 1
 }
 
-// compType is a composite type (parser.mly:446-449). Only the func case carries content: a struct
-// or array type is a `non-function type` to every consumer here, and its fields are never compared.
+// compKind distinguishes comptype's three forms (parser.mly:446-449), mirroring
+// `binary.CompKind`'s already-merged three values — the decoder-side authority for this exact
+// grammar production (`internal/binary/module.go`).
+//
+// **Replaces the old `isFunc bool`, as of decision 0021.** A bool could tell a func apart from
+// "not a func", which was everything `func_type`'s `non-function type` fallthrough needed; a
+// struct and an array are now two distinct populations with their own retained content
+// (`compType.fields`), so the type needs three states rather than two — the same reason
+// `binary.CompKind` is a byte enum and not a bool over there.
+type compKind byte
+
+const (
+	compFunc compKind = iota
+	compStruct
+	compArray
+)
+
+// storageType is a fieldtype's storage, unresolved (parser.mly:404-406): a value type, or one of
+// the two packed widths (decision 0021).
+//
+// Mirrors `binary.StorageType`'s already-merged shape (`internal/binary/module.go`) at this
+// package's own unresolved stratum — `val` is meaningful when `!packed`, matching `valType`'s own
+// "may forward-reference a type index" property, so a struct or array field's value-typed storage
+// resolves in the same deferred phase a functype's param does.
+type storageType struct {
+	val    valType // meaningful when !packed
+	packed bool
+	width  byte // 8 or 16, meaningful only when packed
+}
+
+// fieldType is one struct or array field, unresolved: its storage and whether it may be written
+// after allocation (parser.mly:408-410, decision 0021).
+//
+// **No name field.** 0021 excludes a field's identifier from retention by the wire-form
+// authority: `fieldtype`'s production carries no identifier (decode.ml:243-246), so there is
+// nothing here for the encoder to write regardless of what the text bound one to — `LocalGroup`'s
+// precedent (0016) applied a second time, per the ADR's own citation.
+type fieldType struct {
+	storage storageType
+	mut     bool
+}
+
+// compType is a composite type (parser.mly:446-449).
+//
+// **`fields` carries a struct's or array's content, as of decision 0021** — one entry per
+// declared field for a struct, in declaration order, or exactly one for an array, mirroring
+// `binary.CompType.Fields`'s own comment on the arity (`comptype`'s two different productions,
+// decode.ml:250-259: a struct's `vec(fieldtype)` versus an array's bare `fieldtype`). Meaningful
+// only when `kind` is `compStruct` or `compArray`; `ft` is meaningful only when `kind` is
+// `compFunc`. Two fields rather than a tagged union with one live field, matching `binary.CompType`'s
+// own shape choice and its stated reason: a switch on `kind` reads no worse than an interface
+// dispatch here, and the population (module type definitions, not a hot per-instruction path) is
+// nowhere near where 0002's boxing argument bites.
 type compType struct {
-	isFunc bool
+	kind   compKind
 	ft     funcType
+	fields []fieldType
 }
 
 // limits is a `limits` (parser.mly:466-468): a 64-bit minimum and an optional maximum.
@@ -629,10 +681,34 @@ func (a resolvedFunc) equal(b resolvedFunc) bool {
 	return slices.Equal(a.params, b.params) && slices.Equal(a.results, b.results)
 }
 
-// resolvedComp is a compType with its functype resolved.
+// resolvedStorage is a storageType with its value type resolved (decision 0021).
+//
+// Not `binary.StorageType` reused directly — `resolvedVal` is this package's own reason for
+// existing rather than reusing `binary.ValType` (its doc comment states it, and 0021's task notes
+// the same argument transfers to a field's storage): `val` is meaningful only `!packed`, and
+// `valTypeBytes` is what turns it into wire bytes, exactly as a functype param's `resolvedVal`
+// does. `packed`/`width` need no such translation — a packed storage's two wire bytes are fixed
+// (`-0x08`/`-0x09`), so they are carried as-is rather than through an intermediate resolvedVal
+// shape that has no case for them.
+type resolvedStorage struct {
+	val    resolvedVal // meaningful when !packed
+	packed bool
+	width  byte // 8 or 16, meaningful only when packed
+}
+
+// resolvedField is a fieldType with its storage resolved: one struct or array field, ready to
+// encode (decision 0021).
+type resolvedField struct {
+	storage resolvedStorage
+	mut     bool
+}
+
+// resolvedComp is a compType with its content resolved: the functype for `compFunc`, the field
+// list for `compStruct`/`compArray` (decision 0021).
 type resolvedComp struct {
-	isFunc bool
+	kind   compKind
 	ft     resolvedFunc
+	fields []resolvedField
 }
 
 // defineType records an explicit type definition's content at its index.
@@ -955,15 +1031,20 @@ func (c *context) deferOp(f func() error) { c.deferred = append(c.deferred, f) }
 func (c *context) runDeferred() error {
 	c.typeCtx = make([]resolvedComp, 0, len(c.typeDefs))
 	for _, ct := range c.typeDefs {
-		if !ct.isFunc {
-			c.typeCtx = append(c.typeCtx, resolvedComp{})
-			continue
+		switch ct.kind {
+		case compFunc:
+			ft, err := c.resolveFunc(ct.ft)
+			if err != nil {
+				return err
+			}
+			c.typeCtx = append(c.typeCtx, resolvedComp{kind: compFunc, ft: ft})
+		case compStruct, compArray:
+			fields, err := c.resolveFields(ct.fields)
+			if err != nil {
+				return err
+			}
+			c.typeCtx = append(c.typeCtx, resolvedComp{kind: ct.kind, fields: fields})
 		}
-		ft, err := c.resolveFunc(ct.ft)
-		if err != nil {
-			return err
-		}
-		c.typeCtx = append(c.typeCtx, resolvedComp{isFunc: true, ft: ft})
 	}
 	// Indexed rather than ranged: an operation may append an implicit type, and while nothing
 	// appends an *operation*, a range over a slice that grows is a trap worth not planting. A
@@ -1010,6 +1091,35 @@ func (c *context) resolveFunc(ft funcType) (resolvedFunc, error) {
 	return out, nil
 }
 
+// resolveStorage resolves one field's storage type (decision 0021): a value type through the
+// same `resolveVal` a functype's param already uses — so `(field (ref $t))` may forward-reference
+// a type defined later in the field list, exactly as `(param (ref $t))` does — or a packed width
+// carried through unchanged, having no index of its own to resolve.
+func (c *context) resolveStorage(st storageType) (resolvedStorage, error) {
+	if st.packed {
+		return resolvedStorage{packed: true, width: st.width}, nil
+	}
+	v, err := c.resolveVal(st.val)
+	if err != nil {
+		return resolvedStorage{}, err
+	}
+	return resolvedStorage{val: v}, nil
+}
+
+// resolveFields resolves a struct's or array's field list (decision 0021), in declaration order —
+// `resolveFunc`'s shape, copied rather than re-derived, for a field list rather than a param list.
+func (c *context) resolveFields(fields []fieldType) ([]resolvedField, error) {
+	out := make([]resolvedField, 0, len(fields))
+	for _, f := range fields {
+		st, err := c.resolveStorage(f.storage)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, resolvedField{storage: st, mut: f.mut})
+	}
+	return out, nil
+}
+
 // resolveTypeIdx is the reference's `type_ c x` = `lookup "type" c.types.space x`
 // (parser.mly:152/:164).
 //
@@ -1047,7 +1157,7 @@ func (c *context) funcTypeAt(tok Token, idx uint32) (resolvedFunc, error) {
 		return resolvedFunc{}, errf(tok, "unknown type %d", idx)
 	}
 	e := c.typeCtx[idx]
-	if !e.isFunc {
+	if e.kind != compFunc {
 		return resolvedFunc{}, errf(tok, "non-function type %d", idx)
 	}
 	return e.ft, nil
@@ -1069,11 +1179,11 @@ func (c *context) funcTypeAt(tok Token, idx uint32) (resolvedFunc, error) {
 // not by what today's callers happen to use.
 func (c *context) inlineFuncType(ft resolvedFunc) uint32 {
 	for i, e := range c.typeCtx {
-		if e.isFunc && e.ft.equal(ft) {
+		if e.kind == compFunc && e.ft.equal(ft) {
 			return uint32(i)
 		}
 	}
-	c.typeCtx = append(c.typeCtx, resolvedComp{isFunc: true, ft: ft})
+	c.typeCtx = append(c.typeCtx, resolvedComp{kind: compFunc, ft: ft})
 	c.types.count++
 	return uint32(len(c.typeCtx) - 1)
 }

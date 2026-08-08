@@ -2971,7 +2971,7 @@ func TestEncodeDoesNotRerunTheDeferredPhase(t *testing.T) {
 					break
 				}
 				got := p.ctx.typeCtx[i]
-				if got.isFunc != snapshot[i].isFunc || !got.ft.equal(snapshot[i].ft) {
+				if got.kind != snapshot[i].kind || !got.ft.equal(snapshot[i].ft) {
 					t.Errorf("encode() changed type %d's content: the thunks' idempotence is "+
 						"contingent on what they currently do, and this is what says when that "+
 						"stops holding", i)
@@ -3118,6 +3118,92 @@ func absoluteHeaptypeBytesForTest(spelling string) (byte, bool) {
 	return 0, false
 }
 
+// TestStructAndArrayFieldsRoundTrip is decision 0021's encoder-side control: a struct with mixed
+// packed and full-valtype fields and mixed mutability, and an array with its one field, each
+// encoded and decoded through the real merged decoder (0021 decoder half, #186) and compared
+// field for field against what the text named.
+//
+// **Decoded rather than compared as bytes**, for `TestParameterizedReferenceFormsRoundTrip`'s own
+// reason: the assertion is about what the module *denotes*, and `binary.CompType.Fields` is the
+// decoder's own answer to that question — the same authority `decodeGC` already is for a global's
+// or table's type in this file.
+func TestStructAndArrayFieldsRoundTrip(t *testing.T) {
+	t.Run("struct: packed and full-valtype fields, mixed mutability", func(t *testing.T) {
+		// One of each population 0021's task names: two packed widths (immutable i8, mutable
+		// i16), a full number type (immutable i32), and a full reference type (mutable anyref) —
+		// so a swapped mutability bit or a swapped packed byte moves exactly one field's answer
+		// rather than the whole struct's.
+		src := `(module (type (struct (field i8) (field (mut i16)) (field i32) (field (mut anyref)))))`
+		b, err := EncodeModule([]byte(src))
+		if err != nil {
+			t.Fatalf("EncodeModule(%s): %v", src, err)
+		}
+		m := decodeGC(t, b)
+		if len(m.Types) != 1 {
+			t.Fatalf("%s decoded with %d types, want 1", src, len(m.Types))
+		}
+		got := m.Types[0]
+		if got.Kind != binary.CompStruct {
+			t.Fatalf("%s decoded as %v, want CompStruct", src, got.Kind)
+		}
+		if len(got.Fields) != 4 {
+			t.Fatalf("%s decoded %d fields, want 4: %+v", src, len(got.Fields), got.Fields)
+		}
+		// Fields 0-2 compare by value directly; field 3 (anyref, an abstract heaptype rather than
+		// the indexed form) is asserted by its own accessors below rather than a hand-built
+		// ValType literal, which would be the invented-evidence shape (grave #36) applied to a
+		// test fixture instead of an error message.
+		want := []binary.FieldType{
+			{Storage: binary.StorageType{Packed: true, Width: 8}, Mutable: false},
+			{Storage: binary.StorageType{Packed: true, Width: 16}, Mutable: true},
+			{Storage: binary.StorageType{Val: binary.I32}, Mutable: false},
+		}
+		for i, w := range want {
+			if g := got.Fields[i]; g != w {
+				t.Errorf("field %d = %+v, want %+v", i, g, w)
+			}
+		}
+		f3 := got.Fields[3]
+		if !f3.Mutable {
+			t.Errorf("field 3 (anyref) decoded immutable, want mutable: %+v", f3)
+		}
+		if f3.Storage.Packed {
+			t.Errorf("field 3 (anyref) decoded as packed storage, want a full value type: %+v", f3)
+		}
+		if f3.Storage.Val.IsIndexed() {
+			t.Errorf("field 3 (anyref) decoded as the indexed form, want the abstract anyref heaptype: %+v",
+				f3)
+		}
+		if !f3.Storage.Val.Null() {
+			t.Errorf("field 3 (anyref) decoded non-null, want nullable: %+v", f3)
+		}
+	})
+
+	t.Run("array: exactly one field, no count", func(t *testing.T) {
+		src := `(module (type (array (mut i64))))`
+		b, err := EncodeModule([]byte(src))
+		if err != nil {
+			t.Fatalf("EncodeModule(%s): %v", src, err)
+		}
+		m := decodeGC(t, b)
+		if len(m.Types) != 1 {
+			t.Fatalf("%s decoded with %d types, want 1", src, len(m.Types))
+		}
+		got := m.Types[0]
+		if got.Kind != binary.CompArray {
+			t.Fatalf("%s decoded as %v, want CompArray", src, got.Kind)
+		}
+		want := binary.FieldType{Storage: binary.StorageType{Val: binary.I64}, Mutable: true}
+		if len(got.Fields) != 1 {
+			t.Fatalf("%s decoded %d fields, want exactly 1 — an array's fieldtype is bare, not a "+
+				"vector (decode.ml:257-258)", src, len(got.Fields))
+		}
+		if got.Fields[0] != want {
+			t.Errorf("array field = %+v, want %+v", got.Fields[0], want)
+		}
+	})
+}
+
 // TestEncodeRefusesWhatItCannotWrite is the frontier's control, and it checks the *direction* of
 // the refusal as much as the fact of it.
 //
@@ -3137,8 +3223,10 @@ func TestEncodeRefusesWhatItCannotWrite(t *testing.T) {
 		// `(module (data "abc"))` was here and is now in `encodableModules`, which is what section 11
 		// *is* — the same move `(module (func))` made when the code section landed.
 		{`(module (tag))`, "(tag …) field"},
-		{`(module (type (struct)))`, "struct or array"},
-		{`(module (type (array (mut i32))))`, "struct or array"},
+		// `(module (type (struct)))` and `(module (type (array (mut i32))))` were here and are now
+		// in `encodableModules`, which is what decision 0021's implementation *is*: a struct's or
+		// array's fields are retained and `encodableOrErr`'s struct/array refusal above answers
+		// per field rather than refusing every slot outright.
 		// `(module (type (func (param (ref func)))))` and its three siblings — `(ref extern)`,
 		// `(ref null $t)`, `anyref` — were here and are now in `encodableModules`/
 		// `TestParameterizedReferenceFormsRoundTrip`, which is what decision 0018's encoder-side
@@ -3222,11 +3310,11 @@ func TestEncodeRefusesWhatItCannotWrite(t *testing.T) {
 		// *frontier* — the typeuse rows below are refusals that outlive every section, and the leader
 		// becomes one of those. (The table/global element-type rows this comment used to point at,
 		// `(table 1 (ref func))` among them, are gone: decision 0018's encoder-side implementation
-		// closed that frontier, so it can no longer serve as the next re-pointing target either — the
-		// remaining `CompType.Fields` frontier, `struct or array` above, is a *type-definition* refusal
-		// with no field wrapping it, so it cannot lead a follower row the way a field-level refusal
-		// can.) Named here because a tripwire whose next re-pointing is not obvious is one that gets
-		// closed instead.
+		// closed that frontier, so it can no longer serve as the next re-pointing target either — and
+		// decision 0021's encoder-side implementation closed the `CompType.Fields` frontier this
+		// comment used to name as the next candidate, for the identical reason: a struct or array
+		// type no longer refuses outright, so it cannot lead a follower row either.) Named here
+		// because a tripwire whose next re-pointing is not obvious is one that gets closed instead.
 		{`(module (start 0) (memory 1) (func))`, "(start …) field"},
 		{`(module (start 0) (table 1 funcref) (func))`, "(start …) field"},
 		{`(module (tag) (memory 1) (table 1 funcref))`, "(tag …) field"},

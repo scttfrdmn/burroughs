@@ -132,10 +132,24 @@ const (
 	secDataCount byte = 12
 )
 
-// tagFunc is `comptype`'s functype form, 0x60 — which is -0x20 read as the sleb(7) the decoder
-// reads it as (decodeCompType's comment has the vector that forces the signedness). Written as the
-// byte because that is what a minimal sleb(7) of -0x20 is.
-const tagFunc byte = 0x60
+// tagFunc, tagStruct and tagArray are `comptype`'s three forms — 0x60/-0x20, 0x5f/-0x21,
+// 0x5e/-0x22 read as the sleb(7) the decoder reads them as (decodeCompType's comment has the
+// vector that forces the signedness, and its `-0x21`/`-0x22` case arms are the already-merged
+// decoder-side authority these three bytes are verified against). Written as bytes because that
+// is what a minimal sleb(7) of each negative form is.
+const (
+	tagFunc   byte = 0x60
+	tagStruct byte = 0x5f
+	tagArray  byte = 0x5e
+)
+
+// packI8 and packI16 are `packtype`'s two forms — 0x78/-0x08, 0x77/-0x09 — folded to bytes the
+// same way `absoluteHeaptypeBytes`'s comment folds every other negative-s7 form this package
+// writes, and verified against `decodeStorageType`'s own two cases (sections.go, already merged).
+const (
+	packI8  byte = 0x78
+	packI16 byte = 0x77
+)
 
 // EncodeModule parses src and emits the binary image of the module it denotes.
 //
@@ -533,20 +547,30 @@ func (p *parser) encodableOrErr() error {
 	// type has no source token of its own in any case (it is interned from a signature), so a
 	// position would sometimes be honest and sometimes invented, which is worse than absent.
 	for i, ct := range p.ctx.typeCtx {
-		if !ct.isFunc {
-			// A struct or array slot. The parse retains no fields for these — `compType`'s comment
-			// says why: every consumer treats a non-func type as `non-function type <n>` and never
-			// reads its fields. So there is nothing to write, and writing an *empty* struct would be
-			// wrong content in a right-sized slot: a module that decodes clean and means something
-			// else. Refused instead.
-			return fmt.Errorf("cannot yet encode type %d: a struct or array type's fields are not "+
-				"retained (#8)", i)
-		}
-		for _, group := range [][]resolvedVal{ct.ft.params, ct.ft.results} {
-			for _, v := range group {
-				if _, ok := valTypeBytes(v); !ok {
-					return fmt.Errorf("cannot yet encode type %d: %s needs a parameterized "+
-						"reference encoding, which arrives with the GC gate (#8)", i, v)
+		switch ct.kind {
+		case compFunc:
+			for _, group := range [][]resolvedVal{ct.ft.params, ct.ft.results} {
+				for _, v := range group {
+					if _, ok := valTypeBytes(v); !ok {
+						return fmt.Errorf("cannot yet encode type %d: %s needs a parameterized "+
+							"reference encoding, which arrives with the GC gate (#8)", i, v)
+					}
+				}
+			}
+		case compStruct, compArray:
+			// A struct's or array's fields are retained as of decision 0021, and every field's
+			// storage is either a packed width (always encodable — its two wire bytes are fixed,
+			// `-0x08`/`-0x09`) or a full value type, whose encodability is `valTypeBytes`' existing
+			// question — the same frontier a functype's param meets above, asked through the same
+			// predicate so the two cannot disagree about what is implemented.
+			for j, f := range ct.fields {
+				if f.storage.packed {
+					continue
+				}
+				if _, ok := valTypeBytes(f.storage.val); !ok {
+					return fmt.Errorf("cannot yet encode type %d field %d: %s needs a "+
+						"parameterized reference encoding, which arrives with the GC gate (#8)",
+						i, j, f.storage.val)
 				}
 			}
 		}
@@ -559,13 +583,62 @@ func (p *parser) encodableOrErr() error {
 // One entry per slot, which is what keeps indices aligned — `CompType`'s comment names the
 // alternative as a defect visible only in the all-gates-on lane. Here the alignment is free, because
 // `encodableOrErr` has already refused every module holding a slot this cannot fill.
+//
+// **Three arms since decision 0021**, one per `compKind` — `comptype`'s own three productions
+// (decode.ml:250-259). A struct writes its tag then `vec(fieldtype)`, count then each field; an
+// array writes its tag then exactly *one* bare fieldtype, no count — the arity `decodeCompType`'s
+// already-merged array branch reads on the other side of this round trip, and getting it wrong
+// (writing a vector for an array, or a bare fieldtype for a struct) produces a well-formed image
+// denoting a different composite type, decodable and wrong.
 func (p *parser) encodeTypes(w *writer) {
 	w.vec(len(p.ctx.typeCtx), func(w *writer, i int) {
-		ft := p.ctx.typeCtx[i].ft
-		w.byte1(tagFunc)
-		w.vec(len(ft.params), func(w *writer, j int) { w.valType(ft.params[j]) })
-		w.vec(len(ft.results), func(w *writer, j int) { w.valType(ft.results[j]) })
+		ct := p.ctx.typeCtx[i]
+		switch ct.kind {
+		case compFunc:
+			w.byte1(tagFunc)
+			w.vec(len(ct.ft.params), func(w *writer, j int) { w.valType(ct.ft.params[j]) })
+			w.vec(len(ct.ft.results), func(w *writer, j int) { w.valType(ct.ft.results[j]) })
+		case compStruct:
+			w.byte1(tagStruct)
+			w.vec(len(ct.fields), func(w *writer, j int) { w.fieldType(ct.fields[j]) })
+		case compArray:
+			w.byte1(tagArray)
+			// Exactly one field, per arraytype's own arity (comptype parses it that way, and
+			// `resolveFields` never changes a slice's length) — bare, no count.
+			w.fieldType(ct.fields[0])
+		}
 	})
+}
+
+// fieldType writes one resolved field: its storage type, then its mutability byte
+// (`FieldT (mut, t) -> storagetype t; mutability mut`, encode.ml:169-170).
+func (w *writer) fieldType(f resolvedField) {
+	w.storageType(f.storage)
+	w.mutability(f.mut)
+}
+
+// storageType writes one resolved storage type: a full value type through `valTypeBytes` — the
+// same predicate `encodableOrErr` asked, so the two cannot disagree about what is implemented —
+// or one of the two packed forms, which always has a byte (`packtype`'s domain is exactly `{i8,
+// i16}`, decode.ml:236-241, so there is no third packed spelling to be unencodable).
+func (w *writer) storageType(st resolvedStorage) {
+	if !st.packed {
+		w.valType(st.val)
+		return
+	}
+	switch st.width {
+	case 8:
+		w.byte1(packI8)
+	case 16:
+		w.byte1(packI16)
+	default:
+		// Unreachable: storagetype's parse arm sets width to 8 or 16 unconditionally
+		// (types.go's storagetype), and nothing downstream changes it. A panic rather than a
+		// plausible byte, for `externKindByte`'s reason — a wrong packed byte here writes a
+		// well-formed module denoting a different storage width, invisible to any oracle that
+		// stops at this function's return.
+		panic(fmt.Sprintf("text: unencodable packed storage width %d reached the emitter", st.width))
+	}
 }
 
 // encodeImports writes the import section from the retained imports (encode.ml:938-943).

@@ -231,28 +231,45 @@ func (p *parser) globaltype() (globalType, error) {
 	return globalType{val: v}, err
 }
 
-// storagetype parses a storage type (parser.mly:404-406): a value type or a packed type.
-func (p *parser) storagetype() error {
+// storagetype parses a storage type (parser.mly:404-406): a value type or a packed type, and
+// returns it unresolved (decision 0021).
+//
+// **The packed width is read off the token's own spelling, `i8` versus `i16`, the same authority
+// `addrtype` already reads a NUMTYPE token's text for** — PACKTYPE is a lexer *class* covering
+// both, so the kind alone cannot tell them apart. A width outside {8, 16} cannot occur: the
+// lexer's PACKTYPE class has exactly these two members (kinds.go's comment on kwPacktype), so
+// there is no third spelling to be wrong about. The value type case returns an unresolved
+// `valType`, for `globaltype`'s own reason: a struct or array field may name a type index that
+// forward-references — `(type $a (struct (field (ref $b)))) (type $b (struct))` is 0021's own
+// worked example — so resolution happens in the deferred phase, not here.
+func (p *parser) storagetype() (storageType, error) {
 	if p.c.atKeyword(kwPacktype) {
-		p.c.next()
-		return nil
+		tok := p.c.next()
+		width := byte(8)
+		if tok.Text == "i16" {
+			width = 16
+		}
+		return storageType{packed: true, width: width}, nil
 	}
-	_, err := p.valtype()
-	return err
+	v, err := p.valtype()
+	return storageType{val: v}, err
 }
 
-// fieldtype parses a field type (parser.mly:408-410): a storage type, or `(mut storagetype)`.
-func (p *parser) fieldtype() error {
+// fieldtype parses a field type (parser.mly:408-410): a storage type, or `(mut storagetype)`, and
+// returns it unresolved (decision 0021).
+func (p *parser) fieldtype() (fieldType, error) {
 	if p.c.at(LParen) && p.c.peek2Keyword(kwMut) {
 		if err := p.lpar(kwMut); err != nil {
-			return err
+			return fieldType{}, err
 		}
-		if err := p.storagetype(); err != nil {
-			return err
+		st, err := p.storagetype()
+		if err != nil {
+			return fieldType{}, err
 		}
-		return p.rpar()
+		return fieldType{storage: st, mut: true}, p.rpar()
 	}
-	return p.storagetype()
+	st, err := p.storagetype()
+	return fieldType{storage: st}, err
 }
 
 // atFieldtypeStart reports whether the cursor is at a field type.
@@ -266,24 +283,28 @@ func (p *parser) atFieldtypeStart() bool {
 	return p.atValtypeStart()
 }
 
-// fieldtypeList parses `fieldtype_list` (parser.mly:412-414), returning the count.
+// fieldtypeList parses `fieldtype_list` (parser.mly:412-414), returning each field type it read.
 //
-// The count feeds `anon_fields c x (Lib.List32.length fts)` (parser.mly:420) — the field index
-// space, same silent-index argument valtypeList's count had. It stays a count rather than becoming
-// a list because a struct's fields are never compared: `expand_deftype` on a StructT reaches
-// `non-function type`, and nothing looks inside.
-func (p *parser) fieldtypeList() (int, error) {
-	n := 0
+// **Returns the list now, as of decision 0021** — the comment that stood here argued a struct's
+// fields are never compared, true of `func_type`'s `non-function type` fallthrough and false of
+// the wire form: a struct's `CompType.Fields` is retained content, per 0021's option C, and this
+// is the production that reads them. `len()` of the returned slice is the count the field index
+// space still needs (`anon_fields c x (Lib.List32.length fts)`, parser.mly:420), so no caller
+// lost the count by gaining the list.
+func (p *parser) fieldtypeList() ([]fieldType, error) {
+	var out []fieldType
 	for p.atFieldtypeStart() {
-		if err := p.fieldtype(); err != nil {
-			return n, err
+		ft, err := p.fieldtype()
+		if err != nil {
+			return out, err
 		}
-		n++
+		out = append(out, ft)
 	}
-	return n, nil
+	return out, nil
 }
 
-// structtype parses `struct_field_list` (parser.mly:416-425).
+// structtype parses `struct_field_list` (parser.mly:416-425), returning the field list in
+// declaration order (decision 0021).
 //
 // Two arms, and they differ in whether the fields are named:
 //
@@ -295,43 +316,52 @@ func (p *parser) fieldtypeList() (int, error) {
 // following the arms rather than paraphrasing them.
 //
 // The field index space is per-struct-type, so it is a local here rather than a context member
-// — `x` in the reference is the type index the fields belong to.
-func (p *parser) structtype() error {
+// — `x` in the reference is the type index the fields belong to. **The name itself is not
+// retained past this function** — 0021 excludes field names from `FieldType` by the wire-form
+// authority (`fieldtype`'s production carries no identifier, decode.ml:243-246), the same rule
+// `LocalGroup` already applies to a local's name (0016) — so `fields` exists here only to bind
+// the per-struct index space and enforce the duplicate check; the appended `fieldType` values are
+// what crosses into `compType`.
+func (p *parser) structtype() ([]fieldType, error) {
 	fields := space{kind: spaceField}
+	var out []fieldType
 	for p.c.at(LParen) && p.c.peek2Keyword(kwField) {
 		if err := p.lpar(kwField); err != nil {
-			return err
+			return nil, err
 		}
 		if p.c.at(VarTok) {
 			tok := p.c.peek()
 			name, err := p.bindidx()
 			if err != nil {
-				return err
+				return nil, err
 			}
-			if err := fields.bindAbs(tok, name); err != nil {
-				return err
+			if bindErr := fields.bindAbs(tok, name); bindErr != nil {
+				return nil, bindErr
 			}
-			if err := p.fieldtype(); err != nil {
-				return err
-			}
-		} else {
-			n, err := p.fieldtypeList()
+			ft, err := p.fieldtype()
 			if err != nil {
-				return err
+				return nil, err
 			}
-			for range n {
+			out = append(out, ft)
+		} else {
+			fts, err := p.fieldtypeList()
+			if err != nil {
+				return nil, err
+			}
+			for range fts {
 				fields.bindAnon()
 			}
+			out = append(out, fts...)
 		}
 		if err := p.rpar(); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	return nil
+	return out, nil
 }
 
-// arraytype parses an array type (parser.mly:427-428): one field type.
-func (p *parser) arraytype() error { return p.fieldtype() }
+// arraytype parses an array type (parser.mly:427-428): one field type (decision 0021).
+func (p *parser) arraytype() (fieldType, error) { return p.fieldtype() }
 
 // functype parses a function type (parser.mly:430-444).
 //
@@ -401,27 +431,36 @@ func (p *parser) functypeResult() ([]valType, error) {
 
 // comptype parses a composite type (parser.mly:446-449): `(struct …)`, `(array …)`, `(func …)`.
 //
-// Only the func arm's content is returned. A struct or array reaches `expand_deftype` as a
-// `non-function type` and nothing reads its fields, so `isFunc: false` is everything a consumer
-// here can use — see funcTypeAt.
+// **All three arms' content is returned, as of decision 0021.** `func_type` reaches a struct or
+// array as `non-function type` and never looks inside — that fact is still true, and it is why
+// `resolveTypeIdx`/`funcTypeAt` never read `compType.fields` — but 0021's consumer is the
+// encoder, which writes a struct's or array's fields into the wire form directly rather than
+// through `func_type`'s comparison. `kind` replaces the old `isFunc bool`: three states rather
+// than two, mirroring `binary.CompKind`'s own three values (already-merged decoder authority,
+// `internal/binary/module.go`) — a struct and an array are as distinct from each other as either
+// is from a func, and a bool could only ever tell one of those two apart from the third.
 func (p *parser) comptype() (compType, error) {
 	switch {
 	case p.c.at(LParen) && p.c.peek2Keyword(kwStruct):
 		if err := p.lpar(kwStruct); err != nil {
 			return compType{}, err
 		}
-		if err := p.structtype(); err != nil {
+		fields, err := p.structtype()
+		if err != nil {
 			return compType{}, err
 		}
-		return compType{}, p.rpar()
+		return compType{kind: compStruct, fields: fields}, p.rpar()
 	case p.c.at(LParen) && p.c.peek2Keyword(kwArray):
 		if err := p.lpar(kwArray); err != nil {
 			return compType{}, err
 		}
-		if err := p.arraytype(); err != nil {
+		ft, err := p.arraytype()
+		if err != nil {
 			return compType{}, err
 		}
-		return compType{}, p.rpar()
+		// Exactly one field, per arraytype's own arity (decode.ml:257-258) — no vector, unlike a
+		// struct's `vec(fieldtype)`, which is why this wraps a single value rather than a list.
+		return compType{kind: compArray, fields: []fieldType{ft}}, p.rpar()
 	case p.c.at(LParen) && p.c.peek2Keyword(kwFunc):
 		if err := p.lpar(kwFunc); err != nil {
 			return compType{}, err
@@ -430,7 +469,7 @@ func (p *parser) comptype() (compType, error) {
 		if err != nil {
 			return compType{}, err
 		}
-		return compType{isFunc: true, ft: ft}, p.rpar()
+		return compType{kind: compFunc, ft: ft}, p.rpar()
 	default:
 		return compType{}, p.unexpected()
 	}
