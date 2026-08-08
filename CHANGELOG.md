@@ -47,13 +47,17 @@ weakly-ordered platform.
   *encoder's* refusal, and `internal/interp` has no arms yet for the `0xfb`-prefixed opcodes
   these vectors need to actually execute, so most of the 170 re-key to interpreter buckets
   (`no arm for opcode fb NN`, element-expression evaluation) rather than draining to pass.
-  `unsupported` unmoved at 27099 (default lane). Not in scope: field-name resolution for a
-  symbolic `struct.get`/`struct.set` index, which would need a per-struct-type field-name space
-  this stratum does not have — `structtype`'s local `fields` binding is discarded when the
-  function returns, and nothing threads it to encode time. Flagged for Scott as a possible
-  follow-up rather than attempted here, since the six `struct.wast` vectors using a symbolic
-  field name are already correctly refused with the existing "(#8)" message and no vector in
-  the corpus needs the resolution to pass.
+  `unsupported` unmoved at 27099 (default lane). Not in scope, and not converted by this PR:
+  field-name resolution for a symbolic `struct.get`/`struct.set` index. **This is a real,
+  named remainder, not a declined-because-unneeded gap** — six `struct.wast` vectors
+  (`get_0_y`... — `assert_return` commands expecting real execution, e.g.
+  `(struct.get $vec $y (local.get $v))`) are genuine corpus consumers of exactly this
+  resolution and stay `fail` after this PR, correctly, with the existing "(#8)" message.
+  Resolving them needs a per-struct-type field-name space this stratum does not have —
+  `structtype`'s local `fields` binding (`internal/text/types.go`) is discarded when the
+  function returns, and nothing threads it to encode time. Filed as its own follow-up
+  (issue tracked separately) rather than folded into this PR, since the five easy `ARRAY_*`
+  mnemonics and `ARRAY_NEW_FIXED` needed no new infrastructure while this genuinely does.
 
 - **The text encoder writes a struct's or array's field list**: decision
   [0021](docs/decisions/0021-a-field-type-is-a-value-type-or-a-packed-width-plus-mutability.md)'s

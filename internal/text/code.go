@@ -688,22 +688,30 @@ func (p *parser) retainIdxPair(mnemonic Token, first, second idxRef, havePair bo
 
 // idxPairRetained parses the two mandatory index immediates of an `idx idx` arm and retains both.
 //
-// **The seven `immIdxIdx` mnemonics need no per-mnemonic split, and that is a finding rather than a
-// simplification taken for granted.** Five resolve an ordinary module-level pair — `ARRAY_COPY`
-// `{catType, catType}`, `ARRAY_NEW_ELEM`/`ARRAY_INIT_ELEM` `{catType, catElem}`,
-// `ARRAY_NEW_DATA`/`ARRAY_INIT_DATA` `{catType, catData}` — and the other two, `STRUCT_GET` and
-// `STRUCT_SET`, pass `{catType, catFieldOfType}`, whose second category has no module-level space
-// (`idxSpaceFor` returns nil for it, by design — see `catFieldOfType`'s comment). What makes a
-// uniform reader sufficient anyway is `retainIdxIn`'s own numeric fast path: a **numeric** index is
-// encoded straight from its value and never reaches `idxSpaceFor` at all, so `struct.get 0 1` and
-// `struct.set $vec 0` retain through the identical call a `table.copy` pair does — the field index
-// being a NAT rather than a VAR is what the suite's own vectors write (`struct.wast`'s 18 failing
-// vectors, both `struct.get` and `struct.get_s`, are every one of them numeric-numeric or
-// symbolic-numeric). Only a **symbolic** field name — `struct.get $t $fieldname` — reaches the nil
-// space and is refused, with the same "(#8)" message `idxSpaceFor`'s other unresolvable categories
-// already give; that refusal needs a per-struct-type field-name space this stratum does not have
-// (0021 retains a struct's field *storage*, not its names, by the wire-form authority — see
-// `fieldType`'s comment), and is exactly the follow-up this PR does not attempt.
+// **The seven `immIdxIdx` mnemonics need no per-mnemonic split for a NUMERIC field index, and
+// that is a finding rather than a simplification taken for granted.** Five resolve an ordinary
+// module-level pair — `ARRAY_COPY` `{catType, catType}`, `ARRAY_NEW_ELEM`/`ARRAY_INIT_ELEM`
+// `{catType, catElem}`, `ARRAY_NEW_DATA`/`ARRAY_INIT_DATA` `{catType, catData}` — and the other
+// two, `STRUCT_GET` and `STRUCT_SET`, pass `{catType, catFieldOfType}`, whose second category has
+// no module-level space (`idxSpaceFor` returns nil for it, by design — see `catFieldOfType`'s
+// comment). What makes a uniform reader sufficient for the numeric case is `retainIdxIn`'s own
+// numeric fast path: a **numeric** field index is encoded straight from its value and never
+// reaches `idxSpaceFor` at all, so `struct.get 0 1` and `struct.set $vec 0` retain through the
+// identical call a `table.copy` pair does.
+//
+// **This does not cover the whole corpus, and the gap is real rather than declined-because-
+// unneeded — measured, not assumed.** `struct.wast` has six `assert_return` vectors
+// (`get_vec_y`, `set_get_y`, `set_get_1`, …) that use a **symbolic field name** —
+// `(struct.get $vec $y (local.get $v))` — and every one of them still fails after this
+// function lands: the symbolic name reaches `idxSpaceFor(catFieldOfType)`'s nil space and is
+// refused with the same "(#8)" message every other unresolvable category already gives.
+// Resolving them needs a per-struct-type field-name space this stratum does not have (0021
+// retains a struct's field *storage*, not its names, by the wire-form authority — see
+// `fieldType`'s comment) — `structtype`'s local `fields` binding (`internal/text/types.go`) is
+// discarded when the function returns, and nothing threads it to encode time. That is a
+// separate, larger piece of work than this function's uniform reader, and is filed as its own
+// follow-up rather than attempted here — do not read this function's numeric-fast-path finding
+// as "struct.wast is done," which it measurably is not.
 //
 // None of the seven mnemonics reverses (`initReversedKinds` names only `TABLE_INIT`/`MEMORY_INIT`,
 // the sugar-arm pair), so the write order is the parse order throughout, unlike `retainIdxPair`
