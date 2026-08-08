@@ -226,13 +226,13 @@ func TestBlockTypeFormsMatchTheReference(t *testing.T) {
 		// The `([], [t])` arm, written as a bare valtype byte and not as an s33 — see
 		// blockTypeBytes. `i32` is 0x7f, which as a signed LEB is -1, so a reader treating this
 		// arm as an index would see a negative one.
-		b, ok := valTypeByte(resolvedVal{num: "i32"})
+		b, ok := valTypeBytes(resolvedVal{num: "i32"})
 		if !ok {
 			t.Fatalf("i32 has no valtype byte, so this package cannot encode any block result")
 		}
-		idx, vt, empty := blockTypeOf(t, build(1, []byte{b}))
+		idx, vt, empty := blockTypeOf(t, build(1, b))
 		if empty || vt != binary.I32 {
-			t.Errorf("a bare %#x decodes as idx=%d valtype=%v empty=%v, want the i32 valtype form",
+			t.Errorf("a bare % #x decodes as idx=%d valtype=%v empty=%v, want the i32 valtype form",
 				b, idx, vt, empty)
 		}
 	})

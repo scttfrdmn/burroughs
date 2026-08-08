@@ -29,12 +29,15 @@ import (
 // limits flags byte, unasserted. Found by budgeting for the falsification to *pass*, which is the
 // outcome the exercise exists for.
 //
-// GC stays **off** on purpose: it is the frontier `encodableOrErr` refuses at, so turning it on
-// would test bytes this encoder does not emit. Threads stays off for a different reason — the text
+// **GC turned on with decision 0018's encoder-side implementation**, by the same rule that turns on
+// SIMD and Memory64: the encoder now emits the parameterized reference forms and the twelve GC
+// abstract heaptypes (`valTypeBytes`), and a round trip with the gate off would fail for the
+// decoder's configuration rather than for the encoder — exactly the SIMD case. `CompType.Fields`
+// (struct/array field retention) is a separate, still-refused frontier (#8), so GC-gated *table*,
+// *global*, and *type-signature* rows reach real bytes while a struct or array type declaration
+// stays refused regardless of this gate. Threads stays off for a different reason — the text
 // grammar has no `shared` arm (parser.mly:466-468), so no wat source can denote a shared memory and
-// there is nothing for the gate to admit. The distinction is worth keeping: SIMD and Memory64 are on
-// because the encoder *can* emit them, GC is off because it cannot yet, and Threads is off because
-// no input can ask for it.
+// there is nothing for the gate to admit.
 //
 // **ExceptionHandling is on by that rule rather than by a new decision**, and the derivation is worth
 // showing because it is the rule doing work rather than being restated. The text grammar has a `tag`
@@ -111,7 +114,7 @@ func blockTypeValTypeImm(t binary.ValType) uint64 {
 func decodeForTest(t *testing.T, b []byte) *binary.Module {
 	t.Helper()
 	d := &binary.Decoder{Features: binary.Features{
-		SIMD: true, Memory64: true, ExceptionHandling: true, MultiMemory: true,
+		SIMD: true, Memory64: true, ExceptionHandling: true, MultiMemory: true, GC: true,
 	}}
 	m, err := d.DecodeModule(b)
 	if err != nil {
@@ -2978,6 +2981,143 @@ func TestEncodeDoesNotRerunTheDeferredPhase(t *testing.T) {
 	}
 }
 
+// decodeGC decodes b with the GC gate on — the fixed decoder's authority for what a parameterized
+// reference form or an abstract GC heaptype actually resolves to, per decision 0018 and grave
+// #180's fix. Used to assert against decoded `binary.ValType` values directly, rather than against
+// raw wire bytes, now that #181's fix makes `funcref` and `(ref func)` decode to genuinely distinct
+// values — the workaround a round trip needed before that fix (asserting bytes to tell "wrote the
+// abbreviation" apart from "wrote the parameterized form") is no longer necessary.
+func decodeGC(t *testing.T, b []byte) *binary.Module {
+	t.Helper()
+	d := &binary.Decoder{Features: binary.Features{GC: true}}
+	m, err := d.DecodeModule(b)
+	if err != nil {
+		t.Fatalf("the encoder produced % x, which the GC-gated decoder rejects: %v", b, err)
+	}
+	return m
+}
+
+// TestParameterizedReferenceFormsRoundTrip is decision 0018's encoder-side implementation's own
+// control: every `valTypeBytes` arm this PR adds, round-tripped through the real (fixed) decoder
+// and asserted against the decoded `binary.ValType` it should produce — not against raw bytes,
+// which is the class of check `TestEveryAbbreviatedReftypeExpandsAsItsTableClaims` and
+// `TestEncodeMatchesTheReferenceOnElemFlags` already cover for the abstract-nullable and elem-flag
+// cases respectively. This test's own ground is the *non-null abstract* form and the *indexed* form
+// at both nullabilities — the two shapes that had no byte at all before this PR — plus the
+// `(ref func)` != `FuncRef` pin the task calls out by name, which is the one assertion in this file
+// that most directly depends on grave #181 already being fixed: before it, `funcref` and
+// `(ref func)` decoded to the *same* ValType and no round trip could tell "wrote the abbreviation"
+// apart from "wrote the parameterized form".
+func TestParameterizedReferenceFormsRoundTrip(t *testing.T) {
+	t.Run("non-null abstract form, as a global type", func(t *testing.T) {
+		// (ref i31): the abstract form with no bare-byte abbreviation — decodeRefType's -0x1C
+		// (non-null) branch, prefix 0x64 then heaptype i31 (0x6C).
+		src := `(module (global (ref i31) (ref.null i31)))`
+		b, err := EncodeModule([]byte(src))
+		if err != nil {
+			t.Fatalf("EncodeModule(%s): %v", src, err)
+		}
+		m := decodeGC(t, b)
+		if len(m.Globals) != 1 {
+			t.Fatalf("%s decoded with %d globals, want 1", src, len(m.Globals))
+		}
+		got := m.Globals[0].Type
+		i31Byte, ok := absoluteHeaptypeBytesForTest("i31")
+		if !ok {
+			t.Fatalf("no byte for i31 in absoluteHeaptypeBytes")
+		}
+		if got.IsIndexed() {
+			t.Fatalf("%s decoded element type as the indexed form (idx=%d), want the abstract i31 form",
+				src, got.Index())
+		}
+		if kind, ok := got.Kind(); !ok || kind != i31Byte {
+			t.Errorf("%s decoded global type as %v, want the non-null (ref i31) form (kind %#02x)",
+				src, got, i31Byte)
+		}
+		if got.Null() {
+			t.Errorf("%s decoded global type as nullable (%v), want non-null — (ref i31) is the "+
+				"explicit non-null spelling and must not collide with (ref null i31)", src, got)
+		}
+	})
+
+	t.Run("indexed form, both nullabilities, as a table element type", func(t *testing.T) {
+		for _, tc := range []struct {
+			name, src string
+			wantNull  bool
+		}{
+			{"non-null", `(module (type $t (func)) (table 1 (ref $t)))`, false},
+			{"nullable", `(module (type $t (func)) (table 1 (ref null $t)))`, true},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				b, err := EncodeModule([]byte(tc.src))
+				if err != nil {
+					t.Fatalf("EncodeModule(%s): %v", tc.src, err)
+				}
+				m := decodeGC(t, b)
+				if len(m.Tables) != 1 {
+					t.Fatalf("%s decoded with %d tables, want 1", tc.src, len(m.Tables))
+				}
+				got := m.Tables[0].ElemType
+				if !got.IsIndexed() {
+					t.Fatalf("%s decoded element type as %v, want the indexed form (kind == "+
+						"kindIndexed)", tc.src, got)
+				}
+				if got.Index() != 0 {
+					t.Errorf("%s decoded element type's index as %d, want 0 (the only type in the "+
+						"module)", tc.src, got.Index())
+				}
+				if got.Null() != tc.wantNull {
+					t.Errorf("%s decoded element type's nullability as %v, want %v", tc.src, got.Null(),
+						tc.wantNull)
+				}
+			})
+		}
+	})
+
+	t.Run("(ref func) decodes distinct from FuncRef, and funcref decodes equal to it", func(t *testing.T) {
+		// The pin the task names directly: grave #181's fix is what makes this assertion possible at
+		// all. Before it, decodeRefType's Wasm 2.0 branch hardcoded null:false for the bare
+		// abbreviation, so `funcref` (bare 0x70) and `(ref func)` (0x64 0x70) decoded to the *same*
+		// ValType and this test could not have existed as a decoded-value assertion — only as a raw
+		// wire-byte comparison, which is exactly the workaround the task says is no longer needed.
+		bFuncref, err := EncodeModule([]byte(`(module (global funcref (ref.null func)))`))
+		if err != nil {
+			t.Fatalf("EncodeModule(funcref global): %v", err)
+		}
+		bRefFunc, err := EncodeModule([]byte(`(module (func) (global (ref func) (ref.func 0)))`))
+		if err != nil {
+			t.Fatalf("EncodeModule((ref func) global): %v", err)
+		}
+		gotFuncref := decodeGC(t, bFuncref).Globals[0].Type
+		gotRefFunc := decodeGC(t, bRefFunc).Globals[0].Type
+		if gotFuncref != binary.FuncRef {
+			t.Errorf("`funcref` decoded as %v, want it to equal binary.FuncRef exactly — the bare "+
+				"abbreviation is (ref null func)", gotFuncref)
+		}
+		if gotRefFunc == binary.FuncRef {
+			t.Errorf("`(ref func)` decoded as %v, which equals binary.FuncRef — these are different "+
+				"spec types (funcref is nullable, (ref func) is not) and must decode to different "+
+				"ValTypes; this is the exact regression grave #180/#181 fixed on the decoder side, "+
+				"reached here through the encoder", gotRefFunc)
+		}
+		if gotRefFunc.Null() {
+			t.Errorf("`(ref func)` decoded as nullable (%v), want non-null", gotRefFunc)
+		}
+	})
+}
+
+// absoluteHeaptypeBytesForTest is a small shim so the round-trip test above can name a heap kind by
+// its wat spelling rather than by its internal keywordKind constant, keeping the test's intent
+// (the byte for "i31") separate from the table's own keying.
+func absoluteHeaptypeBytesForTest(spelling string) (byte, bool) {
+	for kw, b := range absoluteHeaptypeBytes {
+		if heapWat(kw) == spelling {
+			return b, true
+		}
+	}
+	return 0, false
+}
+
 // TestEncodeRefusesWhatItCannotWrite is the frontier's control, and it checks the *direction* of
 // the refusal as much as the fact of it.
 //
@@ -2999,10 +3139,10 @@ func TestEncodeRefusesWhatItCannotWrite(t *testing.T) {
 		{`(module (tag))`, "(tag …) field"},
 		{`(module (type (struct)))`, "struct or array"},
 		{`(module (type (array (mut i32))))`, "struct or array"},
-		{`(module (type (func (param (ref func)))))`, "parameterized reference"},
-		{`(module (type (func (param (ref extern)))))`, "parameterized reference"},
-		{`(module (type $t (func)) (type (func (param (ref null $t)))))`, "parameterized reference"},
-		{`(module (type (func (param anyref))))`, "parameterized reference"},
+		// `(module (type (func (param (ref func)))))` and its three siblings — `(ref extern)`,
+		// `(ref null $t)`, `anyref` — were here and are now in `encodableModules`/
+		// `TestParameterizedReferenceFormsRoundTrip`, which is what decision 0018's encoder-side
+		// implementation *is*: `valTypeBytes` answers every one of these forms now.
 
 		// # The unencodable *arms* of memory and table (#8)
 		//
@@ -3041,61 +3181,12 @@ func TestEncodeRefusesWhatItCannotWrite(t *testing.T) {
 		// frontier, and the table's own arm was never the thing under test. Now the func encodes and
 		// the row says what its comment always claimed.
 		{`(module (func $f) (table 1 funcref (ref.func $f)))`, "(table …) field"},
-		// A table whose element type needs GC's prefix: refused by the *element type* check rather
-		// than by the field check, so the message names the type rather than the field.
-		{`(module (table 1 (ref func)))`, "element type (ref func)"},
-		{`(module (table 1 anyref))`, "element type (ref null any)"},
-		{`(module (type $t (func)) (table 1 (ref null $t)))`, "element type (ref null 0)"},
-		// The same table with its type defined **after** it, which is what `defineTable`'s deferral is
-		// for: `table_fields` runs in `module_fields1`'s second `fun () ->` (parser.mly:1341-1347), so
-		// the element type may forward-reference. Both orders refuse today, so the *verdict* cannot see
-		// the deferral — replacing it with eager resolution keeps every row green. What it changes is
-		// the testimony: the message becomes `element type (ref )`, an unresolved index rendered as
-		// nothing, which is the fabricated-evidence class (grave #36) — right refusal, invented type.
-		// So this row pins the message, and it is the only instrument that can: the deferral's effect
-		// on this module is entirely inside a string the suite never reads.
-		{`(module (table 1 (ref null $t)) (type $t (func)))`, "element type (ref null 0)"},
-
-		// # A global's *type* frontier, which needed an empty initializer to be reachable at all
-		//
-		// **These five rows exist because the check they exercise was live and untested, and the
-		// falsification is what said so** — disabling `encodableOrErr`'s per-global `valTypeByte` loop
-		// changed no verdict anywhere in this file. Not stillborn, which is the other failure mode: the
-		// check fires on real input, as a probe confirmed. It was simply asserted by nothing, which is the
-		// same board and the same blindness.
-		//
-		// **What the re-run mutation then established is that this frontier is not the last line, and
-		// the discovery is a dividend of running the mutation rather than reasoning about it.** With the
-		// loop disabled, `(module (global anyref))` fails here — but the other four *panic* in
-		// `w.valType`, which carries a backstop reading "encodableOrErr and valType disagree about a
-		// table they share". So the type check's job is not to prevent a wrong byte; the emitter already
-		// refuses to write one. Its job is to turn a panic into a **frontier message with a field number
-		// and a type in it**, which is a report a reader can act on. That reframes what these rows
-		// assert, and it is why the two index rows are pinned on the *message* text: dropping `g.typ.val`
-		// from the format string fails exactly those two and nothing else in the file — the verdict half
-		// is held up by a panic the mutation would otherwise let pass for a pass.
-		//
-		// The reason is an ordering neither mechanism's code would suggest: a global has two unencodable
-		// halves and the *initializer* is refused first, at the cursor, so `(global anyref (ref.null any))`
-		// reports `the heap type any` and never reaches the type loop. Every spelling that exercises the
-		// type check therefore has to omit the initializer — which `constexpr` being `instr_list` makes
-		// well-formed — and that is why `(global anyref)` is a row here rather than a curiosity. The
-		// general shape is worth the paragraph: **when a construct has two frontiers, the rows for the
-		// later one must defeat the earlier one, and which is earlier is a fact about execution order that
-		// only running it establishes.**
-		//
-		// Both mutability spellings, because `globaltype`'s arms are `valtype` and `(mut valtype)`
-		// (parser.mly:1075-1077) and a check reached through one arm alone would pass the other.
-		{`(module (global anyref))`, "needs a parameterized reference"},
-		{`(module (global (mut anyref)))`, "needs a parameterized reference"},
-		{`(module (global (ref func)))`, "needs a parameterized reference"},
-		// A **type index** valtype, and the pair that makes `defineGlobal`'s deferral testable at all:
-		// both orders refuse, so the verdict cannot see the deferral — replacing it with eager resolution
-		// keeps both rows green. What it changes is the message, which becomes `type (ref null )` on the
-		// second row: an unresolved index rendered as nothing, the fabricated-evidence class (grave #36).
-		// Same argument as the table rows above, and the same reason it is the message that is pinned.
-		{`(module (type $t (func)) (global (ref null $t)))`, "type (ref null 0) needs"},
-		{`(module (global (ref null $t)) (type $t (func)))`, "type (ref null 0) needs"},
+		// The table-element-type rows (`(table 1 (ref func))`, `anyref`, `(ref null $t)` both orders)
+		// and the global-type rows (`(global anyref)`, `(mut anyref)`, `(ref func)`, `(ref null $t)`
+		// both orders) were here and are now in `encodableModules`/
+		// `TestParameterizedReferenceFormsRoundTrip` — `valTypeBytes` answers every one of these types
+		// since decision 0018's encoder-side implementation, including the forward-reference cases the
+		// deferral comments here used to document.
 
 		// # An encodable field *after* an unencodable one — the withdrawal's identity check
 		//
@@ -3128,9 +3219,14 @@ func TestEncodeRefusesWhatItCannotWrite(t *testing.T) {
 		// dissolves with no re-pointing available. The risk does not: `clearNonTypeField`'s offset
 		// comparison will still be the only thing standing between a later field and an earlier field's
 		// record. So the re-pointing that will be required then is not to another field but to another
-		// *frontier* — the per-arm rows above (`(table 1 (ref func))`, the typeuse rows below) are
-		// refusals that outlive every section, and the leader becomes one of those. Named here because a
-		// tripwire whose next re-pointing is not obvious is one that gets closed instead.
+		// *frontier* — the typeuse rows below are refusals that outlive every section, and the leader
+		// becomes one of those. (The table/global element-type rows this comment used to point at,
+		// `(table 1 (ref func))` among them, are gone: decision 0018's encoder-side implementation
+		// closed that frontier, so it can no longer serve as the next re-pointing target either — the
+		// remaining `CompType.Fields` frontier, `struct or array` above, is a *type-definition* refusal
+		// with no field wrapping it, so it cannot lead a follower row the way a field-level refusal
+		// can.) Named here because a tripwire whose next re-pointing is not obvious is one that gets
+		// closed instead.
 		{`(module (start 0) (memory 1) (func))`, "(start …) field"},
 		{`(module (start 0) (table 1 funcref) (func))`, "(start …) field"},
 		{`(module (tag) (memory 1) (table 1 funcref))`, "(tag …) field"},
@@ -3337,45 +3433,42 @@ func TestResolvedValStringNamesTheTypeItDenotes(t *testing.T) {
 // defect became visible — something consumes the value — which is the general method that grave
 // records: **a reader that discards cannot be audited by any suite we have.**
 //
-// Two channels, because two things can be wrong and they fail in different places:
-//   - the ten that the emitter refuses quote the resolved heap type in the refusal, so the *message*
-//     carries the pairing (grave #36's print-don't-trust: this text is invisible to the suite);
-//   - the two the emitter writes (`funcref`, `externref`) reach real bytes, so their pairing is
-//     checked against the binary encoding rather than against our own rendering — 0x70 and 0x6F from
-//     encode.ml, the one place in this test the authority is not a string we produced.
+// **All twelve now reach real bytes, since decision 0018's encoder-side implementation** — every one
+// of these abbreviations is `(Null, ht)`, and a nullable abstract heaptype is exactly the case
+// `valTypeBytes` answers with the single-byte abbreviation (`absoluteHeaptypeBytes`), the same table
+// `heapTypeBytes` reads. Before this PR only `funcref`/`externref` had a byte and the other ten were
+// checked through the *refusal message* they produced (grave #36's print-don't-trust); that channel
+// is retired here because there is no longer a refusal to read it from — the byte itself, from
+// `absoluteHeaptypeBytes`, is the authority for the pairing, machine-checked against encode.ml by
+// `TestAbsoluteHeaptypeBytesAgreeWithEncodeML` rather than re-typed as a second literal here.
 //
 // Scoped to `len(abbreviatedReftypes)` by *iterating the table*, not by listing twelve cases: a
 // thirteenth abbreviation added to the table with no expectation here fails the exhaustiveness check
 // below rather than being silently unexercised. Derive the domain, never enumerate it.
 func TestEveryAbbreviatedReftypeExpandsAsItsTableClaims(t *testing.T) {
-	// The spelling and the type it must denote, read off parser.mly:378-389's semantic actions — not
-	// off abbreviatedReftypes, which is the thing under test. `(Null, AnyHT)` renders as
-	// `(ref null any)` per resolvedVal.String, pinned by the test above.
-	wantDenotes := map[string]string{
-		"anyref":        "(ref null any)",      // :378  (Null, AnyHT)
-		"nullref":       "(ref null none)",     // :379  (Null, NoneHT)
-		"eqref":         "(ref null eq)",       // :380  (Null, EqHT)
-		"i31ref":        "(ref null i31)",      // :381  (Null, I31HT)
-		"structref":     "(ref null struct)",   // :382  (Null, StructHT)
-		"arrayref":      "(ref null array)",    // :383  (Null, ArrayHT)
-		"funcref":       "(ref null func)",     // :384  (Null, FuncHT)
-		"nullfuncref":   "(ref null nofunc)",   // :385  (Null, NoFuncHT)
-		"exnref":        "(ref null exn)",      // :386  (Null, ExnHT)
-		"nullexnref":    "(ref null noexn)",    // :387  (Null, NoExnHT)
-		"externref":     "(ref null extern)",   // :388  (Null, ExternHT)
-		"nullexternref": "(ref null noextern)", // :389  (Null, NoExternHT)
+	// The spelling and the abstract heap-type kind it must denote, read off parser.mly:378-389's
+	// semantic actions — not off abbreviatedReftypes, which is the thing under test.
+	wantHeap := map[string]keywordKind{
+		"anyref":        kwAny,      // :378  (Null, AnyHT)
+		"nullref":       kwNone,     // :379  (Null, NoneHT)
+		"eqref":         kwEq,       // :380  (Null, EqHT)
+		"i31ref":        kwI31,      // :381  (Null, I31HT)
+		"structref":     kwStruct,   // :382  (Null, StructHT)
+		"arrayref":      kwArray,    // :383  (Null, ArrayHT)
+		"funcref":       kwFunc,     // :384  (Null, FuncHT)
+		"nullfuncref":   kwNofunc,   // :385  (Null, NoFuncHT)
+		"exnref":        kwExn,      // :386  (Null, ExnHT)
+		"nullexnref":    kwNoexn,    // :387  (Null, NoExnHT)
+		"externref":     kwExtern,   // :388  (Null, ExternHT)
+		"nullexternref": kwNoextern, // :389  (Null, NoExternHT)
 	}
-	// The two the emitter can write, with the byte encode.ml gives each: `funcref` 0x70 and
-	// `externref` 0x6F (encode.ml's reftype cases). These are the rows whose pairing is judged
-	// against the binary format rather than against our own String.
-	wantByte := map[string]byte{"funcref": 0x70, "externref": 0x6F}
 
 	// Vacuity floor: every assertion below is inside a loop over the table, so an emptied or
 	// truncated table would pass them all by iterating nothing.
-	if len(abbreviatedReftypes) != len(wantDenotes) {
+	if len(abbreviatedReftypes) != len(wantHeap) {
 		t.Fatalf("abbreviatedReftypes has %d entries, expectations cover %d — parser.mly:378-389 is "+
 			"twelve arms; a mismatch means the table gained or lost an abbreviation and this "+
-			"control was not updated with it", len(abbreviatedReftypes), len(wantDenotes))
+			"control was not updated with it", len(abbreviatedReftypes), len(wantHeap))
 	}
 
 	seen := map[string]bool{}
@@ -3395,50 +3488,43 @@ func TestEveryAbbreviatedReftypeExpandsAsItsTableClaims(t *testing.T) {
 				"cannot produce, so the arm is unreachable", a.kw)
 			continue
 		}
-		want, ok := wantDenotes[spelling]
+		wantKind, ok := wantHeap[spelling]
 		if !ok {
 			t.Errorf("abbreviatedReftypes has %s (%s) with no expectation here — a new arm must "+
 				"cite its parser.mly line and the type it denotes", a.kw, spelling)
 			continue
 		}
+		wantByte, ok := absoluteHeaptypeBytes[wantKind]
+		if !ok {
+			t.Errorf("absoluteHeaptypeBytes has no byte for %s (%s) — heapTypeBytes and this test "+
+				"share that table and both must be able to name every abstract heap type", a.heap, spelling)
+			continue
+		}
 		seen[spelling] = true
 
 		b, err := EncodeModule([]byte("(module (table 1 " + spelling + "))"))
-		if wb, encodable := wantByte[spelling]; encodable {
-			if err != nil {
-				t.Errorf("EncodeModule(table 1 %s) = %v; this element type is encodable today",
-					spelling, err)
-				continue
-			}
-			// Section 4 is the table section; its payload is count, reftype, then limits.
-			i := bytesIndex(b, 4)
-			if i < 0 {
-				t.Errorf("no table section in the encoding of `(table 1 %s)`", spelling)
-				continue
-			}
-			// i, size, count, then the reftype byte.
-			if got := b[i+3]; got != wb {
-				t.Errorf("`(table 1 %s)` encodes element type %#02x, want %#02x — the pairing "+
-					"reaches the binary format here, and this byte is encode.ml's, not ours",
-					spelling, got, wb)
-			}
+		if err != nil {
+			t.Errorf("EncodeModule(table 1 %s) = %v; every abbreviation is (Null, ht), which "+
+				"valTypeBytes now answers with the single-byte form", spelling, err)
 			continue
 		}
-		// The refused ten: the refusal quotes the resolved type, which is where the pairing shows.
-		if err == nil {
-			t.Errorf("EncodeModule(table 1 %s) succeeded; only funcref and externref have an "+
-				"unparameterized encoding today", spelling)
+		// Section 4 is the table section; its payload is count, reftype, then limits.
+		i := bytesIndex(b, 4)
+		if i < 0 {
+			t.Errorf("no table section in the encoding of `(table 1 %s)`", spelling)
 			continue
 		}
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("EncodeModule(table 1 %s) = %q, want it to name %q — a wrong pairing in "+
-				"abbreviatedReftypes shows up exactly here, in a message no vector reads",
-				spelling, err, want)
+		// i, size, count, then the reftype byte.
+		if got := b[i+3]; got != wantByte {
+			t.Errorf("`(table 1 %s)` encodes element type %#02x, want %#02x — the pairing "+
+				"reaches the binary format here, and this byte is absoluteHeaptypeBytes', checked "+
+				"against encode.ml elsewhere",
+				spelling, got, wantByte)
 		}
 	}
-	if len(seen) != len(wantDenotes) {
+	if len(seen) != len(wantHeap) {
 		t.Errorf("exercised %d of %d abbreviations; the loop is over the table, so a spelling "+
-			"missing from it is an arm nothing tested", len(seen), len(wantDenotes))
+			"missing from it is an arm nothing tested", len(seen), len(wantHeap))
 	}
 }
 
@@ -3472,11 +3558,14 @@ func TestRefNullEncodesItsHeapType(t *testing.T) {
 	// byte reaches the image, not what the byte is — two questions, two controls, neither standing in
 	// for the other.
 	//
-	// A `funcref` global for `func` and `externref` for the rest is the one column that cannot be
-	// derived: `(global anyref …)` needs a *reftype* the encoder still declines (`valTypeByte`), so
-	// the global's declared type is deliberately mismatched with its initializer for ten of the
-	// twelve. Ill-typed, and irrelevant that it is — the encoder writes what the grammar admits and
-	// validation is #9's, exactly as `encodableModules`' two-`ref.func` element row already reasons.
+	// A `funcref` global for `func` and `externref` for the rest is the one column kept fixed rather
+	// than derived, and deliberately so — even though `(global anyref …)` is encodable now
+	// (`valTypeBytes` answers it since decision 0018), using the matching abstract type per row would
+	// exercise the *global-type* frontier this test does not care about and obscure which byte is
+	// under test. So the global's declared type is deliberately mismatched with its initializer for
+	// ten of the twelve. Ill-typed, and irrelevant that it is — the encoder writes what the grammar
+	// admits and validation is #9's, exactly as `encodableModules`' two-`ref.func` element row already
+	// reasons.
 	for _, k := range absoluteHeaptypes {
 		want, ok := absoluteHeaptypeBytes[k]
 		if !ok {
@@ -3980,8 +4069,8 @@ func externKindBytes(tb testing.TB, src, head, sample, suffix string) map[string
 //     spelled `(i32.const 0)` with no tableuse and active-at-1 as `(table $t) (i32.const 0)`, so
 //     the discriminator under test is the *resolved* index.
 //
-// 4 modes × 5 reftypes × 7 shapes = 140 cells, of which 100 have an expected flag and 40 are the #8
-// frontier's (below).
+// 4 modes × 5 reftypes × 7 shapes = 140 cells, and every one now has an expected flag — decision
+// 0018's encoder-side implementation closed the frontier this comment used to partition against.
 //
 // # The want column is a switch over the reference's text, not a call to the encoder
 //
@@ -3991,37 +4080,33 @@ func externKindBytes(tb testing.TB, src, head, sample, suffix string) map[string
 // those are the two predicates whose *conjunction* is the defect #146 was, so a want column
 // computed from them would have agreed with the bug.
 //
-// # The frontier cells are asserted as refusals, not skipped
+// # The frontier that used to live here is gone, and the history is worth keeping
 //
-// 40 cells cannot encode today and each is refused with #8's message. **The split is 28 + 12, and
-// the arithmetic was got wrong the first time — the counters below are what said so.** `(ref
-// extern)` is refused in all 28 of its cells (4 modes × 7 shapes), since it fails `is_elem_kind` and
-// therefore always writes a reftype `valTypeByte` has no byte for. The other 12 are `(ref func)` ×
-// the three non-index shapes × 4 modes, and they are #146's fix speaking: such a segment *passes*
-// `is_elem_kind` and so looks exempt, then routes to the expression family and needs the very byte
-// that is missing. Those 12 are exactly the population the pre-#146 exemption wrongly cleared, and
-// three of them were the panic.
+// Before this PR, 40 of the 140 cells were refused: `(ref extern)` in all 28 of its cells (4 modes ×
+// 7 shapes), since it fails `is_elem_kind` and therefore always writes a reftype the old
+// `valTypeByte` had no byte for; and `(ref func)` × the three non-index shapes × 4 modes (12 more),
+// which is #146's fix speaking — such a segment *passes* `is_elem_kind` and so looked exempt, then
+// routed to the expression family and needed the very byte that was missing. `valTypeBytes` answers
+// both now: `(ref extern)` is the non-null abstract form (prefix `0x64` + heaptype `extern`) and
+// `(ref func)` is the non-null abstract form (prefix `0x64` + heaptype `func`) — the general
+// parameterized production this PR adds, unchanged for `elemKind`'s own precondition (a segment
+// still needs exactly `(NoNull, FuncHT)` to take the elemkind-byte index form; `(ref func)` and
+// `(ref extern)` both fail `is_elem_kind` on the *heap type* or *null* fields respectively and route
+// to the expression family, which is now fully encodable rather than partly refused).
 //
-// A cell that changes category — refused becoming encoded, or the reverse — fails here, which is
-// what makes this table an account of where the frontier *is* rather than a list of what works.
+// # What the falsification pass found
 //
-// # What the falsification pass found, including the probe that passed
-//
-// Three defects were introduced and watched. Two fail here and passed the whole package before this
-// test existed, which is the argument for it:
+// Two defects were introduced and watched, both catching real regressions in this widened frontier:
 //
 //   - **Dropping flag 0x04's `isFuncref` guard** fails seven cells — `externref` at table 0, every
 //     shape — because an `externref` segment written as 0x04 has *no reftype field* and decodes as a
 //     funcref segment. A wrong image that decodes clean, and the round trip agrees with it.
-//   - **Restoring #146** (the frontier exempting on `isElemKind()` alone) fails at
-//     `passive (ref func) one item of two ref.func` with the **panic** itself, which is the grave
-//     reproduced by the instrument its comment names.
-//   - **Making the writer route on `isElemKind()` alone** changes *nothing observable* — and that is
-//     a finding rather than a gap. The writer's conjunction differs from its first half on exactly
-//     the 12 cells the frontier refuses, so the second half is unreachable today and stays so until
-//     the GC gate admits those cells. Stated rather than left as a hole: this control cannot see
-//     `encodeElems`' half of the pair, only `encodableOrErr`'s, and the day #8's frontier moves is
-//     the day the twelve cells become flag assertions and the writer's half becomes falsifiable.
+//   - **Swapping `refPrefixNull`/`refPrefixNonNull`** (0x63/0x64) in `valTypeBytes` fails every
+//     `(ref func)` and `(ref extern)` cell — the byte written for a non-null form becomes the
+//     *nullable* prefix, so the element type decodes as `(ref null func)`/`(ref null extern)`
+//     (== `funcref`/`externref`) instead, changing both the flag `elemKind`'s guards choose and the
+//     reftype byte written for the expression family. This is the falsification named in the task:
+//     mutated, run, confirmed failing with the wrong flag/byte, then reverted.
 func TestEncodeMatchesTheReferenceOnElemFlags(t *testing.T) {
 	modes := []struct {
 		name, prefix string
@@ -4061,71 +4146,60 @@ func TestEncodeMatchesTheReferenceOnElemFlags(t *testing.T) {
 		{"one item of i32.const", " (item (i32.const 0))", false},
 	}
 
-	// wantFlag is `elem`'s two matches, transcribed. Returns false for a cell this encoder refuses,
-	// which is a fact about the frontier rather than about the reference — hence the separate return
-	// rather than a sentinel flag value.
-	wantFlag := func(mode binary.ElemMode, table uint32, null bool, abs string, allIndex bool) (byte, bool) {
+	// wantFlag is `elem`'s two matches, transcribed. Every cell now has an answer: valTypeBytes'
+	// general parameterized production closed the frontier the old sentinel `false` return used to
+	// name.
+	wantFlag := func(mode binary.ElemMode, table uint32, null bool, abs string, allIndex bool) byte {
 		isElemKind := !null && abs == "func" // encode.ml:1044-1046
 		if isElemKind && allIndex {
 			switch mode { // :1065-1074
 			case binary.ElemPassive:
-				return 0x01, true
+				return 0x01
 			case binary.ElemDeclarative:
-				return 0x03, true
+				return 0x03
 			default:
 				if table == 0 {
-					return 0x00, true
+					return 0x00
 				}
-				return 0x02, true
+				return 0x02
 			}
 		}
-		// The expression family writes a reftype, and `valTypeByte` has one only for the two
-		// unparameterized reference types — so every cell here whose type is not `funcref` or
-		// `externref` is the #8 frontier, including the `(ref func)` cells that fell through the
-		// `if` above. Grave #146 is precisely this line having been absent.
-		if !null {
-			return 0, false
-		}
+		// The expression family writes a reftype. `(ref func)` (null=false, abs=func) reaches here
+		// exactly when its elements fail is_elem_index — grave #146's population — and `valTypeBytes`
+		// now answers it with the general parameterized production (prefix 0x64 + heaptype func),
+		// same as `(ref extern)`.
+		//
+		// **`null` is no longer known true by this point**, which the old code relied on: it used to
+		// return the sentinel `false` for every `!null` cell *before* reaching this switch, since
+		// `(ref func)`/`(ref extern)` (the only non-null rows) were unconditionally the #8 frontier.
+		// With that frontier closed, `(ref func)` reaches this switch too whenever `allIndex` is
+		// false, so the 0x04 guard needs its own null check to stay `isFuncref` — `(Null, FuncHT)`,
+		// :1079 — rather than drifting to match any func-heaptype reftype regardless of nullability.
 		switch mode { // :1076-1084
 		case binary.ElemPassive:
-			return 0x05, true
+			return 0x05
 		case binary.ElemDeclarative:
-			return 0x07, true
+			return 0x07
 		default:
-			if table == 0 && abs == "func" { // the 0x04 guard, :1079
-				return 0x04, true
+			if table == 0 && null && abs == "func" { // the 0x04 guard, :1079 — isFuncref
+				return 0x04
 			}
-			return 0x06, true
+			return 0x06
 		}
 	}
 
-	encoded, refused := 0, 0
 	for _, m := range modes {
 		for _, rt := range reftypes {
 			for _, sh := range shapes {
 				// Two tables so index 1 exists, and one func so `(ref.func 0)` names something.
 				src := "(module (func) (table 1 funcref) (table $t 1 funcref) (elem " +
 					m.prefix + rt.spelling + sh.elems + "))"
-				want, encodable := wantFlag(m.mode, m.table, rt.null, rt.abs, sh.allIndex)
+				want := wantFlag(m.mode, m.table, rt.null, rt.abs, sh.allIndex)
 				t.Run(m.name+" "+rt.spelling+" "+sh.name, func(t *testing.T) {
 					b, err := EncodeModule([]byte(src))
-					if !encodable {
-						refused++
-						if err == nil {
-							t.Fatalf("%s encoded; its element type needs a parameterized reference "+
-								"byte valTypeByte has no entry for, so this cell is the #8 frontier "+
-								"and an encoding of it is a wrong image or a panic away from one", src)
-						}
-						if !strings.Contains(err.Error(), "parameterized reference") {
-							t.Errorf("%s was refused as %q, want #8's frontier message: a cell that "+
-								"changes *which* refusal it gets has moved category without saying so",
-								src, err)
-						}
-						return
-					}
-					encoded++
 					if err != nil {
-						t.Fatalf("EncodeModule refused %s: %v", src, err)
+						t.Fatalf("EncodeModule refused %s: %v — every cell in this grid is encodable "+
+							"since decision 0018's encoder-side implementation", src, err)
 					}
 					i := bytesIndex(b, secElem)
 					if i < 0 {
@@ -4148,20 +4222,5 @@ func TestEncodeMatchesTheReferenceOnElemFlags(t *testing.T) {
 				})
 			}
 		}
-	}
-	// Vacuity floors, per category rather than one total: 100 encoded cells behind 40 refused ones is
-	// the empty-half-behind-a-full-one shape (grave #105), and a frontier that swallowed the whole
-	// grid would leave every flag assertion above unrun while the loop still iterated 140 times.
-	//
-	// **Exact counts rather than floors, because the exact numbers are knowable here** — the grid's
-	// extent is 4 × 5 × 7 and the frontier's shape is derivable, so a floor would be the looser
-	// instrument used where the sharper one is in hand (grave #105's other half). They earned it
-	// immediately: the first version of this check wanted 84 and 28, arithmetic that forgot the
-	// twelve `(ref func)` × non-index cells, and the failure is what corrected the paragraph above.
-	if encoded != 100 || refused != 40 {
-		t.Errorf("exercised %d encoded cells and %d refused ones, want 100 and 40 (4 modes × 5 "+
-			"reftypes × 7 shapes = 140; the refusals are (ref extern)'s 28 plus (ref func)'s 12 "+
-			"non-index-shape cells): a shifted split means an axis lost a member or the frontier "+
-			"moved, and either way the count is the only thing that says so", encoded, refused)
 	}
 }

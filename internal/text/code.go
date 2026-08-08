@@ -1,5 +1,7 @@
 package text
 
+import "slices"
+
 // The code section and its companion, the function section: #8's largest bucket and #7's door.
 //
 // # What this file adds that the rest of the parser refused to
@@ -379,7 +381,7 @@ var encodableShapes = map[immShape]bool{
 	// description.** The board's fail column is *unmoved* — 1699 before and after, encode stratum
 	// 994 both — because every one of the 609 re-bucketed into a sibling frontier one layer up:
 	// +446 into `needs a parameterized reference encoding` (a table's or global's or type's
-	// *reftype*, `valTypeByte`) and +163 into `ref.test`/`ref.cast`/`br_on_cast` immediates. The
+	// *reftype*, `valTypeBytes`) and +163 into `ref.test`/`ref.cast`/`br_on_cast` immediates. The
 	// bucket was **shadowing**: `ref.null` is the first refusal a GC vector meets, so its key was
 	// counting vectors that need three or four other things as well.
 	//
@@ -789,21 +791,26 @@ type textFunc struct {
 // funcLocalBytes resolves and encodes one function's locals, in the deferred phase.
 //
 // **Both halves have to happen here rather than at the cursor.** Resolution is deferred because a
-// local may name a forward-referenced type; encodability is asked *with* it because `valTypeByte` is
+// local may name a forward-referenced type; encodability is asked *with* it because `valTypeBytes` is
 // one function answering both questions (encode.go's argument), and splitting them would be a second
 // place knowing which types have bytes.
 //
 // It refuses per function rather than per module, and quotes the local's ordinal, because that is
 // what a reader edits — the same reason `encodableOrErr` refuses per import rather than folding the
 // valtype check into one loop.
-func (p *parser) funcLocalBytes(f textFunc) ([]byte, error) {
-	out := make([]byte, 0, len(f.locals))
+//
+// **One `[]byte` per local, not one byte** — since `valTypeBytes` widened, a local's encoded type may
+// be more than one byte (a parameterized reference's prefix plus its heaptype), so the flat `[]byte`
+// this used to build (one byte per local, appended positionally) can no longer represent the general
+// case. `writeLocals` folds these into runs by slice equality now, not byte equality.
+func (p *parser) funcLocalBytes(f textFunc) ([][]byte, error) {
+	out := make([][]byte, 0, len(f.locals))
 	for i, v := range f.locals {
 		rv, err := p.ctx.resolveVal(v)
 		if err != nil {
 			return nil, err
 		}
-		b, ok := valTypeByte(rv)
+		b, ok := valTypeBytes(rv)
 		if !ok {
 			return nil, errf(f.kw, "cannot yet encode local %d: %s needs a parameterized reference "+
 				"encoding, which arrives with the GC gate (#8)", i, rv)
@@ -857,8 +864,11 @@ func opBytes(mnemonic string) ([]byte, bool) {
 // property rather than becoming the one place an error can leave bytes behind.
 type encodedFunc struct {
 	typeIdx uint32
-	locals  []byte
-	body    []byte
+	// locals is one encoded valtype per local, not yet folded into runs — `[][]byte` rather
+	// than `[]byte` since `funcLocalBytes` widened, because a parameterized reference's
+	// encoding is more than one byte. `writeLocals` does the RLE fold at write time.
+	locals [][]byte
+	body   []byte
 }
 
 // resolveFuncs answers every deferred question the function and code sections have, or reports the
@@ -992,14 +1002,21 @@ const opElse byte = 0x05
 // reference's rather than ours. With `binary.Func.Locals` retaining runs, the decoder is an
 // independent reader of them, so the round trip checks the fold's output against what the format
 // says those bytes mean. encode_test.go's three-group case is where that bites.
-func writeLocals(w *writer, locals []byte) {
+//
+// **`locals` is `[][]byte`, and the run-length fold compares by `slices.Equal`, not `==`**, since
+// `valTypeBytes` widened: a local's encoded type may now be several bytes (a parameterized
+// reference's prefix plus its heaptype), so two locals of the same type produce two byte slices
+// that must be compared element-wise to fold into one run — a `[]byte`-keyed comparison would
+// treat every multi-byte local as its own run of one, encoding a well-formed local list correctly
+// but never as `combine` (:238) would.
+func writeLocals(w *writer, locals [][]byte) {
 	type run struct {
 		n uint32
-		t byte
+		t []byte
 	}
 	var runs []run
 	for _, t := range locals {
-		if len(runs) > 0 && runs[len(runs)-1].t == t {
+		if len(runs) > 0 && slices.Equal(runs[len(runs)-1].t, t) {
 			runs[len(runs)-1].n++
 			continue
 		}
@@ -1007,7 +1024,7 @@ func writeLocals(w *writer, locals []byte) {
 	}
 	w.vec(len(runs), func(bw *writer, i int) {
 		bw.u32(runs[i].n) // `len n` (:239)
-		bw.byte1(runs[i].t)
+		bw.bytes(runs[i].t)
 	})
 }
 
@@ -1071,7 +1088,7 @@ func selectOpByte(wrote bool) []byte {
 // naming a type defined later in the field list, so resolving at the cursor would reject a legal
 // module — the accept-direction failure this package's index resolutions are already split over. So
 // this is reached through `instr.patch`, and the *encodability* question is asked here with the
-// resolution because `valTypeByte` answers both and splitting them would be a second place knowing
+// resolution because `valTypeBytes` answers both and splitting them would be a second place knowing
 // which types have bytes.
 //
 // It refuses per result and quotes the ordinal, which is `funcLocalBytes`' shape for the same reason:
@@ -1084,12 +1101,12 @@ func (p *parser) selectResultBytes(results []valType, tok Token) ([]byte, error)
 		if err != nil {
 			return nil, err
 		}
-		b, ok := valTypeByte(rv)
+		b, ok := valTypeBytes(rv)
 		if !ok {
 			return nil, errf(tok, "cannot yet encode select result %d: %s needs a parameterized "+
 				"reference encoding, which arrives with the GC gate (#8)", i, rv)
 		}
-		w.byte1(b)
+		w.bytes(b)
 	}
 	return w.b, nil
 }
@@ -1162,19 +1179,22 @@ func (p *parser) blockTypeBytes(slot *blockTypeSlot, ft funcType, tok Token) fun
 		if len(ft.results) == 0 {
 			return []byte{blockTypeEmptyByte}, nil
 		}
-		// `ValBlockType (Some t)` — `([], [t])`, written as a bare `valtype` byte and **not** as an
-		// s33: `blocktype`'s third arm is `valtype t` (encode.ml:232), and the valtype encodings are
-		// the negative s7 forms whose byte is what `valTypeByte` returns.
+		// `ValBlockType (Some t)` — `([], [t])`, written as a `valtype` and **not** as an s33:
+		// `blocktype`'s third arm is `valtype t` (encode.ml:232), and `valtype`'s own grammar is
+		// `decodeBlockTypeValue`'s third branch — `d.decodeValType`, the same production a table's
+		// element type or a global's type goes through — so a parameterized reference result
+		// (`(ref i31)`, `(ref null $t)`) is exactly as legal here as the negative-s7 single-byte
+		// forms, and `valTypeBytes` returns however many bytes that form needs.
 		rv, err := p.ctx.resolveVal(ft.results[0])
 		if err != nil {
 			return nil, err
 		}
-		b, ok := valTypeByte(rv)
+		b, ok := valTypeBytes(rv)
 		if !ok {
 			return nil, errf(tok, "cannot yet encode a block whose result is %s: it needs a "+
 				"parameterized reference encoding, which arrives with the GC gate (#8)", rv)
 		}
-		return []byte{b}, nil
+		return b, nil
 	}
 }
 
@@ -1225,7 +1245,7 @@ func constImmBytes(t Token, bits uint, isFloat bool) ([]byte, bool) {
 	return w.b, true
 }
 
-// The locals path deliberately has no encodability helper of its own: it calls `valTypeByte`, the
+// The locals path deliberately has no encodability helper of its own: it calls `valTypeBytes`, the
 // same predicate the five existing sections use. A second opinion about which value types can be
 // encoded is what #111's six remaining sites are the standing reminder of, and a wrapper adding
 // nothing but a name would be the first step toward one.

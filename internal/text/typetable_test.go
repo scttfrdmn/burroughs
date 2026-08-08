@@ -833,19 +833,17 @@ func TestElemIndexFormNeedsExactlyRefFunc(t *testing.T) {
 			// inversion that makes an empty element vacuously an index, `(elem funcref (item))`
 			// encodes `01 05 70 01 0b` either way. It was carrying that spelling and passing.
 			//
-			// So the witness is a **refusal**, and that is not a weaker assertion here — it is the
-			// only one available. With `(ref func)` the two answers are distinguishable at the
-			// encoder's own frontier: answering "not an index" takes flag 5, which must write the
-			// elemtype and meets #8's unwritten parameterized-reftype encoding; answering "index"
-			// takes flag 1, whose elemkind is a bare `0x00` and needs no such thing. Under the
-			// inversion this row emits `09 04 01 01 00 01` — flag 1, and a section whose declared
-			// size is one byte short of what it wrote, so the *decoder* catches it too. At HEAD it
-			// is declined. A row asserting a payload could not tell those apart, because the correct
-			// behaviour has no payload to assert.
+			// With `(ref func)` the two answers are distinguishable at the payload: answering "not an
+			// index" takes flag 5, whose elemtype is the general parameterized production (prefix
+			// `0x64` + heaptype `func`, `valTypeBytes` since decision 0018's encoder-side
+			// implementation) — `05 64 70`; answering "index" takes flag 1, whose elemkind is a bare
+			// `0x00` — `01 00`. Before this PR flag 5's byte did not exist and the row was a refusal
+			// (#8's frontier); now that `valTypeBytes` answers it, the witness is the payload itself,
+			// and it distinguishes the two answers exactly as well as the refusal used to.
 			"an element with no instructions is not an index, so it needs the expression form (#8)",
 			`(module (func) (elem (ref func) (item)))`,
-			nil,
-			"needs a parameterized reference encoding",
+			[]byte{0x01, 0x05, 0x64, 0x70, 0x01, 0x0b},
+			"",
 		},
 	} {
 		t.Run(c.what, func(t *testing.T) {
