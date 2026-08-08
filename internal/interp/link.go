@@ -272,9 +272,10 @@ func (in *Instance) link(imp Imports) error {
 
 // importTypeMismatch reports why im and ext disagree on their *type*, once they already agree on
 // kind — `match_externtype`'s four kind-specific rules (match.ml), MVP-reduced the way
-// sameFuncType reduces match_deftype: byte equality on ValType rather than reftype subtyping,
-// which is right for the twelve ungated forms this decoder ever admits and a declared gap under
-// GC (sameFuncType's own comment states the identical reduction).
+// sameFuncType reduces match_deftype: `ValType`'s field-wise `==` (0018) rather than reftype
+// subtyping — right for the two ungated Wasm 2.0 forms, and for GC forms it is now *equality*
+// where the reference wants *subtyping*, a narrower but real gap than the pre-0018 collapse
+// (sameFuncType's own comment states the identical reduction).
 //
 // Returns "" when the types match, and otherwise the spec's phrasing —
 // "expected ..., got ..." — the wording eval.ml's Link.error uses, so the caller's sentinel plus

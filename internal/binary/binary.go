@@ -828,7 +828,7 @@ func (d *Decoder) DecodeModule(b []byte) (*Module, error) {
 	// history (#28), and clearing on exit leaves the zero-value path uncovered.
 	d.sawDataRef = false
 	d.funcTypeIdx = nil
-	d.valType, d.blockType = NoValType, 0
+	d.valType, d.blockType, d.blockTypeIdx = NoValType, 0, 0
 
 	// A *short* preamble is "unexpected end"; a full-width but wrong one is
 	// "magic header not detected" / "unknown binary version". binary.wast

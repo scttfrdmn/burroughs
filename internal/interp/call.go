@@ -402,10 +402,13 @@ func (in *Instance) declaredFuncType(idx uint64) (*binary.FuncType, error) {
 // sameFuncType is structural equality over functypes — the MVP reduction of `Match.match_deftype`.
 //
 // Written out rather than `slices.Equal` twice for a reason that is about the *comparison* rather
-// than the code: a `binary.ValType` is a byte, so equality here compares wire encodings, and two
-// reference types that differ only in a heap-type index would compare equal. That cannot happen on
-// the default board (no reference type reaches a functype the interpreter runs) and is a real gap
-// under GC, which is the same shortfall the doc comment above declares.
+// than the code: `binary.ValType`'s `==` compares its three fields (kind, null, idx), so two
+// reference types differing only in a heap-type index correctly compare unequal as of 0018's
+// widening. Before it, `ValType` was a byte with nowhere to put an index, so this comparison
+// could only ever see the sentinel and every GC reference type collapsed to one indistinguishable
+// value — the real gap the doc comment above still declares, since this is *equality*, not
+// subtyping: `match_deftype`'s actual rule (structural subtyping over the module's rec-group
+// graph) is unimplemented regardless of how precisely `ValType` compares.
 func sameFuncType(a, b *binary.FuncType) bool {
 	if len(a.Params) != len(b.Params) || len(a.Results) != len(b.Results) {
 		return false

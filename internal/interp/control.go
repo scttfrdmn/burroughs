@@ -86,14 +86,17 @@ type label struct {
 // naming a type the module does not declare, or naming a struct or array slot, is #9's verdict.
 // The all-gates-on lane makes the second reachable, since `Module.Types` keeps GC slots so type
 // indices do not shift.
-func (in *Instance) blockArity(imm0 uint64) (params, results int, err error) {
-	idx, vt, empty := binary.BlockType(imm0)
+func (in *Instance) blockArity(imm0, imm1 uint64) (params, results int, err error) {
+	idx, vt, empty := binary.BlockType(imm0, imm1)
 	switch {
 	case empty:
 		return 0, 0, nil
-	case vt != 0:
+	case vt != binary.NoValType:
 		// A single result, no parameters — the `valtype` form cannot express either
-		// parameters or a second result.
+		// parameters or a second result. `vt != NoValType` rather than a boolean third
+		// return, preserving the pre-0018 predicate exactly: every valtype the decoder can
+		// resolve has a non-zero kind (0x6E-0x80), so this is never true for the empty or
+		// type-index cases, both of which BlockType returns as the zero ValType.
 		return 0, 1, nil
 	default:
 		if int(idx) >= len(in.mod.Types) {

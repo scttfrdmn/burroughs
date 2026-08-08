@@ -113,7 +113,7 @@ func (in *Instance) runFrame(fn *binary.Func, locals []uint64, st *stack, result
 			// by `govet`'s shadow check, which is the linter doing the job the spirit clause
 			// reserves the suppression for — here the finding is a real ambiguity, not a
 			// design fight.
-			params, blockResults, err := in.blockArity(ins.Imm0)
+			params, blockResults, err := in.blockArity(ins.Imm0, ins.Imm1)
 			if err != nil {
 				return err
 			}
@@ -139,7 +139,7 @@ func (in *Instance) runFrame(fn *binary.Func, locals []uint64, st *stack, result
 			if err != nil {
 				return err
 			}
-			params, blockResults, err := in.blockArity(ins.Imm0)
+			params, blockResults, err := in.blockArity(ins.Imm0, ins.Imm1)
 			if err != nil {
 				return err
 			}

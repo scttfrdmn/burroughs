@@ -181,10 +181,17 @@ type Decoder struct {
 	// a field instead of a message.
 	valType ValType
 
-	// blockType is the encoded blocktype the most recent `blocktype` read accepted, on
-	// the Decoder for valType's reason — its alternation is an `either`. See
+	// blockType and blockTypeIdx are the encoded blocktype the most recent `blocktype` read
+	// accepted, on the Decoder for valType's reason — its alternation is an `either`. See
 	// decodeBlockTypeValue for the encoding and for why the three forms cannot collide.
-	blockType uint64
+	//
+	// **Two fields as of 0018's implementation**, not one: a bare-valtype blocktype whose
+	// result is the indexed reference form (`(ref $t)`/`(ref null $t)`) needs a uint32 index
+	// alongside the kind byte and null bit that still fit blockType, and Imm1 is where that
+	// index rides in the retained Instr (module.go's BlockType doc). blockTypeIdx carries it
+	// through decodeBlockTypeValue's third branch exactly as blockType carries the rest.
+	blockType    uint64
+	blockTypeIdx uint64
 }
 
 // mod returns the module the descent retains into, creating it if this Decoder was driven
@@ -586,7 +593,7 @@ func (d *Decoder) decodeNumType(r *reader) error {
 	}
 	switch form {
 	case -0x01, -0x02, -0x03, -0x04: // i32 i64 f32 f64
-		d.valType = ValType(form & 0x7F)
+		d.valType = ValType{kind: byte(form & 0x7F)}
 		return nil
 	}
 	return fmt.Errorf("%w: %#02x", ErrMalformedNumType, byte(form&0x7F))
@@ -637,7 +644,17 @@ func (d *Decoder) decodeRefType(r *reader) error {
 	}
 	switch form {
 	case -0x10, -0x11: // funcref (0x70), externref (0x6F) — Wasm 2.0, ungated
-		d.valType = ValType(form & 0x7F)
+		// **Written as exactly FuncRef/ExternRef (null false), preserving 0018's
+		// backward-compatibility requirement to the letter.** In the reference's own
+		// model `funcref`/`externref` are the *(Null, FuncHT)*/*(Null, ExternHT)*
+		// abbreviations (decode.ml's abbreviation table) — genuinely nullable — but this
+		// engine's pre-0018 byte representation never tracked nullability for these two
+		// at all, and 0018 requires every existing `t == FuncRef`-style comparison to
+		// keep "behaving identically" for them. `FuncRef`/`ExternRef` are defined with
+		// null unset (the zero value) precisely so this arm can write them unchanged;
+		// giving them null=true here would flip every `t == FuncRef`-style comparison
+		// across the tree, including `tab.Table.ElemType != FuncRef` in sections_test.go.
+		d.valType = refKind(byte(form&0x7F), false)
 		return nil
 
 	case -0x0C, -0x0D, -0x0E, -0x0F, // noexn, nofunc, noextern, none
@@ -647,12 +664,14 @@ func (d *Decoder) decodeRefType(r *reader) error {
 		if !d.Features.GC {
 			return featureErr("gc")
 		}
-		// Accepted, and **not representable** in ValType — so the sentinel is written
-		// rather than the field left alone. Leaving it would let the previous read's
-		// type stand as this one's answer, which is grave #36's class in a field instead
-		// of a message: an engine reporting a value its input never held. The all-gates-on
-		// CI lane is what makes this reachable, so it is not a hypothetical arm.
-		d.valType = NoValType
+		// **Resolved, as of 0018's implementation** — every abstract heaptype `reftype`
+		// names is representable now, so the real kind is written rather than the
+		// NoValType sentinel this arm used to write for lack of anywhere to put the
+		// answer. Unlike the Wasm 2.0 pair above, these ten have no pre-existing byte
+		// behavior to preserve, so they get the reference's actual nullability:
+		// `reftype`'s bare abstract forms are the *(Null, ...)* abbreviations —
+		// `anyref` means `(Null, AnyHT)`, not `(NoNull, AnyHT)` — so null=true.
+		d.valType = refKind(byte(form&0x7F), true)
 		return nil
 
 	case -0x1C, -0x1D: // (ref ht), (ref null ht)
@@ -665,7 +684,12 @@ func (d *Decoder) decodeRefType(r *reader) error {
 		if err := d.decodeHeapType(r); err != nil {
 			return err
 		}
-		d.valType = NoValType
+		// **Resolved, as of 0018's implementation.** decodeHeapType already wrote
+		// d.valType with the heaptype's kind/idx; this branch's own job is only to
+		// overwrite its nullability, since `heaptype` itself has no null bit and
+		// `-0x1c`/`-0x1d` is exactly where the reftype grammar supplies one — the
+		// prefix that told us whether this is `(ref ht)` or `(ref null ht)`.
+		d.valType.null = form == -0x1D
 		return nil
 	}
 	return fmt.Errorf("%w: %#02x", ErrMalformedRefType, byte(form&0x7F))
@@ -701,6 +725,16 @@ func (d *Decoder) decodeRefType(r *reader) error {
 // gate check ahead of the discriminator would decline `ref.null extern` — whose byte is
 // negative at s33 and belongs to the next branch — as a GC construct. Pinned by
 // TestHeapTypeGatesFormsNotThePosition.
+//
+// **Writes d.valType on every accepting branch, as of 0018's implementation** — a heaptype
+// (not a reftype) has no nullability of its own, so the resolved ValType here always has
+// null false; a caller that reads it as a reftype's parameter (decodeRefType's
+// `-0x1c`/`-0x1d` branch) supplies the bit that heaptype's own grammar does not carry, per
+// the same reasoning `immHeapType`'s doc comment already gives for why `ref.null`'s
+// immediate has no nullability of its own. A caller that does not need a resolved type
+// (`immHeapType`'s ref.null/ref.test/ref.cast arms, which retain nothing per #7) simply
+// leaves the write unread — safe by the same out-parameter discipline decodeValType's field
+// comment states: written only immediately before a successful return.
 func (d *Decoder) decodeHeapType(r *reader) error {
 	return either(r,
 		func(r *reader) error {
@@ -716,6 +750,7 @@ func (d *Decoder) decodeHeapType(r *reader) error {
 			if !d.Features.GC {
 				return featureErr("gc")
 			}
+			d.valType = RefType(uint32(v), false)
 			return nil
 		},
 		func(r *reader) error {
@@ -725,12 +760,14 @@ func (d *Decoder) decodeHeapType(r *reader) error {
 			}
 			switch form {
 			case -0x10, -0x11: // func, extern — Wasm 2.0, ungated
+				d.valType = refKind(byte(form&0x7F), false)
 				return nil
 			case -0x0C, -0x0D, -0x0E, -0x0F, // noexn, nofunc, noextern, none
 				-0x12, -0x13, -0x14, -0x15, -0x16, -0x17: // any, eq, i31, struct, array, exn
 				if !d.Features.GC {
 					return featureErr("gc")
 				}
+				d.valType = refKind(byte(form&0x7F), false)
 				return nil
 			}
 			return fmt.Errorf("%w: %#02x", ErrMalformedHeapType, byte(form&0x7F))

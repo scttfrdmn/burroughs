@@ -115,11 +115,13 @@ var immStagedBits = map[imm]int{
 	immF64:       64,
 	immByte:      64,
 	immLaneIdx:   8,   // packed above a memarg's memory index when Imm1 is taken
-	immValType:   64,  // staged as the decoder's out-parameter byte, in a full word
-	immBlockType: 64,  // tag bits above 2^32, so it needs the whole word
-	immV128:      128, // both words, exactly
-	immLane16:    128, // sixteen u8 lanes, packed
-	immMemop:     96,  // a u64 offset plus a u32 memory index
+	immValType:   64,  // 0018: kind/null/idx packed into one word (see instrCtx.imm's arm)
+	immBlockType: 128, // 0018: tag bits above 2^32 in the first word, the valtype's resolved
+	// index (meaningful only for the indexed reference form) staged unconditionally in the
+	// second — see module.go's BlockType comment
+	immV128:   128, // both words, exactly
+	immLane16: 128, // sixteen u8 lanes, packed
+	immMemop:  96,  // a u64 offset plus a u32 memory index
 
 	// Read and dropped, each with its reason at the arm. A vector cannot live in a
 	// fixed-width instruction, so these are #7's side-array work rather than staging.
@@ -428,6 +430,63 @@ func TestStagedBitsAgreeWithTheReader(t *testing.T) {
 				"which is why this is a control and not a comment", row.mnemonic, got)
 		}
 	}
+}
+
+// TestBlockTypeImm1IsFreeForStructuralOpcodes is the control 0018's implementation
+// pre-registered rather than assumed: `BlockType`'s packing comment (module.go) claims Imm1
+// is free for every opcode whose immediates include immBlockType, because decodeBlockTypeValue
+// now stages *both* Instr words itself (Imm0's tag/kind/null, Imm1's resolved index for the
+// indexed valtype form) and every other immediate those rows carry — immBlock, immCatchVec —
+// stages zero bits per immStagedBits.
+//
+// **Derived from the generated table, not from the four opcodes (block/loop/if/try_table)
+// named by number**, for the reason every domain here is derived: a hand-written list of
+// "the four structural opcodes" freezes at authorship and says nothing about a fifth arriving
+// upstream with a third immediate that also wants Imm1 — exactly the collision this control
+// exists to catch before it silently drops a bit. TestPrefixedSubOpcodesFitOp and
+// TestInstrImmediateWidthCoversTheTable are this file's siblings in shape; this one is scoped
+// to the one row-shape 0018's packing depends on.
+func TestBlockTypeImm1IsFreeForStructuralOpcodes(t *testing.T) {
+	rows := 0
+	for prefix, region := range prefixRegions {
+		for code, info := range region {
+			hasBlockType := false
+			for _, im := range info.imms {
+				if im == immBlockType {
+					hasBlockType = true
+					break
+				}
+			}
+			if !hasBlockType {
+				continue
+			}
+			rows++
+			// Every immediate *other* than immBlockType itself must stage zero bits, or
+			// this row already has something else contending for the second word
+			// BlockType's packing claims for its own use.
+			for _, im := range info.imms {
+				if im == immBlockType {
+					continue
+				}
+				if bits := immStagedBits[im]; bits != 0 {
+					t.Errorf("%#02x %#x (%s, decode.ml:%d) carries immBlockType and %q, "+
+						"which stages %d bits — BlockType's packing (module.go) assumes "+
+						"Imm1 is free for the valtype form's resolved index, and this row "+
+						"contends for it", prefix, code, info.mnemonic, info.refLine, im, bits)
+				}
+			}
+		}
+	}
+	// The vacuity floor: an empty walk would make the loop above assert nothing and pass
+	// for free, which is exactly the empty-set agreement (#29). Four rows at the pinned
+	// revision — block, loop, if_, try_table — so two is a floor with margin rather than an
+	// exact pin, since exactness here would fail the day a fifth structural opcode lands
+	// with no code change to this test.
+	if rows < 2 {
+		t.Fatalf("found %d rows carrying immBlockType, want ≥2: the generated table declares "+
+			"four (block, loop, if_, try_table), so a walk this short lost the domain", rows)
+	}
+	t.Logf("%d structural rows checked", rows)
 }
 
 // laneMemopRows returns every row whose immediates are a memarg followed by a lane index —

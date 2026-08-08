@@ -181,7 +181,8 @@ func TestBlockTypeFormsMatchTheReference(t *testing.T) {
 		if len(m.Funcs) != 1 || len(m.Funcs[0].Body) == 0 {
 			t.Fatalf("expected one function with a body, got %d funcs", len(m.Funcs))
 		}
-		return binary.BlockType(m.Funcs[0].Body[0].Imm0)
+		body := m.Funcs[0].Body[0]
+		return binary.BlockType(body.Imm0, body.Imm1)
 	}
 
 	t.Run("empty", func(t *testing.T) {
@@ -198,13 +199,15 @@ func TestBlockTypeFormsMatchTheReference(t *testing.T) {
 	// otherwise make every block row in that table wrong in the same direction, and a want column
 	// wrong in the encoder's own direction agrees with a wrong encoder.
 	t.Run("packed Imm0 literals", func(t *testing.T) {
-		if idx, vt, empty := binary.BlockType(blockTypeImm); !empty {
+		if idx, vt, empty := binary.BlockType(blockTypeImm, 0); !empty {
 			t.Errorf("blockTypeImm (%#x) unpacks as idx=%d valtype=%v empty=false, want the empty form",
 				blockTypeImm, idx, vt)
 		}
 		for _, want := range []binary.ValType{binary.I32, binary.I64, binary.F32, binary.F64, binary.FuncRef} {
 			imm := blockTypeValTypeImm(want)
-			idx, vt, empty := binary.BlockType(imm)
+			// Imm1 is 0 here for every want value in this list, per blockTypeValTypeImm's
+			// own comment — none is the indexed form, so there is no index to pass.
+			idx, vt, empty := binary.BlockType(imm, 0)
 			if empty || vt != want {
 				t.Errorf("blockTypeValTypeImm(%v) = %#x, which unpacks as idx=%d valtype=%v empty=%v",
 					want, imm, idx, vt, empty)
@@ -213,7 +216,7 @@ func TestBlockTypeFormsMatchTheReference(t *testing.T) {
 		// And neither literal may collide with a type index, which is the disjointness the tags
 		// living above 2^32 buys — asserted rather than assumed, since a want column of `Imm0: 0`
 		// for `(block)` is exactly the mistake this rules out.
-		if idx, _, empty := binary.BlockType(0); empty || idx != 0 {
+		if idx, _, empty := binary.BlockType(0, 0); empty || idx != 0 {
 			t.Errorf("Imm0 0 unpacks as idx=%d empty=%v, want type index 0 — so the empty blocktype "+
 				"cannot be written as a zero want column", idx, empty)
 		}
