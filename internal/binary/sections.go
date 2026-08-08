@@ -644,17 +644,20 @@ func (d *Decoder) decodeRefType(r *reader) error {
 	}
 	switch form {
 	case -0x10, -0x11: // funcref (0x70), externref (0x6F) — Wasm 2.0, ungated
-		// **Written as exactly FuncRef/ExternRef (null false), preserving 0018's
-		// backward-compatibility requirement to the letter.** In the reference's own
-		// model `funcref`/`externref` are the *(Null, FuncHT)*/*(Null, ExternHT)*
-		// abbreviations (decode.ml's abbreviation table) — genuinely nullable — but this
-		// engine's pre-0018 byte representation never tracked nullability for these two
-		// at all, and 0018 requires every existing `t == FuncRef`-style comparison to
-		// keep "behaving identically" for them. `FuncRef`/`ExternRef` are defined with
-		// null unset (the zero value) precisely so this arm can write them unchanged;
-		// giving them null=true here would flip every `t == FuncRef`-style comparison
-		// across the tree, including `tab.Table.ElemType != FuncRef` in sections_test.go.
-		d.valType = refKind(byte(form&0x7F), false)
+		// **Written as the reference's true abbreviation meaning: nullable** (grave #180,
+		// correcting the non-null value #179 shipped). `funcref`/`externref` are the *(Null,
+		// FuncHT)*/*(Null, ExternHT)* abbreviations (decode.ml's abbreviation table) — the
+		// spec's own reading, not this engine's choice to make — so writing null:false here
+		// silently declared a well-formed module's type wrong, an accept-direction defect
+		// the default suite is structurally unlikely to exercise (§9 G-3): it collided
+		// `funcref` with `(ref func)` (different spec types) and split `funcref` from
+		// `(ref null func)` (the same spec type, spelled two ways). `FuncRef`/`ExternRef`
+		// (module.go) moved to null:true in lockstep with this arm, so every existing
+		// `t == FuncRef`-style comparison keeps compiling and returning the same answer as
+		// before — the two were never independently observable from outside this package,
+		// only their mutual agreement was, and that agreement is preserved by moving both
+		// sides together rather than by holding either one fixed.
+		d.valType = refKind(byte(form&0x7F), true)
 		return nil
 
 	case -0x0C, -0x0D, -0x0E, -0x0F, // noexn, nofunc, noextern, none

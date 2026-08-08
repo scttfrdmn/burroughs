@@ -216,41 +216,106 @@ func TestValTypeNamedConstantsAreNotAlias(t *testing.T) {
 	}
 }
 
-// TestNullableDivergesFromNullForWasm2Forms pins Nullable's one deliberate disagreement with
-// Null: FuncRef and ExternRef spell non-null (Null() == false, matching this engine's pre-0018
-// byte and every existing t == FuncRef comparison) but are semantically nullable per the
-// reference's own abbreviation table, so Nullable() must report true for them regardless of
-// what the wire spelled. Every other reference kind spells its own real nullability, so the
-// two accessors agree everywhere else — pinned here too, so a future kind added to either
-// table without the other is caught by the same test rather than by a silent gap.
-func TestNullableDivergesFromNullForWasm2Forms(t *testing.T) {
+// TestFuncRefIdentitiesMatchTheReference is grave #180's pinning control: FuncRef/ExternRef are
+// the reference's *(Null, FuncHT)*/*(Null, ExternHT)* abbreviations, so decodeRefType's bare-byte
+// branch must decode to the same ValType as the general parameterized-nullable spelling, and to a
+// *different* ValType than the general non-null spelling — the exact relation #179 shipped
+// backwards. Falsified by reverting FuncRef/ExternRef to null:false (the pre-fix value): the first
+// two subtests fail (funcref no longer equals its own expansion, or wrongly equals the non-null
+// one) while the abstract-kind and indexed-form subtests are unaffected, which is what confirms
+// the defect was scoped to exactly the two Wasm 2.0 forms.
+func TestFuncRefIdentitiesMatchTheReference(t *testing.T) {
+	gc := Features{GC: true}
+	decodeGlobalType := func(t *testing.T, b []byte) ValType {
+		t.Helper()
+		img := append([]byte{
+			0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00,
+			0x06, byte(len(b) + 5), 0x01,
+		}, b...)
+		img = append(img, 0x00, 0x41, 0x00, 0x0B)
+		m, err := (&Decoder{Features: gc}).DecodeModule(img)
+		if err != nil {
+			t.Fatalf("decoding a global of type % x: %v", b, err)
+		}
+		return m.Globals[0].Type
+	}
+
+	t.Run("funcref equals its own (ref null func) expansion", func(t *testing.T) {
+		bare := decodeGlobalType(t, []byte{0x70})
+		expanded := decodeGlobalType(t, []byte{0x63, 0x70})
+		if bare != FuncRef {
+			t.Errorf("bare funcref decoded to %+v, want FuncRef (%+v)", bare, FuncRef)
+		}
+		if bare != expanded {
+			t.Errorf("funcref (%+v) != its own (ref null func) expansion (%+v); they are the "+
+				"same spec type spelled two ways", bare, expanded)
+		}
+	})
+
+	t.Run("funcref differs from (ref func)", func(t *testing.T) {
+		bare := decodeGlobalType(t, []byte{0x70})
+		nonNull := decodeGlobalType(t, []byte{0x64, 0x70})
+		if bare == nonNull {
+			t.Errorf("funcref (%+v) == (ref func) (%+v); they are different spec types "+
+				"(one nullable, one not)", bare, nonNull)
+		}
+		if nonNull.Null() {
+			t.Errorf("(ref func) decoded with Null() == true, want false — it is the " +
+				"explicit non-null spelling")
+		}
+	})
+
+	t.Run("externref, the same two relations", func(t *testing.T) {
+		bare := decodeGlobalType(t, []byte{0x6F})
+		expanded := decodeGlobalType(t, []byte{0x63, 0x6F})
+		nonNull := decodeGlobalType(t, []byte{0x64, 0x6F})
+		if bare != ExternRef || bare != expanded {
+			t.Errorf("externref (%+v) should equal ExternRef (%+v) and its expansion (%+v)",
+				bare, ExternRef, expanded)
+		}
+		if bare == nonNull {
+			t.Errorf("externref (%+v) == (ref extern) (%+v); different spec types", bare, nonNull)
+		}
+	})
+
+	// An abstract GC kind and the indexed form already spell their own real nullability
+	// (unaffected by this fix — #179's collision was scoped to Wasm 2.0's two abbreviations
+	// only), pinned here so a regression that widened the fix's scope would be caught too.
+	t.Run("an abstract GC kind is unaffected", func(t *testing.T) {
+		null := decodeGlobalType(t, []byte{0x6E})          // anyref, the nullable abbreviation
+		nonNull := decodeGlobalType(t, []byte{0x64, 0x6E}) // (ref any), explicit non-null
+		if !null.Null() || nonNull.Null() {
+			t.Errorf("anyref.Null()=%v (ref any).Null()=%v, want true/false", null.Null(), nonNull.Null())
+		}
+		if null == nonNull {
+			t.Error("anyref == (ref any); different spec types")
+		}
+	})
+}
+
+// TestValTypeStringMatchesTheReferenceOnFuncExternNonNull pins a sibling gap swept up alongside
+// grave #180: `(ref func)`/`(ref extern)` (kind 0x70/0x6F, null:false — the genuinely non-null
+// spelling, distinct from FuncRef/ExternRef which are the nullable abbreviation) fell through
+// String's abstractHeapNames lookup to "unknown", because that map had no 0x70/0x6F entries at
+// all — present since 0018's implementation (#179), not introduced by #180's fix, but the same
+// class of gap (a well-formed type this type declines to name) found in the same sweep.
+func TestValTypeStringMatchesTheReferenceOnFuncExternNonNull(t *testing.T) {
 	cases := []struct {
 		name string
 		t    ValType
-		null bool
+		want string
 	}{
-		{"FuncRef", FuncRef, true},
-		{"ExternRef", ExternRef, true},
-		{"refKind any, null", refKind(0x6E, true), true},
-		{"refKind any, non-null", refKind(0x6E, false), false},
-		{"RefType indexed, null", RefType(3, true), true},
-		{"RefType indexed, non-null", RefType(3, false), false},
+		{"(ref func)", refKind(0x70, false), "(ref func)"},
+		{"(ref extern)", refKind(0x6F, false), "(ref extern)"},
 	}
 	for _, c := range cases {
-		if got := c.t.Nullable(); got != c.null {
-			t.Errorf("%s.Nullable() = %v, want %v", c.name, got, c.null)
+		if got := c.t.String(); got != c.want {
+			t.Errorf("%s.String() = %q, want %q", c.name, got, c.want)
 		}
-	}
-
-	// The divergence itself, spelled out rather than left implicit in the table above: Null()
-	// and Nullable() must disagree for exactly the two Wasm 2.0 forms and agree everywhere else.
-	if FuncRef.Null() == FuncRef.Nullable() {
-		t.Error("FuncRef.Null() and FuncRef.Nullable() agree — the wire-spelling/semantic " +
-			"split this test exists to pin has collapsed")
-	}
-	if got, want := refKind(0x6E, true).Null(), refKind(0x6E, true).Nullable(); got != want {
-		t.Errorf("a GC abstract form's Null() (%v) and Nullable() (%v) disagree; the two "+
-			"should agree for every kind except Wasm 2.0's abbreviations", got, want)
+		if c.t.String() == "unknown" {
+			t.Errorf("%s.String() = %q: a well-formed non-null func/extern reference type "+
+				"has no name", c.name, c.t.String())
+		}
 	}
 }
 
