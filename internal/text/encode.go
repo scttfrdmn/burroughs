@@ -447,16 +447,16 @@ func (p *parser) encodableOrErr() error {
 			"withdrew the encoder's frontier without recording its content (#8)", got, want)
 	}
 	// An element segment's type is the same frontier as a table's: `(elem (ref func) (ref.func 0))` and
-	// `(elem externref …)` need bytes `valTypeByte` does not have, and `elem.wast` writes both. Asked
+	// `(elem externref …)` need bytes `valTypeBytes` does not have, and `elem.wast` writes both. Asked
 	// through the one predicate so this cannot disagree with what `encodeElems` will write.
 	//
 	// **The exemption is the writer's family test verbatim, and it has to be — grave #146.** A segment
 	// taking one of the four *index* forms writes an `elemkind` byte instead of a reftype, so its type
-	// needs no `valTypeByte` entry; every other segment writes a reftype and does. Which family a
+	// needs no `valTypeBytes` entry; every other segment writes a reftype and does. Which family a
 	// segment takes is `isElemKind() && allElemIndex()` in `encodeElems`, and this exemption asked only
 	// the first half — so a `(ref func)` segment whose elements fail `is_elem_index` was exempted here
 	// and then routed to the *expression* family by the writer, which called `w.valType` on a type
-	// `valTypeByte` refuses. Not a wrong image: a **panic**, out of the arm whose whole job is to say
+	// `valTypeBytes` refuses. Not a wrong image: a **panic**, out of the arm whose whole job is to say
 	// the two callers cannot disagree, on three spellings the grammar admits
 	// (`(elem (ref func) (item (ref.func 0) (ref.func 0)))` and its active and declarative twins).
 	//
@@ -476,13 +476,13 @@ func (p *parser) encodableOrErr() error {
 		if e.isElemKind() && e.allElemIndex() {
 			continue // the index family: writes an elemkind byte, not a reftype
 		}
-		if _, ok := valTypeByte(e.elemType); !ok {
+		if _, ok := valTypeBytes(e.elemType); !ok {
 			return fmt.Errorf("cannot yet encode element segment %d: element type %s needs a "+
 				"parameterized reference encoding, which arrives with the GC gate (#8)", i, e.elemType)
 		}
 	}
 	for i, t := range p.ctx.tabDefs {
-		if _, ok := valTypeByte(t.elem); !ok {
+		if _, ok := valTypeBytes(t.elem); !ok {
 			return fmt.Errorf("cannot yet encode table %d: element type %s needs a parameterized "+
 				"reference encoding, which arrives with the GC gate (#8)", i, t.elem)
 		}
@@ -490,7 +490,7 @@ func (p *parser) encodableOrErr() error {
 	// A defined global's type is the same frontier, and it is the *widest* of the three: a globaltype's
 	// valtype is any valtype at all — `(global anyref (ref.null any))` and `(global (ref func) …)` are
 	// both well-formed text — where a table's is a reftype and an element segment's likewise. Asked
-	// through `valTypeByte`, the one predicate, so this cannot disagree with what `encodeGlobals` writes.
+	// through `valTypeBytes`, the one predicate, so this cannot disagree with what `encodeGlobals` writes.
 	//
 	// The *initializer* needs no check here: its instructions are refused at the cursor by
 	// `refuseUnencodable`, which is where an unencodable instruction has a token to point at, and the
@@ -498,14 +498,14 @@ func (p *parser) encodableOrErr() error {
 	// global are refused by two different mechanisms, and that is the same division the code section uses
 	// — a func's signature is checked in the type loop below and its body at the cursor.
 	for i, g := range p.ctx.globalDefs {
-		if _, ok := valTypeByte(g.typ.val); !ok {
+		if _, ok := valTypeBytes(g.typ.val); !ok {
 			return fmt.Errorf("cannot yet encode global %d: type %s needs a parameterized reference "+
 				"encoding, which arrives with the GC gate (#8)", i, g.typ.val)
 		}
 	}
 	// An import's descriptor can hold a valtype in two of its five forms, and both are the same
 	// frontier as a table definition's element type: `(import "m" "t" (table 1 (ref func)))` needs
-	// GC's 0x64 prefix. Asked through `valTypeByte`, the one predicate, so this cannot disagree with
+	// GC's 0x64 prefix. Asked through `valTypeBytes`, the one predicate, so this cannot disagree with
 	// what `encodeImports` will write.
 	//
 	// Refused per *import* rather than folded into the loops above, because the position a reader
@@ -522,7 +522,7 @@ func (p *parser) encodableOrErr() error {
 		case importFunc, importMemory, importTag:
 			continue // no valtype in the descriptor: a type index, a limits, or both
 		}
-		if _, ok := valTypeByte(v); !ok {
+		if _, ok := valTypeBytes(v); !ok {
 			return fmt.Errorf("cannot yet encode import %d: %s needs a parameterized reference "+
 				"encoding, which arrives with the GC gate (#8)", i, v)
 		}
@@ -544,7 +544,7 @@ func (p *parser) encodableOrErr() error {
 		}
 		for _, group := range [][]resolvedVal{ct.ft.params, ct.ft.results} {
 			for _, v := range group {
-				if _, ok := valTypeByte(v); !ok {
+				if _, ok := valTypeBytes(v); !ok {
 					return fmt.Errorf("cannot yet encode type %d: %s needs a parameterized "+
 						"reference encoding, which arrives with the GC gate (#8)", i, v)
 				}
@@ -651,7 +651,7 @@ func (p *parser) encodeExports(w *writer) {
 // is installed.
 //
 // It reads `binary`'s own constants rather than literals, so the two sides of the round trip cannot
-// disagree about a number: this is the same one-concept-one-trigger argument `valTypeByte` makes.
+// disagree about a number: this is the same one-concept-one-trigger argument `valTypeBytes` makes.
 func externKindByte(k importKind) byte {
 	switch k {
 	case importFunc:
@@ -931,72 +931,103 @@ func (w *writer) limits(addr64 bool, lim limits) {
 	}
 }
 
-// valTypeByte is the encoding of one resolved value type, and the encodability predicate.
+// valTypeBytes is the encoding of one resolved value type, and the encodability predicate.
 //
 // **One function for both questions on purpose.** A separate "can I encode this" check would be a
 // second place knowing the same table, and the two would drift — with the failure mode being an
 // emitter reached with a type it has no byte for, resolving to a plausible wrong byte. Returning
-// `(byte, bool)` makes the frontier check and the emitter the same fact asked twice.
+// `([]byte, bool)` makes the frontier check and the emitter the same fact asked twice.
+//
+// **A byte slice, not a byte, since decision 0018's encoder-side implementation.** A `reftype` has
+// two shapes of encoding, and only one of them fits a single byte: the *nullable abstract*
+// abbreviations (`funcref`, `externref`, and the ten further GC forms — twelve single bytes
+// total, per `decodeRefType`'s `-0x10`/`-0x11` and `-0x0C..-0x0F`/`-0x12..-0x17` arms). Every other
+// form the parser can now resolve — a non-null abstract form (`(ref i31)`, no bare byte exists for
+// it) and the indexed form at either nullability (`(ref $t)`/`(ref null $t)`, ditto) — needs the
+// general parameterized production: a prefix byte (`0x64` for `(ref ht)`, `0x63` for
+// `(ref null ht)` — `decodeRefType`'s `-0x1C`/`-0x1D`, folded to bytes) followed by `heaptype`'s own
+// bytes, which `heapTypeBytes` already writes correctly and unchanged by this decision (#8's
+// existing frontier). The rule is read off `decodeRefType`/`decodeHeapType` (sections.go),
+// the decoder side's already-merged authority, not re-derived: verified against real wire bytes
+// through the fixed decoder before this function was written (`(ref i31)`, `(ref $t)`/`(ref null
+// $t)` both nullabilities, `funcref` bare, `(ref func)` explicit).
 //
 // The number types key on their *spelling*, which is what `resolvedVal.num` holds and is not a
 // stand-in: the reference's lexer collapses the four to one NUMTYPE class and keeps the payload, so
 // the spelling *is* the value (typetable.go's comment).
 //
-// The reference cases are the two Wasm 2.0 forms, and the `null` field is part of the key rather
-// than decoration. `funcref` and `(ref null func)` both resolve to `{null: true, abs: kwFunc}` —
-// the parser normalizes the abbreviation, so 0x70 is lossless for both. `(ref func)` is
-// `{null: false, …}`, a *different type*, encoded `64 70` with GC's non-null prefix; writing 0x70
-// for it would emit a nullable type where the text said non-nullable, which is a wrong module that
-// decodes clean. Hence the null check, and hence the twelve GC heap types and every `isIdx` form
-// returning false: they need the 0x63/0x64 prefix, which `decodeRefType` declines with the GC gate
-// off, so a module holding one is refused rather than mis-encoded.
-func valTypeByte(v resolvedVal) (byte, bool) {
+// **The nullable-abstract/non-null-abstract split is on `null` alone, and that is grave #180's
+// fix paying off here.** `funcref` and `(ref null func)` both resolve to `{null: true, abs:
+// kwFunc}` — the parser normalizes the abbreviation — and both now correctly take the single-byte
+// abbreviation `0x70`, matching `decodeRefType`'s own normalization (module.go's FuncRef/ExternRef
+// comment). `(ref func)` is `{null: false, …}`, a *genuinely different type*, and takes the
+// parameterized non-null form `64 70` — before #181's fix this distinction was not yet
+// representable on the decode side either, which is why
+// `TestParameterizedReferenceFormsRoundTrip` (encode_test.go) pins it directly, decoding both
+// spellings through the fixed decoder and asserting `(ref func) != binary.FuncRef`.
+func valTypeBytes(v resolvedVal) ([]byte, bool) {
 	if v.num != "" {
 		// Kind() is the accessor 0018 added for exactly this call shape: every one of the
 		// five numeric/vector ValTypes has a raw wire byte and Kind() returns it unconverted,
 		// keeping this arm's behavior identical to the pre-0018 byte(binary.I32) conversions
-		// it replaces — this PR does not teach the encoder any new capability, only keeps it
-		// compiling against the widened type.
+		// it replaces.
 		switch v.num {
 		case "i32":
 			b, _ := binary.I32.Kind()
-			return b, true
+			return []byte{b}, true
 		case "i64":
 			b, _ := binary.I64.Kind()
-			return b, true
+			return []byte{b}, true
 		case "f32":
 			b, _ := binary.F32.Kind()
-			return b, true
+			return []byte{b}, true
 		case "f64":
 			b, _ := binary.F64.Kind()
-			return b, true
+			return []byte{b}, true
 		case "v128":
 			b, _ := binary.V128.Kind()
-			return b, true
+			return []byte{b}, true
 		}
-		return 0, false
+		return nil, false
 	}
-	if v.isIdx || !v.null {
-		return 0, false
+	if !v.isIdx && v.null {
+		// The nullable abstract forms: the two Wasm 2.0 abbreviations and the ten further GC
+		// ones, all twelve single bytes, all already in `absoluteHeaptypeBytes` — the same
+		// table `heapTypeBytes` reads, kept as one table for the one-concept-one-trigger
+		// reason that comment states.
+		if b, ok := absoluteHeaptypeBytes[v.abs]; ok {
+			return []byte{b}, true
+		}
+		return nil, false
 	}
-	switch v.abs {
-	case kwFunc:
-		b, _ := binary.FuncRef.Kind()
-		return b, true
-	case kwExtern:
-		b, _ := binary.ExternRef.Kind()
-		return b, true
-	default:
-		// A real fallback rather than a shrug, which is what `exhaustive`'s
-		// `default-signifies-exhaustive` is asking about: the two arms above are the *entire*
-		// ungated reference set, so everything else is the frontier by construction, and one
-		// answer is the correct answer for all of it. Enumerating the other ten heap types
-		// would be ten arms with identical bodies that go stale the day an eleventh is added —
-		// deriving the domain instead of listing it, the same reason `heapWat`'s control ranges
-		// over `absoluteHeaptypes`. `TestEncodeRefusesWhatItCannotWrite` covers this path.
-		return 0, false
+	// Everything else — a non-null abstract form, or the indexed form at either nullability —
+	// needs the general parameterized production: the prefix byte `decodeRefType`'s `-0x1C`/
+	// `-0x1D` arms read, then `heaptype`'s own bytes. `heapTypeBytes` already answers the second
+	// half correctly for both the abstract and indexed cases (#8's existing frontier, unchanged
+	// here); this function's new job is only the prefix.
+	ht, ok := heapTypeBytes(v)
+	if !ok {
+		return nil, false
 	}
+	out := make([]byte, 0, 1+len(ht))
+	if v.null {
+		out = append(out, refPrefixNull)
+	} else {
+		out = append(out, refPrefixNonNull)
+	}
+	out = append(out, ht...)
+	return out, true
 }
+
+// refPrefixNull and refPrefixNonNull are `reftype`'s two parameterized prefixes — `(ref null ht)`
+// and `(ref ht)` respectively (decode.ml's `-0x1D`/`-0x1C`, folded to bytes exactly as
+// `absoluteHeaptypeBytes`'s comment folds the abstract forms). Named rather than inlined because
+// both `valTypeBytes` and its falsification test need to name "the wrong one" without recomputing
+// the fold.
+const (
+	refPrefixNull    byte = 0x63 // -0x1D, `(ref null ht)`
+	refPrefixNonNull byte = 0x64 // -0x1C, `(ref ht)`
+)
 
 // absoluteHeaptypeBytes is `heaptype`'s twelve keyword arms as the bytes encode.ml writes
 // (:121-132), keyed by the kind `heaptype` returns.
@@ -1041,7 +1072,7 @@ var absoluteHeaptypeBytes = func() map[keywordKind]byte {
 }()
 
 // heapTypeBytes is the encoding of one resolved heap type, and its encodability predicate — the
-// `heaptype` half of what `valTypeByte` does for `reftype` (#8).
+// `heaptype` half of what `valTypeBytes` does for `reftype` (#8).
 //
 // **A heaptype is not a reftype, and the two agree byte for byte on twelve of thirteen forms**, which
 // is the `elemKind`-versus-`valType` distinction one production lower down and is *worse* than a
@@ -1054,7 +1085,7 @@ var absoluteHeaptypeBytes = func() map[keywordKind]byte {
 //
 // So the argument for a separate function is not the byte table, it is the **question**. `ref.null`'s
 // immediate is a bare heaptype (`op 0xd0; heaptype t`, :414) with no nullability of its own — the
-// instruction *is* the null — and routing it through `valTypeByte` would ask a question with a `null`
+// instruction *is* the null — and routing it through `valTypeBytes` would ask a question with a `null`
 // field the grammar never supplied. The value arrives as a `resolvedVal` because `resolveVal` is the
 // one resolver, and `null` is whatever `heaptype`'s caller left there; this reads `abs`/`isIdx` and
 // deliberately ignores it.
@@ -1098,16 +1129,21 @@ func heapTypeBytes(v resolvedVal) ([]byte, bool) {
 
 // valType writes one resolved value type.
 //
-// Unreachable with an unencodable type, because `encodableOrErr` asked `valTypeByte` the same
+// Unreachable with an unencodable type, because `encodableOrErr` asked `valTypeBytes` the same
 // question first — and the panic is *not* a precondition excusing its own check: it fires only if
 // the two callers of one function disagree, which cannot happen, and it says that rather than
 // pretending to validate. The alternative is writing a plausible byte, which is grave #36's class
 // relocated from a message into an image, where no oracle reads it.
+//
+// **`w.bytes`, not `w.byte1`, since valTypeBytes widened**: most values still emit exactly one
+// byte, but the parameterized forms emit a prefix plus heaptype's own bytes (up to several, for
+// the indexed form's LEB), and `bytes` handles both without this method needing to know which case
+// it is in.
 func (w *writer) valType(v resolvedVal) {
-	b, ok := valTypeByte(v)
+	b, ok := valTypeBytes(v)
 	if !ok {
 		panic("text: unencodable value type " + v.String() + " reached the emitter, which means " +
 			"encodableOrErr and valType disagree about a table they share")
 	}
-	w.byte1(b)
+	w.bytes(b)
 }

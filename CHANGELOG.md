@@ -21,6 +21,31 @@ weakly-ordered platform.
 
 ### Added
 
+- **The text encoder writes every parameterized reference form**: decision
+  [0018](docs/decisions/0018-a-wide-value-type-mirrors-the-wire-forms-heaptype-not-the-text-sides-resolvedval.md)'s
+  encoder-side implementation. `valTypeBytes` (`internal/text/encode.go`, replacing the
+  byte-only `valTypeByte`) now emits the twelve nullable-abstract single-byte abbreviations
+  (unchanged from before), plus — new — the general parameterized production for every other
+  form: a non-null abstract heaptype (`(ref i31)`, `(ref func)`) or the indexed form at either
+  nullability (`(ref $t)`/`(ref null $t)`), each written as `decodeRefType`'s prefix byte
+  (`0x64` non-null / `0x63` nullable) followed by `heapTypeBytes`' existing, unchanged
+  `heaptype` encoding. Every call site that used to write one byte (`w.valType`, a func's
+  locals via `funcLocalBytes`, `select (result …)`'s `selectResultBytes`, a block's single-result
+  form in `blockTypeBytes`) now writes a variable-length slice; `writeLocals`'s run-length fold
+  compares by `slices.Equal` rather than `==` for the same reason. Verified against the fixed
+  decoder (grave [#180](https://github.com/scttfrdmn/burroughs/issues/180)/[#181](https://github.com/scttfrdmn/burroughs/pull/181)):
+  `(ref func)` round-trips to a `ValType` distinct from `binary.FuncRef`, and `funcref` round-trips
+  equal to it — the assertion #181's fix made possible, since before it the two decoded identically.
+  Board: the "parameterized reference encoding" bucket (489 vectors, measured with the harness)
+  empties in both lanes; default lane fail 1135 → 734, all-gates-on fail 1284 → 1024, all-gates-on
+  pass 36629 → 36877 (`allOnPassFloor` raised to match), `unsupported` unmoved at 27099 in both
+  lanes. 401 of the 489 land as honest GC declines in the default lane (`TestGatedVectors`'
+  allowlist grew accordingly, one reason per file read off the module's own header); the remainder
+  reconciles into the sibling "struct or array type's fields are not retained" bucket (+115, a
+  different, still-undecided frontier — decision 0019 — this PR does not touch) and a 27-vector
+  drop in "assert_unlinkable expected: incompatible import type" (those vectors now decline one
+  command earlier, in the same script).
+
 - **`binary.ValType` widens from a byte to a three-field struct (`kind`, `null`, `idx`)**,
   decision [0018](docs/decisions/0018-a-wide-value-type-mirrors-the-wire-forms-heaptype-not-the-text-sides-resolvedval.md)'s
   option C, implemented decoder-side. `decodeRefType`/`decodeHeapType` (`internal/binary/sections.go`)
