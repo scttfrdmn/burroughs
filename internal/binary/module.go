@@ -71,8 +71,19 @@ type ValType struct {
 	// indexed form; consult idx".
 	kind byte
 
-	// null is the reference's nullability. Meaningless when kind names a numeric/vector form,
-	// where it is always false.
+	// null is the *spelled* null bit — the wire's own reftype/heaptype-prefix distinction
+	// between `(ref ht)` and `(ref null ht)` — not the reference's semantic nullability. The
+	// two disagree for exactly Wasm 2.0's two abbreviations: `funcref`/`externref` (kind 0x70/
+	// 0x6F) spell non-null here, matching this engine's pre-0018 byte and every existing
+	// `t == FuncRef`-style comparison, while the reference's own model treats them as the
+	// *(Null, FuncHT)*/*(Null, ExternHT)* abbreviations — genuinely nullable. That is not an
+	// error to fix: this field retains what the wire spelled, the same law `LocalGroup` and the
+	// delimiter productions already follow (keep the spelling, not a derived reading of it) —
+	// byte-identical re-encoding of both the abbreviation and its `(ref func)` expansion needs
+	// the distinction kept, not collapsed. A caller that wants the reference's semantic
+	// nullability — non-null under nullable, never the reverse, which is what a subtype check
+	// must get right — calls Nullable(), never this field or Null() directly. Meaningless when
+	// kind names a numeric/vector form, where it is always false.
 	null bool
 
 	// idx is the resolved type index. Meaningful only when kind is kindIndexed; zero
@@ -156,9 +167,38 @@ func (t ValType) Index() uint32 {
 	return t.idx
 }
 
-// Null reports this reference type's nullability. Meaningless, and always false, for a
+// Null reports the *spelled* null bit — the wire's own reftype/heaptype-prefix distinction —
+// not necessarily the reference's semantic nullability. See the field comment on ValType.null
+// for why the two differ for FuncRef/ExternRef, and call Nullable() when semantic nullability,
+// rather than wire spelling, is the question. Meaningless, and always false, for a
 // numeric/vector ValType.
 func (t ValType) Null() bool {
+	return t.null
+}
+
+// Nullable reports this reference type's *semantic* nullability, per the reference's abbreviation
+// table (decode.ml's `funcref = ref null func` / `externref = ref null extern`) — the fact
+// `match_reftype` needs, since a subtype check must have non-null under nullable and never the
+// reverse (0019's forced consumer).
+//
+// **Diverges from Null() for exactly the two Wasm 2.0 forms**, and only there: `FuncRef`/
+// `ExternRef` spell non-null (ValType.null's field comment states why — backward compatibility
+// with 0018's own requirement) while the reference treats both as nullable abbreviations, so this
+// reports true for them despite Null() reporting false. Every other reference kind — the ten GC
+// abstract forms, and the indexed form regardless of which of the two `(ref …)`/`(ref null …)`
+// prefixes produced it — spells its own real nullability, so Nullable() agrees with Null() for
+// all twelve.
+//
+// This is the one place that divergence may be read; every semantic-nullability question in this
+// codebase (0019's cast/subtype relation, whenever it lands) must call this, never Null() or the
+// raw field, or it will get exactly the bug this accessor exists to head off — a `(ref func)`
+// correctly failing a nullable-target cast while `funcref` incorrectly fails the identical cast
+// because its wire spelling says non-null. Falsified by TestNullableDivergesFromNullForWasm2Forms:
+// mutate this to `return t.null` and the FuncRef/ExternRef subtests fail (nothing else does).
+func (t ValType) Nullable() bool {
+	if t == FuncRef || t == ExternRef {
+		return true
+	}
 	return t.null
 }
 

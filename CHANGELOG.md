@@ -39,6 +39,16 @@ weakly-ordered platform.
   emit the new forms, the same zero-conversion shape [#161](https://github.com/scttfrdmn/burroughs/pull/161)'s
   `ref.null` PR measured.
 
+  **`ValType.null` retains the wire's *spelled* null bit, not semantic nullability, and that is
+  deliberate rather than a gap**: `funcref`/`externref` (Wasm 2.0's abbreviations) spell non-null
+  for backward compatibility with every existing `t == FuncRef` comparison, while the reference's
+  own model treats both as nullable — the same wire-spelling-over-derived-reading law
+  `LocalGroup` and the delimiter productions already follow. `Nullable()` is the new accessor for
+  semantic nullability (the fact a subtype check needs — non-null under nullable, never the
+  reverse), diverging from `Null()` for exactly those two forms and agreeing everywhere else;
+  pinned by `TestNullableDivergesFromNullForWasm2Forms`, falsified by reverting it to `return
+  t.null` and confirming only the FuncRef/ExternRef assertions fail.
+
 - **Six table and reference opcodes: `table.get`, `table.set`, `table.size`, `table.grow`,
   `table.fill`, `ref.null`, `ref.is_null`, `ref.func`** ([#7](https://github.com/scttfrdmn/burroughs/issues/7)).
   `opTableFC`'s 18 sub-opcodes are now all answered (`table.grow`/`table.size`/`table.fill` were

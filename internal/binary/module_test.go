@@ -216,6 +216,44 @@ func TestValTypeNamedConstantsAreNotAlias(t *testing.T) {
 	}
 }
 
+// TestNullableDivergesFromNullForWasm2Forms pins Nullable's one deliberate disagreement with
+// Null: FuncRef and ExternRef spell non-null (Null() == false, matching this engine's pre-0018
+// byte and every existing t == FuncRef comparison) but are semantically nullable per the
+// reference's own abbreviation table, so Nullable() must report true for them regardless of
+// what the wire spelled. Every other reference kind spells its own real nullability, so the
+// two accessors agree everywhere else — pinned here too, so a future kind added to either
+// table without the other is caught by the same test rather than by a silent gap.
+func TestNullableDivergesFromNullForWasm2Forms(t *testing.T) {
+	cases := []struct {
+		name string
+		t    ValType
+		null bool
+	}{
+		{"FuncRef", FuncRef, true},
+		{"ExternRef", ExternRef, true},
+		{"refKind any, null", refKind(0x6E, true), true},
+		{"refKind any, non-null", refKind(0x6E, false), false},
+		{"RefType indexed, null", RefType(3, true), true},
+		{"RefType indexed, non-null", RefType(3, false), false},
+	}
+	for _, c := range cases {
+		if got := c.t.Nullable(); got != c.null {
+			t.Errorf("%s.Nullable() = %v, want %v", c.name, got, c.null)
+		}
+	}
+
+	// The divergence itself, spelled out rather than left implicit in the table above: Null()
+	// and Nullable() must disagree for exactly the two Wasm 2.0 forms and agree everywhere else.
+	if FuncRef.Null() == FuncRef.Nullable() {
+		t.Error("FuncRef.Null() and FuncRef.Nullable() agree — the wire-spelling/semantic " +
+			"split this test exists to pin has collapsed")
+	}
+	if got, want := refKind(0x6E, true).Null(), refKind(0x6E, true).Nullable(); got != want {
+		t.Errorf("a GC abstract form's Null() (%v) and Nullable() (%v) disagree; the two "+
+			"should agree for every kind except Wasm 2.0's abbreviations", got, want)
+	}
+}
+
 // declaredValTypes reads the eight named ValType values out of this package's own source.
 //
 // By AST rather than by a literal table, for `immVocabulary`'s reason (instr_width_test.go):
