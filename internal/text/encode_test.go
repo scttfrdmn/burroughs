@@ -2255,6 +2255,162 @@ var encodableModules = []struct {
 		wantFuncs:   []binary.Func{{TypeIndex: 0, Body: []binary.Instr{{Op: 0x0b}}}},
 		wantElemSec: []byte{0x01, 0x04, 0x41, 0x00, 0x0b, 0x01, 0xd2, 0x00, 0x0b},
 	},
+
+	// # The seven `immIdxIdx`/`immIdxNat32` mnemonics (#8, this row's PR)
+	//
+	// Five ordinary `{catType, X}` pairs, `array.new_fixed`'s `idx nat32`, and `struct.get`'s
+	// `{catType, catFieldOfType}` pair with a **numeric** second index — the shape
+	// `idxPairRetained`'s comment argues needs no per-mnemonic split, because a numeric index never
+	// reaches the (absent) per-struct-type space `retainIdxIn` would otherwise have to consult. Each
+	// row's `want` asserts `Op`/`Prefix`/`Imm0`/`Imm1` on the two-word Instr, which is what a swapped
+	// operand order or a reversed pair would get wrong silently — decoding clean, denoting a
+	// different instruction (§9 G-3).
+	{
+		// `{catType, catType}`: both indices resolve against the type space, and this row pins that
+		// neither one is silently read against the other or against a made-up third space.
+		src: `(module (type $a (array (mut i32)))
+			(func (param $d (ref $a)) (param $s (ref $a))
+				(array.copy $a $a (local.get $d) (i32.const 0) (local.get $s) (i32.const 0) (i32.const 1))))`,
+		// Two types: the array, plus the func's own inline signature (two `(ref $a)` non-null
+		// params, no results), interned at index 1 since it matches nothing already in the space.
+		want: []binary.CompType{
+			{Kind: binary.CompArray, Fields: []binary.FieldType{
+				{Storage: binary.StorageType{Val: binary.I32}, Mutable: true},
+			}},
+			{Kind: binary.CompFunc, Func: binary.FuncType{
+				Params: []binary.ValType{binary.RefType(0, false), binary.RefType(0, false)},
+			}},
+		},
+		wantFuncs: []binary.Func{{TypeIndex: 1, Body: []binary.Instr{
+			{Op: 0x20, Imm0: 0},
+			{Op: 0x41, Imm0: 0},
+			{Op: 0x20, Imm0: 1},
+			{Op: 0x41, Imm0: 0},
+			{Op: 0x41, Imm0: 1},
+			{Op: 0x11, Prefix: 0xfb, Imm0: 0, Imm1: 0}, // array.copy $a $a — both indices type 0
+			{Op: 0x0b},
+		}}},
+	},
+	// `{catType, catData}`: the second index is a data segment, a *different* space from the
+	// first's type space — the pair a `{catType, catType}` mnemonic sharing this reader with no
+	// per-mnemonic category could not distinguish.
+	{
+		src: `(module (type $a (array i32)) (data $d "\00\00\00\00")
+			(func (result (ref $a)) (array.new_data $a $d (i32.const 0) (i32.const 1))))`,
+		// Two types: the array, plus the func's own inline signature (no params, one `(ref $a)`
+		// non-null result), interned at index 1.
+		want: []binary.CompType{
+			{Kind: binary.CompArray, Fields: []binary.FieldType{
+				{Storage: binary.StorageType{Val: binary.I32}},
+			}},
+			{Kind: binary.CompFunc, Func: binary.FuncType{
+				Results: []binary.ValType{binary.RefType(0, false)},
+			}},
+		},
+		wantFuncs: []binary.Func{{TypeIndex: 1, Body: []binary.Instr{
+			{Op: 0x41, Imm0: 0},
+			{Op: 0x41, Imm0: 1},
+			{Op: 0x9, Prefix: 0xfb, Imm0: 0, Imm1: 0}, // array.new_data $a(0) $d(0)
+			{Op: 0x0b},
+		}}},
+		wantDataSec: []byte{0x01, 0x01, 0x04, 0x00, 0x00, 0x00, 0x00},
+		// `array.new_data` is one of the four data-referencing mnemonics (`dataRefKinds`), so
+		// section 12 is emitted — the same condition `data.drop`'s rows above pin, now for the
+		// array arm rather than the bulk-memory one.
+		wantDataCountSec: []byte{0x01},
+	},
+	// `{catType, catElem}`: the second index is an element segment.
+	{
+		src: `(module (type $a (array funcref)) (func $f) (elem $e func $f)
+			(func (result (ref $a)) (array.new_elem $a $e (i32.const 0) (i32.const 1))))`,
+		// Three types: the array; `$f`'s empty inline signature `[] -> []`, interned at index 1;
+		// then the outer func's `[] -> [(ref $a)]`, interned at index 2 since it matches neither.
+		want: []binary.CompType{
+			{Kind: binary.CompArray, Fields: []binary.FieldType{{Storage: binary.StorageType{Val: binary.FuncRef}}}},
+			{Kind: binary.CompFunc},
+			{Kind: binary.CompFunc, Func: binary.FuncType{Results: []binary.ValType{binary.RefType(0, false)}}},
+		},
+		wantFuncs: []binary.Func{
+			{TypeIndex: 1, Body: []binary.Instr{{Op: 0x0b}}},
+			{TypeIndex: 2, Body: []binary.Instr{
+				{Op: 0x41, Imm0: 0},
+				{Op: 0x41, Imm0: 1},
+				{Op: 0xa, Prefix: 0xfb, Imm0: 0, Imm1: 0}, // array.new_elem $a(0) $e(0)
+				{Op: 0x0b},
+			}},
+		},
+		// Flag 0x01 — passive, elemkind form: `(elem $e func $f)` has no `(table …)`/offset, so it
+		// is passive, and the plain `func $f` spelling is the elemkind (not reftype) arm.
+		wantElemSec: []byte{0x01, 0x01, 0x00, 0x01, 0x00},
+	},
+	// `array.new_fixed`'s `idx nat32`: the count is a plain u32 with no symbolic spelling, retained
+	// through the identical `encodeLocalIdx` an index immediate uses (`nat32Retained`'s comment) —
+	// this row pins the count landing in Imm1 as 3, not as a third index.
+	{
+		src: `(module (type $a (array i32))
+			(func (result (ref $a)) (array.new_fixed $a 3 (i32.const 1) (i32.const 2) (i32.const 3))))`,
+		// The array, plus the func's own inline signature (no params, one `(ref $a)` non-null
+		// result), interned at index 1.
+		want: []binary.CompType{
+			{Kind: binary.CompArray, Fields: []binary.FieldType{
+				{Storage: binary.StorageType{Val: binary.I32}},
+			}},
+			{Kind: binary.CompFunc, Func: binary.FuncType{Results: []binary.ValType{binary.RefType(0, false)}}},
+		},
+		wantFuncs: []binary.Func{{TypeIndex: 1, Body: []binary.Instr{
+			{Op: 0x41, Imm0: 1},
+			{Op: 0x41, Imm0: 2},
+			{Op: 0x41, Imm0: 3},
+			{Op: 0x8, Prefix: 0xfb, Imm0: 0, Imm1: 3}, // array.new_fixed $a(0), count 3
+			{Op: 0x0b},
+		}}},
+	},
+	// `struct.get`/`struct.set`'s `{catType, catFieldOfType}` pair, both indices **numeric** — the
+	// shape every failing `struct.wast` vector uses (its symbolic-field vectors are refused, see
+	// TestEveryUnencodableShapeIsRefused's STRUCT_GET/STRUCT_SET frames). Two fields, so field index
+	// 1 is distinguishable from field index 0 rather than passing by coincidence.
+	{
+		src: `(module (type $s (struct (field i32) (field i32)))
+			(func (param $v (ref $s)) (result i32) (struct.get $s 1 (local.get $v))))`,
+		// The struct, plus the func's own inline signature (one `(ref $s)` non-null param, one i32
+		// result), interned at index 1.
+		want: []binary.CompType{
+			{Kind: binary.CompStruct, Fields: []binary.FieldType{
+				{Storage: binary.StorageType{Val: binary.I32}},
+				{Storage: binary.StorageType{Val: binary.I32}},
+			}},
+			{Kind: binary.CompFunc, Func: binary.FuncType{
+				Params:  []binary.ValType{binary.RefType(0, false)},
+				Results: []binary.ValType{binary.I32},
+			}},
+		},
+		wantFuncs: []binary.Func{{TypeIndex: 1, Body: []binary.Instr{
+			{Op: 0x20, Imm0: 0},
+			{Op: 0x2, Prefix: 0xfb, Imm0: 0, Imm1: 1}, // struct.get $s(0) field 1
+			{Op: 0x0b},
+		}}},
+	},
+	{
+		src: `(module (type $s (struct (field i32) (field (mut i32))))
+			(func (param $v (ref $s)) (struct.set $s 1 (local.get $v) (i32.const 7))))`,
+		// The struct, plus the func's own inline signature (one `(ref $s)` non-null param, no
+		// results), interned at index 1.
+		want: []binary.CompType{
+			{Kind: binary.CompStruct, Fields: []binary.FieldType{
+				{Storage: binary.StorageType{Val: binary.I32}},
+				{Storage: binary.StorageType{Val: binary.I32}, Mutable: true},
+			}},
+			{Kind: binary.CompFunc, Func: binary.FuncType{
+				Params: []binary.ValType{binary.RefType(0, false)},
+			}},
+		},
+		wantFuncs: []binary.Func{{TypeIndex: 1, Body: []binary.Instr{
+			{Op: 0x20, Imm0: 0},
+			{Op: 0x41, Imm0: 7},
+			{Op: 0x5, Prefix: 0xfb, Imm0: 0, Imm1: 1}, // struct.set $s(0) field 1
+			{Op: 0x0b},
+		}}},
+	},
 }
 
 // dataFill is the payload the two page-boundary rows above expect, stated as an argument rather than

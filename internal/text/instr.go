@@ -588,10 +588,7 @@ func (p *parser) immediates(shape immShape, mnemonic Token) error {
 	case immIdx:
 		return p.idxRetained(mnemonic)
 	case immIdxIdx:
-		if err := p.idx(); err != nil {
-			return err
-		}
-		return p.idx()
+		return p.idxPairRetained(mnemonic)
 	case immIdxOpt:
 		// `memory.size`/`memory.grow` write a **bare `idx`** (encode.ml `op 0x3f; idx x`, :601),
 		// so the immediate is always present in the encoding even when the text omits it — the
@@ -671,10 +668,10 @@ func (p *parser) immediates(shape immShape, mnemonic Token) error {
 	case immHeaptype:
 		return p.heaptypeRetained(mnemonic)
 	case immIdxNat32:
-		if err := p.idx(); err != nil {
+		if err := p.idxRetained(mnemonic); err != nil {
 			return err
 		}
-		return p.nat32()
+		return p.nat32Retained()
 	case immNum:
 		return p.constImmRetained(mnemonic)
 	case immVecConst:
@@ -943,15 +940,36 @@ func (p *parser) laneidx() error {
 //
 // Distinct from idx even though both are `nat32`-checked: idx also admits a VAR, and
 // `array.new_fixed`'s second immediate is a *count*, which has no symbolic spelling.
-func (p *parser) nat32() error {
+//
+// Returns the parsed value alongside the error, for `nat32Retained`'s sake — the same split
+// `idxOpt`'s own comment argues, rather than a second "last value read" channel.
+func (p *parser) nat32() (uint32, error) {
 	t := p.c.peek()
 	if t.Kind != NatTok {
-		return p.unexpected()
+		return 0, p.unexpected()
 	}
 	p.c.next()
-	if _, ok := parseNat(t.Text, 32); !ok {
-		return errAt(t, "i32 constant out of range")
+	n, ok := parseNat(t.Text, 32)
+	if !ok {
+		return 0, errAt(t, "i32 constant out of range")
 	}
+	return uint32(n), nil
+}
+
+// nat32Retained is nat32 plus the encoded immediate — `array.new_fixed`'s count, which unlike its
+// preceding `idx` has no symbolic spelling and so never resolves against a space: `encodeLocalIdx`
+// writes it as the same `u32` LEB every index immediate uses, per `encode.ml`'s `ArrayNewFixed (x,
+// n) -> op 0x08l; idx x; u32 n` (:625) — the count sits in the identical wire slot a second index
+// would, and nothing here distinguishes "an index" from "a count" once the value is a plain u32.
+func (p *parser) nat32Retained() error {
+	n, err := p.nat32()
+	if err != nil {
+		return err
+	}
+	if !p.retaining() {
+		return nil
+	}
+	p.appendImm(encodeLocalIdx(n))
 	return nil
 }
 

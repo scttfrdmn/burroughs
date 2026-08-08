@@ -730,31 +730,21 @@ func TestEveryUnencodableShapeIsRefused(t *testing.T) {
 	// is not a validator, so a stack-underflowing body is still well-formed here.
 	frames := map[keywordKind]string{
 		// The memarg family takes an address operand; the immediates are optional and omitted.
-		"LOAD":            `(module (memory 1) (func (result i32) i32.const 0 %s))`,
-		"STORE":           `(module (memory 1) (func i32.const 0 i32.const 0 %s))`,
-		"VEC_LOAD":        `(module (memory 1) (func (result v128) i32.const 0 %s))`,
-		"VEC_STORE":       `(module (memory 1) (func i32.const 0 v128.const i32x4 0 0 0 0 %s))`,
-		"VEC_LOAD_LANE":   `(module (memory 1) (func (result v128) i32.const 0 v128.const i32x4 0 0 0 0 %s 0 0))`,
-		"VEC_STORE_LANE":  `(module (memory 1) (func i32.const 0 v128.const i32x4 0 0 0 0 %s 0 0))`,
-		"VEC_EXTRACT":     `(module (func (result i32) v128.const i32x4 0 0 0 0 %s 0))`,
-		"VEC_REPLACE":     `(module (func (result v128) v128.const i32x4 0 0 0 0 i32.const 0 %s 0))`,
-		"VEC_SHUFFLE":     `(module (func (result v128) v128.const i32x4 0 0 0 0 v128.const i32x4 0 0 0 0 %s 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15))`,
-		"REF_CAST":        `(module (func (result funcref) ref.null func %s funcref))`,
-		"REF_TEST":        `(module (func (result i32) ref.null func %s funcref))`,
-		"REF_NULL":        `(module (func (result funcref) %s func))`,
-		"BR_TABLE":        `(module (func i32.const 0 %s 0))`,
-		"BR_ON_CAST":      `(module (func (result funcref) ref.null func %s 0 funcref funcref))`,
-		"ARRAY_NEW_FIXED": `(module (type $a (array i32)) (func %s $a 0))`,
-		// The `idx idx` family, whose second index is a struct field or a data/elem segment. Each
-		// needs the type or segment it names to exist.
-		"STRUCT_GET":      `(module (type $s (struct (field i32))) (func (result i32) ref.null $s %s $s 0))`,
-		"STRUCT_SET":      `(module (type $s (struct (field (mut i32)))) (func ref.null $s i32.const 0 %s $s 0))`,
-		"ARRAY_COPY":      `(module (type $a (array i32)) (func %s $a $a))`,
-		"ARRAY_NEW_DATA":  `(module (type $a (array i32)) (data $d "x") (func %s $a $d))`,
-		"ARRAY_NEW_ELEM":  `(module (type $a (array funcref)) (elem $e func) (func %s $a $e))`,
-		"ARRAY_INIT_DATA": `(module (type $a (array i32)) (data $d "x") (func %s $a $d))`,
-		"ARRAY_INIT_ELEM": `(module (type $a (array funcref)) (elem $e func) (func %s $a $e))`,
-		"VEC_CONST":       `(module (func (result v128) %s i32x4 0 0 0 0))`,
+		"LOAD":           `(module (memory 1) (func (result i32) i32.const 0 %s))`,
+		"STORE":          `(module (memory 1) (func i32.const 0 i32.const 0 %s))`,
+		"VEC_LOAD":       `(module (memory 1) (func (result v128) i32.const 0 %s))`,
+		"VEC_STORE":      `(module (memory 1) (func i32.const 0 v128.const i32x4 0 0 0 0 %s))`,
+		"VEC_LOAD_LANE":  `(module (memory 1) (func (result v128) i32.const 0 v128.const i32x4 0 0 0 0 %s 0 0))`,
+		"VEC_STORE_LANE": `(module (memory 1) (func i32.const 0 v128.const i32x4 0 0 0 0 %s 0 0))`,
+		"VEC_EXTRACT":    `(module (func (result i32) v128.const i32x4 0 0 0 0 %s 0))`,
+		"VEC_REPLACE":    `(module (func (result v128) v128.const i32x4 0 0 0 0 i32.const 0 %s 0))`,
+		"VEC_SHUFFLE":    `(module (func (result v128) v128.const i32x4 0 0 0 0 v128.const i32x4 0 0 0 0 %s 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15))`,
+		"REF_CAST":       `(module (func (result funcref) ref.null func %s funcref))`,
+		"REF_TEST":       `(module (func (result i32) ref.null func %s funcref))`,
+		"REF_NULL":       `(module (func (result funcref) %s func))`,
+		"BR_TABLE":       `(module (func i32.const 0 %s 0))`,
+		"BR_ON_CAST":     `(module (func (result funcref) ref.null func %s 0 funcref funcref))`,
+		"VEC_CONST":      `(module (func (result v128) %s i32x4 0 0 0 0))`,
 	}
 
 	// The kinds whose refusal cannot be attributed to the mnemonic, with the reason. Each needs a
@@ -768,11 +758,6 @@ func TestEveryUnencodableShapeIsRefused(t *testing.T) {
 	// a green. Every entry leaves this table when GC's type encoding lands, at which point the frames
 	// become attributable and the assertion above starts applying to them.
 	witnessedByTheTypeLevel := map[keywordKind]bool{
-		// A `(type (struct …))` / `(type (array …))` comptype is refused by `encodableOrErr` before
-		// any function body is reached — `compType` retains no fields, so there is nothing to write.
-		"STRUCT_GET": true, "STRUCT_SET": true,
-		"ARRAY_COPY": true, "ARRAY_NEW_DATA": true, "ARRAY_NEW_ELEM": true,
-		"ARRAY_INIT_DATA": true, "ARRAY_INIT_ELEM": true, "ARRAY_NEW_FIXED": true,
 		// `ref.cast`, `ref.test` and `br_on_cast` need a reference operand, and the only way to spell
 		// one in a module this encoder otherwise accepts is `ref.null`, whose own `immHeaptype` is
 		// refused first. A frame with a `local` of reference type hits the same wall from the other
@@ -802,14 +787,15 @@ func TestEveryUnencodableShapeIsRefused(t *testing.T) {
 
 	// The vacuity check, per partition rather than one total: shapes *and* kinds, because a
 	// `plaininstrShapes` that failed to load would leave both empty and this control would agree
-	// with itself perfectly. 11 of the 16 shapes are unencodable today and the count falls as the
-	// frontier moves; the floor is the direction, and a rise past it means `encodableShapes` grew
-	// without this control being re-read.
+	// with itself perfectly. 6 of the 16 shapes are unencodable today — down from 11, `immIdxIdx`
+	// and `immIdxNat32` having left when this row's PR retained the two shapes' immediates — and the
+	// count falls further as the frontier moves; the floor is the direction, and a rise past it
+	// means `encodableShapes` grew without this control being re-read.
 	unencodableShapes := map[immShape]bool{}
 	for _, k := range kinds {
 		unencodableShapes[plaininstrShapes[k]] = true
 	}
-	if len(unencodableShapes) < 5 || len(kinds) < 15 {
+	if len(unencodableShapes) < 5 || len(kinds) < 8 {
 		t.Fatalf("the derived domain is %d shapes over %d kinds, which is too small to be the real "+
 			"partition: %d shapes exist and %d are encodable, so an empty or near-empty domain here "+
 			"means the table did not load and this control is comparing nothing",
@@ -857,14 +843,18 @@ func TestEveryUnencodableShapeIsRefused(t *testing.T) {
 			// **The refusal must name *this* mnemonic**, and that requirement is the whole reason
 			// this assertion exists rather than a bare non-nil check.
 			//
-			// Measured, by neutralizing `plaininstr`'s shape gate: 13 of the 23 rows failed as
-			// designed and **10 passed anyway** — `struct.get`, both `ref.cast` and `ref.test`, and
-			// the six array forms, every one of them refused by a *different instruction in its own
-			// frame*. `ref.cast`'s frame needs a `ref.null` operand, whose `immHeaptype` is refused
-			// first; the array frames need a `(type (array …))`, which `encodableOrErr` refuses at the
-			// type level before any body is reached. Those rows were scoring green while saying
-			// nothing about the kind they are named for — the witness-correlated-with-subject grave
-			// (#106) at row scale, and a bare non-nil check cannot see it.
+			// Measured at bdd7164, by neutralizing `plaininstr`'s shape gate: 13 of the 23 rows then
+			// in this table failed as designed and **10 passed anyway** — `struct.get`, both
+			// `ref.cast` and `ref.test`, and the six array forms, every one of them refused by a
+			// *different instruction in its own frame*. `ref.cast`'s frame needs a `ref.null`
+			// operand, whose `immHeaptype` is refused first; the array frames needed a `(type (array
+			// …))`, which `encodableOrErr` refused at the type level before any body was reached.
+			// Those rows were scoring green while saying nothing about the kind they were named for
+			// — the witness-correlated-with-subject grave (#106) at row scale, and a bare non-nil
+			// check cannot see it. `struct.get` and the six array forms have since left this table
+			// (their `immIdxIdx`/`immIdxNat32` shapes are retained now), taking their
+			// `witnessedByTheTypeLevel` rows with them — this paragraph stays as the measurement that
+			// justified the mechanism, not as a claim about today's row count.
 			//
 			// So the frame's other refusals are not allowed to stand in for this one. Where a frame
 			// genuinely cannot avoid them — a `struct.get` requires a struct type, and a struct type

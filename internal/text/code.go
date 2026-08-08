@@ -353,6 +353,14 @@ var encodableShapes = map[immShape]bool{
 	immNum:       true,
 	immMemarg:    true, // tier 2 (#8): retainMemarg, over the generated naturalAlign table
 
+	// The seven `STRUCT_GET`/`STRUCT_SET`/array `idx idx` mnemonics and `array.new_fixed`'s `idx
+	// nat32` — `idxPairRetained` and `nat32Retained`, both over `retainIdxIn`'s existing category
+	// resolution. See `idxPairRetained`'s comment for why the two field-space mnemonics need no
+	// separate entry: a numeric field index resolves without ever consulting the (absent)
+	// per-struct-type space, and a symbolic one is refused there, not here.
+	immIdxIdx:   true,
+	immIdxNat32: true,
+
 	// `br_table`, whose immediates are the one case in this map that is not a concatenation of
 	// what the parser read: see brTable for the count, the split_last, and why the sequence is
 	// never empty. Admitted with the interpreter arm rather than with the block family, because an
@@ -672,6 +680,52 @@ func (p *parser) retainIdxPair(mnemonic Token, first, second idxRef, havePair bo
 		}
 		return p.retainIdxIn(mnemonic, first, cats.first)
 	}
+	if err := p.retainIdxIn(mnemonic, first, cats.first); err != nil {
+		return err
+	}
+	return p.retainIdxIn(mnemonic, second, cats.second)
+}
+
+// idxPairRetained parses the two mandatory index immediates of an `idx idx` arm and retains both.
+//
+// **The seven `immIdxIdx` mnemonics need no per-mnemonic split for a NUMERIC field index, and
+// that is a finding rather than a simplification taken for granted.** Five resolve an ordinary
+// module-level pair — `ARRAY_COPY` `{catType, catType}`, `ARRAY_NEW_ELEM`/`ARRAY_INIT_ELEM`
+// `{catType, catElem}`, `ARRAY_NEW_DATA`/`ARRAY_INIT_DATA` `{catType, catData}` — and the other
+// two, `STRUCT_GET` and `STRUCT_SET`, pass `{catType, catFieldOfType}`, whose second category has
+// no module-level space (`idxSpaceFor` returns nil for it, by design — see `catFieldOfType`'s
+// comment). What makes a uniform reader sufficient for the numeric case is `retainIdxIn`'s own
+// numeric fast path: a **numeric** field index is encoded straight from its value and never
+// reaches `idxSpaceFor` at all, so `struct.get 0 1` and `struct.set $vec 0` retain through the
+// identical call a `table.copy` pair does.
+//
+// **This does not cover the whole corpus, and the gap is real rather than declined-because-
+// unneeded — measured, not assumed.** `struct.wast` has six `assert_return` vectors
+// (`get_vec_y`, `set_get_y`, `set_get_1`, …) that use a **symbolic field name** —
+// `(struct.get $vec $y (local.get $v))` — and every one of them still fails after this
+// function lands: the symbolic name reaches `idxSpaceFor(catFieldOfType)`'s nil space and is
+// refused with the same "(#8)" message every other unresolvable category already gives.
+// Resolving them needs a per-struct-type field-name space this stratum does not have (0021
+// retains a struct's field *storage*, not its names, by the wire-form authority — see
+// `fieldType`'s comment) — `structtype`'s local `fields` binding (`internal/text/types.go`) is
+// discarded when the function returns, and nothing threads it to encode time. That is a
+// separate, larger piece of work than this function's uniform reader, and is filed as its own
+// follow-up rather than attempted here — do not read this function's numeric-fast-path finding
+// as "struct.wast is done," which it measurably is not.
+//
+// None of the seven mnemonics reverses (`initReversedKinds` names only `TABLE_INIT`/`MEMORY_INIT`,
+// the sugar-arm pair), so the write order is the parse order throughout, unlike `retainIdxPair`
+// below.
+func (p *parser) idxPairRetained(mnemonic Token) error {
+	first, err := p.idxValue()
+	if err != nil {
+		return err
+	}
+	second, err := p.idxValue()
+	if err != nil {
+		return err
+	}
+	cats := pairCategories(mnemonic.Keyword)
 	if err := p.retainIdxIn(mnemonic, first, cats.first); err != nil {
 		return err
 	}
