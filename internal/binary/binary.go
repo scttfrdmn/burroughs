@@ -829,6 +829,7 @@ func (d *Decoder) DecodeModule(b []byte) (*Module, error) {
 	d.sawDataRef = false
 	d.funcTypeIdx = nil
 	d.valType, d.blockType, d.blockTypeIdx = NoValType, 0, 0
+	d.storageType, d.fieldType = StorageType{}, FieldType{}
 
 	// A *short* preamble is "unexpected end"; a full-width but wrong one is
 	// "magic header not detected" / "unknown binary version". binary.wast

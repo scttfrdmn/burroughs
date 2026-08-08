@@ -192,6 +192,23 @@ type Decoder struct {
 	// through decodeBlockTypeValue's third branch exactly as blockType carries the rest.
 	blockType    uint64
 	blockTypeIdx uint64
+
+	// storageType is the StorageType the most recent successful `storagetype` read
+	// accepted, on the Decoder for valType's exact reason: decodeStorageType is passed as a
+	// `func(*reader) error` to `either` (its two branches are a valtype read or a packtype
+	// read), so widening its signature would widen either's, and either's signature is the
+	// shape of a backtracking alternation with no meaningful value to return for a branch
+	// that failed. Written only immediately before a successful return, never on a path
+	// that goes on to fail — valType's ordering discipline, restated for this field.
+	storageType StorageType
+
+	// fieldType is the FieldType the most recent successful `fieldtype` read accepted, on
+	// the Decoder for the same reason storageType is: decodeFieldType is passed to
+	// decodeVec (a struct's `vec(fieldtype)`) as a `func(*reader) error`, which cannot
+	// return a value, while an array's single fieldtype is read by a direct call that
+	// could. decodeFieldType is called both ways, so it stays error-only and writes here on
+	// every accepting path, matching decodeValType's precedent for the identical shape.
+	fieldType FieldType
 }
 
 // mod returns the module the descent retains into, creating it if this Decoder was driven
@@ -465,14 +482,21 @@ func (d *Decoder) decodeCompType(r *reader) error {
 		if !d.Features.GC {
 			return featureErr("gc")
 		}
-		if err := d.decodeVec(r, d.decodeFieldType); err != nil {
+		// Retained as of decision 0021: each accepted fieldtype is appended to fields
+		// rather than discarded, the same shape decodeCompType's own functype branch
+		// above already uses for Params/Results — one grammar, one traversal, writing
+		// through the closure into a destination the loop does not otherwise see.
+		var fields []FieldType
+		if err := d.decodeVec(r, func(r *reader) error {
+			if err := d.decodeFieldType(r); err != nil {
+				return err
+			}
+			fields = append(fields, d.fieldType)
+			return nil
+		}); err != nil {
 			return err
 		}
-		// The slot is taken and the contents are not retained — fieldtypes have no
-		// representation yet and nothing consumes them (#7). Taking the slot is the
-		// part that matters: a struct type occupies a type index, so skipping it here
-		// would shift every later index in the all-gates-on lane and nowhere else.
-		d.mod().Types = append(d.mod().Types, CompType{Kind: CompStruct})
+		d.mod().Types = append(d.mod().Types, CompType{Kind: CompStruct, Fields: fields})
 		return nil
 
 	case -0x22: // 0x5e — arraytype: exactly one fieldtype
@@ -482,7 +506,10 @@ func (d *Decoder) decodeCompType(r *reader) error {
 		if err := d.decodeFieldType(r); err != nil {
 			return err
 		}
-		d.mod().Types = append(d.mod().Types, CompType{Kind: CompArray})
+		// Exactly one entry, per arraytype's own arity — decode.ml:257-258 reads a bare
+		// fieldtype, not a vector, so there is no count to iterate and the field list
+		// always has length 1.
+		d.mod().Types = append(d.mod().Types, CompType{Kind: CompArray, Fields: []FieldType{d.fieldType}})
 		return nil
 	}
 	// GRAVE (#36): the message names the byte the image actually held, which at
@@ -505,15 +532,22 @@ func (d *Decoder) decodeCompType(r *reader) error {
 }
 
 // decodeFieldType reads a fieldtype: storage type then mutability (decode.ml:243-246).
+//
+// **Writes d.fieldType on every accepting return, as of decision 0021** — the out-parameter
+// discipline decodeValType's own field comment states, applied here because this function is
+// called both through decodeVec (a struct's `vec(fieldtype)`, which needs a
+// `func(*reader) error`) and directly (an array's bare fieldtype, which could return a
+// value but must match the struct call site's signature to stay one function).
 func (d *Decoder) decodeFieldType(r *reader) error {
 	if err := d.decodeStorageType(r); err != nil {
 		return err
 	}
-	// The mutability bit is read and dropped: fieldtypes are not retained (#7, and see
-	// CompType), so there is nothing to record it on. The *read* is what matters — it is
-	// the check `binary-gc.wast` scores.
-	_, err := d.decodeMutability(r)
-	return err
+	mut, err := d.decodeMutability(r)
+	if err != nil {
+		return err
+	}
+	d.fieldType = FieldType{Storage: d.storageType, Mutable: mut}
+	return nil
 }
 
 // decodeStorageType reads a storagetype: a valtype or a packed type (decode.ml:236-241).
@@ -523,8 +557,18 @@ func (d *Decoder) decodeFieldType(r *reader) error {
 // since the cursor rewinds and the bytes get judged again as a packtype. The packtype
 // branch is last, so its message — `malformed storage type` (:234) — is the one `either`
 // returns for a byte that is neither.
+//
+// **Writes d.storageType on every accepting branch, as of decision 0021** — valType's own
+// out-parameter discipline, restated here because decodeStorageType is itself passed to
+// `either` and cannot widen its signature to return a value.
 func (d *Decoder) decodeStorageType(r *reader) error {
-	return either(r, d.decodeValType, func(r *reader) error {
+	return either(r, func(r *reader) error {
+		if err := d.decodeValType(r); err != nil {
+			return err
+		}
+		d.storageType = StorageType{Val: d.valType}
+		return nil
+	}, func(r *reader) error {
 		form, err := r.sleb(7)
 		if err != nil {
 			return err
@@ -532,6 +576,11 @@ func (d *Decoder) decodeStorageType(r *reader) error {
 		if form != -0x08 && form != -0x09 { // i8, i16
 			return fmt.Errorf("%w: %#02x", ErrMalformedStorageType, byte(form&0x7F))
 		}
+		width := byte(8)
+		if form == -0x09 {
+			width = 16
+		}
+		d.storageType = StorageType{Packed: true, Width: width}
 		return nil
 	})
 }

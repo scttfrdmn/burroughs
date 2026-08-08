@@ -349,15 +349,53 @@ func (k CompKind) String() string {
 // defect can have here: correct on the default board, wrong in the lane whose whole job is
 // to catch what the default board cannot see. So every accepted comptype takes a slot.
 //
-// The struct and array *contents* are not retained — fieldtypes have no representation yet,
-// and nothing consumes them. Declared here and at decodeCompType rather than left silent
-// (#6's declared-and-tracked ruling); #7 is the tracking issue, and the growth is forced
-// when a GC consumer arrives rather than guessed at now.
+// **The struct and array contents are retained as of decision 0021** (option C): a
+// struct's fields, one per declared field in declaration order, or an array's single field
+// — `comptype`'s own arity, never a vector for the array case (decode.ml:250-259). Field
+// *names* are not retained; 0021 excludes them by the same wire-form authority `LocalGroup`
+// already established (0016) — the wire's `fieldtype` production carries no identifier, so
+// there is nothing here to keep.
 type CompType struct {
 	Kind CompKind
 
 	// Func is the signature, valid only when Kind is CompFunc.
 	Func FuncType
+
+	// Fields is the struct's or array's field list, valid only when Kind is CompStruct or
+	// CompArray: one entry per declared field for a struct, in declaration order; exactly
+	// one entry for an array, per arraytype's own arity (decode.ml:257-258, one fieldtype,
+	// no vector — a struct's `vec(fieldtype)` and an array's bare `fieldtype` are different
+	// productions, and this field's length reflects whichever one produced it).
+	Fields []FieldType
+}
+
+// StorageType is a fieldtype's storage: either a full ValType, or one of the two packed
+// widths (i8/i16) the reference's packtype production admits — decode.ml:236-241, exactly
+// two forms, never a third.
+//
+// **Not folded into ValType, per decision 0021's rejection of that option**: i8/i16 are
+// not value types at all — a struct field holding i8 unpacks to i32 on every read
+// (`Aggr.read_field`, `type_of_ref`) — so the packed width is a storage optimization with
+// no corresponding ValType, not a fifteenth valtype. The spec's own storage-versus-value
+// distinction (`storagetype` versus `valtype`, two different productions) maps to two Go
+// types here, the grammar's own boundary respected rather than flattened.
+type StorageType struct {
+	// Val is the full value type, meaningful when !Packed.
+	Val ValType
+
+	// Packed reports whether this storage is one of the two packed widths rather than a
+	// full ValType.
+	Packed bool
+
+	// Width is 8 or 16, meaningful only when Packed.
+	Width byte
+}
+
+// FieldType is one struct or array field: its storage and whether it may be written after
+// allocation — `fieldtype` (decode.ml:243-246), storage type plus one mutability bit.
+type FieldType struct {
+	Storage StorageType
+	Mutable bool
 }
 
 // Func is one function: its type index, its declared locals, and its body.

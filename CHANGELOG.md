@@ -21,6 +21,25 @@ weakly-ordered platform.
 
 ### Added
 
+- **`binary.CompType` retains a struct's or array's field list**: decision
+  [0021](docs/decisions/0021-a-field-type-is-a-value-type-or-a-packed-width-plus-mutability.md)'s
+  decoder-side implementation (option C). Two new types — `StorageType` (a full `ValType`,
+  or one of the two packed widths i8/i16 the reference's `packtype` admits) and `FieldType`
+  (a `StorageType` plus a mutability bit) — and `CompType` gains `Fields []FieldType`: one
+  entry per declared field for a struct, in declaration order, or exactly one entry for an
+  array, matching `arraytype`'s own arity. `decodeStorageType`/`decodeFieldType`
+  (`internal/binary/sections.go`) stop discarding their reads, writing through new
+  `Decoder.storageType`/`Decoder.fieldType` out-parameters — the same convention
+  `decodeValType` already uses, forced by the identical shape: both readers are passed to
+  `either`/`decodeVec` as `func(*reader) error`, which cannot return a value. Field *names*
+  are out of scope (no wire representation, per 0016's `LocalGroup` precedent), as is the
+  `struct.get`/`array.get`-family instruction-immediate encoding capacity (a separate
+  frontier, #172 item 5) and any `internal/interp` consumer (0020's `gcObj`/`gcField`, a
+  later PR). No gating change — this is retention, not acceptance, per 0018's precedent for
+  the same class of decision. Board: unmoved in both lanes (default 34227/734/27099/2959,
+  all-gates-on 36877/1024/0 gated) — decoder-only retention with no producer/consumer yet,
+  the identical shape 0018's decoder-side PR (#179) converted zero vectors on.
+
 - **The text encoder writes every parameterized reference form**: decision
   [0018](docs/decisions/0018-a-wide-value-type-mirrors-the-wire-forms-heaptype-not-the-text-sides-resolvedval.md)'s
   encoder-side implementation. `valTypeBytes` (`internal/text/encode.go`, replacing the
