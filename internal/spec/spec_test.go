@@ -3495,6 +3495,156 @@ func TestGatedVectors(t *testing.T) {
 			56: "function-references: call_ref / return_call_ref at :1 — the module this action runs against",
 			58: "function-references: call_ref / return_call_ref at :1 — the module this action runs against",
 		},
+
+		// The six files below are decision 0021's encoder-side dividend (#8's struct/array
+		// frontier closing): every one of these `assert_return`/`assert_trap`/`register`
+		// commands used to be a *fail* — the module ahead of it refused to encode at all
+		// ("a struct or array type's fields are not retained") — and now encodes clean and
+		// meets an honest GC decline instead, one layer later. Measured against the fixed
+		// board rather than assumed: `TestPhase1Files`'s before/after diff on this PR is what
+		// found each line, and every one below traces to a struct or array declaration in the
+		// module the command runs against.
+		"ref_eq.wast": {
+			// One module (:1-27) declaring GC struct/array types (`(sub (struct))`,
+			// `(array i8)`) and a table of `(ref null eq)`. Every command below runs against
+			// it, and it is the only module in the file — GC declines the module itself, not
+			// any individual command.
+			29:  "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			31:  "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			32:  "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			33:  "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			34:  "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			35:  "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			36:  "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			37:  "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			38:  "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			39:  "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			41:  "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			42:  "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			43:  "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			44:  "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			45:  "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			46:  "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			47:  "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			48:  "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			49:  "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			51:  "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			52:  "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			53:  "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			54:  "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			55:  "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			56:  "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			57:  "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			58:  "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			59:  "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			61:  "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			62:  "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			63:  "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			64:  "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			65:  "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			66:  "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			67:  "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			68:  "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			69:  "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			71:  "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			72:  "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			73:  "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			74:  "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			75:  "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			76:  "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			77:  "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			78:  "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			79:  "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			81:  "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			82:  "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			83:  "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			84:  "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			85:  "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			86:  "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			87:  "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			88:  "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			89:  "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			91:  "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			92:  "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			93:  "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			94:  "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			95:  "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			96:  "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			97:  "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			98:  "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			99:  "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			101: "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			102: "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			103: "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			104: "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			105: "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			106: "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			107: "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			108: "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			109: "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			111: "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			112: "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			113: "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			114: "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			115: "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			116: "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			117: "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			118: "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+			119: "gc: (type $st (sub (struct))) at :2 — the module this action runs against",
+		},
+		"array_fill.wast": {
+			// One module (:36-56) declaring `(type $arr8 (array i8))` and friends. Every
+			// command below runs against it.
+			59:  "gc: (type $arr8 (array i8)) at :37 — the module this action runs against",
+			62:  "gc: (type $arr8 (array i8)) at :37 — the module this action runs against",
+			65:  "gc: (type $arr8 (array i8)) at :37 — the module this action runs against",
+			68:  "gc: (type $arr8 (array i8)) at :37 — the module this action runs against",
+			71:  "gc: (type $arr8 (array i8)) at :37 — the module this action runs against",
+			72:  "gc: (type $arr8 (array i8)) at :37 — the module this action runs against",
+			73:  "gc: (type $arr8 (array i8)) at :37 — the module this action runs against",
+			74:  "gc: (type $arr8 (array i8)) at :37 — the module this action runs against",
+			77:  "gc: (type $arr8 (array i8)) at :37 — the module this action runs against",
+			78:  "gc: (type $arr8 (array i8)) at :37 — the module this action runs against",
+			79:  "gc: (type $arr8 (array i8)) at :37 — the module this action runs against",
+			80:  "gc: (type $arr8 (array i8)) at :37 — the module this action runs against",
+			81:  "gc: (type $arr8 (array i8)) at :37 — the module this action runs against",
+			84:  "gc: (type $arr8 (array i8)) at :37 — the module this action runs against",
+			85:  "gc: (type $arr8 (array i8)) at :37 — the module this action runs against",
+			86:  "gc: (type $arr8 (array i8)) at :37 — the module this action runs against",
+			87:  "gc: (type $arr8 (array i8)) at :37 — the module this action runs against",
+			88:  "gc: (type $arr8 (array i8)) at :37 — the module this action runs against",
+			91:  "gc: (type $arr8 (array i8)) at :37 — the module this action runs against",
+			92:  "gc: (type $arr8 (array i8)) at :37 — the module this action runs against",
+			93:  "gc: (type $arr8 (array i8)) at :37 — the module this action runs against",
+			94:  "gc: (type $arr8 (array i8)) at :37 — the module this action runs against",
+			97:  "gc: (type $arr8 (array i8)) at :37 — the module this action runs against",
+			98:  "gc: (type $arr8 (array i8)) at :37 — the module this action runs against",
+			99:  "gc: (type $arr8 (array i8)) at :37 — the module this action runs against",
+			100: "gc: (type $arr8 (array i8)) at :37 — the module this action runs against",
+		},
+		"array.wast": {
+			// Two unrelated modules, each declining for its own array type.
+			99:  "gc: (type $vec (array f32)) at :61 — the module this action runs against",
+			100: "gc: (type $vec (array f32)) at :61 — the module this action runs against",
+			101: "gc: (type $vec (array f32)) at :61 — the module this action runs against",
+			103: "gc: (type $vec (array f32)) at :61 — the module this action runs against",
+			104: "gc: (type $vec (array f32)) at :61 — the module this action runs against",
+			342: "gc: (type $t (array (mut i32))) at :332 — the module this action runs against",
+			343: "gc: (type $t (array (mut i32))) at :332 — the module this action runs against",
+		},
+		"table_init.wast": {
+			// `array.new_default $arr` inside the element segment's item expression, of a
+			// `(type $arr (array (mut arrayref)))` declared at :2272 — the module this action
+			// runs against.
+			2286: "gc: (type $arr (array (mut arrayref))) at :2272 — the module this action runs against",
+		},
+		"type-rec.wast": {
+			141: "gc: (type (struct)) in a rec group at :138 — the module this action runs against",
+			148: "gc: (type (struct)) in a rec group at :144 — the module this action runs against",
+			174: "gc: (type (struct)) in a rec group at :167 — the module this action runs against",
+			183: "gc: (type (struct)) in a rec group at :176 — the module this action runs against",
+			192: "gc: (type (struct)) in a rec group at :185 — the module this action runs against",
+		},
 		// # The bulk-segment batch's 244, every one of which was a *fail* an hour ago
 		//
 		// `table.init` and `memory.init` landed on both sides at once — the encoder learned the
@@ -3644,6 +3794,9 @@ func TestGatedVectors(t *testing.T) {
 			566: "memory64: an i64 index type at :503 — the module this action runs against",
 			567: "memory64: an i64 index type at :503 — the module this action runs against",
 			568: "memory64: an i64 index type at :503 — the module this action runs against",
+			// Decision 0021's dividend: `(type $arr (array (mut arrayref)))` at :2457, used in
+			// an element segment's item expression — `table_init.wast`'s row, memory64's twin.
+			2471: "gc: (type $arr (array (mut arrayref))) at :2457 — the module this action runs against",
 		},
 
 		// # The registry's 50, and the two partitions that have to agree
@@ -4151,6 +4304,17 @@ func TestGatedVectors(t *testing.T) {
 			584: "gc: (ref $f) in a param/result signature, third module at :551",
 			712: "gc: (ref $f) in a param/result signature, fourth module at :706",
 			730: "gc: (ref $f) in a param/result signature, fifth module at :722",
+			// The six rows below are decision 0021's dividend: each `register` runs against a
+			// module declaring `(struct (field (ref $f)))` — a struct field naming a func type
+			// forward- or self-referenced within the same `(rec …)` group, 0021's own worked
+			// example — which used to refuse to encode outright and now encodes clean and meets
+			// an honest GC decline instead.
+			625: "gc: (struct (field (ref $f2))) at :621 — the module this action runs against",
+			641: "gc: (struct (field (ref $f1) (ref $f2) …)) at :633 — the module this action runs against",
+			658: "gc: (struct (field (ref $f1))) at :653 — the module this action runs against",
+			659: "gc: (struct (field (ref $f1))) at :661 — the module this action runs against",
+			674: "gc: (struct (field (ref $f1))) at :668 — the module this action runs against",
+			692: "gc: (struct (field (ref $f1) (ref $f2) …)) at :683 — the module this action runs against",
 		},
 	}
 
@@ -5611,7 +5775,20 @@ func TestPhase1Files(t *testing.T) {
 	// next time this rises"* — the Kind split, plus departures separately from arrivals — and a
 	// rebase that quoted only the net +23 would have been indistinguishable from an encoder losing
 	// 23 vectors it used to emit. Slack stays 0.
-	const encodeFailCeiling = 1017
+	//
+	// # 1017 → 517, decision 0021's encoder-side implementation
+	//
+	// **-126 departures, 0 arrivals** on the "a struct or array type's fields are not retained"
+	// bucket — exactly #183's co-blocking probe's own count (117 + 6 + 3, the `no instance`/
+	// `register` split the probe carried). Every one lands as either an honest GC decline
+	// (`TestGatedVectors`' new allowlist entries: `ref_eq.wast`, `array_fill.wast`, `array.wast`,
+	// `table_init.wast`/`table_init64.wast`, `type-rec.wast`, six new entries in
+	// `type-subtyping.wast`) or a real pass in the all-gates-on lane — never a different fail —
+	// because the struct/array frontier no longer exists; what remains gated is GC's own gate,
+	// unrelated to this decision. `struct.wast`'s 18 fails are untouched (a different, still-open
+	// frontier — `struct.get`/`struct.get_s` instruction immediates, #183's two-blocker chain) and
+	// are why this column does not reach 0. Slack stays 0.
+	const encodeFailCeiling = 517
 	boardBound(t, "encodeFailCeiling", encodeFail, encodeFailCeiling, 0, ceilingBound,
 		"the wat encoder lost ground: either it stopped emitting an instruction it used to "+
 			"emit, or the corpus moved. This ceiling is deliberately not shared with the text "+
@@ -6078,7 +6255,15 @@ func TestPhase1Files(t *testing.T) {
 	// the harness's own `readConst` being unable to parse a `ref.null`/`ref.extern` action
 	// argument, so the setup invoke that would write the table never runs and the later read is
 	// honestly reporting the un-written state.
-	const execFailCeiling = 118
+	//
+	// **118 → 89, decision 0021's encoder-side implementation — -29 departures, 0 arrivals,
+	// entirely a downstream effect and not this stratum's own frontier moving.** A module that
+	// used to refuse to encode reached `run`/`register`/`invoke` for the first time and, for 29
+	// vectors, the *link-time* check now runs and produces `assert_unlinkable expected:
+	// incompatible import type` correctly (the encoder's frontier no longer masks the module's
+	// actual type mismatch) — 27 in the default lane, +2 the all-gates-on lane's own denominator
+	// carries. This column's frontiers (the opcode-arm work list above) are untouched.
+	const execFailCeiling = 89
 	boardBound(t, "execFailCeiling", execFail, execFailCeiling, 0, ceilingBound,
 		"the interpreter answered fewer vectors than it did: either an opcode arm regressed or "+
 			"a value comparison started disagreeing. A *rise* caused by #8 unblocking more "+
