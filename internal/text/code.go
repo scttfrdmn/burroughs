@@ -353,6 +353,14 @@ var encodableShapes = map[immShape]bool{
 	immNum:       true,
 	immMemarg:    true, // tier 2 (#8): retainMemarg, over the generated naturalAlign table
 
+	// The seven `STRUCT_GET`/`STRUCT_SET`/array `idx idx` mnemonics and `array.new_fixed`'s `idx
+	// nat32` — `idxPairRetained` and `nat32Retained`, both over `retainIdxIn`'s existing category
+	// resolution. See `idxPairRetained`'s comment for why the two field-space mnemonics need no
+	// separate entry: a numeric field index resolves without ever consulting the (absent)
+	// per-struct-type space, and a symbolic one is refused there, not here.
+	immIdxIdx:   true,
+	immIdxNat32: true,
+
 	// `br_table`, whose immediates are the one case in this map that is not a concatenation of
 	// what the parser read: see brTable for the count, the split_last, and why the sequence is
 	// never empty. Admitted with the interpreter arm rather than with the block family, because an
@@ -672,6 +680,44 @@ func (p *parser) retainIdxPair(mnemonic Token, first, second idxRef, havePair bo
 		}
 		return p.retainIdxIn(mnemonic, first, cats.first)
 	}
+	if err := p.retainIdxIn(mnemonic, first, cats.first); err != nil {
+		return err
+	}
+	return p.retainIdxIn(mnemonic, second, cats.second)
+}
+
+// idxPairRetained parses the two mandatory index immediates of an `idx idx` arm and retains both.
+//
+// **The seven `immIdxIdx` mnemonics need no per-mnemonic split, and that is a finding rather than a
+// simplification taken for granted.** Five resolve an ordinary module-level pair — `ARRAY_COPY`
+// `{catType, catType}`, `ARRAY_NEW_ELEM`/`ARRAY_INIT_ELEM` `{catType, catElem}`,
+// `ARRAY_NEW_DATA`/`ARRAY_INIT_DATA` `{catType, catData}` — and the other two, `STRUCT_GET` and
+// `STRUCT_SET`, pass `{catType, catFieldOfType}`, whose second category has no module-level space
+// (`idxSpaceFor` returns nil for it, by design — see `catFieldOfType`'s comment). What makes a
+// uniform reader sufficient anyway is `retainIdxIn`'s own numeric fast path: a **numeric** index is
+// encoded straight from its value and never reaches `idxSpaceFor` at all, so `struct.get 0 1` and
+// `struct.set $vec 0` retain through the identical call a `table.copy` pair does — the field index
+// being a NAT rather than a VAR is what the suite's own vectors write (`struct.wast`'s 18 failing
+// vectors, both `struct.get` and `struct.get_s`, are every one of them numeric-numeric or
+// symbolic-numeric). Only a **symbolic** field name — `struct.get $t $fieldname` — reaches the nil
+// space and is refused, with the same "(#8)" message `idxSpaceFor`'s other unresolvable categories
+// already give; that refusal needs a per-struct-type field-name space this stratum does not have
+// (0021 retains a struct's field *storage*, not its names, by the wire-form authority — see
+// `fieldType`'s comment), and is exactly the follow-up this PR does not attempt.
+//
+// None of the seven mnemonics reverses (`initReversedKinds` names only `TABLE_INIT`/`MEMORY_INIT`,
+// the sugar-arm pair), so the write order is the parse order throughout, unlike `retainIdxPair`
+// below.
+func (p *parser) idxPairRetained(mnemonic Token) error {
+	first, err := p.idxValue()
+	if err != nil {
+		return err
+	}
+	second, err := p.idxValue()
+	if err != nil {
+		return err
+	}
+	cats := pairCategories(mnemonic.Keyword)
 	if err := p.retainIdxIn(mnemonic, first, cats.first); err != nil {
 		return err
 	}

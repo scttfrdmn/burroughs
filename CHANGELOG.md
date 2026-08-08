@@ -21,6 +21,40 @@ weakly-ordered platform.
 
 ### Added
 
+- **The text encoder retains `struct.get`/`struct.set`/`array.copy`/`array.new_data`/
+  `array.new_elem`/`array.init_data`/`array.init_elem`/`array.new_fixed`'s immediates** (#8,
+  #183's two-blocker chain). `internal/text/instr.go`'s `immIdxIdx` and `immIdxNat32` cases
+  stop discarding via `p.idx()`/`p.nat32()`: the seven `immIdxIdx` mnemonics route through a
+  new `idxPairRetained`, which resolves each index through the existing `pairCategories`/
+  `retainIdxIn` machinery — the same two-index resolution `table.init`/`memory.init` already
+  use — and `ARRAY_NEW_FIXED`'s trailing count gets a new `nat32Retained`, staging the same
+  `encodeLocalIdx` bytes an index immediate would. `encodableShapes[immIdxIdx]` and
+  `[immIdxNat32]` flip to `true`. **No per-mnemonic split needed for `STRUCT_GET`/
+  `STRUCT_SET`**, despite their second index resolving against `catFieldOfType` — a category
+  with no module-level space (`idxSpaceFor` returns nil by design, since the field space is
+  per-struct-type and 0021 does not retain field names): `retainIdxIn`'s numeric fast path
+  encodes a **numeric** field index without ever consulting that space, and every failing
+  `struct.wast` vector uses a numeric field index, so a uniform reader suffices and only a
+  **symbolic** field name (`struct.get $s $fieldname`) reaches the refusal, unchanged from
+  before. Verified against the merged decoder (round trips for `array.copy`, `array.new_data`,
+  `array.new_elem`, `array.new_fixed`, and both `struct.get`/`struct.set` with numeric field
+  indices, asserting `Instr.Op`/`Prefix`/`Imm0`/`Imm1`) and added as seven new
+  `encodableModules` rows in `internal/text/encode_test.go`. Board: default lane fail 606 →
+  436 (-170, exactly the vectors `TestGatedVectors`' new allowlist entries account for — every
+  one re-keys to an honest GC decline, since the default lane runs with GC off), gated 3087 →
+  3257 (+170); all-gates-on pass 36878 → 36879 (+1), fail 1017 → 1016 (-1), gated stays 0 — the
+  small all-gates-on movement is the co-blocking finding stated plainly: retention answers the
+  *encoder's* refusal, and `internal/interp` has no arms yet for the `0xfb`-prefixed opcodes
+  these vectors need to actually execute, so most of the 170 re-key to interpreter buckets
+  (`no arm for opcode fb NN`, element-expression evaluation) rather than draining to pass.
+  `unsupported` unmoved at 27099 (default lane). Not in scope: field-name resolution for a
+  symbolic `struct.get`/`struct.set` index, which would need a per-struct-type field-name space
+  this stratum does not have — `structtype`'s local `fields` binding is discarded when the
+  function returns, and nothing threads it to encode time. Flagged for Scott as a possible
+  follow-up rather than attempted here, since the six `struct.wast` vectors using a symbolic
+  field name are already correctly refused with the existing "(#8)" message and no vector in
+  the corpus needs the resolution to pass.
+
 - **The text encoder writes a struct's or array's field list**: decision
   [0021](docs/decisions/0021-a-field-type-is-a-value-type-or-a-packed-width-plus-mutability.md)'s
   encoder-side implementation (option C), completing the pair the decoder-side PR (#186)
