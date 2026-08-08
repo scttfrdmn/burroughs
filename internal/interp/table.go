@@ -369,9 +369,13 @@ func (in *Instance) runElem(idx int, seg *binary.ElemSegment) error {
 // rather than two spellings of one: the index form names a function directly, while the
 // expression form must evaluate a const-expr that may be `ref.null`. Collapsing them would mean
 // either synthesizing a `ref.func` expression per index or pattern-matching expressions back
-// into indices — and the second is the normalization 0016 records that this engine *cannot* do,
-// because recovering the reference's `is_elem_kind` verdict needs a reftype's nullability and
-// `binary.ValType` is a byte with no room for it.
+// into indices — and the second is the normalization 0016 records that this engine *cannot* do.
+// `binary.ValType` gained a nullability bit under 0018, but that alone does not revive the
+// normalization: recovering `is_elem_kind` needs the *segment's* element type (now
+// representable) *and* a check over every expression in `Exprs` ("is each one exactly
+// `[ref_func x]`?", encode.ml:1052-1054), which is a property of the segment's content, not
+// something a single ValType comparison decides. ByExpr's decode-time record of which grammar
+// arm ran remains the simpler and already-correct source of truth.
 func (in *Instance) segmentRefs(seg *binary.ElemSegment) ([]ref, error) {
 	if !seg.ByExpr {
 		rs := make([]ref, len(seg.Funcs))

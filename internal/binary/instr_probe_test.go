@@ -375,7 +375,8 @@ func TestDecodeCostIsProportionalToCompressedSize(t *testing.T) {
 	// reason.
 	build := func(nlocals uint32) []byte {
 		body := append([]byte{0x01}, ulebBytes(nlocals)...) // one group, `nlocals` of them
-		body = append(body, byte(I32), 0x0b)                // i32, then END
+		i32Byte, _ := I32.Kind()
+		body = append(body, i32Byte, 0x0b) // i32, then END
 
 		code := append([]byte{0x01}, ulebBytes(uint32(len(body)))...)
 		code = append(code, body...)

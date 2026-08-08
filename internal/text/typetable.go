@@ -341,8 +341,11 @@ type resolvedData struct {
 //
 // Neither half of that predicate asks which grammar arm ran. `is_elem_kind` is `(NoNull, FuncHT)`
 // (:1044-1046) — a question about the reftype's *nullability*, and `valType.null` retains exactly
-// that, because a text valType is a parsed type and not the wire byte. (`binary.ValType` is the byte
-// that loses it; the confusion was between the two representations, one package apart.)
+// that, because a text valType is a parsed type and not the wire byte. (At the time this was
+// written, `binary.ValType` was the byte that lost it; the confusion was between the two
+// representations, one package apart. 0018 later widened `binary.ValType` to carry nullability
+// too, which does not change this package's own reasoning — `valType.null` is still the field
+// this predicate reads, and it was never `binary.ValType` in the first place.)
 // `is_elem_index` is `[{it = RefFunc _}]` — a question about each element *expression's shape*, and
 // `elemidx_list` builds precisely those: `List.map (fun x -> [ref_func x])` (parser.mly:1147-1150).
 //

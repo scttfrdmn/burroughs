@@ -21,6 +21,34 @@ weakly-ordered platform.
 
 ### Added
 
+- **`binary.ValType` widens from a byte to a three-field struct (`kind`, `null`, `idx`)**,
+  decision [0018](docs/decisions/0018-a-wide-value-type-mirrors-the-wire-forms-heaptype-not-the-text-sides-resolvedval.md)'s
+  option C, implemented decoder-side. `decodeRefType`/`decodeHeapType` (`internal/binary/sections.go`)
+  now write the resolved kind/nullability/index for every GC-gated `reftype`/`heaptype` form
+  instead of the `NoValType` sentinel — the ten abstract heaptypes and the two parameterized
+  indexed forms (`(ref $t)`/`(ref null $t)`) are representable for the first time. The five
+  numeric/vector constants and the two Wasm 2.0 reference constants (`FuncRef`, `ExternRef`) keep
+  their exact pre-widening byte behavior, so every existing `t == I32`-style comparison is
+  unaffected. `Instr`'s blocktype packing (`BlockType`, `Imm0`/`Imm1`) is redesigned to carry a
+  resolved index for an indexed-form single-result block, verified against every
+  `immBlockType`-carrying opcode rather than assumed. Encoder-side retention (`internal/text`
+  building this type instead of returning `(0, false)`) is deferred to the next PR in the GC-gate
+  implementation ladder; **board unmoved** (34227/1135/27099/2558 default, 36629/1284/0
+  all-gates-on, byte-identical before and after), exactly as the co-blocking probe predicted for a
+  representation change with no encoder consumer yet — retention alone does not make the encoder
+  emit the new forms, the same zero-conversion shape [#161](https://github.com/scttfrdmn/burroughs/pull/161)'s
+  `ref.null` PR measured.
+
+  **`ValType.null` retains the wire's *spelled* null bit, not semantic nullability, and that is
+  deliberate rather than a gap**: `funcref`/`externref` (Wasm 2.0's abbreviations) spell non-null
+  for backward compatibility with every existing `t == FuncRef` comparison, while the reference's
+  own model treats both as nullable — the same wire-spelling-over-derived-reading law
+  `LocalGroup` and the delimiter productions already follow. `Nullable()` is the new accessor for
+  semantic nullability (the fact a subtype check needs — non-null under nullable, never the
+  reverse), diverging from `Null()` for exactly those two forms and agreeing everywhere else;
+  pinned by `TestNullableDivergesFromNullForWasm2Forms`, falsified by reverting it to `return
+  t.null` and confirming only the FuncRef/ExternRef assertions fail.
+
 - **Six table and reference opcodes: `table.get`, `table.set`, `table.size`, `table.grow`,
   `table.fill`, `ref.null`, `ref.is_null`, `ref.func`** ([#7](https://github.com/scttfrdmn/burroughs/issues/7)).
   `opTableFC`'s 18 sub-opcodes are now all answered (`table.grow`/`table.size`/`table.fill` were

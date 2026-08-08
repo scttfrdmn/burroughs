@@ -413,6 +413,195 @@ func TestHeapTypeGatesFormsNotThePosition(t *testing.T) {
 	}
 }
 
+// TestDecodeRefTypeRetainsGCShapedValues is 0018's implementation control: the whole point of
+// widening `ValType` was to let `decodeRefType`/`decodeHeapType` stop writing `NoValType` for
+// forms they already validate, and this asserts they actually do it — a table's element type,
+// a global's type, and (through decodeBlockTypeValue) a blocktype result, each carrying a GC
+// abstract heaptype, a Wasm 2.0 form, or the indexed form.
+//
+// Every row is reachable only in the all-gates-on lane, per decision 0008's gate boundary —
+// none of this is new *acceptance*, only new *representation* of what the GC gate already let
+// through as NoValType. So this is a representation control, not an acceptance one, matching
+// 0018's own consequences section ("this is a representation decision, not a gate decision").
+func TestDecodeRefTypeRetainsGCShapedValues(t *testing.T) {
+	on := &Decoder{Features: Features{GC: true}}
+
+	t.Run("table element type: GC abstract heaptype (anyref)", func(t *testing.T) {
+		// id 4 (table), size 4, count 1, elemtype 0x6E (anyref), limits 0x00 0x01.
+		img := []byte{
+			0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00,
+			0x04, 0x04, 0x01, 0x6E, 0x00, 0x01,
+		}
+		m, err := on.DecodeModule(img)
+		if err != nil {
+			t.Fatalf("GC on: got %v, want accept", err)
+		}
+		if len(m.Tables) != 1 {
+			t.Fatalf("got %d tables, want 1", len(m.Tables))
+		}
+		got := m.Tables[0].ElemType
+		want := refKind(0x6E, true) // reftype's bare abstract forms are the (Null, ...) abbreviation
+		if got != want {
+			t.Errorf("table element type = %+v, want %+v (anyref, resolved rather than "+
+				"NoValType — the whole point of 0018)", got, want)
+		}
+		if got == NoValType {
+			t.Error("table element type is NoValType: decodeRefType's GC-abstract branch " +
+				"still writes the pre-0018 sentinel instead of the resolved kind")
+		}
+		if !got.IsRef() {
+			t.Error("anyref.IsRef() = false: a GC abstract heaptype must live in the " +
+				"reference array, not the numeric one (0002)")
+		}
+	})
+
+	t.Run("table element type: indexed reference form (ref null $t)", func(t *testing.T) {
+		// A minimal type section (one func type, index 0) so the index is legal, then a
+		// table whose element type is `(ref null 0)` — reftype's -0x1d prefix, heaptype 0.
+		// id 1 (type): 1 rectype, functype tag 0x60, 0 params, 0 results.
+		typeSec := []byte{0x01, 0x04, 0x01, 0x60, 0x00, 0x00}
+		// id 4 (table): count 1, elemtype (0x63 0x00 = (ref null 0)), limits 0x00 0x01.
+		tableSec := []byte{0x04, 0x05, 0x01, 0x63, 0x00, 0x00, 0x01}
+		img := append([]byte{0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00}, typeSec...)
+		img = append(img, tableSec...)
+
+		m, err := on.DecodeModule(img)
+		if err != nil {
+			t.Fatalf("GC on: got %v, want accept", err)
+		}
+		if len(m.Tables) != 1 {
+			t.Fatalf("got %d tables, want 1", len(m.Tables))
+		}
+		got := m.Tables[0].ElemType
+		if !got.IsIndexed() {
+			t.Errorf("table element type = %+v, want the indexed form (kind == kindIndexed)",
+				got)
+		}
+		if got.Index() != 0 {
+			t.Errorf("table element type names index %d, want 0", got.Index())
+		}
+		if !got.Null() {
+			t.Error("table element type lost its nullability: -0x1d is (ref null $t), and " +
+				"decodeRefType's parameterized branch is what supplies the null bit " +
+				"decodeHeapType's own grammar cannot carry")
+		}
+		if !got.IsRef() {
+			t.Error("the indexed form must be a reference (IsRef() == true)")
+		}
+	})
+
+	t.Run("table element type: indexed reference form (ref $t), non-null", func(t *testing.T) {
+		typeSec := []byte{0x01, 0x04, 0x01, 0x60, 0x00, 0x00}
+		// -0x1c (0x64) is (ref $t), non-null.
+		tableSec := []byte{0x04, 0x05, 0x01, 0x64, 0x00, 0x00, 0x01}
+		img := append([]byte{0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00}, typeSec...)
+		img = append(img, tableSec...)
+
+		m, err := on.DecodeModule(img)
+		if err != nil {
+			t.Fatalf("GC on: got %v, want accept", err)
+		}
+		got := m.Tables[0].ElemType
+		if got.Null() {
+			t.Error("(ref 0) decoded as nullable; -0x1c is the non-null prefix")
+		}
+		if !got.IsIndexed() || got.Index() != 0 {
+			t.Errorf("table element type = %+v, want the indexed form naming index 0", got)
+		}
+	})
+
+	t.Run("global type: Wasm 2.0 form unchanged (funcref)", func(t *testing.T) {
+		// id 6 (global): count 1, valtype 0x70 (funcref), mutable 0x00, init i32.const 0
+		// end. Ungated, so this also confirms the Wasm 2.0 branch's backward-compatibility
+		// requirement holds through a real decode rather than only through the unit-level
+		// refKind call.
+		img := []byte{
+			0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00,
+			0x06, 0x06, 0x01, 0x70, 0x00, 0x41, 0x00, 0x0B,
+		}
+		m, err := DecodeModule(img) // every gate off — funcref is Wasm 2.0
+		if err != nil {
+			t.Fatalf("got %v, want accept", err)
+		}
+		if got := m.Globals[0].Type; got != FuncRef {
+			t.Errorf("global type = %+v, want exactly FuncRef (%+v) — the two Wasm 2.0 "+
+				"forms must keep their pre-0018 byte behavior unchanged", got, FuncRef)
+		}
+	})
+
+	t.Run("global type: GC abstract heaptype (eqref), non-null via reftype", func(t *testing.T) {
+		img := []byte{
+			0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00,
+			0x06, 0x06, 0x01, 0x6D, 0x00, 0x41, 0x00, 0x0B,
+		}
+		m, err := on.DecodeModule(img)
+		if err != nil {
+			t.Fatalf("GC on: got %v, want accept", err)
+		}
+		got := m.Globals[0].Type
+		want := refKind(0x6D, true)
+		if got != want {
+			t.Errorf("global type = %+v, want %+v (eqref)", got, want)
+		}
+	})
+}
+
+// TestBlockTypeRetainsAnIndexedResult is 0018's implementation control for the packing
+// redesign in module.go: a bare-valtype blocktype whose single result is the GC-gated indexed
+// reference form must round-trip through Imm0/Imm1 and back out through BlockType with its
+// index intact — the case the pre-0018 packing had no room for at all.
+func TestBlockTypeRetainsAnIndexedResult(t *testing.T) {
+	// type 0: (func). type 1: (func) too, so a type-index result blocktype naming index 1
+	// stays distinguishable from a bare "0". Function 0 has type 0 and a body of one
+	// instruction: `block (result (ref null 1)) end end`.
+	//
+	// blocktype tail: -0x1d (0x63) then s33(1) — `(ref null 1)`, encoded as a single byte
+	// since 1 < 64.
+	body := []byte{
+		0x00,             // no locals
+		0x02, 0x63, 0x01, // block (result (ref null 1))
+		0x0B, // end (block)
+		0x0B, // end (func body)
+	}
+	img := []byte{0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00}
+	img = append(img, 0x01, 0x07, 0x02, 0x60, 0x00, 0x00, 0x60, 0x00, 0x00) // type: two (func)
+	img = append(img, 0x03, 0x02, 0x01, 0x00)                               // function: 1, type 0
+	codeSec := append([]byte{0x01}, byte(len(body)))
+	codeSec = append(codeSec, body...)
+	img = append(img, 0x0A, byte(len(codeSec)))
+	img = append(img, codeSec...)
+
+	on := &Decoder{Features: Features{GC: true}}
+	m, err := on.DecodeModule(img)
+	if err != nil {
+		t.Fatalf("GC on: got %v, want accept", err)
+	}
+	if len(m.Funcs) != 1 || len(m.Funcs[0].Body) == 0 {
+		t.Fatalf("expected one function with a body, got %d funcs", len(m.Funcs))
+	}
+	blockInstr := m.Funcs[0].Body[0]
+	if blockInstr.Op != 0x02 {
+		t.Fatalf("first instruction is opcode %#02x, want 0x02 (block)", blockInstr.Op)
+	}
+	idx, vt, empty := BlockType(blockInstr.Imm0, blockInstr.Imm1)
+	if empty {
+		t.Fatal("BlockType reports empty, want the single-result valtype form")
+	}
+	if idx != 0 {
+		t.Errorf("BlockType's typeIdx return is %d for the valtype form, want 0 (unused)", idx)
+	}
+	if !vt.IsIndexed() {
+		t.Fatalf("blocktype result = %+v, want the indexed form", vt)
+	}
+	if vt.Index() != 1 {
+		t.Errorf("blocktype result names index %d, want 1 — this is Imm1 carrying the "+
+			"value BlockType's pre-0018 one-word packing had nowhere to put", vt.Index())
+	}
+	if !vt.Null() {
+		t.Error("blocktype result lost its nullability: the source is (ref null 1)")
+	}
+}
+
 // TestSegmentKindStringsAreAtTheirSites pins #88's two renamed sentinels where they are
 // raised, which the sentinel inventory cannot do.
 //

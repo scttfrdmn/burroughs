@@ -51,10 +51,10 @@ func TestIsRefPartitionsTheValTypeSpace(t *testing.T) {
 		}
 		wantRef := strings.HasSuffix(strings.ToLower(name), "ref")
 		if got := vt.IsRef(); got != wantRef {
-			t.Errorf("%s (%#02x).IsRef() = %v, want %v: a reference stored in the numeric "+
-				"array is a pointer the Go collector cannot trace (0002), and a number in "+
-				"the reference array is a word it will try to follow",
-				name, byte(vt), got, wantRef)
+			t.Errorf("%s (kind %#02x).IsRef() = %v, want %v: a reference stored in the "+
+				"numeric array is a pointer the Go collector cannot trace (0002), and a "+
+				"number in the reference array is a word it will try to follow",
+				name, vt.kind, got, wantRef)
 		}
 	}
 
@@ -97,7 +97,7 @@ func TestValTypeStringsAreDistinctAndNamed(t *testing.T) {
 	for name, vt := range declaredValTypes(t) {
 		s := vt.String()
 		if s == "" {
-			t.Errorf("%s (%#02x).String() is empty", name, byte(vt))
+			t.Errorf("%s (kind %#02x).String() is empty", name, vt.kind)
 			continue
 		}
 		// "unknown" is the default arm's label, so a *declared* constant reaching it means
@@ -105,8 +105,8 @@ func TestValTypeStringsAreDistinctAndNamed(t *testing.T) {
 		// once already and which it cannot catch for a constant added to the block without
 		// a case.
 		if s == "unknown" {
-			t.Errorf("%s (%#02x).String() = %q: every declared form has a name, and the "+
-				"default arm is for bytes this type does not define", name, byte(vt), s)
+			t.Errorf("%s (kind %#02x).String() = %q: every declared form has a name, and "+
+				"the default arm is for bytes this type does not define", name, vt.kind, s)
 		}
 		if prev, dup := seen[s]; dup {
 			t.Errorf("%s and %s both stringify to %q; a diagnostic naming a type cannot "+
@@ -147,12 +147,128 @@ func TestValTypeStringsAreDistinctAndNamed(t *testing.T) {
 	}
 }
 
-// declaredValTypes reads the ValType constants out of this package's own source.
+// TestValTypeNamedConstantsAreNotAlias asserts the eight named ValType package variables
+// (NoValType, I32, I64, F32, F64, V128, FuncRef, ExternRef) still hold their defining values
+// after this package's decoder has done a representative amount of work.
+//
+// **Why this is a real risk and not a formality.** 0018 moved these eight from `const` to
+// package-level `var`, forced by the type itself: a struct value is not a Go constant. That
+// widens what could go wrong — nothing stops a future edit from writing `I32.kind = 0` inside
+// this package (an exported `var` in another package would additionally be writable from
+// outside it, though every consumer of these is `internal/`), and such a write would silently
+// change what every `t == I32`-style comparison across `internal/binary`, `internal/text`, and
+// `internal/interp` means, everywhere, for the rest of the process — a single mutable global
+// standing in for what used to be eight compiler-enforced constants.
+//
+// So this drives a representative decode — a module exercising every one of the eight kinds,
+// through the real decodeValType/decodeRefType/decodeHeapType paths rather than by calling a
+// constructor directly — and then re-checks each variable against a snapshot taken before the
+// decode ran. A version of this package that assigned through one of them would decode
+// correctly on this one module (nothing here depends on order) and then fail this comparison,
+// which is the discriminating property a plain "does DecodeModule still work" test does not
+// have.
+func TestValTypeNamedConstantsAreNotAlias(t *testing.T) {
+	type snapshot struct {
+		name string
+		ptr  *ValType
+		want ValType
+	}
+	before := []snapshot{
+		{"NoValType", &NoValType, NoValType},
+		{"I32", &I32, I32},
+		{"I64", &I64, I64},
+		{"F32", &F32, F32},
+		{"F64", &F64, F64},
+		{"V128", &V128, V128},
+		{"FuncRef", &FuncRef, FuncRef},
+		{"ExternRef", &ExternRef, ExternRef},
+	}
+
+	// A funcref table's element type, then a global of every numeric/vector kind, then a
+	// GC-gated global naming an abstract heaptype and the indexed form — one decode
+	// touching decodeRefType's Wasm-2.0 branch, decodeNumType, decodeVecType, and
+	// decodeRefType's GC branches, each of which reads one of these variables' kind byte
+	// or builds a value that could in principle be confused with one.
+	d := &Decoder{Features: featuresAllOn(t)}
+	mods := [][]byte{
+		funcTypeParam(0x70), // funcref parameter — decodeRefType's Wasm 2.0 branch
+		funcTypeParam(0x7F), // i32 — decodeNumType
+		funcTypeParam(0x7E), // i64
+		funcTypeParam(0x7D), // f32
+		funcTypeParam(0x7C), // f64
+		funcTypeParam(0x7B), // v128 — decodeVecType, SIMD gate on
+		funcTypeParam(0x6F), // externref
+		funcTypeParam(0x6E), // anyref — decodeRefType's GC abstract branch
+		refNullGlobal(0x00), // ref.null 0 — decodeHeapType's indexed branch
+	}
+	for _, m := range mods {
+		if _, err := d.DecodeModule(m); err != nil {
+			t.Fatalf("decoding a representative module failed: %v", err)
+		}
+	}
+
+	for _, s := range before {
+		if *s.ptr != s.want {
+			t.Errorf("%s changed from %+v to %+v after decoding — a package variable "+
+				"standing in for a constant must not be written through by any code path",
+				s.name, s.want, *s.ptr)
+		}
+	}
+}
+
+// TestNullableDivergesFromNullForWasm2Forms pins Nullable's one deliberate disagreement with
+// Null: FuncRef and ExternRef spell non-null (Null() == false, matching this engine's pre-0018
+// byte and every existing t == FuncRef comparison) but are semantically nullable per the
+// reference's own abbreviation table, so Nullable() must report true for them regardless of
+// what the wire spelled. Every other reference kind spells its own real nullability, so the
+// two accessors agree everywhere else — pinned here too, so a future kind added to either
+// table without the other is caught by the same test rather than by a silent gap.
+func TestNullableDivergesFromNullForWasm2Forms(t *testing.T) {
+	cases := []struct {
+		name string
+		t    ValType
+		null bool
+	}{
+		{"FuncRef", FuncRef, true},
+		{"ExternRef", ExternRef, true},
+		{"refKind any, null", refKind(0x6E, true), true},
+		{"refKind any, non-null", refKind(0x6E, false), false},
+		{"RefType indexed, null", RefType(3, true), true},
+		{"RefType indexed, non-null", RefType(3, false), false},
+	}
+	for _, c := range cases {
+		if got := c.t.Nullable(); got != c.null {
+			t.Errorf("%s.Nullable() = %v, want %v", c.name, got, c.null)
+		}
+	}
+
+	// The divergence itself, spelled out rather than left implicit in the table above: Null()
+	// and Nullable() must disagree for exactly the two Wasm 2.0 forms and agree everywhere else.
+	if FuncRef.Null() == FuncRef.Nullable() {
+		t.Error("FuncRef.Null() and FuncRef.Nullable() agree — the wire-spelling/semantic " +
+			"split this test exists to pin has collapsed")
+	}
+	if got, want := refKind(0x6E, true).Null(), refKind(0x6E, true).Nullable(); got != want {
+		t.Errorf("a GC abstract form's Null() (%v) and Nullable() (%v) disagree; the two "+
+			"should agree for every kind except Wasm 2.0's abbreviations", got, want)
+	}
+}
+
+// declaredValTypes reads the eight named ValType values out of this package's own source.
 //
 // By AST rather than by a literal table, for `immVocabulary`'s reason (instr_width_test.go):
 // a hand-written list freezes the domain at the moment of authorship, and this domain grows
 // when the GC gate flips. The parse target is module.go because that is where the block lives;
 // a moved block yields an empty map, which the callers' floors catch.
+//
+// **Walks composite literals inside a `var` block, not `BasicLit`s inside a `const` block, as
+// of 0018's implementation.** `ValType` is a struct now, so its eight named values are
+// `ValType{kind: 0x7F}`-shaped `*ast.CompositeLit`s in a `var (...)` group rather than bare
+// integer literals in a `const (...)` one — the AST shape this control reads changed exactly
+// the way the type it reads did, and a walker still looking for `token.CONST`/`*ast.BasicLit`
+// would find nothing and pass vacuously (the empty-set agreement, #29), which is why this was
+// rewritten rather than left to degrade quietly. `NoValType`'s zero-elements literal (`ValType{}`)
+// is read as kind 0, matching its zero-value definition.
 func declaredValTypes(t *testing.T) map[string]ValType {
 	t.Helper()
 
@@ -164,7 +280,7 @@ func declaredValTypes(t *testing.T) map[string]ValType {
 	out := map[string]ValType{}
 	for _, decl := range f.Decls {
 		gd, ok := decl.(*ast.GenDecl)
-		if !ok || gd.Tok != token.CONST {
+		if !ok || gd.Tok != token.VAR {
 			continue
 		}
 		for _, spec := range gd.Specs {
@@ -172,19 +288,36 @@ func declaredValTypes(t *testing.T) map[string]ValType {
 			if !ok {
 				continue
 			}
-			if id, ok := vs.Type.(*ast.Ident); !ok || id.Name != "ValType" {
-				continue
-			}
 			for i, val := range vs.Values {
-				lit, ok := val.(*ast.BasicLit)
-				if !ok || lit.Kind != token.INT {
+				cl, ok := val.(*ast.CompositeLit)
+				if !ok {
 					continue
 				}
-				n, err := strconv.ParseUint(lit.Value, 0, 8)
-				if err != nil {
+				id, ok := cl.Type.(*ast.Ident)
+				if !ok || id.Name != "ValType" {
 					continue
 				}
-				out[vs.Names[i].Name] = ValType(n)
+				var vt ValType
+				for _, elt := range cl.Elts {
+					kv, ok := elt.(*ast.KeyValueExpr)
+					if !ok {
+						continue
+					}
+					key, ok := kv.Key.(*ast.Ident)
+					if !ok || key.Name != "kind" {
+						continue
+					}
+					lit, ok := kv.Value.(*ast.BasicLit)
+					if !ok || lit.Kind != token.INT {
+						continue
+					}
+					n, err := strconv.ParseUint(lit.Value, 0, 8)
+					if err != nil {
+						continue
+					}
+					vt.kind = byte(n)
+				}
+				out[vs.Names[i].Name] = vt
 			}
 		}
 	}

@@ -5,6 +5,17 @@ import (
 	"testing"
 )
 
+// blockTypeValTypeWord packs a non-indexed valtype blocktype's Imm0 word, for test rows that
+// only care about Imm0 — the indexed form additionally needs Imm1 (see BlockType's comment),
+// which these rows do not exercise, so this helper only covers the kind/null pair.
+func blockTypeValTypeWord(vt ValType) uint64 {
+	word := blockTypeValType | uint64(vt.kind)
+	if vt.null {
+		word |= blockTypeNullBit
+	}
+	return word
+}
+
 // TestDelimitersAreRetained asserts END and ELSE appear in the retained sequence.
 //
 // # The defect this was written for (grave #99)
@@ -63,7 +74,7 @@ func TestDelimitersAreRetained(t *testing.T) {
 			"a nested block's END and the expr's are both kept",
 			[]byte{0x02, 0x7F, 0x41, 0x01, 0x0B, 0x0B},
 			[]Instr{
-				{Op: 0x02, Imm0: blockTypeValType | uint64(I32)},
+				{Op: 0x02, Imm0: blockTypeValTypeWord(I32)},
 				{Op: 0x41, Imm0: 1},
 				{Op: opEnd},
 				{Op: opEnd},
@@ -77,7 +88,7 @@ func TestDelimitersAreRetained(t *testing.T) {
 			"an if's ELSE separates its arms",
 			[]byte{0x04, 0x7F, 0x41, 0x01, 0x05, 0x41, 0x02, 0x0B, 0x0B},
 			[]Instr{
-				{Op: 0x04, Imm0: blockTypeValType | uint64(I32)},
+				{Op: 0x04, Imm0: blockTypeValTypeWord(I32)},
 				{Op: 0x41, Imm0: 1},
 				{Op: opElse},
 				{Op: 0x41, Imm0: 2},

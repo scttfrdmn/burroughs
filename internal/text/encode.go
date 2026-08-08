@@ -952,17 +952,27 @@ func (w *writer) limits(addr64 bool, lim limits) {
 // off, so a module holding one is refused rather than mis-encoded.
 func valTypeByte(v resolvedVal) (byte, bool) {
 	if v.num != "" {
+		// Kind() is the accessor 0018 added for exactly this call shape: every one of the
+		// five numeric/vector ValTypes has a raw wire byte and Kind() returns it unconverted,
+		// keeping this arm's behavior identical to the pre-0018 byte(binary.I32) conversions
+		// it replaces — this PR does not teach the encoder any new capability, only keeps it
+		// compiling against the widened type.
 		switch v.num {
 		case "i32":
-			return byte(binary.I32), true
+			b, _ := binary.I32.Kind()
+			return b, true
 		case "i64":
-			return byte(binary.I64), true
+			b, _ := binary.I64.Kind()
+			return b, true
 		case "f32":
-			return byte(binary.F32), true
+			b, _ := binary.F32.Kind()
+			return b, true
 		case "f64":
-			return byte(binary.F64), true
+			b, _ := binary.F64.Kind()
+			return b, true
 		case "v128":
-			return byte(binary.V128), true
+			b, _ := binary.V128.Kind()
+			return b, true
 		}
 		return 0, false
 	}
@@ -971,9 +981,11 @@ func valTypeByte(v resolvedVal) (byte, bool) {
 	}
 	switch v.abs {
 	case kwFunc:
-		return byte(binary.FuncRef), true
+		b, _ := binary.FuncRef.Kind()
+		return b, true
 	case kwExtern:
-		return byte(binary.ExternRef), true
+		b, _ := binary.ExternRef.Kind()
+		return b, true
 	default:
 		// A real fallback rather than a shrug, which is what `exhaustive`'s
 		// `default-signifies-exhaustive` is asking about: the two arms above are the *entire*
@@ -989,10 +1001,12 @@ func valTypeByte(v resolvedVal) (byte, bool) {
 // absoluteHeaptypeBytes is `heaptype`'s twelve keyword arms as the bytes encode.ml writes
 // (:121-132), keyed by the kind `heaptype` returns.
 //
-// **A table here rather than in `internal/binary`, because `binary.ValType` deliberately cannot hold
-// ten of these** — `module.go`'s comment says so and the sentinel `NoValType` is what it writes
-// instead, so there is no constant to reference and a `switch` would be twelve arms hand-copied from
-// the same place this map is. `FuncRef`/`ExternRef` are referenced rather than re-spelled precisely
+// **A table here rather than in `internal/binary`, because ten of these have no exported
+// byte constant over there** — `binary.ValType` represents every one of them as of 0018, but
+// only FuncRef and ExternRef are named package-level values with a Kind() byte; the other ten
+// are built by the decoder's own unexported refKind, so there is still no constant to
+// reference for them and a `switch` would still be twelve arms hand-copied from the same
+// place this map is. `FuncRef`/`ExternRef` are referenced rather than re-spelled precisely
 // because they *do* exist over there, which keeps the two arms the corpus reaches honest against the
 // decoder's own names.
 //
@@ -1007,20 +1021,24 @@ func valTypeByte(v resolvedVal) (byte, bool) {
 // nibble. Hand-trusting a twelve-row table of adjacent bytes is the accept-direction hazard in its
 // cheapest form — `authority-for-accept-direction-facts`, and `externKindByte`'s tripwire is the
 // shape copied rather than re-derived.
-var absoluteHeaptypeBytes = map[keywordKind]byte{
-	kwAny:      0x6e,                   // -0x12
-	kwEq:       0x6d,                   // -0x13
-	kwI31:      0x6c,                   // -0x14
-	kwStruct:   0x6b,                   // -0x15
-	kwArray:    0x6a,                   // -0x16
-	kwNone:     0x71,                   // -0x0f
-	kwFunc:     byte(binary.FuncRef),   // -0x10
-	kwNofunc:   0x73,                   // -0x0d
-	kwExn:      0x69,                   // -0x17
-	kwNoexn:    0x74,                   // -0x0c
-	kwExtern:   byte(binary.ExternRef), // -0x11
-	kwNoextern: 0x72,                   // -0x0e
-}
+var absoluteHeaptypeBytes = func() map[keywordKind]byte {
+	funcByte, _ := binary.FuncRef.Kind()
+	externByte, _ := binary.ExternRef.Kind()
+	return map[keywordKind]byte{
+		kwAny:      0x6e,       // -0x12
+		kwEq:       0x6d,       // -0x13
+		kwI31:      0x6c,       // -0x14
+		kwStruct:   0x6b,       // -0x15
+		kwArray:    0x6a,       // -0x16
+		kwNone:     0x71,       // -0x0f
+		kwFunc:     funcByte,   // -0x10
+		kwNofunc:   0x73,       // -0x0d
+		kwExn:      0x69,       // -0x17
+		kwNoexn:    0x74,       // -0x0c
+		kwExtern:   externByte, // -0x11
+		kwNoextern: 0x72,       // -0x0e
+	}
+}()
 
 // heapTypeBytes is the encoding of one resolved heap type, and its encodability predicate — the
 // `heaptype` half of what `valTypeByte` does for `reftype` (#8).

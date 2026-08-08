@@ -114,8 +114,7 @@ func (d *Decoder) decodeElemSegment(r *reader) error {
 	// than a zero value: flags 0 and 4 are funcref segments whose type the wire omits, so
 	// leaving ElemType at NoValType would make the field say "unrepresentable" about a
 	// module that plainly declared funcref. That is grave #36's class in a field — an engine
-	// reporting a value its input never held — which decodeRefType's NoValType arm exists to
-	// avoid in the other direction.
+	// reporting a value its input never held.
 	seg.ElemType = FuncRef
 	if flags&(passive|explicit) != 0 {
 		if flags&exprs != 0 {

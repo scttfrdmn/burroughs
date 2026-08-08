@@ -810,7 +810,17 @@ func (c *instrCtx) imm(r *reader, im imm) error {
 		if err := c.d.decodeValType(r); err != nil {
 			return err
 		}
-		c.stage(uint64(c.d.valType))
+		// Packed into one word: kind in the low 8 bits, null in bit 8, and (for the
+		// indexed form only) idx in bits 32-63 — the same three-field layout BlockType's
+		// comment describes, chosen so this arm (unused by any row at the pinned
+		// revision per immStagedBits' note, but a live reader per instrCtx.imm) does not
+		// need a second word for a struct that still fits comfortably in one.
+		word := uint64(c.d.valType.kind)
+		if c.d.valType.null {
+			word |= 1 << 8
+		}
+		word |= uint64(c.d.valType.idx) << 32
+		c.stage(word)
 		return nil
 	case immHeapType:
 		// `let ht = heaptype s` (decode.ml:603, :636-639) — `heaptype`, not `reftype`.
@@ -835,11 +845,19 @@ func (c *instrCtx) imm(r *reader, im imm) error {
 		// mapping a valtype blocktype to a synthetic single-result functype is the
 		// *validator's* arity computation, and doing it here would put #9's work in the
 		// decoder under a name that hides it.
-		bt, err := c.d.decodeBlockTypeValue(r)
+		//
+		// **Two words staged, not one, since 0018's implementation.** The second is the
+		// valtype form's resolved index (module.go's BlockType comment), zero and unread
+		// for the other two forms; staging it unconditionally is what makes Imm1 free for
+		// exactly this purpose across every structural opcode
+		// (TestBlockTypeImm1IsFreeForStructuralOpcodes), rather than staged only on the
+		// branch that needs it.
+		bt, btIdx, err := c.d.decodeBlockTypeValue(r)
 		if err != nil {
 			return err
 		}
 		c.stage(bt)
+		c.stage(btIdx)
 		return nil
 	case immVecValType:
 		// select's optional result-type vector. The types are read and dropped: nothing
@@ -1047,24 +1065,26 @@ func decodeCatch(r *reader) error {
 // string for a byte that is no blocktype at all is `malformed reference type`. The ordering
 // fact is unchanged; the *name* of the message it selects moved one production deeper.)
 func (d *Decoder) decodeBlockType(r *reader) error {
-	_, err := d.decodeBlockTypeValue(r)
+	_, _, err := d.decodeBlockTypeValue(r)
 	return err
 }
 
-// decodeBlockTypeValue is decodeBlockType returning what it read, encoded so a consumer
-// can tell the three forms apart in one word.
+// decodeBlockTypeValue is decodeBlockType returning what it read, encoded across two words
+// so a consumer can tell the three forms apart — and, for the valtype form, recover a
+// GC-gated indexed result — without re-parsing.
 //
-// The encoding: a type index `i` is `i`, the empty result type is `blockTypeEmpty`, and a
-// valtype `t` is `blockTypeValType | uint64(t)`. Three disjoint ranges rather than a
-// struct, because this has to fit an Instr immediate — and disjoint by construction, not
-// by luck: a type index is `s33` and therefore below 2^32 when non-negative, so the two
-// tag bits sit above every legal index.
+// The encoding: a type index `i` is `(i, 0)`, the empty result type is `(blockTypeEmpty, 0)`,
+// and a valtype `t` is `(blockTypeValType | uint64(kind) | null-bit, idx)` — see module.go's
+// comment above the const block for the full packing rule and BlockType for the reader.
+// Disjoint by construction, not by luck: a type index is `s33` and therefore below 2^32 when
+// non-negative, so the two tag bits in the first word sit above every legal index, and the
+// second word is meaningful only for the valtype form.
 //
-// The alternation writes it through a Decoder field for the reason decodeValType does:
+// The alternation writes it through Decoder fields for the reason decodeValType does:
 // `either` takes `func(*reader) error` branches and cannot return a value from the one
 // that matched.
-func (d *Decoder) decodeBlockTypeValue(r *reader) (uint64, error) {
-	err := either(r,
+func (d *Decoder) decodeBlockTypeValue(r *reader) (imm0, imm1 uint64, decodeErr error) {
+	decodeErr = either(r,
 		func(r *reader) error {
 			// `typeuse s33` (decode.ml:160-164): a negative index is `malformed type
 			// index`, which is what sends 0x40 and the valtypes to the next branch.
@@ -1075,7 +1095,7 @@ func (d *Decoder) decodeBlockTypeValue(r *reader) (uint64, error) {
 			if v < 0 {
 				return ErrMalformedTypeIndex
 			}
-			d.blockType = uint64(v)
+			d.blockType, d.blockTypeIdx = uint64(v), 0
 			return nil
 		},
 		func(r *reader) error {
@@ -1089,18 +1109,30 @@ func (d *Decoder) decodeBlockTypeValue(r *reader) (uint64, error) {
 			if b != 0x40 {
 				return errNotEmptyBlockType
 			}
-			d.blockType = blockTypeEmpty
+			d.blockType, d.blockTypeIdx = blockTypeEmpty, 0
 			return nil
 		},
 		func(r *reader) error {
 			if err := d.decodeValType(r); err != nil {
 				return err
 			}
-			d.blockType = blockTypeValType | uint64(d.valType)
+			kind, ok := d.valType.Kind()
+			if !ok {
+				// The indexed reference form: no single wire byte, so the tag carries
+				// kindIndexed and the second word carries the resolved index — see
+				// module.go's BlockType comment for why this needs Imm1 at all.
+				kind = kindIndexed
+			}
+			word := blockTypeValType | uint64(kind)
+			if d.valType.Null() {
+				word |= blockTypeNullBit
+			}
+			d.blockType = word
+			d.blockTypeIdx = uint64(d.valType.Index())
 			return nil
 		},
 	)
-	return d.blockType, err
+	return d.blockType, d.blockTypeIdx, decodeErr
 }
 
 // either is `let rec either fs s` (decode.ml:126-131): try each branch, resetting the

@@ -90,7 +90,23 @@ func sectionPayload(m *binary.Module, id binary.SectionID) ([]byte, bool) {
 // a signature the text does not name.
 const blockTypeImm uint64 = 1 << 33
 
-func blockTypeValTypeImm(t binary.ValType) uint64 { return 1<<34 | uint64(t) }
+// blockTypeValTypeImm packs Imm0 only, per BlockType's two-word signature since 0018's
+// implementation — every caller in this package passes one of the five numeric ValTypes or
+// FuncRef, none of which is the indexed form, so Imm1 (the valtype's resolved index) is
+// always 0 and every caller may safely ignore it via blockTypeOf/BlockType's own second
+// return.
+func blockTypeValTypeImm(t binary.ValType) uint64 {
+	kind, ok := t.Kind()
+	if !ok {
+		panic("blockTypeValTypeImm: no Kind() byte for " + t.String() + " — this helper does " +
+			"not support the indexed form, which needs Imm1 too")
+	}
+	word := uint64(1<<34) | uint64(kind)
+	if t.Null() {
+		word |= 1 << 8
+	}
+	return word
+}
 
 func decodeForTest(t *testing.T, b []byte) *binary.Module {
 	t.Helper()

@@ -1,5 +1,7 @@
 package binary
 
+import "fmt"
+
 // The internal form: what the decoder *retains* rather than merely recognizes.
 //
 // # Why this file exists at all, and why here
@@ -40,49 +42,183 @@ package binary
 // rejection's path must not change shape — while giving the accept direction a
 // destination.
 
-// ValType is a value type, in the spec's own encoding.
+// ValType is a value type: a number/vector kind, or a reference shape wide enough to carry
+// the twelve GC heaptypes and the indexed form alongside Wasm 2.0's two.
 //
-// A byte-width enum rather than a struct, because the encoding *is* the identity for
-// every form this configuration accepts. The values are the spec's negative s7 forms
-// folded to their byte encoding, which is what the decoder already reads — so this type
-// needs no conversion table and cannot disagree with `decodeValType` about what a form is.
+// **A struct rather than a byte, per decision 0018 (option C).** The five number/vector
+// kinds and the two Wasm 2.0 reference kinds still fit one byte, and `kind` is exactly that
+// byte — the encoding the decoder already reads, unconverted. What no longer fits is the
+// other twelve `heaptype` forms `decodeRefType`/`decodeHeapType` validate: `(ref ht)` and
+// `(ref null ht)` are *parameterized*, carrying a nullability bit and, for the indexed form,
+// a resolved type index — two facts a single byte has nowhere to put. `null` and `idx` are
+// those two facts, meaningful only when `kind` names a reference form (a numeric `kind` value
+// leaves both at their zero value, which is exactly what makes the five numeric constants and
+// the two Wasm 2.0 reference constants below identical in behavior to the byte enum this
+// replaces).
 //
-// The twelve GC reference forms do not fit a byte, because `(ref ht)` and `(ref null ht)`
-// are *parameterized* by a heap type. They are not represented here and they do not need
-// to be: `decodeRefType` declines all twelve with a feature-named error while the GC gate
-// is off, so no accepted module can hold one. When the gate flips, this type grows a
-// parameterized case and the growth is forced by the gate, not by a guess made now — the
-// premature-generality trap 0006 names.
-type ValType byte
+// **Three fields of byte/bool/uint32, not a fourth for the pointer that isn't here.** 0002's
+// GC-traceability pin is about a Go pointer hiding inside a `uint64` slot, invisible to the
+// collector; `idx` is a plain index into the module's own type space, exactly as
+// `Func.TypeIndex` already is, so this struct does not reopen that pin. Comparable with `==`
+// by construction — no slice, no map, no pointer field — which is load-bearing: many call
+// sites compare a retained type against a named constant (`t == I32`), and 0018 requires that
+// every one of them keeps compiling and keeps meaning what it meant.
+type ValType struct {
+	// kind is the number/vector byte for the five Wasm 1.0/SIMD forms, or a heaptype tag for
+	// every reference form: Wasm 2.0's two (0x70 func, 0x6F extern), the ten further GC
+	// abstract forms (0x6E any, 0x6D eq, 0x6C i31, 0x6B struct, 0x6A array, 0x71 none, 0x73
+	// nofunc, 0x69 exn, 0x74 noexn, 0x72 noextern), or kindIndexed — the sentinel meaning "the
+	// indexed form; consult idx".
+	kind byte
 
-const (
-	// NoValType is the sentinel for a form this type cannot represent: the twelve GC
-	// reference types, which the GC gate accepts in the all-gates-on lane and which do
-	// not fit a byte.
+	// null is the *spelled* null bit — the wire's own reftype/heaptype-prefix distinction
+	// between `(ref ht)` and `(ref null ht)` — not the reference's semantic nullability. The
+	// two disagree for exactly Wasm 2.0's two abbreviations: `funcref`/`externref` (kind 0x70/
+	// 0x6F) spell non-null here, matching this engine's pre-0018 byte and every existing
+	// `t == FuncRef`-style comparison, while the reference's own model treats them as the
+	// *(Null, FuncHT)*/*(Null, ExternHT)* abbreviations — genuinely nullable. That is not an
+	// error to fix: this field retains what the wire spelled, the same law `LocalGroup` and the
+	// delimiter productions already follow (keep the spelling, not a derived reading of it) —
+	// byte-identical re-encoding of both the abbreviation and its `(ref func)` expansion needs
+	// the distinction kept, not collapsed. A caller that wants the reference's semantic
+	// nullability — non-null under nullable, never the reverse, which is what a subtype check
+	// must get right — calls Nullable(), never this field or Null() directly. Meaningless when
+	// kind names a numeric/vector form, where it is always false.
+	null bool
+
+	// idx is the resolved type index. Meaningful only when kind is kindIndexed; zero
+	// otherwise.
+	idx uint32
+}
+
+// kindIndexed tags the indexed reference form — `(ref $t)` / `(ref null $t)` — inside
+// ValType.kind.
+//
+// **A value outside every legal wire byte, so it cannot collide with one.** `decodeRefType`
+// and `decodeHeapType` read `sleb(7)`, whose legal range is -64..63 folded to a byte
+// (`form & 0x7F`), which spans 0x00-0x7F — every byte a `kind` might otherwise hold. 0x80 sits
+// one past that range, so no numeric/vector byte, no Wasm 2.0 reference byte, and no GC
+// abstract heaptype byte is ever equal to it; the indexed form is the one case with no wire
+// byte of its own to reuse; a real type index is carried in idx instead.
+const kindIndexed byte = 0x80
+
+// The eight named ValTypes, package-level `var` rather than `const` because a struct value
+// is not a Go constant — the same reason resolvedVal's sibling shape (text/typetable.go)
+// could not be `const` either. Not a weaker guarantee: nothing in this package or its
+// consumers assigns through one of these variables, and TestValTypeNamedConstantsAreNotAlias
+// pins that. `declaredValTypes` (module_test.go) reads them from source by walking
+// composite-literal ValueSpecs rather than BasicLits, which is the AST shape that changed
+// with this decision.
+var (
+	// NoValType is the zero ValType: kind 0x00, null false, idx 0.
 	//
-	// It exists because the alternative is worse. `decodeValType`'s out-parameter is
-	// written on every accepting path, so an arm that accepted without writing would
-	// leave the *previous* read's type standing as this one's answer — an engine
-	// reporting a value its input never held, which is grave #36's class relocated from
-	// a message into a field. A named sentinel makes the gap loud at the point a
-	// consumer reads it, where silence would make it a plausible wrong answer.
-	//
-	// 0x00 is safe as the value: it is not the encoding of any type, and it is the zero
-	// value, so a field nothing wrote reads as "unrepresentable" rather than as i32.
-	NoValType ValType = 0x00
+	// 0x00 is not the encoding of any value type, numeric or reference, so a field nothing
+	// wrote reads as "unrepresentable" rather than silently reading as some real type — the
+	// same role it played as the byte enum's sentinel, preserved by being the zero value of
+	// every field rather than of one.
+	NoValType = ValType{}
 
-	I32  ValType = 0x7F
-	I64  ValType = 0x7E
-	F32  ValType = 0x7D
-	F64  ValType = 0x7C
-	V128 ValType = 0x7B
+	I32  = ValType{kind: 0x7F}
+	I64  = ValType{kind: 0x7E}
+	F32  = ValType{kind: 0x7D}
+	F64  = ValType{kind: 0x7C}
+	V128 = ValType{kind: 0x7B}
 
-	// FuncRef and ExternRef are Wasm 2.0's two ungated reference types. The other
-	// twelve reference forms are GC's and arrive with that gate; a module using one is
-	// declined by `decodeRefType` before it reaches here.
-	FuncRef   ValType = 0x70
-	ExternRef ValType = 0x6F
+	// FuncRef and ExternRef are Wasm 2.0's two ungated reference types, non-null by this
+	// engine's existing convention (0018 does not change what these two constants mean, only
+	// what type holds them). The other twelve reference forms are GC's; decodeRefType/
+	// decodeHeapType resolve them into ValTypes with the matching abstract kind, null bit, and
+	// (for the indexed form) idx — see refKind and RefType below.
+	FuncRef   = ValType{kind: 0x70}
+	ExternRef = ValType{kind: 0x6F}
 )
+
+// refKind constructs an abstract-heaptype ValType — one of the twelve GC forms, or Wasm 2.0's
+// FuncRef/ExternRef — with the given nullability.
+//
+// The decoder's own constructor, so `decodeRefType`/`decodeHeapType` never spell out a
+// `ValType{...}` literal at the call site — the struct's field layout is this file's fact,
+// not sections.go's, matching the reasoning BlockType already gives for keeping its packing
+// rule in one place.
+func refKind(kind byte, null bool) ValType {
+	return ValType{kind: kind, null: null}
+}
+
+// RefType constructs the indexed reference form — `(ref $t)` / `(ref null $t)` — naming
+// resolved type index idx.
+//
+// Exported, unlike refKind: the abstract forms are this package's own closed vocabulary and
+// every call site lives here, but the indexed form's index comes from the decoder's read of
+// the module's own type space and both decodeRefType and decodeHeapType (sections.go, two
+// different productions with two different callers) need to build one.
+func RefType(idx uint32, null bool) ValType {
+	return ValType{kind: kindIndexed, null: null, idx: idx}
+}
+
+// IsIndexed reports whether this is the parameterized indexed reference form — `(ref $t)` /
+// `(ref null $t)` — in which case Index and Null are meaningful.
+func (t ValType) IsIndexed() bool {
+	return t.kind == kindIndexed
+}
+
+// Index returns the resolved type index for the indexed reference form. Meaningless, and
+// always 0, when !t.IsIndexed().
+func (t ValType) Index() uint32 {
+	return t.idx
+}
+
+// Null reports the *spelled* null bit — the wire's own reftype/heaptype-prefix distinction —
+// not necessarily the reference's semantic nullability. See the field comment on ValType.null
+// for why the two differ for FuncRef/ExternRef, and call Nullable() when semantic nullability,
+// rather than wire spelling, is the question. Meaningless, and always false, for a
+// numeric/vector ValType.
+func (t ValType) Null() bool {
+	return t.null
+}
+
+// Nullable reports this reference type's *semantic* nullability, per the reference's abbreviation
+// table (decode.ml's `funcref = ref null func` / `externref = ref null extern`) — the fact
+// `match_reftype` needs, since a subtype check must have non-null under nullable and never the
+// reverse (0019's forced consumer).
+//
+// **Diverges from Null() for exactly the two Wasm 2.0 forms**, and only there: `FuncRef`/
+// `ExternRef` spell non-null (ValType.null's field comment states why — backward compatibility
+// with 0018's own requirement) while the reference treats both as nullable abbreviations, so this
+// reports true for them despite Null() reporting false. Every other reference kind — the ten GC
+// abstract forms, and the indexed form regardless of which of the two `(ref …)`/`(ref null …)`
+// prefixes produced it — spells its own real nullability, so Nullable() agrees with Null() for
+// all twelve.
+//
+// This is the one place that divergence may be read; every semantic-nullability question in this
+// codebase (0019's cast/subtype relation, whenever it lands) must call this, never Null() or the
+// raw field, or it will get exactly the bug this accessor exists to head off — a `(ref func)`
+// correctly failing a nullable-target cast while `funcref` incorrectly fails the identical cast
+// because its wire spelling says non-null. Falsified by TestNullableDivergesFromNullForWasm2Forms:
+// mutate this to `return t.null` and the FuncRef/ExternRef subtests fail (nothing else does).
+func (t ValType) Nullable() bool {
+	if t == FuncRef || t == ExternRef {
+		return true
+	}
+	return t.null
+}
+
+// Kind returns the raw kind byte for a ValType that has one: the five numeric/vector wire
+// bytes, or Wasm 2.0's FuncRef (0x70) / ExternRef (0x6F). The second result is false for the
+// indexed form (which has no single byte — consult Index instead) and for NoValType.
+//
+// **The accessor `internal/text`'s encoder needs and nothing more**, per 0018's consequences:
+// this PR does not teach the encoder to emit GC forms, so byte(binary.I32)-style conversions
+// at existing call sites need a replacement that keeps behaving identically for exactly the
+// two Wasm 2.0 reference kinds and the five numeric kinds they already handle. A GC abstract
+// kind (any, eq, i31, …) also has a byte and this reports it — the predicate is "has one
+// wire byte", not "is one of the seven pre-0018 forms" — but nothing in this PR's scope calls
+// Kind with one, since the encoder's own frontier (absoluteHeaptypeBytes) is untouched.
+func (t ValType) Kind() (byte, bool) {
+	if t.kind == kindIndexed {
+		return 0, false
+	}
+	return t.kind, true
+}
 
 func (t ValType) String() string {
 	switch t {
@@ -94,6 +230,13 @@ func (t ValType) String() string {
 		// printing "unknown" for one of those would report a defect in the module where the
 		// truth is a limitation of the engine's representation, which is grave #36's class
 		// (an engine lying about its input) in a String method.
+		//
+		// **Stale as of 0018's implementation**: every GC reference form now has a
+		// representation, so this case names only the genuine zero value — a field nothing
+		// wrote — rather than a form this type declines to hold. Left as "unrepresentable"
+		// rather than folded into "unknown" for the same reason it was split out originally:
+		// the two are still different facts about *why* a String call reached the default,
+		// even though the population that used to reach it is gone.
 		return "unrepresentable"
 	case I32:
 		return "i32"
@@ -110,7 +253,38 @@ func (t ValType) String() string {
 	case ExternRef:
 		return "externref"
 	}
+	if t.kind == kindIndexed {
+		if t.null {
+			return fmt.Sprintf("(ref null %d)", t.idx)
+		}
+		return fmt.Sprintf("(ref %d)", t.idx)
+	}
+	if name, ok := abstractHeapNames[t.kind]; ok {
+		if t.null {
+			return "(ref null " + name + ")"
+		}
+		return "(ref " + name + ")"
+	}
 	return "unknown"
+}
+
+// abstractHeapNames names the ten GC abstract heaptypes String prints, keyed by kind byte —
+// FuncRef/ExternRef never reach this map because their own named cases above intercept them
+// first (their `switch` cases test full-struct equality, matching kind *and* null, and both
+// constants are defined null-false to preserve their pre-0018 byte behavior — see
+// decodeRefType's comment on why the Wasm 2.0 pair is written non-null despite the reference
+// treating `funcref`/`externref` as nullable abbreviations).
+var abstractHeapNames = map[byte]string{
+	0x6E: "any",
+	0x6D: "eq",
+	0x6C: "i31",
+	0x6B: "struct",
+	0x6A: "array",
+	0x71: "none",
+	0x73: "nofunc",
+	0x69: "exn",
+	0x74: "noexn",
+	0x72: "noextern",
 }
 
 // IsRef reports whether values of this type live in the reference array rather than the
@@ -121,8 +295,24 @@ func (t ValType) String() string {
 // value stack is two parallel arrays from the first line of interpreter code — and the
 // predicate that decides which array a slot uses has to exist before any opcode touches
 // the stack. Adding it later means auditing every stack-touching opcode.
+//
+// **Widened per 0018's consequences**, from `t == FuncRef || t == ExternRef` to a range check
+// over every reference-shaped kind: the two Wasm 2.0 forms, the ten further GC abstract
+// forms, and the indexed sentinel. Every one of those is a reference wire-form, so every one
+// belongs in the reference array — including the ten this engine could not represent before
+// 0018's struct, where they were reachable in the all-gates-on lane only as NoValType, which
+// reports numeric (false) and would have misfiled a live reference as a number the moment
+// this type grew a way to name it.
 func (t ValType) IsRef() bool {
-	return t == FuncRef || t == ExternRef
+	if t.kind == kindIndexed {
+		return true
+	}
+	switch t.kind {
+	case FuncRef.kind, ExternRef.kind,
+		0x6E, 0x6D, 0x6C, 0x6B, 0x6A, 0x71, 0x73, 0x69, 0x74, 0x72:
+		return true
+	}
+	return false
 }
 
 // FuncType is a function's signature: the params and results of `functype`.
@@ -354,43 +544,88 @@ type Instr struct {
 	Imm1 uint64
 }
 
-// The blocktype encoding used by Instr.Imm0 for the four structural arms.
+// The blocktype encoding used by Instr.Imm0 (and, as of 0018's implementation, Imm1) for the
+// four structural arms — block, loop, if, try_table.
 //
 // A blocktype is three disjoint things — a type index, the empty result type, or a single
-// valtype — and it has to fit one immediate word. The tags sit above 2^32 because a type
-// index is read as `s33` and is non-negative when it *is* an index, so no legal index can
-// collide with either tag. That is disjointness by construction rather than by an
-// assumption about how many types a module declares.
+// valtype — and the first two still fit Imm0 alone exactly as before: the tags sit above
+// 2^32 because a type index is read as `s33` and is non-negative when it *is* an index, so
+// no legal index can collide with either tag.
+//
+// **The valtype case is what changed, and why it now spills into Imm1.** Before 0018, a
+// bare-valtype blocktype's single result was a `ValType` byte, and `blockTypeValType |
+// uint64(t)` packed it into Imm0's low bits alongside the two tag bits at 33/34 — the whole
+// value fit in one word with room to spare. 0018 widens ValType to a three-field struct
+// (kind byte, null bool, idx uint32) so that a GC-gated `(ref $t)`/`(ref null $t)` result can
+// be represented at all, and a uint32 index plus a kind byte plus a null bit no longer share
+// a word with two tag bits above 2^32 — `kindIndexed` (0x80) alone already exceeds a byte's
+// nice-round low-order slice, and the index needs the full 32 bits BlockType's tag scheme
+// never reserved room for.
+//
+// **The chosen encoding, verified free rather than assumed:** every opcode whose immediates
+// include immBlockType (0x02 block, 0x03 loop, 0x04 if_, 0x1f try_table — optable.go) has no
+// other immediate that stages into Imm1; block/loop/try_table's remaining immediates are
+// immBlock/immCatchVec, both of which stage zero bits (instr_width_test.go's
+// immStagedBits), and if_'s two immBlock arms are its ELSE/END-delimited bodies, also zero
+// bits. So Imm1 is free for every structural opcode and this is not an assumption — it is
+// what TestBlockTypeImm1IsFreeForStructuralOpcodes checks against the generated table rather
+// than against today's four opcodes by name, so a fifth structural arm arriving upstream
+// with its own Imm1 use fails loudly here instead of silently colliding.
+//
+//   - **Imm0** keeps exactly its old three-way tag: a non-negative value is the type-index
+//     form; blockTypeEmpty is the empty form; blockTypeValType tags the valtype form, whose
+//     *kind byte and null bit* — not the whole ValType — pack into Imm0's low bits (kind in
+//     bits 0-7, null in bit 8), because those two fit easily and keeping them beside the tag
+//     is one word closer to the values that determine arity without an index lookup.
+//   - **Imm1** carries the valtype's `idx`, meaningful only when Imm0 tags the indexed
+//     valtype form (kind == kindIndexed) and zero otherwise — including for the type-index
+//     and empty forms, where Imm1 is unused and BlockType does not read it.
 const (
 	// blockTypeEmpty is the `0x40` form: no parameters, no results.
 	blockTypeEmpty uint64 = 1 << 33
 
-	// blockTypeValType tags a single-result blocktype; the low bits hold the ValType.
+	// blockTypeValType tags a single-result blocktype; the low nine bits of Imm0 hold the
+	// ValType's kind byte and null bit, and Imm1 holds its idx when kind is kindIndexed.
 	blockTypeValType uint64 = 1 << 34
+
+	// blockTypeNullBit is the valtype form's nullability, one bit above the eight-bit kind
+	// field packed into Imm0 alongside blockTypeValType.
+	blockTypeNullBit uint64 = 1 << 8
 )
 
-// BlockType reads a structural instruction's `Imm0` back into the three cases the
-// encoding above packs into it.
+// BlockType reads a structural instruction's `Imm0`/`Imm1` back into the three cases the
+// encoding above packs into them.
 //
 // **An accessor rather than exported constants, because the packing is this package's fact
 // and not its consumers'.** The interpreter needs a block's arity — how many values the
 // block yields, so `br` can keep exactly that many and discard the rest — and it needs to
-// ask without knowing that the tags live at bits 33 and 34. Exporting the two constants
-// would put the decoding rule in every consumer that reads a blocktype, which is the
-// two-places-know-one-fact shape; a function keeps it here, where `decodeBlockType` writes
-// it, so the writer and the reader cannot drift.
+// ask without knowing that the tags live at bits 33 and 34 of Imm0, or that a valtype's
+// index rides in Imm1. Exporting the constants would put the decoding rule in every consumer
+// that reads a blocktype, which is the two-places-know-one-fact shape; a function keeps it
+// here, where `decodeBlockTypeValue` writes it, so the writer and the reader cannot drift.
 //
 // The three returns are disjoint by construction and the caller must branch on them in this
 // order — `empty` first, then `valType`, then `typeIdx` — because only the tags distinguish
 // a tagged word from an index, and an index of 0 is legal.
-func BlockType(imm0 uint64) (typeIdx uint32, valType ValType, empty bool) {
+//
+// **Two-word signature, not one**, since 0018's implementation: a valtype result whose kind
+// is the indexed form needs Imm1 for its idx, and BlockType is the one place that packing
+// rule may be read back, so it takes both words rather than making every caller learn which
+// second word to pass. TestBlockTypeFormsMatchTheReference and TestBlockTypeAlternationIsTheAuthority
+// were both updated for the wider call, not rewritten around it.
+func BlockType(imm0, imm1 uint64) (typeIdx uint32, valType ValType, empty bool) {
 	switch {
 	case imm0 == blockTypeEmpty:
-		return 0, 0, true
+		return 0, ValType{}, true
 	case imm0&blockTypeValType != 0:
-		return 0, ValType(imm0 & 0xFF), false
+		kind := byte(imm0 & 0xFF)
+		null := imm0&blockTypeNullBit != 0
+		if kind == kindIndexed {
+			return 0, RefType(uint32(imm1), null), false
+		}
+		return 0, ValType{kind: kind, null: null}, false
 	default:
-		return uint32(imm0), 0, false
+		return uint32(imm0), ValType{}, false
 	}
 }
 
@@ -586,8 +821,10 @@ type ElemSegment struct {
 	Offset []Instr
 
 	// ElemType is the element type: FuncRef for the elemkind forms, whatever the reftype
-	// says for the expression forms. NoValType when the reftype was a GC form this ValType
-	// cannot represent (the all-gates-on lane reaches that).
+	// says for the expression forms — every reftype resolves to a real ValType as of 0018's
+	// implementation, including the ten further GC abstract forms and the indexed form the
+	// all-gates-on lane reaches; there is no longer a form decodeRefType declines to
+	// represent here.
 	ElemType ValType
 
 	// ByExpr distinguishes the two element encodings — wire bit 2. It is a field rather than
