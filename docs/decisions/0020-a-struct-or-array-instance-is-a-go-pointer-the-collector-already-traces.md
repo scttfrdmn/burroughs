@@ -1,0 +1,165 @@
+# 0020 — A struct or array instance is a Go pointer the collector already traces
+
+Date: 2026-08-08 · Status: **proposed** — no stamp exists yet
+
+> Held open per the ruling on #142. Ordered by Scott on 0019's acceptance (PR #176): heap-object
+> representation earns its own document now, on the 0017 authoring bar — a measured, real
+> consumer (zero `0xfb` dispatch today, `struct.new` waiting on `CompType.Fields`) and a choice
+> that propagates into 0002's GC-traceability pin, the value model, and every struct/array arm to
+> come. The option below is offered for his stamp and has not received one.
+
+Filed against **#172** (the GC-gate recon) and milestone **v0.2.0 GC gate**, the fourth decision
+in the sequence 0018/0019 named but did not resolve: `ValType` (0018) supplies the type a runtime
+value's identity is checked against; the subtyping relation (0019) is what checks it; this ADR
+supplies the *value* — what a struct or array instance actually is, once `struct.new`/`array.new`
+exist as executable opcodes.
+
+## Question
+
+`interp` has no `0xfb`-prefix dispatch at all today — confirmed by direct search, not inferred —
+and the reference's own runtime representation for a struct or array (`runtime/aggr.ml`) is
+exactly the kind of allocated, mutable, identity-bearing value this engine has never needed
+before: `global`, `table`, and `memory` are each one Go value holding flat contents, allocated
+once at instantiation or growth, but none of them is *itself* a reference another value can hold
+and compare for identity. A struct or array is. Decide what that Go value is, and how `ref`
+(0002's parallel array, already widened once this milestone by #163's `Inst` field) names it,
+before any `struct.new`/`array.new`/`struct.get`/`array.get` opcode gets an arm.
+
+## What the reference's shape already settles
+
+`Aggr.alloc_struct dt vs` / `alloc_array dt vs` (`runtime/aggr.ml:43-49`) allocate **one runtime
+value per call**, each carrying its own concrete `deftype` (the resolved type identity — not a
+module-relative index, because a recursive or parameterized GC type's identity is a property of
+*which allocation*, not of a static slot) and a `field list`, each field a **mutable** cell
+(`ValField of value ref` for an unpacked field, `PackField of packtype * int ref` for `i8`/`i16`
+storage). Every field access (`read_field`/`write_field`) goes through that cell.
+
+**Reference equality is pointer identity, and `Aggr` does not override it.** `Value.eq_ref' = ref
+(==)` is the base case (`runtime/value.ml:127`), and unlike `i31.ml`/`extern.ml`/`instance.ml`,
+`aggr.ml` registers no `eq_ref'` hook — `ref.eq` on two struct or array references is exactly
+OCaml's physical equality on the allocated value, nothing computed. `i31` needs no allocation at
+all (`type i31 = int`, boxed only by the `ref_` variant tag); `extern` wraps an opaque `ref_` the
+host supplies and this engine's default board never constructs GC-typed externs, so it is out of
+this ADR's scope by absence of a consumer.
+
+## Decision
+
+**A struct or array instance is a Go pointer to a struct this package defines, held directly in
+`ref`'s existing `Addr`-shaped slot — a fourth field, not a fifth representation.**
+
+```go
+// gcObj is a struct or array instance: one allocation per struct.new/array.new call, carrying
+// its own resolved type (not a module-relative index — a struct or array's identity is the
+// allocation, and 0019's subtype relation is checked against this field) and its fields.
+type gcObj struct {
+	typ    *binary.CompType // the concrete type this instance was allocated with (0018/0020's
+	                        // Fields, once that companion decision lands)
+	fields []gcField
+}
+
+// gcField is one field: its value, and whether it stores a packed 8/16-bit integer — the same
+// split runtime/aggr.ml's ValField/PackField make, because unpacking on every read and re-packing
+// on every write is the reference's own behavior for these two storage kinds and not a detail
+// this engine gets to skip.
+type gcField struct {
+	num    uint64 // holds a packed integer directly, or an unpacked numeric value's bits
+	r      ref    // holds a reference-typed field's value; live only when the field's declared
+	              // type is a reference (0002's two-array split, at field granularity)
+	packed bool
+	packBits byte // 8 or 16, meaningful only when packed
+}
+```
+
+`ref` (`value.go`) gains:
+
+```go
+type ref struct {
+	Null bool
+	Addr uint32
+	Inst *Instance
+
+	// Obj is the struct or array instance this reference names, non-nil exactly when the
+	// reference's runtime type is StructRef/ArrayRef. Addr and Inst are meaningless for a GC
+	// object — there is no module-relative index for an allocation, which is the same fact
+	// Inst's own comment states about Addr needing an instance to resolve against: an
+	// allocated object resolves against nothing but itself.
+	Obj *gcObj
+}
+```
+
+**Three properties are load-bearing:**
+
+1. **One Go allocation per `struct.new`/`array.new`, matching the reference's one-OCaml-value-
+   per-call shape and this codebase's own precedent** (`newTable`, `newMemory`, `newGlobal` are
+   each "allocate once, mutate the allocation" — a struct/array instance is the same pattern one
+   level more granular, since it is itself a *value* other values can hold, where `table`/
+   `memory`/`global` are always reached through an index into the instance that owns them).
+2. **`ref.eq` is Go pointer comparison on `Obj`, no custom comparator, because that is what the
+   reference does.** `eq_ref' = ref (==)` and no override in `aggr.ml` means implementing this any
+   other way (a value-based equality, a generated ID compared by number) would be doing work the
+   reference deliberately does not do and risks getting the identity semantics wrong in exactly
+   the case §9 G-3 warns about — two structurally identical but separately-allocated structs must
+   compare unequal, and Go's own `==` on two pointers gets that right for free.
+3. **`Obj` is the fourth field the collector must trace, and it composes with the GC-precision pin
+   `Inst` already satisfies rather than reopening it.** 0002's parallel-array requirement is that
+   nothing the collector must trace hides inside a `uint64`; `*gcObj` is a Go pointer like `*Instance`
+   already is, so `refs []ref` remains the one array 0002 pinned, now carrying two kinds of pointer
+   instead of one. No new array, no new pin.
+
+**Struct/array field *types* are `CompType.Fields`, 0018's own deferral, and this ADR does not
+resolve it — `gcObj.typ` above cites `*binary.CompType` on the assumption that decision lands with
+a `Fields []FieldType` (or equivalent) the decoder retains; if that companion decision chooses a
+different shape, `gcObj.typ`'s type changes to match and nothing else in this ADR does, since
+`gcObj` only ever asks its type for two things — how many fields, and each field's storage kind —
+both of which are `CompType.Fields`' whole content however it ends up shaped.**
+
+## Options considered
+
+- **A — an index into a per-instance heap slice, `Addr`-shaped like a funcref (rejected).** Denser,
+  and it is the option `ref.Inst`'s own comment already rejected once for funcrefs on the same
+  ground: it makes the reference mean something only the owning instance's heap slice can resolve,
+  and a struct/array's *identity* — the fact `ref.eq` needs — becomes "same instance, same index"
+  instead of "same allocation," which is a heavier invariant to hold across `table.copy`/
+  `global.set` moving the reference between instances than a bare pointer is. GC objects can
+  outlive the frame or even the instance that allocated them (a struct stored into an imported
+  table, exactly `ref.Inst`'s own motivating case) — a heap slice tied to one instance's lifetime
+  is the wrong scope for a value that must outlive it.
+- **B — copy-on-read, no persistent identity (rejected on correctness, the same shape 0017 Q2's
+  option C was rejected on).** A struct is defined by having identity and mutable fields — copying
+  it on every load would make `struct.set` through one reference invisible to a second reference
+  to the same object, which is a wrong answer the moment two locals alias the same struct, not
+  merely a slower one. Rejected the way 0017 rejected copying a callee's `Func` into a table slot:
+  correctness, not cost.
+- **C — a Go pointer, held in a new `ref` field (chosen).** See Decision.
+
+## What this does not decide
+
+- **`CompType.Fields`' own shape** (0018's deferral) — this ADR's `gcObj.typ` is written against
+  whatever that decision produces, not the reverse.
+- **Packing/unpacking arithmetic's exact placement** (a `gcField` method vs. inline at each
+  `struct.get`/`array.get` arm) — an implementation detail the PR that lands these opcodes decides,
+  not a representation question this ADR needs to settle.
+- **`extern`'s GC-typed case** — no consumer on the default board (0019's own scoping move,
+  repeated here for the same reason), named so a future reader does not read the silence as an
+  oversight.
+- **Any change to `ref.Inst`'s existing meaning for funcrefs.** `Obj` is a new, disjoint field;
+  a funcref never sets it and a struct/arrayref never sets `Addr`/`Inst`. `Null` alone continues
+  to mean "no value," independent of which of the two payload shapes a non-null reference carries.
+
+## Consequences
+
+- **`ref` grows to four fields plus `Null`, the second widening of the same struct in one
+  milestone** (0018's own ADR named this direction; this is where it lands). Every existing
+  construction site (`segmentRefs`, `constExprRef`, `table.grow`'s fill value, `global.set`) sets
+  `Obj` to nil implicitly (Go's zero value), so no existing call site needs to change to keep
+  compiling correctly — only the new `struct.new`/`array.new` arms set it.
+- **`struct.get`/`struct.set`/`array.get`/`array.set`/`array.len` become buildable once
+  `CompType.Fields` (0018's companion) lands**, reading/writing through `gcObj.fields` exactly as
+  `Aggr.read_field`/`write_field` do, packing and unpacking on the same two storage kinds the
+  decoder already parses (`decodeStorageType`, per #172's survey).
+- **`ref.eq` becomes a one-line arm**: two references are equal if both null, or if neither is null
+  and (for the GC case) `Obj` pointers match — composeable with whatever `func`/`extern`/`i31`
+  equality 0019's scope eventually needs, without this ADR deciding those.
+- **No change to `binary`'s decode side or `text`'s encode side.** This ADR is purely
+  `internal/interp`'s runtime value model; the wire format (0018) and the grammar (already
+  finished, per #172's survey) are unaffected.
