@@ -19,6 +19,10 @@ weakly-ordered platform.
 ## [Unreleased]
 *Implements contract v0.1.*
 
+### Fixed
+
+- **`funcref`/`externref` decoded with the wrong nullability, colliding with `(ref func)`/`(ref extern)` and splitting from `(ref null func)`/`(ref null extern)`** ([grave #180](https://github.com/scttfrdmn/burroughs/issues/180)). #179's `decodeRefType` hardcoded `null: false` for the bare Wasm 2.0 abbreviations, framed at review as retaining the wire's *spelled* nullability rather than its semantic meaning — but the reference's own grammar defines `funcref = ref null func`: the abbreviation *is* the nullable spelling, with no bare byte for a non-null func reference at all. So `funcref == (ref func)` read `true` (should be `false` — different spec types) and `funcref == (ref null func)` read `false` (should be `true` — the same spec type, spelled two ways) — backwards on both relations, with second-order effects on `Nullable()` (whose special-case arm existed only to paper over this) and `String()` (`(ref null func)` printed `"unknown"`). Fixed by decoding the abbreviation to its true nullable meaning and moving `FuncRef`/`ExternRef` to `null: true` in lockstep, so every existing `t == FuncRef`-style comparison keeps compiling and returning the same answer — the two constants and the decoder arm were never independently observable, only their mutual agreement was, and that agreement now means *type identity* rather than wire-spelling identity. `Nullable()`'s special case is removed; `Null()` alone now answers both what #179 asked of it and what it was split off to avoid. A sibling gap swept up in the same pass: `abstractHeapNames` never had entries for `func`/`extern`'s kind bytes, so the genuinely non-null `(ref func)`/`(ref extern)` printed `"unknown"` since 0018's implementation (#179) — not introduced by this fix, found alongside it. The review ruling that shaped #179's implementation shared the cause (reasoned about a re-encoding consumer for spelled-bit retention that measurement shows does not exist) and is recorded as such at the grave.
+
 ### Added
 
 - **`binary.ValType` widens from a byte to a three-field struct (`kind`, `null`, `idx`)**,

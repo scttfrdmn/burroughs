@@ -71,19 +71,21 @@ type ValType struct {
 	// indexed form; consult idx".
 	kind byte
 
-	// null is the *spelled* null bit — the wire's own reftype/heaptype-prefix distinction
-	// between `(ref ht)` and `(ref null ht)` — not the reference's semantic nullability. The
-	// two disagree for exactly Wasm 2.0's two abbreviations: `funcref`/`externref` (kind 0x70/
-	// 0x6F) spell non-null here, matching this engine's pre-0018 byte and every existing
-	// `t == FuncRef`-style comparison, while the reference's own model treats them as the
-	// *(Null, FuncHT)*/*(Null, ExternHT)* abbreviations — genuinely nullable. That is not an
-	// error to fix: this field retains what the wire spelled, the same law `LocalGroup` and the
-	// delimiter productions already follow (keep the spelling, not a derived reading of it) —
-	// byte-identical re-encoding of both the abbreviation and its `(ref func)` expansion needs
-	// the distinction kept, not collapsed. A caller that wants the reference's semantic
-	// nullability — non-null under nullable, never the reverse, which is what a subtype check
-	// must get right — calls Nullable(), never this field or Null() directly. Meaningless when
-	// kind names a numeric/vector form, where it is always false.
+	// null is this reference type's semantic nullability, per the reference's own model —
+	// `match_reftype`'s fact, the one a subtype check needs (non-null under nullable, never the
+	// reverse). Meaningless when kind names a numeric/vector form, where it is always false.
+	//
+	// **Normalized at decode time, not spelled-bit retention** (grave #180, correcting a ruling
+	// made on #179 that this field should retain the wire's *spelled* null bit instead — that
+	// framing collapsed under its own worked example: `funcref` and `(ref func)` differ in the
+	// spec and collided under it, while `funcref` and `(ref null func)` are the *same* spec type
+	// and split apart. `decodeRefType`'s Wasm 2.0 branch expands the bare abbreviation to its
+	// true nullable meaning (decode.ml's `funcref = ref null func`) rather than hardcoding
+	// non-null for backward compatibility — see FuncRef/ExternRef below for the constants this
+	// forces to move in lockstep. The load-bearing argument for spelled-bit retention was that
+	// byte-identical re-encoding needs the distinction — checked and found false: nothing on the
+	// decode side re-encodes a decoded module, so there was no consumer for the shape it was
+	// blessed to serve.
 	null bool
 
 	// idx is the resolved type index. Meaningful only when kind is kindIndexed; zero
@@ -124,13 +126,18 @@ var (
 	F64  = ValType{kind: 0x7C}
 	V128 = ValType{kind: 0x7B}
 
-	// FuncRef and ExternRef are Wasm 2.0's two ungated reference types, non-null by this
-	// engine's existing convention (0018 does not change what these two constants mean, only
-	// what type holds them). The other twelve reference forms are GC's; decodeRefType/
+	// FuncRef and ExternRef are Wasm 2.0's two ungated reference types, **nullable** — the
+	// reference's own abbreviation (`funcref = ref null func`), corrected here from the non-null
+	// value #179 shipped (grave #180). Every existing `t == FuncRef`-style comparison keeps
+	// compiling and keeps returning the same answer it always did, because this constant moved
+	// in lockstep with decodeRefType's Wasm 2.0 branch — the two were never independently
+	// observable from outside this package, only their agreement was. What changes is what `==`
+	// now means: type identity (`funcref == (ref null func)`, `funcref != (ref func)`) rather
+	// than wire-spelling identity. The other twelve reference forms are GC's; decodeRefType/
 	// decodeHeapType resolve them into ValTypes with the matching abstract kind, null bit, and
 	// (for the indexed form) idx — see refKind and RefType below.
-	FuncRef   = ValType{kind: 0x70}
-	ExternRef = ValType{kind: 0x6F}
+	FuncRef   = ValType{kind: 0x70, null: true}
+	ExternRef = ValType{kind: 0x6F, null: true}
 )
 
 // refKind constructs an abstract-heaptype ValType — one of the twelve GC forms, or Wasm 2.0's
@@ -167,38 +174,19 @@ func (t ValType) Index() uint32 {
 	return t.idx
 }
 
-// Null reports the *spelled* null bit — the wire's own reftype/heaptype-prefix distinction —
-// not necessarily the reference's semantic nullability. See the field comment on ValType.null
-// for why the two differ for FuncRef/ExternRef, and call Nullable() when semantic nullability,
-// rather than wire spelling, is the question. Meaningless, and always false, for a
-// numeric/vector ValType.
+// Null reports this reference type's nullability — `match_reftype`'s fact, the one a subtype
+// check needs (non-null under nullable, never the reverse; 0019's forced consumer). Meaningless,
+// and always false, for a numeric/vector ValType.
+//
+// **Semantic, not wire-spelling, as of grave #180's fix.** #179 shipped this as the *spelled*
+// null bit (the wire's own reftype/heaptype-prefix distinction) with a separate Nullable()
+// accessor for semantic nullability, on the argument that FuncRef/ExternRef's spelled bit and
+// semantic nullability genuinely differ. They don't have to: decodeRefType now normalizes the
+// bare abbreviation to its true nullable meaning at decode time (FuncRef/ExternRef moved to
+// null:true in lockstep), so this single field is correct under both readings and the two-accessor
+// split doesn't exist anymore. See ValType.null's field comment for the full account, including
+// why the old split was itself part of the defect.
 func (t ValType) Null() bool {
-	return t.null
-}
-
-// Nullable reports this reference type's *semantic* nullability, per the reference's abbreviation
-// table (decode.ml's `funcref = ref null func` / `externref = ref null extern`) — the fact
-// `match_reftype` needs, since a subtype check must have non-null under nullable and never the
-// reverse (0019's forced consumer).
-//
-// **Diverges from Null() for exactly the two Wasm 2.0 forms**, and only there: `FuncRef`/
-// `ExternRef` spell non-null (ValType.null's field comment states why — backward compatibility
-// with 0018's own requirement) while the reference treats both as nullable abbreviations, so this
-// reports true for them despite Null() reporting false. Every other reference kind — the ten GC
-// abstract forms, and the indexed form regardless of which of the two `(ref …)`/`(ref null …)`
-// prefixes produced it — spells its own real nullability, so Nullable() agrees with Null() for
-// all twelve.
-//
-// This is the one place that divergence may be read; every semantic-nullability question in this
-// codebase (0019's cast/subtype relation, whenever it lands) must call this, never Null() or the
-// raw field, or it will get exactly the bug this accessor exists to head off — a `(ref func)`
-// correctly failing a nullable-target cast while `funcref` incorrectly fails the identical cast
-// because its wire spelling says non-null. Falsified by TestNullableDivergesFromNullForWasm2Forms:
-// mutate this to `return t.null` and the FuncRef/ExternRef subtests fail (nothing else does).
-func (t ValType) Nullable() bool {
-	if t == FuncRef || t == ExternRef {
-		return true
-	}
 	return t.null
 }
 
@@ -268,12 +256,16 @@ func (t ValType) String() string {
 	return "unknown"
 }
 
-// abstractHeapNames names the ten GC abstract heaptypes String prints, keyed by kind byte —
-// FuncRef/ExternRef never reach this map because their own named cases above intercept them
-// first (their `switch` cases test full-struct equality, matching kind *and* null, and both
-// constants are defined null-false to preserve their pre-0018 byte behavior — see
-// decodeRefType's comment on why the Wasm 2.0 pair is written non-null despite the reference
-// treating `funcref`/`externref` as nullable abbreviations).
+// abstractHeapNames names every abstract heaptype String can print by kind byte, including
+// func/extern (0x70/0x6F): FuncRef/ExternRef's own named cases above intercept the *nullable*
+// spelling (`switch` tests full-struct equality, matching kind *and* null, and both constants are
+// null:true as of grave #180's fix, so `funcref`/`(ref null func)` match there directly) — but
+// `(ref func)`/`(ref extern)`, the genuinely non-null spelling, is a different ValType that falls
+// through to this map, and needs its own entry or String prints "unknown" for a well-formed type.
+// That gap predates #180 (present since 0018's implementation, PR #179) and is fixed alongside it
+// as the same sweep-after-a-grave: a struct/array kind reaching here needed a name and got one; the
+// two Wasm 2.0 kinds needed the identical treatment for their non-null spelling and had not gotten
+// it. TestValTypeStringMatchesTheReferenceOnFuncExternNonNull pins the fix.
 var abstractHeapNames = map[byte]string{
 	0x6E: "any",
 	0x6D: "eq",
@@ -285,6 +277,8 @@ var abstractHeapNames = map[byte]string{
 	0x69: "exn",
 	0x74: "noexn",
 	0x72: "noextern",
+	0x70: "func",
+	0x6F: "extern",
 }
 
 // IsRef reports whether values of this type live in the reference array rather than the
