@@ -1,11 +1,25 @@
 # 0018 — A wide value type mirrors the wire form's `heaptype`, not the text side's `resolvedVal`
 
-Date: 2026-08-08 · Status: **proposed** — no stamp exists yet
+Date: 2026-08-08 · Status: **accepted** — option C, stamped by Scott on PR #173
 
-> Held open per the ruling on #142: *a status field is a citation to an approval, and approvals
-> are artifacts with provenance.* Scott ordered this ADR authored (PR #171's report, "author the
-> value-type ADR") and has not ruled on the option; the two are different acts and only one of
-> them has happened.
+> Held at `proposed` while it had no stamp, per the ruling on #142: *a status field is a
+> citation to an approval, and approvals are artifacts with provenance.* Scott ordered this ADR
+> authored (PR #171's report, "author the value-type ADR"); the stamp arrived separately, on
+> PR #173's bound-green report — option C accepted on the basis this record states, with the
+> re-derivation-not-copying method named as the load-bearing part: consult `resolvedVal` for its
+> *shape*, never for its artifact, which keeps `internal/binary`'s representation answering to
+> the wire form rather than to the text side's convenience (0011's authority-polarity spirit
+> applied to a struct definition). Both rejections were also affirmed on precedent rather than
+> re-argued: sentinel-in-place reproduces the byte-sized-`ValType` trap this ADR exists to
+> escape, twelvefold; the boxed-value option dying on 0002's old measurement is a legitimate
+> *a fortiori* — a shape killed on a cooler path stays dead on a hotter one without needing a
+> new benchmark.
+>
+> Three deferrals travel into **0019** as its explicit agenda rather than as loose ends:
+> subtyping's execution-time shape, struct/array field retention (`CompType.Fields`, downstream
+> of this `ValType` but not decided by it), and the ref-widening direction this ADR named but did
+> not resolve (the second growth of the same struct family in one milestone, #163's `Inst` field
+> being the first).
 
 Filed against **#172** (the GC-gate recon) and milestone **v0.2.0 GC gate**. Per *one ADR earns
 one implementation*, this is the first of the two ADRs the recon named as forced — this one, then
