@@ -2411,6 +2411,57 @@ var encodableModules = []struct {
 			{Op: 0x0b},
 		}}},
 	},
+
+	// #188's arrival: a **symbolic** field name on `struct.get`/`struct.set`, resolved against the
+	// specific struct type the first index names — `struct.wast:99`'s `(struct.get $vec $y
+	// (local.get $v))` shape. Three named fields, so a wrong resolution (an off-by-one, or a fixed
+	// field 0) is distinguishable from a correct one rather than passing by coincidence — the same
+	// discipline the numeric-field rows above already follow, extended to the case those rows
+	// explicitly declined to cover.
+	{
+		src: `(module (type $vec (struct (field f32) (field $y (mut f32)) (field $z f32)))
+			(func (param $v (ref $vec)) (result f32) (struct.get $vec $y (local.get $v))))`,
+		// The struct, plus the func's own inline signature (one `(ref $vec)` non-null param, one f32
+		// result), interned at index 1.
+		want: []binary.CompType{
+			{Kind: binary.CompStruct, Fields: []binary.FieldType{
+				{Storage: binary.StorageType{Val: binary.F32}},
+				{Storage: binary.StorageType{Val: binary.F32}, Mutable: true},
+				{Storage: binary.StorageType{Val: binary.F32}},
+			}},
+			{Kind: binary.CompFunc, Func: binary.FuncType{
+				Params:  []binary.ValType{binary.RefType(0, false)},
+				Results: []binary.ValType{binary.F32},
+			}},
+		},
+		wantFuncs: []binary.Func{{TypeIndex: 1, Body: []binary.Instr{
+			{Op: 0x20, Imm0: 0},
+			{Op: 0x2, Prefix: 0xfb, Imm0: 0, Imm1: 1}, // struct.get $vec(0) $y -> field 1
+			{Op: 0x0b},
+		}}},
+	},
+	{
+		src: `(module (type $vec (struct (field f32) (field $y (mut f32)) (field $z f32)))
+			(func (param $v (ref $vec)) (param $y f32) (struct.set $vec $y (local.get $v) (local.get $y))))`,
+		// The struct, plus the func's own inline signature (one `(ref $vec)` non-null param, one f32
+		// param, no results), interned at index 1.
+		want: []binary.CompType{
+			{Kind: binary.CompStruct, Fields: []binary.FieldType{
+				{Storage: binary.StorageType{Val: binary.F32}},
+				{Storage: binary.StorageType{Val: binary.F32}, Mutable: true},
+				{Storage: binary.StorageType{Val: binary.F32}},
+			}},
+			{Kind: binary.CompFunc, Func: binary.FuncType{
+				Params: []binary.ValType{binary.RefType(0, false), binary.F32},
+			}},
+		},
+		wantFuncs: []binary.Func{{TypeIndex: 1, Body: []binary.Instr{
+			{Op: 0x20, Imm0: 0},
+			{Op: 0x20, Imm0: 1},
+			{Op: 0x5, Prefix: 0xfb, Imm0: 0, Imm1: 1}, // struct.set $vec(0) $y -> field 1
+			{Op: 0x0b},
+		}}},
+	},
 }
 
 // dataFill is the payload the two page-boundary rows above expect, stated as an argument rather than
@@ -2476,8 +2527,17 @@ func TestEncodeRoundTripsThroughTheDecoder(t *testing.T) {
 	// **Raised with section 6 (#8): 153→171 rows, 62→68 bodies, and a new partition at 11.** Moved in
 	// the same edit that grew the table, which is what the paragraph above asks for and what the
 	// paragraph above records not having been done last time.
-	if len(encodableModules) < 164 {
-		t.Fatalf("encodableModules has %d rows, want >=164 (171 at this commit): a table this check "+
+	//
+	// **Raised again for #188: 177→179 rows, 74→76 bodies, measured immediately before this edit
+	// rather than assumed from the last recorded figure.** The two intervening PRs (the `immIdxIdx`/
+	// `immIdxNat32` retention that closed #183's bucket to six, and whatever landed between it and
+	// this one) had already moved the table to 177/74 without this floor following — the same drift
+	// this comment's own history already records once, and the honest fix is the same each time:
+	// measure the actual count rather than trust the trailing comment's number, then move both
+	// together. The two new rows are `struct.wast:99`/`:106`'s symbolic-field-name `struct.get`/
+	// `struct.set` shape, the case `idxPairRetained`'s comment used to name as the gap #188 closes.
+	if len(encodableModules) < 179 {
+		t.Fatalf("encodableModules has %d rows, want >=179 (179 at this commit): a table this check "+
 			"reads is a table whose size is part of the assertion, since a comparison over an empty "+
 			"set succeeds", len(encodableModules))
 	}
@@ -2502,8 +2562,9 @@ func TestEncodeRoundTripsThroughTheDecoder(t *testing.T) {
 			withLabels++
 		}
 	}
-	if withFuncs < 64 {
-		t.Fatalf("only %d of %d encodableModules rows assert a function body, want >=64 (68 at this "+
+	// Raised alongside the table's own floor for #188: 74→76, the two new rows both carrying bodies.
+	if withFuncs < 76 {
+		t.Fatalf("only %d of %d encodableModules rows assert a function body, want >=76 (76 at this "+
 			"commit): the code section is the newest and least-covered half of this table, and a "+
 			"total-only floor would let its rows go to zero behind the other sections'",
 			withFuncs, len(encodableModules))
