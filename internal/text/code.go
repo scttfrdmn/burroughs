@@ -699,19 +699,14 @@ func (p *parser) retainIdxPair(mnemonic Token, first, second idxRef, havePair bo
 // reaches `idxSpaceFor` at all, so `struct.get 0 1` and `struct.set $vec 0` retain through the
 // identical call a `table.copy` pair does.
 //
-// **This does not cover the whole corpus, and the gap is real rather than declined-because-
-// unneeded — measured, not assumed.** `struct.wast` has six `assert_return` vectors
-// (`get_vec_y`, `set_get_y`, `set_get_1`, …) that use a **symbolic field name** —
-// `(struct.get $vec $y (local.get $v))` — and every one of them still fails after this
-// function lands: the symbolic name reaches `idxSpaceFor(catFieldOfType)`'s nil space and is
-// refused with the same "(#8)" message every other unresolvable category already gives.
-// Resolving them needs a per-struct-type field-name space this stratum does not have (0021
-// retains a struct's field *storage*, not its names, by the wire-form authority — see
-// `fieldType`'s comment) — `structtype`'s local `fields` binding (`internal/text/types.go`) is
-// discarded when the function returns, and nothing threads it to encode time. That is a
-// separate, larger piece of work than this function's uniform reader, and is filed as its own
-// follow-up rather than attempted here — do not read this function's numeric-fast-path finding
-// as "struct.wast is done," which it measurably is not.
+// **A symbolic field name is the one case `idxSpaceFor` cannot answer, and it is split off to
+// `structFieldPairRetained` rather than folded into the uniform path (#188).** `struct.wast` has
+// six `assert_return` vectors (`get_vec_y`, `set_get_y`, `set_get_1`, and the three that
+// share their module) using `(struct.get $vec $y (local.get $v))` — a symbolic field name
+// resolved against the field space *of the struct type the first index names*, per
+// `catFieldOfType`'s comment. `compType.fieldNames` (typetable.go) is where `structtype`'s
+// per-struct binding now survives past its own function, and `structFieldPairRetained` is its
+// one reader.
 //
 // None of the seven mnemonics reverses (`initReversedKinds` names only `TABLE_INIT`/`MEMORY_INIT`,
 // the sugar-arm pair), so the write order is the parse order throughout, unlike `retainIdxPair`
@@ -726,10 +721,103 @@ func (p *parser) idxPairRetained(mnemonic Token) error {
 		return err
 	}
 	cats := pairCategories(mnemonic.Keyword)
+	if cats.second == catFieldOfType {
+		// The only two mnemonics that reach here are STRUCT_GET and STRUCT_SET — see
+		// idxPairLookupKinds — and both need the first index's *value*, not merely its
+		// category, before the second can resolve. Splitting them out here rather than
+		// widening retainIdxIn keeps every other category's resolution uniform: catType's
+		// resolution for the five ordinary pairs above is untouched.
+		return p.structFieldPairRetained(mnemonic, first, second)
+	}
 	if err := p.retainIdxIn(mnemonic, first, cats.first); err != nil {
 		return err
 	}
 	return p.retainIdxIn(mnemonic, second, cats.second)
+}
+
+// structFieldPairRetained retains STRUCT_GET/STRUCT_SET's `idx idx` pair, resolving the second
+// index against the *specific* struct type the first names (#188).
+//
+// **Why this cannot go through `retainIdxIn`'s uniform path.** Every other category `idxSpaceFor`
+// answers is a single module-level space, so `retainIdxIn` needs only the *category* to resolve a
+// symbolic index. `catFieldOfType` is different by construction — the reference's own production
+// is `let x = $2 c type_ in $1 x ($3 c (field x.it)).it` (parser.mly:622) — `field x.it` looks up
+// the per-struct field space that belongs to type `x`, and `x` is not knowable until the *first*
+// index has actually been resolved to a number. So the second index's resolution depends on the
+// first's value, not merely on a category constant, which is the one respect in which this pair
+// differs from `table.init`'s `{catTable, catElem}` (two categories, but neither depends on the
+// other's value) or `array.copy`'s `{catType, catType}` (one category, shared).
+//
+// **The first index resolves exactly as it would through the uniform path.** `catType` is never
+// `catFunc` or `catLocal`, so `retainIdxIn`'s branches for those two categories never apply to it
+// — its only behavior there is `space.resolveSpaceIdx(r)` against `&p.ctx.types`, which
+// `p.ctx.resolveTypeIdx` performs directly (typetable.go), reading the identical map. Calling it
+// here rather than through `retainIdxIn` avoids resolving the same name twice for no reason: this
+// function needs the resolved *value* regardless, to hand to the field lookup, so there is nothing
+// left for the generic wrapper to add.
+//
+// **The forward-referencing sub-case refuses rather than guesses, and that is measured rather than
+// assumed to be unneeded.** `struct.get $futuretype $field` naming a struct type defined later in
+// the module is legal wat — nothing in the grammar requires a type to precede its use by a
+// non-function-typed index any more than `imports.wast:62` requires a function's type to. But the
+// suite has no vector for it: a scan of every `struct.get`/`struct.set` in the corpus (all 254
+// files) found the type-naming index always resolves to a type already fully defined earlier in
+// the same module, for the six symbolic-field vectors and for every numeric-field one. So the
+// refusal below costs nothing on the board today, and it is honest about the module it declines
+// rather than reporting a number the type table cannot yet supply.
+func (p *parser) structFieldPairRetained(mnemonic Token, first, second idxRef) error {
+	if !p.retaining() {
+		return nil
+	}
+	typeIdx, err := p.ctx.resolveTypeIdx(first)
+	if err != nil {
+		return err
+	}
+	p.appendImm(encodeLocalIdx(typeIdx))
+	fieldIdx, err := p.resolveFieldIdx(mnemonic, typeIdx, second)
+	if err != nil {
+		return err
+	}
+	p.appendImm(encodeLocalIdx(fieldIdx))
+	return nil
+}
+
+// resolveFieldIdx resolves STRUCT_GET/STRUCT_SET's second index against the field space of the
+// struct or array type `typeIdx` names (#188).
+//
+// A numeric field index needs no resolution — `retainIdxIn`'s numeric fast path, reproduced here
+// because this function is the second index's *only* path once its category is known to be
+// `catFieldOfType`; there is no generic wrapper left to supply it.
+//
+// The symbolic case needs `typeIdx` to already be defined: `p.ctx.typeDefs` is appended in source
+// order as each `(type …)` field is parsed (`defineType`, typetable.go), synchronously with the
+// name binding `resolveTypeIdx` just consulted — both happen inside one call to `typeDef`, so if
+// the name resolved, the definition it names has already been appended. A numeric type index can
+// still name a not-yet-parsed type, though — `nat32` performs no lookup at all — and that is the
+// one case handled by the bounds check rather than assumed away.
+//
+// A type that resolves but is a `compFunc` or a fieldless `compArray` — the grammar never lets an
+// array bind a field name, `arraytype` having no `bindidx` arm — falls into the same "not found"
+// branch as a genuinely unknown name: `fieldNames` is nil for both, and a nil map read reports
+// "not found" exactly as an empty one would, so there is nothing to special-case.
+func (p *parser) resolveFieldIdx(mnemonic Token, typeIdx uint32, r idxRef) (uint32, error) {
+	if !r.isVar {
+		return r.idx, nil
+	}
+	if typeIdx >= uint32(len(p.ctx.typeDefs)) {
+		return 0, errf(r.tok,
+			"cannot yet encode a symbolic field name on %s naming a forward-referenced type (#188)",
+			mnemonic.Text)
+	}
+	if i, ok := p.ctx.typeDefs[typeIdx].fieldNames[r.name]; ok {
+		return i, nil
+	}
+	// The reference's own message, `lookup "field " …` (parser.mly:162-163) — the trailing space
+	// is the same quirk `lookupLabel` reproduces for `label `, and for the identical reason: the
+	// suite reads only as far as its expected string, and no vector in the corpus reaches this
+	// branch (measured — every struct.get/struct.set in the corpus names a bound field), so this
+	// is ours alone to keep honest against the authority rather than against a vector.
+	return 0, errf(r.tok, "unknown field  %s", r.tok.Text)
 }
 
 // constImmRetained is constImm plus the encoded immediate.

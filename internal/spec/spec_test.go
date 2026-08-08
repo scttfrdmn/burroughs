@@ -4495,6 +4495,16 @@ func TestGatedVectors(t *testing.T) {
 			121: "gc: struct/array opcode (0xfb prefix) — the module at :106 this action runs against",
 		},
 		"struct.wast": {
+			// #188: the symbolic-field-name struct.get/struct.set resolution converts these six
+			// from `fail` (encode-column "cannot yet encode a symbolic index on struct.get")
+			// to askable — the module at :70 now decodes, and the GC gate (0xfb prefix, off by
+			// default) is what declines the six assert_returns that invoke against it.
+			124: "gc: struct/array opcode (0xfb prefix) — the module at :70 this action runs against",
+			125: "gc: struct/array opcode (0xfb prefix) — the module at :70 this action runs against",
+			126: "gc: struct/array opcode (0xfb prefix) — the module at :70 this action runs against",
+			127: "gc: struct/array opcode (0xfb prefix) — the module at :70 this action runs against",
+			129: "gc: struct/array opcode (0xfb prefix) — the module at :70 this action runs against",
+			130: "gc: struct/array opcode (0xfb prefix) — the module at :70 this action runs against",
 			155: "gc: struct/array opcode (0xfb prefix) — the module at :145 this action runs against",
 			156: "gc: struct/array opcode (0xfb prefix) — the module at :145 this action runs against",
 			219: "gc: struct/array opcode (0xfb prefix) — the module at :160 this action runs against",

@@ -21,6 +21,31 @@ weakly-ordered platform.
 
 ### Added
 
+- **The text encoder resolves a symbolic field name on `struct.get`/`struct.set`** (#188), the
+  remainder #183's own PR named and declined to fold in: `(struct.get $vec $y (local.get $v))`,
+  where `$y` names a field by identifier rather than by number. `structtype`
+  (`internal/text/types.go`) now returns the name-to-index binding it always built locally to
+  enforce the duplicate-field check, and `compType` (`internal/text/typetable.go`) grows a
+  `fieldNames map[string]uint32` field carrying it forward from parse time — a field *name* binds
+  to a position and never to a type index, so nothing about it needs the deferred phase's
+  forward-reference machinery, unlike `fields`/`ft`. `idxPairRetained`
+  (`internal/text/code.go`) routes `STRUCT_GET`/`STRUCT_SET` through a new
+  `structFieldPairRetained` when the second category is `catFieldOfType`: the first index
+  resolves to a concrete type index via `resolveTypeIdx`, and `resolveFieldIdx` looks the field
+  name up against that specific type's `fieldNames`, encoding the resulting position. A
+  numeric-first-index-naming-a-forward-referenced-type sub-case is refused rather than resolved
+  (measured: no vector in the 254-file corpus needs it — every `struct.get`/`struct.set` names a
+  type already fully defined earlier in its module). Verified against the merged decoder: two new
+  `encodableModules` round-trip rows (`internal/text/encode_test.go`) use a three-field struct so
+  a wrong resolution is distinguishable from a correct one, falsified by an off-by-one mutation in
+  `resolveFieldIdx` and confirmed to fail on exactly those two rows before being reverted. Board:
+  `struct.wast` alone pass=7 fail=6→0 unsupported=5 gated=12→18 (all six converted vectors land in
+  `gated`, not `pass` — GC is off by default and `internal/interp` has no arms for the `0xfb`
+  prefix yet, so the six now-decodable `assert_return`s are honestly declined by the gate rather
+  than executed); default lane fail 436→430 (-6), gated 3257→3263 (+6), unsupported unmoved at
+  27099; all-gates-on lane stays `gated 0` (`TestAllGatesOnLeavesNothingGated`), the six landing
+  in interpreter-arm fail buckets there instead.
+
 - **The text encoder retains `struct.get`/`struct.set`/`array.copy`/`array.new_data`/
   `array.new_elem`/`array.init_data`/`array.init_elem`/`array.new_fixed`'s immediates** (#8,
   #183's two-blocker chain). `internal/text/instr.go`'s `immIdxIdx` and `immIdxNat32` cases

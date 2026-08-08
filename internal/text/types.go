@@ -310,7 +310,7 @@ func (p *parser) fieldtypeList() ([]fieldType, error) {
 }
 
 // structtype parses `struct_field_list` (parser.mly:416-425), returning the field list in
-// declaration order (decision 0021).
+// declaration order (decision 0021) and the name-to-index binding built along the way (#188).
 //
 // Two arms, and they differ in whether the fields are named:
 //
@@ -323,36 +323,41 @@ func (p *parser) fieldtypeList() ([]fieldType, error) {
 //
 // The field index space is per-struct-type, so it is a local here rather than a context member
 // — `x` in the reference is the type index the fields belong to. **The name itself is not
-// retained past this function** — 0021 excludes field names from `FieldType` by the wire-form
-// authority (`fieldtype`'s production carries no identifier, decode.ml:243-246), the same rule
-// `LocalGroup` already applies to a local's name (0016) — so `fields` exists here only to bind
-// the per-struct index space and enforce the duplicate check; the appended `fieldType` values are
-// what crosses into `compType`.
-func (p *parser) structtype() ([]fieldType, error) {
+// retained in `fieldType`, and that has not changed** — 0021 excludes a field name from
+// `FieldType` by the wire-form authority (`fieldtype`'s production carries no identifier,
+// decode.ml:243-246), the same rule `LocalGroup` already applies to a local's name (0016). What
+// changed for #188 is that the *binding* `fields` accumulates (name -> position, exactly what the
+// duplicate check and the anonymous-loop's count both already needed) is now returned rather than
+// discarded, because `struct.get $vec $y`'s second index needs to look a name up against the
+// specific struct type its first index names — the per-struct field space `catFieldOfType`
+// documents having no module-level home. Returning `fields.names` directly rather than copying it
+// is safe: `fields` is a fresh local every call, so no caller can alias a space this function still
+// owns.
+func (p *parser) structtype() ([]fieldType, map[string]uint32, error) {
 	fields := space{kind: spaceField}
 	var out []fieldType
 	for p.c.at(LParen) && p.c.peek2Keyword(kwField) {
 		if err := p.lpar(kwField); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if p.c.at(VarTok) {
 			tok := p.c.peek()
 			name, err := p.bindidx()
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			if bindErr := fields.bindAbs(tok, name); bindErr != nil {
-				return nil, bindErr
+				return nil, nil, bindErr
 			}
 			ft, err := p.fieldtype()
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			out = append(out, ft)
 		} else {
 			fts, err := p.fieldtypeList()
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			for range fts {
 				fields.bindAnon()
@@ -360,10 +365,10 @@ func (p *parser) structtype() ([]fieldType, error) {
 			out = append(out, fts...)
 		}
 		if err := p.rpar(); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
-	return out, nil
+	return out, fields.names, nil
 }
 
 // arraytype parses an array type (parser.mly:427-428): one field type (decision 0021).
@@ -451,11 +456,11 @@ func (p *parser) comptype() (compType, error) {
 		if err := p.lpar(kwStruct); err != nil {
 			return compType{}, err
 		}
-		fields, err := p.structtype()
+		fields, names, err := p.structtype()
 		if err != nil {
 			return compType{}, err
 		}
-		return compType{kind: compStruct, fields: fields}, p.rpar()
+		return compType{kind: compStruct, fields: fields, fieldNames: names}, p.rpar()
 	case p.c.at(LParen) && p.c.peek2Keyword(kwArray):
 		if err := p.lpar(kwArray); err != nil {
 			return compType{}, err

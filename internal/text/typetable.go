@@ -191,10 +191,24 @@ type fieldType struct {
 // own shape choice and its stated reason: a switch on `kind` reads no worse than an interface
 // dispatch here, and the population (module type definitions, not a hot per-instruction path) is
 // nowhere near where 0002's boxing argument bites.
+//
+// **`fieldNames` is a fourth field, added for #188 and not a reopening of 0021's rule about
+// `FieldType`.** 0021 excludes a field's identifier from `fieldType` itself, by the wire-form
+// authority (`fieldtype`'s production carries no identifier) — that stays true, and this map is a
+// different fact: the *type-level* binding from a struct's field names to their positions, the
+// reference's `field x (c) y = lookup "field " (Lib.List32.nth c.types.fields x) y`
+// (parser.mly:162-163). `structtype` built this binding all along, locally, to enforce the
+// duplicate-field check and size the anonymous-field loop, and discarded it on return; this field
+// is where it survives, for `struct.get $vec $y`'s benefit — see `resolveFieldIdx` (code.go), its
+// one consumer. `nil` for `compFunc` and `compArray`, which bind no field names (`arraytype` has
+// no `bindidx` arm in the grammar), and that is not a special case anywhere that reads it: a nil
+// map lookup reports "not found" exactly as an empty one would, matching the reference's own
+// per-type field space being empty for those two kinds rather than absent.
 type compType struct {
-	kind   compKind
-	ft     funcType
-	fields []fieldType
+	kind       compKind
+	ft         funcType
+	fields     []fieldType
+	fieldNames map[string]uint32
 }
 
 // limits is a `limits` (parser.mly:466-468): a 64-bit minimum and an optional maximum.
@@ -705,6 +719,17 @@ type resolvedField struct {
 
 // resolvedComp is a compType with its content resolved: the functype for `compFunc`, the field
 // list for `compStruct`/`compArray` (decision 0021).
+//
+// **No `fieldNames` field, and that is worth stating because `compType` has one (#188).** A field
+// *name* binds to a position and never to a type index, so there is nothing about it that a
+// forward reference could leave unresolved — unlike `fields`/`ft`, whose value types may name a
+// type defined later, `structtype`'s name-to-index binding is complete the moment its `(type …)`
+// field finishes parsing. `resolveFieldIdx`'s one caller (`structFieldPairRetained`) reads it
+// straight off `p.ctx.typeDefs`, before `runDeferred` — and therefore before this type's own
+// values exist — because a symbolic field name appears inside a function body, which this
+// stratum parses in the same pass that appends to `typeDefs`, not in the deferred phase that
+// builds `typeCtx`. Carrying the map here too would be a second, always-stale-until-copied
+// place holding a fact `typeDefs` already answers.
 type resolvedComp struct {
 	kind   compKind
 	ft     resolvedFunc
