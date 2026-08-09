@@ -67,6 +67,12 @@ type parser struct {
 	// can forward-reference: a `call $f` naming a function defined later. Set by the index
 	// reader, consumed and cleared by plaininstr.
 	immPatch func() ([]byte, error)
+	// opOverride is the resolved opcode for a mnemonic `opBytes` cannot answer from the mnemonic
+	// alone — `ref.test`/`ref.cast`, whose byte depends on the reftype operand's nullability
+	// (`opBytes`' `ambiguousOpcodes` refusal, and `refCastOpBytes`'s comment for why the choice
+	// lives here instead). Set by `reftypeRetained`, which has the operand in hand; consumed and
+	// cleared by `plaininstr` in place of the `opBytes` lookup.
+	opOverride []byte
 	// localsMissParams is non-zero while the func being parsed has a typeuse whose params this
 	// stratum could not bind into `p.ctx.locals` — see funcField, and #77.
 	//
