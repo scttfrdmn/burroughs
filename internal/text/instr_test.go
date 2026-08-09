@@ -739,11 +739,8 @@ func TestEveryUnencodableShapeIsRefused(t *testing.T) {
 		"VEC_EXTRACT":    `(module (func (result i32) v128.const i32x4 0 0 0 0 %s 0))`,
 		"VEC_REPLACE":    `(module (func (result v128) v128.const i32x4 0 0 0 0 i32.const 0 %s 0))`,
 		"VEC_SHUFFLE":    `(module (func (result v128) v128.const i32x4 0 0 0 0 v128.const i32x4 0 0 0 0 %s 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15))`,
-		"REF_CAST":       `(module (func (result funcref) ref.null func %s funcref))`,
-		"REF_TEST":       `(module (func (result i32) ref.null func %s funcref))`,
 		"REF_NULL":       `(module (func (result funcref) %s func))`,
 		"BR_TABLE":       `(module (func i32.const 0 %s 0))`,
-		"BR_ON_CAST":     `(module (func (result funcref) ref.null func %s 0 funcref funcref))`,
 		"VEC_CONST":      `(module (func (result v128) %s i32x4 0 0 0 0))`,
 	}
 
@@ -758,11 +755,6 @@ func TestEveryUnencodableShapeIsRefused(t *testing.T) {
 	// a green. Every entry leaves this table when GC's type encoding lands, at which point the frames
 	// become attributable and the assertion above starts applying to them.
 	witnessedByTheTypeLevel := map[keywordKind]bool{
-		// `ref.cast`, `ref.test` and `br_on_cast` need a reference operand, and the only way to spell
-		// one in a module this encoder otherwise accepts is `ref.null`, whose own `immHeaptype` is
-		// refused first. A frame with a `local` of reference type hits the same wall from the other
-		// side, since `local.get` of a reference still yields a value only these can consume.
-		"REF_CAST": true, "REF_TEST": true, "BR_ON_CAST": true,
 		// The SIMD operand family: every one of these takes a `v128` operand, and the only way to
 		// produce one is `v128.const` — itself `immVecConst`, itself unencodable. `v128.load` would
 		// serve, and it is `immMemarg`, also unencodable. So there is no spelling of a v128 value in
@@ -787,15 +779,16 @@ func TestEveryUnencodableShapeIsRefused(t *testing.T) {
 
 	// The vacuity check, per partition rather than one total: shapes *and* kinds, because a
 	// `plaininstrShapes` that failed to load would leave both empty and this control would agree
-	// with itself perfectly. 6 of the 16 shapes are unencodable today — down from 11, `immIdxIdx`
-	// and `immIdxNat32` having left when this row's PR retained the two shapes' immediates — and the
-	// count falls further as the frontier moves; the floor is the direction, and a rise past it
-	// means `encodableShapes` grew without this control being re-read.
+	// with itself perfectly. 4 of the 16 shapes are unencodable today — down from 6, `immReftype`
+	// and `immIdxReftype2` having left when this row's PR retained ref.test/ref.cast/br_on_cast's
+	// immediates via reftypeRetained/brOnCastRetained — and the count falls further as the
+	// frontier moves; the floor is the direction, and a rise past it means `encodableShapes` grew
+	// without this control being re-read.
 	unencodableShapes := map[immShape]bool{}
 	for _, k := range kinds {
 		unencodableShapes[plaininstrShapes[k]] = true
 	}
-	if len(unencodableShapes) < 5 || len(kinds) < 8 {
+	if len(unencodableShapes) < 3 || len(kinds) < 5 {
 		t.Fatalf("the derived domain is %d shapes over %d kinds, which is too small to be the real "+
 			"partition: %d shapes exist and %d are encodable, so an empty or near-empty domain here "+
 			"means the table did not load and this control is comparing nothing",

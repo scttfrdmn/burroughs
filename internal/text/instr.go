@@ -518,11 +518,21 @@ func (p *parser) plaininstr() (bool, error) {
 		return true, p.refuseUnencodable(t, "the "+t.Text+" instruction's immediates")
 	}
 	op, ok := opBytes(t.Text)
+	if p.opOverride != nil {
+		// REF_CAST/REF_TEST: reftypeRetained already resolved the mnemonic's two-opcode ambiguity
+		// from the operand's nullability, which is a fact opBytes structurally cannot have (it is
+		// handed only the mnemonic string) — see refCastOpBytes' comment. Consumed and cleared
+		// here, the same discipline p.immPatch already follows below, so a later instruction
+		// cannot inherit a stale override.
+		op, ok = p.opOverride, true
+		p.opOverride = nil
+	}
 	if !ok {
-		// A mnemonic with no unambiguous encoding: the three type-dependent ones, or one the
-		// generated table does not carry. The *parse* succeeded, so this is an encode refusal and
-		// not a syntax error — it reads as "this module is not encodable yet", which is what the
-		// frontier message says for the fields that have no section.
+		// A mnemonic with no unambiguous encoding: `select`, still refused since its opcode choice
+		// is syntactic rather than type-driven and stays at `flatSelectOrCall`'s own site, or one
+		// the generated table does not carry. The *parse* succeeded, so this is an encode refusal
+		// and not a syntax error — it reads as "this module is not encodable yet", which is what
+		// the frontier message says for the fields that have no section.
 		return true, errf(t, "cannot yet encode the %s instruction (#8)", t.Text)
 	}
 	p.emit(instr{op: op, imm: p.imm, patch: p.immPatch})
@@ -557,15 +567,13 @@ func (p *parser) immediates(shape immShape, mnemonic Token) error {
 			// which is what a shared leading read forces — writes that label where the count
 			// belongs. See brTable.
 			return p.brTable()
-		case immIdxReftype2: // BR_ON_CAST: `idx reftype reftype`, the label then two types (:567)
-			if err := p.labelIdx(); err != nil {
-				return err
-			}
-			if _, err := p.reftype(); err != nil {
-				return err
-			}
-			_, err := p.reftype()
-			return err
+		case immIdxReftype2: // BR_ON_CAST/BR_ON_CAST_FAIL: `idx reftype reftype` (:567)
+			// Retained through brOnCastRetained (#8) rather than labelIdx plus two discarded
+			// reftype reads: the wire form is `byte idx heaptype heaptype` (decode.ml:640-646),
+			// whose flags byte precedes the label and is computed from *both* reftypes'
+			// nullability — so the label cannot be appended on sight the way labelIdx does for
+			// BR/BR_IF/BR_ON_NULL. See brOnCastRetained's comment for the full byte layout.
+			return p.brOnCastRetained(mnemonic)
 		default:
 			// Unreachable while labelTakingKinds and the shape table agree, and a panic because
 			// falling through to the main switch would read the label's immediates a second time.
@@ -637,12 +645,11 @@ func (p *parser) immediates(shape immShape, mnemonic Token) error {
 	case immLaneIdx:
 		return p.laneidx()
 	case immReftype:
-		// The four value-returning readers are called for their errors here and their results
-		// discarded: an instruction's immediate is never a comparison operand — only a functype's
-		// value types reach `inline_functype_explicit`. Named once for the whole switch rather than
-		// at each of the four sites.
-		_, err := p.reftype()
-		return err
+		// REF_CAST/REF_TEST's one reftype operand. Retained through reftypeRetained (#8), which
+		// also sets p.opOverride: opBytes structurally cannot choose between the mnemonic's two
+		// opcodes (0x14/0x15, 0x16/0x17), since the choice is the operand's nullability and opBytes
+		// is handed only the mnemonic string — see refCastOpBytes' comment.
+		return p.reftypeRetained(mnemonic)
 	case immIdxIdxList:
 		// **Unreachable, and named rather than deleted.** `BR_TABLE` is this shape's only
 		// mnemonic and it is label-taking, so the branch above answers it and this arm cannot be

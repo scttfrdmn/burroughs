@@ -21,6 +21,46 @@ weakly-ordered platform.
 
 ### Added
 
+- **The text encoder retains `ref.test`/`ref.cast`/`br_on_cast`/`br_on_cast_fail`'s reftype
+  immediates** (#8), the largest remaining bucket the co-blocking probe found: 205 vectors across
+  `ref_test.wast` (68), `ref_cast.wast` (42), `br_on_cast.wast` (27), `br_on_cast_fail.wast` (27),
+  `i31.wast` (21 of 24, the rest sharing a separate `(table …)` frontier), and `type-subtyping.wast`
+  (20 of 24, the other 4 shadowed by `assert_unlinkable`). `internal/text/code.go` grows
+  `reftypeRetained`/`heaptypeBytesOf`'s reuse (`ref.test`/`ref.cast`'s one reftype, whose wire
+  immediate is a bare heaptype exactly like `ref.null`'s, per `optable.go`'s own `immHeapType` row
+  for 0x14-0x17 — nullability instead selects one of two opcodes, `refCastOpBytes`, since `opBytes`
+  is handed only a mnemonic string and cannot see the operand's type) and `brOnCastRetained`
+  (`br_on_cast`/`br_on_cast_fail`'s label plus two reftypes, whose wire form per
+  `decode.ml:640-646`/`encode.ml:266-271` is `flags idx heaptype heaptype` — a flags byte folding
+  both reftypes' nullability into two bits, written *before* the label even though the label is
+  written first in the text). Both delegate their heap-type halves to `heaptypeBytesOf`, so
+  `ref.null`'s existing forward-reference deferral and thirteenth-heap-type frontier apply
+  unchanged. `encodableShapes[immReftype]` and `[immIdxReftype2]` flip to `true`; a new
+  `parser.opOverride` field lets `reftypeRetained` hand `plaininstr` the opcode `opBytes`
+  structurally cannot choose. Verified against the merged GC-gated decoder
+  (`TestRefCastFamilyRoundTrips`, `internal/text/encode_test.go`): abstract and indexed heap-type
+  targets, nullable and non-null, for all four mnemonics, asserting the decoded opcode and (for the
+  two `br_on_cast` forms) the decoded flags byte directly rather than merely "it decoded" — a wrong
+  nullability bit or a wrong abstract-vs-indexed dispatch produces a module that still decodes
+  clean. Falsified twice: swapping which bit of `br_on_cast`'s flags byte carries which reftype's
+  nullability failed 3 of 4 rows (the fourth has flags 0x00 under both orderings and is correctly
+  insensitive); swapping `ref.test`'s null/non-null opcode branches failed all 4 `ref.test` rows
+  and left `ref.cast`/`br_on_cast` untouched. Both reverted after confirming. Board: default lane
+  fail 430→225 (-205), gated 3263→3468 (+205), pass and unsupported unmoved at 34227/27099 — the
+  205 land in `gated`, not `pass`, because GC is off by default and `internal/interp` has no arms
+  for the `0xfb` 0x14-0x19 sub-opcodes yet (same shape as #188's struct-field PR). All-gates-on
+  lane: pass 36879→36882 (+3), fail 1016→1013 (-3), `gated` stays 0
+  (`TestAllGatesOnLeavesNothingGated`); the 205 mostly land as `interp: no arm for opcode fb
+  14/15/16/17/18/19` fails there instead. `type-subtyping.wast` is the one file with a net pass
+  gain (56→59): its 20 `ref.cast`/`ref.test` frontier fails split three ways — 14 stay fail as
+  interpreter-arm gaps, 3 become a *different* fail (`assert_trap`/trap "indirect call type
+  mismatch", up from 2 to 5, because the module now encodes far enough for validation's own type
+  check to run and disagree with the vector's premise under a different mechanism), and 3 convert
+  to pass. `TestGatedVectors`' per-vector allowlist (`internal/spec/spec_test.go`) grows the 205
+  newly-gated lines, each named for the module it now decodes against — the vigilance mechanism
+  that stops a decline from hiding unnoticed on the default board (contract §9's third-verdict
+  rule).
+
 - **The text encoder resolves a symbolic field name on `struct.get`/`struct.set`** (#188), the
   remainder #183's own PR named and declined to fold in: `(struct.get $vec $y (local.get $v))`,
   where `$y` names a field by identifier rather than by number. `structtype`

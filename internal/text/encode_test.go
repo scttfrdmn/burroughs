@@ -4529,3 +4529,125 @@ func TestEncodeMatchesTheReferenceOnElemFlags(t *testing.T) {
 		}
 	}
 }
+
+// TestRefCastFamilyRoundTrips is #8's control for ref.test/ref.cast/br_on_cast/br_on_cast_fail's
+// reftype immediates (reftypeRetained, brOnCastRetained): every encoded module decodes through the
+// real GC-gated decoder, and the opcode/flags byte the reference's nullability-keyed dispatch
+// requires is asserted directly against `Instr`'s decoded fields — not merely "it decoded", since a
+// module can decode cleanly while denoting the wrong cast (wrong opcode, wrong flags bit).
+//
+// Each row pairs an **abstract** heaptype target with an **indexed** one, and a **nullable**
+// spelling with a **non-null** one, so a swapped nullability bit or a swapped abstract-vs-indexed
+// dispatch is distinguishable by row rather than only in aggregate — the same reason
+// TestParameterizedReferenceFormsRoundTrip pairs its cases.
+func TestRefCastFamilyRoundTrips(t *testing.T) {
+	t.Run("ref.test", func(t *testing.T) {
+		for _, tc := range []struct {
+			name, src string
+			wantOp    uint32
+		}{
+			{"abstract non-null", `(module (func (param anyref) (result i32) (ref.test (ref i31) (local.get 0))))`, 0x14},
+			{"abstract null", `(module (func (param anyref) (result i32) (ref.test i31ref (local.get 0))))`, 0x15},
+			{"indexed non-null", `(module (type $t (func)) (func (param anyref) (result i32) (ref.test (ref $t) (local.get 0))))`, 0x14},
+			{"indexed null", `(module (type $t (func)) (func (param anyref) (result i32) (ref.test (ref null $t) (local.get 0))))`, 0x15},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				b, err := EncodeModule([]byte(tc.src))
+				if err != nil {
+					t.Fatalf("EncodeModule(%s): %v", tc.src, err)
+				}
+				m := decodeGC(t, b)
+				findOp(t, m, 0xfb, tc.wantOp)
+			})
+		}
+	})
+
+	t.Run("ref.cast", func(t *testing.T) {
+		for _, tc := range []struct {
+			name, src string
+			wantOp    uint32
+		}{
+			{"abstract non-null", `(module (func (param anyref) (result (ref i31)) (ref.cast (ref i31) (local.get 0))))`, 0x16},
+			{"abstract null", `(module (func (param anyref) (result i31ref) (ref.cast i31ref (local.get 0))))`, 0x17},
+			{"indexed non-null", `(module (type $t (func)) (func (param anyref) (result (ref $t)) (ref.cast (ref $t) (local.get 0))))`, 0x16},
+			{"indexed null", `(module (type $t (func)) (func (param anyref) (result (ref null $t)) (ref.cast (ref null $t) (local.get 0))))`, 0x17},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				b, err := EncodeModule([]byte(tc.src))
+				if err != nil {
+					t.Fatalf("EncodeModule(%s): %v", tc.src, err)
+				}
+				m := decodeGC(t, b)
+				findOp(t, m, 0xfb, tc.wantOp)
+			})
+		}
+	})
+
+	t.Run("br_on_cast and br_on_cast_fail", func(t *testing.T) {
+		for _, tc := range []struct {
+			name, mnemonic, src string
+			wantOp              uint32
+			wantFlags           uint64
+		}{
+			// flags bit 0 is rt1's nullability, bit 1 is rt2's — encode.ml:266-271. rt1=anyref
+			// (null), rt2=(ref i31) (non-null): flags = 0b01.
+			{
+				"br_on_cast, abstract source null, abstract target non-null", "br_on_cast",
+				`(module (func (param anyref) (result i32) (block $l (result anyref) (br_on_cast $l anyref (ref i31) (local.get 0))) (drop) (i32.const 0)))`,
+				0x18, 0x01,
+			},
+			// rt1=(ref i31) (non-null), rt2=i31ref (null): flags = 0b10.
+			{
+				"br_on_cast, abstract source non-null, abstract target null", "br_on_cast",
+				`(module (func (param (ref i31)) (result i32) (block $l (result (ref i31)) (br_on_cast $l (ref i31) i31ref (local.get 0))) (drop) (i32.const 0)))`,
+				0x18, 0x02,
+			},
+			// Indexed target, both non-null: flags = 0b00.
+			{
+				"br_on_cast, abstract source non-null, indexed target non-null", "br_on_cast",
+				`(module (type $t (func)) (func (param (ref $t)) (result i32) (block $l (result (ref $t)) (br_on_cast $l (ref $t) (ref $t) (local.get 0))) (drop) (i32.const 0)))`,
+				0x18, 0x00,
+			},
+			// br_on_cast_fail, same shape as the first row, different opcode.
+			{
+				"br_on_cast_fail, abstract source null, abstract target non-null", "br_on_cast_fail",
+				`(module (func (param anyref) (result i32) (block $l (result anyref) (br_on_cast_fail $l anyref (ref i31) (local.get 0))) (drop) (i32.const 0)))`,
+				0x19, 0x01,
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				b, err := EncodeModule([]byte(tc.src))
+				if err != nil {
+					t.Fatalf("EncodeModule(%s): %v", tc.src, err)
+				}
+				m := decodeGC(t, b)
+				in := findOp(t, m, 0xfb, tc.wantOp)
+				if in.Imm0 != tc.wantFlags {
+					t.Errorf("%s: decoded flags byte %#x, want %#x", tc.mnemonic, in.Imm0, tc.wantFlags)
+				}
+			})
+		}
+	})
+}
+
+// findOp locates the one Instr in a module's first function whose prefix and sub-opcode match,
+// failing loudly if none or more than one does — the same discipline TestRefNullEncodesItsHeapType
+// and its siblings use for asserting against a specific decoded instruction rather than the body's
+// raw bytes.
+func findOp(t *testing.T, m *binary.Module, prefix byte, op uint32) binary.Instr {
+	t.Helper()
+	if len(m.Funcs) == 0 {
+		t.Fatalf("module has no funcs")
+	}
+	var found []binary.Instr
+	for _, in := range m.Funcs[0].Body {
+		if in.Prefix == prefix && in.Op == op {
+			found = append(found, in)
+		}
+	}
+	if len(found) != 1 {
+		t.Fatalf("found %d instrs matching prefix %#x op %#x in %+v, want exactly 1",
+			len(found), prefix, op, m.Funcs[0].Body)
+	}
+	return found[0]
+}

@@ -408,6 +408,15 @@ var encodableShapes = map[immShape]bool{
 	// expected pay. Written here as the specimen the clause was measured on, not as the statement of
 	// it (ruling: Scott, on this arm's board).
 	immHeaptype: true,
+
+	// **`ref.test`/`ref.cast`'s reftype operand and `br_on_cast`/`br_on_cast_fail`'s pair of
+	// them** — the +163 the paragraph above names, landing behind `reftypeRetained` and
+	// `brOnCastRetained` respectively (#8). Both delegate their heaptype halves to
+	// `heaptypeBytesOf`, so the same forward-reference deferral and the same thirteenth-heap-type
+	// frontier `immHeaptype`'s row states apply here unchanged; what these two shapes add is the
+	// nullability-to-opcode/flags-byte translation their own doc comments carry.
+	immReftype:     true,
+	immIdxReftype2: true,
 }
 
 // heaptypeRetained reads `ref.null`'s heap type immediate and encodes it.
@@ -501,6 +510,182 @@ func (p *parser) heaptypeBytesOf(mnemonic Token, h heapRef, tok Token) ([]byte, 
 			rv.heapString(), mnemonic.Text)
 	}
 	return b, nil
+}
+
+// reftypeRetained parses one `reftype` operand — nullability and heap type together — and retains
+// its **heaptype half** as the wire immediate, its **nullability half** as the opcode choice.
+// Used by `REF_CAST`/`REF_TEST`'s `immReftype` shape.
+//
+// **The wire immediate is a bare `heaptype`, exactly `ref.null`'s, and that is `optable.go`'s own
+// authority, not a re-derivation**: `0x14: {mnemonic: "ref_test", imms: []imm{immHeapType}, …}`
+// (internal/binary/optable.go) — one `immHeapType`, the same tag `ref.null`'s row carries — and
+// `encode.ml:421-424` writes `heaptype t` after the opcode, never `reftype t`. Wasm's `reftype` is
+// `(nullability, heaptype)`, but `ref_test`/`ref_cast`'s constructors take that pair *split*: the
+// nullability selects which of two opcodes to write (`RefTest (NoNull, t)` is `0x14`, `RefTest
+// (Null, t)` is `0x15`), and only the heaptype `t` is bytes in the stream. So this delegates the
+// heaptype half to `heaptypeBytesOf` — the exact function `ref.null`'s `heaptypeRetained` already
+// uses, both callers resolving through the one `p.ctx.resolveVal`/`heapTypeBytes` pair — and never
+// reaches for `valTypeBytes`, which would write a nullability *byte* the wire form has no room for.
+//
+// **The forward-referencing arm mirrors `heaptypeRetained`'s** (*lessons are indexed by shape*,
+// #105): copied rather than re-derived, including both guards, structural here for the same
+// reason — `ref.test`/`ref.cast` each have exactly one immediate.
+//
+// **The opcode choice is set ahead of the deferral branch, not inside either of its arms.**
+// `refCastOpBytes` chooses on nullability alone, and `p.reftype()`'s `null` field is known at the
+// cursor whether the *heap type* it pairs with is a bound name, an unbound forward reference, or
+// an abstract keyword — `null_opt` (parser.mly:357-359) is read and decided before `heaptype` is
+// ever called. Setting it once here, rather than duplicating the call in both arms below, is the
+// same "one fact, one site" reasoning `heaptypeBytesOf`'s own doc gives for sharing an encoder
+// across timings.
+func (p *parser) reftypeRetained(mnemonic Token) error {
+	tok := p.c.peek()
+	v, err := p.reftype()
+	if err != nil {
+		return err
+	}
+	if !p.retaining() {
+		return nil
+	}
+	op, ok := refCastOpBytes(mnemonic, v.null)
+	if !ok {
+		// Unreachable: reftypeRetained's only caller (immediates' immReftype arm) passes exactly
+		// REF_CAST/REF_TEST, which are exactly what refCastOpBytes recognizes. A panic rather than
+		// a silent fallback, because opBytes' own ambiguousOpcodes refusal is what this function
+		// exists to resolve — reaching here unresolved would fall through to that refusal wearing
+		// this function's confidence instead.
+		panic("text: reftypeRetained called for a mnemonic refCastOpBytes does not recognize: " +
+			mnemonic.Text)
+	}
+	p.opOverride = op
+	if v.heap.abs == "" && v.heap.tok.Kind == VarTok {
+		// The forward-referencing arm — see heaptypeRetained's comment for why both guards are
+		// structural here rather than reachable: `ref.test`/`ref.cast` each have exactly one
+		// immediate.
+		if p.immPatch != nil || len(p.imm) != 0 {
+			return errf(tok, "cannot yet encode a deferred reference type beside another immediate (#8)")
+		}
+		p.immPatch = func() ([]byte, error) {
+			return p.heaptypeBytesOf(mnemonic, v.heap, tok)
+		}
+		return nil
+	}
+	b, err := p.heaptypeBytesOf(mnemonic, v.heap, tok)
+	if err != nil {
+		return err
+	}
+	p.appendImm(b)
+	return nil
+}
+
+// isForwardHeapRef reports whether a parsed heap type is the one shape that cannot resolve at
+// the cursor — a symbolic name, per `heaptypeRetained`'s own guard.
+//
+// Factored out because `brOnCastRetained` below asks it of *two* heap types independently,
+// where `heaptypeRetained`/`reftypeRetained` each ask it of one; a second inline copy of the
+// same two-field test would be the kind of small duplication `idxPairLookupKinds`' comment warns
+// drifts silently.
+func isForwardHeapRef(h heapRef) bool {
+	return h.abs == "" && h.tok.Kind == VarTok
+}
+
+// brOnCastRetained parses `BR_ON_CAST`/`BR_ON_CAST_FAIL`'s `idx reftype reftype` immediates — a
+// label then two casts' worth of reftype — and retains them as the wire form's `byte idx heaptype
+// heaptype`, per `decode.ml:640-646`/`encode.ml:266-271`:
+//
+//	let flags = byte s in
+//	require (flags land 0xfc = 0) s (pos + 2) "malformed br_on_cast flags";
+//	let x = at idx s in
+//	let rt1 = ((if bit 0 flags then Null else NoNull), heaptype s) in
+//	let rt2 = ((if bit 1 flags then Null else NoNull), heaptype s) in
+//
+//	let flags = bit 0 (nul1 = Null) + bit 1 (nul2 = Null) in
+//	op 0xfb; op 0x18 (or 0x19); byte flags; idx x; heaptype t1; heaptype t2
+//
+// **The wire order is not the parse order, and that is this function's whole reason to exist
+// rather than three calls threaded through the label-taking switch.** The text is `idx reftype
+// reftype` (parser.mly:567) and the image is `flags idx heaptype heaptype` — the flags byte,
+// encoding *both* reftypes' nullability, precedes the label index that the text writes first.
+// `retainMemarg`'s doc states the identical shape for `load`/`store` (text writes the memory
+// index before the flags the image writes first) and is the precedent copied here rather than
+// re-derived: parse everything into values, then write the image's byte order once every value
+// is in hand. A reader that retained the label index as it read it (`labelIdx`'s ordinary path)
+// would write that index *before* a flags byte this production has not computed yet.
+//
+// **Each reftype's wire form is its bare heaptype, not a full parameterized reftype byte** — the
+// same fact `reftypeRetained`'s doc states for `ref.test`/`ref.cast`, and for the identical
+// reason: `optable.go`'s row for 0x18/0x19 is `imms: []imm{immByte, immIdx, immHeapType,
+// immHeapType}`, two `immHeapType` tags, and `encode.ml` writes `heaptype t1; heaptype t2` — never
+// `reftype`. So both reftypes' *heap* halves go through `heaptypeBytesOf`, ref.null's own encoder,
+// and their *nullability* halves are folded into the one flags byte instead of two per-type bits.
+//
+// **The label resolves at the cursor and never defers; either heap type may.** Labels are lexical
+// (labelIdx's own comment), so `labelIdxValue` runs immediately and its result is a plain `uint32`
+// with nothing to patch. A heap type naming a forward-referenced type index is the mutually
+// recursive types case `heaptypeRetained` defers for, and either of `br_on_cast`'s two reftypes
+// can independently be that case — `br_on_cast $l (ref $future1) (ref $future2) …` names two
+// types the grammar admits in any order relative to this instruction. So the deferral is checked
+// per heap type and the *whole* immediate (flags, the already-resolved label, and both heaptypes)
+// is rebuilt inside one patch when either needs it: `resolveFuncs` replaces `in.imm` wholesale
+// with `in.patch()`'s return, so a patch that deferred only its own heaptype and left the label
+// and flags in `p.imm` would have them silently dropped — the same hazard `retainIdxIn`'s catFunc
+// arm guards against with its "deferred index after another immediate" refusal, generalized here
+// to "build the whole immediate inside the patch when any part of it must wait".
+func (p *parser) brOnCastRetained(mnemonic Token) error {
+	depth, err := p.labelIdxValue()
+	if err != nil {
+		return err
+	}
+	tok1 := p.c.peek()
+	rt1, err := p.reftype()
+	if err != nil {
+		return err
+	}
+	tok2 := p.c.peek()
+	rt2, err := p.reftype()
+	if err != nil {
+		return err
+	}
+	if !p.retaining() {
+		return nil
+	}
+	var flags byte
+	if rt1.null {
+		flags |= 0x01
+	}
+	if rt2.null {
+		flags |= 0x02
+	}
+	build := func() ([]byte, error) {
+		b1, buildErr := p.heaptypeBytesOf(mnemonic, rt1.heap, tok1)
+		if buildErr != nil {
+			return nil, buildErr
+		}
+		b2, buildErr := p.heaptypeBytesOf(mnemonic, rt2.heap, tok2)
+		if buildErr != nil {
+			return nil, buildErr
+		}
+		var w writer
+		w.byte1(flags)
+		w.bytes(encodeLocalIdx(depth))
+		w.bytes(b1)
+		w.bytes(b2)
+		return w.b, nil
+	}
+	if isForwardHeapRef(rt1.heap) || isForwardHeapRef(rt2.heap) {
+		if p.immPatch != nil || len(p.imm) != 0 {
+			return errf(tok1, "cannot yet encode a deferred reference type beside another "+
+				"immediate (#8)")
+		}
+		p.immPatch = build
+		return nil
+	}
+	b, err := build()
+	if err != nil {
+		return err
+	}
+	p.appendImm(b)
+	return nil
 }
 
 // idxRetained parses one index immediate and retains it, resolving in the category the mnemonic's
@@ -1203,6 +1388,59 @@ const (
 	// opSelectT is `Select (Some ts)`, followed by `vec valtype ts` (encode.ml:249).
 	opSelectT byte = 0x1c
 )
+
+// The four `ref.test`/`ref.cast` opcodes, named for `refCastOpBytes`' reason — `opBytes` cannot
+// supply them, and `ambiguousOpcodes` holds each pair without saying which member is which
+// (`select`'s comment above states the same fact about that map's shape).
+//
+// **The choice here is the operand's *nullability*, not syntax** — the opposite of `select`'s
+// case. `select`'s two encodings are told apart by whether `(result …)` was *written*, a fact
+// available at the cursor with no type information at all; `ref.test`/`ref.cast` choose by
+// whether the reftype *is* nullable, per `encode.ml:421-424`:
+//
+//	RefTest (NoNull, t) -> op 0xfb; op 0x14; heaptype t
+//	RefTest (Null, t)   -> op 0xfb; op 0x15; heaptype t
+//	RefCast (NoNull, t) -> op 0xfb; op 0x16; heaptype t
+//	RefCast (Null, t)   -> op 0xfb; op 0x17; heaptype t
+//
+// which is exactly the fact `reftypeRetained` already has in hand (the `valType.null` bit its
+// `p.reftype()` call resolved) and `opBytes` structurally cannot: it is handed a bare mnemonic
+// string, one layer below where the operand's type is known. This is `opBytes`'s ambiguousOpcodes
+// refusal's own comment naming the reason these two stay refused there — decidable here, where
+// the type is in hand, and nowhere lower.
+const (
+	opRefTestNonNull byte = 0x14 // ref_test (NoNull, t)
+	opRefTestNull    byte = 0x15 // ref_test (Null, t)
+	opRefCastNonNull byte = 0x16 // ref_cast (NoNull, t)
+	opRefCastNull    byte = 0x17 // ref_cast (Null, t)
+)
+
+// refCastOpBytes chooses `ref.test`/`ref.cast`'s opcode from the mnemonic and the resolved
+// reftype's nullability.
+//
+// `mnemonic.Keyword` rather than `.Text`, matching every other opcode lookup in this file, so a
+// spelling variant cannot silently fail to match `"REF_TEST"`/`"REF_CAST"`.
+func refCastOpBytes(mnemonic Token, null bool) ([]byte, bool) {
+	switch mnemonic.Keyword {
+	case "REF_TEST":
+		if null {
+			return []byte{0xfb, opRefTestNull}, true
+		}
+		return []byte{0xfb, opRefTestNonNull}, true
+	case "REF_CAST":
+		if null {
+			return []byte{0xfb, opRefCastNull}, true
+		}
+		return []byte{0xfb, opRefCastNonNull}, true
+	default:
+		// Every other keyword is a caller error rather than a case this function partitions:
+		// `reftypeRetained`'s only two callers pass exactly these two kinds. Written as `default`
+		// rather than left implicit so `exhaustive` reads this as a real fallback over
+		// `keywordKind`'s whole vocabulary — the same discipline `flatSelectOrCall`'s switch uses,
+		// two arms out of many and a stated catch-all for the rest.
+		return nil, false
+	}
+}
 
 // selectOpByte chooses between the two, on whether a `(result …)` was **written**.
 //
