@@ -63,21 +63,37 @@ type label struct {
 	// is why it is stated here rather than inferred at the branch site.
 	cont int
 
-	// arity is how many values the label yields — the count a branch must leave on the stack.
-	// For a block or if that is the blocktype's result count; **for a loop it is the
-	// parameter count**, because re-entering a loop supplies its parameters rather than its
-	// results (`eval.ml`'s `Label (n, es)` is built from `blocktype`'s *input* arity for
-	// Loop). One field with two derivations, not two fields, so a branch does not have to
-	// know which construct it is leaving.
+	// arity is how many *numeric* values the label yields — the count a branch must leave on
+	// the numeric stack. For a block or if that is the blocktype's numeric result count;
+	// **for a loop it is the numeric parameter count**, because re-entering a loop supplies
+	// its parameters rather than its results (`eval.ml`'s `Label (n, es)` is built from
+	// `blocktype`'s *input* arity for Loop). One field with two derivations, not two fields,
+	// so a branch does not have to know which construct it is leaving.
 	arity int
 
-	// height is the value stack depth at the point the label was pushed, excluding the
-	// operands the block itself consumes. A branch truncates to height+arity: the spec's
+	// refArity is arity's reference-stack twin (#196/#197) — the count of ref-typed values a
+	// branch must leave on `st.refs`, same block-vs-loop derivation as arity. **Two fields,
+	// not one shared count**, for the reason `call.go`'s `invoke` already established for a
+	// callee's result arity: the two arrays have independent depths (0002), so one counter
+	// cannot answer "how many of each" and a branch that only tracked arity would either
+	// leave stale reference scratch behind or truncate a numeric-only block's (harmless, since
+	// refArity is 0) reference stack incorrectly the day a block mixes kinds.
+	refArity int
+
+	// height is the *numeric* value stack depth at the point the label was pushed, excluding
+	// the operands the block itself consumes. A branch truncates to height+arity: the spec's
 	// "pop the values, pop the frames, push the values back".
 	height int
+
+	// refHeight is height's reference-stack twin, excluding the ref-typed operands the block
+	// itself consumes.
+	refHeight int
 }
 
-// blockArity resolves a structural instruction's blocktype to its parameter and result counts.
+// blockArity resolves a structural instruction's blocktype to its parameter and result counts,
+// each split into numeric and reference — #196/#197's widening of the pre-existing
+// numeric-only signature, mirroring the split `call.go`'s `invoke` already makes for a callee's
+// result arity (`wantNum`/`wantRef` there).
 //
 // **Reads the blocktype through `binary.BlockType` rather than by unpacking Imm0 here**, so the
 // packing rule lives only in the package that writes it.
@@ -86,30 +102,51 @@ type label struct {
 // naming a type the module does not declare, or naming a struct or array slot, is #9's verdict.
 // The all-gates-on lane makes the second reachable, since `Module.Types` keeps GC slots so type
 // indices do not shift.
-func (in *Instance) blockArity(imm0, imm1 uint64) (params, results int, err error) {
+func (in *Instance) blockArity(imm0, imm1 uint64) (params, refParams, results, refResults int, err error) {
 	idx, vt, empty := binary.BlockType(imm0, imm1)
 	switch {
 	case empty:
-		return 0, 0, nil
+		return 0, 0, 0, 0, nil
 	case vt != binary.NoValType:
 		// A single result, no parameters — the `valtype` form cannot express either
 		// parameters or a second result. `vt != NoValType` rather than a boolean third
 		// return, preserving the pre-0018 predicate exactly: every valtype the decoder can
 		// resolve has a non-zero kind (0x6E-0x80), so this is never true for the empty or
 		// type-index cases, both of which BlockType returns as the zero ValType.
-		return 0, 1, nil
+		if vt.IsRef() {
+			return 0, 0, 0, 1, nil
+		}
+		return 0, 0, 1, 0, nil
 	default:
 		if int(idx) >= len(in.mod.Types) {
-			return 0, 0, fmt.Errorf("%w: blocktype names type %d of %d",
+			return 0, 0, 0, 0, fmt.Errorf("%w: blocktype names type %d of %d",
 				ErrNotValidated, idx, len(in.mod.Types))
 		}
 		ct := &in.mod.Types[idx]
 		if ct.Kind != binary.CompFunc {
-			return 0, 0, fmt.Errorf("%w: blocktype names type %d, which is a %s",
+			return 0, 0, 0, 0, fmt.Errorf("%w: blocktype names type %d, which is a %s",
 				ErrNotValidated, idx, ct.Kind)
 		}
-		return len(ct.Func.Params), len(ct.Func.Results), nil
+		np, nr := countByArray(ct.Func.Params)
+		rp, rr := countByArray(ct.Func.Results)
+		return np, nr, rp, rr, nil
 	}
+}
+
+// countByArray partitions a functype's value-type slice into its numeric and reference counts
+// — the same split `call.go`'s `invoke` inlines for `ft.Results` (`wantNum`/`wantRef`), named
+// here because `blockArity` needs it twice (params and results) and `br_table`'s block-typed
+// vectors are exactly what makes a block's *parameter* half need the split too, not only a
+// callee's result half.
+func countByArray(ts []binary.ValType) (numCount, refCount int) {
+	for _, t := range ts {
+		if t.IsRef() {
+			refCount++
+		} else {
+			numCount++
+		}
+	}
+	return numCount, refCount
 }
 
 // matchEnd pairs the structural header at `pc` with its own END, returning that index.
@@ -227,6 +264,14 @@ func (in *Instance) branch(st *stack, ctrl []label, depth uint64) (pc, level int
 	// a copy inside the same slice rather than a temporary: the source range is above the
 	// destination whenever anything is dropped, so a forward copy cannot overwrite an unread
 	// element.
+	//
+	// **Both arrays, independently, exactly as `call.go`'s `invoke` checks a callee's result
+	// arity per array (#196/#197).** A block whose result type mixes a numeric and a
+	// reference value (`br_table.wast`'s `meet-funcref-*`, `(result (ref null func))` blocks
+	// nested with `(result (ref null $t))` ones) needs its ref-typed scratch discarded and
+	// its ref-typed results kept exactly as its numeric ones are — a single shared arity
+	// could not express "keep 1 numeric and 1 reference" any more than a single shared
+	// result count could at the callee boundary.
 	if l.arity > 0 {
 		src := len(st.num) - l.arity
 		if src < l.height {
@@ -238,6 +283,15 @@ func (in *Instance) branch(st *stack, ctrl []label, depth uint64) (pc, level int
 		copy(st.num[l.height:], st.num[src:])
 	}
 	st.num = st.num[:l.height+l.arity]
+	if l.refArity > 0 {
+		src := len(st.refs) - l.refArity
+		if src < l.refHeight {
+			return 0, 0, fmt.Errorf("%w: branch to a label of reference arity %d with %d references above its base",
+				ErrNotValidated, l.refArity, len(st.refs)-l.refHeight)
+		}
+		copy(st.refs[l.refHeight:], st.refs[src:])
+	}
+	st.refs = st.refs[:l.refHeight+l.refArity]
 	return l.cont, len(ctrl) - 1 - int(depth), nil
 }
 
@@ -254,14 +308,23 @@ func (in *Instance) branch(st *stack, ctrl []label, depth uint64) (pc, level int
 // unvalidated (grave #135). The defect was stated as the rule in a comment, which is why no
 // review of that arm against its claim could find it.
 //
+// **Two arities, not one, since #196/#197** — mirroring `branch`'s own widening just above and
+// `call.go`'s `invoke`, which already makes exactly this split for a callee's result count.
+//
 // Reported rather than silently clamped when there are too few values: that is #9's arity
 // question arriving late, the same reading `branch` gives it.
-func returnFrom(st *stack, results int) error {
+func returnFrom(st *stack, results, refResults int) error {
 	if len(st.num) < results {
 		return fmt.Errorf("%w: return with %d values on the stack, but the function declares %d results",
 			ErrNotValidated, len(st.num), results)
 	}
+	if len(st.refs) < refResults {
+		return fmt.Errorf("%w: return with %d references on the stack, but the function declares %d reference results",
+			ErrNotValidated, len(st.refs), refResults)
+	}
 	copy(st.num, st.num[len(st.num)-results:])
 	st.num = st.num[:results]
+	copy(st.refs, st.refs[len(st.refs)-refResults:])
+	st.refs = st.refs[:refResults]
 	return nil
 }

@@ -125,10 +125,18 @@ var immStagedBits = map[imm]int{
 
 	// Read and dropped, each with its reason at the arm. A vector cannot live in a
 	// fixed-width instruction, so these are #7's side-array work rather than staging.
-	immVecValType: 0,
-	immVecIdx:     0,
-	immCatchVec:   0,
-	immHeapType:   0,
+	immVecIdx:   0,
+	immCatchVec: 0,
+	immHeapType: 0,
+
+	// **One bit, since #196/#197 — no longer 0.** The full vector is still read and
+	// dropped for `immVecVecValType`'s own stated reason (a vector cannot live in a
+	// fixed-width instruction), but one derived fact now survives: whether the vector's
+	// single legal-arity type (`valid.ml:442`'s "arity other than 1 is not (yet) allowed")
+	// is a reference — `select`'s interpreter arm needs this to dispatch without a
+	// validator to consult, and stack shape cannot answer it safely (see the arm's own
+	// comment in exec.go). See instrCtx.imm's `immVecValType` arm.
+	immVecValType: 64,
 
 	// Structural: routed to instrCtx.structural, which emits its header before recursing.
 	// The block itself stages nothing; the arms' *other* immediates are the ones above.

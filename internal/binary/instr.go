@@ -860,16 +860,43 @@ func (c *instrCtx) imm(r *reader, im imm) error {
 		c.stage(btIdx)
 		return nil
 	case immVecValType:
-		// select's optional result-type vector. The types are read and dropped: nothing
-		// consumes them, `select` needs its arity from the *stack* at validation time, and
-		// a vector does not fit two words (#7).
+		// select's optional result-type vector. The types themselves are read and dropped:
+		// nothing consumes the full vector, `select` needs its arity from the *stack* at
+		// validation time, and a vector does not fit two words (#7).
 		//
 		// **"Does not fit two words" is no longer the whole reason, and 0016 is why.** The side
 		// table beside the body is where an unbounded immediate goes when it has a consumer, so
-		// what keeps this one discarded is the *absence* of one, not the absence of a mechanism.
-		// A `[]uint32` shape would not serve it in any case — these are valtypes — so the
-		// retention it wants is its own field, on the day #9 needs the annotation.
-		return c.d.decodeVec(r, c.d.decodeValType)
+		// what keeps the full vector discarded is the *absence* of one, not the absence of a
+		// mechanism. A `[]uint32` shape would not serve it in any case — these are valtypes —
+		// so the retention it wants is its own field, on the day #9 needs the annotation.
+		//
+		// **One bit *is* staged, since #196/#197, and it is not the full annotation.** `select`
+		// has no static type to consult at runtime (this package's own layer has no validator),
+		// so the interpreter's own dispatch — numeric/vector operands on `st.num`, reference
+		// operands on `st.refs` — cannot be made safely from stack shape alone: a live
+		// reference sitting elsewhere on `st.refs` while an unrelated numeric `select` executes
+		// would misdispatch, which is exactly the accept-direction hazard (§9 G-3) a stack-shape
+		// guess risks. `valid.ml:442`'s own rule caps the vector at arity 1
+		// ("invalid result arity other than 1 is not (yet) allowed"), so the one case this
+		// engine's decoder needs to answer is "is that single type a reference" — Imm0 is 1 for
+		// yes, 0 for every other shape (arity 0, or a numeric/vector type), which the interpreter
+		// reads as `ins.Imm0 != 0` rather than re-deriving from a runtime guess.
+		var isRef bool
+		if err := c.d.decodeVec(r, func(r *reader) error {
+			if err := c.d.decodeValType(r); err != nil {
+				return err
+			}
+			isRef = c.d.valType.IsRef()
+			return nil
+		}); err != nil {
+			return err
+		}
+		if isRef {
+			c.stage(1)
+		} else {
+			c.stage(0)
+		}
+		return nil
 	case immVecIdx:
 		// br_table's label vector, retained in the side table `emit` files it into (0016).
 		// It cannot live in Instr's two words, and it now has a consumer — the interpreter's

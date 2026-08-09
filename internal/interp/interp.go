@@ -480,13 +480,8 @@ func (in *Instance) invokeIndex(idx uint32, name string, args []Value) ([]Value,
 	if len(args) != len(ft.Params) {
 		return nil, fmt.Errorf("interp: %q takes %d arguments, got %d", name, len(ft.Params), len(args))
 	}
-	// The frame's locals: parameters first, then the declared locals zeroed.
-	//
-	// One array, not two, and unlike the value stack that is *not* a design decision yet — a
-	// ref-typed local is refused below, so no reference ever needs a slot here. When one does,
-	// the parallel array joins the frame for the value stack's reason (0002's pinned
-	// consequence), keyed by the same index: the validator knows each local's type, so each
-	// index uses exactly one of the two arrays.
+	// The frame's locals: parameters first, then the declared locals zeroed. `newFrame`
+	// (value.go) allocates the parallel reference array lazily, per its own doc comment.
 	//
 	// **This is where the flat local vector is paid for, and where it is bounded** (#138). The
 	// decoder retains the wire form — `(count, valtype)` runs — so `len(fn.Locals)` counts
@@ -506,29 +501,26 @@ func (in *Instance) invokeIndex(idx uint32, name string, args []Value) ([]Value,
 		return nil, fmt.Errorf("%w: %q declares %d locals, and this engine's frame ceiling is %d",
 			ErrUnsupported, name, total, maxFrameLocals)
 	}
-	locals := make([]uint64, total)
+	locals := newFrame(total, ft.Params, fn.EachLocal)
 	for i, p := range ft.Params {
-		if p.IsRef() {
-			return nil, fmt.Errorf("%w: parameter %d of %q is %s", ErrUnsupportedOp, i, name, p)
-		}
 		if args[i].Type != p {
 			return nil, fmt.Errorf("interp: %q parameter %d is %s, got %s", name, i, p, args[i].Type)
 		}
-		locals[i] = args[i].Bits
-	}
-	// Iterated rather than indexed, because the flat reading is what the ref check is about
-	// and materializing it to get one is what #138 was. `EachLocal` yields per local without
-	// allocating; the early return is the iterator's own stop signal.
-	var refErr error
-	fn.EachLocal(func(idx uint32, vt binary.ValType) bool {
-		if vt.IsRef() {
-			refErr = fmt.Errorf("%w: local %d of %q is %s", ErrUnsupportedOp, idx, name, vt)
-			return false
+		if p.IsRef() {
+			// **A non-null funcref argument is refused, and that refusal is Value.RefID's own
+			// stated scope boundary, not a leftover of the old blanket refusal.** externref
+			// (null or not) and a null funcref both convert cleanly through toRef; what stays
+			// refused is exactly the shape 0 corpus vectors exercise (see Value.RefID's doc
+			// comment) — a public caller naming a *specific*, non-null function.
+			if p == binary.FuncRef && !args[i].Null {
+				return nil, fmt.Errorf("%w: parameter %d of %q is a non-null funcref, which this "+
+					"boundary cannot accept from outside the engine (see interp.Value.RefID)",
+					ErrUnsupportedOp, i, name)
+			}
+			locals.refs[i] = args[i].toRef(in)
+			continue
 		}
-		return true
-	})
-	if refErr != nil {
-		return nil, refErr
+		locals.num[i] = args[i].Bits
 	}
 
 	st := &stack{
@@ -539,20 +531,26 @@ func (in *Instance) invokeIndex(idx uint32, name string, args []Value) ([]Value,
 		// call in the hot loop would spend what the measurement bought.
 		num: make([]uint64, 0, len(fn.Body)),
 	}
-	if err := in.run(fn, locals, st, len(ft.Results)); err != nil {
+	numResults, refResults := countByArray(ft.Results)
+	if err := in.run(fn, locals, st, numResults, refResults); err != nil {
 		return nil, err
 	}
-	if len(st.num) != len(ft.Results) {
+	if len(st.num) != numResults {
 		// #9's arity check, arriving late. Stated as the layering debt it is rather than
 		// dressed as `type mismatch`.
-		return nil, fmt.Errorf("%w: %q declares %d results and left %d values on the stack",
-			ErrNotValidated, name, len(ft.Results), len(st.num))
+		return nil, fmt.Errorf("%w: %q declares %d numeric results and left %d values on the stack",
+			ErrNotValidated, name, numResults, len(st.num))
+	}
+	if len(st.refs) != refResults {
+		return nil, fmt.Errorf("%w: %q declares %d reference results and left %d references on the stack",
+			ErrNotValidated, name, refResults, len(st.refs))
 	}
 	out := make([]Value, len(ft.Results))
 	for i := len(out) - 1; i >= 0; i-- {
 		t := ft.Results[i]
 		if t.IsRef() {
-			return nil, fmt.Errorf("%w: result %d of %q is %s", ErrUnsupportedOp, i, name, t)
+			out[i] = fromRef(st.popRef(), t)
+			continue
 		}
 		out[i] = Value{Type: t, Bits: st.popNum()}
 	}

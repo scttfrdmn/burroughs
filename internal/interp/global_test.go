@@ -153,7 +153,7 @@ func TestGlobalGetOfARefUsesTheRefStack(t *testing.T) {
 	st := &stack{}
 	// Arity 0: this body's value is read off the stack below rather than returned, so telling
 	// `run` to expect a result would make the arity check the thing under test.
-	if err := in.run(fn, nil, st, 0); err != nil {
+	if err := in.run(fn, nil, st, 0, 1); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	if len(st.num) != 0 {

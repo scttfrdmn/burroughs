@@ -21,6 +21,39 @@ weakly-ordered platform.
 
 ### Added
 
+- **The harness can parse a reference-typed invoke argument, and `Instance.Invoke` can accept and
+  return one** (#196, #197). Two blockers, landed together because neither converts a vector
+  alone: `internal/spec/value.go`'s `readRefConst` parses `ref.null <heaptype>`, `ref.extern N`,
+  and the bare `(ref.func)`/`(ref.extern)`/`(ref.null)` result-only patterns into a widened `Val`
+  (`ValKind` gains `KindFuncRef`/`KindExternRef`; a new `RefClass`/`Extern`/`AnyNull` carry the
+  reference half); `internal/interp`'s `Value` gains `Null`/`RefID` and `Instance.Invoke`/
+  `invokeIndex` accept and produce reference-typed parameters, locals, and results instead of
+  refusing every one unconditionally. `internal/interp/value.go`'s `frame` type gives a call's
+  locals the same numeric/reference parallel-array split 0002 already pins for the value stack
+  (`local.get`/`set`/`tee` dispatch on a per-index `isRef` bitmap built once per call); `call.go`'s
+  `invoke` lifts its own ref-parameter/ref-local refusal the same way; `control.go`'s
+  `blockArity`/`label`/`branch`/`returnFrom` split a block's parameter/result arity into numeric
+  and reference counts, so a block typed over a mix of the two (`br_table.wast`'s
+  `meet-funcref-*`/`meet-externref`) tracks both stacks correctly on a branch. `select`'s
+  interpreter arm, previously restricted to numeric/vector operands by construction (`st.refs` was
+  always empty), now dispatches on one retained bit of its optional type annotation
+  (`internal/binary/instr.go`'s `immVecValType` arm stages whether the vector's single legal-arity
+  type is a reference) rather than guessing from stack shape — stack-shape dispatch was tried and
+  rejected as an accept-direction hazard (a live reference elsewhere on the stack could misdispatch
+  an unrelated numeric `select`). Scope is exactly the corpus's own measured population: a non-null
+  funcref argument through the public boundary and `ref.func` as a literal (as opposed to a
+  module-body instruction, which `internal/text` already reads) are both out of scope, 0 vectors
+  needing either, and both refuse or decline by name rather than silently. Board: default lane
+  unsupported 27099→26822 (−277, closing exactly against pass +87/fail +11/gated +179); all-gates-on
+  lane pass 36888→37126 (+238), fail 1007→1046 (+39), gated stays 0. `TestGatedVectors`'s
+  per-vector allowlist grows the 179 newly-reached gate sites; `internal/spec/mismatch_test.go`'s
+  registry loses two stale entries (`table_grow.wast:22,30`, `table_get.wast:30`) whose cause
+  `readRefConst` closes, caught by the registry's own falsifiability check. New falsifiable
+  controls (`internal/spec/refboundary_test.go`): a corpus-vector round trip of an externref
+  identity through `table.set`/`table.get`, a null-vs-null-across-two-Kinds check, and a negative
+  control pinning `ref.func`-as-argument's declared out-of-scope status — each confirmed to fail
+  under a deliberate, reverted corruption.
+
 - **The text encoder retains `ref.test`/`ref.cast`/`br_on_cast`/`br_on_cast_fail`'s reftype
   immediates** (#8), the largest remaining bucket the co-blocking probe found: 205 vectors across
   `ref_test.wast` (68), `ref_cast.wast` (42), `br_on_cast.wast` (27), `br_on_cast_fail.wast` (27),

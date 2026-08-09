@@ -714,7 +714,7 @@ func namedInvokeAction(act node) (Command, bool) {
 	c := Command{Target: name, Invoke: string(act.list[2].str), Needs: CapInterpreter}
 	for _, a := range act.list[3:] {
 		v, ok := readConst(a)
-		if !ok || v.NaN != NaNNone {
+		if !ok || !v.isPassable() {
 			return Command{}, false
 		}
 		c.Args = append(c.Args, v)
@@ -836,11 +836,12 @@ func invokeAction(act node) (Command, bool) {
 	c := Command{Invoke: string(act.list[1].str), Needs: CapInterpreter}
 	for _, a := range act.list[2:] {
 		v, ok := readConst(a)
-		if !ok || v.NaN != NaNNone {
-			// A NaN *class* in an argument position is not a value that can be passed —
-			// it is a predicate. The asymmetry is enforced here rather than in the
-			// matcher, because it is a statement about which vectors are askable, and
-			// that is this function's subject.
+		if !ok || !v.isPassable() {
+			// A NaN *class*, a bare `(ref.func)`/`(ref.extern)` type-pattern, or a bare
+			// `(ref.null)` in an argument position is not a value that can be passed — each
+			// is a predicate. The asymmetry is enforced here rather than in the matcher,
+			// because it is a statement about which vectors are askable, and that is this
+			// function's subject. See Val.isPassable.
 			return Command{}, false
 		}
 		c.Args = append(c.Args, v)

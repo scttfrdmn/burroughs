@@ -512,13 +512,17 @@ func TestScriptModuleFormsAreNotWatBodies(t *testing.T) {
 // They are here because a decline is a claim about which vectors are askable, and the day one
 // becomes askable this test is where the classification decision has to be made visible.
 //
-// **That day arrived, and the row moved rather than being deleted.** The registry (0017 Q1)
-// makes `(assert_trap (invoke $M …) …)` askable, so `$M` is now `KindNamedAssertTrap` and the
-// row asserts the new Kind — which is the sentence above being *collected* rather than merely
-// vindicated: a decline row that becomes an accept row is the one artefact that proves the
-// classification decision was made deliberately instead of drifting in. The reference-argument
-// row is untouched, because `readConst` still cannot name a `ref.null func`, and keeping the
-// two rows adjacent is what shows the two declines had different causes all along.
+// **That day arrived twice, and each row moved rather than being deleted.** The registry
+// (0017 Q1) makes `(assert_trap (invoke $M …) …)` askable, so `$M` is now `KindNamedAssertTrap`
+// and the row asserts the new Kind — which is the sentence above being *collected* rather than
+// merely vindicated: a decline row that becomes an accept row is the one artefact that proves
+// the classification decision was made deliberately instead of drifting in.
+//
+// The reference-argument row moved the same way, later (#196/#197): `readConst` now names
+// `ref.null func`, and the row's Kind changed from KindUnsupported to KindAssertTrapAction to
+// say so — kept adjacent to the `$M` row for the same reason as before, so the two rows'
+// history (two different declines, closed at two different times, by two different
+// mechanisms) stays visible rather than collapsing into "always worked".
 func TestAssertTrapSplitsByWrappedForm(t *testing.T) {
 	cases := []struct {
 		src    string
@@ -548,9 +552,13 @@ func TestAssertTrapSplitsByWrappedForm(t *testing.T) {
 			`(assert_trap (invoke $M "f") "unreachable")`,
 			KindNamedAssertTrap, "unreachable", "f", "$M",
 		},
-		// Still a decline, and for its own reason: a reference-typed argument is not a value
-		// readConst can name. Adjacent to the row above so the two causes stay distinguishable.
-		{`(assert_trap (invoke "f" (ref.null func)) "unreachable")`, KindUnsupported, "", "", ""},
+		// A reference-typed argument, askable since #196/#197 — readConst now names
+		// `ref.null func`. Adjacent to the row above so the two rows' distinct histories stay
+		// visible (see this function's own doc comment).
+		{
+			`(assert_trap (invoke "f" (ref.null func)) "unreachable")`,
+			KindAssertTrapAction, "unreachable", "f", "",
+		},
 		// A `get` action is a different action grammar and its own stratum.
 		{`(assert_trap (get "g") "unreachable")`, KindUnsupported, "", "", ""},
 		// A module form the keyword check declines — the script grammar, not a wat body.

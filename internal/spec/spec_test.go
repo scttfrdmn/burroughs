@@ -326,6 +326,13 @@ func instantiateWith(f binary.Features, c Command, registry map[string]Instance)
 // copy plus a type-tag map in both directions and nothing else: no float arithmetic, no
 // re-parsing, no NaN normalization. Anything cleverer here would be the harness recomputing
 // a value it was handed, which is how a comparator starts agreeing with itself.
+//
+// **The reference half is a Class/Null/RefID mapping rather than a bit-pattern copy
+// (#196/#197)**, because neither Val nor Value hold a reference's representation as a bit
+// pattern at all — both types say so in their own doc comments — so the "no cleverness" rule
+// above is honored by this function doing exactly the same kind of copy for the reference
+// fields that it already does for Bits, not by forcing a reference through Bits to keep one
+// code path.
 func invoke(in Instance, name string, args []Val) ([]Val, error) {
 	inst, ok := in.(*interp.Instance)
 	if !ok {
@@ -333,11 +340,11 @@ func invoke(in Instance, name string, args []Val) ([]Val, error) {
 	}
 	vs := make([]interp.Value, len(args))
 	for i, a := range args {
-		t, ok := valType(a.Kind)
+		v, ok := toInterpValue(a)
 		if !ok {
-			return nil, fmt.Errorf("argument %d has kind %v, which has no binary.ValType", i, a.Kind)
+			return nil, fmt.Errorf("argument %d is %s, which has no interp.Value", i, a)
 		}
-		vs[i] = interp.Value{Type: t, Bits: a.Bits}
+		vs[i] = v
 	}
 	out, err := inst.Invoke(name, vs...)
 	if err != nil {
@@ -345,14 +352,14 @@ func invoke(in Instance, name string, args []Val) ([]Val, error) {
 	}
 	res := make([]Val, len(out))
 	for i, o := range out {
-		k, ok := valKind(o.Type)
+		v, ok := fromInterpValue(o)
 		if !ok {
 			// A result type the harness cannot name. Reported rather than mapped to a
 			// default, because a silent coercion here would make every v128 result
 			// compare as an i32 and the mismatch bucket would name the wrong defect.
 			return nil, fmt.Errorf("result %d has type %v, which the harness cannot represent", i, o.Type)
 		}
-		res[i] = Val{Kind: k, Bits: o.Bits}
+		res[i] = v
 	}
 	return res, nil
 }
@@ -364,6 +371,12 @@ func invoke(in Instance, name string, args []Val) ([]Val, error) {
 // gains a member — the enumerated-literal defect in its most tempting form, since the two
 // orderings genuinely do correspond right now. Both functions report `ok` rather than
 // defaulting, so an unmappable type is a named failure at the boundary.
+//
+// **Widened to the two reference kinds, since #196/#197** — the type-tag half of a reference
+// Val/Value *is* a ValType-shaped fact (which of FuncRef/ExternRef), even though the rest of a
+// reference's representation (Null, Extern/RefID) is not; toInterpValue/fromInterpValue below
+// call this for that one fact and handle the rest themselves, rather than this pair growing a
+// second copy of the Class dispatch.
 func valType(k ValKind) (binary.ValType, bool) {
 	switch k {
 	case KindI32:
@@ -374,6 +387,10 @@ func valType(k ValKind) (binary.ValType, bool) {
 		return binary.F32, true
 	case KindF64:
 		return binary.F64, true
+	case KindFuncRef:
+		return binary.FuncRef, true
+	case KindExternRef:
+		return binary.ExternRef, true
 	}
 	return binary.NoValType, false
 }
@@ -388,13 +405,82 @@ func valKind(t binary.ValType) (ValKind, bool) {
 		return KindF32, true
 	case binary.F64:
 		return KindF64, true
+	case binary.FuncRef:
+		return KindFuncRef, true
+	case binary.ExternRef:
+		return KindExternRef, true
 	default:
-		// V128, FuncRef, ExternRef, NoValType: types the *harness* cannot name (see
-		// ValKind's four members). Reported as `false` so the caller says so rather than
+		// V128 and every GC reference form: types the *harness* cannot name (see ValKind's
+		// own scope comment). Reported as `false` so the caller says so rather than
 		// coercing — a silent map to KindI32 would make every v128 result compare as an
 		// i32 and bucket the wrong defect.
 		return 0, false
 	}
+}
+
+// toInterpValue converts a Val to an interp.Value, dispatching on whether Kind is a reference
+// kind — the reference half of invoke's glue, kept as its own function because the mapping is a
+// real branch (Class chooses among three shapes) rather than a field-for-field copy the way the
+// numeric half is.
+//
+// **Only RefLiteralNull and RefExternIdentity convert; RefTypePattern and AnyNull report
+// false**, because both are expectation-only predicates with no concrete value to pass as an
+// argument — `isPassable`'s own rule, checked again here as a second, narrower opinion at the
+// one function that actually builds an interp.Value, per the falsifiability law's own
+// "breaking the assertion" reasoning: a caller that reached here after somehow bypassing
+// isPassable's check gets a named failure instead of a silently wrong Value.
+func toInterpValue(a Val) (interp.Value, bool) {
+	if !a.Kind.isRef() {
+		t, ok := valType(a.Kind)
+		if !ok {
+			return interp.Value{}, false
+		}
+		return interp.Value{Type: t, Bits: a.Bits}, true
+	}
+	t, ok := valType(a.Kind)
+	if !ok {
+		return interp.Value{}, false
+	}
+	switch a.Class {
+	case RefLiteralNull:
+		return interp.NullRef(t), true
+	case RefExternIdentity:
+		return interp.ExternRef(a.Extern), true
+	case RefNone, RefTypePattern, RefConcrete:
+		// RefNone is unreachable given a.Kind.isRef(). RefTypePattern is the
+		// expectation-only shape this function's own doc comment excludes. RefConcrete is
+		// result-only (fromInterpValue's own construction) and never appears as an
+		// argument. All three named explicitly so `exhaustive` confirms every RefClass
+		// member has a stated reading here.
+	}
+	return interp.Value{}, false
+}
+
+// fromInterpValue converts an interp.Value to a Val, the reverse direction of toInterpValue.
+//
+// Every reference interp.Value converts: `Null` and `RefID` are always meaningful once Type is
+// known (interp.Value's own doc comment), unlike the harness-argument direction above where a
+// predicate shape has no interp.Value to become. So there is no third arm here mirroring
+// RefTypePattern/AnyNull — a *result* is always a concrete value, never a pattern, and the
+// pattern-matching happens entirely on the expectation side, in Val.Matches.
+func fromInterpValue(o interp.Value) (Val, bool) {
+	k, ok := valKind(o.Type)
+	if !ok {
+		return Val{}, false
+	}
+	if !k.isRef() {
+		return Val{Kind: k, Bits: o.Bits}, true
+	}
+	if o.Null {
+		return Val{Kind: k, Class: RefLiteralNull}, true
+	}
+	if k == KindExternRef {
+		return Val{Kind: k, Class: RefExternIdentity, Extern: o.RefID}, true
+	}
+	// A non-null funcref: RefConcrete, per its own doc comment — this harness tracks no
+	// funcref identity, so a result converts to "some non-null value of this Kind" rather
+	// than to a class carrying an identity nothing compares.
+	return Val{Kind: k, Class: RefConcrete}, true
 }
 
 // engine is the board's engine description, in one place so that every board test scores
@@ -3040,12 +3126,33 @@ func TestGatedVectors(t *testing.T) {
 			64: "multi-memory: 2 memories (1 imported) at :6, so a memarg carries flags bit 6",
 			65: "multi-memory: 2 memories (1 imported) at :6, so a memarg carries flags bit 6",
 		},
+		// **Every command's own line, since #196/#197** — the file is one module (a single
+		// `(table $t64 i64 0 externref)` at :1), so once the boundary can accept and produce
+		// externref arguments/results every action against it reaches the same memory64 gate
+		// check, not only the six lines a pre-#196/#197 harness (which refused every
+		// externref-typed action outright) could reach. Listed exhaustively rather than as a
+		// range, matching this allowlist's own style elsewhere.
 		"table_grow64.wast": {
 			12: "memory64: (table $t64 i64 0 externref) at :1 — an i64 index type",
+			13: "memory64: an i64 index type at :1 — the module this action runs against",
 			14: "memory64: an i64 index type at :1 — the module this action runs against",
-			17: "memory64: (table $t64 i64 0 externref) at :1 — an i64 index type",
+			16: "memory64: (table $t64 i64 0 externref) at :1 — an i64 index type",
+			17: "memory64: an i64 index type at :1 — the module this action runs against",
+			18: "memory64: an i64 index type at :1 — the module this action runs against",
+			19: "memory64: an i64 index type at :1 — the module this action runs against",
+			20: "memory64: an i64 index type at :1 — the module this action runs against",
+			21: "memory64: an i64 index type at :1 — the module this action runs against",
 			22: "memory64: an i64 index type at :1 — the module this action runs against",
-			25: "memory64: (table $t64 i64 0 externref) at :1 — an i64 index type",
+			24: "memory64: (table $t64 i64 0 externref) at :1 — an i64 index type",
+			25: "memory64: an i64 index type at :1 — the module this action runs against",
+			26: "memory64: an i64 index type at :1 — the module this action runs against",
+			27: "memory64: an i64 index type at :1 — the module this action runs against",
+			28: "memory64: an i64 index type at :1 — the module this action runs against",
+			29: "memory64: an i64 index type at :1 — the module this action runs against",
+			30: "memory64: an i64 index type at :1 — the module this action runs against",
+			31: "memory64: an i64 index type at :1 — the module this action runs against",
+			32: "memory64: an i64 index type at :1 — the module this action runs against",
+			33: "memory64: an i64 index type at :1 — the module this action runs against",
 			34: "memory64: an i64 index type at :1 — the module this action runs against",
 		},
 
@@ -3125,7 +3232,93 @@ func TestGatedVectors(t *testing.T) {
 			2194: "memory64: (table $t0 i64 30 30 funcref) at :2171 — tables=2 addr64=2",
 			2219: "memory64: an i64 index type at :2196 — the module this action runs against",
 		},
+		// **New entry, since #196/#197.** One module (`(table $t 10 externref)` at :2,
+		// `(table $t64 i64 10 externref)` at :15), so every one of the file's 70 commands
+		// crosses the boundary with an externref argument or result and reaches this
+		// memory64 gate together — none reachable at all before #196/#197, all gated now.
+		// Listed exhaustively per this allowlist's own style; verified against the file's
+		// full command-line population (grep for assert_return/assert_trap/bare invoke),
+		// not assumed from a range.
+		"table_fill64.wast": {
+			27:  "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			28:  "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			29:  "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			30:  "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			31:  "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			33:  "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			34:  "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			35:  "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			36:  "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			37:  "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			38:  "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			40:  "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			41:  "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			42:  "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			43:  "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			44:  "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			46:  "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			47:  "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			48:  "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			49:  "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			51:  "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			52:  "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			53:  "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			54:  "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			56:  "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			57:  "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			58:  "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			60:  "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			61:  "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			63:  "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			67:  "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			68:  "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			69:  "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			71:  "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			76:  "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			83:  "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			84:  "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			85:  "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			86:  "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			87:  "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			89:  "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			90:  "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			91:  "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			92:  "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			93:  "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			94:  "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			96:  "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			97:  "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			98:  "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			99:  "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			100: "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			102: "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			103: "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			104: "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			105: "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			107: "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			108: "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			109: "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			110: "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			112: "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			113: "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			114: "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			116: "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			117: "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			119: "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			123: "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			124: "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			125: "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			127: "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+			132: "memory64: (table $t64 i64 10 externref) at :15 — the module this action runs against",
+		},
 		"table_get64.wast": {
+			// **:24, :26, :27, :29 join since #196/#197** — `init`/`get-externref`/`get-funcref`
+			// pass or return a reference through the boundary, which a pre-#196/#197 harness
+			// refused before ever reaching this memory64 module's own gate.
+			24: "memory64: (table $t2 i64 2 externref) at :1 — tables=2 addr64=2",
+			26: "memory64: an i64 index type at :1 — the module this action runs against",
+			27: "memory64: an i64 index type at :1 — the module this action runs against",
+			29: "memory64: an i64 index type at :1 — the module this action runs against",
 			30: "memory64: (table $t2 i64 2 externref) at :1 — tables=2 addr64=2",
 			31: "memory64: (table $t2 i64 2 externref) at :1 — tables=2 addr64=2",
 			33: "memory64: an i64 index type at :1 — the module this action runs against",
@@ -3213,6 +3406,13 @@ func TestGatedVectors(t *testing.T) {
 			280: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
 			281: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
 			282: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
+			// **:206, :207, :235, :241 join since #196/#197** — `get-r`/`get-mr`/`set-mr` cross
+			// the boundary with an externref, which a pre-#196/#197 harness refused before ever
+			// reaching this same module's own extended-const gate.
+			206: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
+			207: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
+			235: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
+			241: "extended-const: (global $z3 i32 (i32.add …)) at :19, in the module at :3",
 		},
 		"load2.wast": {
 			162: "multi-memory: 4 memories at :1, so a memarg carries flags bit 6",
@@ -3330,10 +3530,29 @@ func TestGatedVectors(t *testing.T) {
 			63: "memory64: (table $t0 i64 0 externref) at :2 — tables=4 addr64=4",
 			64: "memory64: (table $t0 i64 0 externref) at :2 — tables=4 addr64=4",
 		},
+		// **14 lines join since #196/#197** — `get-externref`/`set-externref`/`get-funcref`/
+		// `set-funcref` all cross the boundary with a reference argument or result, which a
+		// pre-#196/#197 harness refused before ever reaching this memory64 module's own gate;
+		// `set-funcref-from`/`is_null-funcref` do not (their arguments/results are all i64/i32)
+		// and were already gated.
 		"table_set64.wast": {
+			29: "memory64: (table $t2 i64 2 externref) at :1 — tables=2 addr64=2",
+			30: "memory64: an i64 index type at :1 — the module this action runs against",
+			31: "memory64: an i64 index type at :1 — the module this action runs against",
+			32: "memory64: an i64 index type at :1 — the module this action runs against",
+			33: "memory64: an i64 index type at :1 — the module this action runs against",
+			35: "memory64: an i64 index type at :1 — the module this action runs against",
 			36: "memory64: (table $t2 i64 2 externref) at :1 — tables=2 addr64=2",
 			37: "memory64: (table $t2 i64 2 externref) at :1 — tables=2 addr64=2",
+			38: "memory64: an i64 index type at :1 — the module this action runs against",
+			39: "memory64: an i64 index type at :1 — the module this action runs against",
+			41: "memory64: an i64 index type at :1 — the module this action runs against",
+			42: "memory64: an i64 index type at :1 — the module this action runs against",
+			43: "memory64: an i64 index type at :1 — the module this action runs against",
+			44: "memory64: an i64 index type at :1 — the module this action runs against",
+			46: "memory64: an i64 index type at :1 — the module this action runs against",
 			47: "memory64: an i64 index type at :1 — the module this action runs against",
+			48: "memory64: an i64 index type at :1 — the module this action runs against",
 			49: "memory64: an i64 index type at :1 — the module this action runs against",
 		},
 		// **These two files' original three entries each stayed exactly as they were** — a
@@ -3975,7 +4194,14 @@ func TestGatedVectors(t *testing.T) {
 		// `funcref`-typed param, at :1 — read in full rather than assumed from its size, since
 		// the file mixes GC-gated and ungated param types across its exports.
 		"ref_is_null.wast": {
+			// **:44, :45, :48, :50 join since #196/#197** — `funcref`/`externref`/`init` cross
+			// the boundary with a reference, which a pre-#196/#197 harness refused before ever
+			// reaching this same module's own gc gate (:1's `(ref $t)` func param).
+			44: "gc: (ref $t) as a func param at :1 — the module this action runs against",
+			45: "gc: (ref $t) as a func param at :1 — the module this action runs against",
 			46: "gc: (ref $t) as a func param at :1 — the module this action runs against",
+			48: "gc: (ref $t) as a func param at :1 — the module this action runs against",
+			50: "gc: (ref $t) as a func param at :1 — the module this action runs against",
 			52: "gc: (ref $t) as a func param at :1 — the module this action runs against",
 			53: "gc: (ref $t) as a func param at :1 — the module this action runs against",
 			54: "gc: (ref $t) as a func param at :1 — the module this action runs against",
@@ -4095,6 +4321,8 @@ func TestGatedVectors(t *testing.T) {
 			139: "gc: (ref $t) as a func param at :3 — the module this action runs against",
 			140: "gc: (ref $t) as a func param at :3 — the module this action runs against",
 			141: "gc: (ref $t) as a func param at :3 — the module this action runs against",
+			// **:142 joins since #196/#197**, same reason as the rest of this module's entries.
+			142: "gc: (ref $t) as a func param at :3 — the module this action runs against",
 		},
 		"return_call_indirect.wast": {
 			247: "gc: (ref $t) as a func param at :3 — the module this action runs against",
@@ -4146,6 +4374,8 @@ func TestGatedVectors(t *testing.T) {
 			301: "gc: (ref $t) as a func param at :3 — the module this action runs against",
 			303: "gc: (ref $t) as a func param at :3 — the module this action runs against",
 			304: "gc: (ref $t) as a func param at :3 — the module this action runs against",
+			// **:305 joins since #196/#197**, same reason as the rest of this module's entries.
+			305: "gc: (ref $t) as a func param at :3 — the module this action runs against",
 		},
 		// One giant module (:3-1063) exercising every `br_table` shape, including the four
 		// `meet-funcref-*`/`meet-nullref`/`meet-multi-ref` exports whose blocks are typed
@@ -4298,6 +4528,25 @@ func TestGatedVectors(t *testing.T) {
 			1244: "gc: (ref null $t) table type and block results at :1016-1063 — the module this action runs against",
 			1245: "gc: (ref null $t) table type and block results at :1016-1063 — the module this action runs against",
 			1247: "gc: (ref null $t) table type and block results at :1016-1063 — the module this action runs against",
+			// The same `(ref null $t) table` module's `meet-externref`/`meet-funcref-*` exports,
+			// reachable only since #196/#197 taught the boundary to accept and produce
+			// reference-typed arguments/results — these 15 lines are members of the module
+			// gated above at :1016-1063, not a new gate site.
+			1249: "gc: (ref null $t) table type and block results at :1016-1063 — the module this action runs against",
+			1250: "gc: (ref null $t) table type and block results at :1016-1063 — the module this action runs against",
+			1251: "gc: (ref null $t) table type and block results at :1016-1063 — the module this action runs against",
+			1253: "gc: (ref null $t) table type and block results at :1016-1063 — the module this action runs against",
+			1254: "gc: (ref null $t) table type and block results at :1016-1063 — the module this action runs against",
+			1255: "gc: (ref null $t) table type and block results at :1016-1063 — the module this action runs against",
+			1256: "gc: (ref null $t) table type and block results at :1016-1063 — the module this action runs against",
+			1257: "gc: (ref null $t) table type and block results at :1016-1063 — the module this action runs against",
+			1258: "gc: (ref null $t) table type and block results at :1016-1063 — the module this action runs against",
+			1259: "gc: (ref null $t) table type and block results at :1016-1063 — the module this action runs against",
+			1260: "gc: (ref null $t) table type and block results at :1016-1063 — the module this action runs against",
+			1261: "gc: (ref null $t) table type and block results at :1016-1063 — the module this action runs against",
+			1262: "gc: (ref null $t) table type and block results at :1016-1063 — the module this action runs against",
+			1263: "gc: (ref null $t) table type and block results at :1016-1063 — the module this action runs against",
+			1264: "gc: (ref null $t) table type and block results at :1016-1063 — the module this action runs against",
 		},
 		// `(global (export "g") (ref $f) (ref.func $f))` at :2 — the indexed reftype as a global
 		// type. Second occurrence at :426.
@@ -4602,6 +4851,10 @@ func TestGatedVectors(t *testing.T) {
 		// position is the nearest preceding top-level `(module …)` in the .wast file, read by
 		// hand off the vector rather than assumed from proximity.
 		"ref_test.wast": {
+			// **:101 joins since #196/#197**, same module (:3) and gate as the rest of this
+			// file's entries — its `init` setup invoke (:100, one line up) crosses the boundary
+			// with an externref argument.
+			101: "gc: ref.test/ref.cast/br_on_cast opcode (0xfb prefix) — the module at :3 this action runs against",
 			103: "gc: ref.test/ref.cast/br_on_cast opcode (0xfb prefix) — the module at :3 this action runs against",
 			104: "gc: ref.test/ref.cast/br_on_cast opcode (0xfb prefix) — the module at :3 this action runs against",
 			105: "gc: ref.test/ref.cast/br_on_cast opcode (0xfb prefix) — the module at :3 this action runs against",
@@ -4672,6 +4925,8 @@ func TestGatedVectors(t *testing.T) {
 			330: "gc: ref.test/ref.cast/br_on_cast opcode (0xfb prefix) — the module at :182 this action runs against",
 		},
 		"ref_cast.wast": {
+			// **:49 joins since #196/#197**, same reason as the rest of this module's entries.
+			49:  "gc: ref.test/ref.cast/br_on_cast opcode (0xfb prefix) — the module at :3 this action runs against",
 			51:  "gc: ref.test/ref.cast/br_on_cast opcode (0xfb prefix) — the module at :3 this action runs against",
 			52:  "gc: ref.test/ref.cast/br_on_cast opcode (0xfb prefix) — the module at :3 this action runs against",
 			53:  "gc: ref.test/ref.cast/br_on_cast opcode (0xfb prefix) — the module at :3 this action runs against",
@@ -4716,6 +4971,8 @@ func TestGatedVectors(t *testing.T) {
 			186: "gc: ref.test/ref.cast/br_on_cast opcode (0xfb prefix) — the module at :99 this action runs against",
 		},
 		"br_on_cast.wast": {
+			// **:69 joins since #196/#197**, same reason as the rest of this module's entries.
+			69:  "gc: ref.test/ref.cast/br_on_cast opcode (0xfb prefix) — the module at :3 this action runs against",
 			71:  "gc: ref.test/ref.cast/br_on_cast opcode (0xfb prefix) — the module at :3 this action runs against",
 			72:  "gc: ref.test/ref.cast/br_on_cast opcode (0xfb prefix) — the module at :3 this action runs against",
 			73:  "gc: ref.test/ref.cast/br_on_cast opcode (0xfb prefix) — the module at :3 this action runs against",
@@ -4745,6 +5002,8 @@ func TestGatedVectors(t *testing.T) {
 			206: "gc: ref.test/ref.cast/br_on_cast opcode (0xfb prefix) — the module at :104 this action runs against",
 		},
 		"br_on_cast_fail.wast": {
+			// **:69 joins since #196/#197**, same reason as the rest of this module's entries.
+			69:  "gc: ref.test/ref.cast/br_on_cast opcode (0xfb prefix) — the module at :3 this action runs against",
 			71:  "gc: ref.test/ref.cast/br_on_cast opcode (0xfb prefix) — the module at :3 this action runs against",
 			72:  "gc: ref.test/ref.cast/br_on_cast opcode (0xfb prefix) — the module at :3 this action runs against",
 			73:  "gc: ref.test/ref.cast/br_on_cast opcode (0xfb prefix) — the module at :3 this action runs against",
@@ -4772,6 +5031,80 @@ func TestGatedVectors(t *testing.T) {
 			99:  "gc: ref.test/ref.cast/br_on_cast opcode (0xfb prefix) — the module at :3 this action runs against",
 			220: "gc: ref.test/ref.cast/br_on_cast opcode (0xfb prefix) — the module at :104 this action runs against",
 			221: "gc: ref.test/ref.cast/br_on_cast opcode (0xfb prefix) — the module at :104 this action runs against",
+		},
+
+		// Four new files, all since #196/#197 — none of their scorable commands could reach a
+		// gate at all before the boundary accepted and produced reference-typed arguments and
+		// results, so every line below is a new gate site rather than an addition to one.
+
+		// One module (:1-35), GC throughout: `any`/`i31`/`struct`/`array` value types and the
+		// `any.convert_extern`/`extern.convert_any` opcodes. The lines *not* listed here
+		// (:39, :41, :44, :51, :53-56) stay Unsupported: they carry `ref.host`/`ref.i31`/
+		// `ref.struct`/`ref.array`, forms readRefConst's own doc comment states are out of
+		// scope (measured 0 corpus vectors elsewhere needing them as an argument or a
+		// non-bare result), so those lines never reach the gate at all.
+		"extern.wast": {
+			37: "gc: any/i31/struct/array value types and any.convert_extern/extern.convert_any at :1 — the module this action runs against",
+			40: "gc: any/i31/struct/array value types and any.convert_extern/extern.convert_any at :1 — the module this action runs against",
+			43: "gc: any/i31/struct/array value types and any.convert_extern/extern.convert_any at :1 — the module this action runs against",
+			45: "gc: any/i31/struct/array value types and any.convert_extern/extern.convert_any at :1 — the module this action runs against",
+			46: "gc: any/i31/struct/array value types and any.convert_extern/extern.convert_any at :1 — the module this action runs against",
+			47: "gc: any/i31/struct/array value types and any.convert_extern/extern.convert_any at :1 — the module this action runs against",
+			48: "gc: any/i31/struct/array value types and any.convert_extern/extern.convert_any at :1 — the module this action runs against",
+			49: "gc: any/i31/struct/array value types and any.convert_extern/extern.convert_any at :1 — the module this action runs against",
+			50: "gc: any/i31/struct/array value types and any.convert_extern/extern.convert_any at :1 — the module this action runs against",
+			52: "gc: any/i31/struct/array value types and any.convert_extern/extern.convert_any at :1 — the module this action runs against",
+			57: "gc: any/i31/struct/array value types and any.convert_extern/extern.convert_any at :1 — the module this action runs against",
+		},
+
+		// `(param $p (ref extern))`/`(local $x (ref extern))` at :4,:5 etc — the indexed
+		// non-null parameterized reftype, GC's own construct, in every one of this file's
+		// four exported functions across its two modules (:3-17, :66-72).
+		"local_init.wast": {
+			21: "gc: (ref extern) parameter and local type at :4 — the module this action runs against",
+			22: "gc: (ref extern) parameter and local type at :9 — the module this action runs against",
+			23: "gc: (ref extern) parameter and local type at :14 — the module this action runs against",
+			74: "gc: (ref extern) parameter and local type at :67 — the module this action runs against",
+		},
+
+		// Two modules. The first (:1-13) exports `anyref`/`funcref`/`exnref`/`externref`/`ref`
+		// results and globals of the same shapes — `exnref`/`(ref null $t)` are GC's own forms,
+		// so the whole module gates even though the *specific* line invoked may be a Wasm-2.0
+		// shape (`funcref`/`externref`) on its own. The second module (:22-49) adds the four
+		// `null*ref` abstract bottom heaptypes (`none`/`nofunc`/`noexn`/`noextern`), also GC's.
+		"ref_null.wast": {
+			16: "gc: exnref result/global and (ref null $t) result at :1-13 — the module this action runs against",
+			17: "gc: exnref result/global and (ref null $t) result at :1-13 — the module this action runs against",
+			18: "gc: exnref result/global and (ref null $t) result at :1-13 — the module this action runs against",
+			19: "gc: exnref result/global and (ref null $t) result at :1-13 — the module this action runs against",
+			20: "gc: exnref result/global and (ref null $t) result at :1-13 — the module this action runs against",
+			55: "gc: null/nofunc/noexn/noextern bottom heaptypes and (ref null $t) at :22-49 — the module this action runs against",
+			56: "gc: null/nofunc/noexn/noextern bottom heaptypes and (ref null $t) at :22-49 — the module this action runs against",
+			57: "gc: null/nofunc/noexn/noextern bottom heaptypes and (ref null $t) at :22-49 — the module this action runs against",
+			58: "gc: null/nofunc/noexn/noextern bottom heaptypes and (ref null $t) at :22-49 — the module this action runs against",
+			59: "gc: null/nofunc/noexn/noextern bottom heaptypes and (ref null $t) at :22-49 — the module this action runs against",
+			60: "gc: null/nofunc/noexn/noextern bottom heaptypes and (ref null $t) at :22-49 — the module this action runs against",
+			61: "gc: null/nofunc/noexn/noextern bottom heaptypes and (ref null $t) at :22-49 — the module this action runs against",
+			62: "gc: null/nofunc/noexn/noextern bottom heaptypes and (ref null $t) at :22-49 — the module this action runs against",
+			63: "gc: null/nofunc/noexn/noextern bottom heaptypes and (ref null $t) at :22-49 — the module this action runs against",
+			64: "gc: null/nofunc/noexn/noextern bottom heaptypes and (ref null $t) at :22-49 — the module this action runs against",
+			65: "gc: null/nofunc/noexn/noextern bottom heaptypes and (ref null $t) at :22-49 — the module this action runs against",
+			66: "gc: null/nofunc/noexn/noextern bottom heaptypes and (ref null $t) at :22-49 — the module this action runs against",
+			67: "gc: null/nofunc/noexn/noextern bottom heaptypes and (ref null $t) at :22-49 — the module this action runs against",
+			68: "gc: null/nofunc/noexn/noextern bottom heaptypes and (ref null $t) at :22-49 — the module this action runs against",
+			69: "gc: null/nofunc/noexn/noextern bottom heaptypes and (ref null $t) at :22-49 — the module this action runs against",
+			70: "gc: null/nofunc/noexn/noextern bottom heaptypes and (ref null $t) at :22-49 — the module this action runs against",
+			71: "gc: null/nofunc/noexn/noextern bottom heaptypes and (ref null $t) at :22-49 — the module this action runs against",
+			72: "gc: null/nofunc/noexn/noextern bottom heaptypes and (ref null $t) at :22-49 — the module this action runs against",
+			73: "gc: null/nofunc/noexn/noextern bottom heaptypes and (ref null $t) at :22-49 — the module this action runs against",
+			74: "gc: null/nofunc/noexn/noextern bottom heaptypes and (ref null $t) at :22-49 — the module this action runs against",
+			75: "gc: null/nofunc/noexn/noextern bottom heaptypes and (ref null $t) at :22-49 — the module this action runs against",
+			76: "gc: null/nofunc/noexn/noextern bottom heaptypes and (ref null $t) at :22-49 — the module this action runs against",
+			77: "gc: null/nofunc/noexn/noextern bottom heaptypes and (ref null $t) at :22-49 — the module this action runs against",
+			78: "gc: null/nofunc/noexn/noextern bottom heaptypes and (ref null $t) at :22-49 — the module this action runs against",
+			79: "gc: null/nofunc/noexn/noextern bottom heaptypes and (ref null $t) at :22-49 — the module this action runs against",
+			80: "gc: null/nofunc/noexn/noextern bottom heaptypes and (ref null $t) at :22-49 — the module this action runs against",
+			81: "gc: null/nofunc/noexn/noextern bottom heaptypes and (ref null $t) at :22-49 — the module this action runs against",
 		},
 	}
 
@@ -5592,7 +5925,30 @@ func TestPhase1Files(t *testing.T) {
 	// `elem.wast:1016-1030` declining on `ref.extern` — 2 on an argument, 6 on an expected result.
 	// Keying the census on arguments alone said 110-of-110 admitted and was wrong by six; see
 	// `namedInvokeAction` in wast.go for the correction and why both halves have to be counted.
-	const unsupportedCeiling = 27099
+	//
+	// # 27099 → 26822, and the −277 decomposes exactly (#196/#197)
+	//
+	// `readRefConst` (value.go) admits `ref.null <heaptype>` / `ref.extern N` as an argument, and
+	// `invokeIndex`/`invoke` (internal/interp) accept and produce reference-typed parameters,
+	// locals, and results instead of refusing every one unconditionally — the two blockers #196
+	// and #197 each named, landed together because neither converts a vector alone (#197's own
+	// finding). The drain partitions **87 pass + 11 fail − 179 gated's own sign flipped** — stated
+	// properly: pass +87, fail +11, gated +179, and 87 + 11 + 179 = 277 exactly, which is the
+	// check rather than the claim (`TestPhase1Files`'s own board line, run before and after).
+	//
+	// The +179 gated is every one of the 270-vector estimate's members that also needs the GC
+	// gate for an unrelated reason (a struct/array/i31 heaptype elsewhere in the same module) —
+	// expected and correctly attributed, per #196's own note that "some vectors may still be
+	// Unsupported [or gated] afterward ... that's expected". The +11 fail is not a regression:
+	// diffed bucket-by-bucket against the pre-change board, 3 vectors that used to fail on
+	// `assert_return value mismatch` (the harness computing a value over state a setup `invoke`
+	// never wrote, exactly `load1.wast`'s shape from #196's own issue text) now genuinely pass,
+	// and the remaining delta reclassifies pre-existing encoder-frontier fails
+	// (`try_table`/`(table …)` field encoding, #8, unrelated to this change) into their true
+	// bucket — the vectors were always going to land there once the harness could even attempt
+	// them; before this change they were short-circuited earlier and misfiled as a value
+	// mismatch. Measured with the harness, not a grep, per decision 0007/#161's standing rule.
+	const unsupportedCeiling = 26822
 	boardBound(t, "unsupportedCeiling", totalUnsup, unsupportedCeiling, boardBoundSlack, ceilingBound,
 		"either a capability regressed or the corpus moved; both need an explanation rather "+
 			"than a raised ceiling")
