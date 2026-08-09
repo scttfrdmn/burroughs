@@ -327,7 +327,17 @@ func TestModuleAcceptDirection(t *testing.T) {
 		{`(module (type (array (mut i8))))`, "arraytype with a packed mutable field"},
 		{`(module (type (sub (func))))`, "subtype:1453"},
 		{`(module (type (sub final (func))))`, "subtype:1456"},
-		{`(module (type (sub $a $b (func))))`, "subtype:1453 with idx_list"},
+		// **Corrected from `(module (type (sub $a $b (func))))`, an unbound-name case that read as
+		// accepted only while `subtype`'s supertype list was discarded rather than resolved.**
+		// `subtype`'s own grammar action calls `type_` (`lookup "type" c.types.space x`,
+		// parser.mly:453-455) on each declared supertype eagerly, at parse time, and `$a`/`$b`
+		// bound to nothing is `unknown type $a` on the reference's own terms — the sibling of the
+		// drifted-fixture defect: an accept-direction claim citing a real grammar arm, never
+		// checked against what that arm's semantic action actually requires. `check_subtype_sub`'s
+		// forward-reference rule (valid.ml:169-171) is validation's, not this stratum's, but the
+		// *name resolving to something at all* is `subtype`'s own action, so the two named types
+		// below are declared first for the lookup to find.
+		{`(module (type $a (func)) (type $b (func)) (type (sub $a $b (func))))`, "subtype:1453 with idx_list"},
 		{`(module (rec (type (func))))`, "rectype:1294"},
 		{`(module (rec (type (struct)) (type (array i32))))`, "type_def_list:1284"},
 

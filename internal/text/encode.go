@@ -143,6 +143,16 @@ const (
 	tagArray  byte = 0x5e
 )
 
+// tagSubNoFinal and tagSubFinal are `subtype`'s two explicit wrapper forms — 0x50/-0x30 (may be
+// subtyped further) and 0x4f/-0x31 (may not) — the two bytes `decodeSubType` peeks for
+// (sections.go). Written only when a `sub` is either non-final or carries a declared supertype;
+// the no-wrapper and bare-`sub final`-with-no-supertypes cases are the same fact on the wire
+// (`subtype`'s own default, encode.ml:178) and need neither byte.
+const (
+	tagSubNoFinal byte = 0x50
+	tagSubFinal   byte = 0x4f
+)
+
 // packI8 and packI16 are `packtype`'s two forms — 0x78/-0x08, 0x77/-0x09 — folded to bytes the
 // same way `absoluteHeaptypeBytes`'s comment folds every other negative-s7 form this package
 // writes, and verified against `decodeStorageType`'s own two cases (sections.go, already merged).
@@ -584,6 +594,17 @@ func (p *parser) encodableOrErr() error {
 // alternative as a defect visible only in the all-gates-on lane. Here the alignment is free, because
 // `encodableOrErr` has already refused every module holding a slot this cannot fill.
 //
+// **The subtype wrapper is written ahead of the comptype tag, as of 0019's own named gap** —
+// `subtype`'s own two forms, `encode.ml`'s own three arms transcribed:
+//
+//	SubT (Final, [], ct)      -> comptype ct                       (bare, no wrapper byte)
+//	SubT (Final, uts, ct)     -> 0x4f; vec(typeuse u32) uts; comptype ct
+//	SubT (NoFinal, uts, ct)   -> 0x50; vec(typeuse u32) uts; comptype ct
+//
+// so the bare form fires only when finality is the default *and* there are no declared
+// supertypes; a non-final subtype always gets an explicit tag even with an empty supertype list,
+// because there is no bare spelling of "may be subtyped further" the way there is for "may not".
+//
 // **Three arms since decision 0021**, one per `compKind` — `comptype`'s own three productions
 // (decode.ml:250-259). A struct writes its tag then `vec(fieldtype)`, count then each field; an
 // array writes its tag then exactly *one* bare fieldtype, no count — the arity `decodeCompType`'s
@@ -593,6 +614,14 @@ func (p *parser) encodableOrErr() error {
 func (p *parser) encodeTypes(w *writer) {
 	w.vec(len(p.ctx.typeCtx), func(w *writer, i int) {
 		ct := p.ctx.typeCtx[i]
+		if !ct.final || len(ct.supertypes) > 0 {
+			if ct.final {
+				w.byte1(tagSubFinal)
+			} else {
+				w.byte1(tagSubNoFinal)
+			}
+			w.vec(len(ct.supertypes), func(w *writer, j int) { w.u32(ct.supertypes[j]) })
+		}
 		switch ct.kind {
 		case compFunc:
 			w.byte1(tagFunc)

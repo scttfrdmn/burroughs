@@ -204,11 +204,25 @@ type fieldType struct {
 // no `bindidx` arm in the grammar), and that is not a special case anywhere that reads it: a nil
 // map lookup reports "not found" exactly as an empty one would, matching the reference's own
 // per-type field space being empty for those two kinds rather than absent.
+//
+// **`final` and `supertypes` are a fifth and sixth field, for 0019's own named gap** —
+// `subtype`'s own two facts, previously read and discarded (`idxList`, the old doc comment on
+// this function's caller). `final` is true for a bare comptype or an explicit `(sub final
+// idx* ct)`, matching the reference's default (`SubT (Final, [], ct)` for the no-wrapper form,
+// `subtype` :451-458) — the two are structurally identical for every consumer this codebase has,
+// so there is nothing gained by distinguishing "no wrapper" from "wrapper, spelled final" and
+// this field does not try to. It is false only for an explicit `(sub idx* ct)` with no `final`
+// keyword. `supertypes` is unresolved, `idxRef`'s own convention (may name a type bound earlier
+// in the same module, per `check_subtype_sub`'s forward-reference rule, valid.ml:169-171) —
+// resolved at `runDeferred`'s stage 2, the same stage every other forward-referencing index in
+// this table resolves at.
 type compType struct {
 	kind       compKind
 	ft         funcType
 	fields     []fieldType
 	fieldNames map[string]uint32
+	final      bool
+	supertypes []idxRef
 }
 
 // limits is a `limits` (parser.mly:466-468): a 64-bit minimum and an optional maximum.
@@ -734,6 +748,12 @@ type resolvedComp struct {
 	kind   compKind
 	ft     resolvedFunc
 	fields []resolvedField
+
+	// final and supertypes are compType's own two facts, resolved: supertypes as plain type
+	// indices (resolveTypeIdx, the same lookup a numeric or symbolic typeuse always goes
+	// through), final unchanged — there is nothing to resolve in a bool.
+	final      bool
+	supertypes []uint32
 }
 
 // defineType records an explicit type definition's content at its index.
@@ -1056,19 +1076,27 @@ func (c *context) deferOp(f func() error) { c.deferred = append(c.deferred, f) }
 func (c *context) runDeferred() error {
 	c.typeCtx = make([]resolvedComp, 0, len(c.typeDefs))
 	for _, ct := range c.typeDefs {
+		supertypes, err := c.resolveSupertypes(ct.supertypes)
+		if err != nil {
+			return err
+		}
 		switch ct.kind {
 		case compFunc:
 			ft, err := c.resolveFunc(ct.ft)
 			if err != nil {
 				return err
 			}
-			c.typeCtx = append(c.typeCtx, resolvedComp{kind: compFunc, ft: ft})
+			c.typeCtx = append(c.typeCtx, resolvedComp{
+				kind: compFunc, ft: ft, final: ct.final, supertypes: supertypes,
+			})
 		case compStruct, compArray:
 			fields, err := c.resolveFields(ct.fields)
 			if err != nil {
 				return err
 			}
-			c.typeCtx = append(c.typeCtx, resolvedComp{kind: ct.kind, fields: fields})
+			c.typeCtx = append(c.typeCtx, resolvedComp{
+				kind: ct.kind, fields: fields, final: ct.final, supertypes: supertypes,
+			})
 		}
 	}
 	// Indexed rather than ranged: an operation may append an implicit type, and while nothing
@@ -1145,6 +1173,29 @@ func (c *context) resolveFields(fields []fieldType) ([]resolvedField, error) {
 	return out, nil
 }
 
+// resolveSupertypes resolves a subtype's declared supertype list (0019's own named gap), one
+// `resolveTypeIdx` lookup per entry — the same lookup a numeric or symbolic typeuse always goes
+// through, so a supertype named by `$name` and one named by a bare index resolve identically.
+//
+// A nil input reports a nil output rather than an empty non-nil slice, matching `binary.CompType`'s
+// own convention (`Supertypes` is empty for a bare comptype with no `sub` wrapper) and letting the
+// interpreter's declared-supertype walk treat "no wrapper" and "wrapper, no supertypes" the same
+// way it already must — both are zero-length.
+func (c *context) resolveSupertypes(refs []idxRef) ([]uint32, error) {
+	if len(refs) == 0 {
+		return nil, nil
+	}
+	out := make([]uint32, 0, len(refs))
+	for _, r := range refs {
+		idx, err := c.resolveTypeIdx(r)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, idx)
+	}
+	return out, nil
+}
+
 // resolveTypeIdx is the reference's `type_ c x` = `lookup "type" c.types.space x`
 // (parser.mly:152/:164).
 //
@@ -1204,11 +1255,17 @@ func (c *context) funcTypeAt(tok Token, idx uint32) (resolvedFunc, error) {
 // not by what today's callers happen to use.
 func (c *context) inlineFuncType(ft resolvedFunc) uint32 {
 	for i, e := range c.typeCtx {
-		if e.kind == compFunc && e.ft.equal(ft) {
+		// **`e.final && len(e.supertypes) == 0`, not just a structural match, as of 0019's own
+		// named gap.** An implicit type is always the bare, no-wrapper form — `inline_functype`
+		// has no `sub` spelling — so reusing an existing slot that *does* carry a `sub` (final
+		// or not, with or without declared supertypes) would collapse two nominally distinct
+		// declared types into one index because their comptypes happen to agree structurally,
+		// which is exactly the defect this fix exists to stop repeating one layer up.
+		if e.kind == compFunc && e.final && len(e.supertypes) == 0 && e.ft.equal(ft) {
 			return uint32(i)
 		}
 	}
-	c.typeCtx = append(c.typeCtx, resolvedComp{kind: compFunc, ft: ft})
+	c.typeCtx = append(c.typeCtx, resolvedComp{kind: compFunc, ft: ft, final: true})
 	c.types.count++
 	return uint32(len(c.typeCtx) - 1)
 }

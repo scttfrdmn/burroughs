@@ -271,11 +271,15 @@ func (in *Instance) link(imp Imports) error {
 }
 
 // importTypeMismatch reports why im and ext disagree on their *type*, once they already agree on
-// kind — `match_externtype`'s four kind-specific rules (match.ml), MVP-reduced the way
-// sameFuncType reduces match_deftype: `ValType`'s field-wise `==` (0018) rather than reftype
-// subtyping — right for the two ungated Wasm 2.0 forms, and for GC forms it is now *equality*
-// where the reference wants *subtyping*, a narrower but real gap than the pre-0018 collapse
-// (sameFuncType's own comment states the identical reduction).
+// kind — `match_externtype`'s four kind-specific rules (match.ml). The func case now calls
+// `sameFuncType`'s widened `match_deftype` reduction (0019's own named gap, #164's remaining 4
+// vectors) — the declared-supertype walk, restricted to the scope `sameFuncType`'s own doc
+// comment states. The other three kinds stay `ValType`'s field-wise `==` (0018) rather than
+// reftype subtyping: right for the two ungated Wasm 2.0 forms, and for GC forms (a table's or
+// global's reftype) it is *equality* where the reference wants *subtyping*, a real but
+// unwidened gap — `match_reftype`/`match_heaptype` over table and global element types is 0019's
+// *other* consumer, not yet built, since ref.test/ref.cast are what motivated it and neither
+// exists as an interpreter arm yet.
 //
 // Returns "" when the types match, and otherwise the spec's phrasing —
 // "expected ..., got ..." — the wording eval.ml's Link.error uses, so the caller's sentinel plus
@@ -302,7 +306,12 @@ func (in *Instance) importTypeMismatch(im *binary.Import, ext Extern) string {
 		if err != nil {
 			return "an unresolvable supplied type: " + err.Error()
 		}
-		if sameFuncType(want, got) {
+		// **`ext.fnInst.mod`/`fn.TypeIndex` first, `in.mod`/`im.Index` second** — matching the
+		// reference's own argument order at this call site (`match_deftype c dt1 dt2` with
+		// `dt1` the actual export's type, `dt2` the import's declared type, `eval.ml:1186-1187`)
+		// so the declared-supertype walk climbs the *supplier's* chain, exactly as
+		// `match_deftype`'s disjunct 3 does.
+		if sameFuncType(ext.fnInst.mod, fn.TypeIndex, in.mod, im.Index) {
 			return ""
 		}
 		return fmt.Sprintf("expected %s, got %s", funcTypeString(want), funcTypeString(got))

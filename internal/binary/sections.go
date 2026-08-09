@@ -314,16 +314,18 @@ func (d *Decoder) decodePayload(sid SectionID, size uint32, r *reader) (bool, er
 // exist — is the validator's question, not the decoder's; here the only claim is
 // that a well-formed u32 occupies those bytes.
 //
-// Still the right reader at the two sites that keep it — a subtype's declared supertypes and
-// `try_table`'s catch indices — where the index is read to prove the field is well-formed and
-// nothing yet consumes its value. Both are #7's remaining gaps, named at their call sites.
+// Still the right reader at the one site that keeps it — `try_table`'s catch indices — where
+// the index is read to prove the field is well-formed and nothing yet consumes its value. #7's
+// remaining gap there, named at the call site.
 //
-// **Three former callers have dropped it as their consumers arrived**, and the list is kept
+// **Four former callers have dropped it as their consumers arrived**, and the list is kept
 // current rather than describing the moment it was written: an explicit memory index (0015),
-// `br_table`'s label vector (0016), and an element segment's table index and element vector
-// (0016). Each replacement reads the same `r.u32()` and appends the value instead of dropping
-// it, so accept and reject behaviour is unchanged *by construction* — same reader, same width,
-// same errors — which is what makes each retention invisible to the rejection vectors.
+// `br_table`'s label vector (0016), an element segment's table index and element vector
+// (0016), and a subtype's declared supertype list (0019's own named gap — `decodeSubType`
+// retains it for `sameFuncType`'s declared-supertype walk). Each replacement reads the same
+// `r.u32()` and appends the value instead of dropping it, so accept and reject behaviour is
+// unchanged *by construction* — same reader, same width, same errors — which is what makes
+// each retention invisible to the rejection vectors.
 func discardIndex(r *reader) error {
 	_, err := r.u32()
 	return err
@@ -422,20 +424,50 @@ func (d *Decoder) decodeRecType(r *reader) error {
 // decodeSubType reads a subtype: an optional supertype list, then a comptype
 // (decode.ml:262-271).
 //
-// Both explicit forms carry `vec(typeuse u32)` — the declared supertypes — and differ only
-// in finality, which decoding does not observe. Peeked for decodeRecType's reason.
+// Both explicit forms carry `vec(typeuse u32)` — the declared supertypes — and differ only in
+// finality: 0x50 is `NoFinal`, 0x4f is `Final`, and the no-wrapper fallthrough defaults to
+// `Final, []` (decode.ml:271, `SubT (Final, [], comptype s)`). Peeked for decodeRecType's reason.
+//
+// **Retained as of 0019's own named gap, not discarded**: the supertype indices and the finality
+// bit are read into locals and then patched onto the comptype `decodeCompType` appends, rather
+// than being read into the comptype *before* it exists — `decodeCompType` is the function that
+// knows which of its three arms fires and appends exactly one `CompType` on every accepting
+// path, so patching its result is one write, not three (one per arm) duplicating the same
+// fields. `Final` is patched even on the no-wrapper path, since its default (true) is not the
+// zero value decodeCompType's own appends already carry — a bare `CompType{}` has `Final:
+// false`, which would silently misreport every non-`sub` type as `NoFinal`.
 func (d *Decoder) decodeSubType(r *reader) error {
+	var supertypes []uint32
+	final := true                                                      // decode.ml:271's default for the no-wrapper fallthrough — SubT (Final, [], ct)
 	if b, ok := r.peek(); ok && (b == -0x30&0x7F || b == -0x31&0x7F) { // 0x50, 0x4f
 		if !d.Features.GC {
 			return featureErr("gc")
 		}
-		r.skip(1) // `skip 1 s` (decode.ml:264, :268)
-		// `vec (typeuse u32) s` — the supertypes, as plain type indices.
-		if err := d.decodeVec(r, discardIndex); err != nil {
+		final = b == -0x31&0x7F // 0x4f is Final; 0x50 is NoFinal
+		r.skip(1)               // `skip 1 s` (decode.ml:264, :268)
+		// `vec (typeuse u32) s` — the supertypes, as plain type indices, following
+		// `Func.TypeIndex`'s convention: index *validity* is #9's question, not this reader's.
+		if err := d.decodeVec(r, func(r *reader) error {
+			idx, err := r.u32()
+			if err != nil {
+				return err
+			}
+			supertypes = append(supertypes, idx)
+			return nil
+		}); err != nil {
 			return err
 		}
 	}
-	return d.decodeCompType(r)
+	if err := d.decodeCompType(r); err != nil {
+		return err
+	}
+	// decodeCompType has just appended exactly one CompType on this accepting path — its three
+	// arms each end in one append and nothing else runs after — so the slot it occupies is the
+	// type space's last index.
+	last := &d.mod().Types[len(d.mod().Types)-1]
+	last.Supertypes = supertypes
+	last.Final = final
+	return nil
 }
 
 // decodeCompType reads a comptype: functype, structtype, or arraytype (decode.ml:250-259).

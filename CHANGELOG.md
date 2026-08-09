@@ -2853,6 +2853,54 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **`sameFuncType` was pure structural equality with no notion of declared (nominal) subtyping,
+  wrongly linking two `func` types that are structurally identical but declared as unrelated
+  types via GC's `sub`/`rec` grammar** — 0019's own named gap, closed for function types. Two
+  fixes were needed, not one: `binary.CompType` gained `Supertypes []uint32` and `Final bool`
+  (a subtype's declared supertype list and finality bit, previously read by `decodeSubType` and
+  discarded — `Func.TypeIndex`'s retained-but-unresolved-index convention, since index validity
+  is #9's question), and separately the *text encoder*'s `subtype()` was found to discard the
+  same two facts at parse time, so a module spelling `(sub …)`/`(sub final …)` round-tripped
+  through the binary format as a bare functype, invisible to the GC gate entirely — a second,
+  independent instance of the same defect shape, on the other side of 0002's decoder/encoder
+  seam. `sameFuncType` (renamed callers unchanged; the function itself now takes two
+  `(*binary.Module, uint32)` pairs rather than two `*binary.FuncType`s) implements
+  `match_deftype`'s declared-supertype walk (`match.ml:151-155`), verified line-for-line against
+  the reference: same finality and same structural comptype (the pre-existing MVP case, widened
+  to also check `Final`) or a match against any of the callee's own declared supertypes,
+  recursively, with a cycle guard since #9 (the validator) does not exist yet to have ruled out a
+  malformed cyclic chain first.
+
+  **Two of `type-subtyping.wast`'s four `assert_unlinkable` vectors converge under this
+  reduction's own scope (:602, :610 — the `$t1`/`$t2` pair differing only in `Final`); the other
+  two (:752, :767, the M10/M11 `rec`-group pair) do not, measured rather than assumed.** The
+  reference's full relation (`subst_deftype`'s rec-group-relative canonicalization, disjunct 2's
+  general case) needs a retained rec-group boundary this decoder does not have — out of scope for
+  this fix, which widens `sameFuncType` only, not the type representation's rec-group tracking.
+  `TestSameFuncTypeCorpusScope` pins the resulting false positive as a **known, tested** gap
+  rather than a silent one: a future rec-group fix turns that test red, which is the signal to
+  flip it.
+
+  A sweep of the encoder fix's own blast radius found `inlineFuncType`'s implicit-type dedup
+  comparing only functype structure, which — once the encoder started honestly emitting the `sub`
+  wrapper — collapsed every ordinary `(func (param …))` typeuse into the harness's own 13-export
+  `spectest` fixture module's supertyped slots and broke every board file importing from it; fixed
+  by requiring `final && no declared supertypes` alongside the structural match, since an implicit
+  type is always the bare no-wrapper form. And a pre-existing accept-direction control,
+  `TestModuleAcceptDirection`'s `(module (type (sub $a $b (func))))` case, turned out to assert a
+  module the reference does not actually accept — `subtype`'s own grammar action resolves each
+  supertype name eagerly at parse time (`parser.mly:453-455`'s `$3 c type_`), so `$a`/`$b` bound to
+  nothing is `unknown type $a` on the reference's own terms; the case predates any real supertype
+  consumer (from #62, when the list was discarded rather than resolved) and was never actually
+  exercised for its claim. Corrected to name two types bound earlier in the same module.
+
+  Board, default lane: 34227 → 34221 pass, 225 → 221 fail, 27099 unsupported (unmoved), 3468 →
+  3481 gated — the +13 gated is the text encoder correctly declining `sub`/`rec` constructs under
+  the GC gate for the first time, exactly as GC-gated already governs on the binary side (decision
+  0008); all-gates-on lane: 36882 → 36888 pass, 1013 → 1007 fail, 0 gated (unmoved). Both deltas
+  close exactly against a per-file bucket diff of `type-subtyping.wast` alone — no other file in
+  either lane moved.
+
 - **`funcref`/`externref` decoded with the wrong nullability, colliding with `(ref func)`/`(ref extern)` and splitting from `(ref null func)`/`(ref null extern)`** ([grave #180](https://github.com/scttfrdmn/burroughs/issues/180)). #179's `decodeRefType` hardcoded `null: false` for the bare Wasm 2.0 abbreviations, framed at review as retaining the wire's *spelled* nullability rather than its semantic meaning — but the reference's own grammar defines `funcref = ref null func`: the abbreviation *is* the nullable spelling, with no bare byte for a non-null func reference at all. So `funcref == (ref func)` read `true` (should be `false` — different spec types) and `funcref == (ref null func)` read `false` (should be `true` — the same spec type, spelled two ways) — backwards on both relations, with second-order effects on `Nullable()` (whose special-case arm existed only to paper over this) and `String()` (`(ref null func)` printed `"unknown"`). Fixed by decoding the abbreviation to its true nullable meaning and moving `FuncRef`/`ExternRef` to `null: true` in lockstep, so every existing `t == FuncRef`-style comparison keeps compiling and returning the same answer — the two constants and the decoder arm were never independently observable, only their mutual agreement was, and that agreement now means *type identity* rather than wire-spelling identity. `Nullable()`'s special case is removed; `Null()` alone now answers both what #179 asked of it and what it was split off to avoid. A sibling gap swept up in the same pass: `abstractHeapNames` never had entries for `func`/`extern`'s kind bytes, so the genuinely non-null `(ref func)`/`(ref extern)` printed `"unknown"` since 0018's implementation (#179) — not introduced by this fix, found alongside it. The review ruling that shaped #179's implementation shared the cause (reasoned about a re-encoding consumer for spelled-bit retention that measurement shows does not exist) and is recorded as such at the grave.
 
 - **An absolute byte budget wearing a ratio's doc comment: grave #138's control could not see the
