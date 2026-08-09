@@ -4393,6 +4393,34 @@ func TestGatedVectors(t *testing.T) {
 			510: "gc: ref.test/ref.cast/br_on_cast opcode (0xfb prefix) — the module at :492 this action runs against",
 			523: "gc: ref.test/ref.cast/br_on_cast opcode (0xfb prefix) — the module at :515 this action runs against",
 			534: "gc: ref.test/ref.cast/br_on_cast opcode (0xfb prefix) — the module at :525 this action runs against",
+
+			// **Arrived with 0019's own named gap** — the text encoder used to discard a
+			// subtype's `sub`/`sub final` wrapper and its declared supertypes entirely
+			// (`subtype`'s old doc comment: "the supertype list is read and discarded"), so a
+			// module spelling `(sub …)` or `(sub final …)` round-tripped through the binary
+			// format as a bare functype, invisible to the GC gate. Retaining `Final`/
+			// `Supertypes` and emitting the wrapper (`encodeTypes`'s new arm) makes these
+			// modules correctly decline under the default gate posture — the same direction as
+			// the ruling on `data count section required` (#22): a cheap check that used to
+			// pass the vector by not looking is now looking, and looking is right here because
+			// `sub`/`rec` genuinely is GC's own grammar (decode.ml:262-276), gated since
+			// decision 0008.
+			600: "gc: register \"M2\" names the module at :594, which declares (sub (func)) and " +
+				"(sub final (func))",
+			602: "gc: (sub (func))/(sub final (func)) at :594 — the module this action runs against",
+			610: "gc: (sub (func))/(sub final (func)) at :594 — the module this action runs against",
+			751: "gc: register \"M10\" names the module at :746, which declares two (rec …) groups " +
+				"of (sub …) types",
+			752: "gc: (rec …) groups of (sub …) types at :746 — the module this action runs against",
+			766: "gc: register \"M11\" names the module at :760, which declares three (rec …) " +
+				"groups of (sub …) types",
+			767: "gc: (rec …) groups of (sub …) types at :760 — the module this action runs against",
+			971: "gc: (sub $t1 (func))/(sub final $t2 (func)) at :954 — the module this action runs against",
+			972: "gc: (sub $t1 (func))/(sub final $t2 (func)) at :954 — the module this action runs against",
+			973: "gc: (sub $t1 (func))/(sub final $t2 (func)) at :954 — the module this action runs against",
+			974: "gc: (sub $t1 (func))/(sub final $t2 (func)) at :954 — the module this action runs against",
+			975: "gc: (sub $t1 (func))/(sub final $t2 (func)) at :954 — the module this action runs against",
+			976: "gc: (sub $t1 (func))/(sub final $t2 (func)) at :954 — the module this action runs against",
 		},
 		// GC's dividend on six more files whose struct/array `idx idx`/`idx nat32` mnemonics this
 		// PR retains: every one of these `struct.get`/`struct.set`/`array.*` (0xfb-prefixed)

@@ -488,27 +488,41 @@ func (p *parser) comptype() (compType, error) {
 
 // subtype parses a sub type (parser.mly:451-458): a bare comptype, or `(sub [final] idx* comptype)`.
 //
-// The supertype list is read and discarded: `func_type` calls `expand_deftype`, which unrolls to
-// the subtype's own comptype (`SubT (_, _, st) -> st`, types.ml:282-284) without consulting the
-// parents. So a subtype's inline-signature comparison is against its *own* functype, and
-// inheritance is validation's business.
+// **The supertype list and finality are retained, as of 0019's own named gap.** The old doc
+// comment here read them and discarded, reasoning that `func_type` calls `expand_deftype`, which
+// unrolls to the subtype's own comptype without consulting the parents — true for the inline-
+// signature comparison `func_type` performs, and irrelevant to `match_deftype` (match.ml:151-155),
+// which is a *different* consumer this codebase did not have yet: it walks exactly the declared
+// supertype list this function used to throw away. `final` defaults to the reference's own
+// default for the no-wrapper arm (`SubT (Final, [], ct)`, parser.mly:451) — a bare comptype and an
+// explicit `(sub final ...)` are the same fact, stated two ways.
 func (p *parser) subtype() (compType, error) {
 	if !p.c.at(LParen) || !p.c.peek2Keyword(kwSub) {
-		return p.comptype()
+		ct, err := p.comptype()
+		if err != nil {
+			return compType{}, err
+		}
+		ct.final = true
+		return ct, nil
 	}
 	if err := p.lpar(kwSub); err != nil {
 		return compType{}, err
 	}
+	final := false
 	if p.c.atKeyword(kwFinal) {
 		p.c.next()
+		final = true
 	}
-	if err := p.idxList(); err != nil {
+	supertypes, err := p.idxListValues()
+	if err != nil {
 		return compType{}, err
 	}
 	ct, err := p.comptype()
 	if err != nil {
 		return compType{}, err
 	}
+	ct.final = final
+	ct.supertypes = supertypes
 	return ct, p.rpar()
 }
 

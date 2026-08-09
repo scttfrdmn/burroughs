@@ -355,6 +355,22 @@ func (k CompKind) String() string {
 // *names* are not retained; 0021 excludes them by the same wire-form authority `LocalGroup`
 // already established (0016) — the wire's `fieldtype` production carries no identifier, so
 // there is nothing here to keep.
+//
+// **Supertypes and Final are retained as of 0019's own named gap** (the `sameFuncType` widening
+// its ADR text calls out by name): a subtype's declared supertype list — `vec(typeuse u32)`
+// (decode.ml:262-271) — as plain type indices, following `Func.TypeIndex`'s convention for a
+// retained-but-unresolved index (index *validity* is #9's question, not this struct's, so the
+// slot holds what the module said rather than what it resolves to), and its finality bit.
+//
+// **`Final` turned out to be load-bearing, reversing this field's first draft.** The draft
+// argued it away on the grounds that `check_subtype_sub`'s finality check (valid.ml:163-174,
+// "a sub type may not name a final super type") is #9's static well-formedness rule and this
+// fix computes no such check — true, but a different fact than whether `match_deftype`
+// (match.ml:151-155) reads the bit, and it does: `SubT (fin, uts, ct)` is compared as a whole
+// tuple in the structural-equality disjunct (`subst_deftype s dt1 = subst_deftype s dt2`), so
+// two declared types with identical comptypes and supertype lists but opposite finality compare
+// UNEQUAL — exactly `type-subtyping.wast:602/610`'s shape (`$t1` non-final, `$t2` final, both
+// `(func)`). Missing the bit there would keep those two vectors wrongly accepting.
 type CompType struct {
 	Kind CompKind
 
@@ -367,6 +383,18 @@ type CompType struct {
 	// no vector — a struct's `vec(fieldtype)` and an array's bare `fieldtype` are different
 	// productions, and this field's length reflects whichever one produced it).
 	Fields []FieldType
+
+	// Supertypes is the subtype's declared supertype list, one type index per `typeuse` in
+	// `sub`/`sub final`'s `vec(typeuse u32)` (decode.ml:262-271) — empty for a bare comptype
+	// with no `sub` wrapper, which the grammar defaults to `Final, []` (no declared
+	// supertypes at all). Unresolved, for `Func.TypeIndex`'s reason: this is what the module
+	// said, and whether an index names anything is #9's question.
+	Supertypes []uint32
+
+	// Final is the subtype's finality bit: true for a bare comptype or an explicit `sub final`
+	// (both `SubT (Final, ...)`, decode.ml:262-271's default and its 0x4f arm), false only for
+	// an explicit `sub` without `final` (the 0x50 arm, `SubT (NoFinal, ...)`).
+	Final bool
 }
 
 // StorageType is a fieldtype's storage: either a full ValType, or one of the two packed

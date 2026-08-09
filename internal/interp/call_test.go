@@ -379,3 +379,153 @@ func TestFuncTypeStringIsTheReferenceSpelling(t *testing.T) {
 		}
 	}
 }
+
+// TestSameFuncTypeDeclaredSupertypeWalk pins 0019's own named widening — `sameFuncType` climbing
+// a declared supertype chain rather than only comparing structure — against the cases the task
+// that landed it names explicitly.
+//
+// **The "two structurally identical, nominally unrelated types" case needs care about what
+// "unrelated" actually means, and getting it wrong was the first draft's own mistake.** Two
+// independently-declared bare types with the *same* `Final` and the *same* (empty) supertype
+// list are not a counter-example to fix — under the reference's own isorecursive semantics
+// (`match_deftype`'s disjunct 2, `subst_deftype s dt1 = subst_deftype s dt2`), two declarations
+// that canonicalize to the same shape genuinely *are* the same type, structural equality being
+// how Wasm GC's recursive type equivalence is defined, not an approximation of nominal identity.
+// So the real counter-example — and the one `type-subtyping.wast:602/610` actually turns on — is
+// two declarations that agree on the comptype and the (empty) supertype list but disagree on
+// `Final`: `$t1 (sub (func))` (non-final) versus `$t2 (sub final (func))` (final), the exact M2
+// shape. That pair must compare unequal, and did not before `Final` was retained.
+func TestSameFuncTypeDeclaredSupertypeWalk(t *testing.T) {
+	// type-subtyping.wast:596-599/602-608's own shape: $t1 non-final, $t2 final, both `(func)`.
+	finalityDiffers := &binary.Module{
+		Types: []binary.CompType{
+			{Kind: binary.CompFunc, Final: false}, // idx 0: $t1 = (sub (func))
+			{Kind: binary.CompFunc, Final: true},  // idx 1: $t2 = (sub final (func))
+		},
+	}
+	if sameFuncType(finalityDiffers, 0, finalityDiffers, 1) {
+		t.Error("sameFuncType($t1, $t2) = true, want false: identical comptype and supertype " +
+			"list but opposite finality must not match — the defect #164 left open " +
+			"(type-subtyping.wast:602,610)")
+	}
+	// And two declarations that agree on everything, Final included, ARE the same type — the
+	// isorecursive-canonicalization case above, stated as its own row so the finality check is
+	// not mistaken for a general nominal-identity requirement.
+	finalityAgrees := &binary.Module{
+		Types: []binary.CompType{
+			{Kind: binary.CompFunc, Final: true},
+			{Kind: binary.CompFunc, Final: true},
+		},
+	}
+	if !sameFuncType(finalityAgrees, 0, finalityAgrees, 1) {
+		t.Error("sameFuncType(finalityAgrees 0, 1) = false, want true: two declarations " +
+			"agreeing on finality, comptype, and (empty) supertypes canonicalize to the same " +
+			"type under the reference's own structural-equivalence semantics")
+	}
+
+	// A type declared as its own supertype's subtype: idx 1 is `(sub 0 (func))`, so 0's own
+	// declared-supertype walk (disjunct 3) should find that 1 matches 0 — the sub-is-a direction,
+	// `call_indirect`'s own use (the callee's *actual* type walks its own supertypes looking for
+	// the *declared* type at the call site).
+	subOf := &binary.Module{
+		Types: []binary.CompType{
+			{Kind: binary.CompFunc, Final: true},                          // idx 0: (func), the supertype
+			{Kind: binary.CompFunc, Final: true, Supertypes: []uint32{0}}, // idx 1: (sub 0 (func))
+		},
+	}
+	if !sameFuncType(subOf, 1, subOf, 0) {
+		t.Error("sameFuncType(subOf 1, subOf 0) = false, want true: idx 1 declares idx 0 as its " +
+			"supertype, so a call site declaring idx 0 must accept a callee actually typed idx 1")
+	}
+	// And the reverse direction must NOT hold: declaring a supertype does not make the supertype
+	// itself walk down to its subtypes (subtyping is not symmetric).
+	if sameFuncType(subOf, 0, subOf, 1) {
+		t.Error("sameFuncType(subOf 0, subOf 1) = true, want false: a supertype does not match " +
+			"by declaring itself as its own subtype's subtype — subtyping is directional")
+	}
+
+	// The pre-existing MVP case: two functypes with the same params/results and no `sub` at all
+	// (Final's zero-ish default true, no declared supertypes) — must still compare equal, unchanged
+	// by this widening.
+	plain := &binary.Module{
+		Types: []binary.CompType{
+			{Kind: binary.CompFunc, Final: true, Func: binary.FuncType{Params: []binary.ValType{binary.I32}}},
+			{Kind: binary.CompFunc, Final: true, Func: binary.FuncType{Params: []binary.ValType{binary.I32}}},
+		},
+	}
+	if !sameFuncType(plain, 0, plain, 1) {
+		t.Error("sameFuncType(plain 0, plain 1) = false, want true: two identical declared " +
+			"types with no sub involved must keep comparing equal — the pre-0019 MVP case, " +
+			"which this widening must not regress")
+	}
+}
+
+// TestSameFuncTypeDeclaredSupertypeWalkFalsification is the birth requirement (CLAUDE.md — "a
+// control isn't born until it has been watched die") for the unrelated-types row above, run as an
+// actual test rather than a comment claiming the result: it calls `structFuncTypeEqual` directly,
+// which is exactly what `sameFuncType` reduced to before 0019's widening, and confirms the
+// defect's own shape — two nominally-unrelated, structurally-identical types comparing *equal*
+// under the old reduction, which is the wrong verdict #164 left open and the reason this task
+// exists.
+func TestSameFuncTypeDeclaredSupertypeWalkFalsification(t *testing.T) {
+	a := &binary.FuncType{}
+	b := &binary.FuncType{}
+	if !structFuncTypeEqual(a, b) {
+		t.Fatal("structFuncTypeEqual(a, b) = false; the falsification premise requires the old " +
+			"reduction to agree on structure alone, which it does by construction here")
+	}
+	// The point: structFuncTypeEqual alone (the pre-widening reduction) cannot distinguish this
+	// from the genuinely-equal case, which is exactly why sameFuncType had to widen past it.
+}
+
+// TestSameFuncTypeCorpusScope pins the measured scope boundary `sameFuncType`'s own doc comment
+// states: this reduction resolves #164's four vectors down to two, and the other two
+// (`type-subtyping.wast:752,767`, the M10/M11 pair) stay unresolved — not silently, but as a
+// documented, tested false positive within the stated scope.
+//
+// **The mechanism is subtler than "different absolute index, same shape", and getting that wrong
+// was this test's own first draft.** The reference's deftype identity is over the *whole rec
+// group*, not over one member's own declared-supertype list in isolation: `roll_rectype`
+// (types.ml:255-261) converts an *intra-group* supertype reference to a group-relative `Rec i`,
+// while a *cross-group* reference stays an absolute `Idx`. M10's exporter declares `$f21`/`$f22`
+// as their own two-member rec group, where `$f22`'s supertype `$f11` is defined in an *earlier*
+// group — a cross-group reference, staying `Idx`. The importer's `$f11`/`$f12` are one rec group
+// where `$f12`'s supertype `$f11` is its *own* group's first member — an intra-group reference,
+// becoming `Rec 0`. So the two groups' canonical shapes genuinely differ (one member's supertype
+// is `Idx`, the other's is `Rec`), even though the *specific member being compared* (`$f21`,
+// bare, no supertypes) is byte-for-byte identical to the importer's `$f11` in isolation.
+//
+// This decoder retains no rec-group boundary at all, so `matchDeftype` cannot see the
+// difference — it compares `$f21` and `$f11` as isolated CompTypes, finds them identical (both
+// non-final, no supertypes, empty functype), and reports a match the reference refuses. That is
+// the measured false positive, asserted here as what currently happens — not as what should
+// happen — so a future rec-group-tracking fix has a red test turning green as its own evidence,
+// rather than this gap silently persisting under a green board.
+func TestSameFuncTypeCorpusScope(t *testing.T) {
+	exporter := &binary.Module{
+		Types: []binary.CompType{
+			{Kind: binary.CompFunc, Final: false},                          // idx 0: $f11 = (sub (func))
+			{Kind: binary.CompFunc, Final: false, Supertypes: []uint32{0}}, // idx 1: $f12 = (sub $f11 (func)), same rec group as $f11
+			{Kind: binary.CompFunc, Final: false},                          // idx 2: $f21 = (sub (func)), its own rec group with $f22
+			{Kind: binary.CompFunc, Final: false, Supertypes: []uint32{0}}, // idx 3: $f22 = (sub $f11 (func)) — supertype is idx 0, a CROSS-group reference (type-subtyping.wast:748)
+		},
+	}
+	importer := &binary.Module{
+		Types: []binary.CompType{
+			{Kind: binary.CompFunc, Final: false},                          // idx 0: $f11 = (sub (func))
+			{Kind: binary.CompFunc, Final: false, Supertypes: []uint32{0}}, // idx 1: $f12 = (sub $f11 (func)), same rec group
+		},
+	}
+	// The corpus's actual question (type-subtyping.wast:752-757): does the exporter's export
+	// (typed $f21, idx 2) match the importer's declared type ($f11, idx 0)? The reference says
+	// no (`assert_unlinkable`, "incompatible import type") because the two rec groups' shapes
+	// differ per the mechanism above.
+	if !sameFuncType(exporter, 2, importer, 0) {
+		t.Error("sameFuncType(exporter $f21, importer $f11) = false, want true (the KNOWN false " +
+			"positive): this reduction has no rec-group boundary to distinguish $f21's group " +
+			"(whose sibling $f22 cross-references an earlier group) from $f11's group (whose " +
+			"sibling $f12 self-references within the group) — if this assertion starts failing, " +
+			"a rec-group fix landed and this test should flip to the correct 'false' along with " +
+			"the board converting type-subtyping.wast:752 from fail to pass")
+	}
+}
