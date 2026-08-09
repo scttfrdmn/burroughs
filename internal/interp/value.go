@@ -130,6 +130,125 @@ type stack struct {
 	refs []ref
 }
 
+// frame is a call's local-variable storage: 0002's parallel-array split applied to *locals*
+// rather than to the value stack, since #196/#197.
+//
+// **Two arrays, one logical vector, same reasoning `stack` already gives.** A local's declared
+// type decides which array its index lives in — `global.go`'s `get`/`set` make the identical
+// choice for a global's storage, and `IsRef()` is the predicate in both places, per 0002's
+// GC-traceability pin (package doc above): a Go pointer inside a `uint64` slot is invisible to
+// the collector, and a ref-typed local surviving across many instructions of straight-line code
+// is the ordinary case, not an edge one.
+//
+// **Both arrays are sized `total` and indexed by the same flat local index**, unlike `stack`'s
+// two independently-sized arrays — a local's index is fixed for the function's lifetime (it
+// names a *slot*, not a stack position), so `num[i]` and `refs[i]` are simply the two possible
+// homes for local `i`'s value and exactly one is ever read or written, per isRef. This wastes one
+// slot's width in the array a local's index does *not* use, which is the cost 0002's own
+// `ref`-versus-`uint64` slot-width tradeoff already accepts elsewhere for simplicity over
+// density (see ref's own doc comment on the rejected "flat store with Addr indexing into it").
+//
+// **`refs` and `isRef` are allocated lazily, not always alongside `num`.** Every numeric-only
+// function — which is the overwhelming majority of the corpus, per exec.go's own header (0 of
+// the 139-opcode numeric core's answerable population needs a reference) — pays nothing beyond
+// two `nil` slices' zero cost; only a function whose signature or locals contain a reference
+// type allocates either array at all. See newFrame.
+type frame struct {
+	num  []uint64
+	refs []ref
+
+	// isRef is a per-index bitmap: isRef[i] is true when local i is a reference type. Built
+	// once at frame construction (newFrame) from the callee's params and declared locals,
+	// rather than re-derived at every local.get/set/tee — the same "ask once, not per access"
+	// reasoning Func.EachLocal's own doc comment gives for iterating rather than indexing a
+	// flattened local-type vector. Nil when the frame has no reference locals at all, which
+	// getLocal/setLocal/teeLocal treat identically to "every entry false".
+	isRef []bool
+}
+
+// newFrame allocates a call frame sized for total locals, allocating the reference array and
+// the isRef bitmap only when the function actually declares a reference-typed parameter or
+// local — see frame's own doc comment for why that laziness exists. paramTypes is the callee's
+// declared parameter types (for the isRef bitmap's leading entries) and eachLocal iterates the
+// declared locals beyond them, mirroring exactly the two sources invokeIndex's and invoke's own
+// pre-#196/#197 code read to build `locals` — this is one place doing what both used to do
+// separately, per the one-authority reasoning memoryFor's own doc comment gives.
+func newFrame(total uint64, paramTypes []binary.ValType, eachLocal func(func(idx uint32, vt binary.ValType) bool)) *frame {
+	f := &frame{num: make([]uint64, total)}
+	var refTotal uint64
+	for _, p := range paramTypes {
+		if p.IsRef() {
+			refTotal++
+		}
+	}
+	eachLocal(func(_ uint32, vt binary.ValType) bool {
+		if vt.IsRef() {
+			refTotal++
+		}
+		return true
+	})
+	if refTotal == 0 {
+		return f
+	}
+	f.refs = make([]ref, total)
+	f.isRef = make([]bool, total)
+	for i, p := range paramTypes {
+		f.isRef[i] = p.IsRef()
+	}
+	eachLocal(func(idx uint32, vt binary.ValType) bool {
+		f.isRef[uint64(len(paramTypes))+uint64(idx)] = vt.IsRef()
+		return true
+	})
+	return f
+}
+
+// getLocal, setLocal, and teeLocal read/write local index idx, dispatching on the frame's own
+// isRef bitmap exactly as global.go's get/set dispatch on a global's declared type — the
+// local.get/set/tee arms in exec.go are these three's only callers, and none of them needs to
+// know which array backs an index because the frame does.
+func (f *frame) getLocal(idx uint64, st *stack) {
+	if len(f.isRef) > 0 && f.isRef[idx] {
+		st.pushRef(f.refs[idx])
+		return
+	}
+	st.pushNum(f.num[idx])
+}
+
+func (f *frame) setLocal(idx uint64, st *stack) error {
+	if len(f.isRef) > 0 && f.isRef[idx] {
+		if err := st.needRef(1); err != nil {
+			return err
+		}
+		f.refs[idx] = st.popRef()
+		return nil
+	}
+	if err := st.needNum(1); err != nil {
+		return err
+	}
+	f.num[idx] = st.popNum()
+	return nil
+}
+
+// teeLocal is setLocal without consuming the stack's top — local.tee's own semantics, peeking
+// rather than popping so the value survives for the next instruction.
+func (f *frame) teeLocal(idx uint64, st *stack) error {
+	if len(f.isRef) > 0 && f.isRef[idx] {
+		if err := st.needRef(1); err != nil {
+			return err
+		}
+		f.refs[idx] = st.refs[len(st.refs)-1]
+		return nil
+	}
+	if err := st.needNum(1); err != nil {
+		return err
+	}
+	f.num[idx] = st.num[len(st.num)-1]
+	return nil
+}
+
+// len reports the frame's declared local count, for badLocal's bounds message.
+func (f *frame) len() int { return len(f.num) }
+
 // pushNum pushes a raw numeric slot.
 //
 // Every numeric push funnels through here rather than appending at each opcode, so the one place
@@ -241,16 +360,52 @@ func (s *stack) popF64() float64 { return math.Float64frombits(s.popNum()) }
 // knowledge stops.
 //
 // This is the shape the §4 host contract will need too, which is why it is exported now rather than
-// kept internal — but it is deliberately minimal: no reference values, because v0 executes none, and
-// adding them here before an opcode produces one would design the boundary from a consumer that does
-// not exist (0006's load-bearing-spot rule).
+// kept internal.
+//
+// **Widened for a reference value, since #196/#197** — the internal `ref` struct's fields, made
+// safe to export by *narrowing* rather than by exposing `*Instance` directly (§4's host contract
+// cannot construct a `ref{Inst: *Instance}` from outside this package, and should not need to):
+// Null and RefID are exported directly, and what `ref.Inst`/`ref.Addr` mean externally is scoped
+// down to exactly what #197's own population measurement found the corpus needing — see RefID's
+// own doc comment for the reasoning, and invokeIndex/toRef for the two directions this crosses.
 type Value struct {
 	Type binary.ValType
 
 	// Bits is the value's representation, read according to Type — the same discipline as the
 	// numeric stack, so crossing the boundary is a tag being attached rather than a
-	// representation being converted.
+	// representation being converted. Unread when Type.IsRef(); a reference's representation
+	// is Null/RefID below, never a bit pattern, because a Go pointer (what `ref.Inst` carries
+	// internally) cannot honestly be flattened into a `uint64` without reintroducing the
+	// GC-invisibility hazard 0002's whole parallel-array pin exists to avoid.
 	Bits uint64
+
+	// Null is this reference's nullity — meaningful only when Type.IsRef(). A null reference
+	// crosses the boundary as `Value{Type: <ref type>, Null: true}` in both directions and
+	// needs nothing else, which is also the *only* funcref shape #197's own population
+	// measurement found any corpus vector passing as an **argument**: 0 vectors pass a
+	// non-null funcref through `Invoke`, so a non-null funcref argument is out of this
+	// widening's scope exactly as `readRefConst`'s own doc comment states for `ref.func` as a
+	// harness-side literal — the two scope statements are the same measurement, cited once.
+	Null bool
+
+	// RefID is an externref's opaque host identity — this Value's mirror of `ref.extern N`'s
+	// N, present so a caller can construct and inspect a non-null externref without reaching
+	// into the package-internal `ref`/`Extern` types. Meaningful only when Type == ExternRef
+	// and !Null. Zero is a legitimate identity, exactly as spec.Val.Extern's own comment
+	// states, so RefID must never be read as "unset" — Null is the field that means that.
+	//
+	// **No funcref-identity field, and that is a scope boundary stated rather than hidden.** A
+	// non-null funcref crossing this boundary would need to name *which* function in *which*
+	// instance (ref.Addr, ref.Inst) — the pair 0017 Q2/grave #163 established a funcref
+	// always needs — and the only two ways to spell that publicly are exposing `*Instance`
+	// (declined; see this type's own doc comment) or accepting a function *index in the
+	// callee's own instance* (which is what a hypothetical `ref.func $name`-as-argument would
+	// operationally mean). The corpus needs neither: measured over testdata/spec, 0 vectors
+	// pass a non-null funcref as an invoke argument. Building either shape now would be
+	// premature generality for a consumer that does not exist (0006), so this stays a stated
+	// gap rather than a silent one — a future non-null funcref argument surfaces as
+	// ErrUnsupportedOp at invokeIndex's parameter loop, named, rather than as a wrong value.
+	RefID uint32
 }
 
 // F64 constructs an f64 Value from a float.
@@ -265,6 +420,14 @@ func I32(v int32) Value { return Value{Type: binary.I32, Bits: uint64(uint32(v))
 // I64 constructs an i64 Value.
 func I64(v int64) Value { return Value{Type: binary.I64, Bits: uint64(v)} }
 
+// NullRef constructs a null reference Value of the given reference type — the only funcref
+// argument shape the corpus needs (see Value.RefID's doc comment) and one of two externref
+// argument shapes.
+func NullRef(t binary.ValType) Value { return Value{Type: t, Null: true} }
+
+// ExternRef constructs a non-null externref Value carrying the given opaque host identity.
+func ExternRef(id uint32) Value { return Value{Type: binary.ExternRef, RefID: id} }
+
 // Float64 reads a Value as an f64, by bit pattern.
 func (v Value) Float64() float64 { return math.Float64frombits(v.Bits) }
 
@@ -277,6 +440,38 @@ func (v Value) Int32() int32 { return int32(uint32(v.Bits)) }
 // Int64 reads a Value as an i64.
 func (v Value) Int64() int64 { return int64(v.Bits) }
 
+// toRef converts a reference-typed Value to the internal ref shape, resolving a non-null
+// funcref's instance to in — the caller's own instance, per RefID's doc comment on why a
+// cross-instance funcref argument is out of scope: an externally-supplied funcref can only
+// mean "a function index in the callee's own instance", and the corpus never supplies a
+// non-null one at all, so this path is reachable only via a future widening's own arm, not by
+// anything in today's corpus.
+func (v Value) toRef(in *Instance) ref {
+	if v.Null {
+		return ref{Null: true}
+	}
+	if v.Type == binary.ExternRef {
+		// externref's "address" is the opaque host identity, stored in the same Addr field a
+		// funcref's function index uses — the two never collide because a slot's Kind decides
+		// which reading applies, exactly as ref's own Addr field comment already states for
+		// the function-index case. Inst is left nil: an externref never resolves through an
+		// instance's index space, so nothing here would ever read it.
+		return ref{Addr: v.RefID}
+	}
+	return ref{Addr: uint32(v.Bits), Inst: in}
+}
+
+// fromRef converts an internal ref back to its public Value, at static type t.
+func fromRef(r ref, t binary.ValType) Value {
+	if r.Null {
+		return Value{Type: t, Null: true}
+	}
+	if t == binary.ExternRef {
+		return Value{Type: t, RefID: r.Addr}
+	}
+	return Value{Type: t, Bits: uint64(r.Addr)}
+}
+
 // Equal reports whether two values are identical, **bit for bit**, which is what
 // `assert_return` means.
 //
@@ -288,4 +483,16 @@ func (v Value) Int64() int64 { return int64(v.Bits) }
 //
 // The type is compared too, because `i32 0` and `f32 0.0` share a bit pattern and are different
 // values; a comparison that ignored the tag would score a wrongly-typed result green.
-func (v Value) Equal(w Value) bool { return v.Type == w.Type && v.Bits == w.Bits }
+//
+// **Reference-typed values compare Null and RefID instead of Bits (#196/#197)** — Bits is unread
+// for a reference Value (see its own doc comment), so a bit-for-bit comparison here would compare
+// two zero values and call every pair of distinct non-null funcrefs equal.
+func (v Value) Equal(w Value) bool {
+	if v.Type != w.Type {
+		return false
+	}
+	if v.Type.IsRef() {
+		return v.Null == w.Null && v.RefID == w.RefID
+	}
+	return v.Bits == w.Bits
+}

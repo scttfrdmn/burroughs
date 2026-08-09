@@ -351,23 +351,17 @@ var expectedMismatches = map[string]map[int]string{
 	// memargs carry flags bit 6 and multi-memory declines it. Its data segment is what would
 	// write 1..5 into `$M`'s memory, so `$M` honestly reads 0. Gone with every gate on, which is
 	// how the cause was separated from the funcref rows.
-	// The harness's own `readConst` cannot read a `ref.null`/`ref.extern` action argument
-	// (wast.go:596-602) — 24 of this file's actions carry one, scored `unsupported` rather
-	// than run, so `grow`'s calls never execute and the table genuinely never grows. The two
-	// `size` assertions downstream read the correct, un-grown value; this is not an engine
-	// defect and #7's table.grow/table.fill arms (this PR) do not touch it.
-	"table_grow.wast": {
-		22: "harness: readConst cannot read grow's ref.null argument, so grow never ran and size honestly reports 0",
-		30: "harness: readConst cannot read grow's ref.null argument, so grow never ran and size honestly reports 0",
-	},
-	// The bare `(invoke "init" (ref.extern 1))` at the top level cannot run for readConst's
-	// reason above — same mechanism, a different action shape (a setup invoke rather than an
-	// assert_return's own action). `init` writes $t3 slot 2 via table.get/table.set; unrun, slot
-	// 2 stays as newTable left it (null), so `is_null-funcref(2)` honestly reports null (1) where
-	// the vector wants non-null (0).
-	"table_get.wast": {
-		30: "harness: readConst cannot read init's ref.extern argument, so init never ran and slot 2 was never written",
-	},
+	//
+	// **`table_grow.wast`'s and `table_get.wast`'s entries retired, #196/#197.** Both used to
+	// name the harness's own `readConst` gap (wast.go, pre-#196) as the cause: `grow`'s/`init`'s
+	// ref-typed argument scored `unsupported` rather than running, so the table genuinely never
+	// grew/was never written and the downstream `size`/`is_null-funcref` read was honestly
+	// stale. #196/#197 close exactly that gap — `readConst` now reads `ref.null`/`ref.extern`,
+	// and the boundary accepts the resulting argument — so both setup invokes run and both rows
+	// stopped mismatching; `TestValueMismatchBucketIsEmptyAndSaysWhoWroteAnyRow`'s own
+	// falsifiability check is what caught the entries going stale (a registered mismatch that no
+	// longer mismatches), which is the control working exactly as designed rather than a defect
+	// to route around.
 	"load1.wast": {
 		25: "multi-memory: the writer module at :10 is declined, so $M's memory was never written",
 		26: "multi-memory: the writer module at :10 is declined, so $M's memory was never written",

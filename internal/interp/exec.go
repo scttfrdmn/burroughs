@@ -54,13 +54,21 @@ import (
 // literal zero at a boundary call reads as an accident: a caller passing 0 from inside a frame would
 // reset the exhaustion budget, which is a bug no vector can see (the budget's whole purpose is a
 // case that does not terminate).
-func (in *Instance) run(fn *binary.Func, locals []uint64, st *stack, results int) error {
-	return in.runFrame(fn, locals, st, results, 0)
+func (in *Instance) run(fn *binary.Func, locals *frame, st *stack, results, refResults int) error {
+	return in.runFrame(fn, locals, st, results, refResults, 0)
 }
 
 // runFrame is `run` at a known call depth. See run for the loop's design; `depth` counts the frames
 // below this one and is what `callBudget` bounds.
-func (in *Instance) runFrame(fn *binary.Func, locals []uint64, st *stack, results, depth int) error {
+//
+// **`refResults` joins `results` since #196/#197**, the numeric-only signature's widening: the
+// implicit function-body label's arity is the function's *own* result arity, split by array for
+// `returnFrom`'s reason (see label's own doc comment) — a body returning a mix of numeric and
+// reference results needs both counts to truncate each stack correctly.
+//
+// **`locals` is `*frame`, not `[]uint64`, since #196/#197** — see frame's own doc comment for
+// why a ref-typed local needs a second array exactly as the value stack does.
+func (in *Instance) runFrame(fn *binary.Func, locals *frame, st *stack, results, refResults, depth int) error {
 	body := fn.Body
 	// **Not `for pc := range len(body)`**, because a branch writes to `pc`: the arms below set it
 	// to a target and let the `pc++` carry it forward, which is why this walk indexes the slice
@@ -107,13 +115,13 @@ func (in *Instance) runFrame(fn *binary.Func, locals []uint64, st *stack, result
 			if err != nil {
 				return err
 			}
-			// `blockResults`, not `results`: this block's result count and the *function's*
-			// (this method's parameter) are different facts, and one name for both is how a
-			// branch to the outermost depth would come to truncate to a block's arity. Caught
-			// by `govet`'s shadow check, which is the linter doing the job the spirit clause
-			// reserves the suppression for — here the finding is a real ambiguity, not a
-			// design fight.
-			params, blockResults, err := in.blockArity(ins.Imm0, ins.Imm1)
+			// `blockResults`/`blockRefResults`, not `results`/`refResults`: this block's
+			// result counts and the *function's* (this method's parameters) are different
+			// facts, and one name for both is how a branch to the outermost depth would
+			// come to truncate to a block's arity. Caught by `govet`'s shadow check, which
+			// is the linter doing the job the spirit clause reserves the suppression for —
+			// here the finding is a real ambiguity, not a design fight.
+			params, refParams, blockResults, blockRefResults, err := in.blockArity(ins.Imm0, ins.Imm1)
 			if err != nil {
 				return err
 			}
@@ -121,17 +129,23 @@ func (in *Instance) runFrame(fn *binary.Func, locals []uint64, st *stack, result
 			// its END** — the one asymmetry in this construct. And the arity a *branch*
 			// sees differs with it: branching to a loop re-enters it and so supplies its
 			// parameters, while branching to a block leaves it and so yields its results.
-			l := label{cont: end + 1, arity: blockResults}
+			l := label{cont: end + 1, arity: blockResults, refArity: blockRefResults}
 			if ins.Op == opLoop {
-				l = label{cont: pc, arity: params}
+				l = label{cont: pc, arity: params, refArity: refParams}
 			}
 			// The height excludes the operands the block itself consumes, so a branch
-			// truncating to height+arity cannot eat its enclosing frame's values.
+			// truncating to height+arity cannot eat its enclosing frame's values. Both
+			// arrays, independently, per label's own doc comment (#196/#197).
 			if len(st.num) < params {
 				return fmt.Errorf("%w: block takes %d parameters with %d values on the stack",
 					ErrNotValidated, params, len(st.num))
 			}
+			if len(st.refs) < refParams {
+				return fmt.Errorf("%w: block takes %d reference parameters with %d references on the stack",
+					ErrNotValidated, refParams, len(st.refs))
+			}
 			l.height = len(st.num) - params
+			l.refHeight = len(st.refs) - refParams
 			ctrl = append(ctrl, l)
 
 		case opIf:
@@ -139,7 +153,7 @@ func (in *Instance) runFrame(fn *binary.Func, locals []uint64, st *stack, result
 			if err != nil {
 				return err
 			}
-			params, blockResults, err := in.blockArity(ins.Imm0, ins.Imm1)
+			params, refParams, blockResults, blockRefResults, err := in.blockArity(ins.Imm0, ins.Imm1)
 			if err != nil {
 				return err
 			}
@@ -151,10 +165,17 @@ func (in *Instance) runFrame(fn *binary.Func, locals []uint64, st *stack, result
 				return fmt.Errorf("%w: if takes %d parameters with %d values on the stack",
 					ErrNotValidated, params, len(st.num))
 			}
+			if len(st.refs) < refParams {
+				return fmt.Errorf("%w: if takes %d reference parameters with %d references on the stack",
+					ErrNotValidated, refParams, len(st.refs))
+			}
 			// The label is pushed for **both** arms and for the no-else case, because `br 0`
 			// inside either arm exits the whole `if`. Its continuation is past the END, like
 			// a block's: an `if` is not re-enterable.
-			ctrl = append(ctrl, label{cont: end + 1, arity: blockResults, height: len(st.num) - params})
+			ctrl = append(ctrl, label{
+				cont: end + 1, arity: blockResults, refArity: blockRefResults,
+				height: len(st.num) - params, refHeight: len(st.refs) - refParams,
+			})
 			if cond != 0 {
 				break // fall into the then-arm
 			}
@@ -205,7 +226,7 @@ func (in *Instance) runFrame(fn *binary.Func, locals []uint64, st *stack, result
 			// wrong end (was the level zero?), which is a different question and gets `br 0`
 			// inside one enclosing block wrong.
 			if ins.Imm0 == uint64(len(ctrl)) {
-				return returnFrom(st, results)
+				return returnFrom(st, results, refResults)
 			}
 			target, level, err := in.branch(st, ctrl, ins.Imm0)
 			if err != nil {
@@ -222,7 +243,7 @@ func (in *Instance) runFrame(fn *binary.Func, locals []uint64, st *stack, result
 				break // not taken: fall through, and the operand is already consumed
 			}
 			if ins.Imm0 == uint64(len(ctrl)) {
-				return returnFrom(st, results) // taken, and the target is the function body — see opBr
+				return returnFrom(st, results, refResults) // taken, and the target is the function body — see opBr
 			}
 			target, level, err := in.branch(st, ctrl, ins.Imm0)
 			if err != nil {
@@ -250,7 +271,7 @@ func (in *Instance) runFrame(fn *binary.Func, locals []uint64, st *stack, result
 			// after would let the index survive as one of the block's results on any label
 			// whose arity is non-zero.
 			if depth == uint64(len(ctrl)) {
-				return returnFrom(st, results) // the function body, as in opBr
+				return returnFrom(st, results, refResults) // the function body, as in opBr
 			}
 			target, level, err := in.branch(st, ctrl, depth)
 			if err != nil {
@@ -264,7 +285,7 @@ func (in *Instance) runFrame(fn *binary.Func, locals []uint64, st *stack, result
 			// scratch this frame is done with — so the stack is truncated to the function's
 			// arity, which is what `eval.ml:1069`'s `take n vs0` does. See returnFrom for the
 			// arm this replaces and for what its comment asserted (grave #135).
-			return returnFrom(st, results)
+			return returnFrom(st, results, refResults)
 
 		// ---- calls ---------------------------------------------------------------
 		//
@@ -299,7 +320,7 @@ func (in *Instance) runFrame(fn *binary.Func, locals []uint64, st *stack, result
 			if err := in.callIndirect(ins, st, depth); err != nil {
 				return err
 			}
-			return returnFrom(st, results)
+			return returnFrom(st, results, refResults)
 
 		case opEnd:
 			// **Two meanings, and the control stack is what tells them apart** — which is
@@ -333,16 +354,37 @@ func (in *Instance) runFrame(fn *binary.Func, locals []uint64, st *stack, result
 			// So an arm keying on the opcode would be inventing a distinction the reference does
 			// not have.
 			//
-			// It is also the arm the decoder could not support otherwise: `immVecValType` reads
-			// the types and drops them (instr.go), so `Instr` does not carry the annotation and
-			// this arm could not branch on it if it wanted to.
-			//
-			// **Numeric slots only, and that is a real restriction rather than a simplification.**
-			// A `select` over `externref` operands moves values on `st.refs`, which is empty
-			// throughout v0 — no reference opcode exists to have put anything there — so such a
-			// module cannot reach here with operands to move. When the first reference opcode
-			// lands (#7's successor) this arm needs the refs case, and it will be reachable then;
-			// stated here because a silent numeric-only select is the accept-direction shape.
+			// **`Imm0` carries one bit of the annotation, since #196/#197 — not stack shape.**
+			// `immVecValType`'s decoder comment explains what it now stages and why: this layer
+			// has no validator (#9) to consult, and a `select` over `externref`/`funcref`
+			// operands is reachable now that `st.refs` is not always empty
+			// (`select.wast`'s `select-funcref`/`select-externref`), so *some* fact has to
+			// decide which array to pop from. Guessing from stack shape (`len(st.refs) >= 2`)
+			// was tried and rejected here: a live reference sitting elsewhere on `st.refs` while
+			// an unrelated numeric `select` executes would misdispatch, which is the
+			// accept-direction hazard §9 G-3 warns against — a validated module that happens to
+			// have references in scope is not the same fact as *this* select's operands being
+			// references. The retained bit is the one case `opSelect` (bare, no vector at all)
+			// cannot produce it, since `valid.ml:435`'s own rule (`Select None`) restricts the
+			// untyped form to numeric/vector operands — so `ins.Imm0` is always 0 for `opSelect`
+			// and meaningful only for `opSelectT`.
+			if ins.Imm0 != 0 {
+				if err := st.needRef(2); err != nil {
+					return err
+				}
+				if err := st.needNum(1); err != nil {
+					return err
+				}
+				cond := st.popI32()
+				b := st.popRef()
+				a := st.popRef()
+				if cond != 0 {
+					st.pushRef(a)
+				} else {
+					st.pushRef(b)
+				}
+				break
+			}
 			if err := st.needNum(3); err != nil {
 				return err
 			}
@@ -362,31 +404,34 @@ func (in *Instance) runFrame(fn *binary.Func, locals []uint64, st *stack, result
 		// Imm0 is the local index, staged by immIdx. Out-of-range is #9's verdict
 		// reported as the layering debt it is; the validator makes these three checks
 		// unreachable.
+		//
+		// **Dispatch by array is the frame's own job now (#196/#197), not this switch's.**
+		// `frame.getLocal`/`setLocal`/`teeLocal` read the isRef bitmap built once at frame
+		// construction, mirroring `global.go`'s `get`/`set` methods exactly — a local's array
+		// is a property of its declared type, not something each opcode arm re-derives.
 
 		case 0x20: // local.get
-			if ins.Imm0 >= uint64(len(locals)) {
-				return badLocal(ins.Imm0, len(locals))
+			if ins.Imm0 >= uint64(locals.len()) {
+				return badLocal(ins.Imm0, locals.len())
 			}
-			st.pushNum(locals[ins.Imm0])
+			locals.getLocal(ins.Imm0, st)
 
 		case 0x21: // local.set
-			if ins.Imm0 >= uint64(len(locals)) {
-				return badLocal(ins.Imm0, len(locals))
+			if ins.Imm0 >= uint64(locals.len()) {
+				return badLocal(ins.Imm0, locals.len())
 			}
-			if err := st.needNum(1); err != nil {
+			if err := locals.setLocal(ins.Imm0, st); err != nil {
 				return err
 			}
-			locals[ins.Imm0] = st.popNum()
 
 		case 0x22: // local.tee
-			if ins.Imm0 >= uint64(len(locals)) {
-				return badLocal(ins.Imm0, len(locals))
-			}
-			if err := st.needNum(1); err != nil {
-				return err
+			if ins.Imm0 >= uint64(locals.len()) {
+				return badLocal(ins.Imm0, locals.len())
 			}
 			// Peek, not pop-then-push: tee leaves the value on the stack.
-			locals[ins.Imm0] = st.num[len(st.num)-1]
+			if err := locals.teeLocal(ins.Imm0, st); err != nil {
+				return err
+			}
 
 		// ---- globals -------------------------------------------------------------
 		//

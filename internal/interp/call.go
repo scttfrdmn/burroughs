@@ -162,7 +162,19 @@ func (in *Instance) invoke(fn *binary.Func, ft *binary.FuncType, st *stack, dept
 		return fmt.Errorf("%w: a called function declares %d locals, and this engine's frame ceiling is %d",
 			ErrUnsupported, total, maxFrameLocals)
 	}
-	if err := st.needNum(len(ft.Params)); err != nil {
+	// **Both arrays' arity is checked before either is popped from**, for `needNum`/`needRef`'s
+	// own reason repeated at a second call site: a shortfall is `type mismatch`, #9's verdict,
+	// not something this package enforces past reporting the layering debt. Counted once via
+	// countByArray (control.go) rather than inlined — the same split `blockArity` needs for a
+	// block's parameters, and the reason a called function's params needed it is the identical
+	// reason a block's do (#196/#197): a ref-typed parameter reaching here used to refuse
+	// unconditionally, below, and that refusal is exactly what #197 lifts now that the frame has
+	// somewhere to put the value.
+	paramNum, paramRef := countByArray(ft.Params)
+	if err := st.needNum(paramNum); err != nil {
+		return err
+	}
+	if err := st.needRef(paramRef); err != nil {
 		return err
 	}
 	// **The parameters come off the stack in reverse and land in declaration order**, which is
@@ -175,28 +187,30 @@ func (in *Instance) invoke(fn *binary.Func, ft *binary.FuncType, st *stack, dept
 	// fail. So it gets no control of its own — #38's refinement is to read the vectors and know
 	// which case you are in, and 45 of them fail on this. The rule the *sibling* facts needed
 	// (§9 G-3, an accept-direction defect the suite scores green) does not apply here.
-	locals := make([]uint64, total)
+	//
+	// **A ref-typed parameter now pops from `st.refs` rather than refusing (#196/#197)** — the
+	// frame's own parallel array (`newFrame`, value.go), the same split 0002 pins for the value
+	// stack, keyed by the same local index. A local's array is decided by its declared type
+	// exactly as a stack slot's is (global.go's `get`/`set` give the identical reasoning), so
+	// the frame's own isRef bitmap chooses which array both the write here and every `local.*`
+	// arm in exec.go reads.
+	locals := newFrame(total, ft.Params, fn.EachLocal)
 	for i := len(ft.Params) - 1; i >= 0; i-- {
 		if ft.Params[i].IsRef() {
-			return fmt.Errorf("%w: a called function takes %s as parameter %d",
-				ErrUnsupportedOp, ft.Params[i], i)
+			locals.refs[i] = st.popRef()
+			continue
 		}
-		locals[i] = st.popNum()
+		locals.num[i] = st.popNum()
 	}
 	// The declared locals are already zero — `make` gives that — and zero is the correct default
-	// for every numeric type (`default_value`). A ref-typed local is refused, as at the boundary,
-	// because `ref{}` is *function 0* rather than null and nothing here would notice.
-	var refErr error
-	fn.EachLocal(func(idx uint32, vt binary.ValType) bool {
-		if vt.IsRef() {
-			refErr = fmt.Errorf("%w: a called function declares %s as local %d", ErrUnsupportedOp, vt, idx)
-			return false
-		}
-		return true
-	})
-	if refErr != nil {
-		return refErr
-	}
+	// for every numeric type (`default_value`), and for a ref-typed local: `locals.refs[i]`'s
+	// zero value is `ref{}`, which is `ref.func 0` rather than null exactly as `value.go`'s own
+	// `ref` doc comment warns — **and that is the accept-direction gap `local_init.wast` is
+	// testimony against**: `func.wast:662`'s `$type-local-uninitialized` and every one of
+	// `local_init.wast`'s three vectors declare a ref-typed local and read it only after writing
+	// it first (`local.set`/`local.tee` before any `local.get`), so the corpus never exercises
+	// the uninitialized-ref-local default and this comment states the gap rather than closing
+	// it — closing it needs #9's "uninitialized local" concept, not an engine default.
 	// **The callee's results must be exactly its arity, and the check is here rather than at the
 	// boundary**, because a call's results become the caller's operands: a callee leaving scratch
 	// behind would silently corrupt the caller's stack, where at the boundary `Invoke` merely
@@ -215,16 +229,9 @@ func (in *Instance) invoke(fn *binary.Func, ft *binary.FuncType, st *stack, dept
 	// `#9`'s arity question actually asks; one array can be exactly right while the other is
 	// wrong, and a shared counter cannot tell the two apart.
 	numBase, refBase := len(st.num), len(st.refs)
-	if err := in.runFrame(fn, locals, st, len(ft.Results), depth+1); err != nil {
+	wantNum, wantRef := countByArray(ft.Results)
+	if err := in.runFrame(fn, locals, st, wantNum, wantRef, depth+1); err != nil {
 		return err
-	}
-	wantNum, wantRef := 0, 0
-	for _, r := range ft.Results {
-		if r.IsRef() {
-			wantRef++
-		} else {
-			wantNum++
-		}
 	}
 	if gotNum, gotRef := len(st.num)-numBase, len(st.refs)-refBase; gotNum != wantNum || gotRef != wantRef {
 		return fmt.Errorf("%w: a called function declares %d results (%d numeric, %d reference) "+
