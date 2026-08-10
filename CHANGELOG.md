@@ -4389,8 +4389,6 @@ is a formatting pass of its own, not a drive-by inside a decoder PR.*
   with the classifier itself: 68 / 1236 / 26742. A figure quoted to refute a figure is still
   a figure.
 
-### Fixed
-
 - **Grave #206: `drop` (opcode `0x1a`) popped the numeric stack unconditionally, corrupting a
   reference-typed operand** — decision 0023's fix, landed. `stack` gains `numSeq`/`refSeq`/
   `nextSeq`/`tracking`, a lazily-activated push sequence number per slot (nil/zero until the
