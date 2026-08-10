@@ -140,6 +140,26 @@ type stack struct {
 	// end `pc`'s `intrange` directive came to one file over: the prose keeps the reason, the
 	// directive does not outlive its subject.
 	refs []ref
+
+	// numSeq/refSeq/nextSeq/tracking are grave #206's fix (decision 0023): a monotonic push
+	// sequence number per slot, lazily activated. `drop` (exec.go, opcode 0x1a) has no static
+	// signal for which array holds the logical top-of-stack — no validator (#9) exists to
+	// supply one, and the wire form carries no immediate at all — so it consults these instead.
+	//
+	// **Lazy, not always-on, and the reason is measured rather than assumed** (0023's own
+	// `dropbench`): tagging every push costs +72-75% on this array's own operations regardless
+	// of whether a reference is ever pushed, because 0 of the numeric core's corpus needs one at
+	// all (exec.go's own header) — so the tax would be paid by nearly every function for a
+	// question nearly no function asks. `tracking` stays false, `numSeq` stays nil, until the
+	// first `pushRef` — mirroring `frame`'s own lazy `refs`/`isRef` allocation (value.go) for
+	// the identical reason.
+	//
+	// **Retired, not merely made cheaper, the day #9 exists** — 0023's own stated consequence:
+	// a validated `drop` reads a statically-known operand type and needs none of this.
+	numSeq   []uint64
+	refSeq   []uint64
+	nextSeq  uint64
+	tracking bool
 }
 
 // frame is a call's local-variable storage: 0002's parallel-array split applied to *locals*
@@ -269,7 +289,19 @@ func (f *frame) len() int { return len(f.num) }
 // `0xFFFFFFFFFFFFFFFF` — an i32 is not a sign-extended i64, and conflating them makes `i64.extend_i32_u`
 // a no-op when it is not one. The decoder already sign-extends s32 immediates into `Imm0`, so the
 // truncation belongs at the push rather than in each opcode.
-func (s *stack) pushNum(v uint64) { s.num = append(s.num, v) }
+//
+// **Tags the slot with a push sequence number, but only when `tracking` is on** (0023, grave
+// #206) — `drop`'s own signal for which array holds the logical top, and lazily maintained for
+// 0023's own measured reason: tagging unconditionally costs the same whether or not a reference
+// is ever pushed, since the cost is the extra append/reslice on this array's own operations, not
+// anything about references.
+func (s *stack) pushNum(v uint64) {
+	s.num = append(s.num, v)
+	if s.tracking {
+		s.numSeq = append(s.numSeq, s.nextSeq)
+		s.nextSeq++
+	}
+}
 
 // popNum pops a raw numeric slot.
 //
@@ -282,6 +314,9 @@ func (s *stack) pushNum(v uint64) { s.num = append(s.num, v) }
 func (s *stack) popNum() uint64 {
 	v := s.num[len(s.num)-1]
 	s.num = s.num[:len(s.num)-1]
+	if s.tracking {
+		s.numSeq = s.numSeq[:len(s.numSeq)-1]
+	}
 	return v
 }
 
@@ -294,12 +329,58 @@ func (s *stack) popNum() uint64 {
 //
 // These are the first writers to `refs` since 0002 pinned it — the event that field's comment
 // named as its retirement condition for the `unused` suppression.
-func (s *stack) pushRef(r ref) { s.refs = append(s.refs, r) }
+//
+// **The first `pushRef` in a frame's life activates sequence tracking and backfills `numSeq`**
+// (0023) — every numeric slot already on the stack needs a sequence number too, ascending in
+// push order starting below `nextSeq`, or the invariant "every live slot has one" breaks the
+// moment `drop` is asked about a stack mixing pre- and post-activation slots. Correct because
+// nothing has been popped between actual push order and now, so ascending backfill order matches
+// the slots' real relative age.
+func (s *stack) pushRef(r ref) {
+	if !s.tracking {
+		s.tracking = true
+		s.numSeq = make([]uint64, len(s.num))
+		for i := range s.numSeq {
+			s.numSeq[i] = s.nextSeq
+			s.nextSeq++
+		}
+	}
+	s.refs = append(s.refs, r)
+	s.refSeq = append(s.refSeq, s.nextSeq)
+	s.nextSeq++
+}
 
 func (s *stack) popRef() ref {
 	r := s.refs[len(s.refs)-1]
 	s.refs = s.refs[:len(s.refs)-1]
+	s.refSeq = s.refSeq[:len(s.refSeq)-1]
 	return r
+}
+
+// drop implements opcode 0x1a: pop whichever of `num`/`refs` holds the logical top-of-stack
+// value, decided by comparing the two arrays' top sequence numbers (0023, grave #206) — an
+// absent array (nothing tracked yet, or empty) reads as older than everything, so a `drop` on a
+// stack that has never pushed a reference is exactly today's `popNum`, at the cost of one
+// length check.
+//
+// **Before this, `drop` always called `popNum`, silently corrupting the stack whenever the
+// logical top was actually a reference** — confirmed with a three-instruction reproducer
+// carrying no exception-handling machinery at all: `(ref.null func) (drop) (i32.const 7))`
+// returned garbage instead of 7. See grave #206 and decision 0023 for the diagnosis and the
+// measurement behind this fix.
+func (s *stack) drop() {
+	numTop, refTop := int64(-1), int64(-1)
+	if s.tracking && len(s.numSeq) > 0 {
+		numTop = int64(s.numSeq[len(s.numSeq)-1])
+	}
+	if len(s.refSeq) > 0 {
+		refTop = int64(s.refSeq[len(s.refSeq)-1])
+	}
+	if refTop > numTop {
+		s.popRef()
+		return
+	}
+	s.popNum()
 }
 
 // needRef is needNum for the reference array.

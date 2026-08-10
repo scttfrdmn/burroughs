@@ -4389,6 +4389,29 @@ is a formatting pass of its own, not a drive-by inside a decoder PR.*
   with the classifier itself: 68 / 1236 / 26742. A figure quoted to refute a figure is still
   a figure.
 
+### Fixed
+
+- **Grave #206: `drop` (opcode `0x1a`) popped the numeric stack unconditionally, corrupting a
+  reference-typed operand** — decision 0023's fix, landed. `stack` gains `numSeq`/`refSeq`/
+  `nextSeq`/`tracking`, a lazily-activated push sequence number per slot (nil/zero until the
+  first `pushRef`, mirroring `frame`'s own lazy `refs`/`isRef` allocation): `drop` now compares
+  the two arrays' top sequence numbers and pops whichever is newer, instead of always calling
+  `popNum`. `control.go`'s three truncation sites (`branch`, `returnFrom`, `catchThrown`) each
+  carry the sequence numbers through their existing copy+reslice pattern unchanged in shape, one
+  field wider; `pushPayload` (0022's own catch-clause payload restoration) now goes through
+  `pushNum`/`pushRef` rather than a direct `append`, so a caught exception's payload gets
+  sequence numbers too. All-gates-on lane: 37218 → **37233 pass (+15)**, matching
+  `TestGrave206KnownFailures`'s own updated population exactly. Two of the original 17
+  `#206`-attributed lines turned out to be **compound failures**, found only by fixing #206 and
+  reading what surfaced underneath: `try_table.wast:465,466` now fail with the same pre-existing
+  harness limitation `:464` already carried, not with #206's own symptom — a correction to the
+  citation, not a new engine gap. Five new falsifiable controls
+  (`internal/interp/drop_test.go`), including the exact three-instruction reproducer from the
+  grave (`(ref.null func) (drop) (i32.const 7)`) and a discriminating branch-truncation case
+  built to distinguish "the fix is right" from "the test happened to pass anyway" — the first
+  version of that test was stillborn (passed under both correct code and a reverted mutation)
+  and was rebuilt with a sequence-number ordering that actually separates the two readings.
+
 ## [0.0.1] - 2026-07-30
 
 *Implements contract v0.1. Scaffold state, recorded retroactively at the

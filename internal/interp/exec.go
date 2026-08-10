@@ -499,10 +499,15 @@ func (in *Instance) runFrame(fn *binary.Func, locals *frame, st *stack, results,
 		case 0x01: // nop
 
 		case 0x1a: // drop
-			if err := st.needNum(1); err != nil {
-				return err
+			// **The precondition is "something is on the logical stack," not "the numeric
+			// array has an entry"** — `drop`'s operand can be either type (`valid.ml:432-433`
+			// accepts any type unconditionally), so checking `needNum` alone would report the
+			// layering debt for a module that validly drops a lone reference with an empty
+			// numeric array, which is exactly `TestDropPicksTheCorrectArray`'s own shape.
+			if len(st.num) == 0 && len(st.refs) == 0 {
+				return fmt.Errorf("%w: stack has 0 values, an instruction wanted 1", ErrNotValidated)
 			}
-			st.popNum()
+			st.drop()
 
 		case opSelect, opSelectT:
 			// **Both encodings, one arm, and the reason is that the difference is entirely a
