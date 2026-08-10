@@ -98,6 +98,18 @@ type ref struct {
 	// outliving the frame that pushed it. A funcref surviving in a table after its originating
 	// instance's own call frames have returned is the ordinary case, not an edge one.
 	Inst *Instance
+
+	// Exc is the exception this reference names, non-nil exactly when the reference's
+	// runtime type is exnref and Null is false (0022 §1). Addr/Inst are meaningless for
+	// this case, the same way Inst's own comment states about Addr needing an instance to
+	// resolve against — an exception's identity is the allocation itself, resolving
+	// against nothing but its own tag and payload.
+	//
+	// A new field rather than a union with Inst, matching 0020's own rejected-alternative
+	// reasoning one payload kind later: `ref` grows one field per new payload kind it must
+	// carry, not a second representation, so a funcref never sets Exc and an exnref never
+	// sets Addr/Inst.
+	Exc *excObj
 }
 
 // stack is the value stack: 0002 Q3's bare `uint64` slots plus the pinned parallel reference array.

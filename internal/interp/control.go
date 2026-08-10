@@ -1,6 +1,7 @@
 package interp
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/scttfrdmn/burroughs/internal/binary"
@@ -88,6 +89,18 @@ type label struct {
 	// refHeight is height's reference-stack twin, excluding the ref-typed operands the block
 	// itself consumes.
 	refHeight int
+
+	// isHandler is true exactly for a label `try_table` pushed — every other construct leaves
+	// it false. The scan that looks for an enclosing handler (tryCatch, exec.go) tests this
+	// rather than `len(catches) > 0`, because a zero-clause `try_table` is legal (`decode.ml`'s
+	// `vec (at catch) s` accepts an empty vector) and is still a handler — one that never
+	// matches, so every exception thrown inside it falls through uncaught. `len(catches)==0`
+	// cannot tell that case apart from "not a try_table at all" the way an explicit bool can.
+	isHandler bool
+
+	// catches is this label's try_table handler clauses, meaningful only when isHandler is
+	// true. Empty for a zero-clause try_table, per isHandler's own comment.
+	catches []binary.Catch
 }
 
 // blockArity resolves a structural instruction's blocktype to its parameter and result counts,
@@ -220,6 +233,8 @@ const (
 	opBrIf     = 0x0d
 	opBrTable  = 0x0e
 	opReturn   = 0x0f
+	opThrow    = 0x08
+	opThrowRef = 0x0a
 	opTryTable = 0x1f
 
 	// The two `select` encodings. Not control flow, and here for the reason this block exists at
@@ -327,4 +342,143 @@ func returnFrom(st *stack, results, refResults int) error {
 	copy(st.refs, st.refs[len(st.refs)-refResults:])
 	st.refs = st.refs[:refResults]
 	return nil
+}
+
+// caught is catchThrown's report: whether an enclosing handler matched, and if so, whether the
+// matched clause's branch is an ordinary label branch or names the implicit function-body
+// label (a "return", opBr's own reading of `depth == len(ctrl)` reused here because a catch
+// clause's LabelIndex is drawn from the identical space).
+type caught struct {
+	Matched  bool
+	IsReturn bool
+	PC       int
+	Level    int
+}
+
+// raiseOrCatch is the one interception point every thrown-producing or thrown-propagating
+// dispatch-loop site shares, rather than five copies of the same type-check-then-scan. `err` is
+// whatever `opThrow`/`opThrowRef` just built, or whatever `call`/`callIndirect` returned from a
+// callee's own `runFrame` — in every other case (a plain error, a `*Trap`) `errors.As` fails
+// once and the caller's own `if !c.Matched { return err }` puts the original error straight
+// back out, so a non-exception failure costs exactly one failed type assertion and nothing else
+// changes about how it propagates.
+func (in *Instance) raiseOrCatch(st *stack, ctrl []label, err error) (caught, error) {
+	var t *Uncaught
+	if !errors.As(err, &t) {
+		return caught{}, nil
+	}
+	return in.catchThrown(st, ctrl, t)
+}
+
+// catchThrown scans ctrl from the top for the nearest handler label matching t's tag, and
+// performs the reference's own branch on a match — `Handler`'s reduction rules, `eval.ml:1086-
+// 1112`, walked outward one label at a time exactly as `Handler (n, cs, code')`'s fallthrough
+// arm re-wraps around a nested step. `caught.Matched` false means no enclosing label in *this*
+// ctrl caught it, and the caller re-propagates t unchanged, which is `call`'s ordinary `return
+// err` path doing the "escapes this runFrame invocation" half of 0022's design (the Go-call-
+// boundary crossing 0022 §2 names as the mechanism's whole point).
+//
+// **This is the genuinely new machinery** (Scott's own shaping order on 2c): nothing before
+// this inspects ctrl on an error path, only on a branch's normal-path lookup. Falsification
+// depth concentrates here.
+func (in *Instance) catchThrown(st *stack, ctrl []label, t *Uncaught) (caught, error) {
+	for i := len(ctrl) - 1; i >= 0; i-- {
+		l := &ctrl[i]
+		if !l.isHandler {
+			continue
+		}
+		// **Clause order is the wire order, and the reference's own reduction is
+		// first-match**: `Handler (n, {it = Catch (x1,x2); _} :: cs, ...)` peels the head
+		// clause, tests it, and only recurses into `cs` (the rest) on a miss — so the first
+		// clause whose kind and tag agree wins, never a "most specific" or "closest tag"
+		// rule. A reader trying clauses out of order, or stopping at the first *tag match
+		// regardless of kind* rather than the first *clause*, would disagree with the
+		// reference on a try_table carrying more than one clause for the same tag (legal —
+		// nothing in the grammar forbids it).
+		for _, c := range l.catches {
+			var isTagMatch bool
+			switch c.Kind {
+			case binary.CatchTag, binary.CatchTagRef:
+				tg, err := in.tagFor(c.TagIndex)
+				if err != nil {
+					// The layering debt, read as "this clause never matches" rather than
+					// surfaced: a malformed tag index inside a catch clause is #9's
+					// question, and the exception is real and in flight regardless of
+					// whether this particular clause can even be evaluated.
+					continue
+				}
+				isTagMatch = t.exc.tag == tg
+			case binary.CatchAny, binary.CatchAnyRef:
+				// No tag to compare — these two match unconditionally, which the second
+				// switch below (checking isTagMatch only for the Tag/TagRef pair) already
+				// treats correctly by never testing it for these two kinds.
+			}
+			switch c.Kind {
+			case binary.CatchTag, binary.CatchTagRef:
+				if !isTagMatch {
+					continue
+				}
+			case binary.CatchAny, binary.CatchAnyRef:
+				// Matches unconditionally.
+			}
+			// **Discard everything above this handler's own base before pushing the
+			// payload** — `is_jumping e' -> vs, [e']` (eval.ml:1059-1060) drops the ambient
+			// `vs` at every `Label` an exception unwinds past, keeping only what the
+			// exception itself carries. Without this, a `try_table` body that pushed any
+			// scratch before throwing (or even just consumed its own blocktype params) would
+			// leave that scratch on the stack under the restored payload — invisible on a
+			// throw with no ambient stack and a corruption on any other, which is exactly
+			// the shape a body-with-side-effects-then-throw vector would need to catch and
+			// this rung's own falsification depth is ordered to test for.
+			st.num = st.num[:l.height]
+			st.refs = st.refs[:l.refHeight]
+			switch c.Kind {
+			case binary.CatchTag:
+				pushPayload(st, t.exc)
+			case binary.CatchTagRef:
+				pushPayload(st, t.exc)
+				st.pushRef(ref{Exc: t.exc})
+			case binary.CatchAnyRef:
+				st.pushRef(ref{Exc: t.exc})
+			case binary.CatchAny: // no payload pushed
+			}
+			return in.branchTo(st, ctrl, i, c.LabelIndex)
+		}
+		// No clause in this handler matched — `Handler (n, [], (vs', Throwing ...))` and the
+		// cs-exhausted fallthrough both re-raise past this label, which is exactly "keep
+		// scanning outward" in this loop's own shape (i-- continues to the next enclosing
+		// label) rather than a distinct branch.
+	}
+	return caught{}, nil
+}
+
+// pushPayload pushes an exception's payload values back onto the stacks in declaration order —
+// `vs0 @ vs` (eval.ml:1088,1094): `vs0` is the payload, prepended ahead of whatever the handler
+// already had. Both arrays, independently, `call.go`'s own reason repeated at every stack-
+// surgery site in this package: the two arrays have independent depths and a payload can mix
+// kinds.
+func pushPayload(st *stack, exc *excObj) {
+	st.num = append(st.num, exc.num...)
+	st.refs = append(st.refs, exc.refs...)
+}
+
+// branchTo performs the stack surgery a matched catch clause's branch needs, sharing `branch`'s
+// own truncation logic rather than duplicating it: a catch clause's label index is a plain
+// branch depth **relative to the scope outside the try_table's own label** — `valid.ml:581-584`
+// checks every clause against `c`, the context *before* `{c with labels = ts2 :: c.labels}`
+// pushes the try_table's own label, so `ctrl[:handlerIdx]` (excluding the handler label itself)
+// is the slice a clause's LabelIndex resolves against, exactly as if the handler label were
+// never pushed at all.
+func (in *Instance) branchTo(st *stack, ctrl []label, handlerIdx int, labelIdx uint32) (caught, error) {
+	outer := ctrl[:handlerIdx]
+	if int(labelIdx) == len(outer) {
+		// The catch clause's label names the function body itself — legal, same reading
+		// opBr's own function-body-is-an-implicit-label case gives `br len(ctrl)`.
+		return caught{Matched: true, IsReturn: true}, nil
+	}
+	pc, level, err := in.branch(st, outer, uint64(labelIdx))
+	if err != nil {
+		return caught{}, err
+	}
+	return caught{Matched: true, PC: pc, Level: level}, nil
 }

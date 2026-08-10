@@ -21,6 +21,36 @@ weakly-ordered platform.
 
 ### Added
 
+- **`throw`/`throw_ref`/`try_table` execute — exception handling's rung 2c** (#201, against
+  decision 0022). `internal/interp` gains a third control-transfer type, `Uncaught` (exported for
+  the harness boundary the way `*Trap` already is), propagated through the existing Go-call-is-a-
+  wasm-frame recursion and caught by a new capability — `catchThrown`/`raiseOrCatch`, scanning a
+  `runFrame`'s own `ctrl` for the nearest `try_table` handler whose clause matches, on every throw
+  site and every `call`/`call_indirect` return (deliberately *not* `return_call_indirect`, a tail
+  call, per `try_table.wast`'s own `return-call-in-try-catch` corpus vector: the exception must
+  escape a tail-called-through handler, not be caught by it). Clause dispatch is first-match in
+  wire order (`eval.ml:1086-1104`'s own reduction, never most-specific), and a thrown tag is
+  matched against a catch clause by pointer identity (`tagInst`, 0022 §3) — never structurally —
+  applying grave #163's law before any tag code could ship the identical wrong answer. `ref` gains
+  a fifth field, `Exc *excObj` (0022 §1), needing no `ref.eq` arm since the reference itself
+  declines to define exnref identity comparison and zero corpus vectors call it.
+  All-gates-on lane: 37162 → 37218 pass (+56), 0 gated held. Falsification concentrated on the
+  genuinely new machinery per Scott's own shaping order: `TestCatchClauseOrderIsFirstMatchNot-
+  MostSpecific`/its mirror pin dispatch order against `try_table.wast`'s own `catch-all-before-
+  catch` vector; `TestCrossInstanceTagIdentityMatchesByAllocationNotShape`/its sibling pin #163's
+  law directly (two structurally identical, separately-allocated tags must not match); `TestThrow-
+  CaughtAcrossACallBoundary` falsifies that the catch scan runs at `call` sites and not only at
+  the throw site. All eight new controls confirmed to fail under a reverted mutation.
+  **17 of the lane's 19 remaining fails in these four files are grave #206** (found by this rung's
+  own falsification, not created by it — a pre-existing, EH-unrelated defect: `drop` unconditionally
+  pops the numeric stack with no signal for whether the logical top is a reference), and 2 are the
+  already-tracked `sameFuncType` rec-group scope boundary reached via tag-import linking; both are
+  pre-registered by line and citation in `TestGrave206KnownFailures` rather than left as a silent
+  surprise for the next reader. #206's fix needs its own ADR (0023) — the obvious approach (a flat
+  push-order log) was falsified against `branch`'s own independent-per-array truncation pattern
+  before being built, and the sound alternative (per-slot sequence numbers) has a real hot-path
+  cost `make bench` must price before it lands.
+
 - **A tag import's declared type index is retained instead of discarded** (#204, found while
   wiring #95's own retention into `Instance.link`'s tag-import placement, which needs a declared
   type to compare a supplier against). Reuses `Import.Index`, the same field a func import's type

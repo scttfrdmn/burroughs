@@ -137,17 +137,26 @@ throw, not per instruction, so it does not touch the dispatch loop's steady-stat
 
 ### 3. `Instance.tags []*tagInst`, reserved-not-omitted, imports first then definitions — `mems`/`tables`/`globals`'s own shape, no new pattern
 
-**Prerequisite, found checking this section's own assumption against the tree rather than
+**Prerequisite 1, found checking this section's own assumption against the tree rather than
 mid-implementation: `mod.Tags` does not exist yet.** `internal/binary`'s section-13 arm
 (`sections.go:276-288`) returns `(false, nil)` — accepted only by the gate, no payload grammar,
-nothing retained — which is issue **#95**, still open, and upstream of every sentence below that
-reads `len(mod.Tags)`. `binary.Module` has no `Tags` field today. This is retention work of
-rung 1's own exact shape (a `vec(at tag)` of `tagtype = TagT (typeuse idx s)` — a fixed zero byte
-then a type index, per `decode.ml:288-290,1082-1087`, mechanically identical to a global's
-typeuse-bearing grammar) and lands as its own PR, one-mechanism-per-PR, before any of §3 below is
-buildable. This note is the assumption stated rather than the surprise discovered — the same
-premise-check discipline this ADR's own §What the reference's shape already settles ran on the
-reference, turned on this document's own claim.
+nothing retained — which is issue **#95**, upstream of every sentence below that reads
+`len(mod.Tags)`. `binary.Module` has no `Tags` field today. This is retention work of rung 1's own
+exact shape (a `vec(at tag)` of `tagtype = TagT (typeuse idx s)` — a fixed zero byte then a type
+index, per `decode.ml:288-290,1082-1087`, mechanically identical to a global's typeuse-bearing
+grammar) and lands as its own PR, one-mechanism-per-PR, before any of §3 below is buildable. This
+note is the assumption stated rather than the surprise discovered — the same premise-check
+discipline this ADR's own §What the reference's shape already settles ran on the reference,
+turned on this document's own claim. **Closed by #95 (PR #203).**
+
+**Prerequisite 2, found by checking prerequisite 1's own obvious twin before wiring
+`Instance.link`'s tag-import placement**: a tag *import*'s declared type index was decoded and
+discarded (`decodeImport`'s tag arm read the u32 into `_`, and never checked the attribute byte
+against zero either), leaving `importTypeMismatch`'s existing `case binary.ExternTag` nothing to
+compare a supplier's actual tag type against — §3's own "`link.go`'s two currently-inert
+`ExternTag` arms... become live" needs the *declared* half of that comparison to exist, not only
+the supplier half `Instance.tags` builds. Filed and closed as **#204 (PR #205)**: `Import.Index`
+now carries the type index, reusing the field a func import's descriptor already occupies.
 
 ```go
 // tagInst is one tag: an allocation, matching runtime/tag.ml's Tag.alloc exactly — identity is

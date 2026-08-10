@@ -148,6 +148,42 @@ func (in *Instance) runFrame(fn *binary.Func, locals *frame, st *stack, results,
 			l.refHeight = len(st.refs) - refParams
 			ctrl = append(ctrl, l)
 
+		case opTryTable:
+			// **A block that also carries a handler** — `TryTable (bt, cs, es)` validates
+			// exactly like a block over its own blocktype (`valid.ml:581-586`), and its label
+			// behaves identically for `br`'s purposes: branching to it exits with its
+			// results, same as `opBlock`'s non-loop case. What is new is that this label can
+			// also be *matched by a thrown exception* — see tryCatch, which scans `ctrl` for
+			// exactly the label this arm pushes.
+			end, err := matchEnd(body, pc)
+			if err != nil {
+				return err
+			}
+			params, refParams, blockResults, blockRefResults, err := in.blockArity(ins.Imm0, ins.Imm1)
+			if err != nil {
+				return err
+			}
+			if len(st.num) < params {
+				return fmt.Errorf("%w: try_table takes %d parameters with %d values on the stack",
+					ErrNotValidated, params, len(st.num))
+			}
+			if len(st.refs) < refParams {
+				return fmt.Errorf("%w: try_table takes %d reference parameters with %d references on the stack",
+					ErrNotValidated, refParams, len(st.refs))
+			}
+			// **The catch vector is retrieved by `pc`, before `ctrl` grows** — `CatchVector`
+			// mirrors `LabelVector`'s own present/absent distinction, and a `try_table` always
+			// has one retained (rung 1, #199/#200), so `ok` is true on every module the
+			// decoder accepted; a false here is #9's layering debt; treated as zero clauses
+			// rather than refused, matching `matchEnd`'s own not-found-is-the-layering-debt
+			// posture without a second error channel for the identical fact.
+			catches, _ := fn.CatchVector(pc)
+			ctrl = append(ctrl, label{
+				cont: end + 1, arity: blockResults, refArity: blockRefResults,
+				height: len(st.num) - params, refHeight: len(st.refs) - refParams,
+				isHandler: true, catches: catches,
+			})
+
 		case opIf:
 			end, err := matchEnd(body, pc)
 			if err != nil {
@@ -287,6 +323,86 @@ func (in *Instance) runFrame(fn *binary.Func, locals *frame, st *stack, results,
 			// arm this replaces and for what its comment asserted (grave #135).
 			return returnFrom(st, results, refResults)
 
+		// ---- exception handling ----------------------------------------------------
+		//
+		// See tag.go for tagInst/excObj/thrown's shapes and tryCatch for the ctrl-scanning
+		// mechanism a throw's propagation needs — the genuinely new machinery 0022 names.
+
+		case opThrow:
+			// `Throw x, vs -> let t = tag c.frame.inst x in ... let args, vs' = split n vs`
+			// (`eval.ml:307-314`): resolve the tag, pop exactly its declared param arity —
+			// numeric and reference split the same way a call's arguments already are
+			// (`countByArray`, control.go) — and package them into the exception this
+			// function immediately returns as a `*thrown`, propagating up exactly the way a
+			// `*Trap` already does through this same `return err` shape.
+			tg, err := in.tagFor(uint32(ins.Imm0))
+			if err != nil {
+				return err
+			}
+			numN, refN := countByArray(tg.typ.Params)
+			if err := st.needNum(numN); err != nil {
+				return err
+			}
+			if err := st.needRef(refN); err != nil {
+				return err
+			}
+			exc := &excObj{tag: tg, num: make([]uint64, numN), refs: make([]ref, refN)}
+			// **Popped in reverse, filled forward** — `invoke`'s own reasoning at the
+			// call boundary applies unchanged: `split n vs` takes the top `n` values in
+			// stack order, so the last-declared param is popped first and belongs at the
+			// end of `exc`'s own slice.
+			for i := refN - 1; i >= 0; i-- {
+				exc.refs[i] = st.popRef()
+			}
+			for i := numN - 1; i >= 0; i-- {
+				exc.num[i] = st.popNum()
+			}
+			// **Caught here, not merely returned** — a `throw` inside its *own* try_table's
+			// dynamic extent must be caught in this same runFrame invocation, before ever
+			// reaching a `return`. `raiseOrCatch` is the one interception point this loop's
+			// four thrown-producing/propagating sites share (see its own doc comment) rather
+			// than four copies of the same scan — `opReturnCallIndirect` is deliberately the
+			// fifth call/throw-adjacent site that does *not* call it, see that arm's own
+			// comment for why a tail call must not catch.
+			c, cerr := in.raiseOrCatch(st, ctrl, &Uncaught{exc: exc})
+			if cerr != nil {
+				return cerr
+			}
+			if !c.Matched {
+				return &Uncaught{exc: exc}
+			}
+			if c.IsReturn {
+				return returnFrom(st, results, refResults)
+			}
+			ctrl = ctrl[:c.Level]
+			pc = c.PC - 1
+
+		case opThrowRef:
+			// `ThrowRef, Ref NullRef :: vs -> Trapping "null exception reference"` /
+			// `ThrowRef, Ref (ExnRef (Exn (t, args))) :: vs -> Throwing (t, args)`
+			// (`eval.ml:316-320`): the exnref itself carries the tag and payload already
+			// packaged, so there is nothing to re-derive — pop the ref, trap on null,
+			// re-throw its own excObj otherwise, caught in this runFrame exactly as opThrow.
+			if err := st.needRef(1); err != nil {
+				return err
+			}
+			r := st.popRef()
+			if r.Null {
+				return trapNullExceptionRef
+			}
+			c, cerr := in.raiseOrCatch(st, ctrl, &Uncaught{exc: r.Exc})
+			if cerr != nil {
+				return cerr
+			}
+			if !c.Matched {
+				return &Uncaught{exc: r.Exc}
+			}
+			if c.IsReturn {
+				return returnFrom(st, results, refResults)
+			}
+			ctrl = ctrl[:c.Level]
+			pc = c.PC - 1
+
 		// ---- calls ---------------------------------------------------------------
 		//
 		// See call.go for the frame-building half, the exhaustion budget, and why
@@ -294,12 +410,46 @@ func (in *Instance) runFrame(fn *binary.Func, locals *frame, st *stack, results,
 
 		case opCall:
 			if err := in.call(uint32(ins.Imm0), st, depth); err != nil {
-				return err
+				// **The one place a *callee's* thrown exception meets this frame's own
+				// ctrl** — `call`'s own body recurses into `runFrame` and either returns nil,
+				// a trap/layering-debt error, or a `*thrown` that escaped every handler
+				// *inside the callee*. Only the last kind is worth scanning for here; a
+				// plain error or trap is never caught by a try_table, so raiseOrCatch's own
+				// type-check (see its doc comment) makes every other error a same-line
+				// pass-through with no extra cost.
+				c, cerr := in.raiseOrCatch(st, ctrl, err)
+				if cerr != nil {
+					return cerr
+				}
+				if !c.Matched {
+					return err
+				}
+				if c.IsReturn {
+					return returnFrom(st, results, refResults)
+				}
+				ctrl = ctrl[:c.Level]
+				pc = c.PC - 1
+				continue
 			}
 
 		case opCallIndirect:
 			if err := in.callIndirect(ins, st, depth); err != nil {
-				return err
+				// opCall's own reasoning: the callee's runFrame may have returned a
+				// *thrown that escaped every handler inside it, and this frame's own ctrl
+				// gets the first chance to catch it.
+				c, cerr := in.raiseOrCatch(st, ctrl, err)
+				if cerr != nil {
+					return cerr
+				}
+				if !c.Matched {
+					return err
+				}
+				if c.IsReturn {
+					return returnFrom(st, results, refResults)
+				}
+				ctrl = ctrl[:c.Level]
+				pc = c.PC - 1
+				continue
 			}
 
 		case opReturnCallIndirect:
@@ -317,6 +467,15 @@ func (in *Instance) runFrame(fn *binary.Func, locals *frame, st *stack, results,
 			// gate is off by default, so nothing reaches here unless the all-gates-on lane
 			// puts it here, and when it does it answers on the merits for everything the suite
 			// asks.
+			//
+			// **Deliberately not caught here, unlike opCall/opCallIndirect's own arms.** A tail
+			// call discards this frame *before* the callee runs — `ReturningInvoke`'s reduction
+			// unwinds straight to the caller, never re-entering this frame's `Handler`s — so an
+			// exception the callee throws must escape any `try_table` the tail call sat inside,
+			// exactly as `try_table.wast`'s own `return-call-in-try-catch`/`return-call-indirect-
+			// in-try-catch` assert (`assert_exception`, not caught): the corpus itself is the
+			// authority this arm's omission is checked against, not merely a reading of
+			// `eval.ml`.
 			if err := in.callIndirect(ins, st, depth); err != nil {
 				return err
 			}
@@ -993,6 +1152,10 @@ func (s *stack) pushBool(b bool) {
 
 // trapUnreachable is `unreachable`'s trap, whose spec text is the instruction's own name.
 var trapUnreachable = &Trap{Reason: "unreachable"}
+
+// trapNullExceptionRef is `throw_ref`'s null-operand trap — `eval.ml:317`'s
+// `Trapping "null exception reference"`.
+var trapNullExceptionRef = &Trap{Reason: "null exception reference"}
 
 // The sign bits, named because `abs`, `neg` and `copysign` are defined on them rather than
 // on a float value — see the f32 arithmetic arms.
