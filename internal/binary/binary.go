@@ -380,6 +380,13 @@ type Module struct {
 	Memories []Memory
 	Globals  []Global
 
+	// Tags is the tag section's payload — one type index per defined tag, in index order
+	// (`decode.ml:1082-1087`'s `tag_section = section Custom.Tag (vec (at tag))`, each
+	// `tag = TagT (typeuse idx s)`). Retained since #95; before it, section 13 was accepted
+	// only by the gate with no payload grammar at all — well-formed by the tracked set,
+	// nothing kept.
+	Tags []Tag
+
 	// Start is the start section's function index, valid only when HasStart.
 	Start    uint32
 	HasStart bool
@@ -433,6 +440,12 @@ func (m *Module) ImportedTables() int { return m.importedCount(ExternTable) }
 // (global.get 0))` read a defined global where the module named an imported one, and
 // `global.wast:344` is a module whose global 0 is exactly an import.
 func (m *Module) ImportedGlobals() int { return m.importedCount(ExternGlobal) }
+
+// ImportedTags counts the tag imports, which is the offset defined tags start at in the tag
+// index space — the fifth of these, needing no new reasoning for `importedCount`'s own
+// stated reason. #95's own consumer: `Instance.tags` (0022 §3) sizes itself
+// `ImportedTags() + len(mod.Tags)`, exactly as `mems` sizes itself from ImportedMems.
+func (m *Module) ImportedTags() int { return m.importedCount(ExternTag) }
 
 // importedCount counts the imports of one extern kind.
 //

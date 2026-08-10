@@ -793,6 +793,18 @@ type Global struct {
 	Init []Instr
 }
 
+// Tag is one tag declaration — the tag section's element, `tagtype = TagT of typeuse`
+// (`types.ml:40`, `decode.ml:288-290`). No mutability, no init expression: a tag names a
+// function type and nothing else, the fixed zero byte ahead of the type index (`zero s` in
+// `tagtype`, decode.ml:288) being a reserved attribute byte the reference itself never reads
+// back — `tag.ml`'s `Tag.alloc ty = {ty}` takes only the resolved type.
+type Tag struct {
+	// TypeIndex names the tag's function type in the module's type index space — the params
+	// are the exception's payload shape, and the result type is required empty ("non-empty
+	// tag result type" is #9's own already-cited rejection, `tag.wast:20-26`).
+	TypeIndex uint32
+}
+
 // Import is one import: its two names and what kind of thing it brings in.
 type Import struct {
 	Module string

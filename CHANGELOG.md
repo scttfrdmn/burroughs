@@ -21,6 +21,20 @@ weakly-ordered platform.
 
 ### Added
 
+- **The tag section (id 13) has a payload grammar and retains it** (#95, found as a blocker to
+  0022 §3 before any rung-2c code was written — checking the ADR's own assumption against the
+  tree rather than discovering it mid-implementation). `binary.Module` gains `Tags []Tag`
+  (`Tag{TypeIndex uint32}`, matching `tagtype = TagT of typeuse`) and `ImportedTags()`, the fifth
+  member of `importedCount`'s family. `decodeTag` reads the fixed zero attribute byte (checked via
+  the existing `ErrZeroByteExpected` sentinel, not skipped) then a type index; `decodePayload`'s
+  `SectionTag` case returns `true` with a real grammar instead of `false` with none. Zero board
+  movement, measured and expected: the gate is off by default and nothing in `internal/interp`
+  consumes `Tags` yet, so this is pure retention exactly like rung 1's shape. New falsifiable
+  controls: `TestDecodeTagSectionRetainsTypeIndices` (three tags, two distinct types plus a
+  repeat, so a reader collapsing every entry to one index is caught) and
+  `TestDecodeTagSectionRejectsNonzeroAttribute` — both confirmed to fail under a reverted
+  mutation before being trusted.
+
 - **The harness can ask `assert_exception`, exception handling's rung 2a** (#201). A new
   `KindAssertException` (unnamed-only — measured over all 9 files across both proposals, zero
   vectors name a module under this directive, so unlike `assert_trap`'s matched named/unnamed

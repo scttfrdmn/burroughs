@@ -203,11 +203,11 @@ var encodableModules = []struct {
 	// wantTagSec is section 13's payload: the tag count, then each tag's fixed zero-attribute byte
 	// and resolved type index (#199). nil means no section 13.
 	//
-	// **Bytes, on sections 9/11/12's own reason and for the sharper cause**: `binary.Module` has no
-	// `Tags` field at all — #95's still-open decoder-side gap — so there is no structured value to
-	// compare against even in principle, where sections 9 and 11 at least retain a struct the flag
-	// byte doesn't determine. The witness is `sectionPayload`, content read by hand from
-	// `tagtype`'s grammar (encode.ml:190-191).
+	// **Bytes, on sections 9/11/12's own reason, and now historical rather than sharpened**:
+	// `binary.Module` gained a `Tags` field when #95 closed the decoder-side gap this comment
+	// used to name — but this test's own encoder path never decodes what it writes, so there is
+	// still no structured value on *this* side of the comparison to check against. The witness
+	// remains `sectionPayload`, content read by hand from `tagtype`'s grammar (encode.ml:190-191).
 	wantTagSec []byte
 }{
 	{src: `(module)`},
@@ -2691,16 +2691,19 @@ func TestEncodeRoundTripsThroughTheDecoder(t *testing.T) {
 			"commit): section 12's condition is `free.ml`'s instruction set, not the segment list, and "+
 			"a single row cannot cover both directions of that", withDataCount, len(encodableModules))
 	}
-	// Section 13's own floor, on section 9/11's own reasoning: `binary.Module` has no `Tags` field
-	// at all (#95, still open), so a dropped or miswritten tag section is invisible to every other
-	// column in this table — these rows are the only instrument over the fixed attribute byte and
-	// over the tag index space's count. Two is the minimum that exercises both "no import ahead of
-	// the defined tag" and "an import ahead of it", which is where an index-space miscount would
-	// show.
+	// Section 13's own floor, on section 9/11's own reasoning. `binary.Module` gained a `Tags`
+	// field when #95 closed the decoder-side gap this comment used to name, but that is the
+	// *decoder's* retention and this table's own comparison is still byte-level against
+	// `sectionPayload` — this test's encoder path is never fed back through `DecodeModule`, so a
+	// dropped or miswritten tag section remains invisible to every other column in this table.
+	// These rows are the only instrument over the fixed attribute byte and over the tag index
+	// space's count from the encoder side. Two is the minimum that exercises both "no import
+	// ahead of the defined tag" and "an import ahead of it", which is where an index-space
+	// miscount would show.
 	if withTagSec < 2 {
 		t.Fatalf("only %d of %d encodableModules rows assert a tag section payload, want >=2 (2 at "+
-			"this commit): section 13 has no structured decoder field, so these rows are the only "+
-			"instrument over its attribute byte and its index-space count",
+			"this commit): these rows are the only instrument, from the encoder side, over its "+
+			"attribute byte and its index-space count",
 			withTagSec, len(encodableModules))
 	}
 	for _, tc := range encodableModules {
@@ -4823,17 +4826,22 @@ func TestTryTableCatchClausesRoundTrip(t *testing.T) {
 
 // TestTagFieldRoundTrip is #199's other rung-1 gap — the `(tag …)` module field, which is a
 // separate, smaller fix from `try_table`'s own encoding (this PR's own recon measured the two as
-// uncoupled: `decodeForTest`'s `ExceptionHandling` gate makes the tag section's payload decode
-// with `decodePayload`'s no-grammar-yet path, which skips the extent check but still accepts the
-// bytes and decodes every other section correctly — #95's still-open decoder-side tag-section
-// *payload grammar* is not needed for this round trip to succeed end to end).
+// uncoupled). At the time this test was written, `decodeForTest`'s `ExceptionHandling` gate made
+// the tag section's payload decode with `decodePayload`'s no-grammar-yet path — accepting the
+// bytes without an extent check, decoding every other section correctly regardless — so #95's
+// decoder-side tag-section *payload grammar* was not needed for this round trip to succeed
+// end to end. **#95 has since closed** (a real `decodeTag` grammar, `binary.Module.Tags`
+// retained) and this round trip still passes unchanged: the bytes this test writes were always
+// grammar-legal, so gaining a grammar that reads them changes nothing this test observes.
 //
-// **Asserted as section bytes, on `wantDataSec`'s own precedent** (encode_test.go's header): the
-// decoder has no `Tags` field to compare a structured value against — same discard-blindness
-// sections 11/12 have until their own consumer forces retention — so the witness is
-// `sectionPayload`, the decoder's own segmentation of the image, with the content read out by
-// hand from `tagtype`'s grammar (encode.ml:190-191: a fixed zero attribute byte, then a `u32`
-// type index).
+// **Still asserted as section bytes, on `wantDataSec`'s own precedent** (encode_test.go's
+// header) — historical rather than forced now that a `Tags` field exists to compare a
+// structured value against. Left as bytes rather than migrated, because this test's encoder
+// path is never fed back through `DecodeModule` (see `withTagSec`'s own floor comment above),
+// so a structured comparison has nothing on the decoded side to compare against regardless of
+// what the decoder now retains. The witness remains `sectionPayload`, the decoder's own
+// segmentation of the image, with the content read out by hand from `tagtype`'s grammar
+// (encode.ml:190-191: a fixed zero attribute byte, then a `u32` type index).
 func TestTagFieldRoundTrip(t *testing.T) {
 	t.Run("one defined tag with a param, plus an import ahead of it", func(t *testing.T) {
 		// The import precedes the defined tag in the *text*, so a correct encoder's tag index
