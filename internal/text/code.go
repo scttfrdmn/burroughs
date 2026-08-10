@@ -279,6 +279,47 @@ func (p *parser) emitBlock(kw Token, slot *blockTypeSlot, ft funcType, arms *blo
 	return nil
 }
 
+// emitTryTable writes `try_table`: the opener with its blocktype and catch vector, the body, and
+// END (decode.ml:412-417, encode.ml:257-259: `op 0x1f; blocktype bt; vec catch cs; list instr es;
+// end_ ()`).
+//
+// **`emitBlock`'s structure exactly, with one extra immediate component.** try_table has no
+// `els` arm (`handlerClauses`' body always lands in `arms.body`, never `arms.els` — there is no
+// `else` in this family), so this omits that half of emitBlock rather than taking an unused
+// parameter. `hv` is the fully-resolved clause byte-runs `handlerClauses` built — see the
+// `handlerVec` field's comment for why each clause arrives pre-encoded rather than as a value —
+// and the vector's count is `len(hv)`, known now because every clause has already been read.
+//
+// **`hv` and the blocktype are one patched immediate, not two `emit` calls**, because `emit`
+// writes one opcode per call and try_table's opcode is written once: `p.blockTypeBytes`'s thunk
+// and the catch vector's bytes are concatenated inside one patch function.
+func (p *parser) emitTryTable(kw Token, slot *blockTypeSlot, ft funcType, hv [][]byte, arms *blockArms) error {
+	if !p.retaining() {
+		return nil
+	}
+	op, ok := opBytes(kw.Text)
+	if !ok {
+		// Unreachable today — try_table has exactly one row in the generated table — kept for the
+		// same reason emitBlock keeps its own unreachable check: "cannot fail" is a claim about the
+		// table as it stands, not a proof, and every other opBytes caller states it the same way.
+		return errf(kw, "cannot yet encode the %s instruction (#8)", kw.Text)
+	}
+	btPatch := p.blockTypeBytes(slot, ft, kw)
+	p.emit(instr{op: op, patch: func() ([]byte, error) {
+		bt, err := btPatch()
+		if err != nil {
+			return nil, err
+		}
+		var w writer
+		w.bytes(bt)
+		w.vec(len(hv), func(w *writer, i int) { w.bytes(hv[i]) })
+		return w.b, nil
+	}})
+	p.emitSink(&arms.body)
+	p.emit(instr{op: []byte{opEnd}})
+	return nil
+}
+
 // refuseUnencodable is the instruction frontier: it errors when retaining and does nothing
 // otherwise.
 //
@@ -1234,6 +1275,38 @@ func (p *parser) resolveFuncs() ([]encodedFunc, error) {
 		out = append(out, encodedFunc{typeIdx: idx, locals: locals, body: fb.b})
 	}
 	return out, nil
+}
+
+// resolveTagDefs answers every deferred question the tag section has, or reports the first that
+// cannot be answered — `resolveFuncs`' own shape, for the identical reason: a section 13 writer
+// must be `func(*writer)`-shaped and unable to fail, so the thunks run here rather than inline.
+func (p *parser) resolveTagDefs() ([]uint32, error) {
+	out := make([]uint32, 0, len(p.ctx.tagDefs))
+	for _, thunk := range p.ctx.tagDefs {
+		idx, err := thunk()
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, idx)
+	}
+	return out, nil
+}
+
+// writeTagSection writes section 13: one type index per defined tag, each preceded by the fixed
+// zero attribute byte (`tagtype`, encode.ml:190-191: `TagT ut -> u32 0x00l; typeuse u32 ut`).
+//
+// **The zero byte is the wire's, not a placeholder for something this stratum doesn't know.**
+// `types.ml:40`'s `tagtype = TagT of typeuse` carries nothing beyond the type index — the
+// attribute is fixed at 0 in the current spec and there is no second tag-attribute value to
+// choose between, so writing a literal `0x00` here is complete rather than provisional, on
+// exactly the reasoning `mutability`'s two fixed bytes already rest on.
+func writeTagSection(w *writer, tagIdxs []uint32) {
+	w.section(secTag, func(body *writer) {
+		body.vec(len(tagIdxs), func(bw *writer, i int) {
+			bw.byte1(0x00)
+			bw.u32(tagIdxs[i])
+		})
+	})
 }
 
 // writeFuncSection writes section 3: one type index per defined function.

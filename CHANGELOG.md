@@ -21,6 +21,51 @@ weakly-ordered platform.
 
 ### Added
 
+- **`try_table`'s catch-clause vector and the `(tag …)` module field retain and encode, rung 1 of
+  exception handling** (#199). Decoder-side: `internal/binary/module.go` gains `Catch`/`CatchKind`/
+  `Catches`, a side table on `Func` shaped exactly like `br_table`'s `Labels` (0016) — keyed by
+  instruction index, two-result `CatchVector` accessor distinguishing "no vector" from "empty
+  vector" (a zero-clause `try_table` is legal and means every exception falls through uncaught).
+  `decodeCatch` (`internal/binary/instr.go`) returns a `Catch` instead of discarding every index via
+  `discardIndex`; the four clause kinds (`catch`/`catch_ref`/`catch_all`/`catch_all_ref`) carry
+  identical wire data (a tag index and/or a label index) per `ast.ml`'s own `catch'` variant —
+  verified against `decode.ml:975-981`/`encode.ml:905-910`/`ast.ml:266-271` rather than assumed, and
+  the "_ref" forms' only difference (an exnref pushed ahead of the payload before branching) is an
+  execution fact for rung 2 to build, not an extra wire field. Encoder-side:
+  `internal/text/parser.go`'s `handlerClauses` resolves a clause's tag index at the cursor (same
+  timing as `throw`'s existing `catTag` category — verified against the corpus that no vector
+  forward-references a tag) and its label index against the enclosing label scope, staging each
+  clause into a per-`try_table` `[][]byte` swapped in by `handlerBlock`/`handlerTail` on `p.sink`'s
+  exact discipline; `emitTryTable` (`internal/text/code.go`) writes the opener, catch vector, body,
+  and END, retiring the two `refuseUnencodable` call sites in `blockinstr` and `expr1`'s folded arm.
+  A separate, smaller gap closed in the same PR: the `(tag …)` module field's *definition* arm (tag
+  *imports* already encoded) — `context.tagDefs` holds `deferSignature`'s thunks, resolved by the
+  new `resolveTagDefs` and written by `writeTagSection` as section 13, between memory and global per
+  `module_`'s own order. Measured rather than assumed to be independent of #95 (the still-open
+  decoder-side tag-section *payload grammar* gap): a module with a defined tag decodes cleanly
+  end-to-end today because `decodePayload`'s no-grammar-yet path for section 13 skips the extent
+  check but still accepts the bytes.
+  **Zero vectors converted, stated up front and confirmed by measurement** — `internal/interp` has
+  no throw/catch/unwind machinery, so nothing this PR does reaches execution; #199's own recon
+  priced this rung at 0 vectors before any code was written. Board: default lane pass unmoved at
+  34308, unsupported unmoved at 26822, fail 232→164 (−68) exactly matching gated 3660→3728 (+68) —
+  every one of the 68 is a vector that used to fail at the encoder's own text→binary frontier
+  (`cannot yet encode …`) and now reaches the decoder, which correctly declines with
+  `exception handling: gate disabled`; a reclassification into an honest verdict, not a conversion.
+  All-gates-on lane (EH on) pass 36877→37162 (+285, `allOnPassFloor`'s own move), fail 1006, gated
+  stays 0. `TestGatedVectors`'s per-vector allowlist grows the 68 newly-reached gate sites across
+  `imports.wast`, `instance.wast`, `tag.wast`, `throw.wast`, `throw_ref.wast`, and `try_table.wast`.
+  New falsifiable controls: decoder-side `TestDecodeTryTableRetainsCatchClauses` (a hand-built wire
+  image carrying all four clause kinds with asymmetric tag/label indices, so a reader that swapped
+  which u32 is which fails visibly) and `TestDecodeTryTableRetainsEmptyCatchVector`; encoder-side
+  `TestTryTableCatchClausesRoundTrip` (flat and folded forms, a label depth greater than zero, the
+  zero-clause case) and `TestTagFieldRoundTrip` (a defined tag alongside an import, two
+  differently-signed defined tags with one exported) — each confirmed to fail under a deliberate,
+  reverted corruption of the real decode/encode path. `TestEncodeRefusesWhatItCannotWrite`'s
+  `(tag)`-leader frontier rows retired (re-pointed to `(start 0)`, the sole remaining leader, per
+  that table's own countdown comment) and `TestEveryStructuralInstructionIsRefused` deleted per its
+  own header's instruction, its subject moved to `encodableModules`.
+
 - **The harness can parse a reference-typed invoke argument, and `Instance.Invoke` can accept and
   return one** (#196, #197). Two blockers, landed together because neither converts a vector
   alone: `internal/spec/value.go`'s `readRefConst` parses `ref.null <heaptype>`, `ref.extern N`,

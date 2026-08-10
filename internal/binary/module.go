@@ -503,6 +503,12 @@ type Func struct {
 	// written. Same rule `LocalGroup` follows: retention is forced by a consumer, but its shape
 	// comes from the grammar, because the first consumer is rarely the last.
 	Labels map[int][]uint32
+
+	// Catches holds `try_table`'s handler-clause vectors, keyed the same way Labels is —
+	// this is the side table `immCatchVec`'s own comment named as waiting on a consumer,
+	// shaped like Labels but for a clause that is a tag index plus a label rather than a
+	// bare label. See the Catches type for the full shape rationale.
+	Catches Catches
 }
 
 // LabelVector returns the label vector retained for the instruction at index i, and whether one
@@ -515,6 +521,92 @@ type Func struct {
 // than empty.
 func (f *Func) LabelVector(i int) ([]uint32, bool) {
 	v, ok := f.Labels[i]
+	return v, ok
+}
+
+// CatchKind is the one-byte tag on a `try_table` handler clause that selects which of the
+// four catch forms a Catch value is (decode.ml:975-981, encode.ml:905-910).
+type CatchKind byte
+
+const (
+	// CatchTag is wire byte 0x00: `catch` — a tag index and a label index.
+	CatchTag CatchKind = 0x00
+
+	// CatchTagRef is wire byte 0x01: `catch_ref` — the same wire shape as CatchTag (a tag
+	// index and a label index; decode.ml:977-978 reads both forms identically). What
+	// distinguishes it is not an extra wire field but an execution fact: eval.ml's reduction
+	// for `CatchRef` pushes an exnref naming the caught exception *ahead of* the payload
+	// values before branching, where plain `Catch` pushes only the payload
+	// (eval.ml:1084-1094: `vs0 @ vs` versus `Ref Exn.(ExnRef (Exn (a, vs0))) :: vs0 @ vs`).
+	// Retention needs no extra field for this — the Kind byte alone selects the behaviour,
+	// which is rung 2's (execution) to build.
+	CatchTagRef CatchKind = 0x01
+
+	// CatchAny is wire byte 0x02: `catch_all` — a label index only, no tag. Matches any
+	// exception; TagIndex is meaningless for this kind and is not retained.
+	CatchAny CatchKind = 0x02
+
+	// CatchAnyRef is wire byte 0x03: `catch_all_ref` — the same single label index as
+	// CatchAny, with the same exnref-before-branch execution fact CatchTagRef adds to
+	// CatchTag (eval.ml:1096-1104). Again no extra wire field, just the Kind byte.
+	CatchAnyRef CatchKind = 0x03
+)
+
+// Catch is one `try_table` handler clause, retained exactly as `catch` reads it
+// (decode.ml:975-981) and as `catch` writes it (encode.ml:905-910).
+//
+// **Verified against the reference's own AST rather than assumed structurally identical to
+// "a non-ref sibling plus a flag bit"**: `ast.ml`'s `catch'` variant is `Catch of tagidx *
+// labelidx | CatchRef of tagidx * labelidx | CatchAll of tagidx | CatchAllRef of tagidx`
+// (ast.ml:266-271) — every wire form's *data* is exactly the one or two indices the wire
+// grammar already reads (decodeCatch's existing `idxs` count: 2 for catch/catch_ref, 1 for
+// catch_all/catch_all_ref), and decode.ml/encode.ml never read or write an extra byte for
+// either "_ref" form. The distinguishing fact between a form and its "_ref" sibling lives
+// entirely in `eval.ml`'s reduction rules (:1084-1104): the "_ref" forms additionally push
+// an ExnRef ahead of the payload before branching. That is a fact about *execution*, not
+// about the wire, so CatchKind alone (four values, matching the four wire bytes) is
+// sufficient retention for this rung — there is no fifth field to add.
+type Catch struct {
+	// Kind is the wire byte: which of the four clause forms this is.
+	Kind CatchKind
+
+	// TagIndex is the tag this clause matches, for CatchTag and CatchTagRef only. Zero and
+	// meaningless for CatchAny and CatchAnyRef, which match every exception —
+	// decodeCatch never reads a tag index for those two kinds, so there is nothing to
+	// retain here for them.
+	TagIndex uint32
+
+	// LabelIndex is the block this clause branches to on a match, retained for every kind —
+	// decode.ml:977-980 reads one for all four forms.
+	LabelIndex uint32
+}
+
+// Catches holds `try_table`'s handler-clause vectors, keyed by the instruction's index in
+// Body — `Labels`' exact shape and staging discipline (0016), for a clause that is a tag
+// index plus a label rather than a bare label, which is why `immCatchVec`'s own comment
+// names this as wanting "a side table of its own shape rather than a share of Labels".
+//
+// **Nil is the normal case, and a nil map yields nil for every lookup** — the same
+// br_table-derived reasoning `Labels` carries: this map costs nothing for the overwhelming
+// majority of functions, which contain no `try_table` at all.
+//
+// **A `try_table` with zero catch clauses is legal** — decode.ml's `vec (at catch) s` accepts
+// a zero-length vector, and it means every exception thrown in the body falls through
+// uncaught to the enclosing frame. So `len(x) == 0` cannot mean "absent" any more than it
+// can for `Labels`, and `CatchVector`'s two-result form is what keeps "no vector" and
+// "empty vector" distinguishable for a consumer.
+type Catches map[int][]Catch
+
+// CatchVector returns the catch-clause vector retained for the instruction at index i, and
+// whether one was retained at all.
+//
+// The two-result form mirrors `LabelVector` exactly and for the identical reason: `f.Catches[i]`
+// cannot distinguish a `try_table` whose clause vector is empty — legal, and meaning every
+// exception falls through uncaught — from an instruction that is not a `try_table` and has no
+// vector at all. A consumer that conflated them would execute a `try_table` as though its
+// clauses were absent rather than deliberately empty.
+func (f *Func) CatchVector(i int) ([]Catch, bool) {
+	v, ok := f.Catches[i]
 	return v, ok
 }
 

@@ -130,6 +130,7 @@ const (
 	secCode      byte = 10
 	secData      byte = 11
 	secDataCount byte = 12
+	secTag       byte = 13
 )
 
 // tagFunc, tagStruct and tagArray are `comptype`'s three forms — 0x60/-0x20, 0x5f/-0x21,
@@ -259,6 +260,14 @@ func (p *parser) encode() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Section 13's own resolution, on resolveFuncs' exact reason: `tagDefs` holds
+	// `deferSignature`'s thunks and reading them here — rather than inline inside `encodeTags` —
+	// keeps every section writer `func(*writer)`-shaped and unable to fail, which is what lets
+	// `encode` write bytes with nothing left to check.
+	tagIdxs, err := p.resolveTagDefs()
+	if err != nil {
+		return nil, err
+	}
 
 	var w writer
 	w.bytes(binary.Magic[:])
@@ -286,9 +295,13 @@ func (p *parser) encode() ([]byte, error) {
 	if len(p.ctx.memDefs) > 0 {
 		w.section(secMemory, p.encodeMemories)
 	}
-	// Section 6 between memory and export, which is both `module_`'s order (encode.ml:1145-1150) and id
-	// order — the tag section sits between them in the reference and has no emitter here, so its absence
-	// changes nothing about the two neighbours.
+	// Section 13 between memory and global — `module_`'s order (encode.ml:1146-1148) — which is
+	// *not* id order (13 sits after 12 numerically, between data count and code); the format
+	// places it here regardless, on `secDataCount`/`secCode`'s own precedent for a section whose
+	// id and position disagree.
+	if len(tagIdxs) > 0 {
+		writeTagSection(&w, tagIdxs)
+	}
 	if len(p.ctx.globalDefs) > 0 {
 		w.section(secGlobal, p.encodeGlobals)
 	}

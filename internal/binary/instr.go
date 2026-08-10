@@ -240,6 +240,23 @@ type instrCtx struct {
 	// to prove its bytes are well-formed has no consumer for a label vector either, and
 	// `br_table` is not const-legal in any case.
 	labelsOut *map[int][]uint32
+
+	// catches stages the current instruction's unbounded immediate — `try_table`'s
+	// handler-clause vector — on the same discipline `labels` stages `br_table`'s: the arm
+	// that reads it does not know the instruction's index, and `emit` does.
+	//
+	// **Distinguished from nil by `hasCatches`, not by length.** A `try_table` with zero
+	// catch clauses is legal and means every exception falls through uncaught, so
+	// `len(catches) == 0` cannot serve as "no vector was read" — `Catches.CatchVector`'s
+	// two-result comment carries this through to consumers, mirroring `LabelVector`'s.
+	catches    []Catch
+	hasCatches bool
+
+	// catchesOut is where emit files a staged catch-clause vector, or nil when this read is
+	// recognizing only. Parallel to `labelsOut` and nil in exactly the same cases:
+	// `try_table` is not const-legal in any case, so every const-expression call site leaves
+	// this nil along with labelsOut.
+	catchesOut *Catches
 }
 
 // emit appends one decoded instruction to the retained sequence and clears the staging
@@ -268,9 +285,23 @@ func (c *instrCtx) emit(prefix byte, op uint32) {
 			}
 			(*c.labelsOut)[idx] = v
 		}
+		if c.hasCatches && c.catchesOut != nil {
+			if *c.catchesOut == nil {
+				*c.catchesOut = Catches{}
+			}
+			// A nil vector is stored as an empty non-nil one, matching Labels' rule and for
+			// the same reason: CatchVector's second result is what says "no vector",
+			// never len(x) == 0.
+			cv := c.catches
+			if cv == nil {
+				cv = []Catch{}
+			}
+			(*c.catchesOut)[idx] = cv
+		}
 	}
 	c.imm0, c.imm1, c.immN = 0, 0, 0
 	c.labels, c.hasLabels = nil, false
+	c.catches, c.hasCatches = nil, false
 }
 
 // stage records one immediate for the instruction being read, in field order.
@@ -919,11 +950,25 @@ func (c *instrCtx) imm(r *reader, im imm) error {
 			return nil
 		})
 	case immCatchVec:
-		// try_table's handler clauses, likewise unbounded and likewise EH-gated (#7) — and
-		// likewise waiting on a consumer rather than on a mechanism, now that 0016 has built one
-		// for `br_table`. A clause is a tag index plus a label, so this wants a side table of its
-		// own shape rather than a share of `Labels`; the day EH executes is the day to build it.
-		return c.d.decodeVec(r, decodeCatch)
+		// try_table's handler clauses, retained in the side table `emit` files them into,
+		// mirroring immVecIdx's br_table case exactly: a clause is a tag index plus a label
+		// rather than a bare label, which is why it has its own side table (Catches) rather
+		// than a share of Labels — #199's rung 1, closing the gap `immVecIdx`'s neighbour
+		// comment used to name.
+		//
+		// **Appended per element, never preallocated from the declared count**, on
+		// immVecIdx's own citation of grave #138: `decodeVec` reads a u32 count and then
+		// requires each element to consume bytes, so a huge declared count is bounded by the
+		// *image* rather than trusted for an allocation.
+		c.hasCatches = true
+		return c.d.decodeVec(r, func(r *reader) error {
+			cl, err := decodeCatch(r)
+			if err != nil {
+				return err
+			}
+			c.catches = append(c.catches, cl)
+			return nil
+		})
 	case immMemop:
 		return c.decodeMemop(r)
 	case immBlock:
@@ -1046,27 +1091,43 @@ func memopOffset(r *reader) (uint64, error) {
 	return r.u64()
 }
 
-// decodeCatch reads one try_table handler clause (decode.ml:975-981).
-func decodeCatch(r *reader) error {
+// decodeCatch reads one try_table handler clause and returns it in internal form
+// (decode.ml:975-981):
+//
+//	| 0x00 -> let x = at idx s in let y = at idx s in Mnemonics.catch x y
+//	| 0x01 -> let x = at idx s in let y = at idx s in catch_ref x y
+//	| 0x02 -> let x = at idx s in catch_all x
+//	| 0x03 -> let x = at idx s in catch_all_ref x
+//
+// Retention as of #199's rung 1 — the caller (immCatchVec's arm) used to call this for its
+// grammar verdict alone and discard every index via `discardIndex`; every index is now kept
+// in the returned Catch, on `Catch`'s own comment for why a Kind byte plus (up to) two
+// indices is the whole shape the reference's AST carries for all four forms.
+func decodeCatch(r *reader) (Catch, error) {
 	kind, err := r.byte()
 	if err != nil {
-		return err
+		return Catch{}, err
 	}
-	var idxs int
 	switch kind {
-	case 0x00, 0x01: // catch, catch_ref: a tag and a label
-		idxs = 2
-	case 0x02, 0x03: // catch_all, catch_all_ref: a label
-		idxs = 1
-	default:
-		return fmt.Errorf("%w: %#02x", ErrMalformedCatch, kind)
-	}
-	for range idxs {
-		if err := discardIndex(r); err != nil {
-			return err
+	case byte(CatchTag), byte(CatchTagRef): // catch, catch_ref: a tag and a label
+		tag, err := r.u32()
+		if err != nil {
+			return Catch{}, err
 		}
+		label, err := r.u32()
+		if err != nil {
+			return Catch{}, err
+		}
+		return Catch{Kind: CatchKind(kind), TagIndex: tag, LabelIndex: label}, nil
+	case byte(CatchAny), byte(CatchAnyRef): // catch_all, catch_all_ref: a label only
+		label, err := r.u32()
+		if err != nil {
+			return Catch{}, err
+		}
+		return Catch{Kind: CatchKind(kind), LabelIndex: label}, nil
+	default:
+		return Catch{}, fmt.Errorf("%w: %#02x", ErrMalformedCatch, kind)
 	}
-	return nil
 }
 
 // decodeBlockType reads a blocktype (decode.ml:334-339).
@@ -1342,7 +1403,8 @@ func (d *Decoder) decodeFuncBody(r *reader) error {
 	}
 	var body []Instr
 	var labels map[int][]uint32
-	c := &instrCtx{d: d, nonConst: -1, out: &body, labelsOut: &labels}
+	var catches Catches
+	c := &instrCtx{d: d, nonConst: -1, out: &body, labelsOut: &labels, catchesOut: &catches}
 	if err := c.block(r); err != nil {
 		return err
 	}
@@ -1369,7 +1431,7 @@ func (d *Decoder) decodeFuncBody(r *reader) error {
 	// to reject. The zip with the function section's type indices happens in finishFuncs,
 	// because the other half is not available until both sections are read — see
 	// Decoder.funcTypeIdx.
-	d.mod().Funcs = append(d.mod().Funcs, Func{Locals: locals, Body: body, Labels: labels})
+	d.mod().Funcs = append(d.mod().Funcs, Func{Locals: locals, Body: body, Labels: labels, Catches: catches})
 	return nil
 }
 
