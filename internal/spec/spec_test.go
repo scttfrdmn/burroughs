@@ -204,15 +204,14 @@ func isTrap(err error) bool {
 	return errors.As(err, &t)
 }
 
-// isException is isTrap's own delegation for exception handling's outcome, currently unable
-// to answer yes to anything: `internal/interp` has zero exception-handling execution
-// machinery (#201's rung 2a/2b/2c split) — no throw, no catch, no unwind, and therefore no
-// engine type to `errors.As` against. Declared and tracked rather than a stillborn `func(error)
-// bool { return false }` with no reason attached: this is rung 2a's own stated effect
-// (observability before capability, #201), not an oversight — every `assert_exception` vector
-// becomes *askable* today and *answerable* only once rung 2c lands, and the always-false body
-// is the honest engine-truth for the interval between them.
-func isException(error) bool { return false }
+// isException is isTrap's own delegation for exception handling's outcome — `errors.As` against
+// `interp.Uncaught`, the third control-transfer type 0022 names (module-invalid layering debt,
+// trap, exception), exported from `internal/interp` for exactly this boundary crossing the way
+// `*interp.Trap` already is.
+func isException(err error) bool {
+	var u *interp.Uncaught
+	return errors.As(err, &u)
+}
 
 // instantiate is the interpreter's module entry point: it turns a scored module command into
 // something invoke can be called on.
@@ -5839,10 +5838,124 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	// unrelated construct in the same module, which this lane's `assert_return`/`assert_trap`
 	// vectors for that other construct then score as pass now that the frontier does not intercept
 	// them first.
-	const allOnPassFloor = 37162
+	//
+	// **Moved 37162 → 37218 in #201's rung 2c (+56).** `throw`/`throw_ref`/`try_table` execution
+	// landed against decision 0022 — genuine engine capability, not retention. `TestGrave206-
+	// KnownFailures` (below) pins the vectors this rung's own falsification found still red
+	// (`catch_ref`/`catch_all_ref` immediately followed by `drop`, grave #206 — a pre-existing,
+	// EH-unrelated stack-array-confusion bug in `drop` itself, not a gap in this rung's own
+	// mechanism) and the two already-tracked rec-group scope-boundary vectors `sameFuncType`'s
+	// own doc comment names, reached here for the first time via tag-import linking.
+	const allOnPassFloor = 37218
 	boardBound(t, "allOnPassFloor", totalPass, allOnPassFloor, boardBoundSlack, floorBound,
 		"a gated feature regressed, which the Gated==0 assertion above cannot see: with every "+
 			"gate on, a broken feature turns a pass into a fail and leaves Gated at zero")
+}
+
+// TestGrave206KnownFailures pre-registers the all-gates-on fails #201's rung 2c found still red
+// after landing `throw`/`throw_ref`/`try_table` execution — so their persistence is a *prediction
+// wearing a citation*, not a surprise the next reader has to re-diagnose. `TestGatedVectors`'s own
+// per-vector allowlist is the precedent this follows, pointed at Fail instead of Gated.
+//
+// **17 of these 19 lines are grave #206**, found and diagnosed by this rung's own falsification
+// against the corpus, not created by it: `drop` (opcode 0x1a) unconditionally pops the numeric
+// stack with no way to know whether the logical top-of-stack is actually a reference — a
+// pre-existing, EH-unrelated defect (confirmed with a three-instruction reproducer carrying no
+// tag/throw/catch at all: `(ref.null func) (drop) (i32.const 7)` corrupts the result) that this
+// rung's own catch_ref/catch_all_ref vectors are simply the first to expose, by being the first
+// corpus shape to leave a raw reference directly under a `drop`. The fix needs its own ADR (0023)
+// — the obvious approach (a flat push-order log) was falsified against `branch`'s own independent-
+// per-array truncation pattern before being built, and the sound alternative (per-slot sequence
+// numbers) has a real hot-path cost `make bench` has to price. This rung does not block on it.
+//
+// **2 of these 19 lines are the already-tracked rec-group scope boundary** `sameFuncType`'s own
+// doc comment names (`TestSameFuncTypeCorpusScope`'s M10/M11 shape) — `tag.wast`'s cross-module
+// tag-import vectors reach the identical gap `sameTagType` inherits from `structFuncTypeEqual`,
+// for the same reason `call_indirect`'s type check does: no rec-group boundary is retained to
+// distinguish two structurally-identical types declared in different rec groups. Not new, not
+// #206 — named here only because this rung is what walked into it via a different consumer.
+//
+// **2 lines are neither #206 nor the rec-group boundary, cited separately below**:
+// `try_table.wast:334` (`return_call` — opcode `0x12` has no arm in this engine at all, a wholly
+// separate gap) and `:464` (a harness limitation, "which the harness cannot represent" — the spec
+// test framework's own result matcher, not an engine defect). Included in `known` with their own
+// citations rather than left out, because this control's completeness check (every fail in these
+// four files must be pre-registered) would otherwise misreport them as unexplained regressions.
+func TestGrave206KnownFailures(t *testing.T) {
+	requireSuite(t)
+
+	// file → line → citation. Every entry needs one, on TestGatedVectors' own principle: an
+	// unexplained pre-registration is a suppression wearing a disguise.
+	known := map[string]map[int]string{
+		"tag.wast": {
+			48: "sameFuncType's own rec-group scope boundary (TestSameFuncTypeCorpusScope), reached via tag-import linking rather than func linking",
+			59: "sameFuncType's own rec-group scope boundary (TestSameFuncTypeCorpusScope), reached via tag-import linking rather than func linking",
+		},
+		"throw_ref.wast": {
+			102: "grave #206: drop (0x1a) pops the wrong array when the logical top is a reference",
+			107: "grave #206: drop (0x1a) pops the wrong array when the logical top is a reference",
+			112: "grave #206: drop (0x1a) pops the wrong array when the logical top is a reference",
+		},
+		"try_table.wast": {
+			312: "grave #206: drop (0x1a) pops the wrong array when the logical top is a reference",
+			313: "grave #206: drop (0x1a) pops the wrong array when the logical top is a reference",
+			314: "grave #206: drop (0x1a) pops the wrong array when the logical top is a reference",
+			316: "grave #206: drop (0x1a) pops the wrong array when the logical top is a reference",
+			317: "grave #206: drop (0x1a) pops the wrong array when the logical top is a reference",
+			319: "grave #206: drop (0x1a) pops the wrong array when the logical top is a reference",
+			320: "grave #206: drop (0x1a) pops the wrong array when the logical top is a reference",
+			321: "grave #206: drop (0x1a) pops the wrong array when the logical top is a reference",
+			323: "grave #206: drop (0x1a) pops the wrong array when the logical top is a reference",
+			324: "grave #206: drop (0x1a) pops the wrong array when the logical top is a reference",
+			334: "return_call (opcode 0x12) has no arm in this engine at all -- unrelated, pre-existing, not this rung's scope",
+			464: "harness limitation: \"which the harness cannot represent\" -- the spec test framework's own result matcher, not an engine defect",
+			465: "grave #206: drop (0x1a) pops the wrong array when the logical top is a reference",
+			466: "grave #206: drop (0x1a) pops the wrong array when the logical top is a reference",
+			467: "grave #206: drop (0x1a) pops the wrong array when the logical top is a reference",
+			468: "grave #206: drop (0x1a) pops the wrong array when the logical top is a reference",
+		},
+	}
+
+	allOn := allFeaturesOn(t)
+	d := &binary.Decoder{Features: allOn}
+	decodeAllOn := func(image []byte) error {
+		_, err := d.DecodeModule(image)
+		return err
+	}
+	for f, lines := range known {
+		s, err := ParseFile(filepath.Join(suiteDir, f))
+		if err != nil {
+			t.Fatalf("%s: parse: %v", f, err)
+		}
+		e := engine()
+		e.Decode = decodeAllOn
+		e.InstantiateLinked = func(c Command, registry map[string]Instance) (Instance, Stratum, error) {
+			return instantiateWith(allOn, c, registry)
+		}
+		r := s.RunGated(e)
+		failed := make(map[int]bool)
+		for _, fs := range r.Buckets {
+			for _, fail := range fs {
+				failed[fail.Line] = true
+			}
+		}
+		for line, why := range lines {
+			if !failed[line] {
+				t.Errorf("%s:%d is pre-registered as failing (%s) but is no longer failing; "+
+					"remove the entry — a stale pre-registration overstates what is broken, "+
+					"the deadcode-allowlist principle applied to a fail list", f, line, why)
+			}
+		}
+		for _, fs := range r.Buckets {
+			for _, fail := range fs {
+				if lines[fail.Line] == "" {
+					t.Errorf("%s:%d fails and is not pre-registered: %q — either cite it here "+
+						"(grave #206, the rec-group scope boundary, or a new finding) or it is "+
+						"an unexplained regression", f, fail.Line, fail.Got)
+				}
+			}
+		}
+	}
 }
 
 // TestVerdictsPartitionCommands checks the arithmetic the board depends on: every

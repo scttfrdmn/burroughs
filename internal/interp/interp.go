@@ -107,6 +107,14 @@ type Instance struct {
 	// with two.
 	funcs []*Extern
 
+	// tags is the tag index space, in index order — imports first, then definitions, for
+	// mems's reason and by the same measured lesson (0022 §3): reserved-not-omitted, not a
+	// shorter slice. Unlike funcs, a defined tag *does* need a runtime object — a tag's
+	// identity is its allocation (`tagInst`, not a module-relative index), matching
+	// `mems`/`tables`/`globals`'s shape rather than `funcs`'s, since a tag has no body a
+	// module-relative lookup could resolve lazily the way `DefinedFunc` does.
+	tags []*tagInst
+
 	// deferred holds the validation-shaped failures instantiation met and could not report,
 	// because 0015's trap channel may not carry a verdict.
 	//
@@ -156,6 +164,19 @@ func (in *Instance) build() *Trap {
 	m := in.mod
 	memOff, tabOff := m.ImportedMems(), m.ImportedTables()
 	globOff := m.ImportedGlobals()
+	// **Tags first, ahead of even globals** — `eval.ml:1310-1319`'s own fold order
+	// (`init_tag` before `init_func`/`init_global`/`init_table`/`init_memory`), and it needs
+	// nothing from the loops below: a tag's allocation is pure, from its declared type alone,
+	// with no initializer to sequence against an earlier tag or an earlier global (0022 §3).
+	// A new, small loop rather than an insertion into the interleaved global/table/memory
+	// one below — that loop's three concerns already interleave for a real dependency
+	// (globals reading earlier globals); a tag has no such dependency to thread through it.
+	if err := in.newTags(); err != nil {
+		if t := asTrap(err); t != nil {
+			return t
+		}
+		in.deferred = errors.Join(in.deferred, err)
+	}
 	// One slot per memory *index*, filled positionally and **never skipped**: the imported
 	// memories first — already filled by `link` if a resolver supplied them, still nil if
 	// nothing did — then the defined ones at the offset the index space gives them. A failed allocation likewise leaves a nil slot rather than

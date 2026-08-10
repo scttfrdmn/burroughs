@@ -26,6 +26,7 @@ type Extern struct {
 	mem  *memory
 	tab  *table
 	glob *global
+	tag  *tagInst
 
 	// fn is a function *belonging to another instance*, which is why the instance travels
 	// with the index rather than the index alone.
@@ -78,14 +79,10 @@ func (in *Instance) Export(name string) (Extern, bool) {
 			}
 			return Extern{Kind: e.Kind, glob: in.globals[e.Index]}, true
 		case binary.ExternTag:
-			// Wasm 3.0's exception handling, whose gate is off. Absent rather than a panic,
-			// since the decoder admits the kind byte: a module reaching here with a tag export
-			// got past a gate check, so this is the engine having nothing to offer rather than
-			// an impossible state. Enumerated rather than left to a `default` so that a *new*
-			// extern kind is a lint failure at this switch — the exhaustive linter's whole job,
-			// and the opposite call from `Kind.selectsModule`, where the negative is the honest
-			// answer for every future member.
-			return Extern{}, false
+			if int(e.Index) >= len(in.tags) || in.tags[e.Index] == nil {
+				return Extern{}, false
+			}
+			return Extern{Kind: e.Kind, tag: in.tags[e.Index]}, true
 		}
 		return Extern{}, false
 	}
@@ -121,7 +118,7 @@ type Imports func(module, name string) (Extern, bool)
 // Instantiate is this function with a nil resolver rather than a second body.
 func InstantiateLinked(m *binary.Module, imp Imports) (*Instance, *Trap, error) {
 	memOff, tabOff := m.ImportedMems(), m.ImportedTables()
-	globOff := m.ImportedGlobals()
+	globOff, tagOff := m.ImportedGlobals(), m.ImportedTags()
 	in := &Instance{
 		mod:     m,
 		mems:    make([]*memory, memOff+len(m.Memories)),
@@ -130,6 +127,10 @@ func InstantiateLinked(m *binary.Module, imp Imports) (*Instance, *Trap, error) 
 		elems:   make([]*elemInstance, len(m.Elems)),
 		datas:   make([]*dataInstance, len(m.Datas)),
 		funcs:   make([]*Extern, m.ImportedFuncs()),
+		// tags is sized like mems/tables/globals (imports + definitions, reserved not
+		// omitted, 0022 §3) and unlike funcs (imports only) — a defined tag needs a runtime
+		// allocation the way a defined memory does, where a defined function needs none.
+		tags: make([]*tagInst, tagOff+len(m.Tags)),
 	}
 	// **Imports are resolved before anything is allocated or evaluated**, and the position is
 	// forced rather than chosen: a global's initializer may read an imported global, and an
@@ -157,7 +158,7 @@ func InstantiateLinked(m *binary.Module, imp Imports) (*Instance, *Trap, error) 
 // scores green (contract §9 G-3). This is `importedCount`'s lesson arriving on the filling
 // side: the same per-kind arithmetic that sizes the slices has to place into them.
 func (in *Instance) link(imp Imports) error {
-	var memIdx, tabIdx, globIdx, fnIdx int
+	var memIdx, tabIdx, globIdx, fnIdx, tagIdx int
 	for i := range in.mod.Imports {
 		im := &in.mod.Imports[i]
 		// **A counter per kind, and the index is the count of imports of that kind before it.**
@@ -187,13 +188,7 @@ func (in *Instance) link(imp Imports) error {
 		case binary.ExternFunc:
 			slot, fnIdx = fnIdx, fnIdx+1
 		case binary.ExternTag:
-			// A tag import claims no slot, because there is no tag index space here to claim
-			// one in: `Instance` has four slot slices and exception handling's gate is off, so
-			// `slot` stays -1 and the placement switch below has nothing to place. Reaching
-			// here at all means a module with a tag import got past a gate check — not an
-			// impossible state, since the decoder admits the kind byte, so no panic.
-			// Enumerated rather than defaulted for the reason `Export` states: adding a fifth
-			// extern kind must be a lint failure at every switch that fills an index space.
+			slot, tagIdx = tagIdx, tagIdx+1
 		}
 		var ext Extern
 		var ok bool
@@ -260,11 +255,7 @@ func (in *Instance) link(imp Imports) error {
 			e := ext
 			in.funcs[slot] = &e
 		case binary.ExternTag:
-			// Nothing to fill: `slot` is still -1 from the counter switch above, which is the
-			// same fact stated on the other side of the resolver. Indexing anything with it
-			// would panic, so the arm's *emptiness* is the behaviour rather than an omission —
-			// and it is reachable only if a resolver answers a tag import with a tag Extern,
-			// which no supplier in this engine can build.
+			in.tags[slot] = ext.tag
 		}
 	}
 	return nil
@@ -335,10 +326,23 @@ func (in *Instance) importTypeMismatch(im *binary.Import, ext Extern) string {
 		return fmt.Sprintf("expected global %s %s, got global %s %s",
 			mutString(im.GlobalMutable), im.GlobalType, mutString(ext.glob.mutable), ext.glob.typ)
 	case binary.ExternTag:
-		// A tag import has no slot and no type to compare (the field-filling switches in
-		// link and Export both say why): exception handling's gate is off, so nothing in
-		// this engine can build a tag Extern for the kind check above to even reach this
-		// far with.
+		// **`sameTagType`, not `sameFuncType`'s subtyping walk** — `match_tagtype`
+		// (match.ml:157-160) is mutual `match_deftype` containment, which for MVP function
+		// types with no declared supertypes reduces to one structural comparison (see
+		// sameTagType's own doc comment). `im.Index` is the importer's declared type,
+		// resolved against `in.mod.Types` the way every other #9-layered type index in this
+		// package is; a bad index is the layering debt, reported as a mismatch per
+		// declaredFuncType's own established reading — an import this engine cannot even
+		// state a type for cannot be said to match.
+		if int(im.Index) >= len(in.mod.Types) || in.mod.Types[im.Index].Kind != binary.CompFunc {
+			return "an unresolvable declared type"
+		}
+		want := &in.mod.Types[im.Index].Func
+		if sameTagType(want, ext.tag.typ) {
+			return ""
+		}
+		return fmt.Sprintf("expected tag %s, got tag %s",
+			funcTypeString(want), funcTypeString(ext.tag.typ))
 	}
 	return ""
 }
