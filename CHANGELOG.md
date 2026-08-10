@@ -21,6 +21,17 @@ weakly-ordered platform.
 
 ### Added
 
+- **A tag import's declared type index is retained instead of discarded** (#204, found while
+  wiring #95's own retention into `Instance.link`'s tag-import placement, which needs a declared
+  type to compare a supplier against). Reuses `Import.Index`, the same field a func import's type
+  index already occupies — a tag's descriptor *is* a type index, per that field's own stated
+  pattern, so no new field. The attribute byte is now checked against zero via the existing
+  `ErrZeroByteExpected` sentinel rather than silently accepted at any value. Zero board movement
+  (decoder-only, no consumer yet). New falsifiable controls:
+  `TestDecodeTagImportRetainsTypeIndex` (two imports of different types, catching a reader that
+  retains only the last) and `TestDecodeTagImportRejectsNonzeroAttribute` — both confirmed to
+  fail under a reverted mutation before being trusted.
+
 - **The tag section (id 13) has a payload grammar and retains it** (#95, found as a blocker to
   0022 §3 before any rung-2c code was written — checking the ADR's own assumption against the
   tree rather than discovering it mid-implementation). `binary.Module` gains `Tags []Tag`

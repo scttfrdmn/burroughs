@@ -1094,10 +1094,23 @@ func (d *Decoder) decodeImport(r *reader) error {
 		if !d.Features.ExceptionHandling {
 			return featureErr("exception handling")
 		}
-		if _, err = r.byte(); err != nil { // attribute
+		// **Retained in Index, not a new field, closing #204** — `Import`'s own stated pattern
+		// for a func import applies unchanged: a tag's descriptor *is* a type index into the
+		// module's own type space (`tagtype = TagT of typeuse`, the same grammar `decodeTag`
+		// reads for a *defined* tag), so no separate field is needed to carry it. Before this,
+		// both the attribute byte and the type index were decoded and discarded — 0022 §3's
+		// `Instance.link` tag-import placement needs the declared type to compare against a
+		// supplier's actual one, and it had nothing to read. The attribute byte is checked,
+		// not skipped — `decodeTag`'s own reasoning, `ErrZeroByteExpected` rather than a
+		// silently-accepted reserved value.
+		z, err := r.byte()
+		if err != nil {
 			return err
 		}
-		if _, err = r.u32(); err != nil { // type index
+		if z != 0 {
+			return fmt.Errorf("%w: %#02x", ErrZeroByteExpected, z)
+		}
+		if im.Index, err = r.u32(); err != nil {
 			return err
 		}
 	default:
