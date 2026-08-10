@@ -21,6 +21,18 @@ weakly-ordered platform.
 
 ### Added
 
+- **`internal/interp/dropbench` measures grave #206's fix candidates** — decision 0023's own
+  evidence, on `dispatchbench`'s precedent (decision 0002: `make bench` numbers decide, not
+  argument). Three implementations over the identical push/pop/branch access pattern: always-on
+  `uint64` per-slot sequence numbers (+72–75% over baseline, whether or not a reference is ever
+  pushed — the cost is bookkeeping on the numeric array's own operations, not about references at
+  all), always-on `uint8` (+38–39%, roughly half — width matters), and lazily-gated `uint64`
+  (+27–29% when no reference is ever pushed, indistinguishable from the always-on cost once one
+  is). Two independent n=10 `benchstat` runs each, `p=0.000`. Correctness controls
+  (`TestAllAgree*`, `TestDropPicksTheCorrectArray`) caught a real driver bug in an early draft
+  before any timing was trusted — the judge-needs-a-judge control (contract §9 G-4) working as
+  designed.
+
 - **`throw`/`throw_ref`/`try_table` execute — exception handling's rung 2c** (#201, against
   decision 0022). `internal/interp` gains a third control-transfer type, `Uncaught` (exported for
   the harness boundary the way `*Trap` already is), propagated through the existing Go-call-is-a-
