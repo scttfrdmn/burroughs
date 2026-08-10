@@ -3194,6 +3194,13 @@ func TestGatedVectors(t *testing.T) {
 		// The four extended-const lines join the `elem.wast` entry above rather than opening a
 		// second one — one file, one map, or the reverse check reads a subset it cannot name.
 		"imports.wast": {
+			// The "test" module (:3-17) carries three *defined* tag fields —
+			// `(tag (export "tag"))`, `$tag-i32`, and the export-sugar
+			// `(tag (export "tag-f32") …)` — so `register` itself declines, one line after the
+			// module closes. #199's rung 1: before its encoder retention landed, `(tag …)`
+			// fields refused at the text→binary bridge and this vector never reached the
+			// decoder at all.
+			19: "exception handling: (tag …) fields at :15-17 — the module this register runs against",
 			97: "exception handling: (tag (import \"test\" \"tag-i32\") …) at :35",
 			98: "exception handling: (tag (import \"test\" \"tag-i32\") …) at :35",
 			// Five assert_unlinkable vectors whose module under test carries a `(tag …)`
@@ -4078,6 +4085,15 @@ func TestGatedVectors(t *testing.T) {
 		// a disappearance (0010). A version of this list that swept them in would have emptied
 		// five vectors by fiat, and the tell is that the importer's own type is 32-bit.
 		"tag.wast": {
+			// The first module (:3-8) declares four *defined* tag fields — the anonymous
+			// `(tag)`, and three more including the `$t3`/`export` pair — so `register` itself
+			// declines them before this file's own `(import …)` rows even get a chance to.
+			// #199's rung 1: before its encoder retention landed, `(tag …)` fields refused at
+			// the text→binary bridge and this module never reached the decoder at all.
+			11: "exception handling: four (tag …) fields at :4-7 — the module this register runs against",
+			// The second module (:12-16) declares an exported `(tag (export "tag") (type $t1))`
+			// inside a `rec` group; `register` is what needs it instantiated.
+			38: "exception handling: (tag (export \"tag\") (type $t1)) at :35 — the module this register runs against",
 			48: "exception handling: (tag (import \"M\" \"tag\") (type $t2)) — the module under test",
 			59: "exception handling: (tag (import \"M\" \"tag\") (type $t)) — the module under test",
 		},
@@ -5106,6 +5122,112 @@ func TestGatedVectors(t *testing.T) {
 			80: "gc: null/nofunc/noexn/noextern bottom heaptypes and (ref null $t) at :22-49 — the module this action runs against",
 			81: "gc: null/nofunc/noexn/noextern bottom heaptypes and (ref null $t) at :22-49 — the module this action runs against",
 		},
+
+		// # #199's rung 1 opened a third decline path for the EH gate — retention closed the
+		// # encoder frontier that used to intercept these vectors as `fail` first
+		//
+		// Every entry below newly reaches the decoder's `exception handling: gate disabled` decline
+		// because `try_table`/`(tag …)` now retain and encode instead of refusing at the text→binary
+		// bridge — so a module that used to error out of `EncodeModule` before any byte was written
+		// now produces real bytes the decoder correctly declines with the gate off. Verified by
+		// reading each module: every one carries a `(tag …)` field, a `try_table` opcode, or both,
+		// and none is asking a question the engine can answer with EH off. All are passed in the
+		// all-gates-on lane (`allOnPassFloor`'s own move in this PR), so the parked verdict is earned
+		// there rather than deferred everywhere. Measured rather than assumed: the board's `fail`
+		// column moved by exactly the same 68 these entries total, pass unmoved (#199's own scope
+		// statement — zero conversions, this PR is retention only).
+		"instance.wast": {
+			// `$M` (:3-8) carries `(tag (export "tag"))`; the importing module (:15-49) both
+			// imports two tag instances and writes a `try_table`/`throw` pair (:39-45) using them.
+			54: "exception handling: (tag (export \"tag\")) at :7, and a try_table/throw pair at :39-45 — the module this action runs against",
+			55: "exception handling: (tag (export \"tag\")) at :7, and a try_table/throw pair at :39-45 — the module this action runs against",
+			56: "exception handling: (tag (export \"tag\")) at :7, and a try_table/throw pair at :39-45 — the module this action runs against",
+			57: "exception handling: (tag (export \"tag\")) at :7, and a try_table/throw pair at :39-45 — the module this action runs against",
+			// Same shape, both imports naming the same instance (:62-98).
+			101: "exception handling: two tag imports of the same instance at :69-70, and a try_table/throw pair at :86-92 — the module this action runs against",
+			102: "exception handling: two tag imports of the same instance at :69-70, and a try_table/throw pair at :86-92 — the module this action runs against",
+			103: "exception handling: two tag imports of the same instance at :69-70, and a try_table/throw pair at :86-92 — the module this action runs against",
+			104: "exception handling: two tag imports of the same instance at :69-70, and a try_table/throw pair at :86-92 — the module this action runs against",
+			// `$N` (:108-122) carries `(tag $tag)` exported under two names; the importing module
+			// (:127-160) is the same try_table/throw shape again.
+			167: "exception handling: (tag $tag) exported under two names at :112,:120-121, and a try_table/throw pair at :150-156 — the module this action runs against",
+			168: "exception handling: (tag $tag) exported under two names at :112,:120-121, and a try_table/throw pair at :150-156 — the module this action runs against",
+			169: "exception handling: (tag $tag) exported under two names at :112,:120-121, and a try_table/throw pair at :150-156 — the module this action runs against",
+			170: "exception handling: (tag $tag) exported under two names at :112,:120-121, and a try_table/throw pair at :150-156 — the module this action runs against",
+		},
+		"throw.wast": {
+			// The sole module (:3-36) declares five tags and a `throw`-carrying `$throw-if`.
+			38: "exception handling: five (tag …) fields and a throw at :22-25 — the module this action runs against",
+			49: "exception handling: five (tag …) fields and a throw at :22-25 — the module this action runs against",
+		},
+		"throw_ref.wast": {
+			// Every action here invokes against the one module (:3-99), which declares tags and
+			// both `try_table`/`throw_ref` pairs the file is named for.
+			102: "exception handling: try_table/throw_ref pairs at :53-96 — the module this action runs against",
+			107: "exception handling: try_table/throw_ref pairs at :53-96 — the module this action runs against",
+			110: "exception handling: try_table/throw_ref pairs at :53-96 — the module this action runs against",
+			112: "exception handling: try_table/throw_ref pairs at :53-96 — the module this action runs against",
+			113: "exception handling: try_table/throw_ref pairs at :53-96 — the module this action runs against",
+		},
+		"try_table.wast": {
+			// The first module (:3-6) declares `(tag $e0 (export "e0"))`; `register` needs it
+			// instantiated.
+			8: "exception handling: (tag $e0 (export \"e0\")) at :4 — the module this register runs against",
+			// The second module (:10-341) is the file's main subject: nine tags and every
+			// `try_table`/`catch`/`catch_ref`/`catch_all`/`catch_all_ref` combination the suite
+			// tests. Every action from :282 to :340 invokes against it.
+			282: "exception handling: nine (tag …) fields and try_table at :10-341 — the module this action runs against",
+			283: "exception handling: nine (tag …) fields and try_table at :10-341 — the module this action runs against",
+			285: "exception handling: nine (tag …) fields and try_table at :10-341 — the module this action runs against",
+			287: "exception handling: nine (tag …) fields and try_table at :10-341 — the module this action runs against",
+			288: "exception handling: nine (tag …) fields and try_table at :10-341 — the module this action runs against",
+			290: "exception handling: nine (tag …) fields and try_table at :10-341 — the module this action runs against",
+			291: "exception handling: nine (tag …) fields and try_table at :10-341 — the module this action runs against",
+			294: "exception handling: nine (tag …) fields and try_table at :10-341 — the module this action runs against",
+			295: "exception handling: nine (tag …) fields and try_table at :10-341 — the module this action runs against",
+			298: "exception handling: nine (tag …) fields and try_table at :10-341 — the module this action runs against",
+			299: "exception handling: nine (tag …) fields and try_table at :10-341 — the module this action runs against",
+			300: "exception handling: nine (tag …) fields and try_table at :10-341 — the module this action runs against",
+			302: "exception handling: nine (tag …) fields and try_table at :10-341 — the module this action runs against",
+			303: "exception handling: nine (tag …) fields and try_table at :10-341 — the module this action runs against",
+			305: "exception handling: nine (tag …) fields and try_table at :10-341 — the module this action runs against",
+			306: "exception handling: nine (tag …) fields and try_table at :10-341 — the module this action runs against",
+			307: "exception handling: nine (tag …) fields and try_table at :10-341 — the module this action runs against",
+			309: "exception handling: nine (tag …) fields and try_table at :10-341 — the module this action runs against",
+			310: "exception handling: nine (tag …) fields and try_table at :10-341 — the module this action runs against",
+			312: "exception handling: nine (tag …) fields and try_table at :10-341 — the module this action runs against",
+			313: "exception handling: nine (tag …) fields and try_table at :10-341 — the module this action runs against",
+			314: "exception handling: nine (tag …) fields and try_table at :10-341 — the module this action runs against",
+			316: "exception handling: nine (tag …) fields and try_table at :10-341 — the module this action runs against",
+			317: "exception handling: nine (tag …) fields and try_table at :10-341 — the module this action runs against",
+			319: "exception handling: nine (tag …) fields and try_table at :10-341 — the module this action runs against",
+			320: "exception handling: nine (tag …) fields and try_table at :10-341 — the module this action runs against",
+			321: "exception handling: nine (tag …) fields and try_table at :10-341 — the module this action runs against",
+			323: "exception handling: nine (tag …) fields and try_table at :10-341 — the module this action runs against",
+			324: "exception handling: nine (tag …) fields and try_table at :10-341 — the module this action runs against",
+			326: "exception handling: nine (tag …) fields and try_table at :10-341 — the module this action runs against",
+			328: "exception handling: nine (tag …) fields and try_table at :10-341 — the module this action runs against",
+			329: "exception handling: nine (tag …) fields and try_table at :10-341 — the module this action runs against",
+			331: "exception handling: nine (tag …) fields and try_table at :10-341 — the module this action runs against",
+			332: "exception handling: nine (tag …) fields and try_table at :10-341 — the module this action runs against",
+			337: "exception handling: nine (tag …) fields and try_table at :10-341 — the module this action runs against",
+			339: "exception handling: nine (tag …) fields and try_table at :10-341 — the module this action runs against",
+			340: "exception handling: nine (tag …) fields and try_table at :10-341 — the module this action runs against",
+			// The third module (:342-361) imports a tag and declares `(tag $e0)`, plus a nested
+			// try_table pair.
+			364: "exception handling: (tag $e0) at :344 and a nested try_table pair at :347-354 — the module this action runs against",
+			// The fifth module (:420-459) declares `(tag $e (param (ref $t)))` and five
+			// try_table/catch* combinations exercising catch_ref/catch_all_ref's exnref push.
+			464: "exception handling: (tag $e (param (ref $t))) at :425 and five try_table/catch* forms at :428-458 — the module this action runs against",
+			465: "exception handling: (tag $e (param (ref $t))) at :425 and five try_table/catch* forms at :428-458 — the module this action runs against",
+			466: "exception handling: (tag $e (param (ref $t))) at :425 and five try_table/catch* forms at :428-458 — the module this action runs against",
+			467: "exception handling: (tag $e (param (ref $t))) at :425 and five try_table/catch* forms at :428-458 — the module this action runs against",
+			468: "exception handling: (tag $e (param (ref $t))) at :425 and five try_table/catch* forms at :428-458 — the module this action runs against",
+			// The sixth module (:499-519) declares no tag at all — it is `try_table`'s own opcode
+			// (0x1f) that gates, with an empty catch vector and a `br` inside as the only content.
+			522: "exception handling: try_table with a br inside and no catch clauses at :502-506,:512-516 — the module this action runs against",
+			523: "exception handling: try_table with a br inside and no catch clauses at :502-506,:512-516 — the module this action runs against",
+		},
 	}
 
 	files := boardFiles(t)
@@ -5654,10 +5776,12 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	//
 	// **Two same-key-new-reason rows, and they are the ones worth naming.** `imports.wast:97-98`
 	// changed from the §3 sentinel to `unknown import: "test" "func-i64->i64"` — the `"test"`
-	// module's register fails on its `(tag …)` fields (#8), so the cascade is honest and the
-	// *reason* improved: a wrong-layer message ("this engine has no linker") became a right-layer
-	// one ("nothing supplied this name"). Zero other rows changed cause, so nothing regressed
-	// under cover of the fall.
+	// module's register previously failed on its `(tag …)` fields, which #199's rung 1 fixed on
+	// the *default* lane only (this is the all-gates-on lane, where EH is on and the register
+	// always succeeded on the merits) — so the cascade was honest and the *reason* improved: a
+	// wrong-layer message ("this engine has no linker") became a right-layer one ("nothing
+	// supplied this name"). Zero other rows changed cause, so nothing regressed under cover of
+	// the fall.
 	//
 	// **22 of the 204 arrivals are named `assert_return`s, and 19 of those are Q2's funcref-identity
 	// defect showing in this lane too.** `linking.wast:342-353` is the paradigm: `$Ot` imports
@@ -5670,7 +5794,16 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	// **Moved 36428 → 36877 in this PR** — decision 0018's encoder-side implementation
 	// (`valTypeBytes`) reaches 248 more pass in this lane, measured with the harness rather than
 	// guessed (36629 → 36877 over the raw two-run delta before this floor's own slack).
-	const allOnPassFloor = 36877
+	//
+	// **Moved 36877 → 37162 in #199's rung 1.** Zero of this move is `try_table`/`throw`/`throw_ref`
+	// converting — #199's own scope statement says so up front, and it holds: `internal/interp` has
+	// no throw/catch/unwind machinery, so nothing this PR does reaches execution. The 285-pass gain
+	// is retention-adjacent module shapes newly accepting under EH — mostly modules whose `(tag …)`
+	// field or `try_table` opener used to trip the encoder's frontier ahead of some *other*,
+	// unrelated construct in the same module, which this lane's `assert_return`/`assert_trap`
+	// vectors for that other construct then score as pass now that the frontier does not intercept
+	// them first.
+	const allOnPassFloor = 37162
 	boardBound(t, "allOnPassFloor", totalPass, allOnPassFloor, boardBoundSlack, floorBound,
 		"a gated feature regressed, which the Gated==0 assertion above cannot see: with every "+
 			"gate on, a broken feature turns a pass into a fail and leaves Gated at zero")

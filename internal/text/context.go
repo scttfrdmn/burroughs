@@ -564,6 +564,24 @@ type context struct {
 	// spellings do share is the *index space*, which `globalField` binds before either arm runs.
 	globalDefs []resolvedGlobalDef
 
+	// The retained *defined* tags' type-index thunks, in source order — the emitter's input for
+	// section 13 (#199). Appended by `tagField` itself rather than by a `defineTag` helper: unlike
+	// `defineGlobal`, there is no second field to resolve in a deferred op of this list's own, because
+	// `deferSignature` already returns the thunk section 13 needs directly — `textFunc.typeIdx`'s
+	// exact shape, copied for the identical reason (a tag's signature interning is func's).
+	//
+	// **One thunk per tag rather than a struct**, because a tag's wire payload
+	// (`tagtype`/encode.ml:190-191) is `zero-byte, typeuse` and the zero byte is a fixed attribute
+	// with no field to carry — `TagT ut` (types.ml:40) holds nothing else. `resolvedGlobalDef` needs
+	// a struct because a global carries a mutability flag and an initializer; a tag carries only the
+	// type index `deferSignature` already resolves.
+	//
+	// **Unlike imports, exports, data and elem, this list holds one spelling.** `tag_fields`'
+	// inline-import arm produces an `Import` and no defined tag (parser.mly:1053-1065), so an
+	// imported tag never reaches here — `tagField` binds the shared index space before either arm
+	// runs, exactly as `globalField` does for globals.
+	tagDefs []func() (uint32, error)
+
 	// elemsSeen counts every element segment the *grammar* saw, for the withdrawal check.
 	//
 	// `datasSeen`'s instrument on its sibling section, and its argument applies unchanged:

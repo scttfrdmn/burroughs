@@ -97,6 +97,22 @@ type parser struct {
 	// (encode.ml:1141/:1159). Imported funcs are absent: they have no body and their type index
 	// is the import descriptor's.
 	funcs []textFunc
+
+	// handlerVec is where `handlerClauses` appends a `try_table`'s retained catch-clause elements,
+	// one already-encoded `[]byte` per clause, or nil when this read is recognizing only.
+	//
+	// **A field swapped by the caller, on `p.sink`'s exact discipline** (#199): `handlerClauses`
+	// does not know which `try_table` it belongs to any more than `instrList` knows which block it
+	// is filling, so the caller (`blockinstr`/`foldedBlock`, through `handlerBlock`) installs a
+	// fresh slot before calling the signature chain and reads it back once `handlerClauses`
+	// returns, exactly as `blockTail` installs `arms.body` around `instrList`.
+	//
+	// **One `[]byte` per clause, appended as each clause completes, never one shared buffer** — the
+	// count precedes the elements on the wire (`vec catch`, encode.ml:257) and is not knowable until
+	// every clause has been read, on `brTable`'s exact reason for buffering rather than writing
+	// eagerly (code.go). `len(*handlerVec)` at that point *is* the count, which is why this needs no
+	// separate counter the way a byte-buffer design would.
+	handlerVec *[][]byte
 }
 
 // ReadModule reports whether src is a well-formed wat module, to the depth this stratum
@@ -1116,9 +1132,28 @@ func (p *parser) tagField() error {
 		// See funcField's arm for why this *replaces* deferSignature rather than joining it.
 		return p.inlineImportTail(imp, kw, p.importedFuncDesc(importTag, use, haveUse, ft))
 	}
-	p.deferSignature(use, haveUse, ft)
+	// **Appended before the closing paren is checked**, unlike `funcField`'s tail rule — and that
+	// is safe here for a reason `funcField` does not have: `deferSignature` records its own
+	// deferred op on `p.ctx`'s deferred list regardless of what happens next, so a `p.rpar()`
+	// failure below leaves a thunk in `tagDefs` whose *interning* already happened. That thunk is
+	// harmless standing alone (the type table would simply hold a type this rejected module never
+	// gets to use), but it is not the source of truth for whether this tag is well-formed — the
+	// `p.rpar()` return is, and it is checked before this function returns. Moving the append
+	// after the check would leave `tagDefs` and `p.ctx.types` disagreeing about whether the field
+	// existed, since the intern already ran; appending here keeps `tagDefs`' length in step with
+	// what `deferSignature` interned, which is the invariant `resolveFuncs`-style consumers read.
+	p.ctx.tagDefs = append(p.ctx.tagDefs, p.deferSignature(use, haveUse, ft))
 	p.ctx.markDefined(importTag)
-	return p.rpar()
+	if err := p.rpar(); err != nil {
+		return err
+	}
+	// **After the closing paren**, on `globalField`'s tail's rule: a field that errors out
+	// mid-way must leave no trace in the withdrawal record, or section 13's count could disagree
+	// with the grammar's on a module that never finished parsing. `tagDefs` itself is already
+	// appended above (see the comment there for why that append is safe on its own), and this is
+	// the separate bookkeeping — `noteNonTypeField`'s frontier flag — that `encodableOrErr` reads.
+	p.ctx.clearNonTypeField(kw)
+	return nil
 }
 
 // globalField parses `global` (parser.mly:1074-1089).
@@ -2235,19 +2270,6 @@ func (p *parser) blockinstr() (bool, error) {
 	default:
 		return false, nil
 	}
-	// **Refused before the body is read, not after.** `try_table`'s opcode carries a `vec catch`
-	// (encode.ml:257) this file has no encoding for, and its body's instructions *are* encodable — so
-	// emitting the body while dropping the opener would produce a function whose control flow is gone
-	// and which decodes clean. Refusing here means the body is still parsed (the error propagates, so
-	// nothing downstream runs) and no half-encoded function can exist. See refuseUnencodable.
-	//
-	// `block`, `loop` and `if` are past this frontier and are emitted below; the fourth arm stays
-	// behind it, and the refusal is narrowed to it rather than removed.
-	if t.Keyword == kwTryTable {
-		if err := p.refuseUnencodable(t, "the "+t.Text+" instruction"); err != nil {
-			return true, err
-		}
-	}
 	kw := p.c.next()
 
 	label, err := p.labelingOpt()
@@ -2268,17 +2290,17 @@ func (p *parser) blockinstr() (bool, error) {
 		arms blockArms
 		ft   funcType
 		slot *blockTypeSlot
+		hv   [][]byte
 	)
 	if t.Keyword == kwTryTable {
-		// **Its own name, not `err`**, which is the reading both linters accept: the outer `err` is
-		// live from labelingOpt above and reassigned by the else-branch, so `err :=` here is a
-		// shadow (`govet`) and `err =` is a sloppy reassignment (`gocritic`). The two findings
-		// point at each other, and the way out is that these really are different errors — the same
-		// resolution memAccess reached for `resolveErr`. Nothing is currently wrong with any
-		// spelling, since this arm returns immediately; two variables spelled `err` in one function
-		// is how a later edit comes to test the wrong one.
-		if bodyErr := p.handlerBlock(); bodyErr != nil {
-			return true, bodyErr
+		// **`handlerBlock` is `blockSignatureSlot` around `handlerClauses` rather than around
+		// `blockTail`** (handler_block_result_body bottoms out in handler_block_body, :786-806), so
+		// the signature/body evaluation order is identical to the other three keywords and only the
+		// tail differs. `hv` is threaded through as the catch-vector destination, on `arms.body`'s
+		// exact shape: a slot the tail fills that the caller reads after the chain returns.
+		ft, slot, err = p.handlerBlock(&hv, &arms)
+		if err != nil {
+			return true, err
 		}
 	} else {
 		// The body is collected rather than emitted, because the opener precedes it in the image and
@@ -2315,10 +2337,10 @@ func (p *parser) blockinstr() (bool, error) {
 		return true, err
 	}
 	if t.Keyword == kwTryTable {
-		// Refused above, so retention never reaches here for this arm — and it emits nothing, since
-		// nothing was collected. Stated as a return rather than left to `slot == nil`, because a nil
-		// slot reaching blockTypeBytes would be a panic where this is a frontier.
-		return true, nil
+		// `emitTryTable` writes the opener with the catch vector `hv` accumulated, on `emitBlock`'s
+		// exact ordering discipline: everything is read and validated first, and emission is the
+		// last act of a successful parse — see emitBlock's own comment for why that order matters.
+		return true, p.emitTryTable(kw, slot, ft, hv, &arms)
 	}
 	// The `end` token is consumed and its label checked before anything is emitted: emission is the
 	// last act of a *successful* parse, so a malformed tail cannot leave a partial construct in the
@@ -2434,8 +2456,13 @@ func (p *parser) labelingEndOpt(label string) error {
 	return nil
 }
 
-// blockSignature reads the part `block` and `handler_block` have in common: `typeuse?` then the
-// `(param …)*` and `(result …)*` lists, and **then the body, through the tail it is handed**.
+// blockSignatureSlot reads the part `block` and `handler_block` have in common: `typeuse?` then the
+// `(param …)*` and `(result …)*` lists, and **then the body, through the tail it is handed** —
+// every caller of this shared chain, retaining or recognizing, calls this function directly as of
+// #199 (a recognize-mode parse still calls it and simply never patches the slot it returns into
+// anything; there is no separate error-only wrapper any more — `handlerBlock` was the last caller
+// that read only the error, and it needs the slot too now, for `emitTryTable`'s opener the same way
+// `blockinstr`'s other three keywords already did).
 //
 // The three are ordered and each is optional, which `block_param_body` (:754) and
 // `block_result_body` (:760) express as right-recursive lists — `(param)` may repeat, then
@@ -2480,21 +2507,14 @@ func (p *parser) labelingEndOpt(label string) error {
 // chain whose innermost production is the body. So the nested type interns first. No vector sees the
 // difference — an index shift is invisible until a numeric typeuse names a shifted index — which is
 // exactly why the order is taken from the grammar rather than from the board.
-func (p *parser) blockSignature(tail func() error) error {
-	_, _, err := p.blockSignatureSlot(tail)
-	return err
-}
-
-// blockSignatureSlot is blockSignature for the callers that must *encode* the blocktype: the two
-// productions that emit a block opener, where blockSignature's error-only face is what the ones that
-// only recognize keep using.
 //
-// The pairing is typetable.go's — `declareImplicit`/`internImplicit`,
-// `inlineFuncTypeExplicit`/`checkExplicit`, `declareBlockImplicit`/`internBlockImplicit` — copied
-// rather than re-derived (*lessons are indexed by shape*). Two returns because the encoder needs both
-// halves and they are not the same fact: the slot carries what stage 2 resolved, and the signature
-// carries the single result an inline blocktype spells as a bare valtype byte, which is never
-// interned and so has no slot to be read from.
+// **It returns the signature and the slot because the blocktype encoder needs both**, on
+// typetable.go's own pairing — `declareImplicit`/`internImplicit`, `inlineFuncTypeExplicit`/
+// `checkExplicit`, `declareBlockImplicit`/`internBlockImplicit` — copied rather than re-derived
+// (*lessons are indexed by shape*). Two returns because the two halves are not the same fact: the
+// slot carries what stage 2 resolved, and the signature carries the single result an inline
+// blocktype spells as a bare valtype byte, which is never interned and so has no slot to be read
+// from.
 func (p *parser) blockSignatureSlot(tail func() error) (funcType, *blockTypeSlot, error) {
 	return p.orderedTypeUse(blockchain, tail)
 }
@@ -2663,13 +2683,48 @@ func (p *parser) deferBlockSignature(kind signatureKind, use idxRef, haveUse boo
 // Four handler arms (:874-:806), and all four are read even though no vector reaches the last
 // two: a handler set missing an arm rejects a legal module, and that is the accept-direction class
 // decision 0007 says the suite cannot falsify.
-func (p *parser) handlerBlock() error {
+//
+// **`hv` and `arms` are the two retention destinations `handlerClauses` fills**, threaded through
+// rather than read back from a field on return, on `blockTail`'s exact shape (#199): the caller
+// owns the slots and the tail production fills them, so a nested `try_table` cannot be confused
+// about which one it is writing to even though only one is live at a time today (see the
+// `handlerVec` field's own comment on why the swap is defensive rather than load-bearing yet).
+func (p *parser) handlerBlock(hv *[][]byte, arms *blockArms) (funcType, *blockTypeSlot, error) {
 	// The clause reader is shared with the folded arm (#64) — see handlerClauses. It was inline
 	// here while there was one caller; the folded `try_table` is the second, and two copies of a
 	// four-arm set is two places to lose an arm. It is passed *in* rather than called after, because
 	// `handler_block_body` is the innermost production of the chain `$2 c` forces (:792-:806) — see
-	// blockSignature for what depends on that.
-	return p.blockSignature(p.handlerClauses)
+	// blockSignatureSlot for what depends on that.
+	return p.blockSignatureSlot(p.handlerTail(hv, arms))
+}
+
+// handlerTail wraps handlerClauses so its instruction-list tail lands in arms.body instead of the
+// enclosing sequence, and so its catch-clause vector lands in hv — blockTail's exact wrapping,
+// split across two destinations because handlerClauses fills both.
+//
+// **`p.handlerVec` is swapped rather than passed as a parameter**, because `handlerClauses` also
+// reads the tag space and the label stack through `p`, and adding a third calling convention for
+// one more piece of state (a parameter here, a field there) is the inconsistency `code.go`'s
+// header on `p.sink` already argues against. Swap-and-restore matches `p.sink`'s own discipline
+// for the identical reason: nesting is not legal grammar today, and the restore is what keeps a
+// future caller from inheriting a stale slot if that ever changes.
+//
+// **Gated on `p.retain`, exactly as `funcField` gates installing `p.sink`** — a `ReadModule` parse
+// must resolve nothing a build parse would resolve, on 0011's own discipline, so `handlerVec` stays
+// nil through a recognize-only parse and `handlerClauses` falls back to its old behaviour: a tag
+// index is read and never looked up, matching every other symbolic index the recognizer leaves
+// unresolved (idx, idxList, and retainIdxIn's own `!p.retaining()` guard).
+func (p *parser) handlerTail(hv *[][]byte, arms *blockArms) func() error {
+	return func() error {
+		outer := p.handlerVec
+		if p.retain {
+			p.handlerVec = hv
+		}
+		defer func() { p.handlerVec = outer }()
+		var err error
+		arms.body, err = p.intoSink(p.handlerClauses)
+		return err
+	}
 }
 
 // foldedBlock parses `expr1`'s four block arms (parser.mly:826-834): `BLOCK`/`LOOP` over `block`,
@@ -2680,7 +2735,7 @@ func (p *parser) handlerBlock() error {
 // `typeuse`, then `(param …)*`, then `(result …)*` — differing only in what terminates the chain:
 // `block_result_body` bottoms out in `instr_list` (:761), `if_block_result_body` in `if_` (:886),
 // `try_block_result_body` in `try_block_handler_body` (:923). So the ordered param/result chain is
-// one production wearing three names, and `blockSignature` is it.
+// one production wearing three names, and `blockSignatureSlot` is it.
 //
 // That reuse is load-bearing rather than tidy. `block_param_body` takes `LPAR PARAM valtype_list
 // RPAR` (:756) — a `valtype_list`, with **no** `bindidx` — and a second folded implementation is a
@@ -2719,6 +2774,7 @@ func (p *parser) foldedBlock(leader keywordKind) error {
 	var (
 		arms blockArms
 		body func() error
+		hv   [][]byte
 	)
 	switch leader {
 	case kwIf:
@@ -2728,7 +2784,7 @@ func (p *parser) foldedBlock(leader keywordKind) error {
 		// arms rather than diverted wholesale.
 		body = func() error { return p.ifArms(&arms) }
 	case kwTryTable:
-		body = p.handlerClauses
+		body = p.handlerTail(&hv, &arms)
 	default:
 		// `block` and `loop`, whose tail is a plain `instr_list` (:741/:748). Unreachable for
 		// anything else — expr1 dispatched here on exactly these four leaders — and a default
@@ -2740,10 +2796,7 @@ func (p *parser) foldedBlock(leader keywordKind) error {
 		return err
 	}
 	if leader == kwTryTable {
-		// Refused by expr1 before it dispatched here, so retention never reaches this line — and
-		// nothing was collected to emit. See blockinstr's matching return for why it is a statement
-		// rather than a nil-slot check.
-		return nil
+		return p.emitTryTable(kw, slot, ft, hv, &arms)
 	}
 	return p.emitBlock(kw, slot, ft, &arms)
 }
@@ -2838,8 +2891,8 @@ func (p *parser) ifArms(arms *blockArms) error {
 // face of. One closure computes both, in wire order, which is also the only shape that makes the
 // order a single statement.
 //
-// Structurally the signature half is the same ordered chain as `blockSignature` — optional `typeuse`,
-// then `(param …)*`, then `(result …)*` — and **shared with it**, through `orderedTypeUse`, with the
+// Structurally the signature half is the same ordered chain as `blockSignatureSlot` — optional
+// `typeuse`, then `(param …)*`, then `(result …)*` — and **shared with it**, through `orderedTypeUse`, with the
 // tail passed as a parameter: `callexpr_results` ends in `expr_list` (:860), the folded operands,
 // where `block_result_body` ends in `instr_list`.
 //
@@ -2856,8 +2909,8 @@ func (p *parser) ifArms(arms *blockArms) error {
 // against every `Test*` defined.
 //
 // The 30 field-ordering vectors split across both readers — block.wast/loop.wast/if.wast reach
-// `blockSignature`, call_indirect.wast/return_call_indirect.wast reach this one — so a drift between
-// them is a drift the board would show only in one of two files.
+// `blockSignatureSlot`, call_indirect.wast/return_call_indirect.wast reach this one — so a drift
+// between them is a drift the board would show only in one of two files.
 // **Its sugar arm interns unconditionally** (:847: `inline_functype c ft $loc($1)`), with no
 // `([], [t])` case — so `(call_indirect (result i32) …)` creates a type where `(block (result i32))`
 // does not. Hence callchain rather than blockchain, and see signatureKind for why that is a
@@ -3060,6 +3113,16 @@ func (p *parser) placeInstr(place instrPlacement, in instr, tail func() error) e
 // What it would also do is accept `(try_table $t (catch $e $t) …)`, a clause naming the try_table's
 // own label, which the reference rejects as unknown. That spelling is nowhere in the suite, so the
 // control is the oracle here.
+//
+// **The tag index resolves at the cursor, same timing as `throw`'s (#199).** The reference's own
+// grammar reads `($3 c tag)` for both — `THROW idx { fun c -> throw ($2 c tag) }` (:573) and a
+// catch clause's tag half (:795, :933) — and `tag`'s lookup (parser.mly:153) is an immediate
+// `VarMap.find`, not a deferred thunk: unlike `func`, which permits a forward-referencing `call`,
+// nothing in the grammar defers a tag lookup. Measured against the corpus rather than assumed: no
+// vector in the suite spells a `(catch …)`/`(throw …)` naming a tag defined later in the same
+// module (checked across try_table.wast, throw.wast, throw_ref.wast, tag.wast, instance.wast), so
+// resolving here — where `p.idx()` used to discard the value — costs nothing this suite can see and
+// matches the reference's own timing.
 func (p *parser) handlerClauses() error {
 	// The try_table's own label is already pushed by the caller (blockinstr/foldedBlock), so the
 	// enclosing scope is one level down. Popped for the clauses and restored before the body, which
@@ -3080,12 +3143,17 @@ func (p *parser) handlerClauses() error {
 		if t.Kind != KeywordTok {
 			break
 		}
+		var kindByte byte
 		var idxs int
 		switch t.Keyword {
-		case kwCatch, kwCatchRef:
-			idxs = 2 // `(catch $tag $label)` — a tag and a label
-		case kwCatchAll, kwCatchAllRef:
-			idxs = 1 // `(catch_all $label)`
+		case kwCatch:
+			kindByte, idxs = 0x00, 2 // `(catch $tag $label)` — a tag and a label
+		case kwCatchRef:
+			kindByte, idxs = 0x01, 2
+		case kwCatchAll:
+			kindByte, idxs = 0x02, 1 // `(catch_all $label)`
+		case kwCatchAllRef:
+			kindByte, idxs = 0x03, 1
 		default:
 			// Not a handler clause: a folded instruction opening the body, which reads `c'` — so the
 			// try_table's own label goes back before the body is read.
@@ -3094,24 +3162,44 @@ func (p *parser) handlerClauses() error {
 		}
 		p.c.next() // the LPAR
 		p.c.next() // the keyword
-		// The **last** index of every arm is the label; `catch`/`catch_ref`'s first is a tag, which
-		// this stratum does not resolve (tags need the deferred phase — a `(tag $e)` may be defined
-		// after the func that catches it). Written as "all but the last are unresolved" rather than
-		// per-arm because that is what the four arms have in common: `($3 c tag) ($4 c label)` and
-		// `($3 c label)`, the label always final.
+		// **One `[]byte` per clause, built here and appended to `*p.handlerVec` whole** — not the
+		// current instruction's immediate (`p.imm`/`retainLabelIdx` belong to
+		// `plaininstr`/`foldedBlock`'s own instruction being built, and a clause is not an
+		// instruction). The **last** index of every arm is the label; `catch`/`catch_ref`'s first is
+		// a tag, resolved at the cursor against the tag space (see the header above for the timing
+		// argument).
+		var cl writer
+		if p.handlerVec != nil {
+			cl.byte1(kindByte)
+		}
 		for i := range idxs {
 			if i == idxs-1 {
-				if err := p.labelIdx(); err != nil {
+				depth, err := p.labelIdxValue()
+				if err != nil {
 					return err
+				}
+				if p.handlerVec != nil {
+					cl.u32(depth)
 				}
 				continue
 			}
-			if err := p.idx(); err != nil {
+			r, err := p.idxValue()
+			if err != nil {
 				return err
+			}
+			if p.handlerVec != nil {
+				idx, rerr := p.ctx.tags.resolveSpaceIdx(r)
+				if rerr != nil {
+					return rerr
+				}
+				cl.u32(idx)
 			}
 		}
 		if err := p.rpar(); err != nil {
 			return err
+		}
+		if p.handlerVec != nil {
+			*p.handlerVec = append(*p.handlerVec, cl.b)
 		}
 	}
 	restoreOwn() // the body reads `c'`
@@ -3162,7 +3250,7 @@ func (p *parser) expr() (bool, error) {
 //
 // The block arms delegate to readers the flat family already built (#63): `block` for BLOCK/LOOP,
 // `handlerBlock`'s signature half for TRY_TABLE. That reuse is the point rather than a convenience
-// — `blockSignature` is where the param/result ordering and the *absence* of a `bindidx` in
+// — `blockSignatureSlot` is where the param/result ordering and the *absence* of a `bindidx` in
 // `block_param_body` (:756) are decided, and a second folded implementation would be a second place
 // for `(block (param $x i32))` to be wrongly admitted. It was wrongly admitted once already, by
 // delegating to `functype` (grave, #63), and TestFoldedAndFlatSignaturesAgree is what holds the
@@ -3173,14 +3261,6 @@ func (p *parser) expr() (bool, error) {
 func (p *parser) expr1(leader keywordKind) error {
 	switch leader {
 	case kwBlock, kwLoop, kwIf, kwTryTable:
-		// The folded spelling of the same refusal `blockinstr` makes, at the other production, and
-		// narrowed to the same one arm: `try_table`'s `vec catch` has no encoding here. Two sites
-		// because the reference has two productions, not because the reason differs.
-		if leader == kwTryTable {
-			if err := p.refuseUnencodable(p.c.peek(), "the "+p.c.peek().Text+" instruction"); err != nil {
-				return err
-			}
-		}
 		return p.foldedBlock(leader)
 	case kwSelect:
 		// The folded spelling of the same instruction, differing only in its tail — `expr_list`

@@ -200,6 +200,15 @@ var encodableModules = []struct {
 	// (`section 12 len (List.length datas)`, encode.ml:1109). nil means no section 12 — and whether
 	// there is one is a question about *instructions*, never about this list's length.
 	wantDataCountSec []byte
+	// wantTagSec is section 13's payload: the tag count, then each tag's fixed zero-attribute byte
+	// and resolved type index (#199). nil means no section 13.
+	//
+	// **Bytes, on sections 9/11/12's own reason and for the sharper cause**: `binary.Module` has no
+	// `Tags` field at all — #95's still-open decoder-side gap — so there is no structured value to
+	// compare against even in principle, where sections 9 and 11 at least retain a struct the flag
+	// byte doesn't determine. The witness is `sectionPayload`, content read by hand from
+	// `tagtype`'s grammar (encode.ml:190-191).
+	wantTagSec []byte
 }{
 	{src: `(module)`},
 	{src: `(module (type (func)))`, want: []binary.CompType{
@@ -603,6 +612,28 @@ var encodableModules = []struct {
 			Params: []binary.ValType{binary.I32},
 		}}},
 		wantImports: []binary.Import{{Module: "m", Name: "t", Kind: binary.ExternTag, Index: 0}},
+	},
+	// A **defined** tag, section 13's own row (#199) — `(module (tag))` used to be
+	// `TestEncodeRefusesWhatItCannotWrite`'s leading frontier row and moved here the way `(module
+	// (func))` did when the code section landed. `vec(1) { attr=0x00, typeidx=0x00 }`: no params,
+	// so the implicit signature interns type 0.
+	{
+		src:        `(module (tag))`,
+		want:       []binary.CompType{{Kind: binary.CompFunc}},
+		wantTagSec: []byte{0x01, 0x00, 0x00},
+	},
+	// A defined tag alongside an *imported* one, so the tag index space must count the import —
+	// an encoder that resolved the defined tag's signature against a space that ignored imports
+	// would still produce type index 0 by coincidence unless the signatures differ, which is why
+	// this row gives them different param lists.
+	{
+		src: `(module (tag $imp (import "m" "e") (param i32)) (tag (param f32)))`,
+		want: []binary.CompType{
+			{Kind: binary.CompFunc, Func: binary.FuncType{Params: []binary.ValType{binary.I32}}},
+			{Kind: binary.CompFunc, Func: binary.FuncType{Params: []binary.ValType{binary.F32}}},
+		},
+		wantImports: []binary.Import{{Module: "m", Name: "e", Kind: binary.ExternTag, Index: 0}},
+		wantTagSec:  []byte{0x01, 0x00, 0x01},
 	},
 	// Import *order*, with two different kinds, so a transposed pair fails on the Kind column rather
 	// than passing as a reordering.
@@ -1119,9 +1150,9 @@ var encodableModules = []struct {
 	},
 	// **A block with a body, which is the shape a dropped opener makes dangerous rather than merely
 	// incomplete.** Without the opener this is `41 01 1a 41 02 1a 0b` — the block gone, its contents
-	// kept, decoding clean. That was `TestEveryStructuralInstructionIsRefused`'s row while the
-	// construct was refused; it is here now, asserting the opener is *present* and in front of the
-	// body rather than behind it.
+	// kept, decoding clean. It previously cited a now-deleted refusal test's row for exactly this
+	// shape while the construct was refused; it is here now, asserting the opener is *present* and
+	// in front of the body rather than behind it.
 	{
 		src:  `(module (func block i32.const 1 drop end i32.const 2 drop))`,
 		want: []binary.CompType{{Kind: binary.CompFunc}},
@@ -2536,12 +2567,16 @@ func TestEncodeRoundTripsThroughTheDecoder(t *testing.T) {
 	// measure the actual count rather than trust the trailing comment's number, then move both
 	// together. The two new rows are `struct.wast:99`/`:106`'s symbolic-field-name `struct.get`/
 	// `struct.set` shape, the case `idxPairRetained`'s comment used to name as the gap #188 closes.
-	if len(encodableModules) < 179 {
-		t.Fatalf("encodableModules has %d rows, want >=179 (179 at this commit): a table this check "+
+	//
+	// **Raised again for #199: 179→181 rows, and a new byte-column partition at 2** (`withTagSec`,
+	// below). The two new rows are section 13's own: a lone defined tag, and a defined tag beside
+	// an import so the tag index space's own count (not just the type space's) is exercised.
+	if len(encodableModules) < 181 {
+		t.Fatalf("encodableModules has %d rows, want >=181 (181 at this commit): a table this check "+
 			"reads is a table whose size is part of the assertion, since a comparison over an empty "+
 			"set succeeds", len(encodableModules))
 	}
-	withFuncs, withData, withDataCount, withLabels, withElem, withGlobals := 0, 0, 0, 0, 0, 0
+	withFuncs, withData, withDataCount, withLabels, withElem, withGlobals, withTagSec := 0, 0, 0, 0, 0, 0, 0
 	for _, tc := range encodableModules {
 		if len(tc.wantFuncs) > 0 {
 			withFuncs++
@@ -2557,6 +2592,9 @@ func TestEncodeRoundTripsThroughTheDecoder(t *testing.T) {
 		}
 		if tc.wantDataCountSec != nil {
 			withDataCount++
+		}
+		if tc.wantTagSec != nil {
+			withTagSec++
 		}
 		if slices.ContainsFunc(tc.wantFuncs, func(f binary.Func) bool { return f.Labels != nil }) {
 			withLabels++
@@ -2653,6 +2691,18 @@ func TestEncodeRoundTripsThroughTheDecoder(t *testing.T) {
 			"commit): section 12's condition is `free.ml`'s instruction set, not the segment list, and "+
 			"a single row cannot cover both directions of that", withDataCount, len(encodableModules))
 	}
+	// Section 13's own floor, on section 9/11's own reasoning: `binary.Module` has no `Tags` field
+	// at all (#95, still open), so a dropped or miswritten tag section is invisible to every other
+	// column in this table — these rows are the only instrument over the fixed attribute byte and
+	// over the tag index space's count. Two is the minimum that exercises both "no import ahead of
+	// the defined tag" and "an import ahead of it", which is where an index-space miscount would
+	// show.
+	if withTagSec < 2 {
+		t.Fatalf("only %d of %d encodableModules rows assert a tag section payload, want >=2 (2 at "+
+			"this commit): section 13 has no structured decoder field, so these rows are the only "+
+			"instrument over its attribute byte and its index-space count",
+			withTagSec, len(encodableModules))
+	}
 	for _, tc := range encodableModules {
 		t.Run(tc.src, func(t *testing.T) {
 			b, err := EncodeModule([]byte(tc.src))
@@ -2734,6 +2784,7 @@ func TestEncodeRoundTripsThroughTheDecoder(t *testing.T) {
 				{binary.SectionElement, "element", tc.wantElemSec},
 				{binary.SectionData, "data", tc.wantDataSec},
 				{binary.SectionDataCount, "data count", tc.wantDataCountSec},
+				{binary.SectionTag, "tag", tc.wantTagSec},
 			} {
 				got, found := sectionPayload(m, s.id)
 				switch {
@@ -3439,7 +3490,10 @@ func TestEncodeRefusesWhatItCannotWrite(t *testing.T) {
 		{`(module (start 0) (func))`, "(start …) field"},
 		// `(module (data "abc"))` was here and is now in `encodableModules`, which is what section 11
 		// *is* — the same move `(module (func))` made when the code section landed.
-		{`(module (tag))`, "(tag …) field"},
+		//
+		// `(module (tag))` was here and is now in `encodableModules`, which is what section 13 *is*
+		// (#199) — the fifth field to make this move, and per the countdown comment below it was the
+		// second-to-last leader this table had.
 		// `(module (type (struct)))` and `(module (type (array (mut i32))))` were here and are now
 		// in `encodableModules`, which is what decision 0021's implementation *is*: a struct's or
 		// array's fields are retained and `encodableOrErr`'s struct/array refusal above answers
@@ -3508,41 +3562,45 @@ func TestEncodeRefusesWhatItCannotWrite(t *testing.T) {
 		// unencodable field is the one whose name must appear in the message, never the encodable
 		// field that follows it.
 		//
-		// **The leader was `(func)`, then `(data "abc")`, then `(elem)`, then `(global …)`, and is now
-		// `(start 0)` — re-pointed four times for the same reason.** This is the tripwire-re-pointing
-		// rule (#33) at test-row scale, and by the fourth application it is routine rather than
-		// remarkable: the rows name a *risk* — a later field withdrawing an earlier field's refusal — and
-		// each landing section dissolves whichever leader it implements without touching the risk. `func`
-		// moved to follower when the code section landed; `data` when section 11 did; `elem` when section
-		// 9 did; `global` now that section 6 does. Deleting the rows instead would have retired a live
-		// control four times on a technicality, and the instruction the previous version of this comment
-		// left — "re-point again, not delete" — is what is being carried out here.
+		// **The leader was `(func)`, then `(data "abc")`, then `(elem)`, then `(global …)`, then
+		// `(tag)`, and is now `(start 0)` — re-pointed five times for the same reason.** This is the
+		// tripwire-re-pointing rule (#33) at test-row scale, and by the fifth application it is
+		// routine rather than remarkable: the rows name a *risk* — a later field withdrawing an
+		// earlier field's refusal — and each landing section dissolves whichever leader it implements
+		// without touching the risk. `func` moved to follower when the code section landed; `data`
+		// when section 11 did; `elem` when section 9 did; `global` when section 6 did; `tag` now that
+		// section 13 does (#199). Deleting the rows instead would have retired a live control five
+		// times on a technicality, and the instruction the previous version of this comment left —
+		// "re-point again, not delete" — is what is being carried out here.
 		//
-		// **`(start 0)` and `(tag)` are the only leaders left, and that is now worth stating as a
-		// countdown rather than as an instruction.** Two fields remain unencodable; when the second of
-		// them lands there will be *no* unencodable field to lead with, and this control's subject
-		// dissolves with no re-pointing available. The risk does not: `clearNonTypeField`'s offset
-		// comparison will still be the only thing standing between a later field and an earlier field's
-		// record. So the re-pointing that will be required then is not to another field but to another
-		// *frontier* — the typeuse rows below are refusals that outlive every section, and the leader
-		// becomes one of those. (The table/global element-type rows this comment used to point at,
-		// `(table 1 (ref func))` among them, are gone: decision 0018's encoder-side implementation
-		// closed that frontier, so it can no longer serve as the next re-pointing target either — and
-		// decision 0021's encoder-side implementation closed the `CompType.Fields` frontier this
-		// comment used to name as the next candidate, for the identical reason: a struct or array
-		// type no longer refuses outright, so it cannot lead a follower row either.) Named here
-		// because a tripwire whose next re-pointing is not obvious is one that gets closed instead.
+		// **`(start 0)` is the only leader left, and that is now worth stating as a closed countdown
+		// rather than an open one.** One field remains unencodable — the `(tag)`-leader rows this
+		// comment used to describe (memory+table, memory+data, func+memory followers) are gone rather
+		// than re-pointed, because `(start 0)` already carries an equivalent follower for each of
+		// those same risk shapes below, and a second leader asserting the identical risk a second time
+		// is redundant coverage rather than a distinct witness. When `(start 0)` itself is no longer
+		// the sole subject (nothing is planned to encode it differently; it names a function index
+		// and always will), this control's subject dissolves with no re-pointing available. The risk
+		// does not: `clearNonTypeField`'s offset comparison will still be the only thing standing
+		// between a later field and an earlier field's record. So the re-pointing that will be
+		// required then is not to another field but to another *frontier* — the typeuse rows below are
+		// refusals that outlive every section, and the leader becomes one of those. (The table/global
+		// element-type rows this comment used to point at, `(table 1 (ref func))` among them, are
+		// gone: decision 0018's encoder-side implementation closed that frontier, so it can no longer
+		// serve as the next re-pointing target either — and decision 0021's encoder-side
+		// implementation closed the `CompType.Fields` frontier this comment used to name as the next
+		// candidate, for the identical reason: a struct or array type no longer refuses outright, so
+		// it cannot lead a follower row either.) Named here because a tripwire whose next re-pointing
+		// is not obvious is one that gets closed instead.
 		{`(module (start 0) (memory 1) (func))`, "(start …) field"},
 		{`(module (start 0) (table 1 funcref) (func))`, "(start …) field"},
-		{`(module (tag) (memory 1) (table 1 funcref))`, "(tag …) field"},
 		// **A `(data …)` field as the *follower*, which is where its departure makes it a better
 		// witness than it was as a leader.** `dataField` has three arms and every one of them calls
 		// `clearNonTypeField` after its closing paren, so it is the newest candidate for clearing a
 		// record that is not its own — and the sugar arm clears one too. Falsified by dropping the
-		// offset comparison in `clearNonTypeField`: these three encode, emitting a module whose start or
-		// tag is gone.
+		// offset comparison in `clearNonTypeField`: these three encode, emitting a module whose start
+		// is gone.
 		{`(module (start 0) (data "abc") (func))`, "(start …) field"},
-		{`(module (tag) (memory 1) (data (i32.const 0) "x"))`, "(tag …) field"},
 		{`(module (start 0) (memory (data "x")) (func))`, "(start …) field"},
 		// **`(elem …)` as a follower, and it is the sharpest of them**, which is the dividend of its
 		// promotion out of this table. Five arms, each calling `clearNonTypeField` after its own closing
@@ -3565,7 +3623,6 @@ func TestEncodeRefusesWhatItCannotWrite(t *testing.T) {
 		// `clearNonTypeField` after retaining its body, and unlike the memory and table arms it reaches
 		// that call on every well-formed func.
 		{`(module (start 0) (func))`, "(start …) field"},
-		{`(module (tag) (func) (memory 1))`, "(tag …) field"},
 
 		// # The typeuse frontier, which is a *wrong index* rather than a missing section
 		//
@@ -4650,4 +4707,191 @@ func findOp(t *testing.T, m *binary.Module, prefix byte, op uint32) binary.Instr
 			len(found), prefix, op, m.Funcs[0].Body)
 	}
 	return found[0]
+}
+
+// TestTryTableCatchClausesRoundTrip is #199's rung-1 encoder-side control, on
+// `TestParameterizedReferenceFormsRoundTrip`'s own style (encode, decode through the real merged
+// decoder, assert on the decoded `binary.Module` rather than on raw bytes): every `try_table`
+// catch-clause kind this PR's encoder writes, round-tripped and read back through `CatchVector`
+// (#199's decoder-side companion).
+//
+// Tag imports rather than defined `(tag …)` fields, because the `(tag …)` module-field encoding
+// gap is a separate, smaller fix this PR's own recon measured — see the CHANGELOG entry and the
+// PR report for that measurement. `try_table`'s own encoding needs nothing from that fix: a tag
+// index is a tag index whether the tag is imported or defined, and `decodeForTest` already turns
+// `ExceptionHandling` on for exactly this reason (imports.wast's own tag-import row, above).
+func TestTryTableCatchClausesRoundTrip(t *testing.T) {
+	t.Run("all four catch-clause kinds, flat form", func(t *testing.T) {
+		src := `(module
+			(tag $e0 (import "m" "e0") (param i32))
+			(tag $e1 (import "m" "e1"))
+			(func (param i32) (result i32)
+				(block $h (result i32)
+					try_table (result i32) (catch $e0 $h) (catch_ref $e1 $h) (catch_all $h) (catch_all_ref $h)
+						local.get 0
+					end
+				)
+			))`
+		b, err := EncodeModule([]byte(src))
+		if err != nil {
+			t.Fatalf("EncodeModule(%s): %v", src, err)
+		}
+		m := decodeForTest(t, b)
+		if len(m.Funcs) != 1 {
+			t.Fatalf("decoded %d funcs, want 1", len(m.Funcs))
+		}
+		f := m.Funcs[0]
+		// Body is [block $h opener, try_table, local.get, end(try_table), end(block), end(func)];
+		// try_table is index 1.
+		got, ok := f.CatchVector(1)
+		if !ok {
+			t.Fatalf("CatchVector(1) reports absent; want a retained vector for the try_table "+
+				"(Body=%+v)", f.Body)
+		}
+		want := []binary.Catch{
+			{Kind: binary.CatchTag, TagIndex: 0, LabelIndex: 0},
+			{Kind: binary.CatchTagRef, TagIndex: 1, LabelIndex: 0},
+			{Kind: binary.CatchAny, LabelIndex: 0},
+			{Kind: binary.CatchAnyRef, LabelIndex: 0},
+		}
+		if len(got) != len(want) {
+			t.Fatalf("got %d clauses, want %d: %+v", len(got), len(want), got)
+		}
+		for i, w := range want {
+			if got[i] != w {
+				t.Errorf("clause %d = %+v, want %+v", i, got[i], w)
+			}
+		}
+	})
+
+	t.Run("folded form, and a label depth greater than zero", func(t *testing.T) {
+		// Two enclosing blocks so the clause's label resolves to depth 1 rather than 0 — the same
+		// distinguishing shape TestDecodeTryTableRetainsCatchClauses uses on the decoder side, here
+		// exercising the *encoder's* label resolution (handlerClauses' own header: a clause resolves
+		// in the enclosing scope, one level down from the try_table's own label).
+		src := `(module
+			(tag $e0 (import "m" "e0"))
+			(func
+				(block $outer
+					(block $inner
+						(try_table (catch_all $outer) (catch_all_ref $inner))
+					)
+				)
+			))`
+		b, err := EncodeModule([]byte(src))
+		if err != nil {
+			t.Fatalf("EncodeModule(%s): %v", src, err)
+		}
+		m := decodeForTest(t, b)
+		f := m.Funcs[0]
+		// Body: [outer-block, inner-block, try_table, end(try_table), end(inner), end(outer),
+		// end(func)] — try_table at index 2.
+		got, ok := f.CatchVector(2)
+		if !ok {
+			t.Fatalf("CatchVector(2) reports absent; want a retained vector (Body=%+v)", f.Body)
+		}
+		want := []binary.Catch{
+			{Kind: binary.CatchAny, LabelIndex: 1}, // $outer, one level out from $inner
+			{Kind: binary.CatchAnyRef, LabelIndex: 0},
+		}
+		if len(got) != len(want) {
+			t.Fatalf("got %d clauses, want %d: %+v", len(got), len(want), got)
+		}
+		for i, w := range want {
+			if got[i] != w {
+				t.Errorf("clause %d = %+v, want %+v", i, got[i], w)
+			}
+		}
+	})
+
+	t.Run("zero clauses: every exception falls through uncaught", func(t *testing.T) {
+		src := `(module (func (try_table)))`
+		b, err := EncodeModule([]byte(src))
+		if err != nil {
+			t.Fatalf("EncodeModule(%s): %v", src, err)
+		}
+		m := decodeForTest(t, b)
+		got, ok := m.Funcs[0].CatchVector(0)
+		if !ok {
+			t.Fatalf("CatchVector(0) reports absent; want present-and-empty for a zero-clause try_table")
+		}
+		if len(got) != 0 {
+			t.Errorf("got %d clauses, want 0: %+v", len(got), got)
+		}
+	})
+}
+
+// TestTagFieldRoundTrip is #199's other rung-1 gap — the `(tag …)` module field, which is a
+// separate, smaller fix from `try_table`'s own encoding (this PR's own recon measured the two as
+// uncoupled: `decodeForTest`'s `ExceptionHandling` gate makes the tag section's payload decode
+// with `decodePayload`'s no-grammar-yet path, which skips the extent check but still accepts the
+// bytes and decodes every other section correctly — #95's still-open decoder-side tag-section
+// *payload grammar* is not needed for this round trip to succeed end to end).
+//
+// **Asserted as section bytes, on `wantDataSec`'s own precedent** (encode_test.go's header): the
+// decoder has no `Tags` field to compare a structured value against — same discard-blindness
+// sections 11/12 have until their own consumer forces retention — so the witness is
+// `sectionPayload`, the decoder's own segmentation of the image, with the content read out by
+// hand from `tagtype`'s grammar (encode.ml:190-191: a fixed zero attribute byte, then a `u32`
+// type index).
+func TestTagFieldRoundTrip(t *testing.T) {
+	t.Run("one defined tag with a param, plus an import ahead of it", func(t *testing.T) {
+		// The import precedes the defined tag in the *text*, so a correct encoder's tag index
+		// space has the import at 0 and the definition at 1 — an encoder that dropped the import
+		// from the index space would intern the same type index by coincidence here (both tags
+		// take one i32 param), which is why the next case uses two different signatures.
+		src := `(module
+			(tag $imp (import "m" "e") (param i32))
+			(tag $e0 (param i32)))`
+		b, err := EncodeModule([]byte(src))
+		if err != nil {
+			t.Fatalf("EncodeModule(%s): %v", src, err)
+		}
+		m := decodeForTest(t, b)
+		if len(m.Imports) != 1 {
+			t.Fatalf("decoded %d imports, want 1", len(m.Imports))
+		}
+		if m.Imports[0].Kind != binary.ExternTag {
+			t.Errorf("import kind = %v, want ExternTag", m.Imports[0].Kind)
+		}
+		payload, ok := sectionPayload(m, binary.SectionTag)
+		if !ok {
+			t.Fatalf("no tag section (id 13) in the decoded module; the encoder wrote nothing " +
+				"for the defined tag")
+		}
+		// vec(1) { attr=0x00, typeidx=0x00 } — the defined tag's own signature interns a *second*
+		// func type distinct from the import's only if the two disagree; they share one param
+		// list here (both `(param i32)`), so `internImplicit` reuses the import's own interned
+		// type and the index is 0, not 1. That reuse is itself part of what this test checks:
+		// wantSame below pins it.
+		want := []byte{0x01, 0x00, 0x00}
+		if string(payload) != string(want) {
+			t.Errorf("tag section payload = % x, want % x", payload, want)
+		}
+	})
+
+	t.Run("two defined tags with different signatures, one exported", func(t *testing.T) {
+		// Different param lists (i32 vs f64), so the type indices cannot be confused by
+		// coincidental reuse the way the row above's identical-signature pair could be.
+		src := `(module
+			(tag $e0 (export "e0") (param i32))
+			(tag $e1 (param f64)))`
+		b, err := EncodeModule([]byte(src))
+		if err != nil {
+			t.Fatalf("EncodeModule(%s): %v", src, err)
+		}
+		m := decodeForTest(t, b)
+		payload, ok := sectionPayload(m, binary.SectionTag)
+		if !ok {
+			t.Fatalf("no tag section (id 13) in the decoded module")
+		}
+		want := []byte{0x02, 0x00, 0x00, 0x00, 0x01}
+		if string(payload) != string(want) {
+			t.Errorf("tag section payload = % x, want % x", payload, want)
+		}
+		if len(m.Exports) != 1 || m.Exports[0].Kind != binary.ExternTag || m.Exports[0].Index != 0 {
+			t.Errorf("exports = %+v, want one ExternTag export of index 0 (the import-free tag "+
+				"index space's own first slot)", m.Exports)
+		}
+	})
 }
