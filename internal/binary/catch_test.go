@@ -10,9 +10,11 @@ import "testing"
 //
 // The image: a type section (one `() -> ()` func type), an import section (three tag imports,
 // so tag indices 0/1/2 are distinguishable from each other and from any label — exercising the
-// accept path for import kind 4 without needing #95's still-open tag-section payload grammar), a
-// function section (one function of that type), and a code section whose one body is two nested
-// blocks around a `try_table` carrying all four catch-clause kinds.
+// accept path for import kind 4, which needs no section-13 payload since an *imported* tag's
+// type comes from the import descriptor, not from the tag section; #95 closed this gap for
+// *defined* tags separately, see TestDecodeTagSectionRetainsTypeIndices), a function section
+// (one function of that type), and a code section whose one body is two nested blocks around a
+// `try_table` carrying all four catch-clause kinds.
 //
 // **Every tag-bearing clause uses a tag index that differs from its label index** — `catch`
 // reads tag=2 label=0, `catch_ref` reads tag=1 label=0 — so a reader that swapped which u32 is

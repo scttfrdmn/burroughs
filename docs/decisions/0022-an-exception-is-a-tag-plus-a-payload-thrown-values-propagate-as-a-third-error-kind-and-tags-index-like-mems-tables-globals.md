@@ -1,7 +1,6 @@
 # 0022 — An exception is a tag plus a payload, thrown values propagate as a third error kind, and tags index like mems/tables/globals
 
-Date: 2026-08-10 · Status: **proposed** — awaiting Scott's stamp per the status-is-a-citation
-ruling (PR #142): this section is held open until an approval exists to point at.
+Date: 2026-08-10 · Status: **accepted** — stamped by Scott on PR #202.
 
 Filed against **#201** (the EH rung-2 recon) and #199's own two-rung structure, whose rung 1
 (catch-clause and tag-field *retention*, #200) is landed and whose rung 2a (the harness gaining
@@ -137,6 +136,18 @@ the same bound `matchEnd`/`elseOf`'s own per-entry scans already accept, for the
 throw, not per instruction, so it does not touch the dispatch loop's steady-state cost.
 
 ### 3. `Instance.tags []*tagInst`, reserved-not-omitted, imports first then definitions — `mems`/`tables`/`globals`'s own shape, no new pattern
+
+**Prerequisite, found checking this section's own assumption against the tree rather than
+mid-implementation: `mod.Tags` does not exist yet.** `internal/binary`'s section-13 arm
+(`sections.go:276-288`) returns `(false, nil)` — accepted only by the gate, no payload grammar,
+nothing retained — which is issue **#95**, still open, and upstream of every sentence below that
+reads `len(mod.Tags)`. `binary.Module` has no `Tags` field today. This is retention work of
+rung 1's own exact shape (a `vec(at tag)` of `tagtype = TagT (typeuse idx s)` — a fixed zero byte
+then a type index, per `decode.ml:288-290,1082-1087`, mechanically identical to a global's
+typeuse-bearing grammar) and lands as its own PR, one-mechanism-per-PR, before any of §3 below is
+buildable. This note is the assumption stated rather than the surprise discovered — the same
+premise-check discipline this ADR's own §What the reference's shape already settles ran on the
+reference, turned on this document's own claim.
 
 ```go
 // tagInst is one tag: an allocation, matching runtime/tag.ml's Tag.alloc exactly — identity is

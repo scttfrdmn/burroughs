@@ -274,18 +274,19 @@ func (d *Decoder) decodePayload(sid SectionID, size uint32, r *reader) (bool, er
 		_, err := r.u32()
 		return true, err
 	case SectionTag:
-		// Ranked by the structural layer (it is well-formed), accepted only by
-		// the gate. Its payload grammar arrives with the EH gate (#95).
+		// Ranked by the structural layer (it is well-formed), accepted only by the gate —
+		// §5's own "gates never manufacture malformedness" ruling, unaffected by the
+		// payload grammar landing: gate-off still refuses the whole section rather than
+		// reading into it, feature-named rather than a spoofed spec string.
 		//
-		// The citation was `(#8)` until the deferral sweep that followed #22: #8 is the
-		// wat-harness issue and owns none of this, so the deferral was declared but in
-		// substance *untracked* — a tracking number that cannot be followed to the work,
-		// which is the gap the `ErrTrailingData` ruling's declared-and-tracked test exists
-		// to close rather than a grave.
+		// Payload grammar retained since #95 (0022 §3's own found prerequisite): before
+		// this, section 13 accepted only by the gate with no grammar, `decodePayload`
+		// returning `false` — well-formed by the tracked set, nothing kept, and
+		// `Instance.tags` (0022) had nothing to build from.
 		if !d.Features.ExceptionHandling {
 			return false, featureErr("exception handling")
 		}
-		return false, nil
+		return true, d.decodeVec(r, d.decodeTag)
 	case SectionGlobal:
 		return true, d.decodeVec(r, d.decodeGlobal)
 	case SectionElement:
@@ -1107,6 +1108,29 @@ func (d *Decoder) decodeImport(r *reader) error {
 	// that needed them, to compare an import's *type* against a supplied extern and not
 	// only its kind.
 	d.mod().Imports = append(d.mod().Imports, im)
+	return nil
+}
+
+// decodeTag reads one tag section entry: the fixed zero attribute byte, then a type index —
+// `tagtype s = zero s; TagT (typeuse idx s)` (decode.ml:288-290).
+//
+// **The zero byte is checked, not skipped**, via the same `ErrZeroByteExpected` sentinel every
+// other reserved byte in this decoder already reports through — a byte the reference never
+// reads back is still part of the grammar it validated, so a nonzero attribute byte is a
+// malformed module rather than a forward-compatible extension this decoder happens not to use.
+func (d *Decoder) decodeTag(r *reader) error {
+	z, err := r.byte()
+	if err != nil {
+		return err
+	}
+	if z != 0 {
+		return fmt.Errorf("%w: %#02x", ErrZeroByteExpected, z)
+	}
+	idx, err := r.u32()
+	if err != nil {
+		return err
+	}
+	d.mod().Tags = append(d.mod().Tags, Tag{TypeIndex: idx})
 	return nil
 }
 
