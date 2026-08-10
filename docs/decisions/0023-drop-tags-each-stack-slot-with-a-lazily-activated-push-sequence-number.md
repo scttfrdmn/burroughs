@@ -1,7 +1,9 @@
 # 0023 — `drop` tags each stack slot with a lazily-activated push sequence number
 
-Date: 2026-08-10 · Status: **proposed** — awaiting Scott's stamp per the status-is-a-citation
-ruling (PR #142): this section is held open until an approval exists to point at.
+Date: 2026-08-10 · Status: **accepted** — stamped by Scott, contingent on two additions both now
+delivered: the gated-u8 quadrant (measured, with its variance stated honestly rather than
+smoothed over — see the measurement table's own caveat) and a deferral pointer for #9 (see "What
+this decision is *for*, and what retires it").
 
 Filed against **grave #206** (found during #201's rung 2c falsification, PR #207), on Scott's own
 ruling: a decision that "amends 0002's core value model and has genuinely competing shapes,
@@ -59,11 +61,26 @@ doc comment for the full access-pattern rationale) compares:
 | Seq64 vs Base, mixed numeric+ref workload | **+71.9–74.1%** |
 | Seq8 vs Base, mixed workload | **+37.5–38.6%** |
 | Seq64 vs Base, **zero** references ever pushed | **+71.9–75.1%** |
-| Gated vs Base, zero references ever pushed | **+27.5–28.8%** |
-| Gated vs Base, mixed workload | **+73.2–73.5%** |
+| Gated (u64) vs Base, zero references ever pushed | **+27.5–28.8%** |
+| Gated (u64) vs Base, mixed workload | **+73.2–73.5%** |
+| Gated (u8) vs Base, zero references ever pushed | **+25.5–38.2%** (elevated variance — see below) |
 
-Every comparison is `p=0.000` at `n=10`, both times measured — not a single run (decision 0005's
-own rule). Three findings, in the order they change the shape of the decision:
+Every comparison is `p=0.000` at `n=10` for the first five rows, both times measured — not a
+single run (decision 0005's own rule). **The gated-u8 row is the odd one out and is reported with
+the caveat this project's own rules require rather than smoothed over**: measured under machine
+load this project's tooling has no control over (a persistently high, multi-user, non-transient
+load average during measurement), it needed three independent runs before a stable neighbourhood
+emerged (`+38.24%`, `+36.38%`, `+25.50%`, each itself `p≤0.037` at `n=15`), against
+gated-u64-no-refs' own re-measurement under the identical noisy conditions landing in the same
+`+25–45%` neighbourhood rather than repeating its earlier clean `+27–29%`. The two candidates are
+**statistically indistinguishable from each other** under the conditions available to measure
+them, which is itself the finding: unlike the *always-on* comparison (where u8 clearly and
+repeatably halves u64's cost, tight variance, both runs agreeing), gating appears to erase most of
+the gap width alone would otherwise buy — plausible on the mechanism (once gated, the array is
+short-lived and small for the dominant no-ref case, so the bytes-per-slot saved by narrowing
+matter less than they do against Seq64/Seq8's always-tracking, always-growing array), but this ADR
+states that as a plausible reading of noisy data, not a measured result at the confidence its
+other rows carry. Four findings, in the order they change the shape of the decision:
 
 1. **The cost is not about references at all.** Seq64 costs the same (~72-75%) whether or not a
    reference is ever pushed in the run. The regression comes from the extra `append`/reslice pair
@@ -84,6 +101,15 @@ own rule). Three findings, in the order they change the shape of the decision:
    execution, so the mixed-workload cost stays at ~73%, statistically indistinguishable from the
    always-on variants. Gating is a genuine improvement bounded exactly by exec.go's own measured
    population, not a general fix.
+4. **Once gated, width stops being the clear lever it was when always-on.** The always-on
+   comparison (finding 2) shows u8 reliably halving u64's cost — tight variance, reproduced twice.
+   The *gated* comparison shows gated-u8 landing in the same noisy `+25–38%` neighbourhood as
+   gated-u64's own re-measurement under identical conditions, indistinguishable from it at the
+   confidence available. This is a plausible, not a proven, reading (see the caveat on the
+   measurement table above) — but it changes what a future u8 proposal has to argue: not "u8 saves
+   half of the *original* regression," but "u8 saves some fraction of what gating has *already*
+   reduced to ~28%," a much smaller number to be fighting over, on top of a wraparound-soundness
+   design that does not exist yet.
 
 ## Decision
 
@@ -96,11 +122,15 @@ bundling it here.**
   per exec.go's own measured corpus split. The mixed-workload population pays the full ~73% cost
   either way — gating costs nothing extra to add for that population and helps every function
   that doesn't need it.
-- **u64 over u8, for this ADR**: u8's wraparound-soundness question (a per-call-frame generation
-  counter, or some other correctness patch) is real design work this ADR has not done, and
-  shipping a *known-unsound* narrowing to save the difference between two already-large
-  regressions (28% vs. an unmeasured-but-likely-smaller gated-u8 number) is not warranted without
-  that design existing. u64 is unconditionally sound. If a future measurement shows gated-u8 with
+- **u64 over u8, for this ADR, on two grounds now rather than one**: u8's wraparound-soundness
+  question (a per-call-frame generation counter, or some other correctness patch) is real design
+  work this ADR has not done — and finding 4 means the number that design work would be fighting
+  over is not even clearly there: gated-u8 measured statistically indistinguishable from
+  gated-u64 under the conditions available, where the always-on comparison showed a clear,
+  reproduced, tight-variance halving. Shipping a *known-unsound* narrowing to chase a saving this
+  ADR could not measure cleanly is not warranted. u64 is unconditionally sound. If a future
+  measurement — taken under quieter conditions than this ADR had available, so it can actually
+  resolve the question at the confidence its other findings carry — shows gated-u8 with
   a sound wraparound story buys back enough to matter, that is a follow-up decision with its own
   bench numbers — not a reason to hold this one.
 - **`drop`'s own arm**: reads `numSeq[len(numSeq)-1]` vs `refSeq[len(refSeq)-1]` (absent-as-`-1`),
@@ -141,6 +171,31 @@ bundling it here.**
   `drop`'s dynamic one; this ADR does not touch it and does not claim it should be.
 - **Any change to 0002's own switch-dispatch choice** — this widens the value stack's per-slot
   bookkeeping, not the dispatch loop's shape; `dispatchbench`'s own findings are unaffected.
+
+## What this decision is *for*, and what retires it
+
+**This is the right design for an untyped v0 interpreter, not a permanent piece of
+architecture.** The whole reason `drop` needs a runtime signal at all is that nothing today knows
+`drop`'s operand type statically — there is no validator (#9), so the engine cannot ask "what is
+the declared type of the value at this point in this body" and instead has to ask the stack itself
+at the moment `drop` runs. Once #9 exists, that question has a cheap, static answer: `drop`'s
+operand type is known at validation time from the body's own type-checking pass, the same way
+every other instruction's operand types already are. At that point the correct fix is not "keep
+the runtime tag, since it works" — it is to **retire the runtime tracking entirely** and let
+`drop` branch on a fact the validator already computed, the same shape `blockArity`/`countByArray`
+already read a *retained* type fact rather than infer one dynamically. The zero-reference
+population's ~28% tax (Consequences, below) disappears at that point, not merely shrinks: gating
+buys back the common case today because most functions never push a reference, but a validated
+`drop` costs nothing to check *regardless* of whether references are involved, because the answer
+was already computed once, at validation time, for every instruction in the body.
+
+**This is a pre-written consequence for #9's own author, not a promise this ADR can keep on its
+own — #9 does not exist and has no scheduled date**, so nothing here commits to a timeline. What
+it commits to is the shape of the retirement: when #9 lands, this ADR's own mechanism
+(`stack.tracking`/`numSeq`/`refSeq`) is the thing to delete, and `drop`'s arm becomes a plain
+read of the validated operand type — stated here so that the next author who lands #9 finds the
+consequence already written rather than having to re-derive that this tracking was always meant
+to be temporary.
 
 ## Consequences
 

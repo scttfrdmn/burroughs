@@ -564,3 +564,151 @@ func BenchmarkGatedMixed(b *testing.B) {
 		runGatedMixed(iters)
 	}
 }
+
+// ---------- Candidate D: lazily-gated tracking, uint8 sequence numbers ----------
+//
+// **The fourth cell of the matrix, filled rather than left implicit.** Seq8's own measurement
+// found width matters (roughly halves the always-on tax), so the gated design's own width choice
+// needs the identical check, not an assumption that u64's answer transfers. `stackGatedU8` is
+// `stackGated` unchanged except `numSeq`/`refSeq`/`next` narrow to `uint8` — same activation, same
+// backfill, same branch-truncation shape.
+//
+// **Why this is measured for cost but not chosen, and the reason is a mechanism, not a
+// preference.** A push-*kind* shadow (one bit per push: "this slot is a ref") would fit in a u8
+// or even a single bit trivially and never wrap, because it encodes a fact about one slot in
+// isolation. What `drop` actually needs is different: an *ordering* between the two arrays' tops,
+// which only a monotonic counter can answer, and any bounded counter wraps. `Seq8`'s own
+// wraparound analysis applies unchanged here: past 255 pushes since the tracking gate last
+// activated, "higher sequence number" stops meaning "more recent," and `N=1000` in this very
+// benchmark's own access pattern exceeds that in a single un-popped run — so if this were adopted
+// as the real design, drop would silently misidentify the top array on some fraction of real
+// executions, which is grave #206's own defect reborn in the fix meant to close it. Measured
+// anyway, because the ADR's obligation is to say *how much* is being left on the table by
+// rejecting it on soundness grounds, not merely that it is rejected.
+type stackGatedU8 struct {
+	num      []uint64
+	numSeq   []uint8
+	refs     []uint64
+	refSeq   []uint8
+	next     uint8
+	tracking bool
+}
+
+func (s *stackGatedU8) pushNum(v uint64) {
+	s.num = append(s.num, v)
+	if s.tracking {
+		s.numSeq = append(s.numSeq, s.next)
+		s.next++
+	}
+}
+
+func (s *stackGatedU8) popNum() uint64 {
+	v := s.num[len(s.num)-1]
+	s.num = s.num[:len(s.num)-1]
+	if s.tracking {
+		s.numSeq = s.numSeq[:len(s.numSeq)-1]
+	}
+	return v
+}
+
+func (s *stackGatedU8) pushRef(v uint64) {
+	if !s.tracking {
+		s.tracking = true
+		s.numSeq = make([]uint8, len(s.num))
+		for i := range s.numSeq {
+			s.numSeq[i] = s.next
+			s.next++
+		}
+	}
+	s.refs = append(s.refs, v)
+	s.refSeq = append(s.refSeq, s.next)
+	s.next++
+}
+
+func (s *stackGatedU8) popRef() uint64 {
+	v := s.refs[len(s.refs)-1]
+	s.refs = s.refs[:len(s.refs)-1]
+	s.refSeq = s.refSeq[:len(s.refSeq)-1]
+	return v
+}
+
+func (s *stackGatedU8) branch(height, arity, refHeight, refArity int) {
+	if arity > 0 {
+		src := len(s.num) - arity
+		copy(s.num[height:], s.num[src:])
+		if s.tracking {
+			copy(s.numSeq[height:], s.numSeq[src:])
+		}
+	}
+	s.num = s.num[:height+arity]
+	if s.tracking {
+		s.numSeq = s.numSeq[:height+arity]
+	}
+	if refArity > 0 {
+		src := len(s.refs) - refArity
+		copy(s.refs[refHeight:], s.refs[src:])
+		copy(s.refSeq[refHeight:], s.refSeq[src:])
+	}
+	s.refs = s.refs[:refHeight+refArity]
+	s.refSeq = s.refSeq[:refHeight+refArity]
+}
+
+func runGatedU8NoRefs(iters int) uint64 {
+	s := &stackGatedU8{num: make([]uint64, 0, 64)}
+	var acc uint64
+	for range iters {
+		for i := range N {
+			s.pushNum(uint64(i))
+			if i%37 == 0 && len(s.num) > 4 {
+				s.branch(len(s.num)-4, 1, 0, 0)
+			}
+			acc += s.popNum()
+			s.pushNum(acc)
+		}
+	}
+	return acc
+}
+
+func runGatedU8Mixed(iters int) uint64 {
+	s := &stackGatedU8{num: make([]uint64, 0, 64), refs: make([]uint64, 0, 8)}
+	var acc uint64
+	for range iters {
+		for i := range N {
+			s.pushNum(uint64(i))
+			if i%refEvery == 0 {
+				s.pushRef(uint64(i))
+			}
+			if i%37 == 0 && len(s.num) > 4 {
+				s.branch(len(s.num)-4, 1, max(len(s.refs)-1, 0), boolToInt(len(s.refs) > 0))
+			}
+			acc += s.popNum()
+			s.pushNum(acc)
+		}
+		for len(s.refs) > 0 {
+			acc += s.popRef()
+		}
+	}
+	return acc
+}
+
+func TestAllAgreeGatedU8(t *testing.T) {
+	const iters = 5
+	if got, want := runGatedU8NoRefs(iters), runBaseNoRefs(iters); got != want {
+		t.Errorf("GatedU8NoRefs = %d, want %d", got, want)
+	}
+	if got, want := runGatedU8Mixed(iters), runBase(iters); got != want {
+		t.Errorf("GatedU8Mixed = %d, want %d", got, want)
+	}
+}
+
+func BenchmarkGatedU8NoRefs(b *testing.B) {
+	for range b.N {
+		runGatedU8NoRefs(iters)
+	}
+}
+
+func BenchmarkGatedU8Mixed(b *testing.B) {
+	for range b.N {
+		runGatedU8Mixed(iters)
+	}
+}
