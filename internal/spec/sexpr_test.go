@@ -731,6 +731,156 @@ func TestAssertTrapActionNeedsATrapPredicate(t *testing.T) {
 	})
 }
 
+// TestAssertExceptionClassification is TestAssertTrapSplitsByWrappedForm's own shape for
+// assert_exception's narrower grammar (#201 rung 2a) — one fewer field per row, since there
+// is no Expect to carry (classify's own doc comment: the grammar has no expected-text
+// argument at all, unlike assert_trap's).
+func TestAssertExceptionClassification(t *testing.T) {
+	cases := []struct {
+		src    string
+		want   Kind
+		invoke string
+	}{
+		{`(assert_exception (invoke "f"))`, KindAssertException, "f"},
+		{`(assert_exception (invoke "g" (i32.const 1) (i64.const 2)))`, KindAssertException, "g"},
+		// The module-naming form: declined, per classify's own measurement that zero corpus
+		// vectors use it. Structurally indistinguishable from a real decline rather than a
+		// found-and-rejected shape, because there is nothing in this proposal's grammar that
+		// would admit it even if the corpus wanted it — `namedInvokeAction` is never called
+		// from this arm at all, unlike assert_trap's.
+		{`(assert_exception (invoke $M "f"))`, KindUnsupported, ""},
+		// A `get` action is a different grammar entirely.
+		{`(assert_exception (get "g"))`, KindUnsupported, ""},
+		// Arity: `(assert_exception <action>)` takes exactly one element after the head, so a
+		// bare atom or an extra trailing element are both declined. The trailing-element row
+		// is the one that catches a check written as `len(n.list) >= 2` instead of `== 2` —
+		// exactly the mutation that slipped through until this row existed, watched fail
+		// against the mutation and pass against the correct code.
+		{`(assert_exception "f")`, KindUnsupported, ""},
+		{`(assert_exception (invoke "f") "text")`, KindUnsupported, ""},
+	}
+	for _, c := range cases {
+		s, err := Parse("t.wast", []byte(c.src))
+		if err != nil {
+			t.Fatalf("Parse(%q): %v", c.src, err)
+		}
+		if len(s.Commands) != 1 {
+			t.Fatalf("Parse(%q) gave %d commands, want 1", c.src, len(s.Commands))
+		}
+		got := s.Commands[0]
+		if got.Kind != c.want {
+			t.Errorf("%s\n  classified %v, want %v", c.src, got.Kind, c.want)
+			continue
+		}
+		if got.Invoke != c.invoke {
+			t.Errorf("%s\n  Invoke = %q, want %q", c.src, got.Invoke, c.invoke)
+		}
+		wantNeeds := CapInterpreter
+		if c.want == KindUnsupported {
+			wantNeeds = CapNone
+		}
+		if got.Needs != wantNeeds {
+			t.Errorf("%s\n  Needs = %q, want %q", c.src, got.Needs, wantNeeds)
+		}
+	}
+}
+
+// TestAssertExceptionScoring is TestAssertTrapActionScoring's own shape, one failure mode
+// short: there is no expected text to get wrong, so where assert_trap partitions its fails
+// into three keys this partitions into two — no exception raised, and a real error that is
+// not an exception. Both directions are falsified the same way #157's row was: the accept
+// direction (any error scoring as the exception) is what IsException's injection exists to
+// close, exactly as IsTrap's does one Kind over.
+func TestAssertExceptionScoring(t *testing.T) {
+	type excErr struct{ error }
+	const text = "some engine-internal detail the vector does not name"
+	exc := excErr{errString(text)}
+	imposter := errString(text)
+
+	cases := []struct {
+		name string
+		err  error
+		out  []Val
+		pass bool
+		key  string
+	}{
+		{"a real exception", exc, nil, true, ""},
+		{
+			"a plausible imposter: an error, but not an exception",
+			imposter, nil, false, text,
+		},
+		{
+			"no exception at all: the call returned values",
+			nil,
+			[]Val{{Kind: KindI32, Bits: 7}},
+			false, "assert_exception",
+		},
+	}
+	for _, c := range cases {
+		src := `(module binary "\00asm\01\00\00\00")` + "\n" +
+			`(assert_exception (invoke "f"))`
+		s, err := Parse("t.wast", []byte(src))
+		if err != nil {
+			t.Fatalf("%s: parse: %v", c.name, err)
+		}
+		r := s.RunWith(Engine{
+			Decode:  func([]byte) error { return nil },
+			IsGated: func(error) bool { return false },
+			IsException: func(e error) bool {
+				var ee excErr
+				return errors.As(e, &ee)
+			},
+			Instantiate: func(Command) (Instance, Stratum, error) { return "stub", StratumUnset, nil },
+			Invoke: func(Instance, string, []Val) ([]Val, error) {
+				return c.out, c.err
+			},
+			Has: []Capability{CapInterpreter},
+		})
+		if c.pass {
+			if r.Pass != 2 || r.Fail != 0 {
+				t.Errorf("%s: got %d pass / %d fail, want 2/0\n%s", c.name, r.Pass, r.Fail, r.Board())
+			}
+			continue
+		}
+		if r.Pass != 1 || r.Fail != 1 {
+			t.Errorf("%s: got %d pass / %d fail, want 1/1 — this shape must not score a pass\n%s",
+				c.name, r.Pass, r.Fail, r.Board())
+			continue
+		}
+		if len(r.Buckets[c.key]) != 1 {
+			t.Errorf("%s: no failure under key %q; got keys %v", c.name, c.key, r.BucketsBySize())
+		}
+	}
+}
+
+// TestAssertExceptionNeedsAnExceptionPredicate is TestAssertTrapActionNeedsATrapPredicate's
+// own shape: a caller that declares CapInterpreter and hands over no ExceptionFunc must stop
+// rather than silently fail every assert_exception vector the engine can answer.
+func TestAssertExceptionNeedsAnExceptionPredicate(t *testing.T) {
+	src := `(module binary "\00asm\01\00\00\00")` + "\n" +
+		`(assert_exception (invoke "f"))`
+	s, err := Parse("t.wast", []byte(src))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	defer func() {
+		switch v := recover(); {
+		case v == nil:
+			t.Error("declaring CapInterpreter with no ExceptionFunc did not panic; an " +
+				"assert_exception action would be judged by a predicate that answers no to " +
+				"everything, which silently fails every vector the engine can answer")
+		case !strings.Contains(fmt.Sprint(v), "no ExceptionFunc was supplied"):
+			t.Errorf("panic does not name the missing component: %v", v)
+		}
+	}()
+	_ = s.RunWith(Engine{
+		Decode:      func([]byte) error { return nil },
+		Instantiate: func(Command) (Instance, Stratum, error) { return "stub", StratumUnset, nil },
+		Invoke:      func(Instance, string, []Val) ([]Val, error) { return nil, nil },
+		Has:         []Capability{CapInterpreter},
+	})
+}
+
 // TestNoReaderLeavesKindAtItsZeroValue is the control the `register` arm's grave names: a reader
 // that returns its Command bare, without stamping Kind, scores the vector as `KindModuleBinary`.
 //

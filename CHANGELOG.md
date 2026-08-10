@@ -21,6 +21,27 @@ weakly-ordered platform.
 
 ### Added
 
+- **The harness can ask `assert_exception`, exception handling's rung 2a** (#201). A new
+  `KindAssertException` (unnamed-only — measured over all 9 files across both proposals, zero
+  vectors name a module under this directive, so unlike `assert_trap`'s matched named/unnamed
+  pair this Kind has no partner) and `Engine.IsException`/`ExceptionFunc`, mirroring
+  `IsTrap`/`TrapFunc` field-for-field: same accept-direction hazard (a non-exception error must
+  not score as the exception the vector wants), same missing-predicate panic rather than a
+  silent all-fail default. The board's own `isException` is `func(error) bool { return false }`,
+  stated as rung 2a's own honest engine-truth rather than an oversight — `internal/interp` has
+  zero exception-handling execution machinery (rung 2b's ADR and rung 2c's implementation are
+  the recon's next two rungs), so nothing can yet answer yes. **18 vectors move `unsupported`
+  → `gated`, zero convert to pass** — the observability-before-capability move stated up front:
+  `unsupported` 26822→26804, `gated` 3728→3746, `fail`/`pass` unmoved at 164/34308.
+  `TestGatedVectors`'s per-vector allowlist grows the 18 newly-reached gate sites across
+  `throw.wast`, `throw_ref.wast`, and `try_table.wast` — the same declined gate their sibling
+  `assert_trap`/`assert_return` rows already carry, confirming these are the identical modules
+  reaching the decoder from a new angle rather than a new decline. New falsifiable controls:
+  `TestAssertExceptionClassification` (including the trailing-element row that a `len(n.list) ==
+  2` arity check regressing to `>= 2` fails on, watched), `TestAssertExceptionScoring` (both
+  directions — a non-exception imposter must not pass, an uncaught real one must), and
+  `TestAssertExceptionNeedsAnExceptionPredicate`.
+
 - **`try_table`'s catch-clause vector and the `(tag …)` module field retain and encode, rung 1 of
   exception handling** (#199). Decoder-side: `internal/binary/module.go` gains `Catch`/`CatchKind`/
   `Catches`, a side table on `Func` shaped exactly like `br_table`'s `Labels` (0016) — keyed by

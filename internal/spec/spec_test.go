@@ -204,6 +204,16 @@ func isTrap(err error) bool {
 	return errors.As(err, &t)
 }
 
+// isException is isTrap's own delegation for exception handling's outcome, currently unable
+// to answer yes to anything: `internal/interp` has zero exception-handling execution
+// machinery (#201's rung 2a/2b/2c split) — no throw, no catch, no unwind, and therefore no
+// engine type to `errors.As` against. Declared and tracked rather than a stillborn `func(error)
+// bool { return false }` with no reason attached: this is rung 2a's own stated effect
+// (observability before capability, #201), not an oversight — every `assert_exception` vector
+// becomes *askable* today and *answerable* only once rung 2c lands, and the always-false body
+// is the honest engine-truth for the interval between them.
+func isException(error) bool { return false }
+
 // instantiate is the interpreter's module entry point: it turns a scored module command into
 // something invoke can be called on.
 //
@@ -499,7 +509,8 @@ func fromInterpValue(o interp.Value) (Val, bool) {
 func engine() Engine {
 	return Engine{
 		Decode: decode, ReadText: readText, IsGated: isGated, IsTrap: isTrap,
-		Invoke: invoke, InstantiateLinked: instantiateLinked,
+		IsException: isException,
+		Invoke:      invoke, InstantiateLinked: instantiateLinked,
 	}
 }
 
@@ -5159,6 +5170,15 @@ func TestGatedVectors(t *testing.T) {
 			// The sole module (:3-36) declares five tags and a `throw`-carrying `$throw-if`.
 			38: "exception handling: five (tag …) fields and a throw at :22-25 — the module this action runs against",
 			49: "exception handling: five (tag …) fields and a throw at :22-25 — the module this action runs against",
+			// The `assert_exception` rows became askable at #201's rung 2a (a harness Kind,
+			// not an engine capability) — same module, same declined gate, seven more lines.
+			39: "exception handling: five (tag …) fields and a throw at :22-25 — the module this action runs against",
+			40: "exception handling: five (tag …) fields and a throw at :22-25 — the module this action runs against",
+			42: "exception handling: five (tag …) fields and a throw at :22-25 — the module this action runs against",
+			43: "exception handling: five (tag …) fields and a throw at :22-25 — the module this action runs against",
+			44: "exception handling: five (tag …) fields and a throw at :22-25 — the module this action runs against",
+			46: "exception handling: five (tag …) fields and a throw at :22-25 — the module this action runs against",
+			47: "exception handling: five (tag …) fields and a throw at :22-25 — the module this action runs against",
 		},
 		"throw_ref.wast": {
 			// Every action here invokes against the one module (:3-99), which declares tags and
@@ -5168,6 +5188,14 @@ func TestGatedVectors(t *testing.T) {
 			110: "exception handling: try_table/throw_ref pairs at :53-96 — the module this action runs against",
 			112: "exception handling: try_table/throw_ref pairs at :53-96 — the module this action runs against",
 			113: "exception handling: try_table/throw_ref pairs at :53-96 — the module this action runs against",
+			// `assert_exception` rows, askable since #201's rung 2a — same module, same gate.
+			99:  "exception handling: try_table/throw_ref pairs at :53-96 — the module this action runs against",
+			101: "exception handling: try_table/throw_ref pairs at :53-96 — the module this action runs against",
+			104: "exception handling: try_table/throw_ref pairs at :53-96 — the module this action runs against",
+			106: "exception handling: try_table/throw_ref pairs at :53-96 — the module this action runs against",
+			108: "exception handling: try_table/throw_ref pairs at :53-96 — the module this action runs against",
+			109: "exception handling: try_table/throw_ref pairs at :53-96 — the module this action runs against",
+			115: "exception handling: try_table/throw_ref pairs at :53-96 — the module this action runs against",
 		},
 		"try_table.wast": {
 			// The first module (:3-6) declares `(tag $e0 (export "e0"))`; `register` needs it
@@ -5183,6 +5211,10 @@ func TestGatedVectors(t *testing.T) {
 			288: "exception handling: nine (tag …) fields and try_table at :10-341 — the module this action runs against",
 			290: "exception handling: nine (tag …) fields and try_table at :10-341 — the module this action runs against",
 			291: "exception handling: nine (tag …) fields and try_table at :10-341 — the module this action runs against",
+			// The two `assert_exception` rows became askable at #201's rung 2a — same module,
+			// same declined gate.
+			292: "exception handling: nine (tag …) fields and try_table at :10-341 — the module this action runs against",
+			296: "exception handling: nine (tag …) fields and try_table at :10-341 — the module this action runs against",
 			294: "exception handling: nine (tag …) fields and try_table at :10-341 — the module this action runs against",
 			295: "exception handling: nine (tag …) fields and try_table at :10-341 — the module this action runs against",
 			298: "exception handling: nine (tag …) fields and try_table at :10-341 — the module this action runs against",
@@ -5210,6 +5242,10 @@ func TestGatedVectors(t *testing.T) {
 			329: "exception handling: nine (tag …) fields and try_table at :10-341 — the module this action runs against",
 			331: "exception handling: nine (tag …) fields and try_table at :10-341 — the module this action runs against",
 			332: "exception handling: nine (tag …) fields and try_table at :10-341 — the module this action runs against",
+			// The two `assert_exception` rows became askable at #201's rung 2a — same module,
+			// same declined gate.
+			334: "exception handling: nine (tag …) fields and try_table at :10-341 — the module this action runs against",
+			335: "exception handling: nine (tag …) fields and try_table at :10-341 — the module this action runs against",
 			337: "exception handling: nine (tag …) fields and try_table at :10-341 — the module this action runs against",
 			339: "exception handling: nine (tag …) fields and try_table at :10-341 — the module this action runs against",
 			340: "exception handling: nine (tag …) fields and try_table at :10-341 — the module this action runs against",
@@ -6081,7 +6117,12 @@ func TestPhase1Files(t *testing.T) {
 	// bucket — the vectors were always going to land there once the harness could even attempt
 	// them; before this change they were short-circuited earlier and misfiled as a value
 	// mismatch. Measured with the harness, not a grep, per decision 0007/#161's standing rule.
-	const unsupportedCeiling = 26822
+	// 26822 → 26804, −18 (#201 rung 2a): `KindAssertException` makes 18 previously-unclassified
+	// `assert_exception` vectors askable, and all 18 land in `gated` rather than `pass` — the
+	// EH gate is off by default and `isException` cannot yet answer yes (rung 2c's own
+	// prerequisite), so the drain here is purely a reclassification into an honest verdict,
+	// matching #199's own "gated, not pass" precedent for rung 1.
+	const unsupportedCeiling = 26804
 	boardBound(t, "unsupportedCeiling", totalUnsup, unsupportedCeiling, boardBoundSlack, ceilingBound,
 		"either a capability regressed or the corpus moved; both need an explanation rather "+
 			"than a raised ceiling")

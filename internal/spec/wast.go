@@ -118,6 +118,7 @@ const (
 	KindNamedAssertReturn               // (assert_return (invoke $M "f" arg*) result*) — 0017
 	KindNamedAssertTrap                 // (assert_trap (invoke $M "f" arg*) "text") — 0017
 	KindNamedInvoke                     // (invoke $M "f" arg*) at top level — 0017
+	KindAssertException                 // (assert_exception (invoke "f" arg*)) — an uncaught exception, #201 rung 2a
 	KindUnsupported                     // anything phase 1 cannot execute
 )
 
@@ -151,6 +152,8 @@ func (k Kind) String() string {
 		return "assert_trap (invoke $M)"
 	case KindNamedInvoke:
 		return "invoke $M"
+	case KindAssertException:
+		return "assert_exception"
 	default:
 		return "unsupported"
 	}
@@ -159,7 +162,7 @@ func (k Kind) String() string {
 // The three questions the run loop's shared action arm asks about a Kind, as predicates
 // rather than as equality tests spelled at each site.
 //
-// **Two axes crossed, which is why there are six action Kinds and not three.** An action
+// **Two axes crossed, which is why there were six action Kinds and not three.** An action
 // selects a module (unnamed, or `$M`) and carries an expectation (values, a trap, nothing),
 // and those are independent facts — `(assert_trap (invoke $M "f") "…")` is real, and so is
 // every other cell. Scott's ruling was that the named form arrives as its own Kind rather
@@ -168,8 +171,14 @@ func (k Kind) String() string {
 // which is a flag by another route and ambiguous besides — `(assert_return (invoke $M "f"))`
 // with zero expected results exists.
 //
+// **`KindAssertException` is the seventh, and it broke the pairing rather than extending
+// it** (#201 rung 2a) — a third expectation crossed with only the unnamed axis, since the
+// corpus has no named form to give it a partner. The two-axis count above is the shape at
+// six; a reader wanting the current total counts the Kind declaration block, not this
+// comment, for `selectsModule`'s own stated reason.
+//
 // Predicates rather than literals at the use sites because the arm asks each question in more
-// than one place, and *one concept, one trigger*: a seventh action Kind is admitted by
+// than one place, and *one concept, one trigger*: an eighth action Kind is admitted by
 // extending one of these, not by finding every `c.Kind ==` in the loop.
 func (k Kind) selectsModule() bool {
 	switch k {
@@ -179,7 +188,7 @@ func (k Kind) selectsModule() bool {
 		// A real fallback rather than a shrug, which is the condition `.golangci.yml`'s
 		// `default-signifies-exhaustive` attaches to writing one: *every* other Kind runs
 		// against the current instance, including Kinds not yet invented, so the negative is
-		// the honest default and enumerating the eleven others here would be a list to forget
+		// the honest default and enumerating the thirteen others here would be a list to forget
 		// to extend. Contrast the run loop's own switch, where a missing Kind must be loud.
 		return false
 	}
@@ -191,6 +200,17 @@ func (k Kind) wantsTrap() bool {
 
 func (k Kind) wantsNothing() bool {
 	return k == KindInvoke || k == KindNamedInvoke
+}
+
+// wantsException is wantsTrap's own question for exception handling's outcome. One member
+// today, not two: **zero `assert_exception` vectors name a module** — measured over the
+// whole corpus (`grep -rn 'assert_exception' | grep '\$'` finds nothing across all 9 files
+// that use the directive, tracked and legacy proposals both) — so there is no
+// `KindNamedAssertException` to pair it with, unlike wantsTrap's two. A predicate with one
+// member is not a shortcut around the pairing; it is what the corpus actually has, stated
+// the same way selectsModule's own doc comment states its cell count.
+func (k Kind) wantsException() bool {
+	return k == KindAssertException
 }
 
 // Capability is an engine component a command may require before it can be
@@ -621,6 +641,33 @@ func classify(n node, src []byte) Command {
 			if c, ok := namedInvokeAction(n.list[1]); ok {
 				c.Kind, c.Line, c.Head = KindNamedAssertTrap, n.line, head
 				c.Expect = string(n.list[2].str)
+				return c
+			}
+		}
+		return Command{Kind: KindUnsupported, Line: n.line, Head: head}
+
+	case "assert_exception":
+		// `(assert_exception (invoke "f" arg*))` — `parser.mly:1468-1469`'s
+		// `LPAR ASSERT_EXCEPTION action RPAR`, one element shorter than `assert_trap`'s
+		// grammar: there is no expected-text string at all (confirmed against the grammar
+		// production, not inferred from a vector — `runner.ml:571-575`'s handler matches
+		// only on *which exception* was raised, `AssertException act -> (match run_action
+		// act with exception Exception (_, msg) -> () | _ -> Assert.error …)`, discarding
+		// `msg`). So this arm has one fewer field to carry than KindAssertTrapAction: no
+		// `Expect`, ever — a fact worth stating because every sibling arm in this switch
+		// reads a trailing string and this is the one that structurally cannot.
+		//
+		// **Only the unnamed action shape is admitted, and that is the whole corpus, not a
+		// declined remainder.** Measured directly against the grammar and against every
+		// vector in both exception-handling proposals (tracked and legacy, 9 files, 41
+		// uses of the directive): zero name a module. `invokeAction`'s own declines — a
+		// NaN-class or unconvertible argument — still apply and still leave a vector
+		// KindUnsupported with its head recorded, exactly as they do for `assert_trap`'s
+		// unnamed half; there is no second reader to add here because there is no second
+		// population to admit.
+		if len(n.list) == 2 && n.list[1].isList() {
+			if c, ok := invokeAction(n.list[1]); ok {
+				c.Kind, c.Line, c.Head = KindAssertException, n.line, head
 				return c
 			}
 		}
@@ -1334,6 +1381,18 @@ type GatedFunc func(error) bool
 // both type systems and answers with `errors.As`.
 type TrapFunc func(error) bool
 
+// ExceptionFunc reports whether an engine error is an *uncaught exception* escaping to the
+// call boundary — exception handling's own control-transfer outcome (`runner.ml:571-575`'s
+// `AssertException`, matched against `Eval.Exception` by `run_action`'s own exception
+// clause), distinct from a trap, a verdict, and an engine gap.
+//
+// TrapFunc's own reasoning applies unchanged, one Kind over: the harness must not sniff
+// error text for this, and the caller — which holds both type systems — answers with
+// `errors.As`. Required by the assert_exception action arm and by nothing else, so it is
+// nil for every caller that does not score exceptions; see the wantsException() panic this
+// mirrors for what a missing predicate must never do (#201 rung 2a).
+type ExceptionFunc func(error) bool
+
 // Instance is a module the engine has made executable, opaque to the harness.
 //
 // `any`, and the emptiness is the neutrality rule (contract §0) rather than laziness: the
@@ -1425,6 +1484,11 @@ type Engine struct {
 	// cannot tell a trap from an error has not been given what it needs to judge a trap,
 	// and quietly judging anyway is the accept-direction defect the field exists to close.
 	IsTrap TrapFunc
+
+	// IsException is IsTrap's own reasoning for exception handling's own outcome — required
+	// by the assert_exception action arm alone, nil for every caller that does not score it
+	// (#201 rung 2a).
+	IsException ExceptionFunc
 
 	// Instantiate and Invoke are the interpreter's two halves, and they are separate
 	// fields because they are separate obligations: an engine can decode a module without
@@ -1529,6 +1593,11 @@ func (s *Script) run(opts runOpts) *Result {
 	// the harness decline to award, never decline to notice.
 	isTrap := func(err error) bool {
 		return err != nil && opts.IsTrap != nil && opts.IsTrap(err)
+	}
+	// isTrap's own defaulting, one Kind over: an absent ExceptionFunc declines to award
+	// rather than declines to notice.
+	isException := func(err error) bool {
+		return err != nil && opts.IsException != nil && opts.IsException(err)
 	}
 	// cur is the instance the *most recent* module command produced, which is what an
 	// unnamed `assert_return` runs against.
@@ -1953,14 +2022,21 @@ func (s *Script) run(opts runOpts) *Result {
 			})
 
 		case KindAssertReturn, KindInvoke, KindAssertTrapAction,
-			KindNamedAssertReturn, KindNamedInvoke, KindNamedAssertTrap:
-			// **Six kinds, one arm, and the sharing is the point.** All six call an exported
+			KindNamedAssertReturn, KindNamedInvoke, KindNamedAssertTrap, KindAssertException:
+			// **Seven kinds, one arm, and the sharing is the point.** All seven call an exported
 			// function on an instance, so they need the same instance lookup, the same
 			// no-instance accounting, the same gate handling, and the same panic on a
 			// declared-but-absent component. A bare `(invoke …)` is an assert_return with no
-			// expectation; an `assert_trap` action is one whose expectation is an error; the
-			// three named forms differ only in *which* instance. A separate arm would be a
-			// second copy of all the state handling, drifting from this one on the next change.
+			// expectation; an `assert_trap` action is one whose expectation is an error;
+			// `assert_exception` is a sibling expectation with no text to match; the three named
+			// forms differ only in *which* instance. A separate arm would be a second copy of all
+			// the state handling, drifting from this one on the next change.
+			//
+			// **`KindAssertException` joined rather than forked for `wantsTrap`'s own reason,
+			// one Kind short of a pair.** Unlike the three named Kinds (which came in a matched
+			// trio), there is no `KindNamedAssertException` — zero corpus vectors name a module
+			// under this directive (classify's own doc comment measures it) — so this arm gains
+			// one Kind, not two, and `selectsModule()`'s switch needs no new case.
 			//
 			// **It was three, and the named Kinds joining it rather than forking it is the
 			// answer to the obvious objection to Scott's ruling.** Six Kinds sounds like six
@@ -2003,6 +2079,15 @@ func (s *Script) run(opts runOpts) *Result {
 				panic(fmt.Sprintf("%s:%d: CapInterpreter declared but no TrapFunc was supplied; "+
 					"an assert_trap action cannot be judged without one, and judging it anyway "+
 					"would score a non-trap error as a trap", s.Path, c.Line))
+			}
+			// TrapFunc's own tripwire, one Kind over: judging an assert_exception with no
+			// ExceptionFunc would score *any* error — a missing arm, the layering debt — as the
+			// exception the vector wants, which is the identical accept-direction hazard
+			// wantsTrap's check exists to close.
+			if c.Kind.wantsException() && opts.IsException == nil {
+				panic(fmt.Sprintf("%s:%d: CapInterpreter declared but no ExceptionFunc was supplied; "+
+					"an assert_exception action cannot be judged without one, and judging it anyway "+
+					"would score any error as the exception", s.Path, c.Line))
 			}
 			// **Which instance the action selects, which is the one thing the named Kinds
 			// changed here.** An unnamed action runs against the most recent module command's
@@ -2124,6 +2209,52 @@ func (s *Script) run(opts runOpts) *Result {
 				}
 				r.Buckets[key] = append(r.Buckets[key], Failure{
 					Line: c.Line, Expect: c.Expect, Got: got, Kind: c.Kind,
+					Stratum: StratumExec,
+				})
+				continue
+			}
+			if c.Kind.wantsException() {
+				// **wantsTrap's own shape, one field shorter.** An exception *is* the expected
+				// result, an error is required, and it must be a real uncaught exception — but
+				// unlike assert_trap there is no expected text to match, because the grammar
+				// carries none (classify's own doc comment cites `parser.mly:1468-1469` and
+				// `runner.ml:571-575` for exactly this: `AssertException`'s handler discards the
+				// exception's own message). So the substring step wantsTrap's arm needs simply
+				// does not exist here — this is not that arm missing a check, it is one fewer
+				// fact for the corpus to supply.
+				//
+				// **`isException` before scoring, for `isTrap`'s own reason.** A non-exception
+				// error — a missing arm, the layering debt — must not score as the exception the
+				// vector wants; that is the identical accept-direction collision wantsTrap's
+				// ordering closes, one Kind over.
+				got := ""
+				if err != nil {
+					got = err.Error()
+				}
+				if err != nil && isException(err) {
+					r.Pass++
+					continue
+				}
+				r.Fail++
+				// Two failure modes, not wantsTrap's three, because there is no expected text
+				// for a third mode ("right kind of error, wrong words") to exist:
+				//
+				//   - **No error at all**: the call ran and returned values where the suite wants
+				//     an escaping exception — a semantic disagreement, keyed by the directive
+				//     itself since there is no expected string to key by instead.
+				//   - **An error that is not an exception**: almost always a missing arm, keyed
+				//     by the engine's own text so it partitions into the opcode work list the
+				//     same way assert_trap's non-trap branch does.
+				const key0 = "assert_exception"
+				key := key0
+				if err == nil {
+					got = fmt.Sprintf("the call returned %d results (%s) without raising an exception",
+						len(out), joinVals(out))
+				} else {
+					key = got
+				}
+				r.Buckets[key] = append(r.Buckets[key], Failure{
+					Line: c.Line, Expect: "an uncaught exception", Got: got, Kind: c.Kind,
 					Stratum: StratumExec,
 				})
 				continue
