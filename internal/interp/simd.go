@@ -156,6 +156,144 @@ func (in *Instance) execFD(ins binary.Instr, st *stack) error {
 	case 0x1e, 0x22: // i64x2.replace_lane, f64x2.replace_lane
 		return in.vecReplaceLane(ins, st, 8, true)
 
+	// **VecBinary, integer — #212's own largest single family, 53 mnemonics.** Found missing
+	// after the ladder's other four families (VecUnary/VecCompare/float-arithmetic/VecShift/
+	// VecConvert) had already landed: the recon's own "197 bulk per-lane" group folds VecBinary
+	// in with VecUnary/VecCompare/VecConvert/VecShift/VecBitmask/VecTest, and every prior PR took
+	// one of those *other* six out of the group without ever taking VecBinary's own slice —
+	// caught while measuring a gate-flip forecast, whose SIMD-only-features fail bucket named 54
+	// still-missing `fd` opcodes, every one of them a `VecBinary (V128 (IN _))` constructor per
+	// `mnemonics.ml`. The float half of VecBinary (add/sub/mul/div/min/max/pmin/pmax across
+	// f32x4/f64x2) already has arms, landed with the rest of the float-arithmetic sub-batch.
+	//
+	// `eval.ml`'s own stack shape: `Vec n2 :: Vec n1 :: vs'`, matching every other two-v128-
+	// operand family already landed (whole-vector-bitwise, VecCompare, float VecBinary) — n2
+	// (pushed second) pops first.
+	//
+	// Five shapes inside this one family, not one:
+	//  - **ordinary per-lane** (add/sub/min/max/avgr_u, 21 mnemonics): `vecBinaryLanes`.
+	//  - **saturating add/sub** (12): the same shared `vecBinaryLanes` shape with a
+	//    saturating combine function, `satAddLane`/`satSubLane`.
+	//  - **narrow** (6): two double-width operands, each lane saturated down and packed —
+	//    `vecNarrow`, the structural inverse of `vecExtendLanes` from the VecConvert family.
+	//  - **extmul/dot/q15mulr** (13): each reuses `vecExtaddPairwise`'s own sign/zero-extension
+	//    idiom rather than a fifth copy of it.
+	//  - **swizzle/shuffle** (2, i8x16 only): a byte-indexed gather, `vecSwizzle`/`vecShuffle`.
+	case 0x6e: // i8x16.add
+		return in.vecBinaryLanes(st, 1, func(a, b uint64) uint64 { return a + b })
+	case 0x71: // i8x16.sub
+		return in.vecBinaryLanes(st, 1, func(a, b uint64) uint64 { return a - b })
+	case 0x76: // i8x16.min_s
+		return in.vecBinaryLanes(st, 1, minLane(1, true))
+	case 0x77: // i8x16.min_u
+		return in.vecBinaryLanes(st, 1, minLane(1, false))
+	case 0x78: // i8x16.max_s
+		return in.vecBinaryLanes(st, 1, maxLane(1, true))
+	case 0x79: // i8x16.max_u
+		return in.vecBinaryLanes(st, 1, maxLane(1, false))
+	case 0x7b: // i8x16.avgr_u
+		return in.vecBinaryLanes(st, 1, avgrULane)
+	case 0x6f: // i8x16.add_sat_s
+		return in.vecBinaryLanes(st, 1, satAddLane(1, true))
+	case 0x70: // i8x16.add_sat_u
+		return in.vecBinaryLanes(st, 1, satAddLane(1, false))
+	case 0x72: // i8x16.sub_sat_s
+		return in.vecBinaryLanes(st, 1, satSubLane(1, true))
+	case 0x73: // i8x16.sub_sat_u
+		return in.vecBinaryLanes(st, 1, satSubLane(1, false))
+
+	case 0x8e: // i16x8.add
+		return in.vecBinaryLanes(st, 2, func(a, b uint64) uint64 { return a + b })
+	case 0x91: // i16x8.sub
+		return in.vecBinaryLanes(st, 2, func(a, b uint64) uint64 { return a - b })
+	case 0x95: // i16x8.mul
+		return in.vecBinaryLanes(st, 2, func(a, b uint64) uint64 { return a * b })
+	case 0x96: // i16x8.min_s
+		return in.vecBinaryLanes(st, 2, minLane(2, true))
+	case 0x97: // i16x8.min_u
+		return in.vecBinaryLanes(st, 2, minLane(2, false))
+	case 0x98: // i16x8.max_s
+		return in.vecBinaryLanes(st, 2, maxLane(2, true))
+	case 0x99: // i16x8.max_u
+		return in.vecBinaryLanes(st, 2, maxLane(2, false))
+	case 0x9b: // i16x8.avgr_u
+		return in.vecBinaryLanes(st, 2, avgrULane)
+	case 0x8f: // i16x8.add_sat_s
+		return in.vecBinaryLanes(st, 2, satAddLane(2, true))
+	case 0x90: // i16x8.add_sat_u
+		return in.vecBinaryLanes(st, 2, satAddLane(2, false))
+	case 0x92: // i16x8.sub_sat_s
+		return in.vecBinaryLanes(st, 2, satSubLane(2, true))
+	case 0x93: // i16x8.sub_sat_u
+		return in.vecBinaryLanes(st, 2, satSubLane(2, false))
+	case 0x82: // i16x8.q15mulr_sat_s
+		return in.vecBinaryLanes(st, 2, q15mulrSatSLane)
+
+	case 0xae: // i32x4.add
+		return in.vecBinaryLanes(st, 4, func(a, b uint64) uint64 { return a + b })
+	case 0xb1: // i32x4.sub
+		return in.vecBinaryLanes(st, 4, func(a, b uint64) uint64 { return a - b })
+	case 0xb5: // i32x4.mul
+		return in.vecBinaryLanes(st, 4, func(a, b uint64) uint64 { return a * b })
+	case 0xb6: // i32x4.min_s
+		return in.vecBinaryLanes(st, 4, minLane(4, true))
+	case 0xb7: // i32x4.min_u
+		return in.vecBinaryLanes(st, 4, minLane(4, false))
+	case 0xb8: // i32x4.max_s
+		return in.vecBinaryLanes(st, 4, maxLane(4, true))
+	case 0xb9: // i32x4.max_u
+		return in.vecBinaryLanes(st, 4, maxLane(4, false))
+
+	case 0xce: // i64x2.add
+		return in.vecBinaryLanes(st, 8, func(a, b uint64) uint64 { return a + b })
+	case 0xd1: // i64x2.sub
+		return in.vecBinaryLanes(st, 8, func(a, b uint64) uint64 { return a - b })
+	case 0xd5: // i64x2.mul
+		return in.vecBinaryLanes(st, 8, func(a, b uint64) uint64 { return a * b })
+
+	case 0x65: // i8x16.narrow_i16x8_s
+		return in.vecNarrow(st, 2, true)
+	case 0x66: // i8x16.narrow_i16x8_u
+		return in.vecNarrow(st, 2, false)
+	case 0x85: // i16x8.narrow_i32x4_s
+		return in.vecNarrow(st, 4, true)
+	case 0x86: // i16x8.narrow_i32x4_u
+		return in.vecNarrow(st, 4, false)
+
+	case 0x9c: // i16x8.extmul_low_i8x16_s
+		return in.vecExtmul(st, 1, true, false)
+	case 0x9d: // i16x8.extmul_high_i8x16_s
+		return in.vecExtmul(st, 1, true, true)
+	case 0x9e: // i16x8.extmul_low_i8x16_u
+		return in.vecExtmul(st, 1, false, false)
+	case 0x9f: // i16x8.extmul_high_i8x16_u
+		return in.vecExtmul(st, 1, false, true)
+	case 0xbc: // i32x4.extmul_low_i16x8_s
+		return in.vecExtmul(st, 2, true, false)
+	case 0xbd: // i32x4.extmul_high_i16x8_s
+		return in.vecExtmul(st, 2, true, true)
+	case 0xbe: // i32x4.extmul_low_i16x8_u
+		return in.vecExtmul(st, 2, false, false)
+	case 0xbf: // i32x4.extmul_high_i16x8_u
+		return in.vecExtmul(st, 2, false, true)
+	case 0xdc: // i64x2.extmul_low_i32x4_s
+		return in.vecExtmul(st, 4, true, false)
+	case 0xdd: // i64x2.extmul_high_i32x4_s
+		return in.vecExtmul(st, 4, true, true)
+	case 0xde: // i64x2.extmul_low_i32x4_u
+		return in.vecExtmul(st, 4, false, false)
+	case 0xdf: // i64x2.extmul_high_i32x4_u
+		return in.vecExtmul(st, 4, false, true)
+
+	case 0xba: // i32x4.dot_i16x8_s
+		return in.vecDotI16x8S(st)
+
+	case 0x0e: // i8x16.swizzle
+		return in.vecSwizzle(st)
+	case 0x0d: // i8x16.shuffle — Imm0's low 16 bytes are the 16 lane indices, per this arm's
+		// own decode-side staging (immVecShuffle, binary/instr.go)
+		return in.vecShuffle(ins, st)
+
 	// **The bulk per-lane family's first sub-batch, #212's fifth ladder rung's own opening
 	// slice — integer-only, no arch-sensitive rounding or NaN propagation, per the recon's own
 	// risk ordering.** `abs`/`neg`/`popcnt` (`VecUnary`), `all_true` (`VecTest`), `bitmask`
@@ -1356,6 +1494,284 @@ func (in *Instance) vecPromoteLowF32x4(st *stack) error {
 		result[i] = math.Float64bits(float64(f))
 	}
 	hi, lo = lanesToV128(result, 8)
+	st.pushV128(hi, lo)
+	return nil
+}
+
+// vecBinaryLanes applies fn to corresponding lanes of two v128 operands and pushes the result —
+// the integer counterpart of `vecBinaryFloat`, sharing its stack order (`eval.ml`'s `Vec n2 ::
+// Vec n1 :: vs'`, n2 popped first). fn receives each lane's *raw* bits, never sign-extended —
+// callers needing signedness (min_s/max_s/the saturating arms) read it themselves via
+// `signExtendLane`, since a plain add/sub/mul needs no sign at all and forcing every caller
+// through a signed reading would be work the majority of this family's own callers do not need.
+func (in *Instance) vecBinaryLanes(st *stack, width uint64, fn func(a, b uint64) uint64) error {
+	if err := st.needNum(4); err != nil {
+		return err
+	}
+	hi2, lo2 := st.popV128()
+	hi1, lo1 := st.popV128()
+	lanes1 := lanesOf(hi1, lo1, width)
+	lanes2 := lanesOf(hi2, lo2, width)
+	result := make([]uint64, len(lanes1))
+	for i := range lanes1 {
+		result[i] = maskLane(fn(lanes1[i], lanes2[i]), width)
+	}
+	hi, lo := lanesToV128(result, width)
+	st.pushV128(hi, lo)
+	return nil
+}
+
+// minLane and maxLane are `IXX.min`/`Int.choose` read directly (`v128.ml:131-134`'s
+// `choose IXX.le_s`/`le_u`/`ge_s`/`ge_u`): an ordinary signed or unsigned comparison, no
+// equal-operands special case — unlike `floatMin`/`floatMax`, whose own doc comment states the
+// float family's special case explicitly. Confirmed by reading the reference rather than
+// assumed from the float sibling's shape, since the two families being unrelated is exactly
+// the kind of thing an unread assumption gets wrong.
+func minLane(width uint64, signed bool) func(a, b uint64) uint64 {
+	return func(a, b uint64) uint64 {
+		if signed {
+			if signExtendLane(a, width) <= signExtendLane(b, width) {
+				return a
+			}
+			return b
+		}
+		if a <= b {
+			return a
+		}
+		return b
+	}
+}
+
+func maxLane(width uint64, signed bool) func(a, b uint64) uint64 {
+	return func(a, b uint64) uint64 {
+		if signed {
+			if signExtendLane(a, width) >= signExtendLane(b, width) {
+				return a
+			}
+			return b
+		}
+		if a >= b {
+			return a
+		}
+		return b
+	}
+}
+
+// avgrULane is `IXX.avgr_u`: the unsigned rounding average, `(a + b + 1) / 2` read as unsigned —
+// never `(a+b)/2`, which rounds toward zero instead of up on a tie, and never signed division,
+// since both operands are read as unsigned magnitudes regardless of the lane's own top bit.
+func avgrULane(a, b uint64) uint64 { return (a + b + 1) / 2 }
+
+// satAddLane and satSubLane are the eight `*.{add,sub}_sat_{s,u}` mnemonics — `IXX.add_sat_s`/
+// `add_sat_u`/`sub_sat_s`/`sub_sat_u`: compute in a wider (int64) domain where the narrow type's
+// own overflow cannot occur, then clamp to the narrow type's own signed or unsigned range.
+// **The unsigned variants still add/subtract *unsigned* magnitudes** (`zx i`/`zx j` in the
+// reference, zero-extending both operands before the arithmetic) — never a signed add reread as
+// unsigned afterward, which would get sub_sat_u's underflow-to-zero case backwards.
+func satAddLane(width uint64, signed bool) func(a, b uint64) uint64 {
+	return func(a, b uint64) uint64 {
+		if signed {
+			return uint64(satSigned(signExtendLane(a, width)+signExtendLane(b, width), width))
+		}
+		return satUnsigned(int64(a)+int64(b), width)
+	}
+}
+
+func satSubLane(width uint64, signed bool) func(a, b uint64) uint64 {
+	return func(a, b uint64) uint64 {
+		if signed {
+			return uint64(satSigned(signExtendLane(a, width)-signExtendLane(b, width), width))
+		}
+		return satUnsigned(int64(a)-int64(b), width)
+	}
+}
+
+// satSigned and satUnsigned clamp a wide intermediate to a `width`-byte lane's signed or
+// unsigned range — `IXX.sat_s`/`sat_u`: `min(max(i, min_int), max_int)` for the signed range,
+// `min(max(i, 0), max_uint)` for the unsigned. Returned as the narrow signed/unsigned reading
+// respectively; callers `uint64()`-convert and mask as needed, matching `maskLane`'s own
+// re-truncation discipline for every other per-lane arithmetic result in this file.
+func satSigned(v int64, width uint64) int64 {
+	lo := -(int64(1) << (width*8 - 1))
+	hi := int64(1)<<(width*8-1) - 1
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
+}
+
+func satUnsigned(v int64, width uint64) uint64 {
+	hi := int64(mask(uint(width * 8)))
+	if v < 0 {
+		return 0
+	}
+	if v > hi {
+		return uint64(hi)
+	}
+	return uint64(v)
+}
+
+// q15mulrSatSLane is `i16x8.q15mulr_sat_s`'s own function, `IXX.q15mulr_sat_s` — a fixed-point
+// Q15 multiply: widen both i16 lanes to int64, multiply, add the rounding constant `0x4000`
+// (2^14, half an LSB at the post-shift scale), shift right by 15, then saturate to i16's own
+// signed range. The `+ 0x4000` is round-to-nearest before the shift, not an arbitrary offset —
+// stated because a reader re-deriving this from "it's a multiply and a shift" would have no
+// reason to expect a rounding term at all.
+func q15mulrSatSLane(a, b uint64) uint64 {
+	x := signExtendLane(a, 2)
+	y := signExtendLane(b, 2)
+	r := (x*y + 0x4000) >> 15
+	return uint64(satSigned(r, 2))
+}
+
+// vecNarrow implements the six `*.narrow_*_{s,u}` mnemonics: pop two double-width operands,
+// saturate every lane of each down to half width, and pack the first operand's narrowed lanes
+// into the result's low half and the second's into the high half — `v128.ml`'s own `narrow
+// to_lanes cvt of_lanes x y = of_lanes (List.map cvt (to_lanes x @ to_lanes y))`, the structural
+// inverse of `vecExtendLanes`.
+//
+// **Both `_s` and `_u` read the source lane as *signed*** (`Convert.I8_.narrow_sat_i16_s`/`_u`
+// both call `I16.to_int_s`) — only the destination range differs (signed vs. unsigned
+// saturation), never the source interpretation. A reader assuming "_u" means "read the source
+// as unsigned" would get every negative-source-lane vector backwards.
+func (in *Instance) vecNarrow(st *stack, width uint64, signed bool) error {
+	if err := st.needNum(4); err != nil {
+		return err
+	}
+	hi2, lo2 := st.popV128()
+	hi1, lo1 := st.popV128()
+	lanes1 := lanesOf(hi1, lo1, width)
+	lanes2 := lanesOf(hi2, lo2, width)
+	narrowWidth := width / 2
+	result := make([]uint64, len(lanes1)+len(lanes2))
+	for i, l := range append(append([]uint64{}, lanes1...), lanes2...) {
+		v := signExtendLane(l, width)
+		if signed {
+			result[i] = uint64(satSigned(v, narrowWidth)) & mask(uint(narrowWidth*8))
+		} else {
+			result[i] = satUnsigned(v, narrowWidth)
+		}
+	}
+	hi, lo := lanesToV128(result, narrowWidth)
+	st.pushV128(hi, lo)
+	return nil
+}
+
+// vecExtmul implements the twelve `*.extmul_{low,high}_*_{s,u}` mnemonics: extend half of each
+// operand's lanes (via `vecExtendLanes`'s own Low/High-selects-the-source convention) to double
+// width, then multiply the two extended results lane-by-lane — `v128.ml`'s own `extmul_low_s x y
+// = IN2.mul (extend_low_s x) (extend_low_s y)`, reusing `vecExtendLanes`'s exact semantics rather
+// than a second copy of the sign/zero-extension logic.
+func (in *Instance) vecExtmul(st *stack, width uint64, signed, high bool) error {
+	if err := st.needNum(4); err != nil {
+		return err
+	}
+	hi2, lo2 := st.popV128()
+	hi1, lo1 := st.popV128()
+	ext1 := extendHalf(hi1, lo1, width, signed, high)
+	ext2 := extendHalf(hi2, lo2, width, signed, high)
+	result := make([]uint64, len(ext1))
+	for i := range result {
+		result[i] = maskLane(ext1[i]*ext2[i], width*2)
+	}
+	hi, lo := lanesToV128(result, width*2)
+	st.pushV128(hi, lo)
+	return nil
+}
+
+// extendHalf is `vecExtendLanes`'s own per-lane logic, factored out so `vecExtmul` can extend
+// both of its two operands without going through the stack twice — `vecExtendLanes` itself pops
+// its one operand from the stack, which `vecExtmul`'s two-operand shape cannot reuse directly.
+func extendHalf(hi, lo, width uint64, signed, high bool) []uint64 {
+	lanes := lanesOf(hi, lo, width)
+	n := laneCount(width) / 2
+	src := lanes[:n]
+	if high {
+		src = lanes[n:]
+	}
+	result := make([]uint64, n)
+	for i, l := range src {
+		if signed {
+			result[i] = maskLane(uint64(signExtendLane(l, width)), width*2)
+		} else {
+			result[i] = l
+		}
+	}
+	return result
+}
+
+// vecDotI16x8S implements `i32x4.dot_i16x8_s`: sign-extend both operands' i16 lanes to i32, sum
+// adjacent products — `v128.ml`'s own `dot_s`, `Int32.(add (mul x1 y1) (mul x2 y2))` folded over
+// pairs. The one mnemonic in this family with no unsigned sibling (measured against
+// `mnemonics.ml`: `i32x4_dot_i16x8_s` has no `_u` counterpart), so this takes no `signed`
+// parameter the way `vecExtmul`/`vecNarrow` do.
+func (in *Instance) vecDotI16x8S(st *stack) error {
+	if err := st.needNum(4); err != nil {
+		return err
+	}
+	hi2, lo2 := st.popV128()
+	hi1, lo1 := st.popV128()
+	lanes1 := lanesOf(hi1, lo1, 2)
+	lanes2 := lanesOf(hi2, lo2, 2)
+	result := make([]uint64, len(lanes1)/2)
+	for i := range result {
+		x1, x2 := signExtendLane(lanes1[2*i], 2), signExtendLane(lanes1[2*i+1], 2)
+		y1, y2 := signExtendLane(lanes2[2*i], 2), signExtendLane(lanes2[2*i+1], 2)
+		result[i] = maskLane(uint64(x1*y1+x2*y2), 4)
+	}
+	hi, lo := lanesToV128(result, 4)
+	st.pushV128(hi, lo)
+	return nil
+}
+
+// vecSwizzle implements `i8x16.swizzle`: for each byte lane of the index operand, select the
+// byte of the base operand at that index, or zero if the index is out of the 0..15 range —
+// `v128.ml`'s own `swizzle`, `Option.value (List.nth_opt ns (to_int_u i)) ~default:zero`. The
+// index is read as *unsigned* (`I8.to_int_u`), so a negative-looking index byte (0x80..0xff)
+// reads as 128..255 and is out of range, not a negative offset — never `int8(idx)`.
+func (in *Instance) vecSwizzle(st *stack) error {
+	if err := st.needNum(4); err != nil {
+		return err
+	}
+	hi2, lo2 := st.popV128() // the index operand, per eval.ml's Vec n2 :: Vec n1 :: vs' order
+	hi1, lo1 := st.popV128() // the base operand
+	base := v128Bytes(hi1, lo1)
+	idx := v128Bytes(hi2, lo2)
+	var out [16]byte
+	for i, b := range idx {
+		if int(b) < 16 {
+			out[i] = base[b]
+		}
+	}
+	hi, lo := v128FromBytes(out[:])
+	st.pushV128(hi, lo)
+	return nil
+}
+
+// vecShuffle implements `i8x16.shuffle`: a fixed, module-encoded 16-byte index list (decoded
+// into `Imm0`/`Imm1` exactly like a `v128.const`'s own bytes, per `immLane16`'s decode-side
+// comment) selects, for each output byte, one byte from the concatenation of the two operands'
+// 32 bytes — `v128.ml`'s own `shuffle`, `List.nth (to_lanes x @ to_lanes y) idx`. Unlike
+// `vecSwizzle`, an out-of-range index here is impossible by construction: the module's own
+// validator (§9, out of this PR's scope to duplicate) requires every shuffle index to be
+// 0..31, and the decode-side immediate carries no room to encode a value outside one byte's
+// unsigned range in the first place.
+func (in *Instance) vecShuffle(ins binary.Instr, st *stack) error {
+	if err := st.needNum(4); err != nil {
+		return err
+	}
+	hi2, lo2 := st.popV128()
+	hi1, lo1 := st.popV128()
+	both := append(v128Bytes(hi1, lo1), v128Bytes(hi2, lo2)...)
+	idx := v128Bytes(ins.Imm1, ins.Imm0)
+	var out [16]byte
+	for i, b := range idx {
+		out[i] = both[b]
+	}
+	hi, lo := v128FromBytes(out[:])
 	st.pushV128(hi, lo)
 	return nil
 }

@@ -6128,10 +6128,23 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	// **Moved 58578 → 59155 (amd64) / 58658 → 59235 (arm64) landing VecConvert, +577 both
 	// architectures** (#212's own last family, 22 standard mnemonics: extend/extadd_pairwise/
 	// trunc_sat/convert/demote/promote) — the identical 80-vector gap persists unchanged again
-	// (59235-59155=80). #212's ladder is now complete: every one of the five AST-constructor
-	// families (whole-vector-bitwise, memory, lane-access, VecCompare/float-arithmetic, and now
-	// shift/convert) has a landed arm.
-	const allOnPassFloor = 59155
+	// (59235-59155=80).
+	//
+	// **This PR's own "#212's ladder is complete" claim, made here, was wrong** — corrected in
+	// #212's own tracking (comment on the issue) rather than silently edited away, per the
+	// second-order-honesty discipline. `VecBinary` (integer: add/sub/mul/sat-arith/min/max/
+	// avgr/narrow/extmul/dot/q15mulr/swizzle/shuffle, 53 standard mnemonics) had zero arms —
+	// found while measuring a SIMD-only-features gate-flip forecast, whose fail bucket named 54
+	// still-missing opcodes, every one a `VecBinary` constructor. The float half of VecBinary
+	// (add/sub/mul/div/min/max/pmin/pmax) landed earlier with the float-arithmetic sub-batch and
+	// was the reason the gap read as "complete" — VecBinary the *AST constructor* is split
+	// across two of this ladder's own PRs, and only the float half had actually landed.
+	//
+	// **Moved 59155 → 61065 (amd64) / 59235 → 61145 (arm64) landing integer VecBinary, +1910
+	// both architectures** — the identical 80-vector gap persists unchanged (61145-61065=80).
+	// #212's ladder is genuinely complete now: a SIMD-only-features run leaves zero `no arm for
+	// opcode fd *` fails, confirmed directly rather than inferred from a family list.
+	const allOnPassFloor = 61065
 	boardBound(t, "allOnPassFloor", totalPass, allOnPassFloor, boardBoundSlack, floorBound,
 		"a gated feature regressed, which the Gated==0 assertion above cannot see: with every "+
 			"gate on, a broken feature turns a pass into a fail and leaves Gated at zero")

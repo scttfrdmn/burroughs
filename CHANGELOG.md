@@ -21,8 +21,43 @@ weakly-ordered platform.
 
 ### Added
 
-- **`VecConvert` executes — #212's own last family, 22 standard mnemonics, completing the SIMD
-  execution ladder's five AST-constructor families.** `internal/interp/simd.go` gains three
+- **`VecBinary` (integer) executes — #212's own largest single family, 53 mnemonics, and the
+  correction of a wrong "ladder complete" claim two entries below.** Found missing while
+  measuring a SIMD-only-features gate-flip forecast: the forecast's own fail bucket named 54
+  still-missing `fd` opcodes, every one a `VecBinary (V128 (IN _))` constructor per
+  `mnemonics.ml` — the float half of `VecBinary` (add/sub/mul/div/min/max/pmin/pmax across
+  f32x4/f64x2) had already landed with the float-arithmetic sub-batch, and every prior PR took
+  one of the *other* six AST constructors sharing the recon's "197 bulk per-lane" grouping out of
+  the group without ever taking `VecBinary`'s own integer slice. Corrected in #212's own tracking
+  (issue comment) rather than silently, per the second-order-honesty discipline.
+
+  Five shapes inside one family: **ordinary per-lane** (add/sub/min_s/min_u/max_s/max_u/avgr_u,
+  21 mnemonics, `vecBinaryLanes`); **saturating add/sub** (12), the same shape with
+  `satAddLane`/`satSubLane`, which widen to a bounds-free domain before clamping to the narrow
+  type's own signed or unsigned range (`IXX.sat_s`/`sat_u`); **narrow** (6), the structural
+  inverse of `VecConvert`'s own `extend` — both `_s`/`_u` read the *source* lane as signed,
+  differing only in the destination's saturation range; **extmul/dot/q15mulr** (13), reusing
+  `VecConvert`'s own sign/zero-extension idiom rather than a second copy of it; and
+  **swizzle/shuffle** (2, i8x16 only) — swizzle is a runtime byte-indexed gather with an
+  out-of-range index defaulting to zero (`v128.ml`'s own `Option.value ... ~default:zero`),
+  shuffle a module-encoded fixed 16-byte index list with no possible out-of-range index by
+  construction.
+
+  All-gates-on lane: 59155 → 61065 (amd64) / 59235 → 61145 (arm64), **+1910 both
+  architectures** — the pre-existing 80-vector arch-dependent gap (#223, unrelated) persists
+  unchanged, and a SIMD-only-features run now shows **zero** `no arm for opcode fd *` fails,
+  confirmed directly. Default lane unmoved. New falsifiable tests
+  (`internal/interp/simd_binary_test.go`), every row cited against the corpus's own vectors where
+  one exists (`simd_i8x16_sat_arith.wast`, `simd_i16x8_arith2.wast`, `simd_conversions.wast`,
+  `simd_i16x8_extmul_i8x16.wast`, `simd_i32x4_dot_i16x8.wast`, `simd_i16x8_q15mulr_sat_s.wast`,
+  `simd_lane.wast`) — one gap found and closed before merge: the first `min_s` test row (16384
+  vs. 32767, both positive) happened not to distinguish signed from unsigned, so a mutation
+  forcing `minLane`'s comparison to always-unsigned passed undetected until a genuinely negative
+  operand (`min_s(-1, 1)`) replaced it.
+
+- **`VecConvert` executes — #212's own last remaining *unstarted* family, 22 standard
+  mnemonics.** (This entry originally claimed the ladder was complete; it was not — see the
+  `VecBinary` entry above, which corrects it.) `internal/interp/simd.go` gains three
   shapes: **extend** (12 mnemonics — `i{16,32,64}x{8,4,2}.extend_{low,high}_*_{s,u}`), reading
   half of the operand's lanes (`Low`/`High` selects which half of the *source*, never the
   result — `v128.ml`'s own `Lib.List.take`/`Lib.List.drop`) and sign/zero-extending each to
