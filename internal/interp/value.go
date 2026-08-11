@@ -386,6 +386,13 @@ func (s *stack) pushV128(hi, lo uint64) {
 	// would leave `tracking` false, `numSeq` nil, and `drop`'s own v128-pair check (which reads
 	// `numSeq`) could never fire — reproducing grave #206's shape for the population 0023's own
 	// gating was never measured against, since no v128 value existed when that ADR was written.
+	//
+	// **Grave #215: the interaction-defect class.** 0023's activation condition named its
+	// historical trigger (the first reference pushed) rather than the property it protects
+	// (every live multi-slot unit carries orderable sequence numbers) — refs were the first
+	// customer, not the only possible one, and 0024 introduced a second without either ADR's
+	// author knowing to check the other's gate. The fix states the property, not the trigger:
+	// this activation runs on *any* multi-slot push, matching the guarantee's real scope.
 	if !s.tracking {
 		s.tracking = true
 		s.numSeq = make([]uint64, len(s.num))
