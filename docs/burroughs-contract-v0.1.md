@@ -187,9 +187,27 @@ commits to that reading.*
 
 - **G-1.** Every proposal lives behind a gate. A gate's acceptance is its
   upstream spec test suite green, on both a TSO and a weakly-ordered
-  platform, before default-on.
+  platform, before default-on — modulo vectors whose sole attributed
+  blocker is **#9's own deferred validator** (`ErrNotValidated`),
+  attribution by the engine's own error taxonomy rather than by assertion,
+  and only when the gate's own suite carries zero required-engine-execution
+  defects (no missing arms, no value mismatches, no anything-else) once
+  that population is set aside.
   *Experiment-gated, decision-doc-then-land — the discipline that carried
   the Go-side work is the engine's release discipline too.*
+  *Amended by Scott's stamp on #230 (ADR 0025). A literal "green, full
+  stop" reading is unsatisfiable by any gate for the whole of v0: #9's
+  absence blocks every proposal's suite identically, since any suite
+  containing a vector whose module reaches the interpreter unvalidated
+  trips the same wall, and that contradicts the phase ladder the same
+  contract establishes. The carve-out is named to #9 specifically, not to
+  a category of validator gaps, and retires itself when #9 lands — no
+  second amendment repeals it, because `ErrNotValidated`'s call sites
+  become unreachable by its own doc comment's own claim and the carve-out
+  has nothing left to except. It does not excuse missing arms or wrong
+  answers: it excuses only the one named, structurally deferred question
+  #9 has not yet been asked. Precedent: G-2's own #109 amendment, which
+  named the true criterion rather than leaving a silent or ad hoc reading.*
 - **G-2.** Tracked set at v0.1: **all of Wasm 3.0 core**; threads;
   stack switching (pre-phase-4, tracked); component model + WASI 0.3.
   Wasm 3.0 core is the ten features the spec's own release appendix lists
