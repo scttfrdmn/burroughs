@@ -541,6 +541,12 @@ func (in *Instance) invokeIndex(idx uint32, name string, args []Value) ([]Value,
 			locals.refs[i] = args[i].toRef(in)
 			continue
 		}
+		if p == binary.V128 {
+			// decision 0024: a v128 parameter's high half crosses through Value.Hi, never
+			// through Bits alone — Bits/Hi is this boundary's own hi/lo pair, mirroring
+			// frame.num/numHi.
+			locals.numHi[i] = args[i].Hi
+		}
 		locals.num[i] = args[i].Bits
 	}
 
@@ -571,6 +577,11 @@ func (in *Instance) invokeIndex(idx uint32, name string, args []Value) ([]Value,
 		t := ft.Results[i]
 		if t.IsRef() {
 			out[i] = fromRef(st.popRef(), t)
+			continue
+		}
+		if t == binary.V128 {
+			hi, lo := st.popV128()
+			out[i] = Value{Type: t, Bits: lo, Hi: hi}
 			continue
 		}
 		out[i] = Value{Type: t, Bits: st.popNum()}

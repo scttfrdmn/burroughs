@@ -146,16 +146,28 @@ func (in *Instance) blockArity(imm0, imm1 uint64) (params, refParams, results, r
 	}
 }
 
-// countByArray partitions a functype's value-type slice into its numeric and reference counts
-// — the same split `call.go`'s `invoke` inlines for `ft.Results` (`wantNum`/`wantRef`), named
-// here because `blockArity` needs it twice (params and results) and `br_table`'s block-typed
-// vectors are exactly what makes a block's *parameter* half need the split too, not only a
-// callee's result half.
+// countByArray partitions a functype's value-type slice into its numeric and reference **slot**
+// counts — the same split `call.go`'s `invoke` inlines for `ft.Results` (`wantNum`/`wantRef`),
+// named here because `blockArity` needs it twice (params and results) and `br_table`'s
+// block-typed vectors are exactly what makes a block's *parameter* half need the split too, not
+// only a callee's result half.
+//
+// **Slots, not values, since decision 0024.** Every caller of this function
+// (`branch`/`returnFrom`'s truncation, `call.go`'s `invoke` arity check, `needNum`'s underflow
+// guard) reads `numCount` as an offset into `st.num` — a count of *array positions*, not of
+// *logical values*. That identity holds for every numeric `ValType` except `V128`, which occupies
+// two adjacent `st.num` slots per decision 0024's `pushV128`/`popV128`. Before this correction, a
+// block whose type included a v128 parameter or result would compute the wrong height/arity
+// everywhere it crossed a label boundary — the arithmetic error decision 0024's own "Forced
+// design question 4" found while drafting, before any 0xfd arm existed to expose it in practice.
 func countByArray(ts []binary.ValType) (numCount, refCount int) {
 	for _, t := range ts {
-		if t.IsRef() {
+		switch {
+		case t.IsRef():
 			refCount++
-		} else {
+		case t == binary.V128:
+			numCount += 2
+		default:
 			numCount++
 		}
 	}
