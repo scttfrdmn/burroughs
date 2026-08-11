@@ -95,6 +95,43 @@ func TestSIMDLoadStore(t *testing.T) {
 		}
 	})
 
+	// **Grave: v128.load8_splat/load16_splat/load32_splat over-read past their own scalar
+	// width, tripping a spurious out-of-bounds trap** — verbatim addresses from
+	// simd_load_splat.wast:47/52/57, each one byte, two bytes, and four bytes (respectively)
+	// short of a one-page memory's end: legal for the splat's own scalar, but `vecLoadWidth`
+	// used to route every packed opcode through the same 8-byte branch as the six
+	// load*x*_s/u forms, so a load positioned so those extra unread bytes crossed the
+	// memory's edge faulted where the spec expects a value. load64_splat genuinely does read
+	// 8 bytes, so it is not a row here — the three narrower splats are.
+	t.Run("v128.load8_splat at the last legal byte does not over-read into a trap, verbatim from :47", func(t *testing.T) {
+		out := runSIMD1(t, `(module (memory 1)
+			(data (i32.const 65535) "\1f")
+			(func (export "c") (result v128) (v128.load8_splat (i32.const 65535))))`)
+		want := uint64(0x1f1f1f1f1f1f1f1f)
+		if out[0].Hi != want || out[0].Bits != want {
+			t.Errorf("got hi=%#x lo=%#x, want hi=%#x lo=%#x (a one-byte read, not an 8-byte "+
+				"over-read that would trap 65535+8 past the memory's end)", out[0].Hi, out[0].Bits, want, want)
+		}
+	})
+	t.Run("v128.load16_splat at the last legal address does not over-read into a trap, verbatim from :52", func(t *testing.T) {
+		out := runSIMD1(t, `(module (memory 1)
+			(data (i32.const 65534) "\1e\1f")
+			(func (export "c") (result v128) (v128.load16_splat (i32.const 65534))))`)
+		want := uint64(0x1f1e1f1e1f1e1f1e)
+		if out[0].Hi != want || out[0].Bits != want {
+			t.Errorf("got hi=%#x lo=%#x, want hi=%#x lo=%#x (a two-byte read)", out[0].Hi, out[0].Bits, want, want)
+		}
+	})
+	t.Run("v128.load32_splat at the last legal address does not over-read into a trap, verbatim from :57", func(t *testing.T) {
+		out := runSIMD1(t, `(module (memory 1)
+			(data (i32.const 65532) "\1c\1d\1e\1f")
+			(func (export "c") (result v128) (v128.load32_splat (i32.const 65532))))`)
+		want := uint64(0x1f1e1d1c1f1e1d1c)
+		if out[0].Hi != want || out[0].Bits != want {
+			t.Errorf("got hi=%#x lo=%#x, want hi=%#x lo=%#x (a four-byte read)", out[0].Hi, out[0].Bits, want, want)
+		}
+	})
+
 	t.Run("v128.store", func(t *testing.T) {
 		out := runSIMD1(t, `(module (memory 1)
 			(func (export "c") (result i32)
