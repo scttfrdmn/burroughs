@@ -288,6 +288,22 @@ func (v Val) String() string {
 	if v.NaN != NaNNone {
 		return fmt.Sprintf("%s %s", v.Kind, v.NaN)
 	}
+	if v.Kind == KindV128 {
+		// A shaped Val (readV128Const's own output) prints each lane; a raw one
+		// (fromInterpValue's own output — a result, with no shape of its own) prints the two
+		// 64-bit halves, since there is no shape to slice it by. Printed here rather than left
+		// to the generic `int64(v.Bits)` fallback below, which reported a v128 result as a
+		// signed 64-bit integer of its *low* half alone — losing the high half and every
+		// float/NaN reading a mismatch message needs to be useful.
+		if v.Lanes != nil {
+			parts := make([]string, len(v.Lanes))
+			for i, lane := range v.Lanes {
+				parts[i] = lane.String()
+			}
+			return fmt.Sprintf("v128 [%s]", strings.Join(parts, ", "))
+		}
+		return fmt.Sprintf("v128 hi=%#016x lo=%#016x", v.Hi, v.Bits)
+	}
 	if v.Kind.isFloat() {
 		if v.Kind == KindF32 {
 			return fmt.Sprintf("%s %#08x (%v)", v.Kind, uint32(v.Bits), math.Float32frombits(uint32(v.Bits)))

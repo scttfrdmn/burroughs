@@ -34,17 +34,31 @@ weakly-ordered platform.
   half of the SIMD execution ladder's `internal/interp/simd.go` arms (#212) becoming *askable* —
   before this, every `v128.const` argument or expectation reaching `readConst` was refused
   outright, so a landed arm's own suite vectors could not be scored regardless of correctness.
-  All-gates-on lane: 37406 → 58443 pass (+21037), 0 gated held — every newcomer was previously
-  Unsupported at the default lane too and is now honestly Gated there (SIMD stays off by
-  default), never a pass. Default lane: 34308/118 unmoved, `unsupported` 26804 → 2689 (−24115),
-  `gated` 3792 → 27907 (+24115) — one mechanism, `TestGatedVectors`'s new `wholeFileGated` bulk
-  allowance for the 61 files whose entire gated population shares the identical `simd: feature
-  gate disabled` reason (24074 lines) plus per-line entries for the handful of files that mix
-  reasons. Found and fixed a real bug in the same PR (grave, no issue — caught by the new
-  round-trip test before merge): `sliceV128Lanes`/`packV128Lanes` initially spaced lanes by
-  `Kind.width()` (32 for an i8x16/i16x8 lane, since those widen to `KindI32` for storage) instead
-  of the wire width, which would have packed sixteen 8-bit lanes into 512 bits of a 128-bit
-  vector — fixed by adding `Val.LaneBits` to carry the wire width independently of storage `Kind`.
+  All-gates-on lane (amd64, the honest cross-architecture floor — see below): 37406 → 58363 pass
+  (+20957), 0 gated held — every newcomer was previously Unsupported at the default lane too and
+  is now honestly Gated there (SIMD stays off by default), never a pass. Default lane: 34308/118
+  unmoved, `unsupported` 26804 → 2689 (−24115), `gated` 3792 → 27907 (+24115) — one mechanism,
+  `TestGatedVectors`'s new `wholeFileGated` bulk allowance for the 61 files whose entire gated
+  population shares the identical `simd: feature gate disabled` reason (24074 lines) plus
+  per-line entries for the handful of files that mix reasons. Found and fixed a real bug in the
+  same PR (grave, no issue — caught by the new round-trip test before merge):
+  `sliceV128Lanes`/`packV128Lanes` initially spaced lanes by `Kind.width()` (32 for an
+  i8x16/i16x8 lane, since those widen to `KindI32` for storage) instead of the wire width, which
+  would have packed sixteen 8-bit lanes into 512 bits of a 128-bit vector — fixed by adding
+  `Val.LaneBits` to carry the wire width independently of storage `Kind`.
+
+  **This widening also surfaced a pre-existing, architecture-dependent defect (grave #223, not
+  fixed here) that a two-runner CI matrix exists to catch (contract §9 G-1).** `floatMin`/
+  `floatMax` delegate to Go's `math.Min`/`math.Max`, whose NaN branch is per-architecture
+  assembly — amd64 hardcodes a fixed non-canonical NaN pattern for any NaN input, discarding the
+  operand's own class, where arm64's hardware instruction happens not to. 80 vectors
+  (`simd_f64x2.wast`, `simd_f64x2_rounding.wast`) move pass→fail on amd64 alone as a result; the
+  all-gates-on floor is set to the amd64 figure (58363) rather than arm64's (58443) because a
+  floor that only holds on one tracked architecture is not one CI can trust. Found *because* of
+  a second bug fixed in the same PR: `Val.String()` had no `KindV128` case, so a v128 mismatch
+  fell through to the generic `int64(v.Bits)` fallback and printed a signed 64-bit reading of the
+  result's *low* half alone, discarding the high half and every float/NaN reading — the
+  diagnostic that would have named grave #223 was itself unreadable until fixed.
 
 - **`internal/interp/dropbench` measures grave #206's fix candidates — decision 0023, accepted**
   — on `dispatchbench`'s precedent (decision 0002: `make bench` numbers decide, not argument).

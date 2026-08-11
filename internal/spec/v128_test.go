@@ -329,6 +329,31 @@ func TestV128IsPassableRejectsNaNLane(t *testing.T) {
 	}
 }
 
+// TestV128StringPrintsEveryLaneOrTheRawHalves confirms Val.String's KindV128 branch, added
+// because a mismatch message that cannot say what a v128 actually held is a diagnostic that
+// hides the defect it exists to name — found in this PR's own investigation, where the generic
+// `int64(v.Bits)` fallback printed a v128 result as a signed 64-bit reading of its *low* half
+// alone, discarding the high half and every float/NaN reading entirely (see grave #223's own
+// investigation, which needed the fix to read the mismatch at all).
+func TestV128StringPrintsEveryLaneOrTheRawHalves(t *testing.T) {
+	shaped := Val{Kind: KindV128, Lanes: []Val{
+		{Kind: KindF32, Bits: 0x3f800000, LaneBits: 32},
+		{Kind: KindF32, NaN: NaNCanonical, LaneBits: 32},
+	}}
+	got := shaped.String()
+	want := "v128 [f32 0x3f800000 (1), f32 nan:canonical]"
+	if got != want {
+		t.Errorf("shaped v128 String() = %q, want %q", got, want)
+	}
+
+	raw := Val{Kind: KindV128, Hi: 0x1122334455667788, Bits: 0x8877665544332211}
+	got = raw.String()
+	want = "v128 hi=0x1122334455667788 lo=0x8877665544332211"
+	if got != want {
+		t.Errorf("raw v128 String() = %q, want %q", got, want)
+	}
+}
+
 // TestV128BoundaryRoundTripsAgainstTheCorpus is this widening's own version of
 // TestReferenceBoundaryRoundTrips (refboundary_test.go): a v128 argument and a v128 expectation,
 // read from a real corpus file's own vectors, round through toInterpValue/fromInterpValue/Matches
