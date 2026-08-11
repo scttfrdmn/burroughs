@@ -2641,6 +2641,24 @@ weakly-ordered platform.
   `v128.load` (the memory family, not yet implemented) or by the harness's own `readConst`/
   `Matches` gap (v128 has no case in either), neither of which this PR's own scope touches.
 
+- **The interpreter's memory family executes — `v128.load`/`store` and their eleven packed/lane
+  siblings, #212's third ladder rung** (23 mnemonics: the bare load/store, six load-and-extend/
+  splat/zero variants, and the eight lane-load/store forms). Built on the MVP load/store family's
+  own `memoryFor`/`mem.read`/`mem.write`/`mem.addr` helpers rather than duplicating them — the
+  wire staging (`Imm0` offset, `Imm1` memory index, with a lane index OR'd into `Imm1`'s bits
+  32-39 for the eight lane forms) is the identical shape `decodeMemop`/`stageLaneIdx` already use.
+
+  The all-on lane moves fail 951→875 (**−76**), pass 37235→37311 (**+76**) — the reward
+  #212's own recon predicted this rung would unlock, confirming the memory family was the
+  shadowing mechanism behind most of the bitwise family's own co-blocked vectors. The default
+  lane is unmoved (pass 34308, unsupported 26804 — the gate stays off).
+
+  Falsified before trusting, per the standing discipline: `v128.store`'s operand order (address
+  pushed first, value second — the stack's own rule, matching `memAccess`'s identical statement
+  for the MVP family), `loadExtend`'s sign-extension, `loadZero`'s zero-vs-splat distinction, and
+  the lane-load/store family's byte-offset arithmetic and lane-index extraction were each mutated
+  and watched fail before being trusted, then reverted.
+
 ### Changed
 
 - **The §3 sentinel's doc names a narrowed gap rather than a missing linker, and six live "v0 has

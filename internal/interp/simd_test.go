@@ -12,11 +12,18 @@ import (
 // package's own arms are unreachable without it.
 func runSIMD1(t *testing.T, src string, args ...Value) []Value {
 	t.Helper()
+	return runSIMDFeatures1(t, binary.Features{SIMD: true}, src, args...)
+}
+
+// runSIMDFeatures1 is runSIMD1 with an explicit feature set, for the one row
+// (TestSIMDLoadStore's explicit-second-memory case) that also needs MultiMemory on.
+func runSIMDFeatures1(t *testing.T, features binary.Features, src string, args ...Value) []Value {
+	t.Helper()
 	img, err := text.EncodeModule([]byte(src))
 	if err != nil {
 		t.Fatalf("encode %s: %v", src, err)
 	}
-	d := &binary.Decoder{Features: binary.Features{SIMD: true}}
+	d := &binary.Decoder{Features: features}
 	m, err := d.DecodeModule(img)
 	if err != nil {
 		t.Fatalf("decode %s: %v", src, err)
