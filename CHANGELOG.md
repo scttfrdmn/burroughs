@@ -21,6 +21,24 @@ weakly-ordered platform.
 
 ### Added
 
+- **`VecShift` executes — #212's own family, 12 mnemonics.** `internal/interp/simd.go` gains
+  `vecShiftLanes` and the 12 `shl`/`shr_s`/`shr_u` arms across i8x16/i16x8/i32x4/i64x2 (opcodes
+  0x6b-0x6d, 0x8b-0x8d, 0xab-0xad, 0xcb-0xcd). The i32 shift count pops *before* the v128 operand
+  (`eval.ml`'s own `Num s :: Vec v :: vs'` stack shape) and is masked to the lane's own bit width
+  before use (`IXX.shift`'s own `logand j (of_int (bitwidth - 1))`) — a shift by a multiple of
+  the lane width is a no-op, not a full clear, which Go's own `<<`/`>>` would not give for free
+  at an arbitrary sub-64-bit width. All-gates-on lane: 58363 → 58658 (arm64) / 58578 (amd64),
+  +295/+215 — the pre-existing 80-vector arch-dependent gap (grave #223, unrelated to this arm)
+  persists unchanged on both architectures, confirming this family's own correctness is
+  architecture-independent. Default lane unmoved (SIMD stays off by default; this is an
+  interpreter arm, not the gate flip). New falsifiable tests
+  (`internal/interp/simd_shift_test.go`): every row cited against `simd_bit_shift.wast`'s own
+  verbatim vectors, including the mod-width-wrap case (`shr_u` by a multiple of the lane width)
+  and a negative-lane case distinguishing `shr_s` from `shr_u` (the corpus's own `shr_s_9` row
+  turned out not to exercise a negative lane, so a signed/unsigned swap mutation passed
+  undetected until a second row, `shr_s` of `-128`/`-64`, was added — found by falsifying before
+  trusting, not assumed from the first row's green).
+
 - **The harness can build and compare v128 arguments/expectations — decision 0024's forced
   question 5.** `internal/spec` gains `KindV128`, `Val.Hi`/`Val.Lanes`/`Val.LaneBits`,
   `readV128Const` (reads `(v128.const <shape> <lane>*)` for every tracked shape, admitting a
