@@ -775,6 +775,11 @@ func TestGatedVectors(t *testing.T) {
 			1621: "SIMD: v128 result in the type section",
 			1638: "SIMD: v128 result in the type section",
 			1655: "SIMD: v128 result in the type section",
+			// #210's encoder closed v128.const's own immediate shape (immVecConst), so the
+			// module at :890 — whose two drop-operand funcs each `(drop (v128.const …))` — now
+			// reaches the decoder and is declined for SIMD before either assertion runs.
+			984: "simd: v128.const in the module at :890 — the module this action runs against",
+			995: "simd: v128.const in the module at :890 — the module this action runs against",
 		},
 
 		// Seven (module binary ...) forms carrying the function-references table form:
@@ -3098,7 +3103,21 @@ func TestGatedVectors(t *testing.T) {
 			1683: "SIMD: 123 v128 instructions in function bodies at :1415",
 		},
 		"simd_load.wast": {
+			// #210's encoder closed the four remaining unencodable immediate shapes, so wat
+			// modules using extract_lane/replace_lane/shuffle/load*_lane/store*_lane now reach
+			// this decoder instead of stopping at `cannot yet encode` — and with the SIMD gate
+			// off, the module's own `v128.load` is declined before the assertion's question is
+			// ever asked. Same mechanism the memarg and data-section emitters' own entries in
+			// this file document: the encoder is right, the decoder is configured not to read
+			// what it correctly wrote.
+			24: "simd: a v128 instruction (v128.load) in the module at :16",
 			44: "SIMD: a v128 instruction in a function body at :34",
+		},
+		// #210's encoder closed v128.const's own immediate shape, so the module at :1 — two v128
+		// globals, one mutable — now reaches the decoder and is declined for SIMD before the
+		// `register` command that names it can act.
+		"simd_linking.wast": {
+			5: "simd: two v128 globals in the module at :1 — the module this command registers",
 		},
 		"store0.wast": {
 			22: "multi-memory: 2 memories at :3, so a memarg carries flags bit 6",
@@ -3648,7 +3667,16 @@ func TestGatedVectors(t *testing.T) {
 			334: "function-references: call_ref / return_call_ref at :321 — the module this action runs against",
 		},
 		"simd_address.wast": {
+			// #210's encoder closed the four remaining unencodable immediate shapes (see the
+			// simd_load.wast entry above for the mechanism), so these five actions' modules —
+			// all v128.load/v128.store against the module at :3 or :121 — now reach the decoder
+			// and are declined for SIMD before the trap they assert is ever reached.
+			89:  "simd: a v128.load/v128.store instruction at :3 — the module this action runs against",
+			90:  "simd: a v128.load/v128.store instruction at :3 — the module this action runs against",
+			99:  "simd: a v128.load/v128.store instruction at :3 — the module this action runs against",
+			100: "simd: a v128.load/v128.store instruction at :3 — the module this action runs against",
 			110: "simd: a 0xfd-region instruction at :104 — the module this action runs against",
+			128: "simd: a v128.store instruction at :121 — the module this action runs against",
 		},
 		"simd_load_extend.wast": {
 			226: "simd: a 0xfd-region instruction at :3 — the module this action runs against",
@@ -3663,6 +3691,17 @@ func TestGatedVectors(t *testing.T) {
 			236: "simd: a 0xfd-region instruction at :3 — the module this action runs against",
 			237: "simd: a 0xfd-region instruction at :3 — the module this action runs against",
 			238: "simd: a 0xfd-region instruction at :3 — the module this action runs against",
+			// #210 widened this file's decline: these six assertions run against the module at
+			// :309, whose exported funcs mix load*_lane/extract_lane operands (now encodable)
+			// alongside plain 0xfd-region ones (already declined above) — same mechanism, later
+			// arriving because the module needed the newly-closed shapes to reach the decoder at
+			// all.
+			379: "simd: a 0xfd-region instruction at :309 — the module this action runs against",
+			380: "simd: a 0xfd-region instruction at :309 — the module this action runs against",
+			381: "simd: a 0xfd-region instruction at :309 — the module this action runs against",
+			382: "simd: a 0xfd-region instruction at :309 — the module this action runs against",
+			383: "simd: a 0xfd-region instruction at :309 — the module this action runs against",
+			384: "simd: a 0xfd-region instruction at :309 — the module this action runs against",
 		},
 		"simd_load_splat.wast": {
 			119: "simd: a 0xfd-region instruction at :3 — the module this action runs against",
@@ -3697,12 +3736,59 @@ func TestGatedVectors(t *testing.T) {
 			151: "simd: a 0xfd-region instruction at :3 — the module this action runs against",
 			152: "simd: a 0xfd-region instruction at :3 — the module this action runs against",
 			153: "simd: a 0xfd-region instruction at :3 — the module this action runs against",
+			// #210: the module at :158 mixes load_splat operands with extract_lane, so it now
+			// reaches the decoder and joins the file's existing decline (same mechanism, one
+			// module later).
+			206: "simd: a 0xfd-region instruction at :158 — the module this action runs against",
+			207: "simd: a 0xfd-region instruction at :158 — the module this action runs against",
+			208: "simd: a 0xfd-region instruction at :158 — the module this action runs against",
+			209: "simd: a 0xfd-region instruction at :158 — the module this action runs against",
 		},
 		"simd_load_zero.wast": {
 			88: "simd: a 0xfd-region instruction at :3 — the module this action runs against",
 			89: "simd: a 0xfd-region instruction at :3 — the module this action runs against",
 			91: "simd: a 0xfd-region instruction at :3 — the module this action runs against",
 			92: "simd: a 0xfd-region instruction at :3 — the module this action runs against",
+			// #210: the module at :127 mixes load_zero operands with extract_lane, joining the
+			// file's existing decline.
+			153: "simd: a 0xfd-region instruction at :127 — the module this action runs against",
+			154: "simd: a 0xfd-region instruction at :127 — the module this action runs against",
+		},
+		// #210: this file's module at :172 mixes splat operands with extract_lane/all_true, so it
+		// now reaches the decoder and is declined for SIMD before either group of assertions runs
+		// — same mechanism as the load_extend/load_splat/load_zero entries above, one file later.
+		"simd_splat.wast": {
+			292: "simd: a 0xfd-region instruction at :172 — the module this action runs against",
+			293: "simd: a 0xfd-region instruction at :172 — the module this action runs against",
+			294: "simd: a 0xfd-region instruction at :172 — the module this action runs against",
+			295: "simd: a 0xfd-region instruction at :172 — the module this action runs against",
+			296: "simd: a 0xfd-region instruction at :172 — the module this action runs against",
+			297: "simd: a 0xfd-region instruction at :172 — the module this action runs against",
+			298: "simd: a 0xfd-region instruction at :172 — the module this action runs against",
+			299: "simd: a 0xfd-region instruction at :172 — the module this action runs against",
+			301: "simd: a 0xfd-region instruction at :172 — the module this action runs against",
+			302: "simd: a 0xfd-region instruction at :172 — the module this action runs against",
+			303: "simd: a 0xfd-region instruction at :172 — the module this action runs against",
+			304: "simd: a 0xfd-region instruction at :172 — the module this action runs against",
+			325: "simd: a 0xfd-region instruction at :172 — the module this action runs against",
+			326: "simd: a 0xfd-region instruction at :172 — the module this action runs against",
+			327: "simd: a 0xfd-region instruction at :172 — the module this action runs against",
+			328: "simd: a 0xfd-region instruction at :172 — the module this action runs against",
+		},
+		// #210's encoder closed the eight load*_lane/store*_lane mnemonics' shape (immLaneImms),
+		// so this file's module at :52 — which exercises v128.store in nine control-flow
+		// positions (block/loop/br/br_if/br_table/return/if) — now reaches the decoder and is
+		// declined for SIMD before any of the nine assertions runs.
+		"simd_store.wast": {
+			89: "simd: a v128.store instruction at :52 — the module this action runs against",
+			90: "simd: a v128.store instruction at :52 — the module this action runs against",
+			91: "simd: a v128.store instruction at :52 — the module this action runs against",
+			92: "simd: a v128.store instruction at :52 — the module this action runs against",
+			93: "simd: a v128.store instruction at :52 — the module this action runs against",
+			94: "simd: a v128.store instruction at :52 — the module this action runs against",
+			95: "simd: a v128.store instruction at :52 — the module this action runs against",
+			96: "simd: a v128.store instruction at :52 — the module this action runs against",
+			97: "simd: a v128.store instruction at :52 — the module this action runs against",
 		},
 		"traps0.wast": {
 			22: "multi-memory: a memarg carrying flags bit 6 at :1 — the module this action runs against",

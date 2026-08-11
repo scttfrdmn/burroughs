@@ -458,6 +458,19 @@ var encodableShapes = map[immShape]bool{
 	// nullability-to-opcode/flags-byte translation their own doc comments carry.
 	immReftype:     true,
 	immIdxReftype2: true,
+
+	// **The four remaining shapes, and their landing closes the immediate-shape frontier
+	// entirely — #210, the last four `false`s in this file.** `v128.const` (`immVecConst`,
+	// `vecConst`'s own per-lane `laneBytes`), `i8x16.shuffle` (`immLaneIdxList`, sixteen raw
+	// bytes via `laneidx`'s own retention), `extract_lane`/`replace_lane` (`immLaneIdx`, one raw
+	// byte, same `laneidx`), and the eight `load*_lane`/`store*_lane` mnemonics (`immLaneImms`,
+	// the existing memarg encoding plus one trailing raw byte, `laneImms`). All four were parsed
+	// and range-checked in full before this PR — only the byte writers were missing, the same
+	// shape retention has taken at every other tier of #8.
+	immVecConst:    true,
+	immLaneIdxList: true,
+	immLaneIdx:     true,
+	immLaneImms:    true,
 }
 
 // heaptypeRetained reads `ref.null`'s heap type immediate and encodes it.

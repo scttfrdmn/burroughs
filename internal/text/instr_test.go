@@ -777,22 +777,29 @@ func TestEveryUnencodableShapeIsRefused(t *testing.T) {
 	}
 	slices.Sort(kinds)
 
-	// The vacuity check, per partition rather than one total: shapes *and* kinds, because a
-	// `plaininstrShapes` that failed to load would leave both empty and this control would agree
-	// with itself perfectly. 4 of the 16 shapes are unencodable today — down from 6, `immReftype`
-	// and `immIdxReftype2` having left when this row's PR retained ref.test/ref.cast/br_on_cast's
-	// immediates via reftypeRetained/brOnCastRetained — and the count falls further as the
-	// frontier moves; the floor is the direction, and a rise past it means `encodableShapes` grew
-	// without this control being re-read.
-	unencodableShapes := map[immShape]bool{}
-	for _, k := range kinds {
-		unencodableShapes[plaininstrShapes[k]] = true
+	// The vacuity check is now on the *maps themselves*, not on the derived domain — #210 closed
+	// the domain to zero on purpose, which is the milestone this rung was for, so "the domain is
+	// nonempty" stopped being the right floor. A `plaininstrShapes` or `encodableShapes` that
+	// failed to load would leave *both* maps empty (or `encodableShapes` short of all 16 known
+	// shapes), which is what a floor on the total, rather than on the unencodable subset, still
+	// catches — the same partition-not-total lesson `comparisons need a vacuity check` names,
+	// pointed at a domain that is legitimately supposed to be empty today.
+	if len(plaininstrShapes) < 70 || len(encodableShapes) < 16 {
+		t.Fatalf("plaininstrShapes has %d kinds and encodableShapes has %d shapes, too small to be "+
+			"the real tables: an empty or truncated map here would make every row below pass by "+
+			"comparing nothing", len(plaininstrShapes), len(encodableShapes))
 	}
-	if len(unencodableShapes) < 3 || len(kinds) < 5 {
-		t.Fatalf("the derived domain is %d shapes over %d kinds, which is too small to be the real "+
-			"partition: %d shapes exist and %d are encodable, so an empty or near-empty domain here "+
-			"means the table did not load and this control is comparing nothing",
-			len(unencodableShapes), len(kinds), len(plaininstrShapes), len(encodableShapes))
+
+	// **The frontier closed with #210, and that is the pass condition — not a fallback.** Every
+	// one of the 16 immediate shapes `plaininstr` dispatches to is now in `encodableShapes`, so
+	// the derived domain above is legitimately empty: there is no instruction immediate left in
+	// the tracked grammar this encoder cannot write. A rise past zero — a 17th shape added to
+	// `immShape` without a matching `encodableShapes` entry, or an existing entry flipped back to
+	// `false` — re-arms the frame-based refusal check below automatically, on the same
+	// derived-domain mechanism that has run every PR since #33; nothing about the mechanism
+	// changes, only the fact it currently has nothing to report.
+	if len(kinds) == 0 {
+		return
 	}
 
 	// The spelling per kind, inverted out of the *generated* table rather than hand-listed. A kind is

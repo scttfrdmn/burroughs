@@ -900,8 +900,15 @@ func (p *parser) retainMemarg(mnemonic Token, m memargImm) error {
 // mnemonic through keeps the natural-alignment lookup honest for the day the shape is added.
 func (p *parser) laneImms(mnemonic Token) error {
 	if p.c.at(NatTok) && !p.natContinuesMemarg() {
-		// Arm 5: the lone NAT is the laneidx. Nothing for memarg to read, and calling it anyway
-		// would consume the token as `idx_opt`.
+		// Arm 5: the lone NAT is the laneidx, so there is nothing for `p.memarg` to *read* — but
+		// the wire format still writes the memop bytes (`memop x mo; u8 i`, encode.ml:387), with
+		// the implicit memory index 0 and the mnemonic's natural alignment. Calling `p.memarg`
+		// here would consume the laneidx token as `idx_opt`, so the default is written directly
+		// through `retainMemarg` instead, which is exactly what an *absent* idx_opt/offset_opt/
+		// align_opt already means to it.
+		if err := p.retainMemarg(mnemonic, memargImm{align: -1}); err != nil {
+			return err
+		}
 		return p.laneidx()
 	}
 	if err := p.memarg(mnemonic); err != nil {
@@ -931,15 +938,24 @@ func (p *parser) natContinuesMemarg() bool {
 }
 
 // laneidx parses `laneidx` (:658), which is `nat8` — the 15 `i8 constant out of range` vectors.
+//
+// **Retains the byte via `appendImm`, since #210** — both callers (`immLaneIdx`'s arm for
+// `extract_lane`/`replace_lane`, and `laneImms` for the eight `load*_lane`/`store*_lane`
+// mnemonics) want the identical trailing raw byte the reference writes with `u8 i`
+// (`encode.ml:889-903`, `:386-405`), so retaining it here rather than in each caller is one
+// writer for one fact, matching `idxRetained`'s own precedent of retaining at the shared reader
+// rather than at each of its several call sites.
 func (p *parser) laneidx() error {
 	t := p.c.peek()
 	if t.Kind != NatTok {
 		return p.unexpected()
 	}
 	p.c.next()
-	if _, ok := parseNat(t.Text, 8); !ok {
+	n, ok := parseNat(t.Text, 8)
+	if !ok {
 		return errAt(t, "i8 constant out of range")
 	}
+	p.appendImm([]byte{byte(n)})
 	return nil
 }
 
@@ -1116,12 +1132,66 @@ func (p *parser) vecConst(mnemonic Token) error {
 		// located at any one token.
 		return errAt(mnemonic, "wrong number of lane literals")
 	}
+	// **Sixteen raw bytes regardless of shape, since #210** — `encode.ml:626`'s `v128 c` is
+	// `V128.to_bits`, one little-endian write of the whole 128 bits; a shape only decides how
+	// those bits are *sliced* going in (four 32-bit lanes or two 64-bit lanes read identically as
+	// bytes once written), which is why this appends per-lane rather than building one `[16]byte`
+	// up front — the width varies per shape, the total does not. `laneBytes` is the per-lane
+	// converter, shared with nothing else because no other shape has a *variable* per-element
+	// width the way this one does (constImmBytes' four widths are each their own mnemonic).
 	for _, lit := range lits {
 		if err := p.checkNumRange(lit, bits, isFloat); err != nil {
 			return err
 		}
+		if p.retaining() {
+			b, ok := laneBytes(lit, bits, isFloat)
+			if !ok {
+				// Unreachable: checkNumRange's range check uses the identical conversion
+				// (intConstBits/floatConstBits), so a literal that passed it converts —
+				// constImmBytes' own sibling site states the identical invariant.
+				return errf(lit, "internal: %s passed the range check and failed to encode", lit.Text)
+			}
+			p.appendImm(b)
+		}
 	}
 	return nil
+}
+
+// laneBytes converts one `v128.const` lane literal to its raw little-endian bytes at the
+// shape's own width — `constImmBytes`' sibling, differing only in *how* the bits are written:
+// `constImmBytes` LEB-encodes an int (`iN.const`'s own wire form) where this always writes fixed
+// raw bytes, because every v128 lane — 8, 16, 32, or 64 bits, int or float — is a slice of one
+// 128-bit raw image, never a self-delimiting value of its own.
+func laneBytes(t Token, bits uint, isFloat bool) ([]byte, bool) {
+	var w writer
+	if isFloat {
+		n, ok := floatConstBits(t.Text, bits)
+		if !ok {
+			return nil, false
+		}
+		if bits == 32 {
+			w.f32(uint32(n))
+		} else {
+			w.f64(n)
+		}
+		return w.b, true
+	}
+	n, ok := intConstBits(t.Text, bits)
+	if !ok {
+		return nil, false
+	}
+	switch bits {
+	case 8:
+		w.byte1(byte(n))
+	case 16:
+		w.byte1(byte(n))
+		w.byte1(byte(n >> 8))
+	case 32:
+		w.f32(uint32(n))
+	case 64:
+		w.f64(n)
+	}
+	return w.b, true
 }
 
 // laneIdxList parses `list(laneidx)` (:651), `i8x16.shuffle`'s sixteen indices.
