@@ -152,6 +152,46 @@ func (in *Instance) execFD(ins binary.Instr, st *stack) error {
 	case 0x1e, 0x22: // i64x2.replace_lane, f64x2.replace_lane
 		return in.vecReplaceLane(ins, st, 8, true)
 
+	// **The bulk per-lane family's first sub-batch, #212's fifth ladder rung's own opening
+	// slice — integer-only, no arch-sensitive rounding or NaN propagation, per the recon's own
+	// risk ordering.** `abs`/`neg`/`popcnt` (`VecUnary`), `all_true` (`VecTest`), `bitmask`
+	// (`VecBitmask`): 17 mnemonics across the four integer shapes, i8x16 alone carrying
+	// `popcnt` (the others have no per-lane population count in the tracked proposal set).
+	case 0x60: // i8x16.abs
+		return in.vecUnaryLanes(st, 1, absLane)
+	case 0x61: // i8x16.neg
+		return in.vecUnaryLanes(st, 1, negLane)
+	case 0x62: // i8x16.popcnt
+		return in.vecUnaryLanes(st, 1, popcntLane)
+	case 0x63: // i8x16.all_true
+		return in.vecAllTrue(st, 1)
+	case 0x64: // i8x16.bitmask
+		return in.vecBitmask(st, 1)
+	case 0x80: // i16x8.abs
+		return in.vecUnaryLanes(st, 2, absLane)
+	case 0x81: // i16x8.neg
+		return in.vecUnaryLanes(st, 2, negLane)
+	case 0x83: // i16x8.all_true
+		return in.vecAllTrue(st, 2)
+	case 0x84: // i16x8.bitmask
+		return in.vecBitmask(st, 2)
+	case 0xa0: // i32x4.abs
+		return in.vecUnaryLanes(st, 4, absLane)
+	case 0xa1: // i32x4.neg
+		return in.vecUnaryLanes(st, 4, negLane)
+	case 0xa3: // i32x4.all_true
+		return in.vecAllTrue(st, 4)
+	case 0xa4: // i32x4.bitmask
+		return in.vecBitmask(st, 4)
+	case 0xc0: // i64x2.abs
+		return in.vecUnaryLanes(st, 8, absLane)
+	case 0xc1: // i64x2.neg
+		return in.vecUnaryLanes(st, 8, negLane)
+	case 0xc3: // i64x2.all_true
+		return in.vecAllTrue(st, 8)
+	case 0xc4: // i64x2.bitmask
+		return in.vecBitmask(st, 8)
+
 	default:
 		return unsupported(ins)
 	}
@@ -467,5 +507,146 @@ func (in *Instance) vecReplaceLane(ins binary.Instr, st *stack, width uint64, is
 	}
 	hi, lo = replaceLaneBytes(hi, lo, lane, width, bs)
 	st.pushV128(hi, lo)
+	return nil
+}
+
+// laneCount is how many `width`-byte lanes a v128 holds — always 16/width, since a v128 is
+// always exactly 16 bytes regardless of shape.
+func laneCount(width uint64) uint64 { return 16 / width }
+
+// lanesOf splits a v128 into its individual lanes, each read as a raw little-endian uint64 with
+// the lane's own bytes in the low `width*8` bits and everything above zero. The shape (i8x16 vs
+// f32x4, signed vs unsigned) is entirely the caller's business — this function only knows how
+// wide a lane is.
+func lanesOf(hi, lo, width uint64) []uint64 {
+	full := v128Bytes(hi, lo)
+	n := laneCount(width)
+	lanes := make([]uint64, n)
+	for i := range n {
+		var raw uint64
+		off := i * width
+		for b := range width {
+			raw |= uint64(full[off+b]) << (8 * b)
+		}
+		lanes[i] = raw
+	}
+	return lanes
+}
+
+// lanesToV128 is lanesOf's inverse: pack width-byte lanes (each already masked to its own width
+// by the caller) back into a v128's hi/lo pair.
+func lanesToV128(lanes []uint64, width uint64) (hi, lo uint64) {
+	var full [16]byte
+	for i, lane := range lanes {
+		off := uint64(i) * width
+		for b := range width {
+			full[off+b] = byte(lane >> (8 * b))
+		}
+	}
+	return v128FromBytes(full[:])
+}
+
+// signExtendLane sign-extends a lane's low `width*8` bits to a full 64-bit signed reading —
+// every per-lane arithmetic op that needs signedness (abs, neg, the signed compares, min_s/
+// max_s) reads its lanes this way rather than duplicating the shift-pair each time.
+func signExtendLane(raw, width uint64) int64 {
+	shift := 64 - width*8
+	return int64(raw<<shift) >> shift
+}
+
+// maskLane truncates a computed value back to its lane's own width — every arithmetic result
+// must be re-masked before repacking, since Go's own arithmetic on a uint64 does not wrap at an
+// arbitrary bit width the way an i8/i16/i32 lane does.
+func maskLane(v, width uint64) uint64 { return v & mask(uint(width*8)) }
+
+// absLane and negLane are per-lane arithmetic on a signed reading, re-masked to the lane's own
+// width — `IXX.abs`/`IXX.neg`, two's-complement, so `abs(minInt8) == minInt8` (no wider type to
+// escape into) exactly as Go's own `int8` arithmetic already wraps.
+func absLane(raw, width uint64) uint64 {
+	v := signExtendLane(raw, width)
+	if v < 0 {
+		v = -v
+	}
+	return maskLane(uint64(v), width)
+}
+
+func negLane(raw, width uint64) uint64 {
+	return maskLane(uint64(-signExtendLane(raw, width)), width)
+}
+
+// popcntLane counts set bits within the lane's own width — i8x16.popcnt is the only mnemonic in
+// the tracked proposal set that has one, so this is never called with width other than 1, but it
+// is written generally rather than hardcoded to 8 bits since nothing about the algorithm needs
+// the restriction.
+func popcntLane(raw, width uint64) uint64 {
+	return uint64(bitsOnesCount64(raw & mask(uint(width*8))))
+}
+
+// bitsOnesCount64 avoids importing math/bits for one call site — Kernighan's own bit-counting
+// loop, clear enough not to need a second package pulled in for a single-lane popcnt that never
+// exceeds 8 bits in this proposal's tracked opcode set.
+func bitsOnesCount64(v uint64) int {
+	n := 0
+	for v != 0 {
+		v &= v - 1
+		n++
+	}
+	return n
+}
+
+// vecUnaryLanes applies fn to every lane of the v128 on top of the stack and pushes the result —
+// the shared shape behind abs/neg/popcnt (and, on later rungs, every other per-lane unary op
+// that does not need float rounding).
+func (in *Instance) vecUnaryLanes(st *stack, width uint64, fn func(raw, width uint64) uint64) error {
+	if err := st.needNum(2); err != nil {
+		return err
+	}
+	hi, lo := st.popV128()
+	lanes := lanesOf(hi, lo, width)
+	for i, l := range lanes {
+		lanes[i] = fn(l, width)
+	}
+	hi, lo = lanesToV128(lanes, width)
+	st.pushV128(hi, lo)
+	return nil
+}
+
+// vecAllTrue implements `*.all_true`: an i32 result, 1 iff every lane is nonzero — `eval_vec.ml`'s
+// `reduceop (&&) true`, folded left over the lanes with an empty vector (impossible here, a v128
+// always has at least one lane at every tracked width) vacuously true.
+func (in *Instance) vecAllTrue(st *stack, width uint64) error {
+	if err := st.needNum(2); err != nil {
+		return err
+	}
+	hi, lo := st.popV128()
+	lanes := lanesOf(hi, lo, width)
+	all := true
+	for _, l := range lanes {
+		if l == 0 {
+			all = false
+			break
+		}
+	}
+	st.pushBool(all)
+	return nil
+}
+
+// vecBitmask implements `*.bitmask`: an i32 whose bit i is 1 iff lane i's sign bit is set —
+// `eval_vec.ml`'s `bitmask`, confirmed by hand-tracing its `fold_right` against `logor`/
+// `shift_left`: lane 0's sign bit lands in result bit 0, ascending by lane index.
+func (in *Instance) vecBitmask(st *stack, width uint64) error {
+	if err := st.needNum(2); err != nil {
+		return err
+	}
+	hi, lo := st.popV128()
+	lanes := lanesOf(hi, lo, width)
+	var mask uint32
+	signBit := width*8 - 1
+	for i, l := range lanes {
+		if (l>>signBit)&1 != 0 {
+			mask |= 1 << uint(i)
+		}
+	}
+	st.pushI32(int32(mask))
 	return nil
 }
