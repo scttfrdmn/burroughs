@@ -2659,6 +2659,26 @@ weakly-ordered platform.
   the lane-load/store family's byte-offset arithmetic and lane-index extraction were each mutated
   and watched fail before being trusted, then reverted.
 
+- **The interpreter's lane-access family executes — `splat`/`extract_lane[_s|_u]`/`replace_lane`,
+  #212's fourth ladder rung** (20 mnemonics: 6 splat, 8 extract_lane, 6 replace_lane) — the
+  scalar↔vector boundary decision 0024 built the representation for, exercised end to end for
+  the first time (the whole-vector-bitwise and memory families both stayed inside the v128
+  representation, never converting to or from a plain numeric slot). Every reader derived from
+  `eval_vec.ml`'s own `splatop`/`extractop`/`replaceop`: splat wraps a scalar's low bytes into
+  every lane, extract widens one lane back to a full numeric slot (sign- or zero-extending for
+  the two narrow shapes that have both), replace writes one lane and leaves the rest of the
+  vector untouched. `i32x4.replace_lane`/`f32x4.replace_lane` and `i64x2.replace_lane`/
+  `f64x2.replace_lane` share a width but are distinct opcodes, each pinned by its own row.
+
+  The all-on lane moves fail 875→850 (**−25**), pass 37311→37336 (**+25**). The default lane
+  is unmoved (pass 34308, unsupported 26804 — the gate stays off).
+
+  Falsified before trusting: the sign-extension branch in `extract_lane_s` (disabled, caught by
+  both narrow shapes' own sign-pinning rows), `replace_lane`'s scalar-vs-vector pop order
+  (swapped, caught by all five replace rows at once), and `splat`'s lane-replication loop
+  (narrowed to write only the first lane, caught by all five splat rows at once) were each
+  mutated and watched fail before being trusted, then reverted.
+
 ### Changed
 
 - **The §3 sentinel's doc names a narrowed gap rather than a missing linker, and six live "v0 has
