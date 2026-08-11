@@ -196,6 +196,42 @@ func (in *Instance) execFD(ins binary.Instr, st *stack) error {
 	case 0xc4: // i64x2.bitmask
 		return in.vecBitmask(st, 8)
 
+	// **VecShift — #212's own family, 12 mnemonics, integer-only.** `eval.ml`'s own stack shape
+	// for VecShift is `Num s :: Vec v :: vs'`: the i32 shift count is pushed *after* the vector
+	// operand and therefore pops first — `(i8x16.shl v c)` in wat, c on top — never the
+	// two-v128-operand order the whole-vector-bitwise and VecCompare families use above.
+	//
+	// **The shift count is masked to the lane's own bit width before use, per `IXX.shift`'s own
+	// `logand j (of_int (bitwidth - 1))`** — `i8x16.shl` with a count of 8 shifts by 0, not by 8,
+	// exactly as a real 8-bit shift instruction wraps. Go's own `<<`/`>>` on a sized integer type
+	// does not do this for a shift count at or beyond the type's width (undefined-adjacent, not
+	// wrapped), so the mask is applied explicitly here rather than trusted to fall out of the
+	// Go operator the way it would for a same-width native shift.
+	case 0x6b: // i8x16.shl
+		return in.vecShiftLanes(st, 1, false, false)
+	case 0x6c: // i8x16.shr_s
+		return in.vecShiftLanes(st, 1, true, true)
+	case 0x6d: // i8x16.shr_u
+		return in.vecShiftLanes(st, 1, true, false)
+	case 0x8b: // i16x8.shl
+		return in.vecShiftLanes(st, 2, false, false)
+	case 0x8c: // i16x8.shr_s
+		return in.vecShiftLanes(st, 2, true, true)
+	case 0x8d: // i16x8.shr_u
+		return in.vecShiftLanes(st, 2, true, false)
+	case 0xab: // i32x4.shl
+		return in.vecShiftLanes(st, 4, false, false)
+	case 0xac: // i32x4.shr_s
+		return in.vecShiftLanes(st, 4, true, true)
+	case 0xad: // i32x4.shr_u
+		return in.vecShiftLanes(st, 4, true, false)
+	case 0xcb: // i64x2.shl
+		return in.vecShiftLanes(st, 8, false, false)
+	case 0xcc: // i64x2.shr_s
+		return in.vecShiftLanes(st, 8, true, true)
+	case 0xcd: // i64x2.shr_u
+		return in.vecShiftLanes(st, 8, true, false)
+
 	// **VecCompare, #212's fifth ladder rung's second sub-batch — 48 mnemonics, moderate risk.**
 	// Chosen before the float arithmetic arms per Scott's own ordering: comparison itself needs
 	// no rounding and no signed-zero handling (Go's native `<`/`>`/`==` on float32/float64
@@ -823,6 +859,39 @@ func (in *Instance) vecUnaryLanes(st *stack, width uint64, fn func(raw, width ui
 	lanes := lanesOf(hi, lo, width)
 	for i, l := range lanes {
 		lanes[i] = fn(l, width)
+	}
+	hi, lo = lanesToV128(lanes, width)
+	st.pushV128(hi, lo)
+	return nil
+}
+
+// vecShiftLanes implements the 12 `*.shl`/`*.shr_s`/`*.shr_u` mnemonics: pop an i32 shift count
+// (on top, per `eval.ml`'s own `Num s :: Vec v :: vs'` stack shape) and a v128 operand, shift
+// every lane by the count masked to the lane's own bit width, and push the result.
+//
+// `signed` selects arithmetic-vs-logical shift for a right shift (unread for `shl`, which has no
+// sign-dependent variant in the tracked mnemonic set); `right` selects the direction. Three bools
+// rather than a `func(int64, uint) uint64` parameter, unlike `vecUnaryLanes`'s `fn` — a shift's
+// third operand (the count) does not vary per call the way abs/neg/popcnt's zero-argument shape
+// does, so there is no per-call closure to build, and the three opcodes-per-width pattern reads
+// more directly as three named booleans than as three near-identical one-line closures.
+func (in *Instance) vecShiftLanes(st *stack, width uint64, right, signed bool) error {
+	if err := st.needNum(3); err != nil {
+		return err
+	}
+	count := uint64(st.popI32())
+	hi, lo := st.popV128()
+	shift := count & (width*8 - 1) // IXX.shift's own `logand j (of_int (bitwidth - 1))`
+	lanes := lanesOf(hi, lo, width)
+	for i, l := range lanes {
+		switch {
+		case !right: // shl
+			lanes[i] = maskLane(l<<shift, width)
+		case signed: // shr_s
+			lanes[i] = maskLane(uint64(signExtendLane(l, width)>>shift), width)
+		default: // shr_u
+			lanes[i] = maskLane(l>>shift, width)
+		}
 	}
 	hi, lo = lanesToV128(lanes, width)
 	st.pushV128(hi, lo)
