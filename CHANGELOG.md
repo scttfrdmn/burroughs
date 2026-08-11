@@ -21,6 +21,31 @@ weakly-ordered platform.
 
 ### Added
 
+- **The harness can build and compare v128 arguments/expectations — decision 0024's forced
+  question 5.** `internal/spec` gains `KindV128`, `Val.Hi`/`Val.Lanes`/`Val.LaneBits`,
+  `readV128Const` (reads `(v128.const <shape> <lane>*)` for every tracked shape, admitting a
+  lane's own NaN-class spelling exactly where a scalar float literal already admits one),
+  `sliceV128Lanes`/`packV128Lanes` (the raw-bits/shaped-lanes crossing, mirroring
+  `internal/interp`'s own `lanesOf`/`lanesToV128` byte layout independently per contract §0), and
+  `Val.Matches`'s `KindV128` branch (decomposes into N per-lane scalar comparisons — `want`'s own
+  shape slices `got`'s raw bits, never the reverse, since only the expectation side reliably
+  carries a shape). `isPassable` gains a v128 arm rejecting any NaN-class lane in an argument
+  position (confirmed by direct corpus measurement: 0 such occurrences). This is the harness-side
+  half of the SIMD execution ladder's `internal/interp/simd.go` arms (#212) becoming *askable* —
+  before this, every `v128.const` argument or expectation reaching `readConst` was refused
+  outright, so a landed arm's own suite vectors could not be scored regardless of correctness.
+  All-gates-on lane: 37406 → 58443 pass (+21037), 0 gated held — every newcomer was previously
+  Unsupported at the default lane too and is now honestly Gated there (SIMD stays off by
+  default), never a pass. Default lane: 34308/118 unmoved, `unsupported` 26804 → 2689 (−24115),
+  `gated` 3792 → 27907 (+24115) — one mechanism, `TestGatedVectors`'s new `wholeFileGated` bulk
+  allowance for the 61 files whose entire gated population shares the identical `simd: feature
+  gate disabled` reason (24074 lines) plus per-line entries for the handful of files that mix
+  reasons. Found and fixed a real bug in the same PR (grave, no issue — caught by the new
+  round-trip test before merge): `sliceV128Lanes`/`packV128Lanes` initially spaced lanes by
+  `Kind.width()` (32 for an i8x16/i16x8 lane, since those widen to `KindI32` for storage) instead
+  of the wire width, which would have packed sixteen 8-bit lanes into 512 bits of a 128-bit
+  vector — fixed by adding `Val.LaneBits` to carry the wire width independently of storage `Kind`.
+
 - **`internal/interp/dropbench` measures grave #206's fix candidates — decision 0023, accepted**
   — on `dispatchbench`'s precedent (decision 0002: `make bench` numbers decide, not argument).
   Four implementations over the identical push/pop/branch access pattern: always-on `uint64`
