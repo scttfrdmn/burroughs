@@ -296,8 +296,19 @@ func (in *Instance) branch(st *stack, ctrl []label, depth uint64) (pc, level int
 				ErrNotValidated, l.arity, len(st.num)-l.height)
 		}
 		copy(st.num[l.height:], st.num[src:])
+		if st.tracking {
+			// **0023's own truncation, carried along by the identical copy+reslice this
+			// site already performs on `st.num`** — a sequence number belongs to its slot,
+			// so whatever survives the branch keeps the number it arrived with, exactly as
+			// its value does. No new algorithm; the existing per-array truncation pattern
+			// extended one field.
+			copy(st.numSeq[l.height:], st.numSeq[src:])
+		}
 	}
 	st.num = st.num[:l.height+l.arity]
+	if st.tracking {
+		st.numSeq = st.numSeq[:l.height+l.arity]
+	}
 	if l.refArity > 0 {
 		src := len(st.refs) - l.refArity
 		if src < l.refHeight {
@@ -305,8 +316,10 @@ func (in *Instance) branch(st *stack, ctrl []label, depth uint64) (pc, level int
 				ErrNotValidated, l.refArity, len(st.refs)-l.refHeight)
 		}
 		copy(st.refs[l.refHeight:], st.refs[src:])
+		copy(st.refSeq[l.refHeight:], st.refSeq[src:])
 	}
 	st.refs = st.refs[:l.refHeight+l.refArity]
+	st.refSeq = st.refSeq[:l.refHeight+l.refArity]
 	return l.cont, len(ctrl) - 1 - int(depth), nil
 }
 
@@ -339,8 +352,14 @@ func returnFrom(st *stack, results, refResults int) error {
 	}
 	copy(st.num, st.num[len(st.num)-results:])
 	st.num = st.num[:results]
+	if st.tracking {
+		copy(st.numSeq, st.numSeq[len(st.numSeq)-results:])
+		st.numSeq = st.numSeq[:results]
+	}
 	copy(st.refs, st.refs[len(st.refs)-refResults:])
 	st.refs = st.refs[:refResults]
+	copy(st.refSeq, st.refSeq[len(st.refSeq)-refResults:])
+	st.refSeq = st.refSeq[:refResults]
 	return nil
 }
 
@@ -431,7 +450,11 @@ func (in *Instance) catchThrown(st *stack, ctrl []label, t *Uncaught) (caught, e
 			// the shape a body-with-side-effects-then-throw vector would need to catch and
 			// this rung's own falsification depth is ordered to test for.
 			st.num = st.num[:l.height]
+			if st.tracking {
+				st.numSeq = st.numSeq[:l.height]
+			}
 			st.refs = st.refs[:l.refHeight]
+			st.refSeq = st.refSeq[:l.refHeight]
 			switch c.Kind {
 			case binary.CatchTag:
 				pushPayload(st, t.exc)
@@ -458,8 +481,17 @@ func (in *Instance) catchThrown(st *stack, ctrl []label, t *Uncaught) (caught, e
 // surgery site in this package: the two arrays have independent depths and a payload can mix
 // kinds.
 func pushPayload(st *stack, exc *excObj) {
-	st.num = append(st.num, exc.num...)
-	st.refs = append(st.refs, exc.refs...)
+	// **Through `pushNum`/`pushRef`, not a direct append** — 0023's sequence tracking is
+	// maintained entirely inside those two functions (value.go), and a payload value re-entering
+	// the stack needs a sequence number exactly like any other push, or `drop`'s own invariant
+	// (every live slot has one, once tracking is on) breaks for the one value most likely to sit
+	// directly under a `drop`: an exnref's own payload, restored by a `catch_ref` clause.
+	for _, v := range exc.num {
+		st.pushNum(v)
+	}
+	for _, r := range exc.refs {
+		st.pushRef(r)
+	}
 }
 
 // branchTo performs the stack surgery a matched catch clause's branch needs, sharing `branch`'s
