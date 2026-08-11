@@ -1,6 +1,8 @@
 # 0024 — A v128 value occupies two adjacent 64-bit slots everywhere a slot is a thing
 
-Date: 2026-08-11 · Status: **proposed** — awaiting Scott's stamp.
+Date: 2026-08-11 · Status: **accepted** — stamped by Scott on PR #213, on the ground that the
+adverse realistic-frequency bench number is printed with its p-value and correctness overrode it
+anyway: measurement informing, soundness deciding, in the right order.
 
 Filed against **#212** (the 0xfd interpreter-execution recon) and the #153 chain's own forced
 question, on Scott's framing: this is *the value model's widening, not the stack's* — five
