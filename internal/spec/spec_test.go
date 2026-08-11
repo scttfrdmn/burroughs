@@ -6176,7 +6176,42 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	// identical, which is why "confirmed, not merely diagnosed" is the operative distinction.
 	//
 	// **Moved 61065 → 61163 (amd64) / 61145 → 61163 (arm64), the two counts now equal.**
-	const allOnPassFloor = 61163
+	//
+	// **Moved 61163 → 61339, both architectures, landing a third and distinct member of the
+	// same defect family plus a fourth, unrelated bug — found triaging what remained of the
+	// gate-flip forecast's own mismatch bucket per Scott's own instruction ("go find out what
+	// the 199 are") after #223's fix reduced it from 201 to 183:**
+	//
+	//  1. **`f32x4.pmin`/`f32x4.pmax` corrupted a NaN operand's exact bits, 176 of the 183.**
+	//     Both went through `vecBinaryFloat`'s shared widen-to-float64/narrow-back-to-float32
+	//     path, but `v128.ml`'s own `pmin`/`pmax` are a *selection* — one operand's bits
+	//     returned completely unchanged, no arithmetic — and Go's float32↔float64 conversion is
+	//     documented to canonicalize a NaN's payload during the round trip (confirmed directly,
+	//     both architectures: `float32(float64(math.Float32frombits(0x7fa00000)))` returns
+	//     `0x7fe00000`). f64x2's own pmin/pmax never widen and are unaffected — measured zero
+	//     f64 mismatches. Fixed with a dedicated `vecPminPmax` that compares in float64 for
+	//     ordering but selects and returns the operand's original, never-round-tripped lane
+	//     bits. +176.
+	//  2. **`v128.load8_splat`/`load16_splat`/`load32_splat` over-read past their own scalar
+	//     width, tripping a spurious out-of-bounds trap** — a distinct bug, not a NaN-payload
+	//     defect, found in the remaining 9 of the 183 (`simd_load_splat.wast:47,52,57`, each a
+	//     boundary address 1/2/4 bytes from a one-page memory's end). `vecLoadWidth` routed
+	//     every "packed form" opcode through one 8-byte branch, but the three narrower splats
+	//     read only 1/2/4 bytes each before replicating — over-reading up to 7 bytes nobody
+	//     asked for, harmless deep in memory and a trap at the edge. load64_splat genuinely
+	//     reads 8 bytes and needed no change. +9.
+	//
+	// The remaining 7 (of the original 201) were already fully attributed by
+	// `TestValueMismatchBucketIsEmptyAndSaysWhoWroteAnyRow`'s own registry (5 `load1.wast`
+	// multi-memory-cascade, 2 encoder `(start …)` gap) before this session started — confirmed
+	// still green with both fixes applied, nothing to do there. The 161 `module reached the
+	// interpreter unvalidated` fails are **#9-orthogonal**: `ErrNotValidated`'s own doc comment
+	// (`internal/interp/interp.go`) names every one of its call sites as unreachable once #9
+	// (the validator, open) lands — a declared-and-tracked layering debt, not a SIMD defect, and
+	// no SIMD work drives it to zero. 176+9=185 fixed, 161 validator (parked, #9), 7
+	// already-registered — closing the triage the flip procedure (#227) asked for:
+	// 61163 + 185 = 61348.
+	const allOnPassFloor = 61348
 	boardBound(t, "allOnPassFloor", totalPass, allOnPassFloor, boardBoundSlack, floorBound,
 		"a gated feature regressed, which the Gated==0 assertion above cannot see: with every "+
 			"gate on, a broken feature turns a pass into a fail and leaves Gated at zero")

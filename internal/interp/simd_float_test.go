@@ -143,6 +143,28 @@ func TestSIMDFloatArithmetic(t *testing.T) {
 		}
 	})
 
+	// **Grave: f32x4.pmin/pmax's own NaN-passthrough operand loses its exact bit pattern** —
+	// verbatim from simd_f32x4_pmin_pmax.wast:10884-10886 (`nan:0x200000` = `0x7fa00000`, a
+	// *signaling* NaN, quiet bit clear). `v128.ml`'s own `pmin`/`pmax` select an operand and
+	// return its bits *completely unchanged* — no arithmetic, no quieting — but the two rows
+	// above use `0x7fc00000` (already-canonical, quiet bit already set), which round-trips
+	// through Go's own float32→float64→float32 conversion unchanged by coincidence and cannot
+	// catch this: Go's documented NaN-payload canonicalization during that conversion turns
+	// `0x7fa00000` into `0x7fe00000`, a different signaling-vs-quiet bit pattern than the
+	// operand actually held — found while triaging #227's own gate-flip forecast, where this
+	// was 176 of that forecast's 201 `assert_return value mismatch` fails, the corpus's own
+	// `f32x4.pmin_pmax` file testing every NaN-class spelling.
+	t.Run("f32x4.pmax preserves a signaling NaN operand's exact bits, verbatim from :10884-10886", func(t *testing.T) {
+		out := runSIMD1(t, `(module (func (export "c") (result v128)
+			(f32x4.pmax (v128.const i32x4 0x7fa00000 0x7fa00000 0x7fa00000 0x7fa00000)
+			            (v128.const f32x4 -0x0p+0 -0x0p+0 -0x0p+0 -0x0p+0))))`)
+		want := uint64(0x7fa000007fa00000)
+		if out[0].Hi != want || out[0].Bits != want {
+			t.Errorf("got hi=%#x lo=%#x, want hi=%#x lo=%#x (0x7fa00000 exactly, not the "+
+				"0x7fe00000 a float64 round trip would produce)", out[0].Hi, out[0].Bits, want, want)
+		}
+	})
+
 	// Standard arithmetic, one row each, plus the operand-order-sensitive case (sub/div) to
 	// confirm the stack's own pop order (second operand on top) is honored.
 	t.Run("f64x2.add", func(t *testing.T) {

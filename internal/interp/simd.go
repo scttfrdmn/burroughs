@@ -563,9 +563,9 @@ func (in *Instance) execFD(ins binary.Instr, st *stack) error {
 	case 0xe9: // f32x4.max
 		return in.vecBinaryFloat(st, 4, floatMax)
 	case 0xea: // f32x4.pmin
-		return in.vecBinaryFloat(st, 4, floatPmin)
+		return in.vecPminPmax(st, false)
 	case 0xeb: // f32x4.pmax
-		return in.vecBinaryFloat(st, 4, floatPmax)
+		return in.vecPminPmax(st, true)
 
 	case 0xf0: // f64x2.add
 		return in.vecBinaryFloat(st, 8, func(a, b float64) float64 { return a + b })
@@ -798,17 +798,28 @@ func (in *Instance) vecLoad(ins binary.Instr, st *stack, decode func([]byte) (hi
 	return nil
 }
 
-// vecLoadWidth is the byte count each vecLoad opcode reads from memory — 16 for the bare load,
-// 8 for every packed form (all six read exactly half a v128's worth, per `Pack.packed_size`
-// applied to Pack64/Pack32/Pack16/Pack8 in `value.ml`'s own table), except load32_zero, which
-// reads 4.
+// vecLoadWidth is the byte count each vecLoad opcode reads from memory. 16 for the bare load;
+// the six load*x*_s/u forms each widen a full 8-byte pack (Pack64, per `value.ml`'s own table)
+// regardless of the source lane width, so they stay at 8; load32_zero reads exactly the one i32
+// it places in lane 0, so 4. **The splat family does not share the packed-forms' width** — each
+// reads only its own scalar's size before replicating it (load8_splat 1, load16_splat 2,
+// load32_splat 4, load64_splat 8) — a distinction an earlier version of this function collapsed
+// into "every packed form reads 8", which over-read up to 7 bytes past the value load8/16/32_splat
+// actually needs. Harmless deep in a memory but a spurious out-of-bounds trap on a load positioned
+// so those extra bytes cross the memory's end — found via simd_load_splat.wast's own boundary
+// vectors (:47,:52,:57 — v128.load8/16/32_splat at addresses 1/2/4 bytes from the memory's edge),
+// which the over-read faults on and the spec does not.
 func vecLoadWidth(op uint32) uint64 {
 	switch op {
 	case 0x00: // v128.load
 		return 16
-	case 0x5c: // v128.load32_zero
+	case 0x07: // v128.load8_splat
+		return 1
+	case 0x08: // v128.load16_splat
+		return 2
+	case 0x09, 0x5c: // v128.load32_splat, v128.load32_zero
 		return 4
-	default: // the six load*x*_s/u and four load*_splat forms, plus load64_zero
+	default: // the six load*x*_s/u forms, plus load64_splat (0x0a) and load64_zero
 		return 8
 	}
 }
@@ -1358,6 +1369,10 @@ func quietNaNOf(a, b float64) float64 {
 // `pmax x y = if x < y then y else x`. **Not symmetric and not "the smaller/larger of the two"**:
 // when the comparison is false (including whenever either operand is NaN, since NaN is never
 // less than anything), the result is unconditionally the *first* operand, never the second.
+//
+// **Deliberately float64-only, never called for f32 lanes** — see `vecPminPmax`'s own doc
+// comment for why f32's own pmin/pmax go through a separate, bits-preserving path instead of
+// `vecBinaryFloat`'s widen/narrow. These two remain as the f64 arms' own fn value.
 func floatPmin(a, b float64) float64 {
 	if b < a {
 		return b
@@ -1370,6 +1385,44 @@ func floatPmax(a, b float64) float64 {
 		return b
 	}
 	return a
+}
+
+// vecPminPmax implements `f32x4.pmin`/`f32x4.pmax`: pmin/pmax return one operand's bits
+// *completely unchanged* (`v128.ml`'s own `pmin = binop (fun x y -> if FXX.lt y x then y else
+// x)` — no arithmetic on the selected value, just a selection), and `vecBinaryFloat`'s own
+// widen-to-float64/narrow-back shape cannot carry a NaN operand through unchanged: **Go's own
+// float32↔float64 conversion is documented to canonicalize a NaN's payload during the
+// conversion**, confirmed directly and reproducibly on both architectures with a bare,
+// non-indirect conversion (`float32(float64(math.Float32frombits(0x7fa00000)))` returns
+// `0x7fe00000`, not `0x7fa00000`) — so `vecBinaryFloat`'s shared path is only "lossless" for
+// pmin/pmax by coincidence when neither operand is NaN, and silently wrong whenever one is,
+// exactly the failure this function exists to avoid by comparing in float64 but selecting and
+// returning the *original 32-bit lane*, never a round-tripped one.
+func (in *Instance) vecPminPmax(st *stack, isMax bool) error {
+	if err := st.needNum(4); err != nil {
+		return err
+	}
+	hi2, lo2 := st.popV128()
+	hi1, lo1 := st.popV128()
+	lanes1 := lanesOf(hi1, lo1, 4)
+	lanes2 := lanesOf(hi2, lo2, 4)
+	result := make([]uint64, len(lanes1))
+	for i := range lanes1 {
+		a := float64(math.Float32frombits(uint32(lanes1[i])))
+		b := float64(math.Float32frombits(uint32(lanes2[i])))
+		selectSecond := b < a
+		if isMax {
+			selectSecond = a < b
+		}
+		if selectSecond {
+			result[i] = lanes2[i] // the operand's own raw bits, never re-derived from a's/b's float64 reading
+		} else {
+			result[i] = lanes1[i]
+		}
+	}
+	hi, lo := lanesToV128(result, 4)
+	st.pushV128(hi, lo)
+	return nil
 }
 
 // vecBinaryFloat implements the 16 float binary opcodes (add/sub/mul/div/min/max/pmin/pmax

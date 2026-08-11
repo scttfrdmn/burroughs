@@ -4720,6 +4720,30 @@ is a formatting pass of its own, not a drive-by inside a decoder PR.*
   against real corpus vectors (`simd_f32x4.wast:985-987`, `simd_f64x2_rounding.wast:359`); both
   fixes confirmed by mutation before being trusted.
 
+- **Two more real defects, found continuing #223's own triage per Scott's instruction to find out
+  what the SIMD gate-flip forecast's remaining ~199 mismatches were.** After #223's fix the
+  bucket dropped from 201 to 183, and both survivors are new, distinct from the NaN-payload
+  family and from each other:
+  - **`f32x4.pmin`/`f32x4.pmax` corrupted a NaN operand's exact bits (176 of the 183).** Both
+    went through `vecBinaryFloat`'s shared widen-to-float64/narrow-back-to-float32 path, but
+    `v128.ml`'s own `pmin`/`pmax` are a *selection* — one operand's bits returned completely
+    unchanged, no arithmetic — and Go's float32↔float64 conversion is documented to canonicalize
+    a NaN's payload during the round trip (confirmed directly on both architectures:
+    `float32(float64(math.Float32frombits(0x7fa00000)))` returns `0x7fe00000`). f64x2's own
+    pmin/pmax never widen and are unaffected. Fixed with a dedicated `vecPminPmax` that compares
+    in float64 for ordering but selects and returns the operand's original, never-round-tripped
+    lane bits.
+  - **`v128.load8_splat`/`load16_splat`/`load32_splat` over-read past their own scalar width,
+    tripping a spurious out-of-bounds trap (9 of the 183).** `vecLoadWidth` routed every "packed
+    form" opcode through one 8-byte branch, but the three narrower splats read only 1/2/4 bytes
+    each before replicating — over-reading up to 7 bytes nobody asked for, harmless deep in
+    memory and a trap at a boundary address (`simd_load_splat.wast:47,52,57`).
+  The remaining 7 were already fully attributed by `TestValueMismatchBucketIsEmptyAndSaysWhoWroteAnyRow`'s
+  own registry before this session, confirmed still green. All-gates-on lane: 61163 → **61348
+  pass (+185)**, identical on both architectures. New falsifiable tests
+  (`internal/interp/simd_float_test.go`, `internal/interp/simd_mem_test.go`), cited against real
+  corpus vectors; both fixes confirmed by mutation before being trusted.
+
 ## [0.0.1] - 2026-07-30
 
 *Implements contract v0.1. Scaffold state, recorded retroactively at the
