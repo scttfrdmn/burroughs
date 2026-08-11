@@ -110,6 +110,48 @@ func (in *Instance) execFD(ins binary.Instr, st *stack) error {
 	case 0x58, 0x59, 0x5a, 0x5b: // v128.storeN_lane — memop, write one lane's N bytes
 		return in.vecStoreLane(ins, st, laneWidth(ins.Op))
 
+	// **The lane-access family, #212's fourth ladder rung — the scalar↔vector boundary.**
+	// `eval_vec.ml`'s own naming: `splatop` wraps a scalar into every lane of a fresh v128,
+	// `extractop` reads one lane back out and *widens* it to the pushed scalar's own width
+	// (`I32`/`I64`/`F32`/`F64`), `replaceop` writes one lane and leaves the rest of the vector
+	// untouched. Widths and lane counts follow the mnemonic's own shape suffix (i8x16 = 16
+	// lanes of 1 byte, i16x8 = 8 of 2, i32x4/f32x4 = 4 of 4, i64x2/f64x2 = 2 of 8).
+	case 0x0f: // i8x16.splat
+		return in.vecSplat(st, 1)
+	case 0x10: // i16x8.splat
+		return in.vecSplat(st, 2)
+	case 0x11, 0x13: // i32x4.splat, f32x4.splat — same width, same bits (verbatim, per exec.go's
+		// own float-bits-are-numeric-bits rule)
+		return in.vecSplat(st, 4)
+	case 0x12, 0x14: // i64x2.splat, f64x2.splat
+		return in.vecSplat(st, 8)
+
+	case 0x15: // i8x16.extract_lane_s
+		return in.vecExtractLane(ins, st, 1, true, false)
+	case 0x16: // i8x16.extract_lane_u
+		return in.vecExtractLane(ins, st, 1, false, false)
+	case 0x18: // i16x8.extract_lane_s
+		return in.vecExtractLane(ins, st, 2, true, false)
+	case 0x19: // i16x8.extract_lane_u
+		return in.vecExtractLane(ins, st, 2, false, false)
+	case 0x1b: // i32x4.extract_lane
+		return in.vecExtractLane(ins, st, 4, false, false)
+	case 0x1d: // i64x2.extract_lane
+		return in.vecExtractLane(ins, st, 8, false, true)
+	case 0x1f: // f32x4.extract_lane
+		return in.vecExtractLane(ins, st, 4, false, false)
+	case 0x21: // f64x2.extract_lane
+		return in.vecExtractLane(ins, st, 8, false, true)
+
+	case 0x17: // i8x16.replace_lane
+		return in.vecReplaceLane(ins, st, 1, false)
+	case 0x1a: // i16x8.replace_lane
+		return in.vecReplaceLane(ins, st, 2, false)
+	case 0x1c, 0x20: // i32x4.replace_lane, f32x4.replace_lane — same width, different opcodes
+		return in.vecReplaceLane(ins, st, 4, false)
+	case 0x1e, 0x22: // i64x2.replace_lane, f64x2.replace_lane
+		return in.vecReplaceLane(ins, st, 8, true)
+
 	default:
 		return unsupported(ins)
 	}
@@ -338,4 +380,92 @@ func replaceLaneBytes(hi, lo uint64, lane uint, width uint64, bs []byte) (newHi,
 	off := lane * uint(width)
 	copy(full[off:off+uint(width)], bs)
 	return v128FromBytes(full)
+}
+
+// vecSplat implements the six `*.splat` opcodes: wrap a scalar's low `width` bytes into every
+// lane of a fresh v128 — `eval_vec.ml`'s `splatop`, which reads the scalar through
+// `wrap_i32`/`I32Num.of_num`/etc. (a truncation to the lane's own width, never a conversion) and
+// replicates the identical bytes into each lane position.
+//
+// f32x4.splat and f64x2.splat share this arm with their integer siblings of the same width
+// (0x11/0x13 both width 4, 0x12/0x14 both width 8) because a float's bits are the numeric bits
+// verbatim, exec.go's own standing rule for every opcode that moves a float without arithmetic
+// on it — splatting the scalar's raw bytes is correct for both readings without a branch.
+func (in *Instance) vecSplat(st *stack, width uint64) error {
+	if err := st.needNum(1); err != nil {
+		return err
+	}
+	scalar := st.popNum()
+	bs := make([]byte, width)
+	for i := range width {
+		bs[i] = byte(scalar >> (8 * i))
+	}
+	var full [16]byte
+	for i := 0; i < 16; i += int(width) {
+		copy(full[i:], bs)
+	}
+	hi, lo := v128FromBytes(full[:])
+	st.pushV128(hi, lo)
+	return nil
+}
+
+// vecExtractLane implements the eight `*.extract_lane[_s|_u]` opcodes: read one `width`-byte
+// lane out of the v128 operand and widen it to a full numeric slot — `eval_vec.ml`'s
+// `extractop`, whose `S`/`U` arms sign- or zero-extend the narrow lane (i8x16/i16x8 only; the
+// four wider shapes have no signedness suffix because their lane width already equals the slot
+// width once packed into a 64-bit numeric).
+//
+// `is64` distinguishes i64x2/f64x2 (a 64-bit slot, `st.pushNum` directly) from the four 32-bit
+// shapes (i8x16/i16x8/i32x4/f32x4, all of which push through the identical zero-extend-to-64
+// path `pushNum` already gives an i32 slot — see pushNum's own doc comment on why i32 occupies a
+// full slot with high bits zero).
+func (in *Instance) vecExtractLane(ins binary.Instr, st *stack, width uint64, signed, is64 bool) error {
+	if err := st.needNum(2); err != nil {
+		return err
+	}
+	hi, lo := st.popV128()
+	// Imm0 carries the lane index — the bare `immLaneIdx` shape (no preceding memarg), so it
+	// stages into the first word rather than being OR'd into Imm1 the way the lane-load/store
+	// family's index is (`instrCtx.stage`'s own precondition: `immN < 2`).
+	lane := uint(ins.Imm0) & 0xFF
+	bs := laneBytes(hi, lo, lane, width)
+	var raw uint64
+	for i := len(bs) - 1; i >= 0; i-- {
+		raw = raw<<8 | uint64(bs[i])
+	}
+	if signed {
+		shift := 64 - width*8
+		raw = uint64(int64(raw<<shift) >> shift)
+		if !is64 {
+			raw = uint64(uint32(raw))
+		}
+	} else if !is64 {
+		raw = uint64(uint32(raw))
+	}
+	st.pushNum(raw)
+	return nil
+}
+
+// vecReplaceLane implements the six `*.replace_lane` opcodes: write width bytes of the pushed
+// scalar into one lane of the v128 operand, leaving every other lane untouched — `eval.ml`'s
+// `VecReplace` arm, `Num r :: Vec v :: vs'`: the scalar is on top (popped first), the vector
+// below it (popped second), and `is64` selects whether the scalar is a full 64-bit slot
+// (i64x2/f64x2) or the low 32 bits of one (i8x16/i16x8/i32x4/f32x4 all wrap through i32).
+func (in *Instance) vecReplaceLane(ins binary.Instr, st *stack, width uint64, is64 bool) error {
+	if err := st.needNum(3); err != nil {
+		return err
+	}
+	scalar := st.popNum()
+	if !is64 {
+		scalar = uint64(uint32(scalar))
+	}
+	hi, lo := st.popV128()
+	lane := uint(ins.Imm0) & 0xFF
+	bs := make([]byte, width)
+	for i := range width {
+		bs[i] = byte(scalar >> (8 * i))
+	}
+	hi, lo = replaceLaneBytes(hi, lo, lane, width, bs)
+	st.pushV128(hi, lo)
+	return nil
 }
