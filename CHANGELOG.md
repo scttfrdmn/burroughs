@@ -4699,6 +4699,29 @@ is a formatting pass of its own, not a drive-by inside a decoder PR.*
   version of that test was stillborn (passed under both correct code and a reverted mutation)
   and was rebuilt with a sequence-number ordering that actually separates the two readings.
 
+### Fixed
+
+- **Grave #223 (`f32x4`/`f64x2` `min`/`max`/rounding on NaN), fully fixed rather than merely
+  diagnosed — and the original diagnosis corrected.** Triaging the SIMD gate-flip forecast's
+  `assert_return value mismatch` bucket (per Scott's own instruction to test the harness-side
+  NaN-wildcard hypothesis first — it measured false, only 18 of 201 mismatches even mention
+  `nan:`) found two real, **architecture-independent** defects: `floatMin`/`floatMax` delegated
+  to Go's `math.Min`/`math.Max`, whose own documented special cases check `IsInf` *before*
+  `IsNaN` ("Min(x, -Inf) = Min(-Inf, x) = -Inf", no NaN exception stated), so
+  `math.Min(NaN, -Inf)` returned `-Inf` instead of NaN — fixed by writing the reference's own
+  (`fxx.ml`) branch order directly; and `floatUnary` never quieted a NaN result at all, relying
+  on Go's `math.Ceil`/`Floor`/`Trunc`/`Sqrt`/`RoundToEven`, which are compiler intrinsics on
+  arm64/amd64/s390x/wasm firing only for a *literal* call expression — called as this engine's
+  own first-class function value, `RoundToEven`'s pure-Go fallback path leaves a signaling NaN's
+  bits completely unchanged, confirmed on both architectures — fixed by quieting explicitly.
+  Both defects together are #223's own entire 80-vector gap: fixing them makes arm64 and amd64
+  produce the identical all-gates-on count (61163 pass / 1138 fail, verified live on both).
+  #223's original diagnosis (Go's `math.Min`/`math.Max` NaN-payload per-architecture assembly)
+  was correct about that assembly difference existing but was not the actual defect — adjacent
+  to it, not identical. New falsifiable tests (`internal/interp/simd_float_test.go`), cited
+  against real corpus vectors (`simd_f32x4.wast:985-987`, `simd_f64x2_rounding.wast:359`); both
+  fixes confirmed by mutation before being trusted.
+
 ## [0.0.1] - 2026-07-30
 
 *Implements contract v0.1. Scaffold state, recorded retroactively at the

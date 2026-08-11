@@ -178,6 +178,70 @@ func TestSIMDFloatArithmetic(t *testing.T) {
 			t.Errorf("got hi=%#x lo=%#x, want hi=0 lo=%#x", out[0].Hi, out[0].Bits, wantLo)
 		}
 	})
+
+	// **Grave: f32x4.min/max(NaN, ±Inf) is NaN, not the infinite operand** — verbatim from
+	// simd_f32x4.wast:985-987. Go's own math.Min/Max check IsInf *before* IsNaN
+	// (math/dim.go's own min/max: "Min(x, -Inf) = Min(-Inf, x) = -Inf" with no NaN exception
+	// stated), so a naive delegation to math.Min/Max returns -Inf/+Inf here instead of NaN —
+	// found while triaging the SIMD-only gate-flip forecast's own fail bucket, and turned out to
+	// also be the whole of grave #223's own 80-vector arch gap: fixing this closed it entirely,
+	// on both architectures, not just quieted its NaN payload.
+	t.Run("f32x4.min(nan, -inf) is nan:canonical, not -inf, verbatim from :985-987", func(t *testing.T) {
+		out := runSIMD1(t, `(module (func (export "c") (result v128)
+			(f32x4.min (v128.const i32x4 0x7fc00000 0x7fc00000 0x7fc00000 0x7fc00000)
+			           (v128.const f32x4 -inf -inf -inf -inf))))`)
+		if len(out) != 1 {
+			t.Fatalf("got %d results, want 1", len(out))
+		}
+		// nan:canonical: exponent all ones, quiet bit set, payload otherwise zero, sign either.
+		for _, lane := range []uint32{uint32(out[0].Bits), uint32(out[0].Bits >> 32), uint32(out[0].Hi), uint32(out[0].Hi >> 32)} {
+			if lane&0x7fffffff != 0x7fc00000 {
+				t.Errorf("lane = %#x, want a canonical NaN (0x7fc00000 with sign either), "+
+					"not -inf (0xff800000)", lane)
+			}
+		}
+	})
+
+	// The max sibling: f32x4.max(nan, +inf) is nan:canonical, not +inf — Go's math.Max checks
+	// IsInf(x, 1) before IsNaN, the identical defect shape in the opposite direction.
+	t.Run("f32x4.max(nan, +inf) is nan:canonical, not +inf", func(t *testing.T) {
+		out := runSIMD1(t, `(module (func (export "c") (result v128)
+			(f32x4.max (v128.const i32x4 0x7fc00000 0x7fc00000 0x7fc00000 0x7fc00000)
+			           (v128.const f32x4 inf inf inf inf))))`)
+		if len(out) != 1 {
+			t.Fatalf("got %d results, want 1", len(out))
+		}
+		for _, lane := range []uint32{uint32(out[0].Bits), uint32(out[0].Bits >> 32), uint32(out[0].Hi), uint32(out[0].Hi >> 32)} {
+			if lane&0x7fffffff != 0x7fc00000 {
+				t.Errorf("lane = %#x, want a canonical NaN, not +inf (0x7f800000)", lane)
+			}
+		}
+	})
+
+	// **Grave: f64x2.nearest on a signaling NaN leaves it signaling instead of quieting it** —
+	// found in the same triage. Go's math.RoundToEven is a compiler intrinsic on arm64/amd64/
+	// s390x/wasm that only fires for a *literal* call expression; called as a first-class
+	// function value (this engine's own floatUnary shape), the compiler falls back to the pure-
+	// Go source in math/floor.go, whose e>=bias branch computes an unsigned-subtraction shift
+	// amount that underflows for a NaN/Inf exponent and leaves the input's bits completely
+	// unchanged — so a signaling NaN in is a signaling NaN out, where the reference's own
+	// determine_unary_nan always quiets. Confirmed on both architectures (measured, not
+	// assumed) via a standalone repro comparing math.RoundToEven(x) against
+	// viaFuncValue(math.RoundToEven, x) on the identical input.
+	t.Run("f64x2.nearest quiets a signaling NaN, verbatim input from simd_f64x2_rounding.wast:359", func(t *testing.T) {
+		out := runSIMD1(t, `(module (func (export "c") (result v128)
+			(f64x2.nearest (v128.const i64x2 0x7ff4000000000000 0x7ff4000000000000))))`)
+		if len(out) != 1 {
+			t.Fatalf("got %d results, want 1", len(out))
+		}
+		for _, lane := range []uint64{out[0].Hi, out[0].Bits} {
+			quietBit := lane & 0x0008_0000_0000_0000
+			if quietBit == 0 {
+				t.Errorf("lane = %#x, want the quiet bit (bit 51) set — a signaling NaN input "+
+					"must not produce a signaling NaN output", lane)
+			}
+		}
+	})
 }
 
 // itoa is a tiny local decimal-string helper — the wat integer-literal grammar needs a decimal
