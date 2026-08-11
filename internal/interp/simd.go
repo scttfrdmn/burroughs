@@ -1241,13 +1241,39 @@ func (in *Instance) vecCompareFloat(st *stack, width uint64, cmp func(a, b float
 // result narrowed back — a round trip that introduces no error since float32→float64 is exact
 // and every one of these functions' outputs for a float32 input is itself exactly representable
 // in float32 (rounding/truncation never needs more precision than the input already carries).
+//
+// **Every NaN result is explicitly quieted before being returned** — `fxx.ml`'s own
+// `determine_unary_nan`/`canonicalize_nan` (`Rep.logor x Rep.pos_nan`, forcing the quiet bit on
+// whatever NaN the operation produced) — because Go's own `fn`, called here as a first-class
+// value rather than a literal call expression, does not reliably do this itself. **Measured, not
+// assumed**: the Go compiler substitutes a hardware instruction for a *literal* call expression
+// like `math.RoundToEven(x)` (`ssagen/intrinsics.go`'s `addF` table, arm64/amd64/s390x/wasm), and
+// that hardware instruction happens to quiet a signaling NaN — but `fn(x)` where `fn` holds
+// `math.RoundToEven` as a value (exactly this function's own call shape) never matches that
+// substitution and falls through to the pure-Go source in `floor.go`, whose `e >= bias` branch
+// computes `shift - e` as an unsigned subtraction that underflows for a NaN/Inf exponent and
+// leaves the input's bits completely unchanged instead of the doc's own "NaN unchanged" reading
+// a caller might assume implies "canonical NaN out." Confirmed on **both** amd64 and arm64 for
+// `RoundToEven`, and on amd64 alone for `Ceil`/`Floor`/`Trunc` too (their own indirect-call paths
+// diverge from their intrinsic paths identically) — quieting explicitly here is correct
+// regardless of which path any given Go version or architecture takes, so this is not an
+// architecture-specific fix the way grave #223 is; it fixes every architecture at once.
 func floatUnary(width uint64, fn func(float64) float64) func(raw, w uint64) uint64 {
 	return func(raw, _ uint64) uint64 {
 		if width == 4 {
 			result := fn(float64(math.Float32frombits(uint32(raw))))
-			return uint64(math.Float32bits(float32(result)))
+			bits := math.Float32bits(float32(result))
+			if math.IsNaN(float64(result)) {
+				bits |= 0x0040_0000 // quiet bit, f32 mantissa bit 22
+			}
+			return uint64(bits)
 		}
-		return math.Float64bits(fn(math.Float64frombits(raw)))
+		result := fn(math.Float64frombits(raw))
+		bits := math.Float64bits(result)
+		if math.IsNaN(result) {
+			bits |= 0x0008_0000_0000_0000 // quiet bit, f64 mantissa bit 51
+		}
+		return bits
 	}
 }
 
@@ -1269,12 +1295,64 @@ func negFloatLane(width uint64) func(raw, w uint64) uint64 {
 	}
 }
 
-// floatMin and floatMax are v128.ml's own min/max: the equal-operands case is a bitwise
-// logor/logand (not reachable through Go's math.Min/Max, which use their own equal-operands
-// branch — confirmed to agree by decision 0024's own arch-dependence survey, but implemented
-// here by calling math.Min/Max directly since the agreement was measured, not merely assumed).
-func floatMin(a, b float64) float64 { return math.Min(a, b) }
-func floatMax(a, b float64) float64 { return math.Max(a, b) }
+// floatMin and floatMax are `fxx.ml`'s own `min`/`max`, written to their exact branch order
+// rather than delegated to Go's `math.Min`/`math.Max` — **found wrong by measurement, not
+// assumed correct from decision 0024's earlier survey**: that survey confirmed `math.Min`/
+// `math.Max` agree with the reference's *equal-operands* case (`min(-0,0)`/`max(-0,0)`), but
+// never checked the *NaN-with-an-infinite-operand* case, where Go's own implementation checks
+// `IsInf` before `IsNaN` (`math/dim.go`'s own `min`/`max`, documented: "Min(x, -Inf) =
+// Min(-Inf, x) = -Inf" with no NaN exception stated) — so `math.Min(NaN, -Inf)` returns `-Inf`,
+// not NaN, where the reference's own `min x y = if xf = yf then ... else if xf < yf then x else
+// if xf > yf then y else determine_binary_nan x y` falls through to the NaN branch for *any*
+// comparison that is false, infinity included, since every comparison against NaN is false.
+//
+// Written as the four-way branch directly, `determine_binary_nan`'s NaN-operand selection
+// (prefer whichever operand is already NaN, quieting it; a default canonical NaN if neither
+// operand is NaN — reachable when both operands compare equal-false, i.e. one or both are NaN
+// via the `xf = yf` branch already having returned, so this is truly the "compare fails and
+// neither xf=yf nor a strict order held" case) inlined as quietNaN's own two-operand form.
+func floatMin(a, b float64) float64 {
+	switch {
+	case a == b:
+		return math.Float64frombits(math.Float64bits(a) | math.Float64bits(b))
+	case a < b:
+		return a
+	case a > b:
+		return b
+	default:
+		return quietNaNOf(a, b)
+	}
+}
+
+func floatMax(a, b float64) float64 {
+	switch {
+	case a == b:
+		return math.Float64frombits(math.Float64bits(a) & math.Float64bits(b))
+	case a > b:
+		return a
+	case a < b:
+		return b
+	default:
+		return quietNaNOf(a, b)
+	}
+}
+
+// quietNaNOf is `determine_binary_nan`: return whichever operand is NaN, quieted — a's own NaN
+// preferred over b's, matching the reference's own `if is_nan x then x else if is_nan y then y
+// else pos_nan` order — or a canonical quiet NaN if neither operand is NaN (unreachable from
+// floatMin/floatMax's own call sites, since both are only called from the branch where the
+// three-way comparison already failed, which for two non-NaN floats cannot happen; kept as a
+// real branch rather than assumed unreachable, per this project's own "a control isn't born
+// until watched die" discipline applied to an invariant instead of a test).
+func quietNaNOf(a, b float64) float64 {
+	if math.IsNaN(a) {
+		return math.Float64frombits(math.Float64bits(a) | 0x0008_0000_0000_0000)
+	}
+	if math.IsNaN(b) {
+		return math.Float64frombits(math.Float64bits(b) | 0x0008_0000_0000_0000)
+	}
+	return math.NaN()
+}
 
 // floatPmin and floatPmax are `v128.ml`'s own pmin/pmax — `pmin x y = if y < x then y else x`,
 // `pmax x y = if x < y then y else x`. **Not symmetric and not "the smaller/larger of the two"**:

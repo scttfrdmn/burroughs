@@ -6144,7 +6144,39 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	// both architectures** — the identical 80-vector gap persists unchanged (61145-61065=80).
 	// #212's ladder is genuinely complete now: a SIMD-only-features run leaves zero `no arm for
 	// opcode fd *` fails, confirmed directly rather than inferred from a family list.
-	const allOnPassFloor = 61065
+	//
+	// **Grave #223 fully fixed, not merely diagnosed — and it was never actually the NaN-payload
+	// arch-assembly divergence the earlier entries above describe.** Triaging the gate-flip
+	// forecast's own `assert_return value mismatch` bucket (per Scott's own instruction to test
+	// the harness-side NaN-wildcard hypothesis first, which measured false — only 18 of 201
+	// mismatches even mention `nan:`) found two real, architecture-*independent* defects in
+	// `floatMin`/`floatMax`/`floatUnary`:
+	//
+	//  1. `floatMin`/`floatMax` delegated to Go's `math.Min`/`math.Max`, whose own documented
+	//     special cases check `IsInf` *before* `IsNaN` (`math/dim.go`: "Min(x, -Inf) =
+	//     Min(-Inf, x) = -Inf", no NaN exception stated) — so `math.Min(NaN, -Inf)` returns
+	//     `-Inf`, not NaN, where the reference's own `min`/`max` (`fxx.ml`) fall through to a NaN
+	//     branch for *any* failed three-way comparison, infinity included. Fixed by writing the
+	//     reference's own branch order directly rather than delegating.
+	//  2. `floatUnary` never quiets a NaN result at all, relying on Go's `math.Ceil`/`Floor`/
+	//     `Trunc`/`Sqrt`/`RoundToEven` to do it — but those functions are compiler intrinsics on
+	//     arm64/amd64/s390x/wasm that fire only for a *literal* call expression
+	//     (`ssagen/intrinsics.go`), and `floatUnary` calls `fn` as a first-class value, which
+	//     bypasses the intrinsic and falls to the pure-Go source. `RoundToEven`'s own pure-Go
+	//     path (`math/floor.go`) computes an unsigned-subtraction shift amount that underflows
+	//     for a NaN/Inf exponent and leaves a signaling NaN's bits completely unchanged — on
+	//     *both* architectures, confirmed directly, not assumed. Fixed by quieting explicitly.
+	//
+	// **Both defects are the entirety of #223's own 80-vector gap** — fixing them closed it
+	// completely, confirmed by the two architectures now producing the identical count (verified
+	// live: 61163 pass / 1138 fail on both arm64 and amd64, zero gap remaining). The earlier
+	// entries' own NaN-payload-arch-assembly diagnosis was not wrong about `math.Min`/`math.Max`
+	// having architecture-specific assembly, but the actual defect that assembly difference was
+	// masking is what this entry fixes — the diagnosis and the defect were adjacent, not
+	// identical, which is why "confirmed, not merely diagnosed" is the operative distinction.
+	//
+	// **Moved 61065 → 61163 (amd64) / 61145 → 61163 (arm64), the two counts now equal.**
+	const allOnPassFloor = 61163
 	boardBound(t, "allOnPassFloor", totalPass, allOnPassFloor, boardBoundSlack, floorBound,
 		"a gated feature regressed, which the Gated==0 assertion above cannot see: with every "+
 			"gate on, a broken feature turns a pass into a fail and leaves Gated at zero")
