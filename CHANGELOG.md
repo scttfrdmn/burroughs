@@ -2704,6 +2704,32 @@ weakly-ordered platform.
   `abs` and `bitmask` simultaneously, correctly unaffected at width 1) were each mutated and
   watched fail before being trusted, then reverted.
 
+- **VecCompare executes — 48 mnemonics, #212's fifth ladder rung's second sub-batch**
+  (`eq`/`ne`/`lt`/`gt`/`le`/`ge` across all six shapes, unsigned variants for the three narrow
+  integer shapes). Chosen before the float arithmetic arms per Scott's own ordering: comparison
+  needs no rounding and no signed-zero handling, so this batch exercises the shared per-lane
+  plumbing across every width and signedness combination — hardening it by volume — before the
+  float family's genuinely arch-risky arms (`min`/`max`/`pmin`/`pmax`) have to trust it.
+
+  A lane's result is all-ones (not `1`) when true, all-zero when false — `v128.ml`'s own `cmp`
+  convention for both the integer and float shapes, confirmed by reading both rather than
+  assumed to match from the name. Float compares route through Go's native `<`/`>`/`==` on
+  `float32`/`float64` (widened losslessly to `float64` for the comparison itself), which already
+  implements IEEE ordered comparison — including "NaN compares false to everything, including
+  itself" — with no special-casing needed in this engine.
+
+  The all-on lane moves fail 845→780 (**−65**), pass 37341→37406 (**+65**) — a substantial
+  reward, covering the suite's own dedicated per-shape comparison files. The default lane is
+  unmoved (pass 34308, unsupported 26804 — the gate stays off).
+
+  Falsified before trusting: the signed comparator's operand order (swapped, caught by every
+  signed-comparison row while correctly leaving the unsigned rows untouched — confirming the
+  mutation's blast radius was understood before reverting), the all-ones-vs-`1` result
+  convention (changed to `1`, caught by every integer row while correctly leaving the float rows
+  untouched, since they use a separate code path), and `f32x4.eq`'s own comparator (replaced with
+  a constant `true`, caught specifically by the NaN-pinning row — the one row that exists to
+  catch exactly this) were each mutated and watched fail before being trusted, then reverted.
+
 ### Changed
 
 - **The §3 sentinel's doc names a narrowed gap rather than a missing linker, and six live "v0 has

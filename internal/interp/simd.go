@@ -1,6 +1,10 @@
 package interp
 
-import "github.com/scttfrdmn/burroughs/internal/binary"
+import (
+	"math"
+
+	"github.com/scttfrdmn/burroughs/internal/binary"
+)
 
 // execFD dispatches the 0xfd region: SIMD's 256 opcodes, per #212's own family partition
 // (mnemonics.ml's 20 AST constructors, collapsed to five ladder-sized groups). This function
@@ -191,6 +195,126 @@ func (in *Instance) execFD(ins binary.Instr, st *stack) error {
 		return in.vecAllTrue(st, 8)
 	case 0xc4: // i64x2.bitmask
 		return in.vecBitmask(st, 8)
+
+	// **VecCompare, #212's fifth ladder rung's second sub-batch — 48 mnemonics, moderate risk.**
+	// Chosen before the float arithmetic arms per Scott's own ordering: comparison itself needs
+	// no rounding and no signed-zero handling (Go's native `<`/`>`/`==` on float32/float64
+	// already implement IEEE ordered comparison, including "NaN compares false to everything"),
+	// so this batch exercises the shared per-lane plumbing across every width and signedness
+	// combination — hardening it by volume — before the float family's genuinely arch-risky
+	// arms (`min`/`max`/`pmin`/`pmax`, the recon's own named risk) have to trust it.
+	//
+	// `eval.ml`'s own stack order for every VecBinary/VecCompare/VecBinaryBits arm: `Vec n2 ::
+	// Vec n1 :: vs'` — n2 (the second-pushed operand) is on top and pops first, matching the
+	// whole-vector-bitwise family's own established `hi2,lo2 := popV128(); hi1,lo1 :=
+	// popV128()` order (v128.and/or/xor, PR #214).
+	//
+	// A lane's comparison result is all-ones (not 1) when true, all-zero when false —
+	// `v128.ml`'s own `cmp` helper for both the integer and float shapes (`if f x y then
+	// IXX.of_int_s (-1) else IXX.zero`, and the float side's identical-shape `all_ones`/`zero`
+	// pair) — confirmed by reading both, not assumed to match from the name alone.
+	case 0x23: // i8x16.eq
+		return in.vecCompare(st, 1, false, cmpEq)
+	case 0x24: // i8x16.ne
+		return in.vecCompare(st, 1, false, cmpNe)
+	case 0x25: // i8x16.lt_s
+		return in.vecCompare(st, 1, true, cmpLt)
+	case 0x26: // i8x16.lt_u
+		return in.vecCompare(st, 1, false, cmpLt)
+	case 0x27: // i8x16.gt_s
+		return in.vecCompare(st, 1, true, cmpGt)
+	case 0x28: // i8x16.gt_u
+		return in.vecCompare(st, 1, false, cmpGt)
+	case 0x29: // i8x16.le_s
+		return in.vecCompare(st, 1, true, cmpLe)
+	case 0x2a: // i8x16.le_u
+		return in.vecCompare(st, 1, false, cmpLe)
+	case 0x2b: // i8x16.ge_s
+		return in.vecCompare(st, 1, true, cmpGe)
+	case 0x2c: // i8x16.ge_u
+		return in.vecCompare(st, 1, false, cmpGe)
+
+	case 0x2d: // i16x8.eq
+		return in.vecCompare(st, 2, false, cmpEq)
+	case 0x2e: // i16x8.ne
+		return in.vecCompare(st, 2, false, cmpNe)
+	case 0x2f: // i16x8.lt_s
+		return in.vecCompare(st, 2, true, cmpLt)
+	case 0x30: // i16x8.lt_u
+		return in.vecCompare(st, 2, false, cmpLt)
+	case 0x31: // i16x8.gt_s
+		return in.vecCompare(st, 2, true, cmpGt)
+	case 0x32: // i16x8.gt_u
+		return in.vecCompare(st, 2, false, cmpGt)
+	case 0x33: // i16x8.le_s
+		return in.vecCompare(st, 2, true, cmpLe)
+	case 0x34: // i16x8.le_u
+		return in.vecCompare(st, 2, false, cmpLe)
+	case 0x35: // i16x8.ge_s
+		return in.vecCompare(st, 2, true, cmpGe)
+	case 0x36: // i16x8.ge_u
+		return in.vecCompare(st, 2, false, cmpGe)
+
+	case 0x37: // i32x4.eq
+		return in.vecCompare(st, 4, false, cmpEq)
+	case 0x38: // i32x4.ne
+		return in.vecCompare(st, 4, false, cmpNe)
+	case 0x39: // i32x4.lt_s
+		return in.vecCompare(st, 4, true, cmpLt)
+	case 0x3a: // i32x4.lt_u
+		return in.vecCompare(st, 4, false, cmpLt)
+	case 0x3b: // i32x4.gt_s
+		return in.vecCompare(st, 4, true, cmpGt)
+	case 0x3c: // i32x4.gt_u
+		return in.vecCompare(st, 4, false, cmpGt)
+	case 0x3d: // i32x4.le_s
+		return in.vecCompare(st, 4, true, cmpLe)
+	case 0x3e: // i32x4.le_u
+		return in.vecCompare(st, 4, false, cmpLe)
+	case 0x3f: // i32x4.ge_s
+		return in.vecCompare(st, 4, true, cmpGe)
+	case 0x40: // i32x4.ge_u
+		return in.vecCompare(st, 4, false, cmpGe)
+
+	// i64x2 has no unsigned compares in the tracked proposal set — only eq/ne and the four
+	// signed relational ones.
+	case 0xd6: // i64x2.eq
+		return in.vecCompare(st, 8, false, cmpEq)
+	case 0xd7: // i64x2.ne
+		return in.vecCompare(st, 8, false, cmpNe)
+	case 0xd8: // i64x2.lt_s
+		return in.vecCompare(st, 8, true, cmpLt)
+	case 0xd9: // i64x2.gt_s
+		return in.vecCompare(st, 8, true, cmpGt)
+	case 0xda: // i64x2.le_s
+		return in.vecCompare(st, 8, true, cmpLe)
+	case 0xdb: // i64x2.ge_s
+		return in.vecCompare(st, 8, true, cmpGe)
+
+	case 0x41: // f32x4.eq
+		return in.vecCompareFloat(st, 4, cmpEqF)
+	case 0x42: // f32x4.ne
+		return in.vecCompareFloat(st, 4, cmpNeF)
+	case 0x43: // f32x4.lt
+		return in.vecCompareFloat(st, 4, cmpLtF)
+	case 0x44: // f32x4.gt
+		return in.vecCompareFloat(st, 4, cmpGtF)
+	case 0x45: // f32x4.le
+		return in.vecCompareFloat(st, 4, cmpLeF)
+	case 0x46: // f32x4.ge
+		return in.vecCompareFloat(st, 4, cmpGeF)
+	case 0x47: // f64x2.eq
+		return in.vecCompareFloat(st, 8, cmpEqF)
+	case 0x48: // f64x2.ne
+		return in.vecCompareFloat(st, 8, cmpNeF)
+	case 0x49: // f64x2.lt
+		return in.vecCompareFloat(st, 8, cmpLtF)
+	case 0x4a: // f64x2.gt
+		return in.vecCompareFloat(st, 8, cmpGtF)
+	case 0x4b: // f64x2.le
+		return in.vecCompareFloat(st, 8, cmpLeF)
+	case 0x4c: // f64x2.ge
+		return in.vecCompareFloat(st, 8, cmpGeF)
 
 	default:
 		return unsupported(ins)
@@ -648,5 +772,92 @@ func (in *Instance) vecBitmask(st *stack, width uint64) error {
 		}
 	}
 	st.pushI32(int32(mask))
+	return nil
+}
+
+// cmpEq/cmpNe/cmpLt/cmpGt/cmpLe/cmpGe are the six integer relational predicates, each taking
+// two lanes already sign-extended (if signed) to int64 — `v128.ml`'s own `IXX.eq`/`lt_s`/etc.,
+// reduced to Go's native int64 comparison since a sign-extended lane's ordering is exactly an
+// int64 comparison regardless of the lane's original width.
+func cmpEq(a, b int64) bool { return a == b }
+func cmpNe(a, b int64) bool { return a != b }
+func cmpLt(a, b int64) bool { return a < b }
+func cmpGt(a, b int64) bool { return a > b }
+func cmpLe(a, b int64) bool { return a <= b }
+func cmpGe(a, b int64) bool { return a >= b }
+
+// cmpEqF/cmpNeF/cmpLtF/cmpGtF/cmpLeF/cmpGeF are the six float relational predicates over
+// float64 — every f32x4 lane is converted through float32 first (see vecCompareFloat), so a
+// NaN lane's IEEE "unordered, compares false to everything including itself" behavior is
+// inherited from Go's own float comparison operators rather than special-cased here.
+func cmpEqF(a, b float64) bool { return a == b }
+func cmpNeF(a, b float64) bool { return a != b }
+func cmpLtF(a, b float64) bool { return a < b }
+func cmpGtF(a, b float64) bool { return a > b }
+func cmpLeF(a, b float64) bool { return a <= b }
+func cmpGeF(a, b float64) bool { return a >= b }
+
+// vecCompare implements the 42 integer relational opcodes (eq/ne/lt/gt/le/ge across the four
+// integer shapes, unsigned variants unsigned-compared): pop two v128 operands, compare
+// corresponding lanes, and pack an all-ones-or-all-zero result per lane — `v128.ml`'s own `cmp`
+// convention (`if f x y then -1 else 0`, at the lane's own width).
+//
+// `unsigned` values compare through their raw lane reading directly (Go's `uint64` ordering on
+// a value already masked to its own width via lanesOf is exactly an unsigned N-bit comparison);
+// `signed` values go through `signExtendLane` first so the comparison sees the lane's true sign.
+func (in *Instance) vecCompare(st *stack, width uint64, signed bool, cmp func(a, b int64) bool) error {
+	if err := st.needNum(4); err != nil {
+		return err
+	}
+	hi2, lo2 := st.popV128()
+	hi1, lo1 := st.popV128()
+	lanes1 := lanesOf(hi1, lo1, width)
+	lanes2 := lanesOf(hi2, lo2, width)
+	result := make([]uint64, len(lanes1))
+	for i := range lanes1 {
+		var a, b int64
+		if signed {
+			a, b = signExtendLane(lanes1[i], width), signExtendLane(lanes2[i], width)
+		} else {
+			a, b = int64(lanes1[i]), int64(lanes2[i])
+		}
+		if cmp(a, b) {
+			result[i] = mask(uint(width * 8))
+		}
+	}
+	hi, lo := lanesToV128(result, width)
+	st.pushV128(hi, lo)
+	return nil
+}
+
+// vecCompareFloat implements the 12 float relational opcodes (eq/ne/lt/gt/le/ge across f32x4/
+// f64x2). width selects f32 (4) or f64 (8); the lane's raw bits are read back through
+// math.Float32frombits/Float64frombits so the comparison sees the IEEE value rather than the
+// bit pattern, and f32 lanes are widened to float64 for the comparison itself (a lossless
+// widening, so the ordering — including NaN's unordered behavior — is preserved exactly).
+func (in *Instance) vecCompareFloat(st *stack, width uint64, cmp func(a, b float64) bool) error {
+	if err := st.needNum(4); err != nil {
+		return err
+	}
+	hi2, lo2 := st.popV128()
+	hi1, lo1 := st.popV128()
+	lanes1 := lanesOf(hi1, lo1, width)
+	lanes2 := lanesOf(hi2, lo2, width)
+	result := make([]uint64, len(lanes1))
+	for i := range lanes1 {
+		var a, b float64
+		if width == 4 {
+			a = float64(math.Float32frombits(uint32(lanes1[i])))
+			b = float64(math.Float32frombits(uint32(lanes2[i])))
+		} else {
+			a = math.Float64frombits(lanes1[i])
+			b = math.Float64frombits(lanes2[i])
+		}
+		if cmp(a, b) {
+			result[i] = mask(uint(width * 8))
+		}
+	}
+	hi, lo := lanesToV128(result, width)
+	st.pushV128(hi, lo)
 	return nil
 }
