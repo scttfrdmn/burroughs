@@ -2679,6 +2679,31 @@ weakly-ordered platform.
   (narrowed to write only the first lane, caught by all five splat rows at once) were each
   mutated and watched fail before being trusted, then reverted.
 
+- **The bulk per-lane family's opening slice executes — `abs`/`neg`/`popcnt`, `all_true`,
+  `bitmask`, #212's fifth ladder rung's own first batch** (17 mnemonics across the four integer
+  shapes: `i8x16` carries all five including the family's only `popcnt`, the other three carry
+  four each). Integer-only and arch-safe by design, landed before any floating-point arm in this
+  family per #212's own risk ordering — no signed-zero or NaN-propagation cases in this batch at
+  all, unlike the float arithmetic still ahead on this rung.
+
+  New shared plumbing (`lanesOf`/`lanesToV128`, `signExtendLane`/`maskLane`) splits a v128 into
+  its individual lanes and packs them back — the shape every remaining per-lane opcode in this
+  family will reuse, so this batch pays that cost once rather than each future batch re-deriving
+  it. `absLane`'s two's-complement is exact at the lane's own width (`abs(minInt8) == minInt8`,
+  no wider type to escape into, matching Go's own `int8` wraparound); `bitmask`'s lane-to-bit
+  mapping is lane 0 → bit 0, ascending, confirmed by hand-tracing the reference's own
+  `fold_right`/`logor`/`shift_left` composition rather than assumed from the name.
+
+  The all-on lane moves fail 850→845 (**−5**), pass 37336→37341 (**+5**) — a small reward,
+  consistent with this being the family's narrowest sub-batch. The default lane is unmoved
+  (pass 34308, unsupported 26804 — the gate stays off).
+
+  Falsified before trusting: `absLane`'s negation (removed, caught by all four `abs` rows),
+  `bitmask`'s lane-to-bit mapping (reversed, caught by all three `bitmask` rows), and the shared
+  `lanesOf` byte-offset arithmetic (dropped the width factor, caught by every width>1 row across
+  `abs` and `bitmask` simultaneously, correctly unaffected at width 1) were each mutated and
+  watched fail before being trusted, then reverted.
+
 ### Changed
 
 - **The §3 sentinel's doc names a narrowed gap rather than a missing linker, and six live "v0 has
