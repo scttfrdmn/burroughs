@@ -316,6 +316,100 @@ func (in *Instance) execFD(ins binary.Instr, st *stack) error {
 	case 0x4c: // f64x2.ge
 		return in.vecCompareFloat(st, 8, cmpGeF)
 
+	// **The float arithmetic sub-batch, #212's fifth ladder rung's third and highest-risk
+	// slice — 30 mnemonics (14 unary: abs/neg/sqrt/ceil/floor/trunc/nearest × 2 shapes; 16
+	// binary: add/sub/mul/div/min/max/pmin/pmax × 2 shapes).** Landing on plumbing hardened by
+	// 65 comparison arms across every width, per Scott's own ordering.
+	//
+	// **abs/neg are bitwise, never through Go's math.Abs or unary negation** — `fxx.ml`'s own
+	// comment states it explicitly ("abs, neg, copysign are purely bitwise operations, even on
+	// NaN values"), confirmed by measurement: `math.Abs`/unary-negate happen to produce the
+	// identical bit pattern for the NaN values tried, but the language does not guarantee that,
+	// and the reference's own choice to bypass the float ALU for these two is the tell that it
+	// matters somewhere the trial did not reach. Sign-bit clear/flip, exactly as the integer
+	// abs/neg arms operate on two's-complement bits rather than through Go arithmetic.
+	//
+	// **ceil/floor/trunc/nearest/sqrt use Go's own math package directly** (Ceil/Floor/Trunc/
+	// RoundToEven/Sqrt) rather than reimplementing rounding — confirmed by direct measurement,
+	// not assumed, that each already preserves the sign of a zero input exactly as the
+	// reference's own explicit "if xf = 0.0 then x" special case requires, and each already
+	// quiets a signaling NaN's payload to an `nan:arithmetic`-class result, which is all the
+	// suite's own `assert_return` vectors ever check (NaN class, never exact bits, for every
+	// arithmetic NaN result in the tracked proposal set).
+	//
+	// **min/max/pmin/pmax are four genuinely distinct functions, not two names for the same
+	// pair** — `v128.ml`'s own definitions: `min`/`max` special-case the equal-operands case via
+	// bitwise `logor`/`logand` (so `min(-0,0) = -0` and `max(-0,0) = 0`, confirmed against Go's
+	// `math.Min`/`math.Max` in decision 0024's own arch-dependence survey — they already agree,
+	// measured), while `pmin`/`pmax` are a single unconditional comparison with **no** equal-
+	// operands special case and are **not symmetric**: `pmin x y = if y < x then y else x`
+	// always returns `x` when the comparison is false — including when `y` is NaN (NaN is never
+	// less than anything), which is the one case a reader implementing pmin as "the smaller of
+	// the two" would get backwards.
+	case 0xe0: // f32x4.abs
+		return in.vecUnaryLanes(st, 4, absFloatLane(4))
+	case 0xe1: // f32x4.neg
+		return in.vecUnaryLanes(st, 4, negFloatLane(4))
+	case 0xe3: // f32x4.sqrt
+		return in.vecUnaryLanes(st, 4, floatUnary(4, math.Sqrt))
+	case 0x67: // f32x4.ceil
+		return in.vecUnaryLanes(st, 4, floatUnary(4, math.Ceil))
+	case 0x68: // f32x4.floor
+		return in.vecUnaryLanes(st, 4, floatUnary(4, math.Floor))
+	case 0x69: // f32x4.trunc
+		return in.vecUnaryLanes(st, 4, floatUnary(4, math.Trunc))
+	case 0x6a: // f32x4.nearest
+		return in.vecUnaryLanes(st, 4, floatUnary(4, math.RoundToEven))
+
+	case 0xec: // f64x2.abs
+		return in.vecUnaryLanes(st, 8, absFloatLane(8))
+	case 0xed: // f64x2.neg
+		return in.vecUnaryLanes(st, 8, negFloatLane(8))
+	case 0xef: // f64x2.sqrt
+		return in.vecUnaryLanes(st, 8, floatUnary(8, math.Sqrt))
+	case 0x74: // f64x2.ceil
+		return in.vecUnaryLanes(st, 8, floatUnary(8, math.Ceil))
+	case 0x75: // f64x2.floor
+		return in.vecUnaryLanes(st, 8, floatUnary(8, math.Floor))
+	case 0x7a: // f64x2.trunc
+		return in.vecUnaryLanes(st, 8, floatUnary(8, math.Trunc))
+	case 0x94: // f64x2.nearest
+		return in.vecUnaryLanes(st, 8, floatUnary(8, math.RoundToEven))
+
+	case 0xe4: // f32x4.add
+		return in.vecBinaryFloat(st, 4, func(a, b float64) float64 { return a + b })
+	case 0xe5: // f32x4.sub
+		return in.vecBinaryFloat(st, 4, func(a, b float64) float64 { return a - b })
+	case 0xe6: // f32x4.mul
+		return in.vecBinaryFloat(st, 4, func(a, b float64) float64 { return a * b })
+	case 0xe7: // f32x4.div
+		return in.vecBinaryFloat(st, 4, func(a, b float64) float64 { return a / b })
+	case 0xe8: // f32x4.min
+		return in.vecBinaryFloat(st, 4, floatMin)
+	case 0xe9: // f32x4.max
+		return in.vecBinaryFloat(st, 4, floatMax)
+	case 0xea: // f32x4.pmin
+		return in.vecBinaryFloat(st, 4, floatPmin)
+	case 0xeb: // f32x4.pmax
+		return in.vecBinaryFloat(st, 4, floatPmax)
+
+	case 0xf0: // f64x2.add
+		return in.vecBinaryFloat(st, 8, func(a, b float64) float64 { return a + b })
+	case 0xf1: // f64x2.sub
+		return in.vecBinaryFloat(st, 8, func(a, b float64) float64 { return a - b })
+	case 0xf2: // f64x2.mul
+		return in.vecBinaryFloat(st, 8, func(a, b float64) float64 { return a * b })
+	case 0xf3: // f64x2.div
+		return in.vecBinaryFloat(st, 8, func(a, b float64) float64 { return a / b })
+	case 0xf4: // f64x2.min
+		return in.vecBinaryFloat(st, 8, floatMin)
+	case 0xf5: // f64x2.max
+		return in.vecBinaryFloat(st, 8, floatMax)
+	case 0xf6: // f64x2.pmin
+		return in.vecBinaryFloat(st, 8, floatPmin)
+	case 0xf7: // f64x2.pmax
+		return in.vecBinaryFloat(st, 8, floatPmax)
+
 	default:
 		return unsupported(ins)
 	}
@@ -855,6 +949,93 @@ func (in *Instance) vecCompareFloat(st *stack, width uint64, cmp func(a, b float
 		}
 		if cmp(a, b) {
 			result[i] = mask(uint(width * 8))
+		}
+	}
+	hi, lo := lanesToV128(result, width)
+	st.pushV128(hi, lo)
+	return nil
+}
+
+// floatUnary lifts a float64-domain math function (Sqrt/Ceil/Floor/Trunc/RoundToEven) into a
+// per-lane function over a raw width-byte lane, for use with vecUnaryLanes. width selects f32
+// (4) or f64 (8); an f32 lane is widened losslessly to float64, the function applied, and the
+// result narrowed back — a round trip that introduces no error since float32→float64 is exact
+// and every one of these functions' outputs for a float32 input is itself exactly representable
+// in float32 (rounding/truncation never needs more precision than the input already carries).
+func floatUnary(width uint64, fn func(float64) float64) func(raw, w uint64) uint64 {
+	return func(raw, _ uint64) uint64 {
+		if width == 4 {
+			result := fn(float64(math.Float32frombits(uint32(raw))))
+			return uint64(math.Float32bits(float32(result)))
+		}
+		return math.Float64bits(fn(math.Float64frombits(raw)))
+	}
+}
+
+// absFloatLane and negFloatLane clear/flip the sign bit directly — never through math.Abs or
+// unary negation, since `fxx.ml`'s own comment states these two are bitwise even on NaN and
+// this engine takes that as the authority rather than trusting an unmeasured guarantee about
+// what Go's float operators do to a NaN's sign bit.
+func absFloatLane(width uint64) func(raw, w uint64) uint64 {
+	return func(raw, _ uint64) uint64 {
+		signBit := uint64(1) << (width*8 - 1)
+		return raw &^ signBit
+	}
+}
+
+func negFloatLane(width uint64) func(raw, w uint64) uint64 {
+	return func(raw, _ uint64) uint64 {
+		signBit := uint64(1) << (width*8 - 1)
+		return raw ^ signBit
+	}
+}
+
+// floatMin and floatMax are v128.ml's own min/max: the equal-operands case is a bitwise
+// logor/logand (not reachable through Go's math.Min/Max, which use their own equal-operands
+// branch — confirmed to agree by decision 0024's own arch-dependence survey, but implemented
+// here by calling math.Min/Max directly since the agreement was measured, not merely assumed).
+func floatMin(a, b float64) float64 { return math.Min(a, b) }
+func floatMax(a, b float64) float64 { return math.Max(a, b) }
+
+// floatPmin and floatPmax are `v128.ml`'s own pmin/pmax — `pmin x y = if y < x then y else x`,
+// `pmax x y = if x < y then y else x`. **Not symmetric and not "the smaller/larger of the two"**:
+// when the comparison is false (including whenever either operand is NaN, since NaN is never
+// less than anything), the result is unconditionally the *first* operand, never the second.
+func floatPmin(a, b float64) float64 {
+	if b < a {
+		return b
+	}
+	return a
+}
+
+func floatPmax(a, b float64) float64 {
+	if a < b {
+		return b
+	}
+	return a
+}
+
+// vecBinaryFloat implements the 16 float binary opcodes (add/sub/mul/div/min/max/pmin/pmax
+// across f32x4/f64x2): pop two v128 operands, apply fn lane-by-lane in float64 (f32 lanes
+// widened losslessly, narrowed back after), and push the result.
+func (in *Instance) vecBinaryFloat(st *stack, width uint64, fn func(a, b float64) float64) error {
+	if err := st.needNum(4); err != nil {
+		return err
+	}
+	hi2, lo2 := st.popV128()
+	hi1, lo1 := st.popV128()
+	lanes1 := lanesOf(hi1, lo1, width)
+	lanes2 := lanesOf(hi2, lo2, width)
+	result := make([]uint64, len(lanes1))
+	for i := range lanes1 {
+		if width == 4 {
+			a := float64(math.Float32frombits(uint32(lanes1[i])))
+			b := float64(math.Float32frombits(uint32(lanes2[i])))
+			result[i] = uint64(math.Float32bits(float32(fn(a, b))))
+		} else {
+			a := math.Float64frombits(lanes1[i])
+			b := math.Float64frombits(lanes2[i])
+			result[i] = math.Float64bits(fn(a, b))
 		}
 	}
 	hi, lo := lanesToV128(result, width)

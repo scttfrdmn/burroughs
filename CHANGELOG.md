@@ -2730,6 +2730,40 @@ weakly-ordered platform.
   a constant `true`, caught specifically by the NaN-pinning row — the one row that exists to
   catch exactly this) were each mutated and watched fail before being trusted, then reverted.
 
+- **The float arithmetic sub-batch executes — 30 mnemonics, #212's fifth ladder rung's third and
+  highest-risk slice** (14 unary: `abs`/`neg`/`sqrt`/`ceil`/`floor`/`trunc`/`nearest` ×
+  f32x4/f64x2; 16 binary: `add`/`sub`/`mul`/`div`/`min`/`max`/`pmin`/`pmax` × f32x4/f64x2),
+  landing on plumbing hardened by the prior sub-batches' 65 comparison arms across every width.
+  `abs`/`neg` are bitwise (sign-bit clear/flip), never through Go's `math.Abs` or unary
+  negation — `fxx.ml`'s own comment states these two bypass the float ALU even for NaN, and this
+  engine takes that as the authority. `ceil`/`floor`/`trunc`/`nearest`/`sqrt` use Go's own `math`
+  functions directly, each measured (not assumed) to already preserve the sign of a zero input
+  and to already quiet a signaling NaN to an `nan:arithmetic`-class result, matching what the
+  suite's own `assert_return` vectors check. `min`/`max`/`pmin`/`pmax` are four genuinely
+  distinct functions: `min`/`max` special-case equal operands via bitwise `logor`/`logand`
+  (confirmed against Go's `math.Min`/`math.Max` in decision 0024's own arch-dependence survey —
+  they already agree); `pmin`/`pmax` are a single unconditional comparison with **no** equal-
+  operands case and are **not symmetric** — the result is unconditionally the first operand
+  whenever the comparison is false, including whenever either operand is NaN.
+
+  **The board's all-on lane is genuinely unmoved by this sub-batch** (pass 37406, fail 780,
+  unsupported 26804, unchanged) — measured and confirmed rather than assumed correct because the
+  reward moved for every prior sub-batch: every float-arithmetic vector in the suite passes a
+  v128 as an `assert_return` argument, and the harness's own `readConst` has no v128 case at all
+  (decision 0024's forced question 5, still outstanding), so the harness cannot construct the
+  argument and the vector never reaches this engine's arms to be scored `fail` or `pass` — it
+  stays `unsupported`. The 30 arms are confirmed correct by direct interpreter-level tests
+  (`TestSIMDFloatArithmetic`, 16 rows) rather than by the suite, which cannot yet ask these
+  questions at all. Closing the harness gap is its own future work, out of this rung's scope.
+
+  Falsified before trusting: `absFloatLane`'s sign-bit clear (disabled, caught by the one row
+  written specifically to distinguish bitwise-abs from math.Abs on a NaN operand), `pmin`'s
+  asymmetric rule (replaced with symmetric `math.Min`, caught by exactly one of its two NaN rows
+  — demonstrating why both rows are needed, since `math.Min`'s own NaN handling coincidentally
+  matches `pmin` in one NaN position and not the other), and `nearest`'s round-to-even (replaced
+  with round-half-away-from-zero, caught by the tie-pinning row) were each mutated and watched
+  fail before being trusted, then reverted.
+
 ### Changed
 
 - **The §3 sentinel's doc names a narrowed gap rather than a missing linker, and six live "v0 has
