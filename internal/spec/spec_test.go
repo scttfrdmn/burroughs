@@ -6124,7 +6124,14 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	// (58658-58578=80, matching 58443-58363=80 exactly), confirming this arm's own correctness
 	// is architecture-independent and the gap is unrelated to it. The floor moves to the amd64
 	// figure again, for the same reason as above.
-	const allOnPassFloor = 58578
+	//
+	// **Moved 58578 → 59155 (amd64) / 58658 → 59235 (arm64) landing VecConvert, +577 both
+	// architectures** (#212's own last family, 22 standard mnemonics: extend/extadd_pairwise/
+	// trunc_sat/convert/demote/promote) — the identical 80-vector gap persists unchanged again
+	// (59235-59155=80). #212's ladder is now complete: every one of the five AST-constructor
+	// families (whole-vector-bitwise, memory, lane-access, VecCompare/float-arithmetic, and now
+	// shift/convert) has a landed arm.
+	const allOnPassFloor = 59155
 	boardBound(t, "allOnPassFloor", totalPass, allOnPassFloor, boardBoundSlack, floorBound,
 		"a gated feature regressed, which the Gated==0 assertion above cannot see: with every "+
 			"gate on, a broken feature turns a pass into a fail and leaves Gated at zero")

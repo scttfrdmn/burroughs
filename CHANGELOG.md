@@ -21,6 +21,29 @@ weakly-ordered platform.
 
 ### Added
 
+- **`VecConvert` executes — #212's own last family, 22 standard mnemonics, completing the SIMD
+  execution ladder's five AST-constructor families.** `internal/interp/simd.go` gains three
+  shapes: **extend** (12 mnemonics — `i{16,32,64}x{8,4,2}.extend_{low,high}_*_{s,u}`), reading
+  half of the operand's lanes (`Low`/`High` selects which half of the *source*, never the
+  result — `v128.ml`'s own `Lib.List.take`/`Lib.List.drop`) and sign/zero-extending each to
+  double width; **extadd_pairwise** (6 mnemonics), extending and summing adjacent lane pairs,
+  reading every source lane rather than half; and the int↔float family (4
+  `trunc_sat`/4 `convert`/1 `demote`/1 `promote`), the last two zero-filling the high half of a
+  wider destination shape exactly as `v128.ml`'s own `convert_zero`/`convert` state
+  (`Lib.List.take 2` / `@ I32.[zero; zero]`). `i32x4.trunc_sat_f32x4_{s,u}` and
+  `i32x4.trunc_sat_f64x2_{s,u}_zero` delegate per lane to `truncSatF64ToI32`, factored out of the
+  scalar `fc 00`/`fc 01` arm (`truncsat.go`) so the SIMD and scalar families share one
+  saturating-truncation authority rather than a second copy of the range analysis. All-gates-on
+  lane: 58578 → 59155 (amd64) / 58658 → 59235 (arm64), +577 both architectures — the pre-existing
+  80-vector arch-dependent gap (#223, unrelated) persists unchanged. Default lane unmoved. New
+  falsifiable tests (`internal/interp/simd_convert_test.go`), every row cited against the
+  corpus's own vectors (`simd_int_to_int_extend.wast`, `simd_i16x8_extadd_pairwise_i8x16.wast`,
+  `simd_i32x4_trunc_sat_f32x4.wast`, `simd_conversions.wast`) — one gap found and closed before
+  merge: the first `trunc_sat_f32x4_{s,u}` test rows (inf/NaN, both total-function edge cases)
+  happened not to distinguish signed from unsigned, so a mutation forcing the shared authority's
+  `signed` argument to always-true passed undetected until a `-1.5` row (truncates to `-1` signed,
+  `0` unsigned) was added from the corpus's own `:16-17`/`:120-121` pair.
+
 - **`VecShift` executes — #212's own family, 12 mnemonics.** `internal/interp/simd.go` gains
   `vecShiftLanes` and the 12 `shl`/`shr_s`/`shr_u` arms across i8x16/i16x8/i32x4/i64x2 (opcodes
   0x6b-0x6d, 0x8b-0x8d, 0xab-0xad, 0xcb-0xcd). The i32 shift count pops *before* the v128 operand
