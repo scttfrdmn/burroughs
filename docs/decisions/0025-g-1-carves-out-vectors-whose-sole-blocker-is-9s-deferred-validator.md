@@ -1,13 +1,14 @@
 # 0025 — G-1 carves out vectors whose sole blocker is #9's deferred validator
 
-Date: 2026-08-11 · Status: **proposed** — no stamp exists yet
+Date: 2026-08-11 · Status: **accepted** — stamped by Scott on #230
 
-> Held open per 0016's own ruling: *a status field is a citation to an approval, and approvals are
-> artifacts with provenance.* Scott recommended this package be sent up (comment on #227,
-> 2026-08-11) but has not yet stamped the amendment itself, and the two are different acts — an
-> ADR marked accepted on a stamp nobody gave is a fabricated citation about the project's own
-> governance. The interval this spends `proposed` is part of the record, per 0016 and 0017's own
-> demonstration of the same discipline. The deliberation is #230; this is its tombstone.
+> Held `proposed` from 2026-08-11 until the stamp existed, per 0016's own ruling: *a status field
+> is a citation to an approval, and approvals are artifacts with provenance.* Scott recommended
+> this package be sent up (comment on #227, 2026-08-11) and stamped it on #230 ("Scott - proceed
+> with 230"). The interval this spent `proposed` is kept in the record rather than overwritten,
+> per 0016 and 0017's own demonstration of the same discipline. The deliberation is #230; this is
+> its tombstone. The contract text itself is amended in `docs/burroughs-contract-v0.1.md`'s own
+> G-1 clause, with an amendment note in the same style as G-2's #109 note.
 
 ## Context
 
