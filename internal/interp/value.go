@@ -196,6 +196,16 @@ type frame struct {
 	// flattened local-type vector. Nil when the frame has no reference locals at all, which
 	// getLocal/setLocal/teeLocal treat identically to "every entry false".
 	isRef []bool
+
+	// numHi and isV128 are decision 0024's answer for a v128 local: `frame.num` is flatly
+	// indexed by local index (`num[i]` is local `i`'s fixed slot for the function's whole
+	// lifetime), so the stack's own "two adjacent slots" trick does not transfer — there is no
+	// "push a second slot" operation for a flat array. Instead `numHi[i]` carries a v128 local's
+	// high 64 bits (Bits/`num[i]` carries the low), gated by `isV128`'s bitmap exactly as `refs`
+	// is gated by `isRef` — nil until the first v128 local, and every non-v128 local's access
+	// cost is unchanged. See getLocal/setLocal/teeLocal's own v128 arms.
+	numHi  []uint64
+	isV128 []bool
 }
 
 // newFrame allocates a call frame sized for total locals, allocating the reference array and
@@ -207,40 +217,58 @@ type frame struct {
 // separately, per the one-authority reasoning memoryFor's own doc comment gives.
 func newFrame(total uint64, paramTypes []binary.ValType, eachLocal func(func(idx uint32, vt binary.ValType) bool)) *frame {
 	f := &frame{num: make([]uint64, total)}
-	var refTotal uint64
+	var refTotal, v128Total uint64
 	for _, p := range paramTypes {
 		if p.IsRef() {
 			refTotal++
+		} else if p == binary.V128 {
+			v128Total++
 		}
 	}
 	eachLocal(func(_ uint32, vt binary.ValType) bool {
 		if vt.IsRef() {
 			refTotal++
+		} else if vt == binary.V128 {
+			v128Total++
 		}
 		return true
 	})
-	if refTotal == 0 {
-		return f
+	if refTotal > 0 {
+		f.refs = make([]ref, total)
+		f.isRef = make([]bool, total)
+		for i, p := range paramTypes {
+			f.isRef[i] = p.IsRef()
+		}
+		eachLocal(func(idx uint32, vt binary.ValType) bool {
+			f.isRef[uint64(len(paramTypes))+uint64(idx)] = vt.IsRef()
+			return true
+		})
 	}
-	f.refs = make([]ref, total)
-	f.isRef = make([]bool, total)
-	for i, p := range paramTypes {
-		f.isRef[i] = p.IsRef()
+	if v128Total > 0 {
+		f.numHi = make([]uint64, total)
+		f.isV128 = make([]bool, total)
+		for i, p := range paramTypes {
+			f.isV128[i] = p == binary.V128
+		}
+		eachLocal(func(idx uint32, vt binary.ValType) bool {
+			f.isV128[uint64(len(paramTypes))+uint64(idx)] = vt == binary.V128
+			return true
+		})
 	}
-	eachLocal(func(idx uint32, vt binary.ValType) bool {
-		f.isRef[uint64(len(paramTypes))+uint64(idx)] = vt.IsRef()
-		return true
-	})
 	return f
 }
 
 // getLocal, setLocal, and teeLocal read/write local index idx, dispatching on the frame's own
-// isRef bitmap exactly as global.go's get/set dispatch on a global's declared type — the
+// isRef/isV128 bitmaps exactly as global.go's get/set dispatch on a global's declared type — the
 // local.get/set/tee arms in exec.go are these three's only callers, and none of them needs to
-// know which array backs an index because the frame does.
+// know which array (or array pair, for v128) backs an index because the frame does.
 func (f *frame) getLocal(idx uint64, st *stack) {
 	if len(f.isRef) > 0 && f.isRef[idx] {
 		st.pushRef(f.refs[idx])
+		return
+	}
+	if len(f.isV128) > 0 && f.isV128[idx] {
+		st.pushV128(f.numHi[idx], f.num[idx])
 		return
 	}
 	st.pushNum(f.num[idx])
@@ -252,6 +280,13 @@ func (f *frame) setLocal(idx uint64, st *stack) error {
 			return err
 		}
 		f.refs[idx] = st.popRef()
+		return nil
+	}
+	if len(f.isV128) > 0 && f.isV128[idx] {
+		if err := st.needNum(2); err != nil {
+			return err
+		}
+		f.numHi[idx], f.num[idx] = st.popV128()
 		return nil
 	}
 	if err := st.needNum(1); err != nil {
@@ -269,6 +304,16 @@ func (f *frame) teeLocal(idx uint64, st *stack) error {
 			return err
 		}
 		f.refs[idx] = st.refs[len(st.refs)-1]
+		return nil
+	}
+	if len(f.isV128) > 0 && f.isV128[idx] {
+		if err := st.needNum(2); err != nil {
+			return err
+		}
+		// Peek the top two slots without popping: pushV128's own order is hi then lo, so lo is
+		// the stack's true top and hi sits one slot below it.
+		f.numHi[idx] = st.num[len(st.num)-2]
+		f.num[idx] = st.num[len(st.num)-1]
 		return nil
 	}
 	if err := st.needNum(1); err != nil {
@@ -318,6 +363,52 @@ func (s *stack) popNum() uint64 {
 		s.numSeq = s.numSeq[:len(s.numSeq)-1]
 	}
 	return v
+}
+
+// pushV128 pushes a v128 value as two adjacent numeric slots, hi then lo, sharing **one**
+// sequence number across both slots (decision 0024).
+//
+// **Never two independent `pushNum` calls.** That would give the two slots two different push
+// sequence numbers under 0023's tracking, and a `drop` or `branch` landing between them would see
+// two different ages for what is logically one value — grave #206's shape one layer up, since
+// nothing would signal that the two slots are a single unit rather than two independent numerics.
+// This function is the one place a v128 enters the stack, so the atomicity is structural rather
+// than a discipline every future 0xfd arm has to remember. TestV128SharesOneSequenceNumberAcrossBothSlots
+// (0024's own vecbench) pins this by mutation: reverting to two independent appends is watched to
+// fail before this shape is trusted.
+//
+// Hi first, lo second, matching `Instr.Imm0`/`Imm1`'s own little-endian half ordering
+// (`binary/instr.go`'s `immV128` decode arm) and `popV128`'s own pop order below.
+func (s *stack) pushV128(hi, lo uint64) {
+	// **A v128 push activates tracking itself, exactly as pushRef does, and for the identical
+	// reason: `drop` needs the two slots' shared sequence number to recognize a v128 top even
+	// in a function that never pushes a reference at all.** Without this, a v128-only function
+	// would leave `tracking` false, `numSeq` nil, and `drop`'s own v128-pair check (which reads
+	// `numSeq`) could never fire — reproducing grave #206's shape for the population 0023's own
+	// gating was never measured against, since no v128 value existed when that ADR was written.
+	if !s.tracking {
+		s.tracking = true
+		s.numSeq = make([]uint64, len(s.num))
+		for i := range s.numSeq {
+			s.numSeq[i] = s.nextSeq
+			s.nextSeq++
+		}
+	}
+	seq := s.nextSeq
+	s.nextSeq++
+	s.num = append(s.num, hi, lo)
+	s.numSeq = append(s.numSeq, seq, seq)
+}
+
+// popV128 pops a v128 value pushed by pushV128, returning its hi and lo halves in that order.
+//
+// Two `popNum` calls in LIFO order — lo pops first (it was pushed last), hi second — which is
+// why the return is `(hi, lo)` rather than pop order: the caller wants the value's own two
+// halves, not the mechanics of how they left the stack.
+func (s *stack) popV128() (hi, lo uint64) {
+	lo = s.popNum()
+	hi = s.popNum()
+	return hi, lo
 }
 
 // pushRef pushes a reference slot, and popRef pops one.
@@ -378,6 +469,17 @@ func (s *stack) drop() {
 	}
 	if refTop > numTop {
 		s.popRef()
+		return
+	}
+	// **A v128's two slots share one sequence number (decision 0024's own `pushV128`), so a
+	// single matching pair at the numeric top is the signal that the logical top is one v128
+	// value, not two independent numerics** — `popNum` alone would remove only the low half,
+	// leaving the high half behind as a stray slot the next instruction reads as garbage. This
+	// is `drop`'s own gap in 0024's ADR: the ADR named the push/pop *atomicity* but not that
+	// `drop` itself, having no static operand type (#9's absence, same reason the sequence
+	// numbers exist at all), must recognize the two-slot pair before popping either half.
+	if s.tracking && len(s.numSeq) >= 2 && s.numSeq[len(s.numSeq)-1] == s.numSeq[len(s.numSeq)-2] {
+		s.popV128()
 		return
 	}
 	s.popNum()
@@ -471,6 +573,13 @@ type Value struct {
 	// internally) cannot honestly be flattened into a `uint64` without reintroducing the
 	// GC-invisibility hazard 0002's whole parallel-array pin exists to avoid.
 	Bits uint64
+
+	// Hi is a v128 value's high 64 bits (decision 0024) — meaningful only when Type == V128, in
+	// which case Bits holds the low 64 bits. A v128 is the one type this boundary carries in two
+	// words rather than one, mirroring `Instr.Imm0`/`Imm1`'s own wire-format packing and
+	// `stack.pushV128`/`popV128`'s own hi/lo pair; every other numeric type leaves this zero and
+	// unread, exactly as Null/RefID are unread for a numeric Value.
+	Hi uint64
 
 	// Null is this reference's nullity — meaningful only when Type.IsRef(). A null reference
 	// crosses the boundary as `Value{Type: <ref type>, Null: true}` in both directions and

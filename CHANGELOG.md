@@ -2616,6 +2616,31 @@ weakly-ordered platform.
   assertions run — the same emitter-outruns-the-gate shape the memarg and data-section emitters'
   own entries in `TestGatedVectors` already document.
 
+- **The interpreter's whole-vector-bitwise family executes — `v128.const`, `v128.not`/`and`/
+  `andnot`/`or`/`xor`/`bitselect`/`any_true`, #212's first ladder rung** on decision 0024's stack
+  representation: `pushV128`/`popV128` (one shared push-sequence-number across both slots),
+  `frame.numHi`/`isV128` (a v128 local's high half, lazily allocated exactly as `refs`/`isRef`),
+  and `countByArray`'s slot-count correction for arity/height arithmetic across block and call
+  boundaries. Chosen first per #212's own recommendation: no per-lane loop, no width dispatch, the
+  cheapest end-to-end confirmation the representation actually works.
+
+  A grave found while implementing rather than in the ADR's own text: `drop` (no static operand
+  type, per #9's absence) distinguished num-vs-ref by comparing push sequence numbers, but a
+  v128's two slots share one sequence number and a plain `popNum` would remove only the low half
+  — grave #206's shape recurring, for a population 0023's own gating condition ("any reference
+  ever pushed") had never been measured against, since no v128 value existed when it was written.
+  `pushV128` now activates 0023's tracking itself, mirroring `pushRef`'s own backfill, and `drop`
+  recognizes a matching sequence-number pair at the numeric top as one v128 unit before choosing
+  which array to pop. Falsified: each of the four new mechanisms (bitselect/andnot's operand
+  order, the frame's high-half plumbing, `pushV128`'s tracking activation, `drop`'s pair
+  recognition) was mutated and watched fail before being trusted, then reverted.
+
+  The default lane is unmoved (pass 34308, unsupported 26804 — the gate stays off) and the all-on
+  lane moves fail 953→951, pass 37233→37235: a small, honest reward, exactly as #212's own
+  reward-geography finding predicted — most of the family's suite vectors are co-blocked by
+  `v128.load` (the memory family, not yet implemented) or by the harness's own `readConst`/
+  `Matches` gap (v128 has no case in either), neither of which this PR's own scope touches.
+
 ### Changed
 
 - **The §3 sentinel's doc names a narrowed gap rather than a missing linker, and six live "v0 has
