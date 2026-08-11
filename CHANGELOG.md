@@ -2590,6 +2590,32 @@ weakly-ordered platform.
   `unimplemented(wat-reader)` is 0 — every vector converted to pass or fail, **none left
   behind**. That makes #53's done-when checkable by CI instead of by a reviewer.
 
+- **The text encoder writes its last four immediate shapes, closing the entire immediate-shape
+  frontier** ([#210](https://github.com/scttfrdmn/burroughs/issues/210)): `v128.const`
+  (`immVecConst`), `i8x16.shuffle` (`immLaneIdxList`), `extract_lane`/`replace_lane`
+  (`immLaneIdx`), and the eight `load*_lane`/`store*_lane` mnemonics (`immLaneImms`). Every one of
+  the sixteen immediate shapes `plaininstr` dispatches to is now in `encodableShapes` — there is no
+  instruction immediate left in the tracked grammar this encoder cannot write. All four were
+  parsed and range-checked in full before this PR; only the byte writers were missing.
+  `laneidx` gained the shared trailing raw byte both `extract_lane`/`replace_lane` and the eight
+  lane-load/store mnemonics need, and `vecConst` gained a per-lane `laneBytes` writer for
+  `v128.const`'s sixteen raw bytes. Gate off, per every retention rung before it: SIMD stays
+  default-off, so these four shapes only ever reach the decoder when the caller turns the gate on.
+
+  A grave found while wiring `laneImms`'s bare-laneidx arm (`v128.load8_lane N …` with no
+  `offset=`/`align=` text): the wire format still writes the memarg's default bytes (memory index
+  0, natural alignment) even when the text omits them, and the first draft skipped straight to the
+  trailing lane byte — an image short by the memarg's bytes, decoding with `unexpected end of
+  section or function`. Fixed by writing the default memarg explicitly through `retainMemarg`
+  before the lane byte on that arm.
+
+  The board's default lane is unmoved (pass 34308, unsupported 26804 — the SIMD gate stays off, so
+  nothing newly reachable answers on the merits) and 46 vectors move from `fail` to `gated`: wat
+  modules using the four newly-encodable shapes now reach the decoder instead of stopping at
+  `cannot yet encode`, and the decoder correctly declines them for the SIMD gate before their
+  assertions run — the same emitter-outruns-the-gate shape the memarg and data-section emitters'
+  own entries in `TestGatedVectors` already document.
+
 ### Changed
 
 - **The §3 sentinel's doc names a narrowed gap rather than a missing linker, and six live "v0 has

@@ -3,6 +3,7 @@ package text
 import (
 	"errors"
 	"fmt"
+	"math"
 	"regexp"
 	"slices"
 	"strings"
@@ -4900,6 +4901,219 @@ func TestTagFieldRoundTrip(t *testing.T) {
 		if len(m.Exports) != 1 || m.Exports[0].Kind != binary.ExternTag || m.Exports[0].Index != 0 {
 			t.Errorf("exports = %+v, want one ExternTag export of index 0 (the import-free tag "+
 				"index space's own first slot)", m.Exports)
+		}
+	})
+}
+
+// decodeSIMD decodes b with the SIMD gate on and nothing else — the fixed decoder's authority
+// for what the four #210 shapes actually decode to, per the same reason decodeGC exists: a round
+// trip alone would show the encoder and decoder agree, which they would even if both packed the
+// v128 bytes in the wrong order.
+func decodeSIMD(t *testing.T, b []byte) *binary.Module {
+	t.Helper()
+	d := &binary.Decoder{Features: binary.Features{SIMD: true}}
+	m, err := d.DecodeModule(b)
+	if err != nil {
+		t.Fatalf("the encoder produced % x, which the SIMD-gated decoder rejects: %v", b, err)
+	}
+	return m
+}
+
+// TestSIMDEncoderRoundTrips is #210's own control: the four immediate shapes that closed the
+// encoder's entire immediate-shape frontier — `immVecConst` (v128.const), `immLaneIdxList`
+// (i8x16.shuffle), `immLaneIdx` (extract_lane/replace_lane), and `immLaneImms` (the eight
+// load*_lane/store*_lane mnemonics) — round-tripped through the real SIMD-gated decoder and
+// asserted against `Instr`'s decoded fields, on `TestRefCastFamilyRoundTrips`'s own precedent: a
+// module can decode cleanly while packing the wrong bytes, so "it decoded" is not the assertion.
+func TestSIMDEncoderRoundTrips(t *testing.T) {
+	t.Run("v128.const", func(t *testing.T) {
+		// Four distinct 32-bit lanes, low lane in Imm0's low bits — immV128's own layout
+		// (instr.go:788-798) — so a byte-order or lane-order swap in laneBytes/vecConst shows up
+		// as a wrong word rather than a coincidentally-symmetric one.
+		const src = `(module (func (result v128) (v128.const i32x4 1 2 3 4)))`
+		b, err := EncodeModule([]byte(src))
+		if err != nil {
+			t.Fatalf("EncodeModule(%s): %v", src, err)
+		}
+		m := decodeSIMD(t, b)
+		in := findOp(t, m, 0xfd, 0x0c)
+		wantLo := uint64(2)<<32 | 1
+		wantHi := uint64(4)<<32 | 3
+		if in.Imm0 != wantLo || in.Imm1 != wantHi {
+			t.Errorf("v128.const decoded Imm0/Imm1 = %#x/%#x, want %#x/%#x — lanes 1,2,3,4 packed "+
+				"little-endian 32 bits each", in.Imm0, in.Imm1, wantLo, wantHi)
+		}
+	})
+
+	t.Run("v128.const f32x4, non-integer lanes", func(t *testing.T) {
+		// The float half of laneBytes, unreached by the i32x4 row above: 1.5 is exact in f32 and
+		// distinguishable from its own bit pattern read as an integer, so a reader that fell
+		// through to intConstBits for a float shape would decode a different value.
+		const src = `(module (func (result v128) (v128.const f32x4 1.5 -1.5 0 0)))`
+		b, err := EncodeModule([]byte(src))
+		if err != nil {
+			t.Fatalf("EncodeModule(%s): %v", src, err)
+		}
+		m := decodeSIMD(t, b)
+		in := findOp(t, m, 0xfd, 0x0c)
+		// Each lane's bits packed into its 32-bit slot, low lane first — immV128's own layout
+		// (instr.go:788-798), the same one the integer row above pins.
+		wantLo := uint64(math.Float32bits(-1.5))<<32 | uint64(math.Float32bits(1.5))
+		wantHi := uint64(0)<<32 | uint64(0)
+		if in.Imm0 != wantLo || in.Imm1 != wantHi {
+			t.Errorf("v128.const f32x4 decoded Imm0/Imm1 = %#x/%#x, want %#x/%#x", in.Imm0, in.Imm1,
+				wantLo, wantHi)
+		}
+	})
+
+	t.Run("i8x16.shuffle", func(t *testing.T) {
+		// A non-identity permutation, so a reader that emitted the lane *positions* instead of
+		// the parsed mask, or reversed the byte order, produces a different mask rather than one
+		// that happens to match by symmetry.
+		const src = `(module (func (param v128 v128) (result v128) ` +
+			`(i8x16.shuffle 15 14 13 12 11 10 9 8 7 6 5 4 3 2 1 0 (local.get 0) (local.get 1))))`
+		b, err := EncodeModule([]byte(src))
+		if err != nil {
+			t.Fatalf("EncodeModule(%s): %v", src, err)
+		}
+		m := decodeSIMD(t, b)
+		in := findOp(t, m, 0xfd, 0x0d)
+		var want uint64
+		for i := range 8 {
+			want |= uint64(15-i) << (8 * i)
+		}
+		if in.Imm0 != want {
+			t.Errorf("i8x16.shuffle decoded Imm0 = %#x, want %#x (lanes 15..8, low byte first)",
+				in.Imm0, want)
+		}
+		var wantHi uint64
+		for i := range 8 {
+			wantHi |= uint64(7-i) << (8 * i)
+		}
+		if in.Imm1 != wantHi {
+			t.Errorf("i8x16.shuffle decoded Imm1 = %#x, want %#x (lanes 7..0, low byte first)",
+				in.Imm1, wantHi)
+		}
+	})
+
+	t.Run("extract_lane and replace_lane", func(t *testing.T) {
+		for _, tc := range []struct {
+			name, src string
+			wantOp    uint32
+			wantLane  uint64
+		}{
+			{"extract_lane", `(module (func (param v128) (result i32) ` +
+				`(i32x4.extract_lane 2 (local.get 0))))`, 0x1b, 2},
+			{"extract_lane_s, nonzero", `(module (func (param v128) (result i32) ` +
+				`(i8x16.extract_lane_s 9 (local.get 0))))`, 0x15, 9},
+			{"replace_lane", `(module (func (param v128) (result v128) ` +
+				`(i32x4.replace_lane 3 (local.get 0) (i32.const 0))))`, 0x1c, 3},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				b, err := EncodeModule([]byte(tc.src))
+				if err != nil {
+					t.Fatalf("EncodeModule(%s): %v", tc.src, err)
+				}
+				m := decodeSIMD(t, b)
+				in := findOp(t, m, 0xfd, tc.wantOp)
+				if in.Imm0 != tc.wantLane {
+					t.Errorf("%s decoded lane = %#x, want %#x", tc.name, in.Imm0, tc.wantLane)
+				}
+			})
+		}
+	})
+
+	t.Run("load*_lane and store*_lane", func(t *testing.T) {
+		// Nonzero offset, nonzero alignment, and a nonzero lane index in the same row, so a
+		// truncated or mis-packed stageLaneIdx (grave #100's own subject) cannot pass by having
+		// two of the three fields at their zero default. Both **arm 1** (a leading `offset=`/
+		// `align=`, which reaches `laneImms` through its `p.memarg` branch) and **arm 5** (the
+		// bare laneidx, `laneidx`'s own grave: this rung's own decode-time failure had every
+		// memarg field sitting at its zero default, which is exactly what made it invisible to a
+		// row that only ever wrote non-default fields) are rows here, because a fix scoped to one
+		// arm and not the other is the shape `TestLaneImmsCoversAllFiveArms`'s own header warns
+		// against, one layer further out — that control pins the *parse*, this one pins the
+		// *emitted bytes* the parse feeds into `retainMemarg`.
+		for _, tc := range []struct {
+			name, src  string
+			wantOp     uint32
+			wantOffset uint64
+			wantLane   uint64
+		}{
+			{
+				"v128.load8_lane, arm 1 (offset+align)", `(module (memory 1) (func (param i32) ` +
+					`(result v128) (v128.load8_lane offset=5 align=1 3 (local.get 0) ` +
+					`(v128.const i32x4 0 0 0 0))))`,
+				0x54, 5, 3,
+			},
+			{
+				"v128.store8_lane, arm 1 (offset)", `(module (memory 1) (func (param i32 v128) ` +
+					`(v128.store8_lane offset=7 3 (local.get 0) (local.get 1))))`,
+				0x58, 7, 3,
+			},
+			// Arm 5: no offset, no align, no memory index — just the bare laneidx. This is the
+			// exact shape grave #reproduction lived in: `laneImms` skipped `p.memarg` entirely on
+			// this arm and emitted nothing for it, so the image was short by the memarg's bytes
+			// and `DecodeModule` failed with `unexpected end of section or function`. A row
+			// covering only arm 1 would have missed that, because arm 1 always calls `p.memarg`.
+			{
+				"v128.load8_lane, arm 5 (bare laneidx)", `(module (memory 1) (func (param i32) ` +
+					`(result v128) (v128.load8_lane 3 (local.get 0) ` +
+					`(v128.const i32x4 0 0 0 0))))`,
+				0x54, 0, 3,
+			},
+			{
+				"v128.store8_lane, arm 5 (bare laneidx)", `(module (memory 1) (func (param i32 v128) ` +
+					`(v128.store8_lane 3 (local.get 0) (local.get 1))))`,
+				0x58, 0, 3,
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				b, err := EncodeModule([]byte(tc.src))
+				if err != nil {
+					t.Fatalf("EncodeModule(%s): %v", tc.src, err)
+				}
+				m := decodeSIMD(t, b)
+				in := findOp(t, m, 0xfd, tc.wantOp)
+				if in.Imm0 != tc.wantOffset {
+					t.Errorf("%s decoded offset = %#x, want %#x", tc.name, in.Imm0, tc.wantOffset)
+				}
+				gotLane := (in.Imm1 >> 32) & 0xFF
+				if gotLane != tc.wantLane {
+					t.Errorf("%s decoded lane = %#x, want %#x (Imm1 = %#x, per stageLaneIdx's "+
+						"packing)", tc.name, gotLane, tc.wantLane, in.Imm1)
+				}
+			})
+		}
+	})
+
+	t.Run("v128.load8_lane with an explicit memory index", func(t *testing.T) {
+		// Two memories, and the second named explicitly — the arm-1 spelling `laneImms`'s own
+		// header distinguishes from the bare arm above, and the one row here that exercises
+		// `natContinuesMemarg`'s "yes, a memory index precedes the lane index" branch end to end
+		// through the real encoder rather than only through ReadModule (TestLaneImmsCoversAllFiveArms
+		// pins the parse; this pins the emitted bytes).
+		const src = `(module (memory 1) (memory $m 1) (func (param i32) (result v128) ` +
+			`(v128.load8_lane $m offset=0 3 (local.get 0) (v128.const i32x4 0 0 0 0))))`
+		b, err := EncodeModule([]byte(src))
+		if err != nil {
+			t.Fatalf("EncodeModule(%s): %v", src, err)
+		}
+		d := &binary.Decoder{Features: binary.Features{SIMD: true, MultiMemory: true}}
+		m, err := d.DecodeModule(b)
+		if err != nil {
+			t.Fatalf("the encoder produced % x, which the decoder rejects: %v", b, err)
+		}
+		in := findOp(t, m, 0xfd, 0x54)
+		gotIdx := in.Imm1 & 0xFFFFFFFF
+		if gotIdx != 1 {
+			t.Errorf("v128.load8_lane $m decoded memory index = %#x, want 1 (the second memory's "+
+				"space index) — a memarg that dropped the explicit index would decode against "+
+				"memory 0 and compute silently wrong (§9 G-3)", gotIdx)
+		}
+		gotLane := (in.Imm1 >> 32) & 0xFF
+		if gotLane != 3 {
+			t.Errorf("v128.load8_lane $m decoded lane = %#x, want 3", gotLane)
 		}
 	})
 }
