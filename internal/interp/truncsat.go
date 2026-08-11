@@ -178,13 +178,23 @@ func truncSatToI32(op uint32, st *stack) int32 {
 	} else {
 		d = st.popF64()
 	}
-	// NaN first: see the block comment. A NaN fails every comparison below, so an arm order
-	// that tested the range first would reach the truncation with a NaN in hand.
+	signed := op == 0x00 || op == 0x02
+	return truncSatF64ToI32(d, signed)
+}
+
+// truncSatF64ToI32 is `truncSatToI32`'s own analysis, factored out to a pure function of the
+// float and the signedness so `i32x4.trunc_sat_f32x4_s`/`_u` and `i32x4.trunc_sat_f64x2_s_zero`/
+// `_u_zero` (`internal/interp/simd.go`) share this one authority per lane rather than a second
+// copy of the range analysis — the shared-authority rule `truncSatToI32`'s own doc comment
+// already states for the scalar family, extended to its per-lane callers.
+func truncSatF64ToI32(d float64, signed bool) int32 {
+	// NaN first: see truncSatToI32's own block comment. A NaN fails every comparison below, so
+	// an arm order that tested the range first would reach the truncation with a NaN in hand.
 	if d != d {
 		return 0
 	}
 	d = math.Trunc(d)
-	if op == 0x00 || op == 0x02 { // signed
+	if signed {
 		if d < -(1 << 31) {
 			return math.MinInt32
 		}

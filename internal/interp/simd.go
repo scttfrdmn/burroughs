@@ -446,6 +446,78 @@ func (in *Instance) execFD(ins binary.Instr, st *stack) error {
 	case 0xf7: // f64x2.pmax
 		return in.vecBinaryFloat(st, 8, floatPmax)
 
+	// **VecConvert, #212's own family and the last of the ladder's five — 22 standard
+	// mnemonics** (the four `RelaxedTrunc*` variants live in the relaxed-SIMD gate already,
+	// per gatemap.go). Three genuinely different shapes, not one:
+	//
+	//  - **extend** (8): read half of the operand's lanes at the current width, sign- or
+	//    zero-extend each to double the width, halving the lane count in the process
+	//    (i8x16→i16x8, i16x8→i32x4, i32x4→i64x2). `Low`/`High` selects which half of the
+	//    *source* lanes is read — `extend Lib.List.take`/`Lib.List.drop` in `v128.ml` — never
+	//    which half of the *result* is written, a distinction `vecExtendLanes`'s own doc
+	//    comment states explicitly because the two read the same in prose.
+	//  - **extadd_pairwise** (4): sum adjacent pairs of the operand's lanes after sign/zero
+	//    extension, halving the lane count without any `Low`/`High` split — every source lane
+	//    contributes, unlike extend.
+	//  - **trunc_sat/convert/demote/promote** (10): the int↔float family, sharing `truncSatToI32`
+	//    with the scalar `fc 00`/`fc 01` arms (one saturating-truncation authority, not two) and
+	//    Go's own float32↔float64 conversion for demote/promote.
+	case 0x87: // i16x8.extend_low_i8x16_s
+		return in.vecExtendLanes(st, 1, true, false)
+	case 0x88: // i16x8.extend_high_i8x16_s
+		return in.vecExtendLanes(st, 1, true, true)
+	case 0x89: // i16x8.extend_low_i8x16_u
+		return in.vecExtendLanes(st, 1, false, false)
+	case 0x8a: // i16x8.extend_high_i8x16_u
+		return in.vecExtendLanes(st, 1, false, true)
+	case 0x7c: // i16x8.extadd_pairwise_i8x16_s
+		return in.vecExtaddPairwise(st, 1, true)
+	case 0x7d: // i16x8.extadd_pairwise_i8x16_u
+		return in.vecExtaddPairwise(st, 1, false)
+
+	case 0xa7: // i32x4.extend_low_i16x8_s
+		return in.vecExtendLanes(st, 2, true, false)
+	case 0xa8: // i32x4.extend_high_i16x8_s
+		return in.vecExtendLanes(st, 2, true, true)
+	case 0xa9: // i32x4.extend_low_i16x8_u
+		return in.vecExtendLanes(st, 2, false, false)
+	case 0xaa: // i32x4.extend_high_i16x8_u
+		return in.vecExtendLanes(st, 2, false, true)
+	case 0x7e: // i32x4.extadd_pairwise_i16x8_s
+		return in.vecExtaddPairwise(st, 2, true)
+	case 0x7f: // i32x4.extadd_pairwise_i16x8_u
+		return in.vecExtaddPairwise(st, 2, false)
+
+	case 0xc7: // i64x2.extend_low_i32x4_s
+		return in.vecExtendLanes(st, 4, true, false)
+	case 0xc8: // i64x2.extend_high_i32x4_s
+		return in.vecExtendLanes(st, 4, true, true)
+	case 0xc9: // i64x2.extend_low_i32x4_u
+		return in.vecExtendLanes(st, 4, false, false)
+	case 0xca: // i64x2.extend_high_i32x4_u
+		return in.vecExtendLanes(st, 4, false, true)
+
+	case 0xf8: // i32x4.trunc_sat_f32x4_s
+		return in.vecTruncSatF32x4(st, true)
+	case 0xf9: // i32x4.trunc_sat_f32x4_u
+		return in.vecTruncSatF32x4(st, false)
+	case 0xfc: // i32x4.trunc_sat_f64x2_s_zero
+		return in.vecTruncSatF64x2Zero(st, true)
+	case 0xfd: // i32x4.trunc_sat_f64x2_u_zero
+		return in.vecTruncSatF64x2Zero(st, false)
+	case 0xfa: // f32x4.convert_i32x4_s
+		return in.vecConvertI32x4(st, 4, true)
+	case 0xfb: // f32x4.convert_i32x4_u
+		return in.vecConvertI32x4(st, 4, false)
+	case 0x5e: // f32x4.demote_f64x2_zero
+		return in.vecDemoteF64x2Zero(st)
+	case 0xfe: // f64x2.convert_i32x4_s
+		return in.vecConvertI32x4(st, 8, true)
+	case 0xff: // f64x2.convert_i32x4_u
+		return in.vecConvertI32x4(st, 8, false)
+	case 0x5f: // f64x2.promote_low_f32x4
+		return in.vecPromoteLowF32x4(st)
+
 	default:
 		return unsupported(ins)
 	}
@@ -1108,6 +1180,182 @@ func (in *Instance) vecBinaryFloat(st *stack, width uint64, fn func(a, b float64
 		}
 	}
 	hi, lo := lanesToV128(result, width)
+	st.pushV128(hi, lo)
+	return nil
+}
+
+// vecExtendLanes implements the 12 `*.extend_{low,high}_*_{s,u}` mnemonics: read half of the
+// operand's `width`-byte lanes, sign- or zero-extend each to double the width, and push the
+// result with half as many lanes as the operand had.
+//
+// **`high` selects which half of the *source* is read, never which half of the result is
+// written** — `v128.ml`'s own `extend take_or_drop ext x`, where `take_or_drop` is
+// `Lib.List.take`/`Lib.List.drop` applied to the *input* lane list before extension, and the
+// result always fills the *whole* narrower output vector (8 lanes of i16 from 8 of the 16 i8
+// lanes, not 8 lanes with the other 8 left as some previous value). Confirmed by reading
+// `v128.ml:369-374` rather than assumed from the mnemonic's own "low"/"high" wording, which
+// reads identically under either interpretation.
+func (in *Instance) vecExtendLanes(st *stack, width uint64, signed, high bool) error {
+	if err := st.needNum(2); err != nil {
+		return err
+	}
+	hi, lo := st.popV128()
+	lanes := lanesOf(hi, lo, width)
+	n := laneCount(width) / 2
+	src := lanes[:n]
+	if high {
+		src = lanes[n:]
+	}
+	result := make([]uint64, n)
+	for i, l := range src {
+		if signed {
+			result[i] = maskLane(uint64(signExtendLane(l, width)), width*2)
+		} else {
+			result[i] = l // zero-extension is the identity on an already-masked lane's bits
+		}
+	}
+	hi, lo = lanesToV128(result, width*2)
+	st.pushV128(hi, lo)
+	return nil
+}
+
+// vecExtaddPairwise implements the six `*.extadd_pairwise_*_{s,u}` mnemonics: sign- or
+// zero-extend every `width`-byte lane to double width, sum adjacent pairs, and push a result
+// with half as many (double-width) lanes — `v128.ml`'s own `extadd`, which (unlike extend) reads
+// every source lane rather than only one half.
+func (in *Instance) vecExtaddPairwise(st *stack, width uint64, signed bool) error {
+	if err := st.needNum(2); err != nil {
+		return err
+	}
+	hi, lo := st.popV128()
+	lanes := lanesOf(hi, lo, width)
+	result := make([]uint64, len(lanes)/2)
+	for i := range result {
+		a, b := lanes[2*i], lanes[2*i+1]
+		var sum uint64
+		if signed {
+			sum = uint64(signExtendLane(a, width) + signExtendLane(b, width))
+		} else {
+			sum = a + b
+		}
+		result[i] = maskLane(sum, width*2)
+	}
+	hi, lo = lanesToV128(result, width*2)
+	st.pushV128(hi, lo)
+	return nil
+}
+
+// vecTruncSatF32x4 implements `i32x4.trunc_sat_f32x4_{s,u}`: four f32 lanes, each saturating-
+// truncated to i32 through `truncSatF64ToI32` — the identical authority the scalar
+// `f32.trunc_sat_*` arms use (`truncsat.go`), never a second copy of the range analysis.
+func (in *Instance) vecTruncSatF32x4(st *stack, signed bool) error {
+	if err := st.needNum(2); err != nil {
+		return err
+	}
+	hi, lo := st.popV128()
+	lanes := lanesOf(hi, lo, 4)
+	result := make([]uint64, len(lanes))
+	for i, l := range lanes {
+		d := float64(math.Float32frombits(uint32(l)))
+		result[i] = uint64(uint32(truncSatF64ToI32(d, signed)))
+	}
+	hi, lo = lanesToV128(result, 4)
+	st.pushV128(hi, lo)
+	return nil
+}
+
+// vecTruncSatF64x2Zero implements `i32x4.trunc_sat_f64x2_{s,u}_zero`: two f64 lanes, each
+// saturating-truncated to i32 through the identical `truncSatF64ToI32` authority, packed into
+// the *low* two lanes of the i32x4 result with the high two lanes zeroed — `v128.ml`'s own
+// `convert_zero`, `List.map f (F64x2.to_lanes v) @ I32.[zero; zero]`: the source has only two
+// lanes, the destination shape has four, and the reference states explicitly which two are
+// filled rather than leaving it to be inferred from "zero" in the mnemonic.
+func (in *Instance) vecTruncSatF64x2Zero(st *stack, signed bool) error {
+	if err := st.needNum(2); err != nil {
+		return err
+	}
+	hi, lo := st.popV128()
+	lanes := lanesOf(hi, lo, 8)
+	result := make([]uint64, 4)
+	for i, l := range lanes {
+		d := math.Float64frombits(l)
+		result[i] = uint64(uint32(truncSatF64ToI32(d, signed)))
+	}
+	// result[2], result[3] stay zero — the reference's own explicit zero-fill.
+	hi, lo = lanesToV128(result, 4)
+	st.pushV128(hi, lo)
+	return nil
+}
+
+// vecConvertI32x4 implements the four `f{32,64}x2.convert_i32x4_{s,u}` mnemonics: four i32
+// lanes, each converted to a float of the requested width (32 for f32x4's own two, 64 for
+// f64x2's two — `convert_i32x4_s`/`_u` share one opcode name across both destination shapes in
+// the reference, distinguished only by which V128Op variant wraps it). `outWidth` selects the
+// destination lane width; f64x2's result reads only the operand's low two i32 lanes, matching
+// `F64x2_convert.convert`'s own `Lib.List.take 2`.
+func (in *Instance) vecConvertI32x4(st *stack, outWidth uint64, signed bool) error {
+	if err := st.needNum(2); err != nil {
+		return err
+	}
+	hi, lo := st.popV128()
+	lanes := lanesOf(hi, lo, 4)
+	n := laneCount(outWidth)
+	result := make([]uint64, n)
+	for i := range n {
+		var d float64
+		if signed {
+			d = float64(int32(uint32(lanes[i])))
+		} else {
+			d = float64(uint32(lanes[i]))
+		}
+		if outWidth == 4 {
+			result[i] = uint64(math.Float32bits(float32(d)))
+		} else {
+			result[i] = math.Float64bits(d)
+		}
+	}
+	hi, lo = lanesToV128(result, outWidth)
+	st.pushV128(hi, lo)
+	return nil
+}
+
+// vecDemoteF64x2Zero implements `f32x4.demote_f64x2_zero`: two f64 lanes narrowed to f32
+// (Go's own float64→float32 conversion, which already rounds and saturates to ±Inf exactly as
+// IEEE 754 narrowing requires — no reference-specific rounding to reproduce), packed into the
+// low two lanes of an f32x4 result with the high two lanes zeroed, mirroring
+// `vecTruncSatF64x2Zero`'s own zero-fill shape.
+func (in *Instance) vecDemoteF64x2Zero(st *stack) error {
+	if err := st.needNum(2); err != nil {
+		return err
+	}
+	hi, lo := st.popV128()
+	lanes := lanesOf(hi, lo, 8)
+	result := make([]uint64, 4)
+	for i, l := range lanes {
+		d := math.Float64frombits(l)
+		result[i] = uint64(math.Float32bits(float32(d)))
+	}
+	hi, lo = lanesToV128(result, 4)
+	st.pushV128(hi, lo)
+	return nil
+}
+
+// vecPromoteLowF32x4 implements `f64x2.promote_low_f32x4`: the *low* two f32 lanes of the
+// operand (`Lib.List.take 2`, matching `vecConvertI32x4`'s own f64x2 destination reading only
+// the low two source lanes) widened losslessly to f64 — never a truncation, so no saturation or
+// NaN-payload question the way `trunc_sat`/`demote` both have.
+func (in *Instance) vecPromoteLowF32x4(st *stack) error {
+	if err := st.needNum(2); err != nil {
+		return err
+	}
+	hi, lo := st.popV128()
+	lanes := lanesOf(hi, lo, 4)
+	result := make([]uint64, 2)
+	for i := range 2 {
+		f := math.Float32frombits(uint32(lanes[i]))
+		result[i] = math.Float64bits(float64(f))
+	}
+	hi, lo = lanesToV128(result, 8)
 	st.pushV128(hi, lo)
 	return nil
 }
