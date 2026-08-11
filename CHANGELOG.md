@@ -4699,8 +4699,6 @@ is a formatting pass of its own, not a drive-by inside a decoder PR.*
   version of that test was stillborn (passed under both correct code and a reverted mutation)
   and was rebuilt with a sequence-number ordering that actually separates the two readings.
 
-### Fixed
-
 - **Grave #223 (`f32x4`/`f64x2` `min`/`max`/rounding on NaN), fully fixed rather than merely
   diagnosed — and the original diagnosis corrected.** Triaging the SIMD gate-flip forecast's
   `assert_return value mismatch` bucket (per Scott's own instruction to test the harness-side
