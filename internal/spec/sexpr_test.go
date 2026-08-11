@@ -283,7 +283,7 @@ func TestClassifyAndRun(t *testing.T) {
 	if got := s.Commands[4].Invoke; got != "f" {
 		t.Errorf("assert_return Invoke = %q, want %q", got, "f")
 	}
-	if got := s.Commands[4].Results; len(got) != 1 || got[0] != (Val{Kind: KindI32, Bits: 1}) {
+	if got := s.Commands[4].Results; len(got) != 1 || got[0].Kind != KindI32 || got[0].Bits != 1 {
 		t.Errorf("assert_return Results = %v, want [i32 1]", got)
 	}
 

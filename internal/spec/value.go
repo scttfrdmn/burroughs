@@ -30,6 +30,14 @@ const (
 	KindF64
 	KindFuncRef
 	KindExternRef
+
+	// KindV128 is decision 0024's own widening (forced question 5): a v128 result or argument,
+	// carried as N per-lane scalar `Val`s in the owning `Val`'s own `Lanes` field rather than
+	// as a wider `Bits`/`NaN` pair — the harness's own comparator (`Matches`) already knows how
+	// to compare one scalar `Val` against another, and decomposing at this boundary reuses it
+	// unchanged instead of teaching it a second, wider comparison shape. See Val's own doc
+	// comment on `Lanes`.
+	KindV128
 )
 
 func (k ValKind) String() string {
@@ -46,6 +54,8 @@ func (k ValKind) String() string {
 		return "funcref"
 	case KindExternRef:
 		return "externref"
+	case KindV128:
+		return "v128"
 	}
 	return "unknown"
 }
@@ -62,6 +72,12 @@ func (k ValKind) isRef() bool { return k == KindFuncRef || k == KindExternRef }
 // KindI64/KindF64 in their own arm would read as safer and is not: a fifth kind (v128) must not
 // silently acquire a width, and reaching the default with an unknown kind is the case a bare
 // `return 64` would answer confidently and wrongly.
+//
+// **`KindV128` is the fifth kind that comment predicted, and it never reaches here** — a v128
+// has no single width (each of its lanes does), so every caller of `width()` operates on a
+// lane's own scalar `Kind`, never on `KindV128` itself. Callers: the NaN-class predicates in
+// `Matches` and the literal readers (`readIntLit`/`readFloatLit`), both of which read a lane's
+// `Val` — see `Val.Lanes`.
 func (k ValKind) width() uint {
 	switch k {
 	case KindI32, KindF32:
@@ -209,6 +225,42 @@ type Val struct {
 	// it as a real constraint would wrongly refuse an externref result the way a stray Kind
 	// tag refused it before this field existed.
 	AnyNull bool
+
+	// Hi is a v128 Val's high 64 bits, meaningful only when Kind == KindV128 — Bits carries the
+	// low 64 bits for the identical Kind, mirroring `interp.Value`'s own Hi/Bits pair exactly
+	// (decision 0024's own boundary shape, restated here rather than imported for ValKind's own
+	// neutrality reason). Set by `fromInterpValue` for a v128 *result*, where no lane shape is
+	// knowable — an engine result is 128 raw bits, not a shape-tagged value — and read by
+	// `Matches` to slice a `got` Val into `want`'s own shape at comparison time. Never set by
+	// `readV128Const`, whose own output always carries a shape and populates Lanes instead.
+	Hi uint64
+
+	// Lanes holds a v128 Val's per-lane scalar values, meaningful only when Kind == KindV128
+	// and non-nil — Bits/Hi are the *raw-bits* reading of a v128 (a result, shapeless) and
+	// Lanes is the *shaped* reading (an expectation or argument, always built from a
+	// `v128.const shape ...` literal that names its own lane count and width); a v128 Val is
+	// never both at once, since `readV128Const` never sets Hi and `fromInterpValue` never sets
+	// Lanes. Each entry is an ordinary numeric Val (Kind one of KindI32/I64/F32/F64, never
+	// KindV128 or a reference kind) at the shape's own lane width — an `i8x16`/`i16x8` lane
+	// widens to KindI32 the same way `readIntLit`'s own literal reader does for a bare
+	// `i32.const`, since the suite's v128 lane grammar admits no narrower literal kind than i32.
+	//
+	// **Decomposed at this boundary rather than compared as a wider bit pattern** (decision
+	// 0024's forced question 5): `Matches` calls itself once per lane, reusing its own existing
+	// scalar comparison — including per-lane NaN-class matching, which a single wider `NaN`
+	// field could not express (the suite's own vectors mix exact-value lanes and NaN-class
+	// lanes in one `v128.const`, e.g. `simd_f32x4_arith.wast:732`).
+	Lanes []Val
+
+	// LaneBits is a v128 lane's *wire* width in bits — 8/16/32/64 — meaningful only on a Val
+	// that is itself an entry of some other Val's Lanes. This is deliberately **not**
+	// `Kind.width()`: an i8x16 or i16x8 lane widens to KindI32 for storage (Lanes's own doc
+	// comment), so Kind.width() reports 32 for a lane whose actual position in the v128's 128
+	// bits is 8 or 16 wide. sliceV128Lanes/packV128Lanes need the wire width to place a lane
+	// correctly — using the storage width there was a real bug this field exists to fix (caught
+	// by TestPackAndSliceV128LanesRoundTrip's i8x16/i16x8 cases, which is exactly why the round
+	// trip is tested at every tracked width and not only i32x4).
+	LaneBits uint
 }
 
 func (v Val) String() string {
@@ -235,6 +287,22 @@ func (v Val) String() string {
 	}
 	if v.NaN != NaNNone {
 		return fmt.Sprintf("%s %s", v.Kind, v.NaN)
+	}
+	if v.Kind == KindV128 {
+		// A shaped Val (readV128Const's own output) prints each lane; a raw one
+		// (fromInterpValue's own output — a result, with no shape of its own) prints the two
+		// 64-bit halves, since there is no shape to slice it by. Printed here rather than left
+		// to the generic `int64(v.Bits)` fallback below, which reported a v128 result as a
+		// signed 64-bit integer of its *low* half alone — losing the high half and every
+		// float/NaN reading a mismatch message needs to be useful.
+		if v.Lanes != nil {
+			parts := make([]string, len(v.Lanes))
+			for i, lane := range v.Lanes {
+				parts[i] = lane.String()
+			}
+			return fmt.Sprintf("v128 [%s]", strings.Join(parts, ", "))
+		}
+		return fmt.Sprintf("v128 hi=%#016x lo=%#016x", v.Hi, v.Bits)
 	}
 	if v.Kind.isFloat() {
 		if v.Kind == KindF32 {
@@ -271,6 +339,21 @@ func (want Val) Matches(got Val) bool { //nolint:revive,staticcheck // `want`/`g
 	}
 	if want.Kind != got.Kind {
 		return false
+	}
+	if want.Kind == KindV128 {
+		// Decision 0024's forced question 5: decompose into per-lane scalar comparisons rather
+		// than teaching this function a wider comparison shape. `want` is always shaped
+		// (`readV128Const`'s own output, from a `v128.const shape ...` literal that names its
+		// lane count and width); `got` is always raw (`fromInterpValue`'s output — an engine
+		// result is 128 bits with no shape of its own), so `want`'s own shape is what slices
+		// `got`'s bits into comparable lanes, never the other way around.
+		gotLanes := sliceV128Lanes(got.Hi, got.Bits, want.Lanes)
+		for i := range want.Lanes {
+			if !want.Lanes[i].Matches(gotLanes[i]) {
+				return false
+			}
+		}
+		return true
 	}
 	if want.Kind.isRef() {
 		switch want.Class {
@@ -329,6 +412,20 @@ func (v Val) isPassable() bool {
 	}
 	if v.Kind.isRef() && (v.Class == RefTypePattern || v.AnyNull) {
 		return false
+	}
+	if v.Kind == KindV128 {
+		// A v128 argument's own lanes must each be a concrete value — `readV128Const` admits a
+		// NaN-class spelling in any lane position because the same grammar produces both
+		// arguments and results, but the corpus's own argument-side v128 constants never write
+		// one (measured: 0 `v128.const` argument occurrences of `nan:canonical`/`nan:arithmetic`
+		// across testdata/spec) and this check is what makes that a stated fact rather than an
+		// unenforced assumption — a future vector that did write one would be declined here,
+		// named, rather than silently passed through as a wrong bit pattern.
+		for _, lane := range v.Lanes {
+			if !lane.isPassable() {
+				return false
+			}
+		}
 	}
 	return true
 }
@@ -406,6 +503,9 @@ func readConst(n node) (Val, bool) {
 	if v, ok := readRefConst(n); ok {
 		return v, true
 	}
+	if n.isList() && n.head() == "v128.const" {
+		return readV128Const(n)
+	}
 	if !n.isList() || len(n.list) != 2 || n.list[1].isList() || n.list[1].isS {
 		return Val{}, false
 	}
@@ -427,6 +527,76 @@ func readConst(n node) (Val, bool) {
 		return readFloatLit(k, lit)
 	}
 	return readIntLit(k, lit)
+}
+
+// v128LaneShapes maps a `v128.const` shape keyword to its lane count and per-lane width/kind —
+// the harness's own reading of parser.mly's VECSHAPE list, mirroring `internal/text/instr.go`'s
+// identically-purposed `vecShapeLanes` at the encoder's own boundary (two packages, two
+// neutrality domains per contract §0, hence two copies of one fact rather than a shared import).
+var v128LaneShapes = map[string]struct {
+	lanes    int
+	bits     uint
+	isFloat  bool
+	laneKind ValKind // the widened storage kind: KindI32/KindI64 for integer shapes narrower
+	// than 32 bits, KindF32/KindF64 for float shapes — matching the interpreter's own
+	// zero-extend-to-a-full-slot convention (stack.go's pushNum).
+}{
+	"i8x16": {lanes: 16, bits: 8, laneKind: KindI32},
+	"i16x8": {lanes: 8, bits: 16, laneKind: KindI32},
+	"i32x4": {lanes: 4, bits: 32, laneKind: KindI32},
+	"i64x2": {lanes: 2, bits: 64, laneKind: KindI64},
+	"f32x4": {lanes: 4, bits: 32, isFloat: true, laneKind: KindF32},
+	"f64x2": {lanes: 2, bits: 64, isFloat: true, laneKind: KindF64},
+}
+
+// readV128Const reads `(v128.const <shape> <lane>*)` into a KindV128 Val whose Lanes field
+// holds one scalar Val per lane — decision 0024's forced question 5, the harness-side half:
+// every lane is read through the identical scalar readers (`readIntLitBits`/`readFloatLit`)
+// bare `i32.const`/`f32.const` literals already use, so a lane's NaN-class spelling
+// (`nan:canonical`/`nan:arithmetic`) and exact-value spelling are both admitted exactly as they
+// already are for a scalar float result — `simd_f32x4_arith.wast:732` mixes both in one
+// `v128.const`, which is why each lane is read independently rather than the whole list being
+// read as one bit pattern.
+//
+// The lane count is checked exactly (`wrong number of lane literals` is `internal/text`'s own
+// refusal for the identical mismatch on the encoder side; this reader declines the same shape
+// as KindUnsupported rather than inventing a spec-shaped error string, since a malformed
+// `v128.const` reaching an `assert_return`/argument position is not a vector this corpus writes
+// — module-body grammar errors are the encoder's own `assert_malformed` population, disjoint
+// from the script-level constant grammar this function reads).
+func readV128Const(n node) (Val, bool) {
+	if len(n.list) < 2 || n.list[1].isList() || n.list[1].isS {
+		return Val{}, false
+	}
+	shape, ok := v128LaneShapes[n.list[1].atom]
+	if !ok {
+		return Val{}, false
+	}
+	lits := n.list[2:]
+	if len(lits) != shape.lanes {
+		return Val{}, false
+	}
+	lanes := make([]Val, shape.lanes)
+	for i, lit := range lits {
+		if lit.isList() || lit.isS {
+			return Val{}, false
+		}
+		if shape.isFloat {
+			v, ok := readFloatLit(shape.laneKind, lit.atom)
+			if !ok {
+				return Val{}, false
+			}
+			v.LaneBits = shape.bits
+			lanes[i] = v
+			continue
+		}
+		bits, ok := readIntLitBits(lit.atom, shape.bits)
+		if !ok {
+			return Val{}, false
+		}
+		lanes[i] = Val{Kind: shape.laneKind, Bits: bits, LaneBits: shape.bits}
+	}
+	return Val{Kind: KindV128, Lanes: lanes}, true
 }
 
 // readRefConst converts a `ref.null <heaptype>`, `ref.extern N`, `ref.func` (bare), or
@@ -534,6 +704,21 @@ func heapKind(heaptype string) (ValKind, bool) {
 // plausible wrong answer rather than an obvious one.
 func readIntLit(k ValKind, s string) (Val, bool) {
 	w := k.width()
+	n, ok := readIntLitBits(s, w)
+	if !ok {
+		return Val{}, false
+	}
+	return Val{Kind: k, Bits: n}, true
+}
+
+// readIntLitBits is readIntLit's own bit-pattern logic, parameterized by a raw width rather
+// than a ValKind — a v128 lane's width (8/16 for i8x16/i16x8) has no scalar ValKind of its own,
+// since the harness's four numeric kinds are exactly i32/i64/f32/f64 (ValKind's own doc comment)
+// and a v128 lane at a narrower width still widens into one of those two integer kinds for
+// storage in Val.Lanes — matching the interpreter's own convention (stack.go's pushNum: a
+// narrow lane occupies a full slot, zero-extended, never sign-extended) and readIntLit's own
+// existing w==32 zero-extension for i32 itself, generalized to an arbitrary source width.
+func readIntLitBits(s string, w uint) (uint64, bool) {
 	neg := false
 	switch {
 	case strings.HasPrefix(s, "-"):
@@ -543,22 +728,66 @@ func readIntLit(k ValKind, s string) (Val, bool) {
 	}
 	n, ok := readNat(s, 64)
 	if !ok {
-		return Val{}, false
+		return 0, false
 	}
 	if neg {
 		// Magnitude bound, written as a comparison against a shift so that w=64's bound
 		// (2^63, which no positive int64 holds) needs no special case.
 		if n > uint64(1)<<(w-1) {
-			return Val{}, false
+			return 0, false
 		}
 		n = -n
 	} else if w < 64 && n >= uint64(1)<<w {
-		return Val{}, false
+		return 0, false
 	}
-	if w == 32 {
-		n = uint64(uint32(n)) // the slot holds an i32 zero-extended, never sign-extended
+	if w < 64 {
+		n &= mask64(w) // the slot holds the value zero-extended, never sign-extended
 	}
-	return Val{Kind: k, Bits: n}, true
+	return n, true
+}
+
+// mask64 is a bitmask of the low n bits, for n in {8,16,32} — this package's own lane-width
+// truncation, mirroring interp/simd.go's identically-purposed `mask` at the interpreter's own
+// boundary (two packages, two neutrality domains per contract §0, hence two copies of one fact
+// rather than a shared import).
+func mask64(n uint) uint64 {
+	if n >= 64 {
+		return ^uint64(0)
+	}
+	return uint64(1)<<n - 1
+}
+
+// sliceV128Lanes reads len(shape) lanes out of a raw (hi, lo) v128 reading, one per entry of
+// shape — each entry supplies only the lane's own *wire* width (`.LaneBits`, never
+// `.Kind.width()` — see LaneBits's own doc comment for why the two differ for i8x16/i16x8) and
+// Kind, never its value, since shape is `want.Lanes` and this function's whole job is producing
+// the `got` side to compare it against. Byte layout matches `interp`'s own
+// `v128Bytes`/`lanesOf` exactly (low half first, low-numbered lane in the low bits) — the two
+// packages read the identical wire convention independently, per contract §0's neutrality rule,
+// rather than sharing the function across the engine/harness boundary.
+func sliceV128Lanes(hi, lo uint64, shape []Val) []Val {
+	out := make([]Val, len(shape))
+	bitOff := uint(0)
+	for i, want := range shape {
+		w := want.LaneBits
+		var raw uint64
+		if bitOff < 64 {
+			raw = lo >> bitOff
+			if bitOff+w > 64 {
+				// The lane straddles the hi/lo boundary — only reachable if a future shape
+				// mixes lane widths that do not evenly divide 64, which none of the tracked
+				// v128LaneShapes entries do (8/16/32/64 all divide 64 evenly), so this branch
+				// is unreachable today and stated rather than silently mishandled if that ever
+				// changes.
+				raw |= hi << (64 - bitOff)
+			}
+		} else {
+			raw = hi >> (bitOff - 64)
+		}
+		out[i] = Val{Kind: want.Kind, Bits: raw & mask64(w), LaneBits: w}
+		bitOff += w
+	}
+	return out
 }
 
 // readFloatLit is `F32.of_string` / `F64.of_string` (fxx.ml:305-332) as a bit pattern, plus the
