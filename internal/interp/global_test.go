@@ -11,8 +11,11 @@ import (
 // i32Const and globalGet build the two initializer forms these tests need.
 //
 // A const-expr is a sequence terminated by END, so a single-instruction expression is **two**
-// entries — measured in `constExprRef`'s comment one file over, not assumed here, and getting it
-// wrong makes every initializer below report a stack shortfall rather than a value.
+// entries — measured rather than assumed (an active segment's Offset for `(i32.const 0)` decodes to
+// `[{Op: 0x41}, {Op: opEnd}]`, END retained), and getting it wrong makes every initializer below
+// report a stack shortfall rather than a value. The measurement used to be recorded at
+// `constExprRef`'s definition one file over; #241 deleted that function, so the fact is restated
+// here rather than left as a citation to nothing.
 func i32Const(v uint64) []binary.Instr {
 	return []binary.Instr{{Op: 0x41, Imm0: v}, {Op: opEnd}}
 }
@@ -199,6 +202,89 @@ func TestGlobalSetOfARefWritesTheRefSlot(t *testing.T) {
 	}
 	if len(st.refs) != 0 {
 		t.Errorf("reference stack has %d slots after set, want 0: the value was not popped", len(st.refs))
+	}
+}
+
+// TestV128GlobalRoundTripsAllFourLanes is grave #239's closing vector: a `(global v128 …)` module
+// that **instantiates and reads its four lanes back**.
+//
+// # Why instantiation is not the assertion
+//
+// The grave was an arity check hard-coded to one numeric slot, so the visible symptom was a refused
+// module — and a test that only asserted `Instantiate` returns no error would have been satisfied by a
+// fix that widened the check and left the storage alone. `global` had **one** numeric field, so such
+// a fix accepts the module, keeps the low half, silently drops the high half, and turns an honest
+// refusal into a wrong answer. That is the trade the accept-direction rule (§9 G-3) says the board
+// cannot see: the refusal was a *fail* attributed to a missing feature, and the wrong answer is a
+// pass on every vector that only reads lane 0.
+//
+// So the four lanes are read individually and given **four distinct values, none of them zero**. Each
+// choice is load-bearing:
+//
+//   - *Distinct* — a global whose halves were swapped, or whose high half came back as a copy of the
+//     low, answers lanes 2 and 3 wrongly. Four equal lanes cannot see either defect.
+//   - *Nonzero* — the failure mode is a zero-filled high half, so lanes 2 and 3 must differ from what
+//     `numHi`'s zero value would produce. This is the fixed-point lesson: a row whose right answer and
+//     wrong answer coincide is not a row.
+//   - *Lanes 2 and 3 in the high half* — `v128.const`'s Imm0 is the low 64 bits and Imm1 the high
+//     (`binary/instr.go:788-798`), so lanes 0/1 live in Imm0 and 2/3 in Imm1. A test reading only lanes
+//     0 and 1 exercises exactly the half that was never broken.
+//
+// The read goes through `Invoke`, so `global.get`'s dispatch, `pushV128`'s slot pair, and
+// `i32x4.extract_lane`'s own `popV128` are all on the path — the helper-versus-path distinction: calling
+// `g.get` directly would prove the accessor works while nothing dispatched to it.
+func TestV128GlobalRoundTripsAllFourLanes(t *testing.T) {
+	// (global v128 (v128.const i32x4 0x11111111 0x22222222 0x33333333 0x44444444))
+	const lo = 0x2222222211111111 // lanes 0, 1
+	const hi = 0x4444444433333333 // lanes 2, 3 — zero in the broken engine
+	want := []uint64{0x11111111, 0x22222222, 0x33333333, 0x44444444}
+
+	// (func (export "lanes") (result i32 i32 i32 i32) — four `global.get`/`extract_lane` pairs,
+	// because each extract consumes the vector it reads.
+	body := []binary.Instr{}
+	for lane := range 4 {
+		body = append(body,
+			binary.Instr{Op: 0x23, Imm0: 0},                          // global.get 0
+			binary.Instr{Prefix: 0xfd, Op: 0x1b, Imm0: uint64(lane)}, // i32x4.extract_lane
+		)
+	}
+	body = append(body, binary.Instr{Op: opEnd})
+
+	i32x4 := []binary.ValType{binary.I32, binary.I32, binary.I32, binary.I32}
+	m := &binary.Module{
+		Types: []binary.CompType{{Kind: binary.CompFunc, Func: binary.FuncType{Results: i32x4}}},
+		Funcs: []binary.Func{{TypeIndex: 0, Body: body}},
+		Globals: []binary.Global{{Type: binary.V128, Init: []binary.Instr{
+			{Prefix: 0xfd, Op: 0x0c, Imm0: lo, Imm1: hi},
+			{Op: opEnd},
+		}}},
+		Exports: []binary.Export{{Name: "lanes", Kind: binary.ExternFunc, Index: 0}},
+	}
+
+	in, trap := Instantiate(m)
+	if trap != nil {
+		t.Fatalf("trap: %v", trap)
+	}
+	// **`Deferred` is checked, not skipped.** A failed initializer is recorded rather than
+	// returned — `globalFor` reports it later — so the pre-#241 engine reaches this line with
+	// `trap == nil` and its refusal parked here. Omitting this check would make the whole test
+	// depend on `Invoke` noticing, which is a longer chain than the grave needs.
+	if err := in.Deferred(); err != nil {
+		t.Fatalf("deferred: %v — a v128 global initializer was refused (grave #239)", err)
+	}
+
+	out, err := in.Invoke("lanes")
+	if err != nil {
+		t.Fatalf("invoke: %v", err)
+	}
+	if len(out) != 4 {
+		t.Fatalf("got %d results, want 4", len(out))
+	}
+	for lane, w := range want {
+		if got := out[lane].Bits; got != w {
+			t.Errorf("lane %d = %#x, want %#x%s", lane, got, w,
+				map[bool]string{true: " (zero here is the dropped high half — grave #239)"}[got == 0 && lane >= 2])
+		}
 	}
 }
 

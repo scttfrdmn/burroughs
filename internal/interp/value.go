@@ -83,7 +83,10 @@ type ref struct {
 	// one instance's table can hold a slot another instance's element segment filled. Nil for a
 	// null reference, since there is nothing to name; every non-null construction site sets it
 	// to the instance whose index space Addr was read from, which is always in scope at
-	// construction (segmentRefs and constExprRef are both *Instance methods).
+	// construction — `segmentRefs`'s index form is an `*Instance` method, and `ref.func`'s arm
+	// in exec.go has the running instance in hand. Those are now the *only* two sites, #241
+	// having deleted the third (`constExprRef`, which built the same pair by pattern-matching an
+	// element expression); an expression-form element segment reaches the arm instead.
 	//
 	// This is option A of the three the ADR priced: `ref{Null, Addr}` gains an `*Instance`
 	// field, matching `instance.ml:21`'s `funcinst = moduleinst … Func.t` — the reference's

@@ -962,8 +962,11 @@ func (c *context) defineElem(e textElem) {
 // `(item (ref.func 0) (ref.func 0))` — a two-instruction constant expression, ill-typed but
 // well-formed to the grammar — takes the expression form, and `(item)` with no instructions does too.
 // The terminator is not in the list (`constExprBytes` appends it), which is why this counts 1 where
-// the interpreter's `constExprRef` counts 2 on the decoded side: two representations of the same
-// expression, one before the terminator is written and one after it is read.
+// the interpreter's decoded side counts 2: two representations of the same expression, one before the
+// terminator is written and one after it is read. (The interpreter's reader used to be
+// `constExprRef`, whose `len(expr) == 2` was the other end of this fact; #241 replaced it with a
+// general evaluator, so the 2 is now `opEnd` arriving at the interpreter's loop rather than a length
+// a matcher tests. The off-by-one between the two packages is unchanged.)
 //
 // A symbolic `$f` is an unresolved index at the cursor and a resolved one here, which is the whole
 // reason this runs inside the thunk: `retainIdx` deferred it through `patch`, so the bytes exist only

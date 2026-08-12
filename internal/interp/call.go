@@ -202,13 +202,40 @@ func (in *Instance) invoke(fn *binary.Func, ft *binary.FuncType, st *stack, dept
 	// exactly as a stack slot's is (global.go's `get`/`set` give the identical reasoning), so
 	// the frame's own isRef bitmap chooses which array both the write here and every `local.*`
 	// arm in exec.go reads.
+	//
+	// **A `v128` parameter pops two slots, and popping one was grave #243.** Decision 0024 puts a
+	// v128 in *two adjacent numeric stack slots* while the frame keeps it as one index across the
+	// `num`/`numHi` pair — so this loop is the conversion between the two representations, and it
+	// used to do the ref case, the numeric case, and nothing else. The consequence was worse than a
+	// dropped high half: `popNum` left the caller's stack **one slot deep per v128 argument**, so
+	// the *next* call read its own arguments from the leftovers. `simd_const.wast:1072-1074`
+	// measures exactly that cascade — `$set_g0` answers `hi=0`, and `$set_g1_g2`, reading two slots
+	// off a five-slot stack, gives `$g1` and `$g2` the *same* value, which is `$g2`'s high half.
+	//
+	// The sibling was right the whole time: `Invoke`'s boundary loop (interp.go) has carried the
+	// `p == binary.V128` arm since 0024 landed, and this one re-derived the same conversion instead
+	// of reading it — grave #105's shape, a lesson indexed by file rather than by shape. Both loops
+	// now dispatch on the same three cases in the same order.
+	//
+	// **Oracle-covered, so it gets no control of its own** — the reverse-order fact above cites its
+	// 45 vectors and declines a control for this reason, and the figure here is measured the same
+	// way: deleting the `V128` case moves the default lane 142 → 150 fail, in three signatures (3
+	// value mismatches, 4 `left 5 values`, 1 `left 3 values`). Both lanes, identically. §9 G-3's
+	// rule — the one the *sibling* facts needed, an accept-direction defect the suite scores green
+	// — does not apply to a defect eight vectors report.
 	locals := newFrame(total, ft.Params, fn.EachLocal)
 	for i := len(ft.Params) - 1; i >= 0; i-- {
-		if ft.Params[i].IsRef() {
+		switch {
+		case ft.Params[i].IsRef():
 			locals.refs[i] = st.popRef()
-			continue
+		case ft.Params[i] == binary.V128:
+			// Destinations named rather than positional, `global.set`'s v128 arm's reason:
+			// `popV128` returns (hi, lo) because `pushV128`'s order makes lo the stack's true
+			// top, and a transposition here is a wrong answer no arity check can see.
+			locals.numHi[i], locals.num[i] = st.popV128()
+		default:
+			locals.num[i] = st.popNum()
 		}
-		locals.num[i] = st.popNum()
 	}
 	// The declared locals are already zero — `make` gives that — and zero is the correct default
 	// for every numeric type (`default_value`), and for a ref-typed local: `locals.refs[i]`'s

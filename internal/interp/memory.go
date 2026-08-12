@@ -244,7 +244,7 @@ func (in *Instance) runData(idx int, seg *binary.DataSegment) error {
 	if err != nil {
 		return err
 	}
-	off, err := in.constExprValue(seg.Offset)
+	off, err := in.constAddr(seg.Offset, "a data segment's offset")
 	if err != nil {
 		return err
 	}
@@ -259,28 +259,10 @@ func (in *Instance) runData(idx int, seg *binary.DataSegment) error {
 	return nil
 }
 
-// constExprValue evaluates a data segment's offset expression to an address.
-//
-// **It runs the offset through the same interpreter the bodies use** rather than pattern-
-// matching `i32.const`, because the reference does: `decode.ml:983`'s const production *is* the
-// full instruction grammar, which is why `ErrConstExprRequired` is a declared layering debt
-// rather than a grammar rule. Special-casing the constant form would make `(data (offset
-// (global.get 0)) …)` silently wrong instead of honestly unimplemented.
-func (in *Instance) constExprValue(expr []binary.Instr) (uint64, error) {
-	fn := &binary.Func{Body: expr}
-	st := &stack{num: make([]uint64, 0, len(expr))}
-	// Arity 1: a const expression yields exactly the one value the check below reads, and it
-	// is the implicit label's arity for a `return` inside one — legal, since `decode.ml:983`'s
-	// const production is the full instruction grammar.
-	if err := in.run(fn, nil, st, 1, 0); err != nil {
-		return 0, err
-	}
-	if len(st.num) != 1 {
-		return 0, fmt.Errorf("%w: a data segment's offset left %d values on the stack",
-			ErrNotValidated, len(st.num))
-	}
-	return st.popNum(), nil
-}
+// The offset evaluator that used to live here is `constAddr` in constexpr.go, one of the four call
+// sites of #241's single constant-expression evaluator. It moved rather than stayed because it was
+// never a memory concern: it was the *general* const-expr path with a data segment's name on its
+// error message, which is exactly the misattribution grave #240 filed.
 
 // memoryFor resolves a memory index to a memory. It is the *only* place that does, which is what
 // keeps its two failure modes from being half-remembered elsewhere (see initData).

@@ -546,8 +546,8 @@ func TestBulkTableCopyTrapsWithTheTableString(t *testing.T) {
 // outside `opTableFC`'s 18 entries as malformed (`prefixRegion`, `instr.go:148`), so no module
 // this engine accepts can carry one. `0x12` is one past the table's last entry and is
 // unreachable from any accepted module — the same "cannot happen through the front door, still
-// worth asserting at the back door" shape `TestElemExprIndexReachesTheRef` uses for
-// `constExprRef`.
+// worth asserting at the back door" shape `TestElemExprIndexReachesTheRef` uses for the
+// element-expression evaluator.
 func TestUnhandledFCSubOpcodeStaysOnTheWorkList(t *testing.T) {
 	err := (&Instance{}).execFC(binary.Instr{Prefix: 0xfc, Op: 0x12}, &stack{})
 	if !errors.Is(err, ErrUnsupportedOp) {
