@@ -19,6 +19,36 @@ weakly-ordered platform.
 ## [Unreleased]
 *Implements contract v0.1.*
 
+### Added
+
+- **`gate:gc` rung 1 — the six reference operators that need no heap object.** `ref.eq` (0xd3),
+  `ref.as_non_null` (0xd4), `br_on_null` (0xd5), `br_on_non_null` (0xd6), `call_ref` (0x14) and
+  `return_call_ref` (0x15) execute, per #172's four-rung ladder. Rungs 2-4 (struct, array/i31,
+  casts) remain unimplemented; this is the rung whose arms are reachable before 0020's `*gcObj`
+  exists.
+
+  All-on lane **61348/953/0 gated → 61423/878/0**: fail **−75** against a forecast of 61. Four
+  files go fully green — `ref_as_non_null.wast` 6/0, `br_on_null.wast` 9/0, `br_on_non_null.wast`
+  11/0, `call_ref.wast` 31/0 — with `return_call_ref.wast` at 35/5 and `ref_eq.wast` at 14/69.
+  Redistribution closes with residual 0: six `no arm for opcode` buckets to zero (−160), arrivals
+  +85 (`assert_return value mismatch` +76, `trap: call stack exhausted` +5, `trap: null reference`
+  +4, new). The default lane is **byte-identical** before and after (58429/279/2689/3625/0), which
+  is what proves the `funcRefTarget` extraction moved no bucket key.
+
+  `ref_eq.wast`'s 69 fails are correct and expected: with rungs 2-4 absent its `init` cannot run,
+  every table slot stays `ref.null`, and correct `ref.eq` therefore answers 1 to every query.
+  Measured, in the other direction: the *wrong* `ref.eq` (two nulls unequal) scores **69/14** —
+  the defect is worth +55 vectors on the board today, which is the sharpest specimen this project
+  has of *the spec is the objective function; the suite samples it*. Recorded at `refEq`'s
+  definition so rung 2's author expects those fails to drain rather than invert.
+
+  Shared rather than copied: `call_indirect` and `call_ref` resolve a funcref through one
+  `funcRefTarget`, so grave #163's cross-instance rule (resolve `r.Addr` against `r.Inst`, never
+  against the caller) is obeyed in both by construction. `return_call_ref` is a nested call plus
+  a return, not a real tail call, and so exhausts the 10000-frame budget on the five vectors whose
+  argument exceeds it — declared at the arm, flagged for a decision, and shared with the
+  tail-call gate's own 0x12/0x13 when it lands.
+
 ## [0.3.0] - 2026-08-11
 *Implements contract v0.1.*
 

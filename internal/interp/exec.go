@@ -487,6 +487,82 @@ func (in *Instance) runFrame(fn *binary.Func, locals *frame, st *stack, results,
 			}
 			return returnFrom(st, results, refResults)
 
+		case opCallRef: // 0x14 — `eval.ml:266-270` (`gate:gc`, #172 rung 1)
+			if err := in.callRef(st, depth); err != nil {
+				// opCall's own reasoning, and it applies here for the same reason it applies
+				// to opCallIndirect: this is a *non*-tail call, so the callee's runFrame may
+				// have returned a *thrown that escaped every handler inside it, and this
+				// frame's own ctrl gets the first chance to catch it. `call_ref.wast` has no
+				// try_table vector, so the corpus does not distinguish the readings — the
+				// authority is the reduction, where `Invoke` (as opposed to `ReturningInvoke`)
+				// leaves this frame and its Handlers on the stack.
+				c, cerr := in.raiseOrCatch(st, ctrl, err)
+				if cerr != nil {
+					return cerr
+				}
+				if !c.Matched {
+					return err
+				}
+				if c.IsReturn {
+					return returnFrom(st, results, refResults)
+				}
+				ctrl = ctrl[:c.Level]
+				pc = c.PC - 1
+				continue
+			}
+
+		case opReturnCallRef: // 0x15 — `eval.ml:288-296` (`gate:gc`, #172 rung 1)
+			// **A tail call, and this arm does not make it one — same shortfall as
+			// opReturnCallIndirect, but *not* the same board consequence, which is why this
+			// comment is not a cross-reference.** `eval.ml:291-296` steps a plain `CallRef` and
+			// rewraps the result as `ReturningInvoke`, replacing this frame rather than nesting
+			// under it. Nesting-then-returning is observationally identical except for unbounded
+			// tail recursion.
+			//
+			// opReturnCallIndirect could declare its shortfall free of charge, on the stated
+			// ground that `return_call_indirect.wast` contains no unbounded-recursion vector.
+			// **That premise is false for this file**, checked rather than inherited — and it is
+			// false five times:
+			//
+			//	:195  (assert_return (invoke "count" (i64.const 1_000_000)) (i64.const 0))
+			//	:201  (assert_return (invoke "even"  (i64.const 1_000_000)) (i64.const 44))
+			//	:202  (assert_return (invoke "even"  (i64.const 1_000_001)) (i64.const 99))
+			//	:207  (assert_return (invoke "odd"   (i64.const 1_000_000)) (i64.const 99))
+			//	:208  (assert_return (invoke "odd"   (i64.const 999_999))   (i64.const 44))
+			//
+			// One self-recursive and four mutually recursive (`even`/`odd` tail-call each other
+			// through a global funcref), each around a million frames deep, each of which a real
+			// tail call runs in constant stack. Here they exhaust `callBudget` and report `call
+			// stack exhausted` — the *wrong answer* rather than a crash, since the budget is a
+			// counter and catches this long before the Go stack does, which is the one mercy in
+			// the arrangement. `count 1000` at `:194` passes, being under the budget, which is
+			// what makes the shortfall a depth cliff rather than a broken opcode.
+			//
+			// **Five was measured; three was what a grep said**, and the difference is this
+			// project's own trigger-coverage law biting the author of this comment. `grep
+			// 1_000_000` finds `count`/`even`/`odd` at exactly a million and silently misses
+			// `even 1_000_001` and `odd 999_999`, which recurse just as deep — the population is
+			// "vectors whose argument exceeds callBudget", and a literal is not that predicate.
+			// The five are the harness's own count (`run(s).Buckets` for this file: 5 rows keyed
+			// `trap: call stack exhausted`), which is the instrument rather than a pattern over
+			// the text.
+			//
+			// So this arm costs **five** vectors and the cost is declared rather than discovered:
+			// they are counted as fails in the PR's board, `return_call_ref.wast` is not claimed
+			// green, and the fix is the explicit frame stack `call`'s comment defers to v1.
+			// Flagged for the principals rather than settled here, because the mechanism is
+			// shared with the tail-call gate's own 0x12/0x13 and choosing it inside an
+			// implementation PR would be an architecture decision taken silently.
+			//
+			// **Deliberately not caught here, unlike opCallRef above** — opReturnCallIndirect's
+			// reasoning transfers intact: a tail call discards this frame before the callee runs,
+			// so an exception the callee throws must escape any `try_table` the tail call sat
+			// inside.
+			if err := in.callRef(st, depth); err != nil {
+				return err
+			}
+			return returnFrom(st, results, refResults)
+
 		case opEnd:
 			// **Two meanings, and the control stack is what tells them apart** — which is
 			// why the arm that used to say "in this opcode set END can only be the
@@ -687,6 +763,91 @@ func (in *Instance) runFrame(fn *binary.Func, locals *frame, st *stack, results,
 			// instance's space by construction (`func c.frame.inst x`), so the ref this
 			// produces is always in-frame, never a cross-instance name arriving pre-formed.
 			st.pushRef(ref{Addr: uint32(ins.Imm0), Inst: in})
+
+		case opRefEq: // 0xd3 — `eval.ml:661-662` (`gate:gc`, #172 rung 1)
+			if err := st.needRef(2); err != nil {
+				return err
+			}
+			// **Pop order is not observable and is stated anyway.** The reference binds `Ref r1
+			// :: Ref r2`, so r1 is the top; `eq_ref` is symmetric in every one of its five cases,
+			// so a swapped pair passes every vector. Written top-first regardless, because the
+			// next arm to copy this shape may be reading an asymmetric relation (`ref.cast`'s
+			// operand order is load-bearing) and a habit formed on a symmetric case is the wrong
+			// habit to carry there.
+			a := st.popRef()
+			b := st.popRef()
+			eq, err := refEq(a, b)
+			if err != nil {
+				return err
+			}
+			st.pushBool(eq)
+
+		case opRefAsNonNull: // 0xd4 — `eval.ml:642-646` (`gate:gc`, #172 rung 1)
+			if err := st.needRef(1); err != nil {
+				return err
+			}
+			// The non-null case pushes the *same* reference back rather than a copy with Null
+			// cleared: `eval.ml:645-646` is `Ref r :: vs'`, the identical value, and that is
+			// load-bearing for `ref.eq` — a reference laundered through `ref.as_non_null` must
+			// still be `eq` to itself, which rebuilding the struct would preserve today (all
+			// fields copied) and would silently break the moment a field is added that the
+			// rebuild forgets. Push what was popped.
+			r := st.popRef()
+			if r.Null {
+				return trapNullRef
+			}
+			st.pushRef(r)
+
+		case opBrOnNull: // 0xd5 — `eval.ml:234-238` (`gate:gc`, #172 rung 1)
+			if err := st.needRef(1); err != nil {
+				return err
+			}
+			// **The reference is consumed on the branch and preserved otherwise**, which is the
+			// reverse of br_on_non_null below and the entire content of both arms. `eval.ml:234`
+			// is `BrOnNull x, Ref NullRef :: vs' -> vs', [Plain (Br x)]` — the null is *gone*
+			// from `vs'` and the branch is taken; `:237` is `Ref r :: vs', []` — the value is
+			// pushed back and execution falls through. So the taken path leaves nothing and the
+			// not-taken path leaves the reference, and a reading that pushed on both paths would
+			// pass every vector whose target block wants no operands and corrupt the rest.
+			r := st.popRef()
+			if !r.Null {
+				st.pushRef(r)
+				break
+			}
+			if ins.Imm0 == uint64(len(ctrl)) {
+				return returnFrom(st, results, refResults)
+			}
+			target, level, err := in.branch(st, ctrl, ins.Imm0)
+			if err != nil {
+				return err
+			}
+			ctrl = ctrl[:level]
+			pc = target - 1
+
+		case opBrOnNonNull: // 0xd6 — `eval.ml:240-244` (`gate:gc`, #172 rung 1)
+			if err := st.needRef(1); err != nil {
+				return err
+			}
+			// The mirror of br_on_null, and note *where* the push lands: `eval.ml:243-244` is
+			// `Ref r :: vs', [Plain (Br x)]`, so the reference goes back on the stack **and
+			// then** the branch is taken — the target label receives it as an operand. That is
+			// why the push is before `branch()` rather than after the null test: `branch` does
+			// the label's stack surgery, keeping `refArity` values from the top, and a reference
+			// pushed afterwards would be above the surgery instead of inside it.
+			r := st.popRef()
+			if r.Null {
+				break
+			}
+			st.pushRef(r)
+			if ins.Imm0 == uint64(len(ctrl)) {
+				return returnFrom(st, results, refResults)
+			}
+			target, level, err := in.branch(st, ctrl, ins.Imm0)
+			if err != nil {
+				return err
+			}
+			ctrl = ctrl[:level]
+			pc = target - 1
 
 		// ---- constants -----------------------------------------------------------
 		//
