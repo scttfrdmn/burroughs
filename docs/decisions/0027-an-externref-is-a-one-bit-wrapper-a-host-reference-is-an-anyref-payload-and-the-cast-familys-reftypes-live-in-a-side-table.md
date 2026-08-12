@@ -1,12 +1,29 @@
 # 0027 — An externref is a one-bit wrapper, a host reference is an anyref payload, and the cast family's reftypes live in a side table
 
-Date: 2026-08-12 · Status: **proposed** — no stamp exists yet
+Date: 2026-08-12 · Status: **accepted in part** — decisions 1, 2, 4, 5 and 6 **accepted**;
+decision 3 remains **proposed**
 
-> Held at `proposed` deliberately, per the ruling on #142: *a status field is a citation to an
-> approval, and approvals are artifacts with provenance*. Marking this accepted before Scott has
-> ruled would be a fabricated citation about the project's own governance. 0016 sat `proposed`
-> through the PR that implemented it and that is the precedent being followed, not an exception
-> being taken.
+> **Stamp: Scott, on the #259 relay (2026-08-12), with the carve stated in the stamp itself** —
+> decisions 1, 2, 4, 5 and 6 accepted; **decision 3 held at `proposed` inside this document**, marked
+> beside its own section, until slice 3's scoping firms it. The carve was granted on the ground that
+> decision 3 is the only one of the six with prospective design content, and that the slice-2-first
+> ruling (same relay, from #258's measured forecast) had already taken it off the critical path.
+> Slice 2 needs decisions 1 and 2 and can proceed on this stamp alone.
+>
+> **The interval this document spent at `proposed` is kept, not tidied away**, because the rule it
+> was following is that *a status field is a citation to an approval, and approvals are artifacts
+> with provenance* (#142) — so the record has to hold both the stamp and the wait. What stood here
+> before the stamp, verbatim:
+>
+> > Held at `proposed` deliberately, per the ruling on #142: *a status field is a citation to an
+> > approval, and approvals are artifacts with provenance*. Marking this accepted before Scott has
+> > ruled would be a fabricated citation about the project's own governance. 0016 sat `proposed`
+> > through the PR that implemented it and that is the precedent being followed, not an exception
+> > being taken.
+>
+> Amended on the head that merges, per the #252 precedent: the amendment rides the PR the stamp was
+> given on and the green is **re-earned on the amended head**, so the verdict judges the document
+> the stamp actually names rather than its predecessor.
 
 Filed against **#258** (rung 5 of the GC ladder) and milestone **v0.2.0 GC gate**, downstream of
 **0018** (the wide `ValType`), **0019** (runtime type tests are events), and **0020** (a struct or
@@ -182,7 +199,17 @@ surviving option teaches nothing about why it survived.
    spec string is quoted verbatim from the reference rather than invented, per the
    gates-never-manufacture-malformedness rule: the string belongs to the grammar, and the grammar
    here is the tracked union's (§9 G-2), which Wasm 3.0 is in.
-3. **`ref` grows `Externalized` and a host payload** (Q2/Q3 option A). An externref's dynamic
+3. **`ref` grows `Externalized` and a host payload** (Q2/Q3 option A). — **STATUS: `proposed`, not
+   covered by this document's stamp.** The #259 stamp carved this decision out explicitly and it is
+   the only one of the six still open; it is also the only one with prospective design content, since
+   nothing implements it yet and slice 3 is where it lands. Do not cite it as accepted, and do not
+   implement it on this document's authority: its scoping firms with slice 3 (a const-expression arm,
+   harness `(ref.host N)` and three bare `RefTypePattern` heaptypes — see *what this does not
+   decide*), and the stamp is expected then. The `Consequences` entries below that follow from it —
+   `ref`'s width, `refEqTreatment["Addr"]`'s inverted reason, #260 — are therefore **forecasts**
+   rather than accepted commitments, and are marked where they appear.
+
+   An externref's dynamic
    heaptype is `extern` whatever it wraps (`extern.ml:19`); a host reference's is `any`
    (`script.ml:80`) — *not* `eq`, `i31` or `struct`, which is what `ref_test.wast:120-127`'s
    `ref_test_eq(6) = 0` against `ref_test_any(6) = 2` asserts.
@@ -230,6 +257,14 @@ surviving option teaches nothing about why it survived.
   and not a silent 25% — the tripwire is the mechanism, and it already exists.
 
 ## Consequences
+
+The **first four** entries below — `ref`'s width, `refEq`'s treatment map, that map's blind spot, and
+the boundary constructor's new neighbour — follow from **decision 3**, which this document's stamp
+carved out at `proposed`. They are therefore **forecasts of what slice 3 will owe**, not accepted
+commitments, and none has fired yet because no field has been added. The remaining three (`ref.null`'s
+retention gap, `immStagedBits`/`optable.go` untouched, the cast trap's tail) follow from accepted
+decisions 4, 1 and 1/6 and stand as consequences. Counted against the list rather than estimated: an
+"immediately below" that is off by one is a false claim inside an amendment about provenance.
 
 - **`ref` grows by one word.** Measured, not assumed: 40 bytes today, and two more bools plus the
   host discriminator land in existing padding or open one word. `TestRefWidthIsMeasuredNotAssumed`

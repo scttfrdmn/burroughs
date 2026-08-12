@@ -46,6 +46,12 @@ weakly-ordered platform.
   - `gcObj` now carries its **defining module** alongside its type index (0027 decision 5), because a
     type index means nothing without the type space it indexes and `ref.cast` compares an object's
     type against an immediate belonging to the *executing* module.
+  - **Decision 0027 is `accepted in part`** — stamped by Scott on the #259 relay for decisions 1, 2,
+    4, 5 and 6, with **decision 3** (`ref` growing `Externalized` plus a host payload) carved out and
+    still `proposed` until slice 3's scoping firms it. The carve is marked beside decision 3's own
+    section and against the four `Consequences` entries that follow from it, which are forecasts
+    rather than commitments. Recorded here because the changelog and an ADR's `Status:` are the same
+    fact in two places and must not drift.
 
 - **Tail calls — `return_call`, `return_call_indirect`, `return_call_ref`, all three files fully
   green** (#253, decision 0026). A `return_call*` builds the callee's frame, truncates the stack to

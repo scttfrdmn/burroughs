@@ -323,9 +323,15 @@ func typeOfRef(r ref, site string) (refType, error) {
 	// look like) and would be a fabrication here, where the whole output is a type.
 	//
 	// This is also the slot rung 5's slice 3 fills — an externalized reference, whose dynamic
-	// type is `extern` (0027 decision 3). Until it exists, an `externref` in this engine is
-	// either null or a funcref-shaped value from the harness's `ref.extern`, and the honest
-	// answer for anything else is that there isn't one.
+	// type is `extern`. Until it exists, an `externref` in this engine is either null or a
+	// funcref-shaped value from the harness's `ref.extern`, and the honest answer for anything
+	// else is that there isn't one.
+	//
+	// **The design that fills it is 0027 decision 3, which is `proposed` and *not* covered by that
+	// ADR's stamp** — Scott accepted 1, 2, 4, 5 and 6 on the #259 relay and carved 3 out until
+	// slice 3's scoping firms it. Stated rather than cited bare, because a comment naming a
+	// decision reads as naming a settled one, and *a status field is a citation to an approval*
+	// (#142) does not stop being true when the citation moves from an ADR header into prose.
 	return refType{}, fmt.Errorf("%w: %s on a non-null reference with no payload discriminator set",
 		ErrNotValidated, site)
 }
