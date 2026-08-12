@@ -112,6 +112,17 @@ var trapNullFuncRef = &Trap{Reason: "null function reference"}
 // reader arriving at rung 2: the 68 `value mismatch` fails this file currently contributes are
 // **expected and correct**, so do not read them as a defect in this function, and do check that
 // they *drain* rather than invert when `init` starts running.
+//
+// **Called, and it came in: rung 4 drained all 68 and inverted none.** `ref_eq.wast` went
+// **14 pass / 69 fail → 83 / 0** the moment `ref.i31` got an arm (#255) — `init`'s last missing
+// constructor, rungs 2 and 3 having already landed `struct.new` and `array.new` — so the file is
+// fully green and the +55 the wrong `ref.eq` was worth has evaporated exactly as predicted. Kept as a
+// confirmed prediction rather than deleted, because the *point* of the paragraph above is that the
+// board rewarded the defect for four rungs and the only defence was reading `value.ml:127`. Note the
+// instrument lesson it also produced: the 68 were forecast **here**, in prose, and #255's
+// co-blocking probe measured only the `fb 1c` bucket, so the PR's own forecast under-counted its
+// reward by 2.9× while the answer sat in this comment (`spec_test.go`'s floor decomposition records
+// it).
 func refEq(a, b ref) (bool, error) {
 	// **Null first, and both directions in one expression.** `NullRef` is a constant
 	// constructor, so `(==)` makes two nulls physically equal and a null never equal to an
@@ -122,6 +133,28 @@ func refEq(a, b ref) (bool, error) {
 	// thirteen heaptypes).
 	if a.Null || b.Null {
 		return a.Null && b.Null, nil
+	}
+	// **An i31 on either side answers structurally, and the mixed pair answers `false` rather than
+	// #9's** — `i31.ml:20`'s `I31Ref i1, I31Ref i2 -> i1 = i2`, the one override in the family that
+	// compares a payload instead of installing `failwith`. Two `ref.i31` of the same integer are
+	// `eq` however they were produced, which is the whole reason `i31ref` is under `eq` in the
+	// lattice where `funcref` is not: there is no allocation to have an identity, so structural
+	// *is* the identity.
+	//
+	// Both sides are already masked to 31 bits at construction (`i31op.go`'s `i31Mask`), so this is
+	// a plain `==` and not a comparison of two maskings — the narrow-on-store contract paying for
+	// itself at its second reader.
+	//
+	// **The placement that matters is ahead of the two error returns, not ahead of `Obj`.** Against
+	// an aggregate the answer is `false` either way, the kinds being mutually exclusive; against an
+	// exnref or a funcref it is `false` here and `ErrNotValidated` below, and `false` is the
+	// reference's answer — each override matches only its same-kind pair and delegates the rest to
+	// the base `(==)`, so `I31Ref` versus `FuncRef` never reaches `instance.ml:42`'s `failwith`.
+	// That is the correction the aggregate clause below already had to make once; it is the same
+	// correction, and it is what stops a legal `ref.eq` between an `i31` and a `struct` — which
+	// `ref_eq.wast`'s table mixes deliberately — from being refused as unvalidated.
+	if a.IsI31 || b.IsI31 {
+		return a.IsI31 && b.IsI31 && a.I31 == b.I31, nil
 	}
 	// **An aggregate on either side answers by pointer identity, and `aggr.ml`'s *silence* is the
 	// citation.** Every other runtime module chains an `eq_ref'` override for its own kind —
@@ -172,11 +205,13 @@ func refEq(a, b ref) (bool, error) {
 // not to the sample (`ref`'s fields as of today). An enumeration on both sides would agree with
 // itself forever.
 var refEqTreatment = map[string]string{
-	"Null": "compared: two nulls are equal, a null and an allocation are not",
-	"Addr": "not compared: reachable only on a funcref, which refEq reports as #9's",
-	"Inst": "not compared: reachable only on a funcref, which refEq reports as #9's",
-	"Exc":  "not compared: reachable only on an exnref, which refEq reports as #9's",
-	"Obj":  "compared by pointer identity: an aggregate's identity is its allocation (0020)",
+	"Null":  "compared: two nulls are equal, a null and an allocation are not",
+	"Addr":  "not compared: reachable only on a funcref, which refEq reports as #9's",
+	"Inst":  "not compared: reachable only on a funcref, which refEq reports as #9's",
+	"Exc":   "not compared: reachable only on an exnref, which refEq reports as #9's",
+	"Obj":   "compared by pointer identity: an aggregate's identity is its allocation (0020)",
+	"IsI31": "compared: selects the i31 clause, and a mixed pair answers false (i31.ml:20)",
+	"I31":   "compared structurally: an i31 has no allocation, so the payload is the identity",
 }
 
 // refFieldTreatments reports refEq's declared treatment of every field `ref` actually has, and

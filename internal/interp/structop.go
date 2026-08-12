@@ -37,10 +37,10 @@ const (
 // every arm to re-test the prefix. The prefix is a precondition of this whole switch instead.
 //
 // Counted rather than described: `opTableFB` has **31** entries (max sub-opcode 0x1e) and this
-// switch answers **20** of them — the struct family (rung 2) and the array family (rung 3), decision
-// 0020's first two rungs. Everything else falls to `unsupported`, which renders `fb NN` and so keeps
-// the remaining arms visible as the board buckets they are: rung 4 is `i31` (`fb 1c`–`fb 1e`) and
-// rung 5 the casts (`fb 14`–`fb 1b`).
+// switch answers **23** of them — the struct family (rung 2), the array family (rung 3), and the i31
+// trio (rung 4), decision 0020's first three rungs. Everything else falls to `unsupported`, which
+// renders `fb NN` and so keeps the remaining arms visible as the board buckets they are: rung 5 is
+// the casts and the extern conversions (`fb 14`–`fb 1b`), which is the whole remainder.
 //
 // **The dispatch lives here rather than moving to a `gcop.go` as the family grew**, which is a
 // choice and not inertia: `execFB` is the single authority for "which sub-opcode has an arm", and the
@@ -108,6 +108,19 @@ func (in *Instance) execFB(ins binary.Instr, st *stack) error {
 
 	case opArrayInitElem:
 		return in.execArrayInitElem(ins, st)
+
+	// The i31 trio (rung 4, #255, `i31op.go`). None takes an immediate and none needs the
+	// instance, which is why these three are the region's only arms with a bare `st` — an i31
+	// payload resolves against nothing, so there is no type index to look up and no instance to
+	// look it up in.
+	case opRefI31:
+		return execRefI31(st)
+
+	case opI31GetS:
+		return execI31GetS(st)
+
+	case opI31GetU:
+		return execI31GetU(st)
 
 	default:
 		return unsupported(ins)

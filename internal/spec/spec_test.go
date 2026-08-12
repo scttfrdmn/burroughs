@@ -5886,7 +5886,32 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	// Only the fourth crosses the slack, and it crosses it because rung 3 is the largest single
 	// arm batch the GC campaign has: 187 sole-blocked fails forecast on #249's co-blocking probe
 	// and 187 delivered, with the pass side moving by the same 187 and the arrivals column zero.
-	const allOnPassFloor = 61764
+	//
+	// **Moved 61764 → 61891, +127, landing gate:gc rung 4 — the three i31 arms (#255).** Itemized
+	// per file from a before/after census of this lane, because a total reached by having the right
+	// number of terms is #155's corrected defect and #161 requires the redistribution to *sum*:
+	//
+	//	ref_eq.wast          14/69 →  83/0    +69
+	//	i31.wast              7/64 →  54/17   +47
+	//	array_new_elem.wast  11/5  →  16/0     +5
+	//	br_on_cast.wast       4/27 →   7/24    +3
+	//	br_on_cast_fail.wast  4/27 →   7/24    +3
+	//	                                     =127
+	//
+	// Five files moved and no other file moved in either direction; fail fell by the same 127, and
+	// the arrivals column is zero — nothing re-keyed into a new bucket, the `fb 1c`/`1d`/`1e`
+	// buckets are gone corpus-wide, and `i31.wast`'s residual 17 is 14 on `fb 17` (rung 5's casts)
+	// plus 3 on #8's encoder frontier.
+	//
+	// **The three-arm batch outpaid its own forecast by 2.9×, and the reason is on the record rather
+	// than in its favour**: #255's co-blocking probe forecast **44 of 71** sole-blocked on the
+	// `fb 1c` bucket, which is the arms' *own* bucket and nothing downstream of it. `ref.i31` writes
+	// state — `ref_eq.wast`'s `init` fills a table with boxed integers — so its absence was also
+	// costing 68 read-backs keyed as `assert_return value mismatch`, which is #155's write-state
+	// multiplier exactly. What makes the miss worth writing down is that `refop.go` had **already
+	// predicted that drain in prose**, down to the direction (drain, not invert), and the forecast
+	// quoted only the bucket probe: two instruments each held half the answer and the PR quoted one.
+	const allOnPassFloor = 61891
 	boardBound(t, "allOnPassFloor", totalPass, allOnPassFloor, boardBoundSlack, floorBound,
 		"a gated feature regressed, which the Gated==0 assertion above cannot see: with every "+
 			"gate on, a broken feature turns a pass into a fail and leaves Gated at zero")
