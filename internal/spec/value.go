@@ -176,8 +176,12 @@ const (
 	// since #7's engine tracks no funcref identity the corpus ever asks the harness to compare
 	// (0 vectors compare two funcref results, or a funcref result against a literal). Matches
 	// never receives this as a `want`, only as a `got`: it exists purely so a concrete non-null
-	// result has *some* Class other than RefLiteralNull, which is what RefTypePattern's own
-	// predicate (`got.Class != RefLiteralNull`) actually tests.
+	// result has *some* Class other than RefLiteralNull. That distinction used to be tested by
+	// RefTypePattern's own arm reading `got.Class != RefLiteralNull`; since grave #266 it is
+	// tested by *position* instead — every null `got` is answered by the dispatch at the top of
+	// Matches, so reaching the RefTypePattern arm at all is what establishes non-nullness. The
+	// member is no less load-bearing for that; it is the thing that makes the top dispatch's
+	// guard (`got.Class == RefLiteralNull`) a real question rather than a tautology.
 	RefConcrete
 )
 
@@ -218,12 +222,19 @@ type Val struct {
 	// script grammar reads as "null, of *any* heap type" with no keyword naming which
 	// (`literal_null`/`result`'s own `LPAR REF_NULL RPAR` arm, parser.mly:1519,
 	// `RefResult (RefPat (Value.NullRef @@ sloc))` — no heaptype argument at all, unlike the
-	// keyworded arm two lines below it). Matches bypasses the Kind comparison for this one
-	// shape, because a Val naming no heap type has no Kind to compare — Kind still holds
-	// whatever readRefConst assigned it (KindFuncRef, arbitrarily, since some Kind value is
-	// needed to keep this Val constructible without a third "no kind" sentinel), and reading
-	// it as a real constraint would wrongly refuse an externref result the way a stray Kind
-	// tag refused it before this field existed.
+	// keyworded arm two lines below it). Kind holds whatever readRefConst assigned it
+	// (KindFuncRef, arbitrarily, since some Kind value is needed to keep this Val constructible
+	// without a third "no kind" sentinel), and reading it as a real constraint would wrongly
+	// refuse an externref result the way a stray Kind tag refused it before this field existed.
+	//
+	// **This field no longer changes what Matches answers** (grave #266): a `ref.null <ht>`
+	// expectation is *already* Kind-blind against a null result, the reference having exactly one
+	// null value with no heaptype in it, so the bare spelling asks for nothing the keyworded one
+	// does not. What survives is the argument side — `isPassable` refuses this shape because
+	// `toInterpValue`'s `interp.NullRef(t)` needs a concrete type, and here there is no keyword to
+	// derive one from. So the field's meaning narrowed from "matches Kind-blind" to "unpassable",
+	// which is the half the reference also treats as a real distinction: `literal_null`'s bare arm
+	// appears in `result` position only.
 	AnyNull bool
 
 	// Hi is a v128 Val's high 64 bits, meaningful only when Kind == KindV128 — Bits carries the
@@ -267,10 +278,18 @@ func (v Val) String() string {
 	if v.Kind.isRef() {
 		switch v.Class {
 		case RefLiteralNull:
-			if v.AnyNull {
-				return "ref.null"
-			}
-			return "ref.null " + v.Kind.String()
+			// **No heaptype, in either direction** — `runtime/value.ml:322` is
+			// `| NullRef -> "null"`, and the reason is structural rather than stylistic: a null
+			// carries no heaptype to print (`type ref_ += NullRef`, nullary), and `runner.ml:365`
+			// discards the one a `(ref.null ht)` literal spells (`NullLit ht -> Value.(Ref
+			// NullRef)`). Rendering `v.Kind` here named a heaptype the value does not have, which
+			// on the *result* side is an outright fabrication: `fromInterpValue` collapses an
+			// unnameable reftype to a placeholder Kind (grave #266), so a null `anyref` result
+			// printed as "ref.null externref" would be the engine quoting a type nothing produced.
+			// The cost is that a mismatch message no longer echoes which heaptype the *vector*
+			// spelled; the vector's own file:line is in the same message, and an honest message
+			// with less detail beats a detailed one that invents.
+			return "ref.null"
 		case RefExternIdentity:
 			return fmt.Sprintf("ref.extern %d", v.Extern)
 		case RefTypePattern:
@@ -331,11 +350,53 @@ func (v Val) String() string {
 // an expectation there — so the two linters that want one name per type are suppressed here, at
 // the site that earns it, rather than the pair being made consistent and less clear.
 func (want Val) Matches(got Val) bool { //nolint:revive,staticcheck // `want`/`got` names the asymmetry; see above
-	if want.AnyNull {
-		// The bare `(ref.null)` expectation: null of any heap type, checked before the Kind
-		// comparison because this Val's own Kind names no real constraint — see AnyNull's
-		// doc comment.
-		return got.Class == RefLiteralNull
+	// **No `want.AnyNull` fast path here** — it used to be the first thing this function did
+	// (`return got.Class == RefLiteralNull`), and the null-`got` dispatch below subsumes it
+	// exactly: a null `got` reaches the RefLiteralNull arm and returns true whatever Kind the
+	// bare `(ref.null)` expectation is carrying, and a non-null `got` is refused either by the
+	// Kind comparison or by the RefLiteralNull arm one screen down. Verified case by case, and
+	// pinned by TestRefNullMatchesAcrossTwoHeaptypes's bare-`(ref.null)` rows rather than left
+	// to that argument.
+	//
+	// Deleted rather than kept as a harmless shortcut, because an early return that agrees with
+	// the code it skips agrees only *today*: it is a fast path that bypasses the general null
+	// dispatch, so the next refinement of that dispatch would silently not apply to the one
+	// expectation shape whose whole point is that its Kind means nothing. The field itself stays
+	// live on the argument side, where a bare `(ref.null)` genuinely cannot be passed —
+	// `isPassable`, whose `interp.NullRef(t)` needs a heaptype this shape does not have.
+	if got.Class == RefLiteralNull && want.Kind.isRef() {
+		// GRAVE #266: a null `got` is dispatched on the *pattern* alone, and its own Kind is
+		// never read — because in the reference a null carries no heaptype to read.
+		// `runtime/value.ml:20` is `type ref_ += NullRef`, a **nullary** constructor; `:112`
+		// types it `(Null, BotHT)` whatever it came from; `:151` makes every nullable type's
+		// default that one same value. So `Val{KindFuncRef, RefLiteralNull}` and
+		// `Val{KindExternRef, RefLiteralNull}` are two spellings of one reference value, and a
+		// `want.Kind != got.Kind` gate above this point asserted a distinction with no referent.
+		//
+		// The arms are `assert_ref_pat`'s (`script/runner.ml:464-476`), not a generalization of
+		// them: only `NullPat _` and `RefTypePat ExternHT` have arms admitting `NullRef`, and
+		// every other pattern falls through OCaml's catch-all to `false`. Written as an explicit
+		// refusal per class rather than as `return want.Class == RefLiteralNull || …` so a new
+		// RefClass member cannot be silently admitted by a boolean that happens to be false.
+		switch want.Class {
+		case RefLiteralNull:
+			// `NullPat _, Value.NullRef -> true` (runner.ml:476), unconditional.
+			return true
+		case RefTypePattern:
+			// `RefTypePat ExternHT, _ -> true` (runner.ml:475) admits anything including a
+			// null; `RefTypePat FuncHT` has no NullRef arm and so refuses one. That asymmetry
+			// is the reference's, and it is why this is not `return true`.
+			return want.Kind == KindExternRef
+		case RefExternIdentity:
+			// `RefResult (RefPat r)` compares two concrete references; a null is not one.
+			return false
+		case RefNone, RefConcrete:
+			// Unreachable as a `want` — RefNone means "not a reference Val" and RefConcrete is
+			// result-only (fromInterpValue's own doc comment). Named so `exhaustive` confirms
+			// every member has a stated reading here, matching this function's other switch.
+			return false
+		}
+		return false
 	}
 	if want.Kind != got.Kind {
 		return false
@@ -365,14 +426,20 @@ func (want Val) Matches(got Val) bool { //nolint:revive,staticcheck // `want`/`g
 			// matched above, and this harness's two Kind.isRef() members map exactly to those
 			// two heaptypes, so the dispatch is on Kind rather than on a heaptype this Val does
 			// not carry.
-			if want.Kind == KindExternRef {
-				return true
-			}
-			return got.Class != RefLiteralNull
+			//
+			// **The null half of that distinction now lives above**, in the null-`got` dispatch
+			// (grave #266) — so `got` here is non-null and both heaptypes admit it. Stated as a
+			// plain `true` with the reason, rather than kept as `got.Class != RefLiteralNull`:
+			// that comparison is now *always* true, and a condition that cannot be false is a
+			// missing check wearing a disguise (0003) even when it was a real check yesterday.
+			return true
 		case RefLiteralNull:
-			// Matches without regard to heaptype, per this type's own doc comment — the
-			// reference's `NullPat _, NullRef -> true` arm.
-			return got.Class == RefLiteralNull
+			// A non-null `got` against a `ref.null <heaptype>` expectation — always a mismatch.
+			// The null-vs-null case, which is the one `NullPat _, NullRef -> true` governs, is
+			// answered above without consulting Kind (grave #266); by the time control reaches
+			// here `got.Class != RefLiteralNull` is known, so this is the refusal and not the
+			// comparison it used to be.
+			return false
 		case RefExternIdentity:
 			return got.Class == RefExternIdentity && want.Extern == got.Extern
 		case RefNone, RefConcrete:

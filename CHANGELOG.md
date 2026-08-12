@@ -268,6 +268,33 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **A null reference expectation was compared by heaptype, and a null result of an unnameable type
+  was refused outright**
+  ([#266](https://github.com/scttfrdmn/burroughs/issues/266), #258). Two harness deviations from the
+  reference, both accept-direction and both green on every board by construction: `Val.Matches` gated a null-vs-null
+  comparison on `Kind`, and `fromInterpValue` refused a null whose type `valKind` could not name.
+  The reference has **exactly one** null reference value and it carries no heaptype — `runtime/
+  value.ml:20` is `type ref_ += NullRef`, nullary; `:112` types it `(Null, BotHT)` whatever produced
+  it; `:151` makes it every nullable type's default; `script/runner.ml:365` discards the heaptype a
+  `(ref.null ht)` literal spells — so `assert_ref_pat` answers `NullPat _, NullRef -> true`
+  unconditionally (`runner.ml:476`) and the harness's Kind gate asserted a distinction with no
+  referent. `Val.String` likewise stops naming a heaptype for a null, matching `value.ml:322`; on
+  the result side it had been printing one the value never had.
+  - **All-on lane 62089 → 62113 pass, 211 → 187 fail, `Gated` 0.** Fail delta **−24**, and the whole
+    of it is one file: `ref_null.wast` 10/34 → **34/34**, measured by diffing the lane's per-file
+    lines rather than reasoning from the total. `unsupported` is **unmoved** at 2689 and the zero is
+    structural — GC is gated off in the default lane, where `ref_null.wast` scores 2 pass / 32
+    `gated`, so no vector this touches can reach that column before the flip.
+  - **The registered forecast was 21 against 24 delivered — a wrong number inside a correct model.**
+    The prediction's two clauses both hold exactly (all of `ref_null.wast` pays; `try_table.wast`
+    464–466 does not, unmoved at 3 fail); the 21 came from subtracting those 3 non-null vectors from
+    the 24 nulls, which are disjoint sets. The reconciliation ran against the per-file list rather
+    than the total, which is what kept a coincidence of magnitude from closing the account on a
+    false story.
+  - `Matches`'s `AnyNull` fast path is **deleted**, the general null dispatch subsuming it exactly;
+    the field stays live on the argument side, where a bare `(ref.null)` has no heaptype for
+    `interp.NullRef(t)`. An early return that agrees with the code it skips agrees only today.
+
 - **Two decoder error sentinels were absent from the fuzz target's allowlist, one of them
   latent since the PR that introduced it**
   ([#264](https://github.com/scttfrdmn/burroughs/issues/264)). `ErrMalformedBrOnCastFlags`

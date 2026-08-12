@@ -513,9 +513,34 @@ func toInterpValue(a Val) (interp.Value, bool) {
 // predicate shape has no interp.Value to become. So there is no third arm here mirroring
 // RefTypePattern/AnyNull — a *result* is always a concrete value, never a pattern, and the
 // pattern-matching happens entirely on the expectation side, in Val.Matches.
+//
+// **A null converts even when Type does not** (grave #266, the `!ok` arm below). What is left
+// refusing is a *non-null* reference of a type the harness cannot name — a non-null `anyref` or
+// `(ref $t)` — and that refusal is honest rather than pending: such a result would need a
+// heaptype-bearing expectation shape to be compared against, and the harness deliberately has
+// none yet (ValKind's own scope comment; the widening is a flagged question on #258, not an
+// oversight to be papered over with a second placeholder Kind).
 func fromInterpValue(o interp.Value) (Val, bool) {
 	k, ok := valKind(o.Type)
 	if !ok {
+		if o.Null {
+			// **A null needs no nameable type, because it has none** (grave #266). `valKind`
+			// refuses every GC reference form — the harness's two reference Kinds cannot name
+			// `anyref`, `eqref`, `(ref null $t)` — and refusing here made the *value* unrepresentable
+			// on the strength of a *type* nothing downstream reads. In the reference there is one
+			// null reference value, nullary and heaptype-free (`runtime/value.ml:20`, `:112`), so a
+			// null `anyref` result and a null `funcref` result are the same value and neither needs
+			// `o.Type` to be expressible.
+			//
+			// Kind is a placeholder, not a claim, and it is unobservable by construction: `Matches`
+			// dispatches a null `got` on the pattern alone and never reads this Kind (value.go's own
+			// #266 block), `String` renders a null as the reference does with no heaptype in it, and
+			// a result never crosses back through `toInterpValue`. KindFuncRef specifically, for
+			// consistency with the one other Val whose Kind is arbitrary for the same reason — the
+			// bare `(ref.null)` expectation, see AnyNull. The two places that could make this Kind
+			// load-bearing again are pinned by TestRefNullMatchesAcrossTwoHeaptypes.
+			return Val{Kind: KindFuncRef, Class: RefLiteralNull}, true
+		}
 		return Val{}, false
 	}
 	if !k.isRef() {
@@ -5984,7 +6009,24 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	// `(invoke "test-sub")`, and `ref_test.wast:329` was **already failing at 6f6c18c** — the grave's
 	// board witness pre-dates slice 2 by one merge, in slice 1's own file, which is what establishes
 	// that the defect is the shared matcher's and not the branching arms'.
-	const allOnPassFloor = 62089
+	// 62089 → 62113, +24 (grave #266, the harness's null fidelity). The whole delta is one file:
+	// `ref_null.wast` 10/34 → **34/34**, measured by diffing this lane's per-file lines rather than
+	// reasoning from the total. Two harness deviations from the reference, both accept-direction and
+	// both invisible to every vector that was passing: `Matches` compared a null's Kind, where the
+	// reference has exactly one heaptype-free null value (`runtime/value.ml:20`/`:112`/`:151`) and
+	// `assert_ref_pat` answers `NullPat _, NullRef -> true` unconditionally (`runner.ml:476`); and
+	// `fromInterpValue` refused a null whose *type* `valKind` could not name, making the value
+	// unrepresentable on the strength of a type nothing downstream reads.
+	//
+	// **The pre-registered forecast on #258 was 21 and the answer is 24 — a wrong number with sound
+	// reasoning, which is the more useful half to record.** The prediction was "all of
+	// `ref_null.wast` pays; `try_table.wast` 464–466 does not", and the board confirms both clauses
+	// exactly (try_table unmoved at 3 fail). The 21 came from subtracting those 3 non-null vectors
+	// from the 24 nulls, two *disjoint* sets — an arithmetic slip inside a correct model, not a
+	// mis-read of the corpus. Worth the space because the reflex it argues for is to reconcile a
+	// miss against the file list before reaching for an explanation: had the extra 3 been assumed to
+	// be try_table's, the coincidence of magnitude would have closed the account on a false story.
+	const allOnPassFloor = 62113
 	boardBound(t, "allOnPassFloor", totalPass, allOnPassFloor, boardBoundSlack, floorBound,
 		"a gated feature regressed, which the Gated==0 assertion above cannot see: with every "+
 			"gate on, a broken feature turns a pass into a fail and leaves Gated at zero")
