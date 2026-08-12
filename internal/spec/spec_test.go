@@ -5952,7 +5952,39 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	// over-predicts shadowing exactly there, and the instrument that settles it is the one used here:
 	// the exhaustive two-direction bucket census, measured with `run(s).Buckets` rather than a grep
 	// over the board log.
-	const allOnPassFloor = 62046
+	// **62046 → 62089 (rung 5 slice 2: `br_on_cast`/`br_on_cast_fail`, plus grave #261).** Fail
+	// 254 → 211, and the census closes in two parts because two different things landed:
+	//
+	//	the two arms                                                   −44 + 3 = −41
+	//	  interp: no arm for opcode fb 18                                       −22
+	//	  interp: no arm for opcode fb 19                                       −22
+	//	  assert_return value mismatch                                          +2
+	//	  trap: unreachable                                                     +1
+	//
+	//	grave #261 (match_deftype disjunct 2 was subtyping, not equality)        −2
+	//	  br_on_cast.wast:205  (invoke "test-sub")   trap: unreachable          −1
+	//	  ref_test.wast:329    (invoke "test-sub")   trap: unreachable          −1
+	//
+	// Residual zero in both parts, unclassified arrivals zero, and the whole delta is confined to
+	// the three files. The three arrivals are charged to slice 3 rather than to these arms: `init`'s
+	// last `table.set` is `any.convert_extern` (`fb 1a`), so table slot 4 is never written and holds
+	// `ref.null any` — which *does* match a nullable `(ref null struct)`, so `null-diff(4)` answers 1
+	// where the vector wants 0. Three of the four other index-4 reads pass only because null fails to
+	// match their **non**-nullable targets, which is protection by coincidence and is why the arrivals
+	// are 3 rather than 1.
+	//
+	// **The forecast missed in the optimistic direction this time: 36 predicted sole-blocked against
+	// 41 delivered, 8 predicted arrivals against 3.** Recorded because the previous entry's miss was
+	// pessimistic, and the two together say the co-blocking probe's error is not signed — it is a
+	// *variance*, so the honest use of a pre-registered figure is as a falsifiable prediction and
+	// never as a floor the PR is scored against. The specific over-prediction has the same root as
+	// the note above: reasoning about `init` as a unit rather than as a sequence, one layer finer.
+	//
+	// #261's two vectors are the reason this figure is not simply the arms' 41. Both are
+	// `(invoke "test-sub")`, and `ref_test.wast:329` was **already failing at 6f6c18c** — the grave's
+	// board witness pre-dates slice 2 by one merge, in slice 1's own file, which is what establishes
+	// that the defect is the shared matcher's and not the branching arms'.
+	const allOnPassFloor = 62089
 	boardBound(t, "allOnPassFloor", totalPass, allOnPassFloor, boardBoundSlack, floorBound,
 		"a gated feature regressed, which the Gated==0 assertion above cannot see: with every "+
 			"gate on, a broken feature turns a pass into a fail and leaves Gated at zero")

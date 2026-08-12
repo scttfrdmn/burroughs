@@ -26,12 +26,65 @@ import (
 // which is why the four arms below take a full reftype out of the side table and no arm re-derives
 // nullability: a reader who put that switch here would have two places computing one fact, and the
 // one that got it wrong would be invisible on every vector whose answer does not depend on nulls.
+// The pair added by rung 5's second slice reads its type pair the same way and branches on the
+// answer (`decode.ml:640-650`, `eval.ml:246-258`); their arms are below `execRefCast`.
 const (
 	opRefTest     = 0x14
 	opRefTestNull = 0x15
 	opRefCast     = 0x16
 	opRefCastNull = 0x17
+	opBrOnCast    = 0x18
+	opBrOnCastFal = 0x19
 )
+
+// brOnCastLabel is the branch depth of a `br_on_cast`/`br_on_cast_fail` instruction.
+//
+// **A named accessor for one field read, because this is the only branching instruction in the
+// engine whose label is not `Imm0`.** Every other one — `br`, `br_if`, `br_table`, `br_on_null`,
+// `br_on_non_null` — stages its label first and so finds it in `Imm0`; this pair stages the flags
+// byte first (wire order, `decode.ml:641-642`), so the label lands in `Imm1`. A reader who copies
+// a neighbouring arm gets `Imm0`, which on the flags values the corpus actually contains is
+// **0, 1, 2 or 3** — a plausible depth, silently wrong, and indistinguishable from a correct
+// branch on any vector whose intended depth happens to be the flags value.
+//
+// The slot assignment is *printed, never reasoned about* (0027 decision 1): decoding
+// `br_on_cast 2 (ref null any) (ref null i31)` — flags `0x03`, label `0x02` — yields
+// `Imm0=3 Imm1=2`, and `TestBrOnCastSlotsAreFlagsThenLabel` is that print turned into a control so
+// the next reader inherits the measurement instead of re-deriving it. The helper is what makes
+// misreading require *ignoring* something rather than merely forgetting it.
+func brOnCastLabel(ins binary.Instr) uint64 { return ins.Imm1 }
+
+// branchCastTargetAt resolves the type `br_on_cast`/`br_on_cast_fail` casts **to** — `rt2` alone.
+//
+// # Why this returns one type where the side table holds two
+//
+// `Func.Casts` stages the pair in the reference's order: `rt1` is the instruction's declared *input*
+// type and `rt2` is what it tests against (`decode.ml:644-645`). Only `rt2` is a run-time question —
+// `eval.ml:246` and `:252` bind the first as **`_rt1`**, discarded — and reading element 0 where 1
+// was meant produces a test against a *supertype*, which is legal, plausible, and wrong: for
+// `br_on_cast $l anyref (ref i31)` it asks whether the operand is an `anyref`, which every operand
+// on that stack already is, so the branch is always taken.
+//
+// So the arms are not handed the slice. This is a signature standing in for a warning comment: a
+// comment saying "read element 1" is discipline that a copied line can drop, while an accessor that
+// cannot return element 0 makes the wrong read **unrepresentable** — there is no expression for it
+// at the call site. The full pair stays available through `binary.CastTypes` because #9's validator
+// genuinely needs `rt1`: it is the input type the operand must already match, which is a question
+// about the module rather than about the value, and therefore that layer's and not this one's.
+//
+// The arity is checked at exactly 2 for `castTypeAt`'s reason, and the count is the discriminator
+// rather than a lower bound — `len(v) < 2` would accept a three-type vector from a decoder that
+// began staging something else here, which is the drift a side table between two packages is most
+// exposed to.
+func branchCastTargetAt(fn *binary.Func, pc int, site string) (binary.ValType, error) {
+	v, ok := fn.CastTypes(pc)
+	if !ok || len(v) != 2 {
+		return binary.NoValType, fmt.Errorf(
+			"%w: %s at instruction %d staged %d cast types, want exactly 2 (rt1 then rt2)",
+			ErrNotValidated, site, pc, len(v))
+	}
+	return v[1], nil
+}
 
 // heapType is a `heaptype` as the subtype relation needs one (types.ml:87-100): one of the twelve
 // abstract forms, a concrete type in some module's type space, or bottom.
@@ -426,4 +479,70 @@ func (in *Instance) execRefCast(fn *binary.Func, pc int, st *stack) error {
 	}
 	st.pushRef(r)
 	return nil
+}
+
+// brOnCastTaken answers whether a `br_on_cast`/`br_on_cast_fail` branches, having already put the
+// operand back on the stack — `eval.ml:246-258`:
+//
+//	| BrOnCast (x, _rt1, rt2), Ref r :: vs' ->
+//	  let rt2' = subst_reftype (subst_of c.frame.inst) rt2 in
+//	  if Match.match_reftype [] (type_of_ref r) rt2' then
+//	    Ref r :: vs', [Plain (Br x) @@ e.at]
+//	  else
+//	    Ref r :: vs', []
+//
+//	| BrOnCastFail (x, _rt1, rt2), Ref r :: vs' ->
+//	  ... if match then Ref r :: vs', [] else Ref r :: vs', [Plain (Br x) @@ e.at]
+//
+// # The reference survives on all four paths, which is what makes this different from br_on_null
+//
+// Every one of the four arms above rebuilds `Ref r :: vs'`. That is not the shape the two `br_on_*`
+// arms in `runFrame` have — `br_on_null` *consumes* the null when it branches and `br_on_non_null`
+// preserves it only when it branches — so a reader who generalizes from those two writes a
+// conditional push here and is wrong on one path out of four. The push is therefore unconditional
+// and happens before the verdict is returned: a value the reference keeps on every path is not a
+// value this engine may decide about.
+//
+// **And the push has to precede `branch()`**, for the reason `br_on_non_null`'s arm states: `branch`
+// does the label's stack surgery, keeping `refArity` references from the top, so an operand pushed
+// after it would sit *above* the surgery rather than inside it — the branch target would receive
+// whatever was underneath. Since this arm cannot branch (it has no `ctrl`), the ordering is
+// structural rather than remembered: the push is done here and the caller can only branch after.
+//
+// # Why the branch itself is the caller's
+//
+// `execFB` returns an `error`, and branching needs `ctrl` and `pc`, which are `runFrame`'s locals.
+// Splitting at the predicate keeps the semantics — the type test, the stack discipline, the
+// side-table read — in this file with the rest of the family, and leaves `runFrame` doing exactly
+// what its other five branching arms do. The alternative, widening `execFB` to return a branch
+// verdict, would put a control-flow signal on 27 arms that cannot produce one.
+//
+// `_rt1` is not read, and it is not *available* to be read: see `branchCastTargetAt`.
+func (in *Instance) brOnCastTaken(ins binary.Instr, st *stack, fn *binary.Func, pc int) (bool, error) {
+	site := "br_on_cast"
+	if ins.Op == opBrOnCastFal {
+		site = "br_on_cast_fail"
+	}
+	want, err := branchCastTargetAt(fn, pc, site)
+	if err != nil {
+		return false, err
+	}
+	if short := st.needRef(1); short != nil {
+		return false, short
+	}
+	r := st.popRef()
+	got, err := typeOfRef(r, site)
+	if err != nil {
+		return false, err
+	}
+	// Unconditional, and before the verdict — see the two paragraphs above.
+	st.pushRef(r)
+	matched := matchRefType(got, castTarget(want, in.mod))
+	// `br_on_cast_fail` is the exact inversion and nothing else: same operand, same type, same
+	// stack effect, opposite verdict (`eval.ml:253-258`). Written as one negation rather than two
+	// arms so the two opcodes cannot drift into disagreeing about anything but the branch.
+	if ins.Op == opBrOnCastFal {
+		return !matched, nil
+	}
+	return matched, nil
 }

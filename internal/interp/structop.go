@@ -40,8 +40,21 @@ const (
 // switch answers **27** of them — the struct family (rung 2), the array family (rung 3), the i31
 // trio (rung 4), and the four casts (rung 5's first slice), decision 0020's ladder. Everything else
 // falls to `unsupported`, which renders `fb NN` and so keeps the remaining arms visible as the board
-// buckets they are; what is left is rung 5's other two slices, `fb 18`/`fb 19` (`br_on_cast`,
-// `br_on_cast_fail`) and `fb 1a`/`fb 1b` (the extern conversions).
+// buckets they are; what is left is rung 5's third slice, `fb 1a`/`fb 1b` (the extern conversions).
+//
+// **Two of the region's arms are not in this switch, and so this function is no longer the region's
+// whole index.** `fb 18`/`fb 19` (`br_on_cast`, `br_on_cast_fail`) are answered by `runFrame`
+// itself, before it delegates here, because they branch: a control transfer needs `ctrl` and `pc`,
+// which are that loop's locals, and this signature returns an `error`. Their semantics still live
+// with the family in `castop.go` (`brOnCastTaken`); only the transfer is up there. The sentence this
+// paragraph replaces said the switch was "the single authority for which sub-opcode has an arm",
+// and leaving it would have made the count above read as 27-of-29-implemented while two arms
+// existed elsewhere — a comment asserting the property the code no longer has, which is the
+// camouflage review cannot penetrate because review checks code against claims. The count is
+// therefore stated as **29 arms across two sites, 27 of them here**, and the split is pinned in
+// both directions rather than described: `TestBrOnCastIsNotInTheFBSwitch` asserts this switch still
+// declines the pair (so an arm added here later cannot sit dead behind the interception), and
+// `TestBrOnCastBranchesOnTheCastResult` asserts `runFrame` answers them.
 //
 // **`fn` and `pc` rather than a pre-resolved side-table vector**, which is a widening this rung
 // forced and the shape it settled on is worth stating. The four cast arms need `Func.Casts`, a

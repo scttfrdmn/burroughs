@@ -338,18 +338,36 @@ func loadStorage(bs []byte, st binary.StorageType) gcField {
 // checks stay: they are what stop an out-of-range index from indexing a Go slice, and a panic is
 // categorically worse than a named error.
 //
-// **What was here and is not: a storage-kind agreement check between the instruction's declared
-// type and the object's.** It read as a real cross-check and was vacuous — `ct` and `obj.typ` are
-// the *same pointer* on 30 of 30 corpus field accesses and differ on 0, every separating path going
-// through rung 5's `ref.cast`/`br_on_cast`. A comparison of a thing to itself is a green that
-// asserts nothing, so it is retired and its control with it (#248 is the tripwire that reinstates
-// both when rung 5 gives them a subject).
+// # The storage-class agreement check: retired on #247, reinstated on #248
 //
-// The risk it named is real and unretired, which is why it is filed rather than dismissed: field
-// shape decisions come from the instruction's type immediate (`struct.set` must know the value's
-// array before it can pop the reference underneath it), so once subtyping is reachable a
-// disagreement picks the wrong stack array — the grave #243 shape, a wrong array choice cascading
-// into the next instruction's operands.
+// It was retired for being vacuous — `ct` and the object's type were the *same pointer* on 30 of 30
+// corpus field accesses and differed on 0, every separating path going through rung 5's
+// `ref.cast`/`br_on_cast`, so it compared a thing to itself and its only exerciser was its own
+// control. #248 was the tripwire, and rung 5 slice 2 is where it fires.
+//
+// **Re-measured with the rung-5 arms landed, and the corpus figure did not move off zero: 32
+// same-pointer, 0 differing, 0 storage-differs.** Stated as the finding #248 asked for rather than
+// as a licence to close it, and the reason is structural: the corpus's cast vectors
+// (`test-sub`, `test-canon`) never read fields, and its field-reading vectors cast to *exactly* the
+// type whose accessor they then use. A differing pair needs a read through a **supertype's**
+// immediate, which no vector performs.
+//
+// So the check is reinstated on a hand-built witness rather than a corpus one, and the witness is
+// what makes it more than an intention: see
+// `TestFieldStorageClassDisagreementIsRefused`. That module reads a numeric field through a v128
+// immediate and, without this check, **succeeds silently** — grave #243's shape, a wrong array
+// choice, with no error and a plausible return value.
+//
+// **A disagreement is only reachable through a module #9 would reject**, since `match_fieldtype`
+// forbids one in a valid subtype. That makes this the same class as `undefined field` above:
+// a crash-class case the validator's absence lets through, reported as `ErrNotValidated` rather than
+// as a trap. It is not dead code — it is code whose subject is the validator gap, and it stays until
+// #9 closes it.
+//
+// The risk itself was never retired, which is why it was filed rather than dismissed: field shape
+// decisions come from the instruction's type immediate (`struct.set` must know the value's array
+// before it can pop the reference underneath it), so a disagreement picks the wrong stack array and
+// cascades into the next instruction's operands.
 func fieldStorage(ct *binary.CompType, obj *gcObj, i uint64) (binary.FieldType, error) {
 	if i >= uint64(len(ct.Fields)) {
 		return binary.FieldType{}, fmt.Errorf("%w: undefined field %d of %d in type %s",
@@ -361,8 +379,62 @@ func fieldStorage(ct *binary.CompType, obj *gcObj, i uint64) (binary.FieldType, 
 			return binary.FieldType{}, fmt.Errorf("%w: undefined field %d of %d in the object",
 				ErrNotValidated, i, len(obj.fields))
 		}
+		if oct, ok := compTypeAt(obj.mod, obj.typeIdx); ok && i < uint64(len(oct.Fields)) {
+			if a, b := storageClassOf(ft), storageClassOf(oct.Fields[i]); a != b {
+				return binary.FieldType{}, fmt.Errorf(
+					"%w: field %d is %s storage in the instruction's type and %s storage in the object's",
+					ErrNotValidated, i, a, b)
+			}
+		}
 	}
 	return ft, nil
+}
+
+// storageClass is which of `popField`/`pushField`'s four stack paths a field uses.
+type storageClass string
+
+const (
+	storagePacked storageClass = "packed"
+	storageRef    storageClass = "reference"
+	storageV128   storageClass = "v128"
+	storageNum    storageClass = "numeric"
+)
+
+// storageClassOf is the field property that decides **which stack array** a field's value is popped
+// from and pushed to — `popField`'s and `pushField`'s own dispatch, read off in one place so the
+// agreement check in `fieldStorage` and the two transfers cannot disagree about what they are
+// classifying.
+//
+// # Why a class and not `Storage` equality (#248, and it is an accept-direction argument)
+//
+// The obvious check is `ft.Storage == oct.Fields[i].Storage`, and it would **reject valid modules**.
+// `match_fieldtype` (match.ml:134-138) requires equality only for a `Var` field; a `Cons` field is
+// *covariant*, so a legal subtype may declare field 0 as `(ref $sub)` where its supertype declares
+// `(ref $super)`. Both are references, both use the reference array, and nothing is at risk — but a
+// storage-equality check calls the module unvalidated. That is the §9 G-3 failure the discipline
+// names as worse than missing an invalid module, and it would be invisible on the board because no
+// vector in the corpus exercises a covariant field through a supertype accessor.
+//
+// So the comparison is over the four classes, which is exactly the risk #248 was filed on: a
+// disagreement here means a value is popped from one array and read from another — grave #243's
+// shape, a wrong array choice cascading into the *next* instruction's operands.
+//
+// **`Width` is deliberately not part of the class.** Two packed fields of different widths both use
+// the numeric array, so a width disagreement mis-masks a value and cannot desynchronize a stack;
+// and `match_packtype` is equality, so a valid module cannot have one. Including it would widen the
+// check past its subject for no reject-direction gain — and every widening here is a fresh chance to
+// refuse something legal.
+func storageClassOf(ft binary.FieldType) storageClass {
+	switch t := ft.Storage.Val; {
+	case ft.Storage.Packed:
+		return storagePacked
+	case t.IsRef():
+		return storageRef
+	case t == binary.V128:
+		return storageV128
+	default:
+		return storageNum
+	}
 }
 
 // popField pops one field's initializer off the stack, wrapping a packed field at write —

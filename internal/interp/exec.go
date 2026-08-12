@@ -127,6 +127,41 @@ func (in *Instance) runFrame(fn *binary.Func, locals *frame, st *stack, results,
 				continue
 			}
 			if ins.Prefix == 0xfb {
+				// **The region's two branching arms are intercepted here, and only their
+				// branch is here.** `execFB` returns an `error` and cannot express a
+				// control transfer, while `ctrl` and `pc` are this loop's locals — so
+				// `brOnCastTaken` does the type test, the stack discipline and the
+				// side-table read in `castop.go` with the rest of the cast family, and
+				// what is left is the same four lines the other five `br_on_*` arms end
+				// with. The alternative was widening `execFB`'s signature to carry a
+				// branch verdict for 27 arms that cannot produce one.
+				//
+				// **The label is `Imm1`, not `Imm0`, and it is read through an accessor
+				// for that reason** — this pair stages its flags byte first, so the
+				// uniform `ins.Imm0` every other branching arm uses would silently read
+				// the flags as a depth (0, 1, 2 or 3 on real corpus values). See
+				// `brOnCastLabel`, whose slot claim is pinned by a control rather than
+				// reasoned from the generated row (0027 decision 1).
+				if ins.Op == opBrOnCast || ins.Op == opBrOnCastFal {
+					taken, err := in.brOnCastTaken(ins, st, fn, pc)
+					if err != nil {
+						return err
+					}
+					if !taken {
+						continue
+					}
+					label := brOnCastLabel(ins)
+					if label == uint64(len(ctrl)) {
+						return returnFrom(st, base, results, refResults)
+					}
+					target, level, err := in.branch(st, ctrl, label)
+					if err != nil {
+						return err
+					}
+					ctrl = ctrl[:level]
+					pc = target - 1
+					continue
+				}
 				if err := in.execFB(ins, st, fn, pc); err != nil {
 					return err
 				}

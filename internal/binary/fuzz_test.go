@@ -86,6 +86,44 @@ var declaredErrors = []error{
 	ErrMalformedHeapType,
 	ErrTooManyLocals,
 
+	// ErrMalformedBrOnCastFlags — `require (flags land 0xfc = 0)` (decode.ml:642), a real
+	// spec verdict with the reference's own message text, so it belongs in this set.
+	//
+	// **Enrolled by the fuzzer rather than by its author, which is the entry worth reading
+	// twice.** Rung 5 slice 2 added the sentinel, its wrap, and two controls asserting
+	// `errors.Is(err, ErrMalformedBrOnCastFlags)` — and did not add this line, so
+	// `fuzz-smoke` went red on `fb 19` with flags `0x30` inside 41 seconds while `make check`
+	// was green. The gap is structural and not a habit: `make check` runs no fuzz target, so
+	// the *local* mirror of CI cannot see a new error string, and every control this PR wrote
+	// for the condition asks whether the right sentinel came back — none of them asks whether
+	// the vocabulary declares it. A control that names the sentinel it expects cannot notice
+	// the sentinel is undeclared, because it supplies the very fact the allowlist is missing.
+	// So the rule for a PR that introduces a decoder error is: run `make fuzz` before pushing,
+	// or expect the enrollment to be found for you.
+	ErrMalformedBrOnCastFlags,
+
+	// ErrZeroByteExpected — `zero s = expect 0x00 s "zero byte expected"` (decode.ml:150),
+	// and **the sibling the sweep found rather than the fuzzer** (grave #264). It was omitted
+	// on the PR that introduced it and has never been observed, because all three of its call
+	// sites (`decodeTag`, the 0x40 table form, #51) sit behind gated constructs and a gate-off
+	// decoder declines before reaching the reserved byte. Reachable code, unreachable
+	// verdict — so the fuzz target could not have found it and will not, until a flip makes
+	// those sites live.
+	//
+	// Listed for exactly the reason ErrMisplacedOpcode below is listed while unreachable: the
+	// set is what the decoder is *allowed* to return, and an entry becoming reachable should
+	// not look like a fuzz find when it does. Left out, `gate:gc`'s flip would have turned a
+	// correct verdict on a malformed module into a red board with no defect behind it — the
+	// omission's other failure mode, and the one that arrives without a 41-second reproducer
+	// to explain it.
+	//
+	// Note this is the *opposite* posture to errNoImmReader and errNotEmptyBlockType
+	// (instr.go), which are deliberately undeclared. The discriminator is not reachability:
+	// it is whether surfacing the error would be a verdict about the module or a bug in this
+	// package. Both of those are the engine failing to read a field it was told about; this
+	// is the reference's own message about a byte the module got wrong.
+	ErrZeroByteExpected,
+
 	// Declared and *unreachable at bdd7164*, which is a different claim from the rest
 	// of this list and is stated rather than hidden: both of the authority's reason
 	// arms are bytes `block` stops on, so the dispatch never sees them
@@ -316,12 +354,26 @@ func FuzzConstExprProgress(f *testing.F) {
 		//	ErrMalformedTypeIndex  blocktype's and heaptype's negative-s33 branches
 		//	ErrMalformedCatch      try_table's handler kind byte
 		//	ErrMalformedMemopFlags a memarg whose flags field is >= 0x80
+		//	br_on_cast flags       `fb 18`/`fb 19`'s flags byte with a reserved bit set
+		//
+		// GRAVE #264, second registry: this list and the package-level
+		// `declaredErrors` are two registries over one sentinel space, and the space is
+		// therefore (sentinel × registry), not sentinel. `ErrMalformedBrOnCastFlags` was
+		// enrolled above and not here, so `FuzzDecodeModule` went green and
+		// `FuzzConstExprProgress` stayed red — the third instance of the class, and the
+		// one that indicts the repair rather than the original omission. Keeping the two
+		// lists separate is deliberate and not the defect: this one is the *narrower,
+		// stronger* claim (only these may come out of the instruction grammar), so
+		// deriving it from `declaredErrors` would weaken it into a tautology. What the
+		// separation costs is a sweep obligation, and a sweep run over the registry that
+		// failed is not a sweep over the space.
 		for _, want := range []error{
 			ErrTruncated, ErrPayloadEnd, ErrLEBTooLong, ErrLEBOverflow,
 			ErrIllegalOpcode, ErrConstExprRequired, ErrEndExpected, ErrMisplacedOpcode,
 			ErrMalformedNumType, ErrMalformedVecType, ErrMalformedRefType,
 			ErrMalformedHeapType, ErrMalformedTypeIndex,
 			ErrMalformedCatch, ErrMalformedMemopFlags, ErrFeatureDisabled,
+			ErrMalformedBrOnCastFlags,
 		} {
 			if !errors.Is(err, want) {
 				continue

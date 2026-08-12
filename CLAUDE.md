@@ -616,6 +616,21 @@ the choice, and consequences once Scott has called it.
   logs. Sibling of the early-return grave (#41's fetch script), where a fast path
   skipped the assertions it existed to run. (Condition on decision 0007; chat-Claude,
   #41.)
+  - **And the law reaches a *probe*, not just a control: a zero out of an instrument needs a
+    positive control proving the channel was open.** The vacuity failure above is an assertion
+    fed nothing; this is a *measurement* fed nothing, and it is worse in one specific way —
+    an empty comparison at least ran, where a suppressed write never reached the reader at
+    all. The specimen: `go test` **discards a passing binary's stderr without `-v`**, so a
+    `println` counter at a guard site reported "0 hits across the corpus" when it had reported
+    nothing whatsoever. Both a genuinely-unexercised path and a closed channel print zero
+    lines, and the transcript is identical. The remedy is not `-v` — `-v` was the *bug's*
+    repair and the class survives it — but an **unconditional print at the same site**, whose
+    number (294) is what licenses reading the conditional zero as a fact about the code. So
+    before a zero from a probe is quoted anywhere, ask what a *broken probe* would have
+    printed; if the answer is "the same thing", the measurement has not happened yet. Sibling
+    of *presence-of-status is not presence-of-content* one layer down: there a state field
+    stood in for a payload, here an empty channel stands in for an empty result. (Earned on
+    #248's counter, the second reading of which was quoted before it was bounded.)
 - **A tripwire whose subject dissolves is re-pointed, never closed.** A pre-registered
   control names a *risk*, not a code shape, so when the shape it was filed against
   disappears the obligation survives its subject. #33 was filed to catch two opcode
@@ -714,6 +729,38 @@ the choice, and consequences once Scott has called it.
   because asking whether everything the join resolved was resolved is a tautology; being unfit as
   a join key (a naming coincidence, not a derivation) is exactly what makes a signal fit as a
   second opinion. (Ruling: Scott, PR #108; grave #106.)
+  - **The registry form: a control that names the fact it expects cannot notice the registry is
+    missing that fact, because the control supplies it.** #106's echo is a premise measured over
+    the sample the code reads; this is a *control written from the same name the registry lacks*,
+    and it passes for the right reason while the omission stands. Grave **#264**: a new decoder
+    sentinel arrived with two controls asserting `errors.Is(err, ErrMalformedBrOnCastFlags)` —
+    both green, the sentinel being correct — and no entry in `declaredErrors`, the fuzz target's
+    allowlist. Neither control could ask "is this declared?", that question being invisible from
+    inside a test whose subject is the condition. Only an instrument that **enumerates the whole
+    surface without knowing what any one condition expects** sees it, which is why the fuzzer
+    found it in 41 seconds and `make check` could not. Two consequences worth carrying: the
+    detector must be blind to the individual fact (the echo rule's own remedy, one level over),
+    and the sweep for siblings is not optional — grepping every exported sentinel against the
+    allowlist turned up a **second** omission whose call sites are all gate-blocked, so it was
+    unreachable-by-construction in the fuzz target and would have surfaced as an unexplained red
+    *at a gate flip*. A latent omission's arrival time is chosen by the flip, not by the defect.
+    - **The space is (fact × registry), and the sentence above got that wrong while being
+      written.** It says "grepping every exported sentinel against the allowlist" — *the*
+      allowlist, singular — and the package has **two**: `declaredErrors`, and a second inline
+      list inside `FuzzConstExprProgress`. Enrolling the sentinel in the first turned
+      `FuzzDecodeModule` green and left `FuzzConstExprProgress` red on the same byte string, so
+      the class recurred **in its own repair**, one push later, and the third instance indicts
+      the sweep rather than the omission. Two things generalize. First, *a sweep run over the
+      registry that failed is not a sweep over the space* — the failing registry is the one
+      instance guaranteed to be fixed, which makes it the least informative place to look, and
+      the tell is that the second run's green was bought by re-running only the target that had
+      gone red. Second, the duplication is **not** the defect to fix: the constexpr list is the
+      *narrower, stronger* claim (only these may come out of the instruction grammar), so
+      deriving it from the broader one would collapse a real assertion into a tautology. Two
+      registries over one space is a legitimate design that carries a sweep obligation, which is
+      why the tripwire is scoped to the product and not to either list. (Grave #264, third
+      instance, which is also where the re-scoped tripwire lives — the obligation widened, so
+      the issue was re-pointed rather than reopened alongside a new one.)
   - **And its mirror: an impossible count is the strongest witness there is, because a value that
     cannot exist convicts the model rather than the measurement.** A clean result invites the
     suspicion above and can still be honest; an *impossible* one has already settled the question,
@@ -973,6 +1020,33 @@ the choice, and consequences once Scott has called it.
     lives — an arm that only *computes* moves its own bucket, while an arm that **writes state**
     moves every bucket downstream of that state, so the multiplier is predictable in kind if never
     in size. (Ruling: Scott, PR #155.)
+    - **And for an `init`, *where* the blocker sits inside the write sequence is the entire
+      forecast, because an init is a sequence of independent writes and not one construct.** The
+      state-writing half above says an arm that writes moves everything downstream of the state;
+      this is the same fact read from the other end, and it is what makes an arm's payoff
+      *predictable* rather than merely large-in-kind. A `(func $init)` full of `table.set`s is N
+      independent facts about N slots, so a missing arm at write *k* leaves slots `k…N` at their
+      previous contents while `0…k-1` are correct — and every later read of a slot below `k`
+      already passes. Rung 5 slice 2's specimen, **re-measured per vector after the first
+      reading of it was wrong** (see the compensating-errors clause below): the forecast booked
+      **8** of the 44 cast vectors to slice 3 as slot-4 readers, and **2** actually stayed
+      failing — `br_on_cast.wast:99` and `br_on_cast_fail.wast:99`, the `null-diff` invocations,
+      re-keyed from `no arm` to `assert_return value mismatch`. `init`'s last write is
+      `any.convert_extern` (slice **3**'s arm), so slot 4 stays `ref.null any`. The six that
+      paid early — lines **81/87/93** in each file — **pass by coincidence, and the coincidence
+      is the finding**: a null operand correctly fails the *non-nullable* `(ref i31)`/`(ref
+      struct)`/`(ref array)` target, so the function returns the expected `-1` for the same
+      reason a wrongly-typed operand would. They attest that the arms handle null, not that they
+      handle slot 4. Line **75** (`br_on_null` at index 4) failed before and after, so it is
+      neither departure nor arrival — a fifth slot-4 reader the forecast did not count, which is
+      how the "four index-4 reads" figure came to be wrong. Read the init, find the first write
+      the arm does not supply, and forecast from *that index onward*; a bucket count over the
+      whole file assumes the sequence is a unit, which is the assumption an init is built to
+      violate. And when an over-delivery is coincidental, say so: six vectors that pass for a
+      reason unrelated to the capability under test are not six vectors of evidence.
+      Note the miss was **optimistic** here and **pessimistic** in the previous entry, so the
+      probe's error is unsigned variance rather than a bias to correct for — which is why the
+      remedy is reading the sequence, not shading the estimate.
   - **And there is a third outcome that is neither over- nor under-payment: a bucket whose members
     share a *deeper* blocker **re-keys rather than pays**.** The taxonomy is now complete, one
     measured specimen each: an *embedded construct* overpays its bucket (export's 39-paid-55); a
@@ -1002,6 +1076,26 @@ the choice, and consequences once Scott has called it.
       the board log — bucket keys can contain embedded newlines, and a line-oriented sum split them
       into 1697 and 1672 against a true 1699 three times in one session, with a `join` artifact
       briefly reading as a real ±9 behavioural change. (Ruling: Scott, PR #161.)
+      - **Summing is necessary and not sufficient: two errors of opposite sign are invisible to
+        the total, so a census is closed on *vector identity*, never on counts.** The clause above
+        says force the residual to zero and state it — rung 5 slice 2's census did exactly that,
+        reconciled to the measured **−43**, and was wrong in three of its four terms. It reported
+        departures as `fb 18` **29** / `fb 19` **15** (true: **22/22**), arrivals as **+3** (true:
+        **+2**), and grave #261 as **−2** across `ref_test.wast` and `type-subtyping.wast` (true:
+        **−1**, `ref_test.wast:329` alone — `type-subtyping.wast` never moved). −44+3−2 and
+        −44+2−1 both equal −43, so the residual check the rule prescribes **passed on a fabricated
+        decomposition**. That is the right-number-of-terms defect one level deeper: not a wrong
+        count of terms but wrong *values* that cancel, and no arithmetic over the total can see it.
+        The remedy is an identity check, which is the standing law pointed at a census: diff the
+        **set of failing `file:line` pairs** between a baseline worktree and the tree, because
+        `Failure.Line` is right there and two sets either match or name their difference. Counts
+        can compensate; sets cannot. What makes this indictable rather than unlucky is that the
+        sharper instrument was in hand while the looser one did the reporting — the floors rule's
+        own finding, in the census's clothes — and the whole reconciliation took one throwaway
+        probe over `r.Buckets[k]`. So: **a census that cannot name its vectors has not been taken**,
+        and a forecast is reconciled against measurement, never against recollection of the
+        forecast. (Found by Scott asking the census to reconcile against its own pre-registration,
+        PR #263.)
 - **An error from the wrong layer is evidence about where structure was lost.**
   When a lower grammar is missing, its bytes do not vanish — they leak upward and
   get misread by whatever grammar *is* running, so the error names a field the
