@@ -4,8 +4,6 @@
 package interp
 
 import (
-	"fmt"
-
 	"github.com/scttfrdmn/burroughs/internal/binary"
 )
 
@@ -39,10 +37,16 @@ const (
 // every arm to re-test the prefix. The prefix is a precondition of this whole switch instead.
 //
 // Counted rather than described: `opTableFB` has **31** entries (max sub-opcode 0x1e) and this
-// switch answers **6** of them — the struct family, decision 0020's rung. Everything else falls to
-// `unsupported`, which renders `fb NN` and so keeps the remaining arms visible as the board buckets
-// they are: rung 3 is the array family (`fb 06`–`fb 13`), rung 4 `i31` (`fb 1c`–`fb 1e`), rung 5 the
-// casts (`fb 14`–`fb 1b`).
+// switch answers **20** of them — the struct family (rung 2) and the array family (rung 3), decision
+// 0020's first two rungs. Everything else falls to `unsupported`, which renders `fb NN` and so keeps
+// the remaining arms visible as the board buckets they are: rung 4 is `i31` (`fb 1c`–`fb 1e`) and
+// rung 5 the casts (`fb 14`–`fb 1b`).
+//
+// **The dispatch lives here rather than moving to a `gcop.go` as the family grew**, which is a
+// choice and not inertia: `execFB` is the single authority for "which sub-opcode has an arm", and the
+// count in the paragraph above is only checkable because there is one switch to count. The arms
+// themselves are one file per rung (`structop.go`, `arrayop.go`), so the file this comment is in is
+// the region's index.
 func (in *Instance) execFB(ins binary.Instr, st *stack) error {
 	switch ins.Op {
 	case opStructNew:
@@ -62,6 +66,48 @@ func (in *Instance) execFB(ins binary.Instr, st *stack) error {
 
 	case opStructSet:
 		return in.execStructSet(ins, st)
+
+	case opArrayNew:
+		return in.execArrayNew(ins, st)
+
+	case opArrayNewDefault:
+		return in.execArrayNewDefault(ins, st)
+
+	case opArrayNewFixed:
+		return in.execArrayNewFixed(ins, st)
+
+	case opArrayNewData:
+		return in.execArrayNewData(ins, st)
+
+	case opArrayNewElem:
+		return in.execArrayNewElem(ins, st)
+
+	case opArrayGet:
+		return in.execArrayGet(ins, st, extNone)
+
+	case opArrayGetS:
+		return in.execArrayGet(ins, st, extS)
+
+	case opArrayGetU:
+		return in.execArrayGet(ins, st, extU)
+
+	case opArraySet:
+		return in.execArraySet(ins, st)
+
+	case opArrayLen:
+		return in.execArrayLen(st)
+
+	case opArrayFill:
+		return in.execArrayFill(ins, st)
+
+	case opArrayCopy:
+		return in.execArrayCopy(ins, st)
+
+	case opArrayInitData:
+		return in.execArrayInitData(ins, st)
+
+	case opArrayInitElem:
+		return in.execArrayInitElem(ins, st)
 
 	default:
 		return unsupported(ins)
@@ -128,31 +174,6 @@ func (in *Instance) execStructNewDefault(ins binary.Instr, st *stack) error {
 	return nil
 }
 
-// notAStruct reports a non-null reference that is not a struct instance where one was required.
-//
-// **This is the arm the reference interpreter does not need and this engine cannot do without.**
-// `eval.ml`'s match has two cases — `StructRef s` and `NullRef` — and a `FuncRef` reaching
-// `struct.get` is a pattern-match failure, i.e. a validation error. Here the same fact is a `ref`
-// whose `Obj` is nil, and it must be *said*: dereferencing nothing would panic, and treating it as a
-// null trap would answer `struct.wast`'s null vectors correctly while quietly reporting a trap for a
-// module that has a type error. #9's verdict, named as such.
-//
-// It also carries the diagnostic weight of the payload split: `ref` grows one field per payload kind
-// (see the `Exc` precedent), so "not a struct" has a *which-kind-instead* answer worth printing, and
-// grave #36's rule applies — a message naming a value from the input gets printed for real inputs
-// before it is trusted, because the oracle stops at the sentinel and everything past it is ours alone
-// to keep honest.
-func notAStruct(what string, r ref) error {
-	kind := "a function reference"
-	switch {
-	case r.Exc != nil:
-		kind = "an exception reference"
-	case r.Inst != nil:
-		kind = "a function reference with a defining instance"
-	}
-	return fmt.Errorf("%w: %s on %s, not a struct instance", ErrNotValidated, what, kind)
-}
-
 // execStructGet reads one field — `eval.ml:688-700`.
 //
 // **The null trap outranks every other check**, because OCaml's match tries `Ref (StructRef s)`
@@ -175,7 +196,7 @@ func (in *Instance) execStructGet(ins binary.Instr, st *stack, ext fieldExt) err
 		return trapNullStruct
 	}
 	if r.Obj == nil {
-		return notAStruct("struct.get", r)
+		return notAggregate("struct.get", "a struct instance", r)
 	}
 	ft, err := fieldStorage(ct, r.Obj, ins.Imm1)
 	if err != nil {
@@ -223,7 +244,7 @@ func (in *Instance) execStructSet(ins binary.Instr, st *stack) error {
 		return trapNullStruct
 	}
 	if r.Obj == nil {
-		return notAStruct("struct.set", r)
+		return notAggregate("struct.set", "a struct instance", r)
 	}
 	if _, err := fieldStorage(ct, r.Obj, ins.Imm1); err != nil {
 		return err

@@ -5868,7 +5868,25 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	// no SIMD work drives it to zero. 176+9=185 fixed, 161 validator (parked, #9), 7
 	// already-registered — closing the triage the flip procedure (#227) asked for:
 	// 61163 + 185 = 61348.
-	const allOnPassFloor = 61348
+	//
+	// **Moved 61348 → 61764, and the 416 is four PRs' worth of drift rather than one jump** —
+	// three of which rode *inside* `boardBoundSlack` (250) and so were never obliged to move the
+	// bound, which is decision 0013's "a bound rots by the system working" in its plainest form.
+	// The decomposition, each figure quoted from the PR that measured it rather than reconstructed
+	// here, because a total reached by having the right number of terms is #155's own corrected
+	// defect:
+	//
+	//	61348 → 61423   +75    #235, gate:gc rung 1 (ref.eq, ref.as_non_null, br_on_null/non_null,
+	//	                       call_ref/return_call_ref)
+	//	61423 → 61559   +136   #244, one constant-expression evaluator over four call sites (#241)
+	//	61559 → 61577   +18    #247, gate:gc rung 2 (the six struct.* arms, decision 0020)
+	//	61577 → 61764   +187   this PR, gate:gc rung 3 (the fourteen array.* arms)
+	//	                =416
+	//
+	// Only the fourth crosses the slack, and it crosses it because rung 3 is the largest single
+	// arm batch the GC campaign has: 187 sole-blocked fails forecast on #249's co-blocking probe
+	// and 187 delivered, with the pass side moving by the same 187 and the arrivals column zero.
+	const allOnPassFloor = 61764
 	boardBound(t, "allOnPassFloor", totalPass, allOnPassFloor, boardBoundSlack, floorBound,
 		"a gated feature regressed, which the Gated==0 assertion above cannot see: with every "+
 			"gate on, a broken feature turns a pass into a fail and leaves Gated at zero")

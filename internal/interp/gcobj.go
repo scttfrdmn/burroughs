@@ -162,6 +162,129 @@ func (in *Instance) structType(what string, idx uint64) (*binary.CompType, error
 	return ct, nil
 }
 
+// arrayType resolves an instruction's type immediate to an array comptype and its single element
+// type — `array_type` (eval.ml:114, `arraytype_of_comptype (expand_deftype …)`) followed by the
+// `let FieldT (_mut, st) = …` every array arm opens with.
+//
+// **Two returns rather than a `structType` twin, because an array's element type is not a lookup.**
+// A struct instruction carries a *field index* and `fieldStorage` resolves it; an array's element
+// type is the comptype's whole content — `arraytype` is one bare `fieldtype`, not a `vec(fieldtype)`
+// (decode.ml:257-258, and `CompType.Fields`'s own comment on the two productions). So every caller
+// that needs the comptype needs the element type in the same breath, and splitting them would put
+// the arity assumption in fourteen places instead of one.
+//
+// **The arity check is not decoration and it is not the retired agreement check.** `Fields` is a Go
+// slice, so `Fields[0]` on a zero-length one panics, and a panic is categorically worse than a named
+// error (`fieldStorage`'s own rule). The decoder builds exactly one entry for a `CompArray`
+// (sections.go:570), so this is a guard against *this package* being wrong about the decoder rather
+// than against a module — which is why it reports #9's debt and says which arity it found.
+func (in *Instance) arrayType(what string, idx uint64) (*binary.CompType, binary.FieldType, error) {
+	if idx >= uint64(len(in.mod.Types)) {
+		return nil, binary.FieldType{}, fmt.Errorf("%w: %s names type %d of %d",
+			ErrNotValidated, what, idx, len(in.mod.Types))
+	}
+	ct := &in.mod.Types[idx]
+	if ct.Kind != binary.CompArray {
+		return nil, binary.FieldType{}, fmt.Errorf("%w: %s names type %d, which is a %s",
+			ErrNotValidated, what, idx, ct.Kind)
+	}
+	if len(ct.Fields) != 1 {
+		return nil, binary.FieldType{}, fmt.Errorf(
+			"%w: %s names array type %d with %d element types, want exactly 1 "+
+				"(arraytype is one bare fieldtype, decode.ml:257)",
+			ErrNotValidated, what, idx, len(ct.Fields))
+	}
+	return ct, ct.Fields[0], nil
+}
+
+// notAggregate reports a non-null reference that is not the aggregate instance an instruction
+// required — a `FuncRef` reaching `struct.get`, an exnref reaching `array.len`.
+//
+// **This is the arm the reference interpreter does not need and this engine cannot do without.**
+// `eval.ml`'s matches have two cases each — `StructRef s`/`ArrayRef a` and `NullRef` — and anything
+// else is a pattern-match failure, i.e. a validation error. Here the same fact is a `ref` whose `Obj`
+// is nil, and it must be *said*: dereferencing nothing would panic, and treating it as a null trap
+// would answer the corpus' null vectors correctly while quietly reporting a trap for a module that
+// has a type error. #9's verdict, named as such.
+//
+// It also carries the diagnostic weight of the payload split: `ref` grows one field per payload kind
+// (see the `Exc` precedent), so "not a struct" has a *which-kind-instead* answer worth printing, and
+// grave #36's rule applies — a message naming a value from the input gets printed for real inputs
+// before it is trusted, because the oracle stops at the sentinel and everything past it is ours alone
+// to keep honest.
+//
+// **`want` is a phrase and not a `CompKind`**, which is the one thing about this signature worth
+// defending: the kind a caller wants is a static property of the *instruction*, so passing the
+// spelling puts it at the call site where a reader is already looking, and there is no second
+// authority to drift from. A `CompKind` parameter would additionally invite the check this package
+// deliberately does not make — see below on why `obj.typ.Kind` goes unread.
+//
+// **What is deliberately *not* here: a check that the object's own kind matches.** A struct instance
+// reaching `array.len` would answer `len(fields)` — wrong, and not a panic, since every index bound
+// in this package is taken against the object's own slice. Adding the discrimination would
+// reintroduce exactly the shape retired on #247: `obj.typ.Kind` can only disagree with the
+// instruction's expectation on a path `ref.cast`/`br_on_cast` opens, and those are rung 5. So it is
+// filed on the same tripwire (#248) rather than written as a green that asserts nothing.
+func notAggregate(what, want string, r ref) error {
+	kind := "a function reference"
+	switch {
+	case r.Exc != nil:
+		kind = "an exception reference"
+	case r.Inst != nil:
+		kind = "a function reference with a defining instance"
+	}
+	return fmt.Errorf("%w: %s on %s, not %s", ErrNotValidated, what, kind, want)
+}
+
+// storageSize is `Types.storage_size` (types.ml:75-77) — a storage type's width **in bytes**, which
+// is what `array.new_data` and `array.init_data` stride a data segment by.
+//
+// **Bytes here, bits in `StorageType.Width`**, the same units seam `packMask` already names: the
+// packed case is `pack_size` (1 or 2) against a `Width` of 8 or 16, so the conversion is `/8` and
+// stating it is cheaper than a wrong stride that is right for one of the two widths.
+//
+// A **reference** element type has no size, which is `val_of_bits (RefT _) = raise Type`
+// (value.ml:190) — validation rejects `array.new_data` on an array of references, so this is #9's
+// debt and not a trap. `what` is threaded through for the same reason `structType` threads it: the
+// reader needs the line of their module.
+func storageSize(what string, st binary.StorageType) (uint64, error) {
+	if st.Packed {
+		return uint64(st.Width) / 8, nil
+	}
+	switch st.Val {
+	case binary.I32, binary.F32:
+		return 4, nil
+	case binary.I64, binary.F64:
+		return 8, nil
+	case binary.V128:
+		return 16, nil
+	}
+	return 0, fmt.Errorf("%w: %s on an array of %s, which has no bytes in a data segment "+
+		"(value.ml:190 is `raise Type`)", ErrNotValidated, what, st.Val)
+}
+
+// loadStorage is `Data.load_val_storage` (data.ml:45) — one element read out of a data segment's
+// bytes, little-endian, already narrowed to the element's storage.
+//
+// **The packed case is `Pack.U`, unconditionally**, and that is the reference's own choice rather
+// than a simplification: `val_of_storage_bits (PackStorageT pt)` passes `Pack.U` (value.ml:206-210),
+// so an `(array i8)` initialized from the byte `0xff` holds **255**, and a later `array.get_s`
+// re-derives −1 from the stored 255. Reading it signed here would store −1 and make `array.get_u`
+// answer 4294967295; `array_new_data.wast` asserts both directions off one segment, so the two are
+// not interchangeable.
+//
+// `bs` is exactly `storageSize` bytes; the caller has already bounds-checked the whole extent, which
+// is `data_oob` running before any read (eval.ml:753).
+func loadStorage(bs []byte, st binary.StorageType) gcField {
+	if st.Packed || st.Val != binary.V128 {
+		return gcField{num: loadValue(bs, memop{width: uint64(len(bs))})}
+	}
+	return gcField{
+		num: loadValue(bs[:8], memop{width: 8}),
+		hi:  loadValue(bs[8:], memop{width: 8}),
+	}
+}
+
 // fieldStorage resolves field `i` of the instruction's declared comptype, bounds-checking the
 // object too when one is in hand.
 //
