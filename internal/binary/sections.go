@@ -808,7 +808,11 @@ func (d *Decoder) decodeRefType(r *reader) error {
 // decodeHeapType reads a heap type — `heaptype` (decode.ml:178-198).
 //
 // An `either` alternation in the reference: a type *index* (s33, so a plain funcidx-style
-// number) or one of the eleven abstract forms. Written as one here for the reason
+// number) or one of the **twelve** abstract forms (decode.ml:179-200, counted: `-0x0c` through
+// `-0x17` with no gaps). This said *eleven* from 0018's implementation until 0027 needed the
+// number for real, and the miscount is the ordinary drift of a figure written once and never
+// re-derived — the switch below has always had all twelve, and `-0x17`/exn is the one the prose
+// lost. Nothing depended on the wrong number, which is exactly why nothing caught it. Written as one here for the reason
 // decodeBlockType is: on an overlong LEB the first branch's error must not stand, since
 // the cursor rewinds and the bytes get judged again.
 //

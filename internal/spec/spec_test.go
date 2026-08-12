@@ -5911,7 +5911,48 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	// multiplier exactly. What makes the miss worth writing down is that `refop.go` had **already
 	// predicted that drain in prose**, down to the direction (drain, not invert), and the forecast
 	// quoted only the bucket probe: two instruments each held half the answer and the PR quoted one.
-	const allOnPassFloor = 61891
+	//
+	// **Moved 61891 → 62046, +155, of which only 113 are this PR's** — gate:gc rung 5's first slice,
+	// the four cast opcodes `fb 14`-`fb 17` (`ref.test`, `ref.test null`, `ref.cast`,
+	// `ref.cast null`). The other 42 are #257's (tail calls), which moved this lane and left the
+	// constant alone because +42 rides inside `boardBoundSlack`; that is 0013's rot-by-working again
+	// and the accounting closes it here rather than letting it compound a fifth time. **Attributed by
+	// measurement, not by inference**: this lane reads **61891 pass / 409 fail at 23fb864^** (#257's
+	// parent, a worktree run with the corpus linked in), 61933/367 after #257, and 62046/254 after
+	// this PR — so the distance #256 left was zero, exactly as its own note above claims, and the 42
+	// has a named owner rather than a plausible one.
+	//
+	// This PR's 113 itemized per bucket, departures against arrivals, because #161 requires the
+	// redistribution to *sum* and a zero residual is the only form of that claim worth reading. All
+	// 134 departures are `no arm for opcode`:
+	//
+	//	ref_test.wast          fb 14  50 + fb 15  18   = 68
+	//	ref_cast.wast          fb 16  25 + fb 17  12   = 37
+	//	type-subtyping.wast    fb 14   9 + fb 16   6   = 15
+	//	i31.wast                          fb 17  14    = 14
+	//	                                               =134
+	//
+	//	ref_test.wast       :: assert_return value mismatch          14
+	//	ref_test.wast       :: trap: unreachable                      1
+	//	type-subtyping.wast :: assert_return value mismatch           5
+	//	ref_cast.wast       :: assert_trap (invoke) cast failure       1
+	//	                                                             =21
+	//
+	// 134 − 21 = 113, residual zero, unclassified arrivals zero, and all four `fb 14`-`fb 17` buckets
+	// are gone corpus-wide. `i31.wast` paid its residual 17 down to 3, which is the encoder frontier
+	// (#8) the note above forecast.
+	//
+	// **The forecast missed in the pessimistic direction, 29 predicted against 113 delivered, and the
+	// reason generalizes**: #258's co-blocking probe reasoned at *file* granularity and read
+	// `ref_test.wast`/`ref_cast.wast` as shadowed, because each file's `init` calls
+	// `any.convert_extern` (`fb 1a`, slice 3). What the probe missed is that `init` is a *sequence of
+	// independent state writes* — the `table.set` calls before the `any.convert_extern` line all run
+	// and populate the low table slots — so a blocker sitting inside such a sequence shadows only the
+	// vectors downstream of its own line, not the file. A file-granular co-blocking forecast
+	// over-predicts shadowing exactly there, and the instrument that settles it is the one used here:
+	// the exhaustive two-direction bucket census, measured with `run(s).Buckets` rather than a grep
+	// over the board log.
+	const allOnPassFloor = 62046
 	boardBound(t, "allOnPassFloor", totalPass, allOnPassFloor, boardBoundSlack, floorBound,
 		"a gated feature regressed, which the Gated==0 assertion above cannot see: with every "+
 			"gate on, a broken feature turns a pass into a fail and leaves Gated at zero")

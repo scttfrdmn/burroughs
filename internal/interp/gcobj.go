@@ -51,30 +51,57 @@ import (
 // held by global `g0` and then reads it back through *another* `global.get`, so the two `ref` copies
 // must name one object. They do, because copying a `ref` copies the `*gcObj` and not the fields.
 type gcObj struct {
-	// typ is the declared comptype this object was allocated against — `type_of_struct`
-	// (aggr.ml:54), the fact `type_of_ref'` reports for a `StructRef` and therefore the input to
-	// every `ref.test`/`ref.cast` at rung 5.
+	// mod and typeIdx are the declared comptype this object was allocated against —
+	// `type_of_struct` (aggr.ml:54), the fact `type_of_ref'` reports for a `StructRef` and
+	// therefore the input to every `ref.test`/`ref.cast`.
 	//
-	// **Retained for rung 5, and *not* load-bearing before it — measured, having first been
-	// claimed otherwise here.** This comment used to argue that `typ` earned its keep now, by
-	// letting `fieldStorage` cross-check the instruction's declared type against the object's:
-	// field *shape* decisions (which stack array a value comes from, whether storage is packed)
-	// come from the instruction's type immediate, because `struct.set` must know the value's
-	// array *before* it can pop anything — the target reference sits underneath the value — so
-	// an object of some other struct type would pick the wrong array silently.
+	// **The defining module travels *on the object*, which is 0027 decision 5.** A `deftype` in
+	// the reference is self-contained; a type index here means nothing without the type space it
+	// indexes, and `ref.cast` compares an object's type against an immediate belonging to the
+	// *executing* module — two different modules whenever the object crossed an import. The
+	// alternative was `ref.Inst`, and it loses on a counted fact rather than on taste: a `ref` is
+	// copied through seven paths (stack, locals, globals, tables, struct fields, array elements,
+	// element segments) and every one that forgot to carry the instance would produce an object
+	// whose type resolves against the wrong type space — silently, since a wrong index is still an
+	// index. Here it cannot be forgotten, because copying the `*gcObj` copies it.
 	//
-	// The argument was sound and its premise was false. Over the whole corpus the two types are
-	// **the same pointer on 30 of 30 field accesses and differ on 0**: every case that would
-	// separate them (`struct.get $t0` reaching a `$t4` instance) arrives through
-	// `ref.cast`/`br_on_cast`, which are rung 5 and do not exist. The check therefore compared a
-	// thing to itself on every real input, and it is retired rather than kept for company; the
-	// risk is a tripwire filed against rung 5's definition of done (#248), not a live check
-	// without a subject. (Retirement: Scott, PR #247, second rider.)
-	typ *binary.CompType
+	// **Was a bare `*binary.CompType`, and rung 5 is what made the index the load-bearing half.**
+	// `matchDeftype` walks declared supertypes, which are *indices*, so a resolved pointer cannot
+	// be the retained form: the walk would have nothing to walk from. Both facts sit here rather
+	// than beside a cached pointer for this file's own stated reason (see gcField on `packed`) —
+	// two places knowing one thing is the drift shape #78/#105/#106 were filed for — and
+	// `comptype` derives the pointer on demand.
+	//
+	// The previous field's history is worth keeping: it was retained *for* this rung and was
+	// measured **not** load-bearing before it, the two types being the same pointer on 30 of 30
+	// corpus field accesses. That measurement retired `fieldStorage`'s agreement check (#247,
+	// second rider) and filed #248 to reinstate it once casts gave it a subject, which is now.
+	mod     *binary.Module
+	typeIdx uint32
 
 	// fields is one entry per declared field, in declaration order — `field list`, and for an
 	// array exactly the elements (rung 3's consumer).
 	fields []gcField
+}
+
+// alloc builds a gcObj against the type index the instruction named, recording the type space that
+// index belongs to.
+//
+// One constructor for all seven allocation sites rather than a literal at each, so the provenance
+// pair cannot be half-written: a `gcObj{fields: …}` with no `mod` compiles, and its every later
+// `ref.cast` panics on a nil module. `idx` is the caller's own already-validated immediate.
+//
+// **A `comptype()` accessor was written here and deleted before the PR landed, and the deletion is
+// worth a sentence because the reasoning that justified it was sound and its premise was wrong.**
+// The method resolved `&o.mod.Types[o.typeIdx]` with a documented no-range-check rationale (every
+// caller of `alloc` has already resolved the index through `structType`/`arrayType`), and it had no
+// consumer: the cast family compares a *heaptype* against a heaptype, and `matchConcreteAbstract`
+// takes the `(mod, idx)` pair through `compTypeAt` because a target type comes from the module's own
+// immediate and has no object behind it at all. `unused` is what said so. A helper written for a
+// consumer that turned out not to want it is the accept-direction of dead code — it compiles,
+// reviews cleanly, and documents an access pattern nothing uses.
+func (in *Instance) alloc(idx uint64, fields []gcField) *gcObj {
+	return &gcObj{mod: in.mod, typeIdx: uint32(idx), fields: fields}
 }
 
 // gcField is one field's storage: the numeric half, the reference half, and the v128 high half.
@@ -162,39 +189,48 @@ func (in *Instance) structType(what string, idx uint64) (*binary.CompType, error
 	return ct, nil
 }
 
-// arrayType resolves an instruction's type immediate to an array comptype and its single element
-// type — `array_type` (eval.ml:114, `arraytype_of_comptype (expand_deftype …)`) followed by the
-// `let FieldT (_mut, st) = …` every array arm opens with.
+// arrayType resolves an instruction's type immediate to its array element type, checking on the way
+// that the index names an array at all — `array_type` (eval.ml:114,
+// `arraytype_of_comptype (expand_deftype …)`) followed by the `let FieldT (_mut, st) = …` every array
+// arm opens with.
 //
-// **Two returns rather than a `structType` twin, because an array's element type is not a lookup.**
-// A struct instruction carries a *field index* and `fieldStorage` resolves it; an array's element
-// type is the comptype's whole content — `arraytype` is one bare `fieldtype`, not a `vec(fieldtype)`
-// (decode.ml:257-258, and `CompType.Fields`'s own comment on the two productions). So every caller
-// that needs the comptype needs the element type in the same breath, and splitting them would put
-// the arity assumption in fourteen places instead of one.
+// **It returned the comptype too until this rung, and dropping it is the object-provenance change
+// working rather than a tidy-up.** The reason for that second return was that every caller passed it
+// straight into a `gcObj{typ: ct, …}` literal; 0027 decision 5 moved an object's identity to a
+// `(mod, typeIdx)` pair, `alloc` builds it from the caller's own already-resolved index, and the
+// comptype pointer stopped having a consumer at all twelve call sites in one PR. `unparam` is what
+// said so out loud — a return value nobody reads is a missing consumer wearing a disguise, and the
+// honest answer is to stop returning it rather than to keep a plausible-looking parameter alive.
+//
+// Note what is *not* dropped: the element type still comes back with the kind check, because an
+// array's element type is not a lookup the way a struct's field is. A struct instruction carries a
+// *field index* and `fieldStorage` resolves it; an array's element type is the comptype's whole
+// content — `arraytype` is one bare `fieldtype`, not a `vec(fieldtype)` (decode.ml:257-258, and
+// `CompType.Fields`'s own comment on the two productions). Splitting *that* would put the arity
+// assumption in fourteen places instead of one.
 //
 // **The arity check is not decoration and it is not the retired agreement check.** `Fields` is a Go
 // slice, so `Fields[0]` on a zero-length one panics, and a panic is categorically worse than a named
 // error (`fieldStorage`'s own rule). The decoder builds exactly one entry for a `CompArray`
 // (sections.go:570), so this is a guard against *this package* being wrong about the decoder rather
 // than against a module — which is why it reports #9's debt and says which arity it found.
-func (in *Instance) arrayType(what string, idx uint64) (*binary.CompType, binary.FieldType, error) {
+func (in *Instance) arrayType(what string, idx uint64) (binary.FieldType, error) {
 	if idx >= uint64(len(in.mod.Types)) {
-		return nil, binary.FieldType{}, fmt.Errorf("%w: %s names type %d of %d",
+		return binary.FieldType{}, fmt.Errorf("%w: %s names type %d of %d",
 			ErrNotValidated, what, idx, len(in.mod.Types))
 	}
 	ct := &in.mod.Types[idx]
 	if ct.Kind != binary.CompArray {
-		return nil, binary.FieldType{}, fmt.Errorf("%w: %s names type %d, which is a %s",
+		return binary.FieldType{}, fmt.Errorf("%w: %s names type %d, which is a %s",
 			ErrNotValidated, what, idx, ct.Kind)
 	}
 	if len(ct.Fields) != 1 {
-		return nil, binary.FieldType{}, fmt.Errorf(
+		return binary.FieldType{}, fmt.Errorf(
 			"%w: %s names array type %d with %d element types, want exactly 1 "+
 				"(arraytype is one bare fieldtype, decode.ml:257)",
 			ErrNotValidated, what, idx, len(ct.Fields))
 	}
-	return ct, ct.Fields[0], nil
+	return ct.Fields[0], nil
 }
 
 // notAggregate reports a non-null reference that is not the aggregate instance an instruction

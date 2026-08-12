@@ -93,6 +93,34 @@ type ValType struct {
 	idx uint32
 }
 
+// The twelve abstract heaptype forms' `kind` bytes.
+//
+// **Each derived from its own `sleb(7)` wire form by the same arithmetic `decodeHeapType` uses**
+// — `form & 0x7F` — rather than transcribed as a hex literal. That is the difference between two
+// places computing one fact from one number and two places agreeing by copy: the sleb form is the
+// spec's own value (decode.ml:602-620), it appears once per line here, and a reader can check the
+// line against the spec without knowing this type's packing. `TestHeapKindsAreWhatTheReaderProduces`
+// closes the loop from the other end, decoding all twelve forms and comparing.
+//
+// Exported because the subtype lattice is the *interpreter's* — `match_heaptype` (match.ml:76-105)
+// names these twelve forms explicitly and `ref.test`/`ref.cast` evaluate it — while the mapping from
+// wire form to kind byte is this package's. A consumer that spelled 0x6E for `any` would be the
+// second authority this comment exists to prevent.
+const (
+	HeapNoExn    = byte(-0x0C & 0x7F) // noexn
+	HeapNoFunc   = byte(-0x0D & 0x7F) // nofunc
+	HeapNoExtern = byte(-0x0E & 0x7F) // noextern
+	HeapNone     = byte(-0x0F & 0x7F) // none
+	HeapFunc     = byte(-0x10 & 0x7F) // func — Wasm 2.0, ungated
+	HeapExtern   = byte(-0x11 & 0x7F) // extern — Wasm 2.0, ungated
+	HeapAny      = byte(-0x12 & 0x7F) // any
+	HeapEq       = byte(-0x13 & 0x7F) // eq
+	HeapI31      = byte(-0x14 & 0x7F) // i31
+	HeapStruct   = byte(-0x15 & 0x7F) // struct
+	HeapArray    = byte(-0x16 & 0x7F) // array
+	HeapExn      = byte(-0x17 & 0x7F) // exn
+)
+
 // kindIndexed tags the indexed reference form — `(ref $t)` / `(ref null $t)` — inside
 // ValType.kind.
 //
@@ -149,6 +177,20 @@ var (
 // rule in one place.
 func refKind(kind byte, null bool) ValType {
 	return ValType{kind: kind, null: null}
+}
+
+// refNull returns t with its nullability set to null, preserving kind and idx.
+//
+// The constructor for the case where the heaptype and the null bit come from *different places in
+// the wire* — the cast family, where `decodeHeapType` yields the heaptype (always non-null, since
+// the production has no null bit) and the opcode or a flags byte supplies the rest. Written as a
+// function beside refKind and RefType for their reason: the field layout is this file's fact, so
+// `castTypes` does not spell out a `ValType{...}` literal and cannot silently drop `idx` when the
+// heaptype is the indexed form. Dropping it is the live hazard — `(ref null $t)` and
+// `(ref null any)` differ only in the two fields a partial copy loses.
+func refNull(t ValType, null bool) ValType {
+	t.null = null
+	return t
 }
 
 // RefType constructs the indexed reference form — `(ref $t)` / `(ref null $t)` — naming
@@ -266,19 +308,43 @@ func (t ValType) String() string {
 // as the same sweep-after-a-grave: a struct/array kind reaching here needed a name and got one; the
 // two Wasm 2.0 kinds needed the identical treatment for their non-null spelling and had not gotten
 // it. TestValTypeStringMatchesTheReferenceOnFuncExternNonNull pins the fix.
+//
+// **Keyed on the Heap* constants rather than on twelve hex literals as of 0027**, which is a
+// deduplication and not a tidy-up: this map was the second enumeration of the wire-form-to-kind-byte
+// mapping, and the interpreter's cast lattice needed a third. Rekeying leaves exactly one place
+// where a form's byte is written down, so a form whose kind byte were wrong here would now be wrong
+// in the reader too — visible rather than a name printed against the wrong type.
 var abstractHeapNames = map[byte]string{
-	0x6E: "any",
-	0x6D: "eq",
-	0x6C: "i31",
-	0x6B: "struct",
-	0x6A: "array",
-	0x71: "none",
-	0x73: "nofunc",
-	0x69: "exn",
-	0x74: "noexn",
-	0x72: "noextern",
-	0x70: "func",
-	0x6F: "extern",
+	HeapAny:      "any",
+	HeapEq:       "eq",
+	HeapI31:      "i31",
+	HeapStruct:   "struct",
+	HeapArray:    "array",
+	HeapNone:     "none",
+	HeapNoFunc:   "nofunc",
+	HeapExn:      "exn",
+	HeapNoExn:    "noexn",
+	HeapNoExtern: "noextern",
+	HeapFunc:     "func",
+	HeapExtern:   "extern",
+}
+
+// HeapTypeName names an abstract heaptype form by its kind byte — `string_of_heaptype`
+// (types.ml:336-350) for the twelve forms that have a name, reporting false for the indexed form
+// and for any byte that is not a heaptype at all.
+//
+// **Exported so the interpreter can render a reftype the reference's way rather than this type's**
+// (0027). `ValType.String` intercepts the *nullable* func and extern spellings as `funcref` and
+// `externref`, which is the right rendering for a valtype and the wrong one inside `ref.cast`'s trap
+// text: the reference builds that message from `string_of_reftype`, which is uniformly
+// `(ref null func)`. A trap tail is the half of an error the oracle does not read (it matches
+// `cast failure` and stops), so it is ours alone to keep honest — grave #36 — and honest here means
+// spelling the type the way the authority whose verdict we are quoting spells it. Exposing the names
+// rather than a whole reftype formatter keeps the *naming* authority in one place, this map, while
+// leaving the assembly to the caller that knows which convention it wants.
+func HeapTypeName(kind byte) (string, bool) {
+	name, ok := abstractHeapNames[kind]
+	return name, ok
 }
 
 // IsRef reports whether values of this type live in the reference array rather than the
@@ -509,6 +575,34 @@ type Func struct {
 	// shaped like Labels but for a clause that is a tag index plus a label rather than a
 	// bare label. See the Catches type for the full shape rationale.
 	Catches Catches
+
+	// Casts holds the reference types the cast family tests against — `ref.test`/`ref.cast`'s
+	// one, `br_on_cast`/`br_on_cast_fail`'s two — keyed the same way Labels and Catches are
+	// (0027 Q1 option B).
+	//
+	// **A third side table rather than packed words, and the reason is a capacity control this
+	// project already paid for.** 0027's first draft packed a heaptype into `Instr`'s two words:
+	// a heaptype is a kind byte plus a 32-bit index plus a null bit, so `ref.test` fits with
+	// room over and even `br_on_cast`'s pair fits in 114 of 128 bits. It was rejected before a
+	// line was written by `TestInstrImmediateWidthCoversTheTable`, which sums `immStagedBits`
+	// **per immediate kind, globally**, against the words the decoded probe actually fills.
+	// `br_on_cast` already sits at exactly 128 bits (label + flags + two heaptypes), so
+	// `immHeapType` cannot cost 40 bits for `ref.test` and 0 bits for `br_on_cast` — making the
+	// row fit needs a per-row exception in the very control that bounds the packing, which is
+	// the mechanism that let grave #100 drop fourteen lane indices. A side table costs the words
+	// nothing and needs no exception.
+	//
+	// **The pair is retained as full ValTypes, nullability included, because nullability comes
+	// from the opcode and not from the encoding.** `decode.ml:634-641` reads a bare *heaptype*
+	// for `fb 14`-`fb 17` and takes the null bit from which of the four opcodes it is
+	// (`ref.test null` versus `ref.test`); `br_on_cast`'s flags byte carries the two bits for its
+	// pair (`:642-650`). So the wire does not hold a reftype anywhere in this family, and a
+	// consumer reconstructing one would have to re-derive the opcode-to-nullability mapping at
+	// every call site. `castTypes` does it once, at decode.
+	//
+	// Nil is the normal case and a missing key is not an error, exactly as for Labels; consumers
+	// go through `CastTypes`.
+	Casts map[int][]ValType
 }
 
 // LabelVector returns the label vector retained for the instruction at index i, and whether one
@@ -521,6 +615,19 @@ type Func struct {
 // than empty.
 func (f *Func) LabelVector(i int) ([]uint32, bool) {
 	v, ok := f.Labels[i]
+	return v, ok
+}
+
+// CastTypes returns the reference types retained for the cast-family instruction at index i, and
+// whether any were retained at all.
+//
+// Two results for LabelVector's reason one step sharper: an arm reading `f.Casts[i]` gets a nil
+// slice both for "not a cast instruction" and for a cast instruction whose types the decoder
+// failed to file, and the second is an engine bug that must be reported rather than executed. A
+// `ref.cast` against a nil type would otherwise test against the zero ValType — `NoValType`,
+// which is no type at all — and silently answer the wrong question.
+func (f *Func) CastTypes(i int) ([]ValType, bool) {
+	v, ok := f.Casts[i]
 	return v, ok
 }
 

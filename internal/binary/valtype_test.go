@@ -657,3 +657,132 @@ func TestSegmentKindStringsAreAtTheirSites(t *testing.T) {
 		})
 	}
 }
+
+// TestHeapKindsAreWhatTheReaderProduces closes the loop the `Heap*` constants open: every
+// abstract heaptype form, decoded through the real reader, resolves to the constant the
+// interpreter's subtype lattice keys on — and nothing else does.
+//
+// # Why the constants needed a control at all
+//
+// Three places were about to enumerate the same twelve facts: `decodeHeapType`'s two `case`
+// lists, `abstractHeapNames`' keys, and `castop.go`'s `matchHeapType`. The constants exist so
+// the third reads the second reads the first; this test is what makes "reads" true rather
+// than "was copied from".
+//
+// # What it can and cannot see, stated up front
+//
+// The constants are derived by `-0x0C & 0x7F` and the reader resolves by `byte(form & 0x7F)`,
+// so **the two sides share that arithmetic by construction** and the byte column cannot catch
+// a wrong *packing*. What it does catch is every way the wire form and the constant can come
+// apart, which is the failure that actually threatens: the row is keyed by the **wire form**
+// (decode.ml:179-200) and valued by the **constant symbol**, so a constant derived from the
+// wrong form — `HeapAny = byte(-0x11 & 0x7F)`, extern's — makes the reader produce 0x6E where
+// the row wants 0x6F and the row fires. The name column is independent of the arithmetic
+// altogether: it is `string_of_heaptype`'s spelling (types.ml:336-350), which no amount of
+// masking derives, so a mis-keyed `abstractHeapNames` entry has nowhere to hide either.
+//
+// The one fact outside this test's reach is whether the spec's form for `any` *is* -0x12. That
+// is decode.ml's to say, cited per row, and no local control can substitute for it — said here
+// rather than left implicit, because an instrument that does not name its blind spot invites
+// the clean-result reading of its own green.
+//
+// # Scoped to the space, not to the twelve
+//
+// The loop runs **every negative `sleb(7)` value**, -64..-1 — the whole domain the abstract
+// branch can see, since non-negative values are type indices taken by the earlier `s33` branch.
+// So the twelve are pinned *and* the sixty-two non-forms are pinned as rejections: an arm
+// accepting a byte the spec does not define is an over-accept, and this is the shape of defect
+// #88's own fix turned out to have (`heaptype` has no `-0x1c`/`-0x1d` arm, and reading
+// `reftype` there accepted `ref.null (ref null extern)`). A twelve-row table cannot see it.
+//
+// Both parameterized prefixes are run, `(ref null ht)` and `(ref ht)`, because the kind byte
+// and the nullability bit come from different productions — the heaptype carries no
+// nullability of its own (`decodeHeapType`'s doc) and the prefix supplies it. One direction
+// alone would score a hardcoded `null` as correct on half the corpus.
+func TestHeapKindsAreWhatTheReaderProduces(t *testing.T) {
+	on := featuresAllOn(t)
+
+	// Keyed by the wire form, valued by the constant and the reference's spelling. Twelve
+	// rows, decode.ml:179-200 for the forms and types.ml:336-350 for the names.
+	want := map[int]struct {
+		kind byte
+		name string
+	}{
+		-0x0C: {HeapNoExn, "noexn"},
+		-0x0D: {HeapNoFunc, "nofunc"},
+		-0x0E: {HeapNoExtern, "noextern"},
+		-0x0F: {HeapNone, "none"},
+		-0x10: {HeapFunc, "func"},
+		-0x11: {HeapExtern, "extern"},
+		-0x12: {HeapAny, "any"},
+		-0x13: {HeapEq, "eq"},
+		-0x14: {HeapI31, "i31"},
+		-0x15: {HeapStruct, "struct"},
+		-0x16: {HeapArray, "array"},
+		-0x17: {HeapExn, "exn"},
+	}
+	if len(want) != 12 {
+		t.Fatalf("table has %d rows, want 12 — the count is the spec's (decode.ml lists twelve "+
+			"abstract forms, the miscount `decodeHeapType`'s prose carried for three PRs), and a "+
+			"table that lost a row would still agree with a reader that lost the same arm", len(want))
+	}
+
+	for _, prefix := range []struct {
+		name string
+		b    byte
+		null bool
+	}{
+		{"(ref null ht)", 0x63, true}, // -0x1d
+		{"(ref ht)", 0x64, false},     // -0x1c
+	} {
+		accepted := 0
+		for form := -64; form <= -1; form++ {
+			b := byte(form & 0x7F) // single-byte sleb(7): -64..-1 all fit
+			mod := funcTypeParam(prefix.b, b)
+			m, err := (&Decoder{Features: on}).DecodeModule(mod)
+
+			exp, isHeapType := want[form]
+			if !isHeapType {
+				if err == nil {
+					t.Errorf("%s: form %#x (byte %#02x) was accepted; no heaptype branch defines "+
+						"it, so accepting it is an over-accept of exactly #88's shape — a reader "+
+						"reaching one production too wide", prefix.name, form, b)
+				}
+				continue
+			}
+			if err != nil {
+				t.Errorf("%s: form %#x (%s): %v — the spec defines this heaptype, so rejecting it "+
+					"is the accept-direction defect no assert_malformed vector can see (§9 G-3)",
+					prefix.name, form, exp.name, err)
+				continue
+			}
+			accepted++
+
+			vt := m.Types[0].Func.Params[0]
+			if vt.kind != exp.kind {
+				t.Errorf("%s: form %#x (%s) resolved to kind %#02x, want %#02x — the reader and "+
+					"the Heap* constant disagree, which means the interpreter's lattice "+
+					"(match.ml:76-105, castop.go) is keyed on a byte this form never produces",
+					prefix.name, form, exp.name, vt.kind, exp.kind)
+			}
+			if vt.null != prefix.null {
+				t.Errorf("%s: form %#x (%s) resolved with null=%v, want %v — nullability comes from "+
+					"the prefix and not from the heaptype, so a hardcoded bit is right on one of "+
+					"these two loops and wrong on the other",
+					prefix.name, form, exp.name, vt.null, prefix.null)
+			}
+			name, ok := HeapTypeName(vt.kind)
+			if !ok || name != exp.name {
+				t.Errorf("%s: form %#x resolved to kind %#02x, which HeapTypeName spells %q/%v, "+
+					"want %q — this column is independent of the `form & 0x7F` arithmetic the "+
+					"reader and the constants share, so it is the half that can catch a mis-keyed "+
+					"name map", prefix.name, form, vt.kind, name, ok, exp.name)
+			}
+		}
+		if accepted != 12 {
+			t.Errorf("%s: %d of 64 negative forms accepted, want 12 — a count of zero is the "+
+				"vacuous case (a wrapper whose own bytes stopped decoding agrees with any table)",
+				prefix.name, accepted)
+		}
+	}
+}

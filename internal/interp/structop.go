@@ -37,17 +37,27 @@ const (
 // every arm to re-test the prefix. The prefix is a precondition of this whole switch instead.
 //
 // Counted rather than described: `opTableFB` has **31** entries (max sub-opcode 0x1e) and this
-// switch answers **23** of them — the struct family (rung 2), the array family (rung 3), and the i31
-// trio (rung 4), decision 0020's first three rungs. Everything else falls to `unsupported`, which
-// renders `fb NN` and so keeps the remaining arms visible as the board buckets they are: rung 5 is
-// the casts and the extern conversions (`fb 14`–`fb 1b`), which is the whole remainder.
+// switch answers **27** of them — the struct family (rung 2), the array family (rung 3), the i31
+// trio (rung 4), and the four casts (rung 5's first slice), decision 0020's ladder. Everything else
+// falls to `unsupported`, which renders `fb NN` and so keeps the remaining arms visible as the board
+// buckets they are; what is left is rung 5's other two slices, `fb 18`/`fb 19` (`br_on_cast`,
+// `br_on_cast_fail`) and `fb 1a`/`fb 1b` (the extern conversions).
+//
+// **`fn` and `pc` rather than a pre-resolved side-table vector**, which is a widening this rung
+// forced and the shape it settled on is worth stating. The four cast arms need `Func.Casts`, a
+// third instruction-indexed side table (0016's mechanism, 0027's decision 1), and the two candidate
+// signatures were "pass the vector" — resolving it at the call site for every `fb` instruction,
+// which is a map lookup charged to `struct.get` so that `ref.cast` need not make one — and "pass
+// the frame's function and program counter", which charges the lookup to the four arms that use it.
+// The second is what `runFrame` already does for `br_table`'s label vector (`fn.LabelVector(pc)` at
+// its own arm, not at the dispatch), so this is the existing convention rather than a new one.
 //
 // **The dispatch lives here rather than moving to a `gcop.go` as the family grew**, which is a
 // choice and not inertia: `execFB` is the single authority for "which sub-opcode has an arm", and the
 // count in the paragraph above is only checkable because there is one switch to count. The arms
-// themselves are one file per rung (`structop.go`, `arrayop.go`), so the file this comment is in is
-// the region's index.
-func (in *Instance) execFB(ins binary.Instr, st *stack) error {
+// themselves are one file per rung (`structop.go`, `arrayop.go`, `i31op.go`, `castop.go`), so the
+// file this comment is in is the region's index.
+func (in *Instance) execFB(ins binary.Instr, st *stack, fn *binary.Func, pc int) error {
 	switch ins.Op {
 	case opStructNew:
 		return in.execStructNew(ins, st)
@@ -122,6 +132,14 @@ func (in *Instance) execFB(ins binary.Instr, st *stack) error {
 	case opI31GetU:
 		return execI31GetU(st)
 
+	// The casts (rung 5 slice 1, `castop.go`). The region's only arms that read a side table, and
+	// so the only ones that need `fn`/`pc` — see the signature note in this function's doc.
+	case opRefTest, opRefTestNull:
+		return in.execRefTest(fn, pc, st)
+
+	case opRefCast, opRefCastNull:
+		return in.execRefCast(fn, pc, st)
+
 	default:
 		return unsupported(ins)
 	}
@@ -153,7 +171,7 @@ func (in *Instance) execStructNew(ins binary.Instr, st *stack) error {
 	if err != nil {
 		return err
 	}
-	obj := &gcObj{typ: ct, fields: make([]gcField, len(ct.Fields))}
+	obj := in.alloc(ins.Imm0, make([]gcField, len(ct.Fields)))
 	for i := len(ct.Fields) - 1; i >= 0; i-- {
 		f, err := popField(ct.Fields[i], st)
 		if err != nil {
@@ -175,7 +193,7 @@ func (in *Instance) execStructNewDefault(ins binary.Instr, st *stack) error {
 	if err != nil {
 		return err
 	}
-	obj := &gcObj{typ: ct, fields: make([]gcField, len(ct.Fields))}
+	obj := in.alloc(ins.Imm0, make([]gcField, len(ct.Fields)))
 	for i, ft := range ct.Fields {
 		f, err := defaultField(ft)
 		if err != nil {
