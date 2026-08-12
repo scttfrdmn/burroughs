@@ -568,11 +568,31 @@ func (s *stack) drop() {
 	// is `drop`'s own gap in 0024's ADR: the ADR named the push/pop *atomicity* but not that
 	// `drop` itself, having no static operand type (#9's absence, same reason the sequence
 	// numbers exist at all), must recognize the two-slot pair before popping either half.
-	if s.tracking && len(s.numSeq) >= 2 && s.numSeq[len(s.numSeq)-1] == s.numSeq[len(s.numSeq)-2] {
+	if s.topIsV128() {
 		s.popV128()
 		return
 	}
 	s.popNum()
+}
+
+// topIsV128 reports whether the logical top of the numeric stack is one v128 value rather than
+// two independent numeric slots, by the shared sequence number `pushV128` gives both halves
+// (decision 0024).
+//
+// **Extracted rather than inlined twice, and grave #242 is why.** `drop` and `select` are Wasm's
+// two *parametric* instructions — the two whose operand types the opcode does not name — so they
+// are exactly the two arms that must recognize a multi-slot value at runtime instead of being told
+// its width. `drop` was taught this (grave #206's fix, extended for 0024); `select` was not, and
+// re-derived the naive "one operand is one slot" shape, popping three slots for a v128 select's
+// five and orphaning two halves on the stack. One predicate, both callers: the next parametric
+// arm finds the mechanism instead of re-deriving it, which is the whole content of *lessons are
+// indexed by shape, not by file*.
+//
+// Requires `tracking`, and that is not a caveat: `pushV128` activates tracking itself (grave
+// #215), so any stack that has ever held a v128 has the sequence numbers this reads.
+func (s *stack) topIsV128() bool {
+	return s.tracking && len(s.numSeq) >= 2 &&
+		s.numSeq[len(s.numSeq)-1] == s.numSeq[len(s.numSeq)-2]
 }
 
 // needRef is needNum for the reference array.

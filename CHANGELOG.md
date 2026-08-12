@@ -272,6 +272,32 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **A `v128` lost one of its two slots at a branch and at `select`**
+  ([#242](https://github.com/scttfrdmn/burroughs/issues/242)). Decision 0024 gives a `v128` **two**
+  adjacent `st.num` slots sharing one sequence number, and two sites still counted it as one value:
+  `blockArity`'s single-valtype arm returned `1` numeric directly instead of delegating to
+  `countByArray`, the one place that knows `V128` costs two slots — so every branch to a
+  `(result v128)` label truncated the stack one slot short of the value it was carrying — and
+  `select`'s arm popped and pushed single slots, so choosing between two `v128` operands left three
+  stray halves behind. Corruption-class in both directions: the surviving slot is read by the next
+  instruction as an unrelated number.
+  - **Two polarities of one defect, and both are now impossible to reintroduce separately.**
+    `blockArity` no longer has its own slot arithmetic — it delegates to `countByArray` for one
+    valtype exactly as it does for many, so a future value type that occupies two slots is right
+    here by construction rather than by a second edit. `select` shares `drop`'s `topIsV128`
+    predicate, extracted for it: those two are Wasm's only *parametric* instructions, the only ones
+    whose operand width must be recognized at run time rather than read off a static type, so the
+    recognition now lives in one place for both.
+  - **Default lane 58565 → 58590 pass, 142 → 117 fail; all-on 62113 → 62138 pass, 187 → 162 fail;
+    `Gated` 0, `unsupported` unmoved at 2689.** Fail delta **−25 in both lanes**, and the two lanes
+    name the **identical 25 vectors** — SIMD being default-on since #227, this defect was live in
+    the default lane too. Census closed on vector identity with **zero arrivals**: 19 from
+    `blockArity` (`simd_load_extend` 6, `simd_load_splat` 4, `simd_const` 4, `simd_splat` 2,
+    `simd_load_zero` 2, `simd_load` 1) and 6 from `select` (`simd_select.wast` lines 9–54). No
+    `left N values` arity failure remains anywhere on the board, and **no `simd_*` vector fails in
+    the default lane at all**. The grave's own reach figure of 27 is era-stamped to engine
+    `3b3a4b7`; today's tree measures 25 by identity.
+
 - **A null reference expectation was compared by heaptype, and a null result of an unnameable type
   was refused outright**
   ([#266](https://github.com/scttfrdmn/burroughs/issues/266), #258). Two harness deviations from the

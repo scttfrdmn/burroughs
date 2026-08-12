@@ -731,6 +731,38 @@ func (in *Instance) runFrame(fn *binary.Func, locals *frame, st *stack, results,
 				return err
 			}
 			cond := st.popI32()
+			// **A v128 select moves two slots per operand, not one — grave #242.** `select`
+			// is parametric: the opcode does not name its operand type (and the annotated
+			// `0x1c` form's vector is a *validation* fact this layer deliberately reduces to
+			// one ref/numeric bit, per this arm's comment above). So the width has to be
+			// recognized at runtime, which is exactly the problem `drop` already solved —
+			// see `topIsV128`, whose doc comment explains why the two parametric arms are
+			// the only two that need it.
+			//
+			// Without this, the arm below popped three slots where a v128 select has five,
+			// leaving both operands' high halves stranded and pushing one slot back: the
+			// stack came out *longer* than the signature wanted (`left 3 values` where 2
+			// were declared), which is why this grave had two polarities and why the second
+			// one read as a push forgetting rather than a pop miscounting.
+			//
+			// The condition is popped before the test on purpose: `cond` is the i32 on top,
+			// so the operand pair is only at the numeric top once it is gone.
+			if st.topIsV128() {
+				// Four more slots for the two v128 operands, the condition having already
+				// been consumed. A validated module cannot fail this; an unvalidated one
+				// gets #9's arity verdict as the layering debt, like every other `needNum`.
+				if err := st.needNum(4); err != nil {
+					return err
+				}
+				bHi, bLo := st.popV128()
+				aHi, aLo := st.popV128()
+				if cond != 0 {
+					st.pushV128(aHi, aLo)
+				} else {
+					st.pushV128(bHi, bLo)
+				}
+				break
+			}
 			b := st.popNum()
 			a := st.popNum()
 			// `if v then v1 else v2` with the *first* operand as the true arm — the two are

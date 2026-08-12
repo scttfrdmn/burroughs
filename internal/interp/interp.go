@@ -552,11 +552,24 @@ func (in *Instance) invokeIndex(idx uint32, name string, args []Value) ([]Value,
 	}
 
 	st := &stack{
-		// Sized from the body rather than grown from empty: an instruction pushes at most
-		// one numeric slot, so the body's length is a sufficient bound and there is exactly
-		// one allocation per call. Not a correctness property — append would be correct —
-		// but 0002 chose this form on a measurement, and paying an amortized regrow per
-		// call in the hot loop would spend what the measurement bought.
+		// Sized from the body rather than grown from empty, so that the common case costs
+		// exactly one allocation per call. Not a correctness property — append would be
+		// correct — but 0002 chose this form on a measurement, and paying an amortized
+		// regrow per call in the hot loop would spend what the measurement bought.
+		//
+		// **This used to claim the bound was *sufficient*, on the ground that "an
+		// instruction pushes at most one numeric slot". Decision 0024 made that false and
+		// nothing updated the sentence** — a v128 push occupies two slots, so a body dense
+		// in v128 producers can exceed `len(fn.Body)` and regrow. Found sweeping for grave
+		// #242's shape, which is the same false premise (one value, one slot) in prose
+		// rather than in arithmetic; recorded rather than silently corrected because the
+		// two are the same defect and one of them cost 23 vectors.
+		//
+		// Left at `len(fn.Body)` deliberately: it is still a good *estimate*, the regrow is
+		// amortized and correct, and re-tightening it (to a scan for v128 producers, or a
+		// flat factor) is a claim about allocation counts that belongs to `make bench` and
+		// benchstat, not to a grave's sweep. Stated, not fixed, and not asserted as a
+		// number nobody ran.
 		num: make([]uint64, 0, len(fn.Body)),
 	}
 	numResults, refResults := countByArray(ft.Results)
