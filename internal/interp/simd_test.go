@@ -7,9 +7,17 @@ import (
 	"github.com/scttfrdmn/burroughs/internal/text"
 )
 
-// runSIMD1 is run1 with the SIMD gate on — every one of #212's ladder rungs needs it, since the
-// gate stays default-off (decision: no SIMD gate flip without its own procedure, #153) and this
-// package's own arms are unreachable without it.
+// runSIMD1 is run1 with the SIMD gate pinned on at the call site.
+//
+// It was written when the gate was default-*off* and its arms were unreachable without this
+// helper; #227/ADR 0025 has since flipped SIMD default-on, so `DefaultFeatures` now carries
+// `SIMD: true` and plain `run1` would reach these arms too. The helper is kept, and the pin is
+// the reason: `DefaultFeatures` is a per-flip moving target by construction (its own doc comment
+// says so — "diverges one field at a time as gates flip default-on"), so a rung that asserts a
+// SIMD arm should say which gate it needs rather than inherit whatever the default happens to be
+// this milestone. Stated historically because the original sentence outlived its fact: it still
+// read "the gate stays default-off" for two PRs after the flip, which is a citation to a policy
+// that had been superseded.
 func runSIMD1(t *testing.T, src string, args ...Value) []Value {
 	t.Helper()
 	return runSIMDFeatures1(t, binary.Features{SIMD: true}, src, args...)

@@ -126,10 +126,25 @@ func (in *Instance) blockArity(imm0, imm1 uint64) (params, refParams, results, r
 		// return, preserving the pre-0018 predicate exactly: every valtype the decoder can
 		// resolve has a non-zero kind (0x6E-0x80), so this is never true for the empty or
 		// type-index cases, both of which BlockType returns as the zero ValType.
-		if vt.IsRef() {
-			return 0, 0, 0, 1, nil
-		}
-		return 0, 0, 1, 0, nil
+		//
+		// **One result *value*, which is not one *slot* — grave #242.** This arm used to
+		// answer `1` numeric directly, and that is right for every valtype except `V128`,
+		// which occupies two adjacent `st.num` slots (decision 0024). A `(result v128)`
+		// block therefore got arity 1, and `branch` — faithfully implementing the spec's
+		// "truncate to height+arity" — discarded the value's high half on the way out,
+		// leaving the function one slot short of the two its own signature declares. The
+		// type-index arm below was never wrong, because it goes through `countByArray`,
+		// which has carried the slot rule since 0024; this arm re-derived the count from
+		// "a valtype form yields one result" and so could not see it.
+		//
+		// So it delegates to the same authority rather than repeating the rule with the
+		// V128 case bolted on: `countByArray` is where the slot/value distinction is
+		// *defined*, and a second site that agrees with it today is a second site that can
+		// disagree with it tomorrow. The array is a one-element local rather than a slice
+		// literal so the delegation costs no allocation — this runs on every block entry.
+		vts := [1]binary.ValType{vt}
+		n, r := countByArray(vts[:])
+		return 0, 0, n, r, nil
 	default:
 		if int(idx) >= len(in.mod.Types) {
 			return 0, 0, 0, 0, fmt.Errorf("%w: blocktype names type %d of %d",
