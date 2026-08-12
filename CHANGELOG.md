@@ -22,7 +22,8 @@ weakly-ordered platform.
 ### Added
 
 - **Decision 0026 — proper tail calls: a tail call is a fourth control-transfer value, and the frame
-  owner's trampoline re-enters. Held `proposed`; no stamp exists yet.** Scoped to *both* gate
+  owner's trampoline re-enters. Accepted on Scott's stamp (PR #252); authored and pushed `proposed`,
+  and the interval it spent open is kept in the record.** Scoped to *both* gate
   consumers by Scott's ruling (`return_call_ref` is `gate:gc`'s, `return_call`/`return_call_indirect`
   are `gate:tailCall`'s) so one frame-reuse mechanism is decided once rather than built twice. The
   reference settles more than it looks: `eval.ml:282-305`'s three `return_call` arms *step the plain
@@ -48,6 +49,20 @@ weakly-ordered platform.
   all-on lane's 101 bucket keys carry the signature), so it is a §9 G-3 accept-direction defect whose
   control has to be authored. Named here because 0026 depends on the same missing base and states it
   as a prerequisite rather than deciding it twice.
+
+- **Three disciplines ratified into `CLAUDE.md`** (rulings: Scott, PRs #250 and #252). *A
+  falsification that passes is a question with three answers — a no-op mutation, a blind control, or a
+  wrong prediction — and it gets classified before anything proceeds*, the three demanding opposite
+  next moves, with #250's own battery supplying a specimen of each (a mutation that renamed a variable
+  and diffed cleanly, the classic stillbirth, and an expected-*pass* that failed and killed its
+  author's prose claim). This amends the older "print the diff" rule, whose headline had asserted its
+  two answers were exhaustive; the superseded wording is quoted in place. *A flip is never in the
+  mechanism's PR — it is its own stamp-tier event*, because a forecast cannot be pre-registered inside
+  the PR that creates the numbers, making SIMD's flip (#227/#233) the standing procedure rather than a
+  precedent to cite selectively. And *an impossible count is the strongest witness there is*: a value
+  outside its own domain — #251's `left -1 numeric` — convicts the model rather than the measurement,
+  where the same probe's plausible `left 0 numeric` reads as an ordinary arity disagreement and would
+  have been argued about.
 
 - **`gate:gc` rung 3 — array instances, decision 0020's second implementation.** All fourteen
   `array.*` arms (`array.new`, `array.new_default`, `array.new_fixed`, `array.new_data`,

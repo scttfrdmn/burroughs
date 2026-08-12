@@ -557,6 +557,16 @@ the choice, and consequences once Scott has called it.
 - **Gates.** Proposals land behind build tags / config gates; acceptance is
   the proposal's own suite green (contract §9). Nothing defaults on
   without it.
+  - **A flip is never in the mechanism's PR — it is its own stamp-tier event.** Mechanism is
+    product and self-merges on a bound green; a flip is **governance** and holds for a principal's
+    stamp, so they are separate artifacts with separate verdicts. The SIMD flip (#227/#233) is not
+    a precedent to cite selectively but **the procedure**: G-1 measured on the proposal's suite
+    *after* the mechanism exists, forecast **pre-registered**, rollback stated, one-line diff.
+    The practical reason is the one that makes it structural rather than stylistic — *you cannot
+    pre-register a forecast inside the PR that creates the numbers*, which is the actor choosing
+    the instrument that judges the actor, one level up from the ratio. So a mechanism PR that
+    would "also flip while we're here" is two verdicts wearing one green. (Ruling: Scott, PR #252,
+    on 0026's flagged scheduling question; the answer was **no**, generalized to every gate.)
 - **A third verdict needs a structural bound, not just a watched one.** `gated`
   is honest — a vector whose question presumes a declined feature was never
   asked, so scoring it pass or fail both lie — but any verdict that is neither
@@ -704,6 +714,20 @@ the choice, and consequences once Scott has called it.
   because asking whether everything the join resolved was resolved is a tautology; being unfit as
   a join key (a naming coincidence, not a derivation) is exactly what makes a signal fit as a
   second opinion. (Ruling: Scott, PR #108; grave #106.)
+  - **And its mirror: an impossible count is the strongest witness there is, because a value that
+    cannot exist convicts the model rather than the measurement.** A clean result invites the
+    suspicion above and can still be honest; an *impossible* one has already settled the question,
+    and the only remaining work is finding which assumption it kills. #251's probe is the specimen:
+    two pending operands under a `return` produced **`left -1 numeric`**, and a stack cannot have
+    negative depth — so the arithmetic was being done against the wrong origin, which is exactly
+    the missing frame base. Note what the tell bought that a plain refusal would not have: the
+    one-operand row's `left 0 numeric` is a *plausible* number and reads as an ordinary arity
+    disagreement, so it would have been argued about; `-1` cannot be argued with and named the
+    cause in one row. So when a probe emits a quantity outside its own domain — a negative count, a
+    length past an image's end, a depth below zero — stop reaching for the instrument and read it
+    as a **derivation** of the defect. The family this joins is the wrong-layer error and the
+    fabricated byte, both being the engine wrong about its own input; this one is the engine wrong
+    about its own *shape*. (Ruling: Scott, PR #252, from #251's probe.)
 - **A control isn't born until it has been watched die.** `Extract`'s partition check read as a
   real guard and could not fire on **any** input — `byGrammar` is keyed per token kind, `byLexer`
   per keyword, so `byLexer[kind]` asked whether a keyword is spelled `BINARY`. It was found by

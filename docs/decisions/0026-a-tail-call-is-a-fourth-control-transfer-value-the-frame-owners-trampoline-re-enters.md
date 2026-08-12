@@ -1,8 +1,11 @@
 # 0026 — A tail call is a fourth control-transfer value, and the frame owner's trampoline re-enters
 
-Date: 2026-08-12 · Status: **proposed** — no stamp exists yet, and a `Status:` is a citation to an
-approval (the ruling on #142). Scott's stamp is what closes this; the interval it spends open stays
-in the record.
+Date: 2026-08-12 · Status: **accepted** 2026-08-12 — Scott's stamp, relayed on **PR #252**
+(*"0026 is stamped — cite it, flip `Status:`, and merge #252 on its bound green"*). It was authored
+and pushed `proposed` and held there until that stamp existed to cite, because a `Status:` is a
+citation to an approval (the ruling on #142); the interval stays in the record rather than being
+tidied into an ADR that looks as though it was always accepted. The grounds Scott cited are recorded
+under **Stamp** below.
 
 Filed against **#237** (`type:decision`, `gate:gc`) and milestone **v0.2.0 GC gate**. Scott ruled
 this into scope on #235 and scheduled it on #250: the document is scoped to **both** gates and lands
@@ -196,6 +199,15 @@ buys S-3 early at the price of taking v2's decision inside a v0 gate campaign.
 - **Whether `return_call`/`return_call_indirect` flip with `gate:tailCall` in the same PR that lands
   the mechanism.** The mechanism is shared by ruling; the *gate* is G-1's own question, answered by
   that proposal's suite going green, and scheduling it is Scott's.
+
+  **Amended 2026-08-12 (ruling: Scott, PR #252) — answered, and generally: no.** A flip is never in
+  the mechanism's PR. Mechanism is product and self-merges on a bound green; a flip is governance and
+  holds for a stamp, so they are separate artifacts with separate verdicts, and SIMD's flip
+  (#227/#233) is **the procedure** rather than a precedent to cite selectively: G-1 measured on the
+  proposal's suite *after* the mechanism exists, forecast pre-registered, rollback stated, one-line
+  diff. The structural reason is that *a forecast cannot be pre-registered inside the PR that creates
+  the numbers*. This is now standing procedure in `CLAUDE.md` under **Gates**, so the question does
+  not return per-gate; what remains Scott's is only *when*.
 - **The exact spelling of the shared frame-entry helper** (`enterFrame`, a method on `*Instance`, or
   a free function taking the instance) — an implementation choice for the PR, constrained only by
   property 3: one loop, both entry points.
@@ -223,3 +235,27 @@ buys S-3 early at the price of taking v2's decision inside a v0 gate campaign.
 - **`assert_exhaustion`'s existing vectors must stay green**, which is the negative half: a
   mechanism that accidentally stopped counting non-tail frames would buy the five and lose
   `call.wast:337`. Both directions get asserted, per the bidirectional-control rule.
+
+## Stamp
+
+Recorded because a stamp's *grounds* are the part a later reader needs and the part a `Status:` field
+cannot carry. Scott's, on PR #252:
+
+- **The design earns it the way 0020 did: the authority already answered the architecture question,
+  and the ADR noticed.** `eval.ml` pops the dying frame and invokes the callee one level up, so the
+  reference's own shape is a trampoline — option B is *a transcription, not an invention*.
+- **The fourth control-transfer value completes a taxonomy that has been growing one honest member at
+  a time** — error, trap, `*thrown`, `*tailCall`, four siblings each saying exactly what it is — and
+  it is 0022's stamped reasoning applied to a second non-local transfer, cited as such.
+- **The budget finding is the quiet gem: a future grave deleted by reading.** `:1080` decrements on
+  `Frame` entry and `:1114` checks at `Invoke`, so a tail call consumes none and `callBudget` keeps
+  its semantics with nobody re-tuning 10000.
+- **Option C rejected *for v0 only*, with its forcing consumer named** (v2's §7 continuations), is the
+  what-retires-this discipline pointing forward instead of back: *the door is not closed, it is
+  labeled*.
+
+Two things the stamp also settled, both recorded at their own sites: the scheduling question, ruled
+**no** and generalized (see *What this does not decide*, amended), and **#251 going first** —
+prerequisite and defects-first being the same answer twice. On #251, Scott's reading of the pair:
+#135 was return-*without-truncating*, #251 is truncate-*without-base*, so both failure modes of
+frame-relative-arithmetic-without-frames are now filed and **one frame base retires the class**.
