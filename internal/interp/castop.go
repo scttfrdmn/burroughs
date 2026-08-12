@@ -380,11 +380,14 @@ func typeOfRef(r ref, site string) (refType, error) {
 	// funcref-shaped value from the harness's `ref.extern`, and the honest answer for anything
 	// else is that there isn't one.
 	//
-	// **The design that fills it is 0027 decision 3, which is `proposed` and *not* covered by that
-	// ADR's stamp** — Scott accepted 1, 2, 4, 5 and 6 on the #259 relay and carved 3 out until
-	// slice 3's scoping firms it. Stated rather than cited bare, because a comment naming a
-	// decision reads as naming a settled one, and *a status field is a citation to an approval*
-	// (#142) does not stop being true when the citation moves from an ADR header into prose.
+	// **The design that fills it is 0027 decision 3, accepted on the #267 relay** (chat-Claude,
+	// relayed by Scott, Scott's veto standing) — the #259 stamp had carved it out at `proposed`
+	// until slice 3's scoping firmed it, and slice 3 is now what waits on it. The status is stated
+	// rather than the decision cited bare, because a comment naming a decision reads as naming a
+	// settled one, and *a status field is a citation to an approval* (#142) does not stop being true
+	// when the citation moves from an ADR header into prose. The interval is worth the clause: this
+	// comment said `proposed` for exactly as long as that was the fact, which is what makes the
+	// present tense here readable as a fact rather than as an aspiration.
 	return refType{}, fmt.Errorf("%w: %s on a non-null reference with no payload discriminator set",
 		ErrNotValidated, site)
 }

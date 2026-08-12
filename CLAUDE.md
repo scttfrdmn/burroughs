@@ -812,6 +812,35 @@ the choice, and consequences once Scott has called it.
        needs no new law: it is the standing never-quote-a-count-you-did-not-run rule, and the
        repair is to correct in place and keep the episode. (Ruling: Scott, PR #250, his token, on
        the agent's own two flags — "two-thirds of the same trichotomy".)
+    - **The trichotomy's rider, and the deepest thing the method has produced: falsification proves
+      an assertion *live*, never *right*.** All three answers above presuppose the prediction is
+      about the right rule; **none of them can ask whether it is**, so a control can be born, kill
+      its mutation on the nose, and pin a fact its own authority cannot represent. Grave **#266** is
+      the specimen and it satisfied every clause the method demands — falsifiable, watched to die,
+      failing with exactly the signature its comment predicted — while asserting that a null's
+      `Kind` discriminates two nulls, where the reference has **one** heaptype-free null reference
+      value (`runtime/value.ml:20`, nullary; `:112` types it `(Null, BotHT)` whatever produced it)
+      and `assert_ref_pat` answers `NullPat _, NullRef -> true` unconditionally (`runner.ml:476`).
+      So **liveness and correctness are separate audits**, and the second one has exactly one
+      method: **read the authority against the assertion.** A mutation cannot do it, review cannot
+      do it (review verifies code against claims, and here the claim was the defect), and the board
+      cannot do it — the deviation was accept-direction, green on every vector by construction.
+      - **The inverse of *the defect stated as the rule*, and both are caught the same way: the rule
+        stated truly, directly over the defect.** #266's tell was `RefClass`'s own doc comment
+        (`value.go:137-139`) transcribing the authority **correctly** — both `NullLit ht -> Value.(Ref
+        NullRef)` and the unconditional `NullPat` arm — two declarations above code implementing its
+        opposite, with a control pinning the opposite as well. So the cheap sweep is worth running
+        whenever a control pins a *distinction*: grep the nearby prose for the arm that dissolves it,
+        because the family's other face means the transcription may already be in the file. A codebase
+        that cites its authority well enough to convict itself is worth reading before it is worth
+        mutating.
+      - **A citation list is itself a claim**, and it gets resolved before it is published like any
+        other. #266's closing comment listed five fix sites; three were named at the wrong
+        declaration until each one was grepped and pinned to a line. Same oracle as
+        `TestFixtureProvenance` and #114/#115's identifier check, pointed at the enumeration rather
+        than at a single reference — an approximately-correct list of citations reads exactly like an
+        exact one.
+      (Mint: chat-Claude, relayed by Scott, on grave #266; Scott's veto standing.)
   - **A control must fail, never hang — a timeout names no row.** The birth requirement's
     second failure mode, and it is not stillbirth: the control fires, it is technically red, and it
     is *worse* than red, because `panic: test timed out` identifies no case and takes the whole test
