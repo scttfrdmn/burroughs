@@ -102,7 +102,7 @@ const (
 // plausible answer, which is why `array.wast:59`'s `(array.new $vec (f64.const 7) (i32.const 3))` —
 // an f64 element with an i32 count — is the row that cannot be satisfied by the wrong reading.
 func (in *Instance) execArrayNew(ins binary.Instr, st *stack) error {
-	ct, ft, err := in.arrayType("array.new", ins.Imm0)
+	ft, err := in.arrayType("array.new", ins.Imm0)
 	if err != nil {
 		return err
 	}
@@ -118,7 +118,7 @@ func (in *Instance) execArrayNew(ins binary.Instr, st *stack) error {
 	for i := range fields {
 		fields[i] = f
 	}
-	st.pushRef(ref{Obj: &gcObj{typ: ct, fields: fields}})
+	st.pushRef(ref{Obj: in.alloc(ins.Imm0, fields)})
 	return nil
 }
 
@@ -128,7 +128,7 @@ func (in *Instance) execArrayNew(ins binary.Instr, st *stack) error {
 // #9's, per `Crash.error "non-defaultable type"`. Note the reference computes the default *before*
 // it knows n is usable, and the order is unobservable: both failures discard the stack.
 func (in *Instance) execArrayNewDefault(ins binary.Instr, st *stack) error {
-	ct, ft, err := in.arrayType("array.new_default", ins.Imm0)
+	ft, err := in.arrayType("array.new_default", ins.Imm0)
 	if err != nil {
 		return err
 	}
@@ -144,7 +144,7 @@ func (in *Instance) execArrayNewDefault(ins binary.Instr, st *stack) error {
 	for i := range fields {
 		fields[i] = f
 	}
-	st.pushRef(ref{Obj: &gcObj{typ: ct, fields: fields}})
+	st.pushRef(ref{Obj: in.alloc(ins.Imm0, fields)})
 	return nil
 }
 
@@ -159,7 +159,7 @@ func (in *Instance) execArrayNewDefault(ins binary.Instr, st *stack) error {
 // `n` is the **immediate** here and not an operand (`imms: {immIdx, immU32}`), which is the one place
 // in the family where the count is known before the stack is touched.
 func (in *Instance) execArrayNewFixed(ins binary.Instr, st *stack) error {
-	ct, ft, err := in.arrayType("array.new_fixed", ins.Imm0)
+	ft, err := in.arrayType("array.new_fixed", ins.Imm0)
 	if err != nil {
 		return err
 	}
@@ -171,7 +171,7 @@ func (in *Instance) execArrayNewFixed(ins binary.Instr, st *stack) error {
 		}
 		fields[i] = f
 	}
-	st.pushRef(ref{Obj: &gcObj{typ: ct, fields: fields}})
+	st.pushRef(ref{Obj: in.alloc(ins.Imm0, fields)})
 	return nil
 }
 
@@ -185,7 +185,7 @@ func (in *Instance) execArrayNewFixed(ins binary.Instr, st *stack) error {
 // The multiply is done in 64 bits from two 32-bit zero-extensions, so it cannot wrap: `n` is at most
 // 2^32-1 and `storage_size` at most 16.
 func (in *Instance) execArrayNewData(ins binary.Instr, st *stack) error {
-	ct, ft, err := in.arrayType("array.new_data", ins.Imm0)
+	ft, err := in.arrayType("array.new_data", ins.Imm0)
 	if err != nil {
 		return err
 	}
@@ -210,7 +210,7 @@ func (in *Instance) execArrayNewData(ins binary.Instr, st *stack) error {
 		a := src + uint64(i)*width
 		fields[i] = loadStorage(seg.bytes[a:a+width], ft.Storage)
 	}
-	st.pushRef(ref{Obj: &gcObj{typ: ct, fields: fields}})
+	st.pushRef(ref{Obj: in.alloc(ins.Imm0, fields)})
 	return nil
 }
 
@@ -220,7 +220,7 @@ func (in *Instance) execArrayNewData(ins binary.Instr, st *stack) error {
 // is `execTableInit`'s live requirement stated one arm over. The trap is the *table* string; see the
 // file comment.
 func (in *Instance) execArrayNewElem(ins binary.Instr, st *stack) error {
-	ct, _, err := in.arrayType("array.new_elem", ins.Imm0)
+	_, err := in.arrayType("array.new_elem", ins.Imm0)
 	if err != nil {
 		return err
 	}
@@ -240,7 +240,7 @@ func (in *Instance) execArrayNewElem(ins binary.Instr, st *stack) error {
 	for i := range fields {
 		fields[i] = gcField{r: seg.refs[src+uint64(i)]}
 	}
-	st.pushRef(ref{Obj: &gcObj{typ: ct, fields: fields}})
+	st.pushRef(ref{Obj: in.alloc(ins.Imm0, fields)})
 	return nil
 }
 
@@ -283,7 +283,7 @@ func popArrayIndexed(what string, st *stack) (*gcObj, uint64, error) {
 // (`get_u` of `0xff` reading 255) and `:205` (`get_s` reading −1) are one segment byte answered two
 // ways.
 func (in *Instance) execArrayGet(ins binary.Instr, st *stack, ext fieldExt) error {
-	_, ft, err := in.arrayType("array.get", ins.Imm0)
+	ft, err := in.arrayType("array.get", ins.Imm0)
 	if err != nil {
 		return err
 	}
@@ -304,7 +304,7 @@ func (in *Instance) execArrayGet(ins binary.Instr, st *stack, ext fieldExt) erro
 // non-array is reported before the null trap, which is observable only in a module that is
 // simultaneously invalid and trapping.
 func (in *Instance) execArraySet(ins binary.Instr, st *stack) error {
-	_, ft, err := in.arrayType("array.set", ins.Imm0)
+	ft, err := in.arrayType("array.set", ins.Imm0)
 	if err != nil {
 		return err
 	}
@@ -374,7 +374,7 @@ func popArrayTarget(what string, st *stack) (*gcObj, uint64, error) {
 // comment). `array_fill.wast` asserts a zero-length fill at exactly the end succeeding and a
 // one-element fill there trapping, which is the pair that pins the order.
 func (in *Instance) execArrayFill(ins binary.Instr, st *stack) error {
-	_, ft, err := in.arrayType("array.fill", ins.Imm0)
+	ft, err := in.arrayType("array.fill", ins.Imm0)
 	if err != nil {
 		return err
 	}
@@ -429,11 +429,11 @@ func (in *Instance) execArrayFill(ins binary.Instr, st *stack) error {
 // direction branch is written — and it is written from the reference rather than reasoned about,
 // because a self-overlapping packed copy is the case no vector covers.
 func (in *Instance) execArrayCopy(ins binary.Instr, st *stack) error {
-	_, dstFT, err := in.arrayType("array.copy (destination)", ins.Imm0)
+	dstFT, err := in.arrayType("array.copy (destination)", ins.Imm0)
 	if err != nil {
 		return err
 	}
-	if _, _, err = in.arrayType("array.copy (source)", ins.Imm1); err != nil {
+	if _, err = in.arrayType("array.copy (source)", ins.Imm1); err != nil {
 		return err
 	}
 	if short := st.needNum(1); short != nil {
@@ -506,7 +506,7 @@ func copyElem(dst binary.FieldType, f gcField) gcField {
 // through `addr_of_num`, which admits an i64 under memory64; a pushed i32 occupies the slot
 // zero-extended, so one pop serves both widths.
 func (in *Instance) execArrayInitData(ins binary.Instr, st *stack) error {
-	_, ft, err := in.arrayType("array.init_data", ins.Imm0)
+	ft, err := in.arrayType("array.init_data", ins.Imm0)
 	if err != nil {
 		return err
 	}
@@ -547,7 +547,7 @@ func (in *Instance) execArrayInitData(ins binary.Instr, st *stack) error {
 // reference-typed array element is unpacked by construction, so there is no `exto` in the
 // reference's rewrite either.
 func (in *Instance) execArrayInitElem(ins binary.Instr, st *stack) error {
-	if _, _, err := in.arrayType("array.init_elem", ins.Imm0); err != nil {
+	if _, err := in.arrayType("array.init_elem", ins.Imm0); err != nil {
 		return err
 	}
 	seg, err := in.elemFor("array.init_elem", ins.Imm1)

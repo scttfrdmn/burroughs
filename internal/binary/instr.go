@@ -257,6 +257,41 @@ type instrCtx struct {
 	// `try_table` is not const-legal in any case, so every const-expression call site leaves
 	// this nil along with labelsOut.
 	catchesOut *Catches
+
+	// heaps stages the heaptypes read by the current instruction, in wire order.
+	//
+	// **Deliberately not a reftype and deliberately not filed by `imms`.** The wire holds a bare
+	// *heaptype* everywhere this arm runs (decode.ml:603 for `ref.null`, :636-650 for the cast
+	// family), so `decodeHeapType` always yields `null: false` and the nullability of the type
+	// actually being tested comes from somewhere else entirely: the opcode for `fb 14`-`fb 17`,
+	// the flags byte for `fb 18`/`fb 19`. An arm inside `imms` cannot see either — it is a switch
+	// over an immediate *kind*, one opcode removed from the opcode. So this slot carries what the
+	// grammar read, and `castTypes` is where the opcode's contribution is applied.
+	//
+	// No `hasHeaps`: the empty-versus-absent distinction that `hasLabels` exists for has no case
+	// here, since every instruction reading a heaptype reads at least one. What answers "was
+	// anything retained" is `hasCasts`, downstream of the interpretation step.
+	heaps []ValType
+
+	// casts stages the reference types the cast family tests against — the interpreted form of
+	// `heaps`, nullability applied — and `hasCasts` distinguishes "filed" from "empty", on the
+	// same discipline `hasLabels` follows.
+	//
+	// Set by `castTypes` rather than by an `imms` arm, and only for the six cast-family opcodes:
+	// `ref.null` reads a heaptype too and files nothing, because 0027 decision 4 is that a null
+	// keeps no heaptype (the reference's `NullRef` takes no argument and `type_of_ref` maps every
+	// null to a single universal `BotHT`). A `ref.null` entry here would be a retained fact with
+	// no consumer, which is the shape `immVecValType`'s comment declines for the same reason.
+	casts    []ValType
+	hasCasts bool
+
+	// castsOut is where emit files a staged cast-type vector, or nil when this read is
+	// recognizing only — parallel to `labelsOut`/`catchesOut` and nil in exactly the same cases.
+	// Unlike those two the const-expression case is not vacuous by grammar: `ref.null` is
+	// const-legal and does read a heaptype. It is vacuous by the rule above instead — a
+	// const-expression read never reaches `castTypes`, because no cast-family opcode is
+	// const-legal.
+	castsOut *map[int][]ValType
 }
 
 // emit appends one decoded instruction to the retained sequence and clears the staging
@@ -298,10 +333,26 @@ func (c *instrCtx) emit(prefix byte, op uint32) {
 			}
 			(*c.catchesOut)[idx] = cv
 		}
+		if c.hasCasts && c.castsOut != nil {
+			if *c.castsOut == nil {
+				*c.castsOut = map[int][]ValType{}
+			}
+			// A nil vector is stored as an empty non-nil one, matching Labels' and Catches'
+			// rule: `CastTypes`' second result is what says "no vector", never len(x) == 0.
+			tv := c.casts
+			if tv == nil {
+				tv = []ValType{}
+			}
+			(*c.castsOut)[idx] = tv
+		}
 	}
 	c.imm0, c.imm1, c.immN = 0, 0, 0
 	c.labels, c.hasLabels = nil, false
 	c.catches, c.hasCatches = nil, false
+	// `heaps` is cleared here and not by `castTypes`, so an instruction that reads a heaptype
+	// and files nothing (`ref.null`) cannot leave one for the next instruction to inherit —
+	// the stale-field failure this whole staging area is documented against.
+	c.heaps, c.casts, c.hasCasts = nil, nil, false
 }
 
 // stage records one immediate for the instruction being read, in field order.
@@ -621,8 +672,53 @@ func (c *instrCtx) prefixed(r *reader, prefix byte) error {
 	if dataRefOps[[2]uint32{uint32(prefix), sub}] {
 		c.d.sawDataRef = true
 	}
+	c.castTypes(prefix, sub)
 	c.emit(prefix, sub)
 	return nil
+}
+
+// castTypes turns the heaptypes the cast family's grammar just read into the reference types it
+// actually tests against, and stages them for `emit` to file.
+//
+// # Why the nullability is applied here and not in the immediate arm
+//
+// Nothing in this family encodes a reftype. `decode.ml:636-639` reads a bare `heaptype` for each
+// of `fb 14`-`fb 17` and pairs it with `NoNull` or `Null` chosen **by which of the four opcodes
+// it is**; `:642-650` reads one flags byte and takes the two bits from it for `br_on_cast`'s
+// pair. Either way the null bit is a fact about the *opcode*, and `imms` dispatches on immediate
+// kind — it has no opcode in hand. Deriving it at each consumer instead would put a wire-format
+// rule in the interpreter and in the encoder both, which is the two-places-know-one-fact shape
+// this package files tripwires against.
+//
+// # Called for every prefixed opcode and answering for six
+//
+// The membership test is a switch rather than a table lookup, because the mapping *is* the
+// nullability and a table would hold the same three columns in a shape that reads as data. Rows
+// this switch does not name stage nothing and file nothing — including `ref.null` (0xD0), which
+// is not prefixed and so never arrives here at all, and which keeps no heaptype by 0027 decision
+// 4 in any case.
+//
+// `fb 18`/`fb 19` are deliberately absent at this revision: their flags byte carries a
+// malformedness requirement (`require (flags land 0xfc = 0)`) that the reference checks *before*
+// reading the label, which the generic `imms` dispatch cannot express without a signature change
+// — so they land with their arms, in this rung's second slice. What makes that a deferral rather
+// than a hole is that the two opcodes are still `gate:gc` rows and still refused by
+// `execFB`'s default, so no module reaches an arm that would want a vector this does not file.
+func (c *instrCtx) castTypes(prefix byte, sub uint32) {
+	if prefix != 0xFB || len(c.heaps) == 0 {
+		return
+	}
+	var null bool
+	switch sub {
+	case 0x14, 0x16: // ref.test, ref.cast — `NoNull`
+		null = false
+	case 0x15, 0x17: // ref.test null, ref.cast null — `Null`
+		null = true
+	default:
+		return
+	}
+	c.casts = append(c.casts, refNull(c.heaps[0], null))
+	c.hasCasts = true
 }
 
 // dataRefOps is the set of opcodes whose free variables include the data index space,
@@ -869,7 +965,17 @@ func (c *instrCtx) imm(r *reader, im imm) error {
 		// "the GC gate's business" — declared-and-tracked, so not a grave (#6), except
 		// that the tracking pointed at gate work while the fix was substituting a reader
 		// this file already had. *A deferral outlives its reason silently.*
-		return c.d.decodeHeapType(r)
+		//
+		// **Staged into `heaps`, and still claiming no word.** The decoded heaptype is retained
+		// for the cast family (0027 Q1 option B) through a side table, not through Imm0/Imm1, so
+		// `immStagedBits` keeps costing this kind zero — which is what lets `br_on_cast` read two
+		// heaptypes at the 128-bit ceiling it already sits on. See instrCtx.heaps for why the
+		// value staged here is a bare heaptype rather than the reftype a consumer wants.
+		if err := c.d.decodeHeapType(r); err != nil {
+			return err
+		}
+		c.heaps = append(c.heaps, c.d.valType)
+		return nil
 	case immBlockType:
 		// The blocktype as the reference reads it: a non-negative type index, the empty
 		// form, or a valtype (see decodeBlockType). Staged raw rather than normalized —
@@ -1404,7 +1510,8 @@ func (d *Decoder) decodeFuncBody(r *reader) error {
 	var body []Instr
 	var labels map[int][]uint32
 	var catches Catches
-	c := &instrCtx{d: d, nonConst: -1, out: &body, labelsOut: &labels, catchesOut: &catches}
+	var casts map[int][]ValType
+	c := &instrCtx{d: d, nonConst: -1, out: &body, labelsOut: &labels, catchesOut: &catches, castsOut: &casts}
 	if err := c.block(r); err != nil {
 		return err
 	}
@@ -1431,7 +1538,8 @@ func (d *Decoder) decodeFuncBody(r *reader) error {
 	// to reject. The zip with the function section's type indices happens in finishFuncs,
 	// because the other half is not available until both sections are read — see
 	// Decoder.funcTypeIdx.
-	d.mod().Funcs = append(d.mod().Funcs, Func{Locals: locals, Body: body, Labels: labels, Catches: catches})
+	d.mod().Funcs = append(d.mod().Funcs,
+		Func{Locals: locals, Body: body, Labels: labels, Catches: catches, Casts: casts})
 	return nil
 }
 

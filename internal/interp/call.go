@@ -2,6 +2,7 @@ package interp
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/scttfrdmn/burroughs/internal/binary"
@@ -697,6 +698,12 @@ func (in *Instance) declaredFuncType(idx uint64) (*binary.FuncType, error) {
 // #164's four vectors (`type-subtyping.wast:602,610`, the `Final`-differing M2 pair) resolve
 // under that scope; the other two (:752,:767, M10/M11) do not, and stay in the same bucket for
 // the reason stated above — a genuine, cited, and tested scope boundary rather than a silent gap.
+//
+// **Still named for functypes after `matchDeftype` generalized past them (0027), and deliberately
+// so.** Every call site here has *already* resolved both sides through `funcType`/`declaredFuncType`
+// and would have reported #9's layering debt before arriving, so the name records what the callers
+// know rather than what the relation can do. The generalization changed no verdict any of them can
+// reach: a non-functype index on either side is unreachable from all four.
 func sameFuncType(modA *binary.Module, idxA uint32, modB *binary.Module, idxB uint32) bool {
 	return matchDeftype(modA, idxA, modB, idxB, nil)
 }
@@ -709,16 +716,27 @@ func sameFuncType(modA *binary.Module, idxA uint32, modB *binary.Module, idxB ui
 // is exactly `binary.CompType`'s own documented layering debt (`declaredFuncType`'s two #9
 // failures, above) — this is the same debt reached from a different direction, and the guard
 // keeps a malformed cycle from looping this function forever rather than reporting a mismatch.
+//
+// # It is over all three comptype kinds, not just functypes (0027)
+//
+// `ref.cast (ref $t)` asks this same relation about a *struct* or *array* type, so the two
+// resolution steps go through `compTypeAt` and the innermost comparison through `compTypeEqual`,
+// which dispatches on `Kind` and requires the two kinds to agree. Nothing else about the three
+// disjuncts changes, and that is a finding rather than a convenience: **`match_deftype` never calls
+// `match_comptype`** (match.ml:151-155 — `subst_deftype` equality, then the supertype walk), so
+// struct width and depth subtyping reaches a cast *only* through a declared supertype chain, which
+// disjunct 3 already walks. An implementation that reached for a structural width check here would
+// be inventing a relation the reference does not have, and would accept `(struct i32 i32) <:
+// (struct i32)` between two types that never declared each other.
 func matchDeftype(modA *binary.Module, idxA uint32, modB *binary.Module, idxB uint32, visited map[[2]uint32]bool) bool {
-	ctA, ftA, okA := funcCompTypeAt(modA, idxA)
-	ctB, ftB, okB := funcCompTypeAt(modB, idxB)
+	ctA, okA := compTypeAt(modA, idxA)
+	ctB, okB := compTypeAt(modB, idxB)
 	if !okA || !okB {
-		// #9's layering debt: an index naming a struct, an array, or nothing at all. Not this
-		// function's verdict to invent — the caller already resolved both sides through
-		// `funcType`/`declaredFuncType`, whose own errors report this, so reaching here with an
-		// unresolvable index is unreachable on every call site this package has today. False
-		// rather than a panic, per grave 0003: a property of a sibling function, and a future
-		// call site could falsify it silently.
+		// #9's layering debt: an index naming nothing at all. Not this function's verdict to
+		// invent — every functype call site already resolved both sides through
+		// `funcType`/`declaredFuncType`, whose own errors report this, and the cast arms resolve
+		// through `castTypeAt`. False rather than a panic, per grave 0003: a property of a sibling
+		// function, and a future call site could falsify it silently.
 		return false
 	}
 
@@ -726,7 +744,7 @@ func matchDeftype(modA *binary.Module, idxA uint32, modB *binary.Module, idxB ui
 	// same finality and the same structural comptype is always sufficient, whether or not either
 	// side declares supertypes — this is the pre-existing MVP case widened to also check Final,
 	// never narrowed.
-	if ctA.Final == ctB.Final && structFuncTypeEqual(ftA, ftB) {
+	if ctA.Final == ctB.Final && compTypeEqual(ctA, ctB) {
 		// Same absolute chain *so far*; still requires the declared supertypes themselves to
 		// agree pairwise for the two deftypes to be the same rec-group-relative shape. Modules
 		// with no declared supertypes at all (the original MVP case) have both sides empty and
@@ -760,8 +778,12 @@ func matchDeftype(modA *binary.Module, idxA uint32, modB *binary.Module, idxB ui
 
 	// Disjunct 3: does any of A's own declared supertypes match B by this same relation?
 	// `match_heaptype`'s `UseHT (Def dt), UseHT (Def dt2) -> match_deftype c dt dt2` reduces to
-	// exactly this recursive call for the function-type case (the only heaptype form this MVP
-	// reduction handles — struct/array subtyping is 0020's territory, untouched here).
+	// exactly this recursive call, for all three comptype kinds as of 0027 — the parenthetical
+	// here used to read "the only heaptype form this MVP reduction handles — struct/array
+	// subtyping is 0020's territory, untouched here", which the generalization above falsified in
+	// the same PR that wrote it. `castop.go`'s `matchHeapType` is the arm that now reaches here
+	// with a struct or an array on both sides, and it is the *whole* mechanism by which struct
+	// subtyping reaches a cast, since `match_deftype` never consults `match_comptype`.
 	for _, sup := range ctA.Supertypes {
 		if matchDeftype(modA, sup, modB, idxB, visited) {
 			return true
@@ -770,19 +792,44 @@ func matchDeftype(modA *binary.Module, idxA uint32, modB *binary.Module, idxB ui
 	return false
 }
 
-// funcCompTypeAt resolves a type index to its CompType and FuncType, reporting false when the
-// index is out of range or names a non-function comptype — the same two conditions
-// `declaredFuncType`/`funcType` already check at their own call sites, restated here because
-// this function's callers are internal to the walk and have no Instance to report through.
-func funcCompTypeAt(mod *binary.Module, idx uint32) (*binary.CompType, *binary.FuncType, bool) {
+// compTypeAt resolves a type index to its CompType, reporting false when the index is out of range
+// — the condition `declaredFuncType`/`funcType` already check at their own call sites, restated
+// here because this function's callers are internal to the walk and have no Instance to report
+// through.
+//
+// **No kind filter, unlike the `funcCompTypeAt` it replaces** (0027). That function reported false
+// for a struct or array index, which was right while the only relation was over functypes and is
+// wrong now that `ref.cast` asks about the other two: a filter here would make every struct cast
+// answer *no* for a reason that reads as an out-of-range index. The kinds are compared where they
+// are actually a comparison — `compTypeEqual` — so a functype and a structtype are unequal rather
+// than unresolvable, and #9's layering debt keeps exactly one meaning at this seam.
+func compTypeAt(mod *binary.Module, idx uint32) (*binary.CompType, bool) {
 	if int(idx) >= len(mod.Types) {
-		return nil, nil, false
+		return nil, false
 	}
-	ct := &mod.Types[idx]
-	if ct.Kind != binary.CompFunc {
-		return nil, nil, false
+	return &mod.Types[idx], true
+}
+
+// compTypeEqual is structural equality over comptypes, dispatching on kind — the innermost
+// comparison of `matchDeftype`'s disjunct 2, generalized from `structFuncTypeEqual` (0027).
+//
+// Differing kinds are unequal, which is the arm that does the work a kind filter used to do at
+// resolution time. Struct and array fields compare with `==` through `slices.Equal`, which is exact:
+// `FieldType` is storage plus one mutability bit and `StorageType` is a `ValType` plus a packed
+// width, so every field of every field is compared — the mutability bit included, which
+// `match_fieldtype` requires (an immutable field is not the same fieldtype as a mutable one) and
+// which a comparison written over storage alone would silently drop.
+func compTypeEqual(a, b *binary.CompType) bool {
+	if a.Kind != b.Kind {
+		return false
 	}
-	return ct, &ct.Func, true
+	if a.Kind == binary.CompFunc {
+		return structFuncTypeEqual(&a.Func, &b.Func)
+	}
+	// Struct and array: the field list, which for an array is exactly one entry by arraytype's own
+	// arity (CompType.Fields' comment). One comparison serves both because the *shape* difference
+	// between them is already carried by Kind.
+	return slices.Equal(a.Fields, b.Fields)
 }
 
 // structFuncTypeEqual is pure structural equality over functypes — the pre-0019 MVP reduction,

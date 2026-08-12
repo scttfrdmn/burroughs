@@ -21,6 +21,32 @@ weakly-ordered platform.
 
 ### Added
 
+- **`gate:gc` rung 5, first slice — the four cast opcodes, and `match_heaptype` arrives** (#258,
+  decision 0027). `ref.test`, `ref.test null`, `ref.cast`, `ref.cast null` (`fb 14`–`fb 17`), with
+  the reference's subtype relation transcribed arm for arm from `match.ml:58-155`: `matchNull`'s
+  one-way widening, `matchHeapType`'s twelve arms, and `matchConcreteAbstract`'s seven pairs — from
+  which `FuncT _, AnyHT` is deliberately **absent**, so a funcref is not an anyref and
+  `ref.test anyref` on a `ref.func` answers 0. Nullability is not on the wire: `decode.ml:636-641`
+  reads a bare heaptype for all four opcodes and takes the null bit from *which opcode it is*, so
+  the retained reftype pair is assembled at decode into a third instruction-indexed side table
+  (`Func.Casts`, 0027 decision 1) rather than packed into `Instr`'s two words, which
+  `TestInstrImmediateWidthCoversTheTable` would have needed a per-row exception to allow.
+  - **All-on lane 61933 → 62046 pass, 367 → 254 fail, `Gated` 0.** The redistribution sums with
+    residual zero: 134 departures, all `no arm for opcode` (`ref_test.wast` 68, `ref_cast.wast` 37,
+    `type-subtyping.wast` 15, `i31.wast` 14), against 21 arrivals in sibling keys — all four
+    `fb 14`–`fb 17` buckets are gone corpus-wide. The default lane is **unmoved**
+    (58565/142/2689/3625) and structurally so: GC is gated off there, so a cast vector scores
+    `gated`, never `unsupported`.
+  - **A null keeps no heaptype, and that is the reference's design rather than a shortcut.**
+    `value.ml:20` declares `NullRef` as a *nullary* constructor and `value.ml:112` maps it to
+    `(Null, BotHT)`, so `ref.null any` and `ref.null none` are indistinguishable at run time and
+    every cast against a null is decided by nullability alone. This settles the conditional
+    `opRefNull`'s arm had carried since 0016 — the retention gap's one remaining owner is **#8**, the
+    encoder, which needs the spelled heaptype as a static fact.
+  - `gcObj` now carries its **defining module** alongside its type index (0027 decision 5), because a
+    type index means nothing without the type space it indexes and `ref.cast` compares an object's
+    type against an immediate belonging to the *executing* module.
+
 - **Tail calls — `return_call`, `return_call_indirect`, `return_call_ref`, all three files fully
   green** (#253, decision 0026). A `return_call*` builds the callee's frame, truncates the stack to
   the dying frame's own base, and returns a **fourth control-transfer value** — a `*tailCall`

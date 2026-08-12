@@ -416,4 +416,6 @@ func (in *Instance) segmentRefs(seg *binary.ElemSegment) ([]ref, error) {
 // The retention gap it declared did *not* go with it: `immHeapType` stages no word, so
 // `ref.null func` and `ref.null extern` still decode to identical `Instr`s. That fact now lives
 // where the value is produced, at `opRefNull`'s arm in exec.go, which is where a reader of a null's
-// static type will be standing.
+// static type will be standing — and where the conditional it carried is now discharged, rung 5's
+// casts having asked the question and got `BotHT` (`value.ml:112`). The gap's remaining owner is
+// **#8**, the encoder, which needs the spelled heaptype as a static fact; no interpreter arm does.

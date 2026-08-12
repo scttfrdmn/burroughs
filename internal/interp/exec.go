@@ -127,7 +127,7 @@ func (in *Instance) runFrame(fn *binary.Func, locals *frame, st *stack, results,
 				continue
 			}
 			if ins.Prefix == 0xfb {
-				if err := in.execFB(ins, st); err != nil {
+				if err := in.execFB(ins, st, fn, pc); err != nil {
 					return err
 				}
 				continue
@@ -810,10 +810,20 @@ func (in *Instance) runFrame(fn *binary.Func, locals *frame, st *stack, results,
 
 		case opRefNull: // 0xd0 — `eval.ml:629-630`. The heaptype immediate names the static
 			// type and stages no word (immHeapType), so every ref.null is this one value
-			// regardless of which of the thirteen heaptypes it named. Harmless while a null's
-			// static type is the *table's* or the *global's*, and a real gap the moment
-			// something must report which heaptype a null was spelled with; recorded at 0016's
-			// retention-gap note rather than fixed here. The declaration used to live in
+			// regardless of which of the thirteen heaptypes it named. **The conditional this
+			// used to carry is now settled, and settled in the direction that closes it: the
+			// run-time consumer it was waiting for does not exist.** It said "a real gap the
+			// moment something must report which heaptype a null was spelled with", and rung 5's
+			// casts are the first code with a reason to ask — `ref.test`/`ref.cast` type a
+			// reference before matching it. They ask and get bottom: `value.ml:20` declares
+			// `NullRef` as a **nullary** constructor and `value.ml:112` maps it to `(Null,
+			// BotHT)`, so the reference itself does not retain the spelled heaptype and
+			// `ref.null any` is indistinguishable from `ref.null none` at run time (0027
+			// decision 4, `castop.go`'s `typeOfRef`). Every cast against a null is therefore
+			// decided by nullability alone. The one live consumer left is **#8**, the encoder,
+			// which must re-emit the heaptype the module spelled — a static fact, not a value's
+			// — so the retention gap belongs to that frontier and to no interpreter arm. The
+			// declaration used to live in
 			// `constExprRef`, deleted by #241, and it moved here rather than going with it —
 			// this arm is where the value is produced.
 			st.pushRef(ref{Null: true})
