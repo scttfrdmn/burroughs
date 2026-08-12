@@ -1042,11 +1042,52 @@ type DataSegment struct {
 // accept-direction and invisible on the board (§9 G-3).
 //
 // Single-byte only, because that is the region the consumer needs; a prefixed accessor is worth
-// adding when something asks, not before.
+// adding when something asks, not before. **Something asked** — see PrefixedOp below, added for
+// `internal/interp`'s struct arms rather than in anticipation of them.
 func OpMnemonic(op uint32) (string, bool) {
 	info, ok := opTable[op]
 	if !ok {
 		return "", false
 	}
 	return info.mnemonic, true
+}
+
+// PrefixedOp returns a prefixed sub-opcode's mnemonic and immediate count, and whether the region's
+// table has a row for it. OpMnemonic's prefixed twin, added on the condition that comment set: a
+// consumer asked.
+//
+// The consumer is `internal/interp`'s 0xfb arms, and the hazard it needs checking is sharper than the
+// single-byte case's. `fb 02`/`fb 03`/`fb 04` are `struct_get`/`struct_get_s`/`struct_get_u` —
+// adjacent bytes differing only in a signedness the interpreter dispatches to three separate arms —
+// and `fb 00`/`fb 01` are `struct_new`/`struct_new_default`, which are *indistinguishable in
+// behaviour* on a struct whose fields are all zero. A hand-written constant naming the wrong one of
+// either pair produces a module that decodes perfectly, so the error is accept-direction and the
+// board scores it green wherever the values coincide (§9 G-3).
+//
+// **Both facts in one call, because a constant carries two.** The mnemonic alone would pass a
+// regenerated table that renumbered a region while keeping names; the immediate count catches that,
+// `fb 00`/`fb 01` taking one immediate where `fb 02`-`fb 05` take two. Returning them together is
+// what stops a consumer from checking the cheap half and calling it agreement.
+//
+// An unknown *prefix* and an unknown sub-opcode are one `false` deliberately: the caller's question
+// is "does the table have this instruction", and a consumer that cared which half was missing would
+// be reimplementing the decoder's own escape/illegal/absent distinction (see opInfo.escape) from
+// outside.
+func PrefixedOp(prefix byte, op uint32) (mnemonic string, imms int, ok bool) {
+	var tab map[uint32]opInfo
+	switch prefix {
+	case 0xfb:
+		tab = opTableFB
+	case 0xfc:
+		tab = opTableFC
+	case 0xfd:
+		tab = opTableFD
+	default:
+		return "", 0, false
+	}
+	info, found := tab[op]
+	if !found {
+		return "", 0, false
+	}
+	return info.mnemonic, len(info.imms), true
 }
