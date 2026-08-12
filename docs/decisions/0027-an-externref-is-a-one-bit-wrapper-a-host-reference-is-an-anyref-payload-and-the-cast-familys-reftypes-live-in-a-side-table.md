@@ -1,9 +1,24 @@
 # 0027 — An externref is a one-bit wrapper, a host reference is an anyref payload, and the cast family's reftypes live in a side table
 
-Date: 2026-08-12 · Status: **accepted in part** — decisions 1, 2, 4, 5 and 6 **accepted**;
-decision 3 remains **proposed**
+Date: 2026-08-12 · Status: **accepted** — decisions 1, 2, 4, 5 and 6 on the #259 relay;
+**decision 3 on the #267 relay (2026-08-12)**, which closed the carve below
 
-> **Stamp: Scott, on the #259 relay (2026-08-12), with the carve stated in the stamp itself** —
+> **Stamp 2 — decision 3 accepted: chat-Claude, on the #267 relay (2026-08-12), relayed by Scott,
+> Scott's veto standing.** The carve below is discharged, and the ground given is the one the carve
+> itself named: the deferral was for *slice-3 scoping*, the design having been read in full at the
+> substance relay (the one-level proof, the `extern.ml` citations, the pre-registered #260
+> inversion) — and slice 3 is now what is blocked on it. **The harness's `(ref.host N)` reader
+> rides as slice-3 scope**, not as a separate question. So the four `Consequences` entries marked
+> as forecasts below are now **accepted commitments**; they remain unfired, no field having been
+> added yet, which is a statement about implementation rather than about status.
+>
+> Implementation order is ruled with the stamp and is *not* immediate: **grave #242 goes first**
+> (v128 losing a slot across a branch or select, 27 vectors, corruption-class — defects outrank
+> frontiers where they meet), then decision 3 with **#260** riding it, that being the moment the
+> every-ref-field control inverts by design.
+>
+> **Stamp 1 — decisions 1, 2, 4, 5 and 6: Scott, on the #259 relay (2026-08-12), with the carve
+> stated in the stamp itself** —
 > decisions 1, 2, 4, 5 and 6 accepted; **decision 3 held at `proposed` inside this document**, marked
 > beside its own section, until slice 3's scoping firms it. The carve was granted on the ground that
 > decision 3 is the only one of the six with prospective design content, and that the slice-2-first
@@ -199,15 +214,21 @@ surviving option teaches nothing about why it survived.
    spec string is quoted verbatim from the reference rather than invented, per the
    gates-never-manufacture-malformedness rule: the string belongs to the grammar, and the grammar
    here is the tracked union's (§9 G-2), which Wasm 3.0 is in.
-3. **`ref` grows `Externalized` and a host payload** (Q2/Q3 option A). — **STATUS: `proposed`, not
-   covered by this document's stamp.** The #259 stamp carved this decision out explicitly and it is
-   the only one of the six still open; it is also the only one with prospective design content, since
-   nothing implements it yet and slice 3 is where it lands. Do not cite it as accepted, and do not
-   implement it on this document's authority: its scoping firms with slice 3 (a const-expression arm,
-   harness `(ref.host N)` and three bare `RefTypePattern` heaptypes — see *what this does not
-   decide*), and the stamp is expected then. The `Consequences` entries below that follow from it —
-   `ref`'s width, `refEqTreatment["Addr"]`'s inverted reason, #260 — are therefore **forecasts**
-   rather than accepted commitments, and are marked where they appear.
+3. **`ref` grows `Externalized` and a host payload** (Q2/Q3 option A). — **STATUS: accepted on the
+   #267 relay (stamp 2 above); the #259 carve is discharged.** What stood here while it was carved
+   out, kept rather than tidied because the interval is part of the provenance: *"`proposed`, not
+   covered by this document's stamp … Do not cite it as accepted, and do not implement it on this
+   document's authority: its scoping firms with slice 3 (a const-expression arm, harness `(ref.host
+   N)` and three bare `RefTypePattern` heaptypes — see what this does not decide), and the stamp is
+   expected then."* The scoping did firm, and it firmed **larger** than that sentence forecast:
+   `extern.wast`'s own 11 all-on fails are `no arm for opcode fb 1b`/`fb 1a`
+   (`extern.convert_any`/`any.convert_extern`), so this decision's arms are the file's *sole*
+   blocker, and the three bare heaptypes plus `(ref.host N)` are the harness half of the same
+   vectors — `externalize-ii` is `any.convert_extern (extern.convert_any x)`, a round trip whose
+   `(ref.i31)`/`(ref.struct)`/`(ref.array)` expectations assert the wrapper **preserves the inner
+   runtime constructor**. That is the board witness for the one-bit-wrapper shape, measured rather
+   than argued. The `Consequences` entries that follow from this decision — `ref`'s width,
+   `refEqTreatment["Addr"]`'s inverted reason, #260 — are accepted commitments as of stamp 2.
 
    An externref's dynamic
    heaptype is `extern` whatever it wraps (`extern.ml:19`); a host reference's is `any`
@@ -259,9 +280,10 @@ surviving option teaches nothing about why it survived.
 ## Consequences
 
 The **first four** entries below — `ref`'s width, `refEq`'s treatment map, that map's blind spot, and
-the boundary constructor's new neighbour — follow from **decision 3**, which this document's stamp
-carved out at `proposed`. They are therefore **forecasts of what slice 3 will owe**, not accepted
-commitments, and none has fired yet because no field has been added. The remaining three (`ref.null`'s
+the boundary constructor's new neighbour — follow from **decision 3**, which stamp 2 above accepted on
+the #267 relay. They were written as *forecasts of what slice 3 will owe* while decision 3 was carved
+out at `proposed`, and they are now **accepted commitments**; none has fired yet because no field has
+been added, which is a statement about implementation and not about their status. The remaining three (`ref.null`'s
 retention gap, `immStagedBits`/`optable.go` untouched, the cast trap's tail) follow from accepted
 decisions 4, 1 and 1/6 and stand as consequences. Counted against the list rather than estimated: an
 "immediately below" that is off by one is a false claim inside an amendment about provenance.
