@@ -75,7 +75,12 @@ written is a habit. Two figures beside the counts, both cheap and both quoted ra
 than described:
 
 - **`unsupported` delta** (`60872 → N`, or **`unmoved`** stated in that word), and when
-  unmoved, the product work this PR is overhead *for*.
+  unmoved, the product work this PR is overhead *for* — **unless the PR is a gate-campaign
+  PR, in which case the reward figure is the all-on lane's fail delta and the `unsupported`
+  zero is stated as structural**, gated vectors having no way to reach that column before
+  their flip. The full rule and its reason are below, under the product discipline; this
+  line records the substitution so the Board section is not written from a rule its own
+  sub-clause has amended.
 - **engine / instrument lines** for the diff, from `make ratio RATIO=<rev>`
   (`scripts/ratio.sh`) under the uniform comparator ruled on #113 — *not* the "non-test `.go` versus `_test.go`" split this line
   used to describe, which counted generators as engine. Its purpose is to make the
@@ -273,6 +278,21 @@ the choice, and consequences once Scott has called it.
     mechanism gets built for this (*one concept, one trigger*, #82). A PR that drains
     the column lowers the ceiling in the same PR, exactly as `textFailCeiling` fell
     stepwise with a per-PR account.
+    - **During a gate campaign the reward figure is the all-on lane's fail delta, because
+      `unsupported` has no subject.** A vector for a gated proposal is scored `gated`, never
+      `unsupported`, so a pre-flip campaign PR **cannot** move that column however much engine
+      capability it lands — the zero is structural and confessing it would be confessing to
+      arithmetic. The honest reading is that the two lanes measure different things and the
+      campaign lives in the other one: the default lane's `gated` count is what the flip
+      collapses, and until then the all-on lane's **fail** count is the only figure that
+      responds to an arm. So a campaign PR quotes the all-on fail delta as its reward and states
+      the `unsupported` zero as structural, naming the gate; a non-campaign PR keeps the rule
+      above unchanged. Note this is a statement about *which instrument has a subject*, not an
+      exemption — the actor still does not get to pick, which is why it is written here rather
+      than argued per-PR. SIMD's flip taught it (#227/#233: 24282 gated vectors moving while
+      `unsupported` sat at 2689 across the largest board change the project has made) and #235
+      needed it a second time, at which point task-bar folklore became text. (Ruling: Scott, PR
+      #235 — his token, his veto standing.)
   - **The actor never chooses the instrument that judges the actor.** The umbrella the two
     rules below were always standing under, written down once so it does not have to be
     rediscovered a third time: not choosing the measure, not granting the exception — same
