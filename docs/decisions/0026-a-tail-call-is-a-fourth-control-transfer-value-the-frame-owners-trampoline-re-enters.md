@@ -222,6 +222,19 @@ buys S-3 early at the price of taking v2's decision inside a v0 gate campaign.
 
 - **`runFrame` gains a base parameter** (from #251) and **one new sentinel type**; the dispatch loop
   gains no new state, which is the property option A was rejected for lacking.
+
+  **Amended 2026-08-12 — wrong in one word, and in the safe direction: it is a *captured* base, not a
+  parameter.** #251's fix (its own PR, prerequisite as stamped) reads
+  `base := frameBase{num: len(st.num), ref: len(st.refs)}` at the top of `runFrame`, because `invoke`
+  pops the callee's arguments *before* the call and so the entry height already **is** the base —
+  there is nothing for a caller to compute and therefore nothing for a caller to get wrong. Stated
+  here rather than corrected silently: this is an accepted record, and the forecast being one word off
+  is the kind of thing that is worth keeping visible, since a base *parameter* is a fact stated in two
+  places and a captured base is not. Nothing else in this document depends on which it was — the
+  trampoline (property 3) re-enters with "the same `base`" either way, and a captured base makes that
+  automatic rather than an obligation on the loop. What the trampoline now owes is the inverse
+  care: it must re-enter at the height the *original* frame was entered at, which means the arm's
+  truncation-to-base happens before re-entry, exactly as property 2 already says.
 - **Five vectors in `return_call_ref.wast` convert**, taking the file to **40 / 0** and removing
   `gate:gc`'s only non-#9 G-1 blocker in this family. The board figure gets measured on the PR's own
   tree, never quoted from here.

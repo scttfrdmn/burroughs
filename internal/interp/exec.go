@@ -69,6 +69,18 @@ func (in *Instance) run(fn *binary.Func, locals *frame, st *stack, results, refR
 // **`locals` is `*frame`, not `[]uint64`, since #196/#197** — see frame's own doc comment for
 // why a ref-typed local needs a second array exactly as the value stack does.
 func (in *Instance) runFrame(fn *binary.Func, locals *frame, st *stack, results, refResults, depth int) error {
+	// base is grave #251's fix: the height of both value stacks at this frame's entry, which every
+	// `returnFrom` below truncates to. See returnFrom for the defect and for why `branch` never had
+	// it.
+	//
+	// **Captured here rather than passed in, and that is stronger than the parameter ADR 0026
+	// forecast.** `invoke` pops the callee's arguments *before* it calls this function (call.go's
+	// reverse-pop loop, then `numBase, refBase := len(st.num), len(st.refs)`), so this frame's entry
+	// height already *is* the base — there is nothing for a caller to compute and therefore nothing
+	// for a caller to get wrong. A base parameter would be a fact stated twice in two places, which
+	// is the drift shape this package files tripwires against; captured, the only way to pass a wrong
+	// base is to push onto the stack before reading it, which no code path between the two lines can.
+	base := frameBase{num: len(st.num), ref: len(st.refs)}
 	body := fn.Body
 	// **Not `for pc := range len(body)`**, because a branch writes to `pc`: the arms below set it
 	// to a target and let the `pc++` carry it forward, which is why this walk indexes the slice
@@ -274,7 +286,7 @@ func (in *Instance) runFrame(fn *binary.Func, locals *frame, st *stack, results,
 			// wrong end (was the level zero?), which is a different question and gets `br 0`
 			// inside one enclosing block wrong.
 			if ins.Imm0 == uint64(len(ctrl)) {
-				return returnFrom(st, results, refResults)
+				return returnFrom(st, base, results, refResults)
 			}
 			target, level, err := in.branch(st, ctrl, ins.Imm0)
 			if err != nil {
@@ -291,7 +303,7 @@ func (in *Instance) runFrame(fn *binary.Func, locals *frame, st *stack, results,
 				break // not taken: fall through, and the operand is already consumed
 			}
 			if ins.Imm0 == uint64(len(ctrl)) {
-				return returnFrom(st, results, refResults) // taken, and the target is the function body — see opBr
+				return returnFrom(st, base, results, refResults) // taken, and the target is the function body — see opBr
 			}
 			target, level, err := in.branch(st, ctrl, ins.Imm0)
 			if err != nil {
@@ -319,7 +331,7 @@ func (in *Instance) runFrame(fn *binary.Func, locals *frame, st *stack, results,
 			// after would let the index survive as one of the block's results on any label
 			// whose arity is non-zero.
 			if depth == uint64(len(ctrl)) {
-				return returnFrom(st, results, refResults) // the function body, as in opBr
+				return returnFrom(st, base, results, refResults) // the function body, as in opBr
 			}
 			target, level, err := in.branch(st, ctrl, depth)
 			if err != nil {
@@ -333,7 +345,7 @@ func (in *Instance) runFrame(fn *binary.Func, locals *frame, st *stack, results,
 			// scratch this frame is done with — so the stack is truncated to the function's
 			// arity, which is what `eval.ml:1069`'s `take n vs0` does. See returnFrom for the
 			// arm this replaces and for what its comment asserted (grave #135).
-			return returnFrom(st, results, refResults)
+			return returnFrom(st, base, results, refResults)
 
 		// ---- exception handling ----------------------------------------------------
 		//
@@ -384,7 +396,7 @@ func (in *Instance) runFrame(fn *binary.Func, locals *frame, st *stack, results,
 				return &Uncaught{exc: exc}
 			}
 			if c.IsReturn {
-				return returnFrom(st, results, refResults)
+				return returnFrom(st, base, results, refResults)
 			}
 			ctrl = ctrl[:c.Level]
 			pc = c.PC - 1
@@ -410,7 +422,7 @@ func (in *Instance) runFrame(fn *binary.Func, locals *frame, st *stack, results,
 				return &Uncaught{exc: r.Exc}
 			}
 			if c.IsReturn {
-				return returnFrom(st, results, refResults)
+				return returnFrom(st, base, results, refResults)
 			}
 			ctrl = ctrl[:c.Level]
 			pc = c.PC - 1
@@ -437,7 +449,7 @@ func (in *Instance) runFrame(fn *binary.Func, locals *frame, st *stack, results,
 					return err
 				}
 				if c.IsReturn {
-					return returnFrom(st, results, refResults)
+					return returnFrom(st, base, results, refResults)
 				}
 				ctrl = ctrl[:c.Level]
 				pc = c.PC - 1
@@ -457,7 +469,7 @@ func (in *Instance) runFrame(fn *binary.Func, locals *frame, st *stack, results,
 					return err
 				}
 				if c.IsReturn {
-					return returnFrom(st, results, refResults)
+					return returnFrom(st, base, results, refResults)
 				}
 				ctrl = ctrl[:c.Level]
 				pc = c.PC - 1
@@ -491,7 +503,7 @@ func (in *Instance) runFrame(fn *binary.Func, locals *frame, st *stack, results,
 			if err := in.callIndirect(ins, st, depth); err != nil {
 				return err
 			}
-			return returnFrom(st, results, refResults)
+			return returnFrom(st, base, results, refResults)
 
 		case opCallRef: // 0x14 — `eval.ml:266-270` (`gate:gc`, #172 rung 1)
 			if err := in.callRef(st, depth); err != nil {
@@ -510,7 +522,7 @@ func (in *Instance) runFrame(fn *binary.Func, locals *frame, st *stack, results,
 					return err
 				}
 				if c.IsReturn {
-					return returnFrom(st, results, refResults)
+					return returnFrom(st, base, results, refResults)
 				}
 				ctrl = ctrl[:c.Level]
 				pc = c.PC - 1
@@ -567,7 +579,7 @@ func (in *Instance) runFrame(fn *binary.Func, locals *frame, st *stack, results,
 			if err := in.callRef(st, depth); err != nil {
 				return err
 			}
-			return returnFrom(st, results, refResults)
+			return returnFrom(st, base, results, refResults)
 
 		case opEnd:
 			// **Two meanings, and the control stack is what tells them apart** — which is
@@ -825,7 +837,7 @@ func (in *Instance) runFrame(fn *binary.Func, locals *frame, st *stack, results,
 				break
 			}
 			if ins.Imm0 == uint64(len(ctrl)) {
-				return returnFrom(st, results, refResults)
+				return returnFrom(st, base, results, refResults)
 			}
 			target, level, err := in.branch(st, ctrl, ins.Imm0)
 			if err != nil {
@@ -850,7 +862,7 @@ func (in *Instance) runFrame(fn *binary.Func, locals *frame, st *stack, results,
 			}
 			st.pushRef(r)
 			if ins.Imm0 == uint64(len(ctrl)) {
-				return returnFrom(st, results, refResults)
+				return returnFrom(st, base, results, refResults)
 			}
 			target, level, err := in.branch(st, ctrl, ins.Imm0)
 			if err != nil {
