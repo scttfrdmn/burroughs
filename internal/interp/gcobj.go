@@ -228,6 +228,14 @@ func (in *Instance) arrayType(what string, idx uint64) (*binary.CompType, binary
 func notAggregate(what, want string, r ref) error {
 	kind := "a function reference"
 	switch {
+	case r.IsI31:
+		// Rung 4's payload, and the case that would otherwise be *misreported* rather than
+		// merely unreported: an i31 sets none of the pointer fields, so without this arm
+		// `struct.get` on an `i31ref` names "a function reference" — a message asserting
+		// something about the input that the input does not contain, which is grave #36's
+		// class exactly. A payload kind added to `ref` owes this switch an arm for the same
+		// reason it owes `refEqTreatment` an entry.
+		kind = "an i31 reference"
 	case r.Exc != nil:
 		kind = "an exception reference"
 	case r.Inst != nil:

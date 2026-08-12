@@ -73,10 +73,47 @@ type ref struct {
 	// zero is a legitimate function index and `ref.null func` is a *value*, not an absence.
 	Null bool
 
+	// IsI31 is whether this reference's payload is the I31 field below — the fifth payload kind
+	// (rung 4, #255), and the first one that needs a *discriminator* rather than being its own.
+	//
+	// Every earlier kind announces itself by a non-nil pointer, so `Exc != nil` both selects and
+	// carries. An i31 payload is 31 bits of guest integer with no distinguished value — 0 is a
+	// perfectly ordinary `ref.i31` — which is the same argument `Null`'s own comment makes about
+	// address zero one field up, arriving a second time. So the kind is a separate bit.
+	//
+	// Declared beside `Null` because the two discriminators read together, and for **no** size
+	// reason — a claim worth stating in the negative, because the size reason was written here
+	// first and measurement killed it. `ref` was 32 bytes and is now **40**, and both placements
+	// give 40: `Null` does share its four-byte hole with this bit, but `Addr` already occupies the
+	// only other one, so `I31` opens a fresh word wherever it is declared. The floor for two
+	// bools, two `uint32`s and three pointers is 34 bytes, which aligns to 40, and the only way
+	// under it is to union `I31` with `Addr` — the second-representation option 0020 declines by
+	// name. So the payload costs one word per reference slot in the engine, that cost is
+	// unavoidable at this rung, and `TestRefWidthIsMeasuredNotAssumed` pins it so the *next*
+	// payload kind's widening is a red board rather than a silent 25%.
+	IsI31 bool
+
 	// Addr is what the reference names, read according to the reference's static type — a
 	// function index for `funcref`, and for the GC types an object handle this package does not
 	// have yet.
 	Addr uint32
+
+	// I31 is the payload of an `i31ref`, meaningful exactly when IsI31 is true and Null is false —
+	// `i31.ml`'s `I31Ref of int`, decision 0020's one-field-per-payload-kind shape reaching a
+	// payload that is not a pointer at all.
+	//
+	// **Already masked to 31 bits by whoever stored it** (`i31op.go`'s `i31Mask`, the reference's
+	// own `of_i32`), which is what makes `i31.get_u` an identity and `ref.eq` a plain `==`. A
+	// value in this field with bit 31 set is an engine bug, not a guest value; nothing narrows on
+	// read, exactly as `loadStorage`/`pushField`'s narrow-on-store contract does one file over —
+	// the contract #250's M15 falsification established by killing the prose that denied it.
+	//
+	// **The one payload the collector need not trace**, and stating that is the point of the
+	// field's placement in this list: `Inst` and `Obj` carry the GC-precision argument 0002 exists
+	// for, and an i31 is a scalar that owns nothing. It lives in `refs` regardless, because which
+	// array a slot uses is a question about its *static type* and `i31ref` is a reference type —
+	// `stack`'s own doc below, and grave #239's arity lesson.
+	I31 uint32
 
 	// Inst is the instance Addr's index space belongs to (0017 Q2, grave #163). A funcref is a
 	// *pair* — which instance, which index — because index 3 names two different functions once

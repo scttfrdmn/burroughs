@@ -21,6 +21,28 @@ weakly-ordered platform.
 
 ### Added
 
+- **`gate:gc` rung 4 — the three i31 arms, and `ref_eq.wast` goes fully green** (#255). `ref.i31`,
+  `i31.get_s` and `i31.get_u` (`fb 1c`–`fb 1e`), transcribed from `i31.ml` rather than from the board:
+  the 31-bit truncation happens at **construction** (`of_i32`'s `land 0x7fff_ffff`), which makes
+  `i31.get_u` an identity and `i31.get_s` the arithmetic `(i<<1)>>1`, and makes `ref.eq` a plain
+  comparison of two already-narrowed payloads. `ref` grows its fifth payload kind — the first that is
+  a *scalar* rather than a pointer, so it needs a discriminator bit where every earlier kind announced
+  itself by being non-nil — and `refEq` gains `i31.ml:20`'s structural clause, in which a mixed pair
+  answers **false** by delegation rather than reporting #9's debt.
+  - **All-on lane 61764 → 61891 pass, 536 → 409 fail, `Gated` 0.** Five files moved and the
+    redistribution sums with residual zero: `ref_eq.wast` 14/69 → 83/0 (+69), `i31.wast` 7/64 → 54/17
+    (+47), `array_new_elem.wast` +5, `br_on_cast.wast` +3, `br_on_cast_fail.wast` +3. The `fb 1c`/`1d`/
+    `1e` buckets are gone corpus-wide. The default lane is **unmoved** (58565/142/2689/3625) and
+    structurally so: GC is gated off there, so an i31 vector scores `gated`, never `unsupported`.
+  - **A four-rung prediction came in.** `refop.go` has argued since rung 1 that `ref_eq.wast`'s 68
+    `assert_return value mismatch` fails were *correct* and that a wrong `ref.eq` would buy 55 of them
+    — the sharpest specimen in the package of the board rewarding a defect — and that they should
+    **drain rather than invert** once `init`'s constructors existed. They drained, all 68, none
+    inverted. The same episode cost the PR's own forecast: #255's co-blocking probe measured the
+    `fb 1c` bucket alone and predicted 44, where the delivered 127 is #155's write-state multiplier
+    (`ref.i31` fills `ref_eq.wast`'s table, and the read-backs key on a *value*, naming no opcode).
+    Two instruments each held half the answer and the forecast quoted one.
+
 - **Decision 0026 — proper tail calls: a tail call is a fourth control-transfer value, and the frame
   owner's trampoline re-enters. Accepted on Scott's stamp (PR #252); authored and pushed `proposed`,
   and the interval it spent open is kept in the record.** Scoped to *both* gate
