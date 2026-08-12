@@ -730,7 +730,12 @@ func sameFuncType(modA *binary.Module, idxA uint32, modB *binary.Module, idxB ui
 // (struct i32)` between two types that never declared each other.
 func matchDeftype(modA *binary.Module, idxA uint32, modB *binary.Module, idxB uint32, visited map[[2]uint32]bool) bool {
 	ctA, okA := compTypeAt(modA, idxA)
-	ctB, okB := compTypeAt(modB, idxB)
+	// B is resolved for the check and not otherwise read here — disjunct 2 resolves it again inside
+	// `sameDeftype`, and disjunct 3 only walks A's supertypes. Kept rather than dropped because the
+	// early return is the *documented* answer for an unresolvable index; letting it reach disjunct 3
+	// and come back false by exhausting the walk would give the same verdict for a reason nothing
+	// states.
+	_, okB := compTypeAt(modB, idxB)
 	if !okA || !okB {
 		// #9's layering debt: an index naming nothing at all. Not this function's verdict to
 		// invent — every functype call site already resolved both sides through
@@ -740,41 +745,45 @@ func matchDeftype(modA *binary.Module, idxA uint32, modB *binary.Module, idxB ui
 		return false
 	}
 
-	// Disjunct 2, restricted scope (see the doc comment above for exactly which restriction):
-	// same finality and the same structural comptype is always sufficient, whether or not either
-	// side declares supertypes — this is the pre-existing MVP case widened to also check Final,
-	// never narrowed.
-	if ctA.Final == ctB.Final && compTypeEqual(ctA, ctB) {
-		// Same absolute chain *so far*; still requires the declared supertypes themselves to
-		// agree pairwise for the two deftypes to be the same rec-group-relative shape. Modules
-		// with no declared supertypes at all (the original MVP case) have both sides empty and
-		// this is trivially true.
-		if len(ctA.Supertypes) == len(ctB.Supertypes) {
-			same := true
-			key := [2]uint32{idxA, idxB}
-			if visited[key] {
-				// Cycle guard: this pair is already being compared further up the call stack.
-				// Reported as agreeing-so-far, matching the reference's own pointer-identity
-				// optimisation (`dt1 == dt2`) for the case this engine cannot short-circuit on
-				// object identity — a self-referential chain is #9's malformed input, not a
-				// question this function can answer by non-termination.
-				return true
-			}
-			if visited == nil {
-				visited = map[[2]uint32]bool{}
-			}
-			visited[key] = true
-			for i := range ctA.Supertypes {
-				if !matchDeftype(modA, ctA.Supertypes[i], modB, ctB.Supertypes[i], visited) {
-					same = false
-					break
-				}
-			}
-			if same {
-				return true
-			}
-		}
+	// Disjunct 2, and it is **equality, not subtyping** — grave #261. The reference reads
+	// `let s = subst_of c in subst_deftype s dt1 = subst_deftype s dt2` (match.ml:152), an
+	// OCaml `=` over the whole substituted `SubT`: finality, the declared supertype list, and
+	// the comptype, all compared for agreement. So it is `sameDeftype`, whose recursion stays
+	// inside equality and never re-enters this function.
+	//
+	// It recursed through `matchDeftype` until #261, which is the subtyping relation and
+	// therefore true for strictly more pairs than agreement. The cost was two false positives on
+	// `br_on_cast.wast`'s concrete-types module: `$t2 -> $t3` and `$t4 -> $t3`, structurally
+	// identical structs whose *different* declared supertypes happen to stand in a subtype
+	// relation (`$t1 <: $t0`, `$t0' <: $t0`), so "same shape so far" was decided by a relation
+	// that walks upward. The comment here described the property correctly — *agree* pairwise,
+	// *the same* rec-group-relative shape — while the code below it asked a different question,
+	// which is why review kept finding concurrence.
+	if sameDeftype(modA, idxA, modB, idxB, nil) {
+		return true
 	}
+
+	// Disjunct 3's cycle guard, which **used to live inside disjunct 2 and was reachable only
+	// through it** — the pairwise supertype loop was the one place `visited` was ever written, so
+	// collapsing disjunct 2 into `sameDeftype` would have left this walk with a map nothing
+	// populates and no termination argument at all. Guarding here instead is where it belonged:
+	// the walk that can revisit a pair is this one.
+	//
+	// `false` rather than `true` on a repeat, and the direction matters. Disjunct 2's guard
+	// reports agreeing-so-far because it stands in for the reference's `dt1 == dt2`
+	// pointer-identity short-circuit on a question this engine cannot answer by object identity.
+	// This guard is answering a *search*: "have A's supertypes any path to B" is already being
+	// asked further up the stack, so re-answering it yes would let a cyclic chain manufacture a
+	// subtype relation out of its own cycle. A search that has come back to where it started has
+	// found nothing on this path.
+	key := [2]uint32{idxA, idxB}
+	if visited[key] {
+		return false
+	}
+	if visited == nil {
+		visited = map[[2]uint32]bool{}
+	}
+	visited[key] = true
 
 	// Disjunct 3: does any of A's own declared supertypes match B by this same relation?
 	// `match_heaptype`'s `UseHT (Def dt), UseHT (Def dt2) -> match_deftype c dt dt2` reduces to
@@ -790,6 +799,66 @@ func matchDeftype(modA *binary.Module, idxA uint32, modB *binary.Module, idxB ui
 		}
 	}
 	return false
+}
+
+// sameDeftype is `match_deftype`'s disjunct 2 alone: `subst_deftype s dt1 = subst_deftype s dt2`
+// (match.ml:152), the OCaml `=` over two substituted `SubT` values. That structure is
+// `SubT (fin, uts, st)`, so agreement is finality **and** the declared supertype list **and** the
+// comptype — three conjuncts, and this function is those three conjuncts.
+//
+// # Why it is a separate function from matchDeftype (grave #261)
+//
+// Equality is not subtyping, and the recursion has to stay inside equality or the relation loosens
+// transitively. Two struct types with identical fields and *different* declared supertypes are
+// unequal deftypes even when one supertype is a subtype of the other — which is exactly the pair
+// #261 was filed on, and exactly what a recursion back through `matchDeftype` cannot express. The
+// widening is silent because it only fires when both sides have non-empty supertype lists, a shape
+// no functype in the MVP corpus has: the loop was unreachable until 0027 generalized the relation
+// to struct and array types.
+//
+// # Substitution
+//
+// `subst_of c` is the rec-group substitution this engine does not have — see `matchDeftype`'s scope
+// note and #9. Comparing resolved indices pairwise is the same relation for every module the
+// decoder currently accepts, because a supertype index here is already absolute; what it cannot yet
+// see is two rec-groups whose members are equal only *after* substitution, which needs the
+// rec-group boundary the decoder retains nothing of (`call_test.go`'s note on that gap).
+//
+// # The cycle guard is its own, deliberately not matchDeftype's
+//
+// A `visited` entry means "this pair is already being decided by this relation", and the two
+// relations give it opposite answers on a repeat: equality reports **true**, standing in for the
+// reference's `dt1 == dt2` pointer-identity short-circuit, while the upward search reports
+// **false**, a path that returned to its start having found nothing. Sharing one map would let an
+// in-progress equality question answer a subtyping question with equality's optimistic default, so
+// the map is a parameter of each relation rather than of the pair of them.
+func sameDeftype(modA *binary.Module, idxA uint32, modB *binary.Module, idxB uint32, seen map[[2]uint32]bool) bool {
+	ctA, okA := compTypeAt(modA, idxA)
+	ctB, okB := compTypeAt(modB, idxB)
+	if !okA || !okB {
+		return false // #9's layering debt, reported the same way matchDeftype reports it
+	}
+	if ctA.Final != ctB.Final || !compTypeEqual(ctA, ctB) {
+		return false
+	}
+	if len(ctA.Supertypes) != len(ctB.Supertypes) {
+		return false
+	}
+	// Both empty is the original MVP case and is trivially equal — the loop below does not run.
+	key := [2]uint32{idxA, idxB}
+	if seen[key] {
+		return true // see the doc comment for why this direction is true and disjunct 3's is false
+	}
+	if seen == nil {
+		seen = map[[2]uint32]bool{}
+	}
+	seen[key] = true
+	for i := range ctA.Supertypes {
+		if !sameDeftype(modA, ctA.Supertypes[i], modB, ctB.Supertypes[i], seen) {
+			return false
+		}
+	}
+	return true
 }
 
 // compTypeAt resolves a type index to its CompType, reporting false when the index is out of range

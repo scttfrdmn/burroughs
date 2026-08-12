@@ -123,6 +123,22 @@ var (
 	ErrMalformedImportKind = errors.New("malformed import kind")
 	ErrMalformedExportKind = errors.New("malformed export kind")
 
+	// ErrMalformedBrOnCastFlags is `br_on_cast`/`br_on_cast_fail`'s flags byte with a bit
+	// set that the grammar reserves — `require (flags land 0xfc = 0) s (pos + 2) "malformed
+	// br_on_cast flags"` (decode.ml:642). The reference's message text verbatim, including
+	// its use of `br_on_cast` for both opcodes: `br_on_cast_fail` shares the arm and so
+	// shares the string, and inventing a second spelling would be reporting a production
+	// the reference does not have.
+	//
+	// **Only bits 0 and 1 are meaningful, and they are nullability, not options** — bit 0
+	// is `rt1`'s null bit and bit 1 is `rt2`'s (`:644-645`). So the mask is the whole
+	// grammatical content of the byte, and a check written as `flags != 0` would be wrong
+	// in the **accept** direction on legal modules: `br_on_cast $l anyref (ref i31)` encodes
+	// `0x01` and `br_on_cast $l (ref null any) (ref null struct)` encodes `0x03`, both of
+	// which appear in `br_on_cast.wast`. A stricter-than-the-grammar check rejecting valid
+	// modules is the failure §9 G-3 names as worse than missing an invalid one.
+	ErrMalformedBrOnCastFlags = errors.New("malformed br_on_cast flags")
+
 	// ErrZeroByteExpected is a reserved byte that must be 0x00 and was not —
 	// `zero s = expect 0x00 s "zero byte expected"` (decode.ml:150).
 	//

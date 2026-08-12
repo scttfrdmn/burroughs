@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"slices"
 )
 
 // The instruction grammar, driven by the generated table (0007).
@@ -659,8 +660,22 @@ func (c *instrCtx) prefixed(r *reader, prefix byte) error {
 	if info.isStructural() {
 		return fmt.Errorf("%w: structural row under prefix %#02x", errNoImmReader, prefix)
 	}
-	if err := c.imms(r, 0x00, info.imms); err != nil {
-		return err
+	// `flags` is zero for every row but the br_on_cast pair, and it is read by castTypes
+	// below rather than recovered from a staged word: the staging slots are Instr's wire
+	// form and reading one back here would make this file reason about a slot assignment
+	// that 0027 decision 1 says is *printed, never reasoned about*.
+	var flags byte
+	switch {
+	case prefix == 0xFB && (sub == brOnCast || sub == brOnCastFail):
+		f, err := c.brOnCastImms(r, info.imms)
+		if err != nil {
+			return err
+		}
+		flags = f
+	default:
+		if err := c.imms(r, 0x00, info.imms); err != nil {
+			return err
+		}
 	}
 	// #22, closed here rather than guessed at from a byte scan. Four opcodes reference
 	// the data index space — memory.init (fc 08), data.drop (fc 09), array.new_data
@@ -672,9 +687,82 @@ func (c *instrCtx) prefixed(r *reader, prefix byte) error {
 	if dataRefOps[[2]uint32{uint32(prefix), sub}] {
 		c.d.sawDataRef = true
 	}
-	c.castTypes(prefix, sub)
+	c.castTypes(prefix, sub, flags)
 	c.emit(prefix, sub)
 	return nil
+}
+
+// brOnCast and brOnCastFail are named because they are dispatched on by opcode identity in
+// three places, and a bare 0x18 reads as a lane index or a section id at a glance.
+//
+// **Dispatched on the opcode and not on the immediate shape, deliberately.** `immByte`
+// appears in exactly two rows of the whole table — these two — so keying off it would work
+// today and be wrong the moment a row carries a raw byte that is not a flags word: the mask
+// check below would then *reject a legal module*, which is the accept-direction failure §9
+// G-3 calls worse than missing an invalid one. The reference dispatches the same way
+// (`0x18l | 0x19l as opcode ->`, decode.ml:636), and *scope controls to the space* says the
+// predicate must be the one the authority uses rather than the one this table's current
+// contents make sufficient.
+const (
+	brOnCast     uint32 = 0x18
+	brOnCastFail uint32 = 0x19
+)
+
+// brOnCastImmSeq is what the generated table must hold for both br_on_cast rows, and what
+// brOnCastImms hand-codes. Two authorities, one fact, checked against each other rather
+// than trusted — the shape `structural` already has, for the same reason: a hand-written
+// reader beside a generated table is two places knowing one grammar.
+var brOnCastImmSeq = []imm{immByte, immIdx, immHeapType, immHeapType}
+
+// brOnCastImms reads `br_on_cast`/`br_on_cast_fail`'s immediates and returns the flags byte.
+//
+// # Why this pair cannot go through imms
+//
+// `imms` reads a flat sequence, and this row is not flat in two independent ways
+// (decode.ml:640-650):
+//
+//	let flags = byte s in
+//	require (flags land 0xfc = 0) s (pos + 2) "malformed br_on_cast flags";
+//	let x = at var s in
+//	let rt1 = ((if bit 0 flags then Null else NoNull), heaptype s) in
+//	let rt2 = ((if bit 1 flags then Null else NoNull), heaptype s) in
+//
+// First, the requirement sits **between** the byte and the label — a module with reserved
+// bits set is malformed at `pos + 2` whatever follows, so a reader that validated after the
+// sequence would report the label's or a heaptype's error on an input the reference rejects
+// before reaching either. Second, the byte's two low bits are the nullability of the two
+// heaptypes that come *after* it, so the sequence's fourth element depends on its first.
+// Neither fact has anywhere to live in a `[]imm` walk, which is the deferral `castTypes`'
+// comment recorded at the previous revision; this is its redemption.
+//
+// The table's row is still the authority for *what* the immediates are — asserted, not
+// assumed, so a grammar change upstream fails the build here instead of being read flat
+// against a hand-written sequence that no longer matches.
+func (c *instrCtx) brOnCastImms(r *reader, ims []imm) (byte, error) {
+	if !slices.Equal(ims, brOnCastImmSeq) {
+		return 0, fmt.Errorf("%w: br_on_cast row is %v, want %v", errNoImmReader, ims, brOnCastImmSeq)
+	}
+	flags, err := r.byte()
+	if err != nil {
+		return 0, err
+	}
+	// The mask, not `flags != 0`: bits 0 and 1 are grammatical content (the two null bits),
+	// and `br_on_cast $l anyref (ref i31)` encodes 0x01 — see ErrMalformedBrOnCastFlags.
+	if flags&0xfc != 0 {
+		return 0, fmt.Errorf("%w: %#02x", ErrMalformedBrOnCastFlags, flags)
+	}
+	c.stage(uint64(flags))
+	if err := c.imm(r, immIdx); err != nil {
+		return 0, err
+	}
+	// rt1 then rt2, in the reference's order, both appended to c.heaps by the immediate arm.
+	// The nullability is applied by castTypes, which is the one place a cast type is built.
+	for range 2 {
+		if err := c.imm(r, immHeapType); err != nil {
+			return 0, err
+		}
+	}
+	return flags, nil
 }
 
 // castTypes turns the heaptypes the cast family's grammar just read into the reference types it
@@ -682,13 +770,22 @@ func (c *instrCtx) prefixed(r *reader, prefix byte) error {
 //
 // # Why the nullability is applied here and not in the immediate arm
 //
-// Nothing in this family encodes a reftype. `decode.ml:636-639` reads a bare `heaptype` for each
-// of `fb 14`-`fb 17` and pairs it with `NoNull` or `Null` chosen **by which of the four opcodes
-// it is**; `:642-650` reads one flags byte and takes the two bits from it for `br_on_cast`'s
-// pair. Either way the null bit is a fact about the *opcode*, and `imms` dispatches on immediate
-// kind — it has no opcode in hand. Deriving it at each consumer instead would put a wire-format
-// rule in the interpreter and in the encoder both, which is the two-places-know-one-fact shape
-// this package files tripwires against.
+// Nothing in this family encodes a reftype, and the null bit therefore comes from somewhere else
+// in every row — but **not from the same somewhere**, which is the distinction the previous
+// revision of this paragraph flattened. `decode.ml:636-639` reads a bare `heaptype` for each of
+// `fb 14`-`fb 17` and pairs it with `NoNull` or `Null` chosen by *which of the four opcodes it
+// is*; `:642-650` reads a flags **byte** and takes rt1's and rt2's bits out of the encoding.
+// So for four rows the bit is a fact about the opcode and for two it is a fact about the input,
+// and a sentence saying "either way, the opcode" is the defect-stated-as-the-rule shape — right
+// about the four rows that existed when it was written, wrong as the family-wide claim it was
+// phrased as. Its sibling in module.go's `Casts` comment said the same thing and is corrected in
+// the same diff.
+//
+// What is uniform, and what actually justifies the site, is that neither fact reaches `imms`:
+// that walk dispatches on immediate *kind* and holds no opcode and no earlier byte's value.
+// Deriving the bit at each consumer instead would put a wire-format rule in the interpreter and
+// in the encoder both, which is the two-places-know-one-fact shape this package files tripwires
+// against.
 //
 // # Called for every prefixed opcode and answering for six
 //
@@ -698,26 +795,54 @@ func (c *instrCtx) prefixed(r *reader, prefix byte) error {
 // is not prefixed and so never arrives here at all, and which keeps no heaptype by 0027 decision
 // 4 in any case.
 //
-// `fb 18`/`fb 19` are deliberately absent at this revision: their flags byte carries a
-// malformedness requirement (`require (flags land 0xfc = 0)`) that the reference checks *before*
-// reading the label, which the generic `imms` dispatch cannot express without a signature change
-// — so they land with their arms, in this rung's second slice. What makes that a deferral rather
-// than a hole is that the two opcodes are still `gate:gc` rows and still refused by
-// `execFB`'s default, so no module reaches an arm that would want a vector this does not file.
-func (c *instrCtx) castTypes(prefix byte, sub uint32) {
-	if prefix != 0xFB || len(c.heaps) == 0 {
+// `fb 18`/`fb 19` are here now, and they are the reason this function takes a flags byte. The
+// previous revision deferred them with the note that their malformedness requirement sits
+// *before* the label and so cannot be expressed by a flat `imms` walk — see brOnCastImms, which
+// redeems that deferral. Every other row passes `flags` as zero and never reads it.
+//
+// # The pair files two types, and their order is load-bearing
+//
+// `rt1` is the branch instruction's *input* type and `rt2` is what it casts to (decode.ml:644-645),
+// so a consumer reading element 0 where it wants element 1 gets a type that is legal, plausible,
+// and wrong — `br_on_cast $l anyref (ref i31)` would test against `anyref`, which every value
+// satisfies. The arms therefore do not receive this slice: `branchCastTargetAt` hands them `rt2`
+// alone (interp/castop.go), so the wrong read has no syntax rather than a comment telling it not
+// to. The full pair stays available here because #9's validator genuinely needs `rt1`.
+func (c *instrCtx) castTypes(prefix byte, sub uint32, flags byte) {
+	if prefix != 0xFB {
 		return
 	}
-	var null bool
+	// The length guards are unreachable on this path — `prefixed` returns before calling this
+	// on any input where a heaptype arm failed — and they are kept for the same reason the
+	// previous revision kept one: a filing site that indexes a staging slice states the extent
+	// it requires, so a future caller that files before reading gets nothing rather than a
+	// neighbour's heaptype.
 	switch sub {
-	case 0x14, 0x16: // ref.test, ref.cast — `NoNull`
-		null = false
-	case 0x15, 0x17: // ref.test null, ref.cast null — `Null`
-		null = true
+	case 0x14, 0x16: // ref.test, ref.cast — `NoNull` (decode.ml:636,638)
+		if len(c.heaps) < 1 {
+			return
+		}
+		c.casts = append(c.casts, refNull(c.heaps[0], false))
+	case 0x15, 0x17: // ref.test null, ref.cast null — `Null` (decode.ml:637,639)
+		if len(c.heaps) < 1 {
+			return
+		}
+		c.casts = append(c.casts, refNull(c.heaps[0], true))
+	case brOnCast, brOnCastFail:
+		// **Nullability from the flags byte's bits, not from the opcode.** `bit 0 flags` is
+		// rt1's and `bit 1 flags` is rt2's (decode.ml:644-645), which is why 0x18 and 0x19
+		// share an arm here where 0x14-0x17 split into two: the four single-cast rows encode
+		// their null bit in the opcode, the pair encodes both in the byte, and the same
+		// instruction can be nullable on one side and not the other.
+		if len(c.heaps) < 2 {
+			return
+		}
+		c.casts = append(c.casts,
+			refNull(c.heaps[0], flags&0x01 != 0),
+			refNull(c.heaps[1], flags&0x02 != 0))
 	default:
 		return
 	}
-	c.casts = append(c.casts, refNull(c.heaps[0], null))
 	c.hasCasts = true
 }
 
@@ -892,6 +1017,15 @@ func (c *instrCtx) imm(r *reader, im imm) error {
 		c.stage(binary.LittleEndian.Uint64(b[:8]))
 		c.stage(binary.LittleEndian.Uint64(b[8:]))
 		return nil
+	// DECLARED AND TRACKED (#262): unreachable from this walk as of rung 5 slice 2, and
+	// retained. `immByte` is declared by exactly two rows — `0x18`/`0x19` — and both are
+	// dispatched by opcode identity before `imms` runs, because the flags byte's low bits
+	// govern the two heaptypes after it (see brOnCastImms). So this arm has declaring rows
+	// and no path. Not deleted: `immVocabulary`'s comment records the `immValType`
+	// precedent for why a live arm with no row stays (a row-derived domain drops the
+	// entry, and the immediate then sums as zero bits the day a row arrives), and the
+	// default arm being a hard error means deleting this case would turn a future
+	// raw-byte row into a decode failure on a legal module — the accept direction.
 	case immByte:
 		v, err := r.byte()
 		if err != nil {

@@ -592,13 +592,25 @@ type Func struct {
 	// the mechanism that let grave #100 drop fourteen lane indices. A side table costs the words
 	// nothing and needs no exception.
 	//
-	// **The pair is retained as full ValTypes, nullability included, because nullability comes
-	// from the opcode and not from the encoding.** `decode.ml:634-641` reads a bare *heaptype*
-	// for `fb 14`-`fb 17` and takes the null bit from which of the four opcodes it is
-	// (`ref.test null` versus `ref.test`); `br_on_cast`'s flags byte carries the two bits for its
-	// pair (`:642-650`). So the wire does not hold a reftype anywhere in this family, and a
-	// consumer reconstructing one would have to re-derive the opcode-to-nullability mapping at
-	// every call site. `castTypes` does it once, at decode.
+	// **The types are retained as full ValTypes, nullability included, because the wire holds no
+	// reftype anywhere in this family — it holds a bare heaptype and puts the null bit somewhere
+	// a heaptype reader cannot see.** Where that somewhere is differs per opcode, and the
+	// previous revision of this sentence asserted otherwise in bold ("nullability comes from the
+	// opcode and not from the encoding"), which was true of the four rows that existed when it
+	// was written and false as the family-wide claim it was phrased as:
+	//
+	//   - `fb 14`-`fb 17` read a bare *heaptype* and take the null bit from which of the four
+	//     opcodes it is — `ref.test null` versus `ref.test` (decode.ml:636-639).
+	//   - `fb 18`/`fb 19` read a flags **byte** and take rt1's null bit from bit 0 and rt2's from
+	//     bit 1 (`:644-645`), so one instruction can be nullable on one side and not the other.
+	//     For this pair the nullability *is* encoding, and a reader following the old sentence
+	//     would look for it in the opcode and find two rows that do not have it.
+	//
+	// Either way a consumer reconstructing the reftype would have to re-derive the mapping — a
+	// switch for four rows, a bit test for two — at every call site. `castTypes` does it once, at
+	// decode. Corrected here in the diff that added the pair, rather than left for the reader who
+	// trusts a bold claim over the four lines below it: *the defect stated as the rule* is the
+	// strongest camouflage a bug wears, because review checks code against claims.
 	//
 	// Nil is the normal case and a missing key is not an error, exactly as for Labels; consumers
 	// go through `CastTypes`.

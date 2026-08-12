@@ -21,6 +21,29 @@ weakly-ordered platform.
 
 ### Added
 
+- **`gate:gc` rung 5, second slice — `br_on_cast` and `br_on_cast_fail`, the casts family's
+  branching half** (#258, decision 0027). `fb 18`/`fb 19` end to end: decode, internal form, and
+  interpretation. Neither row can go through the flat immediate walk, for two independent reasons
+  from `decode.ml:640-650` — the reserved-bit requirement sits **between** the flags byte and the
+  label, so a reader validating after the sequence would report the label's error on a module the
+  reference rejects at `pos + 2`; and the byte's two low bits are the *nullability of the two
+  heaptypes that follow it*, so the sequence's fourth element depends on its first. `brOnCastImms`
+  reads the row by opcode identity instead, checked against the generated table's declared sequence
+  rather than trusted beside it.
+  - **The rt1 pin is structural, not documentary.** A `br_on_cast` carries two reftypes, and the
+    branch is taken on `rt2` alone — rt1 is the *operand's* declared type, which #9's absent
+    validator will check and which an interpreter must never consult. Rather than a comment saying
+    so, the arm-facing accessor `branchCastTargetAt` returns **rt2 only**, so reading rt1 from an
+    arm is unrepresentable rather than discouraged. A comment is discipline; an accessor signature
+    is law.
+  - **All-on lane 62046 → 62089 pass, 254 → 211 fail, `Gated` 0.** Fail delta **−43**: −41 from the
+    two arms, −2 from grave #261 below. The census sums with residual zero in both parts. Default
+    lane **unmoved** (58565/142/2689/3625), structurally — GC is gated off there, so a cast vector
+    scores `gated` and can never reach `unsupported` before the flip.
+  - `instrCtx.imm`'s `immByte` arm is now reachable from no table row, both declaring rows being
+    dispatched by opcode. Retained and **declared-and-tracked** (#262) rather than deleted, for
+    `immVocabulary`'s own `immValType` reason and because the switch's default is a hard error.
+
 - **`gate:gc` rung 5, first slice — the four cast opcodes, and `match_heaptype` arrives** (#258,
   decision 0027). `ref.test`, `ref.test null`, `ref.cast`, `ref.cast null` (`fb 14`–`fb 17`), with
   the reference's subtype relation transcribed arm for arm from `match.ml:58-155`: `matchNull`'s
@@ -244,6 +267,40 @@ weakly-ordered platform.
   element segment's *offset* and an element *expression* are different lines of the user's module.
 
 ### Fixed
+
+- **`ref.test`/`ref.cast` answered `true` for a supertype tested against a subtype: a disjunct of
+  `match_deftype` was implemented with subtyping where the reference uses equality**
+  ([#261](https://github.com/scttfrdmn/burroughs/issues/261)). `match.ml:152`'s second disjunct is
+  `subst_deftype s dt1 = subst_deftype s dt2` — OCaml **structural equality**, standing in for the
+  pointer-identity short-circuit the reference gets from `dt1 == dt2`. The engine used `matchDeftype`
+  itself, which reads as obviously right (it is the relation the enclosing function computes) and
+  makes the relation **transitively loose**: any pair joined by a chain of declared supertypes
+  satisfies the equality disjunct. `sameDeftype` now computes structural equality, with its **own**
+  cycle guard, because the two disjuncts need opposite directions — disjunct 2 answers `true` on a
+  repeat (pointer identity assumed and uncontradicted), disjunct 3 answers `false` (a search back at
+  its start found nothing on that path), so one shared `visited` map makes each guard wrong half the
+  time. Relocating disjunct 3's guard is what exposed that it had lived *inside* disjunct 2 and was
+  reachable through it alone: collapsing disjunct 2 would have left the supertype walk with no
+  termination argument. The board witness **pre-dated this slice by one merge, in slice 1's own
+  file** — `ref_test.wast:329`'s `(invoke "test-sub")` was already failing at `6f6c18c` with the
+  identical signature — and the attribution was settled by asking the same 6×6 concrete-hierarchy
+  matrix through `ref.test`, the older arm sharing the matcher. −2 all-on fails; the full 36-cell
+  matrix and three synthetic cyclic-chain rows are the controls.
+
+- **`fieldStorage`'s type-agreement check, retired on #247 for want of a subject, reinstated now
+  that casts give it one** ([#248](https://github.com/scttfrdmn/burroughs/issues/248)). A cast lets
+  an instruction's declared type and the object's own comptype differ, so a `struct.get` can name a
+  field whose *storage class* differs from the one the object allocated — read through the wrong
+  array, silently, returning a plausible number. The check compares a four-way class
+  (`packed | reference | v128 | numeric`) rather than `Storage` equality, and the distinction is the
+  accept direction §9 G-3 prices highest: `match_fieldtype` (`match.ml:134-138`) makes a `Cons` field
+  **covariant**, so equality would refuse a module the reference accepts — demonstrated, not argued,
+  by the mutation that rewrites it that way and turns the covariance control red. `Width` is
+  excluded for the same reason. Corpus counter re-run: `32 same-pointer, 0 differing, 0
+  storage-differs`, the zero **structural** (a disagreement is only reachable through a module #9's
+  absent validator would reject), and bounded by a positive control at the same site reporting 294
+  hits — a `println` probe without `-v` is a closed channel, and the first reading of that counter
+  was one.
 
 - **A callee's return destroyed its caller's pending operands, refusing valid modules**
   ([#251](https://github.com/scttfrdmn/burroughs/issues/251)). `returnFrom` truncated the **shared**

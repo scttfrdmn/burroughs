@@ -616,6 +616,21 @@ the choice, and consequences once Scott has called it.
   logs. Sibling of the early-return grave (#41's fetch script), where a fast path
   skipped the assertions it existed to run. (Condition on decision 0007; chat-Claude,
   #41.)
+  - **And the law reaches a *probe*, not just a control: a zero out of an instrument needs a
+    positive control proving the channel was open.** The vacuity failure above is an assertion
+    fed nothing; this is a *measurement* fed nothing, and it is worse in one specific way —
+    an empty comparison at least ran, where a suppressed write never reached the reader at
+    all. The specimen: `go test` **discards a passing binary's stderr without `-v`**, so a
+    `println` counter at a guard site reported "0 hits across the corpus" when it had reported
+    nothing whatsoever. Both a genuinely-unexercised path and a closed channel print zero
+    lines, and the transcript is identical. The remedy is not `-v` — `-v` was the *bug's*
+    repair and the class survives it — but an **unconditional print at the same site**, whose
+    number (294) is what licenses reading the conditional zero as a fact about the code. So
+    before a zero from a probe is quoted anywhere, ask what a *broken probe* would have
+    printed; if the answer is "the same thing", the measurement has not happened yet. Sibling
+    of *presence-of-status is not presence-of-content* one layer down: there a state field
+    stood in for a payload, here an empty channel stands in for an empty result. (Earned on
+    #248's counter, the second reading of which was quoted before it was bounded.)
 - **A tripwire whose subject dissolves is re-pointed, never closed.** A pre-registered
   control names a *risk*, not a code shape, so when the shape it was filed against
   disappears the obligation survives its subject. #33 was filed to catch two opcode
@@ -973,6 +988,23 @@ the choice, and consequences once Scott has called it.
     lives — an arm that only *computes* moves its own bucket, while an arm that **writes state**
     moves every bucket downstream of that state, so the multiplier is predictable in kind if never
     in size. (Ruling: Scott, PR #155.)
+    - **And for an `init`, *where* the blocker sits inside the write sequence is the entire
+      forecast, because an init is a sequence of independent writes and not one construct.** The
+      state-writing half above says an arm that writes moves everything downstream of the state;
+      this is the same fact read from the other end, and it is what makes an arm's payoff
+      *predictable* rather than merely large-in-kind. A `(func $init)` full of `table.set`s is N
+      independent facts about N slots, so a missing arm at write *k* leaves slots `k…N` at their
+      previous contents while `0…k-1` are correct — and every later read of a slot below `k`
+      already passes. Rung 5 slice 2's specimen: the forecast said 8 arrivals in the
+      `null-diff` key and 3 arrived, because `init`'s last write is `any.convert_extern` (slice
+      **3**'s arm), so slot 4 stays `ref.null any`, which genuinely *does* match a nullable
+      `(ref null struct)` — and three of the four other index-4 reads pass only by coincidence,
+      null failing their non-nullable targets. Read the init, find the first write the arm does
+      not supply, and forecast from *that index onward*; a bucket count over the whole file
+      assumes the sequence is a unit, which is the assumption an init is built to violate.
+      Note the miss was **optimistic** here and **pessimistic** in the previous entry, so the
+      probe's error is unsigned variance rather than a bias to correct for — which is why the
+      remedy is reading the sequence, not shading the estimate.
   - **And there is a third outcome that is neither over- nor under-payment: a bucket whose members
     share a *deeper* blocker **re-keys rather than pays**.** The taxonomy is now complete, one
     measured specimen each: an *embedded construct* overpays its bucket (export's 39-paid-55); a
