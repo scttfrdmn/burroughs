@@ -168,6 +168,48 @@ gives up loudly after a bounded wait, where a bare `sleep` asserts an answer. Wh
 no completion signal exists, poll for the condition; never stand in for it with a
 duration.
 
+### Local cross-architecture verification
+
+The dev box is arm64 — the weakly-ordered side, contract §9's own reason both CI
+runners exist (`ci.yml`'s own header: x86-64/TSO plus AArch64/weakly-ordered). CI
+gives both automatically on push, but a claim that needs confirming *before*
+pushing — a G-1 demonstration, a redistribution forecast, a flip's own board
+delta — needs the other architecture locally too, and Docker is the standing way
+to get it without a second machine:
+
+```bash
+docker run --rm --platform linux/amd64 -v "$PWD":/src -w /src golang:1.26 \
+  sh -c "go test ./... 2>&1 | tail -30"
+```
+
+Requires Docker Desktop (or equivalent) with amd64 emulation enabled — `--platform
+linux/amd64` on an arm64 host runs under QEMU, slower than native but exact for
+this purpose: correctness across memory models, not speed. Mount the whole repo
+(`-v "$PWD":/src -w /src`) rather than copying, so the container sees the working
+tree's actual uncommitted state — the same reason a pre-push check exists at all.
+Swap the trailing command for whatever the claim needs (`go test ./internal/spec/...
+-run TestAllGatesOnLeavesNothingGated -v -count=1`, for instance) rather than
+always running the full suite.
+
+### After a squash merge, local main diverges from origin/main — verify, don't force
+
+`gh pr merge --squash` rewrites history on GitHub: the merge commit's tree is
+identical to the branch just merged, but its hash is new, so a local checkout of
+that same branch now points at a commit `origin/main` has never heard of and a
+plain `git pull`/`git checkout main` reports "diverged." The fix is **verify then
+reset, never reset first**:
+
+```bash
+git checkout main && git fetch origin
+git diff origin/main <the-branch-or-commit-just-merged>   # must be empty
+git reset --hard origin/main                              # only after the diff is empty
+```
+
+An empty diff is the check that makes `reset --hard` safe here — it confirms the
+"divergence" is purely the squash rewriting the commit's identity, not a real
+content difference. This surfaced three times in one session, each time re-derived
+from scratch; the pattern is mechanical once named; don't re-derive it.
+
 ## Versioning and the changelog
 
 See **decision 0004** for the full scheme; the short version:
