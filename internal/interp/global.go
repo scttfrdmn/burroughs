@@ -11,9 +11,18 @@ import (
 // **A numeric slot and a reference slot, not one of each per global** — the same split
 // `stack` makes, for 0002's reason, and kept here because a global's value crosses between
 // the two: `global.get` of an externref must push onto `stack.refs`, and a `uint64` holding
-// a `ref` would be the tagged-value design 0002 declined. Which of the two fields is live
-// is decided by `typ.IsRef()`, never by inspecting the slot, because a null reference and
+// a `ref` would be the tagged-value design 0002 declined. Which of the three fields is live
+// is decided by `typ`, never by inspecting the slots, because a null reference and
 // the integer zero are the same bits and only the type tells them apart.
+//
+// **`numHi` is grave #239's fix, and it is the storage half of it.** A `v128` occupies two adjacent
+// numeric slots everywhere a slot is a thing (decision 0024), and this struct had one — so a
+// `(global v128 …)` had nowhere to keep its upper 64 bits even after the initializer evaluated
+// correctly. That is why the grave could not be closed in the evaluator alone: an instantiation-only
+// fix would accept the module and then hand `global.get` a zero-filled high half, which is a wrong
+// answer where the previous behaviour was an honest refusal. `get` and `set` below are the other
+// half. Unused — and therefore harmless to omit — for every other type, which is exactly how it
+// stayed missing.
 //
 // `mutable` is retained rather than checked: writing an immutable global is `global.set`'s
 // validation verdict (#9), not a runtime event, so this engine records the fact and does
@@ -23,8 +32,9 @@ type global struct {
 	typ     binary.ValType
 	mutable bool
 
-	num uint64
-	ref ref
+	num   uint64
+	numHi uint64
+	ref   ref
 }
 
 // newGlobal evaluates a global's initializer and allocates its storage.
@@ -37,26 +47,22 @@ type global struct {
 // global's value — a wrong answer, not a missing feature, and `global.wast:17` (`(global $z1
 // i32 (global.get 0))`) is exactly that vector.
 //
-// The initializer runs through the full interpreter for `constExprValue`'s reason: the
+// The initializer runs through the full interpreter for `constExpr`'s reason: the
 // reference's const production *is* the instruction grammar (`decode.ml:983`), so
 // pattern-matching the constant forms would make `(global i32 (i32.add …))` silently wrong
 // instead of honestly unimplemented.
+//
+// **One call, not a branch on `IsRef()`.** The branch was where grave #239 lived: the numeric arm
+// asked for one slot unconditionally, so `v128` — a type neither arm was written for — took the
+// numeric one and failed its arity check. `constExpr` derives the shape from `g.Type` via
+// `countByArray`, so the three fields are assigned from the one result and a fourth shape arriving in
+// `binary.ValType` is a change to `countByArray`, not to this function.
 func (in *Instance) newGlobal(g binary.Global) (*global, error) {
-	out := &global{typ: g.Type, mutable: g.Mutable}
-	if g.Type.IsRef() {
-		r, err := in.constExprRef(g.Init)
-		if err != nil {
-			return nil, err
-		}
-		out.ref = r
-		return out, nil
-	}
-	v, err := in.constExprValue(g.Init)
+	v, err := in.constExpr(g.Init, g.Type, "a global initializer")
 	if err != nil {
 		return nil, err
 	}
-	out.num = v
-	return out, nil
+	return &global{typ: g.Type, mutable: g.Mutable, num: v.lo, numHi: v.hi, ref: v.ref}, nil
 }
 
 // globalFor resolves a global index to its storage. The *only* place that does, which is what
@@ -96,14 +102,23 @@ func (in *Instance) globalFor(what string, idx uint64) (*global, error) {
 
 // get pushes the global's value onto the matching half of the stack.
 //
-// The two halves are dispatched on the *declared type*, not on the slot's contents, for the
+// The three shapes are dispatched on the *declared type*, not on the slots' contents, for the
 // reason `global`'s comment gives: a null ref and an integer zero are indistinguishable bits.
+//
+// The `v128` arm is grave #239's read-back half. Its absence is what makes an
+// instantiation-only fix insufficient: with the evaluator widened and this arm still missing, a
+// `(global v128 (v128.const i32x4 1 2 3 4))` module would instantiate, and `global.get` would push a
+// single slot — leaving the *next* pop to read whatever sat beneath it. So the vector that closes the
+// grave has to read all four lanes back, not merely instantiate.
 func (g *global) get(st *stack) {
-	if g.typ.IsRef() {
+	switch {
+	case g.typ.IsRef():
 		st.pushRef(g.ref)
-		return
+	case g.typ == binary.V128:
+		st.pushV128(g.numHi, g.num)
+	default:
+		st.pushNum(g.num)
 	}
-	st.pushNum(g.num)
 }
 
 // set pops a value into the global.
@@ -111,16 +126,26 @@ func (g *global) get(st *stack) {
 // Returns the layering debt rather than trapping on an empty stack, which is `needNum`'s
 // contract: underflow is `type mismatch`, a verdict this package does not issue.
 func (g *global) set(st *stack) error {
-	if g.typ.IsRef() {
+	switch {
+	case g.typ.IsRef():
 		if err := st.needRef(1); err != nil {
 			return err
 		}
 		g.ref = st.popRef()
-		return nil
+	case g.typ == binary.V128:
+		// **Two slots asked for as two, not as one twice.** `needNum(2)` is the whole underflow
+		// question for a v128, and `popV128` returns (hi, lo) in that order — `pushV128`'s own
+		// order — so `lo` is the stack's true top. Transposing the two here is a wrong answer no
+		// arity check can see, which is why the destinations are named rather than positional.
+		if err := st.needNum(2); err != nil {
+			return err
+		}
+		g.numHi, g.num = st.popV128()
+	default:
+		if err := st.needNum(1); err != nil {
+			return err
+		}
+		g.num = st.popNum()
 	}
-	if err := st.needNum(1); err != nil {
-		return err
-	}
-	g.num = st.popNum()
 	return nil
 }

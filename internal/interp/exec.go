@@ -43,7 +43,7 @@ import (
 //
 // `results` is the arity of the implicit function-body label — what a `return`, and a branch to
 // the outermost depth, truncates the stack to. Passed in rather than read from `fn.TypeIndex`
-// because one caller has no type: `constExprValue` builds a `binary.Func` around an offset
+// because one caller has no type: `runConst` builds a `binary.Func` around a constant
 // expression, whose zero TypeIndex would name a real and unrelated type. See returnFrom.
 //
 // # run versus runFrame
@@ -749,8 +749,12 @@ func (in *Instance) runFrame(fn *binary.Func, locals *frame, st *stack, results,
 
 		case opRefNull: // 0xd0 — `eval.ml:629-630`. The heaptype immediate names the static
 			// type and stages no word (immHeapType), so every ref.null is this one value
-			// regardless of which of the thirteen heaptypes it named — the same retention
-			// gap constExprRef's comment already declares, not a new one.
+			// regardless of which of the thirteen heaptypes it named. Harmless while a null's
+			// static type is the *table's* or the *global's*, and a real gap the moment
+			// something must report which heaptype a null was spelled with; recorded at 0016's
+			// retention-gap note rather than fixed here. The declaration used to live in
+			// `constExprRef`, deleted by #241, and it moved here rather than going with it —
+			// this arm is where the value is produced.
 			st.pushRef(ref{Null: true})
 
 		case opRefIsNull: // 0xd1 — `eval.ml:636-640`

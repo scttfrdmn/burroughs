@@ -348,7 +348,7 @@ func (in *Instance) runElem(idx int, seg *binary.ElemSegment) error {
 		if err != nil {
 			return err
 		}
-		off, err := in.constExprValue(seg.Offset)
+		off, err := in.constAddr(seg.Offset, "an element segment's offset")
 		if err != nil {
 			return err
 		}
@@ -384,58 +384,36 @@ func (in *Instance) segmentRefs(seg *binary.ElemSegment) ([]ref, error) {
 		}
 		return rs, nil
 	}
+	// **The element type is checked to be a reftype before it is used as one**, even though
+	// `ElemType`'s own doc comment says every wire form yields one. The check is the difference
+	// between a guard and a comment: `constExpr` dispatches on the type it is handed, so a
+	// numeric `ElemType` would ask for a numeric slot, leave `constVal.ref` at its zero value,
+	// and fill the table with references that are neither null nor valid — an accept-direction
+	// wrong answer, which is the direction §9 G-3 says the suite scores green by construction.
+	// Unreachable through the decoder today; scoped to the space, not to the sample.
+	if !seg.ElemType.IsRef() {
+		return nil, fmt.Errorf("%w: an element segment declares element type %s, which is not a "+
+			"reference type", ErrNotValidated, seg.ElemType)
+	}
 	rs := make([]ref, len(seg.Exprs))
 	for i := range seg.Exprs {
-		r, err := in.constExprRef(seg.Exprs[i])
+		v, err := in.constExpr(seg.Exprs[i], seg.ElemType, "an element expression")
 		if err != nil {
 			return nil, err
 		}
-		rs[i] = r
+		rs[i] = v.ref
 	}
 	return rs, nil
 }
 
-// constExprRef evaluates an element expression to a reference value.
+// `constExprRef` used to live here: a two-pattern matcher over `[ref.null, END]` and
+// `[ref.func x, END]` that reported every other element expression `ErrUnsupportedOp` by name. It
+// is **deleted** rather than moved (#241), its own pre-registered retirement condition having been
+// met by #172's rung 1 — see constexpr.go's header for why a matcher is not a subset of the
+// evaluator that replaced it, and `leadingOp`, which existed only to render that error, went with
+// it.
 //
-// **Pattern-matched rather than run, and that is a declared shortfall rather than a shortcut.**
-// constExprValue runs a data segment's offset through the full interpreter, on the ground that
-// the reference's const production *is* the instruction grammar; the same is true here and the
-// same treatment is wanted, but the interpreter pushes no references onto `stack.refs` yet, so
-// running `ref.func 0` would leave nothing to pop and report a stack shortfall instead of a
-// value. The two forms this reads are the two the suite's element segments contain, and anything
-// else — a `global.get`, an initializer through a 0x40 table — is reported unsupported *by name*
-// rather than silently treated as null, because a null where a function belonged is
-// `uninitialized element` at the call: a wrong trap, not a missing feature.
-//
-// Retired by #7's reference opcodes, and the tell that the time has come is `ref` values
-// appearing on the stack at all.
-func (in *Instance) constExprRef(expr []binary.Instr) (ref, error) {
-	// A const-expr is a sequence terminated by END, so a single-instruction expression is two
-	// entries — measured, not assumed: an active segment's Offset for `(i32.const 0)` is
-	// `[{Op: 0x41}, {Op: opEnd}]`, END retained.
-	if len(expr) == 2 && expr[1].Op == opEnd {
-		switch expr[0].Op {
-		case opRefNull:
-			// **`ref.null func` and `ref.null extern` are indistinguishable here, and the
-			// reason is upstream.** `immHeapType` consumes the heaptype and stages no word, so
-			// both decode to identical Instrs and Imm0 is 0 for either. Harmless for a funcref
-			// table — a null is a null, and the static type is the table's — and a real gap the
-			// moment `ref.is_null` must report which. Recorded at 0016's retention-gap note
-			// rather than fixed here.
-			return ref{Null: true}, nil
-		case opRefFunc:
-			return ref{Addr: uint32(expr[0].Imm0), Inst: in}, nil
-		}
-	}
-	return ref{}, fmt.Errorf("%w: an element expression this engine does not evaluate yet (%d instructions, leading opcode %#02x)",
-		ErrUnsupportedOp, len(expr), leadingOp(expr))
-}
-
-// leadingOp is the first opcode of expr, or 0 for an empty one, so the error above can name what
-// it met without indexing an empty slice. An empty const-expr is #9's verdict, not a value.
-func leadingOp(expr []binary.Instr) uint32 {
-	if len(expr) == 0 {
-		return 0
-	}
-	return expr[0].Op
-}
+// The retention gap it declared did *not* go with it: `immHeapType` stages no word, so
+// `ref.null func` and `ref.null extern` still decode to identical `Instr`s. That fact now lives
+// where the value is produced, at `opRefNull`'s arm in exec.go, which is where a reader of a null's
+// static type will be standing.

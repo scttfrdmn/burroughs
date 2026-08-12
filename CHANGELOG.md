@@ -49,6 +49,56 @@ weakly-ordered platform.
   argument exceeds it — declared at the arm, flagged for a decision, and shared with the
   tail-call gate's own 0x12/0x13 when it lands.
 
+### Changed
+
+- **One constant-expression evaluator, four call sites.** `constExprValue` (offsets, hard-coded to
+  one numeric slot) and `constExprRef` (element expressions, a two-pattern matcher over
+  `[ref.null, END]` and `[ref.func x, END]`) are replaced by `constExpr`/`constAddr` in
+  `internal/interp/constexpr.go`, which derive the result's arity from the declared
+  `binary.ValType` via `countByArray` and check **both** stack arrays.
+
+  `constExprRef` is **deleted rather than widened**, which is the whole shape of the change: a
+  two-pattern matcher is not a subset of an evaluator, it is a different thing that happened to
+  agree on two inputs, and keeping it as a fast path would leave a second opinion about a question
+  the interpreter now answers (grave #105's shape). Its retirement condition was pre-registered at
+  its own definition site — "the tell that the time has come is `ref` values appearing on the stack
+  at all" — and #172's rung 1 met it. `leadingOp`, which existed only to render its refusal, went
+  with it.
+
+  The site string is now the **caller's**: four call sites, one more than #241 counted, because an
+  element segment's *offset* and an element *expression* are different lines of the user's module.
+
+### Fixed
+
+- **A `v128` global had nowhere to keep its high half, so its whole file died at instantiation**
+  ([#239](https://github.com/scttfrdmn/burroughs/issues/239)). `constExprValue`'s arity was
+  hard-coded to one numeric slot and `global` had one numeric field, so `(global v128 (v128.const
+  …))` was refused — correct for every type it had been handed, wrong for the one it had not
+  (decision 0024: a v128 occupies two adjacent slots). Both halves were needed: an
+  instantiation-only fix would accept the module and hand `global.get` a zero-filled high half,
+  turning an honest refusal into a wrong answer. `global.numHi` is the storage, and `get`/`set`
+  are three-way switches. Shipped in v0.3.0's default lane, SIMD having gone default-on in #233.
+
+- **One helper's error text named one of its three callers**
+  ([#240](https://github.com/scttfrdmn/burroughs/issues/240)). `constExprValue` said "a data
+  segment's offset" from all three, so an element segment's offset and a global initializer both
+  reported themselves as data segments — grave #36's wrong-layer class, manufactured here rather
+  than leaked from below, and visible in the board's own bucket keys (the 120-vector
+  `no instance: … a data segment's offset left 2 values` bucket was mostly *globals*). The sweep
+  for siblings ran and returned nothing: every other multi-caller helper in this family
+  (`globalFor`, `memoryFor`, `tableFor`, `elemFor`, `dataFor`, `funcRefTarget`) already takes the
+  construct name from its caller.
+
+- **A `v128` argument to `call` popped one slot of two**
+  ([#243](https://github.com/scttfrdmn/burroughs/issues/243)). `invoke`'s frame loop had a ref case,
+  a numeric case, and nothing else, so a v128 argument lost its high half **and left the caller's
+  stack one slot deep**, which made the *next* call read its arguments out of the leftovers.
+  `Invoke`'s boundary loop one file over has carried the arm since 0024 landed; this one re-derived
+  the conversion instead of reading it — grave #105's shape at a third site. Unmasked by #239's fix
+  (the file that measures it declares five `(mut v128)` globals and previously died at
+  instantiation), which is #155's downstream-multiplier phenomenon running in the fix direction.
+  Worth 8 vectors in both lanes, in three signatures.
+
 ## [0.3.0] - 2026-08-11
 *Implements contract v0.1.*
 

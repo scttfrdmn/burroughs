@@ -45,19 +45,26 @@ import (
 //
 // # The last block joins the two halves, and it does *not* pin the immediate's field
 //
-// It runs the decoder's own output through `constExprRef`, so a byte the decoder accepts is shown
-// to reach a reference rather than an "element expression this engine does not evaluate yet". That
-// is the seam between the two packages and it is the reason the block is here.
+// It runs the decoder's own output through `constExpr`, so a byte the decoder accepts is shown to
+// reach a reference. That is the seam between the two packages and it is the reason the block is
+// here.
 //
 // A draft of this paragraph claimed the block pinned the index reaching `Imm0`, and the
-// falsification pass said otherwise: rewriting `constExprRef` to read `Imm1` leaves this test
-// **green**, because the index used here is 0 and both fields hold 0. The claim was about a
-// mechanism rather than an observation of one — the same slip
-// `TestI32ConstOccupiesItsSlotZeroExtended`'s comment records. (It was written with the name elided
-// to an ellipsis, which `TestEveryCitedTestNameResolves` refused: an abbreviated identifier is a
-// citation no resolver can follow, so the eliding *is* the drift.) What actually pins the field is
+// falsification pass said otherwise: rewriting the reader to take `Imm1` leaves this test **green**,
+// because the index used here is 0 and both fields hold 0. The claim was about a mechanism rather
+// than an observation of one — the same slip `TestI32ConstOccupiesItsSlotZeroExtended`'s comment
+// records. (It was written with the name elided to an ellipsis, which
+// `TestEveryCitedTestNameResolves` refused: an abbreviated identifier is a citation no resolver can
+// follow, so the eliding *is* the drift.) What actually pins the field is
 // TestElemExprIndexReachesTheRef below, with a
 // nonzero index, and that is where the assertion belongs.
+//
+// **Re-pointed by #241, not rewritten.** The reader this asked about was `constExprRef`, a
+// two-pattern matcher, and it is now `constExpr` running the expression through the interpreter — so
+// the *field* is read by `opRefFunc`'s arm in exec.go rather than by a matcher, and the Imm1
+// falsification above is a mutation of that arm. The risk is unchanged and so is this control: a
+// tripwire whose subject dissolves is re-pointed, never closed. What did change is the negative
+// direction, which moved to the test below along with its subject.
 func TestElemExprOpcodesAgreeWithTheDecoder(t *testing.T) {
 	// The mnemonic half. Read from the generated table, so a regeneration that renumbered either
 	// opcode fails here rather than silently re-pointing this package's constants.
@@ -122,10 +129,12 @@ func TestElemExprOpcodesAgreeWithTheDecoder(t *testing.T) {
 	if len(m.Elems) != 1 || len(m.Elems[0].Exprs) != 1 {
 		t.Fatalf("the wrapper produced %d segment(s), want 1 with one expression", len(m.Elems))
 	}
-	got, err := (&Instance{}).constExprRef(m.Elems[0].Exprs[0])
+	es := m.Elems[0]
+	v, err := (&Instance{}).constExpr(es.Exprs[0], es.ElemType, "an element expression")
 	if err != nil {
-		t.Fatalf("constExprRef refused a `ref.func 0` element expression: %v", err)
+		t.Fatalf("constExpr refused a `ref.func 0` element expression: %v", err)
 	}
+	got := v.ref
 	if got.Null || got.Addr != 0 {
 		t.Errorf("`ref.func 0` evaluated to %+v, want a non-null reference to function 0", got)
 	}
@@ -135,19 +144,35 @@ func TestElemExprOpcodesAgreeWithTheDecoder(t *testing.T) {
 // expression names has to survive into the reference, not just the opcode.
 //
 // Separate from the agreement test because it has a different subject and a different oracle.
-// The agreement test asks the decoder about bytes; this asks `constExprRef` about a value, and a
+// The agreement test asks the decoder about bytes; this asks `constExpr` about a value, and a
 // nonzero index is what distinguishes "reads Imm0" from "reads the right field and then ignores
 // it". `elem.wast:11` uses `(ref.func $f)` and `(ref.func $g)` in one segment for exactly this
 // reason — two different functions — but the suite cannot fail an engine that resolves both to
 // function 0 unless a vector then *calls* through the second slot, so the positive assertion is
 // what covers it.
 //
-// The nonzero row is the whole point and it was earned by falsification: rewriting `constExprRef`
+// The nonzero row is the whole point and it was earned by falsification: rewriting `opRefFunc`'s arm
 // to read `Imm1` fails `ref.func 7` here and nothing else in the package. `ref.func 0` stays
 // because a partition needs its protected side — it marks where the damage from such a change
 // would *not* reach, which is every element segment naming function 0.
+//
+// # The negative direction inverted at #241, and inverting it is the point rather than a casualty
+//
+// This test used to end by asserting that a `global.get` element expression is **refused** — the
+// contract `constExprRef` had, whose two patterns covered `ref.null` and `ref.func` and whose
+// honesty was in naming everything else unsupported rather than defaulting it to null (a null where
+// a function belonged is `uninitialized element` at the call: a wrong trap, not a missing feature).
+// #241 replaced that matcher with an evaluator, so the form is now *evaluated*, and the old
+// assertion would fail for the right reason.
+//
+// So the row is re-pointed to the capability that replaced it: the same expression, against an
+// instance that actually has the global, yields that global's reference. That is what `elem.wast`'s
+// import-initialized segments want and it is the accept-direction half of #241 — the half §9 G-3 says
+// the suite cannot score, since a wrongly-*rejected* module is a fail the board attributes to a
+// missing feature. The refusal direction did not disappear; it moved down a layer to `globalFor`,
+// which is where an out-of-range index is #9's verdict, and the second row asserts it there.
 func TestElemExprIndexReachesTheRef(t *testing.T) {
-	// **Not `&Instance{}` per row, on purpose (0017 Q2, grave #163).** `constExprRef` now sets
+	// **Not `&Instance{}` per row, on purpose (0017 Q2, grave #163).** `ref.func`'s arm sets
 	// `Inst` to the instance it evaluates against — that is the fix's whole shape — so a `ref`
 	// pins its own struct only against a shared, named instance, and a fresh `&Instance{}` per
 	// call would silently pass by comparing against whatever pointer that row happened to
@@ -162,23 +187,39 @@ func TestElemExprIndexReachesTheRef(t *testing.T) {
 		{"ref.func 7", []binary.Instr{{Op: opRefFunc, Imm0: 7}, {Op: opEnd}}, ref{Addr: 7, Inst: in}},
 		{"ref.null", []binary.Instr{{Op: opRefNull}, {Op: opEnd}}, ref{Null: true}},
 	} {
-		got, err := in.constExprRef(c.expr)
+		got, err := in.constExpr(c.expr, binary.FuncRef, "an element expression")
 		if err != nil {
 			t.Errorf("%s: %v", c.what, err)
 			continue
 		}
-		if got != c.want {
-			t.Errorf("%s evaluated to %+v, want %+v", c.what, got, c.want)
+		if got.ref != c.want {
+			t.Errorf("%s evaluated to %+v, want %+v", c.what, got.ref, c.want)
 		}
 	}
-	// The negative side, because `constExprRef`'s whole contract is that anything it does not
-	// evaluate is reported *by name* rather than treated as null: a null where a function belonged
-	// is `uninitialized element` at the call, which is a wrong trap and not a missing feature.
-	// `global.get` is the form the suite has that this does not run — elem.wast has segments
-	// initialized from an imported global.
-	if _, err := in.constExprRef([]binary.Instr{{Op: 0x23}, {Op: opEnd}}); err == nil {
-		t.Error("a `global.get` element expression evaluated silently; an unevaluated form must be " +
-			"reported, because defaulting to null makes it `uninitialized element` at the call")
+
+	// The form the matcher could not run, now run. `global.get 0` against an instance holding one
+	// funcref global must produce that global's value — a positive assertion, because the failure
+	// mode #241 fixes is a *rejection*, and a rejection is invisible on a board that reads it as a
+	// missing feature.
+	held := ref{Addr: 4, Inst: in}
+	withGlobal := &Instance{globals: []*global{{typ: binary.FuncRef, ref: held}}}
+	got, err := withGlobal.constExpr(
+		[]binary.Instr{{Op: 0x23, Imm0: 0}, {Op: opEnd}}, binary.FuncRef, "an element expression")
+	if err != nil {
+		t.Errorf("a `global.get 0` element expression was refused against an instance that has "+
+			"global 0: %v — the whole of #241 is that this form evaluates", err)
+	} else if got.ref != held {
+		t.Errorf("`global.get 0` evaluated to %+v, want the global's own value %+v", got.ref, held)
+	}
+
+	// And the refusal direction, one layer down where it now lives: an index no global answers is
+	// #9's verdict, never a silent null.
+	if _, err := in.constExpr(
+		[]binary.Instr{{Op: 0x23, Imm0: 0}, {Op: opEnd}}, binary.FuncRef, "an element expression",
+	); err == nil {
+		t.Error("`global.get 0` evaluated against an instance with no globals; an index nothing " +
+			"answers must be reported, because defaulting to null makes it `uninitialized " +
+			"element` at the call")
 	}
 }
 
