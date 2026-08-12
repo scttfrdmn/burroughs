@@ -744,6 +744,23 @@ the choice, and consequences once Scott has called it.
     allowlist turned up a **second** omission whose call sites are all gate-blocked, so it was
     unreachable-by-construction in the fuzz target and would have surfaced as an unexplained red
     *at a gate flip*. A latent omission's arrival time is chosen by the flip, not by the defect.
+    - **The space is (fact × registry), and the sentence above got that wrong while being
+      written.** It says "grepping every exported sentinel against the allowlist" — *the*
+      allowlist, singular — and the package has **two**: `declaredErrors`, and a second inline
+      list inside `FuzzConstExprProgress`. Enrolling the sentinel in the first turned
+      `FuzzDecodeModule` green and left `FuzzConstExprProgress` red on the same byte string, so
+      the class recurred **in its own repair**, one push later, and the third instance indicts
+      the sweep rather than the omission. Two things generalize. First, *a sweep run over the
+      registry that failed is not a sweep over the space* — the failing registry is the one
+      instance guaranteed to be fixed, which makes it the least informative place to look, and
+      the tell is that the second run's green was bought by re-running only the target that had
+      gone red. Second, the duplication is **not** the defect to fix: the constexpr list is the
+      *narrower, stronger* claim (only these may come out of the instruction grammar), so
+      deriving it from the broader one would collapse a real assertion into a tautology. Two
+      registries over one space is a legitimate design that carries a sweep obligation, which is
+      why the tripwire is scoped to the product and not to either list. (Grave #264, third
+      instance, which is also where the re-scoped tripwire lives — the obligation widened, so
+      the issue was re-pointed rather than reopened alongside a new one.)
   - **And its mirror: an impossible count is the strongest witness there is, because a value that
     cannot exist convicts the model rather than the measurement.** A clean result invites the
     suspicion above and can still be honest; an *impossible* one has already settled the question,

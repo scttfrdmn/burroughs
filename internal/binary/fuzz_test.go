@@ -354,12 +354,26 @@ func FuzzConstExprProgress(f *testing.F) {
 		//	ErrMalformedTypeIndex  blocktype's and heaptype's negative-s33 branches
 		//	ErrMalformedCatch      try_table's handler kind byte
 		//	ErrMalformedMemopFlags a memarg whose flags field is >= 0x80
+		//	br_on_cast flags       `fb 18`/`fb 19`'s flags byte with a reserved bit set
+		//
+		// GRAVE #264, second registry: this list and the package-level
+		// `declaredErrors` are two registries over one sentinel space, and the space is
+		// therefore (sentinel × registry), not sentinel. `ErrMalformedBrOnCastFlags` was
+		// enrolled above and not here, so `FuzzDecodeModule` went green and
+		// `FuzzConstExprProgress` stayed red — the third instance of the class, and the
+		// one that indicts the repair rather than the original omission. Keeping the two
+		// lists separate is deliberate and not the defect: this one is the *narrower,
+		// stronger* claim (only these may come out of the instruction grammar), so
+		// deriving it from `declaredErrors` would weaken it into a tautology. What the
+		// separation costs is a sweep obligation, and a sweep run over the registry that
+		// failed is not a sweep over the space.
 		for _, want := range []error{
 			ErrTruncated, ErrPayloadEnd, ErrLEBTooLong, ErrLEBOverflow,
 			ErrIllegalOpcode, ErrConstExprRequired, ErrEndExpected, ErrMisplacedOpcode,
 			ErrMalformedNumType, ErrMalformedVecType, ErrMalformedRefType,
 			ErrMalformedHeapType, ErrMalformedTypeIndex,
 			ErrMalformedCatch, ErrMalformedMemopFlags, ErrFeatureDisabled,
+			ErrMalformedBrOnCastFlags,
 		} {
 			if !errors.Is(err, want) {
 				continue
