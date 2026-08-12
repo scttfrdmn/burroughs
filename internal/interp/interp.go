@@ -486,8 +486,9 @@ func (in *Instance) invokeIndex(idx uint32, name string, args []Value) ([]Value,
 		// result ordering are all the supplier instance's, and a second copy of that logic on
 		// this path is a second place for it to be wrong.
 		//
-		// The recursion terminates for `callImport`'s reason: a supplier is instantiated
-		// before its importer, so a re-export chain cannot cycle.
+		// The recursion terminates for `resolveCall`'s reason: a supplier is instantiated
+		// before its importer, so a re-export chain cannot cycle. (It cited `callImport`, which
+		// 0026's resolution/entry split replaced — same argument, new home.)
 		ext, ierr := in.importedFunc(idx)
 		if ierr != nil {
 			return nil, ierr
