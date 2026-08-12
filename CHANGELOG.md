@@ -21,6 +21,34 @@ weakly-ordered platform.
 
 ### Added
 
+- **Decision 0026 — proper tail calls: a tail call is a fourth control-transfer value, and the frame
+  owner's trampoline re-enters. Held `proposed`; no stamp exists yet.** Scoped to *both* gate
+  consumers by Scott's ruling (`return_call_ref` is `gate:gc`'s, `return_call`/`return_call_indirect`
+  are `gate:tailCall`'s) so one frame-reuse mechanism is decided once rather than built twice. The
+  reference settles more than it looks: `eval.ml:282-305`'s three `return_call` arms *step the plain
+  non-tail opcode* and re-tag its `Invoke` as `ReturningInvoke`, so resolution and every trap text
+  are shared verbatim, and `eval.ml:1072-1074` pops the frame and emits the `Invoke` in the
+  **parent's** instruction list — a trampoline, not a jump. Chosen option B (a Go sentinel checked at
+  the frame boundary, one trampoline both frame entry points call) on 0022's stamped precedent for
+  the analogous problem, over rewriting the frame in place inside the dispatch loop (option A, which
+  would put `invoke`'s frame-building prologue in a second site — graves #243 and #105's shape) and
+  over the explicit frame stack (option C, deferred to v2's stack switching, which is the consumer
+  that actually forces it per contract §7 S-3, and deliberately not foreclosed). `callBudget`
+  survives unchanged with its semantics intact: `eval.ml:1080` decrements only when stepping *into* a
+  frame, so a tail call spends none and `call.wast:337`'s non-tail `runaway` still exhausts.
+
+- **Grave #251, found while researching 0026 and filed rather than folded in: `returnFrom` truncates
+  the shared value stack to the result arity, destroying the caller's pending operands.** A valid
+  module is refused —
+  `(i32.add (i32.const 100) (call $f))` where `$f` uses an explicit `return` reports "left 0 numeric",
+  and with *two* pending operands the count reads an impossible `left -1 numeric`. It is #135's own
+  fix wearing the mirror defect: `eval.ml:1069`'s `take n vs0 @ vs` is **frame-relative** and this
+  engine has no per-frame base, so "`@ vs`" became "discard everything below the results" — correct
+  only when the caller's stack happened to be empty. Measured invisible on the board (zero of the
+  all-on lane's 101 bucket keys carry the signature), so it is a §9 G-3 accept-direction defect whose
+  control has to be authored. Named here because 0026 depends on the same missing base and states it
+  as a prerequisite rather than deciding it twice.
+
 - **`gate:gc` rung 3 — array instances, decision 0020's second implementation.** All fourteen
   `array.*` arms (`array.new`, `array.new_default`, `array.new_fixed`, `array.new_data`,
   `array.new_elem`, `array.get`, `array.get_s`, `array.get_u`, `array.set`, `array.len`,
