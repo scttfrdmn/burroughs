@@ -1040,6 +1040,20 @@ remembering decays across session boundaries:
   at the third** — the threshold isn't the count, it's that an inline allowlist
   can't hold justifications, and an unexplained entry is the unreachable-error
   pattern again: a suppression wearing a disguise. (Ruling: Scott, PR #21.)
+- **A completion state can be true while its payload vanished — verify the artifact, not the
+  flag.** *Presence-of-status is not presence-of-content*, and it is silence-is-not-evidence's
+  uglier cousin: silence at least *looks* like nothing, where a status field looks like
+  everything. The specimen: a grave issue read honestly **CLOSED** — the merge keyword did that,
+  correctly — while the closing comment carrying its lesson had been silently eaten, so every
+  query that asks "is it closed?" returns the reassuring answer and every reader who follows the
+  link finds a tombstone with no inscription. The only move that catches the class is checking
+  the **artifact's own measurable property** — the comment count, the body length, the row the
+  table should contain — rather than the state that is supposed to imply it. Sited here because
+  it is the same instrument confusion the `deadcode` and exit-code rules above name (a verdict
+  channel cannot say *why*, and a status channel cannot say *what*), pointed at the tracker
+  rather than at a tool: `gh issue close` reporting success is a verdict about the close, never a
+  witness to the comment. Generalizes past GitHub — any write whose confirmation is a state
+  transition needs its payload read back. (Lesson: Scott, on the PR #247 relay.)
 - **Toolchain currency is a gated upgrade** — Go 1.27 and future linter majors
   land as their own branch with both arches green and a changelog entry. Never a
   drive-by bump in a PR about something else.

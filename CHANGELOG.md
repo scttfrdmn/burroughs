@@ -21,6 +21,35 @@ weakly-ordered platform.
 
 ### Added
 
+- **`gate:gc` rung 3 — array instances, decision 0020's second implementation.** All fourteen
+  `array.*` arms (`array.new`, `array.new_default`, `array.new_fixed`, `array.new_data`,
+  `array.new_elem`, `array.get`, `array.get_s`, `array.get_u`, `array.set`, `array.len`,
+  `array.fill`, `array.copy`, `array.init_data`, `array.init_elem`) execute, adding **no
+  representation at all** — an array *is* a `gcObj`, which is 0020's own plan rather than a
+  convenience found later, and the reference agrees at the same seam (`Aggr.Struct` and `Aggr.Array`
+  are one constructor each over the *same* `field list`, `aggr.ml:8-9`). So `popField`,
+  `defaultField` and `pushField` are reused verbatim, packed cases and both `read_field` `failwith`s
+  included: an `(array i8)` and a `(struct (field i8))` narrow, extend and refuse identically because
+  in the reference they are the same three functions.
+
+  Three behaviours that a sensible-looking implementation gets wrong, each pinned by a control that
+  was watched fail: the two **segment** traps borrow someone else's string — `array.new_data` reports
+  `out of bounds memory access` and `array.new_elem` reports `out of bounds table access`, though no
+  memory and no table is involved (`array.wast:209`, `:283`), while an out-of-range *index* does say
+  "array"; `array.new_data`'s bound is in **bytes**, `n * storage_size`, so three `i16` elements need
+  six; and the bounds check precedes the zero-length exit in all five arms that take an `n`, the
+  early-return grave (#41) with a zero-length run at exactly the end being in bounds and one element
+  past it not.
+
+  All-on lane **61577 → 61764 pass, 723 → 536 fail**, the reward figure per the #235 ruling: fail
+  −187 against a pre-registered 187 sole-blocked, with 187 departures, **zero** arrivals and residual
+  zero. Six of seven array files go fully green (`array.wast` 40/40, `array_copy` 31/31, `array_fill`
+  27/27, `array_init_data` 44/44, `array_init_elem` 33/33, `array_new_data` 24/24) and
+  `array_new_elem.wast` goes 5/16 → 11/16 with its residue of exactly 5 keyed `fb 1c` — rung 4's
+  subject, exactly as the probe forecast. Default lane unmoved in every column including
+  `unsupported`, structurally: the GC gate is off, so a GC vector is scored `gated` whether or not an
+  arm exists.
+
 - **`gate:gc` rung 2 — struct instances, decision 0020's implementation.** All six `struct.*` arms
   (`struct.new`, `struct.new_default`, `struct.get`, `struct.get_s`, `struct.get_u`, `struct.set`)
   execute, over a `*gcObj` that is a plain Go pointer — so `ref.eq` on two aggregates is pointer

@@ -1,6 +1,8 @@
 # 0020 — A struct or array instance is a Go pointer the collector already traces
 
-Date: 2026-08-08 · Status: **accepted** — option C, stamped by Scott on PR #177
+Date: 2026-08-08 · Status: **accepted** — option C, stamped by Scott on PR #177; **body amended by
+append** (PR #247's ratified departure), so read the append before relying on the `gcField` sketch
+below
 
 > Held at `proposed` while it had no stamp, per the ruling on #142. Ordered by Scott on 0019's
 > acceptance (PR #176): heap-object representation earns its own document now, on the 0017
@@ -231,3 +233,15 @@ and not a footnote to it. This append is a fork in the road, not a wall.
 field is a citation to an approval*; the departure spent one PR flagged and open, which the record
 keeps alongside the stamp. Second rider of the same ratification retired `fieldStorage`'s
 type-agreement check for having no reachable subject — the tripwire is #248.)
+
+**Rung 3 carried the ratified shape unchanged, which is the evidence the ratification could not yet
+have.** The append above argued the omission was right from rung 2's consumers alone — one rung, one
+witness. Rung 3 (the fourteen `array.*` arms, PR #249's implementation) is the second, and it added
+**no representation at all**: `gcObj` and `gcField` are byte-identical, and `popField`/`defaultField`/
+`pushField` are reused verbatim including both packed cases. The reference agrees at the same seam —
+`Aggr.Struct of deftype * field list` and `Aggr.Array of deftype * field list`, one constructor each
+over the *same* `field list` (`aggr.ml:8-9`) — so the two rungs differ only in how the field *type* is
+found, by index for a struct and as the comptype's single content for an array. Had `gcField.packed`
+survived, rung 3 would have been its second writer and the drift check its second obligation, on a
+fact that still never varies per instance. The fork in the road above stays open on the same terms;
+nothing about rung 3 approached it.
