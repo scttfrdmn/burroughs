@@ -233,7 +233,7 @@ func isException(err error) bool {
 // legitimately knows both `spec.Instance` and `*interp.Instance`. Same seam `invoke` cuts for
 // values, for the same reason.
 func instantiateLinked(c Command, registry map[string]Instance) (Instance, Stratum, error) {
-	return instantiateWith(binary.Features{}, c, registry)
+	return instantiateWith(binary.DefaultFeatures(), c, registry)
 }
 
 // imports turns the harness's registry into the engine's resolver.
@@ -780,76 +780,23 @@ func TestClosedBuckets(t *testing.T) {
 // whose *entire* gated population shares one reason (verified per file against the decoder,
 // not assumed from the count alone — see the loop's own comment at its one call site).
 //
-// It exists because of the harness v128 widening (decision 0024's forced question 5):
-// `readV128Const`/`Matches`'s KindV128 branch let a `v128.const` argument or expectation reach
-// the decoder for the first time, which moved 24115 lines across these 58 files from
-// Unsupported straight into Gated in one PR — every one for the single reason `simd: feature
-// gate disabled`, since the SIMD gate stays off by default. A per-line entry for each of the
-// 24115 would restate that one fact 24115 times; a whole-file entry names the reason once and
-// still catches drift, because a file's Gated count moving away from its stated number is
-// exactly as loud as a stale per-line entry would have been.
+// **Drained from 61 entries to 6, #227/ADR 0025's SIMD flip.** The harness v128 widening
+// (decision 0024's forced question 5) had moved 24115 lines across 58 SIMD files from
+// Unsupported straight into Gated in one PR, every one for the reason `simd: feature gate
+// disabled` while SIMD stayed off by default. With `DefaultFeatures` now setting `SIMD: true`,
+// every one of those 55 SIMD-only files measures Gated=0 (confirmed by running the harness over
+// each entry, not assumed from the flip alone) and is removed. The 6 that remain are
+// **relaxed-SIMD** content (the `fd 0x100..0x12f` window, a *separate* still-off gate,
+// `RelaxedSIMD`) — confirmed by reading each file: every one is entirely `*.relaxed_*`
+// instructions, so the SIMD flip does not touch their gated population at all, measured
+// unchanged at the identical counts.
 var wholeFileGated = map[string]int{
-	"i16x8_relaxed_q15mulr_s.wast":          1,
-	"i8x16_relaxed_swizzle.wast":            2,
-	"relaxed_dot_product.wast":              8,
-	"relaxed_laneselect.wast":               5,
-	"relaxed_madd_nmadd.wast":               9,
-	"relaxed_min_max.wast":                  12,
-	"simd_address.wast":                     42,
-	"simd_align.wast":                       8,
-	"simd_bit_shift.wast":                   211,
-	"simd_bitwise.wast":                     139,
-	"simd_boolean.wast":                     259,
-	"simd_conversions.wast":                 232,
-	"simd_f32x4.wast":                       772,
-	"simd_f32x4_arith.wast":                 1803,
-	"simd_f32x4_cmp.wast":                   2581,
-	"simd_f32x4_pmin_pmax.wast":             3872,
-	"simd_f32x4_rounding.wast":              176,
-	"simd_f64x2.wast":                       793,
-	"simd_f64x2_arith.wast":                 1806,
-	"simd_f64x2_cmp.wast":                   2659,
-	"simd_f64x2_pmin_pmax.wast":             3872,
-	"simd_f64x2_rounding.wast":              176,
-	"simd_i16x8_arith.wast":                 181,
-	"simd_i16x8_arith2.wast":                151,
-	"simd_i16x8_cmp.wast":                   433,
-	"simd_i16x8_extadd_pairwise_i8x16.wast": 16,
-	"simd_i16x8_extmul_i8x16.wast":          104,
-	"simd_i16x8_q15mulr_sat_s.wast":         26,
-	"simd_i16x8_sat_arith.wast":             204,
-	"simd_i32x4_arith.wast":                 181,
-	"simd_i32x4_arith2.wast":                121,
-	"simd_i32x4_cmp.wast":                   433,
-	"simd_i32x4_dot_i16x8.wast":             28,
-	"simd_i32x4_extadd_pairwise_i16x8.wast": 16,
-	"simd_i32x4_extmul_i16x8.wast":          104,
-	"simd_i32x4_trunc_sat_f32x4.wast":       102,
-	"simd_i32x4_trunc_sat_f64x2.wast":       102,
-	"simd_i64x2_arith.wast":                 187,
-	"simd_i64x2_arith2.wast":                21,
-	"simd_i64x2_cmp.wast":                   102,
-	"simd_i64x2_extmul_i32x4.wast":          104,
-	"simd_i8x16_arith.wast":                 121,
-	"simd_i8x16_arith2.wast":                184,
-	"simd_i8x16_cmp.wast":                   413,
-	"simd_i8x16_sat_arith.wast":             188,
-	"simd_int_to_int_extend.wast":           228,
-	"simd_lane.wast":                        274,
-	"simd_linking.wast":                     1,
-	"simd_load16_lane.wast":                 32,
-	"simd_load32_lane.wast":                 20,
-	"simd_load64_lane.wast":                 12,
-	"simd_load8_lane.wast":                  48,
-	"simd_load_extend.wast":                 84,
-	"simd_load_splat.wast":                  112,
-	"simd_load_zero.wast":                   27,
-	"simd_select.wast":                      6,
-	"simd_splat.wast":                       158,
-	"simd_store16_lane.wast":                32,
-	"simd_store32_lane.wast":                20,
-	"simd_store64_lane.wast":                12,
-	"simd_store8_lane.wast":                 48,
+	"i16x8_relaxed_q15mulr_s.wast": 1,
+	"i8x16_relaxed_swizzle.wast":   2,
+	"relaxed_dot_product.wast":     8,
+	"relaxed_laneselect.wast":      5,
+	"relaxed_madd_nmadd.wast":      9,
+	"relaxed_min_max.wast":         12,
 }
 
 // TestGatedVectors pins exactly which vectors the engine is allowed to decline.
@@ -873,240 +820,6 @@ func TestGatedVectors(t *testing.T) {
 		"binary_leb128_64.wast": {
 			1:  "memory64: i64 limits flags on the memory section",
 			16: "memory64: i64 limits flags on the memory section",
-		},
-
-		// Six (module binary ...) forms whose type section declares a v128 result
-		// (`\60\00\01\7b` — functype, no params, one result, valtype 0x7b). v128 is
-		// SIMD's value type, so with the SIMD gate off the decoder must reject them
-		// and none of the six is asking a question the engine can answer in that
-		// state. Verified by reading the vectors rather than by trusting the count:
-		// the gate is right, so these are allowlisted rather than treated as
-		// over-gating.
-		//
-		// They arrived with the derived corpus (#52) — the file was off the board
-		// before, so its 6 declines were invisible along with its 752 unsupported
-		// commands. Note the shape: a wider corpus makes a *control* fire, which is
-		// what a control that was scoped to a sample looks like when the sample grows.
-		"simd_const.wast": {
-			1570: "SIMD: v128 result in the type section",
-			1587: "SIMD: v128 result in the type section",
-			1604: "SIMD: v128 result in the type section",
-			1621: "SIMD: v128 result in the type section",
-			1638: "SIMD: v128 result in the type section",
-			1655: "SIMD: v128 result in the type section",
-			// #210's encoder closed v128.const's own immediate shape (immVecConst), so the
-			// module at :890 — whose two drop-operand funcs each `(drop (v128.const …))` — now
-			// reaches the decoder and is declined for SIMD before either assertion runs.
-			984: "simd: v128.const in the module at :890 — the module this action runs against",
-			995: "simd: v128.const in the module at :890 — the module this action runs against",
-			// **The harness v128 widening (decision 0024's forced question 5)**: every one of
-			// these 203 lines' own module declares a v128 param/result or a v128.const, and
-			// its assert_return/invoke vector now reaches the decoder because the harness can
-			// finally build the v128 argument/expectation. All share the identical reason,
-			// measured directly against the decoder rather than assumed from the file.
-			494:  "simd: feature gate disabled",
-			496:  "simd: feature gate disabled",
-			498:  "simd: feature gate disabled",
-			500:  "simd: feature gate disabled",
-			503:  "simd: feature gate disabled",
-			505:  "simd: feature gate disabled",
-			507:  "simd: feature gate disabled",
-			509:  "simd: feature gate disabled",
-			512:  "simd: feature gate disabled",
-			514:  "simd: feature gate disabled",
-			516:  "simd: feature gate disabled",
-			518:  "simd: feature gate disabled",
-			522:  "simd: feature gate disabled",
-			524:  "simd: feature gate disabled",
-			526:  "simd: feature gate disabled",
-			528:  "simd: feature gate disabled",
-			531:  "simd: feature gate disabled",
-			533:  "simd: feature gate disabled",
-			535:  "simd: feature gate disabled",
-			537:  "simd: feature gate disabled",
-			540:  "simd: feature gate disabled",
-			542:  "simd: feature gate disabled",
-			544:  "simd: feature gate disabled",
-			546:  "simd: feature gate disabled",
-			550:  "simd: feature gate disabled",
-			552:  "simd: feature gate disabled",
-			554:  "simd: feature gate disabled",
-			556:  "simd: feature gate disabled",
-			560:  "simd: feature gate disabled",
-			562:  "simd: feature gate disabled",
-			564:  "simd: feature gate disabled",
-			566:  "simd: feature gate disabled",
-			692:  "simd: feature gate disabled",
-			694:  "simd: feature gate disabled",
-			696:  "simd: feature gate disabled",
-			698:  "simd: feature gate disabled",
-			700:  "simd: feature gate disabled",
-			702:  "simd: feature gate disabled",
-			704:  "simd: feature gate disabled",
-			706:  "simd: feature gate disabled",
-			708:  "simd: feature gate disabled",
-			710:  "simd: feature gate disabled",
-			712:  "simd: feature gate disabled",
-			714:  "simd: feature gate disabled",
-			716:  "simd: feature gate disabled",
-			718:  "simd: feature gate disabled",
-			720:  "simd: feature gate disabled",
-			722:  "simd: feature gate disabled",
-			724:  "simd: feature gate disabled",
-			726:  "simd: feature gate disabled",
-			728:  "simd: feature gate disabled",
-			730:  "simd: feature gate disabled",
-			732:  "simd: feature gate disabled",
-			734:  "simd: feature gate disabled",
-			736:  "simd: feature gate disabled",
-			738:  "simd: feature gate disabled",
-			740:  "simd: feature gate disabled",
-			742:  "simd: feature gate disabled",
-			744:  "simd: feature gate disabled",
-			746:  "simd: feature gate disabled",
-			748:  "simd: feature gate disabled",
-			750:  "simd: feature gate disabled",
-			752:  "simd: feature gate disabled",
-			754:  "simd: feature gate disabled",
-			756:  "simd: feature gate disabled",
-			758:  "simd: feature gate disabled",
-			760:  "simd: feature gate disabled",
-			762:  "simd: feature gate disabled",
-			764:  "simd: feature gate disabled",
-			766:  "simd: feature gate disabled",
-			768:  "simd: feature gate disabled",
-			770:  "simd: feature gate disabled",
-			772:  "simd: feature gate disabled",
-			774:  "simd: feature gate disabled",
-			776:  "simd: feature gate disabled",
-			778:  "simd: feature gate disabled",
-			780:  "simd: feature gate disabled",
-			782:  "simd: feature gate disabled",
-			784:  "simd: feature gate disabled",
-			786:  "simd: feature gate disabled",
-			788:  "simd: feature gate disabled",
-			790:  "simd: feature gate disabled",
-			792:  "simd: feature gate disabled",
-			794:  "simd: feature gate disabled",
-			796:  "simd: feature gate disabled",
-			798:  "simd: feature gate disabled",
-			800:  "simd: feature gate disabled",
-			802:  "simd: feature gate disabled",
-			804:  "simd: feature gate disabled",
-			806:  "simd: feature gate disabled",
-			808:  "simd: feature gate disabled",
-			810:  "simd: feature gate disabled",
-			812:  "simd: feature gate disabled",
-			814:  "simd: feature gate disabled",
-			816:  "simd: feature gate disabled",
-			818:  "simd: feature gate disabled",
-			822:  "simd: feature gate disabled",
-			824:  "simd: feature gate disabled",
-			826:  "simd: feature gate disabled",
-			828:  "simd: feature gate disabled",
-			830:  "simd: feature gate disabled",
-			832:  "simd: feature gate disabled",
-			834:  "simd: feature gate disabled",
-			836:  "simd: feature gate disabled",
-			838:  "simd: feature gate disabled",
-			840:  "simd: feature gate disabled",
-			842:  "simd: feature gate disabled",
-			844:  "simd: feature gate disabled",
-			846:  "simd: feature gate disabled",
-			848:  "simd: feature gate disabled",
-			850:  "simd: feature gate disabled",
-			852:  "simd: feature gate disabled",
-			854:  "simd: feature gate disabled",
-			856:  "simd: feature gate disabled",
-			858:  "simd: feature gate disabled",
-			860:  "simd: feature gate disabled",
-			862:  "simd: feature gate disabled",
-			864:  "simd: feature gate disabled",
-			866:  "simd: feature gate disabled",
-			868:  "simd: feature gate disabled",
-			870:  "simd: feature gate disabled",
-			872:  "simd: feature gate disabled",
-			874:  "simd: feature gate disabled",
-			876:  "simd: feature gate disabled",
-			880:  "simd: feature gate disabled",
-			882:  "simd: feature gate disabled",
-			884:  "simd: feature gate disabled",
-			886:  "simd: feature gate disabled",
-			975:  "simd: feature gate disabled",
-			976:  "simd: feature gate disabled",
-			977:  "simd: feature gate disabled",
-			978:  "simd: feature gate disabled",
-			979:  "simd: feature gate disabled",
-			980:  "simd: feature gate disabled",
-			981:  "simd: feature gate disabled",
-			982:  "simd: feature gate disabled",
-			983:  "simd: feature gate disabled",
-			986:  "simd: feature gate disabled",
-			987:  "simd: feature gate disabled",
-			988:  "simd: feature gate disabled",
-			989:  "simd: feature gate disabled",
-			990:  "simd: feature gate disabled",
-			991:  "simd: feature gate disabled",
-			992:  "simd: feature gate disabled",
-			993:  "simd: feature gate disabled",
-			994:  "simd: feature gate disabled",
-			1027: "simd: feature gate disabled",
-			1028: "simd: feature gate disabled",
-			1029: "simd: feature gate disabled",
-			1030: "simd: feature gate disabled",
-			1068: "simd: feature gate disabled",
-			1072: "simd: feature gate disabled",
-			1073: "simd: feature gate disabled",
-			1074: "simd: feature gate disabled",
-			1075: "simd: feature gate disabled",
-			1108: "simd: feature gate disabled",
-			1109: "simd: feature gate disabled",
-			1110: "simd: feature gate disabled",
-			1111: "simd: feature gate disabled",
-			1112: "simd: feature gate disabled",
-			1113: "simd: feature gate disabled",
-			1114: "simd: feature gate disabled",
-			1116: "simd: feature gate disabled",
-			1117: "simd: feature gate disabled",
-			1118: "simd: feature gate disabled",
-			1119: "simd: feature gate disabled",
-			1121: "simd: feature gate disabled",
-			1122: "simd: feature gate disabled",
-			1123: "simd: feature gate disabled",
-			1124: "simd: feature gate disabled",
-			1125: "simd: feature gate disabled",
-			1126: "simd: feature gate disabled",
-			1127: "simd: feature gate disabled",
-			1129: "simd: feature gate disabled",
-			1130: "simd: feature gate disabled",
-			1131: "simd: feature gate disabled",
-			1132: "simd: feature gate disabled",
-			1241: "simd: feature gate disabled",
-			1242: "simd: feature gate disabled",
-			1243: "simd: feature gate disabled",
-			1244: "simd: feature gate disabled",
-			1245: "simd: feature gate disabled",
-			1246: "simd: feature gate disabled",
-			1247: "simd: feature gate disabled",
-			1248: "simd: feature gate disabled",
-			1249: "simd: feature gate disabled",
-			1250: "simd: feature gate disabled",
-			1251: "simd: feature gate disabled",
-			1252: "simd: feature gate disabled",
-			1253: "simd: feature gate disabled",
-			1254: "simd: feature gate disabled",
-			1255: "simd: feature gate disabled",
-			1256: "simd: feature gate disabled",
-			1257: "simd: feature gate disabled",
-			1258: "simd: feature gate disabled",
-			1259: "simd: feature gate disabled",
-			1260: "simd: feature gate disabled",
-			1585: "simd: feature gate disabled",
-			1602: "simd: feature gate disabled",
-			1619: "simd: feature gate disabled",
-			1634: "simd: feature gate disabled",
-			1653: "simd: feature gate disabled",
-			1668: "simd: feature gate disabled",
 		},
 
 		// Seven (module binary ...) forms carrying the function-references table form:
@@ -3313,37 +3026,6 @@ func TestGatedVectors(t *testing.T) {
 			268: "memory64: (memory i64 1) at :34 — an i64 index type",
 			269: "memory64: (memory i64 1) at :34 — an i64 index type",
 		},
-		"simd_load.wast": {
-			// #210's encoder closed the four remaining unencodable immediate shapes, so wat
-			// modules using extract_lane/replace_lane/shuffle/load*_lane/store*_lane now reach
-			// this decoder instead of stopping at `cannot yet encode` — and with the SIMD gate
-			// off, the module's own `v128.load` is declined before the assertion's question is
-			// ever asked. Same mechanism the memarg and data-section emitters' own entries in
-			// this file document: the encoder is right, the decoder is configured not to read
-			// what it correctly wrote.
-			24: "simd: a v128 instruction (v128.load) in the module at :16",
-			44: "SIMD: a v128 instruction in a function body at :34",
-			// **The harness v128 widening (decision 0024's forced question 5)**: every remaining
-			// module in this file declares a `v128`-typed result or param, and its own
-			// `assert_return` now reaches the decoder because the expectation/argument
-			// (`v128.const ...`) can finally be built — verified per module against the decoder,
-			// not assumed from a shared file.
-			11:  "simd: v128 result in the module at :3",
-			12:  "simd: v128 result in the module at :3",
-			13:  "simd: v128 result in the module at :3",
-			32:  "simd: v128 param/result in the module at :26",
-			43:  "simd: v128 param/result in the module at :34",
-			54:  "simd: v128 param/result in the module at :46",
-			62:  "simd: v128 param/result in the module at :56",
-			76:  "simd: v128 param/result in the module at :64",
-			85:  "simd: v128 param/result in the module at :78",
-			93:  "simd: v128 param/result in the module at :87",
-			102: "simd: v128 param/result in the module at :95",
-			110: "simd: v128 param/result in the module at :104",
-			118: "simd: v128 param/result in the module at :112",
-			127: "simd: v128 param/result in the module at :120",
-			135: "simd: v128 param/result in the module at :129",
-		},
 		"store0.wast": {
 			22: "multi-memory: 2 memories at :3, so a memarg carries flags bit 6",
 			23: "multi-memory: 2 memories at :3, so a memarg carries flags bit 6",
@@ -3890,33 +3572,6 @@ func TestGatedVectors(t *testing.T) {
 			306: "function-references: call_ref / return_call_ref at :299 — the module this action runs against",
 			319: "function-references: call_ref / return_call_ref at :308 — the module this action runs against",
 			334: "function-references: call_ref / return_call_ref at :321 — the module this action runs against",
-		},
-		// #210's encoder closed the eight load*_lane/store*_lane mnemonics' shape (immLaneImms),
-		// so this file's module at :52 — which exercises v128.store in nine control-flow
-		// positions (block/loop/br/br_if/br_table/return/if) — now reaches the decoder and is
-		// declined for SIMD before any of the nine assertions runs.
-		"simd_store.wast": {
-			// **The harness v128 widening (decision 0024's forced question 5)**: the module at
-			// :3 declares eight `v128.store_*` exports, and their own `assert_return` vectors
-			// now reach the decoder because the expected `v128.const` result can finally be
-			// built.
-			40: "simd: v128 result in the module at :3",
-			41: "simd: v128 result in the module at :3",
-			42: "simd: v128 result in the module at :3",
-			43: "simd: v128 result in the module at :3",
-			44: "simd: v128 result in the module at :3",
-			45: "simd: v128 result in the module at :3",
-			46: "simd: v128 result in the module at :3",
-			47: "simd: v128 result in the module at :3",
-			89: "simd: a v128.store instruction at :52 — the module this action runs against",
-			90: "simd: a v128.store instruction at :52 — the module this action runs against",
-			91: "simd: a v128.store instruction at :52 — the module this action runs against",
-			92: "simd: a v128.store instruction at :52 — the module this action runs against",
-			93: "simd: a v128.store instruction at :52 — the module this action runs against",
-			94: "simd: a v128.store instruction at :52 — the module this action runs against",
-			95: "simd: a v128.store instruction at :52 — the module this action runs against",
-			96: "simd: a v128.store instruction at :52 — the module this action runs against",
-			97: "simd: a v128.store instruction at :52 — the module this action runs against",
 		},
 		"traps0.wast": {
 			22: "multi-memory: a memarg carrying flags bit 6 at :1 — the module this action runs against",
@@ -7718,7 +7373,16 @@ func TestPhase1Files(t *testing.T) {
 	// incompatible import type` correctly (the encoder's frontier no longer masks the module's
 	// actual type mismatch) — 27 in the default lane, +2 the all-gates-on lane's own denominator
 	// carries. This column's frontiers (the opcode-arm work list above) are untouched.
-	const execFailCeiling = 89
+	// **89 → 243, the SIMD gate's default-on flip (#227/ADR 0025, contract §9 G-1 amended).**
+	// A legitimate rise, not a regression: 154 vectors that used to decline for `simd: feature
+	// gate disabled` (Gated, invisible to this ceiling) now reach the interpreter and either
+	// pass or land in one of exec's own named buckets — chiefly the 161 `#9`-orthogonal
+	// `module reached the interpreter unvalidated` fails ADR 0025's carve-out names, plus the 7
+	// already-registered `assert_return value mismatch` rows and a handful of encoder/linking
+	// fails unrelated to SIMD's own arms. None of it is new engine wrongness: #223 and #229
+	// closed every genuine defect the flip's own forecast surfaced, confirmed on both
+	// architectures, before this flip landed.
+	const execFailCeiling = 243
 	boardBound(t, "execFailCeiling", execFail, execFailCeiling, 0, ceilingBound,
 		"the interpreter answered fewer vectors than it did: either an opcode arm regressed or "+
 			"a value comparison started disagreeing. A *rise* caused by #8 unblocking more "+
@@ -8120,7 +7784,13 @@ func TestPhase1Files(t *testing.T) {
 	// `linking{1,2,3}.wast` and `memory64-imports.wast`, so each of the 17 is simultaneously
 	// answered on the merits and cannot become a disappearance — which is exactly what
 	// TestAllGatesOnLeavesNothingGated is for and why the deferral did not need a second mechanism.
-	const passFloor = 34097
+	// **34308 → 58429, the SIMD gate's default-on flip (#227/ADR 0025).** Pre-registered in
+	// #227's own redistribution forecast and reconciled to the actual post-flip board, both
+	// architectures: pass +24121, fail +161, gated −24282, unsupported +0, summing to zero
+	// against the fixed 65022 total. The forecast's own fail delta (161) is exactly the
+	// #9-orthogonal population ADR 0025's carve-out names — see execFailCeiling's own comment
+	// two tests up for the fail-side accounting.
+	const passFloor = 58429
 	boardBound(t, "passFloor", totalPass, passFloor, boardBoundSlack, floorBound,
 		"a regression in a grammar that used to answer, or the corpus moved")
 }

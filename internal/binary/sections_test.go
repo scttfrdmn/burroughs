@@ -490,8 +490,14 @@ func TestGatesRejectWithFeatureNames(t *testing.T) {
 		0x05, 0x03, 0x01, 0x04, 0x00,
 	} // synthetic: the flags byte lifted out of binary_leb128_64.wast:1, which also needs a code section
 
+	// **`&Decoder{}`, not `DecodeModule`** — the zero value, deliberately, per Features's own
+	// doc comment: this test's subject is "the gate off", and `DecodeModule` no longer means
+	// that for every gate since #227's SIMD flip (`DefaultFeatures` sets `SIMD: true`). The
+	// zero value is still every gate off, unconditionally, which is exactly what "gate off"
+	// needs to construct explicitly now that it and "default policy" are different facts.
+	off := &Decoder{}
 	for name, in := range map[string][]byte{"simd": simd, "memory64": mem64} {
-		_, err := DecodeModule(in)
+		_, err := off.DecodeModule(in)
 		if !errors.Is(err, ErrFeatureDisabled) {
 			t.Errorf("%s gate off: got %v, want ErrFeatureDisabled", name, err)
 			continue
@@ -520,6 +526,40 @@ func TestGatesRejectWithFeatureNames(t *testing.T) {
 		if _, err := on.DecodeModule(in); err != nil {
 			t.Errorf("%s gate on: got %v, want accept", name, err)
 		}
+	}
+}
+
+// TestDefaultFeaturesAndZeroValueAreDistinctFacts pins #227/ADR 0025's own mechanism: the
+// zero value means every gate off, unconditionally, and DefaultFeatures is a separate,
+// independently-settable fact — the two happened to be identical until this flip, and this
+// test is what keeps a future flip from silently reintroducing the same collapse (a field
+// whose zero value carries the default, which cannot flip default-on without either breaking
+// every other caller's all-off assumption or inverting the field's own name into a lie).
+func TestDefaultFeaturesAndZeroValueAreDistinctFacts(t *testing.T) {
+	if got := (Features{}); got.SIMD {
+		t.Errorf("the zero value's own SIMD field is %v, want false — the zero value must stay "+
+			"every gate off unconditionally, per Features's own doc comment", got.SIMD)
+	}
+	if got := DefaultFeatures(); !got.SIMD {
+		t.Errorf("DefaultFeatures().SIMD = %v, want true — #227/ADR 0025's own flip", got.SIMD)
+	}
+
+	// v128 in a type section (the identical synthetic image TestGatesRejectWithFeatureNames
+	// uses for its own "simd" case): DecodeModule now accepts it directly, with no Decoder
+	// constructed by the caller — this is DefaultFeatures actually reaching the package-level
+	// entry point, not merely a fact asserted about the struct in isolation.
+	simd := []byte{
+		0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00,
+		0x01, 0x05, 0x01, 0x60, 0x01, 0x7B, 0x00,
+	}
+	if _, err := DecodeModule(simd); err != nil {
+		t.Errorf("DecodeModule(v128 type), default policy: got %v, want accept", err)
+	}
+	// The explicit zero-value decoder still declines the identical image — proof this is a
+	// policy fact layered on top of the zero value, not a change to the zero value itself.
+	if _, err := (&Decoder{}).DecodeModule(simd); !errors.Is(err, ErrFeatureDisabled) {
+		t.Errorf("&Decoder{}.DecodeModule(v128 type): got %v, want ErrFeatureDisabled — the zero "+
+			"value must still mean every gate off", err)
 	}
 }
 

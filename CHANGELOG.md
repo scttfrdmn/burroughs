@@ -19,7 +19,39 @@ weakly-ordered platform.
 ## [Unreleased]
 *Implements contract v0.1.*
 
+## [0.3.0] - 2026-08-11
+*Implements contract v0.1.*
+
 ### Added
+
+- **`gate:simd` flips default-on — the project's first default-behavior change.** Contract §9
+  G-1's own suite (`simd_*.wast`, 59 files) measures pass=25158 fail=161 gated=0, every fail
+  attributed by the engine's own error taxonomy (`ErrNotValidated`'s doc comment) to #9's
+  deferred validator — a named, self-retiring carve-out G-1 was amended to state explicitly
+  (ADR 0025, stamped by Scott on #230) rather than read silently, because a literal "green, full
+  stop" reading is unsatisfiable by any gate for the whole of v0.
+
+  Mechanism: `binary.DefaultFeatures()` is new, and is what a caller who does not choose gets —
+  a fact now distinct from `Features`'s own zero value (still, and forever, every gate off; see
+  its own doc comment). `binary.DecodeModule` and the spec harness's default lane both moved
+  from constructing `Features{}`/`&Decoder{}` to calling `DefaultFeatures()`; every explicit
+  all-off decoder elsewhere in the codebase (fuzzing, const-verdict isolation, per-gate unit
+  tests) is unaffected, since those construct `&Decoder{}` deliberately and still get all-off.
+
+  Board, pre-registered against #227's own forecast and reconciled: default lane 34308/118/
+  27907/2689 → **58429/279/3625/2689** (pass +24121, fail +161, gated −24282, unsupported +0,
+  summing to zero against the fixed 65022 total) — identical on both architectures, confirmed
+  via Docker for amd64. `TestGatedVectors`'s own `wholeFileGated` allowlist drains from 61
+  entries to 6 (every SIMD-only file measures Gated=0 post-flip; the 6 that remain are
+  relaxed-SIMD content, a separate still-off gate, confirmed unchanged by reading each file).
+  Three mixed files (`simd_const.wast`, `simd_load.wast`, `simd_store.wast`) had their entire
+  per-line SIMD entries removed from the same allowlist, confirmed by measuring each file's own
+  post-flip Gated count is 0.
+
+  `execFailCeiling` (89 → 243) and `passFloor` (34097 → 58429) re-based to the flip's own
+  measured board, per the standing rule that a ceiling/floor left behind a large jump degrades
+  into decoration. `allOnPassFloor` (all-gates-on lane) is untouched — SIMD was already on in
+  that lane and this flip changes only the default.
 
 - **`VecBinary` (integer) executes — #212's own largest single family, 53 mnemonics, and the
   correction of a wrong "ladder complete" claim two entries below.** Found missing while
