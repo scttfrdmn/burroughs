@@ -156,6 +156,28 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **A callee's return destroyed its caller's pending operands, refusing valid modules**
+  ([#251](https://github.com/scttfrdmn/burroughs/issues/251)). `returnFrom` truncated the **shared**
+  value stack to the callee's result arity, so `eval.ml:1069`'s frame-relative `take n vs0 @ vs`
+  became "discard everything below the results" — correct exactly when the caller's stack happened to
+  be empty. `(i32.add (i32.const 100) (call $f))` with an explicit `return` in `$f` was refused as
+  unvalidated, and with *two* operands pending the arity check reported an impossible `left -1
+  numeric`. `runFrame` now captures `base := frameBase{len(st.num), len(st.refs)}` at entry — a
+  *capture*, not the parameter ADR 0026 forecast, since `invoke` pops the arguments before the call
+  and the entry height therefore already **is** the base, leaving nothing for a caller to get wrong
+  (0026's Consequences amended in place, one word off in the safe direction). `branch` never had the
+  defect and the contrast is the diagnosis: a label carries the height it was pushed at, and the
+  implicit function-body label is the one label with no `ctrl` entry, so this function had been
+  standing in for it with an implicit zero. #135's exact mirror — that grave was this arm returning
+  *without* truncating — so both failure modes of frame-relative-arithmetic-without-frames are now
+  filed and one base retires the class. Invisible to the suite by construction (§9 G-3, measured:
+  zero of the all-on lane's 101 bucket keys carry `invoke`'s arity signature), and both lanes are
+  byte-identical across the fix — 58565/142/2689/3625 and 61764/536/0 — so the controls are the only
+  witness there will ever be: nine reaching arms plus the fall-off-the-end negative, all watched fail
+  on the live defect. A third condition became *speakable* rather than merely rarer, and got its own
+  branch and row: a body that pops beneath its own base now reports `the stack below the frame's own
+  base (1/2 numeric, 0/0 reference)` instead of a negative count.
+
 - **An uninitialized reference local read as `ref.func 0` instead of `ref.null`**
   ([#246](https://github.com/scttfrdmn/burroughs/issues/246)). `newFrame` allocated its reference
   slots with `make([]ref, n)`, and Go's zero `ref` has `Null: false` — so a declared-but-unwritten

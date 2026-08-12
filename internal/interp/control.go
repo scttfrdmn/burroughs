@@ -352,12 +352,50 @@ func (in *Instance) branch(st *stack, ctrl []label, depth uint64) (pc, level int
 	return l.cont, len(ctrl) - 1 - int(depth), nil
 }
 
-// returnFrom is the stack surgery a return performs: keep the function's results, drop
-// everything else the body left behind.
+// frameBase is the height of both value stacks at the moment a frame was entered — the origin every
+// frame-relative piece of stack arithmetic is measured from.
 //
-// **`eval.ml:1069` is `take n vs0`, and `n` is the frame's arity** — a return truncates, exactly
-// as a branch to a label does, because a function body *is* an implicit labelled block and the
-// implicit label's arity is the function's result count. The arm this replaces returned without
+// **A struct with named fields rather than two `int` parameters, and the reason is the defect this
+// type exists to have fixed.** `returnFrom` already takes a `(results, refResults)` pair; adding a
+// `(numBase, refBase)` pair would put four same-typed ints in one signature, where a transposition
+// compiles, passes every numeric-only row, and is wrong exactly on the mixed-kind cases that are
+// hardest to notice — the shape `popV128`'s named destinations were argued for in `invoke`. Named
+// fields make the transposition unspellable.
+type frameBase struct {
+	num int
+	ref int
+}
+
+// returnFrom is the stack surgery a return performs: keep the function's results, drop
+// everything else *this frame* left behind.
+//
+// # Frame-relative, which is grave #251
+//
+// `eval.ml:1069` is `take n vs0 @ vs` — take the results off the dying frame's stack `vs0` and append
+// them onto **the parent's** stack `vs`. Both halves are load-bearing and this function used to
+// implement only the first: it truncated the shared stack to `results` absolutely, so `@ vs` became
+// "discard everything below", which is correct exactly when the caller's stack happened to be empty
+// and destroys the caller's pending operands otherwise. `(i32.add (i32.const 100) (call $f))` with an
+// explicit `return` in `$f` refused a **valid** module, and with two operands pending the arity check
+// reported `left -1 numeric` — a count outside its own domain, which is what convicted the model
+// rather than the measurement.
+//
+// **`branch` never had this defect, and the contrast is the diagnosis.** A label carries `height`,
+// captured when it was pushed, so a branch's truncation is frame-relative *by construction*; the
+// implicit function-body label is the one label with no entry in `ctrl`, so it had no captured height
+// and this function stood in for it with an implicit zero. The repair gives it the height the other
+// labels always had.
+//
+// It is also #135's mirror. That grave was this arm returning **without** truncating, which broke
+// `invoke`'s arity check by leaving scratch behind; this one truncates without a base, which breaks
+// the same check by taking the caller's operands with it. Both are the same missing concept — a frame
+// needs a base — approached from opposite sides, and one base retires the pair.
+//
+// # Why it truncates at all, which is grave #135
+//
+// `n` is the frame's arity — a return truncates, exactly as a branch to a label does, because a
+// function body *is* an implicit labelled block and the implicit label's arity is the function's
+// result count. The arm this replaces returned without
 // touching the stack, on the stated ground that "the values below the results belong to no one
 // once this function is done". That is true of the *frame*, and it is not true of `Invoke`'s
 // arity check, which counts what is left: `(i32.const 1) (return (i32.const 2))` in a
@@ -369,26 +407,39 @@ func (in *Instance) branch(st *stack, ctrl []label, depth uint64) (pc, level int
 // `call.go`'s `invoke`, which already makes exactly this split for a callee's result count.
 //
 // Reported rather than silently clamped when there are too few values: that is #9's arity
-// question arriving late, the same reading `branch` gives it.
-func returnFrom(st *stack, results, refResults int) error {
-	if len(st.num) < results {
-		return fmt.Errorf("%w: return with %d values on the stack, but the function declares %d results",
-			ErrNotValidated, len(st.num), results)
+// question arriving late, the same reading `branch` gives it. **Both shortfalls are now worded
+// against the frame**, which is what keeps a real underflow from being reported as an impossible
+// number: a body that popped *beneath* its own base is a third condition, not a small count, and
+// it gets its own sentence below rather than being folded into a subtraction whose result would be
+// negative.
+func returnFrom(st *stack, base frameBase, results, refResults int) error {
+	// Below the frame's own base: the callee has consumed values that belong to its caller. That
+	// is #9's job to prevent (`popNum` deliberately does not check depth — see its doc comment),
+	// and it is unreachable from a validated module; worded separately because a validated-module
+	// violation deserves to name what it is rather than surface as `left -1 numeric`, which was
+	// exactly this grave's tell.
+	if len(st.num) < base.num || len(st.refs) < base.ref {
+		return fmt.Errorf("%w: return with the stack below the frame's own base (%d/%d numeric, %d/%d reference)",
+			ErrNotValidated, len(st.num), base.num, len(st.refs), base.ref)
 	}
-	if len(st.refs) < refResults {
-		return fmt.Errorf("%w: return with %d references on the stack, but the function declares %d reference results",
-			ErrNotValidated, len(st.refs), refResults)
+	if have := len(st.num) - base.num; have < results {
+		return fmt.Errorf("%w: return with %d values on this frame's stack, but the function declares %d results",
+			ErrNotValidated, have, results)
 	}
-	copy(st.num, st.num[len(st.num)-results:])
-	st.num = st.num[:results]
+	if have := len(st.refs) - base.ref; have < refResults {
+		return fmt.Errorf("%w: return with %d references on this frame's stack, but the function declares %d reference results",
+			ErrNotValidated, have, refResults)
+	}
+	copy(st.num[base.num:], st.num[len(st.num)-results:])
+	st.num = st.num[:base.num+results]
 	if st.tracking {
-		copy(st.numSeq, st.numSeq[len(st.numSeq)-results:])
-		st.numSeq = st.numSeq[:results]
+		copy(st.numSeq[base.num:], st.numSeq[len(st.numSeq)-results:])
+		st.numSeq = st.numSeq[:base.num+results]
 	}
-	copy(st.refs, st.refs[len(st.refs)-refResults:])
-	st.refs = st.refs[:refResults]
-	copy(st.refSeq, st.refSeq[len(st.refSeq)-refResults:])
-	st.refSeq = st.refSeq[:refResults]
+	copy(st.refs[base.ref:], st.refs[len(st.refs)-refResults:])
+	st.refs = st.refs[:base.ref+refResults]
+	copy(st.refSeq[base.ref:], st.refSeq[len(st.refSeq)-refResults:])
+	st.refSeq = st.refSeq[:base.ref+refResults]
 	return nil
 }
 
