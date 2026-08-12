@@ -54,8 +54,14 @@ import (
 // literal zero at a boundary call reads as an accident: a caller passing 0 from inside a frame would
 // reset the exhaustion budget, which is a bug no vector can see (the budget's whole purpose is a
 // case that does not terminate).
+// **Through `enterFrame` rather than `runFrame` directly, which is 0026's trampoline (#253) and the
+// second of its exactly two call sites.** A `return_call` in the *outermost* frame — the function the
+// boundary invoked — has no caller inside the engine to catch its sentinel, so the boundary is where
+// its loop has to live; `return_call.wast`'s exported `even`/`odd` are invoked directly, so this is
+// not the exotic case it might read as. The const-expression callers reach the same loop and never
+// exercise it, a constant expression having no call opcodes.
 func (in *Instance) run(fn *binary.Func, locals *frame, st *stack, results, refResults int) error {
-	return in.runFrame(fn, locals, st, results, refResults, 0)
+	return in.enterFrame(fn, locals, st, results, refResults, 0)
 }
 
 // runFrame is `run` at a known call depth. See run for the loop's design; `depth` counts the frames
@@ -456,6 +462,48 @@ func (in *Instance) runFrame(fn *binary.Func, locals *frame, st *stack, results,
 				continue
 			}
 
+		case opReturnCall: // 0x12 — `eval.ml:282-284` (`gate:tailCall`, 0026 / #253)
+			// **A real tail call now**, and the three `return_call*` arms are one shape: resolve
+			// with the plain opcode's own resolver, then end differently. `eval.ml`'s
+			// `ReturnCall` arm literally steps the plain `Call` and re-tags the resulting
+			// `Invoke` as `ReturningInvoke`, so sharing the resolution is the reference's
+			// construction and not a convenience — see resolveCall.
+			//
+			// **No budget check on this path**, which is the whole difference from `opCall`:
+			// `eval.ml:1080` charges the budget on `Frame` entry and a re-tagged `Invoke` lands
+			// in the *parent's* instruction list (`:1072-1074`), so the frame that would have
+			// been charged is the one this instruction is replacing.
+			//
+			// This paragraph used to end "`return_call.wast`'s million-deep `even`/`odd` is the
+			// vector set that measures it", and **that was measured and is false** — worth keeping
+			// as a correction because it names which of two facts is load-bearing. Adding
+			// `if depth >= callBudget { return trapExhaustion }` right here leaves all 141
+			// vectors across the three `return_call*` files green, and so does incrementing
+			// `depth` in `enterFrame`'s loop: `depth` is *invariant along a tail chain*, so a
+			// check against it is inert, and an inflated one is unread until an ordinary call
+			// happens to look. What the million-deep vectors actually catch is an implementation
+			// that **nests** — by exhausting, or by taking the harness down with
+			// `fatal error: stack overflow` — never one that merely miscounts. The two defects
+			// this comment's claim would have covered are pinned in
+			// TestTailCallConsumesNoBudgetButNestingStillDoes instead: a tail call from the
+			// deepest permitted frame, and an ordinary call after a chain twice the budget long.
+			//
+			// **Deliberately not routed through `raiseOrCatch`**, exactly as the two arms below:
+			// this frame is finished before the callee runs, so an exception the callee throws
+			// must escape any `try_table` the tail call sat inside — `try_table.wast:334`'s
+			// `return-call-in-try-catch` asserts precisely that, and it is the corpus rather
+			// than a reading of the reduction that makes the omission checkable. `tailFrom`
+			// discards this frame's `ctrl` by construction: it is a local of this function, and
+			// this function is returning.
+			// `callee`/`calleeType` rather than shadowing this function's own `fn`: the frame
+			// being *replaced* and the frame being *entered* are two different functions, and one
+			// name for both is how a tail call would come to build the wrong frame.
+			target, callee, calleeType, err := in.resolveCall(uint32(ins.Imm0))
+			if err != nil {
+				return err
+			}
+			return tailFrom(target, callee, calleeType, st, base)
+
 		case opCallIndirect:
 			if err := in.callIndirect(ins, st, depth); err != nil {
 				// opCall's own reasoning: the callee's runFrame may have returned a
@@ -476,34 +524,35 @@ func (in *Instance) runFrame(fn *binary.Func, locals *frame, st *stack, results,
 				continue
 			}
 
-		case opReturnCallIndirect:
-			// **A tail call, and this arm does not make it one.** The reference's
-			// `ReturnCallIndirect` (`eval.ml:298-305`) steps a plain `CallIndirect` and then
-			// wraps the result in `ReturningInvoke`, which replaces the current frame instead
-			// of nesting under it. Here the call nests and the frame then returns, which is
-			// *observationally identical* for every vector except one class: unbounded tail
-			// recursion, which the spec requires to run forever and this arm exhausts.
+		case opReturnCallIndirect: // 0x13 — `eval.ml:298-305` (`gate:tailCall`, 0026 / #253)
+			// **A real tail call now, and the paragraph this replaces is worth knowing about.**
+			// It said the arm "does not make it one" — the call nested and the frame then
+			// returned — and declared the shortfall free of charge on the measured ground that
+			// `return_call_indirect.wast` has no unbounded-recursion vector, so all 42 rows
+			// passed either way. That reading was honest and *incomplete*: the file's four
+			// `call stack exhausted` rows (`:294`/`:295`/`:300`/`:301`) recurse through a
+			// **table**, which the grep behind "no unbounded-recursion vector" could not see —
+			// the same trigger-coverage law that cost `opReturnCallRef`'s comment its own
+			// three-versus-five miscount, one arm over.
 			//
-			// Stated rather than left silent because the difference is invisible on the
-			// board — `return_call_indirect.wast` has no unbounded-recursion vector, so all 42
-			// rows pass either way — and a proper tail call needs the explicit frame stack
-			// `call`'s comment defers to v1. That is the shape of a declared shortfall: the
-			// gate is off by default, so nothing reaches here unless the all-gates-on lane
-			// puts it here, and when it does it answers on the merits for everything the suite
-			// asks.
+			// The old paragraph also deferred the fix to "the explicit frame stack `call`'s
+			// comment defers to v1", and 0026 is where that was found to be unnecessary: a
+			// sentinel plus a trampoline at the frame owner gets constant-stack tail calls
+			// without the explicit frame stack, which stays deferred to v2's continuations
+			// (contract §7, 0026 option C).
 			//
-			// **Deliberately not caught here, unlike opCall/opCallIndirect's own arms.** A tail
-			// call discards this frame *before* the callee runs — `ReturningInvoke`'s reduction
-			// unwinds straight to the caller, never re-entering this frame's `Handler`s — so an
-			// exception the callee throws must escape any `try_table` the tail call sat inside,
-			// exactly as `try_table.wast`'s own `return-call-in-try-catch`/`return-call-indirect-
-			// in-try-catch` assert (`assert_exception`, not caught): the corpus itself is the
-			// authority this arm's omission is checked against, not merely a reading of
-			// `eval.ml`.
-			if err := in.callIndirect(ins, st, depth); err != nil {
+			// **Deliberately not routed through `raiseOrCatch`, unlike opCallIndirect's own
+			// arm** — the one claim in the old paragraph that survives intact, and the corpus is
+			// its authority rather than a reading of the reduction: `try_table.wast`'s
+			// `return-call-in-try-catch`/`return-call-indirect-in-try-catch` assert
+			// `assert_exception`, i.e. *not* caught by the handler the tail call sits inside.
+			// `tailFrom` gets that by construction, this frame's `ctrl` being a local of a
+			// function that is returning.
+			target, callee, calleeType, err := in.resolveCallIndirect(ins, st)
+			if err != nil {
 				return err
 			}
-			return returnFrom(st, base, results, refResults)
+			return tailFrom(target, callee, calleeType, st, base)
 
 		case opCallRef: // 0x14 — `eval.ml:266-270` (`gate:gc`, #172 rung 1)
 			if err := in.callRef(st, depth); err != nil {
@@ -529,18 +578,17 @@ func (in *Instance) runFrame(fn *binary.Func, locals *frame, st *stack, results,
 				continue
 			}
 
-		case opReturnCallRef: // 0x15 — `eval.ml:288-296` (`gate:gc`, #172 rung 1)
-			// **A tail call, and this arm does not make it one — same shortfall as
-			// opReturnCallIndirect, but *not* the same board consequence, which is why this
-			// comment is not a cross-reference.** `eval.ml:291-296` steps a plain `CallRef` and
-			// rewraps the result as `ReturningInvoke`, replacing this frame rather than nesting
-			// under it. Nesting-then-returning is observationally identical except for unbounded
-			// tail recursion.
+		case opReturnCallRef: // 0x15 — `eval.ml:288-296` (`gate:gc`, #172 rung 1; 0026 / #253)
+			// **A real tail call now, and this arm is where the shortfall was first priced.**
+			// `eval.ml:291-296` steps a plain `CallRef` and rewraps the result as
+			// `ReturningInvoke`, replacing this frame rather than nesting under it; the
+			// nesting-then-returning version this replaced was observationally identical except
+			// for unbounded tail recursion, and *this* file is where that exception has vectors.
 			//
-			// opReturnCallIndirect could declare its shortfall free of charge, on the stated
-			// ground that `return_call_indirect.wast` contains no unbounded-recursion vector.
-			// **That premise is false for this file**, checked rather than inherited — and it is
-			// false five times:
+			// The five they cost are kept as the record of what the mechanism bought, because a
+			// declared shortfall is only worth declaring if someone can later check what
+			// discharging it was worth. They were the five rows this arm answered `call stack
+			// exhausted`:
 			//
 			//	:195  (assert_return (invoke "count" (i64.const 1_000_000)) (i64.const 0))
 			//	:201  (assert_return (invoke "even"  (i64.const 1_000_000)) (i64.const 44))
@@ -550,36 +598,31 @@ func (in *Instance) runFrame(fn *binary.Func, locals *frame, st *stack, results,
 			//
 			// One self-recursive and four mutually recursive (`even`/`odd` tail-call each other
 			// through a global funcref), each around a million frames deep, each of which a real
-			// tail call runs in constant stack. Here they exhaust `callBudget` and report `call
-			// stack exhausted` — the *wrong answer* rather than a crash, since the budget is a
-			// counter and catches this long before the Go stack does, which is the one mercy in
-			// the arrangement. `count 1000` at `:194` passes, being under the budget, which is
-			// what makes the shortfall a depth cliff rather than a broken opcode.
+			// tail call runs in constant stack — and now does: `depth` does not move across
+			// `enterFrame`'s loop, so a million tail calls occupy one Go frame and one wasm
+			// frame's worth of budget. `count 1000` at `:194` passed even before, being under the
+			// budget, which is what made the shortfall a depth cliff rather than a broken opcode.
 			//
 			// **Five was measured; three was what a grep said**, and the difference is this
-			// project's own trigger-coverage law biting the author of this comment. `grep
+			// project's own trigger-coverage law biting the author of that comment. `grep
 			// 1_000_000` finds `count`/`even`/`odd` at exactly a million and silently misses
 			// `even 1_000_001` and `odd 999_999`, which recurse just as deep — the population is
 			// "vectors whose argument exceeds callBudget", and a literal is not that predicate.
 			// The five are the harness's own count (`run(s).Buckets` for this file: 5 rows keyed
 			// `trap: call stack exhausted`), which is the instrument rather than a pattern over
-			// the text.
+			// the text. The lesson outlived the shortfall, which is why it is still here.
 			//
-			// So this arm costs **five** vectors and the cost is declared rather than discovered:
-			// they are counted as fails in the PR's board, `return_call_ref.wast` is not claimed
-			// green, and the fix is the explicit frame stack `call`'s comment defers to v1.
-			// Flagged for the principals rather than settled here, because the mechanism is
-			// shared with the tail-call gate's own 0x12/0x13 and choosing it inside an
-			// implementation PR would be an architecture decision taken silently.
-			//
-			// **Deliberately not caught here, unlike opCallRef above** — opReturnCallIndirect's
-			// reasoning transfers intact: a tail call discards this frame before the callee runs,
-			// so an exception the callee throws must escape any `try_table` the tail call sat
-			// inside.
-			if err := in.callRef(st, depth); err != nil {
+			// **Deliberately not routed through `raiseOrCatch`, unlike opCallRef above** — a tail
+			// call discards this frame before the callee runs, so an exception the callee throws
+			// must escape any `try_table` the tail call sat inside. `call_ref.wast` has no
+			// try_table vector, so for *this* opcode pair the authority is the reduction; the
+			// corpus checks the same property one arm up, where `try_table.wast:334` asserts it
+			// for `return_call`.
+			target, callee, calleeType, err := resolveCallRef(st)
+			if err != nil {
 				return err
 			}
-			return returnFrom(st, base, results, refResults)
+			return tailFrom(target, callee, calleeType, st, base)
 
 		case opEnd:
 			// **Two meanings, and the control stack is what tells them apart** — which is

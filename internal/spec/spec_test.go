@@ -5942,9 +5942,14 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 // tag-import vectors reach the identical gap `sameTagType` inherits from `structFuncTypeEqual`.
 // Not #206, unaffected by this fix, unchanged from the original pre-registration.
 //
-// **2 lines remain genuinely unrelated pre-existing gaps**: `try_table.wast:334` (`return_call`,
-// opcode `0x12`, has no arm in this engine at all) and `:464`/`:465`/`:466` (the harness
-// limitation now correctly attributed to all three lines it actually covers).
+// **1 unrelated pre-existing gap remains**: `try_table.wast:464`/`:465`/`:466`, the harness
+// limitation now correctly attributed to all three lines it actually covers.
+//
+// It was **2**, the other being `:334` — `return_call` had no arm in this engine at all — and #253
+// landed 0026's tail-call mechanism, so that line passes and the entry became stale. This test
+// caught it, which is the pre-registration behaving exactly as designed: a fail list is supposed to
+// rot by the system working, and a stale entry overstates what is broken. Recorded here rather than
+// silently decremented, because the count in a doc comment is a citation like any other.
 func TestGrave206KnownFailures(t *testing.T) {
 	requireSuite(t)
 
@@ -5956,7 +5961,10 @@ func TestGrave206KnownFailures(t *testing.T) {
 			59: "sameFuncType's own rec-group scope boundary (TestSameFuncTypeCorpusScope), reached via tag-import linking rather than func linking",
 		},
 		"try_table.wast": {
-			334: "return_call (opcode 0x12) has no arm in this engine at all -- unrelated, pre-existing, not this rung's scope",
+			// `:334` was here — `return_call` had no arm — and 0026's mechanism (#253) gave it
+			// one, so the entry went stale and this test said so. Removed rather than
+			// re-explained: that is the whole point of a fail list that rots by the system
+			// working, and its own doc comment's arithmetic is corrected above.
 			464: "harness limitation: \"which the harness cannot represent\" -- the spec test framework's own result matcher, not an engine defect",
 			465: "harness limitation: \"which the harness cannot represent\" -- was misattributed to grave #206, which was masking this same pre-existing gap (found when #206's own fix in PR converted this line's *symptom* but not its underlying cause)",
 			466: "harness limitation: \"which the harness cannot represent\" -- was misattributed to grave #206, which was masking this same pre-existing gap (found when #206's own fix in PR converted this line's *symptom* but not its underlying cause)",

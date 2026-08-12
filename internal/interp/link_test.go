@@ -303,8 +303,14 @@ func TestUnsatisfiedImportKeepsItsSentinel(t *testing.T) {
 // distinct values, both plausible, so the wrong reading answers rather than failing — which is
 // what puts this in the accept-direction class (§9 G-3) with the row above.
 //
-// Falsified: changing `callImport` to `return in.call(ext.fnIdx, st, depth)` — the same index
-// against the wrong receiver — fails this with 7.
+// Falsified: returning `in` instead of `ext.fnInst`'s own resolution from `resolveCall`'s import
+// arm — the same index against the wrong receiver — fails this with 7.
+//
+// **Re-pointed rather than re-derived, and the subject grew.** The mutation used to be phrased
+// against `callImport`, which no longer exists: 0026 (#253) split resolution from entry so a tail
+// call could reuse the first half, and the crossing moved into `resolveCall`. The *risk* is
+// unchanged and now has two consumers rather than one — `invoke` and `tailFrom` — which is why this
+// row is checked beside TestTailCallCrossesTheInstanceBoundary rather than assumed to cover both.
 func TestLinkedCallCrossesIntoTheSupplierInstance(t *testing.T) {
 	sup := supplier(t, `(module
 		(global $g i32 (i32.const 11))

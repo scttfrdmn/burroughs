@@ -21,6 +21,30 @@ weakly-ordered platform.
 
 ### Added
 
+- **Tail calls — `return_call`, `return_call_indirect`, `return_call_ref`, all three files fully
+  green** (#253, decision 0026). A `return_call*` builds the callee's frame, truncates the stack to
+  the dying frame's own base, and returns a **fourth control-transfer value** — a `*tailCall`
+  sentinel joining `ErrNotValidated`, `*Trap` and 0022's `*thrown`. One trampoline, `enterFrame`,
+  consumes it at both frame entry points, re-entering at the *same* depth and with the *original*
+  frame's declared arity, which is what makes a million-deep tail chain cost one Go frame. The
+  resolution half is shared verbatim with the non-tail siblings (`resolveCall` /
+  `resolveCallIndirect` / `resolveCallRef`, split out of `call` / `callIndirect` / `callRef`), which
+  is the reference's own construction: `eval.ml:282-305` steps the plain opcode and re-tags the
+  resulting `Invoke`.
+  - **All-on lane 61891 → 61933 pass, 409 → 367 fail, `Gated` 0** — the pre-registered forecast of
+    42 conversions, exactly. `return_call.wast` 37/0, `return_call_indirect.wast` 64/0,
+    `return_call_ref.wast` 40/0, and the negative halves held to the vector: `call.wast` 71/0,
+    `call_indirect.wast` 146/0, `call_ref.wast` 31/0, `fac.wast` 7/0. The default lane is
+    **unmoved** (58565/142/2689/3625) and structurally so — a tail-call vector scores `gated` there,
+    never `unsupported`.
+  - **One extra allocation per tail call, and it is faster than the call it replaces.** Measured with
+    the pinned benchstat, n=10, 1000-deep chains: tail **164.1µs ± 1%**, 7.013k allocs/op;
+    plain-call **175.8µs ± 2%**, 6.013k allocs/op. The marginal cost is the 24-byte sentinel
+    (+24000 B over 1000 calls); the frame allocation is not new, since an ordinary call builds one
+    too. **−6.7% wall clock**, because the Go stack does not grow. arm64/M4 Pro.
+  - The `gate:tailCall` and `gate:gc` flips are **not** in this entry: a flip is its own stamp-tier
+    event, never the mechanism's PR.
+
 - **`gate:gc` rung 4 — the three i31 arms, and `ref_eq.wast` goes fully green** (#255). `ref.i31`,
   `i31.get_s` and `i31.get_u` (`fb 1c`–`fb 1e`), transcribed from `i31.ml` rather than from the board:
   the 31-bit truncation happens at **construction** (`of_i32`'s `land 0x7fff_ffff`), which makes
@@ -158,6 +182,17 @@ weakly-ordered platform.
   tail-call gate's own 0x12/0x13 when it lands.
 
 ### Changed
+
+- **`callImport` is gone, absorbed into `resolveCall`.** The import crossing is a change of
+  *receiver*, not a kind of call, and once resolution is separated from frame entry there is no
+  depth to pass it — so the recursion is now `resolveCall` returning the supplier's own resolution
+  and the depth-neutrality argument the old function's comment made is structural rather than
+  asserted. Three prose citations to the deleted name were repaired in the same PR (#253).
+
+- **`try_table.wast:334` left `TestGrave206KnownFailures`' pre-registered fail list**, because
+  `return_call` now has an arm. The staleness was reported by that test rather than noticed — a fail
+  list is supposed to rot by the system working, and its doc comment's count was corrected with it
+  (#253).
 
 - **One constant-expression evaluator, four call sites.** `constExprValue` (offsets, hard-coded to
   one numeric slot) and `constExprRef` (element expressions, a two-pattern matcher over

@@ -7,24 +7,27 @@ import (
 	"github.com/scttfrdmn/burroughs/internal/binary"
 )
 
-// The five call opcodes with arms, named for control.go's reason: a bare 0x10 in a switch arm is
-// a byte and these are a family.
+// The six call opcodes, named for control.go's reason: a bare 0x10 in a switch arm is a byte and
+// these are a family.
 //
-// **`return_call` (0x12) is deliberately absent from this block**, and its absence is the shape of
-// the tail-call gate rather than an omission. `return_call_indirect` is here because it is the
-// *indirect* half — the half that shares every line of its resolution with 0x11 — and 0x12 needs
-// nothing this file has: it is `call` with the frame reused, which is #7's `Invoke`-side work.
-// Both are gated by `gateTailCall` in the decoder, so on the default board neither reaches here at
-// all; the gate is what decides, and the switch arm is what answers once it has.
+// **`return_call` (0x12) joined this block when 0026's mechanism landed, and its previous absence
+// is worth reading rather than deleting.** The old comment said 0x12 "needs nothing this file has:
+// it is `call` with the frame reused", which was true of the *arm* and false of the file — frame
+// reuse turns out to need `call`'s resolution split from `call`'s entry, which is this file's
+// subject and nothing else's. So the three tail opcodes are here beside their non-tail siblings
+// because each one *is* its sibling's resolution with a different ending (`resolveCall`,
+// `resolveCallIndirect`, `resolveCallRef` below, each with two callers).
 //
-// `call_ref`/`return_call_ref` (0x14/0x15) are `gateGC`'s, not `gateTailCall`'s — the function
-// references proposal folded into GC, so on the default board these are gated too and by a
-// different gate than their `return_call` sibling. Two proposals reaching one switch is the normal
-// case here; the constants are grouped by *mechanism* (all five resolve a callee and enter it) and
-// `gatemap.go` is where the proposal each belongs to is recorded.
+// Three opcodes, two gates: `return_call`/`return_call_indirect` are `gateTailCall`'s and
+// `call_ref`/`return_call_ref` are `gateGC`'s — the function references proposal folded into GC, so
+// on the default board a `return_call_ref` and a `return_call` are declined by different gates.
+// Two proposals reaching one switch is the normal case here; the constants are grouped by
+// *mechanism* (all six resolve a callee, and three of them then enter it) and `gatemap.go` is where
+// the proposal each belongs to is recorded.
 const (
 	opCall               = 0x10
 	opCallIndirect       = 0x11
+	opReturnCall         = 0x12
 	opReturnCallIndirect = 0x13
 	opCallRef            = 0x14
 	opReturnCallRef      = 0x15
@@ -98,46 +101,59 @@ func (in *Instance) call(idx uint32, st *stack, depth int) error {
 	if depth >= callBudget {
 		return trapExhaustion
 	}
-	fn, ok := in.mod.DefinedFunc(idx)
-	if !ok {
-		if idx < uint32(in.mod.ImportedFuncs()) {
-			// An imported function. If a supplier filled the slot the call **crosses into
-			// that instance**; if not, this is still contract §3's gap, reported as the
-			// engine gap it is rather than as a module fault (`tableFor`'s rule: nothing is
-			// wrong with the module).
-			return in.callImport(idx, st, depth)
-		}
-		// Past the end of the index space, which is #9's `unknown function`.
-		return fmt.Errorf("%w: call names function %d of %d",
-			ErrNotValidated, idx, in.mod.ImportedFuncs()+len(in.mod.Funcs))
-	}
-	ft, err := in.funcType(fn)
+	target, fn, ft, err := in.resolveCall(idx)
 	if err != nil {
 		return err
 	}
-	return in.invoke(fn, ft, st, depth)
+	return target.invoke(fn, ft, st, depth)
 }
 
-// callImport calls a function that reached this instance through an import.
+// resolveCall is `call`'s half that answers *which function* — the index lookup, the import
+// crossing, and the callee's declared type — with no frame built and nothing entered.
+//
+// **Split from entry because a tail call needs exactly this half and nothing after it** (0026,
+// #253). `eval.ml:282-284`'s `ReturnCall` arm literally `step`s the plain `Call` and re-tags the
+// resulting `Invoke`, so resolution is *shared verbatim* between the tail and non-tail opcodes by
+// the reference's own construction. Two callers, one place that knows how a callee is named — the
+// same rule `invoke` states for how a frame is built, and `funcRefTarget`'s reason for existing.
 //
 // **The crossing is a change of receiver and nothing else** — the operands stay on the caller's
 // stack and the results come back onto it, exactly as for a module-local call, because
 // `eval.ml`'s `Func.FuncInst` carries its own instance and `invoke` reads locals from the frame
 // rather than from the caller. What changes is which instance the callee's `memory`,
 // `global.get` and `call` resolve against, which is the entire content of linking at this layer.
+// The returned `*Instance` is that receiver, and every caller must use it rather than its own — a
+// tail call to an import is the case where getting this wrong is silent, see tailcall.go.
 //
-// **`depth` is passed through unincremented, and that is deliberate.** The budget counts wasm
-// *frames*, and resolving an import builds none: the frame arrives when the callee's own `invoke`
-// increments. Incrementing here would make a chain of re-exported imports cost budget for
-// re-exports, so two scripts with the same call graph and different export plumbing would exhaust
-// at different depths. An import chain cannot cycle — a supplier is instantiated before its
-// importer — so the pass-through cannot lose the bound.
-func (in *Instance) callImport(idx uint32, st *stack, depth int) error {
-	ext, err := in.importedFunc(idx)
-	if err != nil {
-		return err
+// **The import crossing costs no depth, and it can no longer be spelled otherwise.** This used to
+// be `callImport`, which took `depth` and passed it through unincremented on the stated ground
+// that the budget counts wasm *frames* and resolving an import builds none. That reasoning was
+// right and is now structural instead: resolution has no depth parameter at all, so the frame
+// arrives when the callee's own `invoke` increments and nothing on this path can charge for
+// re-export plumbing. An import chain cannot cycle — a supplier is instantiated before its
+// importer — so the recursion terminates.
+//
+// An unfilled slot is contract §3's gap, reported as the engine gap it is rather than as a module
+// fault (`tableFor`'s rule: nothing is wrong with the module); `importedFunc` renders it.
+func (in *Instance) resolveCall(idx uint32) (*Instance, *binary.Func, *binary.FuncType, error) {
+	fn, ok := in.mod.DefinedFunc(idx)
+	if !ok {
+		if idx < uint32(in.mod.ImportedFuncs()) {
+			ext, err := in.importedFunc(idx)
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			return ext.fnInst.resolveCall(ext.fnIdx)
+		}
+		// Past the end of the index space, which is #9's `unknown function`.
+		return nil, nil, nil, fmt.Errorf("%w: call names function %d of %d",
+			ErrNotValidated, idx, in.mod.ImportedFuncs()+len(in.mod.Funcs))
 	}
-	return ext.fnInst.call(ext.fnIdx, st, depth)
+	ft, err := in.funcType(fn)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return in, fn, ft, nil
 }
 
 // importedFunc resolves an imported function index to whatever fills its slot.
@@ -162,12 +178,69 @@ func (in *Instance) importedFunc(idx uint32) (*Extern, error) {
 // Split from `call` because `call_indirect` reaches it by a different route — it has the function
 // and its type already, having resolved them through a table — and the frame-building half is
 // identical. Two callers, one place that knows how a frame is built.
+//
+// **Through `enterFrame` rather than `runFrame` directly, which is 0026's trampoline (#253).** A
+// callee that tail-calls returns a `*tailCall` sentinel instead of leaving results, and the loop
+// that consumes it belongs to whoever owns the frame — here and in `run`, the two entry points, and
+// nowhere else. The arity check below therefore still reads a *settled* stack: by the time
+// `enterFrame` returns without a sentinel, whichever function finally left the results left exactly
+// the results this call's `ft` declares, which is property 4's whole content (the declared results
+// stay the original frame's).
 func (in *Instance) invoke(fn *binary.Func, ft *binary.FuncType, st *stack, depth int) error {
+	locals, err := buildFrame(fn, ft, st)
+	if err != nil {
+		return err
+	}
+	// **The callee's results must be exactly its arity, and the check is here rather than at the
+	// boundary**, because a call's results become the caller's operands: a callee leaving scratch
+	// behind would silently corrupt the caller's stack, where at the boundary `Invoke` merely
+	// reports a mismatched count. `run`'s own `returnFrom` truncates on an explicit return, so the
+	// case this catches is a body falling off its end with extra values — #9's arity question,
+	// arriving late.
+	//
+	// **Two arrays, two deltas — checking only `st.num` reported every ref-typed result as
+	// missing, unconditionally.** `table.get`/`ref.func`/`ref.null` had no arms until #7's
+	// opcode-arm stream reached them, so nothing before that could call a function returning a
+	// funcref/externref through `call` or `call_indirect` (both funnel through here) and observe
+	// this: `table_get.wast`'s `is_null-funcref` is `ref.is_null (call $f3 …)`, where `$f3`
+	// returns a `funcref` and left it correctly on `st.refs` — but `len(st.num)-base` read `0`
+	// against a declared arity of `1` every time, regardless of what actually happened on the ref
+	// side. Counting `ft.Results` by kind and checking each array against its own count is what
+	// `#9`'s arity question actually asks; one array can be exactly right while the other is
+	// wrong, and a shared counter cannot tell the two apart.
+	numBase, refBase := len(st.num), len(st.refs)
+	wantNum, wantRef := countByArray(ft.Results)
+	if err := in.enterFrame(fn, locals, st, wantNum, wantRef, depth+1); err != nil {
+		return err
+	}
+	if gotNum, gotRef := len(st.num)-numBase, len(st.refs)-refBase; gotNum != wantNum || gotRef != wantRef {
+		return fmt.Errorf("%w: a called function declares %d results (%d numeric, %d reference) "+
+			"and left %d numeric, %d reference values on the stack",
+			ErrNotValidated, len(ft.Results), wantNum, wantRef, gotNum, gotRef)
+	}
+	return nil
+}
+
+// buildFrame pops the callee's arguments off the shared stack into a fresh frame — everything
+// `invoke` does *before* entering, and nothing after.
+//
+// **Split from entry for 0026's second property (#253): a tail call builds the callee's frame
+// exactly the way a plain call does, and this is that loop rather than a second copy of it.** The
+// reference gets the sharing for free — `eval.ml:282-305` steps the plain opcode and re-tags the
+// resulting `Invoke`, so `:1069`'s `take n vs0` runs once in the source — and a second copy here
+// would be grave #105's shape a third time, this time with the v128 two-slot conversion and grave
+// #246's null fill as the facts to re-derive wrongly.
+//
+// No receiver, `funcRefTarget`'s reason: building a frame reads the callee's own `fn`/`ft` and the
+// shared stack, and touches no instance state at all. The *entering* is what needs an owner, and
+// keeping that distinction in the signatures is what makes a cross-instance tail call hard to spell
+// wrongly (`enterFrame`, tailcall.go).
+func buildFrame(fn *binary.Func, ft *binary.FuncType, st *stack) (*frame, error) {
 	total := fn.TotalLocals() + uint64(len(ft.Params))
 	if total > maxFrameLocals {
 		// `Invoke`'s ceiling, reached from the inside. Same reading: an engine limit, not a
 		// verdict and not a trap.
-		return fmt.Errorf("%w: a called function declares %d locals, and this engine's frame ceiling is %d",
+		return nil, fmt.Errorf("%w: a called function declares %d locals, and this engine's frame ceiling is %d",
 			ErrUnsupported, total, maxFrameLocals)
 	}
 	// **Both arrays' arity is checked before either is popped from**, for `needNum`/`needRef`'s
@@ -180,10 +253,10 @@ func (in *Instance) invoke(fn *binary.Func, ft *binary.FuncType, st *stack, dept
 	// somewhere to put the value.
 	paramNum, paramRef := countByArray(ft.Params)
 	if err := st.needNum(paramNum); err != nil {
-		return err
+		return nil, err
 	}
 	if err := st.needRef(paramRef); err != nil {
-		return err
+		return nil, err
 	}
 	// **The parameters come off the stack in reverse and land in declaration order**, which is
 	// `eval.ml:1126`'s `List.(rev (map Option.some args) @ map default_value ts)`: `args` is
@@ -263,34 +336,7 @@ func (in *Instance) invoke(fn *binary.Func, ft *binary.FuncType, st *stack, dept
 	// One case was closed and the other was not; citing the open one to excuse the closed one made
 	// the whole paragraph read as a deferral. See `newFrame` for the fill and for why it covers
 	// the parameter slots redundantly rather than wrongly.
-	// **The callee's results must be exactly its arity, and the check is here rather than at the
-	// boundary**, because a call's results become the caller's operands: a callee leaving scratch
-	// behind would silently corrupt the caller's stack, where at the boundary `Invoke` merely
-	// reports a mismatched count. `run`'s own `returnFrom` truncates on an explicit return, so the
-	// case this catches is a body falling off its end with extra values — #9's arity question,
-	// arriving late.
-	//
-	// **Two arrays, two deltas — checking only `st.num` reported every ref-typed result as
-	// missing, unconditionally.** `table.get`/`ref.func`/`ref.null` had no arms until #7's
-	// opcode-arm stream reached them, so nothing before that could call a function returning a
-	// funcref/externref through `call` or `call_indirect` (both funnel through here) and observe
-	// this: `table_get.wast`'s `is_null-funcref` is `ref.is_null (call $f3 …)`, where `$f3`
-	// returns a `funcref` and left it correctly on `st.refs` — but `len(st.num)-base` read `0`
-	// against a declared arity of `1` every time, regardless of what actually happened on the ref
-	// side. Counting `ft.Results` by kind and checking each array against its own count is what
-	// `#9`'s arity question actually asks; one array can be exactly right while the other is
-	// wrong, and a shared counter cannot tell the two apart.
-	numBase, refBase := len(st.num), len(st.refs)
-	wantNum, wantRef := countByArray(ft.Results)
-	if err := in.runFrame(fn, locals, st, wantNum, wantRef, depth+1); err != nil {
-		return err
-	}
-	if gotNum, gotRef := len(st.num)-numBase, len(st.refs)-refBase; gotNum != wantNum || gotRef != wantRef {
-		return fmt.Errorf("%w: a called function declares %d results (%d numeric, %d reference) "+
-			"and left %d numeric, %d reference values on the stack",
-			ErrNotValidated, len(ft.Results), wantNum, wantRef, gotNum, gotRef)
-	}
-	return nil
+	return locals, nil
 }
 
 // funcRefTarget resolves a non-null funcref to the `(instance, defined function)` pair that owns
@@ -402,6 +448,36 @@ func funcRefTarget(r ref, site string) (*Instance, *binary.Func, error) {
 // declared shortfall in the all-gates-on lane — stated rather than left for a reader to discover,
 // per *unreachability is a grave only when it's silent*.
 func (in *Instance) callIndirect(ins binary.Instr, st *stack, depth int) error {
+	target, fn, ft, err := in.resolveCallIndirect(ins, st)
+	if err != nil {
+		return err
+	}
+	if depth >= callBudget {
+		return trapExhaustion
+	}
+	return target.invoke(fn, ft, st, depth)
+}
+
+// resolveCallIndirect is `callIndirect`'s half that answers *which function* — the table read, the
+// three failures in the reference's order, and the structural type comparison — with no frame built
+// and nothing entered. `resolveCall`'s reason, at the second of three sites: `eval.ml:286-292`
+// re-tags the plain opcode's `Invoke`, so a tail call resolves through exactly this and then ends
+// differently.
+//
+// **The budget check is *not* here, and its absence is load-bearing.** A tail call consumes no
+// budget — `eval.ml:1080` decrements on `Frame` entry and `:1114` checks at `Invoke`, and a
+// re-tagged `Invoke` arrives in the *parent's* instruction list (`:1072-1074`), so the frame that
+// would have been charged is the one being replaced. Leaving the check at the two `invoke` call
+// sites rather than lifting it into resolution is what keeps `return_call`'s own unbounded
+// recursion (`return_call.wast`'s 1M-deep `even`/`odd`) from exhausting while `call.wast:337`'s
+// `runaway` still does.
+//
+// The *placement* is load-bearing in that sense; a check merely **added** to a `return_call*` arm
+// would be nearly inert, because `depth` does not grow along a tail chain. Measured: it costs
+// nothing on any of the 141 tail-call vectors and shows up only on a tail call made from the
+// deepest frame the budget permits, which is the row
+// TestTailCallConsumesNoBudgetButNestingStillDoes adds for it.
+func (in *Instance) resolveCallIndirect(ins binary.Instr, st *stack) (*Instance, *binary.Func, *binary.FuncType, error) {
 	// **Imm0 is the *type* index and Imm1 the *table* index, which is the reverse of how the text
 	// reads them.** `encode.ml:275` is `op 0x11; idx y; idx x` where `x` is the table and `y` the
 	// type, and `decode.ml:397` reads them back in that order — so the wire form puts the type
@@ -410,7 +486,7 @@ func (in *Instance) callIndirect(ins binary.Instr, st *stack, depth int) error {
 	typeIdx, tabIdx := ins.Imm0, ins.Imm1
 	tab, err := in.tableFor("instruction", tabIdx)
 	if err != nil {
-		return err
+		return nil, nil, nil, err
 	}
 	// The index operand is an **i32 read unsigned**, and widening it to 64 bits before the bounds
 	// test is what makes the test right: a table64's index is genuinely 64-bit
@@ -430,27 +506,27 @@ func (in *Instance) callIndirect(ins binary.Instr, st *stack, depth int) error {
 	// wrapping into a legal slot describes what would happen *if* a raw i64 could arrive here; it
 	// cannot today, and memory64 is when that changes.
 	if needErr := st.needNum(1); needErr != nil {
-		return needErr
+		return nil, nil, nil, needErr
 	}
 	i := tableAddr(tab, st.popNum())
 	r, err := tab.load(i) // `undefined element i` when out of bounds
 	if err != nil {
-		return err
+		return nil, nil, nil, err
 	}
 	if r.Null {
-		return uninitializedElem(i)
+		return nil, nil, nil, uninitializedElem(i)
 	}
 	target, fn, err := funcRefTarget(r, fmt.Sprintf("table slot %d", i))
 	if err != nil {
-		return err
+		return nil, nil, nil, err
 	}
 	ft, err := target.funcType(fn)
 	if err != nil {
-		return err
+		return nil, nil, nil, err
 	}
 	want, err := in.declaredFuncType(typeIdx)
 	if err != nil {
-		return err
+		return nil, nil, nil, err
 	}
 	// **`sameFuncType`'s own module and type index, not just its bare functype, as of 0019's
 	// own named gap** — the declared-supertype walk climbs `target.mod.Types` starting from
@@ -473,13 +549,10 @@ func (in *Instance) callIndirect(ins binary.Instr, st *stack, depth int) error {
 		// sentinel; the citation was invented in the direction of claiming oracle cover for the
 		// half of the message that has none, which is the reverse of the honest reading and the
 		// exact thing #38's refinement exists to keep straight (grave #147).
-		return &Trap{Reason: fmt.Sprintf("indirect call type mismatch, expected %s but got %s",
+		return nil, nil, nil, &Trap{Reason: fmt.Sprintf("indirect call type mismatch, expected %s but got %s",
 			funcTypeString(want), funcTypeString(ft))}
 	}
-	if depth >= callBudget {
-		return trapExhaustion
-	}
-	return target.invoke(fn, ft, st, depth)
+	return target, fn, ft, nil
 }
 
 // callRef is `call_ref` — `eval.ml:263-267`'s
@@ -509,25 +582,7 @@ func (in *Instance) callIndirect(ins binary.Instr, st *stack, depth int) error {
 // the validator, and an engine that trapped here would be answering a question the suite asks only
 // of #9.
 func (in *Instance) callRef(st *stack, depth int) error {
-	if err := st.needRef(1); err != nil {
-		return err
-	}
-	r := st.popRef()
-	if r.Null {
-		return trapNullFuncRef
-	}
-	// An exnref reaching here is #9's, for refEq's stated reason: `call_ref`'s operand is typed
-	// `(ref null $x)` with `$x` a functype, so nothing under `exn` can arrive in a validated module,
-	// and inventing a verdict in the accept direction is what §9 G-3 says the suite cannot see.
-	if r.Exc != nil {
-		return fmt.Errorf("%w: call_ref on an exception reference, which is not a function reference",
-			ErrNotValidated)
-	}
-	target, fn, err := funcRefTarget(r, "call_ref operand")
-	if err != nil {
-		return err
-	}
-	ft, err := target.funcType(fn)
+	target, fn, ft, err := resolveCallRef(st)
 	if err != nil {
 		return err
 	}
@@ -535,6 +590,43 @@ func (in *Instance) callRef(st *stack, depth int) error {
 		return trapExhaustion
 	}
 	return target.invoke(fn, ft, st, depth)
+}
+
+// resolveCallRef is `callRef`'s half that answers *which function* — pop the operand, trap on null,
+// resolve through `funcRefTarget` — with no frame built and nothing entered. `resolveCall`'s reason,
+// at the third of three sites (`eval.ml:295-305`).
+//
+// No receiver, and here it is not a style choice but the *fact*: `call_ref`'s callee is named
+// entirely by the operand's own `r.Inst` (grave #163), so the calling instance contributes nothing
+// to the resolution. `resolveCall` and `resolveCallIndirect` both need one — an index and a table
+// index are relative to the naming module — and this one does not, which is worth being able to see
+// in the signature. The budget check stays at the two entry points; see `resolveCallIndirect` for
+// why that placement is load-bearing.
+func resolveCallRef(st *stack) (*Instance, *binary.Func, *binary.FuncType, error) {
+	if err := st.needRef(1); err != nil {
+		return nil, nil, nil, err
+	}
+	r := st.popRef()
+	if r.Null {
+		return nil, nil, nil, trapNullFuncRef
+	}
+	// An exnref reaching here is #9's, for refEq's stated reason: `call_ref`'s operand is typed
+	// `(ref null $x)` with `$x` a functype, so nothing under `exn` can arrive in a validated module,
+	// and inventing a verdict in the accept direction is what §9 G-3 says the suite cannot see.
+	if r.Exc != nil {
+		return nil, nil, nil, fmt.Errorf(
+			"%w: call_ref on an exception reference, which is not a function reference",
+			ErrNotValidated)
+	}
+	target, fn, err := funcRefTarget(r, "call_ref operand")
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	ft, err := target.funcType(fn)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return target, fn, ft, nil
 }
 
 // declaredFuncType resolves a type index to a functype — `funcType`'s other half, reaching the
