@@ -57,7 +57,17 @@ import "fmt"
 // engine meeting a gated construct rejects it with a feature-named error, never
 // with a spec malformed-string it has no right to.
 //
-// The zero value is v0's posture: every 3.0 gate present and off (contract §9).
+// The zero value means every gate off — a mechanism fact about the struct, always true, used
+// wherever an explicit all-off decoder is wanted (fuzzing, const-verdict isolation, the const
+// tests' own `&Decoder{}`). **Default policy is a different fact, and `DefaultFeatures` is its
+// own name** — what a caller who does not choose gets, which is *not* required to be the zero
+// value once a gate has flipped default-on (contract §9 G-1). The two facts were accidentally
+// identical until #227's SIMD flip, the project's first: had "default policy" stayed spelled as
+// `Features{}` throughout the codebase, flipping a gate would have meant either breaking the
+// zero-value invariant every other caller relies on, or inverting a field's own polarity
+// (`NoSIMD` instead of `SIMD`, false-means-on) — the deceptive-testimony shape this project has
+// filed graves against elsewhere: a bool whose name lies about its semantics. `DefaultFeatures`
+// keeps both facts true at once and turns every future flip into one line here.
 type Features struct {
 	// The comments name every construct the gate governs, because a gate whose scope is
 	// only known at its check sites is a gate nobody can audit — and writing them out is
@@ -100,6 +110,18 @@ type Features struct {
 	// expression required`, and no board could see it — every one of the 4162 green vectors is a
 	// rejection (§9 G-3). Found by #67's cross-check corpus.
 	ExtendedConst bool // i32/i64 add, sub, mul in a constant expression — a position, not an opcode
+}
+
+// DefaultFeatures is what a caller who does not choose gets — v0's policy, not the struct's
+// zero value (see Features's own doc comment for why the two are different facts). It starts
+// equal to the zero value and diverges one field at a time as gates flip default-on, each such
+// flip being its own two-principal-stamped decision (contract §9 G-1) with its own PR.
+//
+// **First divergence: SIMD, #227/ADR 0025.** G-1's own suite (`simd_*.wast`) measures
+// pass=25158 fail=161 gated=0, every fail attributed to #9's own deferred validator by the
+// engine's error taxonomy — the named, self-retiring carve-out ADR 0025 added to G-1's text.
+func DefaultFeatures() Features {
+	return Features{SIMD: true}
 }
 
 // Decoder holds the configuration one decode runs under. A config struct rather

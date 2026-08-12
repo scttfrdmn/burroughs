@@ -826,10 +826,12 @@ func (r *reader) s32() (int32, error) {
 // s64 reads a signed LEB128-encoded 64-bit integer — an i64.const immediate.
 func (r *reader) s64() (int64, error) { return r.sleb(64) }
 
-// DecodeModule decodes a complete module image under v0's default gate posture:
-// every 3.0 proposal gate present and off (contract §9).
+// DecodeModule decodes a complete module image under v0's default gate posture
+// (DefaultFeatures — contract §9 G-1), not the bare zero value: the two are different facts
+// and have diverged since #227's SIMD flip. A caller wanting every gate off explicitly
+// constructs `(&Decoder{}).DecodeModule(b)` instead.
 func DecodeModule(b []byte) (*Module, error) {
-	return (&Decoder{}).DecodeModule(b)
+	return (&Decoder{Features: DefaultFeatures()}).DecodeModule(b)
 }
 
 // DecodeModule decodes a complete module image under d's gate set.
