@@ -7,7 +7,7 @@ import (
 	"github.com/scttfrdmn/burroughs/internal/binary"
 )
 
-// The three call opcodes with arms, named for control.go's reason: a bare 0x10 in a switch arm is
+// The five call opcodes with arms, named for control.go's reason: a bare 0x10 in a switch arm is
 // a byte and these are a family.
 //
 // **`return_call` (0x12) is deliberately absent from this block**, and its absence is the shape of
@@ -16,10 +16,18 @@ import (
 // nothing this file has: it is `call` with the frame reused, which is #7's `Invoke`-side work.
 // Both are gated by `gateTailCall` in the decoder, so on the default board neither reaches here at
 // all; the gate is what decides, and the switch arm is what answers once it has.
+//
+// `call_ref`/`return_call_ref` (0x14/0x15) are `gateGC`'s, not `gateTailCall`'s — the function
+// references proposal folded into GC, so on the default board these are gated too and by a
+// different gate than their `return_call` sibling. Two proposals reaching one switch is the normal
+// case here; the constants are grouped by *mechanism* (all five resolve a callee and enter it) and
+// `gatemap.go` is where the proposal each belongs to is recorded.
 const (
 	opCall               = 0x10
 	opCallIndirect       = 0x11
 	opReturnCallIndirect = 0x13
+	opCallRef            = 0x14
+	opReturnCallRef      = 0x15
 )
 
 // callBudget is how deep this engine will nest calls before reporting exhaustion.
@@ -241,6 +249,84 @@ func (in *Instance) invoke(fn *binary.Func, ft *binary.FuncType, st *stack, dept
 	return nil
 }
 
+// funcRefTarget resolves a non-null funcref to the `(instance, defined function)` pair that owns
+// its body. `site` names where the reference came from, and appears verbatim in every error this
+// returns.
+//
+// # Why this is a function rather than two copies
+//
+// `call_indirect` reads a funcref out of a table and `call_ref` pops one off the stack, and past
+// that first step the resolution is identical — including the cross-instance subtlety below, which
+// is a grave. Two copies would be two places for grave #163 to be reintroduced in one of them, and
+// the copy that gets it wrong is invisible on the whole numeric corpus.
+//
+// **`site` is a pre-rendered string, not a format argument**, so that `call_indirect`'s three
+// existing messages survive the extraction byte for byte: it passes `fmt.Sprintf("table slot %d",
+// i)` and gets back exactly `table slot 3 names function 5 of 7`, the text the board's bucket keys
+// were measured against. Confirmed rather than intended — the default lane is bit-identical across
+// this refactor (58429/279/2689/3625/0 before and after). A `site string, idx int` pair would have
+// been the natural signature and would have forced this function to know that a slot is numbered,
+// which `call_ref`'s operand is not.
+//
+// # The cross-instance resolution, which is grave #163's
+//
+// **`target` is the instance the callee's body belongs to, resolved through `r.Inst` and never
+// through the calling instance (grave #163, 0017 Q2).** A table slot may hold *another instance's*
+// funcref — `r.Inst` is the instance whose index space `r.Addr` was read from when the element
+// segment that filled this slot was evaluated, which is the caller for a module-local function and
+// a different instance whenever this table was imported and someone else's segment wrote into it.
+// Resolving `r.Addr` against the caller's module instead would land on whatever function it happens
+// to have at that index — the exact defect the issue's synthetic reproducer isolates (a decoy
+// function at the same index, `got 99, want 11`) and the exact vector `linking.wast:342-353` pins:
+// `$Ot` writes its own functions into `$Mt`'s table, and `$Mt.call` must resolve them against
+// `$Ot`, not against itself. Getting this right is invisible on the whole numeric corpus and wrong
+// on any cross-instance table.
+//
+// The same argument makes this the right shape for `call_ref`, and there it is not even a subtlety:
+// `ref.func` records `Inst` at the point the reference is *made* (`opRefFunc` pushes `ref{Addr:
+// …, Inst: in}`), so a funcref that crossed an instance boundary through a global or a parameter
+// carries its definer with it, and reading `Addr` against the *current* instance is the same bug
+// with a shorter path to it.
+func funcRefTarget(r ref, site string) (*Instance, *binary.Func, error) {
+	target := r.Inst
+	fn, ok := target.mod.DefinedFunc(r.Addr)
+	if ok {
+		return target, fn, nil
+	}
+	if r.Addr >= uint32(target.mod.ImportedFuncs()) {
+		return nil, nil, fmt.Errorf("%w: %s names function %d of %d",
+			ErrNotValidated, site, r.Addr, target.mod.ImportedFuncs()+len(target.mod.Funcs))
+	}
+	// **Resolved here and then type-checked by the *caller*, sharing the defined path's check.**
+	// `call` names a function statically and the validator has agreed its signature;
+	// `call_indirect` names a *type index* and must compare it against the callee's actual type at
+	// run time. So the import is turned into a `(instance, defined function)` pair and then falls
+	// into the same comparison the defined case uses — one trap message, one `sameFuncType` call,
+	// because two copies of a check the suite reads by substring are two places to spell it
+	// differently. `call_ref` performs no such comparison at all; see its arm for the reference's
+	// reason (`CallRef _x` — the type immediate is unused).
+	//
+	// **`target.importedFunc`, not the caller's** — the import slot being resolved is the *naming*
+	// instance's own import, one level of indirection past `r.Inst` when the funcref chains through
+	// more than one `register`. `r.Inst` is the instance whose segment wrote this slot, and if that
+	// instance's own function 0 is itself an import, its resolution lives in its own `funcs` slice.
+	ext, ierr := target.importedFunc(r.Addr)
+	if ierr != nil {
+		return nil, nil, fmt.Errorf("%w (%s)", ierr, site)
+	}
+	target = ext.fnInst
+	fn, ok = target.mod.DefinedFunc(ext.fnIdx)
+	if !ok {
+		// Unreachable while `Export` resolves re-exported imports through to their definer, which
+		// is the invariant `Instance.funcs` is documented to hold. Stated as a reachable check
+		// rather than a panic, per grave 0003: this asserts a property of a *sibling function*, and
+		// a future arm could falsify it silently.
+		return nil, nil, fmt.Errorf("%w: %s resolves to function %d of a supplier that does not define it",
+			ErrNotValidated, site, ext.fnIdx)
+	}
+	return target, fn, nil
+}
+
 // callIndirect resolves a table slot to a function and calls it — `eval.ml:272-280`.
 //
 // # The three failures, in the reference's order
@@ -310,51 +396,9 @@ func (in *Instance) callIndirect(ins binary.Instr, st *stack, depth int) error {
 	if r.Null {
 		return uninitializedElem(i)
 	}
-	// **`target` is the instance the callee's body belongs to, resolved through `r.Inst` and
-	// never through `in` (grave #163, 0017 Q2).** A table slot may hold *another instance's*
-	// funcref — `r.Inst` is the instance whose index space `r.Addr` was read from when the
-	// element segment that filled this slot was evaluated, which is `in` for a module-local
-	// function and a different instance whenever this table was imported and someone else's
-	// segment wrote into it. Resolving `r.Addr` against `in.mod` instead would land on whatever
-	// function `in` happens to have at that index — the exact defect the issue's synthetic
-	// reproducer isolates (a decoy function at the same index, `got 99, want 11`) and the exact
-	// vector `linking.wast:342-353` pins: `$Ot` writes its own functions into `$Mt`'s table, and
-	// `$Mt.call` must resolve them against `$Ot`, not against itself. Getting this right is
-	// invisible on the whole numeric corpus and wrong on any cross-instance table.
-	target := r.Inst
-	fn, ok := target.mod.DefinedFunc(r.Addr)
-	if !ok {
-		if r.Addr >= uint32(target.mod.ImportedFuncs()) {
-			return fmt.Errorf("%w: table slot %d names function %d of %d",
-				ErrNotValidated, i, r.Addr, target.mod.ImportedFuncs()+len(target.mod.Funcs))
-		}
-		// **Resolved here and then type-checked *below*, sharing the defined path's check.**
-		// `call` names a function statically and the validator has agreed its signature; this
-		// opcode names a *type index* and must compare it against the callee's actual type at
-		// run time. So the import is turned into a `(instance, defined function)` pair and then
-		// falls into the same comparison the defined case uses — one trap message, one
-		// `sameFuncType` call, because two copies of a check the suite reads by substring are
-		// two places to spell it differently.
-		//
-		// **`target.importedFunc`, not `in.importedFunc`** — the import slot being resolved is
-		// the *naming* instance's own import, one level of indirection past `r.Inst` when the
-		// funcref chains through more than one `register`. `r.Inst` is the instance whose
-		// segment wrote this slot, and if that instance's own function 0 is itself an import,
-		// its resolution lives in its own `funcs` slice, not in `in`'s.
-		ext, ierr := target.importedFunc(r.Addr)
-		if ierr != nil {
-			return fmt.Errorf("%w (table slot %d)", ierr, i)
-		}
-		target = ext.fnInst
-		fn, ok = target.mod.DefinedFunc(ext.fnIdx)
-		if !ok {
-			// Unreachable while `Export` resolves re-exported imports through to their
-			// definer, which is the invariant `Instance.funcs` is documented to hold. Stated
-			// as a reachable check rather than a panic, per grave 0003: this asserts a
-			// property of a *sibling function*, and a future arm could falsify it silently.
-			return fmt.Errorf("%w: table slot %d resolves to function %d of a supplier that does not define it",
-				ErrNotValidated, i, ext.fnIdx)
-		}
+	target, fn, err := funcRefTarget(r, fmt.Sprintf("table slot %d", i))
+	if err != nil {
+		return err
 	}
 	ft, err := target.funcType(fn)
 	if err != nil {
@@ -387,6 +431,61 @@ func (in *Instance) callIndirect(ins binary.Instr, st *stack, depth int) error {
 		// exact thing #38's refinement exists to keep straight (grave #147).
 		return &Trap{Reason: fmt.Sprintf("indirect call type mismatch, expected %s but got %s",
 			funcTypeString(want), funcTypeString(ft))}
+	}
+	if depth >= callBudget {
+		return trapExhaustion
+	}
+	return target.invoke(fn, ft, st, depth)
+}
+
+// callRef is `call_ref` — `eval.ml:263-267`'s
+// `Ref (FuncRef f) -> … call_func f` with `NullRef _ -> Trap "null function reference"`.
+//
+// The trap and the resolution are both shared: null goes to `trapNullFuncRef` (a *different* string
+// from `ref.as_non_null`'s, the reference's own distinction — see refop.go), and the non-null path
+// goes through `funcRefTarget`, so grave #163's cross-instance rule is obeyed here by construction
+// rather than by a second author remembering it. A funcref that crossed an instance boundary through
+// a global or a parameter is the *normal* case for `call_ref`, not the exotic one it is for
+// `call_indirect`, so this arm is the one where getting `r.Inst` wrong would bite hardest.
+//
+// # No type check, and that is the reference's reading rather than a shortcut
+//
+// `call_ref` carries a type immediate and `eval.ml` ignores it: the arm is `CallRef _x`, underscore
+// and all. Unlike `call_indirect`, whose table slot's type is unknown until run time, `call_ref`'s
+// operand is *statically* typed `(ref null $x)`, so the validator has already established the match
+// and there is nothing left to compare. So this arm reads no type at all — and the fabricated-check
+// alternative would be worse than useless: it would spend a `sameFuncType` walk to answer a question
+// #9 owns, and get its trap text from nowhere, the reference having no such trap to quote.
+//
+// **Measured, because the first version of this paragraph claimed something false.** I wrote that no
+// vector in the two files asserts any mismatch text; there are 19 such strings. What is actually
+// true is stronger and settles the question: all **15** `type mismatch` vectors across the two files
+// (4 in `call_ref.wast`, 11 in `return_call_ref.wast` — each file's whole count) are
+// `assert_invalid`, and **zero** are `assert_trap`. So the corpus itself says the check belongs to
+// the validator, and an engine that trapped here would be answering a question the suite asks only
+// of #9.
+func (in *Instance) callRef(st *stack, depth int) error {
+	if err := st.needRef(1); err != nil {
+		return err
+	}
+	r := st.popRef()
+	if r.Null {
+		return trapNullFuncRef
+	}
+	// An exnref reaching here is #9's, for refEq's stated reason: `call_ref`'s operand is typed
+	// `(ref null $x)` with `$x` a functype, so nothing under `exn` can arrive in a validated module,
+	// and inventing a verdict in the accept direction is what §9 G-3 says the suite cannot see.
+	if r.Exc != nil {
+		return fmt.Errorf("%w: call_ref on an exception reference, which is not a function reference",
+			ErrNotValidated)
+	}
+	target, fn, err := funcRefTarget(r, "call_ref operand")
+	if err != nil {
+		return err
+	}
+	ft, err := target.funcType(fn)
+	if err != nil {
+		return err
 	}
 	if depth >= callBudget {
 		return trapExhaustion

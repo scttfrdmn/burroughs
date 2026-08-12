@@ -249,6 +249,23 @@ const (
 	opThrowRef = 0x0a
 	opTryTable = 0x1f
 
+	// The two null-testing branches (`gate:gc`, #172 rung 1). Here rather than in refop.go
+	// because they are *branches* — same `Imm0`-is-a-label immediate as `opBr`/`opBrIf`, same
+	// `branch()` call, same `depth == len(ctrl)` function-body case — and the family a constant
+	// belongs to is the one whose mechanism it shares, not the proposal that introduced it. That
+	// is also why the *other* two GC branches are not here despite the shared `br_on_` prefix:
+	// `br_on_cast`/`br_on_cast_fail` are `0xfb 0x18`/`0xfb 0x19` with four immediates each
+	// (`immByte, immIdx, immHeapType, immHeapType`), so they share a name with these and a
+	// mechanism with `ref.cast`.
+	//
+	// Reading these two as cast-shaped is not hypothetical: `br_on_cast.wast`'s five reachable
+	// fails and `br_on_cast_fail.wast`'s five are both blocked on **these** opcodes today, not on
+	// their own, because a cast file's modules use `br_on_null` in passing. Rung 1 unblocks them
+	// and they re-key onto the cast arm rather than passing — accounted for in the PR's
+	// redistribution rather than counted as reward.
+	opBrOnNull    = 0xd5
+	opBrOnNonNull = 0xd6
+
 	// The two `select` encodings. Not control flow, and here for the reason this block exists at
 	// all: they are a family whose members differ only in an immediate the decoder discards, so a
 	// bare `0x1b, 0x1c` in exec.go's switch would read as two unrelated bytes. `internal/text` has
