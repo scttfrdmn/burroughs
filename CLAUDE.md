@@ -729,6 +729,21 @@ the choice, and consequences once Scott has called it.
   because asking whether everything the join resolved was resolved is a tautology; being unfit as
   a join key (a naming coincidence, not a derivation) is exactly what makes a signal fit as a
   second opinion. (Ruling: Scott, PR #108; grave #106.)
+  - **The registry form: a control that names the fact it expects cannot notice the registry is
+    missing that fact, because the control supplies it.** #106's echo is a premise measured over
+    the sample the code reads; this is a *control written from the same name the registry lacks*,
+    and it passes for the right reason while the omission stands. Grave **#264**: a new decoder
+    sentinel arrived with two controls asserting `errors.Is(err, ErrMalformedBrOnCastFlags)` —
+    both green, the sentinel being correct — and no entry in `declaredErrors`, the fuzz target's
+    allowlist. Neither control could ask "is this declared?", that question being invisible from
+    inside a test whose subject is the condition. Only an instrument that **enumerates the whole
+    surface without knowing what any one condition expects** sees it, which is why the fuzzer
+    found it in 41 seconds and `make check` could not. Two consequences worth carrying: the
+    detector must be blind to the individual fact (the echo rule's own remedy, one level over),
+    and the sweep for siblings is not optional — grepping every exported sentinel against the
+    allowlist turned up a **second** omission whose call sites are all gate-blocked, so it was
+    unreachable-by-construction in the fuzz target and would have surfaced as an unexplained red
+    *at a gate flip*. A latent omission's arrival time is chosen by the flip, not by the defect.
   - **And its mirror: an impossible count is the strongest witness there is, because a value that
     cannot exist convicts the model rather than the measurement.** A clean result invites the
     suspicion above and can still be honest; an *impossible* one has already settled the question,

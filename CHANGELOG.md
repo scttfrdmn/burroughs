@@ -268,6 +268,25 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **Two decoder error sentinels were absent from the fuzz target's allowlist, one of them
+  latent since the PR that introduced it**
+  ([#264](https://github.com/scttfrdmn/burroughs/issues/264)). `ErrMalformedBrOnCastFlags`
+  shipped with its `%w` wrap and two controls asserting `errors.Is` against it — both green,
+  the sentinel being correct — and no `declaredErrors` entry, so `fuzz-smoke` went red on
+  `fb 19` with flags `0x30` while `make check` was green. **A control that names the sentinel it
+  expects supplies the very fact the allowlist is missing, so it cannot notice the allowlist is
+  missing it**; only an instrument enumerating the whole error surface without knowing what any
+  one condition expects can see the gap. Sweeping every exported `Err*` against the list turned
+  up **`ErrZeroByteExpected`**, omitted since its own PR and *not observable by the fuzzer* —
+  all three call sites sit behind gated constructs, so a gate-off decoder declines before
+  reaching the reserved byte. That one would have arrived as an unexplained red **at a gate
+  flip**: a correct verdict on a malformed module, scored as a regression. Both enrolled, the
+  second on `ErrMisplacedOpcode`'s stated precedent (declared while unreachable, so that
+  becoming reachable is not mistaken for a find). The reproducer is committed to
+  `testdata/fuzz/FuzzDecodeModule/`, which makes it the repo's first committed corpus entry and
+  gives the `.gitignore` clause reserving that path a subject. Tripwire filed, not built: every
+  exported sentinel either declared or in a documented exclusion set, domain derived from source.
+
 - **`ref.test`/`ref.cast` answered `true` for a supertype tested against a subtype: a disjunct of
   `match_deftype` was implemented with subtyping where the reference uses equality**
   ([#261](https://github.com/scttfrdmn/burroughs/issues/261)). `match.ml:152`'s second disjunct is
