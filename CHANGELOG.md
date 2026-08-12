@@ -21,6 +21,49 @@ weakly-ordered platform.
 
 ### Added
 
+- **Decision 0026 — proper tail calls: a tail call is a fourth control-transfer value, and the frame
+  owner's trampoline re-enters. Accepted on Scott's stamp (PR #252); authored and pushed `proposed`,
+  and the interval it spent open is kept in the record.** Scoped to *both* gate
+  consumers by Scott's ruling (`return_call_ref` is `gate:gc`'s, `return_call`/`return_call_indirect`
+  are `gate:tailCall`'s) so one frame-reuse mechanism is decided once rather than built twice. The
+  reference settles more than it looks: `eval.ml:282-305`'s three `return_call` arms *step the plain
+  non-tail opcode* and re-tag its `Invoke` as `ReturningInvoke`, so resolution and every trap text
+  are shared verbatim, and `eval.ml:1072-1074` pops the frame and emits the `Invoke` in the
+  **parent's** instruction list — a trampoline, not a jump. Chosen option B (a Go sentinel checked at
+  the frame boundary, one trampoline both frame entry points call) on 0022's stamped precedent for
+  the analogous problem, over rewriting the frame in place inside the dispatch loop (option A, which
+  would put `invoke`'s frame-building prologue in a second site — graves #243 and #105's shape) and
+  over the explicit frame stack (option C, deferred to v2's stack switching, which is the consumer
+  that actually forces it per contract §7 S-3, and deliberately not foreclosed). `callBudget`
+  survives unchanged with its semantics intact: `eval.ml:1080` decrements only when stepping *into* a
+  frame, so a tail call spends none and `call.wast:337`'s non-tail `runaway` still exhausts.
+
+- **Grave #251, found while researching 0026 and filed rather than folded in: `returnFrom` truncates
+  the shared value stack to the result arity, destroying the caller's pending operands.** A valid
+  module is refused —
+  `(i32.add (i32.const 100) (call $f))` where `$f` uses an explicit `return` reports "left 0 numeric",
+  and with *two* pending operands the count reads an impossible `left -1 numeric`. It is #135's own
+  fix wearing the mirror defect: `eval.ml:1069`'s `take n vs0 @ vs` is **frame-relative** and this
+  engine has no per-frame base, so "`@ vs`" became "discard everything below the results" — correct
+  only when the caller's stack happened to be empty. Measured invisible on the board (zero of the
+  all-on lane's 101 bucket keys carry the signature), so it is a §9 G-3 accept-direction defect whose
+  control has to be authored. Named here because 0026 depends on the same missing base and states it
+  as a prerequisite rather than deciding it twice.
+
+- **Three disciplines ratified into `CLAUDE.md`** (rulings: Scott, PRs #250 and #252). *A
+  falsification that passes is a question with three answers — a no-op mutation, a blind control, or a
+  wrong prediction — and it gets classified before anything proceeds*, the three demanding opposite
+  next moves, with #250's own battery supplying a specimen of each (a mutation that renamed a variable
+  and diffed cleanly, the classic stillbirth, and an expected-*pass* that failed and killed its
+  author's prose claim). This amends the older "print the diff" rule, whose headline had asserted its
+  two answers were exhaustive; the superseded wording is quoted in place. *A flip is never in the
+  mechanism's PR — it is its own stamp-tier event*, because a forecast cannot be pre-registered inside
+  the PR that creates the numbers, making SIMD's flip (#227/#233) the standing procedure rather than a
+  precedent to cite selectively. And *an impossible count is the strongest witness there is*: a value
+  outside its own domain — #251's `left -1 numeric` — convicts the model rather than the measurement,
+  where the same probe's plausible `left 0 numeric` reads as an ordinary arity disagreement and would
+  have been argued about.
+
 - **`gate:gc` rung 3 — array instances, decision 0020's second implementation.** All fourteen
   `array.*` arms (`array.new`, `array.new_default`, `array.new_fixed`, `array.new_data`,
   `array.new_elem`, `array.get`, `array.get_s`, `array.get_u`, `array.set`, `array.len`,

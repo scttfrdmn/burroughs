@@ -1102,6 +1102,39 @@ type Result struct {
 	// which check is missing or wrong, which makes the board a priority queue:
 	// the biggest bucket is the next issue to take, and a bucket reaching zero
 	// is a PR's measure of done (CLAUDE.md, Disciplines).
+	//
+	// **A key can be a union of several refusals rather than one, and reading it whole is what
+	// separates a forecast of pay from a forecast of unshadowing.** The `no instance` arm keys an
+	// `assert_return` by the *failing module's* error (the `target == nil` branch of the
+	// KindAssertReturn/KindInvoke arm below),
+	// and `interp`'s `Instance.build` accumulates initializer failures into `in.deferred` with
+	// `errors.Join`, whose `Error()` is newline-separated — so one key names every refusal that
+	// module hit, at every site, and the terms are **sites and not distinct causes**: `i31.wast`'s
+	// 60-vector key names `fb 1c` *twice*.
+	//
+	// Measured on the rung-3 tree (`2f9d50c`, all-on lane 61764 / 536 / 0): 101 distinct keys, of
+	// which **2** are multi-term, holding **71** of the 536 fails; widest key 2 terms
+	// (`extern.wast`, `fb 1b` + `fb 1a`). Era-stamped rather than asserted, because both figures
+	// move with every arm that lands.
+	//
+	// Two consequences, and the second is a forecast rule paid for by a miss:
+	//
+	//  1. The newline is *inside* the key, so a line-oriented grep over board text splits one
+	//     bucket into several and mis-sums the total. Sum with `run(s).Buckets`, never with a
+	//     grep — #161's standing rule, and this is the mechanism behind it.
+	//  2. The **co-blocking probe reads sole-blockedness off the whole key**. A single-term key is
+	//     a sole blocker and its size forecasts what an arm pays; an N-term key is a vector
+	//     blocked on N things, and that vector is *already counted* by a search for each of them
+	//     — so clearing one term re-keys the vector without moving the count of keys naming the
+	//     others. #249's forecast got the pay half exact (187 predicted, 187 delivered, read off
+	//     whole keys) and the unshadowing half wrong: it predicted rung 3 would grow the `fb 1c`
+	//     buckets and they read 60/6/5 before and after, because the co-blocked vectors' keys
+	//     already named `fb 1c`. The error was inferring *a module needs two rungs* ⇒ *a vector
+	//     is blocked on both*; the union key answers that directly when it is not truncated at
+	//     its first term.
+	//
+	// (Sited here on Scott's ruling, PR #250: a fact about an instrument lives at the instrument,
+	// per one-truth — not in CLAUDE.md. The miss itself stays marked in #249.)
 	Buckets map[string][]Failure
 }
 
