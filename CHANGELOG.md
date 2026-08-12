@@ -21,6 +21,20 @@ weakly-ordered platform.
 
 ### Added
 
+- **`gate:gc` rung 2 — struct instances, decision 0020's implementation.** All six `struct.*` arms
+  (`struct.new`, `struct.new_default`, `struct.get`, `struct.get_s`, `struct.get_u`, `struct.set`)
+  execute, over a `*gcObj` that is a plain Go pointer — so `ref.eq` on two aggregates is pointer
+  comparison, which is what `aggr.ml`'s *absence* of an `eq_ref'` override specifies rather than a
+  shortcut that got lucky. Packed `i8`/`i16` fields wrap at write and extend at read (`aggr.ml`'s
+  `wrap`/`extend_s`/`extend_u`), and the two `read_field` failures the reference reports as `failwith`
+  — a signed read of an unpacked field, a plain read of a packed one — are reported as #9's debt.
+
+  All-on lane **61559/741/0 gated → 61577/723/0**: fail **−18**, matching #245's pre-registered
+  forecast exactly. `struct.wast` goes **7/25 → 25/25 pass, 5 unsupported** and is the only file
+  whose counts move, so the 8 forecast re-keys all landed with residual 0 — 8 departures from
+  `no arm for opcode fb 01`, 8 arrivals in cast keys `fb 14`–`fb 19`, 0 unclassified. The default
+  lane is unmoved in every column including `unsupported` (58565/142/2689/3625/0), GC being off there.
+
 - **`gate:gc` rung 1 — the six reference operators that need no heap object.** `ref.eq` (0xd3),
   `ref.as_non_null` (0xd4), `br_on_null` (0xd5), `br_on_non_null` (0xd6), `call_ref` (0x14) and
   `return_call_ref` (0x15) execute, per #172's four-rung ladder. Rungs 2-4 (struct, array/i31,
@@ -69,6 +83,18 @@ weakly-ordered platform.
   element segment's *offset* and an element *expression* are different lines of the user's module.
 
 ### Fixed
+
+- **An uninitialized reference local read as `ref.func 0` instead of `ref.null`**
+  ([#246](https://github.com/scttfrdmn/burroughs/issues/246)). `newFrame` allocated its reference
+  slots with `make([]ref, n)`, and Go's zero `ref` has `Null: false` — so a declared-but-unwritten
+  ref local claimed to be a function reference to function 0. A wrong answer in the accept
+  direction, and the corpus cannot see it: `local_init.wast` and `func.wast:662` write every ref
+  local before reading it, which is precisely the argument the code's own comment used to *excuse*
+  the gap. The spec's `default_value` (`value.ml:150-152`) gives `NullRef` for a nullable reference
+  type; the non-nullable case has no default and remains #9's "uninitialized local" concept, and
+  conflating the two is what made the paragraph read as a deferral. `table.go`'s sibling
+  allocation had it right, which is the shape-indexed sweep working (#105, #243). The sweep over
+  all five `make([]ref` sites returned a clean negative: `newFrame` was the only defective one.
 
 - **A `v128` global had nowhere to keep its high half, so its whole file died at instantiation**
   ([#239](https://github.com/scttfrdmn/burroughs/issues/239)). `constExprValue`'s arity was

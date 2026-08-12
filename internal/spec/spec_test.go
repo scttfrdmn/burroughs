@@ -3,9 +3,11 @@ package spec
 import (
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -8252,4 +8254,306 @@ func TestBareModuleSpansAreNonEmptyAndPlausible(t *testing.T) {
 	boardBound(t, "filesFloor", withAny, filesFloor, 0, vacuityBound,
 		"a total floor cannot catch this: const.wast alone holds 402, so the distribution needs "+
 			"its own bound")
+}
+
+// aggregateFiller is one table-filling function in the corpus whose body constructs aggregates —
+// #236's population, derived rather than enumerated.
+type aggregateFiller struct {
+	File     string
+	Line     int
+	Families []string // sorted: which of struct/array/i31 this filler's own body constructs
+}
+
+// aggregateFamilies maps a GC construction family to the instruction mnemonics that build it.
+// The *families* are the axis #172's ladder is cut on (rung 2 struct, rung 3 array, rung 4 i31),
+// so a filler's family set says which rung makes it executable.
+var aggregateFamilies = map[string][]string{
+	"struct": {"struct.new", "struct.new_default"},
+	"array":  {"array.new", "array.new_default", "array.new_fixed", "array.new_data", "array.new_elem"},
+	"i31":    {"ref.i31"},
+}
+
+// aggregateFillers derives #236's population: functions that write an aggregate into a *table*,
+// so a failure to construct leaves storage at its default and every later vector silently asserts
+// something other than what it was written to assert.
+//
+// # Why the population is per *function* and not per file, which measurement decided
+//
+// The first reader classified whole files and produced **6 files, all one class** — and #236's own
+// text names other shapes, so a single-class partition was the trigger under-matching rather than
+// a clean result (*a suspiciously clean result is a tell*). The mechanism: `ref_cast.wast` and its
+// three siblings are **multi-module**, and the struct-only `$init` lives in the *second* module
+// while the first module's filler also uses `array.new` and `ref.i31`. A file-level family union
+// therefore reports every one of them as needing rungs 2-4, and the struct-only partition — the
+// whole subject of this rung — comes out **empty**. Paren-matching each `(func …)` and classifying
+// its own body separates them: **11 fillers in 3 classes**.
+//
+// That degradation is what the discrimination check below tests for, per #159: the struct-only
+// partition being non-empty is a capability a file-level reader cannot exhibit at any count, and a
+// floor alone cannot tell the two readers apart.
+//
+// The trigger is `(table.set` inside the body, and the *negative* is the load-bearing half: the
+// eleven files that construct aggregates without being fillers — `struct.wast`, `array.wast`,
+// `i31.wast`, `array_copy.wast` and the rest — are excluded on purpose, because their vectors *are*
+// the constructions. A failed construction there fails the vector visibly, which is the ordinary
+// case the board already reports. #236's parenthetical guessed `array.wast`/`array_copy.wast`/
+// `i31.wast` into this population; measurement says they are not in it, and the reason is the
+// mechanism rather than the count.
+func aggregateFillers(t *testing.T) []aggregateFiller {
+	t.Helper()
+
+	var out []aggregateFiller
+	for _, f := range boardFiles(t) {
+		src, err := os.ReadFile(filepath.Join(suiteDir, f))
+		if err != nil {
+			t.Fatalf("%s: %v", f, err)
+		}
+		s := string(src)
+		for off, body := range wastFuncBodies(s) {
+			if !strings.Contains(body, "(table.set") {
+				continue
+			}
+			var fams []string
+			for fam, mnemonics := range aggregateFamilies {
+				for _, m := range mnemonics {
+					if containsMnemonic(body, m) {
+						fams = append(fams, fam)
+						break
+					}
+				}
+			}
+			if len(fams) == 0 {
+				continue
+			}
+			slices.Sort(fams)
+			out = append(out, aggregateFiller{
+				File:     f,
+				Line:     strings.Count(s[:off], "\n") + 1,
+				Families: fams,
+			})
+		}
+	}
+	slices.SortFunc(out, func(a, b aggregateFiller) int {
+		if a.File != b.File {
+			return strings.Compare(a.File, b.File)
+		}
+		return a.Line - b.Line
+	})
+	return out
+}
+
+// wastFuncBodies yields each `(func …)` form's byte offset and full text, by paren matching.
+//
+// Deliberately *not* line-oriented: the whole finding above is that a reader which cannot see a
+// function's extent cannot tell a multi-module file's struct-only init from its mixed one. Strings
+// are skipped so a `")"` inside a name cannot unbalance the count.
+func wastFuncBodies(s string) map[int]string {
+	out := map[int]string{}
+	for i := 0; i+5 <= len(s); i++ {
+		if s[i] != '(' || !strings.HasPrefix(s[i:], "(func") {
+			continue
+		}
+		if c := s[i+5]; c != ' ' && c != '\t' && c != '\n' && c != '(' && c != ')' {
+			continue // (func_something — not this form
+		}
+		depth, inStr := 0, false
+		for j := i; j < len(s); j++ {
+			if inStr {
+				switch s[j] {
+				case '\\':
+					j++
+				case '"':
+					inStr = false
+				}
+				continue
+			}
+			switch s[j] {
+			case '"':
+				inStr = true
+			case '(':
+				depth++
+			case ')':
+				depth--
+				if depth == 0 {
+					out[i] = s[i : j+1]
+				}
+			}
+			if depth == 0 && j > i {
+				break
+			}
+		}
+	}
+	return out
+}
+
+// containsMnemonic reports whether body uses exactly this instruction, not a longer one that
+// starts with it — `array.new` must not match `array.new_default`, which is a different family
+// member and, at rung 3, a different arm.
+func containsMnemonic(body, m string) bool {
+	for i := 0; ; {
+		k := strings.Index(body[i:], m)
+		if k < 0 {
+			return false
+		}
+		k += i
+		end := k + len(m)
+		if end >= len(body) {
+			return false
+		}
+		if c := body[end]; c == ' ' || c == '\t' || c == '\n' || c == ')' || c == '(' {
+			return true
+		}
+		i = end
+	}
+}
+
+// TestRung2StructOnlyAggregateInitsRun is #236's live half: the premise check that rung 2's arms
+// make the struct-only table fillers **execute**, asserted on the premise rather than on any pass
+// count.
+//
+// # Why a pass count cannot answer this
+//
+// #236's specimen is `ref_cast.wast`, four of whose vectors passed *because* its table was
+// all-null: `ref.cast (ref null $t0)` on a null slot succeeds, and on a populated slot of a
+// subtype it also succeeds. The verdict is identical either way, so a pass that survives the change
+// of its own premise is indistinguishable from a pass that was always right — and the file's fail
+// count is unmoved by this rung for the same reason. What *is* observable is the refusal: while the
+// filler cannot run, the file reports `no arm for opcode fb 00`, and once it runs that refusal is
+// gone and the next one is the file's own cast. So the assertion is **zero struct-family refusals**
+// in the files whose fillers this rung makes executable.
+//
+// # Scoped to the space, so rungs 3 and 4 inherit it without an edit
+//
+// The population is derived (`aggregateFillers`) and partitioned by the *families a filler's own
+// body constructs*, which is the axis the ladder is cut on. Today 4 fillers are struct-only and
+// live; 6 need array and i31 as well (rungs 3-4) and 1 is array-only (rung 3). When those rungs
+// land, `liveFamilies` grows and the same population starts asserting them — no enumeration to
+// update, which is the difference between a control that grows with its subject and one that
+// freezes at authorship.
+//
+// #236's *other* half — `ref_eq.wast`'s 69 fails must drain rather than invert — stays open, and
+// deliberately: that file has exactly one filler and it is a mixed one (`ref_eq.wast:12` uses
+// `struct.new_default`, `array.new_default` and `ref.i31`), so its init still cannot run at rung 2
+// and the half's subject does not exist until rung 4. Stated rather than silently dropped.
+func TestRung2StructOnlyAggregateInitsRun(t *testing.T) {
+	requireSuite(t)
+
+	fillers := aggregateFillers(t)
+
+	// Exact counts beside the floors, because both are knowable here and they are different
+	// instruments: the floor catches a moved corpus or a reader that stopped matching, the exact
+	// count catches a small silent loss (#105). A suite-pin bump updates these deliberately, with
+	// the delta stated — it is not a number to relax when it disagrees.
+	const wantFillers, wantStructOnly = 11, 4
+	if len(fillers) < 8 {
+		t.Fatalf("derived only %d aggregate table fillers, want >=8 — the population is empty or "+
+			"the reader stopped matching; a comparison against an empty set agrees perfectly",
+			len(fillers))
+	}
+	if len(fillers) != wantFillers {
+		t.Errorf("derived %d aggregate table fillers, want %d — if the suite pin moved, update "+
+			"this with the delta stated; if it did not, the reader lost rows silently", len(fillers), wantFillers)
+	}
+
+	// liveFamilies is what this engine can construct today. Rung 3 adds "array", rung 4 "i31".
+	liveFamilies := map[string]bool{"struct": true}
+	var live, pending []aggregateFiller
+	for _, f := range fillers {
+		if allIn(f.Families, liveFamilies) {
+			live = append(live, f)
+		} else {
+			pending = append(pending, f)
+		}
+	}
+
+	// **Discrimination, not a count** (#159): a file-level classifier — the reader this one
+	// replaced — produces an *empty* live partition, because every file holding a struct-only init
+	// also holds a mixed one elsewhere. So a non-empty live partition is a capability the degraded
+	// reader cannot exhibit at any floor, and the sharpest form of it is a live filler drawn from a
+	// file that also contributes a pending one.
+	if len(live) != wantStructOnly {
+		t.Errorf("struct-only fillers = %d, want %d: %v", len(live), wantStructOnly, live)
+	}
+	if len(pending) == 0 {
+		t.Errorf("every filler classed as live — the partition does not discriminate, so it would " +
+			"agree with a reader that ignored families entirely")
+	}
+	pendingFiles := map[string]bool{}
+	for _, f := range pending {
+		pendingFiles[f.File] = true
+	}
+	multi := 0
+	for _, f := range live {
+		if pendingFiles[f.File] {
+			multi++
+		}
+	}
+	if multi == 0 {
+		t.Errorf("no struct-only filler comes from a file that also holds a mixed filler — that is "+
+			"exactly the multi-module case a per-file reader gets wrong, so its absence means this "+
+			"reader has degraded to a per-file one; live=%v pending=%v", live, pending)
+	}
+
+	// The struct-family refusal text, derived from the decoder's own table rather than typed, so a
+	// renamed opcode cannot leave this searching for a string nothing emits.
+	var refusals []string
+	for op := range uint32(6) {
+		if _, _, ok := binary.PrefixedOp(0xfb, op); !ok {
+			t.Fatalf("fb %02x is not in the decoder's table — the struct family moved", op)
+		}
+		refusals = append(refusals, fmt.Sprintf("fb %02x", op))
+	}
+
+	allOn := allFeaturesOn(t)
+	d := &binary.Decoder{Features: allOn}
+	for _, f := range live {
+		s, err := ParseFile(filepath.Join(suiteDir, f.File))
+		if err != nil {
+			t.Fatalf("%s: parse: %v", f.File, err)
+		}
+		e := engine()
+		e.Decode = func(image []byte) error {
+			_, err := d.DecodeModule(image)
+			return err
+		}
+		e.InstantiateLinked = func(c Command, registry map[string]Instance) (Instance, Stratum, error) {
+			return instantiateWith(allOn, c, registry)
+		}
+		r := s.RunGated(e)
+
+		// Vacuity: a file contributing no scored vectors would satisfy the refusal check by
+		// asking nothing (#236's own condition).
+		scored := r.Pass
+		for _, fs := range r.Buckets {
+			scored += len(fs)
+		}
+		if scored == 0 {
+			t.Errorf("%s scored 0 vectors, so its refusal check asserts nothing", f.File)
+			continue
+		}
+		for key, fs := range r.Buckets {
+			for _, refusal := range refusals {
+				if strings.Contains(key, refusal) {
+					t.Errorf("%s:%d is a struct-only table filler, so rung 2 must let it run, but "+
+						"%s still reports %d fails keyed %q — the filler did not execute and every "+
+						"vector reading the table it fills is asserting something other than what it "+
+						"was written to assert (#236)", f.File, f.Line, f.File, len(fs), key)
+					break
+				}
+			}
+		}
+	}
+
+	t.Logf("#236 population: %d fillers, %d live at rung 2 (struct-only), %d pending: %v",
+		len(fillers), len(live), len(pending), pending)
+}
+
+// allIn reports whether every family in fams is currently constructible.
+func allIn(fams []string, live map[string]bool) bool {
+	for _, f := range fams {
+		if !live[f] {
+			return false
+		}
+	}
+	return true
 }

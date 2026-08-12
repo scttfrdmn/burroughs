@@ -123,11 +123,35 @@ func refEq(a, b ref) (bool, error) {
 	if a.Null || b.Null {
 		return a.Null && b.Null, nil
 	}
-	// Non-null on both sides, so the payload kind decides — and today every payload kind this
-	// engine can build is one the reference declares unreachable here. Reported per kind rather
-	// than under one message, because the two are different modules to go and fix: an exnref
-	// reaching `ref.eq` is a `try_table` body the validator would have rejected, a funcref
-	// reaching it is a `ref.func` where an `eqref` was wanted.
+	// **An aggregate on either side answers by pointer identity, and `aggr.ml`'s *silence* is the
+	// citation.** Every other runtime module chains an `eq_ref'` override for its own kind —
+	// `instance.ml:42` and `exn.ml:26` install `failwith`, `i31.ml:21` compares payloads,
+	// `extern.ml:13` unwraps and recurses — and `aggr.ml` installs **nothing**, so a
+	// `StructRef, StructRef` pair falls through to the base `let eq_ref' = ref (==)`
+	// (`value.ml:127`), OCaml physical equality. A struct or array's identity is its allocation,
+	// and `a.Obj == b.Obj` is that, not a convenient approximation of it.
+	//
+	// **One expression covers the mixed pair too, and mixed is `false` rather than an error** —
+	// which is a correction to the reading that looked obvious. Each override matches only its
+	// *same-kind* pair and delegates `| _, _ -> eq_ref' r1 r2` to the base, so `StructRef` versus
+	// `FuncRef` reaches `(==)` on two different blocks and answers false with no `failwith`. So
+	// this must not report #9's for a mixed pair the way the same-kind funcref case below does:
+	// the reference answers, and fidelity to it outranks a diagnostic we would prefer to emit.
+	// `a.Obj == b.Obj` is false whenever exactly one side is an aggregate, which is that answer.
+	//
+	// The one place the two models could differ is unreachable here: OCaml compares the
+	// *constructor block*, so two distinct `StructRef s` blocks wrapping one `s` would be
+	// unequal where two `ref`s sharing an `Obj` are equal. Nothing re-boxes — `eval.ml:679`
+	// builds the block once at `struct.new` and every later copy copies the pointer — so the
+	// distinction has no witness.
+	if a.Obj != nil || b.Obj != nil {
+		return a.Obj == b.Obj, nil
+	}
+	// Non-null non-aggregate on both sides, so the payload kind decides — and each remaining kind
+	// is one the reference declares unreachable here. Reported per kind rather than under one
+	// message, because the two are different modules to go and fix: an exnref reaching `ref.eq`
+	// is a `try_table` body the validator would have rejected, a funcref reaching it is a
+	// `ref.func` where an `eqref` was wanted.
 	if a.Exc != nil || b.Exc != nil {
 		return false, fmt.Errorf("%w: ref.eq on an exception reference, which is not under eq "+
 			"(exn.ml:26 is `failwith`, the reference asserting validation ruled this out)",
@@ -152,6 +176,7 @@ var refEqTreatment = map[string]string{
 	"Addr": "not compared: reachable only on a funcref, which refEq reports as #9's",
 	"Inst": "not compared: reachable only on a funcref, which refEq reports as #9's",
 	"Exc":  "not compared: reachable only on an exnref, which refEq reports as #9's",
+	"Obj":  "compared by pointer identity: an aggregate's identity is its allocation (0020)",
 }
 
 // refFieldTreatments reports refEq's declared treatment of every field `ref` actually has, and

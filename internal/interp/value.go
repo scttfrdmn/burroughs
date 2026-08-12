@@ -113,6 +113,23 @@ type ref struct {
 	// carry, not a second representation, so a funcref never sets Exc and an exnref never
 	// sets Addr/Inst.
 	Exc *excObj
+
+	// Obj is the struct or array instance this reference names, non-nil exactly when the
+	// reference's runtime type is a concrete aggregate and Null is false — decision 0020, and
+	// `gcobj.go` carries the model's own reasoning.
+	//
+	// The fourth payload field, and its arrival is the `Exc` comment above being right about the
+	// shape rather than about one instance of it: `ref` grows one field per payload kind it must
+	// carry, so a funcref never sets Obj and a struct never sets Addr/Inst/Exc. That the
+	// prediction held one rung later is the reason it is worth keeping written down.
+	//
+	// **This is the field the collector most obviously must trace**, and therefore the strongest
+	// vindication of 0002's parallel-array pin: a `*gcObj` is guest-allocated, guest-reachable
+	// only through this array, and outlives every frame that touched it once it is stored in a
+	// table or a global. Under a tagged-uint64 representation it would be a pointer the Go
+	// collector cannot see, i.e. a use-after-free with no diagnostic. Here it is an ordinary Go
+	// pointer field in an ordinary Go struct.
+	Obj *gcObj
 }
 
 // stack is the value stack: 0002 Q3's bare `uint64` slots plus the pinned parallel reference array.
@@ -246,6 +263,32 @@ func newFrame(total uint64, paramTypes []binary.ValType, eachLocal func(func(idx
 			f.isRef[uint64(len(paramTypes))+uint64(idx)] = vt.IsRef()
 			return true
 		})
+		// **Grave #246: a reference local defaults to `ref.null`, and Go's zero `ref` is not
+		// null.** `make([]ref, total)` yields `{Null: false, Addr: 0, Inst: nil}`, which this
+		// package reads as *a funcref to function 0 of the current instance* — see `ref`'s own
+		// doc comment, which makes the zero value non-null deliberately, because a null and a
+		// reference to function 0 must not be the same bits. So the allocation above is a claim
+		// about function 0 unless this loop follows it. `eval.ml` builds locals from
+		// `default_value t`, and `default_value` of a nullable reference type is `Some NullRef`
+		// (`value.ml:150-152`); a non-nullable reference local is non-defaultable and validation
+		// rejects the function, so every reference local that can exist defaults to null.
+		//
+		// **The type was right and the allocation site did not honour it** — `table.go:134`
+		// already writes `ref{Null: true}` into every fresh table slot for this exact reason, so
+		// the sibling had the arm and this site re-derived the allocation without it (graves
+		// #105/#243). One rung up, the lesson generalizes past references: *where a domain's
+		// default differs from Go's zero value, every allocation site must say so, because the
+		// type cannot.*
+		//
+		// Params are overwritten by the caller's arguments a moment later, so filling them is
+		// redundant rather than wrong; the loop covers the whole array rather than only the
+		// declared locals because "which indices are params" is a second fact to get right and
+		// the redundant writes cost nothing a call does not already pay.
+		for i := range f.isRef {
+			if f.isRef[i] {
+				f.refs[i] = ref{Null: true}
+			}
+		}
 	}
 	if v128Total > 0 {
 		f.numHi = make([]uint64, total)

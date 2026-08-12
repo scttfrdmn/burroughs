@@ -238,14 +238,31 @@ func (in *Instance) invoke(fn *binary.Func, ft *binary.FuncType, st *stack, dept
 		}
 	}
 	// The declared locals are already zero — `make` gives that — and zero is the correct default
-	// for every numeric type (`default_value`), and for a ref-typed local: `locals.refs[i]`'s
-	// zero value is `ref{}`, which is `ref.func 0` rather than null exactly as `value.go`'s own
-	// `ref` doc comment warns — **and that is the accept-direction gap `local_init.wast` is
-	// testimony against**: `func.wast:662`'s `$type-local-uninitialized` and every one of
-	// `local_init.wast`'s three vectors declare a ref-typed local and read it only after writing
-	// it first (`local.set`/`local.tee` before any `local.get`), so the corpus never exercises
-	// the uninitialized-ref-local default and this comment states the gap rather than closing
-	// it — closing it needs #9's "uninitialized local" concept, not an engine default.
+	// for every numeric type (`default_value`). **A ref-typed local is not covered by `make`, and
+	// `newFrame` writes its default explicitly: grave #246.**
+	//
+	// This comment used to say the opposite, and the way it was wrong is worth keeping. It
+	// observed correctly that `locals.refs[i]`'s zero value is `ref{}` — i.e. `ref.func 0`, not
+	// null — and then argued the gap was acceptable *because* `func.wast:662` and all three
+	// `local_init.wast` vectors write such a local before reading it, so "the corpus never
+	// exercises the uninitialized-ref-local default." That is a wrong answer defended on the
+	// grounds that no vector reports it, which is the accept-direction reasoning §9 G-3 exists to
+	// forbid, stated in the one place a reviewer checks code against claims: *the defect stated as
+	// the rule*.
+	//
+	// The substantive error underneath the rhetorical one was a conflation of two cases the spec
+	// keeps apart:
+	//
+	//   - A **nullable** ref-typed local has a default, and it is `ref.null` — `value.ml:150-152`'s
+	//     `default_value` returns `NullRef` for a nullable reference type. So this needs an engine
+	//     default and nothing from #9, which is the half the old comment denied.
+	//   - A **non-nullable** ref-typed local has *no* default value, and validation must prove
+	//     `local.set` precedes every `local.get`. That is genuinely #9's "uninitialized local"
+	//     concept and `local_init.wast`'s actual subject, and it is still open.
+	//
+	// One case was closed and the other was not; citing the open one to excuse the closed one made
+	// the whole paragraph read as a deferral. See `newFrame` for the fill and for why it covers
+	// the parameter slots redundantly rather than wrongly.
 	// **The callee's results must be exactly its arity, and the check is here rather than at the
 	// boundary**, because a call's results become the caller's operands: a callee leaving scratch
 	// behind would silently corrupt the caller's stack, where at the boundary `Invoke` merely

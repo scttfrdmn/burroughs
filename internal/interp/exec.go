@@ -108,6 +108,12 @@ func (in *Instance) runFrame(fn *binary.Func, locals *frame, st *stack, results,
 				}
 				continue
 			}
+			if ins.Prefix == 0xfb {
+				if err := in.execFB(ins, st); err != nil {
+					return err
+				}
+				continue
+			}
 			return unsupported(ins)
 		}
 		switch ins.Op {
