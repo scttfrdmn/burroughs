@@ -267,6 +267,96 @@ func TestNullRendersWithoutAHeaptype(t *testing.T) {
 	}
 }
 
+// TestToInterpValueRefusesEveryUnpassableShape is the control for the second-opinion check
+// `toInterpValue`'s doc comment claims. It claimed it for two shapes and had it for one: a bare
+// `(ref.null)` carries Class RefLiteralNull, so it reached the `interp.NullRef(t)` line and became
+// a concrete funcref null built from a placeholder Kind — the silently-wrong Value the comment
+// says a caller bypassing `isPassable` is protected from. Latent, both `Command.Args` sites in
+// wast.go filtering on `isPassable` first, which is exactly why nothing caught it: the guard that
+// makes the defect unreachable also makes it unobservable.
+//
+// **Both columns are authored from the semantics, not read out of either function.** The first
+// draft of this test derived its expectations from `isPassable` and asserted the two agreed, which
+// was wrong twice over: it is the echo grave (#106) — a premise measured with one of the two things
+// being compared — and it is also *false*, because the two predicates legitimately disagree at
+// `RefConcrete`. isPassable admits that shape (nothing about the grammar makes it an expectation)
+// and toInterpValue refuses it (it is a result-only shape with no argument spelling). An agreement
+// test would have had to be wrong about one of them to pass.
+//
+// The derivation did earn its keep before being replaced: asserting agreement is what surfaced the
+// two NaN classes, which a hand-listed set of *reference* shapes would have missed entirely.
+func TestToInterpValueRefusesEveryUnpassableShape(t *testing.T) {
+	nanLane := Val{Kind: KindV128, LaneBits: 32, Lanes: []Val{
+		{Kind: KindF32, LaneBits: 32, NaN: NaNCanonical},
+		{Kind: KindF32, LaneBits: 32},
+		{Kind: KindF32, LaneBits: 32},
+		{Kind: KindF32, LaneBits: 32},
+	}}
+	exactLanes := Val{Kind: KindV128, LaneBits: 32, Lanes: []Val{
+		{Kind: KindI32, LaneBits: 32, Bits: 1},
+		{Kind: KindI32, LaneBits: 32, Bits: 2},
+		{Kind: KindI32, LaneBits: 32, Bits: 3},
+		{Kind: KindI32, LaneBits: 32, Bits: 4},
+	}}
+	shapes := []struct {
+		name        string
+		v           Val
+		passable    bool // isPassable: is this a shape the *grammar* allows in argument position?
+		convertible bool // toInterpValue: can a concrete interp.Value be built from it?
+		why         string
+	}{
+		// Predicates: no single value to pass, refused by both.
+		{"(ref.func) type pattern", refPat(KindFuncRef), false, false, "names any funcref, not one"},
+		{"(ref.extern) type pattern", refPat(KindExternRef), false, false, "names any externref, not one"},
+		{"nan:canonical f32", Val{Kind: KindF32, NaN: NaNCanonical}, false, false, "a set of bit patterns; Bits is 0"},
+		{"nan:arithmetic f64", Val{Kind: KindF64, NaN: NaNArithmetic}, false, false, "a set of bit patterns; Bits is 0"},
+		{"v128 with a nan:canonical lane", nanLane, false, false, "one lane is a predicate, so the vector is"},
+		// Concrete but untypeable: one value, no heaptype to build it with.
+		{"bare (ref.null)", bareNull(), false, false, "one value, but interp.NullRef needs a type"},
+		// Concrete and typeable: both admit.
+		{"ref.null func", Val{Kind: KindFuncRef, Class: RefLiteralNull}, true, true, "a null of a named heaptype"},
+		{"ref.null extern", Val{Kind: KindExternRef, Class: RefLiteralNull}, true, true, "a null of a named heaptype"},
+		{"ref.extern 7", Val{Kind: KindExternRef, Class: RefExternIdentity, Extern: 7}, true, true, "an opaque identity"},
+		{"i32 42", Val{Kind: KindI32, Bits: 42}, true, true, "an exact numeric"},
+		{"v128 of exact lanes", exactLanes, true, true, "every lane concrete"},
+		// **The one legitimate disagreement**, and the reason this test has two columns rather than
+		// one. A non-null funcref result is not an argument spelling any vector can write, so the
+		// grammar has nothing to refuse while toInterpValue has nothing to build.
+		{"RefConcrete funcref", Val{Kind: KindFuncRef, Class: RefConcrete}, true, false, "result-only shape"},
+	}
+	var passableN, convertibleN, disagree int
+	for _, s := range shapes {
+		if got := s.v.isPassable(); got != s.passable {
+			t.Errorf("%s: isPassable() = %v, want %v (%s)", s.name, got, s.passable, s.why)
+		}
+		if _, got := toInterpValue(s.v); got != s.convertible {
+			t.Errorf("%s: toInterpValue ok = %v, want %v (%s)", s.name, got, s.convertible, s.why)
+		}
+		if s.passable {
+			passableN++
+		}
+		if s.convertible {
+			convertibleN++
+		}
+		if s.passable != s.convertible {
+			disagree++
+		}
+	}
+	// Three floors, because each covers a way this table could agree about nothing: an all-refused
+	// table (the vacuity failure), an all-admitted one, and — the specific one this test exists to
+	// hold — a table that has quietly lost the row where the two predicates differ, which is the
+	// row that establishes they are two predicates at all.
+	if passableN == 0 || convertibleN == 0 {
+		t.Errorf("degenerate partition: %d passable, %d convertible — a control that only ever "+
+			"sees one side of a predicate is not testing the predicate", passableN, convertibleN)
+	}
+	if disagree == 0 {
+		t.Errorf("no row where isPassable and toInterpValue differ; without one, this table is " +
+			"consistent with the two being a single predicate and the second opinion being " +
+			"dischargeable by calling isPassable — which it is not (see RefConcrete)")
+	}
+}
+
 // bareNull is the bare `(ref.null)` expectation — readRefConst's own construction for
 // `literal_null`'s heaptype-free arm (see Val.AnyNull). A helper rather than a var, so each row
 // gets its own copy and no row can mutate another's expectation.

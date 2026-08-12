@@ -470,13 +470,48 @@ func packV128Lanes(lanes []Val) (hi, lo uint64) {
 // numeric half is.
 //
 // **Only RefLiteralNull and RefExternIdentity convert; RefTypePattern and AnyNull report
-// false**, because both are expectation-only predicates with no concrete value to pass as an
-// argument — `isPassable`'s own rule, checked again here as a second, narrower opinion at the
+// false** — `isPassable`'s own rule, checked again here as a second, narrower opinion at the
 // one function that actually builds an interp.Value, per the falsifiability law's own
 // "breaking the assertion" reasoning: a caller that reached here after somehow bypassing
 // isPassable's check gets a named failure instead of a silently wrong Value.
+//
+// The two refuse for **different** reasons, and this comment used to give one reason for both.
+// RefTypePattern is an expectation-only *predicate* — `(ref.func)` names any value of a shape,
+// so there is no value to pass. A bare `(ref.null)` names exactly one value and is perfectly
+// concrete; what it lacks is a **heaptype**, and `interp.NullRef(t)` needs one. Precision matters
+// here because the wrong reason is what let the AnyNull arm go missing below: a "predicate" reads
+// as a shape the switch already excludes, where "a null with no type to give it" reads as the
+// special case it is.
+//
+// **This function and `isPassable` are two predicates, not one asserted twice, and they genuinely
+// disagree in one place** — `RefConcrete`. isPassable admits it (nothing about the *grammar* makes
+// it an expectation), and this function refuses it (it is fromInterpValue's own result-only shape,
+// with no argument spelling to have come from). So the second opinion cannot be discharged by
+// calling isPassable here: that would collapse a real distinction, and the disagreement at
+// RefConcrete is what proves the distinction is real rather than stylistic. The two are kept in
+// sync instead by TestToInterpValueRefusesEveryUnpassableShape, whose expectations are authored
+// from the semantics rather than read out of either function — a control derived from one of two
+// things it is comparing is the echo grave (#106).
 func toInterpValue(a Val) (interp.Value, bool) {
+	if a.NaN != NaNNone {
+		// A NaN *class* names a set of bit patterns, and its Bits field is 0 — so this arm's
+		// absence meant `nan:canonical` converted to a perfectly plausible `f32 0.0` and was
+		// handed to the engine as an argument. The reference-shaped half of this defence existed
+		// and the numeric half did not (grave #266's sweep, found by deriving the control's shapes
+		// from isPassable instead of listing them).
+		return interp.Value{}, false
+	}
 	if a.Kind == KindV128 {
+		for _, lane := range a.Lanes {
+			if lane.NaN != NaNNone {
+				// The same refusal one level down: packV128Lanes reads `lane.Bits`, which is 0 for
+				// a NaN class, so a v128 with one NaN lane would pack a zero into that lane's
+				// position and pass it as a concrete vector. isPassable's own v128 arm refuses
+				// this; that arm's comment says the corpus writes no such argument today, which
+				// is what kept the gap unobservable rather than what closed it.
+				return interp.Value{}, false
+			}
+		}
 		hi, lo := packV128Lanes(a.Lanes)
 		return interp.Value{Type: binary.V128, Bits: lo, Hi: hi}, true
 	}
@@ -493,6 +528,23 @@ func toInterpValue(a Val) (interp.Value, bool) {
 	}
 	switch a.Class {
 	case RefLiteralNull:
+		if a.AnyNull {
+			// **The second opinion this function's doc comment promises, which did not exist.**
+			// A bare `(ref.null)` carries Class RefLiteralNull, so it fell straight through to
+			// the line below and became `interp.NullRef(binary.FuncRef)` — a concrete funcref
+			// null built from the *placeholder* Kind readRefConst assigns a Val that names no
+			// heaptype at all (see Val.AnyNull). Exactly the "silently wrong Value" the comment
+			// above says a caller bypassing isPassable is protected from, for one of the two
+			// shapes it names by name.
+			//
+			// Latent rather than live: both `Command.Args` sites in wast.go filter on
+			// `isPassable` first, so nothing reaches here with this shape today. Fixed anyway,
+			// because a defence documented and absent is worse than one never claimed — the
+			// reader who checks the code against the comment finds agreement. Found by the sweep
+			// grave #266 obliges, and it is #266's own shape (a claim asserting a property the
+			// code lacks), which is why it is recorded there rather than as a new issue.
+			return interp.Value{}, false
+		}
 		return interp.NullRef(t), true
 	case RefExternIdentity:
 		return interp.ExternRef(a.Extern), true

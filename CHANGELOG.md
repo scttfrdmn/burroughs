@@ -294,6 +294,19 @@ weakly-ordered platform.
   - `Matches`'s `AnyNull` fast path is **deleted**, the general null dispatch subsuming it exactly;
     the field stays live on the argument side, where a bare `(ref.null)` has no heaptype for
     `interp.NullRef(t)`. An early return that agrees with the code it skips agrees only today.
+  - **The obligatory sweep found the same shape one file over, three times: `toInterpValue`'s doc
+    comment promised a second opinion refusing shapes `isPassable` refuses, and had it for one of
+    them.** A bare `(ref.null)` carries `Class RefLiteralNull`, so it reached `interp.NullRef` and
+    became a concrete funcref null built from the *placeholder* Kind; `nan:canonical`/`nan:arithmetic`
+    reached the numeric arm and became a plausible `f32 0.0`, a NaN class's `Bits` being 0; and a
+    v128 with one NaN lane packed that zero into the lane. All three latent — both `Command.Args`
+    sites filter on `isPassable` first — and fixed anyway, because the guard that makes a documented
+    defence unreachable also makes its absence unobservable. Found by **deriving** the new control's
+    shapes from `isPassable` rather than listing reference shapes by hand, which is what reached the
+    two numeric classes; the derivation was then replaced, because asserting the two predicates
+    *agree* is both the echo grave (#106) and false — `isPassable` admits a `RefConcrete` funcref and
+    `toInterpValue` refuses it, so the control now carries two independently-authored columns and a
+    floor on the row where they differ.
 
 - **Two decoder error sentinels were absent from the fuzz target's allowlist, one of them
   latent since the PR that introduced it**

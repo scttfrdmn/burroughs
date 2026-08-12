@@ -465,10 +465,14 @@ func (want Val) Matches(got Val) bool { //nolint:revive,staticcheck // `want`/`g
 // isPassable reports whether v is a value this harness can hand to an engine as a call
 // argument, as opposed to an *expectation*-only shape.
 //
-// Two families are expectation-only, for the identical reason: a NaN class (NaNCanonical/
-// NaNArithmetic) and RefTypePattern/AnyNull are all *predicates* over a result, not concrete
-// values a caller could construct and pass — `nan:canonical` names a set of bit patterns, and
-// `(ref.func)`/`(ref.null)` name "any value of this shape" rather than one. Both families were
+// Two families are expectation-only: a NaN class (NaNCanonical/NaNArithmetic) and RefTypePattern
+// are *predicates* over a result, not concrete values a caller could construct and pass —
+// `nan:canonical` names a set of bit patterns and `(ref.func)` names any value of a shape. AnyNull
+// is refused for a **different** reason, and calling it a predicate too (as this comment did) was
+// wrong in a way that mattered: a bare `(ref.null)` names exactly one value, perfectly concrete,
+// and what it lacks is a *heaptype* for `toInterpValue`'s `interp.NullRef(t)` to be built from.
+// The mis-stated reason is what let that function's own AnyNull refusal go missing — see its doc
+// comment, and grave #266, whose sweep found it. Both families were
 // checked the same way before this helper existed (`v.NaN != NaNNone` at invokeAction's and
 // namedInvokeAction's argument loops); this names the check once so a third expectation-only
 // shape arriving later has one site to extend rather than two to keep in sync — the same
