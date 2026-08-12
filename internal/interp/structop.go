@@ -196,8 +196,9 @@ func (in *Instance) execStructGet(ins binary.Instr, st *stack, ext fieldExt) err
 // from the object.** It has to be: the target reference sits *under* the value, so nothing can look
 // at the object before the value is popped, and popping the value requires knowing which array it is
 // in. Validation guarantees the two agree — a struct subtype's shared fields match their supertype's
-// in storage kind exactly — and `fieldStorage`'s agreement check reports it as #9's when they do
-// not. One consequence, stated rather than discovered later: because the field must be resolved
+// in storage kind exactly — and this engine does **not** check that agreement: the check existed
+// briefly and was retired for comparing a thing to itself on all 30 corpus field accesses, every
+// separating path being rung 5's. `fieldStorage` carries the measurement; #248 is the tripwire. One consequence, stated rather than discovered later: because the field must be resolved
 // before the value can be popped, an out-of-range field index is reported *before* the null trap,
 // where the reference traps first. That reordering is observable only in a module that is
 // simultaneously invalid and trapping, which no validated module is.

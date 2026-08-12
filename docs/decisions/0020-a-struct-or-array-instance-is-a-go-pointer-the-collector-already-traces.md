@@ -181,3 +181,53 @@ both of which are `CompType.Fields`' whole content however it ends up shaped.**
 - **No change to `binary`'s decode side or `text`'s encode side.** This ADR is purely
   `internal/interp`'s runtime value model; the wire format (0018) and the grammar (already
   finished, per #172's survey) are unaffected.
+
+## Append — the implementation dropped `gcField.packed`/`packBits`, and the departure is ratified (PR #247)
+
+Appended rather than edited, per *comments and ADRs are testimony too* and the rule that a ruling is
+discharged by appending with the body preserved: the sketch above is the record of what was believed
+at authoring time, and the reason it survived review is part of what is worth keeping.
+
+**The departure.** Rung 2's `gcObj` (`internal/interp/gcobj.go`) is
+`{typ *binary.CompType; fields []gcField}` as sketched, but `gcField` is `{num, hi uint64; r ref}` —
+**no `packed`, no `packBits`.** Two of the three differences are additive and uncontroversial (`hi`
+is 0024's v128 half, filed as grave #243's shape one site over); the omission is the one that needed
+a ruling, and it was flagged in #247 as a departure rather than taken silently.
+
+**Why the omission is right, in the terms the ratification used.** The sketch's `packed`/`packBits`
+were *design-time speculation about what the instance would need*, and the implementation's own
+consumer analysis found the truth: **packedness is a type-level fact, `binary.FieldType.Storage`
+(decision 0021) is its sole authority, and an instance-level copy had no consumer.** Every read site
+already holds the declared field type — it has to, because `struct.set` must know which stack array
+the value comes from *before* it can pop anything, the target reference sitting underneath the value
+— so the width is in hand wherever it is needed, derived rather than stored. And `aggr.ml`'s
+`alloc_field`/`write_field` **wrap at write**, so a stored value is already narrowed and only the
+read needs the width at all.
+
+**The one-truth law favours the omission rather than merely tolerating it.** A per-field copy of a
+fact that never varies per instance would be two places knowing one thing with nothing keeping them
+equal — the drift this project files graves for (#78/#105/#106) — so the copy would have had to be
+enrolled as a witness, with a lifetime drift check, for a constant. That is a control debt bought
+with nothing.
+
+**The evidence that derivation suffices, rather than the argument that it should.** `struct.wast`'s
+packed vectors pass green — the file goes 7/25 to **25/25**, and the packed rows
+(`set_get_packed_g0_1 (i32.const 257)` reading back **1** where the i16 field in the same struct
+reads back 257) are exactly the ones a missing or mismatched width fails — and fifteen of fifteen
+mutations were watched die, including the two that break wrap-at-write and extend-at-read
+independently.
+
+**Authority ordering, stated because it is the general point.** The accepted document loses to the
+consumer-forced law here: **ADRs record decisions; the tree records truths.** An ADR's sketch is
+binding on the *choice* (option C, a Go pointer with identity) and advisory on the *shape*, and where
+implementation finds a field with no consumer the ADR is amended by append, not obeyed by inertia.
+
+**Era-stamped, and the door is open rather than walled.** As of rung 2 the width is derived at every
+read from `FieldType.Storage`. If a bench ever shows that type derivation costing on a hot path,
+**the fields may return** — as *enrolled witnesses, with their drift check*, which is the condition
+and not a footnote to it. This append is a fork in the road, not a wall.
+
+(Ratification: Scott, PR #247, on the agent's own flag. The stamp is what closes it, per *a status
+field is a citation to an approval*; the departure spent one PR flagged and open, which the record
+keeps alongside the stamp. Second rider of the same ratification retired `fieldStorage`'s
+type-agreement check for having no reachable subject — the tripwire is #248.)

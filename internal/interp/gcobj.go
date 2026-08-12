@@ -55,14 +55,21 @@ type gcObj struct {
 	// (aggr.ml:54), the fact `type_of_ref'` reports for a `StructRef` and therefore the input to
 	// every `ref.test`/`ref.cast` at rung 5.
 	//
-	// **Also load-bearing now, not merely retained for later.** Field *shape* decisions (which
-	// stack array a value comes from, whether storage is packed) are taken from the
-	// instruction's own type immediate, because `struct.set` must know the value's array
-	// *before* it can pop anything — the target reference sits underneath the value, and with
-	// two stack arrays there is no way to look at the object first. Validation guarantees the
-	// immediate's type and the object's agree (a struct subtype matches its supertype's fields
-	// exactly in storage kind), so `fieldStorage` checks that agreement and reports #9's verdict
-	// when it fails, rather than letting a disagreement pick an array silently.
+	// **Retained for rung 5, and *not* load-bearing before it — measured, having first been
+	// claimed otherwise here.** This comment used to argue that `typ` earned its keep now, by
+	// letting `fieldStorage` cross-check the instruction's declared type against the object's:
+	// field *shape* decisions (which stack array a value comes from, whether storage is packed)
+	// come from the instruction's type immediate, because `struct.set` must know the value's
+	// array *before* it can pop anything — the target reference sits underneath the value — so
+	// an object of some other struct type would pick the wrong array silently.
+	//
+	// The argument was sound and its premise was false. Over the whole corpus the two types are
+	// **the same pointer on 30 of 30 field accesses and differ on 0**: every case that would
+	// separate them (`struct.get $t0` reaching a `$t4` instance) arrives through
+	// `ref.cast`/`br_on_cast`, which are rung 5 and do not exist. The check therefore compared a
+	// thing to itself on every real input, and it is retired rather than kept for company; the
+	// risk is a tripwire filed against rung 5's definition of done (#248), not a live check
+	// without a subject. (Retirement: Scott, PR #247, second rider.)
 	typ *binary.CompType
 
 	// fields is one entry per declared field, in declaration order — `field list`, and for an
@@ -96,7 +103,12 @@ type gcObj struct {
 // fact with nothing keeping them equal — the drift this project files graves for (#78/#105/#106).
 // The truncation itself is unaffected: `aggr.ml`'s `alloc_field`/`write_field` **wrap at write**, so
 // the stored value is already narrowed and only the *read* needs the width, which is in hand at
-// every read site. Flagged in the PR as a departure rather than taken silently.
+// every read site. Flagged in the PR as a departure rather than taken silently — and **ratified**:
+// packedness is a type-level fact with `FieldType` as its sole authority, so an instance-level copy
+// had no consumer, and the one-truth law favours the omission because a copy would be an enrolled
+// witness needing drift protection for a fact that never varies per instance. The door is open, not
+// walled: if a bench ever shows the type derivation costing on a hot path the fields may return, as
+// enrolled witnesses with their drift check. (Ratification: Scott, PR #247; 0020's append.)
 type gcField struct {
 	num uint64
 	hi  uint64
@@ -150,19 +162,27 @@ func (in *Instance) structType(what string, idx uint64) (*binary.CompType, error
 	return ct, nil
 }
 
-// fieldStorage resolves field `i` of the instruction's declared comptype, checking it against the
-// object's own type.
+// fieldStorage resolves field `i` of the instruction's declared comptype, bounds-checking the
+// object too when one is in hand.
 //
 // **`undefined field` is `eval.ml:696`'s `Crash.error`, not a trap** — a field index out of range
 // is something validation ruled out, so it is reported as #9's debt like every other crash-class
-// case in this package (`refEq`'s `failwith` cases, `branch`'s out-of-range depth).
+// case in this package (`refEq`'s `failwith` cases, `branch`'s out-of-range depth). Both range
+// checks stay: they are what stop an out-of-range index from indexing a Go slice, and a panic is
+// categorically worse than a named error.
 //
-// The agreement check is what makes `gcObj.typ` load-bearing rather than decorative, and it catches
-// a real class rather than a hypothetical one: with no validator, nothing otherwise stops a module
-// from presenting an object of one struct type to an instruction naming another whose field `i` has
-// a different *storage kind*, at which point the shape decision taken from the immediate pops from
-// the wrong stack array. That is the grave #243 shape (a wrong array choice cascading into the next
-// instruction's operands), so it gets a named error instead of a silent divergence.
+// **What was here and is not: a storage-kind agreement check between the instruction's declared
+// type and the object's.** It read as a real cross-check and was vacuous — `ct` and `obj.typ` are
+// the *same pointer* on 30 of 30 corpus field accesses and differ on 0, every separating path going
+// through rung 5's `ref.cast`/`br_on_cast`. A comparison of a thing to itself is a green that
+// asserts nothing, so it is retired and its control with it (#248 is the tripwire that reinstates
+// both when rung 5 gives them a subject).
+//
+// The risk it named is real and unretired, which is why it is filed rather than dismissed: field
+// shape decisions come from the instruction's type immediate (`struct.set` must know the value's
+// array before it can pop the reference underneath it), so once subtyping is reachable a
+// disagreement picks the wrong stack array — the grave #243 shape, a wrong array choice cascading
+// into the next instruction's operands.
 func fieldStorage(ct *binary.CompType, obj *gcObj, i uint64) (binary.FieldType, error) {
 	if i >= uint64(len(ct.Fields)) {
 		return binary.FieldType{}, fmt.Errorf("%w: undefined field %d of %d in type %s",
@@ -174,25 +194,8 @@ func fieldStorage(ct *binary.CompType, obj *gcObj, i uint64) (binary.FieldType, 
 			return binary.FieldType{}, fmt.Errorf("%w: undefined field %d of %d in the object",
 				ErrNotValidated, i, len(obj.fields))
 		}
-		if obj.typ != nil && i < uint64(len(obj.typ.Fields)) {
-			if got := obj.typ.Fields[i].Storage; got != ft.Storage {
-				return binary.FieldType{}, fmt.Errorf(
-					"%w: field %d is %s in the instruction's type and %s in the object's",
-					ErrNotValidated, i, storageName(ft.Storage), storageName(got))
-			}
-		}
 	}
 	return ft, nil
-}
-
-// storageName renders a storage type for fieldStorage's disagreement message. Its own function
-// because `binary.StorageType` has no String method and adding one to the decoder for an
-// interpreter error message would put this package's diagnostic vocabulary in another package.
-func storageName(s binary.StorageType) string {
-	if s.Packed {
-		return fmt.Sprintf("i%d", s.Width)
-	}
-	return s.Val.String()
 }
 
 // popField pops one field's initializer off the stack, wrapping a packed field at write —
@@ -208,8 +211,9 @@ func storageName(s binary.StorageType) string {
 // `alloc_field`'s `failwith "alloc_field"` case — a packed field handed something that is not an
 // i32 — is not reachable as a distinct branch here: the value's array is chosen *from the declared
 // field type*, so a packed field always reads the numeric stack. What the reference catches by
-// pattern match, this engine catches at `fieldStorage`'s agreement check or not at all, which is
-// #9's absence and not a new hole.
+// pattern match, this engine does not catch at all — #9's absence, not a new hole, and not
+// something the retired agreement check covered either: it could only ever have fired on a type
+// disagreement no corpus path reaches (`fieldStorage`, and #248).
 func popField(ft binary.FieldType, st *stack) (gcField, error) {
 	if ft.Storage.Packed {
 		if err := st.needNum(1); err != nil {

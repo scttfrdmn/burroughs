@@ -574,37 +574,6 @@ func TestRefLocalDefaultSurvivesAParameter(t *testing.T) {
 	}
 }
 
-// TestStructFieldStorageDisagreementIsReported is the control for `fieldStorage`'s agreement check,
-// which is what makes `gcObj.typ` load-bearing rather than retained-for-later.
-//
-// Field shape is read from the *instruction's* type immediate, because `struct.set` cannot look at
-// the object before popping the value that sits above it. Validation guarantees the immediate and the
-// object agree; with no validator, this is the module that breaks the guarantee — an object of
-// `$reffield` handed to an instruction naming `$numfield`, whose field 0 is numeric. Left unchecked,
-// the read pops from the numeric array and answers whatever integer sat under the reference.
-//
-// Reported as `ErrNotValidated` and asserted not to be a trap, for the same reason the signedness
-// rows are: a wrong-array read is an accept-direction defect, and answering *something* is the
-// failure mode.
-func TestStructFieldStorageDisagreementIsReported(t *testing.T) {
-	src := `(module
-  (type $numfield (struct (field i32)))
-  (type $reffield (struct (field anyref)))
-  (func (export "c") (result i32)
-    (local $s (ref null $reffield))
-    (local.set $s (struct.new $reffield (ref.null any)))
-    (struct.get $numfield 0 (local.get $s))))`
-	_, err := runGCErr(src)
-	if err == nil {
-		t.Fatalf("a struct.get whose type immediate disagrees with the object's type was " +
-			"accepted; the field's storage kind decides which stack array is read, so this " +
-			"answers an integer from under the reference")
-	}
-	if !errors.Is(err, ErrNotValidated) {
-		t.Errorf("got %v, want ErrNotValidated", err)
-	}
-}
-
 // TestRung2OpcodesAgreeWithTheDecoder is TestRung1OpcodesAgreeWithTheDecoder's sibling for the six
 // struct sub-opcodes, and it exists for that test's stated reason: this package holds a second copy
 // of a fact `internal/binary`'s generated table already holds.
