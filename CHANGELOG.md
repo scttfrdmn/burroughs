@@ -48,13 +48,17 @@ weakly-ordered platform.
     unmoved and identical vector-for-vector and bucket-for-bucket (58590/117/2689/3625).
     `allOnPassFloor` 62113 → 62173 in the same PR, per 0013 — the distance was 25 before and would
     have been 60 after, both inside the slack and therefore both silent.
-  - **#260 discharged: every `refEqTreatment` claim now has a discriminating witness pair.** The
-    coverage control next door checks an *entry* exists, which is a claim rather than its truth —
-    and the specimen arrived in the field #260 predicted, `Addr`'s entry having read "not compared:
-    reachable only on a funcref" until host references made both halves false, green throughout.
-    Ten rows for nine keys, each pair differing in exactly one field with an agreeing half beside
-    it, because a control that only ever watched `refEq` say false would be satisfied by a
-    comparison that never says true.
+  - **#260's specimen discharged: every `refEqTreatment` claim now has a discriminating witness
+    pair.** The coverage control next door checks an *entry* exists, which is a claim rather than its
+    truth — and the specimen arrived in the field #260 predicted, `Addr`'s entry having read "not
+    compared: reachable only on a funcref" until host references made both halves false, green
+    throughout. Ten rows for nine keys, each pair differing in exactly one field with an agreeing
+    half beside it, because a control that only ever watched `refEq` say false would be satisfied by
+    a comparison that never says true. **The issue stays open, re-scoped**: its own Scope section
+    says *the class, not the instance*, and the sweep it prescribed found two live members
+    (`TestGatedVectors`' per-line feature names, `TestGrave206KnownFailures`' cause citations) plus
+    one with no subject (the `deadcode` allowlist is empty). Closing a class issue on its instance is
+    #264's third-instance defect, so the number was re-pointed rather than retired.
   - **Five accept-direction controls, each of them earned by a mutation the board could not see**
     (§9 G-3, where such controls are product work). Reverting `any.convert_extern` to the total
     draft, setting the wrapper bit on a null, and dropping `fromRef`'s `IsHost` guard so a
