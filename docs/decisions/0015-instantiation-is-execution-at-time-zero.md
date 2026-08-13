@@ -90,3 +90,25 @@ trap-versus-verdict question, so the engine answers it on the suite's terms rath
 shape that happened to be convenient. No performance clause is engaged — the trap check is a
 bounds comparison per active segment, paid once at load, on the thesis workload (§1: megabyte
 Go guests loaded once) where it rounds to nothing.
+
+## Pointer, appended 2026-08-12 — the cited count moved to `docs/laws/`
+
+The bullet above cites *"the return-type reading `CLAUDE.md` uses when it counts 28 of 29
+`decode*` functions returning bare `error`"*. That census is now in
+`docs/laws/product-and-overhead.md` (*a representation is not a recognizer*), which is where
+the Disciplines restructure relocated every law's body; only the law's one-line compressed
+form stayed in `CLAUDE.md` as its recall key. The reading is unchanged — the text was
+relocated verbatim, not rewritten — so the sentence above is still true about the count, and
+only the count's address has moved.
+
+**Appended rather than edited, on the same rule 0017 states** — *records append-corrected,
+stale claims wear pointers*. Editing `CLAUDE.md` into `docs/laws/…` in the body would
+fabricate a history in which this ADR cited a file that did not exist when it was written.
+The distinction that governs which treatment applies: a **code comment** is maintained prose
+whose identifiers must resolve today (#114/#115/#116) and is retargeted in place; an
+**accepted record** is a tombstone and wears a pointer.
+
+Found the way the census rule prescribes — by resolving the sweep's own classification table
+against the text rather than against recollection of it. This site had been filed as "a
+statement *about* `CLAUDE.md`", which is what it looks like until you check whether the
+quantity it quotes is still there.

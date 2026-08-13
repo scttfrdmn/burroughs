@@ -421,26 +421,43 @@ weakly-ordered platform.
     or law count because the quantity the purpose names is **context cost**. Like every ceiling here
     it is meant to rot by the system working, and tripping it is a question with two honest answers
     (governance, so move the ceiling and say why — or a law's body, so move the text).
-- **Eleven citations swept, and the sweep found a pre-existing dangler it was not looking for.** A
-  restructure retroactively falsifies the prose that described the old shape, so every `CLAUDE.md`
-  citation in the repo was enumerated — **28 sites** — and classified against whether the cited text
-  still resolves there. Nine quoted a law's *body* rather than its lead and were retargeted to the
-  family file: `binary.go` ×2, `sections.go`, `name_test.go`, `table.go`, `spec_test.go`, `wast.go`,
-  and three in ADR 0017. `README.md`'s repo layout now lists `docs/laws/`. The twelfth site was
-  already broken before this PR: `internal/binary/binary.go:5` cited *"CLAUDE.md, Immediate queue"*,
-  a section retired when tracking moved to GitHub, with nothing having swept for the sentence.
+- **Thirty-two citations swept, twelve addressed, and the sweep's own tally was the last thing it
+  got wrong.** A restructure retroactively falsifies the prose that described the old shape, so
+  every `CLAUDE.md` citation in the repo was enumerated — **32 sites in 22 files** — and classified
+  against whether the cited text still resolves there. **8** quoted a law's *body* and were
+  retargeted in place (`binary.go` ×2, `sections.go`, `name_test.go`, `table.go`, `spec_test.go`,
+  `wast.go`, and `README.md`'s repo layout, which now lists `docs/laws/`); **4** did the same inside
+  an accepted record and got an appended pointer instead (ADR 0017 ×3, ADR 0015); **14** quote a
+  law's *lead*, which is exactly what stayed in the index; **5** cite a section outside Disciplines
+  or retained governance; **1** asserts a fact about where something does *not* live and is still
+  true. One of the eight was already broken before this PR — `internal/binary/binary.go:5` cited
+  *"CLAUDE.md, Immediate queue"*, a section retired when tracking moved to GitHub, with nothing
+  having swept for the sentence since.
+  - **The 14-of-20-unchanged row is why the restructure was cheap**, and the result is explainable
+    rather than lucky: comments cite laws by their compressed form, and the compressed form is
+    precisely what the ruling kept in `CLAUDE.md`. Had it come out the other way, an index/corpus
+    split would have dangled the majority of the repo's citations.
   - **The first probe's clean zero was the instrument reporting its own blindness**, caught by
     interrogating it rather than by anything going red. It matched only phrases *following* the
     filename, and this repo writes them before it just as often, so *"is a PR's measure of done
     (CLAUDE.md, Disciplines)"* — a body phrase, genuinely dangled by the move — scored as resolving.
     *A suspiciously clean result is a tell*, and **exactly zero** on a question this messy was the
-    tell; the exact instrument that replaced it was enumerating all 28 sites with context.
-  - **Code comments were retargeted in place; the accepted record was not.** ADR 0017's three
-    citations got a **pointer appended** instead, on that ADR's own rule (*records append-corrected,
-    stale claims wear pointers*): editing `CLAUDE.md` into `docs/laws/…` there is the same manoeuvre
-    as editing 605 into 624 one section up, and it would fabricate a history in which the record
-    cited a file that did not exist when it was written. A comment is maintained prose whose
-    identifiers must resolve today (#114/#115/#116); an ADR is a tombstone.
+    tell; the exact instrument that replaced it was enumerating every site with context by hand.
+  - **And the hand classification was then itself resolved against the text, which found a twelfth
+    site the first pass had mis-filed.** ADR 0015 cites *"the return-type reading `CLAUDE.md` uses
+    when it counts 28 of 29 `decode*` functions"* — filed as a statement *about* the file, and
+    actually a body citation, that census now living only in `docs/laws/product-and-overhead.md`.
+    *A citation list is itself a claim*, so it gets resolved before publication like any other; the
+    published tally said 28 sites and 11 addressed, both wrong, the first by quoting the
+    **post-edit** grep as the enumeration total. Two different quantities under one number, and the
+    smaller one flattered the sweep — which is the census rule's own finding (*a census that cannot
+    name its vectors has not been taken*) pointed at a prose sweep instead of a board.
+  - **Code comments were retargeted in place; accepted records were not.** ADR 0017's three
+    citations and ADR 0015's got a **pointer appended** instead, on 0017's own rule (*records
+    append-corrected, stale claims wear pointers*): editing `CLAUDE.md` into `docs/laws/…` there is
+    the same manoeuvre as editing 605 into 624 one section up, and it would fabricate a history in
+    which the record cited a file that did not exist when it was written. A comment is maintained
+    prose whose identifiers must resolve today (#114/#115/#116); an ADR is a tombstone.
 
 - **`callImport` is gone, absorbed into `resolveCall`.** The import crossing is a change of
   *receiver*, not a kind of call, and once resolution is separated from frame entry there is no
