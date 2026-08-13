@@ -1,8 +1,11 @@
 # 0028 — Relaxed SIMD lowerings are deterministic and architecture-uniform: the reference's choice, taken once, as a guarantee exceeding the spec
 
-Date: 2026-08-12 · Status: **accepted** — decisions 1, 4 and 5 on Scott's ruling on #275;
-**decisions 2 and 3 taken by the actor** under the license that ruling grants, marked beside their
-own sections and open to veto
+Date: 2026-08-12 · Status: **accepted in full** — decisions 1, 4 and 5 on Scott's ruling on #275;
+decisions 2 and 3 taken by the actor under the license that ruling grants, and **stamped without
+veto on the PR #276 relay** (recorded in *Second stamp* at the foot of this record). The interval
+those two spent open — from authoring to the relay, one session — is kept rather than erased,
+because a status field is a citation to an approval and the citation must name *which* approval and
+*when* it arrived.
 
 > **Stamp — decisions 1, 4 and 5: Scott, ruling on #275's recon (relayed in session 2026-08-12,
 > recorded as a comment on #275 so this citation resolves to an artifact).** Verbatim in the issue;
@@ -373,3 +376,43 @@ reason the opcode is relaxed.
   helper rather than copying it.
 - **A stated guarantee needs somewhere to be stated.** The implementing PR records it in the arms'
   own doc comments beside the `eval_vec.ml` citations, which is where a reader of the code will look.
+
+## Second stamp, appended 2026-08-12 — the whole record, decisions 2 and 3 included
+
+**Stamp: Scott, on the PR #276 relay (session 2026-08-12).** Verbatim: *"0028 is stamped — the
+decision is the one this chair shaped and the ADR embodies it: relaxed lowerings deterministic and
+architecture-uniform, a Burroughs guarantee exceeding the spec, grounded in the thesis and #223's
+paid precedent. Merge #276 with the stamp cited."*
+
+What this adds to the #275 stamp recorded in the header: that one ruled decisions 1, 4 and 5 and
+granted the license under which 2 and 3 were taken; **this one covers the record as a whole**, so
+the two actor-taken decisions are no longer merely unvetoed-so-far — they are stamped. The
+distinction is the point rather than a formality: *"open to veto and nobody vetoed"* is an absence
+of objection, and an absence cannot be cited. A `Status:` resting on one would be the fabricated-
+provenance failure in its quietest form, since nothing about it reads as false.
+
+Both decision sections keep their `— actor's decision` marking exactly as authored. The marking is
+a true statement about **who took it**, which no later approval changes; what changed is the
+approval's presence, and that is what this section records. Appended rather than edited in place on
+the standing rule for accepted records — *records append-corrected, stale claims wear pointers* —
+with the header's `Status:` line the one deliberate exception, because a status field is not
+narrative: it *is* the citation, and one pointing at a superseded state of the approval is the
+defect the rule exists to prevent.
+
+## Provenance pointer, appended 2026-08-12 — this record landed under another PR's commit message
+
+`git log --follow` on this file resolves to **`6a36e97`**, *"docs: CLAUDE.md becomes an index,
+docs/laws/ becomes the corpus — 46 laws relocated verbatim, with a size tripwire (#277)"*. That
+message is about a different piece of work and says nothing about relaxed SIMD.
+
+The cause is mechanical and is recorded as a grave in
+[#279](https://github.com/scttfrdmn/burroughs/issues/279): #277's branch was cut from #276's branch
+while #276 was still open, and a squash merge flattens everything reachable from the head that is
+not already upstream — so this ADR, authored and stamped as #276's deliverable, became part of
+#277's single squashed commit. The content is byte-identical to what was stamped; only the
+attribution is wrong.
+
+**#276 still merged as its own artifact**, carrying the `Status:` amendment above, so this record's
+stamp has its own commit and its own verdict even though its body arrived early under someone
+else's headline. The lesson #279 records: *a branch cut from an unmerged branch merges its parent's
+content under the child's message, and two stamps arrive wearing one green.*

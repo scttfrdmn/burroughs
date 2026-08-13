@@ -258,7 +258,12 @@ weakly-ordered platform.
     watch do not get to land unwatched, and the falsification bar does not waive for corpus gaps).
     Deliberately *not* decided: the `gateRelaxedSIMD` flip, which is its own stamp-tier event with its
     own pre-registered forecast and cannot ride the PR that creates the numbers.
-
+  - **This ADR's body landed under #277's commit message**, not its own: `git log --follow` on it
+    resolves to `6a36e97` (the `CLAUDE.md` restructure), because #277's branch was cut from #276's
+    while #276 was open and a squash merge flattens everything reachable from the head. Content
+    byte-identical to what was stamped; attribution wrong. Grave and lesson in
+    [#279](https://github.com/scttfrdmn/burroughs/issues/279), pointer appended to the ADR itself,
+    and #276 merged separately so the stamp still has its own commit.
 - **Decision 0026 — proper tail calls: a tail call is a fourth control-transfer value, and the frame
   owner's trampoline re-enters. Accepted on Scott's stamp (PR #252); authored and pushed `proposed`,
   and the interval it spent open is kept in the record.** Scoped to *both* gate
