@@ -103,7 +103,8 @@ func mnemonicOf(rhs string, code uint32) string {
 	// rather than a binding. Taking the text after the final `in` alone reported all
 	// four as `end_` — the right verdict about which arm, quoting the wrong name.
 	// Caught by printing what the code returns for the arms whose shape is known
-	// (CLAUDE.md — print-don't-trust, and a label nobody checks is a claim).
+	// (docs/laws/errors-and-testimony.md — print-don't-trust, and a label nobody checks
+	// is a claim).
 	if i := strings.LastIndex(tail, ";"); i >= 0 {
 		tail = tail[i+1:]
 	}

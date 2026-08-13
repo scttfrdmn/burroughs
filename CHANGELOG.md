@@ -375,6 +375,73 @@ weakly-ordered platform.
 
 ### Changed
 
+- **`CLAUDE.md` is an index and `docs/laws/` is the corpus** (ruling: Scott — *"restructure, and the
+  project's own laws dictate the shape"*). The `## Disciplines` section had reached **918 lines /
+  78 KB, 80% of a 98 KB file** that is re-read every session. All **46** laws were relocated
+  **verbatim** into ten thematic family files under `docs/laws/`; each keeps its one-line compressed
+  form in `CLAUDE.md` as the recall key, which works because *lessons are indexed by shape* — the
+  shape is what has to be in context, and the specimen, the minting record, and the token each law
+  was granted on are looked up on demand exactly as an ADR is. Thematic rather than one-file-per-law
+  for the same reason: families of the same defect shape read together. **`CLAUDE.md`: 98252 →
+  36601 bytes (−63%)**, Disciplines 918 → 144 lines.
+  - **Governance is the exception and stays in full** — the product accounting and its
+    gate-campaign substitution, the actor-never-chooses rule, the ratio's recorded command and its
+    no-threshold ruling, the stop condition with its purpose refinement and exemption token,
+    `Gates` with the flip's stamp tier, decision-before-code, and an ADR's status-as-citation.
+    Those do not get looked up on demand: they decide what a PR may do, so they must be in context
+    every turn. Sections outside Disciplines (reporting protocol, waiting on CI, the squash-merge
+    procedure, versioning, tooling gates) are untouched.
+  - **Relocated, never rewritten, and the "verbatim" is measured rather than asserted.** The
+    migration split the section mechanically into top-level bullet blocks — **916 of 917** body
+    lines accounted for, zero non-blank lines outside a block — and each body was checked present
+    as contiguous verbatim text in its family file: **46/46**. So superseded wordings still appear
+    inside the bodies wherever a later ruling amended rather than replaced, which is the point.
+  - **The extractor committed the project's own thrice-paid defect and was repaired by the recorded
+    remedy rather than a new one.** `^- \*\*(.+?)\*\*` found a lead on only **33 of 46** blocks,
+    because 13 leads wrap across lines — #78 → #80 → #105, one shape in three packages. Joining each
+    block before matching fixed it, and the same split-then-join is what the new control uses.
+- **`TestEveryLawIsIndexed` and `TestClaudeMDStaysAnIndex`** (`internal/testenv`). An index plus a
+  corpus is a **two-registry design over one space** — #264's third instance — so it does not rely
+  on anyone remembering both. The bijection is checked in **both** directions and on the heading
+  *text*, not on resolution alone: a key edited in one place and not the other fails here, where a
+  resolve-only check would pass. The anchor each pointer names is **derived** from the heading by
+  GitHub's own slug rules on both sides, so the link cannot resolve to nothing. A key with no
+  pointer fails too, with no exemption — including the governance laws, whose bodies are retained in
+  `CLAUDE.md` and whose minting records are in `docs/laws/`.
+  - **Falsified seven ways, diff printed and read for behaviour each time**: a drifted key (fails in
+    both directions), a deleted key, an orphan heading, a broken anchor, a pasted-back body (the
+    ceiling, 64347 > 38000), a reader with the bullet regexp narrowed (floor fires at 19 of 46), and
+    — the one worth having — the join replaced by first-line-only, which fails on **three**
+    governance laws whose pointer wraps. That last one is the demonstration that the line-joining is
+    load-bearing rather than decorative, and it showed the floor and the per-law check catching
+    *different* halves of the same defect, which is *floors bound the catastrophic case; only an
+    exact count sees a small silent loss* in the new control's own terms.
+  - **The ceiling is 38000 bytes against a measured 36601** — ~1400 bytes, roughly seven more recall
+    keys. Deliberately tight, because *an unasserted distance is the vacuum*. Bytes rather than lines
+    or law count because the quantity the purpose names is **context cost**. Like every ceiling here
+    it is meant to rot by the system working, and tripping it is a question with two honest answers
+    (governance, so move the ceiling and say why — or a law's body, so move the text).
+- **Eleven citations swept, and the sweep found a pre-existing dangler it was not looking for.** A
+  restructure retroactively falsifies the prose that described the old shape, so every `CLAUDE.md`
+  citation in the repo was enumerated — **28 sites** — and classified against whether the cited text
+  still resolves there. Nine quoted a law's *body* rather than its lead and were retargeted to the
+  family file: `binary.go` ×2, `sections.go`, `name_test.go`, `table.go`, `spec_test.go`, `wast.go`,
+  and three in ADR 0017. `README.md`'s repo layout now lists `docs/laws/`. The twelfth site was
+  already broken before this PR: `internal/binary/binary.go:5` cited *"CLAUDE.md, Immediate queue"*,
+  a section retired when tracking moved to GitHub, with nothing having swept for the sentence.
+  - **The first probe's clean zero was the instrument reporting its own blindness**, caught by
+    interrogating it rather than by anything going red. It matched only phrases *following* the
+    filename, and this repo writes them before it just as often, so *"is a PR's measure of done
+    (CLAUDE.md, Disciplines)"* — a body phrase, genuinely dangled by the move — scored as resolving.
+    *A suspiciously clean result is a tell*, and **exactly zero** on a question this messy was the
+    tell; the exact instrument that replaced it was enumerating all 28 sites with context.
+  - **Code comments were retargeted in place; the accepted record was not.** ADR 0017's three
+    citations got a **pointer appended** instead, on that ADR's own rule (*records append-corrected,
+    stale claims wear pointers*): editing `CLAUDE.md` into `docs/laws/…` there is the same manoeuvre
+    as editing 605 into 624 one section up, and it would fabricate a history in which the record
+    cited a file that did not exist when it was written. A comment is maintained prose whose
+    identifiers must resolve today (#114/#115/#116); an ADR is a tombstone.
+
 - **`callImport` is gone, absorbed into `resolveCall`.** The import crossing is a change of
   *receiver*, not a kind of call, and once resolution is separated from frame entry there is no
   depth to pass it — so the recursion is now `resolveCall` returning the supplier's own resolution
@@ -3590,7 +3657,6 @@ weakly-ordered platform.
   median of 344 — not costly to certify. The same finding in era clothes; recorded because a
   hypothesis measurement killed is worth more written than omitted.
 
-
 - **`internal/gen/mllex`: the `lexer.mll` arm reader is one implementation, and the three generators
   call it** ([#105](https://github.com/scttfrdmn/burroughs/issues/105)). `keywordgen`, `opgen` and the
   new `memarggen` each read the same authority's arm heads, and the wrapped-arm defect that cost grave
@@ -4028,7 +4094,6 @@ weakly-ordered platform.
   figure would have shipped with a confirmation attached. `destination()` now resolves the row to
   the path the code lives at, and the three quoted windows are unaffected because none of them
   contains that merge — which is itself the reason the defect was survivable long enough to find.
-
 
 - **A one-of-two-conditions exemption panicked in the arm that asserts two callers agree**
   ([grave #146](https://github.com/scttfrdmn/burroughs/issues/146)). `encodableOrErr` exempts
