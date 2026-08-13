@@ -630,3 +630,80 @@ func TestRung2OpcodesAgreeWithTheDecoder(t *testing.T) {
 		}
 	}
 }
+
+// TestEveryFBSubOpcodeIsAnswered is the *complement* of the agreement tests above, and it is here
+// because the region is now complete: `execFB`'s doc claims 31 of 31 across two sites, and a total is
+// a claim about everything the table holds rather than about the rows a test lists.
+//
+// Every other control in this package points the same direction — from a constant this package
+// declares to the decoder's table — which is grave #272's shape precisely: an allowlist comment whose
+// complement claim no control could see, because every control was scoped to what the table
+// *contained*. Nothing before this test could notice a sub-opcode the decoder admits and this switch
+// does not, and that is exactly the state the region spent five rungs in.
+//
+// **The domain is derived, never enumerated** (0006's law): the sub-opcodes come from
+// `binary.PrefixedOp`, so a 32nd entry landing in `opTableFB` enrolls itself here and fails until its
+// arm exists. Enumerating today's 31 would freeze the control at the moment of authorship, which is
+// the one thing a completeness claim cannot afford.
+//
+// The scan window is `0x1000`, eight times the widest tracked region's maximum (`opTableFD`'s
+// `0x113`) — a sub-opcode is a u32 LEB, so the true space is unscannable and this is stated as a
+// window rather than described as the space.
+func TestEveryFBSubOpcodeIsAnswered(t *testing.T) {
+	const (
+		window = 0x1000
+		// The floor comes from the *authority* — the GC proposal defines `0x00`-`0x1e` — and not from
+		// what the scan happens to return, a floor equal to the failure mode's output being a
+		// certificate for the failure (#159). Without it a `PrefixedOp` that answered `false` for
+		// everything would leave the loop below with nothing to iterate and this test green: the
+		// vacuity case, which for a *completeness* control is the whole failure mode.
+		floor = 31
+	)
+
+	const src = `(module (func (export "c")))`
+	img, err := text.EncodeModule([]byte(src))
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	d := &binary.Decoder{Features: gcGate}
+	m, err := d.DecodeModule(img)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	in, trap := Instantiate(m)
+	if trap != nil {
+		t.Fatalf("instantiate: %v", trap)
+	}
+
+	var defined []uint32
+	for sub := range uint32(window) {
+		if _, _, ok := binary.PrefixedOp(0xfb, sub); ok {
+			defined = append(defined, sub)
+		}
+	}
+	if len(defined) < floor {
+		t.Fatalf("the decoder's 0xfb table reports %d sub-opcodes in [0, %#x), want at least %d — "+
+			"the GC proposal defines fb 00-fb 1e, so a smaller number means this control is "+
+			"iterating a shorter list than it believes and would pass while asserting nothing",
+			len(defined), window, floor)
+	}
+
+	for _, sub := range defined {
+		// The pair `runFrame` intercepts before delegating: their site is the loop, not this switch,
+		// and both halves of that split are pinned by `TestBrOnCastIsNotInTheFBSwitch` (this switch
+		// still declines them) and `TestBrOnCastBranchesOnTheCastResult` (`runFrame` answers them).
+		// Listing them here is what makes "31 of 31 across two sites" checkable rather than a slogan —
+		// a third interception would fail below until it was named, which is the intent.
+		if sub == opBrOnCast || sub == opBrOnCastFal {
+			continue
+		}
+		st := &stack{}
+		err := in.execFB(binary.Instr{Prefix: 0xfb, Op: sub}, st, &m.Funcs[0], 0)
+		if errors.Is(err, ErrUnsupportedOp) {
+			mnemonic, _, _ := binary.PrefixedOp(0xfb, sub)
+			t.Errorf("execFB has no arm for fb %#02x (%s), which the decoder admits — `execFB`'s doc "+
+				"claims the region is fully dispatched, so either the arm is missing or that claim is",
+				sub, mnemonic)
+		}
+	}
+}

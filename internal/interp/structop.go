@@ -36,11 +36,27 @@ const (
 // sub-opcode, so `fb 00` and `unreachable` are both `Op == 0x00`, and a shared switch would need
 // every arm to re-test the prefix. The prefix is a precondition of this whole switch instead.
 //
-// Counted rather than described: `opTableFB` has **31** entries (max sub-opcode 0x1e) and this
-// switch answers **27** of them — the struct family (rung 2), the array family (rung 3), the i31
-// trio (rung 4), and the four casts (rung 5's first slice), decision 0020's ladder. Everything else
-// falls to `unsupported`, which renders `fb NN` and so keeps the remaining arms visible as the board
-// buckets they are; what is left is rung 5's third slice, `fb 1a`/`fb 1b` (the extern conversions).
+// Counted rather than described: `opTableFB` has **31** entries (`0x00`-`0x1e`, contiguous) and this
+// switch answers **29** of them — the struct family (rung 2), the array family (rung 3), the i31
+// trio (rung 4), the four casts (rung 5's first slice) and the two extern conversions (rung 5's
+// third slice), decision 0020's ladder. With the pair below that is **31 of 31**, so the region's
+// opcode space is fully dispatched and `default: unsupported(ins)` is now unreachable through a
+// decoded module: every sub-opcode the decoder admits has an arm, and one it does not admit never
+// reaches here. Declared and tracked rather than deleted — it is the guard for a *decoder* widening,
+// a 32nd entry landing in `opTableFB` before its arm lands here, which is the one direction that
+// still needs the `fb NN` rendering to surface as a board bucket.
+//
+// **A complete region is a claim about a complement, so it has a mechanism and not just this
+// sentence.** The count above has been wrong at every landing — 23, then 27, now 31 — and the
+// paragraph was already rewritten once when `fb 18`/`fb 19` moved (see below), which makes this the
+// third drift of one sentence and #258's definition of done predicted it by name. A hand-counted
+// total in prose is grave #272's shape exactly: that grave is an allowlist comment whose *complement*
+// claim no control could see, because every control was scoped to what the table contained. So
+// `TestEveryFBSubOpcodeIsAnswered` derives its domain from `binary.PrefixedOp` rather than
+// enumerating today's 31, and the two sites are checked together — an arm missing at either one is a
+// failure that names the sub-opcode. Note what that does *not* say: "31 of 31 dispatched" is not "GC
+// works", the proposal's remaining blockers being validation and #270's harness widening, and the
+// `gate:gc` flip is its own stamp-tier event (#252).
 //
 // **Two of the region's arms are not in this switch, and so this function is no longer the region's
 // whole index.** `fb 18`/`fb 19` (`br_on_cast`, `br_on_cast_fail`) are answered by `runFrame`
@@ -51,7 +67,7 @@ const (
 // and leaving it would have made the count above read as 27-of-29-implemented while two arms
 // existed elsewhere — a comment asserting the property the code no longer has, which is the
 // camouflage review cannot penetrate because review checks code against claims. The count is
-// therefore stated as **29 arms across two sites, 27 of them here**, and the split is pinned in
+// therefore stated as **31 arms across two sites, 29 of them here**, and the split is pinned in
 // both directions rather than described: `TestBrOnCastIsNotInTheFBSwitch` asserts this switch still
 // declines the pair (so an arm added here later cannot sit dead behind the interception), and
 // `TestBrOnCastBranchesOnTheCastResult` asserts `runFrame` answers them.
@@ -66,10 +82,16 @@ const (
 // its own arm, not at the dispatch), so this is the existing convention rather than a new one.
 //
 // **The dispatch lives here rather than moving to a `gcop.go` as the family grew**, which is a
-// choice and not inertia: `execFB` is the single authority for "which sub-opcode has an arm", and the
-// count in the paragraph above is only checkable because there is one switch to count. The arms
-// themselves are one file per rung (`structop.go`, `arrayop.go`, `i31op.go`, `castop.go`), so the
-// file this comment is in is the region's index.
+// choice and not inertia: one switch is one place to read for "which sub-opcode has an arm", and the
+// arms themselves are one file per rung (`structop.go`, `arrayop.go`, `i31op.go`, `castop.go`,
+// `externop.go`), so the file this comment is in is the region's index.
+//
+// The sentence this replaces claimed `execFB` is the region's *single* authority and that the count
+// above "is only checkable because there is one switch to count" — both false, and the first was
+// already contradicted by the paragraph directly above it, which is how a stale sentence survives:
+// the correction landed next to it instead of over it. The authority is two sites, and the count is
+// checkable because a test derives it. Kept as history rather than deleted, since a comment that
+// disagreed with its own neighbour for two rungs is worth one sentence of warning.
 func (in *Instance) execFB(ins binary.Instr, st *stack, fn *binary.Func, pc int) error {
 	switch ins.Op {
 	case opStructNew:

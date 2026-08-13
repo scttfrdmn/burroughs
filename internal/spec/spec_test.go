@@ -8505,16 +8505,32 @@ func TestBareModuleSpansAreNonEmptyAndPlausible(t *testing.T) {
 type aggregateFiller struct {
 	File     string
 	Line     int
-	Families []string // sorted: which of struct/array/i31 this filler's own body constructs
+	Families []string // sorted: which of struct/array/i31/convert this filler's own body constructs
+
+	// Export is the name the filler is reachable by, or "" — six of the eleven declare one, and the
+	// difference decides which assertion the filler can carry (see the premise check).
+	Export string
 }
 
 // aggregateFamilies maps a GC construction family to the instruction mnemonics that build it.
-// The *families* are the axis #172's ladder is cut on (rung 2 struct, rung 3 array, rung 4 i31),
-// so a filler's family set says which rung makes it executable.
+// The *families* are the axis #172's ladder is cut on (rung 2 struct, rung 3 array, rung 4 i31,
+// rung 5 slice 3 convert), so a filler's family set says which rung makes it executable.
+//
+// **`convert` is a family this map was missing, and the omission would have misdated five fillers.**
+// `ref_cast.wast:13` writes slot 4 with `(any.convert_extern (local.get $x))`, so the filler needs
+// `fb 1a` as surely as it needs `struct.new_default` — and with only three families named, widening
+// `liveFamilies` at rung 4 would have declared it live while it still could not run, which is a
+// premise check reporting a premise that is false. The same body is the specimen for slice 2's
+// init-sequence lesson (a missing arm at write *k* leaves slots `k…N` at their defaults), and this is
+// that lesson pointed at the *classifier* rather than at a forecast: a filler is only live when every
+// family in its body is, so a family the vocabulary cannot see is a filler that looks readier than it
+// is. Measured, not supposed: 5 of the 11 fillers use a conversion (`br_on_cast.wast:13`,
+// `br_on_cast_fail.wast:13`, `extern.wast:14`, `ref_cast.wast:13`, `ref_test.wast:15`).
 var aggregateFamilies = map[string][]string{
-	"struct": {"struct.new", "struct.new_default"},
-	"array":  {"array.new", "array.new_default", "array.new_fixed", "array.new_data", "array.new_elem"},
-	"i31":    {"ref.i31"},
+	"struct":  {"struct.new", "struct.new_default"},
+	"array":   {"array.new", "array.new_default", "array.new_fixed", "array.new_data", "array.new_elem"},
+	"i31":     {"ref.i31"},
+	"convert": {"any.convert_extern", "extern.convert_any"},
 }
 
 // aggregateFillers derives #236's population: functions that write an aggregate into a *table*,
@@ -8574,6 +8590,7 @@ func aggregateFillers(t *testing.T) []aggregateFiller {
 				File:     f,
 				Line:     strings.Count(s[:off], "\n") + 1,
 				Families: fams,
+				Export:   fillerExport(body),
 			})
 		}
 	}
@@ -8630,6 +8647,27 @@ func wastFuncBodies(s string) map[int]string {
 	return out
 }
 
+// fillerExport returns the name in the filler's own `(export "…")`, or "" if it has none.
+//
+// Hand-scanned rather than a regexp for the reason `containsMnemonic` below is: this package's
+// readers are all written this way, and *lessons are indexed by shape* — the wrapped-arm grave (#105)
+// was earned by re-deriving a pattern a sibling already had, so a one-use regexp import here would be
+// a new shape to get wrong for no gain. A `(func …)` form cannot nest another `(export …)`, so the
+// first occurrence in the body is the function's own.
+func fillerExport(body string) string {
+	const open = `(export "`
+	k := strings.Index(body, open)
+	if k < 0 {
+		return ""
+	}
+	rest := body[k+len(open):]
+	end := strings.IndexByte(rest, '"')
+	if end < 0 {
+		return ""
+	}
+	return rest[:end]
+}
+
 // containsMnemonic reports whether body uses exactly this instruction, not a longer one that
 // starts with it — `array.new` must not match `array.new_default`, which is a different family
 // member and, at rung 3, a different arm.
@@ -8651,9 +8689,8 @@ func containsMnemonic(body, m string) bool {
 	}
 }
 
-// TestRung2StructOnlyAggregateInitsRun is #236's live half: the premise check that rung 2's arms
-// make the struct-only table fillers **execute**, asserted on the premise rather than on any pass
-// count.
+// TestAggregateTableFillersRun is #236's live half: the premise check that the GC arms make the
+// table fillers **execute**, asserted on the premise rather than on any pass count.
 //
 // # Why a pass count cannot answer this
 //
@@ -8661,25 +8698,39 @@ func containsMnemonic(body, m string) bool {
 // all-null: `ref.cast (ref null $t0)` on a null slot succeeds, and on a populated slot of a
 // subtype it also succeeds. The verdict is identical either way, so a pass that survives the change
 // of its own premise is indistinguishable from a pass that was always right — and the file's fail
-// count is unmoved by this rung for the same reason. What *is* observable is the refusal: while the
-// filler cannot run, the file reports `no arm for opcode fb 00`, and once it runs that refusal is
-// gone and the next one is the file's own cast. So the assertion is **zero struct-family refusals**
-// in the files whose fillers this rung makes executable.
+// count is unmoved for the same reason.
 //
-// # Scoped to the space, so rungs 3 and 4 inherit it without an edit
+// # The refusal proxy dissolved when the region completed, so the assertion is re-pointed
 //
-// The population is derived (`aggregateFillers`) and partitioned by the *families a filler's own
-// body constructs*, which is the axis the ladder is cut on. Today 4 fillers are struct-only and
-// live; 6 need array and i31 as well (rungs 3-4) and 1 is array-only (rung 3). When those rungs
-// land, `liveFamilies` grows and the same population starts asserting them — no enumeration to
-// update, which is the difference between a control that grows with its subject and one that
-// freezes at authorship.
+// This test was born asserting **zero struct-family refusals**: while a filler cannot run, its file
+// reports `no arm for opcode fb 00`, and once it runs that refusal is gone. With rung 5 slice 3 the
+// 0xfb region is fully dispatched (`execFB`, 31 of 31) and `TestEveryFBSubOpcodeIsAnswered` now pins
+// that directly — so the old assertion cannot fail for the reason it was written, and a control whose
+// subject dissolved is **re-pointed, never retired**: the risk #236 names (a filler silently not
+// running, so every later vector asserts something else) outlived the one symptom that used to
+// betray it. A filler can still fail to run with every arm present — a validation refusal, a trap, an
+// argument form the harness declines — and none of those emit `no arm`.
 //
-// #236's *other* half — `ref_eq.wast`'s 69 fails must drain rather than invert — stays open, and
-// deliberately: that file has exactly one filler and it is a mixed one (`ref_eq.wast:12` uses
-// `struct.new_default`, `array.new_default` and `ref.i31`), so its init still cannot run at rung 2
-// and the half's subject does not exist until rung 4. Stated rather than silently dropped.
-func TestRung2StructOnlyAggregateInitsRun(t *testing.T) {
+// So the premise is now read where it is actually decided: **the command that calls the filler must
+// pass.** Six of the eleven fillers declare an export, `(invoke "init" …)` names it, and that command
+// is scored — so a failure at its line, or a `Kind` that means the harness never asked, is the
+// premise being false stated in one row. The refusal check is kept below for the five unexported
+// fillers, whose callers this reader cannot resolve; it is the weaker instrument and says so.
+//
+// # Scoped to the space
+//
+// The population is derived (`aggregateFillers`) and partitioned by the *families a filler's own body
+// constructs*, which is the axis the ladder is cut on. All four families now execute, so the live
+// partition is the whole population — and note the widening was **not** just turning a knob: the
+// vocabulary was missing `convert` entirely, so five fillers were classed as needing only rungs 2-4
+// while their slot-4 write needed `fb 1a`. Turning the knob at rung 4 would have made this test green
+// on a false premise, which is the failure mode it exists to catch, one level up.
+//
+// #236's *other* half — `ref_eq.wast`'s 69 fails must drain rather than invert — is discharged
+// separately by `refeqwitness_test.go` (#260), which pins the witness pairs rather than the count:
+// the inversion the issue fears is a pass *gain* with the wrong sign, and a count cannot see the
+// sign.
+func TestAggregateTableFillersRun(t *testing.T) {
 	requireSuite(t)
 
 	fillers := aggregateFillers(t)
@@ -8688,7 +8739,13 @@ func TestRung2StructOnlyAggregateInitsRun(t *testing.T) {
 	// instruments: the floor catches a moved corpus or a reader that stopped matching, the exact
 	// count catches a small silent loss (#105). A suite-pin bump updates these deliberately, with
 	// the delta stated — it is not a number to relax when it disagrees.
-	const wantFillers, wantStructOnly = 11, 4
+	// wantExported is **7 and was first written 6**, which is worth keeping rather than quietly
+	// correcting: the hand count summed the fillers exporting `"init"` and called that "the fillers
+	// declaring an export", missing `array_new_elem.wast:89`'s `array-new-elem-contents` — a row that
+	// was printed on screen in the same probe output the 6 came from. That is the print-don't-reason
+	// law failing at the summing step rather than the measuring step, and the control caught it on its
+	// first run, which is what an exact count beside a floor is for (#105).
+	const wantFillers, wantExported, wantConverting = 11, 7, 5
 	if len(fillers) < 8 {
 		t.Fatalf("derived only %d aggregate table fillers, want >=8 — the population is empty or "+
 			"the reader stopped matching; a comparison against an empty set agrees perfectly",
@@ -8699,8 +8756,10 @@ func TestRung2StructOnlyAggregateInitsRun(t *testing.T) {
 			"this with the delta stated; if it did not, the reader lost rows silently", len(fillers), wantFillers)
 	}
 
-	// liveFamilies is what this engine can construct today. Rung 3 adds "array", rung 4 "i31".
-	liveFamilies := map[string]bool{"struct": true}
+	// liveFamilies is what this engine can construct today. With rung 5 slice 3 that is all four,
+	// so the partition below is expected to be total — which is exactly why the discrimination
+	// checks that used to ride on a non-empty `pending` are re-pointed rather than kept.
+	liveFamilies := map[string]bool{"struct": true, "array": true, "i31": true, "convert": true}
 	var live, pending []aggregateFiller
 	for _, f := range fillers {
 		if allIn(f.Families, liveFamilies) {
@@ -8709,43 +8768,81 @@ func TestRung2StructOnlyAggregateInitsRun(t *testing.T) {
 			pending = append(pending, f)
 		}
 	}
+	if len(pending) != 0 {
+		t.Errorf("%d fillers still classed as pending, but every GC construction family now has an "+
+			"arm — either a family name below has drifted from the mnemonic list or the ladder is "+
+			"less complete than `execFB`'s count claims: %v", len(pending), pending)
+	}
 
-	// **Discrimination, not a count** (#159): a file-level classifier — the reader this one
-	// replaced — produces an *empty* live partition, because every file holding a struct-only init
-	// also holds a mixed one elsewhere. So a non-empty live partition is a capability the degraded
-	// reader cannot exhibit at any floor, and the sharpest form of it is a live filler drawn from a
-	// file that also contributes a pending one.
-	if len(live) != wantStructOnly {
-		t.Errorf("struct-only fillers = %d, want %d: %v", len(live), wantStructOnly, live)
+	// **Discrimination, not a count** (#159), re-pointed. The capability under test is that this
+	// reader is per-*function* and not per-file: the reader it replaced classified whole files and
+	// produced an empty struct-only partition, because the multi-module files hold a mixed filler
+	// beside a struct-only one. That was witnessed by a non-empty live/pending split, which the
+	// completed ladder has now dissolved — so the witness moves to the property the split was only
+	// ever a proxy for: **one file contributing two fillers with different family sets**, which a
+	// per-file union cannot produce at any count.
+	byFile := map[string]map[string]bool{}
+	for _, f := range fillers {
+		if byFile[f.File] == nil {
+			byFile[f.File] = map[string]bool{}
+		}
+		byFile[f.File][strings.Join(f.Families, "+")] = true
 	}
-	if len(pending) == 0 {
-		t.Errorf("every filler classed as live — the partition does not discriminate, so it would " +
-			"agree with a reader that ignored families entirely")
-	}
-	pendingFiles := map[string]bool{}
-	for _, f := range pending {
-		pendingFiles[f.File] = true
-	}
-	multi := 0
-	for _, f := range live {
-		if pendingFiles[f.File] {
-			multi++
+	split := 0
+	for _, sets := range byFile {
+		if len(sets) > 1 {
+			split++
 		}
 	}
-	if multi == 0 {
-		t.Errorf("no struct-only filler comes from a file that also holds a mixed filler — that is "+
-			"exactly the multi-module case a per-file reader gets wrong, so its absence means this "+
-			"reader has degraded to a per-file one; live=%v pending=%v", live, pending)
+	if split == 0 {
+		t.Errorf("no file contributes two fillers with different family sets — a per-file reader "+
+			"unions them and cannot exhibit that, so this reader has degraded to a per-file one; "+
+			"fillers=%v", fillers)
 	}
 
-	// The struct-family refusal text, derived from the decoder's own table rather than typed, so a
-	// renamed opcode cannot leave this searching for a string nothing emits.
+	// The two sub-populations the assertions below split on, pinned exactly because each carries a
+	// *different* strength of check and a silent drift between them would swap a premise assertion
+	// for a refusal proxy without changing any count that is currently watched.
+	exported, converting := 0, 0
+	for _, f := range live {
+		if f.Export != "" {
+			exported++
+		}
+		if slices.Contains(f.Families, "convert") {
+			converting++
+		}
+	}
+	if exported != wantExported {
+		t.Errorf("%d fillers declare an export, want %d — the premise check below only reaches "+
+			"exported fillers, so this number is how much of the population carries the strong "+
+			"assertion", exported, wantExported)
+	}
+	if converting != wantConverting {
+		t.Errorf("%d fillers use a conversion, want %d — this is the family the vocabulary was "+
+			"missing, and a zero here would mean the mnemonic list stopped matching and every one "+
+			"of them silently re-classed as live-since-rung-4", converting, wantConverting)
+	}
+
+	// The GC refusal text, derived from the decoder's own table rather than typed, so a renamed or
+	// renumbered opcode cannot leave this searching for a string nothing emits. Widened from the six
+	// struct sub-opcodes to the whole region, because the population's fillers now need arms from four
+	// families and a list stopping at `fb 05` would check the one family least likely to be missing.
+	//
+	// This is the **weak** half and is retained for the unexported fillers only, per the doc above:
+	// with 31 of 31 dispatched no `no arm for opcode fb NN` can be emitted at all, so a green here is
+	// currently guaranteed by `TestEveryFBSubOpcodeIsAnswered` rather than by any filler running. It
+	// stays because the guarantee is contingent — a gate flip or a decoder widening re-opens it — and
+	// a check that costs nothing to keep is not worth the argument to delete.
 	var refusals []string
-	for op := range uint32(6) {
+	for op := range uint32(0x1f) {
 		if _, _, ok := binary.PrefixedOp(0xfb, op); !ok {
-			t.Fatalf("fb %02x is not in the decoder's table — the struct family moved", op)
+			continue
 		}
 		refusals = append(refusals, fmt.Sprintf("fb %02x", op))
+	}
+	if len(refusals) < 31 {
+		t.Fatalf("derived %d refusal strings from the decoder's 0xfb table, want >=31 — the region "+
+			"moved, and a short list would make every check below pass by not looking", len(refusals))
 	}
 
 	allOn := allFeaturesOn(t)
@@ -8778,18 +8875,68 @@ func TestRung2StructOnlyAggregateInitsRun(t *testing.T) {
 		for key, fs := range r.Buckets {
 			for _, refusal := range refusals {
 				if strings.Contains(key, refusal) {
-					t.Errorf("%s:%d is a struct-only table filler, so rung 2 must let it run, but "+
-						"%s still reports %d fails keyed %q — the filler did not execute and every "+
+					t.Errorf("%s:%d is a table filler whose families all have arms, so it must run, "+
+						"but %s still reports %d fails keyed %q — the filler did not execute and every "+
 						"vector reading the table it fills is asserting something other than what it "+
 						"was written to assert (#236)", f.File, f.Line, f.File, len(fs), key)
 					break
 				}
 			}
 		}
+
+		// **The premise itself, for the fillers that can carry it.** The call is a scored command, so
+		// "the init ran" is not a proxy here: a failure at its line says the table was left at its
+		// defaults, and a `Kind` outside the invoke pair says the harness never asked — which is the
+		// same premise being false, arriving in the column that does not read as a defect.
+		if f.Export == "" {
+			continue
+		}
+		// **The nearest call *after* the filler, not every call that shares its name.** Measured
+		// requirement, not caution: `array_new_elem.wast` declares `array-new-elem-contents` in two
+		// modules (`:38` and `:89`) with an `assert_return` for each (`:47`, `:103`), so a name-only
+		// match would attribute the first module's verdict to the second module's filler — the
+		// field-attribution law (#159), which is not first-match, here in its temporal form. Taking the
+		// first matching command below the filler's line is the module-scoped reading, and it assumes a
+		// script never re-declares an export *above* the module that fills the table; that assumption
+		// holds across all eleven and is stated because it is an assumption.
+		//
+		// The kinds are the four that *call and score*: an `assert_return` is how six of these fillers
+		// are reached, and restricting to bare `invoke` would have silently dropped
+		// `array_new_elem.wast` from the strong check — the first draft did exactly that, and the row
+		// it dropped is the one row whose filler is also its own assertion. Trap and exception kinds
+		// are deliberately not accepted: a call expected to trap has not run to completion, so it
+		// cannot witness a filled table, and a filler reachable only that way must surface here as
+		// uncalled rather than pass on a technicality.
+		callKinds := []Kind{KindInvoke, KindNamedInvoke, KindAssertReturn, KindNamedAssertReturn}
+		var call *Command
+		for i, c := range s.Commands {
+			if c.Invoke != f.Export || c.Line <= f.Line || !slices.Contains(callKinds, c.Kind) {
+				continue
+			}
+			call = &s.Commands[i]
+			break
+		}
+		if call == nil {
+			t.Errorf("%s:%d exports %q and no scored call below it names that export — either the "+
+				"harness classed the call as unsupported, in which case the filler never ran and the "+
+				"column says nothing, or this reader read the wrong export name", f.File, f.Line, f.Export)
+			continue
+		}
+		for _, fs := range r.Buckets {
+			for _, fail := range fs {
+				if fail.Line == call.Line {
+					t.Errorf("%s:%d calls the table filler at :%d and FAILED (%s) — expected %q, got "+
+						"%q. Every vector reading that table is now asserting something other than what "+
+						"it was written to assert, and the file's pass count cannot say so because a "+
+						"null slot answers the same as a populated one (#236)",
+						f.File, call.Line, f.Line, fail.Kind, fail.Expect, fail.Got)
+				}
+			}
+		}
 	}
 
-	t.Logf("#236 population: %d fillers, %d live at rung 2 (struct-only), %d pending: %v",
-		len(fillers), len(live), len(pending), pending)
+	t.Logf("#236 population: %d fillers, all live (struct/array/i31/convert), %d exported and "+
+		"carrying the premise check: %v", len(fillers), exported, fillers)
 }
 
 // allIn reports whether every family in fams is currently constructible.

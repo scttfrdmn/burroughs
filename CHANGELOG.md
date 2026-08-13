@@ -73,6 +73,38 @@ weakly-ordered platform.
     measured with a positive control, the identical body being reported as a free function and
     silent as an exported method) and #270 (the eight `RefTypePat` arms and `(ref.host N)`, 28
     unsupported vectors behind a public-boundary widening that wants its own ADR and stamp).
+  - **The 0xfb region is complete — 31 of 31 arms across two sites — and the total now has a
+    mechanism instead of a sentence.** `execFB` answers 29 (`0x00`-`0x17`, `0x1a`-`0x1e`) and
+    `runFrame` intercepts the `br_on_cast` pair; `default: unsupported(ins)` becomes unreachable
+    through a decoded module and is kept, declared and tracked, as the guard for a *decoder* widening.
+    The region-index comment's count has been wrong at every landing (23, 27, now 31) and #258's
+    definition of done predicted this third rewrite by name, so `TestEveryFBSubOpcodeIsAnswered`
+    derives its domain from `binary.PrefixedOp` rather than enumerating today's 31 — a hand-counted
+    complement claim in prose being grave #272's shape exactly, filed in this same PR. Two
+    falsifications: deleting the `fb 1a` arm fails naming the sub-opcode and mnemonic, and probing a
+    prefix the decoder does not track fails on the vacuity floor rather than passing with an empty
+    loop. Three neighbouring sentences were orphaned by the completion and are corrected in place with
+    the superseded wording quoted — including one that had contradicted the paragraph directly above
+    it for two rungs, which is how a stale sentence survives: the correction landed *next to* it.
+  - **#236's `ref_cast.wast` half discharged — the premise is asserted, not the pass count.** All
+    seven exported table fillers' calls pass, `ref_cast.wast:49` included, so every `init` runs and
+    the four coincidence-passes are re-verified against a filled table. Two repairs were needed
+    first. `aggregateFamilies` was missing a **`convert`** family entirely, so five fillers whose
+    slot-4 write is `(any.convert_extern (local.get $x))` were classed as needing only rungs 2-4 —
+    turning the `liveFamilies` knob at rung 4 would have made the control green on a false premise,
+    which is the failure mode it exists to catch, one level up. And the original assertion (zero
+    `no arm for opcode fb NN` refusals) **dissolved** when the region completed: it can no longer
+    fail for the reason it was written, so per *a tripwire whose subject dissolves is re-pointed,
+    never closed* it is re-aimed at the command that calls the filler, which is scored and therefore
+    says "the init ran" directly. Falsified by making the internalize arm refuse: five files fail,
+    each naming its calling line and its filler's line. The discrimination check moved with it, from
+    a non-empty live/pending split to *one file contributing two fillers with different family sets*,
+    which a per-file reader cannot exhibit at any count.
+    - The exact-count check earned its keep on first run: `wantExported` was hand-written **6** and
+      is **7** — the 6 summed the fillers exporting `"init"` and missed
+      `array_new_elem.wast:89`'s `array-new-elem-contents`, a row printed on screen in the very probe
+      output the 6 came from. The same run reported that filler as uncalled, which was a real gap in
+      the reader (its call is an `assert_return`, not a bare `invoke`) and not a corpus fact.
 
 - **`gate:gc` rung 5, second slice — `br_on_cast` and `br_on_cast_fail`, the casts family's
   branching half** (#258, decision 0027). `fb 18`/`fb 19` end to end: decode, internal form, and
