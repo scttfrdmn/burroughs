@@ -215,6 +215,50 @@ weakly-ordered platform.
     (`ref.i31` fills `ref_eq.wast`'s table, and the read-backs key on a *value*, naming no opcode).
     Two instruments each held half the answer and the forecast quoted one.
 
+- **Decision 0028 — relaxed SIMD's lowerings are deterministic and architecture-uniform: the
+  reference's choice, taken once, as a stated guarantee exceeding the spec.** Authored `accepted`
+  rather than `proposed`, which is a departure from 0026 and 0027 stated in the record: their stamps
+  came after the document, this one's came first (Scott's ruling on #275, quoted onto the issue so the
+  status cites a resolvable artifact), so there is no open interval to keep. Relaxed SIMD is the first
+  family where **conformance does not determine behaviour** — the proposal hands each instruction a
+  *set* of legal results and requires only that an implementation pick a fixed projection **per
+  environment** (`proposals/relaxed-simd/Overview.md:64-69`). Burroughs promises the same projection in
+  *every* environment; the delta is one word, and no conformance suite can ever check it, because
+  checking it means comparing two hosts.
+  - **The hazard is measured, not argued, and it is grave #223 one layer deeper.** Go's specification
+    licenses the compiler to fuse `x*y + z`, and the two architectures this project targets **differ on
+    whether they take it**: identical source and identical input bits give the fused answer on arm64
+    and the unfused one on amd64, 1 ulp apart, at both f64 and f32. Both answers are *inside* the
+    proposal's two-member permitted set, so a bare `a*b + c` would pass every vector, pass the
+    self-consistency vectors, and pass on both CI runners — a uniformity defect with no possible oracle.
+    So the bare form is **forbidden** in the engine's float paths: every multiply-add is `math.FMA` or
+    `float64(a*b) + c`, the two forms Go's own spec pins in opposite directions. Zero existing
+    violations (the engine has no multiply-add yet), verified with a positive control on the search.
+  - **Two authorities read against each other rather than one trusted.** The per-opcode choice is the
+    reference interpreter's, cited line by line from `eval_vec.ml` — 14 of the 20 relaxed opcodes are
+    the *non-relaxed* counterpart this engine already implements, so uniformity is largely inherited,
+    including from #223's own hand-written `floatMin`/`floatMax`. Each of those choices was then checked
+    against the proposal's `IMPLEMENTATION_DEFINED_ONE_OF` sets, and all twenty land inside their set —
+    **with one exception flagged rather than smoothed over**: the reference computes f32 `fma` by
+    widening to f64, fusing, and narrowing, and whether that composite always equals a correctly-rounded
+    single-precision FMA is a double-rounding question the ADR explicitly does **not** settle. The
+    engine is already committed to that route for every f32 vector op, where the classical `2p+2`
+    innocuousness theorem covers the binary cases; the FMA is ternary and the theorem is not stated for
+    it. Filed with a tripwire — a search for a discriminating triple against `math/big`, paired with a
+    positive control so an empty result is a bound rather than a broken channel — instead of a paragraph
+    of reasoning.
+  - **The control for the uniformity rule is stillborn on arm64 by construction**, bare and fused being
+    indistinguishable there, so its falsification runs under `--platform linux/amd64`. Stated in the ADR
+    because a mutation that cannot fire on the author's machine is a control nobody has watched die.
+  - Also decided: the `(either …)` harness widening **rides the first arm family's PR** rather than
+    landing alone (Scott's stamp, on slice 3's both-halves precedent) — 32 corpus-wide occurrences, all
+    six in relaxed files, which is the only value oracle these arms will have; and the four
+    `i32x4.relaxed_trunc_*` opcodes, whose vector file is **eight lines with no assertions at all**,
+    land with **author-supplied witnesses pinned to the reference** (Scott's stamp: arms the suite cannot
+    watch do not get to land unwatched, and the falsification bar does not waive for corpus gaps).
+    Deliberately *not* decided: the `gateRelaxedSIMD` flip, which is its own stamp-tier event with its
+    own pre-registered forecast and cannot ride the PR that creates the numbers.
+
 - **Decision 0026 — proper tail calls: a tail call is a fourth control-transfer value, and the frame
   owner's trampoline re-enters. Accepted on Scott's stamp (PR #252); authored and pushed `proposed`,
   and the interval it spent open is kept in the record.** Scoped to *both* gate
@@ -330,6 +374,90 @@ weakly-ordered platform.
   tail-call gate's own 0x12/0x13 when it lands.
 
 ### Changed
+
+- **`CLAUDE.md` is an index and `docs/laws/` is the corpus** (ruling: Scott — *"restructure, and the
+  project's own laws dictate the shape"*). The `## Disciplines` section had reached **918 lines /
+  78 KB, 80% of a 98 KB file** that is re-read every session. All **46** laws were relocated
+  **verbatim** into ten thematic family files under `docs/laws/`; each keeps its one-line compressed
+  form in `CLAUDE.md` as the recall key, which works because *lessons are indexed by shape* — the
+  shape is what has to be in context, and the specimen, the minting record, and the token each law
+  was granted on are looked up on demand exactly as an ADR is. Thematic rather than one-file-per-law
+  for the same reason: families of the same defect shape read together. **`CLAUDE.md`: 98252 →
+  36601 bytes (−63%)**, Disciplines 918 → 144 lines.
+  - **Governance is the exception and stays in full** — the product accounting and its
+    gate-campaign substitution, the actor-never-chooses rule, the ratio's recorded command and its
+    no-threshold ruling, the stop condition with its purpose refinement and exemption token,
+    `Gates` with the flip's stamp tier, decision-before-code, and an ADR's status-as-citation.
+    Those do not get looked up on demand: they decide what a PR may do, so they must be in context
+    every turn. Sections outside Disciplines (reporting protocol, waiting on CI, the squash-merge
+    procedure, versioning, tooling gates) are untouched.
+  - **Relocated, never rewritten, and the "verbatim" is measured rather than asserted.** The
+    migration split the section mechanically into top-level bullet blocks — **916 of 917** body
+    lines accounted for, zero non-blank lines outside a block — and each body was checked present
+    as contiguous verbatim text in its family file: **46/46**. So superseded wordings still appear
+    inside the bodies wherever a later ruling amended rather than replaced, which is the point.
+  - **The extractor committed the project's own thrice-paid defect and was repaired by the recorded
+    remedy rather than a new one.** `^- \*\*(.+?)\*\*` found a lead on only **33 of 46** blocks,
+    because 13 leads wrap across lines — #78 → #80 → #105, one shape in three packages. Joining each
+    block before matching fixed it, and the same split-then-join is what the new control uses.
+- **`TestEveryLawIsIndexed` and `TestClaudeMDStaysAnIndex`** (`internal/testenv`). An index plus a
+  corpus is a **two-registry design over one space** — #264's third instance — so it does not rely
+  on anyone remembering both. The bijection is checked in **both** directions and on the heading
+  *text*, not on resolution alone: a key edited in one place and not the other fails here, where a
+  resolve-only check would pass. The anchor each pointer names is **derived** from the heading by
+  GitHub's own slug rules on both sides, so the link cannot resolve to nothing. A key with no
+  pointer fails too, with no exemption — including the governance laws, whose bodies are retained in
+  `CLAUDE.md` and whose minting records are in `docs/laws/`.
+  - **Falsified seven ways, diff printed and read for behaviour each time**: a drifted key (fails in
+    both directions), a deleted key, an orphan heading, a broken anchor, a pasted-back body (the
+    ceiling, 64347 > 38000), a reader with the bullet regexp narrowed (floor fires at 19 of 46), and
+    — the one worth having — the join replaced by first-line-only, which fails on **three**
+    governance laws whose pointer wraps. That last one is the demonstration that the line-joining is
+    load-bearing rather than decorative, and it showed the floor and the per-law check catching
+    *different* halves of the same defect, which is *floors bound the catastrophic case; only an
+    exact count sees a small silent loss* in the new control's own terms.
+  - **The ceiling is 38000 bytes against a measured 36601** — ~1400 bytes, roughly seven more recall
+    keys. Deliberately tight, because *an unasserted distance is the vacuum*. Bytes rather than lines
+    or law count because the quantity the purpose names is **context cost**. Like every ceiling here
+    it is meant to rot by the system working, and tripping it is a question with two honest answers
+    (governance, so move the ceiling and say why — or a law's body, so move the text).
+- **Thirty-two citations swept, twelve addressed, and the sweep's own tally was the last thing it
+  got wrong.** A restructure retroactively falsifies the prose that described the old shape, so
+  every `CLAUDE.md` citation in the repo was enumerated — **32 sites in 22 files** — and classified
+  against whether the cited text still resolves there. **8** quoted a law's *body* and were
+  retargeted in place (`binary.go` ×2, `sections.go`, `name_test.go`, `table.go`, `spec_test.go`,
+  `wast.go`, and `README.md`'s repo layout, which now lists `docs/laws/`); **4** did the same inside
+  an accepted record and got an appended pointer instead (ADR 0017 ×3, ADR 0015); **14** quote a
+  law's *lead*, which is exactly what stayed in the index; **5** cite a section outside Disciplines
+  or retained governance; **1** asserts a fact about where something does *not* live and is still
+  true. One of the eight was already broken before this PR — `internal/binary/binary.go:5` cited
+  *"CLAUDE.md, Immediate queue"*, a section retired when tracking moved to GitHub, with nothing
+  having swept for the sentence since.
+  - **The 14-of-20-unchanged row is why the restructure was cheap**, and the result is explainable
+    rather than lucky: comments cite laws by their compressed form, and the compressed form is
+    precisely what the ruling kept in `CLAUDE.md`. Had it come out the other way, an index/corpus
+    split would have dangled the majority of the repo's citations.
+  - **The first probe's clean zero was the instrument reporting its own blindness**, caught by
+    interrogating it rather than by anything going red. It matched only phrases *following* the
+    filename, and this repo writes them before it just as often, so *"is a PR's measure of done
+    (CLAUDE.md, Disciplines)"* — a body phrase, genuinely dangled by the move — scored as resolving.
+    *A suspiciously clean result is a tell*, and **exactly zero** on a question this messy was the
+    tell; the exact instrument that replaced it was enumerating every site with context by hand.
+  - **And the hand classification was then itself resolved against the text, which found a twelfth
+    site the first pass had mis-filed.** ADR 0015 cites *"the return-type reading `CLAUDE.md` uses
+    when it counts 28 of 29 `decode*` functions"* — filed as a statement *about* the file, and
+    actually a body citation, that census now living only in `docs/laws/product-and-overhead.md`.
+    *A citation list is itself a claim*, so it gets resolved before publication like any other; the
+    published tally said 28 sites and 11 addressed, both wrong, the first by quoting the
+    **post-edit** grep as the enumeration total. Two different quantities under one number, and the
+    smaller one flattered the sweep — which is the census rule's own finding (*a census that cannot
+    name its vectors has not been taken*) pointed at a prose sweep instead of a board.
+  - **Code comments were retargeted in place; accepted records were not.** ADR 0017's three
+    citations and ADR 0015's got a **pointer appended** instead, on 0017's own rule (*records
+    append-corrected, stale claims wear pointers*): editing `CLAUDE.md` into `docs/laws/…` there is
+    the same manoeuvre as editing 605 into 624 one section up, and it would fabricate a history in
+    which the record cited a file that did not exist when it was written. A comment is maintained
+    prose whose identifiers must resolve today (#114/#115/#116); an ADR is a tombstone.
 
 - **`callImport` is gone, absorbed into `resolveCall`.** The import crossing is a change of
   *receiver*, not a kind of call, and once resolution is separated from frame entry there is no
@@ -3546,7 +3674,6 @@ weakly-ordered platform.
   median of 344 — not costly to certify. The same finding in era clothes; recorded because a
   hypothesis measurement killed is worth more written than omitted.
 
-
 - **`internal/gen/mllex`: the `lexer.mll` arm reader is one implementation, and the three generators
   call it** ([#105](https://github.com/scttfrdmn/burroughs/issues/105)). `keywordgen`, `opgen` and the
   new `memarggen` each read the same authority's arm heads, and the wrapped-arm defect that cost grave
@@ -3984,7 +4111,6 @@ weakly-ordered platform.
   figure would have shipped with a confirmation attached. `destination()` now resolves the row to
   the path the code lives at, and the three quoted windows are unaffected because none of them
   contains that merge — which is itself the reason the defect was survivable long enough to find.
-
 
 - **A one-of-two-conditions exemption panicked in the arm that asserts two callers agree**
   ([grave #146](https://github.com/scttfrdmn/burroughs/issues/146)). `encodableOrErr` exempts

@@ -264,7 +264,7 @@ func featureErr(feature string) error {
 // A section with no grammar here yet returns false: the caller skips its payload
 // and no extent check runs, because an extent cannot be checked against a
 // grammar that does not exist. That is the declared-and-tracked form of "not
-// done" (CLAUDE.md) — the alternative, a grammar that consumes `size` bytes and
+// done" (docs/laws/graves-and-sweeps.md) — the alternative, a grammar that consumes `size` bytes and
 // declares victory, would report agreement it never verified.
 func (d *Decoder) decodePayload(sid SectionID, size uint32, r *reader) (bool, error) {
 	switch sid {

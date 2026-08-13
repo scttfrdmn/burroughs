@@ -92,7 +92,8 @@ func TestNameMustBeUTF8(t *testing.T) {
 // making the decoder reject valid modules — the overfitting failure in its purest
 // form, and the direction the suite cannot catch because it has no valid-name
 // vectors of its own. A decoder that rejects valid modules is worse than one that
-// misses an invalid one (CLAUDE.md).
+// misses an invalid one (docs/laws/evidence-and-instruments.md, "the spec is the
+// objective function; the suite samples it").
 func TestValidNamesAccepted(t *testing.T) {
 	// synthetic: valid UTF-8 by construction, spanning all four sequence lengths
 	// and the boundaries the invalid cases above sit just outside of.

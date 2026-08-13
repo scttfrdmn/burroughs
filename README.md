@@ -20,8 +20,10 @@ stack machine. The gopher gets its burrows back, one letter askew.
 - **`docs/burroughs-contract-v0.1.md`** — the normative host contract.
   Start there.
 - **`docs/decisions/`** — accepted decision records (ADRs).
-- **`CLAUDE.md`** — implementation agent brief, phase ladder, disciplines,
-  reporting protocol.
+- **`CLAUDE.md`** — implementation agent brief: phase ladder, governance,
+  reporting protocol, and the one-line index of the disciplines.
+- **`docs/laws/`** — the disciplines in full, by family: each law's specimen,
+  the finding that minted it, and the token it was granted on.
 
 Project state lives in **GitHub issues and milestones**, not in files:
 milestones are the phase ladder, and `label:type:grave` is the graveyard of
