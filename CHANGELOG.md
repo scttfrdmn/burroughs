@@ -215,6 +215,50 @@ weakly-ordered platform.
     (`ref.i31` fills `ref_eq.wast`'s table, and the read-backs key on a *value*, naming no opcode).
     Two instruments each held half the answer and the forecast quoted one.
 
+- **Decision 0028 — relaxed SIMD's lowerings are deterministic and architecture-uniform: the
+  reference's choice, taken once, as a stated guarantee exceeding the spec.** Authored `accepted`
+  rather than `proposed`, which is a departure from 0026 and 0027 stated in the record: their stamps
+  came after the document, this one's came first (Scott's ruling on #275, quoted onto the issue so the
+  status cites a resolvable artifact), so there is no open interval to keep. Relaxed SIMD is the first
+  family where **conformance does not determine behaviour** — the proposal hands each instruction a
+  *set* of legal results and requires only that an implementation pick a fixed projection **per
+  environment** (`proposals/relaxed-simd/Overview.md:64-69`). Burroughs promises the same projection in
+  *every* environment; the delta is one word, and no conformance suite can ever check it, because
+  checking it means comparing two hosts.
+  - **The hazard is measured, not argued, and it is grave #223 one layer deeper.** Go's specification
+    licenses the compiler to fuse `x*y + z`, and the two architectures this project targets **differ on
+    whether they take it**: identical source and identical input bits give the fused answer on arm64
+    and the unfused one on amd64, 1 ulp apart, at both f64 and f32. Both answers are *inside* the
+    proposal's two-member permitted set, so a bare `a*b + c` would pass every vector, pass the
+    self-consistency vectors, and pass on both CI runners — a uniformity defect with no possible oracle.
+    So the bare form is **forbidden** in the engine's float paths: every multiply-add is `math.FMA` or
+    `float64(a*b) + c`, the two forms Go's own spec pins in opposite directions. Zero existing
+    violations (the engine has no multiply-add yet), verified with a positive control on the search.
+  - **Two authorities read against each other rather than one trusted.** The per-opcode choice is the
+    reference interpreter's, cited line by line from `eval_vec.ml` — 14 of the 20 relaxed opcodes are
+    the *non-relaxed* counterpart this engine already implements, so uniformity is largely inherited,
+    including from #223's own hand-written `floatMin`/`floatMax`. Each of those choices was then checked
+    against the proposal's `IMPLEMENTATION_DEFINED_ONE_OF` sets, and all twenty land inside their set —
+    **with one exception flagged rather than smoothed over**: the reference computes f32 `fma` by
+    widening to f64, fusing, and narrowing, and whether that composite always equals a correctly-rounded
+    single-precision FMA is a double-rounding question the ADR explicitly does **not** settle. The
+    engine is already committed to that route for every f32 vector op, where the classical `2p+2`
+    innocuousness theorem covers the binary cases; the FMA is ternary and the theorem is not stated for
+    it. Filed with a tripwire — a search for a discriminating triple against `math/big`, paired with a
+    positive control so an empty result is a bound rather than a broken channel — instead of a paragraph
+    of reasoning.
+  - **The control for the uniformity rule is stillborn on arm64 by construction**, bare and fused being
+    indistinguishable there, so its falsification runs under `--platform linux/amd64`. Stated in the ADR
+    because a mutation that cannot fire on the author's machine is a control nobody has watched die.
+  - Also decided: the `(either …)` harness widening **rides the first arm family's PR** rather than
+    landing alone (Scott's stamp, on slice 3's both-halves precedent) — 32 corpus-wide occurrences, all
+    six in relaxed files, which is the only value oracle these arms will have; and the four
+    `i32x4.relaxed_trunc_*` opcodes, whose vector file is **eight lines with no assertions at all**,
+    land with **author-supplied witnesses pinned to the reference** (Scott's stamp: arms the suite cannot
+    watch do not get to land unwatched, and the falsification bar does not waive for corpus gaps).
+    Deliberately *not* decided: the `gateRelaxedSIMD` flip, which is its own stamp-tier event with its
+    own pre-registered forecast and cannot ride the PR that creates the numbers.
+
 - **Decision 0026 — proper tail calls: a tail call is a fourth control-transfer value, and the frame
   owner's trampoline re-enters. Accepted on Scott's stamp (PR #252); authored and pushed `proposed`,
   and the interval it spent open is kept in the record.** Scoped to *both* gate
