@@ -2,7 +2,9 @@
 //
 // v0 scope: module preamble and section-level scan (contract phase v0).
 // Section payloads are held opaque here; per-section decoding lands
-// section-by-section with tests (see CLAUDE.md, Immediate queue).
+// section-by-section with tests (the per-section decoder issues, #39 and its siblings;
+// the "Immediate queue" this line used to cite was retired when tracking moved to
+// GitHub, and nothing swept for the citation until docs/laws/ was split out).
 package binary
 
 import (
@@ -169,7 +171,8 @@ var (
 	// ErrDataCountRequired is memory.init or data.drop appearing without a data
 	// count section.
 	//
-	// Declared and tracked, not silent (the ruling in CLAUDE.md): deciding this
+	// Declared and tracked, not silent (docs/laws/graves-and-sweeps.md, "unreachability
+	// is a grave only when it's silent"): deciding this
 	// requires knowing whether those opcodes occur inside a function body, and a
 	// byte-scan for `fc 08` would false-positive on any immediate that happens to
 	// hold those bytes — a decoder rejecting valid modules is worse than one

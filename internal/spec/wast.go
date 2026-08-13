@@ -1101,7 +1101,7 @@ type Result struct {
 	// Failures, bucketed by expected spec text. The bucket key names exactly
 	// which check is missing or wrong, which makes the board a priority queue:
 	// the biggest bucket is the next issue to take, and a bucket reaching zero
-	// is a PR's measure of done (CLAUDE.md, Disciplines).
+	// is a PR's measure of done (docs/laws/boards-and-buckets.md).
 	//
 	// **A key can be a union of several refusals rather than one, and reading it whole is what
 	// separates a forecast of pay from a forecast of unshadowing.** The `no instance` arm keys an

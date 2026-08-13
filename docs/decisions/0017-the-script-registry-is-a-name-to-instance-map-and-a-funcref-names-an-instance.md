@@ -299,3 +299,24 @@ corrected total moves each figure the same direction by 3.0% and reverses no con
 pointer, not an edit, is what carries a reader from the stale figure to this section without
 rewriting the history that produced it. The rule as given was "never edit the
 body".
+
+## Pointer, appended 2026-08-12 — the doctrine's home moved, the citations did not
+
+Three sites above cite `CLAUDE.md` for the *no host-linking at v0* doctrine (`:58`, `:128`, `:220`).
+When `CLAUDE.md` became an index and the disciplines moved to `docs/laws/`, the doctrine's full text
+went with them: it is now **`docs/laws/decisions-and-thesis.md`**, under *No host-linking at v0,
+because the oracle never asks for it*, with its one-line recall key still in `CLAUDE.md` under
+**Decisions serve the thesis directionally**.
+
+**Appended rather than edited, on this ADR's own rule** — *records append-corrected, stale claims
+wear pointers*. Retargeting the three citations in place is the same manoeuvre as editing 605 into
+624 one section up, and it fails for the same reason: it would fabricate a history in which this
+record cited a file that did not exist when it was written. The sentences are not wrong; they are
+**era-stamped**, and the doctrine they cite is unchanged in substance and in force. A reader
+following one of them lands on the index and finds the key; this pointer is what carries them the
+rest of the way.
+
+Note which way the distinction runs, since this PR did both: **code comments were retargeted in
+place and accepted records were not.** A comment is maintained prose whose identifiers must resolve
+today (#114/#115/#116); an ADR is a tombstone, and what it knew when it was carved is part of the
+record.

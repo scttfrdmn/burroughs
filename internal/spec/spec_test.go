@@ -777,7 +777,7 @@ func TestBinaryWast(t *testing.T) {
 }
 
 // TestClosedBuckets pins buckets that have reached zero. A bucket going to zero
-// is a PR's measure of done (CLAUDE.md), and this is what stops it from quietly
+// is a PR's measure of done (docs/laws/boards-and-buckets.md), and this is what stops it from quietly
 // refilling: the floor above catches a net regression, but a bucket can refill
 // while the total holds if another one drains at the same time.
 //
