@@ -878,13 +878,27 @@ func TestClosedBuckets(t *testing.T) {
 // `RelaxedSIMD`) — confirmed by reading each file: every one is entirely `*.relaxed_*`
 // instructions, so the SIMD flip does not touch their gated population at all, measured
 // unchanged at the identical counts.
+//
+// **+32 across the same six, the `(either …)` widening (0028 d4).** `readResult` makes the
+// reference's `EitherResult` askable in expected-result position, so each `assert_return` carrying
+// one stops being refused by the reader and reaches the decoder, where the still-off `RelaxedSIMD`
+// gate declines it. The per-file deltas are **+1 / +3 / +2 / +6 / +8 / +12**, and they are exactly
+// each file's count of `(either` occurrences — a 1:1 attribution *per file*, which is what this
+// control asked for by demanding "single out any line whose reason is no longer the file's one
+// stated reason". The reason is unchanged for every one of the 32: `relaxed-simd: feature gate
+// disabled`, the same reason the file's existing population carries, which is why these stay bulk
+// entries rather than being singled out.
+//
+// `i32x4_relaxed_trunc.wast` is absent from this map and stays absent: it is eight lines with no
+// assertions at all, so it has no gated population to allow — the corpus gap that is 0028 d5's
+// whole reason for the author-supplied witnesses in `internal/interp/simd_relaxed_test.go`.
 var wholeFileGated = map[string]int{
-	"i16x8_relaxed_q15mulr_s.wast": 1,
-	"i8x16_relaxed_swizzle.wast":   2,
-	"relaxed_dot_product.wast":     8,
-	"relaxed_laneselect.wast":      5,
-	"relaxed_madd_nmadd.wast":      9,
-	"relaxed_min_max.wast":         12,
+	"i16x8_relaxed_q15mulr_s.wast": 2,
+	"i8x16_relaxed_swizzle.wast":   5,
+	"relaxed_dot_product.wast":     10,
+	"relaxed_laneselect.wast":      11,
+	"relaxed_madd_nmadd.wast":      17,
+	"relaxed_min_max.wast":         24,
 }
 
 // TestGatedVectors pins exactly which vectors the engine is allowed to decline.
@@ -6491,7 +6505,23 @@ func TestPhase1Files(t *testing.T) {
 	// this is a reclassification from "the harness cannot ask" to "the harness asked and the
 	// gate declined" — the honest verdict this widening exists to produce, not new engine
 	// capability.
-	const unsupportedCeiling = 2689
+	// 2689 → 2657, −32 (`(either …)` result-position widening, 0028 d4): `readResult` admits the
+	// reference's `EitherResult` (`script.ml:44`, `runner.ml:485`) in expected-result position, so
+	// the 32 `assert_return`s that use it become askable. **The same shape as the entry above, one
+	// proposal later** — all 32 sit in the six relaxed-SIMD files, the relaxed gate is off by
+	// default, and the default lane's Gated column carries the exact same +32 (3625 → 3657). A
+	// reclassification from "the harness cannot ask" to "the harness asked and the gate declined",
+	// not new engine capability, and the attribution is 1:1: 32 occurrences of `(either` in the
+	// corpus, 32 commands drained.
+	//
+	// It is also the entry that falsified this PR's own pre-registered forecast, which said
+	// `unsupported` would be **unmoved and structurally so**. That was wrong twice over — the
+	// direction of `gated` too, forecast at 3625 → 3588 — and the precedent proving it wrong was
+	// the paragraph immediately above, sitting on this very constant. A harness widening moves this
+	// column *whatever the gate campaign does*, because the two changes are independent and 0028 d4
+	// put them in one PR. Recorded here rather than only in the PR body, since the ledger is where
+	// the next forecast will be read from.
+	const unsupportedCeiling = 2657
 	boardBound(t, "unsupportedCeiling", totalUnsup, unsupportedCeiling, boardBoundSlack, ceilingBound,
 		"either a capability regressed or the corpus moved; both need an explanation rather "+
 			"than a raised ceiling")

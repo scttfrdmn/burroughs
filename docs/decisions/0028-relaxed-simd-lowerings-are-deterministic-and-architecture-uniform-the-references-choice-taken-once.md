@@ -416,3 +416,71 @@ attribution is wrong.
 stamp has its own commit and its own verdict even though its body arrived early under someone
 else's headline. The lesson #279 records: *a branch cut from an unmerged branch merges its parent's
 content under the child's message, and two stamps arrive wearing one green.*
+
+## The f32 double-rounding question, appended 2026-08-12 — answered *no* by the tripwire this record filed
+
+Decision 3 filed one open question with a tripwire instead of a paragraph, and pre-registered both
+outcomes: *"Either it finds one — and the open question above becomes a concrete report against the
+reference — or it exhausts its budget, which is a bound and is recorded as one."* **It found one.**
+This section is that report; it resolves the question and changes no decision.
+
+**The measurement.** Over 1000 f32 triples the reference's widen-fuse-narrow composite differs from
+a correctly-rounded single-precision fma on **4**, identically on arm64 and amd64. The first:
+
+```
+fma(3, 34.275555, 0x1p-149)   composite 0x42cda740   correctly-rounded 0x42cda741
+```
+
+**Why the `2p+2` bound does not reach this case** — the part this record named as the gap and did not
+work out. The bound's hypothesis is that the wide format holds the *exact* result before the second
+rounding. For `x*y` that hypothesis is satisfied: a 24×24 significand product needs 48 bits and
+float64 supplies 53, which is why every *binary* f32 arm in `vecBinaryFloat` is exactly right by the
+widen route. For `x*y + z` it fails, and not marginally: with a large product and a subnormal addend
+the exact sum spans most of f32's ~277-bit exponent range, so the float64 rounding discards the
+addend's contribution and the narrowing then rounds a value that has already lost the bit deciding
+which way it should go. Every one of the four differences involves the subnormal addend `0x1p-149`.
+So the observation recorded at the time — that the classical theorem is stated for the basic
+operations and an fma is ternary — was the right thing to notice, and the answer is that the
+extension does not hold.
+
+**Nothing follows for the engine, which is why this is an appended resolution and not an amendment.**
+Decision 2 binds this arm to the reference's answer, and the reference *is* this composite: `fxx.ml`
+is a functor over `to_float`/`of_float`, so F32's `fma` widens, calls `Float.fma`, and narrows,
+double rounding included. The permitted set contains both answers, so a correctly-rounded f32 fma
+would conform too — it is simply not the member chosen. Decision 1 also survives intact, and this is
+where it is hardest to see: 4 on both architectures, because `math.FMA` and the `float32` narrowing
+are both architecture-independent.
+
+**Decision 3's own numbers, since the same sweep produces them.** d3 was an argument when written and
+is now a measurement, and it understated the case:
+
+|  | arm64 | amd64 |
+| --- | --- | --- |
+| `float32(x*y) + z` vs the composite — *the control d3 specified* | 55 | 55 |
+| bare `x*y + z` vs the composite | 4 | 55 |
+| bare `x*y + z` vs single-rounded | 0 | 59 |
+
+arm64 fuses `x*y + z` into a genuine f32 `FMADD` and therefore lands on the correctly-rounded answer
+on every triple; amd64 emits a multiply and an add. So a bare expression in a madd arm would make
+Burroughs' answer depend on **which runner built it** for 55 of 1000 triples, while passing every
+vector in the suite on both — `relaxed_madd_nmadd.wast`'s expectations are `(either …)` and admit
+fused and unfused alike. The uniformity-versus-conformance distinction, with a magnitude.
+
+The first row is the positive control this record specified, and the reason it is the specified one
+rather than a substitute is visible in the second: the bare form's count is whatever the compiler
+chose, so a control built on it fires for a different reason on each architecture. The implementing
+PR's first draft made exactly that substitution — comparing bare against the oracle, which is **0**
+on arm64 — and the control was therefore stillborn on the author's machine, precisely as d3 warned
+in the sentence above it. The lesson is recorded on
+[#280](https://github.com/scttfrdmn/burroughs/issues/280).
+
+**A note on where this record was misread, because the misreading is the finding worth keeping.** The
+implementing PR's draft prose — the doc comment on `vecRelaxedFma` and the tripwire's original name,
+`TestF32FmaWidenNarrowIsDoubleRoundingInnocuous` — asserted the innocuousness *as reasoning recorded
+in this ADR*, quoting `53 >= 2*24+2` and concluding the composite must equal a single-rounded fma.
+This record says the opposite: it names the ternary gap and states *"I have not verified it and do not
+assert it either way."* A hedge is part of a record's content, so prose that resolves an ADR's open
+question in passing — in the confident direction, days later, on the strength of a theorem's name —
+is drift with a citation's authority. That is what #280 records, and it is the case *for* filing
+questions with tripwires rather than paragraphs: the tripwire outranked the prose that contradicted
+its premise.

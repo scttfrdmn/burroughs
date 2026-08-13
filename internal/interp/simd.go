@@ -59,7 +59,21 @@ func (in *Instance) execFD(ins binary.Instr, st *stack) error {
 		hi2, lo2 := st.popV128()
 		hi1, lo1 := st.popV128()
 		st.pushV128(hi1^hi2, lo1^lo2)
-	case 0x52: // v128.bitselect — (v1 AND c) OR (v2 AND NOT c), c on top (v128.ml's bitselect)
+	// v128.bitselect, plus all four of the relaxed laneselect shapes. Written as prose rather than
+	// as a mnemonic list because `gocritic`'s commentedOutCode reads a semicolon-separated list of
+	// dotted identifiers as commented-out code, and it is not wrong to.
+	case 0x52, 0x109, 0x10a, 0x10b, 0x10c:
+		// (v1 AND c) OR (v2 AND NOT c), c on top (v128.ml's bitselect). All four
+		// `relaxed_laneselect` shapes are the *same* expression: `eval_vec.ml:134-137` maps every
+		// one of them to `V128.V1x128.bitselect`, so the choice is **bitwise, not top-bit-only**
+		// (0028 d2) and the lane width in the mnemonic selects nothing at all. A top-bit-only
+		// lowering — the other member of the permitted set, and what the hardware instruction
+		// actually does — differs on any mask with a mixed lane, and the suite *does* build those
+		// (`relaxed_laneselect.wast:30`'s `0xf0`/`0x0f`). It is still no oracle: the two lowerings
+		// are the vector's two `(either …)` alternatives, so both pass. What the vector confirms is
+		// which alternative is the reference's — bitwise gives `0x14`/`0x32` for that pair and the
+		// first alternative is exactly that, so the choice made here is checkable rather than
+		// merely cited.
 		if err := st.needNum(6); err != nil {
 			return err
 		}
@@ -226,7 +240,8 @@ func (in *Instance) execFD(ins binary.Instr, st *stack) error {
 		return in.vecBinaryLanes(st, 2, satSubLane(2, true))
 	case 0x93: // i16x8.sub_sat_u
 		return in.vecBinaryLanes(st, 2, satSubLane(2, false))
-	case 0x82: // i16x8.q15mulr_sat_s
+	case 0x82, 0x111: // i16x8.q15mulr_sat_s, i16x8.relaxed_q15mulr_s
+		// 0x111 aliases the saturating form: `eval_vec.ml:84` → `I16x8.q15mulr_sat_s` (0028 d2).
 		return in.vecBinaryLanes(st, 2, q15mulrSatSLane)
 
 	case 0xae: // i32x4.add
@@ -287,8 +302,15 @@ func (in *Instance) execFD(ins binary.Instr, st *stack) error {
 
 	case 0xba: // i32x4.dot_i16x8_s
 		return in.vecDotI16x8S(st)
+	case 0x112: // i16x8.relaxed_dot_i8x16_i7x16_s
+		return in.vecRelaxedDotI8x16S(st)
+	case 0x113: // i32x4.relaxed_dot_i8x16_i7x16_add_s
+		return in.vecRelaxedDotAddS(st)
 
-	case 0x0e: // i8x16.swizzle
+	case 0x0e, 0x100: // i8x16.swizzle, i8x16.relaxed_swizzle
+		// 0x100 aliases the non-relaxed swizzle: `eval_vec.ml:64` maps RelaxedSwizzle to
+		// `V128.V8x16.swizzle`, so an out-of-range index yields zero rather than the
+		// implementation-defined result the proposal would permit (0028 d2).
 		return in.vecSwizzle(st)
 	case 0x0d: // i8x16.shuffle — Imm0's low 16 bytes are the 16 lane indices, per this arm's
 		// own decode-side staging (immVecShuffle, binary/instr.go)
@@ -558,10 +580,18 @@ func (in *Instance) execFD(ins binary.Instr, st *stack) error {
 		return in.vecBinaryFloat(st, 4, func(a, b float64) float64 { return a * b })
 	case 0xe7: // f32x4.div
 		return in.vecBinaryFloat(st, 4, func(a, b float64) float64 { return a / b })
-	case 0xe8: // f32x4.min
+	case 0xe8, 0x10d: // f32x4.min, f32x4.relaxed_min
 		return in.vecBinaryFloat(st, 4, floatMin)
-	case 0xe9: // f32x4.max
+	case 0xe9, 0x10e: // f32x4.max, f32x4.relaxed_max
 		return in.vecBinaryFloat(st, 4, floatMax)
+	case 0x105: // f32x4.relaxed_madd
+		return in.vecRelaxedFma(st, 4, false)
+	case 0x106: // f32x4.relaxed_nmadd
+		return in.vecRelaxedFma(st, 4, true)
+	case 0x107: // f64x2.relaxed_madd
+		return in.vecRelaxedFma(st, 8, false)
+	case 0x108: // f64x2.relaxed_nmadd
+		return in.vecRelaxedFma(st, 8, true)
 	case 0xea: // f32x4.pmin
 		return in.vecPminPmax(st, false)
 	case 0xeb: // f32x4.pmax
@@ -575,9 +605,15 @@ func (in *Instance) execFD(ins binary.Instr, st *stack) error {
 		return in.vecBinaryFloat(st, 8, func(a, b float64) float64 { return a * b })
 	case 0xf3: // f64x2.div
 		return in.vecBinaryFloat(st, 8, func(a, b float64) float64 { return a / b })
-	case 0xf4: // f64x2.min
+	case 0xf4, 0x10f: // f64x2.min, f64x2.relaxed_min
+		// The relaxed min/max quartet aliases the non-relaxed arms (`eval_vec.ml:113-114`,
+		// `:123-124` → plain `min`/`max`), which lands them on `floatMin`/`floatMax` — the
+		// hand-written four-way branch that grave #223 exists to have produced. That is 0028
+		// d2's second ground in one line: the uniformity of these four is a property already
+		// established and already watched, not a new claim. They must never regress to
+		// `math.Min`/`math.Max`, whose arch assembly quiets NaN differently per platform.
 		return in.vecBinaryFloat(st, 8, floatMin)
-	case 0xf5: // f64x2.max
+	case 0xf5, 0x110: // f64x2.max, f64x2.relaxed_max
 		return in.vecBinaryFloat(st, 8, floatMax)
 	case 0xf6: // f64x2.pmin
 		return in.vecBinaryFloat(st, 8, floatPmin)
@@ -635,13 +671,19 @@ func (in *Instance) execFD(ins binary.Instr, st *stack) error {
 	case 0xca: // i64x2.extend_high_i32x4_u
 		return in.vecExtendLanes(st, 4, false, true)
 
-	case 0xf8: // i32x4.trunc_sat_f32x4_s
+	case 0xf8, 0x101: // i32x4.trunc_sat_f32x4_s, i32x4.relaxed_trunc_f32x4_s
+		// The relaxed trunc quartet (0x101-0x104) aliases the saturating family —
+		// `eval_vec.ml:211-214` → `I32x4_convert.trunc_sat_*` (0028 d2). These four are scored
+		// by **nothing** in either lane: `i32x4_relaxed_trunc.wast` is eight lines with no
+		// assertions. Their witnesses are author-supplied and pinned to the reference, per 0028
+		// d5 and Scott's ruling that arms the suite cannot watch do not land unwatched —
+		// TestRelaxedTruncWitnesses in simd_relaxed_test.go.
 		return in.vecTruncSatF32x4(st, true)
-	case 0xf9: // i32x4.trunc_sat_f32x4_u
+	case 0xf9, 0x102: // i32x4.trunc_sat_f32x4_u, i32x4.relaxed_trunc_f32x4_u
 		return in.vecTruncSatF32x4(st, false)
-	case 0xfc: // i32x4.trunc_sat_f64x2_s_zero
+	case 0xfc, 0x103: // i32x4.trunc_sat_f64x2_s_zero, i32x4.relaxed_trunc_f64x2_s_zero
 		return in.vecTruncSatF64x2Zero(st, true)
-	case 0xfd: // i32x4.trunc_sat_f64x2_u_zero
+	case 0xfd, 0x104: // i32x4.trunc_sat_f64x2_u_zero, i32x4.relaxed_trunc_f64x2_u_zero
 		return in.vecTruncSatF64x2Zero(st, false)
 	case 0xfa: // f32x4.convert_i32x4_s
 		return in.vecConvertI32x4(st, 4, true)

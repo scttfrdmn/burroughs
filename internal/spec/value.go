@@ -237,6 +237,28 @@ type Val struct {
 	// appears in `result` position only.
 	AnyNull bool
 
+	// Alts holds the alternatives of an `(either <result> <result>*)` expectation — relaxed
+	// SIMD's non-determinism form, and the only shape in this harness where one expectation
+	// admits more than one bit pattern. Non-nil means *this Val is a disjunction*, and then
+	// every other field on it is meaningless: `Matches` dispatches on Alts before it reads Kind,
+	// exactly as the reference's own `assert_result` does (`script/runner.ml:485`, `| _,
+	// EitherResult rs -> List.exists (assert_result v) rs` — note the wildcard on the *value*,
+	// so the disjunction applies to any result kind and not just to vectors).
+	//
+	// Recursive, because the grammar is: `LPAR EITHER result list(result) RPAR` (parser.mly:1536)
+	// takes `result`s, and `EitherResult of result list` (script.ml:44) is an arm *of* `result`,
+	// so an alternative may itself be an `either`. No corpus vector nests one — all 32
+	// occurrences are two flat alternatives — and it is read recursively anyway, because the
+	// alternative is a reader that would decline a shape the reference accepts, and *a shape this
+	// harness declines is scored unsupported*: a silent decline on a nested form would look like
+	// a vector nobody had got to yet rather than a reader that stopped short.
+	//
+	// **Result position only.** `either` is not an arm of `literal` or of any const form, so it
+	// cannot appear as an argument; `readResult` is where it is admitted and `readConst` never
+	// sees it. `isPassable` refuses it regardless, since a disjunction is a predicate over a
+	// value and not a value — the same asymmetry the NaN classes and the ref patterns have.
+	Alts []Val
+
 	// Hi is a v128 Val's high 64 bits, meaningful only when Kind == KindV128 — Bits carries the
 	// low 64 bits for the identical Kind, mirroring `interp.Value`'s own Hi/Bits pair exactly
 	// (decision 0024's own boundary shape, restated here rather than imported for ValKind's own
@@ -275,6 +297,18 @@ type Val struct {
 }
 
 func (v Val) String() string {
+	if v.Alts != nil {
+		// Printed as the disjunction it is, because this string lands in a mismatch message's
+		// `Expect` field: reporting only the first alternative there would make a genuine fail
+		// read as a near-miss against a value the engine was never obliged to produce, and *an
+		// error message is testimony*.
+		parts := make([]string, len(v.Alts))
+		for i, alt := range v.Alts {
+			parts[i] = alt.String()
+		}
+		return "either(" + strings.Join(parts, " | ") + ")"
+	}
+
 	if v.Kind.isRef() {
 		switch v.Class {
 		case RefLiteralNull:
@@ -350,6 +384,23 @@ func (v Val) String() string {
 // an expectation there — so the two linters that want one name per type are suppressed here, at
 // the site that earns it, rather than the pair being made consistent and less clear.
 func (want Val) Matches(got Val) bool { //nolint:revive,staticcheck // `want`/`got` names the asymmetry; see above
+	if want.Alts != nil {
+		// `| _, EitherResult rs -> List.exists (assert_result v) rs` (runner.ml:485). **First**,
+		// and before Kind is read, because the reference's arm matches on the *pattern* with a
+		// wildcard for the value — a disjunction carries no Kind of its own, so a `want.Kind !=
+		// got.Kind` gate reached before this point would compare `got` against a zero value and
+		// refuse every `either` vector in the corpus while looking like a type check.
+		//
+		// Recursion, not a loop over scalars: an alternative is a `result`, so it may be a NaN
+		// class, a shaped v128, a ref pattern, or another `either`, and each of those has its own
+		// arm below. Calling Matches is what reuses them all.
+		for _, alt := range want.Alts {
+			if alt.Matches(got) {
+				return true
+			}
+		}
+		return false
+	}
 	// **No `want.AnyNull` fast path here** — it used to be the first thing this function did
 	// (`return got.Class == RefLiteralNull`), and the null-`got` dispatch below subsumes it
 	// exactly: a null `got` reaches the RefLiteralNull arm and returns true whatever Kind the
@@ -478,6 +529,15 @@ func (want Val) Matches(got Val) bool { //nolint:revive,staticcheck // `want`/`g
 // shape arriving later has one site to extend rather than two to keep in sync — the same
 // one-authority reasoning invokeAction's own doc comment gives for sharing readConst itself.
 func (v Val) isPassable() bool {
+	if v.Alts != nil {
+		// An `(either …)` disjunction is a predicate over a value, not a value — nothing can
+		// be *passed* for "one of these two". Unreachable through the grammar (`either` is an
+		// arm of `result`, never of a const form, so `readConst` cannot produce this and only
+		// `readResult` can), and refused here anyway on the same ground as the NaN classes
+		// below it: the asymmetry is a statement about which vectors are askable, and it
+		// belongs where that statement is made rather than resting on a grammar argument.
+		return false
+	}
 	if v.NaN != NaNNone {
 		return false
 	}
@@ -598,6 +658,40 @@ func readConst(n node) (Val, bool) {
 		return readFloatLit(k, lit)
 	}
 	return readIntLit(k, lit)
+}
+
+// readResult reads one *result* position of an `assert_return`, which is a wider grammar than
+// `readConst`'s: the reference's `result` (script.ml:41-45) has an `EitherResult` arm that
+// `literal` does not, so the two are separate readers rather than one reader with a flag.
+//
+// The split is the argument/result asymmetry made structural. `readConst` is reached from both
+// positions and must stay the *narrower* of the two, because a shape admitted there becomes
+// passable-by-default and `isPassable` then has to claw it back; a shape admitted only here
+// cannot leak into an argument position at all. Same seam `invokeAction`'s own `isPassable` call
+// guards, one layer up.
+func readResult(n node) (Val, bool) {
+	if n.isList() && n.head() == "either" {
+		// `LPAR EITHER result list(result) RPAR` (parser.mly:1536) — `$3 :: $4`, so **at least
+		// one** alternative. A bare `(either)` is not in the grammar, and it is refused rather
+		// than read as a disjunction of nothing, which would be a `Matches` that returns false
+		// for every value: a vector no engine can pass, scored as a fail against the engine.
+		// That is *a comparison against an empty set* with the polarity inverted, and it is the
+		// reason this length check is not merely defensive.
+		if len(n.list) < 2 {
+			return Val{}, false
+		}
+		alts := make([]Val, 0, len(n.list)-1)
+		for _, e := range n.list[1:] {
+			// Recursive, per Alts' own comment: an alternative is a `result`, not a `literal`.
+			v, ok := readResult(e)
+			if !ok {
+				return Val{}, false
+			}
+			alts = append(alts, v)
+		}
+		return Val{Alts: alts}, true
+	}
+	return readConst(n)
 }
 
 // v128LaneShapes maps a `v128.const` shape keyword to its lane count and per-lane width/kind —
