@@ -174,10 +174,23 @@ func TestRefEqMixedI31AndFuncrefIsFalseNotADebt(t *testing.T) {
 // layout and false, both placements measuring 40. The comment now states the measurement and names
 // unioning with `Addr` as the only route under it — the option 0020 declines by name. *Print, don't
 // reason*, applied to a struct's own footprint.
+//
+// # Rung 5 slice 3 added two fields and the total did not move, which is the interesting case
+//
+// `Externalized` and `IsHost` (0027 decision 3) took the padding in front of `Addr`, so `want` is
+// still 40 and **only the derivation below changed** — 34 aligned up became 36 aligned up. That is
+// the shape this row is least able to defend on its own: a stale arithmetic comment reaching the
+// right total looks exactly like a current one, and nothing in a size assertion can notice that its
+// own justification has drifted out from under it. So the terms are updated whenever a field lands,
+// and the two new bools are added to the vacuity half below for the reason that half already gives.
+// The measurement that made this worth a paragraph: declared where they were first drafted, below
+// `Exc`, the same two bools open a fresh word and `ref` goes to **48** — so the free packing is a
+// fact about their *placement*, not about bools being cheap, and it was found by measuring both
+// orderings rather than by reading the field list.
 func TestRefWidthIsMeasuredNotAssumed(t *testing.T) {
-	// Two bools, two uint32s, three pointers: 1+1+4+4+8+8+8 = 34, aligned up to 40. Derived from
-	// the field list rather than written as a bare 40, so the arithmetic is auditable and a reader
-	// adding a field sees which term theirs joins.
+	// Four bools, two uint32s, three pointers: 1+1+1+1+4+4+8+8+8 = 36, aligned up to 40. Derived
+	// from the field list rather than written as a bare 40, so the arithmetic is auditable and a
+	// reader adding a field sees which term theirs joins.
 	const want = 40
 	if got := unsafe.Sizeof(ref{}); got != want {
 		t.Errorf("unsafe.Sizeof(ref{}) = %d, want %d — a reference slot's width is paid on every "+
@@ -190,5 +203,13 @@ func TestRefWidthIsMeasuredNotAssumed(t *testing.T) {
 	// rather than passing two.
 	if unsafe.Sizeof(ref{}.I31) != 4 || unsafe.Sizeof(ref{}.IsI31) != 1 {
 		t.Errorf("the i31 payload is not the width this pin was computed from")
+	}
+	// Slice 3's two fields join the same check, per the paragraph above: with the total unchanged,
+	// this is the *only* half of the row that can tell "the fields are packed free" from "the fields
+	// were never added" — a 40 measured on the old seven-field struct passes the assertion above
+	// while saying nothing about decision 3, which is the vacuity law pointed at a pin whose number
+	// did not move.
+	if unsafe.Sizeof(ref{}.Externalized) != 1 || unsafe.Sizeof(ref{}.IsHost) != 1 {
+		t.Errorf("decision 3's two discriminators are not the widths this pin was computed from")
 	}
 }

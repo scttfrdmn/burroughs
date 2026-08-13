@@ -344,6 +344,31 @@ func typeOfRef(r ref, site string) (refType, error) {
 		return refType{null: true, heap: heapType{bottom: true}}, nil
 	}
 	switch {
+	// **Before every payload discriminator, because externalization *overrides* the payload's own
+	// type rather than decorating it.** `extern.ml:19` answers `ExternHT` for an
+	// `ExternRef`, which `value.ml:113` pairs with `NoNull` — the wrapped reference's type is not consulted, so an externalized i31 reports
+	// `extern` and not `i31`. Ordering this arm after `IsI31` would make `ref.test i31` answer 1 on
+	// a value whose static type is `externref`, which is the misreported-payload class one arm over
+	// (grave #36's family) with the arm order rather than a missing arm as its cause.
+	case r.Externalized:
+		return refType{heap: abstractHeap(binary.HeapExtern)}, nil
+
+	// A host reference's dynamic heaptype is **`any`** — `script.ml:80`'s `HostRef` case in
+	// `type_of_ref`, not `eq` and not `extern`. `ref_test.wast:118` and `:127` are the corpus asserting
+	// exactly that placement: `ref_test_any(6)` answers 2 (both a nullable and a non-nullable `any`
+	// test pass) while `ref_test_eq(6)` answers 0, so a host reference is inside `any` and outside
+	// `eq`.
+	//
+	// **This arm's position is not load-bearing, and the negative is worth stating** because `Addr`
+	// being shared with a funcref invites the assumption that it is: a host reference leaves `Inst`
+	// nil, so ordering this arm after `r.Inst != nil` would not misreport it as a funcref — it would
+	// fall through to the default error, a wrong verdict of the *reported* kind rather than the
+	// silent kind. Grouped with the other discriminators for reading order alone. The arm above is
+	// the opposite case: `Externalized`'s precedence is a real constraint, an externalized i31
+	// having `IsI31` set as well.
+	case r.IsHost:
+		return refType{heap: abstractHeap(binary.HeapAny)}, nil
+
 	case r.IsI31:
 		return refType{heap: abstractHeap(binary.HeapI31)}, nil
 
@@ -375,19 +400,17 @@ func typeOfRef(r ref, site string) (refType, error) {
 	// function reference" for this shape, which is right there (it is describing what the fields
 	// look like) and would be a fabrication here, where the whole output is a type.
 	//
-	// This is also the slot rung 5's slice 3 fills — an externalized reference, whose dynamic
-	// type is `extern`. Until it exists, an `externref` in this engine is either null or a
-	// funcref-shaped value from the harness's `ref.extern`, and the honest answer for anything
-	// else is that there isn't one.
+	// **Two of the three kinds this comment used to defer to slice 3 now have arms above** — an
+	// externalized reference reporting `extern`, and a host reference reporting `any` — so the
+	// paragraph is rewritten rather than left standing, a deferral's prose being exactly the kind
+	// that reads as current after its subject has landed. The slot that remains is genuinely empty:
+	// a non-null reference with no discriminator set at all, which no construction site produces and
+	// which is therefore an engine inconsistency rather than a missing feature. Kept as an error for
+	// that reason.
 	//
-	// **The design that fills it is 0027 decision 3, accepted on the #267 relay** (chat-Claude,
-	// relayed by Scott, Scott's veto standing) — the #259 stamp had carved it out at `proposed`
-	// until slice 3's scoping firmed it, and slice 3 is now what waits on it. The status is stated
-	// rather than the decision cited bare, because a comment naming a decision reads as naming a
-	// settled one, and *a status field is a citation to an approval* (#142) does not stop being true
-	// when the citation moves from an ADR header into prose. The interval is worth the clause: this
-	// comment said `proposed` for exactly as long as that was the fact, which is what makes the
-	// present tense here readable as a fact rather than as an aspiration.
+	// The design that filled the other two is 0027 decision 3, accepted on the #267 relay
+	// (chat-Claude, relayed by Scott, Scott's veto standing) — recorded here as history now that the
+	// arms exist, the ADR's own header being where the status lives.
 	return refType{}, fmt.Errorf("%w: %s on a non-null reference with no payload discriminator set",
 		ErrNotValidated, site)
 }

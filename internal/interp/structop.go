@@ -153,6 +153,16 @@ func (in *Instance) execFB(ins binary.Instr, st *stack, fn *binary.Func, pc int)
 	case opRefCast, opRefCastNull:
 		return in.execRefCast(fn, pc, st)
 
+	// The externref conversions (rung 5 slice 3, `externop.go`). Bare `st` for the i31 trio's
+	// reason and one more: neither conversion inspects the payload at all, so there is nothing to
+	// resolve against even in principle — they set and clear one bit on a reference that passes
+	// through untouched.
+	case opExternConvertAny:
+		return execExternConvertAny(st)
+
+	case opAnyConvertExtern:
+		return execAnyConvertExtern(st)
+
 	default:
 		return unsupported(ins)
 	}

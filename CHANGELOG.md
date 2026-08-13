@@ -21,6 +21,59 @@ weakly-ordered platform.
 
 ### Added
 
+- **`gate:gc` rung 5, third slice — `extern.convert_any` and `any.convert_extern`, and the wrapper
+  is one bit** (#258, decision 0027 decision 3). `fb 1b`/`fb 1a` end to end, plus the host-reference
+  boundary the corpus needs to *supply* an externref: `ref` grows `Externalized bool` and reuses
+  `Addr` behind `IsHost`, which is the whole of the decision's cost. The type system permits exactly
+  one level of wrapping, so a bit is not an approximation of `ExternRef r` — it is the same
+  information, and the payload is never read in either direction, which makes
+  `extern.wast:52-57`'s round trip an identity *by construction* rather than by two arms agreeing.
+  - **The blocker was a global, not a function.** All 11 of `extern.wast`'s all-on failures read
+    `no instance:` rather than one bucket per vector, because `:6-7` put the conversions in *global
+    initializers* — one missing arm at the front of an init sequence blocks every vector behind it,
+    which is slice 2's init-sequence lesson arriving from the other end. And one arm serves both
+    paths: `runConst` builds a `binary.Func` and calls `in.run`, so a const-legal opcode needs no
+    second home. This slice's pre-registration implied two sites; measurement said one.
+  - **Both arms are partial where the first draft made them total.** `eval.ml:929-939` has four
+    `ExternConvert` arms and **no arm** for internalizing a non-null non-`ExternRef`, so that
+    operand is a reference crash rather than an identity — the draft that returned it unchanged was
+    reading a partiality as a permission. Externalizing an already-externalized reference is
+    likewise reported: a bit cannot express depth two, and flattening it silently would be the
+    engine answering a question it cannot represent.
+  - **All-on lane 62138 → 62173 pass, 162 → 127 fail, `Gated` 0. Fail delta −35**, which is the
+    reward figure a gate campaign has: `unsupported` is **unmoved at 2689** and structurally so —
+    `extern.wast`'s vectors score `gated` in the default lane, so no pre-flip PR can move that
+    column however much capability it lands. The census closes on **vector identity**, not counts:
+    35 departures, 0 arrivals, residual zero, and five files fully green all-on. Default lane
+    unmoved and identical vector-for-vector and bucket-for-bucket (58590/117/2689/3625).
+    `allOnPassFloor` 62113 → 62173 in the same PR, per 0013 — the distance was 25 before and would
+    have been 60 after, both inside the slack and therefore both silent.
+  - **#260 discharged: every `refEqTreatment` claim now has a discriminating witness pair.** The
+    coverage control next door checks an *entry* exists, which is a claim rather than its truth —
+    and the specimen arrived in the field #260 predicted, `Addr`'s entry having read "not compared:
+    reachable only on a funcref" until host references made both halves false, green throughout.
+    Ten rows for nine keys, each pair differing in exactly one field with an agreeing half beside
+    it, because a control that only ever watched `refEq` say false would be satisfied by a
+    comparison that never says true.
+  - **Five accept-direction controls, each of them earned by a mutation the board could not see**
+    (§9 G-3, where such controls are product work). Reverting `any.convert_extern` to the total
+    draft, setting the wrapper bit on a null, and dropping `fromRef`'s `IsHost` guard so a
+    no-identity externref reports `(ref.extern 0)` all leave the board at 62173/127 exactly. So
+    `IsHost` is scored by **nothing** today: the three vectors that will score it — `extern.wast:39`,
+    `:42`, `:56` — are all `unsupported` pending #270.
+  - **Prose corrected where the mutations killed it, not just code.** Two claims in this slice's own
+    comments were false and were found by running the falsification rather than by review: that
+    `extern.wast:43`/`:45` score the null arm (nothing can — all three readers of `Externalized`
+    guard on `Null` first), and that the corpus checks the conversion pair's composition today (all
+    four of `:53-56` are `unsupported`). A third prediction, that the null mutation would kill only
+    one control, was also wrong: `any.convert_extern` matches `case r.Null` before `case
+    r.Externalized`, so a bit set on a null **persists** rather than round-tripping away.
+  - **Declared and tracked rather than deleted or ruled on:** #271 (`Value.Equal` has no caller
+    anywhere in the module, and `deadcode` is structurally blind to uncalled *exported* methods —
+    measured with a positive control, the identical body being reported as a free function and
+    silent as an exported method) and #270 (the eight `RefTypePat` arms and `(ref.host N)`, 28
+    unsupported vectors behind a public-boundary widening that wants its own ADR and stamp).
+
 - **`gate:gc` rung 5, second slice — `br_on_cast` and `br_on_cast_fail`, the casts family's
   branching half** (#258, decision 0027). `fb 18`/`fb 19` end to end: decode, internal form, and
   interpretation. Neither row can go through the flat immediate walk, for two independent reasons
@@ -271,6 +324,22 @@ weakly-ordered platform.
   element segment's *offset* and an element *expression* are different lines of the user's module.
 
 ### Fixed
+
+- **A gated-allowlist comment enumerated three blank lines as unsupported vectors**
+  ([#272](https://github.com/scttfrdmn/burroughs/issues/272)). The allowlist's `extern.wast` note
+  claimed the lines *not* listed — `:39`, `:41`, `:44`, `:51`, `:53-56` — stay `Unsupported`. `:41`,
+  `:44` and `:51` hold nothing, and the real second member (`:42`'s `(ref.host 2)` argument) was
+  missing, so an enumeration was wrong in both directions at once and green throughout. Measured with
+  the harness: 18 commands, 12 passing all-on, 6 unsupported, and the six are `{39, 42, 53, 54, 55,
+  56}`.
+  - **The lesson is about the *complement*, which is why no control could have caught it.** The
+    allowlist's own two controls are scoped to the lines the table *contains* — one checks each
+    listed line is really failing, the other that a newly-gated line is listed — so a claim about the
+    lines it does **not** contain has no mechanism watching it at all. The available check is
+    closure: sum the enumerated partitions against a total the harness can report (11 gated + 6
+    unsupported + the module at `:1` = 18), which the original list would have failed. Swept
+    tree-wide for the shape rather than over the block that failed: three complement-shaped comments
+    exist and this was the only one of the class.
 
 - **A `v128` lost one of its two slots at a branch and at `select`**
   ([#242](https://github.com/scttfrdmn/burroughs/issues/242)). Decision 0024 gives a `v128` **two**

@@ -605,12 +605,21 @@ func fromInterpValue(o interp.Value) (Val, bool) {
 	if o.Null {
 		return Val{Kind: k, Class: RefLiteralNull}, true
 	}
-	if k == KindExternRef {
+	if k == KindExternRef && o.IsHost {
 		return Val{Kind: k, Class: RefExternIdentity, Extern: o.RefID}, true
 	}
-	// A non-null funcref: RefConcrete, per its own doc comment — this harness tracks no
-	// funcref identity, so a result converts to "some non-null value of this Kind" rather
-	// than to a class carrying an identity nothing compares.
+	// A non-null funcref, or a non-null externref with no host identity: RefConcrete, per its own
+	// doc comment — "some non-null value of this Kind", which is all the harness can say when there
+	// is no identity to compare.
+	//
+	// **The externref half of that arrived with slice 3 and the `o.IsHost` guard above is what
+	// routes it here.** `externalize-i` (`extern.wast:29-31`) returns an externref wrapping an i31,
+	// a struct or an array; the wrapped payload has no identity and `interp.Value.RefID` is 0 for
+	// all three, so the unguarded arm above converted them to `(ref.extern 0)` — a host identity
+	// belonging to a *different* reference in the same file (`:37`). `:46-49` expect the bare
+	// `(ref.extern)` pattern, which `Matches` admits for any non-null externref including
+	// RefConcrete, so **both readings score green on every vector in the corpus** and only the
+	// accept-direction argument distinguishes them (§9 G-3). See interp.Value.IsHost.
 	return Val{Kind: k, Class: RefConcrete}, true
 }
 
@@ -5013,10 +5022,19 @@ func TestGatedVectors(t *testing.T) {
 
 		// One module (:1-35), GC throughout: `any`/`i31`/`struct`/`array` value types and the
 		// `any.convert_extern`/`extern.convert_any` opcodes. The lines *not* listed here
-		// (:39, :41, :44, :51, :53-56) stay Unsupported: they carry `ref.host`/`ref.i31`/
-		// `ref.struct`/`ref.array`, forms readRefConst's own doc comment states are out of
-		// scope (measured 0 corpus vectors elsewhere needing them as an argument or a
-		// non-bare result), so those lines never reach the gate at all.
+		// (:39, :42, :53-56) stay Unsupported: they carry `ref.host`/`ref.i31`/`ref.struct`/
+		// `ref.array`, forms readRefConst's own doc comment states are out of scope, so those
+		// lines never reach the gate at all. Tracking for the widening is **#270**.
+		//
+		// **Grave #272. That list read `(:39, :41, :44, :51, :53-56)` until rung 5 slice 3 resolved it, and
+		// three of those numbers are blank lines** — `:41`, `:44` and `:51` hold nothing, while the
+		// real second member, `:42`'s `(ref.host 2)` argument, was missing. The enumeration was
+		// therefore wrong in both directions at once and green throughout, no mechanism reading a
+		// prose line number. It is the citation-list law's own specimen inside the allowlist that
+		// exists to keep deferrals honest: measured now, `extern.wast` has 18 commands, 12 passing
+		// all-on and 6 unsupported, and the six are `{39, 42, 53, 54, 55, 56}` — 11 gated entries
+		// below plus 6 unsupported plus the module at :1 accounts for all 18, which is the check
+		// the original list would have failed.
 		"extern.wast": {
 			37: "gc: any/i31/struct/array value types and any.convert_extern/extern.convert_any at :1 — the module this action runs against",
 			40: "gc: any/i31/struct/array value types and any.convert_extern/extern.convert_any at :1 — the module this action runs against",
@@ -6078,7 +6096,15 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	// mis-read of the corpus. Worth the space because the reflex it argues for is to reconcile a
 	// miss against the file list before reaching for an explanation: had the extra 3 been assumed to
 	// be try_table's, the coincidence of magnitude would have closed the account on a false story.
-	const allOnPassFloor = 62113
+	// **62113 → 62173, rung 5 slice 3 (#258).** The two `ExternConvert` arms plus the host-reference
+	// boundary moved this lane by +35 (62138 → 62173, fail 162 → 127) and the default lane by
+	// nothing — `extern.wast`'s vectors are `gated` there, which is the structural zero a gate
+	// campaign has instead of an `unsupported` delta. The distance was already 25 before this PR and
+	// would have been 60 after it, both inside the 250 slack and therefore both silent; raised here
+	// because the rule is a distance of zero in the PR that moves the board, not a distance under
+	// the slack. `unsupportedCeiling` is deliberately unmoved at 2689: this PR answers no declined
+	// question, and #270 is where the 28 reference-shape vectors go.
+	const allOnPassFloor = 62173
 	boardBound(t, "allOnPassFloor", totalPass, allOnPassFloor, boardBoundSlack, floorBound,
 		"a gated feature regressed, which the Gated==0 assertion above cannot see: with every "+
 			"gate on, a broken feature turns a pass into a fail and leaves Gated at zero")
