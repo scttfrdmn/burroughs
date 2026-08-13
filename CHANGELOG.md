@@ -21,6 +21,27 @@ weakly-ordered platform.
 
 ### Added
 
+- **`gate:relaxed-simd` — all twenty relaxed opcodes, the last SIMD family, behind a gate that stays
+  off** (#275, decision 0028). `fd 0x100`–`0x113` execute: swizzle, the four zero-vector truncs,
+  madd/nmadd at both widths, the four laneselects, min/max at both widths, `q15mulr_sat_s`, and the
+  two dot products. **Seventeen of the twenty are aliases** — `execFD` routes them to the arms that
+  already implement the reference's choice — so the all-on lane's fail count falls **127 → 90** for
+  three new functions and eighteen joined case labels. All seven relaxed files go fully green: 3/3,
+  1/1, 6/6, 11/11, 12/12, 19/19, 25/25.
+- **The harness reads `(either …)` in expected-result position** (0028 d4). It is an arm of the
+  reference's `result` type (`script.ml:44`), not of `literal`, so it gets its own reader beside
+  `readConst` rather than widening it — an `either` cannot leak into an argument position, which is
+  the asymmetry the reference itself has. Recursive per `parser.mly:1536`, though no vector in the
+  corpus nests one: all 32 are two flat alternatives. This is what lets a relaxed vector accept both
+  the fused and the unfused lowering, and it is *why* no oracle can check which member this engine
+  picked — the vectors admit both on purpose.
+- **Author-supplied witnesses for the four zero-vector truncs** (0028 d5). `i32x4_relaxed_trunc.wast`
+  is eight lines with **no assertions**, so `0x101`–`0x104` are scored by nothing in either lane.
+  Four witnesses assert the exact bit patterns `I32x4_convert.trunc_sat_*` produces, on the inputs
+  where the relaxed freedom actually lives: out-of-range, NaN, negative-to-unsigned, and the zeroed
+  upper half. Absolute patterns first, then a differential against the non-relaxed twin — in that
+  order, because a differential against a shared helper is blind to a defect *inside* the helper.
+
 - **`gate:gc` rung 5, third slice — `extern.convert_any` and `any.convert_extern`, and the wrapper
   is one bit** (#258, decision 0027 decision 3). `fb 1b`/`fb 1a` end to end, plus the host-reference
   boundary the corpus needs to *supply* an externref: `ref` grows `Externalized bool` and reuses
@@ -494,6 +515,28 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **Draft prose resolved an ADR's open question in the confident direction, and the tripwire that ADR
+  filed proved it wrong** ([#280](https://github.com/scttfrdmn/burroughs/issues/280)). Decision 0028
+  observed that the classical `2p+2` double-rounding bound is stated for the basic operations while an
+  fma is ternary, wrote *"I have not verified it and do not assert it either way"*, and filed the
+  question with a control instead of a paragraph. The implementing PR's draft comment on
+  `vecRelaxedFma` then asserted the innocuousness *as reasoning recorded in 0028* — which says the
+  opposite. The control found **4** differences in 1000 triples, identical on both arches
+  (`fma(3, 34.275555, 0x1p-149)` → `0x42cda740` against a correctly-rounded `0x42cda741`): the bound
+  needs the wide format to hold the *exact* result, true of `x*y` and false of `x*y + z` with a
+  subnormal addend. Nothing in the engine was wrong — the reference *is* this composite and 0028 d2
+  binds the arm to the reference — so 0028 gets an appended **resolution**, not an amendment, and the
+  lesson is about prose: a hedge is part of a record's content. The tripwire survives with its subject
+  inverted, pinning the 4 exactly rather than flooring it.
+- **A positive control was stillborn on arm64 because it substituted its own comparison for the one
+  the ADR specified** (same issue). 0028 d3 named the pair — *"a triple where the composite differs
+  from the unfused f32 answer"* — and the draft compared the bare `x*y + z` against the oracle
+  instead, which is **0** on arm64, where the compiler fuses into a genuine f32 `FMADD` and lands on
+  the correctly-rounded answer. Both pairings are asserted now, the specified one as the control
+  (55 on both arches, nonzero for the *same reason* everywhere) and the bare one as d3's evidence
+  (4 on arm64, 55 on amd64) — which makes d3 a measurement rather than an argument, and worse than it
+  claimed: a bare expression would make the engine's answer depend on which runner built it for 55 of
+  1000 triples while passing every vector in the suite on both.
 - **A gated-allowlist comment enumerated three blank lines as unsupported vectors**
   ([#272](https://github.com/scttfrdmn/burroughs/issues/272)). The allowlist's `extern.wast` note
   claimed the lines *not* listed — `:39`, `:41`, `:44`, `:51`, `:53-56` — stay `Unsupported`. `:41`,

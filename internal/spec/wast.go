@@ -810,8 +810,16 @@ func nodeAt(n node, i int) node {
 // KindUnsupported with its head recorded, where the column names it. The forms deliberately
 // left out, each measured over the corpus rather than guessed:
 //
-//   - `(either …)` results, the relaxed-SIMD non-determinism form: **0** answerable, all of
-//     them in bulk and relaxed-SIMD files.
+//   - `(either …)` results **are admitted now**, and the sentence they replace was wrong about
+//     where they are: it read "**0** answerable, all of them in bulk and relaxed-SIMD files",
+//     and the truth is **32 occurrences, all six of them relaxed-SIMD files, zero in bulk**.
+//     Two errors in one clause. The count came from a scan of the answerable population at a
+//     time when every relaxed vector was `gated` — so the 0 measured the gate, not the grammar
+//     — and "in bulk" was an inference from the count rather than a measurement, bulk being
+//     where unanswerable things usually are. A declined-shape list is a record of what was
+//     measured when, so the wrong sentence is quoted rather than deleted; what it must not do is
+//     stay in the present tense. `readResult` reads them (`Val.Alts`), and `Matches` is the
+//     reference's `List.exists`.
 //   - `(get "g")` actions, v128 constants, reference constants: their own strata.
 //
 // The list used to open with `(invoke $M "f" …)`, on the ground that it was **0** in the
@@ -853,7 +861,9 @@ func assertReturn(n node) (Command, bool) {
 	}
 	c.Kind, c.Line, c.Head = kind, n.line, n.head()
 	for _, e := range n.list[2:] {
-		v, ok := readConst(e)
+		// readResult, not readConst: a result position admits `(either …)` and an argument
+		// position does not. See readResult's own comment for why that is two readers.
+		v, ok := readResult(e)
 		if !ok {
 			return no, false
 		}
