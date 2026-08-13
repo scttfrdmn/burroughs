@@ -525,22 +525,63 @@ func (in *Instance) invokeIndex(idx uint32, name string, args []Value) ([]Value,
 	}
 	locals := newFrame(total, ft.Params, fn.EachLocal)
 	for i, p := range ft.Params {
-		if args[i].Type != p {
-			return nil, fmt.Errorf("interp: %q parameter %d is %s, got %s", name, i, p, args[i].Type)
-		}
 		if p.IsRef() {
-			// **A non-null funcref argument is refused, and that refusal is Value.RefID's own
-			// stated scope boundary, not a leftover of the old blanket refusal.** externref
-			// (null or not) and a null funcref both convert cleanly through toRef; what stays
-			// refused is exactly the shape 0 corpus vectors exercise (see Value.RefID's doc
-			// comment) — a public caller naming a *specific*, non-null function.
+			// **A reference argument is checked by *subtyping*, not by type identity, and that is a
+			// transcription rather than a leniency.** `eval.ml:1159-1169`'s `invoke` is
+			//
+			//	if not (List.for_all2 (fun v -> Match.match_valtype [] (type_of_value v)) vs ts1) then
+			//	  Crash.error at "wrong types of arguments";
+			//
+			// so the reference compares the argument's **dynamic** type against the parameter's
+			// declared one through the same `Match` relation `ref.test` evaluates — which this engine
+			// has, in `typeOfRef`/`matchRefType`, and was not consulting here.
+			//
+			// Identity was wrong in two measured directions, both of them refusals of programs the
+			// reference runs:
+			//
+			//   - **A null.** `type_of_value NullRef` is `(Null, BotHT)` (`value.ml:112`) and
+			//     `matchHeapType`'s arm 11 makes bottom a subtype of everything, so one null value
+			//     serves every nullable reference parameter — grave #266's law (there is exactly one
+			//     heaptype-free null) reaching the host boundary. `extern.wast:43` is the vector:
+			//     `(assert_return (invoke "externalize" (ref.null any)) (ref.null extern))` passes a
+			//     null the harness spells at one type into a parameter declared at another, and the
+			//     identity check reported *`"externalize" parameter 0 is (ref null any), got
+			//     externref`* — an engine refusing a value on the strength of a distinction the
+			//     reference does not have.
+			//   - **A non-null reference under an abstract parameter.** A host reference's dynamic
+			//     type is `(ref any)` (`script.ml:80`) and `extern.wast:42` hands one to an `anyref`
+			//     parameter; `matchNull` admits the non-nullable under the nullable, so the reference
+			//     accepts it and identity never could.
+			//
+			// It does not *loosen* anything the corpus relies on: an externref against a `funcref`
+			// parameter still fails (`extern` and `func` are disjoint hierarchies, `matchHeapType`
+			// arm 12), and a non-nullable parameter still refuses a null (`matchNull`, which is the
+			// whole content of `ref.test (ref $t)` answering 0 on one).
+			if !args[i].Type.IsRef() {
+				return nil, fmt.Errorf("interp: %q parameter %d is %s, got %s", name, i, p, args[i].Type)
+			}
+			// The funcref scope refusal comes first, ahead of `toRef`: it is Value.RefID's own
+			// stated boundary rather than a type error, and the shape it declines is one `toRef`
+			// would resolve against the *caller's* instance on the way to a check that would then
+			// pass. externref (null or not) and a null funcref both convert cleanly.
 			if p == binary.FuncRef && !args[i].Null {
 				return nil, fmt.Errorf("%w: parameter %d of %q is a non-null funcref, which this "+
 					"boundary cannot accept from outside the engine (see interp.Value.RefID)",
 					ErrUnsupportedOp, i, name)
 			}
-			locals.refs[i] = args[i].toRef(in)
+			r := args[i].toRef(in)
+			got, terr := typeOfRef(r, fmt.Sprintf("%q parameter %d", name, i))
+			if terr != nil {
+				return nil, terr
+			}
+			if !matchRefType(got, castTarget(p, in.mod)) {
+				return nil, fmt.Errorf("interp: %q parameter %d is %s, got %s", name, i, p, got)
+			}
+			locals.refs[i] = r
 			continue
+		}
+		if args[i].Type != p {
+			return nil, fmt.Errorf("interp: %q parameter %d is %s, got %s", name, i, p, args[i].Type)
 		}
 		if p == binary.V128 {
 			// decision 0024: a v128 parameter's high half crosses through Value.Hi, never

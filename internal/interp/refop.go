@@ -134,6 +134,47 @@ func refEq(a, b ref) (bool, error) {
 	if a.Null || b.Null {
 		return a.Null && b.Null, nil
 	}
+	// **An externalized reference on either side compares its *payload*, and this clause must come
+	// before `IsI31`** — `extern.ml:11-14` is the one override in the family that recurses:
+	//
+	//	| ExternRef r1', ExternRef r2' -> Value.eq_ref r1' r2'
+	//	| _, _ -> eq_ref' r1 r2
+	//
+	// So two externrefs are equal exactly when what they wrap is equal, and a mixed pair falls to the
+	// base `(==)` on two different constructor blocks — `false`, not an error, the same delegation
+	// reading the i31 and aggregate clauses already had to be corrected to.
+	//
+	// **The ordering is load-bearing in a way the other clauses' is not**, because an externalized
+	// i31 has `IsI31` set too: reached in declaration order, `ExternRef (I31Ref 5)` versus a bare
+	// `I31Ref 5` would answer **true** where the reference answers false (neither pair matches an
+	// override, so the base compares two distinct blocks). That is a bit encoding leaking through a
+	// clause that was written when no bit existed — the same hazard `typeOfRef`'s arm order carries,
+	// and the reason both places state it rather than relying on the reader noticing twice.
+	//
+	// Clearing the bit and recursing is exactly `Value.eq_ref r1' r2'`: the recursion is on the
+	// *unwrapped* references, and depth cannot exceed one (0027 decision 3, and
+	// `execExternConvertAny` reports an attempt to nest), so this recurses at most once.
+	if a.Externalized || b.Externalized {
+		if !a.Externalized || !b.Externalized {
+			return false, nil
+		}
+		a.Externalized, b.Externalized = false, false
+		return refEq(a, b)
+	}
+	// **A host reference compares by identity, and `Addr` is what carries it** — `script.ml:91-95`,
+	// `| HostRef n1, HostRef n2 -> n1 = n2`, structurally the same shape as the i31 override below
+	// and for a related reason: a host reference's identity *is* its number, the harness having no
+	// allocation to point at. A mixed pair is `false` by the same delegation as everywhere else.
+	//
+	// Placed ahead of the two error returns rather than beside `IsI31` — a host reference sets no
+	// pointer field, so without this clause it would reach the funcref error and be reported as
+	// something it is not, which is grave #36's class (the engine's testimony naming a kind the value
+	// never had). It must also come ahead of them for the *mixed* pairs: host-versus-funcref and
+	// host-versus-exnref both answer `false` in the reference, so an error there would be a refusal
+	// where an answer exists.
+	if a.IsHost || b.IsHost {
+		return a.IsHost && b.IsHost && a.Addr == b.Addr, nil
+	}
 	// **An i31 on either side answers structurally, and the mixed pair answers `false` rather than
 	// #9's** — `i31.ml:20`'s `I31Ref i1, I31Ref i2 -> i1 = i2`, the one override in the family that
 	// compares a payload instead of installing `failwith`. Two `ref.i31` of the same integer are
@@ -205,13 +246,22 @@ func refEq(a, b ref) (bool, error) {
 // not to the sample (`ref`'s fields as of today). An enumeration on both sides would agree with
 // itself forever.
 var refEqTreatment = map[string]string{
-	"Null":  "compared: two nulls are equal, a null and an allocation are not",
-	"Addr":  "not compared: reachable only on a funcref, which refEq reports as #9's",
-	"Inst":  "not compared: reachable only on a funcref, which refEq reports as #9's",
-	"Exc":   "not compared: reachable only on an exnref, which refEq reports as #9's",
-	"Obj":   "compared by pointer identity: an aggregate's identity is its allocation (0020)",
-	"IsI31": "compared: selects the i31 clause, and a mixed pair answers false (i31.ml:20)",
-	"I31":   "compared structurally: an i31 has no allocation, so the payload is the identity",
+	"Null": "compared: two nulls are equal, a null and an allocation are not",
+	// **This entry's reason inverted when `IsHost` landed, and the value it names did not change** —
+	// which is #260's whole point about a map of justifications. `Addr` was "not compared: reachable
+	// only on a funcref, which refEq reports as #9's", and both halves of that were true when
+	// written; a host reference now reaches `refEq` with its identity in this field and `refEq`
+	// compares it (`script.ml:93`). A coverage control asking only "is there an entry for `Addr`?"
+	// was green across that inversion and had nothing to say about it, because the entry existed
+	// throughout. That is what the witness pairs in `TestRefEqTreatmentsHaveWitnesses` are for.
+	"Addr":         "compared when IsHost: a host reference's identity is its number (script.ml:93); not compared on a funcref, which refEq reports as #9's",
+	"Inst":         "not compared: reachable only on a funcref, which refEq reports as #9's",
+	"Exc":          "not compared: reachable only on an exnref, which refEq reports as #9's",
+	"Obj":          "compared by pointer identity: an aggregate's identity is its allocation (0020)",
+	"IsI31":        "compared: selects the i31 clause, and a mixed pair answers false (i31.ml:20)",
+	"I31":          "compared structurally: an i31 has no allocation, so the payload is the identity",
+	"Externalized": "compared: both set recurses on the unwrapped payloads, a mixed pair answers false (extern.ml:13)",
+	"IsHost":       "compared: selects the host clause, whose identity is Addr, and a mixed pair answers false (script.ml:93)",
 }
 
 // refFieldTreatments reports refEq's declared treatment of every field `ref` actually has, and
