@@ -142,8 +142,20 @@ var refEqWitnesses = []refEqWitness{
 	},
 }
 
-// TestRefEqTreatmentsHaveWitnesses is #260 discharged: every claim in `refEqTreatment` is backed by
-// a pair whose behaviour under `refEq` demonstrates it.
+// TestRefEqTreatmentsHaveWitnesses is #260's **specimen** discharged: every claim in
+// `refEqTreatment` is backed by a pair whose behaviour under `refEq` demonstrates it.
+//
+// **Specimen, not class, and the distinction is the issue's own.** #260's Scope section says *the
+// class, not the instance* — any control whose subject is a map of **justifications** — and names
+// three other candidates. The sweep it prescribed was run and two of them are live and unwitnessed:
+// `TestGatedVectors`' `allowed` map (its reason strings name *which feature* declines a line, and the
+// control reads presence in both directions and the string in neither) and
+// `TestGrave206KnownFailures`' `known` map (its citations name a *cause* — "harness limitation"
+// versus an engine defect — which is #116's oracle-less half and so has no cheap witness). The
+// fourth, the `deadcode` allowlist, has **no subject**: it is empty and `tools/deadcode-allow.txt`
+// does not exist, a negative recorded rather than left to be re-looked-for. So #260 stays open,
+// re-pointed at those two; closing a class issue on the one member that was repaired is the defect
+// #264's third instance is filed for.
 //
 // Three obligations, and the first is the one that makes this a control over the *space* rather than
 // over today's rows: every key in the map must have a witness. So a future payload kind cannot
