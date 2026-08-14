@@ -247,11 +247,21 @@ type Val struct {
 	//
 	// Recursive, because the grammar is: `LPAR EITHER result list(result) RPAR` (parser.mly:1536)
 	// takes `result`s, and `EitherResult of result list` (script.ml:44) is an arm *of* `result`,
-	// so an alternative may itself be an `either`. No corpus vector nests one — all 32
-	// occurrences are two flat alternatives — and it is read recursively anyway, because the
-	// alternative is a reader that would decline a shape the reference accepts, and *a shape this
-	// harness declines is scored unsupported*: a silent decline on a nested form would look like
-	// a vector nobody had got to yet rather than a reader that stopped short.
+	// so an alternative may itself be an `either`. No corpus vector nests one, measured — and it
+	// is read recursively anyway, because the alternative is a reader that would decline a shape
+	// the reference accepts, and *a shape this harness declines is scored unsupported*: a silent
+	// decline on a nested form would look like a vector nobody had got to yet rather than a
+	// reader that stopped short.
+	//
+	// **The widths are 2, 3 and 4, not 2.** This sentence previously read "all 32 occurrences are
+	// two flat alternatives", which was wrong in its second half and wrong in an instructive way:
+	// 32 is the count of `(either` *sites* — a `grep -c` — and the width of a site is a different
+	// measurement that was never taken, so a census of sites was written up as a census of their
+	// contents. Measured over the parsed corpus: 32 sites, **17 of width 2, 2 of width 3, 13 of
+	// width 4**, zero nested. The three- and four-wide ones are where the freedom is widest and
+	// the lowering pin has the most to say — `relaxed_dot_product.wast`'s own comments name each
+	// alternative's lowering (signed×signed, signed×unsigned, unsigned×unsigned), which is the
+	// corpus stating outright that these lists are a menu of implementations. Grave #282.
 	//
 	// **Result position only.** `either` is not an arm of `literal` or of any const form, so it
 	// cannot appear as an argument; `readResult` is where it is admitted and `readConst` never
@@ -366,6 +376,38 @@ func (v Val) String() string {
 	return fmt.Sprintf("%s %d", v.Kind, int64(v.Bits))
 }
 
+// MatchingAlt reports which alternative of an `(either …)` expectation `got` satisfies, and
+// whether any does. It returns `(-1, false)` for an expectation that is not a disjunction: the
+// question "which alternative" has no answer there, and a zero index would be a wrong one.
+//
+// **This exists because `Matches` answers a question that is too coarse for the guarantee
+// decision 0028 makes.** `either` is the corpus admitting more than one legal answer, so a
+// vector carrying one passes whichever the engine picked — which is correct scoring and blind
+// to the *choice*. 0028 d1 promises the choice is deterministic and architecture-uniform, and
+// that promise is about the index this returns. Without it the pin would have to compare board
+// text or re-invoke a second oracle; with it the run loop can record what it matched, the same
+// shape `GatedAt` uses for the same reason.
+//
+// The search is `List.exists`'s order (runner.ml:485) — first match wins, and the alternatives
+// are not disjoint in general, so "which" means "the first that accepts" and not "the only
+// one". A corpus with two alternatives accepting the same value would pin the earlier, and that
+// is a property of the corpus rather than a fact about the engine; `Of` beside the index in
+// AltChoice is what lets a reader see the width of the freedom being reported on.
+func (want Val) MatchingAlt(got Val) (int, bool) { //nolint:revive // `want`/`got` names the asymmetry, as on Matches below — the two must agree, since this is the method Matches delegates its Alts arm to
+	if want.Alts == nil {
+		return -1, false
+	}
+	// Recursion, not a loop over scalars: an alternative is a `result`, so it may be a NaN
+	// class, a shaped v128, a ref pattern, or another `either`, and each of those has its own
+	// arm in Matches. Calling Matches is what reuses them all.
+	for i, alt := range want.Alts {
+		if alt.Matches(got) {
+			return i, true
+		}
+	}
+	return -1, false
+}
+
 // Matches reports whether an engine result satisfies this expectation.
 //
 // Exact expectations compare **bit for bit including the type tag**, because `i32 0` and `f32
@@ -391,15 +433,12 @@ func (want Val) Matches(got Val) bool { //nolint:revive,staticcheck // `want`/`g
 		// got.Kind` gate reached before this point would compare `got` against a zero value and
 		// refuse every `either` vector in the corpus while looking like a type check.
 		//
-		// Recursion, not a loop over scalars: an alternative is a `result`, so it may be a NaN
-		// class, a shaped v128, a ref pattern, or another `either`, and each of those has its own
-		// arm below. Calling Matches is what reuses them all.
-		for _, alt := range want.Alts {
-			if alt.Matches(got) {
-				return true
-			}
-		}
-		return false
+		// Delegated rather than looped here, so the search for a satisfying alternative has one
+		// authority: MatchingAlt answers *which*, this answers *whether*, and a `List.exists`
+		// written twice is the two-places-know-one-fact shape on a question the lowering pin
+		// depends on.
+		_, ok := want.MatchingAlt(got)
+		return ok
 	}
 	// **No `want.AnyNull` fast path here** — it used to be the first thing this function did
 	// (`return got.Class == RefLiteralNull`), and the null-`got` dispatch below subsumes it

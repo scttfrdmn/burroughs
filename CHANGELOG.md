@@ -21,6 +21,22 @@ weakly-ordered platform.
 
 ### Added
 
+- **The relaxed-SIMD lowerings are pinned by a control, which is what decision 0028 d1's guarantee
+  did not have** (#282, pre-flip for `gate:relaxed-simd`). 0028 d1 promises more than the spec asks —
+  lowerings deterministic *and* architecture-uniform — and every `(either …)` vector passes under
+  either lowering, so the board, both lanes and both CI architectures were structurally blind to the
+  choice. `TestRelaxedLoweringChoicesArePinned` records which alternative each answer matches, read
+  out of the run loop rather than re-derived by a second oracle, and pins all **32** of them by the
+  alternative's *text*. Demonstrated: reading the dot product's second operand as unsigned moves
+  `relaxed_dot_product.wast:62` from `65025` to `-66047` — both legal, the whole spec package and
+  `internal/interp` stay green, and only the pin fires. Verified identical on `darwin/arm64` and
+  `linux/amd64`.
+- **Every `Err*` sentinel in `internal/binary` is enrolled in the fuzz oracle or excluded with a
+  reason, checked by an AST walk** (#264 discharged). The grave's own second instance was a sentinel
+  that was unreachable *and* unenrolled, which #264 predicted would surface at a gate flip as an
+  unexplained red; the tripwire is now the (sentinel × registry) bijection it asked for, both
+  directions, with a text-vs-AST gap witness. 40 declared, 38 enrolled, 2 excluded.
+
 - **`gate:relaxed-simd` — all twenty relaxed opcodes, the last SIMD family, behind a gate that stays
   off** (#275, decision 0028). `fd 0x100`–`0x113` execute: swizzle, the four zero-vector truncs,
   madd/nmadd at both widths, the four laneselects, min/max at both widths, `q15mulr_sat_s`, and the
@@ -32,9 +48,11 @@ weakly-ordered platform.
   reference's `result` type (`script.ml:44`), not of `literal`, so it gets its own reader beside
   `readConst` rather than widening it — an `either` cannot leak into an argument position, which is
   the asymmetry the reference itself has. Recursive per `parser.mly:1536`, though no vector in the
-  corpus nests one: all 32 are two flat alternatives. This is what lets a relaxed vector accept both
-  the fused and the unfused lowering, and it is *why* no oracle can check which member this engine
-  picked — the vectors admit both on purpose.
+  corpus nests one: 32 sites, of widths **17×2, 2×3, 13×4** (#282 — the first wording of this said
+  "all 32 are two flat alternatives", a count of sites written up as a census of their contents; the
+  distribution is now pinned executably). This is what lets a relaxed vector accept both
+  the fused and the unfused lowering, and it is why *the suite* cannot check which member this
+  engine picked — the vectors admit both on purpose, so the choice needs an instrument of its own.
 - **Author-supplied witnesses for the four zero-vector truncs** (0028 d5). `i32x4_relaxed_trunc.wast`
   is eight lines with **no assertions**, so `0x101`–`0x104` are scored by nothing in either lane.
   Four witnesses assert the exact bit patterns `I32x4_convert.trunc_sat_*` produces, on the inputs

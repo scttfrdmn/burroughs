@@ -745,25 +745,37 @@ func (p *parser) encodeExports(w *writer) {
 // 0x03, tag 0x04 (encode.ml:202-208). Those two orders are exact reversals, so a `byte(kind)` would
 // write 0x00 for a tag and 0x04 for a func, and every byte it writes is a *legal* kind byte.
 //
-// **What the cast actually does was probed rather than asserted, and the first draft of this comment
-// was wrong about it.** The draft claimed the image would "decode clean as a different module" — the
-// accept-direction class. Substituting `byte(im.desc.kind)` and running the round trip gives 16 fails
-// and 8 passes, and the numbers are the interesting part:
+// **What the cast actually does was probed rather than asserted — and the probe has now been re-run
+// on a larger table, which moved the answer.** Substituting `return byte(k)` and running the round
+// trip gives, **as of the #282 sweep**, 34 fails and the memory rows passing:
 //
-//   - all 16 failures are the *decoder* rejecting, not the want column disagreeing. A kind byte is
-//     followed by that kind's payload, so a wrong byte points the decoder at the wrong payload grammar
-//     and it usually notices: `malformed reference type: 0x7f` for a global written as a table,
-//     `unexpected end of section` for a func written as a tag.
-//   - the 8 passes are **every memory row and only the memory rows**, because memory is the fixed
+//   - **28 of the 34 are the *decoder* rejecting.** A kind byte is followed by that kind's payload,
+//     so a wrong byte points the decoder at the wrong payload grammar and it usually notices:
+//     `section size mismatch: import section` on 12 rows, `malformed reference type: 0x7f` on 7 and
+//     `0x7e` on 2, `unexpected end of section or function` on 6, `zero byte expected: 0x01` on 1.
+//   - **6 are the want column disagreeing** — `want {Name:t Kind:table Index:0}`, the export-name
+//     rows, where the image decodes clean and the *record* is what catches the swapped kind. This
+//     is the **accept-direction class**, and it is the part the earlier wording got wrong in the
+//     stale direction: the first draft of this comment claimed the cast would "decode clean as a
+//     different module", the probe at the time found *"all 16 failures are the decoder rejecting"*,
+//     and that superseded sentence was true of the sixteen rows the table then held. Export rows
+//     were added afterwards; the sentence was not re-run. **The draft's intuition was right about a
+//     class of rows the sample could not yet exhibit** — *scope controls to the space*, pointed at
+//     prose, and the same era-bound-`all N` shape as grave #282.
+//   - the passes are **every memory row and only the memory rows**, because memory is the fixed
 //     point of a five-element reversal. The cast writes 0x02 for it and 0x02 is right.
 //   - the near miss is a table written as a global: `03 70 00 01` reads as a perfectly plausible
 //     `funcref` const global, and what caught it was the **section size mismatch** on the leftover
-//     byte, not the payload grammar.
+//     byte, not the payload grammar. That mechanism is now the plurality, not the exception.
 //
-// So the round trip does catch this, but it catches it through the payloads, which is a property of
-// today's five payload grammars happening to differ — not a structural guard. Two kinds with the same
-// payload shape would swap silently. The mapping is the guard; the round trip is the witness that it
-// is installed.
+// So the round trip catches this two ways, and only one of them is structural. The payload route is a
+// property of today's five payload grammars happening to differ — two kinds with the same payload
+// shape would swap silently past it. The record route (those 6) does not care about payloads at all.
+// And the mapping now has its own direct control, `TestExternKindByteAgreesForBothSections`, which
+// this same mutation also kills: the round trip is no longer the only witness that it is installed.
+//
+// Counts above are stamped rather than timeless *because this comment was already caught once for
+// stating a count as a property*. Re-run the mutation before quoting them.
 //
 // It reads `binary`'s own constants rather than literals, so the two sides of the round trip cannot
 // disagree about a number: this is the same one-concept-one-trigger argument `valTypeBytes` makes.

@@ -5561,8 +5561,19 @@ func allFeaturesOn(t *testing.T) binary.Features {
 // So this test is expected to be *red-ish* in aggregate — the fail counts below are
 // higher than the default board's, and that is the point. What must be zero is
 // Gated.
-func TestAllGatesOnLeavesNothingGated(t *testing.T) {
-	requireSuite(t)
+// allOnLane builds the every-gate-on lane: the features, a decode func carrying them, and an
+// Engine factory.
+//
+// Extracted from TestAllGatesOnLeavesNothingGated when a second reader appeared
+// (TestRelaxedLoweringChoicesArePinned). A lane assembled twice is the two-places-know-one-fact
+// shape on the *definition of the measurement*, and the failure it invites is the one the
+// InstantiateLinked note below records: the second copy sets a field nothing calls, reads as
+// though it configured the lane, and quietly scores a different lane than the first.
+//
+// An Engine *factory* rather than an Engine, because RunGated is called once per file and the
+// closures capture per-run state; returning a value would share it across files.
+func allOnLane(t *testing.T) (binary.Features, func([]byte) error, func() Engine) {
+	t.Helper()
 
 	allOn := allFeaturesOn(t)
 	d := &binary.Decoder{Features: allOn}
@@ -5570,18 +5581,11 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 		_, err := d.DecodeModule(image)
 		return err
 	}
-
-	files := boardFiles(t)
-	var totalPass, totalFail, totalGated int
-	for _, f := range files {
-		s, err := ParseFile(filepath.Join(suiteDir, f))
-		if err != nil {
-			t.Errorf("%s: parse: %v", f, err)
-			continue
-		}
-		// Still RunGated, deliberately: the point is to *measure* Gated and require
-		// it to be zero. Using Run would fold declines into Fail and the requirement
-		// would be unfalsifiable — the counter it asserts on could not be nonzero.
+	return allOn, decodeAllOn, func() Engine {
+		// Still RunGated at the call sites, deliberately: the point is to *measure* Gated
+		// and require it to be zero. Using Run would fold declines into Fail and the
+		// requirement would be unfalsifiable — the counter it asserts on could not be
+		// nonzero.
 		e := engine()
 		e.Decode = decodeAllOn
 		// The instantiation path takes the lane's gates too — see instantiateWith for
@@ -5596,7 +5600,24 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 		e.InstantiateLinked = func(c Command, registry map[string]Instance) (Instance, Stratum, error) {
 			return instantiateWith(allOn, c, registry)
 		}
-		r := s.RunGated(e)
+		return e
+	}
+}
+
+func TestAllGatesOnLeavesNothingGated(t *testing.T) {
+	requireSuite(t)
+
+	_, decodeAllOn, allOnEngine := allOnLane(t)
+
+	files := boardFiles(t)
+	var totalPass, totalFail, totalGated int
+	for _, f := range files {
+		s, err := ParseFile(filepath.Join(suiteDir, f))
+		if err != nil {
+			t.Errorf("%s: parse: %v", f, err)
+			continue
+		}
+		r := s.RunGated(allOnEngine())
 		t.Log("\n" + r.Board())
 		totalPass, totalFail, totalGated = totalPass+r.Pass, totalFail+r.Fail, totalGated+r.Gated
 
@@ -6178,23 +6199,13 @@ func TestGrave206KnownFailures(t *testing.T) {
 		},
 	}
 
-	allOn := allFeaturesOn(t)
-	d := &binary.Decoder{Features: allOn}
-	decodeAllOn := func(image []byte) error {
-		_, err := d.DecodeModule(image)
-		return err
-	}
+	_, _, allOnEngine := allOnLane(t)
 	for f, lines := range known {
 		s, err := ParseFile(filepath.Join(suiteDir, f))
 		if err != nil {
 			t.Fatalf("%s: parse: %v", f, err)
 		}
-		e := engine()
-		e.Decode = decodeAllOn
-		e.InstantiateLinked = func(c Command, registry map[string]Instance) (Instance, Stratum, error) {
-			return instantiateWith(allOn, c, registry)
-		}
-		r := s.RunGated(e)
+		r := s.RunGated(allOnEngine())
 		failed := make(map[int]bool)
 		for _, fs := range r.Buckets {
 			for _, fail := range fs {
@@ -8875,22 +8886,13 @@ func TestAggregateTableFillersRun(t *testing.T) {
 			"moved, and a short list would make every check below pass by not looking", len(refusals))
 	}
 
-	allOn := allFeaturesOn(t)
-	d := &binary.Decoder{Features: allOn}
+	_, _, allOnEngine := allOnLane(t)
 	for _, f := range live {
 		s, err := ParseFile(filepath.Join(suiteDir, f.File))
 		if err != nil {
 			t.Fatalf("%s: parse: %v", f.File, err)
 		}
-		e := engine()
-		e.Decode = func(image []byte) error {
-			_, err := d.DecodeModule(image)
-			return err
-		}
-		e.InstantiateLinked = func(c Command, registry map[string]Instance) (Instance, Stratum, error) {
-			return instantiateWith(allOn, c, registry)
-		}
-		r := s.RunGated(e)
+		r := s.RunGated(allOnEngine())
 
 		// Vacuity: a file contributing no scored vectors would satisfy the refusal check by
 		// asking nothing (#236's own condition).
