@@ -64,6 +64,18 @@ weakly-ordered platform.
     coverage claim is derived: `TestExitCodesCoverEveryPublicSentinel` reads the sentinel set out of
     the package's own source, so a sixth cannot fall through to the catch-all unnoticed.
 
+- **The unsupported-delta rule is stated as a condition instead of a list of cases (#302).** The
+  gate-campaign substitution and the new path-adding case were one rule read twice from outside:
+  **the column moves only when what the harness *can ask* changes**, which is a property of
+  `internal/spec`'s command dispatch and nothing else. `CLAUDE.md` carries the condition (−20 bytes)
+  and `docs/laws/` carries the three specimens — a gate campaign, a PR that adds a consumer, and the
+  classify arm, which is the positive case that moved the column by 2574. Enumerating instances
+  invites an amendment per instance.
+- **`docs/laws/`: the testimony law extends to this project's own executables.** Where a document and
+  an executable disagree about what the executable does, the executable is the record and the
+  document is the claim — added with the specimen that prompted it, a test header that listed as
+  "logged" a property the code below asserted.
+
 - **`internal/validate` — the type oracle decision 0002 Q3 names, slice 1 of #9 (#291).** Decoder →
   internal form → **validator** → interpreter: the pass that decides, statically, which type every
   value slot holds, which is what makes the interpreter's bare `uint64` slots sound and what ADR

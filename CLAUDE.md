@@ -291,13 +291,13 @@ bullet carries operative text has that text nowhere else.
     gate already exists — `unsupportedCeiling` in `spec_test.go`, a **ceiling**, which per 0013
     rots by the system working — so lowering it *is* the record of progress and no second
     mechanism gets built for this (*one concept, one trigger*, #82).
-    - **During a gate campaign the reward figure is the all-on lane's fail delta, because
-      `unsupported` has no subject.** A vector for a gated proposal is scored `gated`, never
-      `unsupported`, so a pre-flip campaign PR **cannot** move that column however much engine
-      capability it lands — the zero is structural, and it is stated as structural, naming the
-      gate. A non-campaign PR keeps the rule above unchanged. This is a statement about *which
-      instrument has a subject*, not an exemption: the actor still does not get to pick.
-      (Ruling: Scott, PR #235 — his token, his veto standing.)
+    - **The column moves only when what the harness *can ask* changes; where a PR cannot change
+      that, the zero is structural and is stated as structural, naming the reason and the reward
+      figure that does have a subject.** A statement about *which instrument has a subject*, never
+      an exemption — the actor still does not get to pick. Written as the condition and not as a
+      list of cases, because enumerated instances invite an amendment per instance; the specimens
+      are in `docs/laws/`. (Rulings: Scott, PR #235 — his token, his veto standing; chat-Claude,
+      PR #302.)
   - **The actor never chooses the instrument that judges the actor.** Where a judgement is about
     the work, the actor makes it; where it is about the actor, the actor's job is to *state the
     case and flag it*, and a principal rules. The general form covers instruments not yet

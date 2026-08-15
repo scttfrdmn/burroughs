@@ -31,21 +31,42 @@ amended rather than replaced.
     mechanism gets built for this (*one concept, one trigger*, #82). A PR that drains
     the column lowers the ceiling in the same PR, exactly as `textFailCeiling` fell
     stepwise with a per-PR account.
-    - **During a gate campaign the reward figure is the all-on lane's fail delta, because
-      `unsupported` has no subject.** A vector for a gated proposal is scored `gated`, never
-      `unsupported`, so a pre-flip campaign PR **cannot** move that column however much engine
-      capability it lands — the zero is structural and confessing it would be confessing to
-      arithmetic. The honest reading is that the two lanes measure different things and the
-      campaign lives in the other one: the default lane's `gated` count is what the flip
-      collapses, and until then the all-on lane's **fail** count is the only figure that
-      responds to an arm. So a campaign PR quotes the all-on fail delta as its reward and states
-      the `unsupported` zero as structural, naming the gate; a non-campaign PR keeps the rule
-      above unchanged. Note this is a statement about *which instrument has a subject*, not an
-      exemption — the actor still does not get to pick, which is why it is written here rather
-      than argued per-PR. SIMD's flip taught it (#227/#233: 24282 gated vectors moving while
-      `unsupported` sat at 2689 across the largest board change the project has made) and #235
-      needed it a second time, at which point task-bar folklore became text. (Ruling: Scott, PR
-      #235 — his token, his veto standing.)
+    - **The column moves only when what the harness *can ask* changes; where a PR cannot change
+      that, the zero is structural and is stated as structural, naming the reason and the reward
+      figure that does have a subject.** The mechanism is `internal/spec/wast.go`'s dispatch:
+      `r.Unsupported++` sits in the **`default:` arm**, keyed by head atom because every
+      unsupported command has `KindUnsupported`. So the column counts *commands the harness has no
+      case for* — it measures that package's command vocabulary and nothing else. Everything below
+      follows from that one fact, which is why this is written as the condition and not as a list
+      of cases: **enumerated instances invite an amendment per instance**, and each amendment
+      arrives as a question a principal has to answer about a case the rule already covered.
+      A statement about *which instrument has a subject*, never an exemption — the actor still does
+      not get to pick.
+
+      Three specimens, all the same rule read from outside:
+
+        - **A gate campaign.** A vector for a gated proposal is scored `gated`, never
+          `unsupported`, so a pre-flip campaign PR cannot move the column however much engine
+          capability it lands. The reward figure is the **all-on lane's fail delta**: the default
+          lane's `gated` count is what the flip collapses, and until then all-on `fail` is the only
+          figure that responds to an arm. SIMD's flip taught it — #227/#233, 24282 gated vectors
+          moving while `unsupported` sat at 2689 across the largest board change the project has
+          made — and #235 needed it a second time, at which point task-bar folklore became text.
+          (Ruling: Scott, PR #235 — his token, his veto standing.)
+        - **A PR that adds a consumer.** #302 published the engine's first API and drove the corpus
+          through it; `unsupported` did not move, because *a new consumer changes who asks, not what
+          can be asked*. The zero is **derived** rather than forecast — it follows from the column's
+          definition plus an empty `git diff -- internal/spec/`, before any measurement — so
+          measuring both boards checks the derivation instead of confirming a prediction. Same
+          distinction a flip turns on in the other direction, a flip's forecast needing
+          pre-registration precisely because its numbers do not exist until the mechanism does.
+          (Ruling: chat-Claude, PR #302.)
+        - **The classify arm**, which is the positive case and the reason the condition is not a
+          licence: it changed what the harness can ask, and the column moved **2574**.
+
+      Recorded as one condition on the relay that would otherwise have added the second instance as
+      its own bullet: *"they aren't two rules, they're one rule stated twice from the outside."*
+      (Ruling: chat-Claude, PR #302.)
   - **The actor never chooses the instrument that judges the actor.** The umbrella the two
     rules below were always standing under, written down once so it does not have to be
     rediscovered a third time: not choosing the measure, not granting the exception — same
