@@ -403,6 +403,7 @@ bullet carries operative text has that text nowhere else.
 - **An error from the wrong layer is evidence about where structure was lost.** — [errors-and-testimony](docs/laws/errors-and-testimony.md#an-error-from-the-wrong-layer-is-evidence-about-where-structure-was-lost)
 - **An error message is testimony, and fabricated evidence is a lying witness even when the verdict is right.** — [errors-and-testimony](docs/laws/errors-and-testimony.md#an-error-message-is-testimony-and-fabricated-evidence-is-a-lying-witness-even-when-the-verdict-is-right)
 - **Comments and ADRs are testimony too, and where prose and the reference's executable disagree, the executable outranks.** — [errors-and-testimony](docs/laws/errors-and-testimony.md#comments-and-adrs-are-testimony-too-and-where-prose-and-the-references-executable-disagree-the-executable-outranks)
+- **A hedge is part of a record's content, so prose that resolves an accepted record's open question in passing has forged an agreement.** — [errors-and-testimony](docs/laws/errors-and-testimony.md#a-hedge-is-part-of-a-records-content-so-prose-that-resolves-an-accepted-records-open-question-in-passing-has-forged-an-agreement)
 - **When two fields disagree about a value, the suite has handed you a bidirectional control.** — [errors-and-testimony](docs/laws/errors-and-testimony.md#when-two-fields-disagree-about-a-value-the-suite-has-handed-you-a-bidirectional-control)
 
 ## Tooling gates

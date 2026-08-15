@@ -50,3 +50,18 @@ amended rather than replaced.
   *named at its definition site* and carries a tracking issue. A sweep that
   turns up a labelled placeholder has still done its job: it forced the
   classification question. (Ruling on `ErrTrailingData`, #6.)
+
+  **Specimen — read a control's specification before writing the control** (finding 2
+  of the PR #281 review, filed here on Scott's ruling): decision 0028 d3 asked for a
+  positive control over *"a triple where the composite differs from the **unfused**
+  f32 answer"*, and the draft compared the bare expression against the correctly-rounded
+  oracle instead. On arm64 that is **0** — the compiler fuses the bare `x*y+z` into a
+  genuine `FMADD` which lands on the correctly-rounded answer — so the substituted
+  control was a stillborn zero, where d3's actual specification is 55 on both arches.
+  d3's own next-but-one sentence warns about precisely that compiler fusion. So the
+  record already held the answer, one paragraph past the line that was read, and the
+  cost of not reading it was a control that would have passed while measuring nothing.
+  This is the law pointed at **specifications** rather than at sibling packages: an
+  accepted ADR that commissions a control is the nearest prior payment there is, and
+  re-deriving the control from its title re-earns the grave the ADR was written to
+  prevent. Both pairings are asserted now. (Ruling: Scott, on the PR #281 relay.)

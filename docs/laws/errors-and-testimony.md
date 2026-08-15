@@ -78,3 +78,28 @@ amended rather than replaced.
   the two halves in opposite directions, where either half alone would look like a
   plausible reading. Prefer such a pair over two independent assertions whenever a
   value's verdict depends on the field rather than on the bytes. (#36.)
+
+### A hedge is part of a record's content, so prose that resolves an accepted record's open question in passing has forged an agreement.
+
+- **A hedge is part of a record's content, so prose that resolves an accepted
+  record's open question in passing has forged an agreement.** The specimen is this
+  agent's own filing of grave #280, which said decision 0028's d2 rationale *"asserted"*
+  that a double-rounding gap was innocuous. It did not. 0028 at `:184` names the exact
+  gap — *"the classical theorem is stated for the basic operations rather than for a
+  fused multiply-add"* — and then states *"I have not verified it and do not assert it
+  either way,"* filing the question with a tripwire and pre-registering both outcomes.
+  The hedge *was the record's finding*: a careful ADR's "I do not know" is a measurement
+  of the project's confidence, and a draft comment that borrowed 0028's authority while
+  quietly closing the question drifted in the direction that matters most — **toward
+  confidence**. This is worse than an ordinary stale comment, because a reader who
+  follows the citation finds an ADR saying the opposite, which is why it belongs beside
+  the fabricated-evidence law rather than under mere drift. Two corollaries earned in
+  the same correction: the generalized lesson underneath it survives — *a theorem is a
+  citation and its hypothesis is the part that resolves* — but as a rule the ADR
+  **followed**, so the law is stated about hedges and not about theorems; and a first
+  filing that is wrong about its own subject is **corrected by comment and retitled with
+  the superseded title kept verbatim**, never deleted, on #143's precedent. Nothing false
+  reached a merged artifact here — `git cat-file` confirmed the file did not exist on
+  `origin/main` — so what the specimen shows is the mechanism working, caught by the ADR
+  it had misquoted. (Ruling: Scott, on the PR #281 relay; minted under the #277 gate,
+  which is why this body and its `CLAUDE.md` key landed together.)

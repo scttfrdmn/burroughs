@@ -335,3 +335,19 @@ amended rather than replaced.
   across two lines** is invisible to a line-oriented trigger, so the file registers
   and contributes zero verified rows — the same defect, one PR later, in the guard
   repaired for it (#80). (Ruling: Scott, #82; grave #78.)
+
+  **Third specimen, and this one is about a *sweep's* trigger rather than a control's**
+  (finding 3 of the PR #281 review, filed here on Scott's ruling — his shorthand for
+  this law is *coverage-is-a-claim*, which is the body's own phrase above): the sweep
+  obligation was "where else does this repo cite a theorem, a bound, or an asymptotic
+  claim as a reason?", and the first pass ran it with `git grep`. `git grep` searches
+  **tracked files only**. The two files carrying the defect were new and unstaged, so
+  the sweep's population **excluded exactly the region the grave came from**, and it
+  returned a clean result. Re-run over the working tree: 20 sites, all triaged, no
+  second instance — the same answer, reached honestly. The tell generalizes past this
+  tool: **a search command's default domain is a claim about the space, made silently
+  by the tool rather than by the author.** `git grep` says tracked, `go test ./pkg`
+  says one package, a bare `grep` says one directory, `gh search` says quoted phrases
+  are optional. None of them announce the restriction and all of them return a
+  confident empty set, which is why a sweep states its domain and why a sweep that
+  found nothing has to say *over what*. (Ruling: Scott, on the PR #281 relay.)

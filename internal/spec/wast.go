@@ -1088,6 +1088,24 @@ type Result struct {
 	// #93 mechanism finding exactly the class it was widened for.
 	GatedAt []int
 
+	// AltChoices records, for every `assert_return` that passed against an `(either …)`
+	// expectation, which alternative the engine's answer matched.
+	//
+	// **The column exists because a pass against a disjunction is a verdict with a hole in it.**
+	// `either` is the corpus stating that more than one answer is legal — relaxed SIMD's whole
+	// non-determinism form — so the vector passes whichever member the engine produced, and the
+	// board cannot distinguish two lowerings that both stay inside the set. Decision 0028 d1
+	// promises more than the spec requires: this engine's relaxed lowerings are deterministic
+	// **and architecture-uniform**. A guarantee that exceeds the spec cannot be measured by an
+	// instrument that only checks the spec, and this is the missing half.
+	//
+	// Recorded by the run loop rather than re-derived by the control, for GatedAt's reason
+	// exactly: a control that re-invokes to find out what happened is asking a second oracle the
+	// same question, and the two can be pointed at different sets without either being wrong.
+	// Populated on the **pass** path only — a vector that matched nothing is already a failure
+	// with a bucket, and an unmatched disjunction has no choice to report.
+	AltChoices []AltChoice
+
 	// Bound counts `(register "name" $M?)` commands that successfully bound a name.
 	//
 	// **A sixth term because a register asks no question, and "not scored" must not be
@@ -1218,6 +1236,22 @@ type Failure struct {
 
 	// Stratum is the component the failure is charged to.
 	Stratum Stratum
+}
+
+// AltChoice is one `(either …)` expectation and the alternative the engine's answer matched.
+//
+// `Text` carries the alternative's own printed form and is what a pin should assert against, in
+// preference to `Alt`. The index is a position in the corpus's list, so an upstream reordering
+// moves it without any lowering having changed; the text is the *answer*, which is what decision
+// 0028 d1's guarantee is about. `Of` is beside them so a reader can see how wide the freedom was
+// — and so a corpus that collapsed a disjunction to a single alternative cannot leave a pin
+// looking satisfied while asserting nothing.
+type AltChoice struct {
+	Line   int    // the assert_return's line
+	Result int    // which result of that command, for the multi-value case
+	Alt    int    // the matching alternative's index in the corpus's list
+	Of     int    // how many alternatives the expectation offered
+	Text   string // the matching alternative's printed form — the pinned quantity
 }
 
 // Total is the number of assertions actually executed — the denominator of the
@@ -2360,6 +2394,32 @@ func (s *Script) run(opts runOpts) *Result {
 					Stratum: StratumExec,
 				})
 				continue
+			}
+			// Every result matched, so the disjunctions among them have a choice to record.
+			// Asked of MatchingAlt rather than of a second search, and asked here rather than
+			// inside firstMismatch, whose subject is the *first* failure and which stops early
+			// by design.
+			for i, want := range c.Results {
+				if want.Alts == nil {
+					continue
+				}
+				alt, ok := want.MatchingAlt(out[i])
+				if !ok {
+					// Unreachable: firstMismatch returned -1, so every result matched, and
+					// Matches delegates this exact search. Bucketed rather than skipped,
+					// because a silent skip would quietly empty the column and the lowering
+					// pin would then read as satisfied while asserting nothing.
+					const key = "either expectation matched and then did not"
+					r.Buckets[key] = append(r.Buckets[key], Failure{
+						Line: c.Line, Expect: want.String(), Got: out[i].String(),
+						Kind: c.Kind, Stratum: StratumExec,
+					})
+					continue
+				}
+				r.AltChoices = append(r.AltChoices, AltChoice{
+					Line: c.Line, Result: i, Alt: alt,
+					Of: len(want.Alts), Text: want.Alts[alt].String(),
+				})
 			}
 			r.Pass++
 
