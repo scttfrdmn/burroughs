@@ -941,10 +941,32 @@ func (p *parser) natContinuesMemarg() bool {
 //
 // **Retains the byte via `appendImm`, since #210** — both callers (`immLaneIdx`'s arm for
 // `extract_lane`/`replace_lane`, and `laneImms` for the eight `load*_lane`/`store*_lane`
-// mnemonics) want the identical trailing raw byte the reference writes with `u8 i`
+// mnemonics) want the identical trailing immediate the reference writes with `u8 i`
 // (`encode.ml:889-903`, `:386-405`), so retaining it here rather than in each caller is one
 // writer for one fact, matching `idxRetained`'s own precedent of retaining at the shared reader
 // rather than at each of its several call sites.
+//
+// # It is a LEB, not a raw byte — and this comment said "raw byte" while citing the line that says so (grave #292)
+//
+// `u8 i = u64 Int64.(logand (of_int (I8.to_int_u i)) 0xffL)` (`encode.ml:64`): `u8` is `u64`
+// with the value masked to eight bits, and `u64` is the LEB writer three lines above it. So the
+// reference emits **one byte for 0..127 and two for 128..255**, and the shuffle list is
+// `List.iter u8 is` (`:722`), the identical writer sixteen times.
+//
+// This wrote `[]byte{byte(n)}`, so every lane index above 127 went out as a truncated LEB: `255`
+// became `0xFF`, a continuation byte with no successor, and `binary.DecodeModule` — reading
+// `uN 8`, correctly — answered `integer too large`. Measured as 15 of `simd_lane.wast`'s 26
+// `invalid lane index` vectors failing with the decoder's malformed verdict instead of reaching
+// the validator at all, and found by the #9 slice's own reject-direction sweep rather than by
+// any encoder test: no round trip covers it, because the writer and the reader are the two
+// halves that disagree, and no *valid* module has a lane index above 15.
+//
+// **The mirror of grave #47, one component over** — that grave was `immLaneIdx` on the *decode*
+// side reading `laneidx` as a raw byte, and the fix cited `uN 8` in the very comment that now
+// stands beside its inverse. *Lessons are indexed by shape, not by file*: a fix in the reader is
+// a claim about the format, and the format has two ports. Sweeping #47 forward through the
+// writers is what this is, and the sweep found exactly one more site because `laneIdxList`
+// delegates here.
 func (p *parser) laneidx() error {
 	t := p.c.peek()
 	if t.Kind != NatTok {
@@ -955,7 +977,10 @@ func (p *parser) laneidx() error {
 	if !ok {
 		return errAt(t, "i8 constant out of range")
 	}
-	p.appendImm([]byte{byte(n)})
+	// encodeLocalIdx is the shared minimal-width ULEB writer (its name is `br_table`'s legacy,
+	// not a claim about the field): 0..127 → one byte, 128..255 → two, which is `u8`'s output
+	// for every value `nat8` admits.
+	p.appendImm(encodeLocalIdx(uint32(n)))
 	return nil
 }
 
