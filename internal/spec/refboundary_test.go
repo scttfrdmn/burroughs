@@ -51,6 +51,17 @@ func TestReferenceBoundaryRoundTrips(t *testing.T) {
 			// than the file's aggregate count.
 			for _, fs := range r.Buckets {
 				for _, f := range fs {
+					// **A decline is not a verdict, so it is not evidence about this round
+					// trip.** `table_get.wast` carries five `assert_invalid` vectors whose
+					// opcode slice 1 of the validator (#9) does not type; they are fails in
+					// their own named bucket on the board, and they say nothing about whether
+					// an externref identity survived table.set/table.get. Filtered on
+					// Failure.Declined rather than on the five line numbers, because an
+					// enumerated exclusion would inherit today's sample and go quietly wrong
+					// the next time the corpus or the slice boundary moves.
+					if f.Declined {
+						continue
+					}
 					t.Errorf("%s:%d unexpected fail: want %s, got %s", c.file, f.Line, f.Expect, f.Got)
 				}
 			}

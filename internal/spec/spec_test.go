@@ -17,6 +17,7 @@ import (
 	"github.com/scttfrdmn/burroughs/internal/interp"
 	"github.com/scttfrdmn/burroughs/internal/testenv"
 	"github.com/scttfrdmn/burroughs/internal/text"
+	"github.com/scttfrdmn/burroughs/internal/validate"
 )
 
 // suiteDir is where make spec-tests vendors the upstream suite. Gitignored;
@@ -131,7 +132,10 @@ func boardFiles(t *testing.T) []string {
 	// admission just brought in, and therefore every vector the 4122 pass floor rests on
 	// — and this guard would still report success. *A floor left at its historical value
 	// is a floor that stopped bounding anything*, so it moves with the measurement or it
-	// is decoration. 240 of 254, the 14-file margin being upstream churn room; the three
+	// is decoration. 240 of 256 as of #9's `assert_invalid` arm (254 before it, which admitted
+	// `memory_size3.wast` and `unreached-invalid.wast` — two files whose every command was
+	// unsupported, so they were not on the board at all), the 16-file margin being upstream churn
+	// room; the three
 	// legitimately-excluded files are itemized at the top of this function, so a fourth
 	// appearing is a fact somebody has to write down.
 	//
@@ -329,6 +333,63 @@ func instantiateWith(f binary.Features, c Command, registry map[string]Instance)
 	}
 	return in, StratumUnset, nil
 }
+
+// validateModule is the validator's entry point: wat source → image → module → type check.
+//
+// **Three steps, and the Stratum it returns says which one refused** — the reason ValidateFunc
+// returns one rather than letting the arm derive it. Only the third is `StratumValidate`; the
+// first two are the harness reading its own output, and a failure there is not evidence about
+// the type checker.
+//
+// **Both pre-validation steps are charged to StratumEncode, including the decoder's.** The
+// decoder is refusing an image `text.EncodeModule` produced, so the two candidate causes are a
+// decoder defect and an encoder that emitted something invalid, and the second is far likelier —
+// the encoder is the younger component and it is being driven by the corpus's *invalid* modules,
+// the one population nothing else exercises. Charging it to StratumBinary would raise a ceiling
+// that is 0 and blind the only instrument watching the decoder, which is `instantiateWith`'s own
+// argument one component over. The number is 0 today; it was 17 until the laneidx grave was
+// fixed, and every one of those was the encoder.
+//
+// It does not re-use `instantiateWith`: that function instantiates, which is the step after the
+// one being scored, and an invalid module must not reach the interpreter at all — that is the
+// condition 0025's carve-out names and the reason this package exists.
+func validateModule(c Command) (Stratum, error) {
+	return validateWith(binary.DefaultFeatures(), c)
+}
+
+// validateWith is validateModule under a stated gate set.
+//
+// **It is split for the reason instantiateWith is split, and the grave that argument records
+// was about to be re-earned here.** A lane that swaps `Engine.Decode` for an all-gates-on
+// decoder and leaves this entry point alone would decode every `assert_invalid` module with the
+// default features — so a vector for a gated proposal would be *declined* inside the lane whose
+// defining property is that nothing is declined, and `Gated must be 0` would fail naming the
+// proposal rather than a defect. That is memory64's 17 vectors again, one component over, and it
+// is why the gate set is a parameter rather than a call to the default helper.
+func validateWith(f binary.Features, c Command) (Stratum, error) {
+	image, err := text.EncodeModule(c.Source)
+	if err != nil {
+		return StratumEncode, err
+	}
+	m, err := (&binary.Decoder{Features: f}).DecodeModule(image)
+	if err != nil {
+		return StratumEncode, err
+	}
+	if _, err := validate.Module(m); err != nil {
+		return StratumValidate, err
+	}
+	return StratumValidate, nil
+}
+
+// isDeclined is isGated's delegation for the validator's own third verdict: `errors.Is` against
+// `validate.ErrUnsupported`, the sentinel slice 1 returns for an instruction whose rules belong to
+// a later slice.
+//
+// A sentinel test rather than a text test, for isTrap's reason — the taxonomy is the engine's —
+// and a *separate* predicate from isGated because the two populations drain by different
+// mechanisms: a gated vector converts when Scott flips a gate, a declined one when the next slice
+// lands. See Engine.IsDeclined for why the arm asks this before matching the expected string.
+func isDeclined(err error) bool { return errors.Is(err, validate.ErrUnsupported) }
 
 // invoke is the interpreter's call entry point, and it is where the two value models meet.
 //
@@ -640,7 +701,8 @@ func engine() Engine {
 	return Engine{
 		Decode: decode, ReadText: readText, IsGated: isGated, IsTrap: isTrap,
 		IsException: isException,
-		Invoke:      invoke, InstantiateLinked: instantiateLinked,
+		Validate:    validateModule, IsDeclined: isDeclined,
+		Invoke: invoke, InstantiateLinked: instantiateLinked,
 	}
 }
 
@@ -945,6 +1007,82 @@ var wholeFileGated = map[string]int{
 	"relaxed_laneselect.wast":      0, // 11 pre-flip
 	"relaxed_madd_nmadd.wast":      0, // 17 pre-flip
 	"relaxed_min_max.wast":         0, // 24 pre-flip — the six sum to the flip's 69
+}
+
+// gatedAssertInvalid is TestGatedVectors's **second** bulk allowance, and it is keyed by Kind
+// where wholeFileGated is keyed by file: for each file, the exact number of `assert_invalid`
+// commands the decoder declines for a disabled feature gate.
+//
+// **463 across 40 files, all arriving in one PR with #9's first validator slice.** The
+// `assert_invalid` arm made a population the harness had never scored askable, and the first
+// thing that happens to a vector for a gated proposal is the decoder declining it — so 463
+// commands moved from Unsupported straight into Gated, exactly as decision 0024's v128 widening
+// moved 24115. That is the situation wholeFileGated was invented for, one axis over: writing 463
+// per-line entries would restate `<gate>: feature gate disabled` 463 times, and *a reason
+// repeated verbatim at that scale is testimony nobody could review by reading it*.
+//
+// **Keyed by Kind rather than by file, because these files are not wholly gated.** `func.wast`
+// has one gated `assert_invalid` and 200-odd other commands that pass; `ref_eq.wast` has six and
+// a per-line entry elsewhere. wholeFileGated's whole-population comparison cannot express that,
+// and widening it to "some of this file" would destroy the property that makes it a bound. So
+// the population is named by the thing it has in common — the Kind — and the per-line arm keeps
+// policing every decline outside it. One concept, two keys.
+//
+// The gates are named per entry, measured through the run loop rather than read off the file:
+// most files are homogeneous, seven mix two proposals, and every one of the 463 is a
+// `feature gate disabled` decline. A file whose mix changes moves its own count, which is what
+// the on-the-nose comparison at the call site still catches.
+//
+// What protects the *domain* is not this map: the per-line arm requires every decline anywhere
+// on the board to be named, and the call site errors on any file with a bulk population and no
+// entry here. So a new gated `assert_invalid` cannot arrive unnoticed whether or not its file is
+// listed — which is the same argument wholeFileGated's comment makes about its own absent
+// seventh file, and the reason this map is free to be pins on counts.
+var gatedAssertInvalid = map[string]int{
+	// memory64 — the whole of `align64`/`load64`/`memory_*64`, plus the mixed files below.
+	"align64.wast":          37,
+	"load64.wast":           46,
+	"memory64.wast":         5,
+	"memory_copy64.wast":    63,
+	"memory_fill64.wast":    63,
+	"memory_init64.wast":    65,
+	"table64.wast":          2,
+	"table_copy_mixed.wast": 3,
+	// GC — the `gc` gate alone.
+	"array.wast":            6,
+	"array_copy.wast":       4,
+	"array_fill.wast":       3,
+	"array_init_data.wast":  2,
+	"array_init_elem.wast":  3,
+	"br_if.wast":            1,
+	"br_on_cast.wast":       6,
+	"br_on_cast_fail.wast":  6,
+	"br_on_non_null.wast":   1,
+	"br_on_null.wast":       1,
+	"func.wast":             1,
+	"local_init.wast":       4,
+	"local_tee.wast":        1,
+	"ref.wast":              12,
+	"ref_as_non_null.wast":  1,
+	"select.wast":           1,
+	"struct.wast":           4,
+	"table.wast":            6,
+	"type-equivalence.wast": 1,
+	"type-rec.wast":         10,
+	"type-subtyping.wast":   36,
+	// Tail calls and typed function references, alone or mixed with gc.
+	"call_ref.wast":             4,  // call_ref, return_call_ref
+	"return_call.wast":          12, // return_call ×11 + gc ×1
+	"return_call_indirect.wast": 16, // return_call_indirect ×15 + gc ×1
+	"return_call_ref.wast":      11, // call_ref, return_call_ref ×4 + gc ×7
+	"ref_eq.wast":               6,  // gc ×4 + ref.eq ×2
+	"unreached-invalid.wast":    3,  // call_ref, return_call_ref ×2 + ref.as_non_null etc ×1
+	// Exception handling.
+	"exports.wast":    1,
+	"tag.wast":        2,
+	"throw.wast":      3, // exception handling ×2 + throw ×1
+	"throw_ref.wast":  2,
+	"try_table.wast":  9, // gc ×5 + try_table ×3 + exception handling ×1
 }
 
 // wholeFileGatedVerdict is the bulk allowance's whole decision: whether `bulk` claims file `f`,
@@ -5404,6 +5542,7 @@ func TestGatedVectors(t *testing.T) {
 			"vacuously green (#284)")
 	}
 
+	seen := map[string]bool{}
 	files := boardFiles(t)
 	for _, f := range files {
 		s, err := ParseFile(filepath.Join(suiteDir, f))
@@ -5448,9 +5587,52 @@ func TestGatedVectors(t *testing.T) {
 			continue
 		}
 
+		// **The second bulk allowance, keyed by Kind rather than by file** — see
+		// gatedAssertInvalid for why 463 per-line entries would be testimony nobody reads and
+		// why this is the same mechanism as wholeFileGated rather than a new concept.
+		//
+		// The membership test is "every command at this line is an assert_invalid", not "some
+		// command at this line is", and the difference is a claim about the corpus this loop
+		// can check rather than assume: a line holding both an `assert_invalid` and something
+		// else would otherwise let an unrelated decline into the bulk count and out of the
+		// per-line arm. Measured 0 such lines across the board today; the guard is here because
+		// the *reason* the count is safe has to survive the corpus moving.
+		invalidOnly := map[int]bool{}
+		for _, c := range s.Commands {
+			if c.Kind == KindAssertInvalid {
+				if _, seen := invalidOnly[c.Line]; !seen {
+					invalidOnly[c.Line] = true
+				}
+			} else {
+				invalidOnly[c.Line] = false
+			}
+		}
+		bulkInvalid := 0
+		for _, line := range r.GatedAt {
+			if invalidOnly[line] {
+				bulkInvalid++
+			}
+		}
+		if n, ok := gatedAssertInvalid[f]; ok {
+			if bulkInvalid != n {
+				t.Errorf("%s: %d gated assert_invalid commands, want %d — the file's gated "+
+					"validator population moved; update gatedAssertInvalid's count in this PR, "+
+					"and single out any line whose gate is not one of the file's stated ones",
+					f, bulkInvalid, n)
+			}
+		} else if bulkInvalid > 0 {
+			t.Errorf("%s: %d assert_invalid commands are declined by a feature gate and the file "+
+				"has no gatedAssertInvalid entry;\n\tadd one with the gate named, or single the "+
+				"lines out in `allowed` — an unlisted bulk population is the enumeration this "+
+				"control exists to prevent", f, bulkInvalid)
+		}
+
 		declined := make(map[int]bool, len(r.GatedAt))
 		for _, line := range r.GatedAt {
 			declined[line] = true
+			if invalidOnly[line] {
+				continue // covered by the bulk count above, with its gate named there
+			}
 			if _, ok := allowed[f][line]; !ok {
 				t.Errorf("%s:%d declined by a feature gate but is not in the allowed set;\n"+
 					"\tif the gate is right, add it with the feature named; if not, the decoder is over-gating and hiding a failure",
@@ -5464,6 +5646,38 @@ func TestGatedVectors(t *testing.T) {
 				t.Errorf("%s:%d is in the allowed-gated set but is no longer declined; remove the entry", f, line)
 			}
 		}
+		seen[f] = true
+	}
+
+	// The bulk allowance's own reverse direction. The on-the-nose comparison in the loop catches
+	// an entry whose file is on the board and has stopped declining (`want 6, got 0`); it cannot
+	// see an entry for a file `boardFiles` no longer selects, because that file is never visited
+	// and the map is never asked. A key nobody reads is an allowance that cannot go stale, which
+	// is the shape a registry decays into.
+	for f := range gatedAssertInvalid {
+		if !seen[f] {
+			t.Errorf("gatedAssertInvalid has an entry for %s, which is not on the board — its "+
+				"count is asserted against nothing; remove the entry or find out why the file left", f)
+		}
+	}
+
+	// The total, pinned as one number beside the 40 that decompose it.
+	//
+	// **Not redundant with the per-file counts, and the direction it catches is the one they
+	// cannot.** Forty comparisons each say "this file declines exactly n"; none of them says how
+	// many files there are. A file dropping out of `boardFiles` takes its whole entry with it and
+	// every remaining comparison still passes — the reverse check above catches that only because
+	// the key survives, and a PR that deletes the key *and* the file passes both. This sum is the
+	// second end: 463 is the validator arm's own gate population, and it moves only when a gate
+	// flips or the corpus does.
+	sum := 0
+	for _, n := range gatedAssertInvalid {
+		sum += n
+	}
+	if sum != 463 {
+		t.Errorf("gatedAssertInvalid sums to %d, want 463 — the gated assert_invalid population "+
+			"changed size. A gate flip is the legitimate cause and re-bases this figure with the "+
+			"proposal named; anything else is a file or a population that moved unremarked", sum)
 	}
 }
 
@@ -5676,6 +5890,176 @@ func TestBareQuoteFormsPassUnearned(t *testing.T) {
 		"stratum boundary (#63/#64); 7 originally", seen, seenRetired)
 }
 
+// TestAssertInvalidPassesFromAboveTheValidator names the 18 `assert_invalid` passes that no
+// validation verdict bought.
+//
+// An `assert_invalid` reaches the validator through two steps first — `text.EncodeModule` and
+// `binary.Decoder.DecodeModule` (see validateWith) — and either may refuse. The board's arm asks
+// four questions in order (gated, declined, message match, accepted), and the message match does
+// not care *which* layer produced the error. So a module the encoder or decoder refuses with a
+// string the vector happens to expect is scored a pass, and 18 of the 1023 this PR added arrived
+// that way.
+//
+// They are **not unearned in the bare-quote sense** and the distinction is the point. A bare
+// `(module quote ...)` passes because nothing above the lexer can disagree — a silence scored as
+// agreement. These 18 are real refusals with the reference's own message: the module *is* invalid
+// and the engine *did* say so. What is wrong is only the layer, which makes them evidence rather
+// than a defect (*an error from the wrong layer is evidence about where structure was lost*).
+// Specifically, 17 say the decoder is enforcing the constant-expression rule the reference
+// enforces in validation, which is the *one concept, one trigger* question this PR does not
+// settle: when #9's slice for constant expressions lands there will be two authorities for it,
+// and one of them has to go.
+//
+// So the list's retirement path is named per entry rather than assumed. Four things can happen to
+// a listed vector and only one of them is this state; the switch below separates them, because
+// "the validator now owns it" (progress: delete the entry) and "the validator now accepts it"
+// (the admission stratum, a defect) both read as *stopped passing above the validator* and are
+// opposite findings. The reverse direction is checked for the bare-quote test's reason: a new
+// arrival here is a vector claiming a green nobody looked at.
+//
+// # Domain, stated because the control cannot check it
+//
+// This sweeps `KindAssertInvalid` commands in `boardFiles` only. It says nothing about the same
+// layer confusion under `assert_malformed` (where an encoder refusal is arguably the right
+// layer), nothing about the 11 `(module binary …)` and 6 `(module quote …)` invalid forms the
+// parser leaves unsupported, and nothing about the all-gates-on lane, whose Features differ.
+func TestAssertInvalidPassesFromAboveTheValidator(t *testing.T) {
+	requireSuite(t)
+
+	type above struct {
+		layer string // "encoder" or "decoder" — which pre-validation step refuses, re-measured below
+		why   string
+	}
+	// Every one of the 17 decoder entries is an init or offset expression holding an opcode
+	// outside the constant set (`i32.ctz`, `nop`, `local.get`, `f32.neg`, `call`). The engine's
+	// init-expression reader admits only the constant opcodes, so it refuses during decode with
+	// exactly the message the reference produces during validation.
+	const constExpr = "a non-constant opcode in an init/offset expression, refused by the " +
+		"decoder's init-expression reader rather than by a constant-expression validation rule"
+	listed := map[string]map[int]above{
+		"data.wast": {
+			464: {"decoder", constExpr + " — (data (i32.ctz ...))"},
+			472: {"decoder", constExpr + " — (data (nop))"},
+			480: {"decoder", constExpr + " — (data (offset (nop) ...))"},
+			488: {"decoder", constExpr + " — (data (offset ... (nop)))"},
+		},
+		"elem.wast": {
+			783: {"decoder", constExpr + " — (elem (i32.ctz ...))"},
+			791: {"decoder", constExpr + " — (elem (nop))"},
+			799: {"decoder", constExpr + " — (elem (offset (nop) ...))"},
+			807: {"decoder", constExpr + " — (elem (offset ... (nop)))"},
+			885: {"decoder", constExpr + " — (elem ... (item (call $f)))"},
+		},
+		"func_ptrs.wast": {
+			39: {"decoder", constExpr + " — (elem (i32.ctz ...))"},
+			43: {"decoder", constExpr + " — (elem (nop))"},
+		},
+		"global.wast": {
+			298: {"decoder", constExpr + " — (global f32 (f32.neg ...))"},
+			303: {"decoder", constExpr + " — (global f32 (local.get 0))"},
+			308: {"decoder", constExpr + " — (global f32 (f32.neg ...))"},
+			313: {"decoder", constExpr + " — (global i32 (i32.const 0) (nop))"},
+			318: {"decoder", constExpr + " — (global i32 (i32.ctz ...))"},
+			323: {"decoder", constExpr + " — (global i32 (nop))"},
+			// The weakest of the 18, and the only encoder one. `(global $g1 i32 (global.get
+			// $g2))` forward-references a global declared on the next line, and the vector
+			// expects "unknown global". The reference resolves wat names in a collecting pass,
+			// so $g2 *is* known there and the error is validation's rule that a constant
+			// expression may only read a *preceding* import; our encoder resolves in one
+			// forward pass, so it reports the same words for a different reason. Right answer,
+			// wrong reason, wrong layer — a two-pass name resolver would retire this entry to
+			// the validator without any validation rule being written.
+			666: {"encoder", "a forward reference the single-pass wat name resolver cannot " +
+				"see yet; the reference's own error is the constant-expression import rule"},
+		},
+	}
+
+	want := 0
+	for _, m := range listed {
+		want += len(m)
+	}
+	// Pinned on the total because the figure is quoted in the pass floor's account and in this
+	// PR's Board section, and because a file leaving boardFiles would otherwise shrink the list
+	// and the observed count together — the two agreeing while both fall (see *a comparison
+	// against an empty set succeeds*).
+	if want != 18 {
+		t.Fatalf("the list holds %d entries, want 18; the count is quoted in passFloor's "+
+			"account, so the two must not drift", want)
+	}
+
+	seen, byLayer := 0, map[string]int{}
+	for _, f := range boardFiles(t) {
+		s, err := ParseFile(filepath.Join(suiteDir, f))
+		if err != nil {
+			t.Errorf("%s: parse: %v", f, err)
+			continue
+		}
+		for _, c := range s.Commands {
+			if c.Kind != KindAssertInvalid {
+				continue
+			}
+			// validateModule, not a hand-rolled pipeline: this must be the entry point the
+			// board itself scores through, or it measures a lookalike.
+			st, err := validateModule(c)
+			if isGated(err) {
+				continue // scored `gated`, never reaching the message match at all
+			}
+			entry, isListed := listed[f][c.Line]
+			fromAbove := err != nil && st == StratumEncode && strings.Contains(err.Error(), c.Expect)
+			switch {
+			case fromAbove && !isListed:
+				t.Errorf("%s:%d is an assert_invalid the engine refuses *above* the validator "+
+					"(%v) with the string the vector expects, and it is not listed; the board "+
+					"scores it a pass, so a green arrived at by the wrong layer has to be named",
+					f, c.Line, err)
+			case fromAbove:
+				// Which step refused is re-measured rather than trusted from the table: the
+				// stratum says "before validation", it cannot say which of the two.
+				layer := "decoder"
+				if _, eerr := text.EncodeModule(c.Source); eerr != nil {
+					layer = "encoder"
+				}
+				if layer != entry.layer {
+					t.Errorf("%s:%d is listed as refused by the %s but the refusal now comes "+
+						"from the %s; the layer is the whole content of this entry, so a moved "+
+						"one is a different finding wearing the same line number",
+						f, c.Line, entry.layer, layer)
+				}
+				byLayer[layer]++
+				seen++
+			case isListed && err != nil && st == StratumValidate:
+				t.Errorf("%s:%d is listed as answered above the validator but the module now "+
+					"reaches the validator, which refuses it (%v); that is the rule migrating "+
+					"to the layer that owns it — delete the entry and lower the count",
+					f, c.Line, err)
+			case isListed && err == nil:
+				t.Errorf("%s:%d is listed as refused above the validator but the whole "+
+					"pipeline now *accepts* it; the pass was not earned somewhere better, it "+
+					"was withdrawn into the admission stratum (validateAdmitCeiling) — an "+
+					"accept-direction defect, the class no negative vector can catch",
+					f, c.Line)
+			case isListed:
+				t.Errorf("%s:%d is listed as refused above the validator with %q, but the "+
+					"refusal no longer quotes it (%v); the vector has become an encode-column "+
+					"fail, which is honest scoring and still a message regression",
+					f, c.Line, c.Expect, err)
+			}
+		}
+	}
+	if seen != want {
+		t.Errorf("found %d of %d listed entries; a listed vector the loop never reached means "+
+			"its file left the board and this list is watching nothing", seen, want)
+	}
+	if byLayer["decoder"] != 17 || byLayer["encoder"] != 1 {
+		t.Errorf("layer split is decoder %d / encoder %d, want 17/1; the split is the finding "+
+			"(the 17 are one validation rule living in the decoder, the 1 is a name-resolution "+
+			"accident) and it is quoted in this PR's Graves section",
+			byLayer["decoder"], byLayer["encoder"])
+	}
+	t.Logf("%d assert_invalid passes come from above the validator: %d decoder, %d encoder",
+		seen, byLayer["decoder"], byLayer["encoder"])
+}
+
 // allFeaturesOn returns a Features with every gate the decoder knows about turned
 // on, discovered by reflection rather than by an enumerated literal.
 //
@@ -5756,6 +6140,13 @@ func allOnLane(t *testing.T) (binary.Features, func([]byte) error, func() Engine
 		e.InstantiateLinked = func(c Command, registry map[string]Instance) (Instance, Stratum, error) {
 			return instantiateWith(allOn, c, registry)
 		}
+		// **The validator's path is a third entry point that decodes**, and it takes the lane's
+		// gates for the same reason the second one does. `validateModule` calls
+		// `binary.DecodeModule` — the default-features helper — so leaving this line out would
+		// decline every gated proposal's `assert_invalid` vectors inside the lane whose whole
+		// claim is that nothing is declined. This is the third time this override has been
+		// needed and the second time it was nearly forgotten; see validateWith.
+		e.Validate = func(c Command) (Stratum, error) { return validateWith(allOn, c) }
 		return e
 	}
 }
@@ -6295,7 +6686,44 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	// because the rule is a distance of zero in the PR that moves the board, not a distance under
 	// the slack. `unsupportedCeiling` is deliberately unmoved at 2689: this PR answers no declined
 	// question, and #270 is where the 28 reference-shape vectors go.
-	const allOnPassFloor = 62173
+	// **62173 → 63329, the validator's first slice (#9), and the +1156 has two parts that must not
+	// be reported as one.**
+	//
+	//	pre-existing drift, this bound against HEAD (052b45b)                      +69
+	//	this PR: the 2697 assert_invalid commands, scored under every gate on    +1087
+	//
+	// The first figure is a finding about the instrument, not about the engine. This bound was
+	// **already 69 low at HEAD** — the lane read 62242/90 there, against a bound of 62173 whose own
+	// comment (above) says the rule is a distance of zero in the PR that moves the board. Some merge
+	// between #258 and #290 moved the lane and left the bound behind, silently, because 69 is inside
+	// the 250 slack. That is the degradation this bound's own history is the case study for, arriving
+	// a third time; it is named here rather than folded into this PR's delta, because a bound that
+	// absorbs someone else's drift into a big jump has laundered it.
+	//
+	// The second figure reconciles exactly and in both columns, measured by diffing this lane's
+	// per-file lines against a HEAD worktree (decision 0007/#161's standing rule, never arithmetic
+	// on the total):
+	//
+	//	                      default lane      all-gates-on lane
+	//	assert_invalid pass          1023                   1087
+	//	  declined                   1059                   1347
+	//	  admitted                    142                    250
+	//	  wrong message                10                     13
+	//	  gated                       463                      0
+	//	                             ----                   ----
+	//	                             2697                   2697
+	//
+	// So this lane's pass delta is 1087 and its fail delta is 1347+250+13 = 1610 (90 → 1700), both
+	// residual zero. The lane's fails exceed the default lane's 1211 because the 463 vectors the
+	// default lane declines to a *gate* are here answered by the validator, which declines 288 more
+	// of them to its own slice boundary and admits 108 more — the two populations drain by different
+	// mechanisms (see DeclinedFunc), and this is the measurement that shows it.
+	//
+	// Two files enter this lane's per-file report for the first time (254 → 256): `memory_size3.wast`
+	// and `unreached-invalid.wast` had *no* attempted command before, being wholly `assert_invalid`.
+	// A file whose every vector was unsupported is invisible to a per-file board, which is worth
+	// knowing about the report and not only about these two files.
+	const allOnPassFloor = 63329
 	boardBound(t, "allOnPassFloor", totalPass, allOnPassFloor, boardBoundSlack, floorBound,
 		"a gated feature regressed, which the Gated==0 assertion above cannot see: with every "+
 			"gate on, a broken feature turns a pass into a fail and leaves Gated at zero")
@@ -6341,6 +6769,16 @@ func TestGrave206KnownFailures(t *testing.T) {
 	// unexplained pre-registration is a suppression wearing a disguise.
 	known := map[string]map[int]string{
 		"tag.wast": {
+			// The admission stratum, arriving with #9's first validator slice: `(tag (result
+			// i32))` and its imported twin are modules the type checker *accepts* against an
+			// expected "non-empty tag result type". The rule is a tag-section rule, and the
+			// code-section walk never visits a tag definition — so there is no instruction to
+			// decline and the module comes out valid. Cited rather than filtered, because an
+			// accept-direction gap is the one class no negative vector can falsify (§9 G-3) and
+			// a filter here would be the second place it hides. Held in aggregate by
+			// validateAdmitCeiling (142); these are 2 of it.
+			18: "admission stratum: slice 1 has no tag-section rules, so `non-empty tag result type` is not checked and the module validates (#9, validateAdmitCeiling)",
+			22: "admission stratum: slice 1 has no tag-section rules, so `non-empty tag result type` is not checked and the module validates (#9, validateAdmitCeiling)",
 			48: "sameFuncType's own rec-group scope boundary (TestSameFuncTypeCorpusScope), reached via tag-import linking rather than func linking",
 			59: "sameFuncType's own rec-group scope boundary (TestSameFuncTypeCorpusScope), reached via tag-import linking rather than func linking",
 		},
@@ -6377,6 +6815,20 @@ func TestGrave206KnownFailures(t *testing.T) {
 		}
 		for _, fs := range r.Buckets {
 			for _, fail := range fs {
+				// **A decline is not a verdict, so it is not a finding about #206.**
+				// `try_table.wast` carries 10 `assert_invalid` vectors on the `try_table` opcode
+				// itself, which slice 1 of the validator does not type; they are fails in their
+				// own named bucket, held by validateDeclineCeiling, and they say nothing about
+				// whether `drop` lost a value. Filtered on the flag rather than pre-registered by
+				// line, because ten citations reading "the validator has not got there yet" is
+				// the repeated-reason testimony the bulk allowances exist to avoid — and a
+				// per-line list would go stale the moment slice 2 lands, one entry at a time.
+				//
+				// The *admission* half is not filtered: an accepted-but-invalid module is a real
+				// gap and gets a citation above. See the two tag.wast entries.
+				if fail.Declined {
+					continue
+				}
 				if lines[fail.Line] == "" {
 					t.Errorf("%s:%d fails and is not pre-registered: %q — either cite it here "+
 						"(grave #206, the rec-group scope boundary, or a new finding) or it is "+
@@ -6688,7 +7140,19 @@ func TestPhase1Files(t *testing.T) {
 	// column *whatever the gate campaign does*, because the two changes are independent and 0028 d4
 	// put them in one PR. Recorded here rather than only in the PR body, since the ledger is where
 	// the next forecast will be read from.
-	const unsupportedCeiling = 2657
+	// 2657 → 83, −2574 (#9 slice 1's `assert_invalid` arm). **The largest single drain this column
+	// has taken, and unlike the two entries above it, it is engine capability rather than a
+	// harness widening.** 2591 `assert_invalid` commands were unsupported; 17 remain (11 `(module
+	// binary …)`, 6 `(module quote …)`, both forms left unadmitted on purpose — see the parse
+	// arm), and the 2574 converted split 463 gated / 2111 verdicts. The gated 463 are a
+	// reclassification of exactly the kind the entries above describe, in the same PR as the
+	// capability that made them askable, and they are the reason the drain here (−2574) is larger
+	// than the pass+fail gain from conversions (2111).
+	//
+	// The remaining 83 are the column's whole content: 39 `assert_return`, 17 `assert_invalid`, 15
+	// `assert_exhaustion`, 9 `module`, 3 with no head atom. A column this small is close to being
+	// an equality, and the next drain should say so.
+	const unsupportedCeiling = 83
 	boardBound(t, "unsupportedCeiling", totalUnsup, unsupportedCeiling, boardBoundSlack, ceilingBound,
 		"either a capability regressed or the corpus moved; both need an explanation rather "+
 			"than a raised ceiling")
@@ -6782,7 +7246,10 @@ func TestPhase1Files(t *testing.T) {
 	// added later and assigns it a layer by omission; StratumUnset is a loud failure rather
 	// than a quietly larger number, which is the same move as the unregistered-capability
 	// panic.
-	binaryFail, textFail, encodeFail, execFail := 0, 0, 0, 0
+	binaryFail, textFail, encodeFail, execFail, validateFail := 0, 0, 0, 0, 0
+	// The decline half of validateFail, sub-partitioned rather than counted separately, so the
+	// two ceilings below cannot drift from the stratum they decompose.
+	validateDeclined := 0
 	for _, fs := range aggBuckets {
 		for _, f := range fs {
 			switch f.Stratum {
@@ -6802,6 +7269,20 @@ func TestPhase1Files(t *testing.T) {
 				// others are the front ends; this is the execution layer, and merging it
 				// into any of them would charge one layer's reds to another layer's ceiling.
 				execFail++
+			case StratumValidate:
+				// **A fifth, and the boundary is causal rather than numeric** (#9 slice 1,
+				// #291): a row is here when *validation is the layer that decided it*, not
+				// when it came out of an `assert_invalid` vector. Three populations look like
+				// this column and are not it, each held by an existing ceiling: the 11
+				// encoder-frontier refusals (StratumEncode, which never reach the type
+				// checker), the decoder's own answers on encoder output (StratumEncode too,
+				// see validateModule), and the `assert_return`s whose module never validated
+				// at all (StratumExec — 0025's carve-out, retiring by migration one slice at
+				// a time rather than by a flag day).
+				validateFail++
+				if f.Declined {
+					validateDeclined++
+				}
 			case StratumUnset:
 				t.Errorf("failure at line %d (%q, kind %v) carries no stratum — the site "+
 					"that reported it did not say which component failed, so its red would "+
@@ -6818,13 +7299,15 @@ func TestPhase1Files(t *testing.T) {
 			}
 		}
 	}
-	if binaryFail+textFail+encodeFail+execFail != totalFail {
+	if binaryFail+textFail+encodeFail+execFail+validateFail != totalFail {
 		t.Errorf("fail partition sums to %d but the column is %d; a failure escaped every "+
-			"arm, so one of the four ceilings below is watching a subset it cannot name",
-			binaryFail+textFail+encodeFail+execFail, totalFail)
+			"arm, so one of the five ceilings below is watching a subset it cannot name",
+			binaryFail+textFail+encodeFail+execFail+validateFail, totalFail)
 	}
-	t.Logf("  fail by stratum: binary %d, text %d, encode %d, exec %d",
-		binaryFail, textFail, encodeFail, execFail)
+	t.Logf("  fail by stratum: binary %d, text %d, encode %d, exec %d, validate %d "+
+		"(%d declined + %d admitted)",
+		binaryFail, textFail, encodeFail, execFail, validateFail,
+		validateDeclined, validateFail-validateDeclined)
 
 	// **0 at the measured revision, and it was 1 for the whole life of this ceiling.**
 	// The one member was binary-gc.wast:1, reported as "malformed function type: 0x5e"
@@ -7341,7 +7824,34 @@ func TestPhase1Files(t *testing.T) {
 	// unrelated to this decision. `struct.wast`'s 18 fails are untouched (a different, still-open
 	// frontier — `struct.get`/`struct.get_s` instruction immediates, #183's two-blocker chain) and
 	// are why this column does not reach 0. Slack stays 0.
-	const encodeFailCeiling = 517
+	// # 517 → 46, and 471 of the 481 is drift that grave #293's exemption hid
+	//
+	// Seven movements after 517 was set, every one of them silently excused, attributed by walking
+	// this stratum line one checkout per merge from `9e0aa9d` (the commit that both set 517 and
+	// measured it):
+	//
+	//	9e0aa9d   encode 517   the constant was correct here
+	//	88053d2   encode 347   struct.get/struct.set/array.* immediate retention (#189)
+	//	f6ba248   encode 341   symbolic field-name resolution (#190)
+	//	30de899   encode 136   ref.test/ref.cast/br_on_cast* retention (#191)
+	//	a7da5c1   encode 150   *a rise*: the harness began passing reference arguments (#198)
+	//	5724e2c   encode  82   try_table's catch clauses and (tag …) fields (#200)
+	//	b907024   encode  36   v128.const/shuffle/extract_lane/lane loads (#212 era)
+	//	  … flat at 36 for the following 24 merges, through HEAD
+	//
+	// The `a7da5c1` row is why the walk was worth the checkouts rather than a bisect for the
+	// minimum: this column **rose** by 14 in the middle of the drain, which a ceiling doing its job
+	// would have reported as new encoder frontiers being asked new questions. It was invisible for
+	// the same reason the falls were.
+	//
+	// **This PR's own contribution is +10, 36 → 46**, and it is the one part of the delta that is
+	// mine: `assert_invalid` vectors now reach `text.EncodeModule`, and ten of them quote a frontier
+	// it cannot emit. They are honest encode-column fails — the module never reached the validator,
+	// so the validator's columns must not claim them. Their siblings are the 18 that *pass* from
+	// above the validator (TestAssertInvalidPassesFromAboveTheValidator); the difference between the
+	// two populations is only whether the refusal happened to quote the vector's expected string,
+	// which is why both are named rather than either being read as a verdict about this stratum.
+	const encodeFailCeiling = 46
 	boardBound(t, "encodeFailCeiling", encodeFail, encodeFailCeiling, 0, ceilingBound,
 		"the wat encoder lost ground: either it stopped emitting an instruction it used to "+
 			"emit, or the corpus moved. This ceiling is deliberately not shared with the text "+
@@ -7825,11 +8335,86 @@ func TestPhase1Files(t *testing.T) {
 	// fails unrelated to SIMD's own arms. None of it is new engine wrongness: #223 and #229
 	// closed every genuine defect the flip's own forecast surfaced, confirmed on both
 	// architectures, before this flip landed.
-	const execFailCeiling = 243
+	// **243 → 81, and none of the 162 is this PR's** — it is drift the slack-0 grave hid (see
+	// boardbound_test.go's package comment). Attributed by walking this stratum line across every
+	// merge from the SIMD flip to HEAD, one checkout per commit, rather than reasoned about:
+	//
+	//	d79c5f9 … 3b3a4b7   exec 243
+	//	5174810             exec 106   one constant-expression evaluator, four call sites (#241/#244)
+	//	23b886f … 30e76e9   exec 106
+	//	83cbecf             exec  81   a v128 lost a slot at a branch and at select (#242/#269)
+	//	efce8a7 … 052b45b   exec  81
+	//
+	// −137 and −25, residual zero. Both are legitimate progress in the direction this ceiling
+	// constrains, and both should have re-based it in their own PR; neither could, because
+	// `boardBound` was returning before the staleness check on every bound that passed slack 0. So
+	// the two merges are not at fault — the exemption is, which is why the fix is in the helper and
+	// the re-base is here rather than a rule about remembering.
+	//
+	// This PR moves this column by **nothing**: `assert_invalid` vectors are answered before
+	// execution, so the validator's arrival cannot touch it. Stated because a 243 → 81 re-base
+	// landing in a PR that also adds 1211 fails elsewhere is exactly the shape a laundered drift
+	// would have.
+	const execFailCeiling = 81
 	boardBound(t, "execFailCeiling", execFail, execFailCeiling, 0, ceilingBound,
 		"the interpreter answered fewer vectors than it did: either an opcode arm regressed or "+
 			"a value comparison started disagreeing. A *rise* caused by #8 unblocking more "+
 			"modules is legitimate and gets this constant re-based with the instruction named")
+
+	// The validator's own column, arriving with #9's first slice, and it is **the largest
+	// annotated stratum this board has admitted in one move** — which is why the number is
+	// pre-registered here rather than read off a green run.
+	//
+	// **1201 is a work plan, not a defect count**, the shape textFailCeiling had at 391 and
+	// encodeFailCeiling still has. It decomposes into exactly two populations, and **each gets
+	// its own bound, because they are two instruments and not two halves of one**:
+	//
+	//   - **1059 declines.** Slice 1 met an instruction whose rules belong to a later slice and
+	//     said so, `validate.ErrUnsupported` naming the opcode. This number falls when a slice
+	//     lands; the bucket keys *are* the work plan, one key per rule to write.
+	//   - **142 admissions.** Modules this validator declared *valid* that the suite says are
+	//     not — limits, duplicate export names, constant expressions, alignment: rules attached
+	//     to things the code-section walk never visits, so there is no instruction to decline.
+	//     This number falls when a *rule* lands, and it is the accept direction, which no other
+	//     bound on this board can see (contract §9 G-3).
+	//
+	// One constant over both would let a decline converting into an admission read as no change,
+	// which is the worst movement this column can make: a vector that used to be refused with a
+	// named gap is now *accepted*, and the total is identical. That is binaryFailCeiling's own
+	// argument about not sharing a column with the text one, arriving inside a single stratum.
+	//
+	// **The 0 that is not here is the one worth naming: wrong-message failures.** 2697 vectors
+	// were scored and *no* vector reached the type checker, was refused, and got a message the
+	// corpus disagreed with. That is a suspiciously clean number and it is treated as one: it is
+	// 0 because six message defects were fixed before this landed — the invented `global is
+	// immutable`, all nine `unknown <category>` formats, `pushFrame(opFuncBody, nil, …)`, the
+	// duplicated result-arity check, `expectEmptyFrame` discarding leftovers, and `brTable`
+	// comparing its arms to the default — each of which was a non-zero row in this account until
+	// it was fixed. Four were comments asserting the property the code lacked. A future non-zero
+	// here is a regression with no ceiling to hide under, which is the point of not giving it one.
+	//
+	// Slack 0 on both, matching every other fail ceiling: these drain by rules landing, and a
+	// slice that lands re-bases the constant with the rule named.
+	const validateFailCeiling = 1201
+	const validateDeclineCeiling = 1059
+	boardBound(t, "validateDeclineCeiling", validateDeclined, validateDeclineCeiling, 0, ceilingBound,
+		"slice 1 declined more instructions than it did — either an opcode left the signature "+
+			"table or a later slice's rule regressed into a decline")
+	const validateAdmitCeiling = 142
+	boardBound(t, "validateAdmitCeiling", validateFail-validateDeclined, validateAdmitCeiling, 0,
+		ceilingBound,
+		"the validator accepted an invalid module it used to refuse, or refused one with a "+
+			"message the corpus disagrees with. This is the accept direction: a rise here is the "+
+			"one board movement that makes the engine *less* correct while the total holds still")
+	if validateDeclineCeiling+validateAdmitCeiling != validateFailCeiling {
+		t.Errorf("the two validator ceilings sum to %d but the stratum's own is %d; one was "+
+			"re-based without the other, so the sub-partition no longer decomposes the column "+
+			"it claims to", validateDeclineCeiling+validateAdmitCeiling, validateFailCeiling)
+	}
+	boardBound(t, "validateFailCeiling", validateFail, validateFailCeiling, 0, ceilingBound,
+		"the validator answered fewer assert_invalid vectors than it did; the two bounds above "+
+			"say which half moved, and this one exists so that a movement between them cannot "+
+			"net out")
 
 	// Pass floor over the whole board, the counterpart to TestBinaryWast's per-file
 	// floor.
@@ -8244,7 +8829,28 @@ func TestPhase1Files(t *testing.T) {
 	// to spare and would have stayed silent. A bound that survives a jump by 20 is the 798-
 	// against-4178 shape at an earlier stage, and the slack is a tolerance for drift between
 	// PRs, never a licence for the PR that *causes* the jump to skip its own accounting.
-	const passFloor = 58659
+	//
+	// **58659 → 59682, #9 slice 1's `assert_invalid` arm**, and the +1023 needs its two halves
+	// stated separately because one of them is not a conversion:
+	//
+	//   - **900 conversions** off `unsupported`: vectors the harness already saw, now answered.
+	//   - **123 admissions**: two files join the board (`unreached-invalid.wast`,
+	//     `memory_size3.wast`, 254 → 256 files) because neither held a scorable command before
+	//     this arm existed. Their commands *begin* to exist, so `Total()` rises and no column
+	//     falls — 0015's data1.wast case again, and the reason the difference is named rather
+	//     than netted: `unsupported` falls 2574 while pass+fail rises 2234, and the 340 gap is
+	//     the gated 463 minus the 123 admissions.
+	//
+	// **18 of the 1023 are answered above the validator, and they are named rather than
+	// absorbed.** An `assert_invalid` whose module the encoder or the decoder refuses still
+	// reaches the substring match, and 18 such refusals quote the string the vector expected: 17
+	// `constant expression required` from the decoder's own init-expression check, and one
+	// `unknown global` from the wat encoder's symbol table. The verdicts are right and the
+	// messages are the reference's, so these are passes on the merits — but they come from a layer
+	// the reference validates in, which makes them evidence about where a rule currently lives.
+	// Pinned by TestAssertInvalidPassesFromAboveTheValidator, and the encoder one is why this PR's
+	// `encodeFail` forecast of +11 landed at +10.
+	const passFloor = 59682
 	boardBound(t, "passFloor", totalPass, passFloor, boardBoundSlack, floorBound,
 		"a regression in a grammar that used to answer, or the corpus moved")
 }
@@ -8657,7 +9263,13 @@ func TestBareModuleSpansAreNonEmptyAndPlausible(t *testing.T) {
 
 	const (
 		totalFloor = 2000 // measured 2143
-		filesFloor = 230  // measured 242 of 253 board files
+		// measured 242 of 256 board files. The denominator moved with #9's arm (254 → 256:
+		// `memory_size3.wast` and `unreached-invalid.wast` are wholly `assert_invalid`, so they
+		// were not board files at all before it) and the numerator did **not**, which is correct
+		// and worth writing down — an `assert_invalid` module is not a bare `(module …)`, so a
+		// file can enter the board without entering this distribution. The 14-file gap is the
+		// byte-string corpus plus those two.
+		filesFloor = 230
 	)
 
 	total, withAny := 0, 0

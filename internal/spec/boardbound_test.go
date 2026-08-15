@@ -5,6 +5,7 @@ import (
 	goparser "go/parser" // aliased: this package already has a `parser` of its own (sexpr.go)
 	"go/token"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -36,7 +37,7 @@ import (
 // *in the PR that moved it*, the same rule as updating `[Unreleased]` in the PR that earns
 // the entry.
 //
-// # The space is eight bounds, not four, and the control is what said so
+// # The space is eighteen bounds, not four, and the control is what said so — twice
 //
 // Decision 0013 was written claiming four (`passFloor`, `allOnPassFloor`,
 // `binaryFailCeiling`, `textFailCeiling`) and this test's first run named four more. The ADR
@@ -45,17 +46,41 @@ import (
 // with the wrong count, silently, and *a control scoped to the current sample inherits the
 // current blind spot*.
 //
-// They partition into three kinds, and the kind decides whether slack applies:
+// **Then this table went stale by ten rows, which is the defect it exists to name arriving in its
+// own prose.** It said "eight" through the literal cross-check's five bounds, the two fail
+// ceilings, and #9's three validator bounds — every one of them routed correctly through
+// `boardBound`, so the executable control stayed green while its documentation described a
+// population that had more than doubled. The rows below are now the full set, and
+// `TestEveryBoardBoundIsChecked` asserts that every bound it finds in the AST is *named here*, so
+// a nineteenth cannot land undocumented. What that check cannot verify is whether a row's kind and
+// reason are *right* — prose is not machine-checkable, and where this table and the call sites
+// disagree, the call sites outrank.
 //
-//	bound                  actual   kind          slack   why
-//	passFloor              4162     board count   250     moves in strata; can go stale
-//	allOnPassFloor         4178     board count   250     same board plus gated vectors
-//	unsupportedCeiling     60872    board count   250     shrinks as capabilities land
-//	binaryFailCeiling      0        at terminal   —       0 cannot drift from 0
-//	textFailCeiling        0        at terminal   —       0 cannot drift from 0
-//	unimplementedCeiling   0        at terminal   —       0, and 0004 fixes it there
-//	totalFloor             2143     vacuity       —       deliberately loose by design
-//	filesFloor             242      vacuity       —       deliberately loose by design
+// They partition into four kinds, and the kind decides whether slack applies:
+//
+//	bound                    actual   kind          slack   why
+//	passFloor                4162     board count   250     moves in strata; can go stale
+//	allOnPassFloor           63329    board count   250     same board plus gated vectors
+//	unsupportedCeiling       60872    board count   250     shrinks as capabilities land
+//	binaryFailCeiling        0        at terminal   —       0 cannot drift from 0
+//	textFailCeiling          0        at terminal   —       0 cannot drift from 0
+//	unimplementedCeiling     0        at terminal   —       0, and 0004 fixes it there
+//	encodeFailCeiling        46       exact re-base  0      drains as the encoder learns forms
+//	execFailCeiling          81       exact re-base  0      drains as the interpreter lands rules
+//	validateFailCeiling      1201     exact re-base  0      the whole validator stratum
+//	validateDeclineCeiling   1059     exact re-base  0      its declined half, named per opcode
+//	validateAdmitCeiling     142      exact re-base  0      its admitted half — the accept direction
+//	totalFloor               2143     vacuity       —       deliberately loose by design
+//	filesFloor               242      vacuity       —       deliberately loose by design
+//	i32SpellingFloor         2531     vacuity       —       the extractor found this kind at all
+//	i64SpellingFloor         1081     vacuity       —       same, per kind
+//	f32SpellingFloor         1335     vacuity       —       same, per kind
+//	f64SpellingFloor         1551     vacuity       —       same, per kind
+//	agreementFloor           6498     vacuity       —       the cross-check compared something
+//
+// **Exact re-base** is the third kind and it is not a kind in the code, deliberately: it is
+// `ceilingBound` with slack 0, meaning "move me in the PR that moves the column". That the helper
+// used to *exempt* those is grave #293, immediately below.
 //
 // **At terminal**: a bound already at the value it is draining toward cannot go stale,
 // because the distance between "at most 0" and "0" is not a quantity that can grow. A slack
@@ -70,6 +95,31 @@ import (
 // trains the reflex of scrolling past it. So they route through boardBound with slack 0 and
 // `vacuityBound`, which *names* the exemption instead of leaving them outside the door — the
 // licensed-skip pattern: an exemption granted at one place, in the open.
+//
+// # slack 0 meant two opposite things, and the helper honoured the wrong one (grave #293)
+//
+// The table above listed only #87's eight until the row above this one was written, and every bound
+// added between — `encodeFailCeiling`, `execFailCeiling`, and #9's three validator bounds — was
+// written with **slack 0 meaning "this column must be re-based exactly, no room"**; their comments
+// say "Slack stays 0" in exactly that sense. `boardBound` read the same 0 as the table's *other* meaning, "at terminal, cannot drift",
+// and returned before the staleness check. So the tightest intention a caller could express
+// produced the loosest behaviour available, and it did so silently:
+//
+//	encodeFailCeiling   517 against an actual  46 — stale by 471
+//	execFailCeiling     243 against an actual  81 — stale by 162
+//
+// Both are #87's own defect, in the mechanism written to end it, reached through the one argument
+// the mechanism could not tell apart from its own exemption. The fix is that the exemption was
+// **never needed for the case it was written for**: a ceiling at terminal 0 with an actual of 0 has
+// distance 0, so `distance > slack` is false and it passes on the arithmetic. Removing the early
+// return costs the terminal bounds nothing and gives every later slack-0 bound the exactness its
+// author was asking for.
+//
+// The shape, since it is the reusable part: **a sentinel value that encodes an author's intent must
+// not collide with a value the mechanism reads as permission.** "0 slack" and "no slack applies"
+// are different claims, and a single int cannot carry both — which is why the vacuity exemption is
+// a *kind* (see boundKind's own comment, which says exactly this about `vacuityBound` and was
+// therefore already the answer, one argument over).
 
 // boardBound checks one bound in the direction it constrains **and** the distance between
 // the bound and the measurement.
@@ -81,8 +131,10 @@ import (
 // original `if` in place next to the helper call, which double-reports on a real regression
 // and leaves two comparisons to keep in agreement.
 //
-// slack ≤ 0 means "this bound cannot go stale" — the zero ceilings — and the distance check
-// is skipped with that stated at the call site rather than inferred here.
+// slack 0 means "re-base this bound exactly, no room" and **is checked**, not exempted: a bound
+// that genuinely cannot drift is at terminal, so its distance is 0 and it satisfies the check
+// arithmetically. The exemption belongs to `vacuityBound`, a kind rather than a magic slack — see
+// the package comment's grave on the two things slack 0 used to mean.
 func boardBound(tb testing.TB, name string, actual, bound, slack int, kind boundKind, why string) {
 	tb.Helper()
 
@@ -107,9 +159,12 @@ func boardBound(tb testing.TB, name string, actual, bound, slack int, kind bound
 		distance = bound - actual
 	}
 
-	if kind == vacuityBound || slack <= 0 {
-		return // exempt by kind or at terminal; see the package comment's table
+	if kind == vacuityBound {
+		return // exempt by kind; see the package comment's table
 	}
+	// slack 0 is checked, not exempted — see the note on "slack 0 meant two opposite things".
+	// A bound at terminal has distance 0 and satisfies `distance > slack` trivially, so the
+	// exemption was never needed for the case it was written for.
 	if distance > slack {
 		tb.Errorf("%s is stale: %d against an actual %d, a distance of %d with a slack of %d.\n\t"+
 			"Move it to %d in this PR. A bound left behind by a large jump degrades into "+
@@ -196,11 +251,17 @@ func TestEveryBoardBoundIsChecked(t *testing.T) {
 	fset := token.NewFileSet()
 	type site struct{ name, pos string }
 	var bounds, checked []site
+	var registry string // this file's own comments — the table the bounds are documented in
 
 	for _, path := range paths {
-		file, err := goparser.ParseFile(fset, path, nil, 0)
+		file, err := goparser.ParseFile(fset, path, nil, goparser.ParseComments)
 		if err != nil {
 			t.Fatalf("parsing %s: %v", path, err)
+		}
+		if path == "boardbound_test.go" {
+			for _, g := range file.Comments {
+				registry += g.Text()
+			}
 		}
 		ast.Inspect(file, func(n ast.Node) bool {
 			switch v := n.(type) {
@@ -240,18 +301,36 @@ func TestEveryBoardBoundIsChecked(t *testing.T) {
 	//
 	// Eight, not the four 0013 was drafted claiming: this walk is what corrected the ADR,
 	// and the floor quotes the measured population rather than the remembered one.
-	const boundPopulation = 8
-	if len(bounds) < boundPopulation {
+	const minBoundPopulation = 8
+	if len(bounds) < minBoundPopulation {
 		t.Fatalf("found %d board bounds in this package's AST; there were %d when 0013 was "+
 			"written (passFloor, allOnPassFloor, unsupportedCeiling, unimplementedCeiling, "+
 			"binaryFailCeiling, textFailCeiling, totalFloor, filesFloor), and a population "+
 			"this small means the trigger stopped matching — *coverage is to a trigger what a "+
-			"vacuity check is to a comparison* (#82)", len(bounds), boundPopulation)
+			"vacuity check is to a comparison* (#82)", len(bounds), minBoundPopulation)
 	}
-	if len(checked) < boundPopulation {
+	if len(checked) < minBoundPopulation {
 		t.Fatalf("found %d boardBound calls; want one per bound (%d found). A bound compared "+
 			"inline bypasses the staleness check entirely, which is the #87 defect surviving "+
 			"the control written for it", len(checked), len(bounds))
+	}
+
+	// **The exact count beside the floor, because the floor is what let the table rot.** A
+	// minimum covers a nineteenth bound automatically — which was the intent, and which is
+	// precisely how ten bounds arrived without anyone updating the package comment. *Floors bound
+	// the catastrophic case; only an exact count sees a small silent gain.* Both inputs are in the
+	// tree, so this is 0012's exact-golden situation rather than #42's drifting corpus.
+	sortedBoundNames := make([]string, 0, len(bounds))
+	for _, b := range bounds {
+		sortedBoundNames = append(sortedBoundNames, b.name)
+	}
+	sort.Strings(sortedBoundNames)
+
+	const boundPopulation = 18
+	if len(bounds) != boundPopulation {
+		t.Errorf("found %d board bounds, want exactly %d. A new bound is welcome — add its row to "+
+			"this file's table with its kind and its reason, and re-base this constant in the same "+
+			"PR. Bounds found: %v", len(bounds), boundPopulation, sortedBoundNames)
 	}
 
 	byName := map[string]bool{}
@@ -265,8 +344,28 @@ func TestEveryBoardBoundIsChecked(t *testing.T) {
 				"which is a constant with no reachable path (grave 0003)", b.name, b.pos)
 		}
 	}
+	// The documentation half. Routing through `boardBound` is what makes a bound *checked*; being
+	// named in this file's table is what makes it *findable*, and the ten undocumented bounds
+	// proved those are different properties. Checked against the comments rather than the whole
+	// file, since every bound's name appears in its own declaration by construction — a citation
+	// check that reads the code it is citing agrees with itself.
+	if len(registry) < 1000 {
+		t.Fatalf("read %d bytes of comments from boardbound_test.go; the table lives there, so a "+
+			"read this short means the citation check below is searching an empty string and "+
+			"agreeing with every bound", len(registry))
+	}
+	for _, b := range bounds {
+		if !strings.Contains(registry, b.name) {
+			t.Errorf("%s (%s) is checked but undocumented: add a row to boardbound_test.go's "+
+				"table with its kind, its measured actual, and what a violation means. The kind is "+
+				"the part a reader cannot infer — slack 0 means `re-base me exactly` for a fail "+
+				"ceiling and `I am at terminal` for a drained one, and grave #293 is what happens "+
+				"when that distinction is left to the reader", b.name, b.pos)
+		}
+	}
+
 	if !t.Failed() {
-		t.Logf("%d board bounds, all routed through boardBound", len(bounds))
+		t.Logf("%d board bounds, all routed through boardBound and all named in the table", len(bounds))
 	}
 }
 
@@ -276,6 +375,13 @@ func TestEveryBoardBoundIsChecked(t *testing.T) {
 // fails silently by construction* (#82, grave #78): a trigger listing today's four names
 // would go green on a fifth bound called `simdPassFloor`, producing no finding rather than
 // a wrong one. The convention is the domain.
+//
+// It therefore **over**-matches, which is the safe direction and not a hypothetical one: this test's
+// own population minimum was briefly called `boundFloor`, and the walk dutifully reported it as a
+// nineteenth board bound that was neither checked nor documented. The finding was correct and the
+// name was wrong — a control's own constants must not wear the convention it hunts. Widening the
+// predicate to exclude them would have traded a loud false positive for the silent false negative
+// this comment exists to forbid.
 func isBoundName(name string) bool {
 	return strings.HasSuffix(name, "Floor") || strings.HasSuffix(name, "Ceiling")
 }
