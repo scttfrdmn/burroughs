@@ -28,12 +28,23 @@ type sig struct {
 // satisfied by *any* refusal, including one for the wrong reason. Contract §9's G-3 names this
 // class.
 //
-// So the signature comes out of the name. `OpMnemonic` is the authority's own table —
-// transcribed from `decode.ml` with a `refLine` per row and cross-checked by
-// `TestOpTableAgreesWithReference` — and `internal/interp`'s `memops` already established the
-// precedent (0014 promoted the mnemonic from "a label" to a fact, exactly so a consumer's
-// hand-written table could be checked against it). Here the mnemonic is not a cross-check on a
-// table; it *is* the table, which removes the class instead of policing it.
+// So the signature comes out of the name. `OpMnemonic` is the authority's own table, and it is
+// stronger than a transcription: `optable.go` is *generated* from `decode.ml` by decision 0007's
+// mechanism B, carries a `refLine` per row, and `TestCommittedTableMatchesTheReference` re-runs
+// the extraction and compares byte for byte, so drift is a build failure. `internal/interp`'s
+// `memops` established the precedent (0014 promoted the mnemonic from "a label" to a fact,
+// exactly so a consumer's hand-written table could be checked against it). Here the mnemonic is
+// not a cross-check on a table; it *is* the table, which removes the class instead of policing
+// it.
+//
+// **That sentence previously cited `TestOpTableAgreesWithReference`, which never existed, and
+// called the table "transcribed" — two errors pointing the same way, both flattering.** The
+// citation resolved to nothing and the mechanism claim understated a generator as hand work, so
+// the paragraph arguing *derive, do not transcribe* rested on an invented control and a wrong
+// description of the very artifact it derives from. Caught by
+// `TestEveryCitedTestNameResolves` — and only on the cross-architecture run, because
+// `make check` had already failed at fmt-check and never reached it: *a gate that stops early
+// tells you less than the gate you skipped.*
 //
 // What remains hand-written is the *operator classification* — that `add` is binary and `clz`
 // unary — because the name does not carry arity. That set is small, closed, and its errors are

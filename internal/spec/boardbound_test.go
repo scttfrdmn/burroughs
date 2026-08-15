@@ -251,7 +251,10 @@ func TestEveryBoardBoundIsChecked(t *testing.T) {
 	fset := token.NewFileSet()
 	type site struct{ name, pos string }
 	var bounds, checked []site
-	var registry string // this file's own comments — the table the bounds are documented in
+	// This file's own comments — the table the bounds are documented in. A Builder rather than
+	// `+=` because the linter is right about the quadratic copy, and the read below wants one
+	// string: `registry.String()` is taken once, after every file has been walked.
+	var registry strings.Builder
 
 	for _, path := range paths {
 		file, err := goparser.ParseFile(fset, path, nil, goparser.ParseComments)
@@ -260,7 +263,7 @@ func TestEveryBoardBoundIsChecked(t *testing.T) {
 		}
 		if path == "boardbound_test.go" {
 			for _, g := range file.Comments {
-				registry += g.Text()
+				registry.WriteString(g.Text())
 			}
 		}
 		ast.Inspect(file, func(n ast.Node) bool {
@@ -349,13 +352,14 @@ func TestEveryBoardBoundIsChecked(t *testing.T) {
 	// proved those are different properties. Checked against the comments rather than the whole
 	// file, since every bound's name appears in its own declaration by construction — a citation
 	// check that reads the code it is citing agrees with itself.
-	if len(registry) < 1000 {
+	table := registry.String()
+	if len(table) < 1000 {
 		t.Fatalf("read %d bytes of comments from boardbound_test.go; the table lives there, so a "+
 			"read this short means the citation check below is searching an empty string and "+
-			"agreeing with every bound", len(registry))
+			"agreeing with every bound", len(table))
 	}
 	for _, b := range bounds {
-		if !strings.Contains(registry, b.name) {
+		if !strings.Contains(table, b.name) {
 			t.Errorf("%s (%s) is checked but undocumented: add a row to boardbound_test.go's "+
 				"table with its kind, its measured actual, and what a violation means. The kind is "+
 				"the part a reader cannot infer — slack 0 means `re-base me exactly` for a fail "+

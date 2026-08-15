@@ -1078,11 +1078,11 @@ var gatedAssertInvalid = map[string]int{
 	"ref_eq.wast":               6,  // gc ×4 + ref.eq ×2
 	"unreached-invalid.wast":    3,  // call_ref, return_call_ref ×2 + ref.as_non_null etc ×1
 	// Exception handling.
-	"exports.wast":    1,
-	"tag.wast":        2,
-	"throw.wast":      3, // exception handling ×2 + throw ×1
-	"throw_ref.wast":  2,
-	"try_table.wast":  9, // gc ×5 + try_table ×3 + exception handling ×1
+	"exports.wast":   1,
+	"tag.wast":       2,
+	"throw.wast":     3, // exception handling ×2 + throw ×1
+	"throw_ref.wast": 2,
+	"try_table.wast": 9, // gc ×5 + try_table ×3 + exception handling ×1
 }
 
 // wholeFileGatedVerdict is the bulk allowance's whole decision: whether `bulk` claims file `f`,

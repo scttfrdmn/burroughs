@@ -110,7 +110,7 @@ func TestAcceptsValidModulesTheBoardCannotSee(t *testing.T) {
 		},
 		{
 			name: "block label carries the block's results",
-			why: "the mirror of the row above, so a fix that swapped the two cannot pass both",
+			why:  "the mirror of the row above, so a fix that swapped the two cannot pass both",
 			wat: `(module
 				(type $t (func (param i32) (result f64)))
 				(func (param i32) (result f64)

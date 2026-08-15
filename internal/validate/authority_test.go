@@ -348,7 +348,7 @@ func TestEveryNumericOpcodeHasASignature(t *testing.T) {
 
 	var missing []string
 	checked := 0
-	for op := uint32(0); op < 0x100; op++ {
+	for op := range uint32(0x100) {
 		name, ok := binary.OpMnemonic(op)
 		if !ok || name == "" {
 			continue
