@@ -14,7 +14,7 @@
 # that churns whenever anything above it moves.
 278	section	(before the first ## heading)
 529	section	## The law
-1345	section	## Phase ladder
+1406	section	## Phase ladder
 1157	section	## Where the work is tracked
 9194	section	## Reporting protocol — the PR *is* the report
 2238	section	## Versioning and the changelog

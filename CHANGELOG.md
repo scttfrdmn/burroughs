@@ -21,6 +21,40 @@ weakly-ordered platform.
 
 ### Added
 
+- **A public API, and `burroughs run` on top of it — the engine's first embeddable surface
+  (decision 0029, #299).** `Instantiate` / `Config.Instantiate`, `Instance.Call` / `Exports` /
+  `Decline` / `Deferred`, a public `Value` with typed constructors and a spelling both `ParseValue`
+  and `Value.String` agree on, and `Trap` as a type because a caller usually wants its reason. The
+  CLI subcommand `burroughs run [--strict] <file.wasm> [<func> [<value>...]]` calls an export and
+  prints the result; with no function named it lists the module's exported functions.
+  - **The public path validates, and a decline is a third outcome rather than a failure.** Invalid
+    means refuse with the rule named; a construct outside the validator's vocabulary (#9's deferred
+    slices) means **run**, with the construct named on stderr. Collapsing decline into either
+    neighbour is the mixture error the board already refuses to make between `gated` and `failed`,
+    made at an API where the consumer is a `switch` in someone else's program. `--strict` closes the
+    carve-out for anyone who wants it closed today, and its default flips when #9's vocabulary
+    completes.
+  - **`Value` is a public type with conversion, not a hoisted `interp.Value`.** Publishing the
+    engine's own value type would freeze a representation that has taken three widenings in recent
+    slices (GC's `ValType`, 0024's `Hi`, 0027's `IsHost`) and make the fourth a breaking change. The
+    conversion is crossed once per call per argument, not per instruction. Exhaustiveness is a guard
+    rather than a `default` arm: the reference half of the type space is derived by sweeping all 256
+    bytes through `binary.AbstractRefType`, the named half is bound by name against an AST walk of
+    the declarations, and every element is asserted to **round-trip**.
+  - **Conformance runs through the new path, as a differential rather than a second board.** All 257
+    corpus files drive both the public API and `internal/interp` directly, in lockstep; 2238 module
+    forms and 25666 compared assertions cross the boundary, and the assertion is that the two paths
+    never *disagree* — which leaves the engine's fails where the board already owns them instead of
+    opening a second ledger with a different sampling filter. The two spec-value converters are
+    deliberately independent implementations, because a shared helper lets one defect satisfy both
+    arms and the differential then agrees with itself.
+  - **Five sentinels and seven exit codes, one per question a caller can ask.** `ErrMalformed`,
+    `ErrGated`, `ErrInvalid`, `ErrDeclined`, `ErrUnsupported`, plus `*Trap`; the CLI maps each to a
+    code of its own, because a script that cannot tell "rebuild with the gate on" from "fix your
+    module" is in the position a merged `gated`/`failed` column puts a reader of the board. The
+    coverage claim is derived: `TestExitCodesCoverEveryPublicSentinel` reads the sentinel set out of
+    the package's own source, so a sixth cannot fall through to the catch-all unnoticed.
+
 - **`internal/validate` — the type oracle decision 0002 Q3 names, slice 1 of #9 (#291).** Decoder →
   internal form → **validator** → interpreter: the pass that decides, statically, which type every
   value slot holds, which is what makes the interpreter's bare `uint64` slots sound and what ADR
@@ -508,6 +542,20 @@ weakly-ordered platform.
 
 ### Changed
 
+- **Two stale measured claims deleted rather than refreshed (0029's riders, #299).** `CLAUDE.md`'s
+  phase-ladder paragraph asserted `internal/interp` held "0 engine lines" and quoted a three-column
+  board; `internal/interp/exec.go`'s "what is deliberately absent" block said the loop had no control
+  flow, no memory, no globals, no calls, no SIMD and no references, beside the four `assert_return`
+  counts that recommended that first narrow set. Every clause and every figure was false. Both are
+  now **gone**, each pointing at the instrument that prints the live number — *any sentence asserting
+  a measured quantity is generated or deleted*, because a refreshed number rots on the same schedule
+  as the one it replaced and reads as current the whole time.
+  - **The ledger was green through the whole interval, correctly.** The `## Phase ladder` row sat at
+    a steady 1345 bytes while the sentences inside it went stale, which is a blind spot of a
+    byte-counting control rather than a bug in it, and `TestClaudeMDIndexLedger`'s scope section now
+    says so: it measures bytes, not the truth of the sentences, and a green ledger beside a green
+    ceiling certifies only the index's size.
+
 - **`CLAUDE.md`'s byte ceiling is now a reconciliation guard over a per-entry ledger (#298).** A
   single ceiling over an index whose entries are individually enumerable is exactly the aggregate
   *a total is not a ledger* demotes: one recall key can bloat back into a body while the file total
@@ -718,6 +766,43 @@ weakly-ordered platform.
   element segment's *offset* and an element *expression* are different lines of the user's module.
 
 ### Fixed
+
+- **`scripts/citecheck.sh` read every ADR's own numbered decisions as citations, which made the
+  citation gate unpassable for correct prose.** ADRs number their decisions — 0027 has five, 0028
+  three — and this repo refers to them as "decision 3", "decisions 2 and 3". The trigger matched any
+  run of digits after the word, so each such sentence became a citation to `docs/decisions/3-*.md`
+  and failed. An **over**-matching trigger predicate, the mirror of the under-match the grave rule's
+  note is careful about, and the worse direction for a gate: an under-match misses a finding, an
+  over-match trains people to work around the tool. Measured on merged history rather than argued —
+  `6a36e97`, the commit that added ADR 0028, fails the old check three times on its own headings. An
+  ADR citation is now **four digits**, which is the filename convention for all 29 records, and a 2-
+  or 3-digit run is reported as neither shape (phase 1b) rather than dropped, so the narrowing could
+  not become a silent under-match. Watched die in three directions before landing.
+  - **Two graves were missing `type:grave`, found by the same run** — #180 and #223, both closed,
+    both cited in prose as graves, neither in `label:type:grave`. The graveyard *is* that query, so
+    an unlabelled grave is a lesson the sweep cannot reach. Labelled, and the labels read back rather
+    than inferred from the edit's exit status.
+
+- **A gated proposal was reported as a malformed module at the public boundary
+  ([#301](https://github.com/scttfrdmn/burroughs/issues/301)).** **429 module forms** across the
+  corpus were told they were broken when the truth was that this build has GC and memory64 switched
+  off. `internal/binary.ErrFeatureDisabled` exists precisely to avoid this — its doc comment says it
+  is deliberately not a malformed-string, because the module is well-formed and the spec would accept
+  it — and `docs/laws/gates.md` writes the law down as *gates never manufacture malformedness*. The
+  property was established at the decoder and **not inherited** by the first consumer of it one layer
+  up, which is the shape rather than the file: *lessons are indexed by shape, not by file*. Fixed
+  with a fifth sentinel `ErrGated`, ordered narrow-before-general ahead of `ErrMalformed`, exit code
+  6 of its own, and three controls — a per-gate fixture set, the other direction (genuine
+  malformedness must not be absorbed by the new arm), and the corpus census that measured the 429.
+
+- **`Kind()` reported the zero `ValType` as a real kind byte
+  ([#300](https://github.com/scttfrdmn/burroughs/issues/300)).** The doc comment promised
+  `ok == false` for `NoValType` and the code returned `(0x00, true)` — *the defect stated as the
+  rule*, so review confirmed the bug. Found by writing the public conversion, which is the first
+  consumer that has to tell "not a kind byte" from "a kind byte I have no mapping for". The repair is
+  asserted in **both** directions, because an over-eager decline would be worse than the original:
+  seven encoder sites in `internal/text` discard the second result, so a type that wrongly declined
+  would reach the wire as byte 0 rather than as a test failure.
 
 - **Two prose claims that outlived their subject (#298).** *A ruling retroactively falsifies prose
   written before it*, so: `docs/laws/evidence-and-instruments.md` said a search of `~/src` had not

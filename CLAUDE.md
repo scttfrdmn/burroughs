@@ -36,11 +36,13 @@ doc approving it.
 **v0's product is a module that runs**, and the ladder is a sequence of *artifacts*,
 not of instruments: decoder → **internal form (0002)** → validator → interpreter. The
 harness, the controls, and the generated tables are how those artifacts are known to be
-right; they are never the deliverable. State of play, measured rather than felt:
-`internal/interp` holds **0 engine lines** against 493 test lines, and the board is
-**4162 pass / 0 fail / 60872 unsupported** — 93.6% of the corpus unanswered, essentially
-all of it behind the one artifact that does not exist yet. A phase is judged by its
-product, so v0 is early, and the next PR adds engine lines.
+right; they are never the deliverable. A phase is judged by its product.
+
+**No measured figure lives in this file.** The four that did — `internal/interp` at "0
+engine lines", a three-column board — were stale unread. *Any sentence asserting a measured
+quantity is generated or deleted* (Scott's rider, ADR 0029). Ask the instrument:
+`go test ./internal/spec/ -run TestPhase1Files -v` prints the board, `make ratio RATIO=<rev>`
+the engine/instrument lines.
 
 ## Where the work is tracked
 

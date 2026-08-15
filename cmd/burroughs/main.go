@@ -1,7 +1,8 @@
 // Command burroughs is the engine CLI.
 //
-// v0 surface: inspect (section-level module dump) and version.
-// The run subcommand arrives with the interpreter (decision 0002).
+// v0 surface: run (instantiate a module and call an export), inspect (section-level module dump),
+// and version. `run` is a consumer of the public `burroughs` package — decision 0029 — so the CLI
+// and an embedding host cross the same path, and neither is covered without the other.
 package main
 
 import (
@@ -30,6 +31,10 @@ func main() {
 			fmt.Fprintln(os.Stderr, "burroughs:", err)
 			os.Exit(1)
 		}
+	case "run":
+		// Nothing is printed here: runCmd reports its own outcome on the writers it is handed, so
+		// the whole of what a user sees is inside the function the tests call.
+		os.Exit(exitCode(runCmd(os.Stdout, os.Stderr, os.Args[2:])))
 	default:
 		usage()
 		os.Exit(2)
@@ -53,5 +58,8 @@ func inspect(path string) error {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: burroughs <version|inspect file.wasm>")
+	fmt.Fprintln(os.Stderr, "usage: burroughs <command> [arguments]")
+	fmt.Fprintln(os.Stderr, "  run [--strict] file.wasm [func [value...]]   instantiate and call an export")
+	fmt.Fprintln(os.Stderr, "  inspect file.wasm                            section-level module dump")
+	fmt.Fprintln(os.Stderr, "  version")
 }

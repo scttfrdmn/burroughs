@@ -54,6 +54,16 @@ import (
 // *derived* (`anchorFor`) and already checked against the lead by `TestEveryLawIsIndexed`. A
 // hand-written label would be a third copy of a sentence that already has two homes.
 //
+// **And no claim about whether the sentences are true.** This ledger measures *bytes*, which is
+// the ratchet it was built to catch; it is blind to a row that holds its size while every figure
+// inside it goes stale. That is not hypothetical — the `## Phase ladder` section sat at a steady
+// 1345 bytes while asserting `internal/interp` held "0 engine lines" against an interpreter that
+// runs the corpus, and this control was green through the whole interval, correctly, because the
+// section had not grown. The instrument for *that* failure is a different one and it is a rule
+// rather than a test: **any sentence asserting a measured quantity is generated or deleted**
+// (Scott's rider, ADR 0029). Worth stating here because a green ledger beside a green ceiling
+// reads as "the index is in good order", and the two of them together certify only its size.
+//
 // # Watched die, twice, and the first one is the law demonstrated inside its own control
 //
 //   - **The compensating perturbation.** `no-cgo-pure-go` was grown by 4 bytes and

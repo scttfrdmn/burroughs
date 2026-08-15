@@ -29,17 +29,19 @@ import (
 // against a slice it consumes, because the alternative would have to be rewritten by #7's
 // successor.
 //
-// # What is deliberately absent
+// # What was deliberately absent, and why the list is no longer here
 //
-// No control flow, no memory, no globals, no calls, no SIMD, no references. Measured before
-// being chosen: the 139-opcode numeric core makes **13671** of the suite's `assert_return`
-// commands answerable, adding all of block/loop/if/br/br_if/br_table/return/call/call_indirect
-// takes that to **13699**, `select` adds **zero**, and globals add **7**. The remaining ~38900
-// are behind the text encoder's frontier and behind v128 and reference types, not behind this
-// loop. The narrow set is what the measurement recommended, not what was easy.
+// This block used to name the loop's frontier — "no control flow, no memory, no globals, no
+// calls, no SIMD, no references" — beside the four `assert_return` counts that recommended that
+// narrow first set. Every clause of it is now false and every figure stale: the loop has all
+// six. **Deleted rather than refreshed**, on the rule that any sentence asserting a measured
+// quantity is generated or deleted (ADR 0029's rider) — a refreshed number rots on the same
+// schedule as the one it replaced, and reads as current the whole time.
 //
 // Every absent opcode is `ErrUnsupportedOp` naming its own bytes, so the board's fail bucket
-// for this layer is keyed by opcode and reads as a work list.
+// for this layer is keyed by opcode and reads as a work list. That bucket, printed by
+// `go test ./internal/spec/ -run TestPhase1Files -v`, is where the live frontier is read, and
+// it is also where the reward for closing one is read.
 //
 // `results` is the arity of the implicit function-body label — what a `return`, and a branch to
 // the outermost depth, truncates the stack to. Passed in rather than read from `fn.TypeIndex`

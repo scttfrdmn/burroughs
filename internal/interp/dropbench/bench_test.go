@@ -357,8 +357,10 @@ func BenchmarkSeq8(b *testing.B) {
 // ---------- Pure-numeric variant: same three implementations, zero references ever pushed ----------
 //
 // **The strongest argument for gating this mechanism per-function, measured rather than assumed.**
-// 0 of the numeric core's 13671 answerable corpus vectors need a reference at all (exec.go's own
-// header) — so the realistic cost of an *ungated* fix is not the refEvery=97 mixed workload above,
+// 0 of the numeric core's 13671 answerable corpus vectors need a reference at all (measured at the
+// numeric-core era, when that was the whole of the loop; `exec.go`'s header carried the figure and
+// no longer does, on 0029's generated-or-deleted rider) — so the realistic cost of an *ungated* fix
+// is not the refEvery=97 mixed workload above,
 // it is this: bookkeeping paid on every numeric push/pop by a function that never touches a
 // reference, mirroring `frame`'s own lazy refs/isRef allocation precedent (newFrame, value.go) —
 // which pays nothing for a function with no reference-typed param or local. If the ungated cost
