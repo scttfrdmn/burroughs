@@ -314,3 +314,43 @@ func TestSuitePinIsAssertedByTheFetchScript(t *testing.T) {
 			script, pinCheck, ifEnd)
 	}
 }
+
+// TestEveryLicensedAuthorityIsReadableAndAboveItsFloor asks the floor question over the
+// *derived set* of authorities rather than over the ones some test happens to cite.
+//
+// A floor in `refFloors` only bites when something calls `RequireSpecRef` on that path, so an
+// authority with no caller has a floor that is declared and unenforced — a presence check
+// nothing performs, wearing a constant that looks like a control. That was the state
+// valid.ml/match.ml arrived in (#291 commit one): licensed in the map and in the fetch script's
+// loop, with nothing in Go ever opening them, so a truncated vendor would have satisfied every
+// existing test. **Scoped to the space and not to the sample** — it iterates
+// `LicensedRefPaths()`, so authority number eight is covered by arriving rather than by someone
+// remembering to add a line here. That is the same derivation `TestFetchScriptAssertsEveryAuthority`
+// uses one layer out, pointed at enforcement instead of at presence.
+//
+// It is deliberately *not* an assertion about sizes at a revision: `RequireSpecRef` already
+// compares each file against its own floor and says so, and restating a floor here would be the
+// second-site duplication `refFloors`'s own comment forbids. All this adds is a caller.
+func TestEveryLicensedAuthorityIsReadableAndAboveItsFloor(t *testing.T) {
+	licensed := testenv.LicensedRefPaths()
+
+	// Vacuity floor, as in TestFetchScriptAssertsEveryAuthority: a loop over an empty set
+	// enforces nothing and reports green. Five is the count before #291 added the sixth and
+	// seventh, and a floor rather than an equality so the next authority fails in the loop.
+	if len(licensed) < 5 {
+		t.Fatalf("LicensedRefPaths returned %d paths, want >=5 — a floor sweep over an empty "+
+			"set enforces nothing and passes", len(licensed))
+	}
+
+	for _, p := range licensed {
+		t.Run(filepath.Base(p), func(t *testing.T) {
+			// RequireSpecRef is the licensed door: it resolves the path, skips honestly on a
+			// clone with no `make spec-ref` (revoked by BURROUGHS_NO_SKIP=1), and fails on a
+			// file below its floor. Reading the bytes here would bypass all three.
+			if got := len(testenv.RequireSpecRef(t, p)); got == 0 {
+				t.Errorf("%s read as empty through RequireSpecRef, which should have failed on "+
+					"its floor first — the floor lookup found a zero, or the file is a stub", p)
+			}
+		})
+	}
+}

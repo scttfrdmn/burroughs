@@ -213,6 +213,51 @@ const RefFreeML = "third_party/spec/interpreter/syntax/free.ml"
 // separate to guard against has now actually ended.
 const MinRefFreeBytes = 5000
 
+// RefValidML is the reference interpreter's *validator*, relative to the repo root.
+//
+// The authority for #9's whole campaign: which modules are well-typed. decode.ml says what an
+// image means and encode.ml says which image a module produces; neither says whether the module
+// is *valid*, and validity is a separate judgement with its own algorithm — the operand stack,
+// the control-frame stack, the polymorphic-after-`unreachable` rule, and the instruction
+// signature table all live here.
+//
+// **Licensed before the first citation rather than after the twenty-eighth, deliberately.** Both
+// this file and match.ml were on disk and in neither this map nor the fetch script's presence
+// loop, which is the shape RefEncodeML's comment records against itself — cited 28 times in
+// internal/text with no floor and no presence check, so a truncated fetch would have read as an
+// authority. The reason it is more urgent here than it was there: encode.ml was a cited
+// artifact, where valid.ml is this campaign's **oracle**. Its absence from this map means a fetch
+// change could drop the authority and no control would notice, which is *coverage is a claim*
+// with the oracle as the subject. (Directive: chat-Claude, on the #290 relay; #291 commit one.)
+const RefValidML = "third_party/spec/interpreter/valid/valid.ml"
+
+// MinRefValidBytes is the floor for valid.ml, which is 38707 bytes at bdd7164.
+//
+// The shared 20000 again, and again as a coincidence rather than a principle — see
+// MinRefFreeBytes, whose 5000 is where the coincidence first ended.
+const MinRefValidBytes = 20000
+
+// RefMatchML is the reference interpreter's *subtyping* relation, relative to the repo root.
+//
+// valid.ml's companion and not a duplicate of it: valid.ml asks whether each instruction's
+// operands are present, and defers *whether this type is acceptable where that one is wanted* to
+// `Match` — so the two together answer one question and neither answers it alone. That split is
+// exactly why the type-mismatch family cannot be discriminated by expected string (2288 of 2714
+// vectors want the identical `type mismatch`): the rule that refused is recoverable only from
+// these two files.
+//
+// Licensed in the same motion as valid.ml. A validator campaign that licensed its type rules and
+// not its subtyping rules would have narrowed its own authority by exactly the mechanism
+// TestFetchScriptAssertsEveryAuthority was written to police — *not a wrong assertion, a
+// shrinking one*.
+const RefMatchML = "third_party/spec/interpreter/valid/match.ml"
+
+// MinRefMatchBytes is the floor for match.ml, which is 5426 bytes at bdd7164.
+//
+// Below the 20000 four of the six share, like free.ml's, and for the same reason: it is a small
+// file, and a floor is a measurement of the file it bounds rather than a house style.
+const MinRefMatchBytes = 4000
+
 // refFloors is the size floor per reference file, keyed by the path constants above.
 //
 // A map rather than a parameter on RequireSpecRef, deliberately: a floor passed at the
@@ -228,6 +273,8 @@ var refFloors = map[string]int{
 	RefParserMLY: MinRefParserBytes,
 	RefEncodeML:  MinRefEncodeBytes,
 	RefFreeML:    MinRefFreeBytes,
+	RefValidML:   MinRefValidBytes,
+	RefMatchML:   MinRefMatchBytes,
 }
 
 // LicensedRefPaths returns every reference file this package licenses as an authority.
@@ -304,8 +351,16 @@ func RequireSpecRef(tb testing.TB, path string) string {
 		return string(b)
 	}
 
-	reason := fmt.Sprintf("reference interpreter not vendored: %s is %d bytes, want >=%d (run: make spec-ref)",
-		path, len(b), floor)
+	// **Truncated and absent are different conditions, and this said "not vendored" for both.**
+	// A file present at 900 bytes under a 20000 floor is vendored; the fetch is *incomplete*,
+	// which has a different cause (an interrupted or partial checkout) and a different remedy
+	// than a missing vendor. The old wording named a state the input did not have — right
+	// verdict, wrong ground, and no board could contradict it because the verdict was correct
+	// either way. That is `ErrMalformedFuncType`'s `0xde` in a skip reason (*an error message is
+	// testimony*). Found by truncating valid.ml to falsify the floor sweep and reading the
+	// message it produced, which is the same print-don't-trust move the law asks for.
+	reason := fmt.Sprintf("reference interpreter is vendored but truncated: %s is %d bytes, want >=%d "+
+		"(an incomplete fetch, not a missing one — re-run: make spec-ref)", path, len(b), floor)
 	if err != nil {
 		reason = fmt.Sprintf("reference interpreter not vendored: %v (run: make spec-ref)", err)
 	}
