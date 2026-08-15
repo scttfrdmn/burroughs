@@ -46,6 +46,20 @@ import (
 // compensation the ≤896 forecast bound actually suffered (four modules over their own upper
 // bound, one 45 under, netting to a comfortable −39). *Errors of opposite sign cancel into a
 // plausible total*, and that is the whole reason this is a per-destination assertion.
+//
+// # Slice 2 (#305) re-bases four of the five rows, and the fifth is the one worth reading
+//
+// The 0xFD region's typing moved 648 vectors from `declined` to `pass` and 20 the other way:
+// **1554 pass (+648) / 388 declined (−668) / 158 admitted (+16) / 14 mismatch (+4) / 460 gated
+// (unmoved)**. `gated` holding still is the row that says the delta is engine capability and not a
+// harness widening — nothing here became *askable*, 648 things became answerable.
+//
+// **And this ledger is what caught the board's own bound mis-measuring.** The 4 that arrived in
+// `mismatch` are validate-stratum failures, and `validateAdmitCeiling` was computed as
+// `validateFail − validateDeclined`, so it had absorbed them into the accept-direction figure: 162
+// against a true 158. Two mechanisms over one population disagreed by exactly the size of a
+// population one of them could not see — the cross-check below is the instrument that reported it,
+// and the fix is a third counter on the board rather than a wider tolerance here.
 func TestAssertInvalidDestinationLedgerCloses(t *testing.T) {
 	requireSuite(t)
 
@@ -161,10 +175,10 @@ func TestAssertInvalidDestinationLedgerCloses(t *testing.T) {
 		{
 			name: "already on the board (254 files) — the 2574 that left `unsupported`",
 			got:  already,
-			want: tally{total: 2574, pass: 906, declined: 1056, accepted: 142, mismatch: 10, gated: 460},
-			why: "the destination split IS the engine's contribution: 906 passes is the reward, " +
-				"1056 named declines are the next slices' work plan, 142 admissions are the " +
-				"accept-direction stratum, 10 are wrong-message on a right refusal, and 460 " +
+			want: tally{total: 2574, pass: 1554, declined: 388, accepted: 158, mismatch: 14, gated: 460},
+			why: "the destination split IS the engine's contribution: 1554 passes is the reward, " +
+				"388 named declines are the next slices' work plan, 158 admissions are the " +
+				"accept-direction stratum, 14 are wrong-message on a right refusal, and 460 " +
 				"never reached the validator at all",
 		},
 		{
@@ -212,24 +226,35 @@ func TestAssertInvalidDestinationLedgerCloses(t *testing.T) {
 	// The cross-checks that tie this ledger to bounds asserted elsewhere, each from a different
 	// path so neither vouches for itself.
 	//
-	// `validateFailCeiling` is 1201 and is computed by the board from the stratum field;
-	// declined + accepted here is computed from bucket-key prefixes over both file groups. The
-	// two agreeing is the identity that made the PR's original "1201" wrong in a subtler way
-	// than the 544: the ceiling covers *both* groups, so quoting it beside a conversion figure
-	// restricted to one of them mixed populations a second time.
-	if got := already.declined + fresh.declined + already.accepted + fresh.accepted; got != 1201 {
-		t.Errorf("validate-stratum assert_invalid fails = %d, want 1201 to match "+
-			"validateFailCeiling (1059 declined + 142 admitted). The ceiling is derived from the "+
-			"stratum field and this from the bucket keys; they must agree or one of them is "+
-			"describing a population the other is not", got)
+	// The board's `validateDeclineCeiling` + `validateAdmitCeiling` are computed from the stratum
+	// field and the arm's own flags; declined + accepted here is computed from bucket-key prefixes
+	// over both file groups. The two agreeing is the identity that made the slice 1 PR's original
+	// "1201" wrong in a subtler way than the 544: the ceiling covers *both* groups, so quoting it
+	// beside a conversion figure restricted to one of them mixed populations a second time.
+	//
+	// **This compared against `validateFailCeiling` — the whole stratum — and that stopped being the
+	// same quantity in slice 2.** It worked while the stratum's third population was empty. It is 4
+	// now, and those 4 are in `validateFailCeiling` (553) and not in the sum below (549), because the
+	// mismatch row *here* is board-wide: 14 vectors get a right refusal with a wrong message, of which
+	// 4 are the validator's and 10 belong to other strata. Two populations sharing a bucket-key
+	// prefix and not a stratum — which is exactly what the disagreement said when it fired, and the
+	// reason this identity now names the two sub-ceilings it can actually close against rather than
+	// the total it happened to equal.
+	if got := already.declined + fresh.declined + already.accepted + fresh.accepted; got != 549 {
+		t.Errorf("validate-stratum declines + admissions = %d, want 549 to match "+
+			"validateDeclineCeiling (391) + validateAdmitCeiling (158). Those come from the stratum "+
+			"field and the arm's flags and this from the bucket keys; they must agree or one of them "+
+			"is describing a population the other is not. The stratum's third part "+
+			"(validateMismatchCeiling, 4) is deliberately outside this identity: the mismatch row "+
+			"below is board-wide and only 4 of its 14 are the validator's", got)
 	}
 	if got := already.gated + fresh.gated; got != 463 {
 		t.Errorf("gated assert_invalid = %d, want 463 to match the unsupportedCeiling ledger's "+
 			"own split of the 2574 into 463 gated + 2111 verdicts", got)
 	}
-	if got := already.pass + fresh.pass; got != 1023 {
-		t.Errorf("assert_invalid passes = %d, want 1023 to match passFloor's account, which "+
-			"names 18 of the 1023 as answered from above the validator", got)
+	if got := already.pass + fresh.pass; got != 1671 {
+		t.Errorf("assert_invalid passes = %d, want 1671 to match passFloor's account — 1023 at "+
+			"slice 1, of which it names 18 as answered from above the validator, plus slice 2's 648", got)
 	}
 	// The residual, and the reason it is asserted rather than logged: it is the *complement* of
 	// this ledger's subject, so it is where a command goes when `classify` stops recognizing one.

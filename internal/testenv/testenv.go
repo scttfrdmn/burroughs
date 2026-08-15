@@ -258,6 +258,44 @@ const RefMatchML = "third_party/spec/interpreter/valid/match.ml"
 // file, and a floor is a measurement of the file it bounds rather than a house style.
 const MinRefMatchBytes = 4000
 
+// RefMnemonicsML is the reference interpreter's mnemonic-to-constructor table, relative to the
+// repo root.
+//
+// **It is the missing link in valid.ml's chain, and without it valid.ml is an oracle nothing can
+// reach.** valid.ml types instructions by their *constructor family* — `VecBinary`, `VecSplat`,
+// `VecLoadLane` — and decode.ml maps an opcode to a *mnemonic*. Neither file says which family a
+// mnemonic belongs to; this one does, in 256 one-line bindings for the vector region alone
+// (`let i8x16_swizzle = VecBinary (V128 (I8x16 V128Op.Swizzle))`). So an opcode's type is
+// recoverable only by joining three authorities, and this is the join key's home.
+//
+// The alternative was hand-classifying 236 SIMD opcodes into families by their names, whose
+// errors are **accept-direction and invisible on the board** — contract §9's G-3 class, the one
+// `signature`'s doc comment argues at length against. Licensed on arrival rather than after the
+// first citation, which is RefValidML's own lesson carried one authority forward. (#305, slice 2.)
+const RefMnemonicsML = "third_party/spec/interpreter/syntax/mnemonics.ml"
+
+// MinRefMnemonicsBytes is the floor for mnemonics.ml, which is 28444 bytes at bdd7164.
+const MinRefMnemonicsBytes = 20000
+
+// RefV128ML is the reference interpreter's vector shape arithmetic, relative to the repo root.
+//
+// Licensed for two six-row functions, and the smallness is the point: `num_lanes` (`:22`) and
+// `type_of_lane` (`:31`) are what turn a shape into a lane count and a lane scalar type, which is
+// the entire content of `VecSplat`/`VecExtract`/`VecReplace`'s signatures and of every lane-index
+// bound. Six rows is exactly the size at which transcribing feels too small to check — and
+// `type_of_lane`'s first row folds three shapes onto `I32T`, so the plausible-looking wrong
+// version (`i8x16` lanes are `i8`-ish, so surely not `i32`) is the one a reader would write from
+// memory. An accept-direction error in it is invisible for G-3's reason.
+//
+// Not licensed for the *execution* semantics in the rest of the file: `internal/interp` runs SIMD
+// already and does not cite this. The authority claimed here is the shape-to-lane mapping and
+// nothing else, stated so a later reader does not read this constant as licensing the file's
+// arithmetic.
+const RefV128ML = "third_party/spec/interpreter/exec/v128.ml"
+
+// MinRefV128Bytes is the floor for v128.ml, which is 16679 bytes at bdd7164.
+const MinRefV128Bytes = 10000
+
 // refFloors is the size floor per reference file, keyed by the path constants above.
 //
 // A map rather than a parameter on RequireSpecRef, deliberately: a floor passed at the
@@ -275,6 +313,9 @@ var refFloors = map[string]int{
 	RefFreeML:    MinRefFreeBytes,
 	RefValidML:   MinRefValidBytes,
 	RefMatchML:   MinRefMatchBytes,
+
+	RefMnemonicsML: MinRefMnemonicsBytes,
+	RefV128ML:      MinRefV128Bytes,
 }
 
 // LicensedRefPaths returns every reference file this package licenses as an authority.

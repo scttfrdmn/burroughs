@@ -76,6 +76,46 @@ weakly-ordered platform.
   document is the claim — added with the specimen that prompted it, a test header that listed as
   "logged" a property the code below asserted.
 
+- **The 0xFD vector region types, slice 2 of #9 (#305).** 236 core SIMD opcodes across 20
+  constructor families, `+648` passes on the board, and the validator's decline column drains
+  `1059 → 391`. `select t` (#294) is now the last instruction in the single-byte space slice 1 left;
+  the other three prefixed regions (0xFB GC, 0xFC bulk, 0xFE threads) still dispatch to a decline.
+  - **The classification is read from the reference, not written here — and that is a stronger claim
+    than slice 1's.** `sig.go` derives numeric signatures from the mnemonic because `add` is visibly
+    binary. Nothing in the string `i32x4_bitmask` says it returns an `i32` while `i32x4_neg` returns a
+    `v128`, and nothing in `i16x8_extmul_low_i8x16_s` says it takes two operands where
+    `i16x8_extend_low_i8x16_s` takes one: a reader classifying 236 mnemonics by eye gets most right,
+    and the ones they get wrong are exactly the ones no `assert_invalid` vector can catch. So
+    `syntax/mnemonics.ml`'s mnemonic → constructor-family binding *is* the table, `valid/valid.ml`
+    types each family in one arm, and `exec/v128.ml` supplies the lane count and lane scalar type —
+    **three authorities joined, because no single file in the reference says what type an opcode has.**
+    Five controls parse them and compare in both directions.
+  - **Those controls found three facts on their first run, each caught by a pinned vacuity count
+    rather than by inspection.** The 0xFD region is 275 rows and 256 instructions — the 19 extras are
+    `optable.go`'s `illegal: true` holes, where `PrefixedOp` returns `ok=true, name=""` (`ok` means
+    there is a row, not that there is a name), and the check that matters is that each of the 19
+    *declines* rather than typing. `valid.ml` has 21 `Vec`-prefixed arms parsed naively and 20 real
+    ones, because bounding a chunk by the next *matching* start makes the excluded cases the widest.
+    And `VecTernary` has no core opcode at all — its smallest is 0x105, so the lanewise ternary
+    family is entirely relaxed SIMD and core SIMD's only three-operand instruction is
+    `v128.bitselect`; the arm is correctly transcribed and unreachable until that gate flips.
+  - **The behavioural half exists because the authority half can be green while nothing calls it.**
+    Every authority check calls `vecSignature` or a lane helper directly. 23 rows go through the real
+    path instead (wat → encode → decode → validate), 15 of them **accept**-direction: all 648
+    converted vectors are `assert_invalid`, satisfied by any refusal, so a wrong signature that
+    refuses a *valid* module shows up as a vector nobody wrote. Demonstrated rather than asserted —
+    reverting the region dispatch to a decline keeps all five authority tests green and kills all 23
+    rows. The reject rows key on the `%w`-wrapped detail, never the sentinel, because all five of the
+    reference's lane-index sites produce the identical `invalid lane index`.
+  - **Typing the region cost 20 vectors, and the two directions are accounted separately.** The
+    admission stratum rises `142 → 158` and a wrong-message population rises `0 → 4`, one cause:
+    `decodeMemop` drops the memarg alignment deliberately, so a vector whose only defect is an
+    over-aligned SIMD access used to be refused *because the instruction had no rule* and is now
+    typed and accepted. The trade was measured, not argued — declining the four memory families
+    instead yields `validate 603 (461 + 142)` and 50 fewer passes, and leaves `v128.load`/`v128.store`
+    untyped for the interpreter. The alignment slice is filed with a tripwire (#306): at 54 it is now
+    the largest admitted bucket.
+
 - **`internal/validate` — the type oracle decision 0002 Q3 names, slice 1 of #9 (#291).** Decoder →
   internal form → **validator** → interpreter: the pass that decides, statically, which type every
   value slot holds, which is what makes the interpreter's bare `uint64` slots sound and what ADR
@@ -787,6 +827,32 @@ weakly-ordered platform.
   element segment's *offset* and an element *expression* are different lines of the user's module.
 
 ### Fixed
+
+- **`validateAdmitCeiling` was measuring a population 4 larger than the one it names, and the
+  arithmetic that did it was correct until it wasn't (#305).** The board read the admission stratum
+  off `validateFail − validateDeclined`, which identified it exactly while the validate stratum's
+  third outcome — an honest refusal whose message the corpus disagrees with (0003) — was **0**. Slice 2
+  made it 4, and those four *refusals* landed silently inside the constant whose whole documented
+  subject is the accept direction. Nothing on the board noticed; what noticed was
+  `TestAssertInvalidDestinationLedgerCloses`, which counts by bucket-key prefix and disagreed by
+  exactly 4. **A count that is right only while some other count is zero is not a count of anything**,
+  so the arm now states which of its outcomes it took (`Failure.Accepted`, beside `Declined`) and the
+  stratum has three counters and three slack-0 bounds that must sum to it. The population that spent
+  slice 1 documented as "the 0 that is not here … the point of not giving it one" has a bound
+  (`validateMismatchCeiling`, the board's nineteenth) — *a third verdict needs a structural bound,
+  not just a watched one*, arriving one stratum down.
+
+- **Two lane-index citations were off by one, both to the line above the bound (#305).**
+  `checkLaneIndex` cited `valid.ml:952`, which is `let t2 = NumT (type_vec_lane replaceop)` — the
+  arm's type binding, one statement before the `require` it claimed to point at — and
+  `ErrInvalidLaneIndex`'s "five sites in the reference producing one string" listed 953 for the same
+  site. Both resolved to the right arm, so a reader would have followed them and found something
+  plausible, which is the failure mode: a list described as *the five lines producing the string*
+  should be those five lines. `TestLaneIndexCitationsResolveToTheReferencesSites` derives the legal
+  targets from the reference (all four `require` sites wrap, so either half counts) and is what found
+  them; it took three iterations to write, each one a refuted claim about its own subject, and the
+  distinction it finally rests on is that **a point citation cites a statement and a range citation
+  cites an arm** — the first can be off by one and the second cannot.
 
 - **`scripts/citecheck.sh` read every ADR's own numbered decisions as citations, which made the
   citation gate unpassable for correct prose.** ADRs number their decisions — 0027 has five, 0028

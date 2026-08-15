@@ -6723,7 +6723,33 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	// and `unreached-invalid.wast` had *no* attempted command before, being wholly `assert_invalid`.
 	// A file whose every vector was unsupported is invisible to a per-file board, which is worth
 	// knowing about the report and not only about these two files.
-	const allOnPassFloor = 63329
+	//
+	// # Slice 2 (#305): 63329 → 63977, and the delta is the default lane's exactly
+	//
+	// Both lanes moved **+648 pass**, and the redistribution is identical in each — declined −668,
+	// admitted +16, wrong-message +4:
+	//
+	//	                      all-gates-on lane, slice 1 → slice 2
+	//	assert_invalid pass          1087 → 1735
+	//	  declined                   1347 →  679
+	//	  admitted                    250 →  266
+	//	  wrong message                13 →   17
+	//	  gated                         0 →    0
+	//	                             ----    ----
+	//	                             2697    2697
+	//
+	// The stratum's total closes against this lane's board too: 962 validate fails + 90 from the
+	// other strata = the 1052 the lane reports.
+	//
+	// **Two lanes moving by exactly the same 648 is a suspiciously clean agreement, so the mechanism
+	// is stated rather than the coincidence admired**: core SIMD is default-*on* since #227/#233, so
+	// the 0xFD vectors this slice converts are gated in neither lane and both see the same
+	// conversion. What differs between the lanes — relaxed SIMD's 0x100..0x12f — contributes 0 to
+	// this delta, because with the relaxed gate on those opcodes reach `vecSignature` and hit its
+	// relaxed decline arm, which is a decline exactly as the region-wide decline before it was. A
+	// figure identical across two lanes is either one cause visible twice or two errors of the same
+	// size; this one is the first, and the sentence that says so is the difference.
+	const allOnPassFloor = 63977
 	boardBound(t, "allOnPassFloor", totalPass, allOnPassFloor, boardBoundSlack, floorBound,
 		"a gated feature regressed, which the Gated==0 assertion above cannot see: with every "+
 			"gate on, a broken feature turns a pass into a fail and leaves Gated at zero")
@@ -7155,10 +7181,14 @@ func TestPhase1Files(t *testing.T) {
 	// facts its own forecast (#291) had deliberately separated.
 	//
 	// The engine's contribution is the **destination split**, which lives in
-	// `TestAssertInvalidDestinationLedgerCloses` because *a total is not a ledger*: 906 of the 2574
-	// pass, 1056 are named declines, 142 are accept-direction admissions, 10 are right-refusal
-	// wrong-message, 460 are gated — and it closes to the vector. The 906 is the reward; the 1056
-	// is the next slices' work plan. A previous draft accounted for the 2574 as "829 conversions +
+	// `TestAssertInvalidDestinationLedgerCloses` because *a total is not a ledger*: at slice 1, 906 of
+	// the 2574 passed, 1056 were named declines, 142 accept-direction admissions, 10 right-refusal
+	// wrong-message, 460 gated — and it closed to the vector. The 906 is that slice's reward; the 1056
+	// was the next slices' work plan, and slice 2 (#305) drew 648 of it down: the split reads
+	// **1554 / 388 / 158 / 14 / 460** now, re-based at the ledger itself, which is where a figure that
+	// moves per slice belongs. Quoted here in both eras rather than updated in place, because this
+	// entry's subject is the −2574 *this* column took and that number did not move.
+	// A previous draft accounted for the 2574 as "829 conversions +
 	// 1201 validate stratum", which left **544 vectors unaccounted** and mixed a figure over a
 	// restricted subject (board-visible `type mismatch` conversions only) into an identity over
 	// the whole population — 829 of the 906 passes expect `type mismatch` and 77 expect something
@@ -7266,9 +7296,15 @@ func TestPhase1Files(t *testing.T) {
 	// than a quietly larger number, which is the same move as the unregistered-capability
 	// panic.
 	binaryFail, textFail, encodeFail, execFail, validateFail := 0, 0, 0, 0, 0
-	// The decline half of validateFail, sub-partitioned rather than counted separately, so the
-	// two ceilings below cannot drift from the stratum they decompose.
-	validateDeclined := 0
+	// The three parts of validateFail, sub-partitioned here rather than counted separately, so the
+	// three ceilings below cannot drift from the stratum they decompose.
+	//
+	// **Two of these were one subtraction until slice 2**, and the reason they are three counters
+	// now is at `Failure.Accepted`: `validateFail − validateDeclined` named the admission stratum
+	// only while the stratum's wrong-message population was 0, and when slice 2 made it 4 the
+	// subtraction reported 162 for a population of 158 without any bound noticing. A partition
+	// recovered by subtraction is a partition that cannot grow an element.
+	validateDeclined, validateAdmitted, validateMismatched := 0, 0, 0
 	for _, fs := range aggBuckets {
 		for _, f := range fs {
 			switch f.Stratum {
@@ -7299,8 +7335,18 @@ func TestPhase1Files(t *testing.T) {
 				// at all (StratumExec — 0025's carve-out, retiring by migration one slice at
 				// a time rather than by a flag day).
 				validateFail++
-				if f.Declined {
+				// The stratum's own three-way split, from the arm's own flags rather than from
+				// arithmetic over two of them. `default` is the wrong-message case and is the one
+				// arm here with no flag of its own: it is what a validate-stratum failure is when
+				// the component neither declined to answer nor accepted — an honest refusal whose
+				// text the corpus disagrees with (0003).
+				switch {
+				case f.Declined:
 					validateDeclined++
+				case f.Accepted:
+					validateAdmitted++
+				default:
+					validateMismatched++
 				}
 			case StratumUnset:
 				t.Errorf("failure at line %d (%q, kind %v) carries no stratum — the site "+
@@ -7323,10 +7369,16 @@ func TestPhase1Files(t *testing.T) {
 			"arm, so one of the five ceilings below is watching a subset it cannot name",
 			binaryFail+textFail+encodeFail+execFail+validateFail, totalFail)
 	}
+	if validateDeclined+validateAdmitted+validateMismatched != validateFail {
+		t.Errorf("the validate stratum's three parts sum to %d but the stratum is %d; a "+
+			"validate-stratum failure is declined, admitted, or wrong-message, so a residual here "+
+			"is a fourth outcome with no ceiling under it",
+			validateDeclined+validateAdmitted+validateMismatched, validateFail)
+	}
 	t.Logf("  fail by stratum: binary %d, text %d, encode %d, exec %d, validate %d "+
-		"(%d declined + %d admitted)",
+		"(%d declined + %d admitted + %d wrong-message)",
 		binaryFail, textFail, encodeFail, execFail, validateFail,
-		validateDeclined, validateFail-validateDeclined)
+		validateDeclined, validateAdmitted, validateMismatched)
 
 	// **0 at the measured revision, and it was 1 for the whole life of this ceiling.**
 	// The one member was binary-gc.wast:1, reported as "malformed function type: 0x5e"
@@ -8385,8 +8437,9 @@ func TestPhase1Files(t *testing.T) {
 	// pre-registered here rather than read off a green run.
 	//
 	// **1201 is a work plan, not a defect count**, the shape textFailCeiling had at 391 and
-	// encodeFailCeiling still has. It decomposes into exactly two populations, and **each gets
-	// its own bound, because they are two instruments and not two halves of one**:
+	// encodeFailCeiling still has. It decomposed into exactly two populations at slice 1 — three
+	// from slice 2 on, the third having been 0 here — and **each gets its own bound, because they
+	// are separate instruments and not halves of one**:
 	//
 	//   - **1059 declines.** Slice 1 met an instruction whose rules belong to a later slice and
 	//     said so, `validate.ErrUnsupported` naming the opcode. This number falls when a slice
@@ -8402,37 +8455,114 @@ func TestPhase1Files(t *testing.T) {
 	// named gap is now *accepted*, and the total is identical. That is binaryFailCeiling's own
 	// argument about not sharing a column with the text one, arriving inside a single stratum.
 	//
-	// **The 0 that is not here is the one worth naming: wrong-message failures.** 2697 vectors
-	// were scored and *no* vector reached the type checker, was refused, and got a message the
-	// corpus disagreed with. That is a suspiciously clean number and it is treated as one: it is
-	// 0 because six message defects were fixed before this landed — the invented `global is
-	// immutable`, all nine `unknown <category>` formats, `pushFrame(opFuncBody, nil, …)`, the
+	// **The 0 that was not here is the one worth naming: wrong-message failures.** At slice 1, 2697
+	// vectors were scored and *no* vector reached the type checker, was refused, and got a message
+	// the corpus disagreed with. That is a suspiciously clean number and it was treated as one: it
+	// was 0 because six message defects were fixed before that slice landed — the invented `global
+	// is immutable`, all nine `unknown <category>` formats, `pushFrame(opFuncBody, nil, …)`, the
 	// duplicated result-arity check, `expectEmptyFrame` discarding leftovers, and `brTable`
-	// comparing its arms to the default — each of which was a non-zero row in this account until
-	// it was fixed. Four were comments asserting the property the code lacked. A future non-zero
-	// here is a regression with no ceiling to hide under, which is the point of not giving it one.
+	// comparing its arms to the default — each of which was a non-zero row in this account until it
+	// was fixed. Four were comments asserting the property the code lacked.
 	//
-	// Slack 0 on both, matching every other fail ceiling: these drain by rules landing, and a
+	// That paragraph ended "a future non-zero here is a regression with no ceiling to hide under,
+	// which is the point of not giving it one" — and **slice 2 is the future it was talking about,
+	// which is the part worth reading before the constants below.** It is 4 now. What the sentence
+	// got right is that the rise had to be *explained*; what it got wrong is that a population with
+	// no bound was being watched at all. It was not being watched: `validateAdmitCeiling` was
+	// `validateFail − validateDeclined`, so the four new wrong-message rows landed *inside the
+	// accept-direction constant* and the only reason they were noticed is that the destination
+	// ledger counts by bucket key and disagreed by exactly 4. The population now has a bound of its
+	// own (`validateMismatchCeiling`), which is the third-verdict rule arriving one stratum down: a
+	// third outcome needs a structural bound and not a comment promising to look.
+	//
+	// Slack 0 on all three, matching every other fail ceiling: these drain by rules landing, and a
 	// slice that lands re-bases the constant with the rule named.
-	const validateFailCeiling = 1201
-	const validateDeclineCeiling = 1059
+	//
+	// # Slice 2 (#305), the 0xFD region: 1201 → 553, and the parts moved in opposite directions
+	//
+	// **668 declines drained; 648 became passes; 16 landed in the admission stratum and 4 in the
+	// wrong-message one.** The arithmetic closes exactly (−668 + 16 + 4 = −648, against a +648 pass
+	// delta), which is what makes the account below a ledger rather than a summary. This is the
+	// sub-partition earning its keep on its first real test: a single constant over the stratum would
+	// have shown 1201 → 553 and said nothing about the twenty vectors that went the wrong way.
+	//
+	// It is also the sub-partition's *own* first real test, and it took the finding: two counters
+	// were enough for a stratum whose third population was empty, and the 20 arrived split 16/4
+	// across a boundary the arithmetic could not see. See `Failure.Accepted`.
+	//
+	// **Every one of the 20 is the alignment gap, and it is one cause with two faces.** Established
+	// by diffing the bucket keys before and after rather than reasoned about — the only admitted
+	// bucket that changed is `alignment must not be larger than natural`, 38 → 54, and the only
+	// *new* key is `assert_invalid expected: alignment must not be larger than natural` at 4
+	// (`simd_store{8,16,32,64}_lane.wast`, one each):
+	//
+	//   - **+16 accepted-but-invalid.** `decodeMemop` drops the memarg's alignment, deliberately
+	//     (its own comment: keeping it would store a fact only #9 reads), so a vector whose *only*
+	//     defect is an over-aligned SIMD access is now typed successfully and accepted. Before this
+	//     slice the instruction was declined and the module refused — for the wrong reason, but
+	//     refused. Typing the region removes that accidental cover.
+	//   - **+4 wrong-message refusals.** Those four modules carry two defects: over-alignment
+	//     *and* an `(result v128)` whose body produces nothing. The reference reports the alignment
+	//     error from inside `check_memop`; this package reports `type mismatch` at the body's
+	//     `end`. An honest refusal with the wrong message per 0003 — and the population that was
+	//     **exactly 0** three paragraphs above, which is why this note names it rather than letting
+	//     the total absorb it. It is no longer 0, the cause is known, and it is one cause.
+	//
+	// **The trade was measured, not argued.** Declining the four memory families instead of typing
+	// them yields `validate 603 (461 declined + 142 admitted)` and pass 60280 — so typing them buys
+	// 50 passes and costs these 20. It lands typed, because `v128.load`/`v128.store` untyped would
+	// leave the interpreter without the two most common vector instructions and the 20 sit in named
+	// buckets under slack-0 bounds. **Raising an accept-direction ceiling is not the actor's call to
+	// make quietly, so it is flagged in the PR body rather than decided here.**
+	//
+	// The alignment slice is filed with a tripwire of its own (#306): at 54 it is now the largest
+	// admitted bucket, and a debt is discharged by a tripwire and never by an intention.
+	const validateFailCeiling = 553
+	const validateDeclineCeiling = 391
 	boardBound(t, "validateDeclineCeiling", validateDeclined, validateDeclineCeiling, 0, ceilingBound,
 		"slice 1 declined more instructions than it did — either an opcode left the signature "+
 			"table or a later slice's rule regressed into a decline")
-	const validateAdmitCeiling = 142
-	boardBound(t, "validateAdmitCeiling", validateFail-validateDeclined, validateAdmitCeiling, 0,
+	// 142 → 158: the +16 accounted above, one cause (the dropped alignment immediate). Re-based
+	// rather than left stale because a bound left behind by a jump it can explain stops catching
+	// anything smaller than the jump — but a *rise* on this particular bound is the one board
+	// movement that makes the engine less correct, so the raise is flagged for a principal in the PR
+	// body and this comment is its account, not its authorization.
+	//
+	// **158 and not 162, and the 4 between them are the whole reason `Failure.Accepted` exists.**
+	// This bound read `validateFail − validateDeclined` and was re-based to 162 on that reading,
+	// which put four *refusals* inside the constant whose documented subject is acceptance — a bound
+	// measuring a population 2.5% larger than the one it names, in the direction that makes the
+	// engine look worse rather than better, but wrong either way. It now counts the arm's own flag.
+	const validateAdmitCeiling = 158
+	boardBound(t, "validateAdmitCeiling", validateAdmitted, validateAdmitCeiling, 0,
 		ceilingBound,
-		"the validator accepted an invalid module it used to refuse, or refused one with a "+
-			"message the corpus disagrees with. This is the accept direction: a rise here is the "+
-			"one board movement that makes the engine *less* correct while the total holds still")
-	if validateDeclineCeiling+validateAdmitCeiling != validateFailCeiling {
-		t.Errorf("the two validator ceilings sum to %d but the stratum's own is %d; one was "+
-			"re-based without the other, so the sub-partition no longer decomposes the column "+
-			"it claims to", validateDeclineCeiling+validateAdmitCeiling, validateFailCeiling)
+		"the validator accepted an invalid module it used to refuse. This is the accept direction: "+
+			"a rise here is the one board movement that makes the engine *less* correct while the "+
+			"total holds still")
+	// The third population, bounded for the first time here. 0 → 4, the alignment vectors carrying a
+	// second defect, and the account is three paragraphs up.
+	//
+	// **A ceiling and not an equality, on a population of 4**, which is the one judgement call in
+	// this block: an equality would be the stronger instrument and it would also fire on any *fix*
+	// that drains one of these four, which is the direction this bound wants to encourage. A ceiling
+	// with slack 0 catches the rise — a right refusal turning into a wrong message is a regression in
+	// testimony (0003) whether or not the verdict moved — and lets the drain land as a re-base.
+	const validateMismatchCeiling = 4
+	boardBound(t, "validateMismatchCeiling", validateMismatched, validateMismatchCeiling, 0,
+		ceilingBound,
+		"the validator refused a module with a message the corpus disagrees with. The verdict is "+
+			"right and the testimony is not, which is the failure a pass/fail column cannot show: "+
+			"these rows are fails, and a rise here can be a *message* regression on a vector that "+
+			"was already refused correctly")
+	if validateDeclineCeiling+validateAdmitCeiling+validateMismatchCeiling != validateFailCeiling {
+		t.Errorf("the three validator ceilings sum to %d but the stratum's own is %d; one was "+
+			"re-based without the others, so the sub-partition no longer decomposes the column "+
+			"it claims to",
+			validateDeclineCeiling+validateAdmitCeiling+validateMismatchCeiling, validateFailCeiling)
 	}
 	boardBound(t, "validateFailCeiling", validateFail, validateFailCeiling, 0, ceilingBound,
-		"the validator answered fewer assert_invalid vectors than it did; the two bounds above "+
-			"say which half moved, and this one exists so that a movement between them cannot "+
+		"the validator answered fewer assert_invalid vectors than it did; the three bounds above "+
+			"say which part moved, and this one exists so that a movement between them cannot "+
 			"net out")
 
 	// Pass floor over the whole board, the counterpart to TestBinaryWast's per-file
@@ -8869,7 +8999,19 @@ func TestPhase1Files(t *testing.T) {
 	// the reference validates in, which makes them evidence about where a rule currently lives.
 	// Pinned by TestAssertInvalidPassesFromAboveTheValidator, and the encoder one is why this PR's
 	// `encodeFail` forecast of +11 landed at +10.
-	const passFloor = 59682
+	// **59682 → 60330, #9 slice 2's 0xFD region (#305): +648, all of them conversions.**
+	//
+	// No new files and no admissions this time — every one of the 648 is a vector already on the
+	// board as a `validate` decline that is now answered, which is why this delta needs no
+	// decomposition where slice 1's needed three. The mirror figure is `validateDeclineCeiling`
+	// falling 1059 → 391, and the two are the same 648 seen from either side plus the 20 that went
+	// the other way; the ledger is at that constant.
+	//
+	// `unsupported` is **unmoved** at 83, and structurally so: a validator decline is scored `fail`
+	// with a named cause, never `unsupported`, so this campaign cannot touch that column however
+	// much capability it lands. The reward figure for slice 2 is this floor's +648, and it is stated
+	// here so the PR's Board section is quoting an instrument rather than describing one.
+	const passFloor = 60330
 	boardBound(t, "passFloor", totalPass, passFloor, boardBoundSlack, floorBound,
 		"a regression in a grammar that used to answer, or the corpus moved")
 }

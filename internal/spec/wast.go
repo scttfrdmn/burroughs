@@ -1338,6 +1338,24 @@ type Failure struct {
 	// own decline/admission split, which is a bidirectional check that this flag and the
 	// stratum count agree.
 	Declined bool
+
+	// Accepted marks the opposite refusal: the component ran to completion and said **yes** to a
+	// vector the corpus says is invalid. Today only the assert_invalid arm sets it, on the same
+	// branch that keys the `assert_invalid accepted, expected:` bucket.
+	//
+	// **It is a bool for Declined's reason and it exists for a reason Declined did not have: the
+	// arithmetic that used to identify this population stopped identifying it.** Slice 1 could read
+	// the admission stratum off `validateFail − validateDeclined`, because the third thing a
+	// validate-stratum failure can be — an honest refusal whose message the corpus disagrees with —
+	// was **exactly 0** board-wide in that stratum, and a subtraction over a two-element partition
+	// needs no third label. Slice 2 made it 4 (the alignment vectors carrying a second defect), and
+	// the subtraction silently began reporting 162 for a population of 158, with four *refusals*
+	// inside a constant whose whole documented purpose is the accept direction.
+	//
+	// So the arm states which of its outcomes it took instead of leaving it to be recovered by
+	// subtraction from a partition whose size was an accident of the measurement. A count that is
+	// right only while some other count is zero is not a count of anything.
+	Accepted bool
 }
 
 // AltChoice is one `(either …)` expectation and the alternative the engine's answer matched.
@@ -2287,6 +2305,7 @@ func (s *Script) run(opts runOpts) *Result {
 					Line: c.Line, Expect: c.Expect,
 					Got:  "the module validated successfully",
 					Kind: c.Kind, Stratum: StratumValidate,
+					Accepted: true,
 				})
 			}
 
