@@ -543,6 +543,16 @@ func TestDefaultFeaturesAndZeroValueAreDistinctFacts(t *testing.T) {
 	if got := DefaultFeatures(); !got.SIMD {
 		t.Errorf("DefaultFeatures().SIMD = %v, want true — #227/ADR 0025's own flip", got.SIMD)
 	}
+	// The second divergence, pinned at the ledger for the same reason the first is: the flip
+	// is a policy fact about this function, and without an assertion here the only thing
+	// holding it is a board count that a corpus change could also move.
+	if got := DefaultFeatures(); !got.RelaxedSIMD {
+		t.Errorf("DefaultFeatures().RelaxedSIMD = %v, want true — the relaxed-SIMD flip", got.RelaxedSIMD)
+	}
+	if got := (Features{}); got.RelaxedSIMD {
+		t.Errorf("the zero value's own RelaxedSIMD field is %v, want false — a second flip must "+
+			"not erode the zero value any more than the first did", got.RelaxedSIMD)
+	}
 
 	// v128 in a type section (the identical synthetic image TestGatesRejectWithFeatureNames
 	// uses for its own "simd" case): DecodeModule now accepts it directly, with no Decoder

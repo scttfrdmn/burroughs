@@ -892,14 +892,22 @@ func TestClosedBuckets(t *testing.T) {
 // `i32x4_relaxed_trunc.wast` is absent from this map and stays absent: it is eight lines with no
 // assertions at all, so it has no gated population to allow — the corpus gap that is 0028 d5's
 // whole reason for the author-supplied witnesses in `internal/interp/simd_relaxed_test.go`.
-var wholeFileGated = map[string]int{
-	"i16x8_relaxed_q15mulr_s.wast": 2,
-	"i8x16_relaxed_swizzle.wast":   5,
-	"relaxed_dot_product.wast":     10,
-	"relaxed_laneselect.wast":      11,
-	"relaxed_madd_nmadd.wast":      17,
-	"relaxed_min_max.wast":         24,
-}
+//
+// **Drained from 6 entries to empty, the relaxed-SIMD flip.** With `DefaultFeatures` now
+// setting `RelaxedSIMD: true`, each of those six files measures Gated=0 — confirmed by running
+// the harness over each entry rather than inferred from the flip — and their 69 declines are
+// now 69 passes. Leaving the entries would fail this control on the nose (`Gated is 0, want
+// 2`), which is the count doing exactly what its comment above says it is for.
+//
+// **The map is now empty, and that is a live consequence rather than a tidy ending.** The bulk
+// path below (`if n, ok := wholeFileGated[f]; ok`) has no subject, so nothing exercises it: a
+// future edit could break the whole-file allowance and every board would stay green, because an
+// allowance with zero entries agrees with any population at all. That is the
+// comparison-against-an-empty-set shape, arriving in the mechanism this project built to avoid
+// it — and it is not fixed here, because a flip is a one-line policy change and a new control is
+// a different artifact with a different verdict. Filed as **#284**, which is where the tripwire
+// goes; the intention is not the discharge.
+var wholeFileGated = map[string]int{}
 
 // TestGatedVectors pins exactly which vectors the engine is allowed to decline.
 //
@@ -8077,7 +8085,18 @@ func TestPhase1Files(t *testing.T) {
 	// against the fixed 65022 total. The forecast's own fail delta (161) is exactly the
 	// #9-orthogonal population ADR 0025's carve-out names — see execFailCeiling's own comment
 	// two tests up for the fail-side accounting.
-	const passFloor = 58429
+	// **58429 → 58659, the relaxed-SIMD gate's default-on flip.** Pre-registered in the flip
+	// PR's redistribution forecast and reconciled to the actual post-flip board on both
+	// architectures: pass +69, fail +0, gated −69, unsupported +0, summing to zero against the
+	// fixed 65021 total. The 69 are the whole of `wholeFileGated`'s six relaxed entries
+	// (2+5+10+11+17+24), which drain to an empty map at the same commit.
+	//
+	// **Raised even though it would have passed**, which is the part worth recording: 58659 −
+	// 58429 is a distance of 230 against a `boardBoundSlack` of 250, so the stale-check had 20
+	// to spare and would have stayed silent. A bound that survives a jump by 20 is the 798-
+	// against-4178 shape at an earlier stage, and the slack is a tolerance for drift between
+	// PRs, never a licence for the PR that *causes* the jump to skip its own accounting.
+	const passFloor = 58659
 	boardBound(t, "passFloor", totalPass, passFloor, boardBoundSlack, floorBound,
 		"a regression in a grammar that used to answer, or the corpus moved")
 }

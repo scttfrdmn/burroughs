@@ -21,6 +21,19 @@ weakly-ordered platform.
 
 ### Added
 
+- **`gate:relaxed-simd` defaults on** — the project's *second* default-behaviour change, after
+  #227's SIMD flip. G-1 measured on the proposal's own suite after the mechanism existed: the
+  seven `*relaxed*.wast` files score **77 pass / 0 fail / 0 unsupported / 0 gated**, identical on
+  `darwin/arm64` and `linux/amd64`, so this flip satisfies G-1's *literal* reading and **does not
+  invoke ADR 0025's `ErrNotValidated` carve-out at all**. Board delta on the default lane, forecast
+  pre-registered before the diff and reconciled to the actual on both architectures: pass **58590 →
+  58659** (+69), fail **117 → 117** (+0), gated **3657 → 3588** (−69), `unsupported` **unmoved at
+  2657** — structurally, since a relaxed vector is scored `gated` and never `unsupported`. The 69
+  are the whole of `wholeFileGated`'s six relaxed entries, which drain to an empty map at the same
+  commit (#284 files the tripwire that empty map now needs). What the flip promises beyond passing
+  vectors is decision 0028 d1's *architecture-uniform* lowering guarantee, which no vector can
+  measure and `TestRelaxedLoweringChoicesArePinned` (#282) holds instead.
+
 - **The relaxed-SIMD lowerings are pinned by a control, which is what decision 0028 d1's guarantee
   did not have** (#282, pre-flip for `gate:relaxed-simd`). 0028 d1 promises more than the spec asks —
   lowerings deterministic *and* architecture-uniform — and every `(either …)` vector passes under
