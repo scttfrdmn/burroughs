@@ -55,7 +55,23 @@ const (
 	// says nothing. Tripping it is a question, not a verdict: is the new text governance (which
 	// belongs here, and then the ceiling moves with a stated reason) or a law's body (which
 	// belongs in `docs/laws/`)?
-	claudeMDCeiling = 38000
+	//
+	// 38000 → 38400 (PR #295). It tripped at **38068** on minting *a total is not a ledger*, and
+	// the question resolves the second way the doc comment below offers: the added text is a law's
+	// **key**, one line and a pointer, with its entire body — two specimens, the minting history,
+	// the attribution ruling — in `docs/laws/controls.md`. That is the restructure working as
+	// designed rather than eroding, so the ceiling moves. The headroom was already down to 262
+	// bytes before this key, spent on governance additions (the gate-campaign carve-out, the flip's
+	// stamp tier) that belong here by the same doc comment's first branch.
+	//
+	// **Worth flagging rather than fixing quietly: the index grows by one key per law, by
+	// construction.** So a fixed byte ceiling on it is tripped by every future mint, forever, and
+	// what it can therefore *be* is a question-asker (which branch is this text?) and not a
+	// ratchet-stopper. That may be exactly right — the question is cheap and the wrong answer is
+	// expensive — but it is a different instrument from `unsupportedCeiling`, which genuinely rots
+	// toward zero, and the comparison above claims it is the same one. Scott's call; noted here so
+	// the next mint does not re-derive it.
+	claudeMDCeiling = 38400
 
 	// lawsFloor is the vacuity guard. 46 laws were relocated by the restructure; the floor sits
 	// just under that so a reader that silently stops matching — the wrapped-lead defect this

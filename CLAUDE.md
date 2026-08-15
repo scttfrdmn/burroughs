@@ -375,6 +375,7 @@ bullet carries operative text has that text nowhere else.
 - **Sweep after a grave.** — [graves-and-sweeps](docs/laws/graves-and-sweeps.md#sweep-after-a-grave)
 - **Lessons are indexed by shape, not by file, so the sweep runs backwards too.** — [graves-and-sweeps](docs/laws/graves-and-sweeps.md#lessons-are-indexed-by-shape-not-by-file-so-the-sweep-runs-backwards-too)
 - **Floors bound the catastrophic case; only an exact count sees a small silent loss.** — [controls](docs/laws/controls.md#floors-bound-the-catastrophic-case-only-an-exact-count-sees-a-small-silent-loss)
+- **A total is not a ledger: where items are enumerable, assert per item and let the total be a checksum on the ledger rather than a claim in its own right.** — [controls](docs/laws/controls.md#a-total-is-not-a-ledger-where-items-are-enumerable-assert-per-item-and-let-the-total-be-a-checksum-on-the-ledger-rather-than-a-claim-in-its-own-right)
 - **A suspiciously clean result is a tell, and *exactly zero* is the cleanest one.** — [controls](docs/laws/controls.md#a-suspiciously-clean-result-is-a-tell-and-exactly-zero-is-the-cleanest-one)
 - **A control isn't born until it has been watched die.** — [controls](docs/laws/controls.md#a-control-isnt-born-until-it-has-been-watched-die)
 - **A status field is a citation to an approval, and approvals are artifacts with provenance.** —
@@ -460,6 +461,12 @@ remembering decays across session boundaries:
   rather than at a tool: `gh issue close` reporting success is a verdict about the close, never a
   witness to the comment. Generalizes past GitHub — any write whose confirmation is a state
   transition needs its payload read back. (Lesson: Scott, on the PR #247 relay.)
+  **Third save, and the recurrence is the point:** grave #289 closed via a merge keyword with
+  **0 comments** — the same tombstone-with-no-inscription, in the graveyard of the project that
+  had already minted this rule, caught by the payload check and not by the state. A rule whose
+  specimens keep arriving is not a solved problem with a memento; it is a live failure mode of
+  how writes get confirmed here, and the count is kept so nobody reads the first specimen as the
+  last one. (Recurrence: chat-Claude, on the #290 relay.)
 - **Toolchain currency is a gated upgrade** — Go 1.27 and future linter majors
   land as their own branch with both arches green and a changelog entry. Never a
   drive-by bump in a PR about something else.

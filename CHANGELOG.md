@@ -21,6 +21,66 @@ weakly-ordered platform.
 
 ### Added
 
+- **`internal/validate` — the type oracle decision 0002 Q3 names, slice 1 of #9 (#291).** Decoder →
+  internal form → **validator** → interpreter: the pass that decides, statically, which type every
+  value slot holds, which is what makes the interpreter's bare `uint64` slots sound and what ADR
+  0025's `ErrNotValidated` carve-out was written to end. Slice 1 implements the *algorithm* — the
+  operand-type stack, the control-frame stack, valid.ml's bottom (the polymorphic state after
+  `unreachable`/`br`/`return`), block and loop label arity, function-body result arity, and the
+  signature table for the numeric, parametric, variable and memory-access families. It returns
+  `Info`/`FuncInfo`/`Arity` rather than a bool, because the branch arity the internal form needs is
+  a fact the type-checker already computed and a second derivation of one fact is how the `Casts`
+  and `Labels` side tables earned their own graves.
+  - **Signatures are derived from the mnemonic, not transcribed.** A hand-written row per opcode
+    has ~180 chances to be wrong in the *accept* direction, and an accept-direction error is
+    invisible on this board: every one of the 4162 greens is a rejection, and an `assert_invalid`
+    vector is satisfied by any refusal, including one for the wrong reason (contract §9 G-3). So
+    `binary.OpMnemonic` — the authority's own table, cross-checked against `decode.ml` per row —
+    *is* the table, which removes the class rather than policing it. What stays hand-written is the
+    operator *classification* (`add` is binary, `clz` unary), whose errors are reject-direction and
+    land in a named bucket.
+  - **Out of scope divides in two, and only one half is a decline.** An out-of-scope rule attached
+    to an *instruction* is refused with `ErrUnsupported` naming the opcode: 1059 vectors. One
+    attached to something the code-section walk never visits — limits, duplicate export names,
+    constant expressions, the alignment immediate — is **accepted**, because there is nothing to
+    decline: 142 vectors, reported as fails with a named cause rather than as passes. Two ceilings
+    (`validateDeclineCeiling`, `validateAdmitCeiling`) rather than one, so a decline converting into
+    an admission cannot net out inside a single constant.
+  - **The index-space rules arrive early and are named as arrivals**, not scope creep:
+    `local.get 99` in a two-local function must be *answered*, and "answered" cannot mean a panic
+    in the pass whose job is deciding whether a module is safe to run. Seven of `valid.ml`'s ten
+    `lookup` categories are claimed; the three that are not (`tag`, `data segment`, `elem segment`)
+    are pinned as a literal set, so the next slice states its arrival instead of inheriting it.
+  - **Six message defects were fixed before this landed, and each was a non-zero row in the
+    wrong-message column until it was.** The invented `global is immutable` (the reference and the
+    corpus both say `immutable global`); all nine `unknown <category>` formats, where a colon
+    satisfies the corpus's `unknown local` vectors and fails its `unknown local 2` vectors on an
+    analysis that was right; `pushFrame(opFuncBody, nil, …)`, which made `return` pop nothing and
+    accepted every one of `func.wast`'s `type-return-*` vectors; a duplicated result-arity check
+    that rejected every valid non-void function *and* accepted every body ending in `return`;
+    `expectEmptyFrame` discarding leftovers, which accepted 19 `unreached-invalid.wast` vectors;
+    and `br_table` matching its arms against the *default* instead of against the operand types,
+    which refused `unreached-valid.wast`'s `meet-bottom` while passing all 133 `br_table` reject
+    vectors. **Four of the six were comments asserting the property the code lacked** — review reads
+    the sentence, the sentence is right, and the argument list two characters away is not.
+  - The package's own controls are split by what can disagree with them. The authority-derived ones
+    (`internal/validate/authority_test.go`) parse `valid.ml`'s ten `lookup` categories in both
+    directions, check every structural opcode constant against `binary.OpMnemonic`, require a
+    derived signature for all 155 numeric-prefixed single-byte opcodes, and require the three
+    operator classes to be disjoint — since `signature` tests them in order, so a duplicate's
+    second classification is unreachable. The behavioural ones are keyed on the **`%w`-wrapped
+    detail** rather than on the sentinel, because `type mismatch` is what 2288 of the corpus's 2714
+    `assert_invalid` vectors expect and so discriminates nothing inside the family; and the
+    accept-direction battery has no corpus half at all, which is why the two graves above and
+    `meet-bottom` are rows in it. All 11 rules were falsified by mutation, each killed by the test
+    named for it.
+  - **Its first two controls fired on their first run, on the expectations rather than on the code.**
+    `TestStructuralOpcodesMatchTheTable` expected `if` for 0x04 and the authority says `if_` — `if`
+    is an OCaml keyword, so `decode.ml:371` escapes it. And the index-message check demanded the
+    directive `%w %d` where `addrType` correctly hardcodes `unknown memory 0`, memory index 0 being
+    the only index a slice-1 memory access can name; the proxy was widened to the property it stood
+    for, not to make a failure go away.
+
 - **Citations are checked mechanically: `make cite` locally, the `citations` job in CI as the
   binding verdict** (`scripts/citecheck.sh`). Every `#NNNN` a diff adds must resolve to a real
   issue or PR, every `decision NNNN` to a `docs/decisions/` file, and every `grave #N` to an issue
@@ -448,6 +508,32 @@ weakly-ordered platform.
 
 ### Changed
 
+- **`make check` now names the gates it did not reach when it aborts.** It was a prerequisite list,
+  which make walks in order and abandons at the first red — correct behaviour that produced a
+  genuinely misleading artifact: a dangling citation in `internal/validate/sig.go` reached a working
+  tree and was caught only by the cross-architecture run, because `check` had failed at `fmt-check`
+  and never got as far as the citation gate. The transcript said `make: *** [fmt-check] Error 1` and
+  nothing else, so five gates that never ran were indistinguishable from five that ran clean. The
+  recipe now runs the same gates in the same order and prints `gates NOT reached — these did not
+  pass, they did not run: build vet lint test deadcode`. **An unreached gate is not a passed gate**,
+  and the omission belongs on the artifact rather than in the reader's memory. Two costs, stated
+  rather than discovered: one recursive `$(MAKE)` per gate, and `check` is now serial even under
+  `-j` — where "which gate did not run" has no single answer anyway, several being in flight when
+  one goes red. (Directive: Scott, PR #295.)
+- **The destination ledger for `assert_invalid` is executable, and the board's `unsupportedCeiling`
+  comment no longer claims the column movement as engine capability.** The entry read "unlike the
+  two entries above it, it is engine capability rather than a harness widening", which contradicted
+  those entries instead of distinguishing itself from them: the −2574 **is** the harness widening,
+  since `classify`'s new arm is what makes the command askable and would have drained the column by
+  very nearly the same amount with an always-accept validator behind it. The engine's contribution
+  is the *destination split*, now pinned per destination by
+  `TestAssertInvalidDestinationLedgerCloses` — 2574 converted (906 pass / 1056 declined / 142
+  admitted / 10 right-refusal-wrong-message / 460 gated) plus 123 arrived (117 / 3 / 0 / 0 / 3), the
+  sums closing to the vector, with cross-checks against `validateFailCeiling`'s 1201, the ceiling
+  ledger's 463 gated and 17 residual heads, and `passFloor`'s 1023. The superseded account — "829
+  conversions + 1201 validate stratum" — left **544 vectors unaccounted** and mixed a figure over a
+  restricted subject (board-visible `type mismatch` conversions only) into an identity over the
+  whole population. (Ruling: Scott, PR #295.)
 - **Recipes and CI `run:` blocks now run with `pipefail`** — `SHELL := /bin/bash -o pipefail` in
   the Makefile, `defaults.run.shell: bash` in both workflows (GitHub's default `run:` shell is
   `bash -e {0}`: `-e` without `pipefail`). Set per-file rather than per-job for the reason
@@ -594,6 +680,60 @@ weakly-ordered platform.
   element segment's *offset* and an element *expression* are different lines of the user's module.
 
 ### Fixed
+
+- **A ≤896 forecast bound held while four of its own modules individually broke it** — the specimen
+  that minted *a total is not a ledger* (`docs/laws/controls.md`). 829 landed comfortably under 896
+  while `if.wast` +1, `i32.wast` +3, `load.wast` +1 and `local_tee.wast` +1 each exceeded their
+  *stated per-module upper bound*, paid for by `load64.wast` coming in **45 under**; the net −39 read
+  as conservative forecasting. Errors of opposite sign cancel, so an aggregate bound of any shape —
+  floor, ceiling, band, or exact equality — is satisfied by a distribution nobody predicted.
+  Tightening 896 to `== 857` would have caught none of it, which is what distinguishes this law from
+  *floors bound the catastrophic case* (that one is about a bound's tightness on one quantity; this
+  one is about its subject). Two defects the per-module reading exposed and the total concealed: the
+  vocabulary predicate **does not consult the feature gate**, and `isGated` is asked first, so
+  `load64.wast`'s 46 vectors score gated and never reach the match (measured 46 gated, 0 matched);
+  and the bound's stated warrant, *"it cannot under-count"*, is **false** — the validator can refuse
+  a module before the walk reaches the out-of-vocabulary instruction, making
+  subset-of-vocabulary sufficient for conversion and never necessary. Attribution replaces the
+  interval's second end: an interval cannot say whether the engine or the harness moved a total,
+  because both move it the same way. Second specimen, already in the tree: `TestGatedVectors`
+  asserts each file's count on the nose rather than a sum. (Ruling: Scott, PR #295, who also
+  recorded his own share — *"I questioned the bound's falsifiability but accepted 'cannot
+  under-count' as given. Monotonicity was a claim about the predicate and I never asked what
+  established it."*)
+- **`boardBound` exempted the very bounds that asked to be checked exactly** (grave
+  [#293](https://github.com/scttfrdmn/burroughs/issues/293)). `slack 0` encoded two opposite
+  intentions: decision 0013's table passed it meaning *"at terminal — 0 cannot drift from 0"*, and
+  every bound added after #87 passed it meaning *"re-base this column exactly, no room"*. The helper
+  honoured the first and returned before the staleness check, so **the tightest intention a caller
+  could express produced the loosest behaviour available**, silently — `encodeFailCeiling` sat at
+  517 against an actual 46 and `execFailCeiling` at 243 against 81. That is #87's own defect, in the
+  mechanism written to end it, reached through the one argument the mechanism could not tell apart
+  from its own exemption. The exemption turns out never to have been needed for the case it was
+  written for: a terminal ceiling has distance 0 and satisfies `distance > slack` arithmetically. The
+  reusable shape — **a sentinel encoding an author's intent must not collide with a value the
+  mechanism reads as permission** — is why the vacuity exemption is a *kind* (`vacuityBound`) and not
+  a magic slack, which `boundKind`'s own comment already said, one argument over.
+  - Both stale ceilings were re-based by **attribution rather than arithmetic** (decision 0007): one
+    checkout per merge, reading each board's own `fail by stratum:` line. `execFailCeiling` moved on
+    two named merges (−137, −25) and `encodeFailCeiling` on seven, one of which was a *rise* to 150 —
+    the row that proves the ceiling was blind in its own constrained direction. Residual zero in both.
+  - `allOnPassFloor` was **62173 against an actual 63329**, and the jump was *split* rather than
+    absorbed: 69 of it is pre-existing drift measured in a HEAD worktree, 1087 is this PR's.
+    Laundering the two together would have credited someone else's movement to #9.
+
+- **Decision 0013's own bound table had gone stale by ten rows — the defect it exists to name,
+  arriving in its own prose.** It documented eight bounds while eighteen were routed correctly
+  through `boardBound`, so the executable control stayed green over documentation describing a
+  population that had more than doubled. The table is now the full set, and
+  `TestEveryBoardBoundIsChecked` gained two checks: every bound found in the AST must be *named in
+  the table*, and the population is pinned **exactly** beside its floor, since a minimum is what let
+  ten arrive unremarked. Prose correctness stays unchecked and is said to be — where the table and
+  the call sites disagree, the call sites outrank.
+
+- **The `laneidx` immediate was read as a raw byte where the format has a `u8`-valued LEB** (grave
+  [#292](https://github.com/scttfrdmn/burroughs/issues/292)), so 15 `simd_lane.wast` vectors died in
+  the decoder. A mirror of grave #47 one port over, found by the sweep that grave licensed.
 
 - **`make bench` reported success when a benchmark package failed to compile** (grave #289).
   `go test -bench … | tee new.txt` ran under a shell with no `pipefail`, so the pipeline's exit

@@ -387,10 +387,19 @@ func TestV128BoundaryRoundTripsAgainstTheCorpus(t *testing.T) {
 	e.InstantiateLinked = func(c Command, registry map[string]Instance) (Instance, Stratum, error) {
 		return instantiateWith(allOn, c, registry)
 	}
+	// The validator decodes too, so it takes the lane's gates — see validateWith.
+	e.Validate = func(c Command) (Stratum, error) { return validateWith(allOn, c) }
 	r := s.RunGated(e)
 
 	for _, fs := range r.Buckets {
 		for _, f := range fs {
+			// A decline is not a verdict about the v128 value boundary: this file's 16
+			// `assert_invalid` vectors name SIMD opcodes slice 1 of the validator (#9) does not
+			// type, and they are fails in their own bucket on the board. Filtered on the flag
+			// rather than on their lines, for refboundary_test.go's reason.
+			if f.Declined {
+				continue
+			}
 			t.Errorf("simd_f32x4_arith.wast:%d unexpected fail: want %s, got %s", f.Line, f.Expect, f.Got)
 		}
 	}

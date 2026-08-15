@@ -5116,4 +5116,77 @@ func TestSIMDEncoderRoundTrips(t *testing.T) {
 			t.Errorf("v128.load8_lane $m decoded lane = %#x, want 3", gotLane)
 		}
 	})
+
+	// The lane index above 127, which is where `u8` stops being one byte — every row above uses a
+	// lane the raw-byte writer got right by coincidence.
+	//
+	// `laneidx` is `nat8`, so 128..255 are *parseable* and the reference writes them as a two-byte
+	// LEB (`u8 i = u64 …`, encode.ml:64). The writer emitted `byte(n)` instead, so `255` went out
+	// as a lone `0xFF` — a continuation byte with no successor — and the decoder answered
+	// `integer too large`. All four rows below failed before the fix and none of the existing rows
+	// did, which is the whole shape of the grave: **the corpus's own valid lane indices are all
+	// below 16, so the coincidence covers every accept-direction vector there is.** Only the
+	// reject direction can see it, and it took #9's sweep over `assert_invalid` to look.
+	//
+	// Both callers are here (`immLaneIdx`'s extract/replace arm, and `laneImms`' trailing lane),
+	// plus the sixteen-lane list, because `laneIdxList` delegating to `laneidx` is a fact about
+	// today's code rather than about the format — a future list writer that inlined the byte would
+	// reintroduce it in the one shape no other row covers.
+	t.Run("lane index above 127 is a two-byte LEB", func(t *testing.T) {
+		for _, tc := range []struct {
+			name, src string
+			wantOp    uint32
+			lane      uint64
+		}{
+			{"i8x16.extract_lane_s 255", `(module (func (param v128) (result i32) ` +
+				`(i8x16.extract_lane_s 255 (local.get 0))))`, 0x15, 255},
+			{"i8x16.extract_lane_s 128", `(module (func (param v128) (result i32) ` +
+				`(i8x16.extract_lane_s 128 (local.get 0))))`, 0x15, 128},
+			{"i8x16.replace_lane 200", `(module (func (param v128) (result v128) ` +
+				`(i8x16.replace_lane 200 (local.get 0) (i32.const 1))))`, 0x17, 200},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				b, err := EncodeModule([]byte(tc.src))
+				if err != nil {
+					t.Fatalf("EncodeModule(%s): %v", tc.src, err)
+				}
+				m := decodeSIMD(t, b)
+				in := findOp(t, m, 0xfd, tc.wantOp)
+				if in.Imm0 != tc.lane {
+					t.Errorf("%s decoded lane = %#x, want %#x", tc.name, in.Imm0, tc.lane)
+				}
+			})
+		}
+
+		t.Run("v128.load8_lane 255", func(t *testing.T) {
+			const src = `(module (memory 1) (func (param i32) (result v128) ` +
+				`(v128.load8_lane 255 (local.get 0) (v128.const i32x4 0 0 0 0))))`
+			b, err := EncodeModule([]byte(src))
+			if err != nil {
+				t.Fatalf("EncodeModule(%s): %v", src, err)
+			}
+			m := decodeSIMD(t, b)
+			in := findOp(t, m, 0xfd, 0x54)
+			if got := (in.Imm1 >> 32) & 0xFF; got != 255 {
+				t.Errorf("v128.load8_lane decoded lane = %#x, want 0xff (Imm1 = %#x)", got, in.Imm1)
+			}
+		})
+
+		t.Run("i8x16.shuffle with a high lane", func(t *testing.T) {
+			// Sixteen lanes with the last one 255: the list writer's own path, and a mask whose
+			// top byte is exactly the value a truncated LEB destroys.
+			const src = `(module (func (param v128 v128) (result v128) ` +
+				`(i8x16.shuffle 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 255 (local.get 0) (local.get 1))))`
+			b, err := EncodeModule([]byte(src))
+			if err != nil {
+				t.Fatalf("EncodeModule(%s): %v", src, err)
+			}
+			m := decodeSIMD(t, b)
+			in := findOp(t, m, 0xfd, 0x0d)
+			if got := (in.Imm1 >> 56) & 0xFF; got != 255 {
+				t.Errorf("i8x16.shuffle decoded lane 15 = %#x, want 0xff (Imm1 = %#x, lanes 15..8 "+
+					"low byte first)", got, in.Imm1)
+			}
+		})
+	})
 }

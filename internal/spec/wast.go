@@ -119,6 +119,7 @@ const (
 	KindNamedAssertTrap                 // (assert_trap (invoke $M "f" arg*) "text") — 0017
 	KindNamedInvoke                     // (invoke $M "f" arg*) at top level — 0017
 	KindAssertException                 // (assert_exception (invoke "f" arg*)) — an uncaught exception, #201 rung 2a
+	KindAssertInvalid                   // (assert_invalid (module …) "text") — the module must fail validation, #9
 	KindUnsupported                     // anything phase 1 cannot execute
 )
 
@@ -154,6 +155,8 @@ func (k Kind) String() string {
 		return "invoke $M"
 	case KindAssertException:
 		return "assert_exception"
+	case KindAssertInvalid:
+		return "assert_invalid"
 	default:
 		return "unsupported"
 	}
@@ -255,6 +258,23 @@ const (
 	// recorded. That is the classification seam (see assertReturn), and it is why this
 	// capability's arrival moves the unsupported column rather than creating a debt anywhere.
 	CapInterpreter Capability = "interpreter"
+
+	// CapValidator is the type oracle — the pass that decides whether a decoded module is
+	// well-formed enough to run (#9, decision 0002 Q3).
+	//
+	// **Declared and never registered, by CapInterpreter's motion rather than
+	// CapWatReader's**: `internal/validate` exists in the commit that names this constant, so
+	// there is no interval to track and no debt to owe. See CapInterpreter's comment for why
+	// those two histories are the only two shapes a capability may have.
+	//
+	// It is a *separate* capability from CapInterpreter even though both are reached through
+	// the encoder, because they answer different questions and can be absent independently: an
+	// engine can validate a module it cannot run, which is exactly the state this repo is in at
+	// slice 1 (the interpreter runs unvalidated modules today — ADR 0025's carve-out). Folding
+	// validation into CapInterpreter would make `assert_invalid` unanswerable in any run that
+	// lacks an interpreter, and would put the fourth verdict's own accounting behind a
+	// component the question does not need.
+	CapValidator Capability = "validator"
 )
 
 // capEntry is a registry entry: what tracks the gap, and what ends it.
@@ -319,6 +339,7 @@ var capabilityIssues = map[Capability]capEntry{}
 var engineCapabilities = map[Capability]bool{
 	CapWatReader:   true,
 	CapInterpreter: true,
+	CapValidator:   true,
 }
 
 // EngineCapabilities returns the capabilities the engine has, sorted. Board runners
@@ -496,6 +517,34 @@ func classify(n node, src []byte) Command {
 					Source: quoted,
 					Expect: string(n.list[2].str),
 					Needs:  CapWatReader,
+				}
+			}
+		}
+		return Command{Kind: KindUnsupported, Line: n.line, Head: head}
+
+	case "assert_invalid":
+		// `(assert_invalid (module …) "text")`: the module is well-formed — it decodes — and
+		// validation must refuse it with the spec's text. **2697 commands in the text form**, the
+		// single largest classifiable population left on the board, and #9's own subject.
+		//
+		// **The text form only, and the two other forms stay unsupported with their counts
+		// named.** 11 are `(module binary …)` and 6 are `(module quote …)`: both are answerable in
+		// principle — a binary one needs only the decoder the harness already has, and a quoted one
+		// the wat reader — and neither is admitted here, because admitting a form is admitting a
+		// *scoring path*, and these two would each need their own Stratum attribution for a
+		// pre-validation failure. 17 vectors is not worth a third and fourth path in the arm that
+		// scores the other 2697; they convert when the slice that wants them arrives, and until
+		// then the column names them rather than the arm guessing.
+		//
+		// `Source` rather than `Module`, for `assert_unlinkable`'s reason: the payload is wat, and
+		// the encode-then-decode round trip that turns it into an image is the *caller's* three
+		// steps, which is why ValidateFunc returns the Stratum instead of this arm deciding it.
+		if len(n.list) == 3 && n.list[1].isList() && n.list[2].isS && n.list[1].head() == "module" {
+			if kw := moduleFormKeyword(n.list[1]); kw == "" {
+				return Command{
+					Kind: KindAssertInvalid, Line: n.line, Head: head,
+					Source: n.list[1].span(src), Expect: string(n.list[2].str),
+					Needs: CapValidator,
 				}
 			}
 		}
@@ -1203,6 +1252,40 @@ const (
 	StratumEncode
 	// StratumExec is the interpreter.
 	StratumExec
+	// StratumValidate is the type oracle — `internal/validate`, #9's own column.
+	//
+	// # The boundary is causal, not numeric and not per-file
+	//
+	// **A row belongs to this stratum when validation is the layer that decided it.** Not "a row
+	// from an `assert_invalid` command", and not "a row in a file the validator campaign owns" —
+	// the deciding layer is the only key that stays right when the layers move underneath it.
+	// (Ruling: Scott, on the #291 recon.)
+	//
+	// Three populations that look like this one and are not:
+	//
+	//   - The **encoder frontier** reached on the way to the validator. 11 `assert_invalid`
+	//     vectors cannot be encoded at all (`(table …)` and `(start …)` module fields, #8), so
+	//     validation never ran; they are StratumEncode, in the ceiling that already holds 517
+	//     of their siblings.
+	//   - The **decoder answering first**. 17 vectors expecting `constant expression required`
+	//     are refused by `binary.DecodeModule` before the code section is walked, with the
+	//     spec's own text — a *pass*, earned by the decoder. When the constant-expression slice
+	//     lands, the same rows will be decided twice by two layers that agree; they stay passes
+	//     and their stratum is whichever one refused first, because that is what "decided" means.
+	//   - `assert_return`s whose module never validated. Those fail in the *exec* column with
+	//     the §3 sentinel today, and 0025's carve-out is the reason: the interpreter runs
+	//     unvalidated modules. **The carve-out retires by migration, one slice at a time**, and
+	//     each slice reports its own migration as a row of its own — a count moving from
+	//     `execFail` to a pass rather than a count appearing here.
+	//
+	// The one case the harness genuinely cannot attribute is a *decode* failure on an image the
+	// *encoder* produced: both components are ours, the bytes are ours, and the disagreement
+	// names no layer. Charged to StratumEncode — the conservative direction, since the front end
+	// wrote the bytes under test and the decoder's ceiling is a structural 0 that a wrong charge
+	// would falsely break. Measured at 0 today, and its one historical member was in the
+	// encoder, which is the only evidence there is: the laneidx grave (`internal/text`'s
+	// `laneidx`, this slice's own sweep) put 15 vectors here before it was fixed.
+	StratumValidate
 )
 
 func (s Stratum) String() string {
@@ -1215,6 +1298,8 @@ func (s Stratum) String() string {
 		return "encode"
 	case StratumExec:
 		return "exec"
+	case StratumValidate:
+		return "validate"
 	default:
 		// StratumUnset, and anything a future Stratum adds before its arm lands. Spelled
 		// as the default rather than as a named arm so that a new stratum renders *something*
@@ -1236,6 +1321,23 @@ type Failure struct {
 
 	// Stratum is the component the failure is charged to.
 	Stratum Stratum
+
+	// Declined marks a failure the engine *refused to answer* — the component reached the
+	// vector, recognized what it was being asked, and reported that the rule deciding it is
+	// unwritten. Today only the assert_invalid arm sets it (`validate.ErrUnsupported`, 1059
+	// vectors), which is why it is a bool here rather than a second Stratum: the stratum still
+	// says *which* component, and this says *whether the component answered*.
+	//
+	// **It is a fail either way, and the field exists so that controls about something else can
+	// say so.** A decline belongs in the fail column with its opcode in the bucket key — that is
+	// the bucketed-failures discipline and the work plan for the next slice. But a control whose
+	// subject is the reference-value boundary, asserting 0 fails in `table_get.wast`, is not
+	// about whether slice 1 types `table.get`; without this field its only options are to trip on
+	// a vector it has nothing to say about or to enumerate lines, and an enumerated exclusion
+	// inherits today's sample. See the two boundary controls that filter on it, and the board's
+	// own decline/admission split, which is a bidirectional check that this flag and the
+	// stratum count agree.
+	Declined bool
 }
 
 // AltChoice is one `(either …)` expectation and the alternative the engine's answer matched.
@@ -1470,6 +1572,41 @@ type TrapFunc func(error) bool
 // mirrors for what a missing predicate must never do (#201 rung 2a).
 type ExceptionFunc func(error) bool
 
+// ValidateFunc runs the engine's validator over a module command's payload and reports
+// whether the module type-checks.
+//
+// **It takes the whole Command and returns a Stratum, for InstantiateFunc's reasons exactly.**
+// Validating a text-form module is three steps — encode, decode, type-check — so a failure is
+// not attributable from the Command's Kind, and deriving the layer here would assign it by
+// omission. The caller performed the steps, so the caller says which one broke: an encoder or
+// decoder failure on the harness's own image is StratumEncode, and only the type-checker's own
+// refusal is StratumValidate. The value is ignored when err is nil.
+//
+// **A nil error is a verdict — "this module is valid" — and for `assert_invalid` that is the
+// fail.** Which is why this cannot be a predicate: the arm needs the *message* to match the
+// vector's expected string per 0003, and it needs to distinguish a refusal from a decline. Both
+// live in the error, and a `bool` would flatten them into the one answer that hides both.
+type ValidateFunc func(c Command) (Stratum, error)
+
+// DeclinedFunc reports whether an engine error means "this component has not implemented the
+// rule that would decide this module" rather than a verdict on the module.
+//
+// GatedFunc's argument, one component over and with a different subject: a gate decline says a
+// *feature* is off by configuration, and a decline here says a *rule* is unwritten in the slice
+// that is shipping. Both are the third verdict rather than the first two, and both must be asked
+// **before** the substring match — because a decline whose text happens to contain the vector's
+// expected string would otherwise score a pass the validator never earned, which is the exact
+// collision the malformed arms ask `isGated` first to prevent (contract §9 G-3).
+//
+// It is a separate predicate rather than a widened GatedFunc, because the two answers are not
+// interchangeable on the board: a gated vector converts when Scott flips a gate, and a declined
+// one converts when the next slice lands. Merging them would put both populations in one column
+// and lose which mechanism drains it.
+//
+// A predicate rather than a text test, for TrapFunc's reason: the sentinel is the engine's, and
+// the caller — which holds both type systems — answers with `errors.Is`.
+type DeclinedFunc func(error) bool
+
 // Instance is a module the engine has made executable, opaque to the harness.
 //
 // `any`, and the emptiness is the neutrality rule (contract §0) rather than laziness: the
@@ -1566,6 +1703,19 @@ type Engine struct {
 	// by the assert_exception action arm alone, nil for every caller that does not score it
 	// (#201 rung 2a).
 	IsException ExceptionFunc
+
+	// Validate and IsDeclined are the validator's halves, required together by CapValidator
+	// and by the assert_invalid arm alone.
+	//
+	// **A nil IsDeclined alongside a non-nil Validate is the dangerous pairing, and it is the
+	// one the loop panics on** — not because a missing predicate scores nothing, but because it
+	// scores the wrong thing in the accept direction: every one of the 1059 declines would fall
+	// through to the substring match, and the ones whose decline text quotes the vector's
+	// expected phrase would land as passes. IsTrap's default (never award) is not available
+	// here, because a decline is not the outcome being awarded — it is a third verdict that has
+	// to be *removed* from the population before matching begins.
+	Validate   ValidateFunc
+	IsDeclined DeclinedFunc
 
 	// Instantiate and Invoke are the interpreter's two halves, and they are separate
 	// fields because they are separate obligations: an engine can decode a module without
@@ -1675,6 +1825,14 @@ func (s *Script) run(opts runOpts) *Result {
 	// rather than declines to notice.
 	isException := func(err error) bool {
 		return err != nil && opts.IsException != nil && opts.IsException(err)
+	}
+	// isDeclined's defaulting is isGated's, not isTrap's, and the difference matters here.
+	// A nil predicate answering "no" makes a decline fall through to the substring match — the
+	// accept-direction hole Engine.IsDeclined describes — so this is *not* the safe default and
+	// the arm panics on the pairing rather than relying on it. The func exists for the nil-Validate
+	// callers, where it is never reached.
+	isDeclined := func(err error) bool {
+		return err != nil && opts.IsDeclined != nil && opts.IsDeclined(err)
 	}
 	// cur is the instance the *most recent* module command produced, which is what an
 	// unnamed `assert_return` runs against.
@@ -2043,6 +2201,94 @@ func (s *Script) run(opts runOpts) *Result {
 				Line: c.Line, Expect: "an instance to bind as module " + c.Register,
 				Got: got, Kind: c.Kind, Stratum: st,
 			})
+
+		case KindAssertInvalid:
+			// `(assert_invalid (module …) "text")`: the module decodes and **validation must
+			// refuse it** with the spec's text. 2697 vectors, #9's own subject and the largest
+			// classifiable population the board had left.
+			//
+			// **Four outcomes in a fixed order, and the order is the whole arm.** A gate decline,
+			// then a slice decline, then the substring match, then acceptance — each earlier test
+			// removing a population the later ones would otherwise misread:
+			//
+			//   1. `isGated` — 463 vectors, the decoder refusing a disabled proposal before the
+			//      validator sees the module. The third verdict, already the house rule on every
+			//      expected-text arm, and here for the same reason: a gate error's text can quote
+			//      the vector's phrase.
+			//   2. `isDeclined` — 1059 vectors whose rule belongs to a later slice. **Not a pass
+			//      and not a gate**: it is a fail with the declined opcode in its bucket key, so
+			//      the column drains as slices land and the work plan reads off the buckets.
+			//      Asked before the match because `validator: instruction not in this slice:
+			//      <mnemonic>` is a *sentence about an opcode*, and the corpus's expected strings
+			//      are phrases about types — a collision is not hypothetical, it is one
+			//      unluckily-named future sentinel away, and the check costs one branch.
+			//   3. the substring match, per decision 0003.
+			//   4. acceptance — **the admission stratum**, 142 vectors this validator declared
+			//      valid and the suite says are not. They are fails with a named cause rather than
+			//      passes, which is the accept-direction defect no board can otherwise see
+			//      (contract §9 G-3): a module wrongly accepted produces no error to bucket, so
+			//      the bucket is keyed on the *expectation* instead.
+			//
+			// **Both components are required and a nil one panics**, in the tripwire words the
+			// other four use. `Validate` because a declared CapValidator with nothing behind it is
+			// the registry ahead of the engine; `IsDeclined` because its absence is not a refusal
+			// to award but a refusal to *notice* — 1059 declines would enter the match, and any
+			// whose text quoted the expected phrase would score a pass the validator never earned.
+			// That is the one asymmetry with IsTrap, and it is why this pairing is checked rather
+			// than defaulted.
+			if opts.Validate == nil {
+				panic(fmt.Sprintf("%s:%d: CapValidator declared but no ValidateFunc was supplied; "+
+					"an assert_invalid cannot be judged without one", s.Path, c.Line))
+			}
+			if opts.IsDeclined == nil {
+				panic(fmt.Sprintf("%s:%d: CapValidator declared but no DeclinedFunc was supplied; "+
+					"every slice decline would fall through to the substring match, and one whose "+
+					"text quoted the expected string would score a pass the validator never earned",
+					s.Path, c.Line))
+			}
+			// **`cur` is untouched**, for KindAssertUnlinkable's reason: an invalid module produces
+			// no instance and says nothing about what the next command runs against.
+			st, err := opts.Validate(c)
+			if isGated(err) {
+				r.gate(c)
+				continue
+			}
+			got := ""
+			if err != nil {
+				got = err.Error()
+			}
+			switch {
+			case isDeclined(err):
+				r.Fail++
+				// Keyed on the engine's own sentence, verbatim, matching the `register` arm's
+				// `"register: " + got`: the declined opcode is *in* that sentence, so the buckets
+				// partition by the rule the next slice has to write. A key this arm paraphrased
+				// would be the harness inventing the taxonomy it is reporting on.
+				key := "assert_invalid declined: " + got
+				r.Buckets[key] = append(r.Buckets[key], Failure{
+					Line: c.Line, Expect: c.Expect, Got: got, Kind: c.Kind, Stratum: st,
+					Declined: true,
+				})
+			case err != nil && strings.Contains(got, c.Expect):
+				r.Pass++
+			case err != nil:
+				r.Fail++
+				key := "assert_invalid expected: " + c.Expect
+				r.Buckets[key] = append(r.Buckets[key], Failure{
+					Line: c.Line, Expect: c.Expect, Got: got, Kind: c.Kind, Stratum: st,
+				})
+			default:
+				// Accepted. There is no error to key on and no Stratum for the caller to have
+				// stated, so both are supplied here: `StratumValidate`, because the type-checker
+				// is the layer that decided — it ran, it finished, and it said yes.
+				r.Fail++
+				key := "assert_invalid accepted, expected: " + c.Expect
+				r.Buckets[key] = append(r.Buckets[key], Failure{
+					Line: c.Line, Expect: c.Expect,
+					Got:  "the module validated successfully",
+					Kind: c.Kind, Stratum: StratumValidate,
+				})
+			}
 
 		case KindAssertUnlinkable:
 			// `(assert_unlinkable (module …) "text")`: the module reads and validates, and

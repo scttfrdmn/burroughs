@@ -89,6 +89,30 @@ amended rather than replaced.
   non-zero on findings is asked for its status, a tool that reports on stdout and
   exits 0 is asked for its output, and capturing `2>&1` to test for non-empty
   confuses a cold module cache with a defect (grave, PR #21).
+  - **Re-scoped from pipes to compounds: the observed status belongs to whichever command
+    produced it last, and appending anything to a command replaces its verdict.** Grave #289
+    fixed this for *pipes* — `go test | tee` reporting `tee`'s success — and `pipefail-check`
+    asserts the fix is live. **The scoping was too narrow, and the proof arrived within days**:
+    running `make check > log 2>&1; echo "check exit: $?"` made the harness's reported status the
+    **echo's 0** for a run that exited 2. Nothing was piped. The `$?` inside the echo was correct;
+    the defect is that the *compound's* status is the last command's, so the wrapper added to
+    observe the verdict is the thing that destroyed it. `pipefail` cannot help, because the class
+    is not pipes — it is **any construct where the observed status belongs to a different command
+    than the one under test**: `cmd; echo`, `cmd || true`, `cmd &`, a `$(…)` whose status is
+    discarded by the next link in a `; \` chain. The remedy at the keyboard is one rule with no
+    exceptions worth remembering — **run the command under test bare, and read its status from its
+    own invocation**; if a wrapper is unavoidable, capture into a variable *before* anything else
+    runs (`cmd > log 2>&1; st=$?`) and print the variable. This is the same instrument confusion
+    the parent law names, applied to *time order* rather than to channel: the last writer to the
+    status wins, and it is not necessarily the witness you called.
+    - Sibling project `keel` carries the pipe half of this independently
+      (`scripts/l1-bench.sh`: "without it the indent pipe would swallow the one status that says
+      whether a comparison happened") and the adjacent rule that *a killed run is `unmeasured`,
+      never an exit code*. Scott names an **exit-capture checker** built in another project whose
+      design should be grafted rather than re-derived; a search of `~/src` did not find it, so it
+      is flagged rather than guessed at — #297 carries the pointer request, because a design
+      invented here and described as grafted would be a fabricated provenance. (Ruling: Scott,
+      PR #295.)
 
 ### Second-order honesty: apply the discipline to its own output.
 

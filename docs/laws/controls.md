@@ -121,6 +121,79 @@ amended rather than replaced.
     matched lookup is a parenthesised expression), because a count cannot separate two readers
     whose counts overlap. (Ruling: Scott, PR #159, naming the law from the finding.)
 
+### A total is not a ledger: where items are enumerable, assert per item and let the total be a checksum on the ledger rather than a claim in its own right.
+
+- **A total is not a ledger: where items are enumerable, assert per item and let the total be a
+  checksum on the ledger rather than a claim in its own right.** The mechanism is that **errors of
+  opposite sign cancel**, so an aggregate bound of *any* shape — floor, ceiling, band, or exact
+  equality — is satisfied by a distribution nobody predicted, and the closer the total lands to
+  its forecast the more confidently the miss is read as a hit. This is the sibling of the floors
+  law above and **not** a restatement of it: that law is about a bound's *tightness* on one
+  quantity (a floor cannot see a small loss, so pin the exact count), where this one is about a
+  bound's *subject* (an exact count on an aggregate still cannot see a redistribution, so pin the
+  items). Tightening the ≤896 ceiling to `== 857` would have satisfied the floors law completely
+  and caught nothing here.
+
+  Two independent specimens, which is why it was minted rather than noted:
+
+  - **The ≤896 forecast bound held while four of its modules individually broke it.** 829 landed
+    under 896, comfortably, and the per-module reading was `if.wast` +1, `i32.wast` +3,
+    `load.wast` +1, `local_tee.wast` +1 each **above its own stated upper bound**, against
+    `load64.wast` coming in **45 under**. One large miss of one sign paid for four small misses
+    of the other, and netted to −39: a number that reads as conservative forecasting. Worth
+    naming the two defects the per-module ledger exposed and the total concealed, because they
+    are of different kinds: (a) the vocabulary predicate **does not consult the feature gate**,
+    and `isGated` is asked first in the arm's fixed order, so `load64.wast`'s 46 vectors score
+    `gated` and never reach the match at all — measured 46 gated, 0 matched; (b) the bound's
+    stated justification, *"it cannot under-count"*, is simply **false** — the validator can
+    refuse a module before the walk ever reaches the out-of-vocabulary instruction, so
+    subset-of-vocabulary is a sufficient condition for conversion and never a necessary one.
+  - **`TestGatedVectors` already did it right, in this repo, for this reason.** It asserts each
+    file's count *on the nose* against a per-file, per-line `allowed` map rather than checking a
+    sum, and pins `len(GatedAt) == Gated` so the line list and the count cannot drift apart. The
+    law was therefore recoverable from the codebase before it was written down — *lessons are
+    indexed by shape*, and the shape was sitting in a sibling test.
+
+  **Attribution replaces the second end.** The pre-registered plan for the ≤896 bound was a
+  two-ended interval; what the second end was reaching for is the question "did the engine's
+  capability do this, or did the harness widening do it?", and an interval cannot answer that
+  however tight it is, because both mechanisms move the same total in the same direction. A
+  per-destination ledger answers it directly: the arm's column movement and the validator's pass
+  column are separate rows, and neither can borrow the other's credit. So the remedy for a
+  suspicious aggregate is not a narrower aggregate — it is **the ledger that says where each item
+  went**.
+
+  Scott's own share, recorded because a law whose history is only the agent's errors teaches the
+  wrong lesson about where review fails: *"I questioned the bound's falsifiability but accepted
+  'cannot under-count' as given. Monotonicity was a claim about the predicate and I never asked
+  what established it."* A justification offered *for* a bound is itself a claim about the space,
+  and review that interrogates the bound while accepting its warrant has checked the conclusion
+  and not the premise.
+
+  The implementation is `TestAssertInvalidDestinationLedgerCloses` (`internal/spec/ledger_test.go`),
+  and three things found while building it belong with the law:
+
+  - **The checksum's job is the partition, not the count.** The sum is computed from the measured
+    tallies, so it *cannot* fail while every row passes — which is the point. What it detects is a
+    destination nobody is counting: if the arm grows a sixth outcome, every pinned row still
+    agrees and the identity closes short.
+  - **The falsification had to be a compensating one, and the first attempt did not fire.** Moving
+    one vector from `declined` to `mismatch` leaves the total untouched; the rows caught it (1055
+    vs 1056, 11 vs 10) while `total = 2574` passed and the checksum closed — the law demonstrated
+    inside its own control. The first perturbation attempt was guarded by
+    `tl.declined == 3 && strings.Contains(key, "unsupported")`, which map iteration order never
+    satisfied, so the run came back green: *an under-matching trigger predicate*, in the
+    falsification rather than in the control, which is a green that means nothing and looks
+    exactly like a green that means everything.
+  - **Two populations shared a name.** Subtracting `UnsupportedByHead["assert_invalid"]` from a
+    `Kind == KindAssertInvalid` total produced **negative pass residuals** in three files, because
+    an unsupported `assert_invalid` *head* is a command `classify` gave a different Kind and so
+    never entered the total. Reported beside the identity, never inside it — and the residual is
+    checked for sign rather than assumed, since the negative number is the only reason the
+    conflation was visible at all.
+
+  (Ruling: Scott, PR #295, from the Board section's own 544-vector gap.)
+
 ### A suspiciously clean result is a tell, and *exactly zero* is the cleanest one.
 
 - **A suspiciously clean result is a tell, and *exactly zero* is the cleanest one.** 0014's

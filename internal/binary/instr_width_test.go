@@ -125,6 +125,14 @@ var immStagedBits = map[imm]int{
 
 	// Read and dropped, each with its reason at the arm. A vector cannot live in a
 	// fixed-width instruction, so these are #7's side-array work rather than staging.
+	//
+	// **A zero here is now also a validator rule that cannot be stated**, and #296 is the
+	// enumeration: with the validator landed (#9 slice 1), every discarded immediate is a
+	// typing fact the pass needs and does not have. This map *is* that enumeration's authority,
+	// because it is checked against the generated table in both directions below — so the list
+	// of lossy kinds is complete by construction and a fifth arriving upstream cannot join it
+	// silently. Ten arms across four kinds; `br_table`'s label vector is the one whose rule is
+	// impossible without the side array, since its validity is a property *of the vector*.
 	immVecIdx:   0,
 	immCatchVec: 0,
 	immHeapType: 0,

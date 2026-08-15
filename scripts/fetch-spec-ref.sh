@@ -60,10 +60,16 @@ fi
 # scope out. parser.mly is the third (#62's stratum), encode.ml the fourth (0011's bridge —
 # cited 28 times in internal/text before anything licensed it), syntax/free.ml the fifth (the
 # data count section's condition, cited by internal/binary since #22 with nothing resolving it).
+# valid/valid.ml is the sixth and valid/match.ml the seventh — #9's validator campaign and its
+# subtyping companion, licensed *before* the first citation rather than after the twenty-eighth,
+# which is encode.ml's lesson taken forward instead of re-earned. They matter more than the others
+# for one reason: they are an oracle rather than a cited artifact, so a fetch that dropped them
+# would leave the campaign checking itself.
 # The list is here rather than derived because a shell script cannot read Go constants;
 # TestFetchScriptAssertsEveryAuthority is what keeps the two agreeing.
 for f in interpreter/binary/decode.ml interpreter/text/lexer.mll interpreter/text/parser.mly \
-         interpreter/binary/encode.ml interpreter/syntax/free.ml; do
+         interpreter/binary/encode.ml interpreter/syntax/free.ml \
+         interpreter/valid/valid.ml interpreter/valid/match.ml; do
   if [ ! -f "$dest/$f" ]; then
     echo "reference vendored at $got but $dest/$f is missing" >&2
     exit 1
