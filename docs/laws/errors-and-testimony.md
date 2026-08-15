@@ -72,6 +72,33 @@ amended rather than replaced.
   minted", which is the whole point — **a right verdict does not launder its grounds.**
   (Correction: Scott, PR #285 relay, on his own ledger.)
 
+  **Extension, same organ: a rendered artifact is a third channel, and it is the most
+  persuasive and least accountable of the three.** Verdict and mechanism are already named as
+  different instruments; the specimen adds the thing a human actually looks at. *A pipeline's
+  exit status is its last stage's opinion, and a formatter's opinion is always that the
+  formatting went fine.* `make bench` piped `go test` into `tee`, `tee` succeeded on
+  `[build failed]`, make read 0, and **benchstat printed a table with a geomean** over a file
+  whose contents were a build error (grave #289). Three channels disagreed and the quietest
+  won, because a table formats successfully whatever it was handed. `benchstat or it didn't
+  happen` was satisfied in letter by a run that measured nothing.
+
+  **This project's largest instance of the third channel is the board.** Every board figure is
+  cross-checked from an independent path precisely because the rendered table is the most
+  believable and least accountable object in the repo — it will lay out four columns over any
+  denominator at all, including one that silently narrowed. That is why the census, the
+  per-bucket bounds, and the derived selector each ask the question a different way: not
+  redundancy, but refusal to let the artifact be its own witness.
+
+  A second-order note the fix earned, because it separates two axes that get conflated. The
+  reasoned-toward repair was to keep the pipe and let `pipefail` fail it; with `-e` also in
+  force that aborts the step **before its own `::error::` line prints** — the failure becomes
+  *louder and less legible at the same time*. So the counters became glob loops with no failure
+  to propagate. **Loudness and legibility are different axes, and a verdict that fires before
+  its own testimony is counted but not printed.** (Correction: chat-Claude, on the #290 relay,
+  against a mechanism he had reasoned toward and then withdrew — the instruction survived its
+  bad premise only because the premise was carried as *unverified* and resolved rather than
+  reconciled.)
+
 ### Comments and ADRs are testimony too, and where prose and the reference's executable disagree, the executable outranks.
 
 - **Comments and ADRs are testimony too, and where prose and the reference's
