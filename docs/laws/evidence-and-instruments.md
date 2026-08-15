@@ -227,9 +227,12 @@ amended rather than replaced.
   whether a citation failed.
 
   **Recurrence, in the same file, two PRs later, and counted rather than
-  re-minted:** the `project#N` arm added on #298 was falsified against a bare
-  `#9999` and a `umami#9999` — two adjacency shapes, and the defect lived in the
-  third. Letting the qualifier end in `-` meant `pre-#298`, ordinary hyphenated
+  re-minted:** the `project#N` arm added on #298 was falsified against an
+  unqualified number and a `umami`-qualified one — two adjacency shapes, and the
+  defect lived in the third. (Those probe numbers are described rather than
+  quoted, because a fake number written into a law is scanned by the checker the
+  law is about; the first draft of this paragraph quoted them and went red.)
+  Letting the qualifier end in `-` meant `pre-#298`, ordinary hyphenated
   English, parsed as project `pre-` and a real citation was silently exempted
   from resolution. Same domain-short-by-one-dimension as the executable bit,
   and the dimension is again *the forms a consumer actually writes* rather than

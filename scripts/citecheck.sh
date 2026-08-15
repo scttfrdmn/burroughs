@@ -57,7 +57,11 @@
 # * `#NNNN` is matched as `#` plus a run of digits, accepted only at 1–4 digits. A six-digit hex
 #   colour is therefore skipped whole rather than shredded into a false four-digit citation.
 #   (Written without an example, because this file is in the diff it checks: the first draft's
-#   example number was itself scanned, reported as unresolvable, and was right to be.)
+#   example number was itself scanned, reported as unresolvable, and was right to be. **The hazard
+#   is not this file — it is any file the diff touches.** A `CHANGELOG.md` paragraph explaining a
+#   dangling-citation defect quoted three unqualified numbers as examples and became three dangling
+#   citations, on this checker's own PR. Prose about a citation defect describes the form; it does
+#   not instantiate it.)
 # * The grave rule triggers on the *immediately preceding* word — `grave #78`, `graves #78`,
 #   `grave issue #78` — and on a following run of numbers joined by `/`, `,`, or `and`, which is
 #   how this repo writes `graves #78/#105`. It deliberately does **not** trigger on the word

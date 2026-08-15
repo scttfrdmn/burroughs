@@ -732,8 +732,8 @@ weakly-ordered platform.
   `immVocabulary`'s declared constants, and `TestStagedBitsAgreeWithTheReader` checking the bit
   *values* against `instrCtx.imm` by running it. *Derive the domain from the space, not the
   registry.*
-  - **That pointer needed a checker change, because a bare `#NNNN` names *this* repo.** `#396`/`#397`
-    are `umami`'s numbers, so writing them unqualified made them dangling citations by construction
+  - **That pointer needed a checker change, because a bare `#NNNN` names *this* repo.** Those are
+    `umami`'s PR numbers, so writing them unqualified made them dangling citations by construction
     and `scripts/citecheck.sh` was right to go red on them in CI. The fix teaches the checker the
     GitHub-conventional `project#N` form rather than dropping the sigil — which would have made
     cross-project citations *less* checkable to satisfy a gate — and prints each as
@@ -748,9 +748,18 @@ weakly-ordered platform.
     silently exempted a real citation from resolution — the dangerous direction, since the whole cost
     of the arm is that whatever it calls unresolvable stops being resolved. The qualifier now must end
     alphanumeric. Found by running the checker over the diff that first wrote the phrase (*artifacts
-    become oracles*), and the falsification that missed it is instructive: it probed a bare `#9999`
-    and a `umami#9999` and never a *third* adjacency shape, which is a domain short by one dimension
-    in the same way the executable-bit specimen was.
+    become oracles*), and the falsification that missed it is instructive: it probed an unqualified
+    number and a `umami`-qualified one and never a *third* adjacency shape, which is a domain short
+    by one dimension in the same way the executable-bit specimen was.
+  - **And it went red a second time, on this entry.** The prose above originally *quoted* the two
+    unqualified numbers and the probe's fake number as examples, which the checker reads as three
+    citations — so a paragraph explaining a dangling-citation defect contained three of them. The
+    script's header already warns that an example number in this repo gets scanned by the run it
+    documents; the warning was scoped to *that file*, and the class is **any file the diff touches**,
+    which includes the changelog entry describing the checker. Compounding it: the local run that
+    said exit 0 was executed *before* those paragraphs were written, so its domain was a tree that
+    no longer existed — an identity check owed to a diff, not just to a commit. The citation gate is
+    now the last command before `git commit`, not an early one.
 - **A ≤896 forecast bound held while four of its own modules individually broke it** — the specimen
   that minted *a total is not a ledger* (`docs/laws/controls.md`). 829 landed comfortably under 896
   while `if.wast` +1, `i32.wast` +3, `load.wast` +1 and `local_tee.wast` +1 each exceeded their
