@@ -174,6 +174,22 @@ amended rather than replaced.
   reader, which splits into bullets and joins each before matching — was two
   directories away.
 
+  **Fifth specimen, and the one the law caught in its own falsification
+  procedure: a probe set can exclude the invocation form its consumers use.**
+  Every one of the four probes above was run as `sh scripts/citecheck.sh …`, so
+  all four passed while the file's **executable bit was never committed** — and
+  both binding consumers invoke it as `./scripts/citecheck.sh`, which is the one
+  form no probe used. CI said `citations -> failure`, exit 126, `Permission
+  denied`: a red gate that had not run its check at all. The falsification was
+  sound in its assertions and short in its domain by exactly one dimension —
+  *how the thing is called* — and the local mirror could not disagree, because
+  `make cite` was never the command that ran it. The repair is the same shape as
+  every other repair in this entry: exercise the **path**, not the artifact
+  behind it, so `make cite` and the CI job are one invocation with two homes.
+  Also the cheapest available reading of *verdict channel and mechanism channel
+  are different instruments* — a `citations` job going red says nothing about
+  whether a citation failed.
+
   The two failure modes are worth keeping separate because they are found
   differently. An **assertion** defect is found by falsification — break it, watch
   it die. A **coverage** defect is found only by measuring the instrument's
