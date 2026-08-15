@@ -285,7 +285,9 @@ func TestClaudeMDIndexLedger(t *testing.T) {
 
 If this is a newly minted law, that is expected: re-base with `+"`make claudemd-ledger`"+` in the
 same PR, and check `+"`claudeMDCeiling`"+` in the same motion — a new key spends the file's headroom,
-which is what the ceiling is a budget on.`, ledgerPath, r.kind, r.label, r.bytes)
+which is what the ceiling is a budget on. If the budget is short, the room comes from **demoting a
+law a live control already enforces** to a bare pointer, never from raising the number (ruling:
+Scott, PR #298).`, ledgerPath, r.kind, r.label, r.bytes)
 			continue
 		}
 		if r.bytes != exp {
@@ -313,9 +315,11 @@ after answering, and say which branch in the PR.`,
 			t.Errorf(`%s: the ledger carries %s %q and %s does not.
 
 A row with no entry is a law that left the index — which `+"`TestEveryLawIsIndexed`"+` will also
-report if its body is still in the corpus. If the removal is deliberate, re-base and lower
-`+"`claudeMDCeiling`"+` by the bytes freed: it is meant to rot by the system working, so a
-shrinking index that leaves the ceiling where it was has quietly bought headroom.`,
+report if its body is still in the corpus. If the removal is deliberate, re-base and leave
+`+"`claudeMDCeiling`"+` where it is: the bytes freed are **for the next mint to spend**, which is
+exactly the remedy the #298 ruling names — room comes from demoting a law a live control already
+enforces, not from raising the budget. Lowering the ceiling by the bytes a demotion freed would
+cancel the only mechanism there is for earning index space.`,
 				ledgerPath, f[0], f[1], claudeMD)
 		}
 	}

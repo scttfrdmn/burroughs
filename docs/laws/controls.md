@@ -152,7 +152,10 @@ amended rather than replaced.
   against the real artifact, because the artifact is what gets consumed and no sum of rows is a
   substitute for `os.Stat`. The general test is one question — **does anything downstream read
   the aggregate?** If yes, keep it and add the ledger under it; if no, the aggregate is a
-  checksum on the ledger and nothing more. (Ruling: Scott, PR #298, on the ceiling's own trip.)
+  checksum on the ledger and nothing more. And on the specimen's own reading, same ruling: once
+  the ledger catches the ratchet per entry, the surviving total is a **budget** and not a
+  ratchet-stopper — so room for a new index key comes from demoting a law a live control already
+  enforces, never from raising the bound. (Ruling: Scott, PR #298, on the ceiling's own trip.)
 
   Two independent specimens, which is why it was minted rather than noted:
 

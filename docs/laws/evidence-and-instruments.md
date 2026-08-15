@@ -108,8 +108,8 @@ amended rather than replaced.
     - Sibling project `keel` carries the pipe half of this independently
       (`scripts/l1-bench.sh`: "without it the indent pipe would swallow the one status that says
       whether a comparison happened") and the adjacent rule that *a killed run is `unmeasured`,
-      never an exit code*. **The exit-capture checker is `umami`'s — PRs #396/#397, merged as
-      `0b4ac1c`** (pointer: Scott, PR #298; a search of `~/src` from here had not found it, and it
+      never an exit code*. **The exit-capture checker is `umami`'s — PRs `umami#396`/`umami#397`, merged as
+      `umami@0b4ac1c`** (pointer: Scott, PR #298; a search of `~/src` from here had not found it, and it
       was flagged rather than guessed at, because a design invented here and described as grafted
       would be a fabricated provenance). Two things about the port, and the second is the load-
       bearing one:
@@ -225,6 +225,17 @@ amended rather than replaced.
   Also the cheapest available reading of *verdict channel and mechanism channel
   are different instruments* — a `citations` job going red says nothing about
   whether a citation failed.
+
+  **Recurrence, in the same file, two PRs later, and counted rather than
+  re-minted:** the `project#N` arm added on #298 was falsified against a bare
+  `#9999` and a `umami#9999` — two adjacency shapes, and the defect lived in the
+  third. Letting the qualifier end in `-` meant `pre-#298`, ordinary hyphenated
+  English, parsed as project `pre-` and a real citation was silently exempted
+  from resolution. Same domain-short-by-one-dimension as the executable bit,
+  and the dimension is again *the forms a consumer actually writes* rather than
+  the forms the author enumerated. A probe set of two is a probe set that has
+  chosen its axis; the space of characters that can precede a `#` is derivable,
+  and was not derived.
 
   The two failure modes are worth keeping separate because they are found
   differently. An **assertion** defect is found by falsification — break it, watch
