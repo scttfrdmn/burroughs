@@ -892,13 +892,58 @@ func TestClosedBuckets(t *testing.T) {
 // `i32x4_relaxed_trunc.wast` is absent from this map and stays absent: it is eight lines with no
 // assertions at all, so it has no gated population to allow — the corpus gap that is 0028 d5's
 // whole reason for the author-supplied witnesses in `internal/interp/simd_relaxed_test.go`.
+//
+// **And its absence is structural rather than observed, which is the difference between this map
+// being a domain and being a registry of whatever happened to decline.** Six keys for seven
+// relaxed files invites exactly that reading, so the seventh is settled by measurement: the file
+// holds **one** command, the `module text` at `:3`, and it scores `pass` with **every gate off**
+// (the zero value, the most hostile configuration there is) — because #124 rules the text front
+// end gate-blind, so the module arm scores `ReadModule`'s answer and carries any instantiation
+// decline forward to the vectors that asked the question. This file has no such vectors. No gate
+// can therefore reach a scorable command here, and a zero entry for it would be an assertion
+// that cannot fail — the decoration this same commit removed from the empty-map case, re-added
+// under a different name.
+//
+// What protects the *domain* is not this map at all: the per-line arm below requires every
+// decline anywhere on the board to be named, so a file gaining one errors there whether or not
+// it was ever listed. That check is derived from the space (all 254 files, all declines) and
+// needs no registry, which is why the map is free to be what it is — pins on counts, witnessing
+// the flip rather than surviving it. (Question: Scott, on the PR #285 stamp.)
+//
+// **Zeroed, not drained, by the relaxed-SIMD flip — and the difference is the whole point.**
+// With `DefaultFeatures` now setting `RelaxedSIMD: true`, each of those six files measures
+// Gated=0, confirmed by running the harness over each entry rather than inferred from the flip.
+// Their 69 declines are 69 passes.
+//
+// The obvious edit was to delete the six keys, and it was wrong. **An empty allowance agrees
+// with every gated population there is** — the bulk path below (`if n, ok :=
+// wholeFileGated[f]; ok`) matches no file, so nothing exercises it, and a later edit that broke
+// the whole-file mechanism outright would leave every board green. That is the
+// comparison-against-an-empty-set shape arriving inside the mechanism this project built to
+// enumerate declines, and it is *worse* than a deleted control, because the board reads a
+// vacuous green as a verdict. It is also the standard this same commit applied to `passFloor`:
+// a bound left entirely inside its own tolerance is decoration. An empty allowance is a bound
+// entirely inside its tolerance. (Ruling: Scott, on the PR #285 stamp conditions.)
+//
+// So **the value 0 is the assertion, not the absence of one.** Each entry now claims "this
+// file's gated population is exactly zero", checked on the nose by the same comparison that
+// used to check 2 and 24 — which means a regression that started declining relaxed vectors
+// again reports `Gated is 2, want 0` instead of passing quietly through a per-line path whose
+// both loops are vacuous. The flip's own board delta is pinned here as a consequence: these six
+// zeros are 69 of it.
+//
+// What is still not certified is the mechanism's **nonzero** branch, since no file has a
+// homogeneous gated population left to give it one. That is #284's remaining scope, narrowed by
+// this edit from "the path has no subject at all" to "the path's nonzero case wants a
+// constructed population" — the tripwire is filed against the risk, not against the shape the
+// risk had on the day it was found.
 var wholeFileGated = map[string]int{
-	"i16x8_relaxed_q15mulr_s.wast": 2,
-	"i8x16_relaxed_swizzle.wast":   5,
-	"relaxed_dot_product.wast":     10,
-	"relaxed_laneselect.wast":      11,
-	"relaxed_madd_nmadd.wast":      17,
-	"relaxed_min_max.wast":         24,
+	"i16x8_relaxed_q15mulr_s.wast": 0, // 2 pre-flip
+	"i8x16_relaxed_swizzle.wast":   0, // 5 pre-flip
+	"relaxed_dot_product.wast":     0, // 10 pre-flip
+	"relaxed_laneselect.wast":      0, // 11 pre-flip
+	"relaxed_madd_nmadd.wast":      0, // 17 pre-flip
+	"relaxed_min_max.wast":         0, // 24 pre-flip — the six sum to the flip's 69
 }
 
 // TestGatedVectors pins exactly which vectors the engine is allowed to decline.
@@ -5245,6 +5290,26 @@ func TestGatedVectors(t *testing.T) {
 		},
 	}
 
+	// **The bulk allowance must have a subject.** An empty `wholeFileGated` is not a smaller
+	// allowlist, it is a comparison that agrees with every gated population there is: the branch
+	// below matches no file, so a broken whole-file mechanism reports green on every board. That
+	// is the same defect as a floor sitting entirely inside its own slack, and it is worse than a
+	// deleted control because a vacuous green still reads as a verdict.
+	//
+	// It nearly happened here: the relaxed-SIMD flip zeroed all six entries, and the obvious edit
+	// was to delete the keys. Zero is a claim; absence is not. See `wholeFileGated`'s own comment,
+	// and #284 for the nonzero branch this guard cannot certify on its own.
+	//
+	// Falsified before being trusted, per the discipline: emptying the map fires this Fatal, and
+	// changing any entry's 0 to 1 fires the count check below with `Gated is 0, want 1`.
+	if len(wholeFileGated) == 0 {
+		t.Fatal("wholeFileGated is empty, so the whole-file allowance below has no subject: it " +
+			"would match no file, exercise nothing, and agree with any gated population at all.\n" +
+			"\tIf a flip zeroed the last entry, keep the key with a value of 0 — that is a checkable " +
+			"claim that the file declines nothing — rather than deleting it and leaving this control " +
+			"vacuously green (#284)")
+	}
+
 	files := boardFiles(t)
 	for _, f := range files {
 		s, err := ParseFile(filepath.Join(suiteDir, f))
@@ -5284,7 +5349,7 @@ func TestGatedVectors(t *testing.T) {
 		// this check still asserts on the nose.
 		if n, ok := wholeFileGated[f]; ok {
 			if r.Gated != n {
-				t.Errorf("%s: Gated is %d, want %d (whole-file SIMD-gate entry) — the file's "+
+				t.Errorf("%s: Gated is %d, want %d (whole-file gate entry) — the file's "+
 					"gated population moved; update wholeFileGated's count in this PR, and "+
 					"single out any line whose reason is no longer the file's one stated reason",
 					f, r.Gated, n)
@@ -8077,7 +8142,18 @@ func TestPhase1Files(t *testing.T) {
 	// against the fixed 65022 total. The forecast's own fail delta (161) is exactly the
 	// #9-orthogonal population ADR 0025's carve-out names — see execFailCeiling's own comment
 	// two tests up for the fail-side accounting.
-	const passFloor = 58429
+	// **58429 → 58659, the relaxed-SIMD gate's default-on flip.** Pre-registered in the flip
+	// PR's redistribution forecast and reconciled to the actual post-flip board on both
+	// architectures: pass +69, fail +0, gated −69, unsupported +0, summing to zero against the
+	// fixed 65021 total. The 69 are the whole of `wholeFileGated`'s six relaxed entries
+	// (2+5+10+11+17+24), which drain to an empty map at the same commit.
+	//
+	// **Raised even though it would have passed**, which is the part worth recording: 58659 −
+	// 58429 is a distance of 230 against a `boardBoundSlack` of 250, so the stale-check had 20
+	// to spare and would have stayed silent. A bound that survives a jump by 20 is the 798-
+	// against-4178 shape at an earlier stage, and the slack is a tolerance for drift between
+	// PRs, never a licence for the PR that *causes* the jump to skip its own accounting.
+	const passFloor = 58659
 	boardBound(t, "passFloor", totalPass, passFloor, boardBoundSlack, floorBound,
 		"a regression in a grammar that used to answer, or the corpus moved")
 }

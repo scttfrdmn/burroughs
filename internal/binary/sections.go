@@ -120,8 +120,24 @@ type Features struct {
 // **First divergence: SIMD, #227/ADR 0025.** G-1's own suite (`simd_*.wast`) measures
 // pass=25158 fail=161 gated=0, every fail attributed to #9's own deferred validator by the
 // engine's error taxonomy — the named, self-retiring carve-out ADR 0025 added to G-1's text.
+//
+// **Second divergence: RelaxedSIMD.** G-1's own suite (the seven `*relaxed*.wast` files)
+// measures pass=77 fail=0 unsupported=0 gated=0, identical on arm64/darwin and
+// amd64/linux — so this flip satisfies G-1's *literal* reading and **does not invoke ADR
+// 0025's carve-out at all**. That is stated rather than left implied: a carve-out cited
+// where it is not load-bearing is a citation that will be believed the next time it is.
+//
+// The flip's board delta is 69 vectors converting `gated` → `pass` with a fail delta of
+// zero, and `unsupported` is structurally unmoved — a relaxed vector is scored `gated`,
+// never `unsupported`, so that column has no subject at a flip.
+//
+// What the flip *promises*, beyond passing vectors: ADR 0028 d1's guarantee that the
+// relaxed lowerings are deterministic **and architecture-uniform** becomes a default-lane
+// promise to a caller who asked for nothing. No vector can measure it — every `(either …)`
+// alternative passes — so the instrument that holds it is
+// `TestRelaxedLoweringChoicesArePinned` (#283), which pins all 32 choices by matched text.
 func DefaultFeatures() Features {
-	return Features{SIMD: true}
+	return Features{SIMD: true, RelaxedSIMD: true}
 }
 
 // Decoder holds the configuration one decode runs under. A config struct rather
