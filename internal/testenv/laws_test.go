@@ -53,24 +53,79 @@ const (
 	// is roughly seven more one-line recall keys with pointers. Deliberately tight, because *an
 	// unasserted distance is the vacuum* — a ceiling far from what it bounds runs, agrees, and
 	// says nothing. Tripping it is a question, not a verdict: is the new text governance (which
-	// belongs here, and then the ceiling moves with a stated reason) or a law's body (which
-	// belongs in `docs/laws/`)?
+	// belongs here) or a law's body (which belongs in `docs/laws/`)? Where the room then comes from
+	// is a separate question, ruled on below: not from this number.
 	//
 	// 38000 → 38400 (PR #295). It tripped at **38068** on minting *a total is not a ledger*, and
 	// the question resolves the second way the doc comment below offers: the added text is a law's
 	// **key**, one line and a pointer, with its entire body — two specimens, the minting history,
 	// the attribution ruling — in `docs/laws/controls.md`. That is the restructure working as
-	// designed rather than eroding, so the ceiling moves. The headroom was already down to 262
+	// designed rather than eroding, so the ceiling moved — under the pre-#298 reading, which the
+	// ruling further down retires as a remedy. The headroom was already down to 262
 	// bytes before this key, spent on governance additions (the gate-campaign carve-out, the flip's
 	// stamp tier) that belong here by the same doc comment's first branch.
 	//
-	// **Worth flagging rather than fixing quietly: the index grows by one key per law, by
-	// construction.** So a fixed byte ceiling on it is tripped by every future mint, forever, and
-	// what it can therefore *be* is a question-asker (which branch is this text?) and not a
-	// ratchet-stopper. That may be exactly right — the question is cheap and the wrong answer is
-	// expensive — but it is a different instrument from `unsupportedCeiling`, which genuinely rots
-	// toward zero, and the comparison above claims it is the same one. Scott's call; noted here so
-	// the next mint does not re-derive it.
+	// # What the number protects, stated here because a bound whose rationale is not at the site
+	// becomes decoration the first time someone needs room
+	//
+	// That is `passFloor`'s lesson (#285) applied to this file. So, explicitly: **38400 bytes is a
+	// budget on what every session must read before it can do anything.** `CLAUDE.md` is loaded
+	// into context each turn, so its size is a standing tax on every task in the repo — it is
+	// subtracted from the room available for the *code* under discussion. What the ceiling protects
+	// is therefore not tidiness and not a line count: it is the agent's capacity to hold an
+	// interpreter's decoder, its validator, and a spec vector in mind at once, which is the work
+	// the file exists to govern. An index that has eaten that room governs a session that can no
+	// longer do the thing being governed.
+	//
+	// Two consequences, both operative:
+	//
+	//   - The trip is a **question, not a verdict** — is the new text governance (which belongs
+	//     here) or a law's body (which belongs in `docs/laws/`)? The failure message spells both
+	//     branches out. Neither branch's answer is "raise the number"; see the ruling below.
+	//   - Raising it is never free, and "we needed room" is not a reason — it is the *statement of
+	//     the trip*. The reason has to name which branch the text is and why.
+	//
+	// # It is a reconciliation guard over a per-entry ledger, not the primary control
+	//
+	// Ruled on PR #298, under *a total is not a ledger*'s own exception clause: a single byte
+	// ceiling over entries that are individually enumerable is the aggregate that law demotes —
+	// one recall key can bloat into a body while the total stays green, and trimming an unrelated
+	// key buys the room for it, which is the same opposite-sign cancellation the ≤896 bound
+	// suffered. So `TestClaudeMDIndexLedger` asserts **each index entry's bytes on the nose** and
+	// is the primary control; this ceiling stays **fatal** because the exception applies squarely —
+	// *the consumer consumes the total*, context cost being total bytes and not per-entry bytes, so
+	// no sum of rows substitutes for the artifact's own size. The division of labour: the ledger
+	// says *which entry* moved, the ceiling says *whether the file* still fits.
+	//
+	// # It is a budget and nothing else, and room is bought by demotion
+	//
+	// The paragraph this replaces flagged a structural tension and asked for a call: the index grows
+	// by one key per law by construction, so a fixed byte ceiling on it is tripped by every future
+	// mint, forever, and it cannot be the ratchet-stopper `unsupportedCeiling` is. Scott ruled (PR
+	// #298): **with the ratchet caught per entry by the ledger, this number is a budget and nothing
+	// else.** Read it that way. It is *not* a ratchet-stopper, and the reason that matters is not
+	// taxonomy — a reader who takes it for one reaches for the wrong remedy when it trips.
+	//
+	// The remedy the ruling names is the operative half: **the next mint does not buy room by raising
+	// 38400 — it buys room by demoting an already-enforced law to a pointer.** Scott's selection rule,
+	// in his words: *a law with a live control that fails when it's violated does not need index prose
+	// teaching it — the control teaches it, at the moment it matters. Index space should go to the laws
+	// no control can enforce.* So a budget at its limit is a prompt to ask **which key is redundant
+	// with a control**, not a prompt to move the limit. Named candidate, on its own terms: *a total is
+	// not a ledger*, whose whole content is now enforced by `TestClaudeMDIndexLedger` sitting beside it.
+	//
+	// Two consequences, kept here because they retire a branch that every message in this file used to
+	// offer:
+	//
+	//   - **"The text is governance, so the ceiling moves" is retired as a remedy.** Governance still
+	//     stays in the index — that half is unchanged, and it is the whole reason the index carries
+	//     operative text at all. What changed is where the room comes from: demotion, not the bound.
+	//   - The rule is not a policy for later. Headroom was **224 bytes** when this was written, under
+	//     a single one-line key; the live figure is printed by `TestClaudeMDIndexLedger` and that is
+	//     where to read it rather than from this sentence, which rots.
+	//
+	// So the number stays at 38400, and the 38000 → 38400 record above is **the last raise made under
+	// the old reading** — quoted with its era, as this repo's other superseded figures are.
 	claudeMDCeiling = 38400
 
 	// lawsFloor is the vacuity guard. 46 laws were relocated by the restructure; the floor sits
@@ -121,17 +176,16 @@ type indexedLaw struct {
 	line   int    // 1-indexed line in CLAUDE.md, for the failure message
 }
 
-// readIndex returns the laws named in `CLAUDE.md`'s `## Disciplines` section.
-func readIndex(t *testing.T) []indexedLaw {
-	t.Helper()
+// disciplinesRange returns the half-open line range of `CLAUDE.md`'s `## Disciplines` section.
+//
+// Factored out because two instruments read the same span and must not disagree about where it
+// is: the bijection below, and the per-entry byte ledger in `claudemd_ledger_test.go`. Two
+// copies of a boundary rule over one region is the two-registry shape this very file exists to
+// police, so it gets one definition.
+func disciplinesRange(tb testing.TB, lines []string) (start, end int) {
+	tb.Helper()
 
-	src, err := os.ReadFile(claudeMD)
-	if err != nil {
-		t.Fatalf("reading the index: %v", err)
-	}
-	lines := strings.Split(string(src), "\n")
-
-	start, end := -1, len(lines)
+	start, end = -1, len(lines)
 	for i, l := range lines {
 		if strings.HasPrefix(l, "## Disciplines") {
 			start = i
@@ -143,9 +197,22 @@ func readIndex(t *testing.T) []indexedLaw {
 		}
 	}
 	if start < 0 {
-		t.Fatalf("%s has no `## Disciplines` section — the index this check reads is gone, which "+
+		tb.Fatalf("%s has no `## Disciplines` section — the index this check reads is gone, which "+
 			"is a bigger finding than any drift it was written to catch", claudeMD)
 	}
+	return start, end
+}
+
+// readIndex returns the laws named in `CLAUDE.md`'s `## Disciplines` section.
+func readIndex(t *testing.T) []indexedLaw {
+	t.Helper()
+
+	src, err := os.ReadFile(claudeMD)
+	if err != nil {
+		t.Fatalf("reading the index: %v", err)
+	}
+	lines := strings.Split(string(src), "\n")
+	start, end := disciplinesRange(t, lines)
 
 	// Split into top-level bullets, then join each before matching. Split-then-join, never a
 	// regexp over raw lines: see the comment on lawLeadRE.
@@ -310,11 +377,17 @@ This is a question, not a verdict, and it has two honest answers:
     the restructure was for, and the ratchet it exists to stop is exactly this: the corpus
     growing back into the index one defensible paragraph at a time.
   - The new text is **governance** — a stamp, a token, a stop condition, a merge rule, a report
-    section. Those must be in context every turn, so they stay, and the ceiling moves in the
-    same PR with the reason stated. Like every other ceiling here it is meant to rot by the
-    system working, so it is lowered when the index shrinks and raised only deliberately.
+    section. Those must be in context every turn, so they stay.
 
-What it must not become is a number nobody looks at, which is what raising it silently makes
+Note which remedy is *not* on that list. This number is a **budget and nothing else** (ruling:
+Scott, PR #298): the ratchet is caught per entry by `+"`TestClaudeMDIndexLedger`"+`, so raising the
+budget is not how governance text earns its room. Demotion is. A law with a live control that
+fails when it is violated does not need index prose teaching it — the control teaches it, at the
+moment it matters — so index space goes to the laws no control can enforce, and a trip is a prompt
+to find the key that has become redundant with a control. See `+"`claudeMDCeiling`"+`'s comment for
+the rule and its named candidate.
+
+What this must not become is a number nobody looks at, which is what raising it silently makes
 it.`, claudeMD, got, claudeMDCeiling)
 	}
 }

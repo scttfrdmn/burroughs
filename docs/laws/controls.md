@@ -134,6 +134,29 @@ amended rather than replaced.
   items). Tightening the ≤896 ceiling to `== 857` would have satisfied the floors law completely
   and caught nothing here.
 
+  **The exception, and it is a real one: *a total is not a ledger, except where the consumer
+  consumes the total — and even then it is never a substitute for per-item assertion when the
+  items are individually checkable.*** The law demotes an aggregate because a *forecast* about a
+  distribution was being read off a sum. Where something downstream actually consumes the sum,
+  the sum is a claim in its own right and stays fatal: it is no longer a proxy for the items, it
+  is the quantity itself. `claudeMDCeiling` (`internal/testenv/laws_test.go`) is the specimen —
+  the consumer of `CLAUDE.md` is a context window, and context cost is **total bytes**, not
+  per-entry bytes, so an index that stays under every per-entry bound and blows the file total
+  has broken the thing the ceiling protects. But the exception buys the total its life, not its
+  primacy, and the second half of the clause is the operative half: the index's entries are
+  individually enumerable, so one entry can bloat while the total stays green, and trimming an
+  unrelated entry buys room for it — exactly the cancellation above. So the two instruments
+  stack rather than substitute. The **per-entry ledger is primary**, asserted on the nose, and it
+  is the *attribution* instrument: when the total moves, the ledger's diff names which entry
+  moved it instead of prompting a hunt. The **total remains fatal** as a reconciliation guard
+  against the real artifact, because the artifact is what gets consumed and no sum of rows is a
+  substitute for `os.Stat`. The general test is one question — **does anything downstream read
+  the aggregate?** If yes, keep it and add the ledger under it; if no, the aggregate is a
+  checksum on the ledger and nothing more. And on the specimen's own reading, same ruling: once
+  the ledger catches the ratchet per entry, the surviving total is a **budget** and not a
+  ratchet-stopper — so room for a new index key comes from demoting a law a live control already
+  enforces, never from raising the bound. (Ruling: Scott, PR #298, on the ceiling's own trip.)
+
   Two independent specimens, which is why it was minted rather than noted:
 
   - **The ≤896 forecast bound held while four of its modules individually broke it.** 829 landed

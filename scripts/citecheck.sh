@@ -57,7 +57,11 @@
 # * `#NNNN` is matched as `#` plus a run of digits, accepted only at 1–4 digits. A six-digit hex
 #   colour is therefore skipped whole rather than shredded into a false four-digit citation.
 #   (Written without an example, because this file is in the diff it checks: the first draft's
-#   example number was itself scanned, reported as unresolvable, and was right to be.)
+#   example number was itself scanned, reported as unresolvable, and was right to be. **The hazard
+#   is not this file — it is any file the diff touches.** A `CHANGELOG.md` paragraph explaining a
+#   dangling-citation defect quoted three unqualified numbers as examples and became three dangling
+#   citations, on this checker's own PR. Prose about a citation defect describes the form; it does
+#   not instantiate it.)
 # * The grave rule triggers on the *immediately preceding* word — `grave #78`, `graves #78`,
 #   `grave issue #78` — and on a following run of numbers joined by `/`, `,`, or `and`, which is
 #   how this repo writes `graves #78/#105`. It deliberately does **not** trigger on the word
@@ -142,6 +146,47 @@ extract() {
 			num = substr(t, RSTART + 1, RLENGTH - 1)
 			t = substr(t, RSTART + RLENGTH)
 
+			# **A bare `#N` names *this* repo, so a cross-project citation needs a
+			# qualifier or it is dangling by construction.** `umami#396` is the
+			# GitHub-conventional form and is what this arm recognizes: a token
+			# butted directly against the `#`, no space. Emitted as `qualified` and
+			# *printed* below rather than dropped — an unresolvable-by-design
+			# reference that vanished from the output would be an exemption
+			# mechanism, and the count is the only thing making it reviewable.
+			#
+			# Reported as a *qualified reference* and not as a cross-project
+			# citation, because this arm cannot tell those apart: a markdown anchor
+			# whose slug opens with digits matches identically. Naming it what the
+			# match actually establishes is the difference between a note and a
+			# lying witness. The previous behaviour failed such a link as a bad
+			# issue citation, a false positive in the other direction. (No literal
+			# example here, per this files own header: an example would be scanned
+			# by the very run it documents, and the first draft of this comment was.)
+			#
+			# Not resolved against that repo: doing so would make this checkers
+			# verdict depend on a repo whose numbering nobody here controls, and a
+			# gate that can go red because a sibling project renumbered is a gate
+			# that will be disabled. Provenance is asserted by the qualifier; the
+			# claim it makes is checkable by a human following it, which is all a
+			# cross-repo citation can honestly offer.
+			#
+			# The qualifier must **end** in an alphanumeric, and that is not
+			# cosmetic: the first draft accepted a trailing `-` or `.`, so the
+			# ordinary English `pre-#298` parsed as project `pre-`, and a real
+			# citation was silently exempted from resolution instead of being
+			# checked. Found by running this checker over the diff that first
+			# wrote that phrase — *artifacts become oracles* — and it is the
+			# dangerous direction of error, since the whole cost of this arm is
+			# that whatever it claims is unresolvable stops being resolved. No
+			# `owner/repo#N` ends in punctuation, so the tightening costs nothing.
+			if (gap ~ /[A-Za-z]([A-Za-z0-9_.-]*[A-Za-z0-9])?$/) {
+				match(gap, /[A-Za-z]([A-Za-z0-9_.-]*[A-Za-z0-9])?$/)
+				if (length(num) >= 1 && length(num) <= 5)
+					print "qualified " substr(gap, RSTART, RLENGTH) "#" num
+				prevgrave = 0
+				continue
+			}
+
 			# The trigger: the word immediately before this citation, with a
 			# sentence-ish break stripped so an earlier mention cannot reach it.
 			tail = tolower(gap)
@@ -176,6 +221,15 @@ fail=0
 adrs=0
 issues=0
 graves=0
+foreigns=0
+
+# Phase 0: qualified references — a cross-project citation, or a markdown anchor shaped alike. Named,
+# counted, and deliberately not resolved: see the `qualified` arm in extract() for why a gate must
+# not depend on a sibling repo's numbering, and why this line does not claim which kind it is.
+for q in $(printf '%s\n' "$cites" | awk '$1 == "qualified" { print $2 }'); do
+	foreigns=$((foreigns + 1))
+	echo "note  $q -> qualified reference, not resolved against this repo (provenance is the qualifier)"
+done
 
 # Phase 1: ADR citations, offline.
 for n in $(printf '%s\n' "$cites" | awk '$1 == "adr" { print $2 }'); do
@@ -244,10 +298,10 @@ fi
 
 # The domain, printed whether or not anything failed. A checker that says OK without saying over
 # what has made a silent claim about its own coverage.
-printf 'citecheck %s..%s: %d added lines, %d citations (%d issue, %d grave, %d ADR)\n' \
+printf 'citecheck %s..%s: %d added lines, %d citations (%d issue, %d grave, %d ADR, %d qualified)\n' \
 	"$(git rev-parse --short "$base")" \
 	"$([ -n "$head" ] && git rev-parse --short "$head" || echo worktree)" \
-	"$nlines" "$ncites" "$issues" "$graves" "$adrs"
+	"$nlines" "$ncites" "$issues" "$graves" "$adrs" "$foreigns"
 
 if [ "$fail" -ne 0 ]; then
 	echo "citecheck: at least one citation does not resolve to the artifact it names."

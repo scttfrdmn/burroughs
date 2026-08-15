@@ -108,11 +108,23 @@ amended rather than replaced.
     - Sibling project `keel` carries the pipe half of this independently
       (`scripts/l1-bench.sh`: "without it the indent pipe would swallow the one status that says
       whether a comparison happened") and the adjacent rule that *a killed run is `unmeasured`,
-      never an exit code*. Scott names an **exit-capture checker** built in another project whose
-      design should be grafted rather than re-derived; a search of `~/src` did not find it, so it
-      is flagged rather than guessed at — #297 carries the pointer request, because a design
-      invented here and described as grafted would be a fabricated provenance. (Ruling: Scott,
-      PR #295.)
+      never an exit code*. **The exit-capture checker is `umami`'s — PRs `umami#396`/`umami#397`, merged as
+      `umami@0b4ac1c`** (pointer: Scott, PR #298; a search of `~/src` from here had not found it, and it
+      was flagged rather than guessed at, because a design invented here and described as grafted
+      would be a fabricated provenance). Two things about the port, and the second is the load-
+      bearing one:
+      - **`umami` reached this place from a different failure**, so what transfers is a **design,
+        not evidence about this repo**. A checker that caught a real defect there is a witness to
+        `umami`'s codebase and to nothing here; the shapes a Go-plus-Make tree can hide a
+        displaced status in are its own question. So the port earns **its own falsification** —
+        write a compound whose status belongs to the wrong command, watch the checker go red on
+        *this* tree — exactly as if the design had been invented here. Grafting the mechanism does
+        not graft the *watched-die*, which is the half a control is not born without.
+      - It is therefore a **second instrument, not a replacement for `pipefail-check`**: that
+        target asserts a shell *setting* is live and covers pipes; a checker reads *constructs* and
+        covers `cmd; echo`, `cmd || true`, `cmd &`, and the `$(…)` whose status the next link in a
+        `; \` chain discards. #297 carries the port. (Ruling: Scott, PR #295; pointer supplied on
+        PR #298.)
 
 ### Second-order honesty: apply the discipline to its own output.
 
@@ -213,6 +225,20 @@ amended rather than replaced.
   Also the cheapest available reading of *verdict channel and mechanism channel
   are different instruments* — a `citations` job going red says nothing about
   whether a citation failed.
+
+  **Recurrence, in the same file, two PRs later, and counted rather than
+  re-minted:** the `project#N` arm added on #298 was falsified against an
+  unqualified number and a `umami`-qualified one — two adjacency shapes, and the
+  defect lived in the third. (Those probe numbers are described rather than
+  quoted, because a fake number written into a law is scanned by the checker the
+  law is about; the first draft of this paragraph quoted them and went red.)
+  Letting the qualifier end in `-` meant `pre-#298`, ordinary hyphenated
+  English, parsed as project `pre-` and a real citation was silently exempted
+  from resolution. Same domain-short-by-one-dimension as the executable bit,
+  and the dimension is again *the forms a consumer actually writes* rather than
+  the forms the author enumerated. A probe set of two is a probe set that has
+  chosen its axis; the space of characters that can precede a `#` is derivable,
+  and was not derived.
 
   The two failure modes are worth keeping separate because they are found
   differently. An **assertion** defect is found by falsification — break it, watch

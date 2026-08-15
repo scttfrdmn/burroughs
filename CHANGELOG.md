@@ -508,6 +508,43 @@ weakly-ordered platform.
 
 ### Changed
 
+- **`CLAUDE.md`'s byte ceiling is now a reconciliation guard over a per-entry ledger (#298).** A
+  single ceiling over an index whose entries are individually enumerable is exactly the aggregate
+  *a total is not a ledger* demotes: one recall key can bloat back into a body while the file total
+  stays green, and trimming an unrelated key buys the room for it. So
+  `TestClaudeMDIndexLedger` (`internal/testenv`) asserts **every index entry's bytes on the nose**
+  against a golden ledger — `make claudemd-ledger` re-bases it — with one row per `## ` section
+  around them, and the row sum reconciled against `os.Stat`. The ceiling **stays fatal** under the
+  law's new exception clause, since the consumer of `CLAUDE.md` is a context window and context
+  cost is total bytes. Division of labour: the ledger says which entry moved, the ceiling says
+  whether the file still fits.
+  - **Watched die on a byte-identical file.** Growing one entry 4 bytes and shrinking another by 4
+    left `CLAUDE.md` at 38068 exactly; the ceiling and the bijection both passed, having nothing to
+    see, and the ledger reported both rows with signed deltas. The vacuity floor was falsified on
+    the **regenerate** path too — a broken bullet reader fataled rather than writing two rows over
+    51, verified by diffing the golden file afterwards rather than by reading an exit status.
+  - Its first real finding was its own PR: a 108-byte growth in `## Tooling gates` (the
+    tombstone-with-no-inscription rule's fourth specimen, #292), named as that section rather than
+    as a number nobody could attribute.
+  - `claudeMDCeiling`'s doc comment now states **what the 38400 protects** — a budget on what every
+    session must read before it can do anything, subtracted from the room available for the code
+    under discussion. Per #285's `passFloor` lesson: a bound whose rationale is not at the site
+    becomes decoration the first time someone needs room.
+  - **The ceiling is now a budget and nothing else, and room is bought by demotion.** The doc comment
+    had flagged a structural tension — the index grows by one key per law by construction, so a byte
+    ceiling on it is tripped by every future mint and cannot be the ratchet-stopper
+    `unsupportedCeiling` is. Ruled: with the ratchet caught per entry by the ledger, the surviving
+    total is a budget, and **the next mint does not buy room by raising 38400 — it buys room by
+    demoting a law a live control already enforces to a bare pointer**, on the rule that *a law with
+    a live control that fails when it is violated does not need index prose teaching it; index space
+    goes to the laws no control can enforce*. `a total is not a ledger` is the named candidate, now
+    enforced by the ledger itself. The "governance, so move the ceiling" branch is **retired as a
+    remedy** wherever it appeared — the ceiling's comment, the tripwire's failure message, the
+    ledger's new-entry and missing-row messages, and the law's own body. The missing-row message was
+    a live contradiction and inverted: a deliberate removal now *leaves* the ceiling where it is,
+    because lowering it by the bytes a demotion freed would cancel the only mechanism for earning
+    index space. Headroom stands at **224 bytes**, under one one-line key, so this is the next mint's
+    procedure and not a policy for later. (Ruling: Scott, PR #298, on the flag it answers.)
 - **`make check` now names the gates it did not reach when it aborts.** It was a prerequisite list,
   which make walks in order and abandons at the first red — correct behaviour that produced a
   genuinely misleading artifact: a dangling citation in `internal/validate/sig.go` reached a working
@@ -612,7 +649,8 @@ weakly-ordered platform.
     keys. Deliberately tight, because *an unasserted distance is the vacuum*. Bytes rather than lines
     or law count because the quantity the purpose names is **context cost**. Like every ceiling here
     it is meant to rot by the system working, and tripping it is a question with two honest answers
-    (governance, so move the ceiling and say why — or a law's body, so move the text).
+    (governance, so it stays — or a law's body, so move the text). The "and then move the ceiling"
+    half of that remedy was retired later in this same unreleased window; see the ledger entry above.
 - **Thirty-two citations swept, twelve addressed, and the sweep's own tally was the last thing it
   got wrong.** A restructure retroactively falsifies the prose that described the old shape, so
   every `CLAUDE.md` citation in the repo was enumerated — **32 sites in 22 files** — and classified
@@ -681,6 +719,47 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **Two prose claims that outlived their subject (#298).** *A ruling retroactively falsifies prose
+  written before it*, so: `docs/laws/evidence-and-instruments.md` said a search of `~/src` had not
+  found the exit-capture checker whose design #297 is to port — it is `umami`'s, PRs `umami#396`/`umami#397`,
+  merged `umami@0b4ac1c`, and the entry now carries the pointer plus the caveat that `umami` reached the
+  same place from a *different* failure, so the checker transfers as a **design and not as evidence
+  about this repo** and earns its own falsification when ported. And `immStagedBits`'s note in
+  `internal/binary/instr_width_test.go` claimed the lossy-immediate list is "complete by
+  construction" without saying what that meant; it now names the three mechanisms that make it a
+  claim about the space rather than about the author's recall — the forward domain walked from the
+  **generated** `prefixRegions` table with a vacuity `t.Fatal`, the reverse domain checked against
+  `immVocabulary`'s declared constants, and `TestStagedBitsAgreeWithTheReader` checking the bit
+  *values* against `instrCtx.imm` by running it. *Derive the domain from the space, not the
+  registry.*
+  - **That pointer needed a checker change, because a bare `#NNNN` names *this* repo.** Those are
+    `umami`'s PR numbers, so writing them unqualified made them dangling citations by construction
+    and `scripts/citecheck.sh` was right to go red on them in CI. The fix teaches the checker the
+    GitHub-conventional `project#N` form rather than dropping the sigil — which would have made
+    cross-project citations *less* checkable to satisfy a gate — and prints each as
+    `note  umami#396 -> qualified reference, not resolved against this repo`, counted in the domain
+    line so an unresolvable-by-design reference is visible rather than exempt. It says *qualified
+    reference* and not *cross-project citation* because the arm cannot tell those apart: a markdown
+    anchor whose slug opens with digits matches identically, and claiming the stronger reading would
+    be a lying witness. It is deliberately **not** resolved against that repo — a gate that can go
+    red because a sibling project renumbered is a gate that gets disabled.
+  - **The new arm was then caught over-matching by its own PR: `pre-#298` parsed as project `pre-`.**
+    The first draft let the qualifier end in `-` or `.`, so an ordinary hyphenated English phrase
+    silently exempted a real citation from resolution — the dangerous direction, since the whole cost
+    of the arm is that whatever it calls unresolvable stops being resolved. The qualifier now must end
+    alphanumeric. Found by running the checker over the diff that first wrote the phrase (*artifacts
+    become oracles*), and the falsification that missed it is instructive: it probed an unqualified
+    number and a `umami`-qualified one and never a *third* adjacency shape, which is a domain short
+    by one dimension in the same way the executable-bit specimen was.
+  - **And it went red a second time, on this entry.** The prose above originally *quoted* the two
+    unqualified numbers and the probe's fake number as examples, which the checker reads as three
+    citations — so a paragraph explaining a dangling-citation defect contained three of them. The
+    script's header already warns that an example number in this repo gets scanned by the run it
+    documents; the warning was scoped to *that file*, and the class is **any file the diff touches**,
+    which includes the changelog entry describing the checker. Compounding it: the local run that
+    said exit 0 was executed *before* those paragraphs were written, so its domain was a tree that
+    no longer existed — an identity check owed to a diff, not just to a commit. The citation gate is
+    now the last command before `git commit`, not an early one.
 - **A ≤896 forecast bound held while four of its own modules individually broke it** — the specimen
   that minted *a total is not a ledger* (`docs/laws/controls.md`). 829 landed comfortably under 896
   while `if.wast` +1, `i32.wast` +3, `load.wast` +1 and `local_tee.wast` +1 each exceeded their
