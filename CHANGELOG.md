@@ -29,10 +29,12 @@ weakly-ordered platform.
   pre-registered before the diff and reconciled to the actual on both architectures: pass **58590 →
   58659** (+69), fail **117 → 117** (+0), gated **3657 → 3588** (−69), `unsupported` **unmoved at
   2657** — structurally, since a relaxed vector is scored `gated` and never `unsupported`. The 69
-  are the whole of `wholeFileGated`'s six relaxed entries, which drain to an empty map at the same
-  commit (#284 files the tripwire that empty map now needs). What the flip promises beyond passing
-  vectors is decision 0028 d1's *architecture-uniform* lowering guarantee, which no vector can
-  measure and `TestRelaxedLoweringChoicesArePinned` (#282) holds instead.
+  are the whole of `wholeFileGated`'s six relaxed entries, which are **zeroed rather than deleted**:
+  an empty allowance agrees with every gated population there is, so the six keys stay with a value
+  of `0` — a checkable claim that the file declines nothing — and `TestGatedVectors` now fails
+  loudly if the allowance is ever empty (#284 keeps the mechanism's nonzero branch). What the flip
+  promises beyond passing vectors is decision 0028 d1's *architecture-uniform* lowering guarantee,
+  which no vector can measure and `TestRelaxedLoweringChoicesArePinned` (#282) holds instead.
 
 - **The relaxed-SIMD lowerings are pinned by a control, which is what decision 0028 d1's guarantee
   did not have** (#282, pre-flip for `gate:relaxed-simd`). 0028 d1 promises more than the spec asks —
