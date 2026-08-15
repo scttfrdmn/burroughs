@@ -932,11 +932,12 @@ func TestClosedBuckets(t *testing.T) {
 // both loops are vacuous. The flip's own board delta is pinned here as a consequence: these six
 // zeros are 69 of it.
 //
-// What is still not certified is the mechanism's **nonzero** branch, since no file has a
-// homogeneous gated population left to give it one. That is #284's remaining scope, narrowed by
-// this edit from "the path has no subject at all" to "the path's nonzero case wants a
-// constructed population" — the tripwire is filed against the risk, not against the shape the
-// risk had on the day it was found.
+// The mechanism's **nonzero** branch is certified by `TestWholeFileGatedCountIsAsserted` below,
+// against a *constructed* homogeneous population rather than a suite file — which closes #284's
+// remaining scope. The domain of the bulk path is "a file whose entire gated population shares
+// one reason", not "one of the six relaxed-SIMD files", so the certification is written from the
+// domain: if the last real entry going to 0 could silence it, the control was scoped to the
+// sample and not to the space.
 var wholeFileGated = map[string]int{
 	"i16x8_relaxed_q15mulr_s.wast": 0, // 2 pre-flip
 	"i8x16_relaxed_swizzle.wast":   0, // 5 pre-flip
@@ -944,6 +945,99 @@ var wholeFileGated = map[string]int{
 	"relaxed_laneselect.wast":      0, // 11 pre-flip
 	"relaxed_madd_nmadd.wast":      0, // 17 pre-flip
 	"relaxed_min_max.wast":         0, // 24 pre-flip — the six sum to the flip's 69
+}
+
+// wholeFileGatedVerdict is the bulk allowance's whole decision: whether `bulk` claims file `f`,
+// and if so whether the count it claims matches the gated population actually measured.
+//
+// It is a function rather than four inline lines inside `TestGatedVectors` for one reason, and it
+// is the reason #284 stayed open after the relaxed-SIMD flip: **every live entry is now 0, so the
+// count-mismatch branch has no subject in the suite**. A control whose only exercise comes from
+// the current sample inherits the current sample's blind spot, and the flip emptied exactly the
+// part of the sample that exercised this. Extracting the decision lets it be driven from a
+// constructed population — see `TestWholeFileGatedCountIsAsserted`.
+//
+// It returns the complaint instead of taking a `*testing.T` so the certification can read the
+// verdict without a fake `testing.T` and without a second copy of the comparison. That matters
+// more than it looks: *a control can test the helper and not the path*, so the real loop in
+// `TestGatedVectors` calls this same function — the only thing it keeps for itself is `t.Error`.
+func wholeFileGatedVerdict(bulk map[string]int, f string, gated int) (handled bool, complaint string) {
+	n, ok := bulk[f]
+	if !ok {
+		return false, ""
+	}
+	if gated != n {
+		return true, fmt.Sprintf("%s: Gated is %d, want %d (whole-file gate entry) — the file's "+
+			"gated population moved; update wholeFileGated's count in this PR, and single out "+
+			"any line whose reason is no longer the file's one stated reason", f, gated, n)
+	}
+	return true, ""
+}
+
+// TestWholeFileGatedCountIsAsserted certifies the bulk allowance's **nonzero** branch, which
+// closes #284.
+//
+// The population is constructed, deliberately. #284's subject is the bulk path, whose domain is
+// "a file with a homogeneous gated population" — a space, not a list — and after the
+// relaxed-SIMD flip zeroed all six live entries the suite contains no member of it that would
+// exercise a *count mismatch*. Certifying against the six would then certify nothing: the zero
+// entries only prove the path notices a file that started declining, never that it notices a
+// file whose count moved by 3.
+//
+// Both directions and the negative, because the three failures are different: an entry that
+// never matches (the allowance silently stops consuming its file, and every line falls through
+// to the per-line loop, which fails loudly — the benign direction); an entry that matches but
+// stops comparing (a moved population passes, which is the whole defect the count exists for);
+// and a file with no entry being claimed anyway (the allowance swallowing vectors nobody
+// allowed, the worst of the three, since it is silent).
+func TestWholeFileGatedCountIsAsserted(t *testing.T) {
+	// A name no suite file has, so the case cannot accidentally be a real measurement.
+	const synthetic = "zz-constructed-homogeneous.wast"
+	bulk := map[string]int{synthetic: 3}
+
+	t.Run("count agrees", func(t *testing.T) {
+		handled, complaint := wholeFileGatedVerdict(bulk, synthetic, 3)
+		if !handled {
+			t.Errorf("handled = false for a file the allowance lists; the entry would not consume "+
+				"its file and %q's lines would be judged by the per-line path instead", synthetic)
+		}
+		if complaint != "" {
+			t.Errorf("complaint = %q, want none: 3 gated against an entry of 3 agrees", complaint)
+		}
+	})
+
+	t.Run("count moved", func(t *testing.T) {
+		// The nonzero branch itself: a homogeneous file that gained a gated line.
+		handled, complaint := wholeFileGatedVerdict(bulk, synthetic, 4)
+		if !handled {
+			t.Fatal("handled = false for a listed file, so the mismatch below was never reached")
+		}
+		if complaint == "" {
+			t.Fatal("complaint is empty for 4 gated against an entry of 3 — the bulk path accepted " +
+				"a moved population, which is the exact drift the exact count exists to catch (#284)")
+		}
+		// The message is testimony and its numbers come from the inputs, so they get printed
+		// for real inputs before being trusted: a complaint naming neither count would report
+		// the right verdict while telling the reader nothing they could act on.
+		for _, want := range []string{synthetic, "Gated is 4", "want 3"} {
+			if !strings.Contains(complaint, want) {
+				t.Errorf("complaint does not name %q: %s", want, complaint)
+			}
+		}
+	})
+
+	t.Run("unlisted file is not claimed", func(t *testing.T) {
+		handled, complaint := wholeFileGatedVerdict(bulk, "zz-not-listed.wast", 7)
+		if handled {
+			t.Errorf("handled = true for a file with no entry, complaint %q — the bulk path would "+
+				"consume a file nobody allowed and its declines would never reach the per-line "+
+				"allowlist, which is the third verdict hiding in the control against hiding",
+				complaint)
+		}
+		if complaint != "" {
+			t.Errorf("complaint = %q for an unlisted file, want none", complaint)
+		}
+	})
 }
 
 // TestGatedVectors pins exactly which vectors the engine is allowed to decline.
@@ -5347,12 +5441,9 @@ func TestGatedVectors(t *testing.T) {
 		// what still catches drift: a file gaining or losing a gated line (a new vector, or a
 		// vector converting to pass/fail once SIMD execution lands) moves its own count, which
 		// this check still asserts on the nose.
-		if n, ok := wholeFileGated[f]; ok {
-			if r.Gated != n {
-				t.Errorf("%s: Gated is %d, want %d (whole-file gate entry) — the file's "+
-					"gated population moved; update wholeFileGated's count in this PR, and "+
-					"single out any line whose reason is no longer the file's one stated reason",
-					f, r.Gated, n)
+		if handled, complaint := wholeFileGatedVerdict(wholeFileGated, f, r.Gated); handled {
+			if complaint != "" {
+				t.Error(complaint)
 			}
 			continue
 		}

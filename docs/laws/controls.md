@@ -337,8 +337,7 @@ amended rather than replaced.
   repaired for it (#80). (Ruling: Scott, #82; grave #78.)
 
   **Third specimen, and this one is about a *sweep's* trigger rather than a control's**
-  (finding 3 of the PR #281 review, filed here on Scott's ruling — his shorthand for
-  this law is *coverage-is-a-claim*, which is the body's own phrase above): the sweep
+  (finding 3 of the PR #281 review, filed here on Scott's ruling): the sweep
   obligation was "where else does this repo cite a theorem, a bound, or an asymptotic
   claim as a reason?", and the first pass ran it with `git grep`. `git grep` searches
   **tracked files only**. The two files carrying the defect were new and unstaged, so
@@ -351,3 +350,16 @@ amended rather than replaced.
   are optional. None of them announce the restriction and all of them return a
   confident empty set, which is why a sweep states its domain and why a sweep that
   found nothing has to say *over what*. (Ruling: Scott, on the PR #281 relay.)
+
+  **The shorthand this specimen was filed under has since been minted as its own key**
+  — *coverage is a claim: an instrument's domain is an assertion it cannot check about
+  itself* (`evidence-and-instruments.md`), on the PR #285 relay. The parenthetical here
+  used to record the shorthand as "the body's own phrase above", which was true when
+  written and false the moment the phrase became a heading elsewhere; it is removed
+  rather than left to read as a pointer at this law. The division is deliberate and both
+  keys are load-bearing: **this** law is about a *predicate* that under-matches its
+  population, where the remedy is to measure the trigger's coverage against the
+  population it claims; the new one is the general form over any instrument's domain,
+  including the ones with no predicate at all — a registry, a corpus directory, a default
+  search scope. (Ruling: Scott, PR #285 relay — "the index ceiling is real and one idea
+  shouldn't buy two keys", so the two keys are two ideas or this one is wrong.)

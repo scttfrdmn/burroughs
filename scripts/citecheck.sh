@@ -1,0 +1,258 @@
+#!/usr/bin/env sh
+# citecheck.sh — every citation a diff adds must resolve to the artifact it names.
+#
+# Two guessed issue numbers reached a working tree in consecutive PRs (`#283`, which resolved
+# to the *wrong* artifact, and `#284`, which did not exist when it was typed and then happened
+# to be the number the filing came back with). Both were self-caught; both were saved by luck,
+# and the third would not be. So the check exists, and it is the mechanical half of a rule this
+# repo already states in prose — *a deferral's citation outlives its subject*, *a self-citation
+# must resolve like any other*, *fixtures cite the suite, and the citations are checked*.
+#
+# Usage:
+#   scripts/citecheck.sh <rev>              # one commit, against its first parent
+#   scripts/citecheck.sh <base> <head>      # a range, e.g. a PR's merge base to its tip
+#   scripts/citecheck.sh --worktree [base]  # base (default `main`) against the working tree
+#
+# The two revision forms match ratio.sh deliberately: read the sibling before writing the
+# reader. Both tools answer a question about *a diff*, so both take a diff the same way.
+#
+# `--worktree` exists because the local case is the *uncommitted* one, and leaving it out would
+# repeat the specimen this check is a sibling of: the #281 sweep ran `git grep`, whose domain is
+# tracked files, and so excluded exactly the new unstaged region the defect lived in. A guessed
+# issue number is in the working tree before it is anywhere else — that is where it is cheapest
+# to catch and where a commit-range-only tool cannot look.
+#
+# ## What is binding and what is printed
+#
+# Three checks, and they are not equally strong. Saying which is which is the point, because a
+# tool that gates on existence while its name suggests it gates on correctness is testimony
+# about itself:
+#
+#   1. **ADR citations resolve — binding, offline.** `decision NNNN` / `ADR NNNN` must have a
+#      matching `docs/decisions/NNNN-*.md`. Needs no network, so this half runs everywhere and
+#      always, including on a plane.
+#   2. **Issue citations resolve — binding, needs the network.** Every `#NNNN` added by the diff
+#      must be a real issue or PR in this repo. This is the half that catches a guessed number.
+#   3. **`grave #N` carries `type:grave` — binding, needs the network.** The one *title-shaped*
+#      claim in the set that has a mechanical oracle: a citation whose immediately preceding word
+#      is "grave" must resolve to an **issue** (not a PR) labelled `type:grave`. `#283`'s failure
+#      mode was resolving to the wrong *kind* of artifact, and existence alone cannot see that.
+#
+# What is deliberately **not** gated: whether the resolved title matches the sentence citing it.
+# There is no oracle for that — agreement between a citation's context and an issue's title is a
+# judgement, and a fuzzy word-overlap gate would fail on correct prose and pass on wrong prose,
+# which is worse than no gate. So the title is **printed beside every citation** for the reviewer
+# and the CI log, and the verdict channel carries only what a machine can decide. Verdict channel
+# and mechanism channel are different instruments; this script uses both and says which.
+#
+# ## The domain is printed, always
+#
+# The last line reports the range, the number of added lines scanned, and the citation count —
+# *coverage is a claim*, and a checker that reports "OK" without saying over what has made an
+# unstated claim about its own population. A diff that cites nothing passes and says so in those
+# words: zero citations is a legitimate state, and it is not the same fact as zero failures.
+#
+# ## Trigger coverage, stated because an under-matching trigger fails silently
+#
+# * `#NNNN` is matched as `#` plus a run of digits, accepted only at 1–4 digits. A six-digit hex
+#   colour is therefore skipped whole rather than shredded into a false four-digit citation.
+#   (Written without an example, because this file is in the diff it checks: the first draft's
+#   example number was itself scanned, reported as unresolvable, and was right to be.)
+# * The grave rule triggers on the *immediately preceding* word — `grave #78`, `graves #78`,
+#   `grave issue #78` — and on a following run of numbers joined by `/`, `,`, or `and`, which is
+#   how this repo writes `graves #78/#105`. It deliberately does **not** trigger on the word
+#   appearing anywhere earlier in the line: "sweep after a grave … see #262" would then demand a
+#   label #262 has no reason to carry. That under-match is the stated cost, and it is the right
+#   direction of error for a gate — a missed grave citation is caught by review, a false demand
+#   trains people to work around the tool.
+# * Deleted lines are not scanned. A diff is responsible for the citations it *adds*; the ones it
+#   removes are the previous author's, and re-litigating them turns every edit into a sweep.
+#
+# The per-diff domain is the reason a *one-time* repo-wide sweep was run at authorship rather than
+# assumed away: this check can only ever see what a diff adds, so everything already committed is
+# outside its population by construction. That sweep resolved 63 `grave #N` citations and flagged
+# 10 — five graves missing the label, five citations naming the wrong artifact — triaged in #286.
+# A checker that starts clean on a corpus it never read would be claiming coverage it does not
+# have, which is the law it was written under.
+
+set -eu
+
+base="${1:?usage: citecheck.sh <rev> | <base> <head> | --worktree [base]}"
+head="${2-}"
+if [ "$base" = "--worktree" ]; then
+	base="${2-main}"
+	head="" # the empty head *is* the working tree, for git diff and for the label below
+elif [ -z "$head" ]; then
+	head="$base"
+	base="$base^"
+fi
+
+diffout="$(git diff "$base" $head || true)"
+
+# In worktree mode, `git diff` is not the whole working tree: an **untracked** file is invisible
+# to it, which is the tracked-files defect this mode was added to avoid, one layer in. A new file
+# is the most likely home for a freshly guessed number, so its lines are appended to the stream as
+# synthetic additions — `+++` first, so the paragraph join below cannot weld a new file's opening
+# line to the previous hunk's tail. Found while falsifying the check: the first `--worktree` run
+# could not see this script.
+if [ -z "$head" ]; then
+	for f in $(git ls-files --others --exclude-standard); do
+		diffout="$diffout
++++ b/$f
+$(sed 's/^/+/' "$f")"
+	done
+fi
+nlines="$(printf '%s\n' "$diffout" | grep '^+' | grep -v '^+++' | grep -c '' || true)"
+
+# extract prints one `<kind> <number>` row per citation the diff adds: `issue N`, `grave N`, or
+# `adr N`. The classification lives entirely in this awk program rather than half here and half
+# in the shell, so there is one place to read the trigger from.
+#
+# **It joins consecutive added lines before matching, and that is not a nicety.** The first draft
+# matched the `+` lines one at a time and missed `ADR 0025` on this script's own PR, because the
+# citation was split by a prose wrap — `... citing ADR` / `0025's carve-out ...`. That is #78 /
+# #80 / #105 exactly, the wrapped-lead defect, committed by the checker written to enforce the law
+# about it, and found the only way it can be: by running the instrument over the diff that
+# introduced it (*artifacts become oracles*). `internal/testenv`'s law-index reader had already
+# paid for this and split-then-joins for the same reason; read the sibling.
+#
+# The join stops at any non-added line — a context line, a deletion, a hunk header, a `+++` file
+# header — so the unit is a run of consecutive added lines, which is what a wrapped paragraph is.
+# It cannot fabricate a citation by welding the tail of one file's hunk to the head of another's.
+extract() {
+	awk '
+	function emit(kind, n) {
+		if (length(n) >= 1 && length(n) <= 4) print kind " " n
+	}
+	function scan(s,   t, tok, gap, num, isgrave, prevgrave, tail) {
+		# ADR citations first: `decision 0025`, `decisions 0025`, `ADR 0025`.
+		t = s
+		while (match(t, /([Dd]ecision[s]?|ADR[s]?)[ ]+[0-9][0-9]*/)) {
+			tok = substr(t, RSTART, RLENGTH)
+			sub(/^[^0-9]*/, "", tok)
+			emit("adr", tok)
+			t = substr(t, RSTART + RLENGTH)
+		}
+
+		# Issue citations, left to right, carrying the grave-run state forward.
+		t = s
+		prevgrave = 0
+		while (match(t, /#[0-9][0-9]*/)) {
+			gap = substr(t, 1, RSTART - 1)
+			num = substr(t, RSTART + 1, RLENGTH - 1)
+			t = substr(t, RSTART + RLENGTH)
+
+			# The trigger: the word immediately before this citation, with a
+			# sentence-ish break stripped so an earlier mention cannot reach it.
+			tail = tolower(gap)
+			sub(/^.*[.;:]/, "", tail)
+			isgrave = (tail ~ /graves?[ ]*(issue[ ]*)?$/)
+			# ... or a continuation of a `graves #78/#105` run.
+			if (!isgrave && prevgrave && gap ~ /^[ ]*([\/,]|and)[ ]*$/) isgrave = 1
+
+			if (length(num) < 1 || length(num) > 4) { prevgrave = 0; continue }
+			emit(isgrave ? "grave" : "issue", num)
+			prevgrave = isgrave
+		}
+	}
+	function flush() {
+		if (buf != "") scan(buf)
+		buf = ""
+	}
+	/^\+\+\+/ { flush(); next }
+	/^\+/ {
+		buf = (buf == "" ? "" : buf " ") substr($0, 2)
+		next
+	}
+	{ flush() }
+	END { flush() }
+	'
+}
+
+cites="$(printf '%s\n' "$diffout" | extract | sort -u)"
+ncites="$(printf '%s' "$cites" | grep -c '' || true)"
+
+fail=0
+adrs=0
+issues=0
+graves=0
+
+# Phase 1: ADR citations, offline.
+for n in $(printf '%s\n' "$cites" | awk '$1 == "adr" { print $2 }'); do
+	adrs=$((adrs + 1))
+	# The glob is the resolution: `docs/decisions/0025-*.md`. A number with no file is a
+	# citation to a decision that does not exist, which is the ADR face of a guessed issue.
+	found="$(find docs/decisions -maxdepth 1 -name "$n-*.md" 2>/dev/null | head -1)"
+	if [ -z "$found" ]; then
+		echo "FAIL  decision $n -> no docs/decisions/$n-*.md"
+		fail=1
+	else
+		echo "ok    decision $n -> ${found#docs/decisions/}"
+	fi
+done
+
+# Phase 2 and 3: issue citations, which need the network.
+#
+# `gh api repos/{owner}/{repo}/issues/N` rather than `gh issue view N`, and the difference is
+# load-bearing: `gh issue view` resolves a *PR* number happily and reports it as an issue, so it
+# cannot answer check 3 at all. The REST payload carries `pull_request` (present iff the number
+# is a PR) plus the labels, in one request per citation.
+need_gh="$(printf '%s\n' "$cites" | awk '$1 == "issue" || $1 == "grave"' | grep -c '' || true)"
+if [ "$need_gh" -gt 0 ]; then
+	if ! command -v gh >/dev/null 2>&1; then
+		echo "FAIL  gh is not installed, so $need_gh issue citations were not resolved."
+		echo "      This is not a pass. The offline half above ran; the network half did not,"
+		echo "      and a check that could not ask its question does not get to report green."
+		echo "      CI is where this half is binding (see .github/workflows/ci.yml)."
+		exit 1
+	fi
+	for row in $(printf '%s\n' "$cites" | awk '$1 == "issue" || $1 == "grave" { print $1 ":" $2 }'); do
+		kind="${row%:*}"
+		n="${row#*:}"
+		if ! meta="$(gh api "repos/{owner}/{repo}/issues/$n" \
+			--jq '(if .pull_request then "pr" else "issue" end) + "\t" + ([.labels[].name] | join(",")) + "\t" + .title' 2>/dev/null)"; then
+			echo "FAIL  #$n -> does not resolve: no such issue or PR in this repo"
+			fail=1
+			continue
+		fi
+		what="$(printf '%s' "$meta" | cut -f1)"
+		labels="$(printf '%s' "$meta" | cut -f2)"
+		title="$(printf '%s' "$meta" | cut -f3)"
+		if [ "$kind" = grave ]; then
+			graves=$((graves + 1))
+			case ",$labels," in
+			*,type:grave,*)
+				if [ "$what" != issue ]; then
+					echo "FAIL  grave #$n -> resolves to a PR, not an issue: $title"
+					fail=1
+				else
+					echo "ok    grave #$n -> [$labels] $title"
+				fi
+				;;
+			*)
+				echo "FAIL  grave #$n -> $what without type:grave [${labels:-no labels}]: $title"
+				echo "      Cited as a grave; the graveyard is \`label:type:grave\` and this is not in it."
+				fail=1
+				;;
+			esac
+		else
+			issues=$((issues + 1))
+			echo "ok    #$n -> $what [${labels:-no labels}] $title"
+		fi
+	done
+fi
+
+# The domain, printed whether or not anything failed. A checker that says OK without saying over
+# what has made a silent claim about its own coverage.
+printf 'citecheck %s..%s: %d added lines, %d citations (%d issue, %d grave, %d ADR)\n' \
+	"$(git rev-parse --short "$base")" \
+	"$([ -n "$head" ] && git rev-parse --short "$head" || echo worktree)" \
+	"$nlines" "$ncites" "$issues" "$graves" "$adrs"
+
+if [ "$fail" -ne 0 ]; then
+	echo "citecheck: at least one citation does not resolve to the artifact it names."
+	exit 1
+fi
+if [ "$ncites" -eq 0 ]; then
+	echo "citecheck: this diff cites nothing — zero citations, which is not the same fact as zero failures."
+fi

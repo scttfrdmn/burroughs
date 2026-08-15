@@ -29,6 +29,22 @@ amended rather than replaced.
     the instrument that judges the actor, one level up from the ratio. So a mechanism PR that
     would "also flip while we're here" is two verdicts wearing one green. (Ruling: Scott, PR #252,
     on 0026's flagged scheduling question; the answer was **no**, generalized to every gate.)
+    - **Every forecast row is marked P or D, a D row carries its derivation inline, and a row
+      entered as P that was derivable is a miss recorded like any other.** The instrument note
+      belongs to the *forecast*, so it is sited here rather than in `CLAUDE.md`: the governance
+      question — may this PR flip — is answered above, and this is how the pre-registration is
+      written once the answer is yes. **P** is a prediction: a number that cannot be computed
+      before the diff exists, so being wrong about it costs only accuracy. **D** is a
+      derivation: a number that *can* be computed from what is already measured, so being wrong
+      about it is an arithmetic error, and the derivation is written beside the row for exactly
+      that reason. The distinction exists because an unmarked forecast lets a derivable figure
+      be quoted with a prediction's tolerance — a P mark on a D row is a hedge bought for free,
+      and it is the forecast's own version of *the actor never chooses the instrument that
+      judges the actor*. The relaxed-SIMD flip (#285) forecast **every row D**, derivations
+      inline, and reconciled exactly; the residual 77-against-69 gap was resolved by
+      *deriving* the eight extra passes (module-definition commands, scored on the text
+      reader's answer per #124) rather than by subtracting totals, which is the same rule
+      applied to a discrepancy instead of to a prediction. (Ruling: Scott, PR #285.)
 
 ### Gates never manufacture malformedness.
 
