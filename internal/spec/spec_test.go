@@ -893,6 +893,23 @@ func TestClosedBuckets(t *testing.T) {
 // assertions at all, so it has no gated population to allow — the corpus gap that is 0028 d5's
 // whole reason for the author-supplied witnesses in `internal/interp/simd_relaxed_test.go`.
 //
+// **And its absence is structural rather than observed, which is the difference between this map
+// being a domain and being a registry of whatever happened to decline.** Six keys for seven
+// relaxed files invites exactly that reading, so the seventh is settled by measurement: the file
+// holds **one** command, the `module text` at `:3`, and it scores `pass` with **every gate off**
+// (the zero value, the most hostile configuration there is) — because #124 rules the text front
+// end gate-blind, so the module arm scores `ReadModule`'s answer and carries any instantiation
+// decline forward to the vectors that asked the question. This file has no such vectors. No gate
+// can therefore reach a scorable command here, and a zero entry for it would be an assertion
+// that cannot fail — the decoration this same commit removed from the empty-map case, re-added
+// under a different name.
+//
+// What protects the *domain* is not this map at all: the per-line arm below requires every
+// decline anywhere on the board to be named, so a file gaining one errors there whether or not
+// it was ever listed. That check is derived from the space (all 254 files, all declines) and
+// needs no registry, which is why the map is free to be what it is — pins on counts, witnessing
+// the flip rather than surviving it. (Question: Scott, on the PR #285 stamp.)
+//
 // **Zeroed, not drained, by the relaxed-SIMD flip — and the difference is the whole point.**
 // With `DefaultFeatures` now setting `RelaxedSIMD: true`, each of those six files measures
 // Gated=0, confirmed by running the harness over each entry rather than inferred from the flip.
