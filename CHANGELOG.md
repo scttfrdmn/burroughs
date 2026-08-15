@@ -508,6 +508,28 @@ weakly-ordered platform.
 
 ### Changed
 
+- **`CLAUDE.md`'s byte ceiling is now a reconciliation guard over a per-entry ledger (#298).** A
+  single ceiling over an index whose entries are individually enumerable is exactly the aggregate
+  *a total is not a ledger* demotes: one recall key can bloat back into a body while the file total
+  stays green, and trimming an unrelated key buys the room for it. So
+  `TestClaudeMDIndexLedger` (`internal/testenv`) asserts **every index entry's bytes on the nose**
+  against a golden ledger — `make claudemd-ledger` re-bases it — with one row per `## ` section
+  around them, and the row sum reconciled against `os.Stat`. The ceiling **stays fatal** under the
+  law's new exception clause, since the consumer of `CLAUDE.md` is a context window and context
+  cost is total bytes. Division of labour: the ledger says which entry moved, the ceiling says
+  whether the file still fits.
+  - **Watched die on a byte-identical file.** Growing one entry 4 bytes and shrinking another by 4
+    left `CLAUDE.md` at 38068 exactly; the ceiling and the bijection both passed, having nothing to
+    see, and the ledger reported both rows with signed deltas. The vacuity floor was falsified on
+    the **regenerate** path too — a broken bullet reader fataled rather than writing two rows over
+    51, verified by diffing the golden file afterwards rather than by reading an exit status.
+  - Its first real finding was its own PR: a 108-byte growth in `## Tooling gates` (the
+    tombstone-with-no-inscription rule's fourth specimen, #292), named as that section rather than
+    as a number nobody could attribute.
+  - `claudeMDCeiling`'s doc comment now states **what the 38400 protects** — a budget on what every
+    session must read before it can do anything, subtracted from the room available for the code
+    under discussion. Per #285's `passFloor` lesson: a bound whose rationale is not at the site
+    becomes decoration the first time someone needs room.
 - **`make check` now names the gates it did not reach when it aborts.** It was a prerequisite list,
   which make walks in order and abandons at the first red — correct behaviour that produced a
   genuinely misleading artifact: a dangling citation in `internal/validate/sig.go` reached a working
@@ -681,6 +703,19 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **Two prose claims that outlived their subject (#298).** *A ruling retroactively falsifies prose
+  written before it*, so: `docs/laws/evidence-and-instruments.md` said a search of `~/src` had not
+  found the exit-capture checker whose design #297 is to port — it is `umami`'s, PRs #396/#397,
+  merged `0b4ac1c`, and the entry now carries the pointer plus the caveat that `umami` reached the
+  same place from a *different* failure, so the checker transfers as a **design and not as evidence
+  about this repo** and earns its own falsification when ported. And `immStagedBits`'s note in
+  `internal/binary/instr_width_test.go` claimed the lossy-immediate list is "complete by
+  construction" without saying what that meant; it now names the three mechanisms that make it a
+  claim about the space rather than about the author's recall — the forward domain walked from the
+  **generated** `prefixRegions` table with a vacuity `t.Fatal`, the reverse domain checked against
+  `immVocabulary`'s declared constants, and `TestStagedBitsAgreeWithTheReader` checking the bit
+  *values* against `instrCtx.imm` by running it. *Derive the domain from the space, not the
+  registry.*
 - **A ≤896 forecast bound held while four of its own modules individually broke it** — the specimen
   that minted *a total is not a ledger* (`docs/laws/controls.md`). 829 landed comfortably under 896
   while `if.wast` +1, `i32.wast` +3, `load.wast` +1 and `local_tee.wast` +1 each exceeded their

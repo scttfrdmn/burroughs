@@ -128,11 +128,28 @@ var immStagedBits = map[imm]int{
 	//
 	// **A zero here is now also a validator rule that cannot be stated**, and #296 is the
 	// enumeration: with the validator landed (#9 slice 1), every discarded immediate is a
-	// typing fact the pass needs and does not have. This map *is* that enumeration's authority,
-	// because it is checked against the generated table in both directions below — so the list
-	// of lossy kinds is complete by construction and a fifth arriving upstream cannot join it
-	// silently. Ten arms across four kinds; `br_table`'s label vector is the one whose rule is
-	// impossible without the side array, since its validity is a property *of the vector*.
+	// typing fact the pass needs and does not have. Ten arms across four kinds; `br_table`'s
+	// label vector is the one whose rule is impossible without the side array, since its
+	// validity is a property *of the vector*.
+	//
+	// **What "complete by construction" means here, since that phrase is doing all the work.**
+	// It is not "we searched for known blockers and found four" — a registry of past findings
+	// wearing a domain's shape, which is the defect #264's second specimen is filed against. It
+	// is that neither the domain nor the values of this map are authored:
+	//
+	//   - **Domain, forward:** `TestInstrImmediateWidthCoversTheTable` builds its vocabulary by
+	//     walking `prefixRegions` → `region` → `info.imms` — the **generated** table, extracted
+	//     from the reference's `decode.ml` — and requires an `immStagedBits` entry for every
+	//     immediate it finds, with a vacuity `t.Fatal` if that walk yields nothing (#29). An
+	//     immediate the upstream grammar has and this map does not is a red test, not a gap.
+	//   - **Domain, reverse:** every key here must appear in `immVocabulary`, derived from the
+	//     extractor's own declared constants, so a stale entry cannot pad the enumeration either.
+	//   - **Values:** `TestStagedBitsAgreeWithTheReader` runs `instrCtx.imm` and checks the bit
+	//     figures against what the reader actually stages. So a `0` is a *measured* property of
+	//     the reader over a domain nobody typed by hand — not a belief about it.
+	//
+	// That is what makes the lossy-kind list a claim about the space rather than about the
+	// author's recall, and it is why a fifth kind arriving upstream cannot join it silently.
 	immVecIdx:   0,
 	immCatchVec: 0,
 	immHeapType: 0,

@@ -466,7 +466,8 @@ remembering decays across session boundaries:
   had already minted this rule, caught by the payload check and not by the state. A rule whose
   specimens keep arriving is not a solved problem with a memento; it is a live failure mode of
   how writes get confirmed here, and the count is kept so nobody reads the first specimen as the
-  last one. (Recurrence: chat-Claude, on the #290 relay.)
+  last one. (Recurrence: chat-Claude, on the #290 relay.) **Fourth on #292**, same PR as the
+  third: closed by merge keyword, 0 comments, lesson written afterwards.
 - **Toolchain currency is a gated upgrade** — Go 1.27 and future linter majors
   land as their own branch with both arches green and a changelog entry. Never a
   drive-by bump in a PR about something else.

@@ -64,6 +64,38 @@ const (
 	// bytes before this key, spent on governance additions (the gate-campaign carve-out, the flip's
 	// stamp tier) that belong here by the same doc comment's first branch.
 	//
+	// # What the number protects, stated here because a bound whose rationale is not at the site
+	// becomes decoration the first time someone needs room
+	//
+	// That is `passFloor`'s lesson (#285) applied to this file. So, explicitly: **38400 bytes is a
+	// budget on what every session must read before it can do anything.** `CLAUDE.md` is loaded
+	// into context each turn, so its size is a standing tax on every task in the repo — it is
+	// subtracted from the room available for the *code* under discussion. What the ceiling protects
+	// is therefore not tidiness and not a line count: it is the agent's capacity to hold an
+	// interpreter's decoder, its validator, and a spec vector in mind at once, which is the work
+	// the file exists to govern. An index that has eaten that room governs a session that can no
+	// longer do the thing being governed.
+	//
+	// Two consequences, both operative:
+	//
+	//   - The trip is a **question, not a verdict** — is the new text governance (which belongs
+	//     here, and the ceiling moves with a stated reason) or a law's body (which belongs in
+	//     `docs/laws/`)? The failure message spells both branches out.
+	//   - Raising it is never free, and "we needed room" is not a reason — it is the *statement of
+	//     the trip*. The reason has to name which branch the text is and why.
+	//
+	// # It is a reconciliation guard over a per-entry ledger, not the primary control
+	//
+	// Ruled on PR #298, under *a total is not a ledger*'s own exception clause: a single byte
+	// ceiling over entries that are individually enumerable is the aggregate that law demotes —
+	// one recall key can bloat into a body while the total stays green, and trimming an unrelated
+	// key buys the room for it, which is the same opposite-sign cancellation the ≤896 bound
+	// suffered. So `TestClaudeMDIndexLedger` asserts **each index entry's bytes on the nose** and
+	// is the primary control; this ceiling stays **fatal** because the exception applies squarely —
+	// *the consumer consumes the total*, context cost being total bytes and not per-entry bytes, so
+	// no sum of rows substitutes for the artifact's own size. The division of labour: the ledger
+	// says *which entry* moved, the ceiling says *whether the file* still fits.
+	//
 	// **Worth flagging rather than fixing quietly: the index grows by one key per law, by
 	// construction.** So a fixed byte ceiling on it is tripped by every future mint, forever, and
 	// what it can therefore *be* is a question-asker (which branch is this text?) and not a
@@ -121,17 +153,16 @@ type indexedLaw struct {
 	line   int    // 1-indexed line in CLAUDE.md, for the failure message
 }
 
-// readIndex returns the laws named in `CLAUDE.md`'s `## Disciplines` section.
-func readIndex(t *testing.T) []indexedLaw {
-	t.Helper()
+// disciplinesRange returns the half-open line range of `CLAUDE.md`'s `## Disciplines` section.
+//
+// Factored out because two instruments read the same span and must not disagree about where it
+// is: the bijection below, and the per-entry byte ledger in `claudemd_ledger_test.go`. Two
+// copies of a boundary rule over one region is the two-registry shape this very file exists to
+// police, so it gets one definition.
+func disciplinesRange(tb testing.TB, lines []string) (start, end int) {
+	tb.Helper()
 
-	src, err := os.ReadFile(claudeMD)
-	if err != nil {
-		t.Fatalf("reading the index: %v", err)
-	}
-	lines := strings.Split(string(src), "\n")
-
-	start, end := -1, len(lines)
+	start, end = -1, len(lines)
 	for i, l := range lines {
 		if strings.HasPrefix(l, "## Disciplines") {
 			start = i
@@ -143,9 +174,22 @@ func readIndex(t *testing.T) []indexedLaw {
 		}
 	}
 	if start < 0 {
-		t.Fatalf("%s has no `## Disciplines` section — the index this check reads is gone, which "+
+		tb.Fatalf("%s has no `## Disciplines` section — the index this check reads is gone, which "+
 			"is a bigger finding than any drift it was written to catch", claudeMD)
 	}
+	return start, end
+}
+
+// readIndex returns the laws named in `CLAUDE.md`'s `## Disciplines` section.
+func readIndex(t *testing.T) []indexedLaw {
+	t.Helper()
+
+	src, err := os.ReadFile(claudeMD)
+	if err != nil {
+		t.Fatalf("reading the index: %v", err)
+	}
+	lines := strings.Split(string(src), "\n")
+	start, end := disciplinesRange(t, lines)
 
 	// Split into top-level bullets, then join each before matching. Split-then-join, never a
 	// regexp over raw lines: see the comment on lawLeadRE.
