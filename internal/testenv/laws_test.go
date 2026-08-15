@@ -59,8 +59,13 @@ const (
 
 	// lawsFloor is the vacuity guard. 46 laws were relocated by the restructure; the floor sits
 	// just under that so a reader that silently stops matching — the wrapped-lead defect this
-	// project has three graves for (#78/#80/#105), which the migration's own extractor
-	// committed and had to repair — fails loudly instead of certifying an empty bijection.
+	// project has **two** graves for (#78, #105) plus an un-graved recurrence on #80, which the
+	// migration's own extractor committed and had to repair — fails loudly instead of certifying
+	// an empty bijection. The count said "three graves for (#78/#80/#105)" until
+	// `scripts/citecheck.sh`'s first repo-wide run resolved the three numbers and found #80
+	// carries no `type:grave` label, because it is not a grave: it is the work issue the
+	// recurrence fired during. A claim about the graveyard's own size, wrong in the file that
+	// checks the law corpus.
 	lawsFloor = 44
 )
 

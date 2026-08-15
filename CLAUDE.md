@@ -396,6 +396,7 @@ bullet carries operative text has that text nowhere else.
 - **A guard's trigger predicate is itself a claim about the space, and an under-matching one fails silently by construction.** — [controls](docs/laws/controls.md#a-guards-trigger-predicate-is-itself-a-claim-about-the-space-and-an-under-matching-one-fails-silently-by-construction)
 - **Verdict channel and mechanism channel are different instruments.** — [evidence-and-instruments](docs/laws/evidence-and-instruments.md#verdict-channel-and-mechanism-channel-are-different-instruments)
 - **A ruling retroactively falsifies prose written before it, so accepting a ruling includes sweeping for the sentences it orphaned.** — [citations](docs/laws/citations.md#a-ruling-retroactively-falsifies-prose-written-before-it-so-accepting-a-ruling-includes-sweeping-for-the-sentences-it-orphaned)
+- **Coverage is a claim: an instrument's domain is an assertion it cannot check about itself.** — [evidence-and-instruments](docs/laws/evidence-and-instruments.md#coverage-is-a-claim-an-instruments-domain-is-an-assertion-it-cannot-check-about-itself)
 - **Second-order honesty: apply the discipline to its own output.** — [evidence-and-instruments](docs/laws/evidence-and-instruments.md#second-order-honesty-apply-the-discipline-to-its-own-output)
 - **Honest boards.** — [engine](docs/laws/engine.md#honest-boards)
 - **Bucketed failures are the work plan — while there are buckets.** — [boards-and-buckets](docs/laws/boards-and-buckets.md#bucketed-failures-are-the-work-plan--while-there-are-buckets)

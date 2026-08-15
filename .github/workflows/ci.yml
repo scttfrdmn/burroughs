@@ -181,6 +181,47 @@ jobs:
             exit 1
           fi
 
+  citations:
+    # Every `#NNNN` a diff adds must resolve to a real issue or PR, every `decision NNNN` to a
+    # file in docs/decisions/, and every `grave #N` to something actually labelled `type:grave`.
+    #
+    # **This job is where the check is binding, and that is a scoping ruling, not an accident**
+    # (Scott, PR #285 relay). `make cite` exists so it is runnable locally, but the local run
+    # cannot be the verdict: the issue half needs the network, so an offline run either fails for
+    # a reason that is not a finding or — worse, if it were written to tolerate the absence —
+    # passes by not asking. A pre-push hook has the same defect with a hidden switch:
+    # `--no-verify` leaves no trace that it was skipped, and a skip is not a verdict. CI is where
+    # the network exists and where the answer is recorded, so the offline case stops being a case
+    # rather than being handled.
+    #
+    # `issues: read` explicitly, because the resolution is a real API call and a job whose
+    # permissions are implied is a job that breaks when the repo's default changes.
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # The whole history, because the range this checks is base..head and a shallow
+          # checkout has no merge base to diff against. A truncated fetch here would make the
+          # diff empty and the check would report a confident zero citations — which is the
+          # exact defect the script's own domain line exists to make visible.
+          fetch-depth: 0
+
+      - name: citations resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # For a PR, the range is its merge base to its tip. For a push to main, it is the
+          # merge that just landed. Both are set here rather than derived in the script: the
+          # script takes a diff, and which diff is the workflow's question.
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || 'HEAD^' }}
+          HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || 'HEAD' }}
+        run: |
+          git rev-parse --verify "$BASE" >/dev/null
+          ./scripts/citecheck.sh "$BASE" "$HEAD"
+
   vuln:
     runs-on: ubuntu-24.04
     steps:

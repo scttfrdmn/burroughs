@@ -21,6 +21,20 @@ weakly-ordered platform.
 
 ### Added
 
+- **Citations are checked mechanically: `make cite` locally, the `citations` job in CI as the
+  binding verdict** (`scripts/citecheck.sh`). Every `#NNNN` a diff adds must resolve to a real
+  issue or PR, every `decision NNNN` to a `docs/decisions/` file, and every `grave #N` to an issue
+  actually labelled `type:grave` — the one title-shaped claim in the set with a mechanical oracle,
+  since a guessed number's failure mode is resolving to *something else*. Whether a resolved title
+  matches the sentence citing it has no oracle and is deliberately **not** gated: the title is
+  printed beside every citation instead, and the check's own domain (range, added lines, citation
+  count) is printed whether or not anything failed. Two guessed numbers reached a working tree in
+  consecutive PRs and both were saved by luck; the split between the local target and the binding
+  CI job is a scoping ruling, because a pre-push hook someone passes `--no-verify` to leaves no
+  trace that it was skipped. Its first repo-wide sweep resolved 63 `grave #N` citations and flagged
+  10 — triaged in #286.
+
+
 - **`gate:relaxed-simd` defaults on** — the project's *second* default-behaviour change, after
   #227's SIMD flip. G-1 measured on the proposal's own suite after the mechanism existed: the
   seven `*relaxed*.wast` files score **77 pass / 0 fail / 0 unsupported / 0 gated**, identical on
@@ -434,6 +448,17 @@ weakly-ordered platform.
 
 ### Changed
 
+- **`coverage is a claim` is a law key of its own**, in `docs/laws/evidence-and-instruments.md`
+  with four specimens: #264's `declaredErrors` bijection, `wholeFileGated`'s post-flip keys (the
+  remedy for a coverage defect being a coverage defect), `git grep`'s tracked-files domain, and
+  `citecheck.sh`'s own wrapped-citation miss. An instrument's *assertion* can be broken and watched
+  to fail; its *domain* cannot, because an under-covered instrument produces no finding rather than
+  a wrong one. The predicate-level law in `controls.md` stays where it is and the two now cite each
+  other. Also recorded: the P/D forecast-marking rule at the flip procedure it governs
+  (`docs/laws/gates.md`), and two specimens beside the laws they instantiate — a carve-out cited
+  where it is not load-bearing (#285's flip, which did not need ADR 0025), and a right verdict whose
+  stated grounds were never in the record.
+
 - **`CLAUDE.md` is an index and `docs/laws/` is the corpus** (ruling: Scott — *"restructure, and the
   project's own laws dictate the shape"*). The `## Disciplines` section had reached **918 lines /
   78 KB, 80% of a 98 KB file** that is re-read every session. All **46** laws were relocated
@@ -547,6 +572,15 @@ weakly-ordered platform.
   element segment's *offset* and an element *expression* are different lines of the user's module.
 
 ### Fixed
+
+- **A claim about the graveyard's own size was wrong in the file that checks the law corpus.**
+  `internal/testenv/laws_test.go` said the wrapped-lead defect had "three graves for
+  (#78/#80/#105)"; #80 carries no `type:grave` label because it is not a grave — it is the work
+  issue the recurrence fired during. Two graves and one un-graved recurrence. Found by
+  `scripts/citecheck.sh`'s first run, which is the whole argument for the check: the number
+  resolved, to something else. The other ten disagreements it turned up are triaged in #286 rather
+  than fixed here, since five of them are tracker mutations and three of those need a ruling on what
+  counts as a grave.
 
 - **Draft prose resolved an ADR's open question in the confident direction, and the tripwire that ADR
   filed proved it wrong** ([#280](https://github.com/scttfrdmn/burroughs/issues/280)). Decision 0028

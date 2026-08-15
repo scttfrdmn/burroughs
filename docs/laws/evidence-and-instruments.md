@@ -103,3 +103,98 @@ amended rather than replaced.
   representation of exactly that much knowledge. The sibling of *benchstat or it
   didn't happen*, pointed at environmental measurement: n=1 cannot separate a
   property from an accident of one scheduling. (#28.)
+
+### Coverage is a claim: an instrument's domain is an assertion it cannot check about itself.
+
+- **Coverage is a claim: an instrument's domain is an assertion it cannot check
+  about itself.** Every instrument makes two claims and only one of them is
+  falsifiable from the inside. Its **assertion** — this count equals that count,
+  this table agrees with the reference — can be broken on purpose and watched to
+  fail, which is what *a control isn't born until it has been watched die* buys.
+  Its **domain** — the files it reads, the rows it matches, the population it
+  ranges over — cannot be, because a domain that is too small produces **no
+  finding rather than a wrong one**, and a green from an under-covered instrument
+  is indistinguishable at the board from a green earned over everything. So the
+  domain is stated, derived from the space rather than enumerated, and floored;
+  and an instrument that reports a clean result has to say *over what*.
+
+  **First specimen, and the one that names the shape: a control that names the
+  fact it expects cannot notice that fact is missing** (#264, whose closing
+  comment is that sentence). `ErrMalformedBrOnCastFlags` landed with its
+  sentinel, its `%w` wrap, and **two controls asserting `errors.Is` against it**
+  — and was not added to `declaredErrors`, the fuzz target's allowlist of errors
+  the decoder is permitted to return. Both controls passed, because the sentinel
+  they named was the right one; neither could ask *is this sentinel declared?*,
+  since a test written from a sentinel's own name supplies the very fact the
+  allowlist is missing. `make check` was green and `fuzz-smoke` went red in 41
+  seconds. The instrument that can see it is the one that enumerates the
+  decoder's **whole error surface** without knowing what any individual condition
+  expects — which is why the repair was a bijection derived from the package
+  (`internal/binary/errdecl_test.go`, #283) and not another assertion.
+
+  **Second specimen, the recursion, which is why this is a key and not a
+  corollary of the vacuity law: the remedy for a coverage defect can be a
+  coverage defect.** `wholeFileGated`'s keys, after #285 zeroed them, were the
+  six relaxed-SIMD files that had been *observed* declining — a registry of past
+  findings wearing the shape of a domain, so a seventh file that never declined
+  had no zero to violate. Scott's question on the flip named it exactly: *that is
+  #264's sentence arriving inside #264's own remedy.* The answer was admissible
+  only because the domain-side check beside it (`internal/spec/spec_test.go`) is
+  derived from the space — all 254 files, all their declines, needing no registry
+  — and because the seventh file's absence was then shown to be **structural**: it
+  holds one command, which passes with every gate off, so no gate can reach a
+  scorable command there and a zero key would be an assertion that cannot fail.
+  *Derive the domain from the space, never from the registry* (#264) is the
+  operative sentence in both.
+
+  **Third specimen, one layer out, where the domain is chosen by a tool and
+  never announced:** `git grep` searches tracked files only, so a sweep run with
+  it excluded exactly the new unstaged region the grave came from and returned a
+  confident empty set. Full text at *a guard's trigger predicate is itself a
+  claim about the space* (`controls.md`), whose third specimen this is — that law
+  is this one applied to a *predicate*, and it stays where it is; **a search
+  command's default domain is a claim about the space, made silently by the tool
+  rather than by the author** is the sentence that generalizes past regexps to
+  every instrument with a default scope. `go test ./pkg` says one package, a bare
+  `grep` says one directory, a fuzz target says whatever is in its corpus
+  directory, and none of them announce the restriction.
+
+  **Fourth specimen, minted in the same PR as the law and by it:**
+  `scripts/citecheck.sh`, the check that every `#NNNN` a diff adds resolves,
+  matched the `+` lines of a diff one at a time — and missed `ADR 0025` in its own
+  PR, because the citation was split by a prose wrap (`... citing ADR` / `0025's
+  carve-out ...`). Its assertion was sound and its population was short by
+  whatever wraps, which is most prose citations in this repo. It is the
+  wrapped-lead defect a fourth time (#78, #105, and the un-graved recurrence on
+  #80), in the instrument written to enforce
+  the law about it, and it was found the only way this class is ever found: by
+  running the instrument over the diff that introduced it, then reading the
+  printed citation count instead of the exit status. *Artifacts become oracles*,
+  and the sibling that had already paid for it — `internal/testenv`'s law-index
+  reader, which splits into bullets and joins each before matching — was two
+  directories away.
+
+  **Fifth specimen, and the one the law caught in its own falsification
+  procedure: a probe set can exclude the invocation form its consumers use.**
+  Every one of the four probes above was run as `sh scripts/citecheck.sh …`, so
+  all four passed while the file's **executable bit was never committed** — and
+  both binding consumers invoke it as `./scripts/citecheck.sh`, which is the one
+  form no probe used. CI said `citations -> failure`, exit 126, `Permission
+  denied`: a red gate that had not run its check at all. The falsification was
+  sound in its assertions and short in its domain by exactly one dimension —
+  *how the thing is called* — and the local mirror could not disagree, because
+  `make cite` was never the command that ran it. The repair is the same shape as
+  every other repair in this entry: exercise the **path**, not the artifact
+  behind it, so `make cite` and the CI job are one invocation with two homes.
+  Also the cheapest available reading of *verdict channel and mechanism channel
+  are different instruments* — a `citations` job going red says nothing about
+  whether a citation failed.
+
+  The two failure modes are worth keeping separate because they are found
+  differently. An **assertion** defect is found by falsification — break it, watch
+  it die. A **coverage** defect is found only by measuring the instrument's
+  population against an independently derived one, which is why floors, exact
+  counts, and vacuity guards are not redundant with each other: a floor catches a
+  domain that collapsed, an exact count catches one that shrank quietly, and a
+  vacuity guard catches one that emptied. (Ruling: Scott, PR #285 relay; minted
+  from #264, whose closing comment is the first specimen's own wording.)

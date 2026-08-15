@@ -51,6 +51,27 @@ amended rather than replaced.
   Read the vector to know which case you are in — and note the shape: the sibling of
   the buried defect is the newly-checked case. (Ruling: chat-Claude, #38.)
 
+  **The class is not confined to error strings, and the specimen that proves it is the
+  reviewer committing the substitution he had just ratified.** Scott's own ledger, on the
+  PR #285 relay, recorded a directive as *"not delivered"* — a claim about the agent's
+  action — when the record behind it supported only *"not received by me"*, a claim about
+  his tracking. Same shape as `0xde`: the verdict was right (the sentence in question was
+  and remains unminted, and the sweep found nothing to remove), the ground quoted was
+  never in the image, and nothing on any board could have contradicted it. He filed the
+  correction himself, and the reason it is recorded here rather than absorbed as an
+  ordinary erratum is his: *the specimen is the reviewer committing the substitution he
+  ratified, not the substitution alone* — a law whose author breaks it while enforcing it
+  is evidence that the defect is structural to how records get written and not a property
+  of the party writing them. Two operative consequences. **An absence in your own records
+  is evidence about your records**, so it is reported as such — the tracker's version of
+  *silence is not evidence*. And the payload-verification rule that this project applies
+  to `gh issue close` applies to instructions: a directive believed delivered because a
+  status somewhere said so is *presence-of-status mistaken for presence-of-content*,
+  pointed at the chair rather than at the tool. The outcome of the corrected record was
+  unchanged; only its stated reason moved, from "not delivered" to "delivered and never
+  minted", which is the whole point — **a right verdict does not launder its grounds.**
+  (Correction: Scott, PR #285 relay, on his own ledger.)
+
 ### Comments and ADRs are testimony too, and where prose and the reference's executable disagree, the executable outranks.
 
 - **Comments and ADRs are testimony too, and where prose and the reference's
@@ -103,3 +124,23 @@ amended rather than replaced.
   `origin/main` — so what the specimen shows is the mechanism working, caught by the ADR
   it had misquoted. (Ruling: Scott, on the PR #281 relay; minted under the #277 gate,
   which is why this body and its `CLAUDE.md` key landed together.)
+
+  **Second specimen, the mirror image — testimony that is *true* and believed for the
+  wrong reason. A carve-out cited where it is not load-bearing is a citation that will be
+  believed the next time it is.** The relaxed-SIMD flip (#285) was drafted citing ADR
+  0025's carve-out, which excuses vectors whose sole blocker is #9's deferred validator
+  from G-1's all-green requirement. Every sentence of that citation was accurate — the
+  carve-out exists, it is accepted, it covers exactly that class. It was also *unnecessary*:
+  the proposal's own suite measured `pass=77 fail=0 unsupported=0 gated=0`, identical on
+  both arches, so the flip satisfies G-1's **literal** reading and the carve-out is not
+  reached at all. A reader who follows the citation finds a genuine exemption and concludes
+  the flip needed one, which is a wrong belief about how strong the evidence was —
+  manufactured by a true statement. The flip landed saying so in `sections.go`'s own prose:
+  the carve-out is named as **not invoked**, with the reason, because the next flip that
+  does need it must be the first one that appears to. Sited here rather than under drift
+  because the defect is in a *record's* accuracy about its own grounds and not in a
+  measurement's coverage: an instrument claiming coverage it lacks is
+  *coverage-is-a-claim* (`evidence-and-instruments.md`); testimony whose citation
+  overstates the difficulty of the case it decided is this. (Ruling: Scott, PR #285 relay —
+  filed as a specimen and explicitly **not** minted as a key: "it's a specimen, not a key",
+  the index ceiling being real.)

@@ -5,7 +5,7 @@ GO ?= go
 # anything globally.
 TOOL = $(GO) tool -modfile=tools/go.mod
 
-.PHONY: all build test vet fmt lint check vuln deadcode fuzz bench ratio spec-tests spec-ref tidy conformance strict opcodes opcode-drift keywords keyword-drift opcodes-text opcodes-text-drift memarg memarg-drift gate-census xcorpus
+.PHONY: all build test vet fmt lint check vuln deadcode fuzz bench ratio cite spec-tests spec-ref tidy conformance strict opcodes opcode-drift keywords keyword-drift opcodes-text opcodes-text-drift memarg memarg-drift gate-census xcorpus
 
 # The default gate. `check` is what must be green before a report — it is the
 # local mirror of CI, so a surprise in CI means a bug in this line, not a bug in
@@ -146,6 +146,26 @@ bench:
 RATIO ?= --window 6
 ratio:
 	@./scripts/ratio.sh $(RATIO)
+
+# Every citation a diff adds must resolve to the artifact it names: `#NNNN` to a real issue or
+# PR, `decision NNNN` to a `docs/decisions/` file, `grave #N` to something actually labelled
+# `type:grave`. Two guessed numbers reached a working tree in consecutive PRs and both were saved
+# by luck; the script's header carries the rest.
+#
+# **Also not part of `check`, but for a different reason than `ratio` above.** The issue half
+# needs the network, and `check` must stay green on a fresh clone with no `gh` and no token —
+# wiring it in would make the default gate fail for people with no citation problem, which is how
+# a gate gets worked around. So the split is deliberate and stated: this target is the *local*
+# face, runnable on demand, and `.github/workflows/ci.yml`'s `citations` job is where the verdict
+# is **binding**, because CI is where the network exists and where the answer gets recorded. A
+# pre-push hook would have been the third option and is the wrong one — `--no-verify` leaves no
+# trace that it was skipped, and *a skip is not a verdict*. (Scoping: Scott, PR #285 relay.)
+#
+#   make cite                       # base `main` against the working tree
+#   make cite CITE="<base> <head>"  # an explicit range, e.g. a PR's merge base to its tip
+CITE ?= --worktree main
+cite:
+	@./scripts/citecheck.sh $(CITE)
 
 # The engine module only. Deliberately NOT tools/go.mod: a tool modfile has no
 # packages of its own, so tidy pulls in the tools' transitive test dependencies
