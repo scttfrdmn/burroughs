@@ -786,3 +786,104 @@ func TestHeapKindsAreWhatTheReaderProduces(t *testing.T) {
 		}
 	}
 }
+
+// TestKindDeclinesTheZeroValType pins both arms of grave #300: `Kind()`'s doc comment promised
+// `ok == false` for NoValType and its code returned `(0x00, true)`.
+//
+// Two assertions rather than one, because the repair could be wrong in either direction and the
+// two failures mean different things. The zero value must decline — otherwise an external
+// consumer cannot tell "not a kind byte" from "a kind byte I have no mapping for", which is the
+// distinction the public boundary's conversion is built on (0029). And every type that *does*
+// have a byte must still report it, because a fix that declined too much would break the seven
+// encoder sites silently: they discard `ok`, so an over-eager decline reaches the wire as byte 0
+// rather than as a test failure.
+//
+// The second half is scoped to the space rather than to the named vars: the five numeric forms
+// come from the named `var`s (the only place their bytes are written), and the reference forms
+// are enumerated by ranging over all 256 bytes and keeping the ones `AbstractRefType` accepts —
+// the same derivation the boundary's own guard uses, so a thirteenth heaptype is covered here the
+// moment it is added to `abstractHeapNames`.
+func TestKindDeclinesTheZeroValType(t *testing.T) {
+	if b, ok := NoValType.Kind(); ok {
+		t.Errorf("NoValType.Kind() = (%#02x, true), want ok=false. 0x00 is not the encoding of any "+
+			"value type — NoValType's own comment says so — and an accessor reporting it as a kind "+
+			"byte tells a caller outside this package that a field nothing wrote holds a real type "+
+			"(grave #300)", b)
+	}
+	if b, ok := RefType(0, true).Kind(); ok {
+		t.Errorf("RefType(0, true).Kind() = (%#02x, true), want ok=false: the indexed form has no "+
+			"single wire byte", b)
+	}
+
+	var withByte []ValType
+	withByte = append(withByte, I32, I64, F32, F64, V128)
+	for b := range 256 {
+		for _, null := range []bool{false, true} {
+			if vt, ok := AbstractRefType(byte(b), null); ok {
+				withByte = append(withByte, vt)
+			}
+		}
+	}
+	// 5 numeric/vector forms plus the twelve heaptypes in both nullabilities. Floored on the
+	// nose rather than as a minimum: a count that drifted would mean `AbstractRefType`'s
+	// predicate moved, and this test's second half would then be comparing over a domain
+	// nobody chose.
+	if want := 5 + 12*2; len(withByte) != want {
+		t.Fatalf("enumerated %d ValTypes with a kind byte, want %d — the derivation is the "+
+			"assertion's domain, so a wrong count invalidates every row below", len(withByte), want)
+	}
+	for _, vt := range withByte {
+		if _, ok := vt.Kind(); !ok {
+			t.Errorf("%s.Kind() reports no kind byte, and it has one. Seven call sites in "+
+				"internal/text discard the second result, so an over-eager decline here reaches "+
+				"the wire as byte 0 rather than as a failure", vt)
+		}
+	}
+}
+
+// TestAbstractRefTypeDerivesTheTwelve is the domain check on the constructor the public boundary's
+// guard ranges over. It is the vacuity guard that guard cannot carry itself: a constructor that
+// accepted nothing would make the boundary's exhaustiveness test pass over an empty reference
+// space, which is *a comparison against an empty set succeeds* aimed at the newest instrument.
+//
+// Checked against `HeapTypeName` in **both** directions. They read one table by construction, so
+// this cannot catch a mis-keyed entry — what it catches is the two accessors coming apart, which is
+// what a future arm that special-cases a form would do.
+func TestAbstractRefTypeDerivesTheTwelve(t *testing.T) {
+	accepted, named := map[byte]bool{}, map[byte]bool{}
+	for b := range 256 {
+		if _, ok := AbstractRefType(byte(b), false); ok {
+			accepted[byte(b)] = true
+		}
+		if _, ok := HeapTypeName(byte(b)); ok {
+			named[byte(b)] = true
+		}
+	}
+	if len(accepted) != 12 {
+		t.Errorf("AbstractRefType accepts %d of 256 bytes, want the twelve abstract heaptypes",
+			len(accepted))
+	}
+	for b := range accepted {
+		if !named[b] {
+			t.Errorf("AbstractRefType accepts %#02x and HeapTypeName cannot spell it", b)
+		}
+	}
+	for b := range named {
+		if !accepted[b] {
+			t.Errorf("HeapTypeName spells %#02x and AbstractRefType declines it — the boundary's "+
+				"exhaustiveness guard ranges over what this accepts, so a form missing here is a "+
+				"form nothing checks converts", b)
+		}
+	}
+	// Nullability comes from the argument and not from the heaptype, which is the one property a
+	// constructor keyed on a name map could get wrong for every form at once.
+	for b := range accepted {
+		for _, null := range []bool{false, true} {
+			vt, _ := AbstractRefType(b, null)
+			if vt.Null() != null {
+				name, _ := HeapTypeName(b)
+				t.Errorf("AbstractRefType(%s, %v).Null() = %v", name, null, vt.Null())
+			}
+		}
+	}
+}

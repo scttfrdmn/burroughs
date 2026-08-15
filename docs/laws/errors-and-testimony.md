@@ -116,6 +116,18 @@ amended rather than replaced.
   record of what was believed, and of why it survived review, is the part worth
   keeping. (Ruling: Scott, PR #37; the correction is in 0003.)
 
+  **And the rank holds for *our own* executable, not only the reference's:** where a
+  document and an executable disagree about what the executable does, **the executable is
+  the record and the document is the claim.** The heading says "the reference's" because
+  that is the specimen that minted it, but nothing in the argument depends on whose
+  implementation it is — a document describing behaviour is testimony about an artifact
+  that can be run, and the artifact does not have opinions. Specimen: `publicpath_test.go`'s
+  own header listed vector agreement under "counted and logged" while the assertion sat in
+  the code fifty lines below, so the file carried two accounts of what it checked and the
+  softer one was the one a reader met first. That is *the defect stated as the rule* pointed
+  inward — the discipline's own output — and the remedy is the same, correct the document and
+  say that it was the document that moved. (Sharpening: chat-Claude, PR #302.)
+
 ### When two fields disagree about a value, the suite has handed you a bidirectional control.
 
 - **When two fields disagree about a value, the suite has handed you a

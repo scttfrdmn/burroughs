@@ -69,6 +69,20 @@
 #   label #262 has no reason to carry. That under-match is the stated cost, and it is the right
 #   direction of error for a gate — a missed grave citation is caught by review, a false demand
 #   trains people to work around the tool.
+# * **An ADR citation is a four-digit number, and a one-digit one is not a citation at all.** ADRs
+#   number their own decisions — 0027 has five, 0028 three — and this repo refers to them in prose
+#   as "decision 3", "decisions 2 and 3", "0029 decision 2". The first version of this trigger read
+#   any run of digits after the word, so every such sentence became a citation to
+#   `docs/decisions/3-*.md` and failed. That is an **over**-matching trigger predicate, the mirror
+#   of the under-matching one the grave rule's note above is careful about, and it fails in the
+#   worse direction for a gate: an under-match misses a finding, an over-match makes the gate
+#   unpassable for correct prose and *teaches people to work around the tool*. Measured on merged
+#   history rather than argued: `6a36e97` (the commit that added ADR 0028) fails this check three
+#   times, on its own record's headings, and so did every ADR with numbered decisions. The
+#   narrowing is the artifact's own convention — every file in `docs/decisions/` is `NNNN-`, all 29
+#   of them — so four digits is what a citation looks like and anything shorter is prose.
+#   A 2- or 3-digit run is neither shape and is reported as such (phase 1b) rather than dropped,
+#   because dropping it would trade the over-match for the silent under-match.
 # * Deleted lines are not scanned. A diff is responsible for the citations it *adds*; the ones it
 #   removes are the previous author's, and re-litigating them turns every edit into a sweep.
 #
@@ -129,12 +143,21 @@ extract() {
 		if (length(n) >= 1 && length(n) <= 4) print kind " " n
 	}
 	function scan(s,   t, tok, gap, num, isgrave, prevgrave, tail) {
-		# ADR citations first: `decision 0025`, `decisions 0025`, `ADR 0025`.
+		# ADR citations first: `decision 0025`, `decisions 0025`, `ADR 0025`. **Four digits,
+		# because that is the filename convention** — see the trigger-coverage note above on why a
+		# one-to-three digit run after the word is a sub-decision reference and not a citation.
 		t = s
 		while (match(t, /([Dd]ecision[s]?|ADR[s]?)[ ]+[0-9][0-9]*/)) {
 			tok = substr(t, RSTART, RLENGTH)
 			sub(/^[^0-9]*/, "", tok)
-			emit("adr", tok)
+			if (length(tok) == 4) {
+				emit("adr", tok)
+			} else if (length(tok) >= 2) {
+				# A 2- or 3-digit run is neither: no ADR is spelled that way and no record has 10
+				# numbered decisions. Reported rather than dropped, since dropping it is the
+				# under-match this narrowing could otherwise introduce.
+				emit("adrshort", tok)
+			}
 			t = substr(t, RSTART + RLENGTH)
 		}
 
@@ -243,6 +266,16 @@ for n in $(printf '%s\n' "$cites" | awk '$1 == "adr" { print $2 }'); do
 	else
 		echo "ok    decision $n -> ${found#docs/decisions/}"
 	fi
+done
+
+# Phase 1b: a `decision NN` / `decision NNN` that is neither an ADR citation nor a sub-decision
+# reference. Binding, because the alternative to reporting it is silently dropping it, and this
+# arm exists precisely so narrowing the ADR trigger to four digits could not become an under-match.
+for n in $(printf '%s\n' "$cites" | awk '$1 == "adrshort" { print $2 }'); do
+	adrs=$((adrs + 1))
+	echo "FAIL  decision $n -> ADR citations are four digits (docs/decisions/NNNN-*.md);" \
+		"a one-digit reference is a record's own numbered decision. This is neither."
+	fail=1
 done
 
 # Phase 2 and 3: issue citations, which need the network.

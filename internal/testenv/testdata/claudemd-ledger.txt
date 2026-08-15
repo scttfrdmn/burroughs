@@ -14,13 +14,13 @@
 # that churns whenever anything above it moves.
 278	section	(before the first ## heading)
 529	section	## The law
-1345	section	## Phase ladder
+1304	section	## Phase ladder
 1157	section	## Where the work is tracked
 9194	section	## Reporting protocol — the PR *is* the report
 2238	section	## Versioning and the changelog
 301	section	## Decision records
 1160	section	## Disciplines heading and preamble
-5071	law	product-and-overhead/the-phases-product-is-the-work-instruments-are-overhead-on-it
+5051	law	product-and-overhead/the-phases-product-is-the-work-instruments-are-overhead-on-it
 311	law	product-and-overhead/control-work-is-a-debt-against-the-product-so-it-is-charged-deferred-or-declined--never-taken-because-it-is-available
 196	law	product-and-overhead/a-zero-fail-board-is-not-a-green-light-it-is-a-lost-instrument
 238	law	product-and-overhead/a-representation-is-not-a-recognizer-and-936-of-the-board-wants-the-representation

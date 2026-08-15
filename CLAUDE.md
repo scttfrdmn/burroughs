@@ -36,11 +36,12 @@ doc approving it.
 **v0's product is a module that runs**, and the ladder is a sequence of *artifacts*,
 not of instruments: decoder → **internal form (0002)** → validator → interpreter. The
 harness, the controls, and the generated tables are how those artifacts are known to be
-right; they are never the deliverable. State of play, measured rather than felt:
-`internal/interp` holds **0 engine lines** against 493 test lines, and the board is
-**4162 pass / 0 fail / 60872 unsupported** — 93.6% of the corpus unanswered, essentially
-all of it behind the one artifact that does not exist yet. A phase is judged by its
-product, so v0 is early, and the next PR adds engine lines.
+right; they are never the deliverable. A phase is judged by its product.
+
+**No measured figure lives in this file** — *any sentence asserting a measured quantity is
+generated or deleted* (Scott's rider, ADR 0029). Ask the instrument:
+`go test ./internal/spec/ -run TestPhase1Files -v` prints the board, `make ratio RATIO=<rev>`
+the engine/instrument lines.
 
 ## Where the work is tracked
 
@@ -290,13 +291,13 @@ bullet carries operative text has that text nowhere else.
     gate already exists — `unsupportedCeiling` in `spec_test.go`, a **ceiling**, which per 0013
     rots by the system working — so lowering it *is* the record of progress and no second
     mechanism gets built for this (*one concept, one trigger*, #82).
-    - **During a gate campaign the reward figure is the all-on lane's fail delta, because
-      `unsupported` has no subject.** A vector for a gated proposal is scored `gated`, never
-      `unsupported`, so a pre-flip campaign PR **cannot** move that column however much engine
-      capability it lands — the zero is structural, and it is stated as structural, naming the
-      gate. A non-campaign PR keeps the rule above unchanged. This is a statement about *which
-      instrument has a subject*, not an exemption: the actor still does not get to pick.
-      (Ruling: Scott, PR #235 — his token, his veto standing.)
+    - **The column moves only when what the harness *can ask* changes; where a PR cannot change
+      that, the zero is structural and is stated as structural, naming the reason and the reward
+      figure that does have a subject.** A statement about *which instrument has a subject*, never
+      an exemption — the actor still does not get to pick. Written as the condition and not as a
+      list of cases, because enumerated instances invite an amendment per instance; the specimens
+      are in `docs/laws/`. (Rulings: Scott, PR #235 — his token, his veto standing; chat-Claude,
+      PR #302.)
   - **The actor never chooses the instrument that judges the actor.** Where a judgement is about
     the work, the actor makes it; where it is about the actor, the actor's job is to *state the
     case and flag it*, and a principal rules. The general form covers instruments not yet

@@ -243,11 +243,46 @@ func (t ValType) Null() bool {
 // kind (any, eq, i31, …) also has a byte and this reports it — the predicate is "has one
 // wire byte", not "is one of the seven pre-0018 forms" — but nothing in this PR's scope calls
 // Kind with one, since the encoder's own frontier (absoluteHeaptypeBytes) is untouched.
+//
+// **The NoValType arm is a repair, not a widening** (grave #300). This doc comment has always
+// said the second result is false "for the indexed form … and for NoValType", and the code
+// checked only the first — so a zero ValType reported `(0x00, true)`, claiming 0x00 is a wire
+// byte in the same file whose NoValType comment says 0x00 "is not the encoding of any value
+// type, numeric or reference". No caller was wrong as a result: the three encoder sites pass
+// named types, `castop.go` discards the second result, and `instr.go`'s site reads it only
+// after `decodeValType` succeeded. That is what kept it silent, and it is also why the fix is
+// safe — every existing call returns exactly what it returned before. It surfaced the way this
+// class always does, by writing the first consumer that takes the documented guarantee at its
+// word: the public boundary's type conversion (0029), which is outside this package and so has
+// only the doc comment to go on.
 func (t ValType) Kind() (byte, bool) {
-	if t.kind == kindIndexed {
+	if t.kind == kindIndexed || t == NoValType {
 		return 0, false
 	}
 	return t.kind, true
+}
+
+// AbstractRefType constructs one of the twelve abstract reference forms — the heaptype named by
+// kind, with the given nullability — reporting false for a byte that is not one of the twelve.
+//
+// **refKind's exported sibling, and it exists because the space is not constructible from
+// outside this package.** The twelve `Heap*` kind bytes are exported, `RefType` builds the
+// indexed form, and the five numeric types plus Wasm 2.0's two references are named `var`s — so
+// an external consumer can *name* every reference form and could not *build* ten of them. The
+// consumer that needs to is the public boundary's exhaustiveness guard (0029), whose whole
+// method is to range over the reference space and assert every element converts; enumerating it
+// with hand-written literals would make the guard's domain a transcription of the thing it is
+// checking, which is the coverage defect it exists to prevent.
+//
+// The predicate is `abstractHeapNames`, the same single table HeapTypeName reads, so the two
+// accessors agree by construction rather than by a cross-check between two copies. That is what
+// makes ranging over all 256 bytes and keeping the ones this accepts a *derivation* of the
+// twelve rather than a second enumeration of them.
+func AbstractRefType(kind byte, null bool) (ValType, bool) {
+	if _, ok := abstractHeapNames[kind]; !ok {
+		return NoValType, false
+	}
+	return refKind(kind, null), true
 }
 
 func (t ValType) String() string {
