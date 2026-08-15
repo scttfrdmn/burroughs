@@ -1,16 +1,35 @@
 # 0029 — The public boundary: `run` on a validated path, decline as a third outcome, and a `Value` that converts
 
-Date: 2026-08-15 · Status: **proposed**
+Date: 2026-08-15 · Status: **accepted** (chat-Claude, PR #302, under the stability clause below).
+Held `proposed` 2026-08-15 → 2026-08-15, one PR wide; the interval is recorded rather than erased.
 
 Filed against **#299** (`type:decision`, `phase:v0`) and milestone **v0 interpreter**.
 
-Held `proposed` deliberately, and the reason is a distinction rather than a formality: Scott has ruled
-the two *design questions* below — his words are quoted verbatim under each, and they are the grounds,
-not a paraphrase of them. What has **not** been stamped is this record's wording, and the third thing it
-settles (the premise correction in decision 2's guard) was never put to him at all, because it is a
-measurement that contradicts a sentence in his own ruling. A `Status:` is a citation to an approval (the
-ruling on #142), so it stays `proposed` until a stamp on the PR carrying this file exists to point at,
-and the interval stays in the record.
+## The stability clause, which is what makes this ratification sufficient
+
+**The surface this record defines carries no compatibility promise before `v1.0.0`.** Anything exported
+outside `internal/` — `Instantiate`, `Config`, `Instance` (`Call`/`Exports`/`Decline`/`Deferred`), `Value`,
+`Type`, `Kind`, `Trap`, the five sentinels, the seven exit codes — may be renamed, re-shaped, or removed in
+any `v0.x`, and callers get no deprecation window. That
+is not a hedge bolted on to cheapen the stamp; it is 0004's scheme applied where it lands hardest: `v0.x`
+is *a privileged place to live*, freedom to break is the privilege, and a public API is the first thing
+that privilege is actually worth anything for.
+
+The clause is load-bearing for **who may stamp this**. A public API is normally Scott's call, because it
+is the first artifact anyone outside the repo can depend on — and "can depend on" is exactly what the
+clause removes until `v1.0.0`. With the promise withdrawn, the cost of a wrong shape is a rename in a
+`v0.x`, so chat-Claude's ratification is sufficient here and Scott's veto stands as usual.
+(Ruling: chat-Claude, PR #302: *"state in 0029 that the surface carries no compatibility promise before
+v1.0. With that in it, my ratification is sufficient and Scott's veto stands as usual."*)
+
+**Why it did not stay `proposed`:** the code this record describes is in `main`. A record held open while
+its implementation ships is the drift shape in a new location — the gap between what the repo does and
+what the repo says it decided — and it is the shape a `Status:` field exists to close, not to host. The
+grounds were already ruled: Scott's words on the two *design questions* are quoted verbatim under each
+below. What was unstamped was this record's wording, plus the one thing never put to him at all — the
+premise correction in decision 2's guard, a measurement that contradicts a sentence in his own ruling.
+A `Status:` is a citation to an approval (the ruling on #142), so both the stamp and the interval it
+spent open are kept above.
 
 **Revised once while still `proposed`, from the implementation.** Three things the writing of the code
 established, which is why this record is worth revising rather than annotating: the guard shipped on a
@@ -282,10 +301,64 @@ Two properties make it an instrument rather than a ceremony:
   "engine defects" in `simd_const`/`simd_align` that were the driver's own bookkeeping. *Exactly small
   enough to believe* is what made them worth chasing.
 
-**Open, for Scott.** The census of vector-level mismatches is currently *asserted* at zero as well as
-logged. That is a stronger claim than the differential needs, it happens to hold, and it is arguably the
-second ledger this design was built to avoid. Whether it stays an assertion or becomes a logged census is
-his call, flagged in the implementing PR rather than settled here.
+### The vector census stays an assertion, and its domain is not the one the ruling assumed
+
+This was flagged open in the implementing PR: the vector-level mismatch count is *asserted* at zero as
+well as logged, which is stronger than the differential strictly needs and arguably the second ledger this
+design was built to avoid.
+
+**Ruled: it stays an assertion** (chat-Claude, PR #302). The grounds sharpen the design rather than merely
+permitting it — *"a differential's value is that disagreement is a defect by construction. Same module,
+same export, two paths; if they differ, one is wrong, and there is no legitimate population to census."* A
+flake here would not be noise to absorb; it would be **nondeterminism between two paths in one engine**,
+which is the most valuable thing this instrument can find, and a log is where that gets buried. With the
+consequence stated: if exemptions ever become necessary they are **enumerated by name with a reason each,
+on the nose — never a tolerated count**, which is the second-ledger shape itself.
+
+The ruling also read the module census as saying the declines carry the legitimate exclusions, so that the
+comparison's domain is the **1067** fully-checked modules. **Measured, that is false.** A decline is not a
+refusal — it says this validator slice could not check every instruction, not that the module is rejected —
+so a declining module instantiates, arms, and has its exports called like any other. **11166 of the 25666
+comparisons, 43%, run on a declining instance**, and the domain is **1787 module forms (1067 ran + 720
+declined)**. Recorded here for the reason the guard below is: *check a ruling's premises, not just its
+conclusion*. The conclusion is unaffected and implemented as ruled; the number is corrected, the split is
+now printed by the test, and the legitimate exclusions are the other named buckets — 429 gated, 22
+encoder-frontier, 26146 no-instance, 78 unpassable, 599 identically-failing calls.
+
+## The `unsupported` delta is **derived**, not forecast — a D row
+
+The product law requires every PR to state its `unsupported`-column delta, and this PR's is **zero**. Two
+readings of a zero already exist: a *confession* (overhead that moved nothing), and the gate-campaign
+*structural* zero, where a gated vector cannot reach the column before its flip (Scott, PR #235). This PR
+is neither, and the third case is ratified with a refinement about what kind of claim the zero is:
+
+> *"Unsupported measures questions the harness cannot ask; a PR that adds a consumer changes who asks, not
+> what can be asked. So the zero isn't a forecast that came in — it's derived, and measuring it against a
+> worktree at main checks the derivation rather than confirming a prediction. Record it as a D row. Same
+> distinction as the flip."* (Ruling: chat-Claude, PR #302.)
+
+**Provenance: derived.** Premises, both mechanically checkable:
+
+- `internal/spec/wast.go:2672` — `r.Unsupported++` sits in the **`default:` arm** of the harness's command
+  dispatch, and the bucket key is the command's *head atom* rather than its kind, "because every
+  unsupported command has `KindUnsupported`". The column therefore counts commands `internal/spec` has no
+  case for: it is a measure of that package's command vocabulary.
+- `git diff --stat main..HEAD -- internal/spec/` is **empty**. This PR adds no command kind to the harness,
+  because it does not touch the harness.
+
+Inference: a column whose population is the harness's missing command kinds cannot move by a diff that adds
+no harness command kind. The delta is zero **by entailment**, before any measurement — which is what makes
+it a D row rather than a pre-registered forecast. The two boards were nevertheless measured on both sides
+(a throwaway worktree at `main` prints `59682 pass, 1328 fail, 83 unsupported, 4051 gated, 0 unimplemented`,
+identical), and that measurement's job is to **check the derivation** — if the columns had differed, the
+premise about what the column measures would be the thing that was wrong.
+
+This is the same distinction the flip turns on. A flip's forecast is *pre-registered* precisely because its
+numbers do not exist until the mechanism does, and a prediction stated afterwards is the actor choosing the
+instrument that judges the actor. A derived zero has the opposite structure: it follows from a property of
+the instrument that is true before the diff, so stating it afterwards costs nothing and measuring it is a
+check rather than a confirmation. The reward figure this PR is judged on is elsewhere — the differential's
+own census, 2238 module forms and 25666 compared assertions through the published API.
 
 ## Consequences
 

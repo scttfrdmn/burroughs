@@ -38,9 +38,8 @@ not of instruments: decoder → **internal form (0002)** → validator → inter
 harness, the controls, and the generated tables are how those artifacts are known to be
 right; they are never the deliverable. A phase is judged by its product.
 
-**No measured figure lives in this file.** The four that did — `internal/interp` at "0
-engine lines", a three-column board — were stale unread. *Any sentence asserting a measured
-quantity is generated or deleted* (Scott's rider, ADR 0029). Ask the instrument:
+**No measured figure lives in this file** — *any sentence asserting a measured quantity is
+generated or deleted* (Scott's rider, ADR 0029). Ask the instrument:
 `go test ./internal/spec/ -run TestPhase1Files -v` prints the board, `make ratio RATIO=<rev>`
 the engine/instrument lines.
 

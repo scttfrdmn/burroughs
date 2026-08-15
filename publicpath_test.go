@@ -31,12 +31,18 @@ import (
 // **second fail ledger** with a different sampling filter from the board's. Two ledgers counting the
 // same population drift and then argue, which is what *one concept, one trigger* forbids.
 //
-// So the assertion is a **differential** instead: every vector is driven down two paths in lockstep —
-// the published API, and `interp` directly, as the harness drives it — and the paths must agree. What
-// that buys is the licence to leave the vector comparison as an unasserted census: given agreement,
-// a mismatch here *is* a board fail, already counted, already owned. The claim the two instruments
-// make together is the one Scott asked for — the engine is conformant through the public path
-// wherever it is conformant at all — and neither can make it alone.
+// So the primary assertion is a **differential** instead: every vector is driven down two paths in
+// lockstep — the published API, and `interp` directly, as the harness drives it — and the paths must
+// agree. What that buys is the reading of the vector comparison: given agreement, a mismatch here *is*
+// a board fail, already counted, already owned. The claim the two instruments make together is the one
+// Scott asked for — the engine is conformant through the public path wherever it is conformant at all —
+// and neither can make it alone.
+//
+// The vector comparison is **also** asserted at zero, and that is a ruling rather than a drafting
+// choice (chat-Claude, PR #302): it currently holds, and a disagreement between the two paths over one
+// module and one export is a defect by construction, with no legitimate population to census. See the
+// long note at the assertion itself for what happens if it ever moves, and for why the exemption
+// shape is "named, with a reason each" and never a tolerated count.
 //
 // The two arms are deliberately independent implementations. `specToPublic`/`publicToSpec` cross the
 // boundary under test; `specToRaw`/`rawToSpec` do not touch it, and re-derive the same mapping in
@@ -45,10 +51,16 @@ import (
 //
 // # What is asserted at zero, and what is only counted
 //
-// Asserted: path agreement; that no gate refusal is classified as anything but ErrGated (grave #301);
-// that the validator now on the run path refuses **no** module the corpus offers as valid; that the
-// buckets partition. Counted and logged: agreement with the vectors, and the decline census, which is
-// #9's frontier stated in modules a user would actually hand this engine.
+// Asserted: path agreement; agreement with the vectors over the population this driver can drive; that
+// no gate refusal is classified as anything but ErrGated (grave #301); that the validator now on the
+// run path refuses **no** module the corpus offers as valid; that the buckets partition. Counted and
+// logged: the decline census, which is #9's frontier stated in modules a user would actually hand this
+// engine, and the domain split — 14500 of the comparisons run on a fully-checked module and 11166 on a
+// declining one, a decline being callable rather than refused.
+//
+// (An earlier draft of this paragraph listed vector agreement under "counted and logged" while the code
+// below asserted it. Comments are testimony and the executable outranks; corrected here rather than
+// left as a second, softer account of what this file does.)
 //
 // Every command this driver cannot ask is counted into a named bucket. A skip is not a verdict, and
 // an uncounted skip is worse, because it reads as coverage.
@@ -228,6 +240,9 @@ type publicTally struct {
 
 	asserts    int // assert_return commands seen
 	compared   int // driven down both paths and judged
+	comparedOn struct {
+		ran, declined int // which kind of instance the comparison ran against
+	}
 	noInstance int // nothing trustworthy to call: the module was refused, or the script diverged
 	unpassable int // an argument or result shape this API cannot carry
 	callFailed int // both paths failed the call the same way
@@ -270,11 +285,17 @@ func TestConformanceThroughThePublicPath(t *testing.T) {
 		var pub *Instance
 		var raw *interp.Instance
 		trusted := false
+		// Whether the armed instance carries a decline. A declined module is still *callable* — the
+		// decline says this slice could not check every instruction, not that the module is refused —
+		// so it arms like any other and its asserts are compared. Tracked because the comparison's
+		// domain is a claim about this instrument, and "the declines are the excluded population" is
+		// a plausible reading of the module census that happens to be false.
+		declinedNow := false
 
 		for _, c := range s.Commands {
 			switch c.Kind {
 			case spec.KindModuleBinary, spec.KindModuleText, spec.KindModuleQuote:
-				pub, raw, trusted = nil, nil, false
+				pub, raw, trusted, declinedNow = nil, nil, false, false
 				tally.modules++
 
 				image := c.Module
@@ -306,6 +327,7 @@ func TestConformanceThroughThePublicPath(t *testing.T) {
 					if d := in.Decline(); d != nil {
 						tally.declined++
 						tally.declines[declineConstruct(d)]++
+						declinedNow = true
 					} else {
 						tally.ran++
 					}
@@ -448,6 +470,11 @@ func TestConformanceThroughThePublicPath(t *testing.T) {
 				}
 
 				tally.compared++
+				if declinedNow {
+					tally.comparedOn.declined++
+				} else {
+					tally.comparedOn.ran++
+				}
 				if len(pres) != len(c.Results) {
 					tally.mismatched++
 					mismatches = append(mismatches, fmt.Sprintf(
@@ -480,6 +507,7 @@ func TestConformanceThroughThePublicPath(t *testing.T) {
 	t.Logf("the public path over %d scripts:\n"+
 		"  modules  %5d = %d ran + %d declined + %d gated + %d malformed + %d other + %d INVALID\n"+
 		"  asserts  %5d = %d compared + %d no-instance + %d unpassable + %d call-failed + %d DISAGREED\n"+
+		"  of the %d compared, %d ran on a fully-checked module and %d on a declining one\n"+
 		"  of the %d compared, %d disagreed with their vector — engine fails the board already owns,\n"+
 		"  which is a reading the zero above licenses and nothing else would",
 		tally.files,
@@ -487,6 +515,7 @@ func TestConformanceThroughThePublicPath(t *testing.T) {
 		tally.refusedOther, tally.refusedInvalid,
 		tally.asserts, tally.compared, tally.noInstance, tally.unpassable, tally.callFailed,
 		tally.disagreed,
+		tally.compared, tally.comparedOn.ran, tally.comparedOn.declined,
 		tally.compared, tally.mismatched)
 	t.Logf("the declining constructs — #9's frontier as a host meets it: %s", topN(tally.declines, 8))
 	if tally.mismatched > 0 {
@@ -513,19 +542,38 @@ func TestConformanceThroughThePublicPath(t *testing.T) {
 			tally.disagreed, min(len(disagreements), 20), sample(disagreements, 20))
 	}
 
-	// **And the population it can drive, it gets right.** Asserted rather than logged, which is a
-	// judgement about instruments and is flagged for Scott in the PR rather than settled here: the
-	// argument against is that the board owns the engine's fail count and a second assertion over an
-	// overlapping population is a second ledger; the argument for, which is why it is written this
-	// way, is that "the engine works through the published API" is exactly the claim this PR was
-	// asked to make executable, and a census nobody asserts makes no claim at all. The population is
-	// not the board's: it is what the public boundary can drive end to end, which excludes every
-	// command kind this driver skips and every script tail after a trust break.
+	// **And the population it can drive, it gets right. Asserted, and ruled so.**
 	//
-	// If engine capability growth ever makes this non-zero — a validator slice admitting vectors the
-	// interpreter then fails — the movement is a finding to triage, **not a ceiling to raise**. The
-	// difference matters: `unsupportedCeiling` bounds a column that drains, and this bounds a column
-	// that should never fill.
+	// The hedge this comment used to carry — asserted here but flagged for a principal, on the
+	// argument that a second zero over a population overlapping the board's is a second fail ledger —
+	// is discharged: **it stays an assertion.** The reasoning, which is worth keeping because it is
+	// what makes the assertion legitimate rather than merely tolerated: a differential's disagreement
+	// is *a defect by construction*. Same module, same export, two paths — if they differ one of them
+	// is wrong, so there is no legitimate population to census. A nondeterminism between two paths in
+	// one engine is the single most valuable thing this instrument can find, and burying it in a log
+	// is the one outcome worth avoiding. That is not the shape `unsupportedCeiling` has: that bounds a
+	// column which drains as work lands, and this bounds a column that should never fill.
+	//
+	// So if engine capability growth ever makes this non-zero — a validator slice admitting vectors the
+	// interpreter then fails — the movement is a finding to triage, **never a ceiling to raise**. And
+	// if an exemption is ever genuinely needed, it is **enumerated by name with a reason each, on the
+	// nose**; a tolerated count is exactly the second ledger this design refuses.
+	// (Ruling: chat-Claude, PR #302, on the flag this comment used to carry.)
+	//
+	// # The domain, stated — and it is not the 1067
+	//
+	// The ruling came with a reading of the census: that the declines carry the legitimate exclusions,
+	// so the comparison's domain is the 1067 fully-checked modules. **Measured, that is false, and by
+	// a wide margin.** A decline is not a refusal — it says this validator slice could not check every
+	// instruction, not that the module is rejected — so a declining module instantiates, arms, and has
+	// its exports called like any other. 11166 of the 25666 comparisons, 43%, run on one. The domain
+	// is therefore **1787 module forms (1067 ran + 720 declined)**, and the split is printed above so
+	// the next reader does not have to re-derive it from the module census.
+	//
+	// The exclusions are the other buckets, and they are already what the ruling asks for — named, with
+	// a reason each, never a tolerated count: 429 gated, 22 encoder-frontier, 26146 no-instance (a
+	// refused module or a trust break upstream), 78 unpassable argument or result shapes, 599 calls
+	// that failed identically on both paths.
 	if tally.mismatched != 0 {
 		t.Errorf("%d of %d assertions driven through the public path disagreed with their vector "+
 			"(showing %d):\n%s", tally.mismatched, tally.compared, min(len(mismatches), 20),

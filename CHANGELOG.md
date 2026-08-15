@@ -47,7 +47,16 @@ weakly-ordered platform.
     never *disagree* — which leaves the engine's fails where the board already owns them instead of
     opening a second ledger with a different sampling filter. The two spec-value converters are
     deliberately independent implementations, because a shared helper lets one defect satisfy both
-    arms and the differential then agrees with itself.
+    arms and the differential then agrees with itself. Agreement with the vectors is asserted at zero
+    too, and that is a ruling rather than a drafting choice: a disagreement between two paths over one
+    module and one export is a defect by construction, so there is no legitimate population to census,
+    and exemptions — if ever needed — are enumerated by name with a reason each, never a tolerated
+    count. The comparison's domain is **1787 module forms**, not the 1067 fully checked ones: a decline
+    is callable rather than refused, and 11166 of the 25666 comparisons run on a declining instance.
+  - **The surface carries no compatibility promise before `v1.0.0`, stated in the record.** `v0.x` is
+    the privileged place to live and freedom to break is the privilege; a public API is the first
+    artifact that privilege is worth anything for. The clause is what makes 0029 ratifiable without
+    Scott's own stamp — with dependability withdrawn until `v1.0.0`, a wrong shape costs a rename.
   - **Five sentinels and seven exit codes, one per question a caller can ask.** `ErrMalformed`,
     `ErrGated`, `ErrInvalid`, `ErrDeclined`, `ErrUnsupported`, plus `*Trap`; the CLI maps each to a
     code of its own, because a script that cannot tell "rebuild with the gate on" from "fix your
