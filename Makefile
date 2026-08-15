@@ -40,14 +40,60 @@ SHELL := /bin/bash -o pipefail
 # anything globally.
 TOOL = $(GO) tool -modfile=tools/go.mod
 
-.PHONY: all build test vet fmt lint check vuln deadcode fuzz bench ratio cite spec-tests spec-ref tidy conformance strict pipefail-check opcodes opcode-drift keywords keyword-drift opcodes-text opcodes-text-drift memarg memarg-drift gate-census xcorpus
+.PHONY: all build test race vet fmt fmt-check lint check vuln deadcode fuzz bench ratio cite spec-tests spec-ref tidy conformance strict pipefail-check opcodes opcode-drift keywords keyword-drift opcodes-text opcodes-text-drift memarg memarg-drift gate-census xcorpus
 
 # The default gate. `check` is what must be green before a report — it is the
 # local mirror of CI, so a surprise in CI means a bug in this line, not a bug in
 # the habit.
 all: check
 
-check: pipefail-check fmt-check build vet lint test deadcode
+# The gate list, named once so the recipe below cannot drift from it.
+CHECK_GATES = pipefail-check fmt-check build vet lint test deadcode
+
+# **An unreached gate is not a passed gate, and the abort must say which is which.**
+#
+# This was `check: pipefail-check fmt-check build vet lint test deadcode` — a prerequisite list,
+# which make walks in order and abandons at the first red. Correct behaviour, and it produced a
+# genuinely misleading artifact: a dangling citation in `internal/validate/sig.go` (naming a test
+# that never existed) reached a working tree and was caught only by the *cross-architecture* run,
+# because `make check` had failed at `fmt-check` and never got as far as the citation gate. The
+# transcript said `make: *** [fmt-check] Error 1` and nothing else, so the five gates that never
+# ran were indistinguishable from five gates that ran clean — the omission lived in the reader's
+# head rather than on the artifact.
+#
+# So the recipe runs the same gates in the same order and, on the first failure, prints the ones it
+# did not reach. Naming them is the whole feature; a reader who sees `NOT reached: lint test
+# deadcode` cannot mistake the run for a partial pass. Same shape as `strict`'s grep and
+# `deadcode`'s filtered output: *a verdict channel cannot say what*, so the recipe says it.
+#
+# Two costs, both accepted and stated rather than discovered later. Recursive `$(MAKE)` per gate
+# adds a process each (negligible against `go test`), and `check` is now **serial even under
+# `-j`**, where the prerequisite form would have run gates concurrently. The second is arguably a
+# fix: under `-j` "which gate did not run" has no single answer, because several are in flight when
+# one goes red, and a report that cannot be exact about its own subject is the kind of instrument
+# this file keeps deleting. (Directive: Scott, PR #295.)
+check:
+	@failed=""; \
+	for g in $(CHECK_GATES); do \
+		[ -n "$$failed" ] && continue; \
+		$(MAKE) --no-print-directory "$$g" || failed="$$g"; \
+	done; \
+	if [ -n "$$failed" ]; then \
+		rest=""; past=""; \
+		for g in $(CHECK_GATES); do \
+			if [ "$$g" = "$$failed" ]; then past=1; continue; fi; \
+			[ -n "$$past" ] && rest="$$rest $$g"; \
+		done; \
+		echo; \
+		echo "make check FAILED at gate: $$failed"; \
+		if [ -n "$$rest" ]; then \
+			echo "gates NOT reached — these did not pass, they did not run:$$rest"; \
+			echo "a green from them is unavailable, not implied. Fix $$failed and re-run."; \
+		else \
+			echo "$$failed is the last gate; every other gate ran."; \
+		fi; \
+		exit 1; \
+	fi
 
 # The falsification above, kept. `SHELL := /bin/bash -o pipefail` is a claim about how every
 # recipe in this file runs, and it is a claim that has already been silently false once — the

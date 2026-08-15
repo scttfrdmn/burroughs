@@ -508,6 +508,32 @@ weakly-ordered platform.
 
 ### Changed
 
+- **`make check` now names the gates it did not reach when it aborts.** It was a prerequisite list,
+  which make walks in order and abandons at the first red — correct behaviour that produced a
+  genuinely misleading artifact: a dangling citation in `internal/validate/sig.go` reached a working
+  tree and was caught only by the cross-architecture run, because `check` had failed at `fmt-check`
+  and never got as far as the citation gate. The transcript said `make: *** [fmt-check] Error 1` and
+  nothing else, so five gates that never ran were indistinguishable from five that ran clean. The
+  recipe now runs the same gates in the same order and prints `gates NOT reached — these did not
+  pass, they did not run: build vet lint test deadcode`. **An unreached gate is not a passed gate**,
+  and the omission belongs on the artifact rather than in the reader's memory. Two costs, stated
+  rather than discovered: one recursive `$(MAKE)` per gate, and `check` is now serial even under
+  `-j` — where "which gate did not run" has no single answer anyway, several being in flight when
+  one goes red. (Directive: Scott, PR #295.)
+- **The destination ledger for `assert_invalid` is executable, and the board's `unsupportedCeiling`
+  comment no longer claims the column movement as engine capability.** The entry read "unlike the
+  two entries above it, it is engine capability rather than a harness widening", which contradicted
+  those entries instead of distinguishing itself from them: the −2574 **is** the harness widening,
+  since `classify`'s new arm is what makes the command askable and would have drained the column by
+  very nearly the same amount with an always-accept validator behind it. The engine's contribution
+  is the *destination split*, now pinned per destination by
+  `TestAssertInvalidDestinationLedgerCloses` — 2574 converted (906 pass / 1056 declined / 142
+  admitted / 10 right-refusal-wrong-message / 460 gated) plus 123 arrived (117 / 3 / 0 / 0 / 3), the
+  sums closing to the vector, with cross-checks against `validateFailCeiling`'s 1201, the ceiling
+  ledger's 463 gated and 17 residual heads, and `passFloor`'s 1023. The superseded account — "829
+  conversions + 1201 validate stratum" — left **544 vectors unaccounted** and mixed a figure over a
+  restricted subject (board-visible `type mismatch` conversions only) into an identity over the
+  whole population. (Ruling: Scott, PR #295.)
 - **Recipes and CI `run:` blocks now run with `pipefail`** — `SHELL := /bin/bash -o pipefail` in
   the Makefile, `defaults.run.shell: bash` in both workflows (GitHub's default `run:` shell is
   `bash -e {0}`: `-e` without `pipefail`). Set per-file rather than per-job for the reason
@@ -655,6 +681,26 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **A ≤896 forecast bound held while four of its own modules individually broke it** — the specimen
+  that minted *a total is not a ledger* (`docs/laws/controls.md`). 829 landed comfortably under 896
+  while `if.wast` +1, `i32.wast` +3, `load.wast` +1 and `local_tee.wast` +1 each exceeded their
+  *stated per-module upper bound*, paid for by `load64.wast` coming in **45 under**; the net −39 read
+  as conservative forecasting. Errors of opposite sign cancel, so an aggregate bound of any shape —
+  floor, ceiling, band, or exact equality — is satisfied by a distribution nobody predicted.
+  Tightening 896 to `== 857` would have caught none of it, which is what distinguishes this law from
+  *floors bound the catastrophic case* (that one is about a bound's tightness on one quantity; this
+  one is about its subject). Two defects the per-module reading exposed and the total concealed: the
+  vocabulary predicate **does not consult the feature gate**, and `isGated` is asked first, so
+  `load64.wast`'s 46 vectors score gated and never reach the match (measured 46 gated, 0 matched);
+  and the bound's stated warrant, *"it cannot under-count"*, is **false** — the validator can refuse
+  a module before the walk reaches the out-of-vocabulary instruction, making
+  subset-of-vocabulary sufficient for conversion and never necessary. Attribution replaces the
+  interval's second end: an interval cannot say whether the engine or the harness moved a total,
+  because both move it the same way. Second specimen, already in the tree: `TestGatedVectors`
+  asserts each file's count on the nose rather than a sum. (Ruling: Scott, PR #295, who also
+  recorded his own share — *"I questioned the bound's falsifiability but accepted 'cannot
+  under-count' as given. Monotonicity was a claim about the predicate and I never asked what
+  established it."*)
 - **`boardBound` exempted the very bounds that asked to be checked exactly** (grave
   [#293](https://github.com/scttfrdmn/burroughs/issues/293)). `slack 0` encoded two opposite
   intentions: decision 0013's table passed it meaning *"at terminal — 0 cannot drift from 0"*, and

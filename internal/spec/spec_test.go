@@ -7140,14 +7140,33 @@ func TestPhase1Files(t *testing.T) {
 	// column *whatever the gate campaign does*, because the two changes are independent and 0028 d4
 	// put them in one PR. Recorded here rather than only in the PR body, since the ledger is where
 	// the next forecast will be read from.
-	// 2657 → 83, −2574 (#9 slice 1's `assert_invalid` arm). **The largest single drain this column
-	// has taken, and unlike the two entries above it, it is engine capability rather than a
-	// harness widening.** 2591 `assert_invalid` commands were unsupported; 17 remain (11 `(module
-	// binary …)`, 6 `(module quote …)`, both forms left unadmitted on purpose — see the parse
-	// arm), and the 2574 converted split 463 gated / 2111 verdicts. The gated 463 are a
-	// reclassification of exactly the kind the entries above describe, in the same PR as the
-	// capability that made them askable, and they are the reason the drain here (−2574) is larger
-	// than the pass+fail gain from conversions (2111).
+	// 2657 → 83, −2574 (#9 slice 1's `assert_invalid` arm). The largest single drain this column has
+	// taken. 2591 `assert_invalid` commands were unsupported; 17 remain (11 `(module binary …)`, 6
+	// `(module quote …)`, both forms left unadmitted on purpose — see the parse arm), and the 2574
+	// converted split 463 gated / 2111 verdicts.
+	//
+	// **This entry read "it is engine capability rather than a harness widening", and that was the
+	// two entries above being contradicted rather than distinguished** (ruling: Scott, PR #295).
+	// The −2574 *is* the harness widening, exactly as they describe: `classify`'s new arm is what
+	// makes the command askable, and it would have drained this column by very nearly the same
+	// 2574 with an always-accept validator behind it — the vectors would have landed in the
+	// admission bucket instead of being spread across five destinations. So this column's figure
+	// cannot be the engine's reward, and the entry claiming it was had made one number carry two
+	// facts its own forecast (#291) had deliberately separated.
+	//
+	// The engine's contribution is the **destination split**, which lives in
+	// `TestAssertInvalidDestinationLedgerCloses` because *a total is not a ledger*: 906 of the 2574
+	// pass, 1056 are named declines, 142 are accept-direction admissions, 10 are right-refusal
+	// wrong-message, 460 are gated — and it closes to the vector. The 906 is the reward; the 1056
+	// is the next slices' work plan. A previous draft accounted for the 2574 as "829 conversions +
+	// 1201 validate stratum", which left **544 vectors unaccounted** and mixed a figure over a
+	// restricted subject (board-visible `type mismatch` conversions only) into an identity over
+	// the whole population — 829 of the 906 passes expect `type mismatch` and 77 expect something
+	// else. Read the ledger, not this delta, for what the validator did.
+	//
+	// The gated 463 are a reclassification of exactly the kind the entries above describe, in the
+	// same PR as the capability that made them askable, and they are the reason the drain here
+	// (−2574) is larger than the pass+fail gain from conversions (2111).
 	//
 	// The remaining 83 are the column's whole content: 39 `assert_return`, 17 `assert_invalid`, 15
 	// `assert_exhaustion`, 9 `module`, 3 with no head atom. A column this small is close to being
