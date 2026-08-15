@@ -448,6 +448,28 @@ weakly-ordered platform.
 
 ### Changed
 
+- **Recipes and CI `run:` blocks now run with `pipefail`** — `SHELL := /bin/bash -o pipefail` in
+  the Makefile, `defaults.run.shell: bash` in both workflows (GitHub's default `run:` shell is
+  `bash -e {0}`: `-e` without `pipefail`). Set per-file rather than per-job for the reason
+  `ci.yml`'s `env:` block gives for itself — per-job is the instance fix, and a pipe added later by
+  someone who has not read the file is the class. `nightly.yml` has no pipes today, so its copy is
+  prophylaxis and is labelled as such at the site.
+  - The flag is embedded in `SHELL` rather than set via `.SHELLFLAGS` because **`.SHELLFLAGS`
+    arrived in GNU Make 3.82 and macOS ships 3.81, which accepts and ignores it silently.** The
+    first version of this fix did exactly that: it would have worked on CI's make 4.x and done
+    nothing on the dev box — a laptop board and a CI board meaning different things, which is
+    decision 0005's own promise inverted. Caught by re-running the falsification locally, on the
+    make that ignores it.
+  - Discharged by a control rather than a settings line: **`make pipefail-check`**, wired into
+    `make check` and run in CI as well, so both make versions answer the question. Falsified in
+    both directions — it passes with the flag, and without it fails naming the mechanism.
+  - The two `ls testdata/spec/*.wast | wc -l` corpus counters became failure-free loops. With
+    `pipefail` *and* `-e` in force the old form aborted the step **before** the floor's `::error::`
+    line could say what was wrong — louder but mute — so the count is now taken a way that has no
+    failure to propagate: an unmatched glob is honestly zero and the floor keeps its diagnostic.
+    Those two floors also stop doubling as invisible swallowed-exit-code backstops, a second
+    consumer that was not visible at either site.
+
 - **`coverage is a claim` is a law key of its own**, in `docs/laws/evidence-and-instruments.md`
   with four specimens: #264's `declaredErrors` bijection, `wholeFileGated`'s post-flip keys (the
   remedy for a coverage defect being a coverage defect), `git grep`'s tracked-files domain, and
@@ -572,6 +594,15 @@ weakly-ordered platform.
   element segment's *offset* and an element *expression* are different lines of the user's module.
 
 ### Fixed
+
+- **`make bench` reported success when a benchmark package failed to compile** (grave #289).
+  `go test -bench … | tee new.txt` ran under a shell with no `pipefail`, so the pipeline's exit
+  status was `tee`'s: `[build failed]` landed *inside* `new.txt`, the target exited 0, and the
+  `benchstat new.txt` on the next line printed a confident table — geomean included — over
+  whichever packages did build. The target behind *benchstat or it didn't happen* (decision 0005)
+  was therefore satisfiable by output with a build failure in it, and all three channels
+  disagreed: exit code clean, `new.txt` holding the FAIL, and the artifact a human reads showing
+  neither. Demonstrated by injecting one compile error and reading the exit code, before and after.
 
 - **A claim about the graveyard's own size was wrong in the file that checks the law corpus.**
   `internal/testenv/laws_test.go` said the wrapped-lead defect had "three graves for

@@ -37,6 +37,32 @@ permissions:
 env:
   BURROUGHS_NO_SKIP: '1'
 
+# `pipefail`, workflow-wide — because without it a pipe discards the exit code of
+# everything but its last stage, and this file counts things through pipes.
+#
+# **GitHub's default `run:` shell is `bash -e {0}`, which has `-e` and *not*
+# `pipefail`.** Naming `bash` explicitly is what changes it: the documented
+# invocation for `shell: bash` is `bash --noprofile --norc -eo pipefail {0}`. So this
+# block adds exactly one thing — pipe-head failures now count — and leaves `-e`
+# where it already was.
+#
+# The class it closes: `ls testdata/spec/*.wast | wc -l` reports `0` when `ls` fails,
+# because `wc` succeeded, so a broken fetch produced a *number* instead of an error
+# and only a downstream floor turned it red. That is a verdict travelling on the
+# wrong channel — the count answered a question about the corpus's size using an
+# input that was really an enumeration failure. `make bench` had the same defect with
+# no floor behind it and it was silently green for the whole project's history
+# (grave #289).
+#
+# Set here for the reason `env:` above is set here, and the argument transfers
+# unchanged: per-job is the instance fix, the class is "a pipe added next month by
+# someone who did not read this file," and inheritance makes the safe thing the
+# default so an exemption has to be written down. A step that genuinely wants a
+# failing head ignored says so at the step with `|| true`, which is then visible.
+defaults:
+  run:
+    shell: bash
+
 jobs:
   build:
     strategy:
@@ -50,6 +76,29 @@ jobs:
         with:
           go-version: '1.26'
           cache-dependency-path: tools/go.sum
+
+      - name: pipefail is in effect, here and in the Makefile
+        # Two claims, two shells, because they are configured in two places and can
+        # regress independently: `defaults.run.shell: bash` above governs `run:` blocks,
+        # `SHELL` in the Makefile governs recipes. Asserted rather than assumed — a
+        # settings line nobody checks is an intention, and this one has already been
+        # silently false once.
+        #
+        # **The Makefile half is checked here specifically because this runner's `make` is a
+        # different version from the dev box's.** The flag lives in `SHELL` rather than
+        # `.SHELLFLAGS` precisely because macOS ships GNU Make 3.81, which ignores the latter
+        # without complaint; a fix validated on only one of the two makes is how that defect
+        # survived in the first place. `make pipefail-check` asks make 4.x the same question
+        # `make check` asks 3.81 locally.
+        #
+        # Under `pipefail` a pipeline whose head fails is non-zero, so `false | true` is
+        # non-zero and the `if` does not fire. Without it the pipeline reports success.
+        run: |
+          if false | true; then
+            echo "::error::this run-block has no pipefail — defaults.run.shell was changed or removed"
+            exit 1
+          fi
+          make pipefail-check
 
       - name: gofumpt
         # A diff check, not a suggestion. Formatting is never a review topic.
@@ -94,8 +143,27 @@ jobs:
         # Go-level door, and then yields a board or an extraction computed over
         # whatever happened to arrive. Assert the inputs before trusting anything
         # computed from them.
+        #
+        # **The counter below is a loop and not `ls | wc -l`, and the reason is `pipefail`.**
+        # It used to be a pipe, and the pipe swallowed `ls`'s exit code: a missing corpus
+        # yielded `n=0` instead of an error, so this floor was the *only* thing that turned a
+        # broken fetch red — a backstop nobody could see from here. `pipefail` is now set
+        # workflow-wide, which fixes the swallowing and creates a second problem at exactly
+        # this site: with `-e` also in force, `n="$(ls … | wc -l)"` would now abort the step
+        # **silently**, before the `::error::` line below could say what was wrong. Louder,
+        # but mute. So the count is taken a way that has no failure to propagate — an
+        # unmatched glob is zero files, which is a legitimate state and is reported *by the
+        # floor*, with its diagnostic. `if` keeps the test out of `-e`'s reach.
+        #
+        # The floor therefore still carries the truncation check it advertises, and no longer
+        # doubles as a swallowed-exit-code backstop; that job moved to `defaults.run.shell`.
+        # The `wc -c` below keeps its pipe, being already safe: `|| echo 0` makes the
+        # substitution succeed either way, so `pipefail` changes nothing there.
         run: |
-          n="$(ls testdata/spec/*.wast 2>/dev/null | wc -l | tr -d ' ')"
+          n=0
+          for f in testdata/spec/*.wast; do
+            if [ -e "$f" ]; then n=$((n + 1)); fi
+          done
           d=third_party/spec/interpreter/binary/decode.ml
           b="$(wc -c <"$d" 2>/dev/null | tr -d ' ' || echo 0)"
           echo "vendored $n .wast files; reference decode.ml $b bytes"
@@ -275,8 +343,18 @@ jobs:
         # by making it ask nothing — precisely the failure this job exists to end.
         # Assert the corpus is present before trusting any count that comes out of
         # it: a verdict without an identity check is hearsay.
+        #
+        # **The counter is a loop for `pipefail`'s sake — see the `build` job's copy of this
+        # note for the full reasoning.** In short: as `ls … | wc -l` it swallowed `ls`'s exit
+        # code and this floor was the only thing that noticed; with `pipefail` and `-e` both in
+        # force it would instead abort the step *before* the `::error::` line below, which is
+        # louder and mute. Counted this way there is no failure to propagate, an unmatched glob
+        # is honestly zero, and the floor keeps its diagnostic.
         run: |
-          n="$(ls testdata/spec/*.wast 2>/dev/null | wc -l | tr -d ' ')"
+          n=0
+          for f in testdata/spec/*.wast; do
+            if [ -e "$f" ]; then n=$((n + 1)); fi
+          done
           echo "vendored $n .wast files"
           if [ "$n" -lt 250 ]; then
             echo "::error::expected ≥250 .wast files, found $n — the suite fetch is broken and every board test would silently skip"

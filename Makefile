@@ -1,18 +1,72 @@
 GO ?= go
 
+# Recipes run under bash with `pipefail`. Make's default is `/bin/sh -c`, which does not
+# have it, and the cost was a real lost verdict: `make bench` piped `go test -bench` into
+# `tee`, so a benchmark package that failed to *compile* left `[build failed]` inside
+# new.txt while the pipeline reported success — the target exited 0 and benchstat printed a
+# confident table, geomean included, from whichever packages happened to build. The one
+# discipline that target exists to serve is *benchstat or it didn't happen*, and it was
+# satisfiable by output with a build failure in it (grave #289).
+#
+# **`-e` is deliberately absent, and that is not timidity.** Adding it would abort a recipe
+# at the first non-zero status, which is exactly how `strict` and `conformance` are written
+# *not* to behave: `strict` runs `out="$$(go test …)"; status=$$?` and then prints the FAIL
+# and SKIP lines it found. Under `-e` the shell would exit on the assignment, make would
+# still go red, and the diagnosis would be gone — a verdict that keeps its exit code and
+# loses its testimony. Make already fails a recipe on the line's final status, so `-e` buys
+# little here and costs the reporting. `pipefail` alone is the surgical change: pipe heads
+# stop being silently discarded, and nothing else moves.
+#
+# That absence is also why `conformance`'s `ls … | wc -l` counter below stays a pipe while
+# ci.yml's two copies of it had to become loops: those run under `-e` as well, where the failing
+# assignment kills the step *before* the floor can print its diagnosis. Here the assignment's
+# status is simply discarded by the next command in the `; \` chain, the count is honestly 0, and
+# the floor reports. Verified rather than assumed, both shells. Do not "fix" it for symmetry.
+#
+# **The flag is in SHELL and not in `.SHELLFLAGS`, and that is a portability fact with teeth.**
+# `.SHELLFLAGS` arrived in GNU Make 3.82; macOS ships **3.81**, the last GPLv2 release, where
+# it is accepted and **silently ignored**. The first version of this fix used it, went green,
+# and did nothing: `SHELL := /bin/bash` took effect, the flags did not, and `make bench` kept
+# swallowing build failures on the dev box while the same change would have worked on CI's
+# make 4.x. That is decision 0005's own promise inverted — a laptop board and a CI board
+# meaning different things — and it is the exact shape a fix is *most* likely to have when it
+# is only ever validated in CI. Caught by re-running the falsification locally, which is why
+# it is run locally. Embedding the flag in SHELL works on both: 3.81 invokes `$(SHELL) -c`,
+# 4.x invokes `$(SHELL) $(.SHELLFLAGS)`, and the flag rides along either way.
+SHELL := /bin/bash -o pipefail
+
 # Quality tools are pinned in tools/go.mod via `tool` directives (decision 0005),
 # so every target below runs the same version CI runs. Nothing here installs
 # anything globally.
 TOOL = $(GO) tool -modfile=tools/go.mod
 
-.PHONY: all build test vet fmt lint check vuln deadcode fuzz bench ratio cite spec-tests spec-ref tidy conformance strict opcodes opcode-drift keywords keyword-drift opcodes-text opcodes-text-drift memarg memarg-drift gate-census xcorpus
+.PHONY: all build test vet fmt lint check vuln deadcode fuzz bench ratio cite spec-tests spec-ref tidy conformance strict pipefail-check opcodes opcode-drift keywords keyword-drift opcodes-text opcodes-text-drift memarg memarg-drift gate-census xcorpus
 
 # The default gate. `check` is what must be green before a report — it is the
 # local mirror of CI, so a surprise in CI means a bug in this line, not a bug in
 # the habit.
 all: check
 
-check: fmt-check build vet lint test deadcode
+check: pipefail-check fmt-check build vet lint test deadcode
+
+# The falsification above, kept. `SHELL := /bin/bash -o pipefail` is a claim about how every
+# recipe in this file runs, and it is a claim that has already been silently false once — the
+# `.SHELLFLAGS` form was ignored by macOS's make 3.81 and nothing said so. A settings line
+# nobody checks is an intention, so the property is asserted rather than configured: under
+# `pipefail` a pipeline whose head fails is non-zero, so `false | true` is non-zero, so the
+# `if` does not fire. Without it the pipeline reports success and this target says which
+# mechanism went missing rather than leaving a silently weaker board.
+#
+# In `check` because that is where the cost of being wrong lands: every swallowed pipe head in
+# this file — and the `make bench` build failure that started this (grave #289) — is invisible
+# on a green board, which is the one place an instrument's absence must not be free.
+pipefail-check:
+	@if false | true; then \
+		echo "recipes are NOT running with pipefail: a pipe here discards its head's exit"; \
+		echo "status, which is how a failing 'go test | tee' reported success (grave #289)."; \
+		echo "SHELL is: $(SHELL)  — and note .SHELLFLAGS is ignored by GNU Make < 3.82."; \
+		exit 1; \
+	fi
 
 # Skip-forbidden mode (grave #29). Exported so every recipe below inherits it —
 # see internal/testenv for what it revokes and why. `check` deliberately does NOT
