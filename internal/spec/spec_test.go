@@ -6989,7 +6989,7 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	// The 12 wrong-message rows are 10 board-wide non-validator ones plus this lane's 2, which is why
 	// `validateMismatchCeiling` reads 0 on the default board while this lane keeps a pair. Stated
 	// because the two figures look like a disagreement and are two different populations.
-	const allOnPassFloor = 64639
+	const allOnPassFloor = 64676
 	boardBound(t, "allOnPassFloor", totalPass, allOnPassFloor, boardBoundSlack, floorBound,
 		"a gated feature regressed, which the Gated==0 assertion above cannot see: with every "+
 			"gate on, a broken feature turns a pass into a fail and leaves Gated at zero")
@@ -8889,7 +8889,7 @@ func TestPhase1Files(t *testing.T) {
 	// and `memory.grow` was taken during the work and accounts for the difference between 350 and 358.
 	// So the pre-registered figure held on the population it was written about, and the extra 8 are
 	// named as a scope decision rather than folded into a delta that would then have matched nothing.
-	const validateFailCeiling = 142
+	const validateFailCeiling = 112
 	const validateDeclineCeiling = 31
 	boardBound(t, "validateDeclineCeiling", validateDeclined, validateDeclineCeiling, 0, ceilingBound,
 		"slice 1 declined more instructions than it did — either an opcode left the signature "+
@@ -8931,22 +8931,37 @@ func TestPhase1Files(t *testing.T) {
 	//     amended. The self-retiring shape 0025 used for its own carve-out — named to one numbered
 	//     blocker, attribution read off the engine's own output, repealed by the blocker landing.
 	//
-	// What replaced it for the residual **104** is the admission census `TestPhase1Files` prints, not
-	// a second named set — quoted here in that instrument's own order, which is size then reason:
-	// 26 type mismatch, 19 duplicate export name, 12 memory size, 10 unknown memory, 10 unknown
-	// table, 6 unknown global, 5 constant expression required, 4 unknown function, 3 size minimum
-	// must not be greater than maximum, 2 unknown global 0, 2 unknown global 1, 2 unknown type,
-	// 1 offset out of range, 1 unknown function 0, 1 unknown function 7. That is Scott's
-	// residual flag answered — "a base that has stopped having a documented majority is a count
-	// agreeing with any 104" (Note: Scott, PR #307) — by a decomposition the board regenerates rather
-	// than by 104 hand-written sites, which is the smaller instrument for the same question. Naming
+	// What replaced it is the admission census `TestPhase1Files` prints, not a second named set. That
+	// is Scott's residual flag answered — "a base that has stopped having a documented majority is a
+	// count agreeing with any 104" (Note: Scott, PR #307) — by a decomposition the board regenerates
+	// rather than by hand-written sites, which is the smaller instrument for the same question. Naming
 	// them per site is available and is a decision to flag, not to take.
 	//
-	// The census also relocates the domain argument the ledger carried: membership is read from the
-	// bucket key, which is the vector's own expected message, and never from a filename prefix. A
-	// `simd_`-prefix predicate would have been a claim about the current sample rather than the space,
-	// and an under-matching trigger fails silently by construction.
-	const validateAdmitCeiling = 111
+	// # The decomposition was also *quoted* here, and the quote is deleted rather than re-based
+	//
+	// This paragraph used to carry the census inline — fifteen "N reason" rows in the board's own
+	// order. It drifted twice without anything noticing, in the two ways a copied measurement drifts:
+	// **silently by one** (it summed to 104 against a ceiling of 103, still listing an
+	// `offset out of range` row that had already drained), and then **loudly by eight** when the
+	// 17-head slice re-based the ceiling to 111 and left the list at 104. Neither drift could fail
+	// anything, because the list's only reader was a human and its only check was that a reader might
+	// add it up.
+	//
+	// So it is deleted, on the rule that a measured figure in prose is generated or it is gone
+	// (Scott's rider, ADR 0029). The board prints this census on every run, in size-then-reason order,
+	// and the printed copy cannot go stale against itself. A comment that restates an instrument's
+	// output is a second instrument with no falsification, and this one demonstrated the failure mode
+	// twice before it was removed:
+	//
+	//	go test ./internal/spec/ -run TestPhase1Files -v   # the `admitted N expected: …` rows
+	//
+	// What stays here is the *shape* claim, which is not a measurement and does not rot: the census's
+	// membership is read from each bucket's key, which is the vector's own expected message, and never
+	// from a filename prefix.
+	//
+	// A `simd_`-prefix predicate would have been a claim about the current sample rather than the
+	// space, and an under-matching trigger fails silently by construction.
+	const validateAdmitCeiling = 81
 	boardBound(t, "validateAdmitCeiling", validateAdmitted, validateAdmitCeiling, 0,
 		ceilingBound,
 		"the validator accepted an invalid module it used to refuse. This is the accept direction: "+
@@ -9481,7 +9496,7 @@ func TestPhase1Files(t *testing.T) {
 	//
 	// The all-on lane takes 552 where this one takes 358, and the 194-vector gap is attributed per
 	// file at `allOnPassFloor`.
-	const passFloor = 60756
+	const passFloor = 60786
 	boardBound(t, "passFloor", totalPass, passFloor, boardBoundSlack, floorBound,
 		"a regression in a grammar that used to answer, or the corpus moved")
 }

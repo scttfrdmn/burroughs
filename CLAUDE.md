@@ -140,7 +140,11 @@ Three separate mistakes are being avoided, and they were made in that order:
 1. **`sleep N && gh pr checks` — a duration is not a completion signal.** It
    guesses low and reports a pending run as though that were news, or guesses high
    and wastes the difference; either way the shell, not the CI system, decided
-   when to look. Same error as reading a verdict off a tool's stderr.
+   when to look. Same error as reading a verdict off a tool's stderr — and read the
+   verdict from `gh run view "$RUN" --json conclusion`, **never off the end of a watch
+   pipeline**: one command, no last-link ambiguity, nothing for a pipe to eat. A
+   procedure, not a control, because no repo gate reaches your own command
+   composition. (Directive: Scott, PR #331.)
 2. **`gh pr checks --watch` races the run's creation.** It watches whatever checks
    exist *now*, so seconds after a push it finds the previous commit's run,
    reports pass, and exits 0 — a stale green. Always resolve the run id from the
@@ -158,7 +162,8 @@ own output file while its completion notification was in flight. Polling a backg
 a timer is strictly worse than a bare `sleep`, because the signal already exists and the timer
 replaces it with a guess. The test is one question — **does a completion signal exist?** If
 yes, wait on the signal; if no (GitHub has no "run created" event), poll for the *condition* in
-a bounded loop that gives up loudly, which is the one honest `sleep` in this file. If nothing
+a bounded loop that gives up loudly — the one honest `sleep` here, and honest because the loop
+re-asks a real question until it gets an answer where a bare `sleep` asserts one. If nothing
 else is ready to do, say what is pending and stop: an idle turn costs nothing, a blocked tool
 call costs the whole wait. (Directive: Scott, PR #103 — *"stop using sleep"*, and he was right
 to be terse about it, the rule having already been written here by the agent that broke it.)
@@ -166,13 +171,6 @@ to be terse about it, the rule having already been written here by the agent tha
 The first two are *verdict channel and mechanism channel are different
 instruments* applied to time and to identity: ask the right channel, and ask it
 about the right run.
-
-The one honest timer is the `sleep 2` inside that loop: GitHub has no
-"run created" event to block on, so appearance genuinely has to be *polled*. Note
-the difference — the loop re-asks a real question until it gets an answer and
-gives up loudly after a bounded wait, where a bare `sleep` asserts an answer. When
-no completion signal exists, poll for the condition; never stand in for it with a
-duration.
 
 ### Local cross-architecture verification
 

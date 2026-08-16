@@ -310,11 +310,21 @@ type Arity struct {
 	End   int // values the block leaves on the stack when it completes
 }
 
-// Module validates every function body in m and returns the metadata the internal form needs.
+// Module validates m's module-level rules and every function body, and returns the metadata the
+// internal form needs.
 //
-// The module-level rules (limits, index-space well-formedness, element/data segment types,
-// start-function signature) are later slices'; this walks the code section.
+// **The module-level phase runs first, because the reference's does** (`check_module`, valid.ml:1151)
+// — every module-level rule is checked before any body is walked, so a module with a bad memory
+// limit *and* a bad body reports the limit. See module() for the phase list, which rules of it this
+// slice implements, and why the remaining ones are named there in order rather than omitted.
+//
+// This sentence used to read "the module-level rules … are later slices'; this walks the code
+// section." Limits and the data segments' memory index stopped being later slices' here; the rest
+// of that list still is, and module()'s table is now where it is recorded.
 func Module(m *binary.Module) (*Info, error) {
+	if err := module(m); err != nil {
+		return nil, err
+	}
 	info := &Info{Funcs: make([]FuncInfo, len(m.Funcs))}
 	for i := range m.Funcs {
 		fi, err := funcBody(m, &m.Funcs[i])

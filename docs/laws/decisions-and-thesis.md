@@ -85,3 +85,14 @@ amended rather than replaced.
   the project's own decisions rather than at its code: same defect (a citation nobody can resolve
   to the thing it claims), same remedy (name the artifact, not the intention). Doctrine by
   demonstration — 0016 sat `proposed` through the PR that implemented it. (Ruling: Scott, PR #142.)
+
+  - **The stamp's subject is the capability and the constraint, never the signature.** The law above
+    is about not claiming a stamp nobody gave; its mirror is asking for one on a question that was
+    already yours. Scott's standing form: *"I'll name the capability and the constraint, and the
+    signature is yours."* So an exported name, a parameter order, an error's wording are the actor's
+    to settle and to *state* — while whether a capability exists at all, and under what constraint,
+    is a principal's. Routing a signature upward reads as diligence and is the same instrument
+    misused in the other direction: it spends the one channel whose scarcity is a principal's
+    attention on a decision the record can already answer, and it buries the questions that do need
+    ruling among ones that do not. Flag what needs ruling; decide what needs deciding.
+    (Standing correction: Scott, PR #331.)
