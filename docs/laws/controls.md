@@ -121,7 +121,60 @@ amended rather than replaced.
     matched lookup is a parenthesised expression), because a count cannot separate two readers
     whose counts overlap. (Ruling: Scott, PR #159, naming the law from the finding.)
 
-### A total is not a ledger: where items are enumerable, assert per item and let the total be a checksum on the ledger rather than a claim in its own right.
+### Reconcile an extent, never floor it.
+
+- **Reconcile an extent, never floor it.** A one-sided bound is silent in the direction it does not
+  bound, and it is silent *with the right domain in hand* — which is what separates this from the
+  three laws it sits between. The floors law above is about a bound's **tightness** on a scalar, and
+  its remedy is the exact count. The ledger law below is about a bound's **subject**, and its remedy
+  is per-item assertion. *Coverage is a claim* is about a bound's **domain**. This one is about a
+  bound's **predicate strength** over a claim that has *two ends*: a range, an interval, a distance, a
+  population with a known other side. For an extent there is no "exact count" to reach for — there is
+  a start and an end, each needing its own derivation from the authority — so the remedy is not
+  tightening but **reconciliation**: derive both ends independently and require them to meet.
+  Containment is the pure specimen of the defect, being membership asked of a thing that has an
+  extent.
+
+  Three local specimens, and the third is the strongest evidence a law can have:
+
+  - **`minBoundPopulation` at 8, content with 18 of 19** (`internal/spec/boardbound_test.go`). The
+    board-bound walk's floor is a minimum over a population that is nineteen; a trigger that narrowed
+    by one shape left 18 and the floor said nothing. Only the exact count beside it fired, on #307.
+    That much is the floors law. What makes it *this* law's specimen too is the reason the floor was
+    written loose on purpose — "so a nineteenth bound is covered rather than ignored" — which is a
+    deliberate one-sidedness bought to tolerate growth, and the price is exactly blindness to shrink.
+    A one-sided bound chosen for a good reason is still one-sided.
+  - **`allOnPassFloor`'s slack of 250, read as evidence about a distance of 3.** Its row in the
+    `boardBound` table carries `slack 250`, so the floor cannot resolve any effect smaller than that
+    — and a bound's *not firing* was taken on both sides of a relay as evidence that a three-vector
+    effect had not happened. Two independent instances of the same move: treating silence as a
+    negative without asking whether the instrument's slack could have resolved the thing in question.
+    Not minted for that on its own — #315 removes the confusion structurally, and a law duplicating a
+    control is what the index economy cannot afford (ruling: Scott, PR #317) — so it stands here as a
+    specimen of the extent shape rather than as the mint's occasion.
+  - **Containment-as-floor, in a control built in the same PR to catch that very class.**
+    `TestReferenceRangeCitationsContainTheirSubjectsSite` (`internal/validate/vec_authority_test.go`)
+    checks that a `valid.ml:A-B` citation *contains* its subject's site, which catches a range that
+    has retargeted wholesale. It cannot catch a range whose end is short while still covering the
+    site — and that is precisely the defect its own author had just committed: `checkOffset` cited
+    `:390-392` for a quoted block running to `:393`. **The control failed to catch its own PR's
+    instance of the class it was written for**, and the off-by-one was found by hand instead. Both
+    ends of that range are derivable from the reference (the `require` and the wrapped string), so
+    reconciliation was available and containment was chosen.
+
+  Relayed corroboration, recorded as relayed: Scott reports the same law derived independently in
+  another of his projects, from an unrelated failure. That is the outside derivation the threshold
+  asks for, and it is worth distinguishing from the module-form case, where two "independent"
+  specimens turned out to share a mechanism and only impersonated corroboration.
+
+  The operational test is one question — **does the claim have two ends?** If yes, a check that
+  asserts one of them reads as checked and covers half. If no, the floors and ledger laws already say
+  what to do. And the diagnostic that would have caught all three specimens is cheap: state the
+  distance between the bound and what it bounds, because *an unasserted distance is the vacuum* and an
+  extent has two of them. (Ruling: Scott, PR #317, minted against a demotion rather than against the
+  ceiling.)
+
+### A total is not a ledger.
 
 - **A total is not a ledger: where items are enumerable, assert per item and let the total be a
   checksum on the ledger rather than a claim in its own right.** The mechanism is that **errors of
@@ -216,6 +269,19 @@ amended rather than replaced.
     conflation was visible at all.
 
   (Ruling: Scott, PR #295, from the Board section's own 544-vector gap.)
+
+  **Demoted on PR #317, and the heading above is the compressed key.** The index carried this law's
+  whole sentence — *where items are enumerable, assert per item and let the total be a checksum on the
+  ledger rather than a claim in its own right* — as its recall key, 347 bytes of `CLAUDE.md`. The
+  content is now enforced by two live controls that fail when it is violated: `TestClaudeMDIndexLedger`
+  over the index's own entries, and `alignmentAdmissions` in `internal/validate`. Under `claudeMDCeiling`'s
+  ruling (PR #298) — *a law with a live control that fails when it's violated does not need index prose
+  teaching it; the control teaches it, at the moment it matters* — that makes it the demotion candidate
+  the ceiling's comment had already named by name. So the key is now four words and the sentence lives
+  here, where the bold lead above still states it in full. Nothing was retracted and nothing moved to a
+  weaker status: **demotion is an index-economy operation, not a downgrade of the law**, and it is how
+  *reconcile an extent* above bought its room instead of raising the budget. One key out, one key in, no
+  ceiling movement. (Ruling: Scott, PR #317.)
 
 ### A suspiciously clean result is a tell, and *exactly zero* is the cleanest one.
 

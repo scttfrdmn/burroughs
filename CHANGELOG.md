@@ -694,6 +694,36 @@ weakly-ordered platform.
 
 ### Changed
 
+- **New law: *reconcile an extent, never floor it* — and it was paid for by a demotion, not by the
+  ceiling.** A one-sided bound is silent in the direction it does not bound, *with the right domain in
+  hand*, which is what separates it from the three laws it sits between: the floors law is about a
+  bound's tightness on a scalar, the ledger law about its subject, coverage-is-a-claim about its
+  domain, and this one about its **predicate strength** over a claim that has two ends. For an extent
+  there is no exact count to reach for, so the remedy is reconciliation — derive both ends from the
+  authority and require them to meet — and containment is the pure specimen of the defect. Three
+  local instances: `minBoundPopulation` at 8 content with 18 of 19; `allOnPassFloor`'s slack of 250
+  read on both sides of a relay as evidence about a distance of 3; and containment-as-floor in
+  `TestReferenceRangeCitationsContainTheirSubjectsSite`, which **failed to catch its own PR's instance
+  of the class it was written for** (the `:390-392` citation of a block running to `:393`). Scott
+  relays an independent derivation of the same law in another project, which is the outside
+  corroboration the mint threshold asks for.
+  - ***A total is not a ledger* is demoted to a four-word key** — its whole content is now enforced by
+    `TestClaudeMDIndexLedger` and `alignmentAdmissions`, which is the candidate `claudeMDCeiling`'s
+    own comment had already named. The corpus heading shortens with the key so the bijection stays
+    exact, and the full sentence survives as the body's bold lead. 347 bytes out, 116 + 93 in, net
+    **−138**: `CLAUDE.md` 38024 → 37886 against an unmoved 38400 ceiling. One key out, one key in, no
+    ceiling movement — the mechanism PR #298 ruled in place of raising the budget, exercised for the
+    first time.
+
+- **The pipefail checker states where its writ ends (#317).** `pipefail-check`'s domain is two
+  configured shells — this Makefile's recipes and `ci.yml`'s `run:` blocks — and an ad-hoc command
+  typed at a prompt is **outside it by design**. The recurring specimen is a chain ending in a
+  counting filter (`… go test … | grep -c FAIL`), where `grep` exits 1 on zero matches, so a clean run
+  reports failure and the exit code is an opinion about matches rather than about tests. `pipefail`
+  would not have helped: nothing in that pipeline failed. Three instances of one habit earn a sentence
+  at the checker saying what it does not cover, not a fourth mechanism — so the next recurrence reads
+  as a known boundary rather than a gap someone should close.
+
 - **CLAUDE.md's payload-rule specimen tally is struck, not incremented (#317).** The rule kept a
   running count of how many times a closing keyword had eaten an issue's lesson comment, which is a
   measured quantity living in prose — updating it to five would have scheduled the sixth. Replaced by
@@ -971,6 +1001,18 @@ weakly-ordered platform.
   element segment's *offset* and an element *expression* are different lines of the user's module.
 
 ### Fixed
+
+- **The blind-spot header put three vectors in the wrong column, and the wrong sentence came back as
+  an instruction.** `internal/validate/authority_test.go` said the validator's 103 admissions included
+  "three `module quote` vectors no validator rule can reach". Measured, all three
+  (`address.wast:213`, `simd_address.wast:143,151`) score **unsupported** — the wast reader does not
+  build a quoted module, so they never reach this package at all — and `align.go` and `validate.go`
+  both say so correctly about the same vectors. The consequence inverts: as admissions they would be
+  permanently unreachable residue inside a population expected to drain, and in the column they are
+  actually in they are drainable by harness work (#8's lane), so the 103 is expected to reach zero
+  whole. Recorded at the site rather than repaired quietly, because #317's residue treatment was asked
+  for on the strength of that sentence — a wrong premise about a population is the kind of error that
+  arrives back as work.
 
 - **`citecheck.sh` read `%#02x` as a citation and resolved it — a phantom *resolved* citation in the
   gate's own output (#308).** The `#` of a Go format verb is not preceded by an identifier, so it

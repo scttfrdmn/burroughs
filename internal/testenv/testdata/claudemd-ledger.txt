@@ -44,7 +44,8 @@
 103	law	graves-and-sweeps/sweep-after-a-grave
 211	law	graves-and-sweeps/lessons-are-indexed-by-shape-not-by-file-so-the-sweep-runs-backwards-too
 206	law	controls/floors-bound-the-catastrophic-case-only-an-exact-count-sees-a-small-silent-loss
-347	law	controls/a-total-is-not-a-ledger-where-items-are-enumerable-assert-per-item-and-let-the-total-be-a-checksum-on-the-ledger-rather-than-a-claim-in-its-own-right
+116	law	controls/reconcile-an-extent-never-floor-it
+93	law	controls/a-total-is-not-a-ledger
 198	law	controls/a-suspiciously-clean-result-is-a-tell-and-exactly-zero-is-the-cleanest-one
 146	law	controls/a-control-isnt-born-until-it-has-been-watched-die
 747	law	decisions-and-thesis/a-status-field-is-a-citation-to-an-approval-and-approvals-are-artifacts-with-provenance

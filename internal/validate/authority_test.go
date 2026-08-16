@@ -91,8 +91,33 @@ import (
 //
 // Worth having here rather than only in the ledger, because a coverage claim with no measured
 // direction of travel is a claim that can only ever be restated. The population this file describes
-// is now 103 admissions, three of which are the `module quote` vectors no validator rule can reach,
-// and the next slice's reward is a subtraction from that figure. (Note: Scott, on the #317 relay.)
+// is now 103 admissions, and the next slice's reward is a subtraction from that figure. (Note:
+// Scott, on the #317 relay.)
+//
+// # Correction: the three `module quote` vectors are not in the 103, and the sentence that said they
+// were is the one that was here
+//
+// The first version of the paragraph above read "103 admissions, three of which are the `module
+// quote` vectors no validator rule can reach". **Measured, they are in a different column.** All
+// three — `address.wast:213` and `simd_address.wast:143,151` — are `assert_invalid` commands whose
+// payload is a quoted module the wast reader does not build, so they score **unsupported**
+// (`address.wast: 259/259 pass, 1 unsupported`; `simd_address.wast: 47/47 pass, 2 unsupported`) and
+// are never handed to this package at all. `align.go` and `validate.go` both say `unsupported` about
+// the same three vectors correctly; this file's sentence was written from memory rather than from the
+// board, which is the drift a claim about *another instrument's column* invites.
+//
+// The consequence inverts what the wrong sentence implied, which is why it is worth more than a
+// silent edit. Carried inside the admissions they would be permanently-unreachable residue, and an
+// allowance holding residue implies a drain that can never complete — so the 103 would not be
+// expected to reach zero. In the column they are actually in they are **drainable by harness work**
+// (#8's text-format lane; #53 landed the lexer half, and a bare quoted module asserts *validity*,
+// which is this package's word to give), and the 103 is expected to reach zero whole. Both figures
+// keep their own instrument: the admissions are `validateAdmitCeiling`'s, the three are
+// `unsupportedCeiling`'s.
+//
+// Recorded rather than repaired quietly because the residue treatment in #317 was asked for *on the
+// strength of this sentence* — a wrong premise about a population is the one kind of error that
+// arrives back as an instruction. (Correction: on the #317 relay.)
 
 // TestUnknownCategoriesMatchTheReference is ErrUnknown*'s own promised control, in both
 // directions.
