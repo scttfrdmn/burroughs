@@ -21,6 +21,45 @@ weakly-ordered platform.
 
 ### Added
 
+- **The two `assert_invalid` module forms the harness could not ask, and a boundary that hands back
+  what it read.** `(assert_invalid (module binary …) "text")` and `(assert_invalid (module quote …)
+  "text")` get Kinds of their own — 17 vectors that scored `unsupported` since #9's arm landed, on
+  the recorded grounds that they "need a text-format assembler the arm does not have." They did not:
+  `text.EncodeModule` already existed and was already in use by the public-path fixtures. What was
+  missing was a *boundary* — a read function that could say "clean" without returning the module.
+  **`unsupported` 83 → 66**, the whole delta, and both lanes landed on the pre-registered forecast:
+  default 60749 → **60756 pass** / 269 fail / **66 unsupported** / 4053 gated, all-gates-on
+  64631 → **64639 pass** / 407 fail / 0 gated.
+  - **Each form is a three-part *ordered* assertion, and the first part gets its own named bucket
+    (Scott's ruling).** The module must come into being, validation must refuse it, and the message
+    must match. A decode or assembly refusal is not a pass and does not join the validation fail
+    bucket: those two facts have different owners, and a decoder refusing a module the spec says must
+    decode *and then* fail validation is a defect in the decoder that a validator-fail bucket would
+    make invisible. #288's message-match discipline extended one layer down — rejection alone is
+    never the verdict, because rejected-for-the-wrong-reason reads identically to
+    rejected-for-the-right-one. `StratumBinary`'s ceiling is 0 and shared with nothing, so the first
+    such refusal is a red in the decoder's own column.
+  - **`AssembleFunc`, not a widened `ReadTextFunc`, and the board is why.** Pointing `ReadTextFunc`
+    at `text.EncodeModule` **regressed 58 vectors** (`text 0 → 58`): the arm serves three Kinds, and
+    build mode does strictly more work than recognize mode — the emitter cannot yet write
+    `(table …)`/`(start …)` fields (#8) or #77's symbolic locals. Decision 0011's error-only
+    signature therefore stands, with the assembler as a separate capability nil-checked at its one
+    arm. Recorded in 0030 as a grave, because *the widening had been pre-measured and the
+    measurement still missed it*: the probe compared the two functions over `KindModuleQuote` and
+    `KindAssertMalformedText` and found zero disagreement across 1236 commands, while the arm's third
+    Kind — `KindModuleText`, 1119 bare bodies — was not in the probe's domain at all.
+  - **The binary arm checks its two decode paths against each other.** Its precondition runs
+    `DecodeFunc` and validation re-derives its own image, so the two can disagree; the quote arm
+    assembles once and hands the *same* image on, which is a property the binary arm cannot have.
+    The disagreement is bucketed rather than assumed away.
+  - **`Kind.isAssertInvalid()` replaces three equality tests, and the equality it replaced is the
+    grave.** `c.Kind == KindAssertInvalid` was correct when written and became a *sample* of its own
+    subject the moment the head split three ways — silently in the destination ledger, and loudly in
+    `TestGatedVectors`, whose bulk-arm predicate had narrowed the same way and dropped two gated
+    vectors into the per-line arm. `TestAssertInvalidKindsAreExactlyTheAssertInvalidForms` derives
+    the same set from `String()` and pins the enum at both ends, watched dying on five mutations
+    tripping five different assertions.
+
 - **Slice 5 of #9's validator: the instructions whose type reads a module index space (#319).** The
   bulk-memory and bulk-table family — `memory.init` / `copy` / `fill`, `data.drop`,
   `table.init` / `copy` / `fill` / `grow` / `size`, and `trunc_sat` — plus `memory.size` and
@@ -1029,6 +1068,24 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **A pre-measurement whose domain excluded a Kind the arm serves (grave #329).** The probe that cleared
+  the `ReadTextFunc` widening compared recognize mode against build mode over `KindModuleQuote` and
+  `KindAssertMalformedText` and reported **zero** disagreement across 1236 commands. The arm serves a
+  third Kind — `KindModuleText`, 1119 bare `(module <wat body>)` bodies — which was not in the domain,
+  and which is exactly the population that then regressed (`text 0 → 58`). The zero was vacuous on
+  its own terms besides: 1229 of the 1236 fail inside the shared `parseModule` before the encoder is
+  reached, so seven modules were the whole subject of the agreement. Derive a probe's domain from the
+  function's call sites, and decompose an exactly-zero before quoting it.
+- **A membership predicate that narrowed from a population to one form of it (grave #330).**
+  `c.Kind == KindAssertInvalid` *was* the `assert_invalid` population while there was one Kind, and
+  became a sample of its own subject when the head split three ways. Two sites, opposite failure
+  modes from one cause: `TestGatedVectors`' bulk arm failed **loudly**, because its per-line arm
+  counts the complement and demanded the two dropped vectors by name, while the destination ledger
+  failed **silently**, its pinned rows agreeing with each other while the population beneath them
+  grew by 17. Both now call `Kind.isAssertInvalid()`. The gate control's remedy text was also wrong
+  and is recorded as such — it said to add the lines to the per-line allowlist with the feature
+  named, which would have papered over the predicate: a bucket names where a symptom surfaces, not
+  where the defect lives (#194).
 - **The formatting gate reported a verdict on a question it never asked (#322).** Both `make
   fmt-check` and ci.yml's gofumpt step read `golangci-lint fmt --diff`'s exit code, where 0 means
   *no disagreement* and never *I looked* — so a run in which the formatter examined nothing reported a

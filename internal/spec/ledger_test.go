@@ -71,7 +71,7 @@ func TestAssertInvalidDestinationLedgerCloses(t *testing.T) {
 	arrived := map[string]bool{"memory_size3.wast": true, "unreached-invalid.wast": true}
 
 	type tally struct {
-		total, pass, declined, accepted, mismatch, gated int
+		total, pass, declined, accepted, mismatch, gated, precondition int
 		// unsupHead is reported and deliberately **not** part of the identity; see below.
 		unsupHead int
 	}
@@ -84,9 +84,15 @@ func TestAssertInvalidDestinationLedgerCloses(t *testing.T) {
 			t.Errorf("%s: parse: %v", f, err)
 			continue
 		}
+		// **The domain is all three `assert_invalid` forms, via the Kind's own predicate.** It was
+		// `c.Kind == KindAssertInvalid` and that was this ledger's subject exactly — until the
+		// 17-head slice gave two more forms their own Kinds, at which point the equality test
+		// became a *sample* of the subject and the rows below held still while the population grew
+		// by 17. The predicate is the fix and the second mechanism that pins it is in
+		// TestAssertInvalidKindsAreExactlyTheAssertInvalidForms; see `Kind.isAssertInvalid`.
 		aiLines := map[int]bool{}
 		for _, c := range s.Commands {
-			if c.Kind == KindAssertInvalid {
+			if c.Kind.isAssertInvalid() {
 				aiLines[c.Line] = true
 			}
 		}
@@ -112,16 +118,33 @@ func TestAssertInvalidDestinationLedgerCloses(t *testing.T) {
 		}
 		for key, fs := range r.Buckets {
 			for _, fl := range fs {
-				if fl.Kind != KindAssertInvalid {
+				if !fl.Kind.isAssertInvalid() {
 					continue
 				}
+				// The key is `<Kind.String()> <marker><message>`, so the form is stripped by the
+				// Kind that wrote it rather than by matching each form's literal. A literal list
+				// here would be a second place knowing the key format, and its failure mode is
+				// the worst available: an unstripped form falls into `default` and reports "the
+				// arm grew an outcome" when the arm merely has a form this reader never learned.
+				marker := strings.TrimPrefix(key, fl.Kind.String())
 				switch {
-				case strings.HasPrefix(key, "assert_invalid declined:"):
+				case strings.HasPrefix(marker, " declined:"):
 					tl.declined++
-				case strings.HasPrefix(key, "assert_invalid accepted, expected:"):
+				case strings.HasPrefix(marker, " accepted, expected:"):
 					tl.accepted++
-				case strings.HasPrefix(key, "assert_invalid expected:"):
+				case strings.HasPrefix(marker, " expected:"):
 					tl.mismatch++
+				case strings.HasPrefix(marker, " must decode"), strings.HasPrefix(marker, " must assemble"),
+					strings.HasPrefix(marker, " two decode paths disagree"):
+					// **The precondition destinations, named and pinned at zero rather than left
+					// to `default`.** These are the 17-head slice's own reason for existing: a
+					// `(module binary …)` whose image does not decode, or a `(module quote …)`
+					// whose source does not assemble, is a defect in the *decoder* or the
+					// *assembler* and never a validation verdict. Pinned at 0 in both rows below,
+					// which is what makes them falsifiable — caught by `default` they would be
+					// reported as an unknown outcome, which is true but says nothing about how
+					// many, and a total is not a ledger.
+					tl.precondition++
 				default:
 					// A fifth bucket shape means the arm grew an outcome this ledger does not
 					// know about, which is exactly the drift a closed identity is for.
@@ -132,8 +155,10 @@ func TestAssertInvalidDestinationLedgerCloses(t *testing.T) {
 		}
 		// **Head-keyed unsupported is reported beside the identity and never inside it, and the
 		// first draft got that wrong.** An `assert_invalid` *head* that is still unsupported is a
-		// command `classify` gave some other Kind — the 17 `(module binary …)`/`(module quote …)`
-		// forms — so it never entered `total`, and subtracting it produced **negative residuals**
+		// command `classify` gave some other Kind — when this was written, the 17 `(module
+		// binary …)`/`(module quote …)` forms, which now have Kinds of their own, leaving the
+		// population empty but the arithmetic exactly as load-bearing — so it never entered
+		// `total`, and subtracting it produced **negative residuals**
 		// in three files. Two populations that share a name and are not the same set; the
 		// negative pass count is what said so, which is why the residual is checked for sign
 		// rather than assumed.
@@ -142,7 +167,7 @@ func TestAssertInvalidDestinationLedgerCloses(t *testing.T) {
 				tl.unsupHead += n
 			}
 		}
-		tl.pass = tl.total - tl.gated - tl.declined - tl.mismatch - tl.accepted
+		tl.pass = tl.total - tl.gated - tl.declined - tl.mismatch - tl.accepted - tl.precondition
 		if tl.pass < 0 {
 			t.Errorf("%s: pass residual is %d, which is impossible: the four fail/gate "+
 				"destinations claim more commands than the file has assert_invalid vectors "+
@@ -160,6 +185,7 @@ func TestAssertInvalidDestinationLedgerCloses(t *testing.T) {
 		dst.accepted += tl.accepted
 		dst.mismatch += tl.mismatch
 		dst.gated += tl.gated
+		dst.precondition += tl.precondition
 		dst.unsupHead += tl.unsupHead
 	}
 
@@ -173,9 +199,9 @@ func TestAssertInvalidDestinationLedgerCloses(t *testing.T) {
 		why  string
 	}{
 		{
-			name: "already on the board (254 files) — the 2574 that left `unsupported`",
+			name: "already on the board (254 files) — the 2591 that left `unsupported`",
 			got:  already,
-			want: tally{total: 2574, pass: 1971, declined: 30, accepted: 103, mismatch: 10, gated: 460},
+			want: tally{total: 2591, pass: 1978, declined: 30, accepted: 111, mismatch: 10, gated: 462, precondition: 0},
 			why: "the destination split IS the engine's contribution: 1615 passes is the reward, " +
 				"386 named declines are the next slices' work plan, 103 admissions are the " +
 				"accept-direction stratum, 10 are wrong-message on a right refusal, and 460 " +
@@ -204,12 +230,27 @@ func TestAssertInvalidDestinationLedgerCloses(t *testing.T) {
 				"is the discriminator the paragraph above asks for, and here it is load-bearing " +
 				"in the other direction: had `accepted` moved down too, some of the reward would " +
 				"have been the validator ceasing to admit modules it should always have refused, " +
-				"and that would belong to a different account than a slice's",
+				"and that would belong to a different account than a slice's. " +
+				"**The 17-head slice is the first entry whose delta comes out of no destination at " +
+				"all**, and the row's own instruction — say which destination the delta came *from* — " +
+				"is what makes that worth stating rather than eliding: `total` rose 2574 → 2591, so " +
+				"the 17 `(module binary …)` and `(module quote …)` heads are commands `classify` " +
+				"previously gave `KindUnsupported` and now gives an `assert_invalid` Kind. They were " +
+				"in the residual below, not in any row here. The distinction is the whole reason this " +
+				"ledger keeps the residual as a checked complement rather than a log line: a " +
+				"conversion trades between two rows and leaves `total` fixed, a *widening* raises " +
+				"`total` and lowers the residual by the same 17, and the two shapes are only " +
+				"distinguishable because both quantities are pinned. The 17 split 7 pass / 8 admitted " +
+				"/ 2 gated, and the 8 are the honest half of the reward: an `assert_invalid` the " +
+				"validator accepts is a rule this package does not have, so the slice's figure is 7 " +
+				"verdicts earned and 8 rules named as owed. Recorded here rather than folded into the " +
+				"pass count, because `accepted` rising is the accept-direction stratum growing, which " +
+				"in every other row of this table would read as a regression",
 		},
 		{
 			name: "arrived with the arm (2 files) — corpus admission, not verdicts earned",
 			got:  fresh,
-			want: tally{total: 123, pass: 119, declined: 1, accepted: 0, mismatch: 0, gated: 3},
+			want: tally{total: 123, pass: 119, declined: 1, accepted: 0, mismatch: 0, gated: 3, precondition: 0},
 			why: "row 1 of #291's forecast, measured: these 123 were in no column before the arm, " +
 				"so their 119 passes must never be quoted as conversion. Slice 5 moved 2 of them, " +
 				"`declined` 3 → 1 into `pass`, and they are `memory_size3.wast`'s pair — the file " +
@@ -217,7 +258,10 @@ func TestAssertInvalidDestinationLedgerCloses(t *testing.T) {
 				"one this slice's *widening* converts rather than its region. A row of 123 moving " +
 				"by 2 is small enough to read as noise, which is why the file is named: this " +
 				"population has no gated members left to drain and no admissions at all, so any " +
-				"movement in it is a verdict changing",
+				"movement in it is a verdict changing. The 17-head slice moved this row by nothing, " +
+				"and the zero is a fact about the corpus rather than about the slice: all 17 widened " +
+				"heads live in files the arm already covered, so none of them landed here. Stated " +
+				"because an unmoved row beside a moved one invites the reading that it was missed",
 		},
 	} {
 		if c.got.total != c.want.total {
@@ -233,6 +277,7 @@ func TestAssertInvalidDestinationLedgerCloses(t *testing.T) {
 			{"accepted (admission stratum)", c.got.accepted, c.want.accepted},
 			{"mismatch (right refusal, wrong message)", c.got.mismatch, c.want.mismatch},
 			{"gated", c.got.gated, c.want.gated},
+			{"precondition (decode/assemble refused before validation)", c.got.precondition, c.want.precondition},
 		} {
 			if row.got != row.exp {
 				t.Errorf("%s: %s = %d, want exactly %d.\n\t%s\n\tRe-base this row in the PR that "+
@@ -246,7 +291,7 @@ func TestAssertInvalidDestinationLedgerCloses(t *testing.T) {
 		// having it: it is an assertion about the *partition* — that the five destinations are
 		// exhaustive and disjoint — rather than about any count. If the arm grows a sixth
 		// outcome, the rows still pass and this closes short.
-		sum := c.got.pass + c.got.declined + c.got.accepted + c.got.mismatch + c.got.gated
+		sum := c.got.pass + c.got.declined + c.got.accepted + c.got.mismatch + c.got.gated + c.got.precondition
 		if sum != c.got.total {
 			t.Errorf("%s: the five destinations account for %d of %d commands — %d unaccounted. "+
 				"Every vector arrives somewhere; a ledger that does not close names a destination "+
@@ -275,35 +320,62 @@ func TestAssertInvalidDestinationLedgerCloses(t *testing.T) {
 	// all ten now belong to other strata and the two quantities agree by *coincidence of one being
 	// empty*. Restoring the total to this identity would therefore pass today and be wrong again on
 	// the next stratum that refuses with the wrong message.
-	if got := already.declined + fresh.declined + already.accepted + fresh.accepted; got != 134 {
-		t.Errorf("validate-stratum declines + admissions = %d, want 134 to match "+
-			"validateDeclineCeiling (31) + validateAdmitCeiling (103). Those come from the stratum "+
+	//
+	// **The 17-head slice put the two paths' independence to work rather than merely relying on
+	// it.** The new forms write bucket keys carrying their own prefix — `assert_invalid (binary)
+	// accepted, expected: …` — while the stratum figures come from `Failure.Declined`/`.Accepted`,
+	// which are form-blind. So the left side of this identity had to learn a vocabulary the right
+	// side cannot see, and it does that by stripping the prefix *the Kind that wrote the key*
+	// supplies (`fl.Kind.String()`) rather than matching a literal. Had the classification been
+	// keyed on the literal `assert_invalid`, the eight new admissions would have fallen through to
+	// the unrecognized-bucket arm above — which is the failure this identity is *for*: two paths
+	// disagreeing because one stopped recognizing a population, not because the engine moved.
+	if got := already.declined + fresh.declined + already.accepted + fresh.accepted; got != 142 {
+		t.Errorf("validate-stratum declines + admissions = %d, want 142 to match "+
+			"validateDeclineCeiling (31) + validateAdmitCeiling (111). Those come from the stratum "+
 			"field and the arm's flags and this from the bucket keys; they must agree or one of them "+
 			"is describing a population the other is not. The stratum's third part "+
 			"(validateMismatchCeiling, 0) is deliberately outside this identity: the mismatch row "+
 			"below is board-wide and none of its 10 are the validator's", got)
 	}
-	if got := already.gated + fresh.gated; got != 463 {
-		t.Errorf("gated assert_invalid = %d, want 463 to match the unsupportedCeiling ledger's "+
-			"own split of the 2574 into 463 gated + 2111 verdicts", got)
+	if got := already.gated + fresh.gated; got != 465 {
+		t.Errorf("gated assert_invalid = %d, want 465 to match the unsupportedCeiling ledger's "+
+			"own split of the 2591 into 465 gated + 2126 verdicts", got)
 	}
-	if got := already.pass + fresh.pass; got != 2090 {
-		t.Errorf("assert_invalid passes = %d, want 2090 to match passFloor's account — 1023 at "+
+	if got := already.pass + fresh.pass; got != 2097 {
+		t.Errorf("assert_invalid passes = %d, want 2097 to match passFloor's account — 1023 at "+
 			"slice 1, of which it names 18 as answered from above the validator, plus slice 2's 648, "+
-			"slice 3's 58, #294's 2, and slice 5's 358 (356 converted + 2 from the arrived group)", got)
+			"slice 3's 58, #294's 2, slice 5's 358 (356 converted + 2 from the arrived group), and "+
+			"the 17-head slice's 7 — the only entry in this sum that raised the ledger's `total` "+
+			"instead of converting inside it", got)
 	}
 	// The residual, and the reason it is asserted rather than logged: it is the *complement* of
 	// this ledger's subject, so it is where a command goes when `classify` stops recognizing one.
-	// 17 is `unsupportedCeiling`'s own figure for what remains after the arm — the `(module
-	// binary …)` and `(module quote …)` forms, which need a text-format assembler the arm does not
-	// have. A drop here without a matching rise in `total` is an arm that grew coverage; a rise is
-	// a regression in `classify` that the total alone would show as a smaller population rather
-	// than as a loss.
-	if got := already.unsupHead + fresh.unsupHead; got != 17 {
-		t.Errorf("unsupported assert_invalid heads = %d, want 17 to match unsupportedCeiling's "+
-			"residual. These are commands classify gave a different Kind, so they are in no row "+
-			"of the ledger above — the two counts partition the corpus's assert_invalid heads "+
-			"between them and must sum to it", got)
+	// **It is now 0, and the zero is this slice's actual deliverable**: the 17 that stood here were
+	// the `(module binary …)` and `(module quote …)` forms, and the sentence this comment used to
+	// carry — that they "need a text-format assembler the arm does not have" — was falsified by
+	// the arm acquiring one (`AssembleFunc`, wired to `text.EncodeModule`). Recorded rather than
+	// deleted, because the prose was wrong in a specific and instructive way: `text.EncodeModule`
+	// already existed and was already in use by the public-path fixtures, so the cost was never a
+	// missing assembler but a missing *boundary* — a `ReadTextFunc` that could say "clean" without
+	// handing back what it read.
+	//
+	// The zero costs this check half its informativeness, and that is worth naming rather than
+	// enjoying. At 17 it moved in two directions and each meant something: a drop with a matching
+	// rise in `total` was the arm widening, a rise was `classify` regressing. At 0 it can only
+	// rise, so it has degraded from a two-sided identity to a one-sided tripwire — still live, and
+	// still the only thing that catches `classify` handing an `assert_invalid` head back to
+	// `KindUnsupported`, which the rows above would show as a *smaller population* rather than as
+	// a loss. That asymmetry is the reason it stays asserted at zero instead of being dropped for
+	// having nothing left to count: the direction that survives is the one that matters.
+	if got := already.unsupHead + fresh.unsupHead; got != 0 {
+		t.Errorf("unsupported assert_invalid heads = %d, want 0: every `assert_invalid` form the "+
+			"corpus contains — bare, `(module binary …)` and `(module quote …)` — now has a Kind, "+
+			"so this complement is empty and a nonzero value means `classify` stopped recognizing "+
+			"one of them. These are commands classify gave a different Kind, so they sit in no row "+
+			"of the ledger above; the two counts partition the corpus's assert_invalid heads "+
+			"between them and must sum to it, which is why a loss here shows up as `total` "+
+			"shrinking and not as a failure in any pinned row", got)
 	}
 
 	names := make([]string, 0, len(perArrived))

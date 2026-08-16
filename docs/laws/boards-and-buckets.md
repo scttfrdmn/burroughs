@@ -55,6 +55,28 @@ amended rather than replaced.
   fallback is not "whatever is available"** — see *a zero-fail board is not a green
   light, it is a lost instrument* above: the plan becomes the largest unsupported
   stratum and the artifact it names.
+  - **A bucket names where a symptom surfaces, not where the defect lives — so a slice's first
+    act is locating the defect, not fixing the named one.** This is the qualifier the rule above
+    needs rather than a separate rule, because without it the rule invites exactly one mislabel:
+    an issue filed from a bucket reads as precise *either way*, since the bucket key is a real
+    measured string whether or not it names the cause. #194 is the specimen it is named for — a
+    bucket that read as an interpreter gap and was an element-expression evaluator with no
+    `global.get` arm. Selecting work from the board stays right; what the qualifier forbids is
+    treating the bucket key as a diagnosis. Two consequences worth spelling out, because both
+    have since been paid for:
+    - **A control's remedy text is subject to the same rule.** `TestGatedVectors` printed
+      *"declined by a feature gate but is not in the allowed set; if the gate is right, add it
+      with the feature named"* over two vectors whose actual defect was its own bulk-arm
+      membership predicate narrowing when a Kind split (grave #330). Following the remedy would
+      have added two allowlist entries and left the predicate broken. A control can be right that
+      something is wrong and wrong about what — *an error message is testimony*, and a remedy
+      naming the wrong layer is a lying witness even when the verdict is right.
+    - **The relocation is reported, not silently absorbed.** When the defect turns out to sit
+      somewhere other than the bucket's name, the PR says so and the issue title is corrected —
+      otherwise the tracker accumulates precise-sounding titles that send the next reader to the
+      wrong layer, which is the cost #194 actually carried.
+    (Ruling: Scott, on the 17-head slice's relay: *"Write that into the law when it lands —
+    without it the rule invites exactly the mislabel #194 carried."*)
 
 ### Bucket size estimates the reward, not the job.
 
