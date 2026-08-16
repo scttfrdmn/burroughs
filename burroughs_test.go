@@ -27,10 +27,21 @@ func compile(t *testing.T, src string) []byte {
 	return wasm
 }
 
-// The three fixtures, one per outcome. `declining` uses `memory.size`, which #9's slice 1 has no rule
-// for — an instruction the *interpreter* implements, which is what makes the decline case meaningful:
-// the module runs and returns the right answer while carrying a statement that one construct was
-// never checked. A construct neither half supported would conflate decline with ErrUnsupported.
+// The three fixtures, one per outcome. `declining` uses `ref.null`/`ref.is_null`, which #9's
+// validator has no rule for yet — instructions the *interpreter* implements, which is what makes the
+// decline case meaningful: the module runs and returns the right answer while carrying a statement
+// that one construct was never checked. A construct neither half supported would conflate decline
+// with ErrUnsupported.
+//
+// **Re-pointed by slice 5, and it is the fifth re-point in that one diff.** The specimen was
+// `memory.size`, which slice 5 types, so this fixture reported "either the vocabulary grew (retire
+// this fixture) or the decline was lost" — correctly, and the first of those. The pattern is now
+// established well enough to name: a hand-named decline specimen is drawn from a population *every
+// slice drains*, so it is not a risk that a specimen dissolves but a schedule. What the fixture
+// asserts is that the three outcomes stay distinguishable, which is a property of the API and not of
+// any instruction; deriving the specimen from the validator's own vocabulary instead of naming one is
+// #326. Until then the constraint on a replacement is the one this comment opens with — implemented
+// by the interpreter, not yet typed by the validator — and that pair is what makes candidates scarce.
 const (
 	validWAT = `(module
 		(func (export "answer") (result i32) i32.const 42)
@@ -40,7 +51,7 @@ const (
 
 	invalidWAT = `(module (func (export "f") (result i32) i64.const 42))`
 
-	decliningWAT = `(module (memory 1) (func (export "pages") (result i32) memory.size))`
+	decliningWAT = `(module (func (export "isnull") (result i32) (ref.is_null (ref.null func))))`
 )
 
 // gatedWATs are well-formed modules from proposals whose gates are off in this build — grave #301's
@@ -115,16 +126,21 @@ func TestTheThreeOutcomesAreDistinguishable(t *testing.T) {
 		}
 		// The message is the campaign's public work plan (0029), so it has to name the construct.
 		// Asserted on the mnemonic rather than the whole string, which is the validator's to word.
-		if !strings.Contains(d.Error(), "memory_size") {
+		//
+		// `ref_null` and not `ref_is_null`: the validator reports the *first* instruction it cannot
+		// type, and in this module that is the operand rather than the operator. Worth stating,
+		// because a fixture asserting the outer mnemonic would be asserting an evaluation order
+		// nothing promises.
+		if !strings.Contains(d.Error(), "ref_null") {
 			t.Errorf("the decline does not name the construct: %v", d)
 		}
 
-		res, err := in.Call("pages")
+		res, err := in.Call("isnull")
 		if err != nil {
 			t.Fatalf("a declined module did not run: %v", err)
 		}
 		if len(res) != 1 || res[0] != I32(1) {
-			t.Errorf("pages() = %v, want [i32:1]", res)
+			t.Errorf("isnull() = %v, want [i32:1]", res)
 		}
 	})
 }

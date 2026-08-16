@@ -63,15 +63,18 @@ func (v *validator) instr(i int, in binary.Instr) error {
 	}
 	if in.Prefix != 0 {
 		// The prefixed regions are 0xFB (GC), 0xFC (bulk memory/table), 0xFD (SIMD), 0xFE
-		// (threads). Slice 2 (#305) types 0xFD and the other three stay declined — which is what
-		// keeps an unchecked module from being reported valid, and keeps the decline census a work
-		// plan for the slices that own them rather than a silence.
+		// (threads). Slice 2 (#305) types 0xFD and slice 5 types 0xFC; 0xFB and 0xFE stay
+		// declined — which is what keeps an unchecked module from being reported valid, and keeps
+		// the decline census a work plan for the slices that own them rather than a silence.
 		//
-		// A region dispatch rather than one arm per region: the three that decline decline
-		// *identically*, and three copies of one refusal is three places to forget when the next
+		// A region dispatch rather than one arm per region: the regions that decline decline
+		// *identically*, and a copy of that refusal per region is a place to forget when the next
 		// slice claims one of them.
-		if in.Prefix == prefixSIMD {
+		switch in.Prefix {
+		case prefixSIMD:
 			return v.vecInstr(in)
+		case prefixBulk:
+			return v.bulkInstr(in)
 		}
 		return fmt.Errorf("%w: prefixed opcode %#02x %#02x", ErrUnsupported, in.Prefix, in.Op)
 	}
@@ -643,11 +646,13 @@ func (v *validator) globalAt(idx uint32) (binary.ValType, bool, error) {
 }
 
 // requireTable checks a table index resolves.
+//
+// A lookup whose result is discarded, delegating to `tableTypeAt` so that the index space is
+// walked in one place — see that function on why slice 5 made a second implementation of this
+// question a live risk rather than a hypothetical one.
 func (v *validator) requireTable(idx uint32) error {
-	if n := uint32(v.mod.ImportedTables()) + uint32(len(v.mod.Tables)); idx >= n {
-		return fmt.Errorf("%w %d (%d in scope)", ErrUnknownTable, idx, n)
-	}
-	return nil
+	_, err := tableTypeAt(v.mod, idx)
+	return err
 }
 
 // sameTypes compares two type sequences by identity.

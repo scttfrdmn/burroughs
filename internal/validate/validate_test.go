@@ -42,6 +42,18 @@ import (
 // that needs more says so at its own site rather than every row running all-on.
 func validated(tb testing.TB, wat string, gate func(*binary.Features)) (*Info, error) {
 	tb.Helper()
+	return Module(decodedModule(tb, wat, gate))
+}
+
+// decodedModule is validated's first two stages, for the rows that need the *module* rather than
+// the verdict.
+//
+// Split out rather than copied: the two `Fatalf` messages below are the whole content of the
+// "a row the encoder refused says nothing about this package" discipline, and a second copy of
+// them is a second place for that discipline to be weakened one word at a time. The caller that
+// asked is TestPrefixBulkIsTheRegionBinaryDispatches, which reads a decoded instruction's prefix.
+func decodedModule(tb testing.TB, wat string, gate func(*binary.Features)) *binary.Module {
+	tb.Helper()
 
 	img, err := text.EncodeModule([]byte(wat))
 	if err != nil {
@@ -57,7 +69,7 @@ func validated(tb testing.TB, wat string, gate func(*binary.Features)) (*Info, e
 		tb.Fatalf("the decoder refused this row's module, so it says nothing about the "+
 			"validator: %v\n%s", err, wat)
 	}
-	return Module(m)
+	return m
 }
 
 // mustValidate is the accept direction: the module is valid and this package must agree.
@@ -505,23 +517,39 @@ func TestSelectAnnotationArityIsTheValidatorsRule(t *testing.T) {
 // lookup task where `memory.copy` is a work item — `errNoSignature`'s own argument. A decline that
 // names only a byte is a visible refusal with unusable testimony.
 func TestDeclinesAreDeclinesAndNameTheirOpcode(t *testing.T) {
-	for _, c := range []struct{ name, wat, want string }{
+	for _, c := range []struct {
+		name, wat, want string
+		gate            func(*binary.Features)
+	}{
 		{
 			// A single-byte opcode with no numeric type prefix: falls past every structural arm
 			// and out of `signature` as errNoSignature.
+			//
+			// **Re-pointed by slice 5, and this is the third re-point in that one diff** — the
+			// specimen was `memory.grow`, which slice 5 types. The population this row draws from
+			// is *drained by every slice*, so a hand-named specimen here is a scheduled failure
+			// rather than a risk: what the row asserts is that an unclaimed single-byte opcode
+			// declines by name, and the specimen is only the current witness to it. `ref.null` is
+			// slice 6's (11 of the 39 declines slice 5 leaves), and when slice 6 lands this row
+			// moves again. Deriving the specimen instead of naming it is #326.
 			name: "single-byte, no signature",
-			wat:  `(module (memory 1) (func (result i32) (memory.grow (i32.const 0))))`,
-			want: "memory_grow",
+			wat:  `(module (func (result funcref) (ref.null func)))`,
+			want: "ref_null",
 		},
 		{
-			// The prefixed regions, all four of which are later slices'.
+			// A prefixed region no slice has claimed. **Re-pointed by slice 5**: the specimen was
+			// `memory.copy` under the sentence "the prefixed regions, all four of which are later
+			// slices'", and two of the four are now this package's, so the sentence and the row moved
+			// together. `ref.i31` is `0xfb 0x1c`, and the gate is on to clear the *decoder* — what
+			// is being read is the validator's refusal below it.
 			name: "prefixed region",
-			wat:  `(module (memory 1) (func (memory.copy (i32.const 0) (i32.const 0) (i32.const 0))))`,
-			want: "prefixed opcode 0xfc",
+			wat:  `(module (func (result i31ref) (ref.i31 (i32.const 0))))`,
+			want: "prefixed opcode 0xfb",
+			gate: func(f *binary.Features) { f.GC = true },
 		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			_, err := validated(t, c.wat, nil)
+			_, err := validated(t, c.wat, c.gate)
 			if !errors.Is(err, ErrUnsupported) {
 				t.Fatalf("want a decline (ErrUnsupported), got %v.\nAccepting an instruction this "+
 					"slice cannot type reports *valid* for a module nothing type-checked, which is "+

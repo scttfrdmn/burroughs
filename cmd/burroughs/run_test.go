@@ -169,8 +169,11 @@ func TestRunSubcommandOutcomes(t *testing.T) {
 		(func (export "divz") (param i32) (result i32) local.get 0 i32.const 0 i32.div_s)
 		(func (export "nothing"))
 		(memory (export "mem") 1))`)
+	// `ref.null`/`ref.is_null`: implemented by the interpreter, not yet typed by the validator.
+	// Re-pointed by slice 5, which types the previous specimen `memory.size` — see the note on
+	// decliningWAT in the root package for why this specimen is a schedule rather than a risk.
 	declining := writeModule(t, "declining.wasm",
-		`(module (memory 1) (func (export "pages") (result i32) memory.size))`)
+		`(module (func (export "isnull") (result i32) (ref.is_null (ref.null func))))`)
 	invalid := writeModule(t, "invalid.wasm", `(module (func (export "f") (result i32) i64.const 42))`)
 	gated := writeModule(t, "gated.wasm", `(module (memory i64 1))`)
 	malformed := filepath.Join(t.TempDir(), "malformed.wasm")
@@ -203,13 +206,13 @@ func TestRunSubcommandOutcomes(t *testing.T) {
 			stdout: "answer\nadd\ndivz\nnothing\n", stderrNone: true,
 		},
 		"a decline runs and reports on stderr": {
-			argv: []string{declining, "pages"}, code: exitOK,
+			argv: []string{declining, "isnull"}, code: exitOK,
 			stdout:    "i32:1\n",
-			stderrHas: []string{"memory_size", "--strict"},
+			stderrHas: []string{"ref_null", "--strict"},
 		},
 		"--strict refuses a decline": {
-			argv: []string{"--strict", declining, "pages"}, code: exitRefused,
-			emptyOut: true, stderrHas: []string{"memory_size"},
+			argv: []string{"--strict", declining, "isnull"}, code: exitRefused,
+			emptyOut: true, stderrHas: []string{"ref_null"},
 		},
 		"invalid is refused, naming the rule": {
 			argv: []string{invalid, "f"}, code: exitRefused,

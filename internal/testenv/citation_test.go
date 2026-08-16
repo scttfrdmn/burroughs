@@ -5,6 +5,7 @@ import (
 	"go/parser"
 	"go/token"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -200,6 +201,135 @@ func TestEveryCitedTestNameResolves(t *testing.T) {
 	if findings == 0 {
 		t.Logf("%d citations of %d distinct names, all resolving against %d defined functions",
 			len(cites), len(distinct), len(defined))
+	}
+}
+
+// runFlagName matches a `-run <Name>` argument in a shell command — the gates' way of citing a
+// test. Anchored on the flag rather than on the name's shape so that a `-run` whose argument is a
+// regex alternation or a lowercase typo is captured and then fails to resolve, rather than being
+// silently skipped for not looking like a test name.
+var runFlagName = regexp.MustCompile(`-run ([A-Za-z_][A-Za-z0-9_]*)`)
+
+// TestEveryGateCitedTestNameResolves is TestEveryCitedTestNameResolves' domain extended to the
+// place where the same drift is silent instead of loud — and it is #322's shape on a second
+// surface, found by sweeping for it.
+//
+// # The mechanism, measured rather than reasoned
+//
+// `go test -run ThisNameDoesNotExist ./internal/spec/` prints `testing: warning: no tests to
+// run`, then `PASS`, then `ok … [no tests to run]`, and **exits 0**. So a gate that invokes a test
+// by name reports a passing verdict about a question it never asked, the moment that name stops
+// resolving. Two of those gates exist and they are the same control on both sides of the mirror:
+//
+//	Makefile:164        $(STRICT) $(GO) test -v -run TestAllGatesOnLeavesNothingGated ./internal/spec/
+//	ci.yml (all-on job) go test -v -run TestAllGatesOnLeavesNothingGated ./internal/spec/
+//
+// A rename of that function — an ordinary, blameless refactor — turns both into no-ops that report
+// success. Nothing in the tree noticed: the existing resolver above walks `.go` files and reads
+// *comments*, so a Makefile recipe and a workflow step are outside the only instrument that checks
+// this class of citation. **An instrument's domain is an assertion it cannot check about itself**,
+// and this is that assertion coming due.
+//
+// # Why this is worse than the dangling comment the resolver above catches
+//
+// A stale comment misinforms a reader, who can then go and look. A stale `-run` misinforms *CI*,
+// which cannot. The failure is in the direction that produces green — the whole reason #322 is
+// filed about the formatting gate, and the reason `-run` deserves the same treatment: the two share
+// the shape "the gate's success is indistinguishable from its non-execution", which is the
+// verdict-channel/mechanism-channel confusion pointed at a gate instead of at a tool.
+//
+// No instance is live at the time of writing — `TestAllGatesOnLeavesNothingGated` resolves — so
+// this lands as a tripwire on a prospective defect, which is the only time a tripwire can be
+// written calmly.
+//
+// # The exemption, and why it is keyed on the mode flag rather than on `XXX`
+//
+// The fuzz and bench gates say `-run XXX -fuzz <target>` / `-run XXX -bench .`, where `XXX` is an
+// idiom meaning *match no unit test, I only want the other mode's subject*. That is a deliberate
+// non-citation and has to be excused. It is excused by the presence of a **mode flag on the same
+// line**, not by the literal `XXX`: keying on the literal would also excuse a bare `-run XXX` with
+// no mode flag after it, which is a gate that runs nothing at all and is precisely the defect this
+// test exists for. A guard's trigger predicate is itself a claim about the space, and "the argument
+// is XXX" is a claim about spelling where "this command selects a fuzz or bench subject" is a claim
+// about meaning.
+//
+// **The first draft named only `-fuzz`, and the six fuzz gates it was written against all passed** —
+// the bench gate at Makefile:280 is the same idiom with the other mode flag, and it was reported as
+// a dangling citation of a test named `XXX`. An under-matching trigger predicate, caught in the
+// direction that is merely noisy; the same omission on the *other* side of an exemption is the one
+// that fails silently, which is why it is recorded here rather than quietly widened.
+//
+// # Comment lines are skipped, and that is a scope statement rather than a convenience
+//
+// `Makefile:367` contains the words "`a -run list of test names`" inside a comment explaining why a
+// gate runs a whole package instead. That is prose, and it was the second false positive. What this
+// test is about is the **silent-green mechanism**: a command that exits 0 while selecting nothing.
+// A stale citation in a Makefile comment is the ordinary loud kind — it misinforms a reader who can
+// then go and look — and it belongs to the resolver above, whose domain is prose. So lines whose
+// first non-space character is `#` are not commands and are not read as such.
+func TestEveryGateCitedTestNameResolves(t *testing.T) {
+	defined, _ := citationInventory(t)
+
+	// Reuses the resolver's own definition set, deliberately: two populations of "the tests that
+	// exist", built two ways, would eventually disagree, and then a gate citation would be called
+	// dangling by one and fine by the other. The floor below is what makes the reuse safe.
+	if len(defined) < 200 {
+		t.Fatalf("found %d defined test functions; a population this small means the walk stopped "+
+			"reaching the tree, and every gate citation below would be reported dangling", len(defined))
+	}
+
+	gates := []string{"../../Makefile"}
+	workflows, err := filepath.Glob("../../.github/workflows/*.yml")
+	if err != nil {
+		t.Fatalf("globbing workflows: %v", err)
+	}
+	// Globbed rather than enumerated — *scope controls to the space, not to the current sample* —
+	// so a workflow added tomorrow is covered without anyone remembering this file exists.
+	gates = append(gates, workflows...)
+
+	cited := 0
+	for _, path := range gates {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			t.Errorf("%s: %v", path, err)
+			continue
+		}
+		for i, line := range strings.Split(string(b), "\n") {
+			if strings.HasPrefix(strings.TrimSpace(line), "#") {
+				continue // prose, not a command; see the scope note above
+			}
+			if strings.Contains(line, "-fuzz ") || strings.Contains(line, "-bench ") {
+				continue // the `-run XXX -<mode>` idiom; see the exemption note above
+			}
+			for _, m := range runFlagName.FindAllStringSubmatch(line, -1) {
+				name := m[1]
+				cited++
+				if defined[name] {
+					continue
+				}
+				t.Errorf("%s:%d invokes `-run %s`, which no test function defines:\n\t%s\n\t"+
+					"This gate exits 0 and prints PASS when the name matches nothing, so it is "+
+					"currently reporting a verdict about a question it never asks (#322's shape). "+
+					"Re-point it at the control's real name, or delete the gate — a gate whose "+
+					"subject no longer exists is worse than no gate, because it reads as coverage",
+					path, i+1, name, strings.TrimSpace(line))
+			}
+		}
+	}
+
+	// Vacuity, and it is the assertion that keeps the rest honest: every check above is a loop over
+	// matches, so a regex that stopped matching, a moved Makefile, or a renamed workflow directory
+	// all produce a clean green over an empty set. Two named gates cite a test today, so a floor of
+	// 2 is the measurement and not a guess; it is a floor rather than an equality because gates
+	// citing controls is a habit this project should be free to grow.
+	if cited < 2 {
+		t.Errorf("found %d `-run <Name>` citations across %d gate files, want at least 2 (the "+
+			"all-gates-on control, invoked from both the Makefile and ci.yml). A comparison against "+
+			"an empty set succeeds — either the gates stopped citing tests by name, which is worth "+
+			"knowing, or this test stopped being able to see them", cited, len(gates))
+	}
+	if cited > 0 {
+		t.Logf("%d `-run <Name>` gate citations across %d files, all resolving", cited, len(gates))
 	}
 }
 

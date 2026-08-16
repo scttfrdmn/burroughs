@@ -203,8 +203,32 @@ fmt:
 # progress rather than the formatting. The exit code is the verdict; testing for
 # non-empty output instead would also trip on `go: downloading ...` lines when
 # the module cache is cold.
+#
+# **The probe above the verdict is #322**, and it is the mechanism channel this
+# gate was missing: `fmt --diff` exits 0 both when the tree is clean and when the
+# formatter examined nothing at all, so silence had two meanings and the gate
+# reported the flattering one. A verdict channel cannot say whether it looked.
+#
+# So the formatter is first asked a question whose answer is known: a source with
+# a blank line at the top of a function body, which is a gofumpt rule that plain
+# gofmt leaves alone. If the reformatted text comes back equal to the input (or
+# empty), the tool did not run, did not load its formatters, or is not gofumpt —
+# and the tree check below would have passed regardless. `--stdin` is used because
+# `fmt --diff --stdin` prints the *formatted source* and exits 0 either way, which
+# makes it useless as a verdict and exactly right as a liveness probe.
+#
+# The two halves are deliberately different instruments: the probe proves gofumpt
+# is reachable and opinionated, the `./...` run proves the tree agrees with it.
 fmt-check:
-	@$(TOOL) golangci-lint fmt --diff ./... || { echo "run: make fmt"; exit 1; }
+	@probe="$$(printf 'package p\n\nfunc F() {\n\n\tx := 0\n\t_ = x\n}\n')"; \
+	got="$$(printf '%s\n' "$$probe" | $(TOOL) golangci-lint fmt --diff --stdin 2>/dev/null)"; \
+	if [ -z "$$got" ] || [ "$$got" = "$$probe" ]; then \
+		echo "fmt-check cannot confirm the formatter ran: a deliberately misformatted"; \
+		echo "probe came back unchanged or empty, so the tree check below would report"; \
+		echo "'formatted' whether or not gofumpt ever looked at it (#322)."; \
+		exit 1; \
+	fi; \
+	$(TOOL) golangci-lint fmt --diff ./... || { echo "run: make fmt"; exit 1; }
 
 lint:
 	$(TOOL) golangci-lint run ./...

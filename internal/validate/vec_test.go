@@ -290,15 +290,30 @@ func TestVecDeclinesWhatThisSliceDoesNotType(t *testing.T) {
 			"plan for the flip", err)
 	}
 
-	// The other three prefixed regions stay declined, and the message names the opcode so the
-	// bucket is a work item. 0xfc 0x08 is `memory.init`, whose slice is not this one.
-	_, err := validated(t, `(module (memory 1) (data "x") (func (memory.init 0 (i32.const 0) (i32.const 0) (i32.const 0))))`, nil)
+	// The prefixed regions that are still someone else's stay declined, and the message names the
+	// opcode so the bucket is a work item.
+	//
+	// **Re-pointed by slice 5, not retired.** This row's specimen was `memory.init` — `0xfc 0x08`,
+	// "whose slice is not this one" — and slice 5 is that slice, so the assertion became false by
+	// the work landing. The risk it was filed against is *a prefixed region falling through to an
+	// accept*, which is a property of the dispatch and not of any one region, so the specimen moves
+	// to a region that is still unclaimed rather than the test closing: `0xfb 0x1c` is `ref.i31`,
+	// GC's, and it needs the gate on only to get *past the decoder* — the validator's refusal is
+	// this slice's own and is what is being read.
+	//
+	// 0xFE (threads) has no specimen here because the text encoder has no operator for it
+	// ("unknown operator memory.atomic.notify"), so a module cannot be built to carry one. That
+	// half is covered at the dispatch instead, over all four prefixes as a partition —
+	// TestPrefixedRegionsPartitionIntoClaimedAndDeclined — which is where a control belongs when
+	// the space is larger than the specimens available for it.
+	_, err := validated(t, `(module (func (result i31ref) (ref.i31 (i32.const 0))))`,
+		func(f *binary.Features) { f.GC = true })
 	if err == nil {
-		t.Fatal("a bulk-memory instruction validated; slice 2 claims 0xFD only, so the other " +
-			"three regions must still decline rather than fall through to an accept")
+		t.Fatal("a GC instruction validated; the regions no slice has claimed must decline " +
+			"rather than fall through to an accept")
 	}
-	if !errors.Is(err, ErrUnsupported) || !strings.Contains(err.Error(), "0xfc") {
-		t.Errorf("the 0xFC region declined with %q, want an ErrUnsupported naming the prefix", err)
+	if !errors.Is(err, ErrUnsupported) || !strings.Contains(err.Error(), "0xfb") {
+		t.Errorf("the 0xFB region declined with %q, want an ErrUnsupported naming the prefix", err)
 	}
 }
 
