@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"math/bits"
 	"strconv"
 	"strings"
 	"testing"
@@ -387,4 +388,85 @@ func declaredValTypes(t *testing.T) map[string]ValType {
 		}
 	}
 	return out
+}
+
+// TestMemargPackingRoundTrips is the control the writer/reader pair owes, and it is deliberately
+// narrow about what it can prove.
+//
+// `StageMemarg` and `Memarg` are two halves of one bit layout, so this test cannot show that the
+// layout is *right* — it agrees with itself by construction, and the fields' real meanings are
+// checked where they come from (`decodeMemop`'s vectors) and where they are used (`checkAlignment`,
+// `memAccess`). What it can show is the one failure the pair has on its own: a shift or mask that
+// moves in one half and not the other. That was a live near-miss rather than a hypothetical — see
+// Memarg's comment on the two unmasked readers #306's six bits would have broken — and the fix put
+// the layout in one place precisely so this check has a subject.
+//
+// The lane index is in the table because it is the third tenant of the same word: `stageLaneIdx`
+// writes bits 32-39, and a memarg composer that widened into them would corrupt an immediate
+// belonging to eight of the 45 rows while every memarg assertion here still passed.
+//
+// **The mask was watched *not* die twice, and the second time is the interesting one.** Deleting
+// `StageMemarg`'s `&memargAlignMask` left every round-trip row green, first because the table only
+// passed exponents that fit — the fix for which is the two `in: 0x4…` rows, since the sole caller
+// hands over a whole memarg *flags byte* whose bit 6 is multi-memory's `has_idx` — and then *still*
+// green with those rows present, because **`Memarg` masks on the way out as well**. The two masks
+// make the pair insensitive to either one alone.
+//
+// So what the writer's mask actually protects is not the exponent, which the reader would clean up
+// anyway: it is the bits **above** the field. An unmasked `0x42` sets bit 46, which belongs to no
+// tenant today and to the fourth one tomorrow — precisely the latent break `Memarg`'s comment
+// describes #306's six bits nearly making live in the other direction. `wantNoSpill` is the
+// assertion that has that subject, and it is the only one of the four here that fails when the mask
+// goes. A round trip cannot see a bit that no reader reads; only a claim about the word can.
+func TestMemargPackingRoundTrips(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		offset uint64
+		memIdx uint64
+		in     uint32 // what the caller hands StageMemarg — a flags byte at the real call site
+		want   uint32 // what Memarg must read back
+		lane   uint8
+	}{
+		{name: "all zero"},
+		{name: "natural i32 align", in: 2, want: 2},
+		{name: "widest exponent", in: memargAlignMask, want: memargAlignMask},
+		{name: "explicit memory index", memIdx: 1, in: 2, want: 2},
+		{name: "wide offset past a LEB byte", offset: 4294967296, in: 3, want: 3},
+		{name: "every tenant at once", offset: 128, memIdx: 3, in: 4, want: 4, lane: 15},
+		// `0x42` is the flags byte the multi-memory row in internal/text asserts: align 2, bit 6
+		// set. The exponent read back must be 2, and bit 6 must not have moved into the word.
+		{name: "flags byte with the multi-memory bit set", memIdx: 1, in: 0x42, want: 2},
+		{name: "flags byte at the widest legal value", in: 0x7f, want: memargAlignMask},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			imm1 := StageMemarg(tc.memIdx, tc.in) | uint64(tc.lane)<<memargLaneShift
+			offset, memIdx, alignExp := Memarg(tc.offset, imm1)
+			if offset != tc.offset {
+				t.Errorf("offset = %d, want %d", offset, tc.offset)
+			}
+			if uint64(memIdx) != tc.memIdx {
+				t.Errorf("memIdx = %d, want %d — a memarg reader that stopped masking would "+
+					"report the alignment or the lane as a memory index", memIdx, tc.memIdx)
+			}
+			if alignExp != tc.want {
+				t.Errorf("StageMemarg(_, %#02x) reads back as alignExp %d, want %d — either the "+
+					"two halves disagree about where the exponent sits, which silently changes "+
+					"every alignment verdict, or the writer stopped masking the flags byte's "+
+					"non-exponent bits", tc.in, alignExp, tc.want)
+			}
+			if got := MemargLane(imm1); got != tc.lane {
+				t.Errorf("MemargLane = %d, want %d — a memarg field widened into the lane's bits",
+					got, tc.lane)
+			}
+			// The word's own boundary: nothing above the exponent field. Written against the
+			// declared shift and mask rather than a literal 46, so widening the field is a
+			// deliberate edit here and not a silent re-interpretation.
+			wantNoSpill := memargAlignShift + bits.Len64(memargAlignMask)
+			if spill := imm1 >> wantNoSpill; spill != 0 {
+				t.Errorf("StageMemarg(%d, %#02x) sets %#x above bit %d, where no tenant lives yet "+
+					"and the next one will: the flags byte's non-exponent bits were not masked off",
+					tc.memIdx, tc.in, spill, wantNoSpill-1)
+			}
+		})
+	}
 }

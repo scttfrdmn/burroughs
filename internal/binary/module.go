@@ -650,6 +650,33 @@ type Func struct {
 	// Nil is the normal case and a missing key is not an error, exactly as for Labels; consumers
 	// go through `CastTypes`.
 	Casts map[int][]ValType
+
+	// Selects holds `select`'s optional result-type annotation (`0x1C`), keyed the way the three
+	// side tables above are — the retention `immVecValType`'s own comment deferred until a
+	// consumer existed ("the retention it wants is its own field, on the day #9 needs the
+	// annotation"). #294 is that day; `internal/validate`'s annotated arm is the consumer.
+	//
+	// **The whole vector, not its single legal element**, and the reference is why. `valid.ml:443`
+	// caps the arity at one — `require (List.length ts = 1)`, "invalid result arity other than 1
+	// is not (yet) allowed" — but that is the *validator's* rule, and the two corpus vectors it
+	// converts are a `(result)` of arity 0 and a `(result i32 i32)` of arity 2 (`select.wast:368`,
+	// `:373`). A decoder that kept only `ts[0]` would have discarded the fact those vectors are
+	// about, and a decoder that *rejected* them would be manufacturing malformedness out of a
+	// typing rule — both wire forms decode, and their arity is a question for the layer that has
+	// the reference's `require`.
+	//
+	// **`Instr.Imm0`'s reference-ness bit stays, and it is a derived cache of this field rather
+	// than a second source for it.** The interpreter dispatches `select` onto one of two stacks and
+	// cannot afford a map lookup per execution to learn which (#196/#197's argument, at
+	// `immVecValType`); the validator needs the types themselves. So the word carries a bit
+	// computed from the vector at decode, and `TestSelectImm0AgreesWithTheAnnotation` asserts the
+	// two agree over the whole shape of the annotation — the bidirectional control two fields
+	// holding one fact are owed, written when the second field landed rather than after they
+	// disagreed.
+	//
+	// Nil is the normal case and a missing key is not an error, as for Labels; consumers go
+	// through `SelectTypes`.
+	Selects map[int][]ValType
 }
 
 // LabelVector returns the label vector retained for the instruction at index i, and whether one
@@ -675,6 +702,20 @@ func (f *Func) LabelVector(i int) ([]uint32, bool) {
 // which is no type at all — and silently answer the wrong question.
 func (f *Func) CastTypes(i int) ([]ValType, bool) {
 	v, ok := f.Casts[i]
+	return v, ok
+}
+
+// SelectTypes returns the result-type annotation retained for the `select` at index i, and whether
+// one was retained at all.
+//
+// Two results, and here the distinction is load-bearing in a way it is not for the other three
+// tables: **`select` has two opcodes and only one of them carries a vector.** `0x1B` is the bare
+// form and files nothing; `0x1C` files its vector, which may legally be *empty* on the wire — a
+// `(select (result) …)` decodes and is rejected by the validator's arity rule, not by the decoder
+// (`select.wast:368`). So `len(v) == 0` is exactly the case a consumer must be able to tell from
+// "this is the unannotated opcode", and the second result is the only thing that can tell it.
+func (f *Func) SelectTypes(i int) ([]ValType, bool) {
+	v, ok := f.Selects[i]
 	return v, ok
 }
 
@@ -934,6 +975,80 @@ func BlockType(imm0, imm1 uint64) (typeIdx uint32, valType ValType, empty bool) 
 		return uint32(imm0), ValType{}, false
 	}
 }
+
+// Imm1's three tenants for a memory access, and the reason they are packed rather than
+// spread: `Instr` is fixed-width by 0002, a memarg already spends Imm0 on the u64 offset,
+// and the eight `v128.loadN_lane` rows carry a third value on top of that.
+//
+//   - **bits 0-31** — the memory index, `memopIndex`'s result (0 when bit 6 of the flags
+//     byte is clear, multi-memory's explicit index otherwise).
+//   - **bits 32-39** — the lane index, for the memarg+laneidx rows only, written by
+//     stageLaneIdx *after* the memarg has taken both words.
+//   - **bits 40-45** — the alignment exponent, `flags & 0x3f`, six bits because the flags
+//     byte's `>= 0x80` rejection bounds it at 63.
+//
+// **The alignment's retention is #306, and the reason it was not retained is worth keeping
+// rather than deleting.** The original comment was right that alignment carries no execution
+// semantics — it is a validation constraint (`valid.ml:380-389`'s `check_memop`) — and wrong
+// about the conclusion, because "only #9 reads it" stopped being a reason not to keep it on
+// the day #9 existed. Dropping it made the validator *accept* 54 `assert_invalid` vectors it
+// knows how to reject, sixteen of them under-rejections no message-match could see
+// (`validateAdmitCeiling`'s note, internal/spec/spec_test.go).
+const (
+	// memargLaneShift is where stageLaneIdx packs a lane index, above the memory index.
+	memargLaneShift = 32
+
+	// memargAlignShift is where decodeMemop packs the alignment exponent, above the lane
+	// index so the eight rows that carry both do not contend.
+	memargAlignShift = 40
+
+	// memargAlignMask bounds the exponent at the six bits `flags & 0x3f` can produce.
+	memargAlignMask = 0x3F
+)
+
+// Memarg reads a memory access's two staged words back into the three facts decodeMemop put
+// there: the static offset, the memory index, and the alignment exponent.
+//
+// **An accessor for BlockType's reason, and this packing has the evidence that reason needs.**
+// Before #306 the layout had two tenants and four hand-rolled readers, and *two of them
+// masked while two did not*: the SIMD lane paths wrote `ins.Imm1&0xFFFFFFFF` because the lane
+// index taught them to, while the core load/store path passed the bare `ins.Imm1` as a memory
+// index. That was correct only because nothing packed above bit 32 for those rows — a latent
+// break that #306's six bits would have made live, turning every `i32.load` with natural
+// alignment into memory index `2<<40`. So the packing rule lives here, where decodeMemop
+// writes it, and a third tenant cannot silently falsify a consumer's arithmetic.
+//
+// The lane index is deliberately *not* returned: it is a different immediate (immLaneIdx)
+// that happens to share the word, and MemargLane is its own accessor for exactly that reason.
+func Memarg(imm0, imm1 uint64) (offset uint64, memIdx, alignExp uint32) {
+	return imm0, uint32(imm1), uint32(imm1>>memargAlignShift) & memargAlignMask
+}
+
+// StageMemarg composes the word Memarg reads, and it exists so the layout has exactly one
+// definition.
+//
+// **decodeMemop used to compose this inline**, which put the shift and the mask in one file and the
+// reader in another — tolerable while nothing else needed to build the word, and not once a second
+// producer arrived. `internal/text`'s round-trip expectations are that producer: with the alignment
+// retained (#306) a decoded memarg carries a value those rows have to *state*, and stating it as a
+// hand-written `2 << 40` would be a second copy of the layout in a file with no reason to know it.
+// The Memarg comment directly above records what a second reader of this packing already cost; a
+// second writer is the same defect facing the other way.
+//
+// The exponent is masked here rather than trusted: it comes from six bits of a flags byte at the
+// only call site that matters, and a caller passing a wider value would otherwise corrupt whatever
+// tenant lands above bit 45.
+func StageMemarg(memIdx uint64, alignExp uint32) uint64 {
+	return memIdx | uint64(alignExp&memargAlignMask)<<memargAlignShift
+}
+
+// MemargLane reads the lane index stageLaneIdx packs above a memarg's memory index.
+//
+// Separate from Memarg because the two are separate immediates: every memory access has a
+// memarg, and only the eight `v128.loadN_lane`/`v128.storeN_lane` rows add a lane. A single
+// accessor returning both would hand every caller a field that is zero-and-meaningless for
+// 37 of the 45 rows, which is the shape that gets read anyway.
+func MemargLane(imm1 uint64) uint8 { return uint8(imm1 >> memargLaneShift) }
 
 // Global is one global: its type, mutability, and initializer.
 type Global struct {
@@ -1204,6 +1319,44 @@ func OpMnemonic(op uint32) (string, bool) {
 		return "", false
 	}
 	return info.mnemonic, true
+}
+
+// HasMemarg reports whether an instruction's immediates include a memarg — that is, whether
+// Memarg may be read back from its two words. `prefix` is 0 for a single-byte opcode.
+//
+// **Exported so a consumer's rule can have a *derived* domain rather than a guessed one.** The
+// alignment constraint (`valid.ml:380-389`) applies to exactly the rows carrying `immMemop`, and
+// that set lives in the generated table — 45 rows at the pinned revision, 23 core and 22 vector.
+// A consumer inferring it from the mnemonic instead would be asserting that "load"/"store" in a
+// name means "carries a memarg", which is a claim about the naming of every proposal not yet
+// merged upstream; `memory.copy` and `table.get` are already counterexamples in one direction,
+// and an atomic access arriving with a memarg would be one in the other. So the question is
+// answered by the table that knows, which is also what lets `internal/validate`'s width table be
+// checked against this predicate in both directions instead of against its own key set.
+func HasMemarg(prefix byte, op uint32) bool {
+	var tab map[uint32]opInfo
+	switch prefix {
+	case 0:
+		tab = opTable
+	case 0xfb:
+		tab = opTableFB
+	case 0xfc:
+		tab = opTableFC
+	case 0xfd:
+		tab = opTableFD
+	default:
+		return false
+	}
+	info, found := tab[op]
+	if !found {
+		return false
+	}
+	for _, im := range info.imms {
+		if im == immMemop {
+			return true
+		}
+	}
+	return false
 }
 
 // PrefixedOp returns a prefixed sub-opcode's mnemonic and immediate count, and whether the region's

@@ -6738,8 +6738,14 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	//	                             ----    ----
 	//	                             2697    2697
 	//
-	// The stratum's total closes against this lane's board too: 962 validate fails + 90 from the
-	// other strata = the 1052 the lane reports.
+	// The stratum's total closes against this lane's board too — **and the decomposition this
+	// sentence used to give was wrong in both of its terms** (grave #312). It read "962 validate fails
+	// + 90 from the other strata = the 1052 the lane reports"; re-measured at that same revision, the lane's
+	// split is **952 validate + 100 other (46 encode, 54 exec)**. Both terms are off by 10 in
+	// opposite directions, so the identity closed to 1052 either way — which is the defect the
+	// destination ledger's own header names, *errors of opposite sign cancel into a plausible total*,
+	// caught here by re-measuring the parts while re-basing the whole rather than by anything the sum
+	// could ever have said. A total that agrees is not evidence that its addends do.
 	//
 	// **Two lanes moving by exactly the same 648 is a suspiciously clean agreement, so the mechanism
 	// is stated rather than the coincidence admired**: core SIMD is default-*on* since #227/#233, so
@@ -6749,7 +6755,81 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	// relaxed decline arm, which is a decline exactly as the region-wide decline before it was. A
 	// figure identical across two lanes is either one cause visible twice or two errors of the same
 	// size; this one is the first, and the sentence that says so is the difference.
-	const allOnPassFloor = 63977
+	//
+	// # Slice 3 (#306): 63977 → 64072, and this time the lanes differ — by exactly one file
+	//
+	// The default lane moved +58 and this one +95, so the *disagreement* is the figure worth reading.
+	// Per-file, measured on both lanes at both revisions rather than inferred from the totals:
+	//
+	//	                       default lane    all-gates-on lane
+	//	align.wast              121 → 159       121 → 159        +38
+	//	align64.wast              (gated)       120 → 157        +37   ← the whole difference
+	//	simd_align.wast          88 → 100        88 → 100        +12
+	//	simd_{load,store}{8,16,32,64}_lane.wast   +1 each         +8
+	//	                        ---------       ---------
+	//	                             +58             +95
+	//
+	// **The extra 37 is `align64.wast` and nothing else**: memory64's own alignment corpus, gated on
+	// the default board, converted by the same rule with the gate on. That is the property to want
+	// from an alignment rule — it reads the memarg's alignment exponent and the operation's natural
+	// width, never the memory's index type, so a 64-bit memory's vectors convert without a second
+	// rule — and it is *checkable* here precisely because the two lanes' deltas are unequal. Slice 2's
+	// paragraph above had to argue a suspiciously clean agreement down to one cause; this one has a
+	// disagreement, and its account is complete only when every vector of the gap is attributed to a
+	// file.
+	//
+	// The redistribution is the default lane's shape, at this lane's size — measured, since the
+	// paragraph above is a record of what happens when a split is asserted from arithmetic:
+	//
+	//	                       all-gates-on lane, slice 2 → slice 3
+	//	validate stratum            952 → 857
+	//	  declined                  679 → 679    unmoved
+	//	  admitted                  266 → 175    −91  = the default lane's −54 plus align64's 37
+	//	  wrong message               7 →   3    −4   = the same four vectors, in both lanes
+	//	other strata (46+54)        100 → 100    unmoved
+	//	                           ----   ---
+	//	                           1052   957
+	//
+	// `declined` unmoved in both lanes is the sentence: 95 rules became *right*, and none became
+	// *known*. Note the difference from the default lane in what remains — `validateMismatchCeiling`
+	// is 0 there and this lane keeps 3, so the wrong-message population is drained in the default
+	// board's subject and not in the corpus.
+	//
+	// **The floor did not fire, and 95 < 250 is why**: this lane's measurement drifted a third of the
+	// way through `boardBoundSlack` while the constant stayed green. That is not the slack
+	// misbehaving — it is what slack *is* — but it is why the re-base is taken from the printed total
+	// rather than from whether the bound complained. A floor left behind by a jump it can explain
+	// stops catching anything smaller than the jump.
+	//
+	// # `select t` (#294): 64072 → 64075, three where the default lane took two
+	//
+	// Same PR as slice 3 and the same class — the decoder dropping what the validator needs — so the
+	// two deltas are quoted apart rather than as the +98 this lane actually moved. The third vector is
+	// the whole content of the asymmetry: `select.wast:368` and `:373` convert on both lanes, and
+	// `ref.wast:78` (`(select (result (ref 1)))`, expecting `unknown type`) converts only here,
+	// because a concrete `(ref 1)` annotation needs the GC gate to decode at all. Slice 3's extra 37
+	// was one gated *file*; this one is one gated *type form* inside a file the default lane already
+	// scores — `ref.wast` is 1/13 → 2/13 here and 1/1 with 12 gated there.
+	//
+	// The redistribution, measured at both revisions on this lane, and it moves the sub-population
+	// slice 3 left alone:
+	//
+	//	                       all-gates-on lane, slice 3 → #294
+	//	validate stratum            857 → 854
+	//	  declined                  679 → 676    −3   ← the two select vectors plus ref.wast's
+	//	  admitted                  175 → 175    unmoved
+	//	  wrong message               3 →   3    unmoved
+	//	other strata (46+54)        100 → 100    unmoved
+	//	                           ----   ---
+	//	                            957   954
+	//
+	// **Read the two tables together and the PR's shape is the argument for having folded the issues:**
+	// slice 3 drained `admitted` and `mismatch` with `declined` untouched, #294 drains `declined` with
+	// the other two untouched. One PR, one cause (retention through the decoder), and two disjoint
+	// sub-populations — which is a stronger claim about the seam than either delta could make alone,
+	// and it is only visible because the sub-partition is three counters rather than two and a
+	// subtraction.
+	const allOnPassFloor = 64075
 	boardBound(t, "allOnPassFloor", totalPass, allOnPassFloor, boardBoundSlack, floorBound,
 		"a gated feature regressed, which the Gated==0 assertion above cannot see: with every "+
 			"gate on, a broken feature turns a pass into a fail and leaves Gated at zero")
@@ -6898,16 +6978,14 @@ func TestVerdictsPartitionCommands(t *testing.T) {
 	}
 }
 
-// The admission stratum's bucket-key prefix and the one expected message the alignment population
-// carries. Both are strings the *corpus* supplies, not names this test invents: the prefix is
-// `classify`'s own key for "ran to completion and said yes", and the reason is the vector's own
-// `assert_invalid` expectation. Membership in the ledger below is decided by these two and never by
-// a file-name prefix — `simd_align.wast` and `align.wast` are the same population under this
-// instrument, which is the point (the domain is the message, not the filename's era).
-const (
-	admittedKeyPrefix        = "assert_invalid accepted, expected: "
-	alignmentAdmissionReason = "alignment must not be larger than natural"
-)
+// admittedKeyPrefix is the admission stratum's bucket-key prefix — `classify`'s own key for "ran to
+// completion and said yes". A string the *corpus* supplies, not a name this test invents, which is
+// what lets the census below be keyed by the vectors' own expected messages rather than by a
+// file-name prefix or an era.
+//
+// It keyed a per-vector ledger for the alignment population until #306; see the census at
+// `validateAdmitCeiling` for what replaced it and why.
+const admittedKeyPrefix = "assert_invalid accepted, expected: "
 
 // TestPhase1Files runs every suite file that phase 1 can meaningfully score,
 // so the board covers the byte-string corpus rather than one file.
@@ -6918,9 +6996,6 @@ func TestPhase1Files(t *testing.T) {
 	byHead := map[string]int{}
 	byCap := map[Capability]int{}
 	aggBuckets := map[string][]Failure{}
-	// `file:line` for every admission attributed to the alignment message; the ledger at
-	// validateAdmitCeiling is checked against it in both directions.
-	alignAdmitted := map[string]bool{}
 	for _, f := range files {
 		s, err := ParseFile(filepath.Join(suiteDir, f))
 		if err != nil {
@@ -6942,20 +7017,6 @@ func TestPhase1Files(t *testing.T) {
 		}
 		for k, fs := range r.Buckets {
 			aggBuckets[k] = append(aggBuckets[k], fs...)
-			// Per-vector identity for the alignment admissions, collected here because
-			// `aggBuckets` drops the file name and `file:line` is the only thing that turns a
-			// named allowance into a named *set* rather than a second copy of the count. The
-			// population is derived from the bucket key — the vector's own expected message —
-			// and never from the file name, so a `simd_`-prefix guess cannot decide membership.
-			// The ledger it feeds is `alignmentAdmissions`, at validateAdmitCeiling.
-			if reason, ok := strings.CutPrefix(k, admittedKeyPrefix); !ok || reason != alignmentAdmissionReason {
-				continue
-			}
-			for _, fl := range fs {
-				if fl.Kind == KindAssertInvalid {
-					alignAdmitted[fmt.Sprintf("%s:%d", f, fl.Line)] = true
-				}
-			}
 		}
 	}
 	// The corpus identity, printed *with* the counts and not merely available somewhere
@@ -6972,6 +7033,42 @@ func TestPhase1Files(t *testing.T) {
 	// run so the PR's Board line quotes measured buckets rather than a recollection.
 	for _, k := range (&Result{Buckets: aggBuckets}).BucketsBySize() {
 		t.Logf("  fail %5d  %s", len(aggBuckets[k]), k)
+	}
+
+	// The admission stratum, re-printed on its own. Every one of these lines is already above, in
+	// the fail-bucket list it is filtered out of — the point is that up there it is interleaved by
+	// size with a hundred other keys, and *this column is the accept direction*. A reader asking
+	// "what does this validator still say yes to" should not have to grep a prefix out of the work
+	// plan to find out.
+	//
+	// **A census and not a ledger, and that is the answer to #307's flag** ("a base that has stopped
+	// having a documented majority is a count agreeing with any 104"). The residual now has a
+	// documented majority and the document is this loop's output, regenerated every run: the fix for
+	// an undocumented count was to make the count print its own decomposition, not to hand-name 104
+	// sites. Extending the naming — a `file:line` set per member, as `alignmentAdmissions` held for
+	// the alignment population until #306 drained it — is a decision to flag rather than to take: it
+	// buys per-site membership checks and costs a ledger that a principal has already declined once.
+	type admission struct {
+		reason string
+		n      int
+	}
+	var admitted []admission
+	for k, fs := range aggBuckets {
+		if reason, ok := strings.CutPrefix(k, admittedKeyPrefix); ok {
+			admitted = append(admitted, admission{reason, len(fs)})
+		}
+	}
+	// Size descending, then by reason, so two runs of the same board print the same order — a
+	// census whose row order depends on map iteration cannot be diffed between PRs, which is the
+	// only use it has.
+	slices.SortFunc(admitted, func(a, b admission) int {
+		if a.n != b.n {
+			return b.n - a.n
+		}
+		return strings.Compare(a.reason, b.reason)
+	})
+	for _, a := range admitted {
+		t.Logf("  admitted %5d  expected: %s", a.n, a.reason)
 	}
 
 	// The unsupported column as a work plan, not a number. Printed every run so the
@@ -8511,8 +8608,9 @@ func TestPhase1Files(t *testing.T) {
 	//
 	// That paragraph ended "a future non-zero here is a regression with no ceiling to hide under,
 	// which is the point of not giving it one" — and **slice 2 is the future it was talking about,
-	// which is the part worth reading before the constants below.** It is 4 now. What the sentence
-	// got right is that the rise had to be *explained*; what it got wrong is that a population with
+	// which is the part worth reading before the constants below.** It went to 4 there and back to 0
+	// with #306. What the sentence got right is that the rise had to be *explained*; what it got
+	// wrong is that a population with
 	// no bound was being watched at all. It was not being watched: `validateAdmitCeiling` was
 	// `validateFail − validateDeclined`, so the four new wrong-message rows landed *inside the
 	// accept-direction constant* and the only reason they were noticed is that the destination
@@ -8565,179 +8663,142 @@ func TestPhase1Files(t *testing.T) {
 	// away. Declaring a decline for a reason that is not out-of-vocabulary puts two different facts in
 	// one column, which is the error this board's whole sub-partition exists to refuse, and it would
 	// buy that by leaving `v128.load`/`v128.store` untyped for the interpreter — paying 50 passes for
-	// *worse information*. The condition attached to the ruling is the named ledger below.
+	// *worse information*. The condition attached to the ruling was a named ledger, since retired —
+	// see the note at `validateAdmitCeiling` for what it was and what replaced it.
 	//
-	// The alignment slice is filed with a tripwire of its own (#306): at 54 it is now the largest
+	// The alignment slice was filed with a tripwire of its own (#306): at 54 it was the largest
 	// admitted bucket, and a debt is discharged by a tripwire and never by an intention.
-	const validateFailCeiling = 553
-	const validateDeclineCeiling = 391
+	//
+	// # Slice 2's twenty, drained: 553 → 495, and the ledger retired itself as designed
+	//
+	// #306 landed the memarg's alignment through the decoder and `check_memop`'s first `require`
+	// through the validator, and **both faces of the one cause closed together**: the 54 admissions
+	// are 0 and the 4 wrong-message refusals are 0. The second half is the part worth stating,
+	// because it was a *forecast* — those four modules carry two defects, and the claim that the
+	// reference's step order (`check_memop` before the body's `end`) is what picks the message could
+	// only be settled by running it. It was run. 54 + 4 = 58, against a 553 → 495 stratum delta.
+	//
+	// **The ledger retired itself with no edit to the arithmetic**, which is property 3 below
+	// arriving on schedule: the alignment message stopped being reachable, its measured set emptied,
+	// and the vacuity check fired with the instruction to delete the ledger. That instruction was
+	// itself wrong by 38 — it said "re-base this ceiling to 142", and 142 was slice 1's *base*, the
+	// figure with 38 alignment members already inside it. The correct residual is 104. A
+	// self-retiring control that names its own successor value has to compute that value the same way
+	// the live path does, or the last thing it says is a number nobody re-derived.
+	//
+	// # `select t`, drained: 495 → 493, and this one is the decline channel doing its job
+	//
+	// #294 retained `select`'s result-type annotation and typed it, and the two vectors it converts
+	// are **declines**, not admissions: `select.wast:368` and `:373` were refused, correctly, by an
+	// arm that said `instruction not in this slice: select_t` — which was *true*, and is the decline
+	// channel's actual meaning as the ruling three paragraphs up defines it. Slice 3's two vectors
+	// were the other case, the one that ruling calls false: rules the validator knew and could not
+	// reach for want of an operand. The same PR landed both, so this stratum's two sub-ceilings fall
+	// for opposite reasons in one diff, and the reason each is quoted separately is that only the
+	// *decline* fall is evidence about vocabulary. `validateDeclineCeiling` 391 → 389 is that fall;
+	// `validateAdmitCeiling` is unmoved at 104 and `validateMismatchCeiling` at 0.
+	const validateFailCeiling = 493
+	const validateDeclineCeiling = 389
 	boardBound(t, "validateDeclineCeiling", validateDeclined, validateDeclineCeiling, 0, ceilingBound,
 		"slice 1 declined more instructions than it did — either an opcode left the signature "+
 			"table or a later slice's rule regressed into a decline")
-	// 142 → 158: the +16 accounted above, one cause (the dropped alignment immediate). Re-based
-	// rather than left stale because a bound left behind by a jump it can explain stops catching
-	// anything smaller than the jump — but a *rise* on this particular bound is the one board
-	// movement that makes the engine less correct, so it was flagged for a principal rather than
-	// taken, and **the stamp it now cites is Scott's on PR #307**, conditioned on the named ledger
-	// below. The interval this bound spent raised-but-unauthorized was one PR wide: the raise was
-	// measured and flagged in #307's body, and the ruling arrived on that PR.
+	// 142 → 158 → **104**, and the middle number is the one with a stamp on it. The rise was the +16
+	// the account above attributes to one cause, and a *rise* on this particular bound is the one
+	// board movement that makes the engine less correct, so it was flagged for a principal rather
+	// than taken: **the stamp is Scott's on PR #307**, conditioned on a named ledger. The interval it
+	// spent raised-but-unauthorized was one PR wide. The fall to 104 needs no stamp — #306 landing
+	// the rule is the whole event, and a ceiling that drops is a bound catching up to an engine that
+	// got more correct.
 	//
 	// **158 and not 162, and the 4 between them are the whole reason `Failure.Accepted` exists.**
 	// This bound read `validateFail − validateDeclined` and was re-based to 162 on that reading,
 	// which put four *refusals* inside the constant whose documented subject is acceptance — a bound
 	// measuring a population 2.5% larger than the one it names, in the direction that makes the
-	// engine look worse rather than better, but wrong either way. It now counts the arm's own flag.
+	// engine look worse rather than better, but wrong either way. It now counts the arm's own flag,
+	// and the four have since drained: see `validateMismatchCeiling`.
 	//
-	// # The sixteen are named, and the sixteen is derived from the names
+	// # The named ledger, and what it cost to have had one
 	//
-	// (Ruling: Scott, PR #307, as the condition on taking the admission rather than the decline.)
-	// **`158` is satisfied by any sixteen vectors, including a different sixteen.** A count cannot
-	// tell "the dropped alignment immediate admitted these" from "eight of those were fixed and
-	// eight others arrived"; both readings satisfy the same constant, and the second is a silent
-	// regression wearing the first one's number. So the population is a named set, the ceiling is
-	// *computed* from how many of its members are still live, and the measured set is checked
-	// against it in both directions. Three properties follow and the third is why the shape:
+	// It is gone, and the note stays because the *shape* is the reusable part. Scott's condition on
+	// taking the admission rather than the decline (#307) was that the sixteen be named, on the
+	// argument that **`158` is satisfied by any sixteen vectors, including a different sixteen**: a
+	// count cannot tell "the dropped alignment immediate admitted these" from "eight were fixed and
+	// eight others arrived", both readings satisfy the same constant, and the second is a silent
+	// regression wearing the first one's number. So `alignmentAdmissions` named all 54 sites by
+	// `file:line`, the ceiling was *computed* from how many were still live, and the measured set was
+	// checked in both directions. Three properties, of which the third is why that shape:
 	//
-	//  1. **A membership change fails.** A measured admission whose site is not in the ledger is an
-	//     admission nobody accounted for, whatever the total says.
-	//  2. **A drain produces exactly one loud signal, never silence.** A slice-1 site draining
-	//     leaves this ceiling at 158 against a smaller actual, and slack 0 reports it stale. A
-	//     slice-2 site draining lowers the ceiling with the actual, so this bound stays green and
-	//     the three-way sum against `validateFailCeiling` fires instead — which is the correct
-	//     place, a drain being a stratum re-base and not an admission-bound event.
-	//  3. **It retires itself.** When #306 restores the memarg alignment, the message stops being
-	//     reachable, the measured set empties, `liveSlice2` is 0, and this ceiling computes 142 with
-	//     no edit to this line. That is the self-retiring shape 0025 used for its own carve-out:
-	//     named to one numbered blocker, attribution read off the engine's own output rather than
-	//     asserted, and repealed by the blocker landing rather than by a second amendment.
+	//  1. **A membership change fails.** A measured admission whose site was not in the ledger was an
+	//     admission nobody had accounted for, whatever the total said.
+	//  2. **A drain produced exactly one loud signal, never silence.** A slice-1 site draining left
+	//     the ceiling stale against a smaller actual; a slice-2 site draining lowered the ceiling with
+	//     the actual, so the three-way sum fired instead — the correct place, a drain being a stratum
+	//     re-base and not an admission-bound event.
+	//  3. **It retired itself.** Which is what happened: #306 made the message unreachable, the
+	//     measured set emptied, the vacuity check fired, and the ledger was deleted rather than
+	//     amended. The self-retiring shape 0025 used for its own carve-out — named to one numbered
+	//     blocker, attribution read off the engine's own output, repealed by the blocker landing.
 	//
-	// **The 142 base is still a bare count, deliberately and with a date on it.** Only its 38
-	// alignment members are named; the other 104 — limits, duplicate export names, constant
-	// expressions — are carried as a number, and the argument above applies to them word for word.
-	// Scott declined to extend the naming now and flagged the residual for the PR that drains this
-	// class (#306): when the alignment members leave, what remains inside 142 is worth the same look,
-	// because a base that has stopped having a documented majority is a count agreeing with any 104.
-	// Noted at #306 as well as here, since an intention in a comment is not a tripwire and the PR that
-	// makes the residual visible is where a reader will be standing. (Note: Scott, PR #307.)
+	// What replaced it for the residual **104** is the admission census `TestPhase1Files` prints, not
+	// a second named set — quoted here in that instrument's own order, which is size then reason:
+	// 26 type mismatch, 19 duplicate export name, 12 memory size, 10 unknown memory, 10 unknown
+	// table, 6 unknown global, 5 constant expression required, 4 unknown function, 3 size minimum
+	// must not be greater than maximum, 2 unknown global 0, 2 unknown global 1, 2 unknown type,
+	// 1 offset out of range, 1 unknown function 0, 1 unknown function 7. That is Scott's
+	// residual flag answered — "a base that has stopped having a documented majority is a count
+	// agreeing with any 104" (Note: Scott, PR #307) — by a decomposition the board regenerates rather
+	// than by 104 hand-written sites, which is the smaller instrument for the same question. Naming
+	// them per site is available and is a decision to flag, not to take.
 	//
-	// The ledger names all 54 and not only slice 2's 16, because the *domain* has to be derivable
-	// for either direction to mean anything: it is "every admission attributed to the alignment
-	// message", read from the bucket key. Naming only the sixteen would have left the check needing
-	// a `simd_` filename prefix to decide which measured sites it was entitled to ignore — a
-	// predicate over the current sample rather than over the space, and an under-matching trigger
-	// fails silently by construction. The `slice` column is what carries Scott's arithmetic: 142 is
-	// slice 1's own figure with its 38 already inside it, so only slice 2's members are added.
-	alignmentAdmissions := map[string]int{
-		// Slice 1's 38, inside the 142 base. `align.wast`'s own over-alignment block, plus
-		// one at 1016 (`i64.load32_u` under a `(result i32)`), all reachable before #305.
-		"align.wast:305": 1, "align.wast:309": 1, "align.wast:313": 1, "align.wast:317": 1,
-		"align.wast:321": 1, "align.wast:325": 1, "align.wast:329": 1, "align.wast:333": 1,
-		"align.wast:337": 1, "align.wast:341": 1, "align.wast:345": 1, "align.wast:349": 1,
-		"align.wast:353": 1, "align.wast:357": 1, "align.wast:362": 1, "align.wast:366": 1,
-		"align.wast:370": 1, "align.wast:374": 1, "align.wast:378": 1, "align.wast:382": 1,
-		"align.wast:386": 1, "align.wast:390": 1, "align.wast:394": 1, "align.wast:398": 1,
-		"align.wast:402": 1, "align.wast:406": 1, "align.wast:410": 1, "align.wast:414": 1,
-		"align.wast:419": 1, "align.wast:423": 1, "align.wast:427": 1, "align.wast:431": 1,
-		"align.wast:435": 1, "align.wast:439": 1, "align.wast:443": 1, "align.wast:447": 1,
-		"align.wast:451": 1, "align.wast:1016": 1,
-		// Slice 2's 16 — the +16 this PR is answerable for. Twelve are `simd_align.wast`'s
-		// over-alignment block; four are the load-lane forms, whose natural alignment is the
-		// *lane* width and not the vector's, which is why they sit in their own files.
-		"simd_align.wast:53": 2, "simd_align.wast:57": 2, "simd_align.wast:61": 2,
-		"simd_align.wast:65": 2, "simd_align.wast:69": 2, "simd_align.wast:73": 2,
-		"simd_align.wast:77": 2, "simd_align.wast:81": 2, "simd_align.wast:85": 2,
-		"simd_align.wast:89": 2, "simd_align.wast:93": 2, "simd_align.wast:97": 2,
-		"simd_load8_lane.wast:295": 2, "simd_load16_lane.wast:207": 2,
-		"simd_load32_lane.wast:139": 2, "simd_load64_lane.wast:93": 2,
-	}
-	const validateAdmitBase = 142
-	liveSlice2 := 0
-	var drainedSites, unnamedSites []string
-	for site, slice := range alignmentAdmissions {
-		switch {
-		case !alignAdmitted[site]:
-			drainedSites = append(drainedSites, fmt.Sprintf("%s (slice %d)", site, slice))
-		case slice == 2:
-			liveSlice2++
-		}
-	}
-	for site := range alignAdmitted {
-		if _, ok := alignmentAdmissions[site]; !ok {
-			unnamedSites = append(unnamedSites, site)
-		}
-	}
-	slices.Sort(drainedSites)
-	slices.Sort(unnamedSites)
-	// The domain's own vacuity check, because this ledger *compares two sets*: an empty measured set
-	// agrees with a ledger of any size, every member reading as "drained". The consequence would
-	// still be caught — the ceiling would compute 142 against an actual 158 — but it would be caught
-	// by the **accept-direction bound**, which would report a correctness regression when the truth
-	// is that the bucket key moved and this collector stopped matching. An error from the wrong layer
-	// is evidence about where structure was lost, so the collector states its own precondition here
-	// rather than letting a downstream bound mis-attribute its silence.
-	if len(alignAdmitted) == 0 {
-		t.Errorf("no admission carries the expected message %q, so this ledger's domain is empty and "+
-			"all %d named members read as drained. Either #306 landed — in which case delete the "+
-			"ledger and re-base this ceiling to %d — or the key this collector matches has changed "+
-			"shape; check %q against classify's own bucket key before touching any ceiling",
-			alignmentAdmissionReason, len(alignmentAdmissions), validateAdmitBase, admittedKeyPrefix)
-	}
-	// Direction 1: an admission this ledger does not name. This is the check a count cannot make,
-	// and it is an error rather than a re-base prompt because a *new* accepted-but-invalid module is
-	// the one board movement that makes the engine less correct.
-	if len(unnamedSites) > 0 {
-		t.Errorf("%d alignment admission(s) are not in the ledger: %s.\n\tThe validator accepted an "+
-			"invalid module whose expected message is %q at a site nobody has accounted for. If a "+
-			"rule landed and moved the population, re-base the ledger *by name* in that PR; the "+
-			"total holding at %d would not have shown this",
-			len(unnamedSites), strings.Join(unnamedSites, ", "), alignmentAdmissionReason,
-			validateAdmitBase+liveSlice2)
-	}
-	// Direction 2: a member that drained. Reported as testimony, never as the verdict — the verdict
-	// is `boardBound`'s below (slice 1's members) or the three-way sum's (slice 2's), per property 2
-	// above. A log line here says *which*, which neither of those can.
-	if len(drainedSites) > 0 {
-		t.Logf("  alignment admissions drained since their slice: %s. Re-base the ledger and the "+
-			"ceilings it feeds — a drain here is a rule landing, which is the direction this "+
-			"population is supposed to move", strings.Join(drainedSites, ", "))
-	}
-	validateAdmitCeiling := validateAdmitBase + liveSlice2
+	// The census also relocates the domain argument the ledger carried: membership is read from the
+	// bucket key, which is the vector's own expected message, and never from a filename prefix. A
+	// `simd_`-prefix predicate would have been a claim about the current sample rather than the space,
+	// and an under-matching trigger fails silently by construction.
+	const validateAdmitCeiling = 104
 	boardBound(t, "validateAdmitCeiling", validateAdmitted, validateAdmitCeiling, 0,
 		ceilingBound,
 		"the validator accepted an invalid module it used to refuse. This is the accept direction: "+
 			"a rise here is the one board movement that makes the engine *less* correct while the "+
 			"total holds still")
-	// The third population, bounded for the first time here. 0 → 4, the alignment vectors carrying a
-	// second defect, and the account is three paragraphs up.
+	// The third population: 0 → 4 with slice 2, and **back to 0 with #306**.
 	//
-	// **A ceiling and not an equality, on a population of 4**, which is the one judgement call in
-	// this block: an equality would be the stronger instrument and it would also fire on any *fix*
-	// that drains one of these four, which is the direction this bound wants to encourage. A ceiling
-	// with slack 0 catches the rise — a right refusal turning into a wrong message is a regression in
-	// testimony (0003) whether or not the verdict moved — and lets the drain land as a re-base.
-	const validateMismatchCeiling = 4
+	// **The judgement call that made this a ceiling rather than an equality is what let the drain
+	// land as a re-base**, and it is worth reading now that the drain has happened. An equality would
+	// have been the stronger instrument on the rise and would also have fired on the fix, which is the
+	// direction this bound wants to encourage; a ceiling with slack 0 catches the rise — a right
+	// refusal turning into a wrong message is a regression in testimony (0003) whether or not the
+	// verdict moved — and reports the drain as staleness.
+	//
+	// **At 0 it is a bound with nothing under it, which is the state its own history says to be
+	// careful about.** The paragraph above `validateFailCeiling` records that this population was
+	// exactly 0 at slice 1 and was *not being watched*: the four rows landed inside the
+	// accept-direction constant, and only the destination ledger's per-key count disagreed. That is
+	// why the bound stays at 0 rather than being deleted for want of a subject — the third verdict
+	// needs a structural bound, and a population that has been empty before and refilled is precisely
+	// the one to keep an instrument pointed at.
+	const validateMismatchCeiling = 0
 	boardBound(t, "validateMismatchCeiling", validateMismatched, validateMismatchCeiling, 0,
 		ceilingBound,
 		"the validator refused a module with a message the corpus disagrees with. The verdict is "+
 			"right and the testimony is not, which is the failure a pass/fail column cannot show: "+
 			"these rows are fails, and a rise here can be a *message* regression on a vector that "+
 			"was already refused correctly")
-	// **Two constants and a derived quantity**, which is what makes this check the one that fires
-	// when the alignment ledger retires a member: `validateAdmitCeiling` is `142 + liveSlice2`, so a
-	// slice-2 site draining lowers it and this sum stops closing against a stratum total that is
-	// still a literal. That is the intended loud signal (property 2 at the ledger) and it lands in
-	// the right place — a drain is a *stratum* re-base, not an admission-bound event. Do not repair
-	// it by making `validateFailCeiling` derived too: a partition whose every part is computed from
-	// the measurement is a tautology, and this identity's whole job is that at least one side of it
-	// was written down by a person.
+	// **Four constants now, where three of them used to be two plus a derived quantity.** While the
+	// alignment ledger existed, `validateAdmitCeiling` was computed from its live members, and this
+	// identity was the check that fired when one drained — the intended loud signal, landing in the
+	// right place, a drain being a stratum re-base and not an admission-bound event. The ledger has
+	// retired, so all four sides are written down by a person again, and the identity is back to its
+	// plainer job: it catches a re-base of one part that forgot the others.
+	//
+	// Do not make `validateFailCeiling` derived to save the arithmetic. A partition whose every part
+	// is computed from the measurement is a tautology, and this identity's whole value is that both
+	// sides were asserted independently.
 	if validateDeclineCeiling+validateAdmitCeiling+validateMismatchCeiling != validateFailCeiling {
-		t.Errorf("the three validator ceilings sum to %d but the stratum's own is %d; one was "+
-			"re-based without the others, so the sub-partition no longer decomposes the column "+
-			"it claims to. `validateAdmitCeiling` is derived (%d + %d live alignment admissions), "+
-			"so if that is the side that moved, the ledger retired a member and this stratum total "+
-			"is the constant owed a re-base",
-			validateDeclineCeiling+validateAdmitCeiling+validateMismatchCeiling, validateFailCeiling,
-			validateAdmitBase, liveSlice2)
+		t.Errorf("the three validator ceilings (%d declined + %d admitted + %d wrong-message) sum to "+
+			"%d but the stratum's own is %d; one was re-based without the others, so the "+
+			"sub-partition no longer decomposes the column it claims to",
+			validateDeclineCeiling, validateAdmitCeiling, validateMismatchCeiling,
+			validateDeclineCeiling+validateAdmitCeiling+validateMismatchCeiling, validateFailCeiling)
 	}
 	boardBound(t, "validateFailCeiling", validateFail, validateFailCeiling, 0, ceilingBound,
 		"the validator answered fewer assert_invalid vectors than it did; the three bounds above "+
@@ -9190,7 +9251,29 @@ func TestPhase1Files(t *testing.T) {
 	// with a named cause, never `unsupported`, so this campaign cannot touch that column however
 	// much capability it lands. The reward figure for slice 2 is this floor's +648, and it is stated
 	// here so the PR's Board section is quoting an instrument rather than describing one.
-	const passFloor = 60330
+	//
+	// **60330 → 60388, #9 slice 3's alignment rule (#306): +58, and this one has no decline
+	// component at all.** Slice 2's mirror figure was `validateDeclineCeiling` falling; slice 3's is
+	// two *other* sub-ceilings falling — `validateAdmitCeiling` 158 → 104 and
+	// `validateMismatchCeiling` 4 → 0 — because the vectors it converts were never declined. They
+	// were accepted, or refused with the wrong message, which is the whole reason the sub-partition
+	// exists: a +58 with `declined` untouched says the reward is 58 rules newly *right* rather than
+	// 58 opcodes newly *known*. `unsupported` is unmoved again and for the same structural reason.
+	//
+	// **60388 → 60390, `select t`'s annotation (#294): +2, and both are `select.wast`'s.** The
+	// smallest delta this campaign has landed, and it is in the same PR as slice 3 because it is the
+	// same class of defect — information the decoder read and dropped, which no rule in this package
+	// could ask for. Slice 3's operand was the alignment exponent; this one's is the result-type
+	// vector. The mirror figure is `validateDeclineCeiling` falling 391 → 389, which makes this a
+	// slice-2-shaped delta (opcodes newly *known*) sitting beside a slice-3-shaped one (rules newly
+	// *right*) — the two mirrors move in one PR, and they are quoted separately rather than summed
+	// because a +60 with one mirror would be a different claim about the engine than a +60 with two.
+	//
+	// The two vectors are `select.wast:368` (`(select (result))`, arity 0) and `:373`
+	// (`(select (result i32 i32))`, arity 2), both expecting `invalid result arity`. The all-on lane
+	// takes a third — `ref.wast:78`'s `(select (result (ref 1)))` expecting `unknown type`, which
+	// needs the GC gate to decode at all — and that asymmetry is at `allOnPassFloor`.
+	const passFloor = 60390
 	boardBound(t, "passFloor", totalPass, passFloor, boardBoundSlack, floorBound,
 		"a regression in a grammar that used to answer, or the corpus moved")
 }

@@ -258,21 +258,21 @@ func vecSignature(m *binary.Module, in binary.Instr) (sig, error) {
 	// through the same `addrType` slice 1's loads and stores use — including its `unknown memory
 	// 0` verdict, which is a rule and not a decline.
 	case "VecLoad": // valid.ml:663 — [addr] --> [VecT t]
-		addr, err := addrType(m)
+		addr, err := checkMemop(m, in, name)
 		if err != nil {
 			return sig{}, err
 		}
 		return sig{params: []binary.ValType{addr}, results: []binary.ValType{v128}}, nil
 
 	case "VecStore": // valid.ml:668 — [addr; VecT t] --> []
-		addr, err := addrType(m)
+		addr, err := checkMemop(m, in, name)
 		if err != nil {
 			return sig{}, err
 		}
 		return sig{params: []binary.ValType{addr, v128}}, nil
 
 	case "VecLoadLane": // valid.ml:673 — [addr; VecT t] --> [VecT t], lane index bounded
-		addr, err := addrType(m)
+		addr, err := checkMemop(m, in, name)
 		if err != nil {
 			return sig{}, err
 		}
@@ -282,7 +282,7 @@ func vecSignature(m *binary.Module, in binary.Instr) (sig, error) {
 		return sig{params: []binary.ValType{addr, v128}, results: []binary.ValType{v128}}, nil
 
 	case "VecStoreLane": // valid.ml:680 — [addr; VecT t] --> [], lane index bounded
-		addr, err := addrType(m)
+		addr, err := checkMemop(m, in, name)
 		if err != nil {
 			return sig{}, err
 		}
@@ -370,15 +370,16 @@ func checkLaneIndex(in binary.Instr, fam vecFamilyRow, lane uint64) error {
 // field, which the decoder does not retain. Reading it from the name is the same move `sig.go`
 // makes for `i32.load8_u`, and the set is the eight rows `optable.go` declares.
 //
-// The lane index is `Imm1` bits 32-39: the memarg stages offset and memory index into both words
-// first, so `stageLaneIdx` packs the lane above the memory index rather than staging a third word.
+// The lane index comes back through `binary.MemargLane`, the memarg word having three tenants
+// since #306 (memory index, lane index, alignment exponent) and the packing rule belonging to the
+// package that writes it.
 func checkPackedLaneIndex(in binary.Instr, name string) error {
 	width, ok := packedLaneWidth(name)
 	if !ok {
 		return errNoVecSignature(in)
 	}
 	lanes := 128 / width
-	lane := (in.Imm1 >> 32) & 0xFF
+	lane := uint64(binary.MemargLane(in.Imm1))
 	if lane >= lanes {
 		return fmt.Errorf("%w: %s selects lane %d of %d", ErrInvalidLaneIndex, mnemonic(in), lane, lanes)
 	}

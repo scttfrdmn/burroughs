@@ -712,6 +712,18 @@ func (in *Instance) runFrame(fn *binary.Func, locals *frame, st *stack, results,
 			// cannot produce it, since `valid.ml:435`'s own rule (`Select None`) restricts the
 			// untyped form to numeric/vector operands — so `ins.Imm0` is always 0 for `opSelect`
 			// and meaningful only for `opSelectT`.
+			//
+			// **As of #294 the annotation is also retained whole, in `Func.Selects`, and this arm
+			// still reads the bit.** The two are not redundant and the division is deliberate: the
+			// vector is the *validator's* input, where the arity rule and `check_valtype` need the
+			// elements themselves, and the bit is this layer's, where a `map[int][]ValType` lookup
+			// per execution would buy nothing a dispatch bit does not already decide. The bit is
+			// documented at `Func.Selects` as a **derived cache** of that field, with a
+			// bidirectional agreement control in `internal/binary` — because two representations of
+			// one wire fact drift silently, and the drift here misdispatches a live reference as an
+			// integer on a module both layers accepted. Nothing changed at this line for #294; the
+			// sentence exists so the next reader does not "fix" the duplication by reaching for the
+			// map.
 			if ins.Imm0 != 0 {
 				if err := st.needRef(2); err != nil {
 					return err

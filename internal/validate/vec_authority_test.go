@@ -813,28 +813,84 @@ func TestLaneFactsMatchTheReference(t *testing.T) {
 //
 // # A point citation and a range citation are different claims, and the predicate says so
 //
-// Two earlier predicates over-matched, and both taught the same thing. Keying on the word "lane"
-// per *line* claimed the four `case "Vec…Lane"` arms, which say "lane index bounded" beside their
-// own arm's line. Keying on comment *blocks* then claimed `valid.ml:373-378`, `:906-908` and
-// `:938-955` — the section and arm-rationale comments, which mention lanes and cite **ranges**.
+// Three earlier predicates over-matched, and they taught the same thing three times. Keying on the
+// word "lane" per *line* claimed the four `case "Vec…Lane"` arms, which say "lane index bounded"
+// beside their own arm's line. Keying on comment *blocks* then claimed `valid.ml:373-378`,
+// `:906-908` and `:938-955` — the section and arm-rationale comments, which mention lanes and cite
+// **ranges**. Distinguishing points from ranges fixed those two, and the third arrived with #306:
+// ErrAlignmentTooLarge's block cites `check_memop`'s alignment `require` and mentions lanes twice,
+// because it names ErrInvalidLaneIndex as the precedent for its own shared-sentinel shape — so a
+// correct citation to a different rule was reported as a lane-index citation to the wrong line.
 //
-// The distinction that actually separates the sets is syntactic and was there all along: a
-// **range** cites an arm or a region, and a **point** cites a statement. Only a point can be off by
-// one in the way :952 was. So ranges are checked for well-formedness and nothing else, points inside
-// a lane-mentioning comment block are checked against the sites, and trailing comments on code lines
-// are the arm test's subject by construction — a doc block starts with `//` in the leading position
-// and a `case … // valid.ml:897` does not. Three passes over one predicate, each one a claim about
-// the space that the space refuted.
+// A **topic word is not a subject**, which is what all three had in common: prose about a rule
+// mentions its neighbours, so any keyword sitting in a block is evidence about vocabulary and not
+// about what the block documents. The predicate is now derived instead —
+// `messageKeyedPointCitations` reads each block's *subject* off the declaration below it and keys on
+// the sentinel that subject produces. Nothing in this test names a word from the message; the
+// message comes from `errors.New` and the legal lines come from the reference.
+//
+// The point/range distinction stays, and it is syntactic: a **range** cites an arm or a region, a
+// **point** cites a statement, and only a point can be off by one the way :952 was. Trailing
+// comments on code lines are the arm test's subject by construction — a doc block starts with `//`
+// in the leading position and a `case … // valid.ml:897` does not.
 func TestLaneIndexCitationsResolveToTheReferencesSites(t *testing.T) {
-	ref := testenv.RequireSpecRef(t, testenv.RefValidML)
+	// Nine legal lines: five carrying the string, plus the four wrapped `require`s above them.
+	// **The pin was wrong the first time it ran** — 9, not 7: every `require` site wraps and only
+	// :377's `error at` fits on one line. Guessing would have set it to whatever the parse
+	// produced; asserting it made the parse state a fact worth knowing.
+	//
+	// Seven points: checkLaneIndex's 2 (:946,:953), checkPackedLaneIndex's 2 (:676,:683) and
+	// ErrInvalidLaneIndex's 3 (:377,:947,:954).
+	messageKeyedPointCitations(t, "invalid lane index", 9, 7)
+}
+
+// TestAlignmentCitationsResolveToTheReferencesSites is the same check for #306's rule.
+//
+// Its own test rather than a second message inside the one above, because the *name* of a control
+// is a claim about its population: a test called "lane index citations" that also judged alignment
+// citations would be checked against its own case labels instead of against the partition it names.
+// Both bodies are one call, and the mechanism they share is where the generalization lives.
+func TestAlignmentCitationsResolveToTheReferencesSites(t *testing.T) {
+	// Two legal lines — `valid.ml:388`'s `require` and its wrapped string on `:389` — and one
+	// point, ErrAlignmentTooLarge's `:388`. The `check_memop` and `check_pack` citations in
+	// align.go are *not* here and cannot be: they point at a `let` and at a rule producing a
+	// different string, so nothing keys them. That residue is stated in the helper's doc.
+	messageKeyedPointCitations(t, "alignment must not be larger than natural", 2, 1)
+}
+
+// messageKeyedPointCitations checks every `valid.ml:NNN` point citation whose comment block
+// documents something that produces `message`, against the reference's own lines for it.
+//
+// # What keys a block, and what the residue is
+//
+// A block's subject is the declaration immediately below it: a sentinel (`ErrX = errors.New("…")`)
+// contributes its own string, and a `func` contributes the strings of every `Err…`/`err…` sentinel
+// its body names. So the population is derived twice over — from Go's declaration order and from
+// `errors.New` — and no word of the message appears in this file.
+//
+// **Not every point citation is keyable, and that is stated rather than hidden.** A block whose
+// subject produces no reference message (`checkMemop`'s, whose citation is a `let`) or a file-level
+// header block (align.go's, which cites four statements across three rules) has no message to key
+// on, so its points are range-checked by the caller-independent well-formedness pass and no
+// further. Coverage is a claim an instrument cannot check about itself; this one's domain is
+// "citations inside a block whose subject produces a reference message", and the honest form of
+// saying so is naming what falls outside it.
+//
+// wantSites and wantPoints are pinned in both directions. An empty site set would fail every
+// citation rather than pass it, which is the safe direction — but a *short* set rejects a correct
+// citation and reads as a citation defect, and zero points means the comments were reworded and
+// this check is agreeing with nothing.
+func messageKeyedPointCitations(tb testing.TB, message string, wantSites, wantPoints int) {
+	tb.Helper()
+	ref := testenv.RequireSpecRef(tb, testenv.RefValidML)
 	lines := strings.Split(ref, "\n")
 
-	// The legal set, derived: every line of the reference carrying the string, plus the `require`
-	// above it when the string is that require's wrapped continuation.
-	const laneMsg = `"invalid lane index"`
+	// The legal set, derived: every line carrying the quoted string, plus the `require`/`error`
+	// above it when the string is that statement's wrapped continuation.
+	quoted := `"` + message + `"`
 	sites := map[int]bool{}
 	for i, l := range lines {
-		if !strings.Contains(l, laneMsg) {
+		if !strings.Contains(l, quoted) {
 			continue
 		}
 		sites[i+1] = true
@@ -842,96 +898,197 @@ func TestLaneIndexCitationsResolveToTheReferencesSites(t *testing.T) {
 			sites[i] = true
 		}
 	}
-	// Vacuity, and the pin was wrong the first time it ran: 9, not 7. ErrInvalidLaneIndex's five
-	// sites are five lines carrying the string, and **four** of them are wrapped `require`s rather
-	// than two — every `require` site wraps, and only :377's `error at` fits on one line. Guessing
-	// the count would have set the pin to whatever the parse produced; asserting it made the parse
-	// state a fact about the reference that turned out to be worth knowing.
-	//
-	// An empty set would fail every citation below rather than pass it, which is the safe
-	// direction — but a *short* set rejects a correct citation and reads as a citation defect, so
-	// the count is pinned in both directions like any other.
-	const wantSites = 9
 	if len(sites) != wantSites {
-		t.Fatalf("derived %d legal line numbers for %s from %s, want %d; the count is 5 string "+
-			"lines plus the 4 wrapped `require`s above them, and a different one means the "+
-			"reference's sites moved", len(sites), laneMsg, testenv.RefValidML, wantSites)
+		tb.Fatalf("derived %d legal line numbers for %s from %s, want %d; the count is the string "+
+			"lines plus the wrapped statements above them, and a different one means the "+
+			"reference's sites moved", len(sites), quoted, testenv.RefValidML, wantSites)
 	}
 
-	pointRe := regexp.MustCompile(`valid\.ml:(\d+(?:,\d+)*)(?:\b|$)`)
-	rangeRe := regexp.MustCompile(`valid\.ml:(\d+)-(\d+)`)
+	points := 0
+	for _, file := range citationFiles {
+		for _, b := range docBlocks(tb, file) {
+			if !slices.Contains(b.messages, message) {
+				continue
+			}
+			for _, n := range b.points {
+				points++
+				if !sites[n] {
+					tb.Errorf("%s:%d documents %q and cites %s:%d, and that line is %q — the "+
+						"message is not produced there, so the citation points a reader at the "+
+						"wrong statement while reading as checked",
+						file, b.start, message, testenv.RefValidML, n, strings.TrimSpace(lines[n-1]))
+				}
+			}
+		}
+	}
+	if points != wantPoints {
+		tb.Errorf("checked %d point citation(s) for %q, want %d — recount and re-pin if a comment "+
+			"was reworded, because a check over no citations passes without asserting anything",
+			points, message, wantPoints)
+	}
+}
 
-	points, ranges := 0, 0
-	for _, file := range []string{"vec.go", "validate.go"} {
+// citationFiles is the package's non-test source, which is the domain both citation checks walk.
+//
+// Listed rather than globbed for the reason the range check below needs: every file here has been
+// read for what its citations *are*, and a new file arriving should fail the range count and get
+// that reading rather than be swept in silently.
+var citationFiles = []string{"align.go", "sig.go", "vec.go", "validate.go"}
+
+// docBlock is one leading-`//` comment run, its point citations, and the reference messages its
+// subject declaration produces.
+type docBlock struct {
+	start    int
+	points   []int
+	messages []string
+}
+
+var (
+	pointRe    = regexp.MustCompile(`valid\.ml:(\d+(?:,\d+)*)(?:\b|$)`)
+	rangeRe    = regexp.MustCompile(`valid\.ml:(\d+)-(\d+)`)
+	sentinelRe = regexp.MustCompile(`^\s*(?:var\s+)?([Ee]rr\w*)\s*=\s*errors\.New\("([^"]*)"\)`)
+	errIdentRe = regexp.MustCompile(`\b([Ee]rr[A-Z]\w*)\b`)
+)
+
+// docBlocks parses one file's comment blocks: where each is, which reference lines it cites as
+// points, and which messages its subject produces.
+func docBlocks(tb testing.TB, file string) []docBlock {
+	tb.Helper()
+	src, err := os.ReadFile(file)
+	if err != nil {
+		tb.Fatalf("reading %s: %v", file, err)
+	}
+	fileLines := strings.Split(string(src), "\n")
+	sentinels := packageSentinels(fileLines)
+
+	var blocks []docBlock
+	for i := 0; i < len(fileLines); i++ {
+		if !strings.HasPrefix(strings.TrimSpace(fileLines[i]), "//") {
+			continue
+		}
+		j := i
+		for j < len(fileLines) && strings.HasPrefix(strings.TrimSpace(fileLines[j]), "//") {
+			j++
+		}
+		b := docBlock{start: i + 1}
+		// Ranges are stripped before points are read, so a range's leading number is never taken
+		// for a point.
+		block := rangeRe.ReplaceAllString(strings.Join(fileLines[i:j], "\n"), "")
+		i = j - 1
+
+		for _, m := range pointRe.FindAllStringSubmatch(block, -1) {
+			for _, s := range strings.Split(m[1], ",") {
+				n, convErr := strconv.Atoi(s)
+				if convErr != nil {
+					tb.Errorf("%s:%d cites %q as a valid.ml line: %v", file, b.start, s, convErr)
+					continue
+				}
+				b.points = append(b.points, n)
+			}
+		}
+		if len(b.points) > 0 {
+			b.messages = subjectMessages(fileLines, j, sentinels)
+			blocks = append(blocks, b)
+		}
+	}
+	return blocks
+}
+
+// subjectMessages reads the messages produced by the declaration starting at line index `at`.
+//
+// A sentinel declaration contributes its own message; a `func` contributes every sentinel its body
+// names, which is what puts `checkLaneIndex`'s doc block into ErrInvalidLaneIndex's population
+// without the block having to mention the sentinel. Anything else — a `type`, a `const`, a package
+// clause under a file header — contributes nothing, and its citations are the unkeyed residue.
+func subjectMessages(fileLines []string, at int, sentinels map[string]string) []string {
+	for ; at < len(fileLines); at++ {
+		line := fileLines[at]
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		if m := sentinelRe.FindStringSubmatch(line); m != nil {
+			return []string{m[2]}
+		}
+		if !strings.HasPrefix(line, "func ") {
+			return nil
+		}
+		// The body, by brace balance from the `func` line. A signature spanning lines is fine:
+		// the count only closes once the body does.
+		var msgs []string
+		depth := 0
+		for ; at < len(fileLines); at++ {
+			depth += strings.Count(fileLines[at], "{") - strings.Count(fileLines[at], "}")
+			for _, id := range errIdentRe.FindAllStringSubmatch(fileLines[at], -1) {
+				if msg, ok := sentinels[id[1]]; ok && !slices.Contains(msgs, msg) {
+					msgs = append(msgs, msg)
+				}
+			}
+			if depth == 0 && at > 0 && strings.Contains(fileLines[at], "}") {
+				break
+			}
+		}
+		return msgs
+	}
+	return nil
+}
+
+// packageSentinels maps sentinel identifiers to their messages, reading every `errors.New` in the
+// package's non-test source rather than only in the file being walked — `vec.go`'s functions name
+// sentinels `validate.go` declares.
+func packageSentinels(_ []string) map[string]string {
+	sentinels := map[string]string{}
+	for _, file := range citationFiles {
+		src, err := os.ReadFile(file)
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(src), "\n") {
+			if m := sentinelRe.FindStringSubmatch(line); m != nil {
+				sentinels[m[1]] = m[2]
+			}
+		}
+	}
+	return sentinels
+}
+
+// TestReferenceRangeCitationsAreWellFormed is the other half of the point/range split: a range
+// cites an arm or a region and has no string to key on, so what is checkable about it is that it is
+// a range inside the file.
+//
+// Its count is pinned for the reason the point counts are — it is what keeps this from quietly
+// becoming the branch that never runs — and the pin is what makes a new file in `citationFiles`
+// arrive loudly rather than be swept in.
+func TestReferenceRangeCitationsAreWellFormed(t *testing.T) {
+	ref := testenv.RequireSpecRef(t, testenv.RefValidML)
+	n := len(strings.Split(ref, "\n"))
+
+	ranges := 0
+	for _, file := range citationFiles {
 		src, err := os.ReadFile(file)
 		if err != nil {
 			t.Fatalf("reading %s: %v", file, err)
 		}
-		fileLines := strings.Split(string(src), "\n")
-
-		// Comment blocks: maximal runs of lines whose *first* token is `//`. A trailing comment on a
-		// code line is not one, which is exactly how the arm citations stay out.
-		for i := 0; i < len(fileLines); i++ {
-			if !strings.HasPrefix(strings.TrimSpace(fileLines[i]), "//") {
-				continue
-			}
-			j := i
-			for j < len(fileLines) && strings.HasPrefix(strings.TrimSpace(fileLines[j]), "//") {
-				j++
-			}
-			block := strings.Join(fileLines[i:j], "\n")
-			blockStart := i + 1
-			i = j - 1
-
-			// Ranges first, and removed from the text, so a range's leading number is never read as
-			// a point. Checked for well-formedness only: a range cites an arm, and an arm's extent
-			// has no string to key on.
-			for _, m := range rangeRe.FindAllStringSubmatch(block, -1) {
+		for i, line := range strings.Split(string(src), "\n") {
+			for _, m := range rangeRe.FindAllStringSubmatch(line, -1) {
 				lo, _ := strconv.Atoi(m[1])
 				hi, _ := strconv.Atoi(m[2])
 				ranges++
-				if lo < 1 || hi <= lo || hi > len(lines) {
-					t.Errorf("%s:%d cites the range %s:%d-%d, which is not a range inside a %d-line "+
-						"file", file, blockStart, testenv.RefValidML, lo, hi, len(lines))
-				}
-			}
-			block = rangeRe.ReplaceAllString(block, "")
-
-			if !strings.Contains(strings.ToLower(block), "lane") {
-				continue
-			}
-			for _, m := range pointRe.FindAllStringSubmatch(block, -1) {
-				for _, s := range strings.Split(m[1], ",") {
-					n, convErr := strconv.Atoi(s)
-					if convErr != nil {
-						t.Errorf("%s:%d cites %q as a valid.ml line: %v", file, blockStart, s, convErr)
-						continue
-					}
-					points++
-					if !sites[n] {
-						t.Errorf("%s:%d cites %s:%d for a lane-index bound, and that line is %q — "+
-							"no lane-index site is there, so the citation points a reader at the "+
-							"wrong statement while reading as checked",
-							file, blockStart, testenv.RefValidML, n, strings.TrimSpace(lines[n-1]))
-					}
+				if lo < 1 || hi <= lo || hi > n {
+					t.Errorf("%s:%d cites the range %s:%d-%d, which is not a range inside a "+
+						"%d-line file", file, i+1, testenv.RefValidML, lo, hi, n)
 				}
 			}
 		}
 	}
-
-	// The citations exist to be checked. Zero points means the comments were reworded and this test
-	// is agreeing with nothing — the vacuum on the other side of the comparison. The range count is
-	// pinned for the same reason one level down: it is what keeps the range branch from quietly
-	// becoming the branch that never runs.
-	// Six ranges: vec.go's four section/rationale comments (:885-937, :906-908, :938-955, :663-686),
-	// checkVecBinaryRule's `check_vec_binop` (:373-378), and validate.go's `lookup` (:41-42).
-	const wantPoints, wantRanges = 7, 6
-	if points != wantPoints || ranges != wantRanges {
-		t.Errorf("checked %d point citations and %d range citations, want %d and %d — the points "+
-			"are checkLaneIndex's 2 (:946,:953), checkPackedLaneIndex's 2 (:676,:683) and "+
-			"ErrInvalidLaneIndex's 3 (:377,:947,:954); recount and re-pin if a comment was "+
-			"reworded, because a check over no citations passes without asserting anything",
-			points, ranges, wantPoints, wantRanges)
+	// Eight: vec.go's four section/rationale comments (:885-937, :906-908, :938-955, :663-686),
+	// checkVecBinaryRule's `check_vec_binop` (:373-378), validate.go's `lookup` (:41-42) and its
+	// package doc's `Select (Some ts)` (:442-446, slice 4/#294), and align.go's `check_memop`
+	// (:380-394).
+	const wantRanges = 8
+	if ranges != wantRanges {
+		t.Errorf("checked %d range citation(s) across %v, want %d — recount and re-pin, and if a "+
+			"file was added to citationFiles, read its point citations too",
+			ranges, citationFiles, wantRanges)
 	}
 }
 

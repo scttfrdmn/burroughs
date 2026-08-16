@@ -121,7 +121,11 @@ var immStagedBits = map[imm]int{
 	// second — see module.go's BlockType comment
 	immV128:   128, // both words, exactly
 	immLane16: 128, // sixteen u8 lanes, packed
-	immMemop:  96,  // a u64 offset plus a u32 memory index
+	// A u64 offset, a u32 memory index, and — since #306 — a six-bit alignment exponent
+	// packed above the lane index's slot (module.go's memarg comment). Still two words, so
+	// TestStagedBitsAgreeWithTheReader's ⌈bits/64⌉ is unchanged at 2; the figure moves
+	// because the *payload* grew, which is what this table measures.
+	immMemop: 102,
 
 	// Read and dropped, each with its reason at the arm. A vector cannot live in a
 	// fixed-width instruction, so these are #7's side-array work rather than staging.

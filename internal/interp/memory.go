@@ -331,7 +331,15 @@ func (in *Instance) memAccess(ins binary.Instr, st *stack) error {
 	// scopes, and reusing the name here would shadow this one — flagged by `govet`, and worth
 	// renaming rather than suppressing because the two errors mean different things (no memory
 	// versus no operands) and a single name invites returning whichever is in scope.
-	mem, resolveErr := in.memoryFor("instruction", ins.Imm1)
+	// **Through binary.Memarg, not `ins.Imm1` bare.** This line read the whole second word
+	// as a memory index, which was correct only for as long as nothing packed above bit 32
+	// on these 23 rows — the SIMD lane paths next door already masked, because their lane
+	// index had taught them to. #306 packs an alignment exponent at bits 40-45, so the bare
+	// read would resolve `i32.load align=4` to memory index `2<<40`: not a subtle wrong
+	// answer but every aligned load in every module failing to find its memory. The accessor
+	// is the fix for the class rather than for this line (module.go's memarg comment).
+	offset, memIdx, _ := binary.Memarg(ins.Imm0, ins.Imm1)
+	mem, resolveErr := in.memoryFor("instruction", uint64(memIdx))
 	if resolveErr != nil {
 		return resolveErr
 	}
@@ -341,13 +349,13 @@ func (in *Instance) memAccess(ins binary.Instr, st *stack) error {
 		}
 		v := st.popNum()   // the value, pushed second
 		idx := st.popNum() // the address, pushed first
-		return mem.write(mem.addr(idx), ins.Imm0, storeBytes(v, m.width))
+		return mem.write(mem.addr(idx), offset, storeBytes(v, m.width))
 	}
 	if err := st.needNum(1); err != nil {
 		return err
 	}
 	idx := st.popNum()
-	bs, err := mem.read(mem.addr(idx), ins.Imm0, m.width)
+	bs, err := mem.read(mem.addr(idx), offset, m.width)
 	if err != nil {
 		return err
 	}
