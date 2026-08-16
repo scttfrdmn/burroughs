@@ -1002,6 +1002,44 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **`claudeMDCeiling`'s stated purpose named a domain twice the size of the one it measures
+  (#319).** It read *"38400 bytes is a budget on what every session must read before it can do
+  anything"* — a claim about the **consumer's** extent, and the consumer had never been asked. Asked
+  now, by reading the assembled context block rather than reasoning about the loader: a session loads
+  **two** files, `CLAUDE.md` (37886 bytes) and a per-project memory index outside the module
+  (5793 bytes), so the extent is **43679 bytes** and the bound covers 86.7% of it. The extent
+  therefore **already exceeds the budget by 5279 bytes while every instrument is green**, and neither
+  instrument is wrong about its own subject — the ledger still reconciles `CLAUDE.md`'s rows against
+  `os.Stat` to the byte. That is the shape rather than an exception to it: *coverage is a claim* with
+  the ceiling as its subject, and *reconcile an extent, never floor it* (#317) turned on the
+  instrument minted under it three PRs earlier, the unmeasured end being **monotone** since a memory
+  index only ever gains lines. The correction is a boundary statement and no new mechanism — the
+  remedy Scott ordered for `pipefail-check` on #317 — because partitioning the real extent needs an
+  instrument reaching outside the module into a user-specific path that exists on neither CI runner,
+  where it would skip, and *a skip is not a verdict*. Flagged on #319 with four options. Found from
+  outside: a consumer-side figure the two green instruments could not account for (Scott), which is
+  the only place the tell was available from.
+
+- **Nine vectors were parked in phase v3 by a comment the reference interpreter refutes, found by
+  censusing the unsupported column (#320).** `wast.go`'s module arm said *"Phase v3 (component model)
+  is where `definition`/`instance` become answerable."* `definition_opt` is a modifier on the **core**
+  `script_module` production (`parser.mly:1417-1428`), `instance` is a core production beside it
+  (`:1437-1444`), and `instance.wast` is in `test/core/`. The purpose is v0's: `memory.wast:8` is
+  `(module definition (memory 65536))` amid nine ordinary `(module (memory …))` commands, because a
+  4 GiB memory must be asserted **valid without being instantiated** — decode-plus-validate with no
+  interpreter. The wrong premise cost 9 vectors filed three rungs up the ladder where nothing in v0
+  would come looking. *Where prose and the reference's executable disagree, the executable outranks.*
+  - **The `(no head atom)` branch's comment claimed it was unexercised; the board scores three
+    through it.** *"annotations.wast, which the derived selector does not currently put on the
+    board"* — the board prints `annotations.wast: 71/71 pass, 3 unsupported` with
+    `3 (no head atom)`. A stale coverage claim inside the arm whose own coverage it described.
+  - **The census itself: all 83 enumerated with a reason each, and none is permanent residue.**
+    28 ref-typed result patterns (#270), 17 `assert_invalid` over non-text module forms (11 binary /
+    6 quote, matching the split recorded independently on `unsupportedCeiling`), 15
+    `assert_exhaustion`, 11 `(get …)` actions, 9 `definition`/`instance`, 3 with an annotation before
+    the head. Every one is a harness widening or a v0-scoped engine capability, so the column's
+    implied drain to zero stands — and **55 of the 83 had no tracker entry** before #320.
+
 - **The blind-spot header put three vectors in the wrong column, and the wrong sentence came back as
   an instruction.** `internal/validate/authority_test.go` said the validator's 103 admissions included
   "three `module quote` vectors no validator rule can reach". Measured, all three
