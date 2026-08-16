@@ -166,6 +166,21 @@ var (
 	ErrUnknownLocal  = errors.New("unknown local")
 	ErrUnknownLabel  = errors.New("unknown label")
 
+	// The two segment index spaces, claimed by slice 5 (#9's 0xFC region). They were the
+	// `wantUnclaimed` list's second and third entries until this slice landed, and the reason
+	// they were on it is the reason they are off it now: nothing *read* a segment index while
+	// every instruction that names one was declined at the prefixed-opcode arm, so the deferral
+	// was a statement about dispatch rather than about the rules. `tag` remains, and remains a
+	// gate's.
+	//
+	// `data segment` is the one category whose lookup the *decoder* can pre-empt: a module using
+	// `memory.init` or `data.drop` without a data count section is malformed, not invalid
+	// (`binary.ErrDataCountRequired`), so this sentinel is reached only for an index that
+	// overruns a count the module did declare. That is a division of labour with the layer
+	// below rather than a gap — see dataSegmentAt.
+	ErrUnknownDataSegment = errors.New("unknown data segment")
+	ErrUnknownElemSegment = errors.New("unknown elem segment")
+
 	// ErrInvalidResultArity is `select`'s annotation carrying anything other than one type —
 	//	`valid.ml:443`, the reference's own text verbatim (0003), *including its parenthetical*.
 	//

@@ -107,7 +107,22 @@ jobs:
         # and testing for non-empty would also catch `go: downloading ...`
         # progress lines on a cold module cache, which is how the first version
         # of this step failed on both arches while lint passed.
+        #
+        # The probe is #322 and mirrors `make fmt-check`: exit 0 from --diff means
+        # "no disagreement" and never "I looked", so this step first asks the
+        # formatter a question whose answer is known. The probe source carries a
+        # gofumpt-*only* violation (a blank line at the top of a block, which plain
+        # gofmt leaves alone), so an unchanged or empty reply means the tool did not
+        # run or is not gofumpt — and the tree check would then have passed
+        # vacuously. See the Makefile target for the full reasoning; the two must
+        # stay mirrors, a surprise in CI being a bug in the Makefile.
         run: |
+          probe="$(printf 'package p\n\nfunc F() {\n\n\tx := 0\n\t_ = x\n}\n')"
+          got="$(printf '%s\n' "$probe" | go tool -modfile=tools/go.mod golangci-lint fmt --diff --stdin 2>/dev/null)"
+          if [ -z "$got" ] || [ "$got" = "$probe" ]; then
+            echo "::error::gofumpt liveness probe failed: a deliberately misformatted probe came back unchanged, so this step cannot distinguish a formatted tree from a formatter that never ran (#322)"
+            exit 1
+          fi
           if ! go tool -modfile=tools/go.mod golangci-lint fmt --diff ./...; then
             echo "::error::gofumpt would reformat the tree; run: make fmt"
             exit 1

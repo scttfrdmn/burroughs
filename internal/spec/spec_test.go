@@ -6880,7 +6880,62 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	// *default* lane's two sub-ceilings both fired on the identical single-vector move because their
 	// slack is 0. Two lanes, one movement, opposite instrument behaviour: that contrast is #315's
 	// subject and it is recorded here because this is the bound that is quiet.
-	const allOnPassFloor = 64079
+	// # Slice 5 (#322): 64079 → 64631, +552 against the default lane's +358, and the gap is four files
+	//
+	// The index-space family, and this bound's own before-state was **exactly 64079** — distance 0,
+	// no inherited drift for the first time in this comment's history. It fired here, at a distance
+	// of 552 against a slack of 250, which makes slice 5 the first entry that is not discretionary.
+	//
+	// The 194-vector gap between the lanes, attributed per file by diffing both lanes' per-file lines
+	// at both revisions (0007/#161, never arithmetic on the total):
+	//
+	//	                          default lane    all-gates-on lane    gap
+	//	memory_init64.wast          29 →  31       183 → 250            65
+	//	memory_fill64.wast          11 →  12        36 → 100            63
+	//	memory_copy64.wast        3885 → 3886     4386 → 4450            63
+	//	table_copy_mixed.wast          (0)           1 →   4             3
+	//	                          ----------      -----------          ---
+	//	                                                               194
+	//
+	// Every vector of the gap is memory64's, and the shape says something the totals cannot: the three
+	// `*64` memory corpora move by 1 or 2 in the default lane and by 63-67 here, because the *rules*
+	// are the same rules and what differs is whether a 64-bit memory can be declared at all. The
+	// fourth file is the interesting one — `table_copy_mixed.wast` moves 1/4 → 4/4 here and **0** in
+	// the default lane, and it is `minAddrType`'s only corpus subject: a copy between a 32-bit and a
+	// 64-bit table, whose length operand the reference's `min at1 at2` makes an i32. So the rule with
+	// the least corpus coverage in this slice is the one whose whole coverage is in this lane, which is
+	// the argument for the lane restated per-rule rather than per-file.
+	//
+	// The redistribution, measured on this lane at both revisions rather than inferred:
+	//
+	//	                       all-gates-on lane, #310 → slice 5
+	//	lane total pass           64079 → 64631   +552
+	//	lane total fail             950 →   398   −552
+	//	  declined                  676 →   124   −552   ← drains alone
+	//	  admitted                  172 →   172   unmoved
+	//	  wrong message              12 →    12   unmoved (2 of them the validator's, also unmoved)
+	//	  gated                        0 →     0
+	//
+	// **The rows are the lane's own printed totals and its bucket census, not an `assert_invalid`
+	// decomposition** — the tables above this one quote `assert_invalid pass` for their eras, and this
+	// lane does not report that figure: `TestAllGatesOnLeavesNothingGated` prints pass/fail/gated and
+	// per-file failure buckets, and the destination ledger runs on the default board. Writing an
+	// `assert_invalid pass` row here would have meant deriving it by subtraction, which is grave
+	// #312's exact defect — a decomposition asserted from arithmetic, agreeing with its own total. So
+	// the row is absent rather than computed, and the three sub-populations quoted are counted from
+	// the bucket keys the lane does print.
+	//
+	// **`declined` draining alone in both lanes, by each lane's own figure, is the slice's signature**
+	// — and it is the exact complement of slice 3's shape, which drained `admitted` and `mismatch`
+	// with `declined` untouched. A slice adds vocabulary; a rule fix makes vocabulary right. This one
+	// is entirely the former in both lanes, which is what a correct slice looks like and is worth
+	// having a measurement of, since the alternative (some of the 552 landing in `admitted`) is how a
+	// slice that types things *wrongly* would also show a large pass delta.
+	//
+	// The 12 wrong-message rows are 10 board-wide non-validator ones plus this lane's 2, which is why
+	// `validateMismatchCeiling` reads 0 on the default board while this lane keeps a pair. Stated
+	// because the two figures look like a disagreement and are two different populations.
+	const allOnPassFloor = 64631
 	boardBound(t, "allOnPassFloor", totalPass, allOnPassFloor, boardBoundSlack, floorBound,
 		"a gated feature regressed, which the Gated==0 assertion above cannot see: with every "+
 			"gate on, a broken feature turns a pass into a fail and leaves Gated at zero")
@@ -8763,8 +8818,25 @@ func TestPhase1Files(t *testing.T) {
 	// board bounds generally, and reading one lane's instrument as the other's is the mistake #315
 	// exists to remove. A prediction that a control will stay quiet is a claim about the control, and
 	// this one got checked by being wrong.
-	const validateFailCeiling = 492
-	const validateDeclineCeiling = 389
+	// # 492 → 134 and 389 → 31: slice 5, and the stratum's largest single fall
+	//
+	// The index-space family — 0xFC's ten bulk operations plus the two plain memory operators
+	// `memory.size`/`memory.grow` — types 358 vectors that were declined, and **all 358 come out of
+	// `validateDeclined`**. `validateAdmitCeiling` is unmoved at 103 and `validateMismatchCeiling` at
+	// 0, which is the row worth reading twice: a slice this size converting nothing into an admission
+	// means no module it newly types is *accepted* that the spec refuses, and converting nothing into
+	// a wrong-message refusal means every one of the 358 refuses with the string its vector names. Two
+	// unmoved ceilings are the evidence here, and neither would have moved on its own if the slice had
+	// simply been right — they move when a rule is *nearly* right, which is what makes their silence
+	// informative rather than empty.
+	//
+	// The forecast was derivable before the code existed and was pre-registered on #322 with all four
+	// rows (declines −350, admissions 0, wrong-message 0, pass +350); the widening to `memory.size`
+	// and `memory.grow` was taken during the work and accounts for the difference between 350 and 358.
+	// So the pre-registered figure held on the population it was written about, and the extra 8 are
+	// named as a scope decision rather than folded into a delta that would then have matched nothing.
+	const validateFailCeiling = 134
+	const validateDeclineCeiling = 31
 	boardBound(t, "validateDeclineCeiling", validateDeclined, validateDeclineCeiling, 0, ceilingBound,
 		"slice 1 declined more instructions than it did — either an opcode left the signature "+
 			"table or a later slice's rule regressed into a decline")
@@ -9339,7 +9411,23 @@ func TestPhase1Files(t *testing.T) {
 	// (`(select (result i32 i32))`, arity 2), both expecting `invalid result arity`. The all-on lane
 	// takes a third — `ref.wast:78`'s `(select (result (ref 1)))` expecting `unknown type`, which
 	// needs the GC gate to decode at all — and that asymmetry is at `allOnPassFloor`.
-	const passFloor = 60390
+	// **60390 → 60749, #9 slice 5, the index-space family: +358, and it is this campaign's largest
+	// single move.** The mirror is `validateDeclineCeiling` 389 → 31, so the delta is entirely
+	// slice-2-shaped: 358 opcodes newly *known*, none newly *right*, with `validateAdmitCeiling` and
+	// `validateMismatchCeiling` both unmoved. `unsupported` is unmoved at 83 for the fourth time and
+	// for the structural reason stated above — a decline is a `fail` with a named cause, so no amount
+	// of typing capability can reach that column. This floor's +358 is the reward figure the PR quotes.
+	//
+	// The 358 are 350 from the 0xFC region and 8 from the widening to `memory.size`/`memory.grow`
+	// (plain 0x3F/0x40), which are in this slice because they resolve `memory c x` — the criterion
+	// that defines it — rather than because of a prefix byte they do not carry. That scope call is
+	// named in the PR and at `internal/validate/bulk.go`'s header, and the two figures are quoted
+	// apart so the pre-registered forecast on #322 (which was written about the region) is checked
+	// against the population it actually named.
+	//
+	// The all-on lane takes 552 where this one takes 358, and the 194-vector gap is attributed per
+	// file at `allOnPassFloor`.
+	const passFloor = 60749
 	boardBound(t, "passFloor", totalPass, passFloor, boardBoundSlack, floorBound,
 		"a regression in a grammar that used to answer, or the corpus moved")
 }

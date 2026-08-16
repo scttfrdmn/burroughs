@@ -57,7 +57,7 @@ type sig struct {
 // the last two into one "cannot derive" bool would report `i32.load` in a module with no memory
 // as out of scope, when the reference has a verdict for it and so does this package.
 func signature(m *binary.Module, in binary.Instr) (sig, error) {
-	name, ok := binary.OpMnemonic(in.Op)
+	name, ok := opMnemonic(in)
 	if !ok {
 		return sig{}, errNoSignature(in)
 	}
@@ -70,6 +70,15 @@ func signature(m *binary.Module, in binary.Instr) (sig, error) {
 	if !found {
 		return sig{}, errNoSignature(in)
 	}
+
+	// `memory.size` and `memory.grow` are typed by the memory they name, not by a type prefix, so
+	// they would fall through `numType` below into a decline. They are slice 5's, not because they
+	// are encoded in its region — they are plain `0x3F`/`0x40` — but because they read the memory
+	// index space, which is what that slice is; see bulk.go's header on the difference.
+	if prefix == "memory" && (rest == "size" || rest == "grow") {
+		return memoryIndexOp(m, in, rest == "grow")
+	}
+
 	t, ok := numType(prefix)
 	if !ok {
 		return sig{}, errNoSignature(in)
@@ -119,6 +128,29 @@ func signature(m *binary.Module, in binary.Instr) (sig, error) {
 	}
 
 	return sig{}, errNoSignature(in)
+}
+
+// opMnemonic is the authority's name for an instruction, from whichever of its tables holds the
+// row — the plain one for a single-byte opcode, the prefixed one otherwise.
+//
+// **`signature` asked only `binary.OpMnemonic` until slice 5, which made its own doc comment
+// false about eight opcodes.** That comment lists `i32.trunc.sat.f32.s` among the conversions
+// whose operand type "is read off the name rather than enumerated", and the parsing below does
+// handle it — but `trunc_sat` is `0xfc 0x00`-`0x07`, and the plain table has no row for a
+// sub-opcode, so the name lookup failed before the parsing was reached and all eight declined.
+// A claim about a code path nothing could execute: *the defect stated as the rule*, in the file
+// whose header argues hardest for deriving over transcribing.
+//
+// It is separate from `mnemonic()`, which renders an instruction for a *human* and falls back to
+// hex. This one must be able to fail, because a missing row means no signature can be derived
+// and a hex string would parse as no type prefix and decline for the wrong reason. Two callers,
+// two contracts, and the difference is that one of them is evidence and the other is a lookup.
+func opMnemonic(in binary.Instr) (string, bool) {
+	if in.Prefix != 0 {
+		name, _, ok := binary.PrefixedOp(in.Prefix, in.Op)
+		return name, ok && name != ""
+	}
+	return binary.OpMnemonic(in.Op)
 }
 
 // errNoSignature is the decline, and it names the opcode *and its mnemonic* rather than only the

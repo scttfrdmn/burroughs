@@ -21,6 +21,33 @@ weakly-ordered platform.
 
 ### Added
 
+- **Slice 5 of #9's validator: the instructions whose type reads a module index space (#319).** The
+  bulk-memory and bulk-table family — `memory.init` / `copy` / `fill`, `data.drop`,
+  `table.init` / `copy` / `fill` / `grow` / `size`, and `trunc_sat` — plus `memory.size` and
+  `memory.grow`. **358 vectors move from `declined` to `pass`** on the default board (60391 → 60749),
+  and 552 in the all-gates-on lane (64079 → 64631); the validate stratum falls 492 → 134, its largest
+  single fall, with the accept-direction and wrong-message strata **unmoved** — so the whole delta is
+  vocabulary, which is what a slice is and what a rule fix is not.
+  - **The slice is not "the 0xFC region", and the widening is the argument.** The prefix byte is an
+    encoding fact; the typing family is *reads a module index space*. `memory.size` and `memory.grow`
+    are plain `0x3F`/`0x40` and belong to the slice; `trunc_sat` sits at `0xfc 0x00–0x07` and is in
+    the region without being in the family. The reference's own grouping is the evidence —
+    `valid.ml:687`, `:691`, `:695` are three consecutive arms sharing one
+    `let MemoryT (at, _lim) = memory c x in` preamble, so an encoding-shaped boundary cuts a sequence
+    upstream wrote as one. The scope call is named in the PR and is challengeable.
+  - **`minAddrType`, from the reference's `min at1 at2` over `I32AT | I64AT`.** OCaml's structural
+    `min` is constructor order, so a mixed-width `table.copy` takes an i32 length and only an
+    all-i64 pair takes i64. Witnessed by `table_copy_mixed.wast` (1/4 → 4/4, all-on lane) and by a
+    unit control, because a corpus file agreeing says the verdict was right and never says the
+    *length operand's type* was — that direction being invisible to `assert_invalid` (§9 G-3).
+  - **The `memory.init` / `table.init` immediates are not swapped.** They encode segment first,
+    memory/table second — the opposite of `memory.copy` / `table.copy` (`decode.ml:669,674`) — and a
+    transposition is accept-direction invisible on any module whose indices are both 0, which is most
+    of them. Pinned by its own control in both lanes.
+  - **Lookups precede pops**, following the reference's `let`-binding order, so `table.copy 0 4` with
+    f32 operands reports `unknown table 4` rather than a type mismatch. The refusal names the rule
+    that actually fired.
+
 - **`check_memop`'s offset bound, and the rule reads the memory the instruction names
   (#310).** `offset < 0x1_0000_0000` for a 32-bit memory (`valid.ml:392`) — the third and last of
   `check_memop`'s three `require`s, and the one that had been named in `align.go`'s header as
@@ -1001,6 +1028,24 @@ weakly-ordered platform.
   element segment's *offset* and an element *expression* are different lines of the user's module.
 
 ### Fixed
+
+- **The formatting gate reported a verdict on a question it never asked (#322).** Both `make
+  fmt-check` and ci.yml's gofumpt step read `golangci-lint fmt --diff`'s exit code, where 0 means
+  *no disagreement* and never *I looked* — so a run in which the formatter examined nothing reported a
+  clean tree. Both gates now front a **liveness probe**: a source carrying a gofumpt-*only* violation
+  (a blank line at the top of a block, which plain gofmt leaves alone) must come back changed. Keyed
+  on a gofumpt-only rule deliberately, so a silent downgrade to gofmt trips it; verified by watching
+  three mutations — no formatter, `gofmt`, an absent tool — each trip, and
+  `TestBothFormatGatesCarryTheLivenessProbe` keeps the two copies from drifting, the alternative being
+  a comment asking them not to.
+- **`-run <Name>` in a gate is a citation, and nothing was checking it (#322's shape, second
+  surface).** `go test -run ThisNameDoesNotExist` prints `PASS` and exits 0, so an ordinary rename
+  turns the all-gates-on gate — invoked from both the Makefile and CI — into a no-op reporting
+  success. `TestEveryGateCitedTestNameResolves` extends the cited-name resolver's domain from `.go`
+  comments to the gate files, where the same drift fails *green* instead of loudly. No instance was
+  live; it lands as a tripwire. Its exemption for the `-run XXX -fuzz`/`-bench` idiom is keyed on the
+  mode flag rather than on the literal `XXX`, so a `-run XXX` that selects nothing at all is still
+  reported — an under-matching first draft, caught in the noisy direction.
 
 - **`claudeMDCeiling`'s stated purpose named a domain twice the size of the one it measures
   (#319).** It read *"38400 bytes is a budget on what every session must read before it can do

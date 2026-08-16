@@ -161,6 +161,10 @@ func TestUnknownCategoriesMatchTheReference(t *testing.T) {
 	for _, err := range []error{
 		ErrUnknownType, ErrUnknownGlobal, ErrUnknownMemory, ErrUnknownTable,
 		ErrUnknownFunc, ErrUnknownLocal, ErrUnknownLabel,
+		// Slice 5's two arrivals. They were `wantUnclaimed`'s second and third entries, and the
+		// reverse direction below is what required this line to be added rather than allowing the
+		// sentinels to appear with the list unchanged — which is the whole of what that list buys.
+		ErrUnknownDataSegment, ErrUnknownElemSegment,
 	} {
 		msg := err.Error()
 		cat, ok := strings.CutPrefix(msg, "unknown ")
@@ -182,9 +186,14 @@ func TestUnknownCategoriesMatchTheReference(t *testing.T) {
 	// its arrival instead of inheriting it.
 	//
 	//   - `tag`: exception handling's index space (a later gate's).
-	//   - `data segment`/`elem segment`: reached only by the bulk memory/table ops, all of which
-	//     this slice declines at the prefixed-opcode arm before any index is read.
-	wantUnclaimed := map[string]bool{"tag": true, "data segment": true, "elem segment": true}
+	//
+	// **`data segment` and `elem segment` were here until slice 5 and are not any more**, and the
+	// entry they left is worth keeping as the record of why the list works. Their stated reason was
+	// that the bulk memory/table ops are "declined at the prefixed-opcode arm before any index is
+	// read" — a deferral whose subject was the *dispatch*, not the rules, so it expired the moment
+	// 0xFC was typed and the two sentinels arrived in the same commit that removed it. That is the
+	// list behaving as designed: it made a slice that claims a category come here and say so.
+	wantUnclaimed := map[string]bool{"tag": true}
 	for cat := range found {
 		switch {
 		case claimed[cat] && wantUnclaimed[cat]:
