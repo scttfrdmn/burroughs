@@ -201,7 +201,7 @@ func TestAssertInvalidDestinationLedgerCloses(t *testing.T) {
 		{
 			name: "already on the board (254 files) — the 2591 that left `unsupported`",
 			got:  already,
-			want: tally{total: 2591, pass: 1978, declined: 30, accepted: 111, mismatch: 10, gated: 462, precondition: 0},
+			want: tally{total: 2591, pass: 2008, declined: 30, accepted: 81, mismatch: 10, gated: 462, precondition: 0},
 			why: "the destination split IS the engine's contribution: 1615 passes is the reward, " +
 				"386 named declines are the next slices' work plan, 103 admissions are the " +
 				"accept-direction stratum, 10 are wrong-message on a right refusal, and 460 " +
@@ -245,7 +245,16 @@ func TestAssertInvalidDestinationLedgerCloses(t *testing.T) {
 				"validator accepts is a rule this package does not have, so the slice's figure is 7 " +
 				"verdicts earned and 8 rules named as owed. Recorded here rather than folded into the " +
 				"pass count, because `accepted` rising is the accept-direction stratum growing, which " +
-				"in every other row of this table would read as a regression",
+				"in every other row of this table would read as a regression. **The module-level slice is " +
+				"the mirror of slice 5, and the pair is why this table records shapes and not only " +
+				"deltas**: `accepted` 111 → 81, `pass` 1978 → 2008, with `declined`, `mismatch`, " +
+				"`gated` and `total` all unmoved. A delta out of `accepted` alone is a *correctness* " +
+				"gain in this row's own vocabulary — 30 rules became right and none became known — " +
+				"where slice 5's equally sized move out of `declined` alone was 356 becoming known " +
+				"and none becoming right. Two slices, two single-destination conversions, opposite " +
+				"destinations, and this ledger tells them apart without being told which is which. It " +
+				"also closes the 8 the sentence above named as owed: 8 of these 30 are those 8, so the " +
+				"17-head slice's 7-earned-8-owed settled at 15 verdicts across two PRs",
 		},
 		{
 			name: "arrived with the arm (2 files) — corpus admission, not verdicts earned",
@@ -330,9 +339,9 @@ func TestAssertInvalidDestinationLedgerCloses(t *testing.T) {
 	// keyed on the literal `assert_invalid`, the eight new admissions would have fallen through to
 	// the unrecognized-bucket arm above — which is the failure this identity is *for*: two paths
 	// disagreeing because one stopped recognizing a population, not because the engine moved.
-	if got := already.declined + fresh.declined + already.accepted + fresh.accepted; got != 142 {
-		t.Errorf("validate-stratum declines + admissions = %d, want 142 to match "+
-			"validateDeclineCeiling (31) + validateAdmitCeiling (111). Those come from the stratum "+
+	if got := already.declined + fresh.declined + already.accepted + fresh.accepted; got != 112 {
+		t.Errorf("validate-stratum declines + admissions = %d, want 112 to match "+
+			"validateDeclineCeiling (31) + validateAdmitCeiling (81). Those come from the stratum "+
 			"field and the arm's flags and this from the bucket keys; they must agree or one of them "+
 			"is describing a population the other is not. The stratum's third part "+
 			"(validateMismatchCeiling, 0) is deliberately outside this identity: the mismatch row "+
@@ -340,10 +349,12 @@ func TestAssertInvalidDestinationLedgerCloses(t *testing.T) {
 	}
 	if got := already.gated + fresh.gated; got != 465 {
 		t.Errorf("gated assert_invalid = %d, want 465 to match the unsupportedCeiling ledger's "+
-			"own split of the 2591 into 465 gated + 2126 verdicts", got)
+			"own gated count, summed across both groups — note this figure's subject is "+
+			"board-wide where the 2591 above is the converted group alone, so the two are cross-checks "+
+			"of different populations and not two halves of one subtraction", got)
 	}
-	if got := already.pass + fresh.pass; got != 2097 {
-		t.Errorf("assert_invalid passes = %d, want 2097 to match passFloor's account — 1023 at "+
+	if got := already.pass + fresh.pass; got != 2127 {
+		t.Errorf("assert_invalid passes = %d, want 2127 to match passFloor's account — 1023 at "+
 			"slice 1, of which it names 18 as answered from above the validator, plus slice 2's 648, "+
 			"slice 3's 58, #294's 2, slice 5's 358 (356 converted + 2 from the arrived group), and "+
 			"the 17-head slice's 7 — the only entry in this sum that raised the ledger's `total` "+

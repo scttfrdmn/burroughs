@@ -21,6 +21,34 @@ weakly-ordered platform.
 
 ### Added
 
+- **Module-level validation — the pass that was never there.** `validate.Module` walked the code
+  section and nothing else, so every rule `check_module` runs *before* the function bodies had no
+  implementation at all: limits on defined and imported memories and tables, and the memory index an
+  active data segment names. Eight vectors asked for exactly those rules and the engine **admitted**
+  each one — the direction no `assert_invalid` vector can catch, since a vector is satisfied by any
+  refusal and there was nothing to refuse them. `internal/validate/module.go` transcribes
+  `check_limits`, `check_memorytype`, `check_tabletype`, and `check_datamode`'s active arm, in
+  `check_module`'s own order. **`validateAdmitCeiling` 111 → 81**, the whole delta; default
+  60756 → **60786 pass** / 269 → **239 fail** / 66 unsupported **unmoved** / 4053 gated unmoved,
+  all-gates-on 64639 → **64676 pass** / 370 fail.
+  - **The reference's *order* is part of the rule, because the suite can see it.** `check_module`
+    reports the first failing phase, and `check_limits` tests `min ≤ range` before `min ≤ max`, so
+    `(table 0xffff_ffff 0 funcref)` must say `table size must be at most …` and not `size minimum
+    must not be greater than maximum`. Both orders are transcribed rather than chosen, and `module`'s
+    doc comment lists every reference phase with this slice's coverage beside it — each "not this
+    slice" line being a live admission bucket rather than a hypothetical.
+  - **Two sentinels for the range failures, one for min-against-max**, because the reference composes
+    two messages from one function (`"memory size must be at most " ^ s`, `"table size must be at
+    most " ^ s`) and shares the third verbatim. The per-address-type range text lives at the call
+    site that picks the range it describes: a message and the bound it names are one fact.
+  - **A constant the corpus does not constrain in *either* direction, and a machine-checked citation
+    for it.** The i64 ranges' arms are reached — refusing unconditionally costs the all-on lane 284
+    passes — but their *values* are unfalsifiable: no vector declares an i64 limit anywhere near
+    either candidate bound, so collapsing `memRangeI64`/`tabRangeI64` onto the i32 constants moves
+    **nothing** on either lane. `TestLimitsRangesMatchTheReference` reads value, range text, and
+    message head out of `valid.ml` in both directions, driving the real `checkMemoryType`/
+    `checkTableType` path so the string compared is the one a vector would see.
+
 - **The two `assert_invalid` module forms the harness could not ask, and a boundary that hands back
   what it read.** `(assert_invalid (module binary …) "text")` and `(assert_invalid (module quote …)
   "text")` get Kinds of their own — 17 vectors that scored `unsupported` since #9's arm landed, on
@@ -759,6 +787,21 @@ weakly-ordered platform.
   tail-call gate's own 0x12/0x13 when it lands.
 
 ### Changed
+
+- **The CI verdict is read from one chainless command.** `CLAUDE.md`'s "Waiting on CI" now says to
+  take the conclusion from `gh run view "$RUN" --json conclusion` and never off the end of a watch
+  pipeline: one command, no last-link ambiguity, nothing for a pipe to eat. Framed as a procedure
+  and not a control on purpose — no repo gate can reach the shape of a command the agent composes.
+  Funded by deleting the trailing "one honest timer" paragraph, whose content the PR #103 paragraph
+  above it already carried; its one distinction (the loop re-asks a real question where a bare
+  `sleep` asserts an answer) was grafted in rather than dropped. (Directive: Scott, PR #331.)
+
+- **The stamp's subject is the capability and the constraint, never the signature** — recorded as a
+  sub-bullet under *a status field is a citation to an approval*, whose mirror it is. That law is
+  about not claiming a stamp nobody gave; this is about not asking for one on a question that was
+  already the actor's. An exported name or an error's wording is settled and stated by the actor;
+  whether a capability exists, and under what constraint, is a principal's. (Standing correction:
+  Scott, PR #331.)
 
 - **New law: *reconcile an extent, never floor it* — and it was paid for by a demotion, not by the
   ceiling.** A one-sided bound is silent in the direction it does not bound, *with the right domain in
