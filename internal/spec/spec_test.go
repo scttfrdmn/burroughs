@@ -191,6 +191,27 @@ func decode(image []byte) error {
 // and a harness that lexed first would be reimplementing that ordering in a second place.
 func readText(src []byte) error { return text.ReadModule(src) }
 
+// assemble is the build-mode half of the same front end: `spec.AssembleFunc`, feeding the
+// `assert_invalid (module quote ...)` arm the image it must hand to the validator.
+//
+// **Separate from readText because a measurement said so, and the measurement's own domain is the
+// lesson.** The first draft of the 17-head slice widened `ReadTextFunc` to return the image and
+// pointed it here, which put the three Kinds that arm serves through the emitter. The board
+// answered: `text 0 -> 58`, and the buckets named the cause — the emitter cannot yet write
+// `(table ...)` or `(start ...)` fields, or #77's symbolic locals (#8).
+//
+// It was pre-measured and the measurement still missed it, which is the part worth keeping. The
+// probe compared `ReadModule` against `EncodeModule` over `KindModuleQuote` and
+// `KindAssertMalformedText` and found **zero** disagreement across 1236 commands — while the arm
+// serves a *third* Kind, `KindModuleText`, whose 1119 bare bodies were not in the domain at all.
+// Coverage is a claim: an instrument's domain is an assertion it cannot check about itself, and
+// this one asserted "every command this function sees" over 1236 of 2355.
+//
+// The zero was vacuous besides, and decomposing it is what said so: 1229 of the 1236 fail inside
+// the shared `parseModule` before the encoder is reached, so seven modules and 146 bytes were the
+// entire subject of the agreement. Recorded as grave #329.
+func assemble(src []byte) ([]byte, error) { return text.EncodeModule(src) }
+
 // isGated asks the engine, rather than reading its error text. The taxonomy is
 // the engine's to define; a substring test here would be the harness guessing at
 // the thing it exists to check.
@@ -367,9 +388,18 @@ func validateModule(c Command) (Stratum, error) {
 // proposal rather than a defect. That is memory64's 17 vectors again, one component over, and it
 // is why the gate set is a parameter rather than a call to the default helper.
 func validateWith(f binary.Features, c Command) (Stratum, error) {
-	image, err := text.EncodeModule(c.Source)
-	if err != nil {
-		return StratumEncode, err
+	// **A pre-assembled image is used as given.** The binary form has no wat source at all, and the
+	// quote form's arm assembles once and hands the image forward — so `Module` set means the
+	// caller has already established that this module comes into being, and re-deriving it here
+	// would be the double work #296 names *and* a second chance to disagree with the caller's own
+	// fact 1. The text form leaves `Module` nil and takes the branch below, unchanged.
+	image := c.Module
+	if len(image) == 0 {
+		var err error
+		image, err = text.EncodeModule(c.Source)
+		if err != nil {
+			return StratumEncode, err
+		}
 	}
 	m, err := (&binary.Decoder{Features: f}).DecodeModule(image)
 	if err != nil {
@@ -699,7 +729,7 @@ func fromInterpValue(o interp.Value) (Val, bool) {
 // that caller.
 func engine() Engine {
 	return Engine{
-		Decode: decode, ReadText: readText, IsGated: isGated, IsTrap: isTrap,
+		Decode: decode, ReadText: readText, Assemble: assemble, IsGated: isGated, IsTrap: isTrap,
 		IsException: isException,
 		Validate:    validateModule, IsDeclined: isDeclined,
 		Invoke: invoke, InstantiateLinked: instantiateLinked,
@@ -1038,6 +1068,22 @@ var wholeFileGated = map[string]int{
 // entry here. So a new gated `assert_invalid` cannot arrive unnoticed whether or not its file is
 // listed — which is the same argument wholeFileGated's comment makes about its own absent
 // seventh file, and the reason this map is free to be pins on counts.
+//
+// **465 after the 17-head slice, and the +2 is a fact about this control's own domain rather than
+// about the gates.** Keying the population "by the Kind" was written when `assert_invalid` had
+// exactly one Kind, so the membership test read `c.Kind == KindAssertInvalid` — and when the slice
+// split the head into three (`KindAssertInvalidBinary`, `KindAssertInvalidQuote`), that equality
+// silently narrowed from *the population* to *one form of it*. It failed in the loud direction,
+// which is the only reason this was cheap: the two vectors fell out of the bulk arm and into the
+// per-line arm, which demanded them by name. Had they fallen the other way they would have been
+// counted and never named. The predicate is now `Kind.isAssertInvalid()`, which is the property
+// the prose above always claimed — *a guard's trigger predicate is its own claim about the space*,
+// and this one had been true when written and quietly stopped being.
+//
+// The error message the failure printed was also wrong, and worth recording because following it
+// would have hidden the defect: it said to add the lines to `allowed` with the feature named,
+// which would have been a per-line entry papering over a bulk-arm predicate that had stopped
+// matching. A bucket names where a symptom surfaces, not where the defect lives (#194). Recorded as grave #330.
 var gatedAssertInvalid = map[string]int{
 	// memory64 — the whole of `align64`/`load64`/`memory_*64`, plus the mixed files below.
 	"align64.wast":          37,
@@ -1059,6 +1105,7 @@ var gatedAssertInvalid = map[string]int{
 	"br_on_cast_fail.wast":  6,
 	"br_on_non_null.wast":   1,
 	"br_on_null.wast":       1,
+	"elem.wast":             1, // gc — a `(module binary …)` form, see the note below
 	"func.wast":             1,
 	"local_init.wast":       4,
 	"local_tee.wast":        1,
@@ -1083,6 +1130,8 @@ var gatedAssertInvalid = map[string]int{
 	"throw.wast":     3, // exception handling ×2 + throw ×1
 	"throw_ref.wast": 2,
 	"try_table.wast": 9, // gc ×5 + try_table ×3 + exception handling ×1
+	// Multi-memory, and the only entry here whose file is otherwise ungated.
+	"align.wast": 1, // multi-memory: `memarg flags bit 6, an explicit memory index`
 }
 
 // wholeFileGatedVerdict is the bulk allowance's whole decision: whether `bulk` claims file `f`,
@@ -5599,7 +5648,7 @@ func TestGatedVectors(t *testing.T) {
 		// the *reason* the count is safe has to survive the corpus moving.
 		invalidOnly := map[int]bool{}
 		for _, c := range s.Commands {
-			if c.Kind == KindAssertInvalid {
+			if c.Kind.isAssertInvalid() {
 				if _, seen := invalidOnly[c.Line]; !seen {
 					invalidOnly[c.Line] = true
 				}
@@ -5674,10 +5723,15 @@ func TestGatedVectors(t *testing.T) {
 	for _, n := range gatedAssertInvalid {
 		sum += n
 	}
-	if sum != 463 {
-		t.Errorf("gatedAssertInvalid sums to %d, want 463 — the gated assert_invalid population "+
-			"changed size. A gate flip is the legitimate cause and re-bases this figure with the "+
-			"proposal named; anything else is a file or a population that moved unremarked", sum)
+	if sum != 465 {
+		t.Errorf("gatedAssertInvalid sums to %d, want 465 — the gated assert_invalid population "+
+			"changed size. Two causes are legitimate and each re-bases this figure with its subject "+
+			"named: a gate flip (name the proposal), or the harness learning to *ask* a form it "+
+			"previously scored as unsupported (name the Kind — the 17-head slice added 2 this way, "+
+			"`align.wast` and `elem.wast`, both `(module binary …)`). The second is not a gate "+
+			"moving and not a corpus moving, which is why it is spelled out here rather than left "+
+			"to be argued: the gates declined those two vectors all along and nothing was listening. "+
+			"Anything else is a file or a population that moved unremarked", sum)
 	}
 }
 
@@ -6935,7 +6989,7 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	// The 12 wrong-message rows are 10 board-wide non-validator ones plus this lane's 2, which is why
 	// `validateMismatchCeiling` reads 0 on the default board while this lane keeps a pair. Stated
 	// because the two figures look like a disagreement and are two different populations.
-	const allOnPassFloor = 64631
+	const allOnPassFloor = 64639
 	boardBound(t, "allOnPassFloor", totalPass, allOnPassFloor, boardBoundSlack, floorBound,
 		"a gated feature regressed, which the Gated==0 assertion above cannot see: with every "+
 			"gate on, a broken feature turns a pass into a fail and leaves Gated at zero")
@@ -7449,7 +7503,7 @@ func TestPhase1Files(t *testing.T) {
 	// campaign, where vectors score `gated`), and that is not this case — nothing needed to be
 	// authorized here, because nothing was being substituted. (Ruling: Scott, PR #307, on the actor's
 	// flag asking whether the carve-out extended. It did not need to.)
-	const unsupportedCeiling = 83
+	const unsupportedCeiling = 66
 	boardBound(t, "unsupportedCeiling", totalUnsup, unsupportedCeiling, boardBoundSlack, ceilingBound,
 		"either a capability regressed or the corpus moved; both need an explanation rather "+
 			"than a raised ceiling")
@@ -8835,7 +8889,7 @@ func TestPhase1Files(t *testing.T) {
 	// and `memory.grow` was taken during the work and accounts for the difference between 350 and 358.
 	// So the pre-registered figure held on the population it was written about, and the extra 8 are
 	// named as a scope decision rather than folded into a delta that would then have matched nothing.
-	const validateFailCeiling = 134
+	const validateFailCeiling = 142
 	const validateDeclineCeiling = 31
 	boardBound(t, "validateDeclineCeiling", validateDeclined, validateDeclineCeiling, 0, ceilingBound,
 		"slice 1 declined more instructions than it did — either an opcode left the signature "+
@@ -8892,7 +8946,7 @@ func TestPhase1Files(t *testing.T) {
 	// bucket key, which is the vector's own expected message, and never from a filename prefix. A
 	// `simd_`-prefix predicate would have been a claim about the current sample rather than the space,
 	// and an under-matching trigger fails silently by construction.
-	const validateAdmitCeiling = 103
+	const validateAdmitCeiling = 111
 	boardBound(t, "validateAdmitCeiling", validateAdmitted, validateAdmitCeiling, 0,
 		ceilingBound,
 		"the validator accepted an invalid module it used to refuse. This is the accept direction: "+
@@ -9427,7 +9481,7 @@ func TestPhase1Files(t *testing.T) {
 	//
 	// The all-on lane takes 552 where this one takes 358, and the 194-vector gap is attributed per
 	// file at `allOnPassFloor`.
-	const passFloor = 60749
+	const passFloor = 60756
 	boardBound(t, "passFloor", totalPass, passFloor, boardBoundSlack, floorBound,
 		"a regression in a grammar that used to answer, or the corpus moved")
 }

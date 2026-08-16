@@ -261,6 +261,30 @@ amended rather than replaced.
   unrelated failure — **two independent derivations, which is corroboration in
   the way a single shape recurring inside one instrument is not**.
 
+  **Seventh specimen, the third-specimen shape pointed at the tracker: `gh`'s
+  undocumented default of 30 rows.** `gh issue list` and `gh pr list` page
+  silently, so a census taken from either — how many closed `type:grave` issues
+  carry no closing comment, how many issues a label holds, how many PRs a
+  milestone has open — reports a **page** as the population and never says so.
+  It is *a search command's default domain is a claim about the space, made
+  silently by the tool rather than by the author* in the one place this repo keeps
+  its project state, which is why it earns a specimen rather than a footnote on
+  the third: the tracker is the authority for everything the code cannot check
+  about itself, so a truncated read there has no second mechanism above it to
+  disagree. Two reassuring failure directions, both silent: fewer rows than exist,
+  and a defect-hunting sweep that finds nothing because the rows carrying the
+  defect were on page two — the grave-comment sweep is exactly such a query, so
+  the shape's own remedy was subject to it. The rule is mechanical: **any `gh`
+  invocation whose output is counted, summed, or asserted against carries an
+  explicit `--limit` above the plausible population**, and a result landing
+  *exactly* on the limit is read as a truncation rather than a count until a
+  second query says otherwise — *a suspiciously clean result is a tell*, with the
+  round number supplied by the tool instead of by the data. (Directive: Scott, on
+  the 17-head slice's relay: *"The `gh` default-30 truncation is the boardFiles
+  error again: a tool's silent limit becoming a census. Worth a line wherever
+  counts are taken from `gh`."* — the `boardFiles` he names is the third specimen's
+  sibling, one instrument over.)
+
   The two failure modes are worth keeping separate because they are found
   differently. An **assertion** defect is found by falsification — break it, watch
   it die. A **coverage** defect is found only by measuring the instrument's

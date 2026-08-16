@@ -464,8 +464,12 @@ remembering decays across session boundaries:
   witness to the comment. Generalizes past GitHub — any write whose confirmation is a state
   transition needs its payload read back. **The recurrence is the point, and the specimens are
   counted by a query rather than by this file** — `gh issue list --label type:grave --state
-  closed --json number,comments`, whose zero-comment rows *are* the list, and #303 is the filed
-  control that runs it mechanically. This rule kept a running tally here until it was pointed out
+  closed --limit 500 --json number,comments`, whose zero-comment rows *are* the list, and #303 is
+  the filed control that runs it mechanically.
+  The `--limit 500` is load-bearing, not decoration: `gh issue list` defaults to **30** silently, so
+  a count taken without it reports a page as the population — body in
+  [evidence-and-instruments](docs/laws/evidence-and-instruments.md#coverage-is-a-claim-an-instruments-domain-is-an-assertion-it-cannot-check-about-itself).
+  This rule kept a running tally here until it was pointed out
   that a measured quantity in prose schedules its own next increment; the tally is generated or
   it is deleted, and this one is deleted. (Lesson: Scott, on the PR #247 relay; recurrences
   relayed by chat-Claude; count struck on his ruling, PR #317.)
