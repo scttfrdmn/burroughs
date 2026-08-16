@@ -116,6 +116,36 @@ weakly-ordered platform.
     untyped for the interpreter. The alignment slice is filed with a tripwire (#306): at 54 it is now
     the largest admitted bucket.
 
+- **The decoder seam: two rules that were blocked on a different package, slices 3 and 4 of #9
+  (#306, #294).** One cause — information the decoder read and dropped, so no rule in
+  `internal/validate` could ask for it — and the board delta is `+60` on the default lane and `+98`
+  with every gate on.
+  - **`check_memop`'s alignment `require` (#306).** The memarg's alignment exponent is retained
+    through `Instr.Imm1` and compared against a per-opcode natural width, over 45 rows derived from
+    the reference's own `Memory.mem_size`/lane arithmetic rather than typed out. `+58` default,
+    `+95` all-on, and the extra 37 is `align64.wast` and nothing else — memory64's alignment corpus,
+    converted by the same rule with the gate on, which is the property to want from an alignment rule
+    and is checkable only because the two lanes' deltas are *unequal*.
+  - **`select t`'s result-type annotation (#294).** `Func.Selects` retains the vector beside the body
+    (0016's side table, `hasX` flag included, so "filed empty" is distinguishable from "absent") and
+    `selectAnnotated` types it: `valid.ml:443`'s arity `require`, `check_valtype` on the annotated
+    type, and both operands popped **against the annotation rather than against each other**. `+2`
+    default, `+3` all-on — the third is `ref.wast:78`'s `(select (result (ref 1)))`, whose concrete
+    reference annotation needs the GC gate to decode at all. This closes the single-byte opcode space;
+    what remains declined is 0xFB, 0xFC and 0xFE.
+  - **The decoder files annotations it knows to be unusable, and that is the layering.** Arity-0 and
+    arity-2 `select` annotations are well-formed *encodings*; the arity rule is a typing rule, so a
+    decoder rejecting them would manufacture malformedness out of #9's work. `Imm0`'s reference-ness
+    bit stays as the interpreter's map-free dispatch input and is now documented as a *derived cache*
+    of the retained vector, with a bidirectional agreement control written in the same diff that
+    created the second field — its valtype domain derived by offering all 256 bytes to the decoder,
+    not by listing the types a proposal could add to.
+  - **The two slices drain disjoint sub-populations, which is why they are one PR.** Slice 3's
+    vectors were *admissions* (`validateAdmitCeiling` 158 → 104, `validateMismatchCeiling` 4 → 0,
+    declines untouched) — rules the validator knew and could not reach. Slice 4's were *declines*
+    (`validateDeclineCeiling` 391 → 389, the other two untouched) — vocabulary it genuinely lacked.
+    One cause seen from both sides, and the pair is what makes neither delta a reclassification.
+
 - **`internal/validate` — the type oracle decision 0002 Q3 names, slice 1 of #9 (#291).** Decoder →
   internal form → **validator** → interpreter: the pass that decides, statically, which type every
   value slot holds, which is what makes the interpreter's bare `uint64` slots sound and what ADR
@@ -616,6 +646,13 @@ weakly-ordered platform.
   sum fires for the total that *is* still a literal — the self-retiring shape 0025 used for its own
   carve-out, and the ruling's stated reason for preferring the admission is that a decline means "not
   yet in vocabulary", which was false here and would have put two facts in one column.
+  - **It retired, one PR later, and the retirement was wrong by 38 in the one place a self-retiring
+    control speaks last.** #306 landed the rule, the measured set emptied, and the vacuity check fired
+    with the instruction to delete the ledger — and that instruction named `142` as the successor
+    value, which was slice 1's *base*, with 38 alignment members already inside it. The correct
+    residual is `104`. A control that names its own successor has to compute it the way the live path
+    does, or the last thing it ever says is a number nobody re-derived. All four sub-ceilings are
+    literals again, and the identity over them is back to catching a re-base that forgot the others.
 - **The reject-direction oracle's coverage statement names its third blind spot and its sixteen known
   instances (#307).** `internal/validate/authority_test.go`'s header described two — the corpus's
   any-refusal-satisfies (84.3%) and the absence of any negative vector for an accept-direction defect
@@ -851,6 +888,14 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **The all-gates-on lane's stratum decomposition was wrong in both of its terms, by 10, in opposite
+  directions (#312).** It read "962 validate + 90 other = 1052"; the measured split at that same
+  revision is `952 validate + 100 other (46 encode, 54 exec)`. The identity closed to 1052 either
+  way, so the sum — the one thing anyone checks — could not have caught it. Corrected with the
+  mechanism named rather than the number silently overwritten, because the artifact worth keeping is
+  that two cancelling errors survived a review; the lane's strata are now re-measured at every re-base
+  and quoted per part. *A decomposition is a measurement or it is nothing, and its checksum cannot
+  validate it* — the total-is-not-a-ledger law, applied to prose figures inside a control's own comment.
 - **`validateAdmitCeiling` was measuring a population 4 larger than the one it names, and the
   arithmetic that did it was correct until it wasn't (#305).** The board read the admission stratum
   off `validateFail − validateDeclined`, which identified it exactly while the validate stratum's

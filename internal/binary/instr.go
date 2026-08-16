@@ -293,6 +293,23 @@ type instrCtx struct {
 	// const-expression read never reaches `castTypes`, because no cast-family opcode is
 	// const-legal.
 	castsOut *map[int][]ValType
+
+	// selects stages `select`'s result-type annotation, and `hasSelects` distinguishes "filed"
+	// from "empty" on the discipline `hasLabels` sets.
+	//
+	// **This is the case that discipline was written for, and it is not hypothetical here.** A
+	// `select (result)` — arity 0 — is a legal *encoding* whose vector is empty, and the validator's
+	// job is to reject it by the reference's arity rule (`valid.ml:443`, `select.wast:368`). With
+	// length as the discriminator that vector would be indistinguishable from opcode `0x1B`, which
+	// carries no annotation at all and is legal, so the one vector this retention exists to convert
+	// would read as the form that needs no checking.
+	selects    []ValType
+	hasSelects bool
+
+	// selectsOut is where emit files a staged annotation, or nil when this read is recognizing
+	// only — parallel to the three above, and vacuous in the const-expression case by grammar:
+	// `select` is not const-legal.
+	selectsOut *map[int][]ValType
 }
 
 // emit appends one decoded instruction to the retained sequence and clears the staging
@@ -346,10 +363,24 @@ func (c *instrCtx) emit(prefix byte, op uint32) {
 			}
 			(*c.castsOut)[idx] = tv
 		}
+		if c.hasSelects && c.selectsOut != nil {
+			if *c.selectsOut == nil {
+				*c.selectsOut = map[int][]ValType{}
+			}
+			// A nil vector is stored as an empty non-nil one, matching the three above. The
+			// case is *reachable* here rather than defensive — `select (result)` stages no
+			// element — and `SelectTypes`' second result is what says "no annotation".
+			sv := c.selects
+			if sv == nil {
+				sv = []ValType{}
+			}
+			(*c.selectsOut)[idx] = sv
+		}
 	}
 	c.imm0, c.imm1, c.immN = 0, 0, 0
 	c.labels, c.hasLabels = nil, false
 	c.catches, c.hasCatches = nil, false
+	c.selects, c.hasSelects = nil, false
 	// `heaps` is cleared here and not by `castTypes`, so an instruction that reads a heaptype
 	// and files nothing (`ref.null`) cannot leave one for the next instruction to inherit —
 	// the stale-field failure this whole staging area is documented against.
@@ -402,7 +433,7 @@ func (c *instrCtx) stageLaneIdx(v uint64) {
 		c.stage(v)
 		return
 	}
-	c.imm1 |= (v & 0xFF) << 32
+	c.imm1 |= (v & 0xFF) << memargLaneShift
 }
 
 // decline records a gated construct without returning it. First one wins, matching
@@ -1131,15 +1162,20 @@ func (c *instrCtx) imm(r *reader, im imm) error {
 		c.stage(btIdx)
 		return nil
 	case immVecValType:
-		// select's optional result-type vector. The types themselves are read and dropped:
-		// nothing consumes the full vector, `select` needs its arity from the *stack* at
-		// validation time, and a vector does not fit two words (#7).
+		// select's optional result-type vector, retained in the side table `emit` files it into
+		// (0016) since **#294** — the day this comment's own deferral named.
 		//
-		// **"Does not fit two words" is no longer the whole reason, and 0016 is why.** The side
-		// table beside the body is where an unbounded immediate goes when it has a consumer, so
-		// what keeps the full vector discarded is the *absence* of one, not the absence of a
-		// mechanism. A `[]uint32` shape would not serve it in any case — these are valtypes —
-		// so the retention it wants is its own field, on the day #9 needs the annotation.
+		// The deferral read: "nothing consumes the full vector, `select` needs its arity from the
+		// *stack* at validation time, and a vector does not fit two words (#7)", then corrected
+		// itself to "what keeps the full vector discarded is the *absence* of a consumer, not the
+		// absence of a mechanism … the retention it wants is its own field, on the day #9 needs the
+		// annotation." Both halves are worth keeping, because the first one's middle clause was
+		// **wrong on the spec and not merely premature**: `select`'s arity does not come from the
+		// stack in the annotated form. `valid.ml:442-446` types the operands against `ts` and
+		// requires `List.length ts = 1`, so a validator reading the stack would have accepted
+		// `(select (result i32 i32) …)` — the accept-direction hazard (§9 G-3) that a stack-shape
+		// guess always risks, recorded here as a *plan* while no validator existed to be wrong. Its
+		// retraction is why the arm below stages the vector and not a summary of it.
 		//
 		// **One bit *is* staged, since #196/#197, and it is not the full annotation.** `select`
 		// has no static type to consult at runtime (this package's own layer has no validator),
@@ -1152,12 +1188,28 @@ func (c *instrCtx) imm(r *reader, im imm) error {
 		// engine's decoder needs to answer is "is that single type a reference" — Imm0 is 1 for
 		// yes, 0 for every other shape (arity 0, or a numeric/vector type), which the interpreter
 		// reads as `ins.Imm0 != 0` rather than re-deriving from a runtime guess.
+		//
+		// **The bit survives the retention as a cache, and the last element is deliberately
+		// what it summarizes.** With the vector filed, `isRef` is derivable at every consumer;
+		// what it buys is the interpreter's map-free dispatch, which is the whole reason it was
+		// staged. The two facts are checked against each other by
+		// `TestSelectImm0AgreesWithTheAnnotation` rather than trusted, because a cache and its
+		// source in different words of different tables is exactly the pair that drifts. On the
+		// only arity the validator admits the two readings coincide; for arity > 1 the bit reads
+		// the *last* element, which is stated here rather than left for a reader to infer from
+		// the assignment's position in the loop.
+		c.hasSelects = true
 		var isRef bool
 		if err := c.d.decodeVec(r, func(r *reader) error {
 			if err := c.d.decodeValType(r); err != nil {
 				return err
 			}
 			isRef = c.d.valType.IsRef()
+			// Appended per element, never preallocated from the declared count — grave #138's
+			// law, for the reason `immVecIdx` gives one arm over: a vector claiming 0xFFFFFFFE
+			// types stays bounded by the image only as long as nothing sizes a slice from the
+			// count first.
+			c.selects = append(c.selects, c.d.valType)
 			return nil
 		}); err != nil {
 			return err
@@ -1283,13 +1335,23 @@ func (c *instrCtx) decodeMemop(r *reader) error {
 	if err != nil {
 		return err
 	}
-	// **Offset in Imm0, memory index in Imm1** — and the alignment is *not* retained.
-	// Alignment is a validation constraint (it must not exceed the access's natural
-	// width) and carries no execution semantics, so keeping it would be storing a fact
-	// only #9 reads, in the two words the interpreter needs. The flags byte is still
-	// checked here; what is dropped is only its retention.
+	// **Offset in Imm0; memory index and alignment exponent in Imm1** — see module.go's
+	// memarg packing comment for the word's three tenants and Memarg for reading them back.
+	//
+	// **The alignment is retained as of #306, and the argument it replaces was sound in its
+	// premise.** Alignment really is a validation constraint with no execution semantics
+	// (`valid.ml:380-389`), so this comment used to say that keeping it would store a fact
+	// only #9 reads. That was a reason while #9 did not exist. Once it did, the same
+	// sentence became a description of a defect: the validator knows how to reject
+	// `align=4` on an `i32.load` and could not see the alignment to do it, so 54
+	// `assert_invalid` vectors were accepted.
+	//
+	// Six bits, in a word with eighteen spare above them, is what the retention costs —
+	// which is also why *this* is the fix rather than a side-table field: a map entry per
+	// load and store is the allocation 0002's fixed-width form exists to avoid, and the
+	// hottest instruction class in Wasm is the wrong place to start paying it.
 	c.stage(off)
-	c.stage(memIdx)
+	c.stage(StageMemarg(memIdx, flags))
 	return nil
 }
 
@@ -1645,7 +1707,11 @@ func (d *Decoder) decodeFuncBody(r *reader) error {
 	var labels map[int][]uint32
 	var catches Catches
 	var casts map[int][]ValType
-	c := &instrCtx{d: d, nonConst: -1, out: &body, labelsOut: &labels, catchesOut: &catches, castsOut: &casts}
+	var selects map[int][]ValType
+	c := &instrCtx{
+		d: d, nonConst: -1, out: &body,
+		labelsOut: &labels, catchesOut: &catches, castsOut: &casts, selectsOut: &selects,
+	}
 	if err := c.block(r); err != nil {
 		return err
 	}
@@ -1673,7 +1739,7 @@ func (d *Decoder) decodeFuncBody(r *reader) error {
 	// because the other half is not available until both sections are read — see
 	// Decoder.funcTypeIdx.
 	d.mod().Funcs = append(d.mod().Funcs,
-		Func{Locals: locals, Body: body, Labels: labels, Catches: catches, Casts: casts})
+		Func{Locals: locals, Body: body, Labels: labels, Catches: catches, Casts: casts, Selects: selects})
 	return nil
 }
 

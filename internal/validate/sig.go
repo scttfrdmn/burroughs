@@ -92,15 +92,19 @@ func signature(m *binary.Module, in binary.Instr) (sig, error) {
 	case compareOps[rest]:
 		return sig{params: []binary.ValType{t, t}, results: []binary.ValType{binary.I32}}, nil
 
+	// The two memarg arms, and they route through `checkMemop` rather than `addrType` directly:
+	// resolving the address type is only half of the reference's shared preamble, the other half
+	// being the alignment rule, and two arms remembering to call the second half separately is the
+	// shape that had it called from nowhere.
 	case strings.HasPrefix(rest, "load"):
-		addr, err := addrType(m)
+		addr, err := checkMemop(m, in, name)
 		if err != nil {
 			return sig{}, err
 		}
 		return sig{params: []binary.ValType{addr}, results: []binary.ValType{t}}, nil
 
 	case strings.HasPrefix(rest, "store"):
-		addr, err := addrType(m)
+		addr, err := checkMemop(m, in, name)
 		if err != nil {
 			return sig{}, err
 		}

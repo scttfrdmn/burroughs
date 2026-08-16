@@ -3,6 +3,7 @@
 package validate
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/scttfrdmn/burroughs/internal/binary"
@@ -155,17 +156,7 @@ func (v *validator) instr(i int, in binary.Instr) error {
 		return v.selectUnannotated()
 
 	case opSelectT:
-		// **The one instruction slice 1 declines for a reason that is ours and not the spec's.**
-		// `select t` carries a result-type vector, and the decoder reads and *discards* it
-		// (`instr.go`'s `immVecValType` arm) because until now nothing consumed it. Its own
-		// comment names this day: "the retention it wants is its own field, on the day #9 needs
-		// the annotation." Validating the annotated form means checking the operands against the
-		// *annotation*, which cannot be recovered from the stack — a stack-shape guess would
-		// accept a module whose annotation disagrees with its operands, which is the
-		// accept-direction hazard (§9 G-3). So it is declined here and the retention is filed,
-		// rather than approximated.
-		return fmt.Errorf("%w: select with a result-type annotation needs the vector retained "+
-			"beside the body (0016, #294)", ErrUnsupported)
+		return v.selectAnnotated(i)
 
 	case opLocalGet, opLocalSet, opLocalTee:
 		return v.localOp(in)
@@ -443,6 +434,106 @@ func (v *validator) selectUnannotated() error {
 	v.push(res)
 	return nil
 }
+
+// selectAnnotated is `select` with a result-type annotation — `valid.ml:442-446`, the last
+// instruction in the single-byte opcode space slice 1 declined (#294).
+//
+//	| Select (Some ts) ->
+//	  require (List.length ts = 1) e.at
+//	    "invalid result arity other than 1 is not (yet) allowed";
+//	  check_resulttype c ts e.at;
+//	  (ts @ ts @ [NumT I32T]) --> ts, []
+//
+// **The annotation is the type, and the stack is checked against it — never the reverse.** That
+// asymmetry is the whole reason this arm waited for #294's retention rather than being approximated
+// from the operands: `select (result i32)` on two `f32`s is invalid, and a validator inferring the
+// type from the stack would accept it and hand the interpreter a module whose dispatch bit disagrees
+// with its values. Accept-direction, §9 G-3, and no `assert_invalid` vector can score it.
+//
+// **Order matters and it is the reference's.** Arity is checked before the types are resolved and
+// before any operand is popped, so `(select (result i32 i32) …)` on an empty stack reports the arity
+// and not a stack shortage. `select.wast:373`'s module is exactly that case — its function declares
+// `(result i32 i32)` and its operands are four `i32.const`s, so a validator popping first has three
+// other complaints available and the corpus expects this one.
+func (v *validator) selectAnnotated(i int) error {
+	ts, ok := v.curFunc.SelectTypes(i)
+	if !ok {
+		return fmt.Errorf("%w: instruction %d", errNoSelectAnnotation, i)
+	}
+	if len(ts) != 1 {
+		// The reference's text verbatim per 0003, with the count after it — the corpus expects
+		// the substring `invalid result arity`, and both vectors that reach here are about the
+		// count, so naming it is what tells arity 0 from arity 2 in a bucket key.
+		return fmt.Errorf("%w (%d annotated)", ErrInvalidResultArity, len(ts))
+	}
+	// `check_resulttype c ts` — over the whole vector, which is how the reference writes it.
+	//
+	// **Written as a loop rather than as `ts[0]`, so that the arity require above is the rule and
+	// not also this line's bounds guard.** It was `ts[0]` first, and the falsification run that
+	// disabled the require to watch the arity rows die found the arity-0 row dying by *panic*
+	// instead: with the require gone, indexing an empty annotation is an index-out-of-range in the
+	// package whose job is to decide whether a module is safe to run. The row still went red, so
+	// the control was never in question — but a rule that is silently load-bearing for memory
+	// safety is one lifted restriction away from a crash, and the reference will lift this one
+	// ("not (yet) allowed"). Everything below is index-free for the same reason: the arity is the
+	// only thing that has to change when it does.
+	for _, t := range ts {
+		if err := v.checkValType(t); err != nil {
+			return err
+		}
+	}
+	// `ts @ ts @ [i32] --> ts` popped from the top down: the condition, then both operands, each
+	// against the annotation rather than against each other. `matches` is not consulted here for the
+	// same reason — `popExpect` already admits `unknown` in an unreachable frame, and two operands
+	// agreeing with a type they were both checked against agree with each other by construction.
+	if err := v.popExpect(binary.I32); err != nil {
+		return err
+	}
+	if err := v.popExpectAll(ts); err != nil {
+		return err
+	}
+	if err := v.popExpectAll(ts); err != nil {
+		return err
+	}
+	v.pushAll(ts)
+	return nil
+}
+
+// checkValType is `check_valtype` (`valid.ml:131-136`), which is a no-op for every form except one:
+// a reference type naming a *concrete* type index has to name one that exists.
+//
+// The numeric and vector cases are `()` in the reference (`check_numtype`, `check_vectype`), and the
+// abstract heaptypes are `()` in `check_heaptype`. What is left is `UseHT (Idx x)` reaching
+// `check_typeuse`'s `type_ c x` — the same `lookup "type"` every other index-space check in this
+// package goes through, so the message is `unknown type N` and not a paraphrase.
+//
+// **`blockType`'s valtype form does not call this and the reference's `check_blocktype` does**
+// (`:420`: `ValBlockType (Some t) -> check_valtype c t at`), so `(block (result (ref 99)))` is
+// accepted here with no such type in the module. That is an accept-direction gap of exactly the
+// shape #294 closes for `select`, found while reading the function that closes it, and it is
+// **#311** rather than a drive-by fix: it is a different opcode family with its own corpus vectors
+// and its own board delta, and folding it in would put a second reward under this one's forecast.
+func (v *validator) checkValType(t binary.ValType) error {
+	if !t.IsIndexed() {
+		return nil
+	}
+	if idx := t.Index(); idx >= uint32(len(v.mod.Types)) {
+		return fmt.Errorf("%w %d (%d in scope)", ErrUnknownType, idx, len(v.mod.Types))
+	}
+	return nil
+}
+
+// errNoSelectAnnotation is opcode `0x1C` reaching the validator with no retained annotation.
+//
+// **Undeclared and unreachable by construction**, on `errNoNaturalWidth`'s posture and for its
+// reason: this is not a decline (the instruction is plainly in this slice's vocabulary now) and not
+// a verdict about the module (nothing in it is wrong) — it is the decoder and this arm disagreeing
+// about what `0x1C` files, which is an engine bug and belongs in a channel nobody expects to see.
+//
+// The decoder files a vector for every `0x1C`, empty annotation included, which is what makes this
+// unreachable; `binary.TestSelectRetainsTheAnnotationIncludingItsIllegalArities` is the control that
+// says so rather than this comment claiming it.
+var errNoSelectAnnotation = errors.New("internal: select 0x1C with no retained result-type annotation")
 
 // localOp handles the three local instructions.
 func (v *validator) localOp(in binary.Instr) error {

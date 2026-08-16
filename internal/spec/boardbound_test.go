@@ -69,10 +69,12 @@ import (
 // unbounded; the *instrument's* claim about where bounds live had gone false. The heading above still
 // says nineteen for that reason — the population did not move — and the loss was visible only to the
 // exact count, `minBoundPopulation` being 8 and perfectly content with 18. See the `*ast.AssignStmt`
-// arm for the fix and for why a floor could not have caught it.
+// arm for the fix and for why a floor could not have caught it. That row is a `const` again as of
+// #306, so the arm it forced now covers a shape with no live specimen; the *Derived* kind below says
+// what follows from that.
 //
 // **The `actual` column is the figure at the row's last re-base and several are older than that** —
-// `passFloor` reads 4162 against a live 60330. The columns doing work here are `kind` and `slack`,
+// `passFloor` reads 4162 against a live 60390. The columns doing work here are `kind` and `slack`,
 // which is the part a reader cannot infer; the live figure is at the call site, which outranks this
 // table by the rule above.
 //
@@ -80,17 +82,17 @@ import (
 //
 //	bound                    actual   kind          slack   why
 //	passFloor                4162     board count   250     moves in strata; can go stale
-//	allOnPassFloor           63977    board count   250     same board plus gated vectors
+//	allOnPassFloor           64075    board count   250     same board plus gated vectors
 //	unsupportedCeiling       60872    board count   250     shrinks as capabilities land
 //	binaryFailCeiling        0        at terminal   —       0 cannot drift from 0
 //	textFailCeiling          0        at terminal   —       0 cannot drift from 0
 //	unimplementedCeiling     0        at terminal   —       0, and 0004 fixes it there
 //	encodeFailCeiling        46       exact re-base  0      drains as the encoder learns forms
 //	execFailCeiling          81       exact re-base  0      drains as the interpreter lands rules
-//	validateFailCeiling      553      exact re-base  0      the whole validator stratum
-//	validateDeclineCeiling   391      exact re-base  0      its declines, named per opcode
-//	validateAdmitCeiling     158      derived        0      its admissions — the accept direction
-//	validateMismatchCeiling  4        exact re-base  0      right refusal, wrong message (0003)
+//	validateFailCeiling      493      exact re-base  0      the whole validator stratum
+//	validateDeclineCeiling   389      exact re-base  0      its declines, named per opcode
+//	validateAdmitCeiling     104      exact re-base  0      its admissions — the accept direction
+//	validateMismatchCeiling  0        at terminal   —       right refusal, wrong message (0003)
 //	totalFloor               2143     vacuity       —       deliberately loose by design
 //	filesFloor               242      vacuity       —       deliberately loose by design
 //	i32SpellingFloor         2531     vacuity       —       the extractor found this kind at all
@@ -103,12 +105,18 @@ import (
 // `ceilingBound` with slack 0, meaning "move me in the PR that moves the column". That the helper
 // used to *exempt* those is grave #293, immediately below.
 //
-// **Derived** is exact re-base with the constant replaced by an expression over a named set, and
-// `validateAdmitCeiling` is the only one: `142 + <live members of alignmentAdmissions>` (#307's
-// condition on taking the admission). The kind is worth its own word because the *re-base* clause
-// reads differently — a member draining moves this bound with no edit, so what needs re-basing is
-// the total it decomposes rather than the bound itself. It is also the row that taught this walk
-// that a bound need not be a `const`; see the `*ast.AssignStmt` arm.
+// **Derived** was a fifth kind and **no row is of that kind today**, which is worth a paragraph
+// rather than a deletion. It was exact re-base with the constant replaced by an expression over a
+// named set: `validateAdmitCeiling` read `142 + <live members of alignmentAdmissions>` under #307's
+// condition on taking the admission, so a member draining moved the bound with no edit and what
+// needed re-basing was the total it decomposed. #306 drained the whole named set, the ledger retired,
+// and the row is a plain `const` again at 104.
+//
+// The kind stays described because **the walk's `*ast.AssignStmt` arm exists for it and now has no
+// subject in the tree.** That is a trigger predicate whose only specimen has left: keep the arm (a
+// tripwire is re-pointed, never closed — the *risk* is "a bound is not a `const`", which no rule
+// prevents recurring), and know that nothing currently exercises it, so its own correctness rests on
+// having been watched fire in #307 rather than on today's green.
 //
 // **At terminal**: a bound already at the value it is draining toward cannot go stale,
 // because the distance between "at most 0" and "0" is not a quantity that can grow. A slack
@@ -309,12 +317,19 @@ func TestEveryBoardBoundIsChecked(t *testing.T) {
 				}
 			case *ast.AssignStmt:
 				// **A bound does not have to be a constant, and this arm exists because one
-				// stopped being one.** `validateAdmitCeiling` is now `142 + <live members of a
-				// named set>` (#307's condition), so it is a `:=` — an `*ast.AssignStmt`, which
+				// stopped being one.** `validateAdmitCeiling` was `142 + <live members of a
+				// named set>` (#307's condition), so it was a `:=` — an `*ast.AssignStmt`, which
 				// `*ast.ValueSpec` does not cover — and the census's population fell 19 → 18 with
 				// every bound still present and still checked. *A guard's trigger predicate is
 				// itself a claim about the space*, and the claim here was "a bound is declared in
 				// a ValueSpec", true for eighteen bounds and false for the nineteenth.
+				//
+				// **#306 drained that ledger and the row is a `const` again, so this arm currently
+				// matches nothing** — kept anyway, because what it guards is the *risk* that a bound
+				// is not a `const`, and nothing in the conventions prevents that recurring. A
+				// tripwire whose subject dissolves is re-pointed and never closed. The consequence
+				// to hold onto is that its green today is vacuous: it was watched fire once, on
+				// #307, and that observation is the whole evidence that it works.
 				//
 				// Worth reading for *which* instrument caught it: `minBoundPopulation` is 8, so the
 				// floor was satisfied by 18 and said nothing. Only the exact count fired. That is

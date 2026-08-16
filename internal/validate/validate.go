@@ -21,16 +21,48 @@
 // `vec.go` types the 0xFD region (#305) — 236 core SIMD opcodes across 20 constructor families,
 // including the lane-index bounds, which is the second sentinel this package declares. Its argument
 // for reading the classification out of `syntax/mnemonics.ml` instead of writing it here is that
-// file's own header; what matters at this level is that the region is no longer declined, so
-// `select t` (#294) is the last instruction in the single-byte space slice 1 left, and the other
-// three prefixed regions (0xFB GC, 0xFC bulk, 0xFE threads) are the ones still dispatched to a
-// decline.
+// file's own header; what matters at this level is that the region is no longer declined.
+//
+// This paragraph then said `select t` (#294) was the last instruction in the single-byte space slice
+// 1 left, which was true when it was written and is not now — slice 4 took it. **The single-byte
+// opcode space is fully in vocabulary as of that slice**, and what remains declined is the three
+// prefixed regions: 0xFB (GC), 0xFC (bulk memory/table), 0xFE (threads).
+//
+// # Slice 3: the memarg's alignment
+//
+// `align.go` is `check_memop`'s alignment `require` (#306), and it is the smallest slice here by
+// line count and the one with the longest argument attached, because **it is the first rule in this
+// package that was blocked on a different package**. The decoder read the alignment exponent and
+// dropped it; the rule had no operand. Retention through `Imm1` plus the comparison against a
+// per-opcode natural width closed 54 admissions and 4 wrong-message refusals together. The other two
+// `require`s in the reference's function are named in `align.go`'s header — one unreachable across
+// all 45 rows, one (`offset out of range`) reachable and still unwritten (#310).
+//
+// # Slice 4: `select`'s result-type annotation
+//
+// `selectAnnotated` in `instr.go` is `valid.ml:442-446` (#294), and it landed in the *same PR* as
+// slice 3 because it is the same defect wearing a different opcode: the decoder read `select t`'s
+// result-type vector and dropped it, so the arity rule had nothing to count and the type rule had
+// nothing to pop against. `Func.Selects` retains it (0016's side table) and this arm reads it.
+//
+// **The two slices drain opposite sub-populations of the fail column, and that is the argument for
+// having folded them.** Slice 3's vectors were *admissions* — rules this package knew and could not
+// reach — so its reward is `validateAdmitCeiling` and `validateMismatchCeiling` falling with
+// `validateDeclineCeiling` untouched. Slice 4's two were *declines*, which is the channel telling
+// the truth: `select t` genuinely was not in vocabulary, and now it is. Same cause, disjoint
+// destinations, one PR — see `passFloor`'s and `allOnPassFloor`'s accounts for both tables.
+//
+// It is also the slice that closes the single-byte space, and the last one whose rule was blocked on
+// a *different package*. What blocks the rules still missing is this package: #311's
+// `check_valtype` on a block's valtype annotation is a call the walk never makes, and #310's
+// `offset out of range` is a `require` never written.
 //
 // Out of scope by declaration, each with its own expected string in the suite and so its own
-// measurable slice: alignment (99 vectors, and slice 2 raised its stake — see below and #306), GC
-// subtyping (21), constant expressions (24), limits (16), reference instructions, the bulk
-// memory/table ops, and exception handling. SIMD lane immediates (48) were on this list until
-// slice 2, and are the reason `ErrInvalidLaneIndex` exists.
+// measurable slice: GC subtyping (21), constant expressions (24), limits (16), reference
+// instructions, the bulk memory/table ops, and exception handling. Two entries have left this list
+// and are worth naming as departures rather than deletions — SIMD lane immediates (48) with slice 2,
+// which is why `ErrInvalidLaneIndex` exists, and alignment (99) with slice 3, which is why
+// `ErrAlignmentTooLarge` does.
 //
 // # Out of scope divides in two, and only one half is a decline
 //
@@ -43,24 +75,25 @@
 // that way, each naming its opcode — the board's own `assert_invalid declined:` buckets summed,
 // which is `validateDeclineCeiling`, not a separately-counted figure that could drift from it. An out-of-scope rule attached to anything the code-section
 // walk never visits is **accepted**, because there is nothing to decline — limits, duplicate
-// export names, constant expressions in globals and segment offsets, and the alignment immediate
-// (which the walk does visit, but whose check is a later slice's) are not instructions this
-// package refuses to type, they are questions it never asks. 162 vectors are accepted for that
+// export names, and constant expressions in globals and segment offsets are not instructions this
+// package refuses to type, they are questions it never asks. 104 vectors are accepted for that
 // reason.
 //
-// Those 162 are the admission stratum, and the harness reports them as **fails with a named
+// Those 104 are the admission stratum, and the harness reports them as **fails with a named
 // cause**, not as passes — which is the property the original claim was reaching for and stated
 // too strongly. The strong form is worth keeping as a target rather than as a description: an
 // accepted-but-invalid module is invisible on any board that scores only refusals, so the arm's
 // bucket key carries the cause for every one of them.
 //
-// Both figures moved with slice 2 and both are quoted from `spec_test.go`'s constants rather than
-// counted here — 1059 → 391 and 142 → 162, the second a *rise*, whose twenty vectors are the
-// alignment immediate this paragraph already names as the one out-of-scope rule the walk does visit.
-// Typing the vector region removed the accidental cover a decline was giving them: the module used
-// to be refused because `v128.store8_lane` had no rule, and it is now typed successfully and
-// accepted, because the alignment the vector is *about* was dropped by the decoder. The account is
-// at `validateAdmitCeiling`; the slice that fixes it is #306.
+// Both figures are quoted from `spec_test.go`'s constants rather than counted here, and their
+// history is the argument for keeping them apart: **1059 → 391** on the declines, and **142 → 162 →
+// 104** on the admissions, where the middle number was a *rise*. The alignment immediate was the one
+// out-of-scope rule the code-section walk did visit, so typing the vector region removed the
+// accidental cover a decline had been giving it — a module refused because `v128.store8_lane` had no
+// rule became a module typed successfully and accepted, the alignment the vector was *about* having
+// been dropped by the decoder. Slice 3 is the rule landing, and both faces of it drained: the account
+// is at `validateAdmitCeiling`. One class of admission survives inside the 104 for the same shape of
+// reason — `offset out of range`, a rule never written rather than a rule that could not be.
 //
 // # The bounds checks are here because the alternative is a panic, and they are named
 //
@@ -128,6 +161,21 @@ var (
 	ErrUnknownLocal  = errors.New("unknown local")
 	ErrUnknownLabel  = errors.New("unknown label")
 
+	// ErrInvalidResultArity is `select`'s annotation carrying anything other than one type —
+	//	`valid.ml:443`, the reference's own text verbatim (0003), *including its parenthetical*.
+	//
+	// **"not (yet) allowed" is part of the message and is kept**, because the hedge is the
+	// reference's own statement about the rule's status: multi-value `select` is a shape the spec
+	// has reserved rather than forbidden, and paraphrasing it to "invalid result arity" would make
+	// this engine assert a stability the authority declines to. The corpus matches the substring
+	// (`select.wast:369,379` expect `invalid result arity`), so keeping the tail costs nothing and
+	// the day the parenthetical disappears upstream is a day this string should move with it.
+	//
+	// One sentinel, two vectors, and they are the *only* two: arity 0 (`(select (result) …)`) and
+	// arity 2 (`(select (result i32 i32) …)`). Both were declines until #294, because the decoder
+	// dropped the vector whose length is the entire question.
+	ErrInvalidResultArity = errors.New("invalid result arity other than 1 is not (yet) allowed")
+
 	// ErrGlobalImmutable is `global.set` on a non-mutable global.
 	//
 	// **Its text was `global is immutable` until the probe caught it, and that is a grave in
@@ -158,6 +206,22 @@ var (
 	// as ErrTypeMismatch's comment prescribes for the 84.3% family. Slice 2 is the first sentinel
 	// in this package added *knowing* its suite cannot discriminate inside it.
 	ErrInvalidLaneIndex = errors.New("invalid lane index")
+
+	// ErrAlignmentTooLarge is a memarg whose alignment exponent exceeds the access's natural
+	// width — `check_memop`'s first `require` (`valid.ml:388`), and the one rule in this package
+	// that **could not be written until the decoder kept its input**.
+	//
+	// That is the whole shape of #306 and it is worth stating beside the sentinel rather than only
+	// in align.go: the decoder read the alignment, used it for nothing, and dropped it, so this
+	// rule had no operand and 54 invalid modules were reported valid — sixteen of them in slice 2,
+	// which is the raise `validateAdmitCeiling` spent one PR carrying under Scott's stamp. A
+	// missing sentinel is a *quiet* accept: there is no wrong message for a vector to disagree
+	// with, so `authority_test.go`'s message-match can no more see it than the count could.
+	//
+	// One sentinel for 62 vectors, and none of them can tell which row refused — 42 in
+	// `align.wast`, 12 in `simd_align.wast`, 8 in the lane files. So the shared-sentinel,
+	// detailed-wrap arrangement is ErrInvalidLaneIndex's above, adopted for the identical reason.
+	ErrAlignmentTooLarge = errors.New("alignment must not be larger than natural")
 
 	// ErrUnsupported is slice 1 declining an instruction whose rules belong to a later slice.
 	//

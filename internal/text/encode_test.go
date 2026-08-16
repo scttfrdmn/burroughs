@@ -1795,24 +1795,38 @@ var encodableModules = []struct {
 		},
 	},
 
-	// # The memarg rows (#8), and **only two of its three fields are here**
+	// # The memarg rows (#8), and **all three of its fields are here as of #306**
 	//
-	// `decodeMemop` stages the offset in `Imm0` and the memory index in `Imm1` and
-	// **discards the alignment** — its own comment says so, on the ground that alignment is a
-	// validation constraint with no execution semantics. So a round trip is structurally blind to
-	// the whole generated `naturalAlign` table, exactly as it is blind to the limits address-type
-	// bit, and for the same reason: the decoded value carries no field to disagree in.
-	// `TestEncodeWritesTheNaturalAlignmentDefault` is the other witness, at byte level, and it
-	// exists because these rows cannot be it. Two fields checkable here, one not, stated rather
-	// than left for a reader to infer from which assertions happen to appear.
+	// `decodeMemop` stages the offset in `Imm0` and the memory index and alignment exponent in
+	// `Imm1`. This block used to say the opposite about the third field, and the sentence is worth
+	// quoting because it was true and load-bearing: the decoder *discarded* the alignment, so "a
+	// round trip is structurally blind to the whole generated `naturalAlign` table, exactly as it is
+	// blind to the limits address-type bit … the decoded value carries no field to disagree in."
+	// Retention gave it a field to disagree in. These rows now witness the encoder's natural-align
+	// default end to end, which is a capability they gained from a change in another package rather
+	// than from anything written here — the reason to state it is that nobody would look for it.
+	//
+	// `TestEncodeWritesTheNaturalAlignmentDefault` stays the byte-level witness and is *not*
+	// redundant: it reads the flags byte, so it sees the `0x40` bit and the one-byte-versus-two
+	// question, which a decoded `Imm1` still cannot distinguish (see the explicit-`0` row below,
+	// whose whole comment is about that blind spot).
+	//
+	// **The expected words are composed with `binary.StageMemarg`, not written as literals.** The
+	// value under test is the *exponent* — 2 for an `i32.load`, chosen by the encoder from
+	// `naturalAlign` — and that is asserted by hand below. Where the exponent sits inside the word is
+	// plumbing this file has no reason to know twice; a hand-rolled `2 << 40` here would be the
+	// second copy of a bit layout whose first duplication is already a documented near-miss (see
+	// `binary.Memarg`).
 	{
 		src:      `(module (memory 1) (func (drop (i32.load (i32.const 0)))))`,
 		want:     []binary.CompType{{Kind: binary.CompFunc}},
 		wantMems: []binary.Memory{{Limits: binary.Limits{Min: 1}}},
 		wantFuncs: []binary.Func{{TypeIndex: 0, Body: []binary.Instr{
 			{Op: 0x41, Imm0: 0}, // i32.const 0 — the address
-			{Op: 0x28},          // i32.load: offset 0, memory 0, both implicit
-			{Op: 0x1a},          // drop
+			// i32.load: offset 0 and memory 0 both implicit, alignment the natural 4 bytes,
+			// which is exponent 2 — the value `naturalAlign` supplies when the source omits it.
+			{Op: 0x28, Imm1: binary.StageMemarg(0, 2)},
+			{Op: 0x1a}, // drop
 			{Op: 0x0b},
 		}}},
 	},
@@ -1825,7 +1839,10 @@ var encodableModules = []struct {
 		want:     []binary.CompType{{Kind: binary.CompFunc}},
 		wantMems: []binary.Memory{{Limits: binary.Limits{Min: 1}}},
 		wantFuncs: []binary.Func{{TypeIndex: 0, Body: []binary.Instr{
-			{Op: 0x41, Imm0: 0}, {Op: 0x28, Imm0: 128}, {Op: 0x1a}, {Op: 0x0b},
+			{Op: 0x41, Imm0: 0},
+			{Op: 0x28, Imm0: 128, Imm1: binary.StageMemarg(0, 2)},
+			{Op: 0x1a},
+			{Op: 0x0b},
 		}}},
 	},
 	// An explicit memory index `0`, whose correct bytes are the *implicit* case's — and **this row
@@ -1845,12 +1862,18 @@ var encodableModules = []struct {
 		want:     []binary.CompType{{Kind: binary.CompFunc}},
 		wantMems: []binary.Memory{{Limits: binary.Limits{Min: 1}}},
 		wantFuncs: []binary.Func{{TypeIndex: 0, Body: []binary.Instr{
-			{Op: 0x41, Imm0: 0}, {Op: 0x28}, {Op: 0x1a}, {Op: 0x0b},
+			{Op: 0x41, Imm0: 0},
+			{Op: 0x28, Imm1: binary.StageMemarg(0, 2)},
+			{Op: 0x1a},
+			{Op: 0x0b},
 		}}},
 	},
 	// A **non-zero** memory index, which is the row that makes the two above falsifiable: it is the
 	// only one where `has_idx` is true, so an emitter that never set 0x40 passes both of them and
-	// fails here. `Imm1: 1` is the staged index; the flags byte is `0x42` (align 2 | 0x40).
+	// fails here. The staged word carries index 1 *and* exponent 2, from a flags byte of `0x42`
+	// (align 2 | 0x40) — so this is also the row where the two tenants of `Imm1` are both non-zero,
+	// which is the arrangement `binary.Memarg`'s comment says the old unmasked readers would have
+	// gotten wrong.
 	//
 	// **This row is why `decodeForTest` turns MultiMemory on, and it got there by failing.** The
 	// sentence here first claimed bit 6 needed no gate to decode, reasoning from `memopIndex`
@@ -1865,18 +1888,24 @@ var encodableModules = []struct {
 		want:     []binary.CompType{{Kind: binary.CompFunc}},
 		wantMems: []binary.Memory{{Limits: binary.Limits{Min: 1}}, {Limits: binary.Limits{Min: 1}}},
 		wantFuncs: []binary.Func{{TypeIndex: 0, Body: []binary.Instr{
-			{Op: 0x41, Imm0: 0}, {Op: 0x28, Imm1: 1}, {Op: 0x1a}, {Op: 0x0b},
+			{Op: 0x41, Imm0: 0},
+			{Op: 0x28, Imm1: binary.StageMemarg(1, 2)},
+			{Op: 0x1a},
+			{Op: 0x0b},
 		}}},
 	},
 	// A store, so the memarg reader is exercised on an instruction whose operands it follows rather
 	// than precedes, and with both optional fields at once. `0x36` is `i32.store`; natural alignment
-	// 2, offset 4.
+	// 4 bytes (exponent 2), offset 4.
 	{
 		src:      `(module (memory 1) (func (i32.store offset=4 (i32.const 0) (i32.const 1))))`,
 		want:     []binary.CompType{{Kind: binary.CompFunc}},
 		wantMems: []binary.Memory{{Limits: binary.Limits{Min: 1}}},
 		wantFuncs: []binary.Func{{TypeIndex: 0, Body: []binary.Instr{
-			{Op: 0x41, Imm0: 0}, {Op: 0x41, Imm0: 1}, {Op: 0x36, Imm0: 4}, {Op: 0x0b},
+			{Op: 0x41, Imm0: 0},
+			{Op: 0x41, Imm0: 1},
+			{Op: 0x36, Imm0: 4, Imm1: binary.StageMemarg(0, 2)},
+			{Op: 0x0b},
 		}}},
 	},
 

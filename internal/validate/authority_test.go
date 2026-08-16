@@ -37,17 +37,20 @@ import (
 // restated one layer in: not merely that no vector catches it, but that the instrument covering the
 // vectors' weakness shares their direction.
 //
-// **Sixteen known instances live in the tree right now**, and they are named here rather than only
-// where their count lives (ruling: Scott, PR #307). `decodeMemop` drops the memarg alignment, so a
-// vector whose sole defect is an over-aligned SIMD access is typed successfully and accepted; the
-// per-vector ledger is `alignmentAdmissions` beside `validateAdmitCeiling` in
-// `internal/spec/spec_test.go`, and the rule that retires them is #306. Four *more* of the same
-// cause do reach the message match — `simd_store{8,16,32,64}_lane.wast`, which carry a second
-// defect and so get refused for the wrong reason — and the split is the point: one cause, and the
-// message oracle sees exactly the quarter of it that happens to be refused.
+// **Sixteen known instances lived in the tree when this paragraph was written**, named here rather
+// than only where their count lived (ruling: Scott, PR #307): `decodeMemop` dropped the memarg
+// alignment, so a vector whose sole defect was an over-aligned SIMD access was typed successfully
+// and accepted. Four *more* of the same cause did reach the message match —
+// `simd_store{8,16,32,64}_lane.wast`, which carry a second defect and so were refused for the wrong
+// reason — and **that split is the exhibit, which is why it is kept now that #306 has closed both
+// halves**: one cause, 20 vectors, and the message oracle saw exactly the quarter of it that
+// happened to be refused at all. The 16 were invisible to it by construction, not by bad luck, and
+// the fix arrived from reading the reference rather than from any signal this test could emit.
 //
 // A coverage claim is an assertion an instrument cannot check about itself, so its honest form
-// carries its known counterexamples. These are the ones this campaign knows about.
+// carries its known counterexamples. This blind spot is unchanged by the specimen draining; what
+// changed is that this campaign no longer knows of a live instance, which is a weaker statement than
+// there being none.
 
 // TestUnknownCategoriesMatchTheReference is ErrUnknown*'s own promised control, in both
 // directions.
@@ -285,8 +288,14 @@ func TestUnknownIndexMessagesAreCategorySpaceIndex(t *testing.T) {
 //
 // One further blind spot: `select` (0x1B) and `select t` (0x1C) both render as `select` in the
 // table, so a swap of those two constants would pass. What catches that swap is behavioural —
-// `TestSelectAnnotatedIsDeclinedAndBareIsNot` — and it is named here rather than left implied,
+// `TestSelectAnnotatedTypesAgainstItsAnnotation` — and it is named here rather than left implied,
 // because a control's domain is an assertion it cannot check about itself.
+//
+// That citation previously cited `TestSelectAnnotatedIsDeclinedAndBareIsNot`, and #294 rewrote the
+// control the moment it typed the annotated form. The rename was caught by
+// `TestEveryCitedTestNameResolves` rather than by anyone remembering this sentence — which is the
+// blind spot the paragraph is about, one level up: a domain note is a citation, and a citation that
+// no longer resolves documents a direction nothing checks.
 func TestStructuralOpcodesMatchTheTable(t *testing.T) {
 	// name → opcode, as instr.go's switch reads them. Written out rather than reflected because
 	// they are untyped constants: there is nothing at run time to enumerate.

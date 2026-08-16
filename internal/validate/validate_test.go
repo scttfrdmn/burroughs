@@ -401,27 +401,100 @@ func TestUnknownIndexMessagesRender(t *testing.T) {
 	}
 }
 
-// TestSelectAnnotatedIsDeclinedAndBareIsNot is the behavioural check the opcode-table control
+// TestSelectAnnotatedTypesAgainstItsAnnotation is the behavioural check the opcode-table control
 // cannot make: 0x1B and 0x1C both render as `select` in `binary.OpMnemonic`, so a swap of the two
 // constants passes there and is caught only here.
 //
-// It is also the pair that keeps the decline honest. `select t` is declined because the decoder
-// discards its result-type vector (#294), and a decline that accidentally covered the bare form
-// too would park a rule slice 1 implements in an out-of-scope bucket.
-func TestSelectAnnotatedIsDeclinedAndBareIsNot(t *testing.T) {
-	const annotated = `(module (func (result i32) (i32.const 1) (i32.const 2) (i32.const 0) (select (result i32))))`
-	_, err := validated(t, annotated, nil)
-	if !errors.Is(err, ErrUnsupported) {
-		t.Errorf("`select t` must be declined until the annotation is retained (#294): got %v", err)
-	}
-	if err != nil && !strings.Contains(err.Error(), "#294") {
-		t.Errorf("the decline should cite the issue that retires it, so the bucket is a work item "+
-			"rather than a dead end: %v", err)
-	}
-
+// **This test was the decline's tripwire and is now the rule's, rewritten in the diff that flipped
+// it.** Until #294 it asserted `ErrUnsupported` for the annotated form and cited the issue that
+// would retire it; the retention landed, the assertion failed, and *the failure was the whole point
+// of having written it that way* — a design debt discharged by a tripwire rather than by an
+// intention. What replaces it is the same pair, read in the other direction: both forms are typed
+// now, and the annotated one is typed *from the annotation*, which is the only thing the bare arm
+// cannot do.
+func TestSelectAnnotatedTypesAgainstItsAnnotation(t *testing.T) {
 	const bare = `(module (func (result i32) (i32.const 1) (i32.const 2) (i32.const 0) (select)))`
 	if _, err := validated(t, bare, nil); err != nil {
 		t.Errorf("bare `select` is in slice 1's scope and must be typed, not declined: %v", err)
+	}
+
+	const annotated = `(module (func (result i32) (i32.const 1) (i32.const 2) (i32.const 0) (select (result i32))))`
+	if _, err := validated(t, annotated, nil); err != nil {
+		t.Errorf("`select t` is typed as of #294 and this module is valid: %v", err)
+	}
+
+	// The annotation is *load-bearing*, not decoration. A reference-typed `select` is exactly the
+	// module the bare arm refuses (`needs a result-type annotation`, one table over), so its
+	// acceptance here can only come from reading the retained vector — an arm that ignored the
+	// annotation and re-derived the type from the operands would refuse this and pass every
+	// numeric row above.
+	const ref = `(module (func (result funcref) (local funcref)
+		(local.get 0) (local.get 0) (i32.const 0) (select (result funcref))))`
+	if _, err := validated(t, ref, nil); err != nil {
+		t.Errorf("an annotated `select` over references is the case the annotation exists for: %v", err)
+	}
+
+	const wrong = `(module (func (result i64) (i64.const 1) (i64.const 2) (i32.const 0) (select (result i64))))`
+	if _, err := validated(t, wrong, nil); err != nil {
+		t.Errorf("i64 operands under an i64 annotation is valid: %v", err)
+	}
+
+	// And the annotation is *believed*, not merely consulted: the rule pops both operands against
+	// the annotated type, so an annotation disagreeing with well-typed operands refuses.
+	//
+	// **The declared result is `i64` here deliberately, and the first version of this row had `i32`.**
+	// That version was green under a falsification that read the annotation and then derived the type
+	// from the operands anyway — because with `(result i32)` declared, the *frame's* end-of-body check
+	// objected to the i64 left on the stack, and the row could not tell which rule had spoken. Making
+	// the function agree with its operands leaves the select arm as the only thing with a complaint,
+	// which is why the detail is asserted too: `instr 3 (select)` is this rule refusing, and a
+	// mismatch reported anywhere else is the coincidence coming back.
+	const mismatch = `(module (func (result i64) (i64.const 1) (i64.const 2) (i32.const 0) (select (result i32))))`
+	_, err := validated(t, mismatch, nil)
+	if !errors.Is(err, ErrTypeMismatch) {
+		t.Errorf("an i32 annotation over i64 operands must be a type mismatch, not an accept: %v", err)
+	} else if !strings.Contains(err.Error(), "(select)") {
+		t.Errorf("the mismatch is reported by some rule other than `select`: %v", err)
+	}
+}
+
+// TestSelectAnnotationArityIsTheValidatorsRule is the pair of vectors #294's retention exists to
+// answer, and it is here rather than in the table above because both rows share a sentinel the
+// table has only one of.
+//
+// The decoder files arity-0 and arity-2 annotations knowing they are unusable — they are well-formed
+// *encodings*, and a decoder rejecting them would manufacture malformedness out of a typing rule
+// (`internal/binary`'s selectt_test.go carries that argument). This is the layer that says so, with
+// `valid.ml:443`'s own string.
+func TestSelectAnnotationArityIsTheValidatorsRule(t *testing.T) {
+	for _, c := range []struct{ name, wat string }{
+		// select.wast:368 and :373 — the two corpus vectors, and the only two arities that are
+		// neither one nor unbounded.
+		{"arity 0", `(module (func (i32.const 1) (i32.const 2) (i32.const 0) (select (result)) (drop)))`},
+		{"arity 2", `(module (func (result i32) (i32.const 1) (i32.const 2) (i32.const 0)
+			(select (result i32 i32))))`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := validated(t, c.wat, nil)
+			if !errors.Is(err, ErrInvalidResultArity) {
+				t.Fatalf("want ErrInvalidResultArity, got %v.\nThe decoder files this vector "+
+					"deliberately; if nothing refuses it the module is accepted with an "+
+					"annotation no rule ever read", err)
+			}
+			if !strings.Contains(err.Error(), "not (yet) allowed") {
+				t.Errorf("the message drops the reference's parenthetical: %v. The corpus matches "+
+					"a substring, so a paraphrase asserts a stability valid.ml declines to", err)
+			}
+		})
+	}
+
+	// The index-space half, which is `ref.wast:78`: an annotation naming a type index nothing
+	// declares. `check_valtype` is the reference's rule and the arity rule cannot reach it — a
+	// validator checking only the count accepts this.
+	_, err := validated(t, `(module (func (i32.const 1) (i32.const 2) (i32.const 0)
+		(select (result (ref null 1))) (drop)))`, func(f *binary.Features) { f.GC = true })
+	if !errors.Is(err, ErrUnknownType) {
+		t.Errorf("want ErrUnknownType for an annotation naming type 1 in a module with none: %v", err)
 	}
 }
 

@@ -819,10 +819,24 @@ func mask(n uint) uint64 {
 	return (uint64(1) << n) - 1
 }
 
+// vecMemarg resolves the memory a vector access names and returns its static offset.
+//
+// **One site rather than four, because the four disagreed with their neighbours.** Each of these
+// arms wrote `ins.Imm1&0xFFFFFFFF` inline — correct, and correct for a reason none of them stated:
+// the lane index packs above bit 32. The core load/store path next door read the same word bare,
+// which was equally correct and for no reason at all, until #306 added a third tenant. Reading the
+// packing through binary.Memarg puts the rule where decodeMemop writes it, and collapsing the four
+// call sites means a fourth tenant cannot be handled correctly in three of them.
+func (in *Instance) vecMemarg(ins binary.Instr) (*memory, uint64, error) {
+	offset, memIdx, _ := binary.Memarg(ins.Imm0, ins.Imm1)
+	mem, err := in.memoryFor("instruction", uint64(memIdx))
+	return mem, offset, err
+}
+
 // vecLoad is v128.load and its twelve packed siblings: resolve the memory, read the access's own
 // byte width, decode through `decode`, push the result.
 func (in *Instance) vecLoad(ins binary.Instr, st *stack, decode func([]byte) (hi, lo uint64)) error {
-	mem, resolveErr := in.memoryFor("instruction", ins.Imm1&0xFFFFFFFF)
+	mem, offset, resolveErr := in.vecMemarg(ins)
 	if resolveErr != nil {
 		return resolveErr
 	}
@@ -831,7 +845,7 @@ func (in *Instance) vecLoad(ins binary.Instr, st *stack, decode func([]byte) (hi
 	}
 	idx := st.popNum()
 	n := vecLoadWidth(ins.Op)
-	bs, err := mem.read(mem.addr(idx), ins.Imm0, n)
+	bs, err := mem.read(mem.addr(idx), offset, n)
 	if err != nil {
 		return err
 	}
@@ -869,7 +883,7 @@ func vecLoadWidth(op uint32) uint64 {
 // vecStore is v128.store: resolve the memory, pop the value then the address (the stack's own
 // order — memAccess's own doc comment states the identical rule for the MVP family), write.
 func (in *Instance) vecStore(ins binary.Instr, st *stack, encode func(hi, lo uint64) []byte) error {
-	mem, resolveErr := in.memoryFor("instruction", ins.Imm1&0xFFFFFFFF)
+	mem, offset, resolveErr := in.vecMemarg(ins)
 	if resolveErr != nil {
 		return resolveErr
 	}
@@ -878,14 +892,14 @@ func (in *Instance) vecStore(ins binary.Instr, st *stack, encode func(hi, lo uin
 	}
 	hi, lo := st.popV128() // the value, pushed second
 	idx := st.popNum()     // the address, pushed first
-	return mem.write(mem.addr(idx), ins.Imm0, encode(hi, lo))
+	return mem.write(mem.addr(idx), offset, encode(hi, lo))
 }
 
 // vecLoadLane reads width bytes at the memarg's address and replaces one lane of the v128
 // operand already on the stack — `eval.ml`'s `VecLoadLane` arm, `Vec (V128 v) :: Num i :: vs'`:
 // the vector is pushed *after* the address, so it pops first.
 func (in *Instance) vecLoadLane(ins binary.Instr, st *stack, width uint64) error {
-	mem, resolveErr := in.memoryFor("instruction", ins.Imm1&0xFFFFFFFF)
+	mem, offset, resolveErr := in.vecMemarg(ins)
 	if resolveErr != nil {
 		return resolveErr
 	}
@@ -894,11 +908,11 @@ func (in *Instance) vecLoadLane(ins binary.Instr, st *stack, width uint64) error
 	}
 	hi, lo := st.popV128() // the operand vector, pushed second
 	idx := st.popNum()     // the address, pushed first
-	bs, err := mem.read(mem.addr(idx), ins.Imm0, width)
+	bs, err := mem.read(mem.addr(idx), offset, width)
 	if err != nil {
 		return err
 	}
-	lane := (ins.Imm1 >> 32) & 0xFF
+	lane := binary.MemargLane(ins.Imm1)
 	hi, lo = replaceLaneBytes(hi, lo, uint(lane), width, bs)
 	st.pushV128(hi, lo)
 	return nil
@@ -906,7 +920,7 @@ func (in *Instance) vecLoadLane(ins binary.Instr, st *stack, width uint64) error
 
 // vecStoreLane writes one lane's bytes to the memarg's address — `eval.ml`'s `VecStoreLane` arm.
 func (in *Instance) vecStoreLane(ins binary.Instr, st *stack, width uint64) error {
-	mem, resolveErr := in.memoryFor("instruction", ins.Imm1&0xFFFFFFFF)
+	mem, offset, resolveErr := in.vecMemarg(ins)
 	if resolveErr != nil {
 		return resolveErr
 	}
@@ -915,8 +929,8 @@ func (in *Instance) vecStoreLane(ins binary.Instr, st *stack, width uint64) erro
 	}
 	hi, lo := st.popV128() // the value, pushed second
 	idx := st.popNum()     // the address, pushed first
-	lane := (ins.Imm1 >> 32) & 0xFF
-	return mem.write(mem.addr(idx), ins.Imm0, laneBytes(hi, lo, uint(lane), width))
+	lane := binary.MemargLane(ins.Imm1)
+	return mem.write(mem.addr(idx), offset, laneBytes(hi, lo, uint(lane), width))
 }
 
 // laneBytes extracts one lane's little-endian bytes from a v128, where a "lane" for this family
