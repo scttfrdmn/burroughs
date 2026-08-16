@@ -51,6 +51,33 @@ import (
 // carries its known counterexamples. This blind spot is unchanged by the specimen draining; what
 // changed is that this campaign no longer knows of a live instance, which is a weaker statement than
 // there being none.
+//
+// # And the weaker statement was the right one to make: two more instances arrived
+//
+// The paragraph above was written when the campaign knew of no live instance. Two turned up
+// afterwards, neither found by anything in this file, and both are recorded here rather than only at
+// their fix sites — because the count is the coverage claim's counterexample list, and a list that
+// only grows where the fixes live is a list nobody reads as a list.
+//
+//   - **#311, `blockType`'s valtype arm.** `check_blocktype` calls `check_valtype` on the
+//     single-valtype form (`valid.ml:420`) and this package did not, so `(block (result (ref 1)))`
+//     typed successfully against a module declaring no type 1. Pure accept direction: the validator
+//     said nothing, so there was no message for the match to disagree with, and no negative vector
+//     could reach it either. Found by reading the reference, exactly as the alignment specimen was.
+//   - **#310's divergence, and this one is a rule *no vector exercises at all*.** The offset bound
+//     (`checkOffset`) is implemented, so it is not an under-rejection — but the decision inside it,
+//     which memory's index type the bound reads, has no vector on either side. All four vectors
+//     expecting `offset out of range` declare one memory, where the two readings agree. So the rule
+//     is exercised only in the region where its open question does not apply, and the reject-direction
+//     oracle is blind to it not because the verdict is an accept but because the *discriminating
+//     input does not exist in the corpus*.
+//
+// That second shape is worth naming separately, because it is not what the three blind spots above
+// describe and it is the more common thing to miss. A rule no vector exercises cannot be seen by any
+// instrument that reads verdicts, whichever direction it reads them in — the corpus does not disagree
+// with it, it declines to ask. `offset_test.go` builds the discriminating modules by hand for exactly
+// that reason, and its tripwire watches the *reference's* text, since the suite has no channel
+// through which this decision could ever report itself wrong. (Ruling: Scott, #310.)
 
 // TestUnknownCategoriesMatchTheReference is ErrUnknown*'s own promised control, in both
 // directions.

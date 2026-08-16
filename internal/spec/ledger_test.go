@@ -175,9 +175,9 @@ func TestAssertInvalidDestinationLedgerCloses(t *testing.T) {
 		{
 			name: "already on the board (254 files) — the 2574 that left `unsupported`",
 			got:  already,
-			want: tally{total: 2574, pass: 1614, declined: 386, accepted: 104, mismatch: 10, gated: 460},
-			why: "the destination split IS the engine's contribution: 1614 passes is the reward, " +
-				"386 named declines are the next slices' work plan, 104 admissions are the " +
+			want: tally{total: 2574, pass: 1615, declined: 386, accepted: 103, mismatch: 10, gated: 460},
+			why: "the destination split IS the engine's contribution: 1615 passes is the reward, " +
+				"386 named declines are the next slices' work plan, 103 admissions are the " +
 				"accept-direction stratum, 10 are wrong-message on a right refusal, and 460 " +
 				"never reached the validator at all. Slice 3 (#306) moved 58 of these rows in one " +
 				"motion and the shape of the move is the interesting part: 54 out of `accepted` " +
@@ -188,7 +188,14 @@ func TestAssertInvalidDestinationLedgerCloses(t *testing.T) {
 				"`declined` and into `pass`, with `accepted` and `mismatch` untouched — so this " +
 				"row's two deltas are disjoint sub-populations of one cause, and the pair is the " +
 				"evidence neither is a reclassification: a vocabulary gain and a correctness gain " +
-				"cannot both be the same vectors moving twice",
+				"cannot both be the same vectors moving twice. #310 moved one more row after those, " +
+				"and it came out of `accepted` into `pass` with `declined`, `mismatch` and `gated` " +
+				"all untouched — `align.wast:1004`, the one vector expecting `offset out of range` " +
+				"that reaches this package. A single vector necessarily shows as −1/+1, which is the " +
+				"shape this row warns can disguise a reclassification, so the discriminator is stated " +
+				"rather than left to the arithmetic: the rule that moved it refuses a module the " +
+				"validator used to accept, so the gain is correctness and not vocabulary, and a " +
+				"vocabulary gain would have had to come out of `declined`",
 		},
 		{
 			name: "arrived with the arm (2 files) — corpus admission, not verdicts earned",
@@ -253,9 +260,9 @@ func TestAssertInvalidDestinationLedgerCloses(t *testing.T) {
 	// all ten now belong to other strata and the two quantities agree by *coincidence of one being
 	// empty*. Restoring the total to this identity would therefore pass today and be wrong again on
 	// the next stratum that refuses with the wrong message.
-	if got := already.declined + fresh.declined + already.accepted + fresh.accepted; got != 493 {
-		t.Errorf("validate-stratum declines + admissions = %d, want 493 to match "+
-			"validateDeclineCeiling (389) + validateAdmitCeiling (104). Those come from the stratum "+
+	if got := already.declined + fresh.declined + already.accepted + fresh.accepted; got != 492 {
+		t.Errorf("validate-stratum declines + admissions = %d, want 492 to match "+
+			"validateDeclineCeiling (389) + validateAdmitCeiling (103). Those come from the stratum "+
 			"field and the arm's flags and this from the bucket keys; they must agree or one of them "+
 			"is describing a population the other is not. The stratum's third part "+
 			"(validateMismatchCeiling, 0) is deliberately outside this identity: the mismatch row "+
@@ -265,8 +272,8 @@ func TestAssertInvalidDestinationLedgerCloses(t *testing.T) {
 		t.Errorf("gated assert_invalid = %d, want 463 to match the unsupportedCeiling ledger's "+
 			"own split of the 2574 into 463 gated + 2111 verdicts", got)
 	}
-	if got := already.pass + fresh.pass; got != 1731 {
-		t.Errorf("assert_invalid passes = %d, want 1731 to match passFloor's account — 1023 at "+
+	if got := already.pass + fresh.pass; got != 1732 {
+		t.Errorf("assert_invalid passes = %d, want 1732 to match passFloor's account — 1023 at "+
 			"slice 1, of which it names 18 as answered from above the validator, plus slice 2's 648, "+
 			"slice 3's 58, and #294's 2", got)
 	}

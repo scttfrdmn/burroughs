@@ -582,8 +582,9 @@ func TestVecSignaturesMatchTheReferencesArms(t *testing.T) {
 			"gained an instruction of that shape", got, want)
 	}
 
-	// A memory, because four of the twenty arms read memory 0's address type. Index type i32,
-	// which is what makes `NumT (numtype_of_addrtype at)` resolvable below.
+	// A memory, because four of the twenty arms read the named memory's address type — memory 0
+	// here, that being the only memory a one-memory module has and the index an unindexed memarg
+	// names. Index type i32, which is what makes `NumT (numtype_of_addrtype at)` resolvable below.
 	mod := &binary.Module{Memories: []binary.Memory{{}}}
 
 	resolved, unresolved := 0, 0
@@ -1080,11 +1081,13 @@ func TestReferenceRangeCitationsAreWellFormed(t *testing.T) {
 			}
 		}
 	}
-	// Eight: vec.go's four section/rationale comments (:885-937, :906-908, :938-955, :663-686),
+	// Nine: vec.go's four section/rationale comments (:885-937, :906-908, :938-955, :663-686),
 	// checkVecBinaryRule's `check_vec_binop` (:373-378), validate.go's `lookup` (:41-42) and its
-	// package doc's `Select (Some ts)` (:442-446, slice 4/#294), and align.go's `check_memop`
-	// (:380-394).
-	const wantRanges = 8
+	// package doc's `Select (Some ts)` (:442-446, slice 4/#294), and align.go's two — the file
+	// header's `check_memop` (:380-394) and `checkOffset`'s own offset bound (:390-392, #310), which
+	// is a sub-range of it and cited separately because the rule the function implements is the
+	// citation a reader of that function needs.
+	const wantRanges = 9
 	if ranges != wantRanges {
 		t.Errorf("checked %d range citation(s) across %v, want %d — recount and re-pin, and if a "+
 			"file was added to citationFiles, read its point citations too",

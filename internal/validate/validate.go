@@ -223,6 +223,23 @@ var (
 	// detailed-wrap arrangement is ErrInvalidLaneIndex's above, adopted for the identical reason.
 	ErrAlignmentTooLarge = errors.New("alignment must not be larger than natural")
 
+	// ErrOffsetOutOfRange is a memarg whose static offset does not fit a 32-bit memory's address
+	// space — `check_memop`'s third and last `require` (`valid.ml:392`), which completes the
+	// function. The alignment rule above needed the decoder to stop dropping its operand; this one
+	// needed nothing but writing, which is the less flattering of the two reasons a rule is absent.
+	//
+	// Four corpus vectors expect this string and exactly one of them reaches this package today
+	// (`align.wast:1004`; the other three are `module quote` and sit in the unsupported column), so
+	// the reward was a single admission before the work rather than after it. Written down in
+	// advance on #310 for that reason: a one-vector rule is worth doing because it closes
+	// `check_memop`, not because it moves the board, and those are different justifications that a
+	// board delta cannot tell apart.
+	//
+	// **It reads the memory the instruction names, which the reference does not** — see
+	// `checkOffset` for the ruling, and for the three-part condition under which the divergence
+	// becomes observable at all.
+	ErrOffsetOutOfRange = errors.New("offset out of range")
+
 	// ErrUnsupported is slice 1 declining an instruction whose rules belong to a later slice.
 	//
 	// **A decline, and deliberately not an accept.** The alternative — treating an unknown

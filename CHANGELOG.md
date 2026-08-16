@@ -21,6 +21,36 @@ weakly-ordered platform.
 
 ### Added
 
+- **`check_memop`'s offset bound, and the rule reads the memory the instruction names
+  (#310).** `offset < 0x1_0000_0000` for a 32-bit memory (`valid.ml:392`) — the third and last of
+  `check_memop`'s three `require`s, and the one that had been named in `align.go`'s header as
+  reachable-and-unimplemented for two slices. The offset is a u64 on the wire and was retained all
+  along, so this was a rule never written rather than a rule that could not be written, which is the
+  less flattering of the two reasons. One vector's reward (`align.wast:1004`); the three other
+  vectors expecting the string are `module quote` forms in the unsupported column.
+  - **The reference reads memory 0 for this bound and Burroughs does not — Scott's ruling on
+    #310.** `check_memop` hardcodes `memory c (0l @@ at)` while its own callers read `memory c x` for
+    the operand type, so the reference consults two different memories inside one instruction's
+    check. `valid.ml` is an oracle for conformance to the spec rather than the norm itself; where the
+    two disagree the oracle is the thing that is wrong, and a check contradicting itself internally
+    is an artifact rather than an intent. The divergence is **unobservable on the whole suite** —
+    every vector exercising the rule declares one memory — so the deliverable is the tripwire, not
+    the choice.
+  - **`addrType` became `addrTypeAt` and resolves by index.** It read memory 0 for the *operand
+    type* too, which diverged from `valid.ml:654` on any multi-memory module and was correct only
+    because the multi-memory gate is off. Correct by coincidence of scope, which stops the day the
+    gate flips rather than on a date anyone notices.
+  - **Three controls, each watched die.** The discriminating pair (two memories of differing index
+    type, the instruction naming memory 1) fails in *opposite directions* under the
+    bug-compatible reading; the boundary test catches `>` for `>=`, which no corpus vector can,
+    the one reachable vector's offset being far past the bound; and
+    `TestReferenceStillReadsMemoryZeroForTheOffsetBound` fails when upstream's own text changes,
+    verified by perturbing the vendored file and restoring it under a matching checksum.
+  - **The reject-direction blind-spot header gained two instances**, #311's accept-direction gap and
+    this decision — the second being a shape the header did not previously describe: a rule *no
+    vector exercises*, invisible to any instrument that reads verdicts because the corpus declines
+    to ask rather than disagreeing.
+
 - **A public API, and `burroughs run` on top of it — the engine's first embeddable surface
   (decision 0029, #299).** `Instantiate` / `Config.Instantiate`, `Instance.Call` / `Exports` /
   `Decline` / `Deferred`, a public `Value` with typed constructors and a spelling both `ParseValue`

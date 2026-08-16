@@ -163,7 +163,7 @@ func conversionSource(rest string) (binary.ValType, bool) {
 	return numType(parts[len(parts)-1])
 }
 
-// addrType is a memory access's address type, and it is a *module* fact rather than a constant.
+// addrTypeAt is a memory access's address type, and it is a *module* fact rather than a constant.
 //
 // i32 for a 32-bit memory, i64 for a 64-bit one (memory64). Read from the memory's own limits
 // because that is where the decoder puts it (`Limits.Addr64`) — hardcoding i32 would reject
@@ -176,21 +176,49 @@ func conversionSource(rest string) (binary.ValType, bool) {
 // `lookup` as every other index space, so the error is already decided, and deferring it would
 // have parked ten vectors in a decline bucket labelled as out of scope while the rule sat two
 // lines away.
-func addrType(m *binary.Module) (binary.ValType, error) {
-	if m.ImportedMems() > 0 {
+//
+// # It takes the index, and it did not until #310
+//
+// This function read memory **0**, hardcoded, for its whole life before #310 — the imported memory
+// if there was one, else `Memories[0]`. The reference's callers do not: `valid.ml:654` and its
+// fifteen siblings resolve `memory c x` from the instruction's own index and use *that* for the
+// operand type. So the old form diverged from the reference on any module with more than one memory,
+// and it was correct only because multi-memory is gated and a validated memarg's index is therefore
+// always 0 (`internal/binary/instr.go`'s bit-6 decline). Correct by coincidence of scope, which
+// stops the day the gate flips rather than on a date anyone would notice.
+//
+// The index space is imports-then-definitions, `ImportedMems()` being the offset the defined
+// memories start at — the same arrangement `internal/interp` resolves against, and the lesson that
+// accessor's comment records is that reading `Memories[idx]` directly gets the wrong memory for
+// every module that imports one.
+func addrTypeAt(m *binary.Module, idx uint32) (binary.ValType, error) {
+	imported := m.ImportedMems()
+	if int(idx) < imported {
+		n := 0
 		for i := range m.Imports {
-			if m.Imports[i].Kind == binary.ExternMemory {
+			if m.Imports[i].Kind != binary.ExternMemory {
+				continue
+			}
+			if n == int(idx) {
 				return addrTypeOf(m.Imports[i].Memory), nil
 			}
+			n++
 		}
 	}
-	if len(m.Memories) > 0 {
-		return addrTypeOf(m.Memories[0]), nil
+	if defined := int(idx) - imported; defined >= 0 && defined < len(m.Memories) {
+		return addrTypeOf(m.Memories[defined]), nil
 	}
-	// Memory index 0 does not resolve. The reference reaches this through the same `lookup` the
-	// other index spaces use (`memory c x`), so the verdict is `unknown memory 0` and not a
-	// decline — an access to a memory that is not there is a rule slice 1 can and does decide.
-	return binary.ValType{}, fmt.Errorf("%w 0 (module declares no memory)", ErrUnknownMemory)
+	// The index does not resolve. The reference reaches this through the same `lookup` the other
+	// index spaces use (`memory c x`), so the verdict is `unknown memory N` and not a decline — an
+	// access to a memory that is not there is a rule slice 1 can and does decide.
+	//
+	// The parenthetical keeps its `no memory` wording for the empty case rather than reading
+	// `declares 0`, because that string is what 0003's message match has been comparing against and
+	// the sentinel it wraps is unchanged.
+	if total := imported + len(m.Memories); total > 0 {
+		return binary.ValType{}, fmt.Errorf("%w %d (module declares %d)", ErrUnknownMemory, idx, total)
+	}
+	return binary.ValType{}, fmt.Errorf("%w %d (module declares no memory)", ErrUnknownMemory, idx)
 }
 
 func addrTypeOf(mem binary.Memory) binary.ValType {

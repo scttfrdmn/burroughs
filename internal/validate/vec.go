@@ -255,8 +255,8 @@ func vecSignature(m *binary.Module, in binary.Instr) (sig, error) {
 		return sig{params: []binary.ValType{v128, lane}, results: []binary.ValType{v128}}, nil
 
 	// The memory arms, valid.ml:663-686. The address type is a module fact, so these route
-	// through the same `addrType` slice 1's loads and stores use — including its `unknown memory
-	// 0` verdict, which is a rule and not a decline.
+	// through the same `checkMemop` slice 1's loads and stores use — including its `unknown memory
+	// N` verdict, which is a rule and not a decline, and since #310 the offset bound as well.
 	case "VecLoad": // valid.ml:663 — [addr] --> [VecT t]
 		addr, err := checkMemop(m, in, name)
 		if err != nil {
