@@ -461,14 +461,13 @@ remembering decays across session boundaries:
   channel cannot say *why*, and a status channel cannot say *what*), pointed at the tracker
   rather than at a tool: `gh issue close` reporting success is a verdict about the close, never a
   witness to the comment. Generalizes past GitHub — any write whose confirmation is a state
-  transition needs its payload read back. (Lesson: Scott, on the PR #247 relay.)
-  **Third save, and the recurrence is the point:** grave #289 closed via a merge keyword with
-  **0 comments** — the same tombstone-with-no-inscription, in the graveyard of the project that
-  had already minted this rule, caught by the payload check and not by the state. A rule whose
-  specimens keep arriving is not a solved problem with a memento; it is a live failure mode of
-  how writes get confirmed here, and the count is kept so nobody reads the first specimen as the
-  last one. (Recurrence: chat-Claude, on the #290 relay.) **Fourth on #292**, same PR as the
-  third: closed by merge keyword, 0 comments, lesson written afterwards.
+  transition needs its payload read back. **The recurrence is the point, and the specimens are
+  counted by a query rather than by this file** — `gh issue list --label type:grave --state
+  closed --json number,comments`, whose zero-comment rows *are* the list, and #303 is the filed
+  control that runs it mechanically. This rule kept a running tally here until it was pointed out
+  that a measured quantity in prose schedules its own next increment; the tally is generated or
+  it is deleted, and this one is deleted. (Lesson: Scott, on the PR #247 relay; recurrences
+  relayed by chat-Claude; count struck on his ruling, PR #317.)
 - **Toolchain currency is a gated upgrade** — Go 1.27 and future linter majors
   land as their own branch with both arches green and a changelog entry. Never a
   drive-by bump in a PR about something else.

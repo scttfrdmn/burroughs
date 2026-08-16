@@ -36,7 +36,8 @@
 // dropped it; the rule had no operand. Retention through `Imm1` plus the comparison against a
 // per-opcode natural width closed 54 admissions and 4 wrong-message refusals together. The other two
 // `require`s in the reference's function are named in `align.go`'s header — one unreachable across
-// all 45 rows, one (`offset out of range`) reachable and still unwritten (#310).
+// all 45 rows, one (`offset out of range`) reachable and **written by #310**, in the PR that landed
+// this sentence's correction along with the rule.
 //
 // # Slice 4: `select`'s result-type annotation
 //
@@ -53,9 +54,11 @@
 // destinations, one PR — see `passFloor`'s and `allOnPassFloor`'s accounts for both tables.
 //
 // It is also the slice that closes the single-byte space, and the last one whose rule was blocked on
-// a *different package*. What blocks the rules still missing is this package: #311's
-// `check_valtype` on a block's valtype annotation is a call the walk never makes, and #310's
-// `offset out of range` is a `require` never written.
+// a *different package*. What blocked the two rules named here next was this package itself: #311's
+// `check_valtype` on a block's valtype annotation was a call the walk never made, and #310's
+// `offset out of range` was a `require` never written. **Both are now written**, and the tense is
+// corrected in place rather than the sentence deleted, because *which* rules this package was the
+// blocker for is the durable half of it.
 //
 // Out of scope by declaration, each with its own expected string in the suite and so its own
 // measurable slice: GC subtyping (21), constant expressions (24), limits (16), reference
@@ -92,8 +95,10 @@
 // accidental cover a decline had been giving it — a module refused because `v128.store8_lane` had no
 // rule became a module typed successfully and accepted, the alignment the vector was *about* having
 // been dropped by the decoder. Slice 3 is the rule landing, and both faces of it drained: the account
-// is at `validateAdmitCeiling`. One class of admission survives inside the 104 for the same shape of
-// reason — `offset out of range`, a rule never written rather than a rule that could not be.
+// is at `validateAdmitCeiling`. The one class of admission that survived inside the 104 for the same
+// shape of reason — `offset out of range`, a rule never written rather than a rule that could not be
+// — is **104 → 103** as of #310, which is the whole of that class the corpus can reach: the other
+// three vectors expecting the string are `module quote` forms the wast reader does not build.
 //
 // # The bounds checks are here because the alternative is a panic, and they are named
 //
@@ -222,6 +227,23 @@ var (
 	// `align.wast`, 12 in `simd_align.wast`, 8 in the lane files. So the shared-sentinel,
 	// detailed-wrap arrangement is ErrInvalidLaneIndex's above, adopted for the identical reason.
 	ErrAlignmentTooLarge = errors.New("alignment must not be larger than natural")
+
+	// ErrOffsetOutOfRange is a memarg whose static offset does not fit a 32-bit memory's address
+	// space — `check_memop`'s third and last `require` (`valid.ml:392`), which completes the
+	// function. The alignment rule above needed the decoder to stop dropping its operand; this one
+	// needed nothing but writing, which is the less flattering of the two reasons a rule is absent.
+	//
+	// Four corpus vectors expect this string and exactly one of them reaches this package today
+	// (`align.wast:1004`; the other three are `module quote` and sit in the unsupported column), so
+	// the reward was a single admission before the work rather than after it. Written down in
+	// advance on #310 for that reason: a one-vector rule is worth doing because it closes
+	// `check_memop`, not because it moves the board, and those are different justifications that a
+	// board delta cannot tell apart.
+	//
+	// **It reads the memory the instruction names, which the reference does not** — see
+	// `checkOffset` for the ruling, and for the three-part condition under which the divergence
+	// becomes observable at all.
+	ErrOffsetOutOfRange = errors.New("offset out of range")
 
 	// ErrUnsupported is slice 1 declining an instruction whose rules belong to a later slice.
 	//

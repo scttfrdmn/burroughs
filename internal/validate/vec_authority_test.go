@@ -582,8 +582,9 @@ func TestVecSignaturesMatchTheReferencesArms(t *testing.T) {
 			"gained an instruction of that shape", got, want)
 	}
 
-	// A memory, because four of the twenty arms read memory 0's address type. Index type i32,
-	// which is what makes `NumT (numtype_of_addrtype at)` resolvable below.
+	// A memory, because four of the twenty arms read the named memory's address type — memory 0
+	// here, that being the only memory a one-memory module has and the index an unindexed memarg
+	// names. Index type i32, which is what makes `NumT (numtype_of_addrtype at)` resolvable below.
 	mod := &binary.Module{Memories: []binary.Memory{{}}}
 
 	resolved, unresolved := 0, 0
@@ -940,6 +941,7 @@ var citationFiles = []string{"align.go", "sig.go", "vec.go", "validate.go"}
 type docBlock struct {
 	start    int
 	points   []int
+	ranges   [][2]int
 	messages []string
 }
 
@@ -971,9 +973,20 @@ func docBlocks(tb testing.TB, file string) []docBlock {
 			j++
 		}
 		b := docBlock{start: i + 1}
+		joined := strings.Join(fileLines[i:j], "\n")
 		// Ranges are stripped before points are read, so a range's leading number is never taken
-		// for a point.
-		block := rangeRe.ReplaceAllString(strings.Join(fileLines[i:j], "\n"), "")
+		// for a point. They are *collected* first, because since #310 a range whose subject produces
+		// a message is checkable for content and not only for well-formedness.
+		for _, m := range rangeRe.FindAllStringSubmatch(joined, -1) {
+			lo, loErr := strconv.Atoi(m[1])
+			hi, hiErr := strconv.Atoi(m[2])
+			if loErr != nil || hiErr != nil {
+				tb.Errorf("%s:%d cites %q as a valid.ml range", file, b.start, m[0])
+				continue
+			}
+			b.ranges = append(b.ranges, [2]int{lo, hi})
+		}
+		block := rangeRe.ReplaceAllString(joined, "")
 		i = j - 1
 
 		for _, m := range pointRe.FindAllStringSubmatch(block, -1) {
@@ -986,7 +999,7 @@ func docBlocks(tb testing.TB, file string) []docBlock {
 				b.points = append(b.points, n)
 			}
 		}
-		if len(b.points) > 0 {
+		if len(b.points) > 0 || len(b.ranges) > 0 {
 			b.messages = subjectMessages(fileLines, j, sentinels)
 			blocks = append(blocks, b)
 		}
@@ -1052,8 +1065,17 @@ func packageSentinels(_ []string) map[string]string {
 }
 
 // TestReferenceRangeCitationsAreWellFormed is the other half of the point/range split: a range
-// cites an arm or a region and has no string to key on, so what is checkable about it is that it is
-// a range inside the file.
+// cites an arm or a region, so what this check can say about it is that it is a range inside the
+// file.
+//
+// **It bounds-checks and nothing more, and that is written down here because the difference was
+// asked about.** A range citation whose target text is never read retargets in silence the day
+// anything above it moves — the same defect class as an issue citation resolving to a real issue with
+// the wrong title. Two other instruments cover what this one cannot, and neither is this:
+// `TestReferenceRangeCitationsContainTheirSubjectsSite` below reads the *text* inside each range
+// whose subject gives it a key, and `TestReferenceStillReadsMemoryZeroForTheOffsetBound`
+// (`offset_test.go`) matches three literal patterns in the reference rather than any line number,
+// which is why #310's ruling rests on that test and not on this one.
 //
 // Its count is pinned for the reason the point counts are — it is what keeps this from quietly
 // becoming the branch that never runs — and the pin is what makes a new file in `citationFiles`
@@ -1080,15 +1102,137 @@ func TestReferenceRangeCitationsAreWellFormed(t *testing.T) {
 			}
 		}
 	}
-	// Eight: vec.go's four section/rationale comments (:885-937, :906-908, :938-955, :663-686),
+	// Nine: vec.go's four section/rationale comments (:885-937, :906-908, :938-955, :663-686),
 	// checkVecBinaryRule's `check_vec_binop` (:373-378), validate.go's `lookup` (:41-42) and its
-	// package doc's `Select (Some ts)` (:442-446, slice 4/#294), and align.go's `check_memop`
-	// (:380-394).
-	const wantRanges = 8
+	// package doc's `Select (Some ts)` (:442-446, slice 4/#294), and align.go's two — the file
+	// header's `check_memop` (:380-394) and `checkOffset`'s own offset bound (:390-392, #310), which
+	// is a sub-range of it and cited separately because the rule the function implements is the
+	// citation a reader of that function needs.
+	const wantRanges = 9
 	if ranges != wantRanges {
 		t.Errorf("checked %d range citation(s) across %v, want %d — recount and re-pin, and if a "+
 			"file was added to citationFiles, read its point citations too",
 			ranges, citationFiles, wantRanges)
+	}
+}
+
+// TestOffsetCitationsResolveToTheReferencesSites is #310's rule joining the message-keyed check.
+//
+// Its own test rather than a third message inside either of the two above, for the reason stated at
+// `TestAlignmentCitationsResolveToTheReferencesSites`: a control's name is a claim about its
+// population, and a test judging three messages under one rule's name would be checked against its
+// own case labels instead of the partition it names.
+//
+// **The point that needed checking was `ErrOffsetOutOfRange`'s.** The rule's line citations went in
+// unread by any instrument — the range pin bounds-checks, and no message-keyed test existed for this
+// string — which is the gap that let the range citation land as `:390-392` when the quoted code block
+// above `checkOffset` runs to `:393`. Corrected in the same PR that added this.
+func TestOffsetCitationsResolveToTheReferencesSites(t *testing.T) {
+	// Two legal lines — `valid.ml:392`'s `require` and its wrapped string on `:393` — and one point,
+	// ErrOffsetOutOfRange's `:392`. `checkOffset`'s own block cites the *range* and so is judged by
+	// the range check below; `align.go`'s file header writes its citation as a bare `:392` with no
+	// `valid.ml:` prefix, which is not citation-shaped to `pointRe` and is unkeyable anyway.
+	messageKeyedPointCitations(t, "offset out of range", 2, 1)
+}
+
+// TestReferenceRangeCitationsContainTheirSubjectsSite reads inside each range citation whose subject
+// hands it a key, which is the half `TestReferenceRangeCitationsAreWellFormed` cannot do.
+//
+// # Why a range can be keyed at all
+//
+// The point/range split was written as "a range has no string to key on", and that is true of a range
+// in isolation. It is not true of a range in a *doc block whose subject produces a reference message*:
+// `checkOffset` cites `valid.ml:390-393` and its body names `ErrOffsetOutOfRange`, so the reference's
+// own site for `offset out of range` is a line this range claims to contain. The key comes from
+// `errors.New` and the site from the reference, exactly as in the point check — no word of any message
+// appears here, and no per-file list says which range means what.
+//
+// # What it catches that the bounds check does not
+//
+// Upstream inserting ten lines above `check_memop` leaves `390-393` a perfectly well-formed range
+// inside the file, pointing at whatever moved into it. That is silent under a bounds check and loud
+// here. It does *not* catch a range whose end is short by a line while still covering the site —
+// which is how `:390-392` survived long enough to be corrected by hand — so containment is the floor
+// and not the whole claim. Stated because *an instrument's domain is an assertion it cannot check
+// about itself*.
+//
+// # A constructed message is unkeyable, and that is counted rather than excused
+//
+// **The first run of this check failed on a correct citation**, which is how the distinction below
+// got written. `validate.go`'s index-space block cites `valid.ml:41-42` and its subject produces
+// `unknown type` — and the reference never writes that string: `lookup` builds it as
+// `"unknown " ^ category ^ " " ^ …`, so there is no literal site to be inside any range. The
+// citation is right and the instrument was wrong.
+//
+// The repair is not to skip that block. A message with no verbatim site anywhere in the reference is
+// **residue**, and the residue is *counted and pinned* beside the keyed population — so upstream
+// renaming a message does not quietly demote a checked range to an unchecked one. Both pins move,
+// and the test says which way. Skipping silently would have been the accept-direction version of
+// this fix, and it is the one that reads identically to working.
+func TestReferenceRangeCitationsContainTheirSubjectsSite(t *testing.T) {
+	ref := testenv.RequireSpecRef(t, testenv.RefValidML)
+	lines := strings.Split(ref, "\n")
+
+	// sites returns the reference's own line numbers for a message, empty when the reference builds
+	// the string rather than writing it.
+	sites := func(msg string) []int {
+		var at []int
+		for i, l := range lines {
+			if strings.Contains(l, `"`+msg+`"`) {
+				at = append(at, i+1)
+			}
+		}
+		return at
+	}
+
+	keyed, residue := 0, 0
+	for _, file := range citationFiles {
+		for _, b := range docBlocks(t, file) {
+			if len(b.ranges) == 0 || len(b.messages) == 0 {
+				continue
+			}
+			// Only the messages the reference writes verbatim can locate anything. The rest are
+			// residue: counted below, never silently dropped.
+			var located []int
+			for _, msg := range b.messages {
+				located = append(located, sites(msg)...)
+			}
+			if len(located) == 0 {
+				residue += len(b.ranges)
+				continue
+			}
+			for _, r := range b.ranges {
+				// A range is answerable if any one of the subject's sites is inside it. Any rather
+				// than all: a subject naming several sentinels is not claiming that one arm's range
+				// contains the others.
+				ok := false
+				for _, n := range located {
+					if n >= r[0] && n <= r[1] {
+						ok = true
+					}
+				}
+				keyed++
+				if !ok {
+					t.Errorf("%s:%d documents %v and cites %s:%d-%d, and no line in that range "+
+						"carries any of those messages (they are at %v) — the range has retargeted "+
+						"or the subject changed, and either way the citation reads as checked while "+
+						"pointing elsewhere",
+						file, b.start, b.messages, testenv.RefValidML, r[0], r[1], located)
+				}
+			}
+		}
+	}
+
+	// Both pinned, for the reason every count in this file is — a check over no ranges passes without
+	// asserting anything — and pinned *separately* so a message the reference stops writing verbatim
+	// moves a range from the checked column into the excused one loudly.
+	const wantKeyed, wantResidue = 2, 1
+	if keyed != wantKeyed || residue != wantResidue {
+		t.Errorf("checked %d keyed range citation(s) and excused %d as constructed-message residue "+
+			"across %v, want %d and %d — recount and re-pin. A range becomes keyable when its "+
+			"subject starts producing a message the reference writes verbatim, so either figure "+
+			"moving means a doc block's subject changed or a reference string did",
+			keyed, residue, citationFiles, wantKeyed, wantResidue)
 	}
 }
 

@@ -233,7 +233,7 @@ func TestVecRejectsWithTheRuleThatRefused(t *testing.T) {
 		},
 		{
 			name: "a load with no memory in the module",
-			why: "`addrType`'s `unknown memory 0` — a *rule*, not a decline, and the row that " +
+			why: "`addrTypeAt`'s `unknown memory 0` — a *rule*, not a decline, and the row that " +
 				"pins the vector path onto slice 1's address resolution rather than a second copy",
 			wat:    `(module (func (result v128) (v128.load (i32.const 0))))`,
 			is:     ErrUnknownMemory,

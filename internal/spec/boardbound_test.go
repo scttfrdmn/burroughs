@@ -82,16 +82,16 @@ import (
 //
 //	bound                    actual   kind          slack   why
 //	passFloor                4162     board count   250     moves in strata; can go stale
-//	allOnPassFloor           64078    board count   250     same board plus gated vectors
+//	allOnPassFloor           64079    board count   250     same board plus gated vectors
 //	unsupportedCeiling       60872    board count   250     shrinks as capabilities land
 //	binaryFailCeiling        0        at terminal   —       0 cannot drift from 0
 //	textFailCeiling          0        at terminal   —       0 cannot drift from 0
 //	unimplementedCeiling     0        at terminal   —       0, and 0004 fixes it there
 //	encodeFailCeiling        46       exact re-base  0      drains as the encoder learns forms
 //	execFailCeiling          81       exact re-base  0      drains as the interpreter lands rules
-//	validateFailCeiling      493      exact re-base  0      the whole validator stratum
+//	validateFailCeiling      492      exact re-base  0      the whole validator stratum
 //	validateDeclineCeiling   389      exact re-base  0      its declines, named per opcode
-//	validateAdmitCeiling     104      exact re-base  0      its admissions — the accept direction
+//	validateAdmitCeiling     103      exact re-base  0      its admissions — the accept direction
 //	validateMismatchCeiling  0        at terminal   —       right refusal, wrong message (0003)
 //	totalFloor               2143     vacuity       —       deliberately loose by design
 //	filesFloor               242      vacuity       —       deliberately loose by design

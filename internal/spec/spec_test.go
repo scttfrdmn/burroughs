@@ -6873,7 +6873,14 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	//
 	// That the corrected decomposition in the tables above is itself asserted by nothing is grave
 	// #312's live remainder, and #315 rather than a fix here.
-	const allOnPassFloor = 64078
+	// # 64078 → 64079: the offset bound (#310), discretionary again and for the same reason
+	//
+	// One vector, `align.wast:1004`, on both lanes. Distance 1 against a slack of 250, so this bound
+	// said nothing — the third consecutive re-base here that no instrument asked for, where the
+	// *default* lane's two sub-ceilings both fired on the identical single-vector move because their
+	// slack is 0. Two lanes, one movement, opposite instrument behaviour: that contrast is #315's
+	// subject and it is recorded here because this is the bound that is quiet.
+	const allOnPassFloor = 64079
 	boardBound(t, "allOnPassFloor", totalPass, allOnPassFloor, boardBoundSlack, floorBound,
 		"a gated feature regressed, which the Gated==0 assertion above cannot see: with every "+
 			"gate on, a broken feature turns a pass into a fail and leaves Gated at zero")
@@ -8739,9 +8746,24 @@ func TestPhase1Files(t *testing.T) {
 	// were the other case, the one that ruling calls false: rules the validator knew and could not
 	// reach for want of an operand. The same PR landed both, so this stratum's two sub-ceilings fall
 	// for opposite reasons in one diff, and the reason each is quoted separately is that only the
-	// *decline* fall is evidence about vocabulary. `validateDeclineCeiling` 391 → 389 is that fall;
-	// `validateAdmitCeiling` is unmoved at 104 and `validateMismatchCeiling` at 0.
-	const validateFailCeiling = 493
+	// *decline* fall is evidence about vocabulary. `validateDeclineCeiling` 391 → 389 was that fall;
+	// `validateAdmitCeiling` was unmoved at 104 and `validateMismatchCeiling` at 0.
+	//
+	// # 493 → 492 and 104 → 103: the offset bound (#310), and these bounds are *not* discretionary
+	//
+	// `check_memop`'s third `require` landed, and `align.wast:1004` moved from the admission census
+	// to a pass — one vector, the whole reward, the other three expecting `offset out of range`
+	// being `module quote` forms that sit in the unsupported column.
+	//
+	// **Both of these fired, and the pre-registration on #310 predicted they would not.** That
+	// prediction was written by analogy to `allOnPassFloor`, which carries a slack of 250 and so says
+	// nothing about a distance of 1 — and the analogy was false, because these two carry a slack of
+	// **0** and are exact re-bases. The correction belongs beside the numbers and not only on the
+	// issue: the all-on lane's silence is a property of *that* lane's one loose bound rather than of
+	// board bounds generally, and reading one lane's instrument as the other's is the mistake #315
+	// exists to remove. A prediction that a control will stay quiet is a claim about the control, and
+	// this one got checked by being wrong.
+	const validateFailCeiling = 492
 	const validateDeclineCeiling = 389
 	boardBound(t, "validateDeclineCeiling", validateDeclined, validateDeclineCeiling, 0, ceilingBound,
 		"slice 1 declined more instructions than it did — either an opcode left the signature "+
@@ -8798,7 +8820,7 @@ func TestPhase1Files(t *testing.T) {
 	// bucket key, which is the vector's own expected message, and never from a filename prefix. A
 	// `simd_`-prefix predicate would have been a claim about the current sample rather than the space,
 	// and an under-matching trigger fails silently by construction.
-	const validateAdmitCeiling = 104
+	const validateAdmitCeiling = 103
 	boardBound(t, "validateAdmitCeiling", validateAdmitted, validateAdmitCeiling, 0,
 		ceilingBound,
 		"the validator accepted an invalid module it used to refuse. This is the accept direction: "+

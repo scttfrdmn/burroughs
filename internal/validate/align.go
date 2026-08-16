@@ -71,11 +71,13 @@ import (
 // that coincidence rather than trusting it, because it is a coincidence and not a rule: a proposal
 // adding `v128.store8x8` would break it, and the test is what says so.
 //
-// # check_memop's other two rules, and why only one lands here
+// # check_memop's other two rules, and where each of them stands
 //
-// The reference function has three `require`s in it, and naming the two this file does not implement
+// The reference function has three `require`s in it, and naming the ones this file does not implement
 // is the point of saying so — an unimplemented rule that nobody wrote down reads exactly like a
-// rule that does not exist.
+// rule that does not exist. **Two of the three are now implemented**: the alignment rule above, and
+// the offset bound in `checkOffset` below, which #310 landed. The section keeps its shape and its
+// tense is corrected in place, because *which* rule was missing and for how long is the durable part.
 //
 //   - **`check_pack sz (ty_size memop.ty)` → `invalid sign extension`** (`:365`). Unreachable across
 //     all 45 rows and not by luck: it requires `packed_size < ty_size`, and no constructor in
@@ -84,21 +86,21 @@ import (
 //     the violating case, so this is a rule about the reference's *own* internal consistency rather
 //     than about a module. `TestNaturalWidthsMatchTheReference` computes both sides, so a proposal
 //     that introduces the case fails there rather than reaching an arm that does not exist.
-//   - **`offset < 0x1_0000_0000` for an I32AT memory → `offset out of range`** (`:392`). Reachable
-//     and **not implemented**, which is an under-rejection this file does not repair: the offset is a
-//     u64 on the wire (`decodeMemop`'s own comment — `binary-leb128.wast:730` needs the wide read),
-//     so a module can encode one past 2^32 against a memory32 and this validator accepts it.
-//     **Four corpus vectors expect the string and exactly one reaches this package**, measured
-//     rather than counted from grep: `align.wast:1004` is a plain `(module …)` and lands in the
-//     admission census; `address.wast:213` and `simd_address.wast:143,151` are `(module quote "…")`
-//     forms the wast reader does not build, so they sit in the *unsupported* column and cannot
-//     express an opinion about the validator at all. The reward for the rule is 1 today and 4 when
-//     `module quote` reads. **#310**, filed separately rather than folded in here, because it is a different
-//     *class* from #306's: nothing was lost by the decoder, the offset having been retained in
-//     `Imm0` all along — this is a rule never written, where alignment was a rule that could not be
-//     written. Note also that the reference reads the address type from `memory c (0l @@ at)` —
-//     memory **0**, literally, not the instruction's own `x` — which any implementation of it has to
-//     decide whether to reproduce.
+//   - **`offset < 0x1_0000_0000` for an I32AT memory → `offset out of range`** (`:392`). Reachable,
+//     and **unimplemented until #310** — an under-rejection this file named for two slices before
+//     repairing: the offset is a u64 on the wire (`decodeMemop`'s own comment —
+//     `binary-leb128.wast:730` needs the wide read), so a module could encode one past 2^32 against
+//     a memory32 and this validator accepted it. **Four corpus vectors expect the string and exactly
+//     one reaches this package**, measured rather than counted from grep: `align.wast:1004` is a
+//     plain `(module …)` and landed in the admission census; `address.wast:213` and
+//     `simd_address.wast:143,151` are `(module quote "…")` forms the wast reader does not build, so
+//     they sit in the *unsupported* column and cannot express an opinion about the validator at all.
+//     The reward was 1 today and 4 when `module quote` reads. It was a different *class* from #306's:
+//     nothing was lost by the decoder, the offset having been retained in `Imm0` all along — a rule
+//     never written, where alignment was a rule that could not be written. The decision inside it —
+//     that the reference reads the address type from `memory c (0l @@ at)`, memory **0** literally,
+//     not the instruction's own `x` — went to Scott rather than being settled in code, and
+//     `checkOffset` carries the ruling and the divergence's observability condition.
 
 // checkMemop is `check_memop` (`valid.ml:380`), and it is one function here because it is one
 // function there: all six memarg arms call it, immediately after resolving the memory.
@@ -110,23 +112,96 @@ import (
 // lookup is whether the address is i32 or i64. So the shared preamble hands back the fact the arms
 // share.
 //
-// **The order of the three steps is the reference's, and each step has a vector that reads it.**
-// The memory lookup is first (`memory c x`, on the arm rather than in here) so a module with no
-// memory reports `unknown memory 0` and not an alignment complaint; alignment is next; the lane
-// bound is *after*, which is why the two `Vec…Lane` arms still call `checkPackedLaneIndex`
-// themselves instead of it moving in here. `simd_store8_lane.wast:427` is the specimen for the last
+// **The order of the four steps is the reference's, and each step has a vector that reads it.**
+// The memory lookup is first (`memory c x`, which #310 made a lookup *by the instruction's index*
+// rather than of memory 0) so a module with no memory reports `unknown memory 0` and not an
+// alignment complaint; alignment is next; the **offset bound** third, matching `check_memop`'s own
+// order; the lane bound is *after* all of them, which is why the two `Vec…Lane` arms still call
+// `checkPackedLaneIndex` themselves instead of it moving in here. `simd_store8_lane.wast:427` is the specimen for the last
 // one: `v128.store8_lane align=2 0` has a legal lane and an illegal alignment, and its module also
 // declares `(result v128)` on a function whose body stores — three candidate verdicts, of which the
 // reference reports this one.
 func checkMemop(m *binary.Module, in binary.Instr, name string) (binary.ValType, error) {
-	addr, err := addrType(m)
+	// A row carrying no memarg encodes neither a memory index nor an offset, so it names memory 0
+	// and has nothing for the bound to reject. That is the *absence* of the two operands rather than
+	// an exemption from the two rules — all six call sites are load/store families, which the table
+	// marks, and a row that reached here without a memarg would be answering both rules with the
+	// values its encoding does not carry.
+	var offset uint64
+	var memIdx uint32
+	if binary.HasMemarg(in.Prefix, in.Op) {
+		offset, memIdx, _ = binary.Memarg(in.Imm0, in.Imm1)
+	}
+	addr, err := addrTypeAt(m, memIdx)
 	if err != nil {
 		return binary.ValType{}, err
 	}
 	if err := checkAlignment(in, name); err != nil {
 		return binary.ValType{}, err
 	}
+	if err := checkOffset(in, addr, offset); err != nil {
+		return binary.ValType{}, err
+	}
 	return addr, nil
+}
+
+// checkOffset is `check_memop`'s third and last `require` — the offset bound (`valid.ml:390-393`):
+//
+//	let MemoryT (at_, _lim) = memory c (0l @@ at) in
+//	if at_ = I32AT then
+//	  require (I64.lt_u memop.offset 0x1_0000_0000L) at
+//	    "offset out of range";
+//
+// The offset is read as a full u64 on the wire — `decodeMemop` cites `binary-leb128.wast:730` for
+// why the width is needed — and retained in `Imm0`, so a module can encode an offset past 2^32
+// against a 32-bit memory and this is the rule that refuses it. The bound is unconditional for a
+// 64-bit memory: a u64 offset cannot leave a 64-bit address space, so there is nothing to compare.
+//
+// # It reads the memory the instruction names, and the reference does not (#310)
+//
+// The quote above says `memory c (0l @@ at)` — memory **0**, hardcoded — while the *caller* two
+// functions up reads `memory c x` for the operand type. The reference therefore consults two
+// different memories inside one instruction's check, and Burroughs deliberately does not: the bound
+// comes from the memory the instruction names, the same one the operand type comes from.
+//
+// **Ruled by Scott on #310**, and the reasoning is worth keeping next to the divergence rather than
+// only in the issue. `valid.ml` is an *oracle* for conformance to the spec, not the norm itself;
+// where an oracle and the norm disagree the oracle is the thing that is wrong, and a check that
+// contradicts itself internally is far more likely an artifact than an intent. Bug-compatibility
+// would have bought agreement with the oracle at the price of being wrong, at a price invisible
+// today and unbounded later.
+//
+// # When the divergence becomes observable, stated as a condition
+//
+// A divergence at zero measured cost is deferred rather than costless, so the record says what
+// defers it. Ours and the reference's verdicts differ on exactly one shape:
+//
+//   - a module declaring **two or more memories whose index types differ**, and
+//   - an instruction naming a **non-zero** memory, and
+//   - an offset **at or past 2^32**.
+//
+// All three are needed, and the first two require the **multi-memory** and **memory64** gates both
+// on — multi-memory to encode a non-zero index at all (`internal/binary/instr.go`'s bit 6), and
+// memory64 for two memories to disagree about their index type. No corpus vector meets the
+// condition today: all four expecting `offset out of range` declare one memory, and exactly two
+// `offset=` tokens in the whole suite reach 2^32, both in that group. So this rule is exercised in
+// the direction where the two readings agree and in no other, which is why the pair of unit tests
+// below construct the discriminating modules by hand — and why
+// `TestReferenceStillReadsMemoryZeroForTheOffsetBound` watches the reference's own text, since the
+// day upstream repairs its inconsistency is the day this divergence should be re-ruled rather than
+// silently kept.
+func checkOffset(in binary.Instr, addr binary.ValType, offset uint64) error {
+	if addr != binary.I32 {
+		return nil
+	}
+	if offset >= 1<<32 {
+		// The reference's text verbatim per 0003, with the wrapped half naming the instruction and
+		// the offset — the four vectors expecting this string cannot say which row produced it, so
+		// the arrangement is ErrAlignmentTooLarge's directly above, for its reason.
+		return fmt.Errorf("%w: %s offset %d does not fit a 32-bit address space",
+			ErrOffsetOutOfRange, mnemonic(in), offset)
+	}
+	return nil
 }
 
 // checkAlignment is `check_memop`'s alignment `require`, split out so the rule and the preamble that
