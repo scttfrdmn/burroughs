@@ -47,10 +47,19 @@
 #
 # ## The domain is printed, always
 #
-# The last line reports the range, the number of added lines scanned, and the citation count —
-# *coverage is a claim*, and a checker that reports "OK" without saying over what has made an
-# unstated claim about its own population. A diff that cites nothing passes and says so in those
-# words: zero citations is a legitimate state, and it is not the same fact as zero failures.
+# The last line reports the range, the number of added lines scanned, and the count of
+# citation-shaped tokens broken down by what each turned out to be — *coverage is a claim*, and a
+# checker that reports "OK" without saying over what has made an unstated claim about its own
+# population. A diff that cites nothing passes and says so in those words: zero citations is a
+# legitimate state, and it is not the same fact as zero failures.
+#
+# **It says "citation-shaped tokens" and not "citations" because two of the categories are not
+# citations** — a qualified reference is one this repo cannot resolve, and a `verb` is a Go format
+# flag that was never a reference at all (#308). While the total was called the citation count, the
+# `%#02x` phantom made "12 citations, all resolving" an over-count, and the only number that had
+# ever been checkable — how many *issue* citations were resolved — was buried inside it. The
+# breakdown is the fix: the total counts what the extractor matched, and each category says what it
+# was.
 #
 # ## Trigger coverage, stated because an under-matching trigger fails silently
 #
@@ -169,6 +178,48 @@ extract() {
 			num = substr(t, RSTART + 1, RLENGTH - 1)
 			t = substr(t, RSTART + RLENGTH)
 
+			# **A `#` that is a Go format-verb flag, not a citation** (#308). The narrow
+			# hex verb `%#02x` put its own flag-and-width into this checkers output as a
+			# citation, and because the number it landed on names a real grave, the gate
+			# printed `ok` beside a field width — a *phantom resolved citation*, which is
+			# worse than a false alarm. (The number is deliberately not written here: see
+			# this files header on prose about a citation defect describing the form
+			# rather than instantiating it. The first draft of this block wrote it out,
+			# and this checker duly resolved it against an unrelated LEB128 grave.) A
+			# false alarm is
+			# visibly wrong; this asserted that a citation had been checked and found
+			# good where there was no citation at all, and it inflated the total the
+			# last line prints, so "all resolving" was an over-count nobody could
+			# falsify from the green.
+			#
+			# The predicate is the **verb form**, not the two call sites that happened
+			# to have one: a `#` whose preceding run is `%` plus Go flag characters
+			# (`+-0#`). `%#x` is invisible only because no digits follow it, and `%#4x`
+			# would have been the next specimen — the population is Go format verbs,
+			# not the two files a grep found.
+			#
+			# **A space is deliberately not in the flag class**, though `% d` is a real
+			# verb: the ordinary English "100% #298" would otherwise parse as a verb and
+			# a genuine citation would stop being resolved. That is the `pre-#298`
+			# direction of error, an exemption wearing a fix, and this arm sits one
+			# character away from it — so the under-match on the vanishingly rare
+			# space-flag-then-hash form is taken on purpose. (Also not written out: with
+			# the space excluded from the class, spelling that verb here would emit its
+			# width as a bare citation, which is the same self-instantiation the block
+			# above records.)
+			#
+			# Printed and counted rather than dropped, on the precedent the next arm
+			# sets: a token that vanished from the output would be an exemption
+			# mechanism. **No apostrophes in this block** — the awk program is inside a
+			# single-quoted shell string, which is why its neighbours read "this
+			# checkers own header"; the first draft of this comment used one and broke
+			# the script at parse time.
+			if (match(gap, /%[-+0#]*$/)) {
+				print "verb " substr(gap, RSTART, RLENGTH) "#" num
+				prevgrave = 0
+				continue
+			}
+
 			# **A bare `#N` names *this* repo, so a cross-project citation needs a
 			# qualifier or it is dangling by construction.** `umami#396` is the
 			# GitHub-conventional form and is what this arm recognizes: a token
@@ -245,6 +296,14 @@ adrs=0
 issues=0
 graves=0
 foreigns=0
+verbs=0
+
+# Phase 0a: Go format verbs whose `#` flag looked like a citation (#308). Not resolved, because
+# there is nothing to resolve; printed because a silently dropped token is an exemption mechanism.
+for v in $(printf '%s\n' "$cites" | awk '$1 == "verb" { print $2 }'); do
+	verbs=$((verbs + 1))
+	echo "note  $v -> Go format verb flag, not a citation (see #308)"
+done
 
 # Phase 0: qualified references — a cross-project citation, or a markdown anchor shaped alike. Named,
 # counted, and deliberately not resolved: see the `qualified` arm in extract() for why a gate must
@@ -331,10 +390,10 @@ fi
 
 # The domain, printed whether or not anything failed. A checker that says OK without saying over
 # what has made a silent claim about its own coverage.
-printf 'citecheck %s..%s: %d added lines, %d citations (%d issue, %d grave, %d ADR, %d qualified)\n' \
+printf 'citecheck %s..%s: %d added lines, %d citation-shaped tokens (%d issue, %d grave, %d ADR, %d qualified, %d verb)\n' \
 	"$(git rev-parse --short "$base")" \
 	"$([ -n "$head" ] && git rev-parse --short "$head" || echo worktree)" \
-	"$nlines" "$ncites" "$issues" "$graves" "$adrs" "$foreigns"
+	"$nlines" "$ncites" "$issues" "$graves" "$adrs" "$foreigns" "$verbs"
 
 if [ "$fail" -ne 0 ]; then
 	echo "citecheck: at least one citation does not resolve to the artifact it names."

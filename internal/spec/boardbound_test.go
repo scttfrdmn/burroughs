@@ -82,7 +82,7 @@ import (
 //
 //	bound                    actual   kind          slack   why
 //	passFloor                4162     board count   250     moves in strata; can go stale
-//	allOnPassFloor           64075    board count   250     same board plus gated vectors
+//	allOnPassFloor           64078    board count   250     same board plus gated vectors
 //	unsupportedCeiling       60872    board count   250     shrinks as capabilities land
 //	binaryFailCeiling        0        at terminal   —       0 cannot drift from 0
 //	textFailCeiling          0        at terminal   —       0 cannot drift from 0
