@@ -49,6 +49,11 @@
 #   * **commit messages** in the range, scanned offline, always;
 #   * **the PR title and body**, scanned when a number is supplied, which needs `gh`.
 #
+# Note what is *not* scanned, because this file is the obvious counterexample: **file contents.**
+# The header above quotes the banned construct verbatim, and that is safe — GitHub parses commit
+# messages and pull request bodies, not the tree. So the script describing the ban does not trip it,
+# and the gate scans channels rather than files for a reason rather than an oversight.
+#
 # Checking only commits would have missed the specimen until the moment it fired, which is the
 # whole point of the gate. `make close` runs the offline half over the working branch; CI runs both
 # on the pull_request event, where the number exists. That split is citecheck.sh's ruling applied
@@ -71,6 +76,15 @@
 #
 # The domain is printed whether or not anything fails: *coverage is a claim*, and a checker that
 # reports OK without saying over what has made a silent claim about its own population.
+#
+# ## Falsification record
+#
+# Run over the commit that caused #314: FAIL, exit 1. Run over the recommended phrasings: no hits.
+# Run over the pull request that introduced this script: **FAIL, two constructs** — the graves
+# section had quoted the specimen verbatim, so the body announcing the ban would have closed the same
+# issue a second time. Prose about a defect describes the form; it does not instantiate it, and the
+# checker enforced that against its own author before a human read the page. That third case is the
+# one worth keeping: the first two were arranged, and this one was not.
 #
 # One arithmetic note, because the figure was checked against its subject and did not match. The
 # line count is one lower than `git log --format=%B <range> | grep -c ''` emits: command
