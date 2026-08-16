@@ -56,6 +56,26 @@ amended rather than replaced.
     where being superseded is the point — the cascade narrative at `mllex.go` is the licensed
     shape. This shrinks #116's oracle-less half to nearly nothing while building nothing, which
     is why it is a rule and not an issue. (Ruling: Scott, PR #128.)
+  - **A range citation's description is written by reading the cited lines, never from what the code
+    around them appears to be doing.** Mandatory rather than customary, and the promotion is an
+    **error rate** rather than an anecdote: repairing #333 required a description for each newly
+    covered range, six were written from inference — inside the repair of a citation defect — and
+    **five of the six were wrong**, the sixth right only because it was copied from a description
+    someone had written from the reference. Every one of the five *resolved*: well-formed range, inside
+    the file, subject's message site contained where keyable. Nothing could see them, because a check
+    that asks where a range points cannot ask what the prose beside it claims the range **contains**,
+    and the two questions come apart exactly when the author has read the code and not the citation.
+    The rule carries a tripwire, a five-in-six rate being the argument for not leaving it a procedure:
+    `TestRangeCitationSubjectsAreReadFromTheReference`
+    (`internal/validate/citation_subject_test.go`) takes every comment line that cites a range and
+    names a reference-defined identifier, and requires one of the two honest relationships — the
+    identifier is *inside* the range, or the range is inside the identifier's own definition. Both
+    halves of the trigger are derived (globbed files, candidates parsed out of the reference's own
+    bindings and arms), which is #333's lesson applied at construction rather than after the grave;
+    descriptions naming no reference subject are counted as residue and pinned, so a row leaving the
+    checked column is loud. **Naming the subject is therefore the operative form of the rule** — a
+    description that names one is a description somebody had to read the reference to write.
+    (Ruling: Scott, PR #335 relay.)
 
 ### Three provenance categories: cited, derived, synthetic.
 

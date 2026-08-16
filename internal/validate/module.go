@@ -28,7 +28,8 @@ var (
 	ErrTableSize  = errors.New("table size must be at most")
 
 	// ErrLimitsMinMax is the third `check_limits` failure and the one the two callers *share*
-	// verbatim, which is why it is one sentinel where the range messages are two (valid.ml:104-105).
+	// verbatim — `check_limits` builds it once, at valid.ml:104-105 — which is why it is one
+	// sentinel where the range messages are two.
 	ErrLimitsMinMax = errors.New("size minimum must not be greater than maximum")
 
 	// ErrDuplicateExport is `check_names`' only failure (valid.ml:1142-1149), and the reference
@@ -46,8 +47,9 @@ var (
 	ErrUnknownTag = errors.New("unknown tag")
 )
 
-// The two address-type ranges per limits kind, from valid.ml:202-206 and 212-216 — the reference's
-// numbers and its own descriptive text, kept adjacent because the text names the number.
+// The two address-type ranges per limits kind, from `check_memorytype`'s table at valid.ml:202-206
+// and `check_tabletype`'s at 212-216 — the reference's numbers and its own descriptive text, kept
+// adjacent because the text names the number.
 //
 // Note memories are counted in **pages** and tables in **elements**, so 0x1_0000 and 0xffff_ffff
 // are not the same kind of quantity despite sitting in the same shape. The i64 rows are reachable
@@ -60,7 +62,7 @@ const (
 	tabRangeI64 = 0xffff_ffff_ffff_ffff // 2^64-1
 )
 
-// checkLimits is `valid.ml:96-105`, transcribed including its order.
+// checkLimits is `check_limits` (`valid.ml:96-105`), transcribed including its order.
 //
 // **The order is observable and is therefore part of the rule.** `min <= range` is checked before
 // `max <= range`, and both before `min <= max`, so `(table 0x1_0000_0000 0x1_0000_0000 funcref)`

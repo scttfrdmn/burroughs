@@ -810,6 +810,31 @@ weakly-ordered platform.
 
 ### Changed
 
+- **Description-from-source is mandatory for a range citation, and it has a tripwire.** A range
+  citation's description is written by reading the cited lines, never from what the code around them
+  appears to be doing. Promoted from custom to rule on an **error rate rather than an anecdote**: six
+  descriptions written from inference during #333's repair, five wrong, and every one of the five
+  *resolved* — well-formed range, inside the file, subject's message site contained where keyable — so
+  no existing check could see them. `TestRangeCitationSubjectsAreReadFromTheReference`
+  (`internal/validate/citation_subject_test.go`) requires one of the two honest relationships between a
+  cited range and a reference identifier named beside it: the identifier is inside the range, or the
+  range is inside the identifier's own definition. Both halves of the trigger are derived — files
+  globbed (`_test.go` included, since the five specimens were in a pin table), candidates parsed out of
+  `valid.ml`'s own bindings and arms — which is #333's lesson applied at construction. Six descriptions
+  in `bulk.go`, `instr.go`, `stack.go`, `module.go` and `validate.go` were rewritten to name their
+  subject, moving them from the residue column into the checked one. (Ruling: Scott, PR #335 relay.)
+
+- **The blind-spot register gained its fourth entry, and #333 was re-sited.** The rules with **no
+  corpus witness at any gate setting** now accumulate in `authority_test.go`'s header — seven members,
+  grouped by what lacks the witness (a reading, a value, two orderings, an arm, a delegation) — rather
+  than each slice recording its own in its own PR's prose, where the fourth slice rediscovers the shape
+  and no reader can ask how many arms the board is silent about. The set is known-not-total by
+  construction: a mutation's null result is a measurement, not a property of the tree, so nothing counts
+  it mechanically. Separately, #333's specimen moved to *scope controls to the space* in
+  `docs/laws/controls.md`: the defect is upstream of any bound — a total computed over the registry
+  itself can only agree with the registry — so it is a derive-the-domain grave and not an extent one.
+  (Rulings: Scott, PR #335 relay.)
+
 - **The citation instrument's domain is derived, not enumerated** (grave
   [#333](https://github.com/scttfrdmn/burroughs/issues/333)). `citationFiles` named four files under a
   doc comment calling itself "the package's non-test source"; four others held 26 of the package's 59
@@ -1142,6 +1167,16 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **An enumerated forward domain in the check built to catch unenumerated categories** (grave
+  [#336](https://github.com/scttfrdmn/burroughs/issues/336)). `TestUnknownCategoriesMatchTheReference`
+  compared the reference's `unknown *` messages against **nine literal strings**, so `ErrUnknownTag`
+  arrived with the export phase and the forward direction never asked about it — and the failure is the
+  inverse of #333's: there a missing member contributed nothing to a total, here a missing member
+  silently satisfied the test's *other* arm, the reverse scope declaration going on describing `tag` as
+  a category the package does not produce. Found one file over from #333's own paragraph, which is the
+  proximity-is-not-a-defence point: the same shape survived in a sibling instrument while its grave was
+  being written. The forward list is now derived from `packageSentinels` by prefix, pinned at 10, and
+  `wantUnclaimed` is empty.
 - **A pre-measurement whose domain excluded a Kind the arm serves (grave #329).** The probe that cleared
   the `ReadTextFunc` widening compared recognize mode against build mode over `KindModuleQuote` and
   `KindAssertMalformedText` and reported **zero** disagreement across 1236 commands. The arm serves a

@@ -161,7 +161,7 @@ func TestLimitsRangesMatchTheReference(t *testing.T) {
 		})
 	}
 
-	// The shared message, checked once because the reference shares it once (valid.ml:104-105) —
+	// The shared message, checked once because `check_limits` shares it once (valid.ml:104-105) —
 	// the asymmetry ErrLimitsMinMax's comment records. A vacuity guard rather than a formality: the
 	// literal below is the whole of what three vectors match on.
 	if !strings.Contains(src, `"size minimum must not be greater than maximum"`) {

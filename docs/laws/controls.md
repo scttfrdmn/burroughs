@@ -476,6 +476,40 @@ amended rather than replaced.
   by construction. This is the overfitting law (§9 G-3) turned on the controls
   themselves rather than on the engine. (Ruling: Scott, decision 0006 / #33.)
 
+  **The sharpest specimen is #333, and it is sited here rather than under the extent law because the
+  defect is upstream of any bound.** `citationFiles` (`internal/validate/vec_authority_test.go`)
+  enumerated four of the package's eight citing files under a doc comment calling the domain "the
+  package's non-test source"; the four it omitted held 26 of 59 `valid.ml` citations, and the
+  sentinel walk could not see one file's three sentinels at all. What makes it this law's specimen and
+  not the floors law's is the **defence the enumeration shipped with**: that a new file would fail the
+  pinned range count and get read rather than swept in. The pinned count is summed *over the list*, so
+  a file that is not on the list contributes zero citations, moves no pin, and arrives in total
+  silence — the stated tripwire was the one thing that construction structurally cannot do. Not a
+  floor that cannot see a missing member; a total computed **over the registry itself**, which can only
+  ever agree with the registry. Everything downstream was consistent with a domain that came from a
+  list, which is why nothing downstream could report it. Fixed by globbing the package and re-pinning
+  both counts against a read of every newly covered range (9 → 27 ranges, keyed/residue 2/1 → 5/8).
+  (Ruling: Scott, PR #335 relay; grave #333.)
+
+  **Second instance, one file over, found while writing the paragraph above** (grave #336):
+  `TestUnknownCategoriesMatchTheReference` checked the package's `unknown <category>` sentinels
+  against the reference's ten `lookup` categories in both directions, with the forward direction
+  iterating **a literal list of nine sentinel values** and the reverse pinning `wantUnclaimed =
+  {"tag"}` under a comment promising that a later slice adding `tag` "has to come here and say so".
+  The export slice declared `ErrUnknownTag` and said nothing, and the file stayed green: a sentinel
+  absent from the literal is never *claimed*, so `tag` went on matching the out-of-scope arm and a
+  scope declaration went on describing a rule that now existed. The promised mechanism needed somebody
+  to extend an enumeration two directions away from the code they were writing.
+  Two things make this worth recording beside #333 rather than as a repeat. The derived form of the
+  same trigger was **directly below it in the same file** — the format check reads `ErrUnknown*` out
+  of the AST — so proximity to the right pattern is not a defence. And the enumeration's failure mode
+  was *inverted* relative to #333's: there a missing member contributed nothing to a total, here a
+  missing member silently satisfied the opposite arm of a two-direction check, so the reverse
+  direction that existed to catch exactly this was decoration for as long as the forward domain was a
+  list. Fixed by deriving the forward domain from source, pinning its count, and draining
+  `wantUnclaimed` to empty — which is now a *board figure*, every category the reference has being
+  claimed.
+
 ### A guard's trigger predicate is itself a claim about the space, and an under-matching one fails silently by construction.
 
 - **A guard's trigger predicate is itself a claim about the space, and an
