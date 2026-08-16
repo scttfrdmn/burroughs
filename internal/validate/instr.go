@@ -62,8 +62,16 @@ func (v *validator) instr(i int, in binary.Instr) error {
 	}
 	if in.Prefix != 0 {
 		// The prefixed regions are 0xFB (GC), 0xFC (bulk memory/table), 0xFD (SIMD), 0xFE
-		// (threads). All four are later slices'; declining is what keeps an unchecked module
-		// from being reported valid.
+		// (threads). Slice 2 (#305) types 0xFD and the other three stay declined — which is what
+		// keeps an unchecked module from being reported valid, and keeps the decline census a work
+		// plan for the slices that own them rather than a silence.
+		//
+		// A region dispatch rather than one arm per region: the three that decline decline
+		// *identically*, and three copies of one refusal is three places to forget when the next
+		// slice claims one of them.
+		if in.Prefix == prefixSIMD {
+			return v.vecInstr(in)
+		}
 		return fmt.Errorf("%w: prefixed opcode %#02x %#02x", ErrUnsupported, in.Prefix, in.Op)
 	}
 

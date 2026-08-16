@@ -25,6 +25,29 @@ import (
 // vectors are satisfied by *any* refusal, so 84.3% of them cannot tell a right rule from a wrong
 // one (see ErrTypeMismatch's comment); and no negative vector at all can catch an accept-direction
 // defect. What is left is agreement with the authority, checked mechanically.
+//
+// # The third blind spot: message-match cannot see an under-rejection, and there are sixteen
+//
+// The two above are about the *corpus*. This one is about the instrument that was supposed to cover
+// what the corpus cannot: 0003's message match, which compares the refusal's text against the
+// vector's expectation and is the only thing that catches a right verdict delivered with wrong
+// testimony. **It fires only on refusals.** A validator that *accepts* an invalid module emits no
+// message, so there is nothing for the match to disagree with — the under-rejection has no message
+// channel at all, not a channel that reports a passing grade. This is the accept-direction gap
+// restated one layer in: not merely that no vector catches it, but that the instrument covering the
+// vectors' weakness shares their direction.
+//
+// **Sixteen known instances live in the tree right now**, and they are named here rather than only
+// where their count lives (ruling: Scott, PR #307). `decodeMemop` drops the memarg alignment, so a
+// vector whose sole defect is an over-aligned SIMD access is typed successfully and accepted; the
+// per-vector ledger is `alignmentAdmissions` beside `validateAdmitCeiling` in
+// `internal/spec/spec_test.go`, and the rule that retires them is #306. Four *more* of the same
+// cause do reach the message match — `simd_store{8,16,32,64}_lane.wast`, which carry a second
+// defect and so get refused for the wrong reason — and the split is the point: one cause, and the
+// message oracle sees exactly the quarter of it that happens to be refused.
+//
+// A coverage claim is an assertion an instrument cannot check about itself, so its honest form
+// carries its known counterexamples. These are the ones this campaign knows about.
 
 // TestUnknownCategoriesMatchTheReference is ErrUnknown*'s own promised control, in both
 // directions.

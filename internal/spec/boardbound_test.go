@@ -37,7 +37,7 @@ import (
 // *in the PR that moved it*, the same rule as updating `[Unreleased]` in the PR that earns
 // the entry.
 //
-// # The space is eighteen bounds, not four, and the control is what said so — twice
+// # The space is nineteen bounds, not four, and the control is what said so — three times
 //
 // Decision 0013 was written claiming four (`passFloor`, `allOnPassFloor`,
 // `binaryFailCeiling`, `textFailCeiling`) and this test's first run named four more. The ADR
@@ -52,24 +52,45 @@ import (
 // `boardBound`, so the executable control stayed green while its documentation described a
 // population that had more than doubled. The rows below are now the full set, and
 // `TestEveryBoardBoundIsChecked` asserts that every bound it finds in the AST is *named here*, so
-// a nineteenth cannot land undocumented. What that check cannot verify is whether a row's kind and
+// a twentieth cannot land undocumented. What that check cannot verify is whether a row's kind and
 // reason are *right* — prose is not machine-checkable, and where this table and the call sites
 // disagree, the call sites outrank.
+//
+// **The third time is `validateMismatchCeiling` (#305), and it is the one this table's mechanism
+// could not have caught**: the population existed, was documented in prose as "the 0 that is not
+// here", and had *no constant at all* — so there was nothing for the AST walk to find or for this
+// table to be missing. A bound that does not exist is not an undocumented bound; the row that
+// caught it was an independent count disagreeing by 4 (see `Failure.Accepted`).
+//
+// **A fourth event, and it is not a fourth bound — it is this walk's own trigger narrowing** (#307).
+// `validateAdmitCeiling` became derived (`142 + <live members of a named set>`) and therefore a
+// `:=`, which `*ast.ValueSpec` does not match, so the census reported **18** with all nineteen bounds
+// present, correctly declared, and correctly checked. Nothing was undocumented and nothing was
+// unbounded; the *instrument's* claim about where bounds live had gone false. The heading above still
+// says nineteen for that reason — the population did not move — and the loss was visible only to the
+// exact count, `minBoundPopulation` being 8 and perfectly content with 18. See the `*ast.AssignStmt`
+// arm for the fix and for why a floor could not have caught it.
+//
+// **The `actual` column is the figure at the row's last re-base and several are older than that** —
+// `passFloor` reads 4162 against a live 60330. The columns doing work here are `kind` and `slack`,
+// which is the part a reader cannot infer; the live figure is at the call site, which outranks this
+// table by the rule above.
 //
 // They partition into four kinds, and the kind decides whether slack applies:
 //
 //	bound                    actual   kind          slack   why
 //	passFloor                4162     board count   250     moves in strata; can go stale
-//	allOnPassFloor           63329    board count   250     same board plus gated vectors
+//	allOnPassFloor           63977    board count   250     same board plus gated vectors
 //	unsupportedCeiling       60872    board count   250     shrinks as capabilities land
 //	binaryFailCeiling        0        at terminal   —       0 cannot drift from 0
 //	textFailCeiling          0        at terminal   —       0 cannot drift from 0
 //	unimplementedCeiling     0        at terminal   —       0, and 0004 fixes it there
 //	encodeFailCeiling        46       exact re-base  0      drains as the encoder learns forms
 //	execFailCeiling          81       exact re-base  0      drains as the interpreter lands rules
-//	validateFailCeiling      1201     exact re-base  0      the whole validator stratum
-//	validateDeclineCeiling   1059     exact re-base  0      its declined half, named per opcode
-//	validateAdmitCeiling     142      exact re-base  0      its admitted half — the accept direction
+//	validateFailCeiling      553      exact re-base  0      the whole validator stratum
+//	validateDeclineCeiling   391      exact re-base  0      its declines, named per opcode
+//	validateAdmitCeiling     158      derived        0      its admissions — the accept direction
+//	validateMismatchCeiling  4        exact re-base  0      right refusal, wrong message (0003)
 //	totalFloor               2143     vacuity       —       deliberately loose by design
 //	filesFloor               242      vacuity       —       deliberately loose by design
 //	i32SpellingFloor         2531     vacuity       —       the extractor found this kind at all
@@ -81,6 +102,13 @@ import (
 // **Exact re-base** is the third kind and it is not a kind in the code, deliberately: it is
 // `ceilingBound` with slack 0, meaning "move me in the PR that moves the column". That the helper
 // used to *exempt* those is grave #293, immediately below.
+//
+// **Derived** is exact re-base with the constant replaced by an expression over a named set, and
+// `validateAdmitCeiling` is the only one: `142 + <live members of alignmentAdmissions>` (#307's
+// condition on taking the admission). The kind is worth its own word because the *re-base* clause
+// reads differently — a member draining moves this bound with no edit, so what needs re-basing is
+// the total it decomposes rather than the bound itself. It is also the row that taught this walk
+// that a bound need not be a `const`; see the `*ast.AssignStmt` arm.
 //
 // **At terminal**: a bound already at the value it is draining toward cannot go stale,
 // because the distance between "at most 0" and "0" is not a quantity that can grow. A slack
@@ -279,6 +307,29 @@ func TestEveryBoardBoundIsChecked(t *testing.T) {
 						bounds = append(bounds, site{id.Name, fset.Position(id.Pos()).String()})
 					}
 				}
+			case *ast.AssignStmt:
+				// **A bound does not have to be a constant, and this arm exists because one
+				// stopped being one.** `validateAdmitCeiling` is now `142 + <live members of a
+				// named set>` (#307's condition), so it is a `:=` — an `*ast.AssignStmt`, which
+				// `*ast.ValueSpec` does not cover — and the census's population fell 19 → 18 with
+				// every bound still present and still checked. *A guard's trigger predicate is
+				// itself a claim about the space*, and the claim here was "a bound is declared in
+				// a ValueSpec", true for eighteen bounds and false for the nineteenth.
+				//
+				// Worth reading for *which* instrument caught it: `minBoundPopulation` is 8, so the
+				// floor was satisfied by 18 and said nothing. Only the exact count fired. That is
+				// the floors-bound-the-catastrophic-case rule landing on the file that minted it —
+				// a small silent loss is exactly what a floor cannot see, and a trigger narrowing
+				// by one shape is the smallest such loss there is.
+				if v.Tok != token.DEFINE {
+					return true
+				}
+				for _, lhs := range v.Lhs {
+					id, ok := lhs.(*ast.Ident)
+					if ok && isBoundName(id.Name) {
+						bounds = append(bounds, site{id.Name, fset.Position(id.Pos()).String()})
+					}
+				}
 			case *ast.CallExpr:
 				fn, ok := v.Fun.(*ast.Ident)
 				if !ok || fn.Name != "boardBound" {
@@ -329,7 +380,11 @@ func TestEveryBoardBoundIsChecked(t *testing.T) {
 	}
 	sort.Strings(sortedBoundNames)
 
-	const boundPopulation = 18
+	// 18 → 19 with `validateMismatchCeiling` (#305 slice 2), which is the first bound this exact
+	// count has ever seen arrive — and it arrived for the reason the count exists: a population that
+	// had been 0 since the stratum was created became 4, and it was being *silently absorbed* by the
+	// bound next door rather than going unbounded in a visible way.
+	const boundPopulation = 19
 	if len(bounds) != boundPopulation {
 		t.Errorf("found %d board bounds, want exactly %d. A new bound is welcome — add its row to "+
 			"this file's table with its kind and its reason, and re-base this constant in the same "+

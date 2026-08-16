@@ -16,10 +16,21 @@
 // variable, and memory-access families. Every later rule hangs off this; none of them can be
 // checked before it exists.
 //
+// # Slice 2: the vector region
+//
+// `vec.go` types the 0xFD region (#305) — 236 core SIMD opcodes across 20 constructor families,
+// including the lane-index bounds, which is the second sentinel this package declares. Its argument
+// for reading the classification out of `syntax/mnemonics.ml` instead of writing it here is that
+// file's own header; what matters at this level is that the region is no longer declined, so
+// `select t` (#294) is the last instruction in the single-byte space slice 1 left, and the other
+// three prefixed regions (0xFB GC, 0xFC bulk, 0xFE threads) are the ones still dispatched to a
+// decline.
+//
 // Out of scope by declaration, each with its own expected string in the suite and so its own
-// measurable slice: alignment (99 vectors), SIMD lane immediates (48), GC subtyping (21),
-// constant expressions (24), limits (16), reference instructions, the bulk memory/table ops,
-// and exception handling.
+// measurable slice: alignment (99 vectors, and slice 2 raised its stake — see below and #306), GC
+// subtyping (21), constant expressions (24), limits (16), reference instructions, the bulk
+// memory/table ops, and exception handling. SIMD lane immediates (48) were on this list until
+// slice 2, and are the reason `ErrInvalidLaneIndex` exists.
 //
 // # Out of scope divides in two, and only one half is a decline
 //
@@ -28,20 +39,28 @@
 // it forces is worth having.
 //
 // An out-of-scope rule attached to an *instruction* is declined, because the walk meets the
-// instruction and has nothing to say about it: 1059 of the corpus's `assert_invalid` vectors land
+// instruction and has nothing to say about it: 391 of the corpus's `assert_invalid` vectors land
 // that way, each naming its opcode — the board's own `assert_invalid declined:` buckets summed,
 // which is `validateDeclineCeiling`, not a separately-counted figure that could drift from it. An out-of-scope rule attached to anything the code-section
 // walk never visits is **accepted**, because there is nothing to decline — limits, duplicate
 // export names, constant expressions in globals and segment offsets, and the alignment immediate
 // (which the walk does visit, but whose check is a later slice's) are not instructions this
-// package refuses to type, they are questions it never asks. 142 vectors are accepted for that
+// package refuses to type, they are questions it never asks. 162 vectors are accepted for that
 // reason.
 //
-// Those 142 are the admission stratum, and the harness reports them as **fails with a named
+// Those 162 are the admission stratum, and the harness reports them as **fails with a named
 // cause**, not as passes — which is the property the original claim was reaching for and stated
 // too strongly. The strong form is worth keeping as a target rather than as a description: an
 // accepted-but-invalid module is invisible on any board that scores only refusals, so the arm's
 // bucket key carries the cause for every one of them.
+//
+// Both figures moved with slice 2 and both are quoted from `spec_test.go`'s constants rather than
+// counted here — 1059 → 391 and 142 → 162, the second a *rise*, whose twenty vectors are the
+// alignment immediate this paragraph already names as the one out-of-scope rule the walk does visit.
+// Typing the vector region removed the accidental cover a decline was giving them: the module used
+// to be refused because `v128.store8_lane` had no rule, and it is now typed successfully and
+// accepted, because the alignment the vector is *about* was dropped by the decoder. The account is
+// at `validateAdmitCeiling`; the slice that fixes it is #306.
 //
 // # The bounds checks are here because the alternative is a panic, and they are named
 //
@@ -119,6 +138,26 @@ var (
 	// strings one file over were transcribed by hand anyway, from memory, with a doc comment
 	// asserting the suite said so. The verdict was right and the testimony invented.
 	ErrGlobalImmutable = errors.New("immutable global")
+
+	// ErrInvalidLaneIndex is a vector lane immediate outside its shape's lane count —
+	// `valid.ml:377,947,954` and the two `check_memop` bounds at `:677,684`, which is **five sites
+	// in the reference producing one string**.
+	//
+	// Those five numbers are the lines the string is *on*, which is what makes the sentence above
+	// literal rather than approximate: the third read 953, the `require` whose message continues
+	// onto 954. Both resolve to the site, so it was a consistency defect rather than a wrong
+	// citation — but a list described as "five sites producing one string" should be the five lines
+	// producing it. TestLaneIndexCitationsResolveToTheReferencesSites checks all five, and admits
+	// either half of a wrapped `require` so that only a citation pointing outside the site fails.
+	//
+	// That collapse is the point rather than an inconvenience: `i8x16.shuffle` bounds sixteen
+	// indices at 32, `i8x16.extract_lane` bounds one at 16, and `v128.load32_lane` bounds one at
+	// 4 — three genuinely different rules, and no vector can tell which refused, because all of
+	// them expect the identical `invalid lane index`. So the sentinel is shared (the suite's
+	// string, verbatim, per 0003) and the wrapped detail says which bound and which lane, exactly
+	// as ErrTypeMismatch's comment prescribes for the 84.3% family. Slice 2 is the first sentinel
+	// in this package added *knowing* its suite cannot discriminate inside it.
+	ErrInvalidLaneIndex = errors.New("invalid lane index")
 
 	// ErrUnsupported is slice 1 declining an instruction whose rules belong to a later slice.
 	//

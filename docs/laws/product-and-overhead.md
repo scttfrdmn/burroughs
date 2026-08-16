@@ -67,6 +67,18 @@ amended rather than replaced.
       Recorded as one condition on the relay that would otherwise have added the second instance as
       its own bullet: *"they aren't two rules, they're one rule stated twice from the outside."*
       (Ruling: chat-Claude, PR #302.)
+
+      **A fourth case arrived on the very next PR and got no bullet, which is the evidence the
+      generalization works.** #307 is a validator slice: its `assert_invalid` vectors score `fail`
+      with a named cause, never `unsupported`, so the column cannot move for a third distinct
+      mechanism — and the actor's flag asked whether #235's gate-campaign carve-out *extended*. The
+      answer was that nothing needed to extend: the ordinary reward figure was not structurally zero
+      here (`passFloor` moved +648), so there was no substitution to authorize, only the normal line
+      quoted in the normal case. A rule stated as a list would have needed an amendment to say that;
+      stated as a condition, it answered on its own. **This paragraph is prose and not a fourth
+      specimen deliberately** — a case answered without an amendment is evidence about the rule, and
+      filing it as an instance would re-create exactly the enumeration this clause refuses.
+      (Ruling: Scott, PR #307.)
   - **The actor never chooses the instrument that judges the actor.** The umbrella the two
     rules below were always standing under, written down once so it does not have to be
     rediscovered a third time: not choosing the measure, not granting the exception — same

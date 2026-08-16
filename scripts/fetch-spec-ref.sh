@@ -65,11 +65,17 @@ fi
 # which is encode.ml's lesson taken forward instead of re-earned. They matter more than the others
 # for one reason: they are an oracle rather than a cited artifact, so a fetch that dropped them
 # would leave the campaign checking itself.
+# syntax/mnemonics.ml is the eighth and exec/v128.ml the ninth, both for slice 2's vector typing
+# (#305): valid.ml types by *constructor family* and decode.ml names *mnemonics*, so mnemonics.ml
+# is the only file that joins them, and v128.ml is where a shape's lane count and lane scalar type
+# come from. An oracle reachable only through a join is no more robust than the join's weakest
+# link, which is what licensing them together says.
 # The list is here rather than derived because a shell script cannot read Go constants;
 # TestFetchScriptAssertsEveryAuthority is what keeps the two agreeing.
 for f in interpreter/binary/decode.ml interpreter/text/lexer.mll interpreter/text/parser.mly \
          interpreter/binary/encode.ml interpreter/syntax/free.ml \
-         interpreter/valid/valid.ml interpreter/valid/match.ml; do
+         interpreter/valid/valid.ml interpreter/valid/match.ml \
+         interpreter/syntax/mnemonics.ml interpreter/exec/v128.ml; do
   if [ ! -f "$dest/$f" ]; then
     echo "reference vendored at $got but $dest/$f is missing" >&2
     exit 1
