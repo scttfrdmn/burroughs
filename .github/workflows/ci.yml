@@ -290,6 +290,31 @@ jobs:
           git rev-parse --verify "$BASE" >/dev/null
           ./scripts/citecheck.sh "$BASE" "$HEAD"
 
+      # No prose may close an issue as a side effect (grave #314). A step in *this* job rather
+      # than a job of its own: it needs the same checkout, the same token, and the same two
+      # permissions, and it asks the neighbouring question — that one checks whether the tracker
+      # references a diff adds resolve, this checks whether they will silently act.
+      #
+      # **Both channels, because GitHub acts on both.** A keyword closes an issue from a commit
+      # message reaching the default branch *or* from the PR body, and the specimen came in
+      # through the body: a squash message is derived from the PR title and body by default, so
+      # prose written for a human reader became an instruction stream. The commit half runs on
+      # every event; the body half needs a PR number and is skipped on a push to main, where no
+      # body exists — stated because *a skip is not a verdict*, and the thing being skipped here
+      # is a question that has no subject rather than one going unasked.
+      - name: no closing keywords
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || 'HEAD^' }}
+          HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || 'HEAD' }}
+        run: |
+          ./scripts/closecheck.sh "$BASE" "$HEAD"
+          if [ "${{ github.event_name }}" = pull_request ]; then
+            ./scripts/closecheck.sh --pr "${{ github.event.pull_request.number }}"
+          else
+            echo "closecheck: push event, no PR body to scan (the commit half above ran)."
+          fi
+
   vuln:
     runs-on: ubuntu-24.04
     steps:

@@ -219,6 +219,19 @@ func (v *validator) blockType(in binary.Instr) (params, results []binary.ValType
 	case empty:
 		return nil, nil, nil
 	case idx == 0 && vt != binary.ValType{}:
+		// `check_blocktype`'s valtype arm (`valid.ml:420`: `ValBlockType (Some t) -> check_valtype
+		// c t at`). Without this the annotation is returned unchecked, so `(block (result (ref 1)))`
+		// types successfully against a module declaring no type 1 — an accept-direction gap, which
+		// is why no default-lane vector could see it (#311).
+		//
+		// The indexed arm below needs no such call: `funcType` resolves the index and reports
+		// `unknown type N` itself.
+		// Named `vterr` rather than `err`: this function has a named `err` return, so `err :=`
+		// trips govet's shadow and `err =` trips gocritic's sloppyReassign — the two linters want
+		// opposite things here, and a distinct name satisfies both without a suppression.
+		if vterr := v.checkValType(vt); vterr != nil {
+			return nil, nil, vterr
+		}
 		return nil, []binary.ValType{vt}, nil
 	}
 	// The indexed form: a full function type, parameters included.
@@ -507,12 +520,15 @@ func (v *validator) selectAnnotated(i int) error {
 // `check_typeuse`'s `type_ c x` — the same `lookup "type"` every other index-space check in this
 // package goes through, so the message is `unknown type N` and not a paraphrase.
 //
-// **`blockType`'s valtype form does not call this and the reference's `check_blocktype` does**
-// (`:420`: `ValBlockType (Some t) -> check_valtype c t at`), so `(block (result (ref 99)))` is
-// accepted here with no such type in the module. That is an accept-direction gap of exactly the
-// shape #294 closes for `select`, found while reading the function that closes it, and it is
-// **#311** rather than a drive-by fix: it is a different opcode family with its own corpus vectors
-// and its own board delta, and folding it in would put a second reward under this one's forecast.
+// **Two callers, and the second one was a gap this comment used to describe as open.** It read
+// "`blockType`'s valtype form does not call this and the reference's `check_blocktype` does"
+// (`:420`: `ValBlockType (Some t) -> check_valtype c t at`), so `(block (result (ref 99)))` was
+// accepted with no such type in the module — an accept-direction gap of exactly the shape #294
+// closed for `select`, found while reading the function that closed it. **#311 closed it**, and
+// `blockType` now calls this; the sentence is kept in the past tense rather than deleted because the
+// reason it was *not* fixed in #294 is the durable part: a different opcode family with its own
+// corpus vectors and its own board delta, and folding it in would have put a second reward under the
+// first one's forecast.
 func (v *validator) checkValType(t binary.ValType) error {
 	if !t.IsIndexed() {
 		return nil

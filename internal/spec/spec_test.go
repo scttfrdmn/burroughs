@@ -6829,7 +6829,51 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	// sub-populations — which is a stronger claim about the seam than either delta could make alone,
 	// and it is only visible because the sub-partition is three counters rather than two and a
 	// subtraction.
-	const allOnPassFloor = 64075
+	//
+	// # `blockType`'s valtype form (#311): 64075 → 64078, and **no instrument asked for this re-base**
+	//
+	// `check_blocktype` calls `check_valtype` on the single-valtype arm and `blockType` did not, so
+	// `(block (result (ref 1)))` typed successfully against a module declaring no type 1. Accept
+	// direction, which is why the default lane is **+0 and stays there**: a concrete `(ref N)`
+	// annotation needs the GC gate to decode, so on that lane the rule has no subject and all four of
+	// its stratum ceilings are unmoved. One file moves, `ref.wast` 2/13 → 5/13, and *nothing else in
+	// either lane moves in either direction* — worth measuring rather than assuming, because the new
+	// call fires when a block **opens** and could therefore preempt a later rule's message, turning a
+	// correctly-refused vector into a wrong-message one. Zero preemptions, so the fail delta is
+	// exactly −3 and not −3 net. A net figure hides a regression inside a reward.
+	//
+	//	                       all-gates-on lane, #294 → #311
+	//	validate stratum            854 → 851
+	//	  declined                  676 → 676    unmoved
+	//	  admitted                  175 → 173    −2   ← the accept-direction drain
+	//	  wrong message               3 →   2    −1   ← a module already refused, now refused
+	//	                                              for the reason its vector names
+	//	other strata (46+54)        100 → 100    unmoved
+	//	                           ----   ---
+	//	                            954   951
+	//
+	// **A third sub-population shape, after slice 3's and #294's**: slice 3 drained `admitted` and
+	// `mismatch`, #294 drained `declined` alone, and this drains `admitted` and `mismatch` again while
+	// `declined` holds — the same pair as slice 3, from a rule with an unrelated cause. So the pairing
+	// is not a signature of the seam; what distinguished the seam was the *disjointness* of the two
+	// drains within one diff, not either drain's own shape. Recorded because the earlier paragraph is
+	// one careless reading away from claiming more than it established.
+	//
+	// **And the re-base itself was discretionary, which is the part worth keeping.** This floor's slack
+	// is `boardBoundSlack` = 250; an actual of 64078 against a bound of 64075 is a distance of 3, so
+	// `boardBound` neither errored nor reported staleness. This lane carries **exactly one** bound in
+	// total — the three slack-0 ceilings that would have fired on a one-vector move are in
+	// `TestPhase1Files`, where this delta is 0. So #311's reward is real and invisible to every
+	// instrument in the repo, and every figure in the table above was **pre-registered on the issue
+	// before the fix was applied** and then confirmed, because a silent floor cannot distinguish a
+	// derived number from a copied one. The pre-registration is the check the instruments could not
+	// perform; the tracker holds it, deliberately outside the diff it judges. (Condition: Scott, on
+	// the #313 thread — *"otherwise the tool prints a number and agrees with itself, which is the same
+	// shape as a frozen snapshot passing."*)
+	//
+	// That the corrected decomposition in the tables above is itself asserted by nothing is grave
+	// #312's live remainder, and #315 rather than a fix here.
+	const allOnPassFloor = 64078
 	boardBound(t, "allOnPassFloor", totalPass, allOnPassFloor, boardBoundSlack, floorBound,
 		"a gated feature regressed, which the Gated==0 assertion above cannot see: with every "+
 			"gate on, a broken feature turns a pass into a fail and leaves Gated at zero")

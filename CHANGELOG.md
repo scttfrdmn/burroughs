@@ -146,6 +146,26 @@ weakly-ordered platform.
     (`validateDeclineCeiling` 391 → 389, the other two untouched) — vocabulary it genuinely lacked.
     One cause seen from both sides, and the pair is what makes neither delta a reclassification.
 
+- **`check_blocktype`'s missing `check_valtype`, so a block could name a type that does not exist
+  (#311).** `(block (result (ref 1)))` typed successfully against a module declaring no type 1: the
+  reference calls `check_valtype` on the single-valtype arm (`valid.ml:420`) and `blockType` did not.
+  One line, and the accept direction, so **no default-lane vector could ever have seen it** — a
+  concrete `(ref N)` annotation needs the GC gate to decode, which puts the whole reward on the
+  all-gates-on lane: `+3` there (`ref.wast` 2/13 → 5/13), `+0` on the default board, whose four
+  validator ceilings are unmoved.
+  - **Two of the three are accept-direction drains and the third is a *message* drain** — a module
+    already refused, for a reason its vector disagreed with, now refused by the rule the vector
+    names. All-on `admitted` 175 → 173 and wrong-message 3 → 2, with `declined` untouched.
+  - **No instrument asked for the re-base, and that is recorded rather than smoothed over.** The
+    all-on lane carries exactly one bound — a pass floor with 250 slack — so a distance of 3 raised
+    neither an error nor a staleness report, and the three slack-0 ceilings that would have fired
+    live on the lane where this delta is 0. Every figure was therefore **pre-registered on the issue
+    before the fix was applied** and confirmed afterwards, including the sharp one: that *no other
+    file moves in either lane*, since the new call fires when a block opens and could otherwise
+    preempt a later rule's message. Zero preemptions, so the fail delta is exactly −3 and not −3 net.
+    The missing instrument is #315.
+
+
 - **`internal/validate` — the type oracle decision 0002 Q3 names, slice 1 of #9 (#291).** Decoder →
   internal form → **validator** → interpreter: the pass that decides, statically, which type every
   value slot holds, which is what makes the interpreter's bare `uint64` slots sound and what ADR
@@ -633,6 +653,22 @@ weakly-ordered platform.
 
 ### Changed
 
+- **No PR body or commit message may close an issue by keyword, and the gate is `make close`
+  (#314).** `Filed, not fixed: #310` closed #310 on merge: GitHub matched `fixed: #310` and the "not"
+  is not a token its parser has an opinion about, so the sentence asserting the issue was unresolved
+  is the one that resolved it. #310 carries `decision-needed:scott`, so the close silently removed a
+  pending decision from a principal's queue and left `CLOSED` as the reassuring answer. `scripts/
+  closecheck.sh` scans **both channels GitHub acts on** — commit messages in a range, and the PR
+  title and body — and the CI step is in the `citations` job, which already holds the token.
+  - **A ban rather than a declared intended-closes list**, which is what the issue first proposed. A
+    keyword is never the right mechanism in this repo: issues are closed by hand so the lesson
+    comment lands *before* the close, and a declared list would have been an exemption surface for
+    the actor to plead against. The remedy costs one word — "Landed in #N", "Filed, deferred: #N".
+  - Falsified against the artifact that caused it: the check fails on `5df86cf`, the squash commit
+    that closed #310, and passes on the safe phrasings including `Fixed in #N` and a `### Fixed`
+    changelog heading. It drains the *cause* of the zero-comment tombstones #303 watches for as a
+    symptom; both stay, since #303 also catches a hand close whose comment failed to post.
+
 - **The alignment admissions are a named set, and `validateAdmitCeiling` is derived from it rather
   than written down (#307).** Scott's condition on ruling that slice 2 take the admission rather than
   the decline: `158` is satisfied by *any* sixteen vectors, including a different sixteen, so a count
@@ -887,6 +923,22 @@ weakly-ordered platform.
   element segment's *offset* and an element *expression* are different lines of the user's module.
 
 ### Fixed
+
+- **`citecheck.sh` read `%#02x` as a citation and resolved it — a phantom *resolved* citation in the
+  gate's own output (#308).** The `#` of a Go format verb is not preceded by an identifier, so it
+  fell through to the bare-citation path; the digits after it landed on a real grave, and the gate
+  printed `ok` beside a field width. Worse than a false alarm, which is visibly wrong: this asserted
+  that a citation had been checked and found good where there was no citation at all, and it inflated
+  the total, so "all resolving" was an over-count nobody could falsify from the green.
+  - The predicate is the **verb form** — `%` plus Go's flag characters — not the two files a grep
+    found, because the population is Go format verbs. A space is deliberately excluded from the flag
+    class so ordinary English like "100% #298" keeps being resolved; that is the `pre-#298` direction
+    of error, an exemption wearing a fix. Classified and printed as `verb`, never dropped, on the
+    `qualified` arm's precedent: a token that vanishes from the output is an exemption mechanism.
+  - The domain line now says **"citation-shaped tokens"** with a per-category breakdown, because two
+    categories are not citations. Watched die: with the arm disabled the phantoms return and the
+    `verb` count falls to 0. The other half of the issue — `pre-#298` — was checked against the
+    executable rather than its comment and is genuinely already fixed.
 
 - **The all-gates-on lane's stratum decomposition was wrong in both of its terms, by 10, in opposite
   directions (#312).** It read "962 validate + 90 other = 1052"; the measured split at that same

@@ -40,7 +40,7 @@ SHELL := /bin/bash -o pipefail
 # anything globally.
 TOOL = $(GO) tool -modfile=tools/go.mod
 
-.PHONY: all build test race vet fmt fmt-check lint check vuln deadcode fuzz bench ratio cite spec-tests spec-ref tidy conformance strict pipefail-check opcodes opcode-drift keywords keyword-drift opcodes-text opcodes-text-drift memarg memarg-drift gate-census claudemd-ledger xcorpus
+.PHONY: all build test race vet fmt fmt-check lint check vuln deadcode fuzz bench ratio cite close spec-tests spec-ref tidy conformance strict pipefail-check opcodes opcode-drift keywords keyword-drift opcodes-text opcodes-text-drift memarg memarg-drift gate-census claudemd-ledger xcorpus
 
 # The default gate. `check` is what must be green before a report — it is the
 # local mirror of CI, so a surprise in CI means a bug in this line, not a bug in
@@ -266,6 +266,24 @@ ratio:
 CITE ?= --worktree main
 cite:
 	@./scripts/citecheck.sh $(CITE)
+
+# closecheck — no PR body or commit message may close an issue by keyword (grave #314).
+#
+# A **separate script from citecheck.sh, not a fourth phase inside it**, and the reason is the
+# population rather than the subject. citecheck.sh scans the lines a *diff adds*; this scans
+# *commit messages and the PR body*, which are not in the diff at all. Folding them would give one
+# tool two domains and one printed coverage line that could not describe either honestly — the
+# opposite of the rule that put the domain line there. Same revision grammar, so the two read as
+# siblings.
+#
+# Local face only, on `cite`'s scoping ruling: the `--pr` half needs the network, so CI is where
+# the verdict is binding.
+#
+#   make close                       # commit messages on this branch, base `main`
+#   make close CLOSE="--pr 313"      # the PR title and body; needs gh
+CLOSE ?= --worktree main
+close:
+	@./scripts/closecheck.sh $(CLOSE)
 
 # The engine module only. Deliberately NOT tools/go.mod: a tool modfile has no
 # packages of its own, so tidy pulls in the tools' transitive test dependencies
