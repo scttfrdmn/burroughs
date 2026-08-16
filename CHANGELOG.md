@@ -603,6 +603,29 @@ weakly-ordered platform.
 
 ### Changed
 
+- **The alignment admissions are a named set, and `validateAdmitCeiling` is derived from it rather
+  than written down (#307).** Scott's condition on ruling that slice 2 take the admission rather than
+  the decline: `158` is satisfied by *any* sixteen vectors, including a different sixteen, so a count
+  cannot tell "the dropped alignment immediate admitted these" from "eight were fixed and eight
+  others arrived". `alignmentAdmissions` names all 54 members of the population by `file:line` with
+  the slice that admitted each, the ceiling computes `142 + <live slice-2 members>`, and the measured
+  set is checked in both directions — an unnamed admission is an error, a drained one is reported by
+  name. The domain is read from the vector's own bucket key and never from a `simd_` filename, so an
+  under-matching predicate cannot decide membership. **It retires itself**: when #306 restores the
+  memarg alignment the measured set empties, the ceiling computes 142 with no edit, and the stratum
+  sum fires for the total that *is* still a literal — the self-retiring shape 0025 used for its own
+  carve-out, and the ruling's stated reason for preferring the admission is that a decline means "not
+  yet in vocabulary", which was false here and would have put two facts in one column.
+- **The reject-direction oracle's coverage statement names its third blind spot and its sixteen known
+  instances (#307).** `internal/validate/authority_test.go`'s header described two — the corpus's
+  any-refusal-satisfies (84.3%) and the absence of any negative vector for an accept-direction defect
+  — and both are about the corpus. The third is about the instrument built to cover it: 0003's message
+  match fires *only on refusals*, so an under-rejection emits no message for it to disagree with. The
+  sixteen alignment admissions are named there as the known counterexamples, with the four that carry
+  a second defect and so *do* reach the match called out, because one cause split 16/4 across an
+  oracle boundary is the clearest statement of what that oracle can see. *A coverage claim is an
+  assertion an instrument cannot check about itself*, so its honest form carries its counterexamples.
+
 - **Two stale measured claims deleted rather than refreshed (0029's riders, #299).** `CLAUDE.md`'s
   phase-ladder paragraph asserted `internal/interp` held "0 engine lines" and quoted a three-column
   board; `internal/interp/exec.go`'s "what is deliberately absent" block said the loop had no control
@@ -840,7 +863,19 @@ weakly-ordered platform.
   stratum has three counters and three slack-0 bounds that must sum to it. The population that spent
   slice 1 documented as "the 0 that is not here … the point of not giving it one" has a bound
   (`validateMismatchCeiling`, the board's nineteenth) — *a third verdict needs a structural bound,
-  not just a watched one*, arriving one stratum down.
+  not just a watched one*, arriving one stratum down. The raise from 142 was flagged rather than
+  taken, and the stamp it cites is Scott's on #307, conditioned on the named ledger above; the
+  interval the bound spent raised-but-unauthorized was one PR wide.
+
+- **The board-bound census's trigger claimed a bound is a `const`, and one stopped being one (#307).**
+  `TestEveryBoardBoundIsChecked` matched `*ast.ValueSpec`, which covers `const` and `var` but not
+  `:=`. Making `validateAdmitCeiling` derived turned it into an `*ast.AssignStmt` and the census
+  reported **18 bounds** with all nineteen present, correctly declared, and correctly checked —
+  nothing undocumented and nothing unbounded, just the instrument's own claim about where bounds live
+  gone false. *A guard's trigger predicate is itself a claim about the space.* Fixed by matching
+  `:=` as well, and worth recording for **which instrument caught it**: `minBoundPopulation` is 8 and
+  was perfectly satisfied by 18, so only the exact count fired — *floors bound the catastrophic case;
+  only an exact count sees a small silent loss*, landing on the very file that minted it.
 
 - **Two lane-index citations were off by one, both to the line above the bound (#305).**
   `checkLaneIndex` cited `valid.ml:952`, which is `let t2 = NumT (type_vec_lane replaceop)` — the
