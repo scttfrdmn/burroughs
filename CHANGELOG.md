@@ -49,7 +49,18 @@ weakly-ordered platform.
   - **The reject-direction blind-spot header gained two instances**, #311's accept-direction gap and
     this decision — the second being a shape the header did not previously describe: a rule *no
     vector exercises*, invisible to any instrument that reads verdicts because the corpus declines
-    to ask rather than disagreeing.
+    to ask rather than disagreeing. It also records the first *measured* shrink of that population,
+    `validateAdmitCeiling` 104 → 103, and why the ledger asserts the −1/+1 pair rather than the
+    increment: a lone `+1` in the pass column is consistent with a decline gaining vocabulary, and
+    only the paired form is a correctness claim.
+  - **Two citation controls, because the line citations were going in unread.**
+    `TestOffsetCitationsResolveToTheReferencesSites` checks the rule's point citation against the
+    reference's own text, and `TestReferenceRangeCitationsContainTheirSubjectsSite` reads *inside*
+    each range citation whose subject produces a reference message — the range pin next to it only
+    bounds-checks, so a range retargets silently when anything above it moves. Building the second
+    one found this PR's own citation short by a line (`:390-392` for a quote running to `:393`), and
+    its first run failed on a *correct* citation, which is why a message the reference builds by
+    concatenation is now counted as residue instead of skipped.
 
 - **A public API, and `burroughs run` on top of it — the engine's first embeddable surface
   (decision 0029, #299).** `Instantiate` / `Config.Instantiate`, `Instance.Call` / `Exports` /
@@ -682,6 +693,13 @@ weakly-ordered platform.
   tail-call gate's own 0x12/0x13 when it lands.
 
 ### Changed
+
+- **CLAUDE.md's payload-rule specimen tally is struck, not incremented (#317).** The rule kept a
+  running count of how many times a closing keyword had eaten an issue's lesson comment, which is a
+  measured quantity living in prose — updating it to five would have scheduled the sixth. Replaced by
+  the query that enumerates the specimens (`gh issue list --label type:grave --state closed`,
+  zero-comment rows) and a pointer to #303, the control that runs it. `scripts/closecheck.sh`'s
+  header quoted that tally and is re-pointed with it. Returns 91 bytes of index headroom.
 
 - **No PR body or commit message may close an issue by keyword, and the gate is `make close`
   (#314).** `Filed, not fixed: #310` closed #310 on merge: GitHub matched `fixed: #310` and the "not"

@@ -78,6 +78,21 @@ import (
 // with it, it declines to ask. `offset_test.go` builds the discriminating modules by hand for exactly
 // that reason, and its tripwire watches the *reference's* text, since the suite has no channel
 // through which this decision could ever report itself wrong. (Ruling: Scott, #310.)
+//
+// # The blind spot shrank measurably for the first time, and the measurement is what says so
+//
+// Everything above describes a population this file cannot see. #310 is the first entry that also
+// *drained* it by a counted amount: `validateAdmitCeiling` **104 → 103**, one admission becoming a
+// pass. The number matters less than the channel it came out of — a bare `+1` in the pass column is
+// consistent with either an under-rejection repaired or a decline gaining vocabulary, and only the
+// first is a shrink of this blind spot. So the ledger row asserts the *pair*: `accepted` down one and
+// `pass` up one with `declined` untouched (`internal/spec/ledger_test.go`), which is a correctness
+// claim where a lone increment would have been a movement.
+//
+// Worth having here rather than only in the ledger, because a coverage claim with no measured
+// direction of travel is a claim that can only ever be restated. The population this file describes
+// is now 103 admissions, three of which are the `module quote` vectors no validator rule can reach,
+// and the next slice's reward is a subtraction from that figure. (Note: Scott, on the #317 relay.)
 
 // TestUnknownCategoriesMatchTheReference is ErrUnknown*'s own promised control, in both
 // directions.

@@ -15,10 +15,12 @@
 # closing keyword is never the right mechanism here anyway.**
 #
 # Issues in this project are closed by hand, and they have to be: the lesson comment must land
-# *before* the close, or the close eats it. That failure has five recorded specimens (the payload
-# rule in CLAUDE.md, whose count is kept precisely so the first is not read as the last), and four
-# of them are merge keywords closing an issue whose lesson was never written. So the correct
-# sequence is `gh issue comment` then `gh issue close`, in which a keyword has no part to play.
+# *before* the close, or the close eats it. That failure recurs, and *most* of its specimens are merge
+# keywords closing an issue whose lesson was never written — which is what makes this ban the cheap
+# half of the repair. The specimens are enumerated by query and not by prose (`gh issue list --label
+# type:grave --state closed --json number,comments`, zero-comment rows; #303 is the control that runs
+# it), because the tally this sentence used to quote was a measured quantity living in a comment.
+# So the correct sequence is `gh issue comment` then `gh issue close`, in which a keyword has no part.
 #
 # A declared list would also have re-created the thing it guards against: a list is an exemption
 # surface, and *the actor never chooses the instrument that judges the actor*. A ban has no

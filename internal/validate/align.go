@@ -145,7 +145,7 @@ func checkMemop(m *binary.Module, in binary.Instr, name string) (binary.ValType,
 	return addr, nil
 }
 
-// checkOffset is `check_memop`'s third and last `require` — the offset bound (`valid.ml:390-392`):
+// checkOffset is `check_memop`'s third and last `require` — the offset bound (`valid.ml:390-393`):
 //
 //	let MemoryT (at_, _lim) = memory c (0l @@ at) in
 //	if at_ = I32AT then
