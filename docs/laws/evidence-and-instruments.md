@@ -240,6 +240,27 @@ amended rather than replaced.
   chosen its axis; the space of characters that can precede a `#` is derivable,
   and was not derived.
 
+  **Sixth specimen, with the census itself as the subject, and filed as a
+  specimen rather than minted as a law** (ruling: Scott, PR #307).
+  `TestEveryBoardBoundIsChecked` derives the board's bounds from the package AST
+  by matching `*ast.ValueSpec` — the naming convention on a declaration, which is
+  the right trigger and was a complete domain for eighteen bounds. #307 made
+  `validateAdmitCeiling` **derived** (`142 + <live members of a named set>`), so
+  it became a `:=` and therefore an `*ast.AssignStmt`, and the census reported
+  **18 bounds** while all nineteen were present, correctly declared, and
+  correctly routed through `boardBound`. Nothing was undocumented and nothing
+  unbounded; the instrument's claim about *where a bound lives* had gone false
+  under it. The specimen's value is which guard caught it: `minBoundPopulation`
+  is **8**, so the floor was satisfied by 18 and said nothing — a floor cannot
+  notice a missing member of a population of 19 — and the **exact count** fired
+  on its own. That is this entry's closing paragraph demonstrated rather than
+  restated, which is also why it is a specimen and not a new key: the law already
+  said it, and the census was the subject that had not been tested. Its sibling
+  reading is *floors bound the catastrophic case; only an exact count sees a
+  small silent loss* (`controls.md`), reached in another project from an
+  unrelated failure — **two independent derivations, which is corroboration in
+  the way a single shape recurring inside one instrument is not**.
+
   The two failure modes are worth keeping separate because they are found
   differently. An **assertion** defect is found by falsification — break it, watch
   it die. A **coverage** defect is found only by measuring the instrument's

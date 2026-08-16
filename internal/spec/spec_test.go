@@ -8611,6 +8611,15 @@ func TestPhase1Files(t *testing.T) {
 	//     named to one numbered blocker, attribution read off the engine's own output rather than
 	//     asserted, and repealed by the blocker landing rather than by a second amendment.
 	//
+	// **The 142 base is still a bare count, deliberately and with a date on it.** Only its 38
+	// alignment members are named; the other 104 — limits, duplicate export names, constant
+	// expressions — are carried as a number, and the argument above applies to them word for word.
+	// Scott declined to extend the naming now and flagged the residual for the PR that drains this
+	// class (#306): when the alignment members leave, what remains inside 142 is worth the same look,
+	// because a base that has stopped having a documented majority is a count agreeing with any 104.
+	// Noted at #306 as well as here, since an intention in a comment is not a tripwire and the PR that
+	// makes the residual visible is where a reader will be standing. (Note: Scott, PR #307.)
+	//
 	// The ledger names all 54 and not only slice 2's 16, because the *domain* has to be derivable
 	// for either direction to mean anything: it is "every admission attributed to the alignment
 	// message", read from the bucket key. Naming only the sixteen would have left the check needing
