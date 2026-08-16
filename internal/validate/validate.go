@@ -322,7 +322,7 @@ type Arity struct {
 // section." Limits and the data segments' memory index stopped being later slices' here; the rest
 // of that list still is, and module()'s table is now where it is recorded.
 func Module(m *binary.Module) (*Info, error) {
-	if err := module(m); err != nil {
+	if err := modulePre(m); err != nil {
 		return nil, err
 	}
 	info := &Info{Funcs: make([]FuncInfo, len(m.Funcs))}
@@ -332,6 +332,11 @@ func Module(m *binary.Module) (*Info, error) {
 			return nil, fmt.Errorf("func %d: %w", i, err)
 		}
 		info.Funcs[i] = fi
+	}
+	// `check_module` checks the exports *last*, after every body (valid.ml:1168-1169). See
+	// moduleExports on why that placement is observable and therefore not ours to tidy.
+	if err := moduleExports(m); err != nil {
+		return nil, err
 	}
 	return info, nil
 }

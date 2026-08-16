@@ -6989,7 +6989,7 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	// The 12 wrong-message rows are 10 board-wide non-validator ones plus this lane's 2, which is why
 	// `validateMismatchCeiling` reads 0 on the default board while this lane keeps a pair. Stated
 	// because the two figures look like a disagreement and are two different populations.
-	const allOnPassFloor = 64676
+	const allOnPassFloor = 64708
 	boardBound(t, "allOnPassFloor", totalPass, allOnPassFloor, boardBoundSlack, floorBound,
 		"a gated feature regressed, which the Gated==0 assertion above cannot see: with every "+
 			"gate on, a broken feature turns a pass into a fail and leaves Gated at zero")
@@ -8889,7 +8889,7 @@ func TestPhase1Files(t *testing.T) {
 	// and `memory.grow` was taken during the work and accounts for the difference between 350 and 358.
 	// So the pre-registered figure held on the population it was written about, and the extra 8 are
 	// named as a scope decision rather than folded into a delta that would then have matched nothing.
-	const validateFailCeiling = 112
+	const validateFailCeiling = 81
 	const validateDeclineCeiling = 31
 	boardBound(t, "validateDeclineCeiling", validateDeclined, validateDeclineCeiling, 0, ceilingBound,
 		"slice 1 declined more instructions than it did — either an opcode left the signature "+
@@ -8961,7 +8961,7 @@ func TestPhase1Files(t *testing.T) {
 	//
 	// A `simd_`-prefix predicate would have been a claim about the current sample rather than the
 	// space, and an under-matching trigger fails silently by construction.
-	const validateAdmitCeiling = 81
+	const validateAdmitCeiling = 50
 	boardBound(t, "validateAdmitCeiling", validateAdmitted, validateAdmitCeiling, 0,
 		ceilingBound,
 		"the validator accepted an invalid module it used to refuse. This is the accept direction: "+
@@ -9496,7 +9496,7 @@ func TestPhase1Files(t *testing.T) {
 	//
 	// The all-on lane takes 552 where this one takes 358, and the 194-vector gap is attributed per
 	// file at `allOnPassFloor`.
-	const passFloor = 60786
+	const passFloor = 60817
 	boardBound(t, "passFloor", totalPass, passFloor, boardBoundSlack, floorBound,
 		"a regression in a grammar that used to answer, or the corpus moved")
 }

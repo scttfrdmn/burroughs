@@ -4,6 +4,7 @@ package validate
 
 import (
 	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
@@ -931,10 +932,33 @@ func messageKeyedPointCitations(tb testing.TB, message string, wantSites, wantPo
 
 // citationFiles is the package's non-test source, which is the domain both citation checks walk.
 //
-// Listed rather than globbed for the reason the range check below needs: every file here has been
-// read for what its citations *are*, and a new file arriving should fail the range count and get
-// that reading rather than be swept in silently.
-var citationFiles = []string{"align.go", "sig.go", "vec.go", "validate.go"}
+// **It was a four-name list under that same sentence, and the sentence was false.** `align.go`,
+// `sig.go`, `vec.go` and `validate.go` were named; `bulk.go`, `instr.go`, `stack.go` and — since the
+// limits slice — `module.go` were not, so 26 of the package's 59 reference citations sat outside an
+// instrument whose doc comment called its domain "the package's non-test source". The defence for
+// enumerating was that "a new file arriving should fail the range count and get that reading rather
+// than be swept in silently", and that is exactly what the enumeration cannot do: the count is
+// summed *over the list*, so a file not on the list contributes nothing and moves no pin. A guard
+// whose trigger predicate under-matches its space fails silently by construction, and this one
+// under-matched by half. (Grave: #333.)
+//
+// Derived now, so the trigger is sound: a new file's citations join the totals, both pins move, and
+// the read the old comment asked for is what re-pinning them requires. `packageSentinels` widens with
+// it, which is its own repair — `module.go`'s three sentinels were invisible to every message-keyed
+// check in this file for as long as the list omitted the file that declares them.
+var citationFiles = func() []string {
+	ents, err := filepath.Glob("*.go")
+	if err != nil {
+		panic(err)
+	}
+	var files []string
+	for _, f := range ents {
+		if !strings.HasSuffix(f, "_test.go") {
+			files = append(files, f)
+		}
+	}
+	return files
+}()
 
 // docBlock is one leading-`//` comment run, its point citations, and the reference messages its
 // subject declaration produces.
@@ -1102,13 +1126,22 @@ func TestReferenceRangeCitationsAreWellFormed(t *testing.T) {
 			}
 		}
 	}
-	// Nine: vec.go's four section/rationale comments (:885-937, :906-908, :938-955, :663-686),
-	// checkVecBinaryRule's `check_vec_binop` (:373-378), validate.go's `lookup` (:41-42) and its
-	// package doc's `Select (Some ts)` (:442-446, slice 4/#294), and align.go's two — the file
-	// header's `check_memop` (:380-394) and `checkOffset`'s own offset bound (:390-392, #310), which
-	// is a sub-range of it and cited separately because the rule the function implements is the
-	// citation a reader of that function needs.
-	const wantRanges = 9
+	// Twenty-seven, by file, each read when the domain stopped being a four-name list:
+	//
+	//	align.go   :380-394 `check_memop`, :390-393 checkOffset's own bound (#310)
+	//	bulk.go    :641-647 `TableInit`'s two element types, :618-651 the table arms as a region
+	//	instr.go   :470-475 `BrTable`, :442-446 `Select (Some ts)`, :131-136 `check_valtype`
+	//	module.go  :96-105 `check_limits`, :104-105 its shared min/max message, :200-208 and :210-218
+	//	           the two type checks, :202-206 the memory ranges, :40-49 the `lookup` family and
+	//	           :40-42 `lookup` itself, :1151-1164 `check_module`'s pre-body phases, :1073-1084
+	//	           `check_datamode`, :1128-1137 `check_export`, :1142-1149 `check_names`
+	//	sig.go     (none: its one citation is a point)
+	//	stack.go   :966-972 `check_block`'s end-of-block check
+	//	validate.go :41-42 `lookup`, :442-446 `Select (Some ts)` (slice 4/#294), :1168-1169 the
+	//	           export phase's placement after every body
+	//	vec.go     :885-937, :906-908, :938-955, :663-686 four section/rationale comments, :373-378
+	//	           `check_vec_binop`
+	const wantRanges = 27
 	if ranges != wantRanges {
 		t.Errorf("checked %d range citation(s) across %v, want %d — recount and re-pin, and if a "+
 			"file was added to citationFiles, read its point citations too",
@@ -1226,7 +1259,21 @@ func TestReferenceRangeCitationsContainTheirSubjectsSite(t *testing.T) {
 	// Both pinned, for the reason every count in this file is — a check over no ranges passes without
 	// asserting anything — and pinned *separately* so a message the reference stops writing verbatim
 	// moves a range from the checked column into the excused one loudly.
-	const wantKeyed, wantResidue = 2, 1
+	// Five keyed and eight residue once the domain became the whole package. The keyed ones are
+	// align.go:148 (`offset out of range` inside :390-393), instr.go:454 (select's arity message inside
+	// :442-446), vec.go:316 (`invalid lane index` inside :373-378), and module.go's two — both blocks
+	// naming `size minimum must not be greater than maximum`, which the reference does write verbatim
+	// at :104-105.
+	//
+	// **The residue is where the newly-covered files landed, and it is a fact about the reference, not
+	// a gap.** `memory size must be at most `, `table size must be at most `, `duplicate export name "`
+	// and every `unknown <category> ` are *built* — the reference concatenates a head with a range text,
+	// a quoted name, or a category, so no line carries the sentinel's string as a complete literal and
+	// no range can be said to contain it. Those messages are not thereby unchecked: the head of each is
+	// read straight out of the reference by `TestLimitsRangesMatchTheReference` and by the message-keyed
+	// point checks, which is the stronger instrument. Residue is counted so that a message the reference
+	// *starts* or *stops* writing verbatim moves a range between the columns loudly.
+	const wantKeyed, wantResidue = 5, 8
 	if keyed != wantKeyed || residue != wantResidue {
 		t.Errorf("checked %d keyed range citation(s) and excused %d as constructed-message residue "+
 			"across %v, want %d and %d — recount and re-pin. A range becomes keyable when its "+

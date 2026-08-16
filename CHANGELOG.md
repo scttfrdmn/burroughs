@@ -21,6 +21,28 @@ weakly-ordered platform.
 
 ### Added
 
+- **The export phase: `check_export` and `check_names`.** Every export's index resolves against its
+  own index space, then the names are checked for duplicates — the reference's sequence
+  (`valid.ml:1128-1137`, `:1142-1149`, ordered at `:1168-1169`). This was the largest single-file
+  admission bucket on the board: **`exports.wast` 62/93 → 93/93**, all 31 fails, of which 19 were the
+  one `duplicate export name` rule and the other 12 were three each of `unknown
+  function`/`table`/`memory`/`global`. **`validateAdmitCeiling` 81 → 50**; default 60786 → **60817
+  pass** / 239 → **208 fail** / 66 unsupported unmoved / 4053 gated unmoved, all-gates-on 64676 →
+  **64708 pass** / 338 fail.
+  - **Two orderings, both the reference's and both invisible to the board.** Exports are checked
+    *after* every function body, so `Module` calls the export phase last and `module` became
+    `modulePre`; and every index resolves before any name is compared, so a module with a duplicate
+    name *and* a missing index reports the index. Fusing the two loops moves neither lane, so unit
+    rows in `export_test.go` are what hold the second one.
+  - **The memory arm delegates to `memoryExists` instead of spelling the lookup again**, and replacing
+    the delegation with a hand-rolled copy also moves neither lane — the two agree today, which is the
+    whole hazard. A unit row now asserts the same missing memory renders identically through the export
+    phase and the data-segment phase, in both of that function's two message branches.
+  - **The tag arm is unfalsifiable by the corpus in both lanes**, exactly as the i64 ranges were one
+    slice ago: making it accept unconditionally moves nothing even with every gate on. It gets the only
+    instrument available, a direct assertion of both directions, rather than an arm that looks like its
+    four falsifiable siblings.
+
 - **Module-level validation — the pass that was never there.** `validate.Module` walked the code
   section and nothing else, so every rule `check_module` runs *before* the function bodies had no
   implementation at all: limits on defined and imported memories and tables, and the memory index an
@@ -787,6 +809,15 @@ weakly-ordered platform.
   tail-call gate's own 0x12/0x13 when it lands.
 
 ### Changed
+
+- **The citation instrument's domain is derived, not enumerated** (grave
+  [#333](https://github.com/scttfrdmn/burroughs/issues/333)). `citationFiles` named four files under a
+  doc comment calling itself "the package's non-test source"; four others held 26 of the package's 59
+  `valid.ml` citations, and `module.go`'s sentinels were invisible to every message-keyed check. The
+  enumeration's defence — a new file trips the pinned count — is the one thing an enumerated domain
+  cannot do, since the count sums over the list. Re-pinned with a read of every newly covered range: 9
+  → 27 ranges, keyed/residue 2/1 → 5/8, and five of the descriptions I first wrote from inference were
+  wrong about which reference function they name, corrected against the reference before landing.
 
 - **The CI verdict is read from one chainless command.** `CLAUDE.md`'s "Waiting on CI" now says to
   take the conclusion from `gh run view "$RUN" --json conclusion` and never off the end of a watch
