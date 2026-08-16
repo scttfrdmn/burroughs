@@ -69,13 +69,51 @@ const (
 	// becomes decoration the first time someone needs room
 	//
 	// That is `passFloor`'s lesson (#285) applied to this file. So, explicitly: **38400 bytes is a
-	// budget on what every session must read before it can do anything.** `CLAUDE.md` is loaded
-	// into context each turn, so its size is a standing tax on every task in the repo — it is
-	// subtracted from the room available for the *code* under discussion. What the ceiling protects
-	// is therefore not tidiness and not a line count: it is the agent's capacity to hold an
-	// interpreter's decoder, its validator, and a spec vector in mind at once, which is the work
-	// the file exists to govern. An index that has eaten that room governs a session that can no
+	// budget on the largest component of what every session must read before it can do anything.**
+	// `CLAUDE.md` is loaded into context each turn, so its size is a standing tax on every task in
+	// the repo — it is subtracted from the room available for the *code* under discussion. What the
+	// ceiling protects is therefore not tidiness and not a line count: it is the agent's capacity to
+	// hold an interpreter's decoder, its validator, and a spec vector in mind at once, which is the
+	// work the file exists to govern. An index that has eaten that room governs a session that can no
 	// longer do the thing being governed.
+	//
+	// # The domain is two files and this sentence said one — *coverage is a claim*, with the ceiling
+	// as its own subject (#319)
+	//
+	// The sentence above read, until #319:
+	//
+	//	**38400 bytes is a budget on what every session must read before it can do anything.**
+	//
+	// That is a claim about the **consumer's** extent, and the consumer was never asked. Asked now —
+	// by reading the assembled context block, which names its own sources, rather than by reasoning
+	// about the loader — a session in this repo loads **two** files under that heading:
+	//
+	//   - `CLAUDE.md`, 37886 bytes, which is this ceiling's whole domain and the ledger's.
+	//   - a per-project memory index under `$HOME/.claude/projects/…/memory/MEMORY.md`, 5793 bytes,
+	//     outside the module and in no instrument's domain.
+	//
+	// The extent is **43679 bytes**, of which this bound covers 86.7%, and **the extent already
+	// exceeds the budget** — by 5279 bytes — while every instrument here is green. Nothing in this
+	// file is wrong about its own subject: the ledger reconciles `CLAUDE.md`'s rows against
+	// `os.Stat` to the byte, exactly as it claims. That is the shape, not an exception to it. A green
+	// control plus a domain nobody stated is indistinguishable from a green control over the real
+	// thing, and the tell was not available from inside — it took a consumer-side figure that the two
+	// green instruments could not account for (Scott, this session) before anyone asked what the
+	// domain was.
+	//
+	// The second half is *reconcile an extent, never floor it* (#317) turned on the instrument that
+	// was minted under it three PRs earlier. The extent has two ends; one is reconciled to the byte
+	// and the other is not measured at all, and the unmeasured end is **monotone** — a memory index
+	// grows one line per memory and memories are only ever added. It also cannot be measured from
+	// here: the path embeds a specific `$HOME` and exists on neither CI runner, so a control that
+	// read it would skip in CI, and *a skip is not a verdict*.
+	//
+	// **Deliberately not fixed by building something.** Partitioning the real extent means an
+	// instrument reaching outside the module into a user-specific path, which is Scott's call and is
+	// flagged as one on #319 with its options rather than taken here. The remedy applied is the one
+	// he ordered for `pipefail-check`'s own boundary on PR #317 — *state the boundary, build
+	// nothing* — and the boundary is stated in the sentence this section corrects rather than only in
+	// the issue, because a domain claim belongs where the number is read.
 	//
 	// Two consequences, both operative:
 	//

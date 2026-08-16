@@ -480,8 +480,30 @@ func classify(n node, src []byte) Command {
 		// board from an engine defect. The wat reader is right to reject `(module
 		// definition …)`; it was never asked a fair question.
 		//
-		// They stay `unsupported` with the head recorded, so the column names them. Phase
-		// v3 (component model) is where `definition`/`instance` become answerable.
+		// They stay `unsupported` with the head recorded, so the column names them.
+		//
+		// **The sentence that stood here parked them in the wrong phase**, and the reference's
+		// own grammar is what refutes it. It read:
+		//
+		//	Phase v3 (component model) is where `definition`/`instance` become answerable.
+		//
+		// `definition_opt` is a modifier on the **core** `script_module` production
+		// (parser.mly:1417-1428) and `instance` is a core production beside it (:1437-1444);
+		// `instance.wast` is in `test/core/`, not in a proposal directory. Nor is the purpose
+		// component-model: `memory.wast:8` is `(module definition (memory 65536))` sitting in a
+		// run of nine ordinary `(module (memory …))` commands, and `table.wast:9` is
+		// `(module definition (table 0xffff_ffff funcref))` — upstream writes `definition` there
+		// exactly because the module must be asserted **valid without being instantiated**, a
+		// 4 GiB memory and a 4 G-slot table being valid and unallocatable. That is
+		// decode-plus-validate with no interpreter, which is v0 work and not v3's.
+		//
+		// So these 9 are a **harness widening**, tracked on #320 with the rest of the column's
+		// census: a `definition` form validates and does not instantiate, an `instance` form
+		// instantiates a named definition, and 0017's registry is where the second one's state
+		// already lives. What the wrong premise cost was not the sentence — it was 9 vectors
+		// filed three rungs up the ladder, where nothing in v0 would come looking. *Comments and
+		// ADRs are testimony too, and where prose and the reference's executable disagree, the
+		// executable outranks.*
 		if kw := moduleFormKeyword(n); kw == "definition" || kw == "instance" {
 			return Command{Kind: KindUnsupported, Line: n.line, Head: head}
 		}
@@ -2697,14 +2719,27 @@ func (s *Script) run(opts runOpts) *Result {
 			head := c.Head
 			if head == "" {
 				// A command with no head atom — a list whose first element is itself a
-				// list or a string, as in annotations.wast's `(@custom ...)` forms.
-				// Measured, not assumed: three such commands across the vendored suite,
-				// all in annotations.wast, which the derived selector does not currently
-				// put on the board. So this branch is live-but-unexercised by today's
-				// corpus and stays because the corpus moves — TestUnsupportedIsBucketed-
-				// ByCommand pins that no key is ever empty, which is the failure this
-				// placeholder prevents: an unlabelled entry in a work-plan column is the
-				// one nobody investigates.
+				// list or a string, as in annotations.wast's `((@a) module …)` forms,
+				// where an annotation precedes the head.
+				//
+				// **Three of them, and they are on the board.** The clause that stood here
+				// said otherwise:
+				//
+				//	all in annotations.wast, which the derived selector does not currently
+				//	put on the board. So this branch is live-but-unexercised by today's
+				//	corpus
+				//
+				// True when written and stale since: the board prints `annotations.wast:
+				// 71/71 pass, 3 unsupported` with `3 (no head atom)`, so the selector does
+				// put it on the board and this branch scores all three. Quoted rather than
+				// deleted, because it was a coverage claim sitting in the arm whose own
+				// coverage it described — and a stale one reads as a live measurement.
+				// Counted in #320's census, drainable by teaching classify to skip
+				// annotation nodes when it looks for the head.
+				//
+				// The placeholder stays regardless: TestUnsupportedIsBucketedByCommand
+				// pins that no key is ever empty, which is the failure it prevents — an
+				// unlabelled entry in a work-plan column is the one nobody investigates.
 				head = "(no head atom)"
 			}
 			r.UnsupportedByHead[head]++
