@@ -376,7 +376,8 @@ bullet carries operative text has that text nowhere else.
 - **Sweep after a grave.** — [graves-and-sweeps](docs/laws/graves-and-sweeps.md#sweep-after-a-grave)
 - **Lessons are indexed by shape, not by file, so the sweep runs backwards too.** — [graves-and-sweeps](docs/laws/graves-and-sweeps.md#lessons-are-indexed-by-shape-not-by-file-so-the-sweep-runs-backwards-too)
 - **Floors bound the catastrophic case; only an exact count sees a small silent loss.** — [controls](docs/laws/controls.md#floors-bound-the-catastrophic-case-only-an-exact-count-sees-a-small-silent-loss)
-- **A total is not a ledger: where items are enumerable, assert per item and let the total be a checksum on the ledger rather than a claim in its own right.** — [controls](docs/laws/controls.md#a-total-is-not-a-ledger-where-items-are-enumerable-assert-per-item-and-let-the-total-be-a-checksum-on-the-ledger-rather-than-a-claim-in-its-own-right)
+- **Reconcile an extent, never floor it.** — [controls](docs/laws/controls.md#reconcile-an-extent-never-floor-it)
+- **A total is not a ledger.** — [controls](docs/laws/controls.md#a-total-is-not-a-ledger)
 - **A suspiciously clean result is a tell, and *exactly zero* is the cleanest one.** — [controls](docs/laws/controls.md#a-suspiciously-clean-result-is-a-tell-and-exactly-zero-is-the-cleanest-one)
 - **A control isn't born until it has been watched die.** — [controls](docs/laws/controls.md#a-control-isnt-born-until-it-has-been-watched-die)
 - **A status field is a citation to an approval, and approvals are artifacts with provenance.** —

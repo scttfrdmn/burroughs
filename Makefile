@@ -106,6 +106,29 @@ check:
 # In `check` because that is where the cost of being wrong lands: every swallowed pipe head in
 # this file — and the `make bench` build failure that started this (grave #289) — is invisible
 # on a green board, which is the one place an instrument's absence must not be free.
+#
+# # What this does not cover, by design: ad-hoc interactive commands
+#
+# The domain is **two configured shells** — recipes in this file, via `SHELL` above, and `run:`
+# blocks in `ci.yml`, via `defaults.run.shell`, which that workflow's own step asserts by running
+# this target beside its own `false | true`. Both are places where a pipe is *written once and read
+# by everyone afterwards*, which is what makes a gate the right instrument for them.
+#
+# A command typed at a prompt during a session is **outside that domain on purpose, and there is no
+# gate that could be inside it.** The recurring specimen is a compound command whose last link is a
+# counting filter — `docker run … go test … | grep -c FAIL` — where `grep` exits 1 on *zero matches*,
+# so a clean run reports failure and the reported exit code is an opinion about matches rather than
+# about tests. That is *verdict channel and mechanism channel are different instruments* arriving
+# through the shell, and `pipefail` would not have helped: nothing in that pipeline failed. The head
+# succeeded, the tail's convention differs from the caller's expectation, and no setting reconciles
+# them.
+#
+# So this is stated rather than gated. Three instances of the same habit earn a sentence at the
+# checker saying where the checker's writ ends, not a fourth mechanism: the remedy is to put the
+# verdict-bearing command last, or to capture its status before filtering. Written here so the next
+# recurrence reads as a **known boundary** rather than as a gap someone should close — an
+# instrument's domain being an assertion it cannot check about itself, which is the one thing it can
+# do about that. (Ruling: Scott, PR #317 — *"state the boundary, build nothing."*)
 pipefail-check:
 	@if false | true; then \
 		echo "recipes are NOT running with pipefail: a pipe here discards its head's exit"; \
