@@ -201,7 +201,7 @@ func TestAssertInvalidDestinationLedgerCloses(t *testing.T) {
 		{
 			name: "already on the board (254 files) — the 2591 that left `unsupported`",
 			got:  already,
-			want: tally{total: 2591, pass: 2008, declined: 30, accepted: 81, mismatch: 10, gated: 462, precondition: 0},
+			want: tally{total: 2591, pass: 2039, declined: 30, accepted: 50, mismatch: 10, gated: 462, precondition: 0},
 			why: "the destination split IS the engine's contribution: 1615 passes is the reward, " +
 				"386 named declines are the next slices' work plan, 103 admissions are the " +
 				"accept-direction stratum, 10 are wrong-message on a right refusal, and 460 " +
@@ -254,7 +254,15 @@ func TestAssertInvalidDestinationLedgerCloses(t *testing.T) {
 				"and none becoming right. Two slices, two single-destination conversions, opposite " +
 				"destinations, and this ledger tells them apart without being told which is which. It " +
 				"also closes the 8 the sentence above named as owed: 8 of these 30 are those 8, so the " +
-				"17-head slice's 7-earned-8-owed settled at 15 verdicts across two PRs",
+				"17-head slice's 7-earned-8-owed settled at 15 verdicts across two PRs. " +
+				"**The export slice is the second single-destination correctness gain and the larger " +
+				"one**: `accepted` 81 → 50, `pass` 2008 → 2039, again with `declined`, `mismatch`, " +
+				"`gated` and `total` all unmoved. Same shape as the entry above and worth keeping as a " +
+				"separate entry rather than merging the two, because the pair now says something " +
+				"neither says alone — two consecutive slices in the *same* direction means the " +
+				"remaining admissions are a work plan rather than a floor, and the census names what " +
+				"is left. 19 of the 31 are one rule (`check_names`), which is the largest single-rule " +
+				"reward this row has recorded",
 		},
 		{
 			name: "arrived with the arm (2 files) — corpus admission, not verdicts earned",
@@ -339,9 +347,9 @@ func TestAssertInvalidDestinationLedgerCloses(t *testing.T) {
 	// keyed on the literal `assert_invalid`, the eight new admissions would have fallen through to
 	// the unrecognized-bucket arm above — which is the failure this identity is *for*: two paths
 	// disagreeing because one stopped recognizing a population, not because the engine moved.
-	if got := already.declined + fresh.declined + already.accepted + fresh.accepted; got != 112 {
-		t.Errorf("validate-stratum declines + admissions = %d, want 112 to match "+
-			"validateDeclineCeiling (31) + validateAdmitCeiling (81). Those come from the stratum "+
+	if got := already.declined + fresh.declined + already.accepted + fresh.accepted; got != 81 {
+		t.Errorf("validate-stratum declines + admissions = %d, want 81 to match "+
+			"validateDeclineCeiling (31) + validateAdmitCeiling (50). Those come from the stratum "+
 			"field and the arm's flags and this from the bucket keys; they must agree or one of them "+
 			"is describing a population the other is not. The stratum's third part "+
 			"(validateMismatchCeiling, 0) is deliberately outside this identity: the mismatch row "+
@@ -353,12 +361,17 @@ func TestAssertInvalidDestinationLedgerCloses(t *testing.T) {
 			"board-wide where the 2591 above is the converted group alone, so the two are cross-checks "+
 			"of different populations and not two halves of one subtraction", got)
 	}
-	if got := already.pass + fresh.pass; got != 2127 {
-		t.Errorf("assert_invalid passes = %d, want 2127 to match passFloor's account — 1023 at "+
+	if got := already.pass + fresh.pass; got != 2158 {
+		t.Errorf("assert_invalid passes = %d, want 2158 to match passFloor's account — 1023 at "+
 			"slice 1, of which it names 18 as answered from above the validator, plus slice 2's 648, "+
-			"slice 3's 58, #294's 2, slice 5's 358 (356 converted + 2 from the arrived group), and "+
+			"slice 3's 58, #294's 2, slice 5's 358 (356 converted + 2 from the arrived group), "+
 			"the 17-head slice's 7 — the only entry in this sum that raised the ledger's `total` "+
-			"instead of converting inside it", got)
+			"instead of converting inside it — the limits slice's 30 and the export slice's 31. "+
+			"**That sums to 2157 against an actual 2158, and the one-vector residue is stated rather "+
+			"than absorbed:** it predates both of the last two slices (the account read 2096 against a "+
+			"pinned 2097 before either), so it belongs to an entry above and not to them. Filed as a "+
+			"loose end as #334; an unexplained +1 folded into a named entry would make one of these "+
+			"figures a fudge and the whole account unreadable", got)
 	}
 	// The residual, and the reason it is asserted rather than logged: it is the *complement* of
 	// this ledger's subject, so it is where a command goes when `classify` stops recognizing one.

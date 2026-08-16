@@ -30,6 +30,20 @@ var (
 	// ErrLimitsMinMax is the third `check_limits` failure and the one the two callers *share*
 	// verbatim, which is why it is one sentinel where the range messages are two (valid.ml:104-105).
 	ErrLimitsMinMax = errors.New("size minimum must not be greater than maximum")
+
+	// ErrDuplicateExport is `check_names`' only failure (valid.ml:1142-1149), and the reference
+	// puts the offending name in quotes — `duplicate export name "a"`. The corpus matches the
+	// head, so the quoting is reproduced because the reference does it and not because a vector
+	// needs it; %q is Go's quoting rather than OCaml's `string_of_name`, which differs on
+	// non-ASCII names and cannot differ on the matched head.
+	ErrDuplicateExport = errors.New("duplicate export name")
+
+	// ErrUnknownTag is the tag arm of `check_export`, and the tenth category of the reference's
+	// one `lookup` function (valid.ml:40-49) — the whole family is `"unknown " ^ category ^ " "
+	// ^ index`, which is why every sentinel here reads that way. Reachable only with the EH gate
+	// on; written because the arm is one of five and omitting it would be a silent accept, not a
+	// deferral.
+	ErrUnknownTag = errors.New("unknown tag")
 )
 
 // The two address-type ranges per limits kind, from valid.ml:202-206 and 212-216 — the reference's
@@ -95,7 +109,14 @@ func checkTableType(tab binary.Table) error {
 	return checkLimits(tab.Limits, tabRangeI32, ErrTableSize, "2^32-1 for i32")
 }
 
-// module checks the module-level rules, in `check_module`'s order (valid.ml:1151-1165).
+// modulePre checks the module-level rules that run *before* any function body, in
+// `check_module`'s order (valid.ml:1151-1164). Its other half is moduleExports.
+//
+// **The split is the reference's own, not a convenience.** `check_module` builds its context from
+// nine phases, then walks every body, then checks the start function and the exports (l.1165-1169).
+// So the two halves cannot be one function without either moving the export phase ahead of the
+// bodies or moving the bodies into this file, and the first of those is observable: a module with an
+// ill-typed body and a bad export must report the body.
 //
 // # Why the order is transcribed rather than chosen
 //
@@ -117,13 +138,18 @@ func checkTableType(tab binary.Table) error {
 //	check_global    globals                   — not this slice (`constant expression required`)
 //	check_data      data segments             — MEMORY INDEX ONLY (not the offset's const check)
 //	check_elem      element segments          — not this slice (`unknown table`)
-//	check_func_body every body                — pre-existing, below
-//	check_start     the start function        — not this slice
-//	check_export    exports + check_names     — not this slice (`unknown memory`, `duplicate export name`)
+//	check_func_body every body                — pre-existing, in Module between the two halves
+//	check_start     the start function        — not this slice, and not an admission either: its
+//	                                            three vectors are refused above the validator with
+//	                                            the wrong message, so they sit in the board-wide
+//	                                            mismatch stratum and a rule here would have to take
+//	                                            the refusal *over* rather than supply it
+//	check_export    exports                   — moduleExports, below
+//	check_names     export names              — moduleExports, below
 //
 // **Each "not this slice" line is a live admission bucket, not a hypothetical.** The board's
 // accepted census is the work plan, and these are its remaining rows.
-func module(m *binary.Module) error {
+func modulePre(m *binary.Module) error {
 	// check_import → check_externtype → check_memorytype / check_tabletype. An imported memory's
 	// limits are checked by the same rule as a defined one's, on the same descriptor fields, and
 	// `memory.wast:90-100` is the suite asserting exactly that: three vectors whose only
@@ -193,4 +219,81 @@ func memoryExists(m *binary.Module, idx uint32) error {
 		return fmt.Errorf("%w %d (module declares %d)", ErrUnknownMemory, idx, total)
 	}
 	return fmt.Errorf("%w %d (module declares no memory)", ErrUnknownMemory, idx)
+}
+
+// moduleExports is `check_export` over every export followed by `check_names` over the names it
+// produced — the reference's l.1168-1169, in that sequence.
+//
+// # Two orderings, both transcribed
+//
+// The first is why this is a separate function from modulePre: exports are checked **after every
+// function body**, so a module with an ill-typed body and an unknown export index reports the body.
+//
+// The second is why this is two loops and not one: the reference maps `check_export` across *all*
+// exports and only then hands the resulting names to `check_names`, so a module whose duplicate-named
+// export also names a missing function reports `unknown function`, never `duplicate export name`.
+// A single loop that compared each name as it went would invert that on exactly the modules where
+// both defects appear. **Whether the corpus can see it is a separate question from whether it is the
+// rule, and the answer is measured, not assumed:** fusing the loops moves neither lane — 60817/208
+// default and 64708/338 all-on, either way — so this ordering is transcribed on the reference's
+// authority alone, and export_test.go's M1 row is the only instrument holding it.
+func moduleExports(m *binary.Module) error {
+	for i := range m.Exports {
+		ex := &m.Exports[i]
+		if err := exportExists(m, ex.Kind, ex.Index); err != nil {
+			return fmt.Errorf("export %d (%q): %w", i, ex.Name, err)
+		}
+	}
+	seen := make(map[string]struct{}, len(m.Exports))
+	for i := range m.Exports {
+		name := m.Exports[i].Name
+		if _, dup := seen[name]; dup {
+			return fmt.Errorf("%w %q", ErrDuplicateExport, name)
+		}
+		seen[name] = struct{}{}
+	}
+	return nil
+}
+
+// exportExists is `check_export`'s five arms (valid.ml:1128-1137) with the externtype thrown away —
+// the same relationship memoryExists has to `memory c x`, and for the same reason: this phase needs
+// only whether the index resolves.
+//
+// Each arm's message is the one that index space already emits elsewhere in this package, because an
+// error's text is a property of the rule and not of the phase that happened to find the violation.
+// That is why memory delegates rather than being spelled again here: `unknown memory` has a
+// two-branch message of its own (`module declares no memory`), and a second copy of it in this switch
+// is a copy that can drift.
+func exportExists(m *binary.Module, kind binary.ExternKind, idx uint32) error {
+	switch kind {
+	case binary.ExternFunc:
+		return indexInScope(idx, m.ImportedFuncs()+len(m.Funcs), ErrUnknownFunc)
+	case binary.ExternTable:
+		return indexInScope(idx, m.ImportedTables()+len(m.Tables), ErrUnknownTable)
+	case binary.ExternMemory:
+		return memoryExists(m, idx)
+	case binary.ExternGlobal:
+		return indexInScope(idx, m.ImportedGlobals()+len(m.Globals), ErrUnknownGlobal)
+	case binary.ExternTag:
+		return indexInScope(idx, m.ImportedTags()+len(m.Tags), ErrUnknownTag)
+	}
+	// Unreachable through the decoder, which refuses any sixth kind byte before a Module exists —
+	// and therefore loud rather than a bare `return nil`. A silent accept here would make a future
+	// proposal's extern kind read as *checked* the moment the decoder learned to admit it, which is
+	// the under-matching predicate that fails by construction.
+	return fmt.Errorf("export kind %#x is not one of check_externtype's five arms", byte(kind))
+}
+
+// indexInScope is the reference's `lookup` (valid.ml:40-42) for the index spaces whose engine message
+// already reads `(%d in scope)` — funcTypeAt's and globalAt's tail, kept identical here so the same
+// rule reads the same way whichever phase reports it.
+//
+// It takes the total rather than the two halves because the import-then-defined split matters to
+// *resolution* and not to *existence*: only the boundary of the space decides this question, and the
+// two accessors that compute it are the module's own.
+func indexInScope(idx uint32, total int, sent error) error {
+	if int(idx) < total {
+		return nil
+	}
+	return fmt.Errorf("%w %d (%d in scope)", sent, idx, total)
 }
