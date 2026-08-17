@@ -314,8 +314,8 @@ func (v *validator) endBlock() error {
 //
 // # Against the stack, and not against each other — which is the whole rule
 //
-// The obvious reading is that the arms must agree with the default, and it is wrong. The
-// reference (`valid/valid.ml:470-475`) peeks the operand types *first* and matches everything
+// The obvious reading is that the arms must agree with the default, and it is wrong. The reference's
+// `BrTable` arm (`valid/valid.ml:470-475`) peeks the operand types *first* and matches everything
 // against them:
 //
 //	let n = List.length (label c x) in
@@ -451,8 +451,8 @@ func (v *validator) selectUnannotated() error {
 	return nil
 }
 
-// selectAnnotated is `select` with a result-type annotation — `valid.ml:442-446`, the last
-// instruction in the single-byte opcode space slice 1 declined (#294).
+// selectAnnotated is the `Select (Some ts)` arm (`valid.ml:442-446`) — `select` with a result-type
+// annotation, the last instruction in the single-byte opcode space slice 1 declined (#294).
 //
 //	| Select (Some ts) ->
 //	  require (List.length ts = 1) e.at

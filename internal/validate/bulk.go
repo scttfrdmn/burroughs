@@ -60,7 +60,8 @@ import (
 //
 // # The reference's two `type mismatch` messages have their operands transposed
 //
-// `valid.ml:641-647` binds `t1` from the *table* and `t2` from the *segment*, then reports
+// The `TableInit` arm (`valid.ml:641-647`) binds `t1` from the *table* and `t2` from the *segment*,
+// then reports
 // `"element segment's type " ^ string_of_reftype t1 ^ " does not match table's element type " ^
 // string_of_reftype t2` — each label attached to the other one's type. `:632-639` does the same
 // with source and destination. The `require` itself is right (`match_reftype c.types t2 t1`:

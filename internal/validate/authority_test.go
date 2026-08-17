@@ -6,8 +6,10 @@ import (
 	"go/ast"
 	goparser "go/parser"
 	"go/token"
+	"maps"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -77,7 +79,9 @@ import (
 // instrument that reads verdicts, whichever direction it reads them in — the corpus does not disagree
 // with it, it declines to ask. `offset_test.go` builds the discriminating modules by hand for exactly
 // that reason, and its tripwire watches the *reference's* text, since the suite has no channel
-// through which this decision could ever report itself wrong. (Ruling: Scott, #310.)
+// through which this decision could ever report itself wrong. (Ruling: Scott, #310.) **Naming it
+// separately turned out to be the start of a register rather than the whole treatment** — three more
+// slices found members of the same shape, and they are collected below as the fourth blind spot.
 //
 // # The blind spot shrank measurably for the first time, and the measurement is what says so
 //
@@ -118,6 +122,72 @@ import (
 // Recorded rather than repaired quietly because the residue treatment in #317 was asked for *on the
 // strength of this sentence* — a wrong premise about a population is the one kind of error that
 // arrives back as an instruction. (Correction: on the #317 relay.)
+//
+// # The fourth blind spot: the rules with no corpus witness at any gate setting, and there are seven
+//
+// #310's entry above named this shape — a rule the corpus does not disagree with but *declines to
+// ask about* — and named it as a single divergence. It is not one. Three consecutive slices each
+// found instances of it independently, by the same method (mutate the rule, run both lanes, read the
+// delta), and each recorded its own in its own PR's prose. **A shape named once with one instance
+// reads as an incident, so the instances are collected here**: the point of a register is that a
+// reader can ask how many of this validator's rules the board is silent about, and get a number.
+//
+// Seven, as of the export slice, counting #310's own divergence as the first — it is a member and
+// not the preamble to the list. Grouped by *what* has no witness rather than by slice, because the
+// grouping is the finding: an arm is the obvious case and it is the minority.
+//
+//   - **A reading**, and the entry that named the shape: which memory's index type `checkOffset`'s
+//     bound consults (#310). All four vectors expecting `offset out of range` declare one memory,
+//     where the two readings agree. Held by `TestReferenceStillReadsMemoryZeroForTheOffsetBound`
+//     (`offset_test.go`), which watches the reference's text because the suite has no channel.
+//   - **A value.** `memRangeI64` and `tabRangeI64` (`module.go`). Both arms are reached, and mutating
+//     the *constant* to anything between the largest valid i64 limit in the corpus and the smallest
+//     invalid one passes the entire suite in both lanes. `tabRangeI64` is stronger still: it is the
+//     full u64 domain, so no `binary.Limits` can violate it and the arm's message can never be
+//     emitted by any module at all. Held by `TestLimitsRangesMatchTheReference`, which reads the
+//     numbers out of `valid.ml`.
+//   - **An ordering, twice.** `checkLimits` tests `min <= range` before `min <= max`
+//     (`limits_authority_test.go`), and `moduleExports` resolves every index before comparing any
+//     name (`export_test.go`'s M1). Neither is observable: every min-over-max vector in the corpus
+//     has its minimum inside the range, and fusing the export loops moves neither lane. Both are
+//     transcribed from the reference on its authority alone and held by unit rows.
+//   - **An arm.** `exportExists`' tag arm (`export_test.go`'s M7). Making it accept unconditionally
+//     moves neither lane *with every gate on*, so no vector anywhere in the corpus exports a tag
+//     with an out-of-scope index. The EH gate makes the arm reachable; it does not make it sampled.
+//   - **A delegation.** `exportExists`' memory arm calls `memoryExists` instead of spelling the
+//     lookup again (`export_test.go`'s M6). A hand-rolled copy moves neither lane, which is exactly
+//     the condition under which two copies agree — the copy that drifts is not the copy written
+//     today.
+//
+// Two things this register is careful about. It is a count of the **known** members, and the
+// population is unknown by the same argument every coverage claim here carries: what produced each
+// entry was a mutation somebody chose to run, so the honest reading is "seven found by seven
+// bills", not "seven that exist". And nothing counts them mechanically, because a mutation's null
+// result is not a property of the tree that a test could read — it is a measurement. What *is* mechanical is that
+// each member has a unit row naming the mutation it stands in for, so the bills in
+// `limits_authority_test.go` and `export_test.go` are where a reader goes from this list to the
+// assertion holding each one, `offset_test.go` for the first. (Ruling: Scott, PR #335 relay —
+// accumulate the set in the one place that already exists for it, or the next slice rediscovers the
+// shape.)
+//
+// # This register is a floor, not an extent, and that is #333's shape again
+//
+// The paragraph above says "seven found by seven bills" and stops one step short of naming why that
+// is a defect rather than a caveat. **The seven were collected from the mutations somebody happened
+// to run while working on some other slice**, so the register's domain is "the rules that got
+// mutated" — and a list assembled that way can only ever agree with itself. A fourth unwitnessed arm
+// in a file nobody mutated moves no entry here, exactly as #333's total summed over the registry
+// could only ever agree with the registry. Sited beside the list rather than left implicit because
+// the failure mode is that a *growing* register reads as a census: five slices, five entries, and no
+// reader can tell collection from coverage.
+//
+// The derivation exists and has been used informally at every discovery: **an arm is unwitnessed
+// exactly when mutating it moves neither lane.** That makes the extent computable rather than
+// collectable, so what stands between this floor and an extent is a full sweep across the package's
+// arms under that predicate — filed as **#338**, deliberately deferred, because it is instrument work
+// and the counter says the next PRs are product. Cited as a tracked sweep rather than described as an
+// intention, which is *a design debt is discharged by a tripwire, never by an intention* honoured at
+// the only strength a deferral can honour it. (Ruling: Scott, PR #337 relay.)
 
 // TestUnknownCategoriesMatchTheReference is ErrUnknown*'s own promised control, in both
 // directions.
@@ -127,9 +197,12 @@ import (
 // *parsed* rather than transcribed: a renamed category fails the forward direction and a new one
 // fails the reverse.
 //
-// The reverse direction is the half that matters. Slice 1 claims seven of the ten, and the three it
-// does not claim are pinned as a literal set — so a later slice adding `tag` has to come here and
-// say so, which is the difference between a scope declaration and a gap.
+// The reverse direction is the half that matters, and it spent five slices *saying* so on a
+// mechanism it did not have. This paragraph read: "Slice 1 claims seven of the ten, and the three it
+// does not claim are pinned as a literal set — so a later slice adding `tag` has to come here and say
+// so." Phrased historically now, because #336 measured it and it was false: a slice adding `tag`
+// came, and nothing here made it say anything. What holds the claim today is the forward loop's
+// derived domain, described at its own site below.
 func TestUnknownCategoriesMatchTheReference(t *testing.T) {
 	src := testenv.RequireSpecRef(t, testenv.RefValidML)
 
@@ -157,43 +230,73 @@ func TestUnknownCategoriesMatchTheReference(t *testing.T) {
 	// Forward: every sentinel this package declares must name one of the reference's categories,
 	// spelled `unknown ` + the category and nothing else. The trailing-detail rule is a *format*
 	// question and is checked separately, below.
+	//
+	// # This loop was nine literals until #336, and the reverse direction below was decoration
+	//
+	// The list read `ErrUnknownType, …, ErrUnknownElemSegment`, and the comment on the reverse check
+	// said a later slice adding `tag` "has to come here and say so". **It did not.** The export slice
+	// declared `ErrUnknownTag`, left both this list and `wantUnclaimed` alone, and the whole file
+	// stayed green — because a sentinel absent from the literal is never *claimed*, so `tag` matched
+	// the "declared out of scope" arm exactly as before. The list's stated mechanism required the
+	// enumeration to be extended, which is the one thing an enumeration cannot make anyone do.
+	//
+	// That is `#333`'s shape one file over, and the derived sibling was already directly below: the
+	// format check reads the package's `ErrUnknown*` declarations out of the AST. So the domain here
+	// comes from source too — `packageSentinels` over the globbed non-test files — and the reverse
+	// direction now has something to be a check *of*. The candidate predicate is the union of the two
+	// halves rather than either alone: an `ErrUnknown*` name with a message that does not begin
+	// `unknown ` is a misspelling that must fail loudly, and a sentinel named something else with a
+	// message that does is still a lookup message.
+	lookupSentinels := map[string]string{}
+	for id, msg := range packageSentinels(nil) {
+		if strings.HasPrefix(id, "ErrUnknown") || strings.HasPrefix(msg, "unknown ") {
+			lookupSentinels[id] = msg
+		}
+	}
+	// Pinned exactly, on the vacuity argument the categories carry above: a derived set that shrinks
+	// makes the reverse check quietly report unclaimed categories as gaps, and one that empties makes
+	// this loop assert nothing at all.
+	const wantSentinels = 10
+	if len(lookupSentinels) != wantSentinels {
+		t.Fatalf("derived %d lookup sentinel(s) from this package's source, want %d (%v) — either a "+
+			"sentinel was removed or `packageSentinels` stopped reading a file, and both make the "+
+			"reverse direction below agree with a shorter list than the package has",
+			len(lookupSentinels), wantSentinels, sortedKeys(lookupSentinels))
+	}
+
 	claimed := map[string]bool{}
-	for _, err := range []error{
-		ErrUnknownType, ErrUnknownGlobal, ErrUnknownMemory, ErrUnknownTable,
-		ErrUnknownFunc, ErrUnknownLocal, ErrUnknownLabel,
-		// Slice 5's two arrivals. They were `wantUnclaimed`'s second and third entries, and the
-		// reverse direction below is what required this line to be added rather than allowing the
-		// sentinels to appear with the list unchanged — which is the whole of what that list buys.
-		ErrUnknownDataSegment, ErrUnknownElemSegment,
-	} {
-		msg := err.Error()
+	for id, msg := range lookupSentinels {
 		cat, ok := strings.CutPrefix(msg, "unknown ")
 		if !ok {
-			t.Errorf("%q does not begin with %q; the reference composes this message as "+
-				`"unknown " ^ category ^ " " ^ index, so the prefix is not stylistic`, msg, "unknown ")
+			t.Errorf("%s = %q, which does not begin with %q; the reference composes this message as "+
+				`"unknown " ^ category ^ " " ^ index, so the prefix is not stylistic`, id, msg, "unknown ")
 			continue
 		}
 		if !found[cat] {
-			t.Errorf("%q names category %q, which %s does not have (%v) — a sentinel spelling "+
+			t.Errorf("%s = %q names category %q, which %s does not have (%v) — a sentinel spelling "+
 				"a category the authority never uses reports a verdict no vector expects",
-				msg, cat, testenv.RefValidML, sortedKeys(found))
+				id, msg, cat, testenv.RefValidML, sortedKeys(found))
 			continue
 		}
 		claimed[cat] = true
 	}
 
-	// Reverse: exactly which of the ten slice 1 leaves alone, pinned so the next slice states
-	// its arrival instead of inheriting it.
+	// Reverse: which of the ten no sentinel claims. **The list is now empty, and that is a board
+	// figure rather than a formality** — the export slice's `ErrUnknownTag` was the tenth, so this
+	// package names every index space the reference has a `lookup` for.
 	//
-	//   - `tag`: exception handling's index space (a later gate's).
+	// The two entries it used to hold are worth keeping as the record of what the list was *for*.
+	// `data segment` and `elem segment` sat here until slice 5 on the stated reason that the bulk
+	// memory/table ops are "declined at the prefixed-opcode arm before any index is read" — a deferral
+	// whose subject was the *dispatch*, not the rules, so it expired the moment 0xFC was typed. `tag`
+	// sat here until the export slice, and **left without anyone editing this line**, which is the
+	// grave the forward loop above now records: the list only ever made a slice come here and say so
+	// when a human happened to extend an enumeration two directions away.
 	//
-	// **`data segment` and `elem segment` were here until slice 5 and are not any more**, and the
-	// entry they left is worth keeping as the record of why the list works. Their stated reason was
-	// that the bulk memory/table ops are "declined at the prefixed-opcode arm before any index is
-	// read" — a deferral whose subject was the *dispatch*, not the rules, so it expired the moment
-	// 0xFC was typed and the two sentinels arrived in the same commit that removed it. That is the
-	// list behaving as designed: it made a slice that claims a category come here and say so.
-	wantUnclaimed := map[string]bool{"tag": true}
+	// Empty is not vacuous here. Every category runs through the loop below, and an eleventh arriving
+	// upstream lands in the "gap wearing no label" arm — so what the emptiness asserts is *full
+	// coverage*, checked, rather than nothing left to check.
+	wantUnclaimed := map[string]bool{}
 	for cat := range found {
 		switch {
 		case claimed[cat] && wantUnclaimed[cat]:
@@ -545,11 +648,9 @@ func TestOperatorClassesAreDisjoint(t *testing.T) {
 	}
 }
 
-func sortedKeys(m map[string]bool) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
+// Generic in the value because the callers hold two different maps of the same keys — a category set
+// and a sentinel-to-message map — and a second copy of this for the second value type is the kind of
+// duplication that lets one copy drift.
+func sortedKeys[V any](m map[string]V) []string {
+	return slices.Sorted(maps.Keys(m))
 }

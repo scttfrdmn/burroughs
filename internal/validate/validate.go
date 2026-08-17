@@ -147,7 +147,7 @@ var (
 	//	  try Lib.List32.nth list x.it with Failure _ ->
 	//	    error x.at ("unknown " ^ category ^ " " ^ I32.to_string_u x.it)
 	//
-	// (`valid/valid.ml:41-42`, with the ten categories at `:44-53`.) So the message is
+	// (`lookup`, `valid/valid.ml:41-42`, with the ten categories at `:44-53`.) So the message is
 	// `unknown local 2` — category, space, index, and nothing else before it. That format is
 	// not cosmetic: the corpus expects *both* `unknown local` and `unknown local 2`, matched as
 	// a substring per 0003, so a message reading `unknown local: local 2` satisfies the first

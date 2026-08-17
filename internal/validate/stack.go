@@ -231,7 +231,7 @@ func (v *validator) pushAll(types []binary.ValType) {
 // `(func (block (br 0) (i32.const 1)))`, every `*-after-break`/`*-after-return`/`*-after-
 // unreachable` row — were *accepted* by exactly that discard.
 //
-// The reference's end-of-block check is three lines (`valid/valid.ml:966-972`):
+// The reference's end-of-block check is three lines of `check_block` (`valid/valid.ml:966-972`):
 //
 //	let s, xs' = check_instrs c (stack ts1) es in
 //	let s' = pop c (stack ts2) s at in
