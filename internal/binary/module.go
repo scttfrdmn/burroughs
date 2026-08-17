@@ -496,6 +496,30 @@ type CompType struct {
 	// (both `SubT (Final, ...)`, decode.ml:262-271's default and its 0x4f arm), false only for
 	// an explicit `sub` without `final` (the 0x50 arm, `SubT (NoFinal, ...)`).
 	Final bool
+
+	// RecStart and RecLen are the extent of the recursive type group this entry belongs to:
+	// the type index of the group's first member, and the number of members. Every entry is in
+	// exactly one group — a bare subtype is a singleton, per decode.ml:276's `RecT [st]` — so
+	// neither field has an "ungrouped" value and `RecStart <= own index < RecStart+RecLen`
+	// always holds.
+	//
+	// **These two fields are the type's *identity*, and that is the whole reason they are
+	// retained.** A `deftype` in the spec is `DefT (rectype, i)` — the entire group paired with
+	// the member's ordinal — not the member's comptype. Two structurally identical functypes in
+	// differently-shaped groups are different types, and `match_deftype`'s structural-equality
+	// disjunct (`subst_deftype s dt1 = subst_deftype s dt2`, match.ml:151) compares the *rolled*
+	// forms, in which references inside the group have become ordinals. Retained by
+	// `labelRecGroup`, consumed by `internal/validate`'s port of that disjunct.
+	//
+	// The alternative, which is what this struct held before, is worth naming because it looks
+	// adequate: with only the flat comptypes, the finest relation computable is bisimulation over
+	// type indices — the *equi*-recursive equality. It is strictly coarser than the spec's, so it
+	// **accepts** modules the spec rejects, which is the direction the board cannot see. Eight
+	// `type-rec.wast` vectors are the witnesses for the difference, and they were admissions
+	// blocked behind a *different* unwritten rule when this field was added, so the falsifier for
+	// getting this wrong was not available at the time it would have been needed.
+	RecStart uint32
+	RecLen   uint32
 }
 
 // StorageType is a fieldtype's storage: either a full ValType, or one of the two packed

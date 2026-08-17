@@ -7020,7 +7020,32 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	// The default lane is unmoved at 60790, all four vectors being table64. That is the structural zero
 	// `validateOverRejectCeiling` documents, seen from the other side: a lane that gates a feature off
 	// can neither over-reject it nor be credited with the repair.
-	const allOnPassFloor = 64567
+	// **64567 → 64592, #343's GC-subtyping slice: +25, and the ledger does not read +30.** The
+	// criterion ADR 0031 pre-registered was 30 rows — 21 `assert_invalid` modules expecting `sub type`
+	// that this validator accepted, and the 9 remaining `moduleOverRejections`. All 30 converted,
+	// confirmed row by row rather than inferred from the total. The difference is **five vectors that
+	// were passing on the defect being fixed**: `br_if.wast:667`, `br_on_null.wast:81`,
+	// `br_on_non_null.wast:91`, `br_on_cast.wast:271` and `br_on_cast_fail.wast:286` are the
+	// gc/issues/516 family, whose modules contain a `(ref null $t)` returned as `funcref` — valid, and
+	// over-rejected by index equality with the message `type mismatch`, which is the very text the
+	// `assert_invalid` expects. They were green because the wrong refusal happened to say the right
+	// thing. With the relation correct the module reaches an out-of-slice `ref.null`, and each is now
+	// an honest decline.
+	//
+	// *A total is not a ledger*, and this is what the ledger buys: +30 −5 = +25, all-on fail 479 → 454.
+	// A reader given only the total would have to take "the slice landed" on faith, and a reader given
+	// only the forecast would read the 5 as a regression. Neither is true: nothing the engine does got
+	// worse, and five rows stopped being carried by a coincidence. Filed as its own finding, because
+	// *the shape of what survives names the bug* — an `assert_invalid` vector can be held up by an
+	// over-rejection inside the module, and the over-rejection instrument cannot see it because the
+	// row is a pass. #350.
+	//
+	// The default lane is unmoved at 60790 pass / 235 fail / 66 unsupported, with its stratum split
+	// byte-identical including the structural `0 over-rejected`. Every one of the 30 needs the GC gate,
+	// so that lane could neither see the defects nor be credited with the repair — the same asymmetry
+	// this bound's #341 and cause-2 entries above both record, and the reason #343's PR quotes this
+	// lane's fail delta as its reward figure.
+	const allOnPassFloor = 64592
 	boardBound(t, "allOnPassFloor", totalPass, allOnPassFloor, boardBoundSlack, floorBound,
 		"a gated feature regressed, which the Gated==0 assertion above cannot see: with every "+
 			"gate on, a broken feature turns a pass into a fail and leaves Gated at zero")
@@ -7029,46 +7054,47 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 // moduleOverRejections are the modules this validator refuses that the corpus asserts are valid —
 // the accept direction's own defect, and the finding #341 was taken for.
 //
-// **All thirteen are all-gates-on-lane rows, and that is a property of the defects rather than of
-// the instrument.** Every one needs a feature the default lane gates off, so `validateOverRejectCeiling`
-// reads 0 on the default board honestly; this map is where the population actually lives, which is
-// why it is an exact table and not a count. *Floors bound the catastrophic case; only an exact count
-// sees a small silent loss* — and here even a count would be too weak, because a rule landing while
-// a different one breaks moves nothing.
+// **It is empty, and an empty table here is the whole point of having had one.** Thirteen rows were
+// pre-registered on #341; four went with the `call_indirect` address-type repair and the last nine
+// with #343's `match.ml` port. The documentation stays because the *subject* has not gone anywhere —
+// the accept direction can acquire a new defect tomorrow, and the vacuity arm in
+// TestModuleDefinitionsAskTheValidator is what keeps the drained state from reading as a green
+// nobody measured.
 //
-// The four causes, which are the work plan rather than a taxonomy:
+// **All thirteen were all-gates-on-lane rows, and that was a property of the defects rather than of
+// the instrument.** Every one needed a feature the default lane gates off, so
+// `validateOverRejectCeiling` read 0 on the default board honestly; this map was where the population
+// actually lived, which is why it was an exact table and not a count. *Floors bound the catastrophic
+// case; only an exact count sees a small silent loss* — and here even a count would have been too
+// weak, because a rule landing while a different one breaks moves nothing. The same asymmetry is why
+// draining it moves the default board by zero: #343's PR states that zero as structural rather than
+// as an absence of work.
+//
+// The four causes, which were the work plan rather than a taxonomy, and how each closed:
 //
 //  1. **recursive type equivalence and subtyping at a `call`'s arguments** (7) — the validator
-//     compares type indices where the reference compares the types they name, so two structurally
-//     identical rec-group members read as different.
+//     compared type indices where the reference compares the types they name, so two structurally
+//     identical rec-group members read as different. Closed by #343's `match.go`, whose
+//     structural-equality disjunct needed the rec-group extent `binary` was not retaining.
 //  2. **`(ref null none) <: (ref null any)` at a block result** (1) — bottom-of-the-heap-hierarchy
-//     subtyping.
-//  3. **element-type subtyping at `table.copy`** (1) — the check demands equality where the spec
-//     allows the source's element type to be a subtype of the destination's.
+//     subtyping. Closed by the same port's four recursive bottom arms.
+//  3. **element-type subtyping at `table.copy`** (1) — the check demanded equality where the spec
+//     allows the source's element type to be a subtype of the destination's. Closed by routing that
+//     comparison through the relation.
+//  4. **`call_indirect`'s index operand** (4) — read as a hardcoded `i32` where the reference takes
+//     it from the table's own address type (`valid.ml:537,542`), refusing four valid table64
+//     modules: `call_indirect64.wast:3` and `table_init64.wast:385,444,503`.
 //
-// **A fourth cause was here and is fixed**, which is what this table's "no longer over-rejects" arm is
-// for: `call_indirect` read its index operand as a hardcoded `i32` where the reference takes it from
-// the table's own address type (`valid.ml:537,542`), refusing four valid table64 modules —
-// `call_indirect64.wast:3` and `table_init64.wast:385,444,503`. The four rows were deleted when the
-// fix landed, on the arm's own instruction. Recording the deletion rather than only performing it,
-// because a table that silently shrinks cannot be told from a table someone trimmed to make a test
-// pass.
+// The rows were deleted as each cause closed, on the arm's own instruction. Recording the deletions
+// rather than only performing them, because a table that silently shrinks cannot be told from a
+// table someone trimmed to make a test pass — and that argument applies hardest to the deletion that
+// empties it.
 //
 // Keyed `file:line` → the substring of the refusal that names the cause, so a row moving to a
 // *different* wrong answer is a change this table reports rather than absorbs. Pre-registered on
-// #341 before the arm was touched; the four causes are tracked as #343, which is the subject this
-// table would otherwise be a declaration without.
-var moduleOverRejections = map[string]string{
-	"type-equivalence.wast:5":  "(call): type mismatch: expected (ref 1), got (ref 0)",
-	"type-equivalence.wast:16": "(call): type mismatch: expected (ref 4), got (ref 3)",
-	"type-equivalence.wast:30": "(call): type mismatch: expected (ref 1), got (ref 0)",
-	"type-equivalence.wast:38": "(call): type mismatch: expected (ref 1), got (ref 0)",
-	"type-equivalence.wast:49": "(call): type mismatch: expected (ref 2), got (ref 0)",
-	"type-subtyping.wast:68":   "(call): type mismatch: expected (ref 0), got (ref 1)",
-	"type-subtyping.wast:89":   "(call): type mismatch: expected (ref 0), got (ref 2)",
-	"ref_null.wast:23":         "(end): type mismatch: expected (ref null any), got (ref null none)",
-	"table-sub.wast:1":         "does not match destination element type funcref",
-}
+// #341 before the arm was touched; the four causes were tracked as #343, which is the subject this
+// table would otherwise have been a declaration without.
+var moduleOverRejections = map[string]string{}
 
 // TestModuleDefinitionsAskTheValidator is the oracle for the accept direction, and the missing half
 // of every reward figure quoted before it existed.
@@ -7126,26 +7152,47 @@ func TestModuleDefinitionsAskTheValidator(t *testing.T) {
 
 	t.Run("the all-on lane's over-rejections are exactly the pinned table", func(t *testing.T) {
 		requireSuite(t)
-		if len(moduleOverRejections) == 0 {
-			t.Fatal("moduleOverRejections is empty, so the reconciliation below compares two empty " +
-				"sets and agrees with any board at all. If a slice drained the last row, keep the " +
-				"table's documentation and assert 0 explicitly rather than deleting the subject")
-		}
+		// **The table is drained, and this is the arm the guard that used to stand here specified.**
+		// Its words were: "moduleOverRejections is empty, so the reconciliation below compares two
+		// empty sets and agrees with any board at all. If a slice drained the last row, keep the
+		// table's documentation and assert 0 explicitly rather than deleting the subject." #343's
+		// GC-subtyping slice drained all nine, so the documentation is kept above and the zero is
+		// asserted here — by the second reconciliation loop, which errors on any over-rejection not
+		// in the table and against an empty table is exactly "there are none."
+		//
+		// What that loop cannot do is notice that it walked nothing, which is the vacuity the old
+		// guard was really about: nine pinned rows *were* the proof the walk finds over-rejections
+		// at all, and an empty expectation cannot prove its own instrument. So the walk's own extent
+		// is floored below — *a comparison against an empty set succeeds*, and the set that has to be
+		// non-empty now is the set of rows the walk looked at.
 		_, _, allOnEngine := allOnLane(t)
 		got := map[string]string{}
+		files, scored := 0, 0
 		for _, f := range boardFiles(t) {
 			s, err := ParseFile(filepath.Join(suiteDir, f))
 			if err != nil {
 				t.Errorf("%s: parse: %v", f, err)
 				continue
 			}
+			files++
 			for _, fs := range s.RunGated(allOnEngine()).Buckets {
 				for _, fail := range fs {
+					scored++
 					if fail.OverRejected {
 						got[fmt.Sprintf("%s:%d", f, fail.Line)] = fail.Got
 					}
 				}
 			}
+		}
+		// A plausibility floor on the walk, not a bound on the board: the numbers it guards against
+		// are 0 and 1, so it is pinned well below the all-on lane's own figures and says only that
+		// the suite was found, parsed, and run. `allOnPassFloor` is where the board's actual counts
+		// are tracked, and duplicating them here would make two places move for one event.
+		if files < 200 || scored < 100 {
+			t.Fatalf("the walk covered %d file(s) and scored %d failure(s) — with the table drained "+
+				"this loop's only remaining assertion is that `got` is empty, and an empty `got` "+
+				"from a walk that ran over nothing is the reassuring answer for the wrong reason",
+				files, scored)
 		}
 		// Reconciled in both directions, never floored: a row that starts passing is the reward a
 		// validator slice earns, and a floor would report it as fine.

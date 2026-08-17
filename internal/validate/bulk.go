@@ -227,7 +227,7 @@ func (v *validator) bulkSignature(in binary.Instr) (sig, error) {
 		if err != nil {
 			return sig{}, err
 		}
-		if !matches(src.ElemType, dst.ElemType) {
+		if !v.matches(src.ElemType, dst.ElemType) {
 			return sig{}, fmt.Errorf("%w: source element type %s does not match destination "+
 				"element type %s", ErrTypeMismatch, src.ElemType, dst.ElemType)
 		}
@@ -244,7 +244,7 @@ func (v *validator) bulkSignature(in binary.Instr) (sig, error) {
 		if err != nil {
 			return sig{}, err
 		}
-		if !matches(seg, t.ElemType) {
+		if !v.matches(seg, t.ElemType) {
 			return sig{}, fmt.Errorf("%w: element segment's type %s does not match table's "+
 				"element type %s", ErrTypeMismatch, seg, t.ElemType)
 		}

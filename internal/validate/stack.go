@@ -129,18 +129,28 @@ var unknown = binary.RefType(^uint32(0), true)
 
 // matches reports whether an operand of type `got` satisfies a requirement of type `want`.
 //
-// Bottom matches anything in either direction. **Everything else is identity, and that is
-// slice 1's declared limit rather than an oversight**: proper subtyping — `(ref $t) <: (ref null
-// $t)`, `eq <: any`, the whole `match.ml` relation — is the GC slice's, and its vectors expect
-// `sub type` rather than `type mismatch`. Identity is exactly right for the numeric families,
-// which is what this slice type-checks; a reference-typed operand reaches here only through
-// local/global/select, and a wrong answer there is a *reject* of a valid module, which the
-// suite's accept direction does see.
-func matches(got, want binary.ValType) bool {
-	if got == unknown || want == unknown {
-		return true
-	}
-	return got == want
+// **This was identity plus a bottom wildcard, under a comment declaring that limit slice 1's**,
+// and decision 0031 retired the declaration. The prior text, quoted because a retired boundary
+// is recorded rather than absorbed:
+//
+//	Bottom matches anything in either direction. **Everything else is identity, and that is
+//	slice 1's declared limit rather than an oversight**: proper subtyping — `(ref $t) <: (ref
+//	null $t)`, `eq <: any`, the whole `match.ml` relation — is the GC slice's, and its vectors
+//	expect `sub type` rather than `type mismatch`. Identity is exactly right for the numeric
+//	families, which is what this slice type-checks; a reference-typed operand reaches here only
+//	through local/global/select, and a wrong answer there is a *reject* of a valid module, which
+//	the suite's accept direction does see.
+//
+// Its last clause was **false when it was written and true only later**: the accept direction had
+// no witness at all until #341 built one, so at the time the comment claimed the suite would see
+// a wrong reject, nothing scored module definitions on the validator's answer. The nine
+// over-rejections #343 tracked were invisible for exactly as long as that sentence stood.
+//
+// What it delegates to is `match.go`, which is `match_valtype` (match.ml:110-116). The module is
+// needed because the relation is not local to the two types: an indexed reference form's place in
+// the lattice comes from the definition it names.
+func (v *validator) matches(got, want binary.ValType) bool {
+	return matchValType(v.mod, got, want)
 }
 
 // popExpect pops one operand and requires it to satisfy want.
@@ -149,7 +159,7 @@ func (v *validator) popExpect(want binary.ValType) error {
 	if !ok {
 		return fmt.Errorf("%w: expected %s, stack empty", ErrTypeMismatch, want)
 	}
-	if !matches(got, want) {
+	if !v.matches(got, want) {
 		return fmt.Errorf("%w: expected %s, got %s", ErrTypeMismatch, want, got)
 	}
 	return nil

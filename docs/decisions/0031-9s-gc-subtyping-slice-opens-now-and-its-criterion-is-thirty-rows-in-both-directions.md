@@ -71,3 +71,35 @@ as a count.
 - **A permissive relation is the failure mode with teeth, and it is bounded by the 21.** The risk is
   asymmetric: too-strict shows up as new over-rejections in a table that is checked in both
   directions, too-permissive shows up as those 21 staying admitted.
+
+## Falsified by its own implementation — the last bullet, 2026-08-16 (#351)
+
+Recorded rather than corrected, because an accepted record's claims are testimony and the honest
+move is to say which one the work refuted. The sentence is *"it is bounded by the 21."* It is
+**false**, and the criterion's own thirty rows cannot see the case it misses.
+
+The relation the 21 witness is *equi-recursive* type equality — bisimulation over type indices —
+which is strictly **coarser** than the spec's iso-recursive equality: it accepts modules the
+reference rejects. Every vector that discriminates the two is a `type mismatch` admission in
+`type-rec.wast` (`:51,59,93,103,114,124,204,216`), and all eight are admitted **before and after**
+this slice, because each puts its grouping-sensitive reference in a `(global (ref $ft) …)`
+initializer whose type check is a separate deferred rule. So a bisimulation port would have
+satisfied all thirty rows, passed the criterion, and been wrong in exactly the direction the
+criterion was built to bound.
+
+Two things follow, and only the first is about this ADR:
+
+- **The claim should have been "bounded by the 21 *plus a claim about the representation*."** What
+  actually caught the coarseness was not a vector: it was `match_deftype`'s second disjunct being
+  unportable against a flat comptype list, which forced `binary.CompType.RecStart`/`RecLen` and made
+  the rolled comparison explicit. A representation that *cannot* express the wrong relation is a
+  stronger bound than a population that happens to exclude it — and the wrong relation here was the
+  easier one to write.
+- **The eight are a named blind spot, not casualties.** They are neither guards nor regressions;
+  they are rows the criterion counted on and could not deliver. Whatever slice lands the global
+  initializer's type check inherits them as its own reward figure, and inherits the discrimination
+  they were supposed to perform here.
+
+*A suspiciously clean result is a tell*, and "the criterion is exactly the population that could
+witness the risk" was one. The prediction that the eight *currently pass* was also made, in a
+comment, and was wrong in the same direction — measured, then corrected before landing.
