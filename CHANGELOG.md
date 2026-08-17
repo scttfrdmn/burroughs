@@ -41,7 +41,7 @@ weakly-ordered platform.
   - **A four-of-five census, with the fifth named**: the table-initializer site (`valid.ml:1070`) has
     no subject in the internal form, the expression being decoded and then discarded, and arrives with
     the GC gate (#7). Enumerated in `modulePre`'s phase table rather than left as a silent absence.
-  - Falsification: **13 mutations, both lanes**. Four move neither lane and each has a unit row —
+  - Falsification: **11 mutations, both lanes**. Four move neither lane and each has a unit row —
     two *sample* gaps (the corpus reaches its globals through imports, and no expression-form element
     vector exists), one gap no corpus can close (the decoder refuses the input), and one *harness* gap
     now filed as #341. A helper reused outside the dispatch that supplied its invariant does not
