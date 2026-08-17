@@ -1412,9 +1412,10 @@ type Failure struct {
 
 	// Declined marks a failure the engine *refused to answer* — the component reached the
 	// vector, recognized what it was being asked, and reported that the rule deciding it is
-	// unwritten. Today only the assert_invalid arm sets it (`validate.ErrUnsupported`, 1059
-	// vectors), which is why it is a bool here rather than a second Stratum: the stratum still
-	// says *which* component, and this says *whether the component answered*.
+	// unwritten. Set by the assert_invalid arms and, since #341, by the module-definition arm
+	// (`validate.ErrUnsupported` either way), which is why it is a bool here rather than a second
+	// Stratum: the stratum still says *which* component, and this says *whether the component
+	// answered*.
 	//
 	// **It is a fail either way, and the field exists so that controls about something else can
 	// say so.** A decline belongs in the fail column with its opcode in the bucket key — that is
@@ -1444,6 +1445,25 @@ type Failure struct {
 	// subtraction from a partition whose size was an accident of the measurement. A count that is
 	// right only while some other count is zero is not a count of anything.
 	Accepted bool
+
+	// OverRejected marks the accept direction's own defect: validation ran to completion and said
+	// **no** to a module the corpus asserts is valid. Set only by the module-definition arm, which
+	// is the only arm that asks the validator a question whose right answer is yes.
+	//
+	// **It is Accepted's mirror and it exists for Accepted's reason, applied before the arithmetic
+	// could go wrong rather than after.** Without a flag of its own this population lands in the
+	// `default` arm of the validate stratum's split — the wrong-message case, "an honest refusal
+	// whose text the corpus disagrees with" — and that description is false of it twice over: there
+	// is no expected text to disagree with, because a module definition states no expectation, and
+	// the refusal is not honest, because the corpus says the module is valid. Folding it there
+	// would also put 13 rows inside a constant standing at 0, so the first over-rejection would
+	// read as a wrong-message regression in a population that has none.
+	//
+	// The distinction from Declined is *whether the validator claimed to know*: a decline says the
+	// rule is unwritten (#9's next slice owes it), an over-rejection says the rule is written and
+	// wrong. The two drain by different mechanisms, which is the same argument that separated
+	// isDeclined from isGated one layer up.
+	OverRejected bool
 }
 
 // AltChoice is one `(either …)` expectation and the alternative the engine's answer matched.
@@ -2047,16 +2067,26 @@ func (s *Script) run(opts runOpts) *Result {
 	// match, and any whose text quoted the expected phrase would score a pass the validator never
 	// earned. That is the one asymmetry with IsTrap, and it is why this pairing is checked rather
 	// than defaulted.
+	//
+	// **A fourth caller since #341, and the messages name the command rather than a form.** The
+	// module-definition arm requires the validator too, on Scott's semantics ruling, and its
+	// `Needs` stays `CapWatReader` — an arm requiring more than its own capability names is the
+	// established shape here (`assert_invalid (module binary …)` needs a decoder and panics for it),
+	// because `Needs` is what `classify` can state syntactically and the arm is where the rest is
+	// checked. What the two callers would lose differs, so the second sentence of each message is
+	// the one that stayed general: an unsupplied validator is a claim nobody asked, and an
+	// unsupplied `IsDeclined` turns #9's frontier into unearned passes on the assert_invalid side
+	// and into *over-rejections* on the module side, which is the very population the arm reports.
 	requireValidator := func(c Command) {
 		if opts.Validate == nil {
 			panic(fmt.Sprintf("%s:%d: CapValidator declared but no ValidateFunc was supplied; "+
-				"an assert_invalid cannot be judged without one", s.Path, c.Line))
+				"%v cannot be judged without one", s.Path, c.Line, c.Kind))
 		}
 		if opts.IsDeclined == nil {
 			panic(fmt.Sprintf("%s:%d: CapValidator declared but no DeclinedFunc was supplied; "+
-				"every slice decline would fall through to the substring match, and one whose "+
-				"text quoted the expected string would score a pass the validator never earned",
-				s.Path, c.Line))
+				"every slice decline would be scored as a verdict the validator never reached: an "+
+				"assert_invalid whose expected text the decline happened to quote would pass, and a "+
+				"module definition would be reported as over-rejected", s.Path, c.Line))
 		}
 	}
 	// cur is the instance the *most recent* module command produced, which is what an
@@ -2270,16 +2300,105 @@ func (s *Script) run(opts runOpts) *Result {
 					})
 					continue
 				}
-				// **The module command keeps its pass and the decline is carried forward.**
-				// A gate decline arriving from instantiation is not a verdict on the front
-				// end — ReadModule accepted the source, which is the right answer and is
-				// #124's ruling that the text front end stays gate-blind. Scoring the module
-				// command as `gated` here would move a pass the reader earned into the third
-				// verdict; scoring the downstream assert_return as `fail` would mark correct
-				// behaviour red. So the front end is scored on its own answer and the
-				// decline travels to the vector whose question it actually blocks.
+				// **Fact 2: the module validates.** A module definition in a script asserts the
+				// module *is valid*, so a harness scoring it on parsing alone is under-asserting
+				// — and that under-assertion is precisely where an over-rejecting rule hides,
+				// because an over-rejection produces no error anyone buckets. Every reward figure
+				// quoted for a validator slice before this arm existed was resting on it:
+				// `internal/validate/global_test.go`'s M11 row measured a `modulePre` refusing
+				// *every* module and left all 2143 of these commands green. (Scott's semantics
+				// ruling, #341: `KindModuleText` means the module decodes **and** validates.)
+				//
+				// **Gate declines are exempt and keep their pass, which is the one thing this
+				// fact does not touch.** #124's ruling is a different axis: the front end stays
+				// gate-blind, so a decline arriving from the validator's own decoder is not a
+				// verdict on the module, and scoring it here would move 421 passes the reader
+				// earned into the third verdict. The decline travels to the vector whose question
+				// it actually blocks, exactly as an instantiation decline does.
+				requireValidator(c)
+				vst, verr := opts.Validate(c)
+				scored := false
+				switch {
+				case isGated(verr):
+					// Unchanged by design — see above.
+				case isDeclined(verr):
+					// The sibling assert_invalid arms' treatment, verbatim including the key's
+					// shape (see scoreValidation): a decline is a fail with the engine's own
+					// sentence as the key, so the buckets partition by the rule #9's next slice
+					// has to write, and the column drains as slices land rather than by anyone
+					// editing a number.
+					r.Fail++
+					scored = true
+					key := c.Kind.String() + " declined: " + verr.Error()
+					r.Buckets[key] = append(r.Buckets[key], Failure{
+						Line: c.Line, Expect: key, Got: verr.Error(), Kind: c.Kind,
+						Stratum: vst, Declined: true,
+					})
+				case verr != nil && vst != StratumValidate:
+					// **The module never reached the type checker**, so this is not evidence about
+					// the validator: `Validate` assembles and decodes first, and both of those
+					// steps are the harness reading its own output (see validateModule for why
+					// they are charged to StratumEncode). Scored rather than skipped for the
+					// reason KindModuleBinary's arm is scored — an unrun vector is invisible — and
+					// keyed apart from the validator's own answers so the encoder frontier drains
+					// in the column that owns it (#8) instead of inflating #9's.
+					r.Fail++
+					scored = true
+					key := c.Kind.String() + " must reach the validator"
+					r.Buckets[key] = append(r.Buckets[key], Failure{
+						Line: c.Line, Expect: key, Got: verr.Error(), Kind: c.Kind,
+						Stratum: vst,
+					})
+				case verr != nil:
+					// **The finding this arm exists for**: the type checker ran, finished, and
+					// refused a module the corpus asserts is valid. `OverRejected` rather than the
+					// stratum's wrong-message arm, for the reason that field records.
+					r.Fail++
+					scored = true
+					key := c.Kind.String() + " must validate"
+					r.Buckets[key] = append(r.Buckets[key], Failure{
+						Line: c.Line, Expect: key, Got: verr.Error(), Kind: c.Kind,
+						Stratum: StratumValidate, OverRejected: true,
+					})
+				}
+				// **Instantiation happens either way, and a validation refusal does not withhold
+				// the instance.** Withholding is the tidier-looking choice and it is wrong here:
+				// one missing subtyping rule would go red across every dependent vector of the
+				// module, which is a hundred reds for one defect and the end of the bucket
+				// resolution that *is* the work plan. Measurably the refusals are the validator's
+				// error rather than the corpus's — 13 of 13 at the pre-registered revision — so
+				// withholding would be punishing correct modules for an unwritten rule. 0025's
+				// carve-out is about the other direction, where the corpus says invalid.
+				//
+				// **The module command keeps its pass on an instantiation decline and the decline
+				// is carried forward**, which is #124's ruling stated where it applies: ReadModule
+				// accepted the source, and scoring the downstream assert_return as `fail` would
+				// mark correct behaviour red.
 				in, st, ierr := opts.instantiate(c, registry)
 				remember(c, in, st, ierr, isGated(ierr))
+				if scored {
+					continue
+				}
+				// **The two paths that decode this module must agree**, and this arm is where the
+				// second one was introduced: `Validate` assembles and decodes, then `instantiate`
+				// assembles and decodes again, which is #296's boundary-signature hazard created
+				// by fact 2 above. Validation having reached the type checker means encode and
+				// decode both succeeded, so a refusal from instantiation in a *pre-interpreter*
+				// stratum means the two paths differ — a harness defect, not a verdict, and the
+				// same assertion the `assert_invalid (module binary …)` arm makes for the same
+				// reason. A gate decline is deliberately **not** excluded: one path declining on a
+				// gate the other honours is exactly the lane-override defect `allOnLane` records
+				// having twice nearly forgotten.
+				if ierr != nil && vst == StratumValidate &&
+					(st == StratumEncode || st == StratumBinary) {
+					r.Fail++
+					key := c.Kind.String() + " two decode paths disagree"
+					r.Buckets[key] = append(r.Buckets[key], Failure{
+						Line: c.Line, Expect: key, Got: ierr.Error(), Kind: c.Kind,
+						Stratum: st,
+					})
+					continue
+				}
 				r.Pass++
 				continue
 			}

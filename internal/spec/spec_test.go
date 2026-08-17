@@ -6993,10 +6993,169 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	// The 12 wrong-message rows are 10 board-wide non-validator ones plus this lane's 2, which is why
 	// `validateMismatchCeiling` reads 0 on the default board while this lane keeps a pair. Stated
 	// because the two figures look like a disagreement and are two different populations.
-	const allOnPassFloor = 64708
+	// **64727 → 64563, #341: −164, and this lane is where the slice's finding actually lives.**
+	//
+	// The default board's −46 is the same event with four fifths of it gated off. Here: +22 encode
+	// (the emitter frontier, identical rows in both lanes), +129 declined (the same 24 plus the GC and
+	// tail-call operators the default lane never decodes), and **+13 over-rejections** — modules the
+	// type checker ran on, finished, and refused, that the corpus says are valid. Those 13 are the
+	// reason #341 was taken before more validator slices: they are engine defects that no board could
+	// see, because an over-rejection produces no error for anyone to bucket. `validateOverRejectCeiling`
+	// is the default lane's bound on the same population and reads 0 for a structural reason stated
+	// there; TestModuleDefinitionsAskTheValidator is what pins these 13 by row.
+	//
+	// A floor falling on this lane says the same thing it says on the default one and is argued at
+	// `passFloor`: the assertion arrived, the engine did not regress. Pre-registered on #341 with both
+	// lanes' figures before the arm changed; the forecast was `64727 → 64563`.
+	const allOnPassFloor = 64563
 	boardBound(t, "allOnPassFloor", totalPass, allOnPassFloor, boardBoundSlack, floorBound,
 		"a gated feature regressed, which the Gated==0 assertion above cannot see: with every "+
 			"gate on, a broken feature turns a pass into a fail and leaves Gated at zero")
+}
+
+// moduleOverRejections are the modules this validator refuses that the corpus asserts are valid —
+// the accept direction's own defect, and the finding #341 was taken for.
+//
+// **All thirteen are all-gates-on-lane rows, and that is a property of the defects rather than of
+// the instrument.** Every one needs a feature the default lane gates off, so `validateOverRejectCeiling`
+// reads 0 on the default board honestly; this map is where the population actually lives, which is
+// why it is an exact table and not a count. *Floors bound the catastrophic case; only an exact count
+// sees a small silent loss* — and here even a count would be too weak, because a rule landing while
+// a different one breaks moves nothing.
+//
+// The four causes, which are the work plan rather than a taxonomy:
+//
+//  1. **recursive type equivalence and subtyping at a `call`'s arguments** (7) — the validator
+//     compares type indices where the reference compares the types they name, so two structurally
+//     identical rec-group members read as different.
+//  2. **a 64-bit table's index type at `call_indirect`** (4) — `call_indirect` takes its index from
+//     the table's own index type, and this validator hard-codes `i32`.
+//  3. **`(ref null none) <: (ref null any)` at a block result** (1) — bottom-of-the-heap-hierarchy
+//     subtyping.
+//  4. **element-type subtyping at `table.copy`** (1) — the check demands equality where the spec
+//     allows the source's element type to be a subtype of the destination's.
+//
+// Keyed `file:line` → the substring of the refusal that names the cause, so a row moving to a
+// *different* wrong answer is a change this table reports rather than absorbs. Pre-registered on
+// #341 before the arm was touched; the four causes are tracked as #343, which is the subject this
+// table would otherwise be a declaration without.
+var moduleOverRejections = map[string]string{
+	"type-equivalence.wast:5":  "(call): type mismatch: expected (ref 1), got (ref 0)",
+	"type-equivalence.wast:16": "(call): type mismatch: expected (ref 4), got (ref 3)",
+	"type-equivalence.wast:30": "(call): type mismatch: expected (ref 1), got (ref 0)",
+	"type-equivalence.wast:38": "(call): type mismatch: expected (ref 1), got (ref 0)",
+	"type-equivalence.wast:49": "(call): type mismatch: expected (ref 2), got (ref 0)",
+	"type-subtyping.wast:68":   "(call): type mismatch: expected (ref 0), got (ref 1)",
+	"type-subtyping.wast:89":   "(call): type mismatch: expected (ref 0), got (ref 2)",
+	"call_indirect64.wast:3":   "(call_indirect): type mismatch: expected i32, got i64",
+	"table_init64.wast:385":    "(call_indirect): type mismatch: expected i32, got i64",
+	"table_init64.wast:444":    "(call_indirect): type mismatch: expected i32, got i64",
+	"table_init64.wast:503":    "(call_indirect): type mismatch: expected i32, got i64",
+	"ref_null.wast:23":         "(end): type mismatch: expected (ref null any), got (ref null none)",
+	"table-sub.wast:1":         "does not match destination element type funcref",
+}
+
+// TestModuleDefinitionsAskTheValidator is the oracle for the accept direction, and the missing half
+// of every reward figure quoted before it existed.
+//
+// A module definition in a script asserts the module *is valid*, and until #341 the harness scored it
+// on the reader's answer alone — so `internal/validate/global_test.go`'s M11 row could refuse **every**
+// module from inside the validator and leave all 2143 `KindModuleText` commands green. Sixty thousand
+// passes were carrying a claim they could not bear: an over-rejection produces no error for anyone to
+// bucket, so the one defect class this direction can have was invisible by construction.
+//
+// Three things are asserted here and they fail in different ways on purpose:
+//
+//  1. **The arm asks at all**, falsified directly rather than argued: a validator that refuses every
+//     module must turn a module definition red. This is the M11 mutation reproduced at the harness
+//     boundary, and it is what makes the two subtests below more than a description of current output.
+//  2. **The population is exactly `moduleOverRejections`**, both directions — a row that starts
+//     passing is as much a finding as a new one appearing, and it is the direction that says a
+//     validator slice landed.
+//  3. **Each refusal still names its own cause**, so a row that moves to a *different* wrong answer
+//     is reported instead of absorbed.
+func TestModuleDefinitionsAskTheValidator(t *testing.T) {
+	t.Run("a validator that refuses every module turns a module definition red", func(t *testing.T) {
+		// The M11 mutation: `modulePre` refusing unconditionally. Run against a module the reader
+		// accepts, so the *only* thing that can score this command is fact 2.
+		s, err := Parse("t.wast", []byte(`(module (func))`))
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		if got := s.Commands[0].Kind; got != KindModuleText {
+			t.Fatalf("classified %v, want KindModuleText — this control needs the arm it is about", got)
+		}
+		e := engine()
+		e.Validate = func(Command) (Stratum, error) {
+			return StratumValidate, errString("refuses every module")
+		}
+		r := s.RunGated(e)
+		if r.Pass != 0 || r.Fail != 1 {
+			t.Fatalf("got %d pass, %d fail; want 0/1 — a module definition scored green under a "+
+				"validator that refuses everything is exactly the hole #341 closed, and this "+
+				"assertion is the only thing standing between that hole and every reward figure "+
+				"the board quotes", r.Pass, r.Fail)
+		}
+		const key = "module text must validate"
+		b := r.Buckets[key]
+		if len(b) != 1 {
+			t.Fatalf("no failure under %q; got keys %v", key, r.BucketsBySize())
+		}
+		if !b[0].OverRejected || b[0].Stratum != StratumValidate {
+			t.Errorf("OverRejected = %v, Stratum = %v; want true/%v — without the flag this row "+
+				"lands in the wrong-message arm of the validate stratum's split, a population "+
+				"whose ceiling is 0 (see Failure.OverRejected)",
+				b[0].OverRejected, b[0].Stratum, StratumValidate)
+		}
+	})
+
+	t.Run("the all-on lane's over-rejections are exactly the pinned table", func(t *testing.T) {
+		requireSuite(t)
+		if len(moduleOverRejections) == 0 {
+			t.Fatal("moduleOverRejections is empty, so the reconciliation below compares two empty " +
+				"sets and agrees with any board at all. If a slice drained the last row, keep the " +
+				"table's documentation and assert 0 explicitly rather than deleting the subject")
+		}
+		_, _, allOnEngine := allOnLane(t)
+		got := map[string]string{}
+		for _, f := range boardFiles(t) {
+			s, err := ParseFile(filepath.Join(suiteDir, f))
+			if err != nil {
+				t.Errorf("%s: parse: %v", f, err)
+				continue
+			}
+			for _, fs := range s.RunGated(allOnEngine()).Buckets {
+				for _, fail := range fs {
+					if fail.OverRejected {
+						got[fmt.Sprintf("%s:%d", f, fail.Line)] = fail.Got
+					}
+				}
+			}
+		}
+		// Reconciled in both directions, never floored: a row that starts passing is the reward a
+		// validator slice earns, and a floor would report it as fine.
+		for row, want := range moduleOverRejections {
+			switch g, ok := got[row]; {
+			case !ok:
+				t.Errorf("%s no longer over-rejects — if a slice fixed it, drop the row here and "+
+					"say so in the changelog; if it stopped being asked, that is a regression in "+
+					"what the harness can see", row)
+			case !strings.Contains(g, want):
+				t.Errorf("%s still over-rejects but with a different cause:\n\tgot  %s\n\twant a "+
+					"message containing %q\n\ta row moving to a new wrong answer is a change this "+
+					"table exists to report rather than absorb", row, g, want)
+			}
+		}
+		for row, g := range got {
+			if _, ok := moduleOverRejections[row]; !ok {
+				t.Errorf("%s over-rejects and is not in the table: %s\n\tthe validator refused a "+
+					"module the corpus says is valid, which is the accept direction's own defect — "+
+					"file it and add the row, never widen a count", row, g)
+			}
+		}
+		t.Logf("all-on lane: %d module-definition over-rejections, %d pinned",
+			len(got), len(moduleOverRejections))
+	})
 }
 
 // TestGrave206KnownFailures pre-registers the all-gates-on fails #201's rung 2c found still red
@@ -7610,7 +7769,12 @@ func TestPhase1Files(t *testing.T) {
 	// only while the stratum's wrong-message population was 0, and when slice 2 made it 4 the
 	// subtraction reported 162 for a population of 158 without any bound noticing. A partition
 	// recovered by subtraction is a partition that cannot grow an element.
-	validateDeclined, validateAdmitted, validateMismatched := 0, 0, 0
+	//
+	// **Four since #341**, and the fourth arrived the way the third should have: the module-definition
+	// arm reports over-rejections, so the arm that would otherwise absorb them (`default`, the
+	// wrong-message case, standing at 0) got its flag *before* the first row rather than after four
+	// had already been miscounted. See Failure.OverRejected.
+	validateDeclined, validateAdmitted, validateMismatched, validateOverRejected := 0, 0, 0, 0
 	for _, fs := range aggBuckets {
 		for _, f := range fs {
 			switch f.Stratum {
@@ -7651,6 +7815,8 @@ func TestPhase1Files(t *testing.T) {
 					validateDeclined++
 				case f.Accepted:
 					validateAdmitted++
+				case f.OverRejected:
+					validateOverRejected++
 				default:
 					validateMismatched++
 				}
@@ -7675,16 +7841,16 @@ func TestPhase1Files(t *testing.T) {
 			"arm, so one of the five ceilings below is watching a subset it cannot name",
 			binaryFail+textFail+encodeFail+execFail+validateFail, totalFail)
 	}
-	if validateDeclined+validateAdmitted+validateMismatched != validateFail {
-		t.Errorf("the validate stratum's three parts sum to %d but the stratum is %d; a "+
-			"validate-stratum failure is declined, admitted, or wrong-message, so a residual here "+
-			"is a fourth outcome with no ceiling under it",
-			validateDeclined+validateAdmitted+validateMismatched, validateFail)
+	if validateDeclined+validateAdmitted+validateMismatched+validateOverRejected != validateFail {
+		t.Errorf("the validate stratum's four parts sum to %d but the stratum is %d; a "+
+			"validate-stratum failure is declined, admitted, over-rejected, or wrong-message, so a "+
+			"residual here is a fifth outcome with no ceiling under it",
+			validateDeclined+validateAdmitted+validateMismatched+validateOverRejected, validateFail)
 	}
 	t.Logf("  fail by stratum: binary %d, text %d, encode %d, exec %d, validate %d "+
-		"(%d declined + %d admitted + %d wrong-message)",
+		"(%d declined + %d admitted + %d over-rejected + %d wrong-message)",
 		binaryFail, textFail, encodeFail, execFail, validateFail,
-		validateDeclined, validateAdmitted, validateMismatched)
+		validateDeclined, validateAdmitted, validateOverRejected, validateMismatched)
 
 	// **0 at the measured revision, and it was 1 for the whole life of this ceiling.**
 	// The one member was binary-gc.wast:1, reported as "malformed function type: 0x5e"
@@ -8228,7 +8394,19 @@ func TestPhase1Files(t *testing.T) {
 	// above the validator (TestAssertInvalidPassesFromAboveTheValidator); the difference between the
 	// two populations is only whether the refusal happened to quote the vector's expected string,
 	// which is why both are named rather than either being read as a verdict about this stratum.
-	const encodeFailCeiling = 46
+	// # 46 → 68, and the +22 is the same shape as the +10 above, one command class over
+	//
+	// Module-definition commands ask the validator since #341, so they reach `text.EncodeModule`
+	// too, and 22 of them quote a frontier it cannot emit: 14 `(table …)` fields and 6 `(start …)`
+	// fields (#8), one symbolic local under a typeuse (#77), and `memory-multi.wast:5`'s `unknown
+	// data segment $d`. Pre-registered on #341 with the row list before the arm changed.
+	//
+	// **They are the encoder's and not the validator's, and the row that proves the boundary is
+	// real is `func.wast:459`** — a module the type checker would have judged, refused two steps
+	// earlier by the emitter. Charging these to `validateFail` would raise #9's column by 22 rows
+	// the type checker never saw, which is the confusion `validateModule`'s own comment names and
+	// this ceiling exists to keep separated. Slack stays 0.
+	const encodeFailCeiling = 68
 	boardBound(t, "encodeFailCeiling", encodeFail, encodeFailCeiling, 0, ceilingBound,
 		"the wat encoder lost ground: either it stopped emitting an instruction it used to "+
 			"emit, or the corpus moved. This ceiling is deliberately not shared with the text "+
@@ -8918,8 +9096,29 @@ func TestPhase1Files(t *testing.T) {
 	// thirteenth family member, `global.wast:674`, was pre-registered as *not* converting and did not:
 	// it is charged to the encode stratum, needing a `(table …)` field the emitter cannot yet write
 	// (#8).
-	const validateFailCeiling = 62
-	const validateDeclineCeiling = 31
+	// # 62 → 86 and 31 → 55: #341, and the *rise* is the assertion arriving rather than the engine
+	// losing ground
+	//
+	// Module definitions ask the validator now (Scott's semantics ruling on #341: a
+	// `KindModuleText` command means the module decodes **and** validates), and 24 of the 2150 are
+	// declined — `ref_null`, `ref_func`, `ref_is_null`, `table_get`, `table_set` and eight relaxed-SIMD
+	// operators, all of them rules a later slice owes. All 24 come out of `validateDeclined`; the
+	// admission bound is unmoved at 31 and the wrong-message bound at 0.
+	//
+	// **This is the one movement on this stratum that is neither of the two signatures above**, and
+	// reading it as either would be wrong. A vocabulary slice drains `declined`; a rule slice drains
+	// `admitted`; this is a *question* slice — it changes what the corpus is allowed to ask — so the
+	// column rises on both lanes and nothing about the validator changed. What makes the rise honest
+	// rather than a regression is that it was pre-registered on #341 with its row list and its cause
+	// before the arm was touched, and the two neighbouring bounds staying still is what says the
+	// engine did not move: had this slice broken a rule, the new questions would have arrived as
+	// over-rejections instead, in the fourth bound below.
+	//
+	// The 24 are the *default* lane's figure. The all-on lane declines 129, which is the same
+	// population without the gates hiding four fifths of it, and that lane's fail count is printed
+	// rather than bounded (TestAllGatesOnLeavesNothingGated bounds `Gated` only).
+	const validateFailCeiling = 86
+	const validateDeclineCeiling = 55
 	boardBound(t, "validateDeclineCeiling", validateDeclined, validateDeclineCeiling, 0, ceilingBound,
 		"slice 1 declined more instructions than it did — either an opcode left the signature "+
 			"table or a later slice's rule regressed into a decline")
@@ -9019,22 +9218,50 @@ func TestPhase1Files(t *testing.T) {
 			"right and the testimony is not, which is the failure a pass/fail column cannot show: "+
 			"these rows are fails, and a rise here can be a *message* regression on a vector that "+
 			"was already refused correctly")
-	// **Four constants now, where three of them used to be two plus a derived quantity.** While the
+	// The fourth population, and it is **0 in this lane while being 13 in the other** — which is the
+	// one thing about this bound a reader has to hold in mind before trusting its silence.
+	//
+	// An over-rejection is the accept direction's own defect: validation ran to completion and refused
+	// a module the corpus asserts is valid. `validateAdmitCeiling` above watches the mirror
+	// (accepted-and-shouldn't-be) and has watched it since slice 1; nothing watched this side at all
+	// until #341, because no command asked the validator a question whose right answer was yes.
+	//
+	// **The 0 here is honest and it is not the finding.** All 13 rows #341 measured need features the
+	// default lane gates off — GC's recursive type equivalence, memory64's 64-bit table index type at
+	// `call_indirect`, `(ref null none) <: (ref null any)`, element-type subtyping at `table.copy` —
+	// so they are invisible in this lane by construction and not by the instrument being blind. The
+	// all-on lane is where they live, and TestModuleDefinitionsAskTheValidator is what pins them by
+	// row: a bound at 0 whose population is elsewhere would otherwise be the unasserted distance,
+	// running and agreeing and saying nothing.
+	//
+	// A rise *here* therefore means something sharper than a rise in the all-on figure: it means the
+	// validator began refusing a module built only from instructions this engine ships on by default.
+	const validateOverRejectCeiling = 0
+	boardBound(t, "validateOverRejectCeiling", validateOverRejected, validateOverRejectCeiling, 0,
+		ceilingBound,
+		"the validator refused a module the corpus says is valid, built from default-lane features "+
+			"only. This is the accept direction's own defect and the reason #341 exists: an "+
+			"over-rejection produces no error for anyone to bucket, so it is invisible until a "+
+			"module definition is scored on the validator's answer")
+	// **Five constants now, where four of them used to be two plus a derived quantity.** While the
 	// alignment ledger existed, `validateAdmitCeiling` was computed from its live members, and this
 	// identity was the check that fired when one drained — the intended loud signal, landing in the
 	// right place, a drain being a stratum re-base and not an admission-bound event. The ledger has
-	// retired, so all four sides are written down by a person again, and the identity is back to its
+	// retired, so all sides are written down by a person again, and the identity is back to its
 	// plainer job: it catches a re-base of one part that forgot the others.
 	//
 	// Do not make `validateFailCeiling` derived to save the arithmetic. A partition whose every part
 	// is computed from the measurement is a tautology, and this identity's whole value is that both
 	// sides were asserted independently.
-	if validateDeclineCeiling+validateAdmitCeiling+validateMismatchCeiling != validateFailCeiling {
-		t.Errorf("the three validator ceilings (%d declined + %d admitted + %d wrong-message) sum to "+
-			"%d but the stratum's own is %d; one was re-based without the others, so the "+
-			"sub-partition no longer decomposes the column it claims to",
+	if validateDeclineCeiling+validateAdmitCeiling+validateMismatchCeiling+
+		validateOverRejectCeiling != validateFailCeiling {
+		t.Errorf("the four validator ceilings (%d declined + %d admitted + %d wrong-message + "+
+			"%d over-rejected) sum to %d but the stratum's own is %d; one was re-based without the "+
+			"others, so the sub-partition no longer decomposes the column it claims to",
 			validateDeclineCeiling, validateAdmitCeiling, validateMismatchCeiling,
-			validateDeclineCeiling+validateAdmitCeiling+validateMismatchCeiling, validateFailCeiling)
+			validateOverRejectCeiling,
+			validateDeclineCeiling+validateAdmitCeiling+validateMismatchCeiling+
+				validateOverRejectCeiling, validateFailCeiling)
 	}
 	boardBound(t, "validateFailCeiling", validateFail, validateFailCeiling, 0, ceilingBound,
 		"the validator answered fewer assert_invalid vectors than it did; the three bounds above "+
@@ -9525,7 +9752,27 @@ func TestPhase1Files(t *testing.T) {
 	//
 	// The all-on lane takes 552 where this one takes 358, and the 194-vector gap is attributed per
 	// file at `allOnPassFloor`.
-	const passFloor = 60817
+	// **60836 → 60790, #341: −46, and a pass floor going *down* is the one movement on this bound
+	// that has to argue for itself.**
+	//
+	// Every entry above this one is a rise, because every one of them landed capability. This one
+	// landed an *assertion*: a module definition now means the module decodes **and** validates
+	// (Scott's semantics ruling on #341), so 46 commands that used to pass on the reader's answer
+	// alone are now judged on a question nobody was asking. 22 of them cannot reach the type checker
+	// (`encodeFailCeiling`'s +22) and 24 are declined by it (`validateDeclineCeiling`'s +24). Not one
+	// of the 46 is a vector this engine used to answer correctly and now answers wrongly — the
+	// distinction this bound's own failure message cannot draw, which is why the delta is written down
+	// here rather than left to a reader to reconstruct.
+	//
+	// **Pre-registered on #341 before the arm was touched, with the row list and both lanes' figures**,
+	// which is the condition Scott set precisely because a slice that moves already-merged numbers
+	// cannot be allowed to explain its movements afterwards. The forecast was `60836 → 60790` and it
+	// landed exactly.
+	//
+	// `unsupported` is unmoved at 66 and the zero is **structural**: `classify` is untouched, so
+	// nothing the harness could not ask became askable. The reward figure with a subject is the fail
+	// column, +46 here and +164 in the all-on lane, every row an assertion that was not being made.
+	const passFloor = 60790
 	boardBound(t, "passFloor", totalPass, passFloor, boardBoundSlack, floorBound,
 		"a regression in a grammar that used to answer, or the corpus moved")
 }

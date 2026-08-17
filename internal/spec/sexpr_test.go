@@ -17,6 +17,23 @@ import (
 // Unit tests for the reader itself, so a parser bug is distinguishable from a
 // decoder bug when the suite board moves.
 
+// stubValidate and stubDeclined are fact 2 stubbed out for the probes in this file, in the shape
+// their `Decode` and `ReadText` stubs already use: every module is valid, nothing is declined.
+//
+// #341 made a module definition assert that the module *validates*, so an Engine that reads text
+// needs a validator or the arm panics — the registry-ahead-of-the-engine tripwire, one component
+// over. A permissive stub is the right answer for a probe whose subject is the parser, for the same
+// reason `Decode: func([]byte) error { return nil }` is: the component is being taken out of the
+// picture rather than measured. It is emphatically *not* the right answer for the board, and the
+// difference is the whole of #341 — a validator that says yes to everything is exactly what
+// `internal/validate/global_test.go`'s M11 row measured surviving. The board's engine supplies the
+// real one (`engine()` in spec_test.go), and TestModuleDefinitionsAskTheValidator is what asserts
+// that a refusal there is scored.
+var (
+	stubValidate ValidateFunc = func(Command) (Stratum, error) { return StratumValidate, nil }
+	stubDeclined DeclinedFunc = func(error) bool { return false }
+)
+
 func TestParseStringEscapes(t *testing.T) {
 	cases := []struct {
 		src  string
@@ -174,10 +191,12 @@ func TestParseAnnotationTokenSoup(t *testing.T) {
 		t.Fatalf("Parse: %v", err)
 	}
 	r := s.RunWith(Engine{
-		Decode:   func([]byte) error { return nil },
-		ReadText: func([]byte) error { return nil },
-		IsGated:  func(error) bool { return false },
-		Has:      []Capability{CapWatReader},
+		Decode:     func([]byte) error { return nil },
+		ReadText:   func([]byte) error { return nil },
+		Validate:   stubValidate,
+		IsDeclined: stubDeclined,
+		IsGated:    func(error) bool { return false },
+		Has:        []Capability{CapWatReader},
 	})
 	if r.Pass != 1 || r.Unsupported != 0 {
 		t.Errorf("got %d pass, %d unsupported; want 1/0 — the bare module form is scored "+
@@ -311,6 +330,8 @@ func TestClassifyAndRun(t *testing.T) {
 			return nil
 		},
 		ReadText:    func([]byte) error { return errString("unexpected token") },
+		Validate:    stubValidate,
+		IsDeclined:  stubDeclined,
 		Instantiate: func(Command) (Instance, Stratum, error) { return "stub", StratumUnset, nil },
 		Invoke: func(_ Instance, name string, _ []Val) ([]Val, error) {
 			if name != "f" {
@@ -1215,10 +1236,12 @@ type probeCall struct {
 
 func (p *registryProbe) engine() Engine {
 	return Engine{
-		Decode:   func([]byte) error { return nil },
-		ReadText: func([]byte) error { return nil },
-		IsGated:  func(error) bool { return false },
-		IsTrap:   func(error) bool { return false },
+		Decode:     func([]byte) error { return nil },
+		ReadText:   func([]byte) error { return nil },
+		Validate:   stubValidate,
+		IsDeclined: stubDeclined,
+		IsGated:    func(error) bool { return false },
+		IsTrap:     func(error) bool { return false },
 		InstantiateLinked: func(c Command, registry map[string]Instance) (Instance, Stratum, error) {
 			keys := make([]string, 0, len(registry))
 			mods := map[string]string{}
@@ -1622,10 +1645,12 @@ func TestAssertUnlinkableNeedsTheLinkerAndScoresBothWays(t *testing.T) {
 				t.Fatalf("classified %v, want KindAssertUnlinkable", got)
 			}
 			r := s.RunWith(Engine{
-				Decode:   func([]byte) error { return nil },
-				ReadText: func([]byte) error { return nil },
-				IsGated:  func(error) bool { return false },
-				IsTrap:   func(error) bool { return false },
+				Decode:     func([]byte) error { return nil },
+				ReadText:   func([]byte) error { return nil },
+				Validate:   stubValidate,
+				IsDeclined: stubDeclined,
+				IsGated:    func(error) bool { return false },
+				IsTrap:     func(error) bool { return false },
 				InstantiateLinked: func(cmd Command, _ map[string]Instance) (Instance, Stratum, error) {
 					// **The spectest bootstrap comes through this same door** (0017 part 3), and a
 					// stub that failed every call would panic in spectestRegistry before the vector
@@ -1691,6 +1716,8 @@ func TestAssertUnlinkableNeedsTheLinkerAndScoresBothWays(t *testing.T) {
 		_ = s.RunWith(Engine{
 			Decode:      func([]byte) error { return nil },
 			ReadText:    func([]byte) error { return nil },
+			Validate:    stubValidate,
+			IsDeclined:  stubDeclined,
 			IsGated:     func(error) bool { return false },
 			IsTrap:      func(error) bool { return false },
 			Instantiate: func(Command) (Instance, Stratum, error) { return "stub", StratumUnset, nil },

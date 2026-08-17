@@ -21,6 +21,35 @@ weakly-ordered platform.
 
 ### Added
 
+- **A `(module …)` command in a script is scored on the validator's answer, not the reader's alone
+  (#341).** A module definition asserts the module *is valid*; the harness had been asking only
+  whether it parsed, so `internal/validate`'s own mutation-testing row M11 could refuse **every**
+  module from inside the validator and leave all 2143 `KindModuleText` commands green. Sixty thousand
+  passes were carrying a claim they could not bear. The module-definition arm now calls
+  `opts.Validate` and buckets three distinct failures — didn't reach the validator, declined
+  (`StratumValidate` with no answer), and refused a valid module — with the instance still produced
+  either way, because withholding it would go red across every dependent vector for one defect.
+  - **`Failure.OverRejected`, a fourth validate-stratum bucket for the accept direction's own
+    defect.** Refusing a *valid* module is not a wrong message and not an admission; without its own
+    flag it lands in the wrong-message `default` arm, a population standing at 0, and would be read
+    as a 0003 message mismatch forever. Landed in the same PR that created the population rather
+    than after four rows had been miscounted — *a count that is right only while some other count is
+    zero is not a count of anything*.
+  - **Two decode paths are asserted to agree.** `Validate` encodes and decodes, then `instantiate`
+    encodes and decodes again (#296's boundary-signature double work), so a command whose validation
+    reached the type checker and whose instantiation then fails in `StratumEncode` or
+    `StratumBinary` is a disagreement between two paths over the same bytes, and is now red. Gate
+    declines are deliberately *not* excluded from the comparison: a gate decline on one path and not
+    the other is exactly the lane-override defect. Excluding them was the first design and it made
+    the check stillborn — falsification returned 0 rows.
+  - Gate declines leave the pass intact, unchanged by design (#124): the text front end stays
+    gate-blind and a gate decline travels forward to the dependent vector.
+- **`TestModuleDefinitionsAskTheValidator`, the oracle for the accept direction.** The M11 mutation
+  reproduced at the harness boundary — a validator refusing every module must turn `(module (func))`
+  red — plus the all-on lane's over-rejection population reconciled against a pinned table in both
+  directions with a vacuity guard. Falsified four ways, each with its own message: a dropped row, an
+  invented row, a corrupted cause, and a neutered mutation.
+
 - **`check_global`: `is_const`'s GlobalGet arm, at every call site the internal form has a subject for.**
   One reference line (`valid.ml:1037`) carrying **two** messages, because `global c x` raises before the
   mutability test — `unknown global N` for an index that does not resolve, `constant expression required`
@@ -910,6 +939,21 @@ weakly-ordered platform.
   tail-call gate's own 0x12/0x13 when it lands.
 
 ### Changed
+
+- **Seven board bounds re-based on #341's new question, pre-registered before the arm was touched.**
+  Asking a question the harness had never asked moves numbers on already-merged slices, and *those
+  movements are the finding rather than a regression* (Scott's condition on #341). Default lane
+  `60836 / 189 fail` → `60790 / 235`; all-on `64727 / 319` → `64563 / 483`. `encodeFailCeiling`
+  46 → 68 and `validateDeclineCeiling` 31 → 55 take module definitions that reach the encoder or the
+  validator and get no answer; `validateFailCeiling` 62 → 86 covers the widened stratum;
+  `validateOverRejectCeiling` is new at 0, terminal, since every one of the 13 needs a gated feature;
+  `passFloor` 60817 → 60790 and `allOnPassFloor` 64708 → 64563. `unsupported` is **unmoved at 66 and
+  structurally so** — `classify` is untouched, and this slice changes what the harness *asks* of
+  vectors it already recognized. `gated` unmoved at 4053 was the claim most worth checking, since
+  #124 rests on it.
+- **The all-on lane's fail delta is the reward figure: +164, of which 13 are the over-rejections
+  #343 tracks** and the rest are declines and encoder refusals that were being scored green on the
+  reader's answer.
 
 - **The cross-architecture procedure names a script and a native host, not a container recipe.**
   Scott's directive was a disjunction — *either the box gets fixed or the procedure should name CI as

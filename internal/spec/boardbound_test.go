@@ -93,6 +93,7 @@ import (
 //	validateDeclineCeiling   389      exact re-base  0      its declines, named per opcode
 //	validateAdmitCeiling     103      exact re-base  0      its admissions — the accept direction
 //	validateMismatchCeiling  0        at terminal   —       right refusal, wrong message (0003)
+//	validateOverRejectCeiling 0       at terminal   —       refusal of a *valid* module (#341)
 //	totalFloor               2143     vacuity       —       deliberately loose by design
 //	filesFloor               242      vacuity       —       deliberately loose by design
 //	i32SpellingFloor         2531     vacuity       —       the extractor found this kind at all
@@ -399,7 +400,13 @@ func TestEveryBoardBoundIsChecked(t *testing.T) {
 	// count has ever seen arrive — and it arrived for the reason the count exists: a population that
 	// had been 0 since the stratum was created became 4, and it was being *silently absorbed* by the
 	// bound next door rather than going unbounded in a visible way.
-	const boundPopulation = 19
+	//
+	// 19 → 20 with `validateOverRejectCeiling` (#341), which is the same arrival taken one step
+	// earlier: the population that would have been silently absorbed is again `validateMismatchCeiling`,
+	// and this time the flag and the bound landed in the PR that created the population rather than in
+	// the one that noticed the absorption. The row above stayed at 0 as a result, which is the only
+	// evidence available that the absorption did not happen.
+	const boundPopulation = 20
 	if len(bounds) != boundPopulation {
 		t.Errorf("found %d board bounds, want exactly %d. A new bound is welcome — add its row to "+
 			"this file's table with its kind and its reason, and re-base this constant in the same "+
