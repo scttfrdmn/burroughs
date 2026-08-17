@@ -21,6 +21,32 @@ weakly-ordered platform.
 
 ### Added
 
+- **`(module binary …)` asks fact 2 as well — the last module definition still scored on how it came
+  into being (#353, #345's flagged remainder).** #341 gave the text and quote forms a validation
+  check and left the byte-image form where it stood; the arm's own comment conceded it, in the words
+  that are now deleted — "phase 1 only decodes, so this is a decode-must-succeed check — a weaker
+  claim than the suite makes". So the 80 passes this form contributes to the default board were
+  decode-success wearing a validity claim. All three forms now go through one
+  `scoreModuleValidation` closure, extracted rather than copied because what a definition *asserts*
+  cannot be allowed to differ between a byte image and an assembler, and `classify` declares
+  `Needs: CapValidator` on the Kind to match.
+  - **Fact 1 runs first, and the order is load-bearing rather than tidy.** A `ValidateFunc` assembles
+    before it decodes and charges a decode refusal to `StratumEncode` — a claim that the image came
+    out of an encoder, true for the other two forms and false here, there being no encoder on this
+    path. Nothing but statement order holds the mis-charge off, so it gets a tripwire instead of a
+    comment.
+  - **The board does not move, and the zero was pre-registered on #353 before the arm was touched**:
+    88 `KindModuleBinary` commands, all 88 validating clean in both lanes. Default
+    `60790 pass / 235 fail / 66 unsupported / 4053 gated` and all-on `64592 pass / 454 fail / 0 gated`
+    are unmoved. A clean population does not make the question idle — an over-rejection produces no
+    error for any bucket to catch, which is the whole hole — but it does mean the arm's green says
+    nothing on its own, so the slice lands its own witness.
+  - **The mutation witness now carries a row per module-definition Kind**, each watched die
+    separately: the binary row to deleting its arm's call, the quote row to a one-token narrowing of
+    the per-Kind guard it shares with text. That second row is #341's own coverage gap repaired — it
+    landed fact 2 for two Kinds and witnessed one. The table is still *enumerated* where the domain
+    is derivable, declared and tracked as #354.
+
 - **The subtype relation — `internal/validate/match.go`, the whole of `match.ml` (#9 slice 5, #343,
   decision 0031).** `matches` had been type-index equality plus a bottom wildcard, which is exactly
   right for the numeric families and wrong for every reference form. That boundary was declared out of
