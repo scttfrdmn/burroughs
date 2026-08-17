@@ -60,6 +60,27 @@ import (
 // against a true 158. Two mechanisms over one population disagreed by exactly the size of a
 // population one of them could not see — the cross-check below is the instrument that reported it,
 // and the fix is a third counter on the board rather than a wider tolerance here.
+//
+// # `declined` reads zero in both groups (#359), and the empty column is a milestone, not a fault
+//
+// **The vocabulary question is closed.** The validator has a rule for every instruction the
+// `assert_invalid` corpus asks it about, so nothing left in this table is an untyped instruction:
+// what remains is 31 admissions, 10 wrong-message rows and 465 gated, and every one of those is a
+// question of the rules being *right* rather than of their existing. The campaign that this column
+// was the work plan for is over; the campaign it hands off to is correctness.
+//
+// Stated in the header rather than only in the row below, because a reader who arrives later finds
+// `declined: 0` pinned twice and the readiest explanation for an empty column is a broken counter.
+// It is not broken, and two facts show it: the tally is still accumulated on every walk, and the
+// board's *remaining* declines are pinned as this ledger's own complement (`stratumOther == 8`,
+// the non-`assert_invalid` kinds — #341's eight relaxed-SIMD operators). A zero here is a fact
+// about this population, not an absence of measurement over it.
+//
+// **The direction of read inverts, which is the practical consequence.** While the column was
+// populated it estimated reward: a number to be driven down, and its size was the next slice's
+// expected yield. At zero it becomes a *regression detector*, where nonzero no longer means "work
+// remaining" but "an instruction lost its rule, or the corpus grew one this validator has never
+// seen". Same counter, opposite inference, so the inference is written down.
 func TestAssertInvalidDestinationLedgerCloses(t *testing.T) {
 	requireSuite(t)
 
@@ -320,7 +341,10 @@ func TestAssertInvalidDestinationLedgerCloses(t *testing.T) {
 				"therefore no longer readable in this ledger \u2014 it is readable in `accepted` (the accept " +
 				"direction) and in the board's *other* command kinds, where the 8 remaining declines all " +
 				"live. **A column that reaches zero stops being an instrument**, and this entry says where " +
-				"the subject went rather than only that the row moved",
+				"the subject went rather than only that the row moved. The zero is a campaign milestone and " +
+				"not merely a navigation change — with no instruction in this population left untyped, " +
+				"everything remaining here is correctness — and the header states what that means for " +
+				"reading the column, since an empty one invites the theory that the counter broke",
 		},
 		{
 			name: "arrived with the arm (2 files) — corpus admission, not verdicts earned",

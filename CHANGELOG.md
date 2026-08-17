@@ -1035,6 +1035,34 @@ weakly-ordered platform.
 
 ### Changed
 
+- **The `declined` column's zero is documented as a campaign milestone rather than a navigation
+  change** (Scott's ruling, PR #363). With `declined` reading zero in both of the `assert_invalid`
+  ledger's groups, the vocabulary question is closed — the validator has a rule for every instruction
+  the corpus asks it about — and everything remaining in that table is *correctness*. Stated at the
+  column's own description, because the readiest explanation for an empty column found later is a
+  broken counter, and two facts against that reading are named beside it: the tally is still
+  accumulated on every walk, and the board's remaining declines are pinned as this ledger's
+  complement. The direction of read inverts with the zero — the column estimated reward while it was
+  populated and is a **regression detector** now — so the inference is written down rather than left
+  to whoever reads it next.
+- **`Ratio-Class` and purpose classification are documented as two ledgers that are never read as
+  one** (Scott's ruling, PR #363), at the trailer's own site in `scripts/ratio.sh`. `Ratio-Class`
+  attributes lines *within* the instrument column — who caused them — and moves nothing between
+  classes; purpose classification decides whether a PR is product or instrument, which is what the
+  two-consecutive-instrument-PRs counter runs on (#159). So an order from a principal changes a PR's
+  priority and never its class: #345 was instrument work, stayed instrument work, and the trailer only
+  made the chair's share visible. Written because the apparent tension was raised on #363 and reads as
+  a contradiction until the two subjects are separated. A chair-ordered PR with a zero reward figure is
+  a cost the chair caused, reported as such — *"I'd rather see it than not"* — so the `ordered` bucket
+  is the chair's line in the ledger and not an exemption surface.
+- **ADR 0027 records that `ref.null`'s declared retention gap acquired its first consumer**
+  (Scott's order, PR #363), appended rather than amended per 0028's standing rule for accepted
+  records. The gap was declared with a named condition — closed when a consumer exists — and the
+  consumer the record identified was the text encoder (#8); the one that arrived is the validator's
+  `ref.null` rule (#359). The original reasoning stands unamended, and the append is what keeps a
+  reader from concluding the gap is still open: a declared limit whose cost has been *incurred* reads
+  differently from one still hypothetical.
+
 - **Seven board bounds re-based on #341's new question, pre-registered before the arm was touched.**
   Asking a question the harness had never asked moves numbers on already-merged slices, and *those
   movements are the finding rather than a regression* (Scott's condition on #341). Default lane
