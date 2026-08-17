@@ -21,6 +21,33 @@ weakly-ordered platform.
 
 ### Added
 
+- **`check_global`: `is_const`'s GlobalGet arm, at every call site the internal form has a subject for.**
+  One reference line (`valid.ml:1037`) carrying **two** messages, because `global c x` raises before the
+  mutability test — `unknown global N` for an index that does not resolve, `constant expression required`
+  for a global declared `mut`. Twelve board vectors convert on the pair, and the two halves have
+  **disjoint** corpus populations (5 non-const, 7 unresolved), so each is witnessed alone rather than
+  jointly. The other half of `check_const` — `check_block`'s typing of the initializer — stays deferred,
+  and the *opcode* half of the same question is already answered one layer down by the decoder's
+  const-expression table (`internal/binary/instr.go:588`), a declared layering debt sharing
+  `binary.ErrConstExprRequired`.
+  - **The scope argument is the rule.** `check_global` folds one global into the context at a time
+    (`valid.ml:1059`), so a global's initializer sees the imports plus the globals declared *before it*
+    — not itself, not the module. Segment offsets and element expressions run after the fold completes
+    (`valid.ml:1162-1163` after `:1161`) and so see every defined global. Two scopes, one helper, and
+    passing the wrong one is invisible to the board in the accept direction.
+  - **Element expressions are checked in every mode**, `check_const` at `valid.ml:1100` running before
+    `check_elemmode` at `:1101` — so a passive segment's elements are checked, and an active segment
+    with both a non-constant element and an unresolvable table index reports the element.
+  - **A four-of-five census, with the fifth named**: the table-initializer site (`valid.ml:1070`) has
+    no subject in the internal form, the expression being decoded and then discarded, and arrives with
+    the GC gate (#7). Enumerated in `modulePre`'s phase table rather than left as a silent absence.
+  - Falsification: **13 mutations, both lanes**. Four move neither lane and each has a unit row —
+    two *sample* gaps (the corpus reaches its globals through imports, and no expression-form element
+    vector exists), one gap no corpus can close (the decoder refuses the input), and one *harness* gap
+    now filed as #341. A helper reused outside the dispatch that supplied its invariant does not
+    inherit it: `Op == opGlobalGet` is unambiguous inside the prefixed-region switch and ambiguous in a
+    raw expression scan, so the scan tests `Prefix` too.
+
 - **`scripts/citecheck.sh` gains a fourth check: no citation in a PR *body* may name that PR.** A body
   citing itself is never intentional, and the comparison costs nothing. It exists because three comment
   sites attributed a directive to the PR number one above the one that carried it — a *forward guess* at

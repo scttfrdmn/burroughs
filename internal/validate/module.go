@@ -137,10 +137,13 @@ func checkTableType(tab binary.Table) error {
 //	check_func      function declarations     — not this slice
 //	check_memory    defined memories          — this slice
 //	check_table     defined tables            — this slice
-//	check_global    globals                   — not this slice (`constant expression required`)
-//	check_data      data segments             — MEMORY INDEX ONLY (not the offset's const check)
-//	check_elem      element segments          — TABLE INDEX ONLY (not the reftype match, and not the
-//	                                            offset's or the elements' const checks)
+//	check_global    globals                   — this slice, `is_const`'s GlobalGet arm only (the
+//	                                            declared type is checked; `check_block`'s type
+//	                                            check on the initializer is not)
+//	check_data      data segments             — memory index, and the offset's GlobalGet arm
+//	check_elem      element segments          — table index, and the GlobalGet arm on the offset and
+//	                                            on every expression-form element (not the reftype
+//	                                            match, and not `check_block`'s type check)
 //	check_func_body every body                — pre-existing, in Module between the two halves
 //	check_start     the start function        — not this slice, and not an admission either: its
 //	                                            three vectors are refused above the validator with
@@ -152,6 +155,25 @@ func checkTableType(tab binary.Table) error {
 //
 // **Each "not this slice" line is a live admission bucket, not a hypothetical.** The board's
 // accepted census is the work plan, and these are its remaining rows.
+//
+// # The const-expression sites, counted against the reference rather than against this file
+//
+// `is_const`'s GlobalGet arm is one rule reached from **five** `check_const` call sites, and a
+// rule implemented at four of five is not a rule — *coverage is a claim*, so the claim is
+// enumerated and the absence is named:
+//
+//	valid.ml:1058   global initializer          checkConstGlobals(…, i)               scope = i
+//	valid.ml:1070   table initializer           NO SUBJECT — see below
+//	valid.ml:1078   data segment offset         checkConstGlobals(…, len(m.Globals))
+//	valid.ml:1094   element segment offset      checkConstGlobals(…, len(m.Globals))
+//	valid.ml:1100   element segment elements    checkConstGlobals(…, len(m.Globals)), every mode
+//
+// The table-initializer site is absent **by representation and not by omission**: a table's
+// initializer expression is decoded and then discarded, so there is no field in
+// `binary.Table` for a rule here to read. It arrives with the GC gate (#7), which is what
+// introduces the form; until then a call site would have nothing to be passed. Recorded here
+// because a four-of-five census that says "five" is the coverage claim an instrument cannot
+// make about itself, and the next slice to touch tables needs the gap where it can see it.
 func modulePre(m *binary.Module) error {
 	// check_import → check_externtype → check_memorytype / check_tabletype. An imported memory's
 	// limits are checked by the same rule as a defined one's, on the same descriptor fields, and
@@ -188,6 +210,23 @@ func modulePre(m *binary.Module) error {
 			return fmt.Errorf("table %d: %w", i, err)
 		}
 	}
+	// check_global (valid.ml:1054-1059), in the reference's position: after check_table, before
+	// check_data. `check_globaltype` then `check_const const t`, and this slice supplies the first
+	// half of `check_const` — the `require (List.for_all (is_const c) const.it)` at :1042 — while
+	// `check_block`'s type check on the initializer stays deferred.
+	//
+	// **The scope argument is `i`, and it is the whole rule.** `check_global` folds
+	// (`{c with globals = c.globals @ [gt]}` at :1059) so a global's initializer sees the imported
+	// globals plus the globals *declared before it* and not itself: `(module (global i32 (global.get
+	// 0)))` is `unknown global 0` even though the module has a global 0, while the module one line
+	// below it in the suite — `(global i32 (i32.const 0)) (global i32 (global.get 0))` — is valid.
+	// A whole-module view answers both wrong, in opposite directions, and only one of those two
+	// vectors is an `assert_invalid` the board would notice.
+	for i := range m.Globals {
+		if err := checkConstGlobals(m, m.Globals[i].Init, i); err != nil {
+			return fmt.Errorf("global %d: %w", i, err)
+		}
+	}
 	// check_data → check_datamode (valid.ml:1073-1084). The active arm resolves `memory c x`
 	// *before* checking the offset expression, so a segment naming a memory that is not there
 	// reports `unknown memory N` and never `constant expression required` — which is why the
@@ -199,6 +238,14 @@ func modulePre(m *binary.Module) error {
 			continue
 		}
 		if err := memoryExists(m, d.MemIndex); err != nil {
+			return fmt.Errorf("data segment %d: %w", i, err)
+		}
+		// `check_const c offset (addr_type_of_memory)` at :1076, after the memory resolves — the
+		// sequence the loop's own comment above relies on. Every defined global is in scope here,
+		// unlike a global's initializer: `check_module` has already folded all of them in by the
+		// time it reaches the data segments (:1161 before :1163), which is why this passes the full
+		// count where the loop above passes `i`.
+		if err := checkConstGlobals(m, d.Offset, len(m.Globals)); err != nil {
 			return fmt.Errorf("data segment %d: %w", i, err)
 		}
 	}
@@ -223,14 +270,126 @@ func modulePre(m *binary.Module) error {
 	// a declarative element segment is legal where a declarative data segment cannot be built at all.
 	for i := range m.Elems {
 		e := &m.Elems[i]
+		// The element expressions are checked in **every** mode (`check_elem` at :1100 runs
+		// `check_const` over the segment's elements at :1100, before `check_elemmode` at :1101 decides
+		// anything about a table), so this half is outside the Active guard below. A passive segment's
+		// `(item (global.get 0))` is as much a const expression as an active one's — and an *active*
+		// segment naming a missing table with a bad element expression reports the element, not the
+		// table, which is why this loop precedes the tableTypeAt call rather than following it.
+		if e.ByExpr {
+			for j := range e.Exprs {
+				if err := checkConstGlobals(m, e.Exprs[j], len(m.Globals)); err != nil {
+					return fmt.Errorf("element segment %d, element %d: %w", i, j, err)
+				}
+			}
+		}
 		if e.Mode != binary.ElemActive {
 			continue
 		}
 		if _, err := tableTypeAt(m, e.TableIndex); err != nil {
 			return fmt.Errorf("element segment %d: %w", i, err)
 		}
+		// `check_const c offset ...` at :1094, after `table c x` and after the reftype match that is
+		// still deferred. **The deferred check sits between these two, so a module with both a
+		// reftype mismatch and a non-constant offset reports this one where the reference reports
+		// the match** — a message inversion the board is measured for rather than assumed clear of,
+		// and the reason the elem loop's absences were worth transcribing in order.
+		if err := checkConstGlobals(m, e.Offset, len(m.Globals)); err != nil {
+			return fmt.Errorf("element segment %d: %w", i, err)
+		}
 	}
 	return nil
+}
+
+// checkConstGlobals is `is_const`'s GlobalGet arm (valid.ml:1037) over one constant expression:
+//
+//	| GlobalGet x -> let GlobalT (mut, _t) = global c x in mut = Cons
+//
+// One line of the reference, and it carries two distinct messages because `global c x` *raises*
+// before the mutability test can be reached: an index that does not resolve is `unknown global N`,
+// and one that resolves to a `Var` global is `constant expression required`. Ordering them the
+// other way around would report the const-expr refusal for a module whose real defect is a
+// dangling index — the same message-inversion the loops above are written to avoid, one rule down.
+//
+// # What this function is not
+//
+// It is **not** `check_const`. That rule is two requirements (`valid.ml:1041-1044`): the
+// `List.for_all (is_const c)` predicate, and then `check_block` typing the expression against the
+// expected result type. Only the first is this slice's, and only the GlobalGet arm of the first —
+// `is_const`'s other arms are answered one layer down, by the decoder's own const-expr table
+// (`internal/binary/instr.go:588`), which refuses a non-const *opcode* with this same
+// `ErrConstExprRequired` identity before a Module exists. That split is the declared layering debt
+// the sentinel's comment records, and reusing the identity rather than minting a second one is the
+// `ErrUnknownTable` precedent: one rule, one error, whichever layer happens to be the one that can
+// see the violation.
+//
+// # definedInScope, and why the caller supplies it
+//
+// The count of *defined* globals visible to this expression — not `len(m.Globals)` unless the
+// caller means all of them. `check_global` folds one global into the context at a time
+// (`{c with globals = c.globals @ [gt]}`, :1059), so a global's own initializer sees the globals
+// declared before it and not itself or any after; a data or element expression sees every global,
+// `check_module` having folded them all in by :1162. Imports are always in scope and are counted
+// by the module, so only the defined half is a parameter.
+func checkConstGlobals(m *binary.Module, expr []binary.Instr, definedInScope int) error {
+	for i := range expr {
+		// `Prefix == 0` is load-bearing, and it is a precondition this function's *caller* does not
+		// supply where `globalOp`'s did. The validator's instruction loop reaches globalOp through a
+		// switch that has already separated the prefixed opcode spaces, so a bare `Op == opGlobalGet`
+		// is unambiguous there; scanning a raw expression, it is not — `Op` is the sub-opcode for a
+		// prefixed instruction, so `0xfd 0x23` would read as `global.get` and resolve a SIMD
+		// instruction's first immediate as a global index. That the decoder's const-expr table would
+		// have refused that byte pair first is true and is exactly the reason not to lean on it: the
+		// refusal is a layering debt, and a debt is not an invariant.
+		if expr[i].Prefix != 0 || expr[i].Op != opGlobalGet {
+			continue
+		}
+		idx := uint32(expr[i].Imm0)
+		_, mutable, err := globalTypeAt(m, idx, definedInScope)
+		if err != nil {
+			return err
+		}
+		if mutable {
+			return fmt.Errorf("%w: global.get %d names a mutable global", binary.ErrConstExprRequired, idx)
+		}
+	}
+	return nil
+}
+
+// globalTypeAt resolves a global index to its type and mutability across the imports-then-defined
+// index space, with the defined half bounded by an explicit scope.
+//
+// The scope parameter is the only thing this has that `tableTypeAt` next door does not, and it is
+// there because global scope is the one index space the reference *grows during* module checking —
+// see checkConstGlobals on the fold. `validator.globalAt` delegates here at full scope, which is
+// correct for its callers: a function body runs after :1161, by which time every global is in.
+func globalTypeAt(m *binary.Module, idx uint32, definedInScope int) (binary.ValType, bool, error) {
+	imported := m.ImportedGlobals()
+	if int(idx) < imported {
+		n := 0
+		for i := range m.Imports {
+			if m.Imports[i].Kind != binary.ExternGlobal {
+				continue
+			}
+			if n == int(idx) {
+				return m.Imports[i].GlobalType, m.Imports[i].GlobalMutable, nil
+			}
+			n++
+		}
+		// Unreachable while ImportedGlobals counts the same predicate this loop filters on, and loud
+		// rather than silent for that reason: the two agreeing is what makes the branch above sound,
+		// so the way to hear about them disagreeing is to say so here.
+		return binary.ValType{}, false, fmt.Errorf("%w %d (import scan found no match)", ErrUnknownGlobal, idx)
+	}
+	if defined := int(idx) - imported; defined < definedInScope {
+		g := m.Globals[defined]
+		return g.Type, g.Mutable, nil
+	}
+	// `(%d in scope)` verbatim from indexInScope, because the corpus matches by substring (0003) and
+	// three bucket keys ride on this one format: the bare `unknown global`, `unknown global 0`, and
+	// `unknown global 1`. Any text between the category and the index breaks the latter two.
+	return binary.ValType{}, false, fmt.Errorf("%w %d (%d in scope)",
+		ErrUnknownGlobal, idx, imported+definedInScope)
 }
 
 // memoryExists is the `memory c x` lookup with the descriptor thrown away.
