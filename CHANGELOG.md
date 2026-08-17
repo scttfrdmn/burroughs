@@ -1082,6 +1082,40 @@ weakly-ordered platform.
   3): which code `inspect` owes a refusal is a live question about the CLI's contract, and a refactor
   that threads writers is not the artifact that answers it.
 
+- **`CLAUDE.md` is a brief and a pointer page** (Scott's directive, the four-workstream brief).
+  The file that every session reads first now carries orientation (what the project is, the phase
+  ladder, where work is tracked, the conventions), **five behaviours** that change what a PR does,
+  and a page of links into `docs/laws/`, `docs/decisions/`, and the contract. The five: the
+  product/overhead rule with its unsupported-delta statement, stop condition and ratio provenance;
+  the PR-is-the-report protocol; decision-before-code with the status-field rule; gates and the
+  flip's stamp tier; and wait-on-the-verdict-never-on-a-timer. Everything else is a lesson looked
+  up when its subject is in play, which is what `docs/laws/` is for.
+  - **The three operational recipes moved verbatim to `docs/laws/operations.md`** — waiting on CI,
+    local cross-architecture verification, and post-squash divergence — because they exist nowhere
+    else and a page of pointers is the wrong place for a shell snippet. Only the heading depth
+    changed, which does not move the anchors `CLAUDE.md` links to.
+  - **The one law that lived only in `CLAUDE.md` moved verbatim into the corpus** — *a completion
+    state can be true while its payload vanished — verify the artifact, not the flag*, now
+    `docs/laws/evidence-and-instruments.md`'s last heading. It sat under `## Tooling gates` rather
+    than under `## Disciplines`, so it was never inside the checked bijection and the sweep that
+    proved the 52 indexed laws survived would have said nothing about it; three other families cite
+    its shape, and none carried its specimen, its `gh issue list --limit 500` query, or the rulings
+    it was granted on. Found by grepping the corpus for the body rather than for the pointer.
+  - **No law text moved and none was lost.** All 52 law headings the old index pointed at still
+    resolve in the corpus, checked mechanically; the only deletions inside `docs/laws/` are the two
+    front-matter paragraphs that described the retired recall-key design.
+  - **The link check is re-pointed, not retired.** `TestClaudeMDLinksResolve` and
+    `TestLawFamiliesAreReachable` (`internal/testenv`) replace the per-law bijection: every
+    relative link on the page resolves to a file and, where it carries an anchor, to a heading that
+    slugs to it; and every law family is reachable from the page. A dangling pointer is a page of
+    pointers' characteristic failure, and *a body nobody points at is a law out of context* is the
+    same risk one granularity up. Falsified five ways — a dangling path, a reworded anchor, an
+    unlinked family, a link reader that stopped matching, and a dangling *ADR* path, which is the
+    one that shows the check is not scoped to `docs/laws/`. The unlinked-family falsification also
+    caught a defect in the check itself: an unconditional `t.Logf` printed "all linked" beside the
+    failure saying one was not, a witness contradicting the verdict in the same output, so the log
+    is now guarded on `t.Failed()`.
+
 - **A borrowed reward figure is refused, and the closing-keyword lesson gets a home**
   (`docs/laws/`, Scott's rulings, PR #364). Two governance records written into the law corpus's
   bodies, where they cost the index nothing.
@@ -1657,6 +1691,23 @@ weakly-ordered platform.
 
   The site string is now the **caller's**: four call sites, one more than #241 counted, because an
   element segment's *offset* and an element *expression* are different lines of the user's module.
+
+### Removed
+
+- **The `CLAUDE.md` index economy, in full** (Scott's directive: *"once the file is a pointer page
+  there's nothing to ration"*). Gone: `claudeMDCeiling` and `TestClaudeMDStaysAnIndex` (the 38400
+  byte budget), `TestClaudeMDIndexLedger` with its golden `claudemd-ledger.txt` and the
+  `make claudemd-ledger` target, `lawsFloor`, and the mint-and-demote accounting the ceiling's
+  comment carried — including the memory-index reserve and the extent reconciliation #319 was
+  filed about. Each is retired because **its subject dissolved**, which is the only admissible
+  reason under *a tripwire whose subject dissolves is re-pointed, never closed*: a budget over a
+  page that rations nothing measures a quantity nobody is trading, and a per-law byte ledger has no
+  per-law entries left to weigh. What survives of the apparatus is the citation half, re-pointed
+  (see Changed). The vacuity guard is now **derived instead of enumerated** — every family in the
+  corpus must be linked, so a reader that stops matching fails once per family rather than passing
+  over an empty set.
+  - **`internal/testenv/laws_test.go`'s header carries the account** of what dissolved and what was
+    re-pointed, so the retirement is readable at the site rather than only in this entry.
 
 ### Fixed
 
