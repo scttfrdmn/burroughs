@@ -79,6 +79,26 @@ amended rather than replaced.
       specimen deliberately** — a case answered without an amendment is evidence about the rule, and
       filing it as an instance would re-create exactly the enumeration this clause refuses.
       (Ruling: Scott, PR #307.)
+
+      **A fifth case tried the substitution from the other end and was refused: a *borrowed*
+      figure is out.** #348 is overhead — a CI-subsection rewording, no engine diff — and the
+      actor offered, as its reward figure, the delta of the product work the rewording rides
+      with. Scott declined it, and the reason names a defect class rather than this instance:
+      *"a borrowed figure is a reward figure with a different subject, which is the same defect
+      as the membership swap in the 103 and the harness-widening-read-as-engine-capability
+      conflation — a number that was true about something else, standing where a number about
+      this artifact belongs."* **#235's carve-out is not the precedent**, and its two conditions
+      are why: there the ordinary figure is structurally zero *and* a same-subject substitute
+      exists (the all-on lane measures the same artifact's own vectors). A figure whose subject is
+      a different PR satisfies neither, and he had already declined to extend #235 once on that
+      reasoning (#307, above).
+      So the honest report for an overhead PR is **`unmoved`, plus the named subject on its own
+      line as context** — the subject is what the PR is overhead *for*, which the rule already
+      requires, and it is context rather than a reward figure. **An overhead PR's reward figure is
+      *none*, and this project already prefers `NOT RUN` to zero, `UNAVAILABLE` to negative, and
+      absent to `0.0`**: a figure standing in a slot where no figure has a subject is the same
+      false witness in the reward column that a fabricated `0.0` would be in a measurement one.
+      Prose again rather than a specimen bullet, per the clause above. (Ruling: Scott, PR #364.)
   - **The actor never chooses the instrument that judges the actor.** The umbrella the two
     rules below were always standing under, written down once so it does not have to be
     rediscovered a third time: not choosing the measure, not granting the exception — same

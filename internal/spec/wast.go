@@ -125,12 +125,49 @@ const (
 	KindUnsupported                     // anything phase 1 cannot execute
 )
 
+// String names the question the harness asked, **in the suite's words, plus any distinction the
+// Kind adds** (ruling: Scott, PR #364).
+//
+// The board measures the corpus, so its rows name the corpus's terms: `assert_invalid` is checkable
+// against the `.wast` files by anyone, where a Go identifier is checkable only against source the
+// reader does not have open. And the collapsing hazard is the other half of the same rule — two
+// Kinds sharing one head atom must not print the same label, which the distinctness pass in
+// `TestAssertInvalidKindsAreExactlyTheAssertInvalidForms` enforces — load-bearing for the ledger's
+// bucket keys, not for display.
+//
+// Five strings were wrong under that rule until #364 fixed them, and all five the same way: **a
+// bare head atom in a family whose siblings discriminate**, so the string named the head atom of a
+// group rather than the Kind's own form. `module` is how the corpus spells the *text* form, sitting
+// beside two wrapper Kinds; `assert_malformed` has no unwrapped form at all, its two Kinds being
+// the binary and quote wrappers, so the bare atom named neither; `assert_return`, `invoke` and
+// `assert_invalid` each left the unwrapped arm bare while their siblings carried a discriminator.
+//
+// **The fifth was defended in this comment before the control was written, and the defence was
+// wrong.** The argument for keeping a bare `assert_invalid` was that the Kind's own corpus spelling
+// *is* unwrapped — true, and not the question. `assert_trap` in this same switch already
+// discriminates both of its arms (`(module)` and `(invoke)`), so the three bare arms made one
+// switch inconsistent about one question, and a board reader can check consistency between rows
+// while having no way to recover which form the corpus happens to spell bare. Recorded rather than
+// quietly corrected because the sequence is the lesson: prose asserting the property the code
+// lacked, then a control derived from the rule instead of from the prose, disagreeing with it.
+//
+// The three arms that stay bare — `register`, `assert_unlinkable`, `assert_exception` — are bare
+// because *no sibling Kind subdivides them*, which is the rule's own condition and not an
+// exception to it. A second Kind arriving under any of those heads makes them defects the moment
+// it lands, and `TestKindStringsSpeakTheSuitesVocabulary` fails at that moment rather than at the
+// next reading of this comment.
+//
+// `module text` is the one string the corpus does not literally contain, and it is declared rather
+// than checked: the text form is distinguished by the *absence* of a wrapper, so its faithful
+// spelling is the bare `module` — which would leave a board reader unable to tell it from the head
+// atom of three Kinds. The added word is legibility bought against fidelity, named here because
+// `TestKindStringsSpeakTheSuitesVocabulary` declares it as the one string it cannot check.
 func (k Kind) String() string {
 	switch k {
 	case KindModuleBinary:
-		return "module"
+		return "module binary"
 	case KindAssertMalformed:
-		return "assert_malformed"
+		return "assert_malformed (binary)"
 	case KindModuleQuote:
 		return "module quote"
 	case KindAssertMalformedText:
@@ -138,9 +175,9 @@ func (k Kind) String() string {
 	case KindModuleText:
 		return "module text"
 	case KindAssertReturn:
-		return "assert_return"
+		return "assert_return (invoke)"
 	case KindInvoke:
-		return "invoke"
+		return `invoke "f"`
 	case KindAssertTrapModule:
 		return "assert_trap (module)"
 	case KindAssertTrapAction:
@@ -158,13 +195,18 @@ func (k Kind) String() string {
 	case KindAssertException:
 		return "assert_exception"
 	case KindAssertInvalid:
-		return "assert_invalid"
+		return "assert_invalid (module)"
 	case KindAssertInvalidBinary:
 		return "assert_invalid (binary)"
 	case KindAssertInvalidQuote:
 		return "assert_invalid (quote)"
 	default:
-		return "unsupported"
+		// **Bracketed, because this Kind has no head atom and must not read as though it did.**
+		// It is not a suite form — it is the harness saying it recognized nothing — and the corpus
+		// contains no `(<…` anywhere, so the brackets are a spelling no `.wast` file can produce.
+		// It rendered a bare `unsupported` until #364, which sat in a board row beside real atoms
+		// and beside the board's own `unsupported` *column*, two different things wearing one word.
+		return "<unsupported>"
 	}
 }
 
@@ -2040,8 +2082,15 @@ func (s *Script) run(opts runOpts) *Result {
 	// Derived from `c.Kind.String()` because the alternative is two places knowing one string: a
 	// reader of these keys (the destination ledger) has to recover the form to classify the
 	// marker after it, and a literal here would let the two drift into a `default` arm that
-	// reports "the arm grew an outcome" when the arm merely renamed one. `KindAssertInvalid`'s
-	// name is `"assert_invalid"`, so the 2697 existing keys are byte-identical to what they were.
+	// reports "the arm grew an outcome" when the arm merely renamed one.
+	//
+	// **That derivation was tested for real by #364**, which renamed `KindAssertInvalid` from
+	// `assert_invalid` to `assert_invalid (module)`: every key on this side and every prefix strip
+	// on the ledger's side moved together, because both come from the same call. What did *not*
+	// move with them was the one literal that had been written out by hand — `admittedKeyPrefix` in
+	// `spec_test.go`, now derived here's way. A rename is how you find out which readers were
+	// deriving and which were copying; this comment used to end by asserting the keys were
+	// byte-identical to their pre-split form, which stopped being true the moment the string did.
 	//
 	// The **stratum** figures are unaffected by the split because they come from
 	// `Failure.Declined`/`Accepted`, the flags, not from these strings — so the partition is a
