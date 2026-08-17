@@ -349,11 +349,14 @@ func citationInventory(tb testing.TB) (map[string]bool, []citation) {
 			return err
 		}
 		if d.IsDir() {
-			// Same exclusions as TestEverySkipSiteIsLicensed, deliberately: the two controls
-			// walk one tree, and a divergence would mean they disagree about what "the tree"
-			// is. third_party is vendored upstream material we do not author.
-			switch d.Name() {
-			case "testdata", "bin", ".git", "tools", "third_party":
+			// Same exclusions as TestEverySkipSiteIsLicensed, and now shared rather than
+			// asserted: this comment used to claim the two lists were the same while the
+			// literal beneath it carried a fifth entry the other did not — *the defect
+			// stated as the rule*, which makes a reader confirm the drift as though it were
+			// the design. `skipWalkDir` is the one list; `third_party` is passed as this
+			// walk's own documented addition, vendored upstream material we do not author,
+			// so the divergence is visible at the call site instead of hidden in a copy.
+			if skipWalkDir(d, "third_party") {
 				return fs.SkipDir
 			}
 			return nil

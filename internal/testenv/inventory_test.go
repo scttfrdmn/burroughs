@@ -90,8 +90,7 @@ func TestEverySkipSiteIsLicensed(t *testing.T) {
 			return err
 		}
 		if d.IsDir() {
-			switch d.Name() {
-			case "testdata", "bin", ".git", "tools":
+			if skipWalkDir(d) {
 				return fs.SkipDir
 			}
 			return nil
@@ -223,8 +222,7 @@ func TestEveryFuzzTargetIsGated(t *testing.T) {
 			return err
 		}
 		if d.IsDir() {
-			switch d.Name() {
-			case "testdata", "bin", ".git", "tools":
+			if skipWalkDir(d) {
 				return fs.SkipDir
 			}
 			return nil
