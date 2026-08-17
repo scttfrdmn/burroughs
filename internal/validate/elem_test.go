@@ -39,8 +39,41 @@ import (
 //
 // Seven predicted movers against a seven-row bucket, which is the kind of agreement that wants a
 // second mechanism rather than a nod: it holds only because all nine other rows are already settled,
-// and that is measured above rather than assumed. `table.wast:51-52` are **verbatim repeats** of
-// :23-24 under a second header, so the seven are five distinct modules.
+// and that is measured above rather than assumed.
+//
+// # The row list leaves one question open, and the modules close it without the oracle
+//
+// Six of the seven live outside `elem.wast`, which falsified the scouting claim that the file named the
+// rule. But *why* the claim was false has two readings and the message oracle cannot separate them,
+// because all seven want the same string: either the **file was a bad proxy** for rule ownership, or
+// **this rule is over-firing** onto modules whose intended defect is elsewhere and the seven agree by
+// coincidence. That is the resolution limit `authority_test.go` now documents, arriving on the first
+// slice after it was written down.
+//
+// The closing check needs no oracle — read the modules. All seven are an active element segment naming
+// table index 0 in a module that declares no table, so the answer is the first reading: the file was a
+// proxy and the proxy was wrong. The four distinct module texts behind the seven vectors:
+//
+//	module text                                     vectors
+//	------------------------------------------------+----------------------------------------------
+//	(module (elem (i32.const 0)))                    func_ptrs.wast:32, table.wast:23, table.wast:51
+//	(module (elem (i32.const 0) 0) (func))           func_ptrs.wast:33
+//	(module (elem (i32.const 0) $f) (func $f))       table.wast:24, table.wast:52
+//	(module (func $f) (elem (i32.const 0) $f))       elem.wast:721
+//
+// Two of the three files state the ownership in prose while filing the vector under a table or
+// function-pointer heading — `;; Elem segments with no table` (`table.wast:49`) and `;; Element without
+// table` (`elem.wast:719`). The suite was never ambiguous about whose rule these are; the file name was
+// the only thing that ever suggested otherwise.
+//
+// **And this read corrected a second claim of the same shape, in the sentence that reported the
+// first.** That sentence read "the seven are five distinct modules", derived by noticing that
+// `table.wast:51-52` are verbatim repeats of `:23-24`. There are **four**, not five: `(module (elem
+// (i32.const 0)))` appears three times, and the third is in `func_ptrs.wast`. The repeat was deduped
+// *within* the file where it had been noticed and not *across* files — file-scoped reasoning again, one
+// level down, inside the correction of a file-scoped error. Recorded because the recurrence is the
+// lesson: a dedup is a claim about a population, and scoping it to the container it was spotted in
+// inherits the container's blind spot. (Directive: Scott, PR #339 review.)
 //
 // # The rows below, and which are falsifiable by the board
 //
@@ -176,6 +209,13 @@ func TestElemSegmentTableIndexResolves(t *testing.T) {
 // two ways — and fails this test and `TestBulkRejectsWithTheRuleThatRefused`, nothing else. Those two
 // are pinning different things and both are needed: the bulk test holds one producer's *text*, this one
 // holds the two producers' *agreement*, and a matched drift in both spellings passes the first.
+//
+// **This test is the only reader of that mutation, so deleting it uncovers the mutation silently.** The
+// board does not cover it — that is the measurement above, not a guess — and neither does any sentinel
+// check, since `errors.Is` passes on both producers whatever the parenthetical says. The substring
+// comparison below is therefore load-bearing rather than a loose assertion a tightening pass should
+// replace with an identity check: identity is exactly the instrument that cannot see this. (Directive:
+// Scott, PR #339 review — a mutation with one reader needs the reader to say so.)
 //
 // Asserted as text rather than by sentinel identity, because `errors.Is` passes on both while the
 // parenthetical is what the substring match consumes.

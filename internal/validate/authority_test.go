@@ -198,8 +198,18 @@ import (
 // shortest way to write an active segment, so the suite reaches the implicit form whenever it wants a
 // tableless-module vector at all. The register does not grow, and this paragraph is why a reader can
 // tell that from the register never having been asked — which is the same distinction between
-// collection and coverage the section above is about, one level down. (Directive: Scott, PR #337
-// relay, and the answer to the question he asked.)
+// collection and coverage the section above is about, one level down.
+//
+// **The board is that mutation's only reader, and no unit row anywhere covers it.** Every row in
+// `elem_test.go` passes with the implicit index skipped, because a row that constructs a segment with
+// `TableIndex: 0` cannot distinguish "implicit" from "explicit zero" any more than the validator can —
+// the wire bit is not in `binary.ElemSegment`, by that field's own design (*absent and empty are
+// different facts* was applied to `ByExpr` and not to this). So the seven is quoted here rather than
+// asserted as a row, and the two mutations in that slice's battery are covered by disjoint instruments:
+// this one board-only, the parenthetical unit-only. Deleting the corpus would uncover this one silently,
+// which is what the suite-as-oracle already implies and is worth stating where the figure lives.
+// (Directive: Scott, PR #337 relay, and the answer to the question he asked; the single-reader note is
+// his PR #339 review.)
 //
 // # The message oracle discriminates layers, never rules within a layer
 //

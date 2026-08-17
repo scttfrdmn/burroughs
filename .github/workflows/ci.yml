@@ -301,9 +301,20 @@ jobs:
           # script takes a diff, and which diff is the workflow's question.
           BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || 'HEAD^' }}
           HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || 'HEAD' }}
+          # Check 4's subject, from the payload rather than derived. Its population is the body,
+          # not the diff, so it is a *second invocation* — the same two-call shape closecheck uses
+          # below, and for the same reason: two populations, two verdicts, neither hidden in the
+          # other. A comment citing the PR it was written in is this repo's attribution
+          # convention, which is why the diff call must not be given the number.
+          SELF: ${{ github.event_name == 'pull_request' && github.event.pull_request.number || '' }}
         run: |
           git rev-parse --verify "$BASE" >/dev/null
           ./scripts/citecheck.sh "$BASE" "$HEAD"
+          if [ -n "$SELF" ]; then
+            ./scripts/citecheck.sh --pr "$SELF"
+          else
+            echo "citecheck: push event, no PR body to scan (the diff half above ran)."
+          fi
 
       # No prose may close an issue as a side effect (grave #314). A step in *this* job rather
       # than a job of its own: it needs the same checkout, the same token, and the same two
