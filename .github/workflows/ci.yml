@@ -174,11 +174,14 @@ jobs:
         # doubles as a swallowed-exit-code backstop; that job moved to `defaults.run.shell`.
         # The `wc -c` below keeps its pipe, being already safe: `|| echo 0` makes the
         # substitution succeed either way, so `pipefail` changes nothing there.
+        #
+        # **That loop now lives in `scripts/suite-count.sh` (#340), which keeps both properties
+        # above and adds the one they were missing:** the glob it replaced was dot-blind, so a
+        # tree holding 257 vectors and 257 AppleDouble sidecars counted 257 here and 514 in Go.
+        # One definition per side, with a control between them — the count this floor is applied
+        # to is now the same *set* `testenv.SuitePaths` measures, not merely the same number.
         run: |
-          n=0
-          for f in testdata/spec/*.wast; do
-            if [ -e "$f" ]; then n=$((n + 1)); fi
-          done
+          n="$(scripts/suite-count.sh testdata/spec)"
           d=third_party/spec/interpreter/binary/decode.ml
           b="$(wc -c <"$d" 2>/dev/null | tr -d ' ' || echo 0)"
           echo "vendored $n .wast files; reference decode.ml $b bytes"
@@ -395,17 +398,13 @@ jobs:
         # Assert the corpus is present before trusting any count that comes out of
         # it: a verdict without an identity check is hearsay.
         #
-        # **The counter is a loop for `pipefail`'s sake — see the `build` job's copy of this
-        # note for the full reasoning.** In short: as `ls … | wc -l` it swallowed `ls`'s exit
-        # code and this floor was the only thing that noticed; with `pipefail` and `-e` both in
-        # force it would instead abort the step *before* the `::error::` line below, which is
-        # louder and mute. Counted this way there is no failure to propagate, an unmatched glob
-        # is honestly zero, and the floor keeps its diagnostic.
+        # **The counter is `scripts/suite-count.sh` — see the `build` job's copy of this note for
+        # the full reasoning.** It was a loop here for `pipefail`'s sake and the script keeps that
+        # property (no pipe, unmatched glob honestly zero, the floor keeping its diagnostic); what
+        # moving it out of the YAML adds is #340's fix, that the population counted here is the one
+        # `testenv.SuitePaths` counts, sidecars and all, rather than a dot-blind twin of it.
         run: |
-          n=0
-          for f in testdata/spec/*.wast; do
-            if [ -e "$f" ]; then n=$((n + 1)); fi
-          done
+          n="$(scripts/suite-count.sh testdata/spec)"
           echo "vendored $n .wast files"
           if [ "$n" -lt 250 ]; then
             echo "::error::expected ≥250 .wast files, found $n — the suite fetch is broken and every board test would silently skip"

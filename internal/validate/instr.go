@@ -621,28 +621,16 @@ func (v *validator) funcTypeAt(idx uint32) (binary.FuncType, error) {
 }
 
 // globalAt resolves a global index across the same import-then-defined split.
+//
+// A delegation since the check_global slice, which needed the same walk under a *narrower* scope
+// than a function body has — the reference grows the global context one global at a time while it
+// checks their initializers (valid.ml:1059), so the question "which globals are in scope" has two
+// answers and only one walk. This is `requireTable`→`tableTypeAt` again, and for the reason #241
+// gave: two functions answering one index-space question agree until one of them learns something.
+// Full scope is the right argument here because every caller of this method validates a function
+// body, which the reference reaches at :1165, after the last global is folded in.
 func (v *validator) globalAt(idx uint32) (binary.ValType, bool, error) {
-	imported := uint32(v.mod.ImportedGlobals())
-	if idx < imported {
-		n := 0
-		for i := range v.mod.Imports {
-			if v.mod.Imports[i].Kind != binary.ExternGlobal {
-				continue
-			}
-			if uint32(n) == idx {
-				return v.mod.Imports[i].GlobalType, v.mod.Imports[i].GlobalMutable, nil
-			}
-			n++
-		}
-		return binary.ValType{}, false, fmt.Errorf("%w %d (import scan found no match)", ErrUnknownGlobal, idx)
-	}
-	def := idx - imported
-	if def >= uint32(len(v.mod.Globals)) {
-		return binary.ValType{}, false, fmt.Errorf("%w %d (%d in scope)",
-			ErrUnknownGlobal, idx, imported+uint32(len(v.mod.Globals)))
-	}
-	g := v.mod.Globals[def]
-	return g.Type, g.Mutable, nil
+	return globalTypeAt(v.mod, idx, len(v.mod.Globals))
 }
 
 // requireTable checks a table index resolves.

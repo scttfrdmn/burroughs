@@ -2,6 +2,7 @@ package testenv_test
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -166,6 +167,166 @@ func TestSuiteFiles(t *testing.T) {
 	})
 }
 
+// poisonedTree writes one file of every kind the shell and Go could disagree about, and
+// returns the directory with the three counts that *distinguish the three definitions*.
+//
+// The fixture is the whole test, so it is built where its discriminating property can be
+// asserted rather than assumed. A clean corpus cannot tell the definitions apart — 257
+// vectors and no sidecars is 257 under all three — which is precisely why the grave sat
+// unlit: the checker and the consumer agreed for as long as nothing dot-leading existed.
+func poisonedTree(t *testing.T) (dir string, vectors, dotBlind, unfiltered int) {
+	t.Helper()
+	dir = t.TempDir()
+	tree := []struct {
+		name   string
+		vector bool // is it a member of the suite population?
+	}{
+		{"address.wast", true},
+		{"i32.wast", true},
+		{"._address.wast", false},    // AppleDouble sidecar: dot-leading, .wast-suffixed, not a vector
+		{"._i32.wast", false},        // the second half of the 1:1 poisoning macOS tar produces
+		{".hidden.wast", true},       // dot-leading and *not* a sidecar — the residual asymmetry
+		{"notes.txt", false},         // wrong suffix
+		{"wastless", false},          // no suffix at all
+		{"trailing.wast.bak", false}, // .wast present but not final
+	}
+	for _, f := range tree {
+		if err := os.WriteFile(filepath.Join(dir, f.name), []byte("(module)"), 0o600); err != nil {
+			t.Fatalf("write %s: %v", f.name, err)
+		}
+		if f.vector {
+			vectors++
+		}
+		if strings.HasSuffix(f.name, ".wast") {
+			unfiltered++ // what Go's bare filepath.Glob("*.wast") saw before #340
+			if !strings.HasPrefix(f.name, ".") {
+				dotBlind++ // what a POSIX shell's `*.wast` sees
+			}
+		}
+	}
+	// The fixture discriminates or it proves nothing: three definitions, three different
+	// numbers. Without this the test could be handed a directory on which the wrong
+	// expression is indistinguishable from the right one and would report agreement.
+	if vectors == dotBlind || vectors == unfiltered || dotBlind == unfiltered {
+		t.Fatalf("fixture does not separate the three definitions: vectors=%d dot-blind=%d "+
+			"unfiltered=%d — a tree they agree on cannot witness the asymmetry this control is "+
+			"about", vectors, dotBlind, unfiltered)
+	}
+	return dir, vectors, dotBlind, unfiltered
+}
+
+// TestShellAndGoAgreeOnTheSuitePopulation is the control #340 asked for, and the one the
+// arrangement it replaces did not have.
+//
+// `TestSuitePinIsAssertedByTheFetchScript` certified that the two sides' *thresholds* agreed —
+// `min=250` against `testenv.MinSuiteFiles` — while they were applied to different **sets**:
+// Go's floor to a dot-inclusive glob, the shell's to a dot-blind one. An agreement about a
+// number is not an agreement about the population it measures, which is *a guard's trigger
+// predicate is a claim about the space* aimed at a control rather than at a guard.
+//
+// So: run both definitions over the same poisoned directory and require the same integer.
+// `scripts/suite-count.sh` is executed rather than read, because what a shell script *does*
+// with two globs and a `case` is not a property a regexp over its text can assert.
+func TestShellAndGoAgreeOnTheSuitePopulation(t *testing.T) {
+	dir, vectors, dotBlind, unfiltered := poisonedTree(t)
+
+	const script = "../../scripts/suite-count.sh"
+	out, err := exec.Command(script, dir).Output()
+	if err != nil {
+		t.Fatalf("%s %s: %v\n\tIf this is a permission error the executable bit is not committed, "+
+			"and the Makefile and both CI floors invoke this script by path — they would fail the "+
+			"same way, one push later.", script, dir, err)
+	}
+	shell, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	if err != nil {
+		t.Fatalf("%s printed %q, want one integer: %v", script, out, err)
+	}
+
+	paths, err := testenv.SuitePaths(dir)
+	if err != nil {
+		t.Fatalf("SuitePaths: %v", err)
+	}
+
+	if len(paths) != vectors {
+		t.Errorf("testenv.SuitePaths counted %d of %d vectors in the poisoned tree (%v).\n\tThe Go "+
+			"side of the population moved; the sidecar exclusion is what keeps a corpus that is "+
+			"50%% junk from being globbed as though it were the corpus.", len(paths), vectors, paths)
+	}
+	if shell != vectors {
+		t.Errorf("%s counted %d, want %d — the shell side of the population moved.\n\tdot-blind "+
+			"would say %d and unfiltered would say %d, so this is not a rounding disagreement: it "+
+			"names which of the three definitions the script is now implementing.",
+			script, shell, vectors, dotBlind, unfiltered)
+	}
+	if shell != len(paths) {
+		t.Errorf("%s says %d and testenv.SuitePaths says %d for the same directory.\n\tEvery "+
+			"shell-side floor in the repo is applied to the first number and every board is "+
+			"computed over the second: they are one population or the floors bound nothing "+
+			"the board measures (#340).", script, shell, len(paths))
+	}
+}
+
+// TestEveryShellSuiteCountGoesThroughOneScript keeps the shell side at *one* definition, which
+// is the part of #340 a passing population control cannot hold on its own: two agreeing
+// expressions are still two expressions, and the second one is where the next drift lands.
+//
+// Derived, not enumerated — the domain is every file in the repo that carries shell (`Makefile`,
+// the workflows, `scripts/*.sh`), scanned for a `*.wast` glob outside a comment. The one
+// admissible exception is derived too rather than listed by line: a glob on a line that also
+// runs `ssh` is asking a different question — what the *far side of a copy* holds, vectors and
+// sidecars counted separately, which is the poisoning check in `xcheck-amd64.sh` and not the
+// population.
+func TestEveryShellSuiteCountGoesThroughOneScript(t *testing.T) {
+	const counter = "suite-count.sh"
+
+	files := []string{"../../Makefile"}
+	for _, pat := range []string{"../../.github/workflows/*.yml", "../../scripts/*.sh"} {
+		got, err := filepath.Glob(pat)
+		if err != nil {
+			t.Fatalf("glob %s: %v", pat, err)
+		}
+		files = append(files, got...)
+	}
+	// Vacuity: a scan that found no shell would report perfect compliance.
+	if len(files) < 4 {
+		t.Fatalf("found %d shell-bearing files (%v), want at least the Makefile, a workflow and "+
+			"two scripts — an empty scan agrees with everything", len(files), files)
+	}
+
+	callers := 0
+	for _, path := range files {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		if strings.HasSuffix(path, counter) {
+			continue // the definition itself
+		}
+		for i, line := range strings.Split(string(b), "\n") {
+			if strings.Contains(line, counter) {
+				callers++
+			}
+			if trimmed := strings.TrimLeft(line, " \t"); strings.HasPrefix(trimmed, "#") {
+				continue // prose quotes the expressions it replaced, at length
+			}
+			if !strings.Contains(line, "*.wast") || strings.Contains(line, "ssh") {
+				continue
+			}
+			t.Errorf("%s:%d globs *.wast in shell without going through %s:\n\t%s\n\tA POSIX `*` "+
+				"skips a leading dot and Go's filepath.Match does not, so a second expression is "+
+				"a second population — 257 vectors beside 257 sidecars counts 257 here and 514 in "+
+				"Go (#340).", path, i+1, counter, strings.TrimSpace(line))
+		}
+	}
+	// The negative above is vacuous unless somebody is actually calling the script: zero
+	// offenders is also what a repo that had deleted every count would report.
+	if callers < 4 {
+		t.Errorf("only %d line(s) outside %s invoke it, want at least 4 (Makefile, two CI floors, "+
+			"the fetch script).\n\tNo offenders and no callers is not compliance, it is a scan "+
+			"whose subject left.", callers, counter)
+	}
+}
+
 // TestNoSkipIsExactlyOne guards against the sloppiest possible way for this to
 // break: an env var that is "set to anything" would treat BURROUGHS_NO_SKIP=0 as
 // strict mode, and a CI YAML typo like `false` as strict mode too. Harmless in that
@@ -294,6 +455,41 @@ func TestSuitePinIsAssertedByTheFetchScript(t *testing.T) {
 			"blesses a corpus the tests treat as absent is the skip-is-not-a-verdict hole at "+
 			"the fetch layer: the fetch says success, RequireSuite then skips, and the board "+
 			"passes by asking nothing.", script, got, testenv.MinSuiteFiles)
+	}
+
+	// The exact count for the pin (#340). `files=` was a *comment* on the `rev=` line until this
+	// slice, which is a floor's worth of nothing: a floor cannot see a small silent loss and
+	// cannot see an addition at all, so every count between 250 and infinity cleared every check
+	// in this file. *Reconcile an extent, never floor it.*
+	//
+	// Distinct from the sidecar poisoning, which this does **not** catch and is not for: sidecars
+	// are excluded on both sides now, so the count does not move and nothing downstream sees the
+	// junk. Measured, in the script's own comment. What moves this figure is a lossy fetch, a
+	// directory that gained a vector, or a pin bump whose population nobody wrote down.
+	//
+	// Two assertions, because the field can fail in two directions: absent (the reconciliation
+	// is gone and the floor is alone again) and *below the floor* (a `files=` under `min=` is a
+	// pin recording a corpus the same script would reject, which is two guards disagreeing about
+	// their own subject).
+	f := regexp.MustCompile(`(?m)^files="?([0-9]+)"?`).FindStringSubmatch(src)
+	if f == nil {
+		t.Fatalf("%s has no `files=<n>` assignment beside its pin.\n\tThe pinned rev's own vector "+
+			"count is what makes the fetch a reconciliation instead of a floor, and a floor is "+
+			"blind to a corpus that grew (#340).", script)
+	}
+	exact, err := strconv.Atoi(f[1])
+	if err != nil {
+		t.Fatalf("pinned count %q is not a number: %v", f[1], err)
+	}
+	if exact < got {
+		t.Errorf("%s pins %d vectors but floors at %d.\n\tThe fetch would reject the very corpus "+
+			"its pin records; the two fields describe one directory and disagree about it.",
+			script, exact, got)
+	}
+	if !strings.Contains(src, `-ne "$files"`) {
+		t.Errorf("%s records `files=%d` and never compares a count against it.\n\tAn exact count "+
+			"that nothing reconciles is the comment it used to be, wearing an assignment's "+
+			"clothes.", script, exact)
 	}
 
 	// The post-conditions must not sit behind the already-at-the-right-rev branch. This is

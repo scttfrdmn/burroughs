@@ -31,6 +31,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -43,6 +44,46 @@ import (
 // precondition nobody asserted, and confining the fix to the one job that
 // prompted it would leave the class open.
 const NoSkipEnv = "BURROUGHS_NO_SKIP"
+
+// SuitePaths is the **one definition of the suite population**: which files in a vendored
+// testdata/spec are vectors. Every count, floor, seeder and board selector resolves it through
+// here, so a disagreement about the population is a disagreement nothing can have.
+//
+// # It excludes AppleDouble sidecars, and that is the whole point (#340)
+//
+// `filepath.Glob("*.wast")` matches a *leading dot* — Go's `filepath.Match` has no special
+// handling for it — while a POSIX shell's `*` does not. So `._address.wast`, the resource-fork
+// sidecar macOS `tar` writes, is a vector to Go and invisible to every `ls *.wast` in the repo.
+// #340's specimen is that asymmetry firing: a copy step left 257 sidecars beside 257 vectors,
+// the shell checker reported 257 on the poisoned tree and 257 on the clean one, and Go saw 514.
+// Twenty instruments reddened for the copy rather than for the architecture.
+//
+// **#340 prescribed making the shell dot-aware "so the shell counts what Go counts", and that
+// prescription is wrong on its own goal** — measured rather than reasoned:
+//
+//	directory holding address.wast and ._address.wast
+//	Go filepath.Glob("*.wast")               2   ← counts the sidecar
+//	sh  ls *.wast | wc -l                    1
+//	find -name '*.wast'                      2
+//	find -name '*.wast' ! -name '._*'        1   ← the prescription: agrees with the *shell*
+//
+// The prescribed expression reproduces the shell's population, not Go's, so the two sides would
+// still have disagreed — same direction, one layer better disguised. The fix is to pick the
+// population that is *right* rather than the one that is easier to reach from either side, and a
+// sidecar is not a vector: it is excluded on both sides, here and in the three shell sites, and
+// then a poisoned tree yields 257 everywhere and a board computed over the real corpus.
+//
+// A prefix match rather than a `.`-prefix match: `._` is AppleDouble's own marker, and excluding
+// every dotfile would silently widen this to a class nobody measured.
+func SuitePaths(suiteDir string) ([]string, error) {
+	paths, err := filepath.Glob(filepath.Join(suiteDir, "*.wast"))
+	if err != nil {
+		return nil, err
+	}
+	return slices.DeleteFunc(paths, func(p string) bool {
+		return strings.HasPrefix(filepath.Base(p), "._")
+	}), nil
+}
 
 // MinSuiteFiles is the floor for a vendored suite to count as present.
 //
@@ -116,7 +157,7 @@ func RequireSuite(tb testing.TB, suiteDir string) {
 func SuiteFiles(tb testing.TB, suiteDir string) []string {
 	tb.Helper()
 
-	paths, err := filepath.Glob(filepath.Join(suiteDir, "*.wast"))
+	paths, err := SuitePaths(suiteDir)
 	if err == nil && len(paths) >= MinSuiteFiles {
 		return paths
 	}
@@ -525,7 +566,7 @@ func RequireProposalDoc(tb testing.TB, path string) string {
 }
 
 func countSuiteFiles(suiteDir string) (int, error) {
-	paths, err := filepath.Glob(filepath.Join(suiteDir, "*.wast"))
+	paths, err := SuitePaths(suiteDir)
 	if err != nil {
 		return 0, err
 	}

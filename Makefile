@@ -155,7 +155,7 @@ STRICT = BURROUGHS_NO_SKIP=1
 # skip would have to defeat both. Includes the all-gates-on lane, where the gated
 # count must be zero.
 conformance:
-	@n="$$(ls testdata/spec/*.wast 2>/dev/null | wc -l | tr -d ' ')"; \
+	@n="$$(scripts/suite-count.sh testdata/spec)"; \
 	if [ "$$n" -lt 250 ]; then \
 		echo "spec suite not vendored ($$n files); run: make spec-tests"; exit 1; \
 	fi; \

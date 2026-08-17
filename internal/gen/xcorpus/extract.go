@@ -63,6 +63,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/scttfrdmn/burroughs/internal/testenv"
 )
 
 // Module is one image in the corpus: an independently produced encoding of the suite text
@@ -159,7 +161,11 @@ func Generate(suiteDir, workDir, suiteRev string) (*Manifest, error) {
 	if err != nil {
 		return nil, err
 	}
-	paths, err := filepath.Glob(filepath.Join(suiteDir, "*.wast"))
+	// testenv.SuitePaths, not a local glob: the corpus's population must be the board's
+	// population (#340), or the manifest's `SkippedFiles` is a statement about a set nothing
+	// else measures. testenv in a generator is the existing shape — `cmd/xcorpus/main.go`
+	// already resolves `testenv.SuiteDir` through it.
+	paths, err := testenv.SuitePaths(suiteDir)
 	if err != nil {
 		return nil, err
 	}

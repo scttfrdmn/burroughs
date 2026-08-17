@@ -49,7 +49,14 @@ if [ ! -f go.mod ] || [ ! -d internal ]; then
 fi
 
 # Dot-aware and sidecar-excluding, so this is the number the *consumer's* globber sees.
-localwast=$(find testdata/spec -maxdepth 1 -name '*.wast' ! -name '._*' 2>/dev/null | wc -l | tr -d ' ')
+#
+# Through `suite-count.sh` since #340: this script's `find` expression was the first correct
+# shell-side count in the repo and, being the only one, it was still a *second* definition of
+# the population. It is now the same one the Makefile, CI, and the fetch script use, and the
+# one a control holds against `testenv.SuitePaths`. The far side below keeps its own `find`
+# pair on purpose — it counts vectors and sidecars *separately*, which is a different question
+# and the one that names a poisoned copy.
+localwast=$(scripts/suite-count.sh testdata/spec)
 
 native() {
 	ssh -o BatchMode=yes -o ConnectTimeout=10 "$host" 'true' 2>/dev/null

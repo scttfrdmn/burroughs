@@ -810,12 +810,16 @@ func suitePin(t *testing.T) string {
 // corpus. An empty result here is impossible rather than skippable — requireSuite
 // asserted the count — so it is a Fatal: the two disagreeing would mean the glob
 // and the assertion are looking at different things.
+//
+// Through testenv.SuitePaths rather than its own glob, per #340: the population is one
+// definition or it is several, and this selector feeds the board itself (boardFiles), so a
+// local glob here is the one that decides what the board is computed over.
 func suitePaths(t *testing.T) []string {
 	t.Helper()
 	requireSuite(t)
-	paths, err := filepath.Glob(filepath.Join(suiteDir, "*.wast"))
+	paths, err := testenv.SuitePaths(suiteDir)
 	if err != nil || len(paths) == 0 {
-		t.Fatalf("glob %s after requireSuite passed: %d paths, err=%v", suiteDir, len(paths), err)
+		t.Fatalf("SuitePaths %s after requireSuite passed: %d paths, err=%v", suiteDir, len(paths), err)
 	}
 	return paths
 }
@@ -8889,7 +8893,32 @@ func TestPhase1Files(t *testing.T) {
 	// and `memory.grow` was taken during the work and accounts for the difference between 350 and 358.
 	// So the pre-registered figure held on the population it was written about, and the extra 8 are
 	// named as a scope decision rather than folded into a delta that would then have matched nothing.
-	const validateFailCeiling = 74
+	//
+	// # 74 → 62 and 43 → 31: check_global, and the *admissions* drain alone
+	//
+	// `is_const`'s GlobalGet arm (valid.ml:1037) over the four const-expression sites this engine's
+	// internal form can hold — a global's own initializer, a data segment's offset, an element
+	// segment's offset, and each expression-form element. Twelve vectors, all twelve out of
+	// `validateAdmitted`, with `validateDeclineCeiling` unmoved at 31 and `validateMismatchCeiling`
+	// at 0.
+	//
+	// **This is the exact complement of slice 5's signature, and the pair is worth reading together.**
+	// Slice 5 drained `declined` alone and left `admitted` unmoved: a slice that adds vocabulary
+	// converts refusals-to-answer into answers, and the unmoved admission bound is the evidence that
+	// every new answer was the right one. This slice drains `admitted` alone and leaves `declined`
+	// unmoved: a slice that adds a *rule* converts wrong acceptances into refusals, and the unmoved
+	// decline bound is the evidence that it did so without withdrawing from any question the engine
+	// already answered. The two shapes are what a vocabulary slice and a rule slice look like from the
+	// stratum's side, and neither is derivable from the pass delta, which reads +12 either way.
+	//
+	// The twelve were pre-registered by `file:line` — derived from *module contents* rather than from
+	// file location, which is Scott's condition on this slice and not a stylistic preference: only 1
+	// of the 5 `constant expression required` rows and 3 of the 7 `unknown global` rows live in
+	// `global.wast`, so a file-keyed forecast would have named four rows and missed eight. A
+	// thirteenth family member, `global.wast:674`, was pre-registered as *not* converting and did not:
+	// it is charged to the encode stratum, needing a `(table …)` field the emitter cannot yet write
+	// (#8).
+	const validateFailCeiling = 62
 	const validateDeclineCeiling = 31
 	boardBound(t, "validateDeclineCeiling", validateDeclined, validateDeclineCeiling, 0, ceilingBound,
 		"slice 1 declined more instructions than it did — either an opcode left the signature "+
@@ -8961,7 +8990,7 @@ func TestPhase1Files(t *testing.T) {
 	//
 	// A `simd_`-prefix predicate would have been a claim about the current sample rather than the
 	// space, and an under-matching trigger fails silently by construction.
-	const validateAdmitCeiling = 43
+	const validateAdmitCeiling = 31
 	boardBound(t, "validateAdmitCeiling", validateAdmitted, validateAdmitCeiling, 0,
 		ceilingBound,
 		"the validator accepted an invalid module it used to refuse. This is the accept direction: "+

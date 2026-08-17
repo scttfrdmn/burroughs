@@ -189,7 +189,7 @@ func TestRangeCitationSubjectsAreReadFromTheReference(t *testing.T) {
 	// region and this file's sentence about it (:618-651), `validate.go`'s slice-4 summary pointing at
 	// `instr.go` (:442-446), and three rows in `vec_authority_test.go`'s own prose (:373-378, :390-393,
 	// :41-42) that describe what another instrument keys rather than naming a reference subject.
-	const wantKeyed, wantResidue = 30, 10
+	const wantKeyed, wantResidue = 32, 11
 	if keyed != wantKeyed || residue != wantResidue {
 		t.Errorf("keyed %d range citation(s) by named subject and left %d as residue, want %d and "+
 			"%d — recount and re-pin. A row moves from residue to keyed when its description starts "+
