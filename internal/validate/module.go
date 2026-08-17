@@ -164,7 +164,7 @@ func checkTypes(m *binary.Module) error {
 				return fmt.Errorf("%w %d has final super type %d", ErrSubType, x, xi)
 			}
 			// `require (match_comptype c.types ct cti)` — the relation, in match.go.
-			if !matchCompType(m, m.Types[x], super) {
+			if !matchCompType(tctx{gotMod: m, wantMod: m}, m.Types[x], super) {
 				return fmt.Errorf("%w %d does not match super type %d", ErrSubType, x, xi)
 			}
 		}

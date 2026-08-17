@@ -155,8 +155,12 @@ var unknown = binary.RefType(^uint32(0), true)
 // What it delegates to is `match.go`, which is `match_valtype` (match.ml:110-116). The module is
 // needed because the relation is not local to the two types: an indexed reference form's place in
 // the lattice comes from the definition it names.
+//
+// Both sides of the context are the same module here, and that is the validator's whole use of
+// the relation: it compares two types drawn from one type section, so `tctx.same` holds and the
+// index-equality shortcuts apply. The linker is the caller for which they do not (#368).
 func (v *validator) matches(got, want binary.ValType) bool {
-	return matchValType(v.mod, got, want)
+	return matchValType(tctx{gotMod: v.mod, wantMod: v.mod}, got, want)
 }
 
 // popExpect pops one operand and requires it to satisfy want.
