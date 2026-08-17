@@ -41,7 +41,7 @@ func runCmd(stdout, stderr io.Writer, argv []string) error {
 	// A usage error has already printed the usage; adding "burroughs: usage" to it would be this
 	// process reporting its own control flow as a diagnostic.
 	if err != nil && !errors.Is(err, errUsage) {
-		fmt.Fprintln(stderr, "burroughs:", err)
+		diagnose(stderr, err)
 	}
 	return err
 }
@@ -80,12 +80,17 @@ func run(stdout, stderr io.Writer, argv []string) error {
 	// about what was *not* checked and the user has to be able to read it alongside a result rather
 	// than instead of one. Decision 0029: out-of-vocabulary means run, with the construct named —
 	// not silently, and not by refusing.
+	//
+	// Both go through `diagnose` rather than through a `"burroughs: %v"` of their own, which is the
+	// sweep half of grave #383: `Decline` returns an ErrDeclined and `Deferred` an ErrUnsupported, so
+	// both already name the program and both stuttered. The sentence between them is prose and not an
+	// error, so it keeps its literal prefix.
 	if d := in.Decline(); d != nil {
-		fmt.Fprintf(stderr, "burroughs: %v\n", d)
-		fmt.Fprintln(stderr, "burroughs: the module ran unvalidated in that respect; --strict refuses instead")
+		diagnose(stderr, d)
+		fmt.Fprintln(stderr, prefix+"the module ran unvalidated in that respect; --strict refuses instead")
 	}
 	if d := in.Deferred(); d != nil {
-		fmt.Fprintf(stderr, "burroughs: %v\n", d)
+		diagnose(stderr, d)
 	}
 
 	if fs.NArg() == 1 {
@@ -154,7 +159,13 @@ const (
 	exitGated       = 6 // the module is fine; this build has that proposal's gate off (#301)
 )
 
-// exitCode maps an error from runCmd onto the taxonomy above.
+// exitCode maps an error from runCmd **or inspectCmd** onto the taxonomy above.
+//
+// Both, as of decision 0033 (#373): the codes are the CLI's and not one subcommand's, and this switch
+// is the single place the mapping happens. `inspect` reaches fewer of them — nothing it does can trap
+// or reach an unimplemented instruction — which is a statement about the questions it asks, not about
+// the taxonomy, and TestBothSubcommandsClassifyOneModuleTheSameWay is where that statement is
+// executable.
 //
 // Matched with errors.Is/As against the public sentinels rather than by inspecting text, for the
 // harness's own reason for doing so: the taxonomy belongs to the package that defines it, and a
