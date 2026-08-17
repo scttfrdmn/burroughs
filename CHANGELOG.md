@@ -21,6 +21,44 @@ weakly-ordered platform.
 
 ### Added
 
+- **The README's second phase — current state, a transcript that runs, the Go surface, and
+  conformance by pointer** (`README.md`, `examples/add/`, `example_test.go`, `readme_test.go`,
+  `cmd/burroughs/readme_test.go`; Scott's directive). Now that `burroughs run` exists, the README says
+  what v0 is (decoder → internal form → validator → interpreter, no compiler), what it is not (no host
+  imports, no WASI, no threads, no stack switching, no component model), and how to drive it from a
+  shell and from Go. Every command and every line of Go in the file is executed by a test rather than
+  pasted.
+  - **Conformance carries no figure, deliberately.** The section names the instrument — `make
+    spec-tests`, `go test ./internal/spec/ -run TestPhase1Files -v`, `make conformance` — and explains
+    the five verdicts and why they are five (decision 0010). It quotes no count: a count typed into
+    prose is a count that rots, and the rule that a measured quantity is generated or deleted does not
+    stop being true because the file is the front page.
+  - **`examples/add/`** — a module whose three exports are a result (`add`), a computation the
+    interpreter has to actually interpret (`fib`, a call and a branch and recursion, so a right answer
+    is not a folded constant), and a trap (`div`). The `.wat` is the source, `gen.go` assembles it, and
+    the `.wasm` is committed so a fresh clone runs the transcript in one command. The binary is a
+    **derived** artifact: `TestExampleWasmIsDerivedFromItsWat` holds it equal to what the engine's own
+    assembler produces from the text printed beside it in the docs.
+  - **`Example` and `ExampleConfig`, in the external test package**, whose printed output `go test`
+    asserts — so the README's "Use from Go" block is a compiled, output-checked function and not an
+    illustration. The external package is the point: an example that compiles against only the
+    exported surface is an example a caller can copy. `TestREADMEGoBlocksAreRealCode` holds every
+    fenced `go` block in the file equal, modulo indentation, to code the test build compiles, and is
+    scoped to the space rather than to today's single block.
+  - **`TestREADMETranscriptIsExecutable`** parses the README's own "Try it" transcript, runs each
+    `burroughs` line through the CLI's dispatcher, and compares both the output and the exit code. Its
+    domain is printed rather than assumed — `go build` and `make` lines are counted and not run — and
+    a documented command that writes to both streams is an error, because a transcript cannot say
+    which came first.
+  - **`TestREADMEDocumentsEveryExitCode`** derives the code set from `run.go`'s own declarations and
+    checks the table in both directions: a code with no row, and a row for a code no constant
+    declares.
+  - Five falsifications, each watched to fail: a wrong documented result, a deleted table row, a
+    renamed identifier inside the fenced block, a mutated byte in the committed `.wasm`, and the
+    fence's language tag changed so the transcript parser finds nothing. The fourth found a defect in
+    its own diagnostic — on a one-byte mutation the message reported "97 bytes and 97" and no offset,
+    a verdict withholding its evidence — now fixed to name the first difference.
+
 - **The reference-type slice — `ref.null`, `ref.func`, `ref.is_null`, `table.get`, `table.set`
   (`internal/validate/ref.go`, #9 slice 6, #359).** Five rules whose common subject is a *reference
   type*, ported from `valid.ml` arm by arm. `ref.null ht` takes its type off 0027's cast-family side
@@ -1034,6 +1072,15 @@ weakly-ordered platform.
   tail-call gate's own 0x12/0x13 when it lands.
 
 ### Changed
+
+- **`main` is one `os.Exit` call and everything else returns** (`cmd/burroughs/main.go`). `dispatch`
+  takes writers and returns an exit code, which is the shape `run` already had and the reason it had
+  it: everything a user sees belongs inside a function a test can call. Its two siblings did not have
+  it — `inspect` printed straight to `os.Stdout` and was covered by no test at all, the lesson `run`'s
+  own doc comment records, one case to the left and never swept. `inspect`'s codes and messages are
+  unchanged, including its disagreement with `run` about the same malformed file (exit 1 against exit
+  3): which code `inspect` owes a refusal is a live question about the CLI's contract, and a refactor
+  that threads writers is not the artifact that answers it.
 
 - **A borrowed reward figure is refused, and the closing-keyword lesson gets a home**
   (`docs/laws/`, Scott's rulings, PR #364). Two governance records written into the law corpus's
