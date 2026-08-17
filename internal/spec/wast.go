@@ -460,7 +460,33 @@ func classify(n node, src []byte) Command {
 		// read before the forms divide. Empty for the 2195 unnamed forms.
 		name, _ := scriptName(nodeAt(n, 1))
 		if img, ok := binaryModule(n); ok {
-			return Command{Kind: KindModuleBinary, Line: n.line, Head: head, Module: img, Name: name}
+			return Command{
+				Kind: KindModuleBinary, Line: n.line, Head: head, Module: img, Name: name,
+				// **CapValidator since #353**, and it is the one capability this form needs
+				// syntactically — the same call `assert_invalid (module binary …)` makes and for
+				// the same stated reason: the decoder is the component the harness has
+				// unconditionally and has no constant, so the validator is what is left to
+				// declare. It was `CapNone` while the arm scored decode alone, which was accurate
+				// then.
+				//
+				// The two text forms keep `CapWatReader` rather than gaining this, which is not
+				// an inconsistency: `Needs` names the *distinguishing* capability, their arm
+				// checks the validator with `requireValidator`, and a form whose payload is bytes
+				// has no reader to distinguish it.
+				//
+				// **What this changes for a caller that does not declare the validator is which
+				// panic it gets, not whether it gets one**, and the first draft of this comment
+				// claimed the fourth verdict instead — corrected here rather than quietly, since a
+				// comment asserting the property its code lacks makes review confirm the bug.
+				// `CapValidator` was retired from `capabilityIssues` when the validator landed, so
+				// the gap check has no entry to score against and panics by design (guard 6's
+				// ending). The gain is that the panic now comes from the gap check, naming the
+				// capability and the remedy — *use RunGated, which derives from the declaration* —
+				// instead of from inside the arm, where `requireValidator` can only report that a
+				// `ValidateFunc` was missing. `TestClassifyAndRun` was the caller that surfaced
+				// this: it *supplies* `Validate` and had simply not listed the capability in `Has`.
+				Needs: CapValidator,
+			}
 		}
 		// Named `quoted`, not `src`: the parameter above is the *script's* bytes and this is
 		// the *module's*, and letting the second shadow the first would put two different
@@ -2089,6 +2115,76 @@ func (s *Script) run(opts runOpts) *Result {
 				"module definition would be reported as over-rejected", s.Path, c.Line))
 		}
 	}
+	// scoreModuleValidation is **fact 2 of a module definition**, shared by all three forms: the
+	// module the corpus just defined must *validate*, not merely come into being.
+	//
+	// It is a closure and not a package function for `requireValidator`'s reason — both need
+	// `opts` and `s.Path` — and it is extracted rather than duplicated because the thing it
+	// encodes is what a definition *asserts*, which cannot be allowed to differ between the byte
+	// image and the assembler. #341 landed it inline on the text arm; #353 added the binary arm as
+	// its second caller, and two copies of a four-outcome switch is two chances for one form to
+	// quietly stop asking. The forms still differ, and they differ in fact 1 — which is exactly
+	// the split `classify`'s three Kinds already record.
+	//
+	// It returns the **stratum** as well as `scored`, because the caller needs it for the
+	// two-decode-paths check that follows instantiation and re-deriving it would ask the validator
+	// twice. It does **not** return the error, and the first draft did: `errcheck` flagged both
+	// call sites discarding it, which was the right reading of a signature offering a caller
+	// something to re-decide after this switch has already decided it. Every outcome the error
+	// carries is bucketed here; a caller that consulted it would be a second opinion on a verdict
+	// that is already recorded.
+	//
+	// **Gate declines keep their pass and are the one outcome this does not score.** #124's
+	// ruling on a different axis: the front end stays gate-blind, so a decline arriving from the
+	// validator's own decoder is not a verdict on the module, and scoring it here would move
+	// passes the reader earned into the third verdict. The decline travels to the vector whose
+	// question it actually blocks.
+	scoreModuleValidation := func(c Command) (Stratum, bool) {
+		requireValidator(c)
+		vst, verr := opts.Validate(c)
+		switch {
+		case isGated(verr):
+			// Unchanged by design — see above.
+		case isDeclined(verr):
+			// The sibling assert_invalid arms' treatment, verbatim including the key's shape
+			// (see scoreValidation): a decline is a fail with the engine's own sentence as the
+			// key, so the buckets partition by the rule #9's next slice has to write, and the
+			// column drains as slices land rather than by anyone editing a number.
+			r.Fail++
+			key := c.Kind.String() + " declined: " + verr.Error()
+			r.Buckets[key] = append(r.Buckets[key], Failure{
+				Line: c.Line, Expect: key, Got: verr.Error(), Kind: c.Kind,
+				Stratum: vst, Declined: true,
+			})
+			return vst, true
+		case verr != nil && vst != StratumValidate:
+			// **The module never reached the type checker**, so this is not evidence about the
+			// validator: `Validate` assembles and decodes first, and both of those steps are the
+			// harness reading its own output (see validateModule for why they are charged to
+			// StratumEncode). Scored rather than skipped because an unrun vector is invisible,
+			// and keyed apart from the validator's own answers so the encoder frontier drains in
+			// the column that owns it (#8) instead of inflating #9's.
+			r.Fail++
+			key := c.Kind.String() + " must reach the validator"
+			r.Buckets[key] = append(r.Buckets[key], Failure{
+				Line: c.Line, Expect: key, Got: verr.Error(), Kind: c.Kind,
+				Stratum: vst,
+			})
+			return vst, true
+		case verr != nil:
+			// **The finding this fact exists for**: the type checker ran, finished, and refused a
+			// module the corpus asserts is valid. `OverRejected` rather than the stratum's
+			// wrong-message arm, for the reason that field records.
+			r.Fail++
+			key := c.Kind.String() + " must validate"
+			r.Buckets[key] = append(r.Buckets[key], Failure{
+				Line: c.Line, Expect: key, Got: verr.Error(), Kind: c.Kind,
+				Stratum: StratumValidate, OverRejected: true,
+			})
+			return vst, true
+		}
+		return vst, false
+	}
 	// cur is the instance the *most recent* module command produced, which is what an
 	// unnamed `assert_return` runs against.
 	//
@@ -2218,10 +2314,21 @@ func (s *Script) run(opts runOpts) *Result {
 			})
 
 		case KindModuleBinary:
-			// A bare (module binary ...) at top level asserts the module is
-			// *valid*. Phase 1 only decodes, so this is a decode-must-succeed
-			// check — a weaker claim than the suite makes, and the honest thing
-			// is to score it rather than skip it.
+			// **Fact 1: the image decodes.** A bare `(module binary …)` at top level asserts
+			// the module is *valid*, and this is the half of that claim the decoder can
+			// answer. The sentence that used to finish this comment is gone, and its removal
+			// is the point of #353:
+			//
+			//	Phase 1 only decodes, so this is a decode-must-succeed check — a weaker
+			//	claim than the suite makes, and the honest thing is to score it rather
+			//	than skip it.
+			//
+			// Accurate for as long as it stood, and it was a standing confession rather than
+			// a deferral: the arm scored `Pass` on decode alone, so the 80 passes this form
+			// contributes to the default board were decode-success wearing a validity claim.
+			// #341 closed the same hole for the text and quote forms; #345 flagged this one
+			// rather than widening it, because moving a second population's numbers inside
+			// the PR that creates them has no pre-registration for that population.
 			err := opts.Decode(c.Module)
 			if isGated(err) {
 				// The instance is cleared on a gate decline too. An `assert_return`
@@ -2242,8 +2349,50 @@ func (s *Script) run(opts runOpts) *Result {
 				})
 				continue
 			}
+			// **Fact 2: the module validates**, in the words and the shape the text arm below
+			// uses — see `scoreModuleValidation`, which both arms now call so that the two
+			// module-definition forms cannot drift in what a definition *asserts*. The
+			// per-form differences are entirely in fact 1 above (a byte image here, the
+			// assembler there), which is the split `classify`'s three Kinds already record.
+			//
+			// **Fact 1 must run first, and not only for tidiness.** `ValidateFunc`
+			// implementations assemble before they decode and charge a decode refusal to
+			// `StratumEncode` — a claim that the image came out of the encoder, which is true
+			// for the text and quote forms and false here, there being no encoder on this
+			// path. The mis-charge is unreachable because the branch above has already
+			// `continue`d on any decode failure, so this is statement order holding off a
+			// wrong stratum rather than the stratum being right. Named because an ordering
+			// constraint that is invisible in the code it constrains is one edit from a
+			// silently mis-charged column (#353).
+			//
+			// **The pre-registered forecast for this arm is no board movement at all**: 88
+			// commands, all 88 validating clean in both lanes, measured before the arm changed
+			// (#353). So the assertion is prospective — an over-rejection produces no error for
+			// any reject-direction bucket to catch, which is why a population that is clean
+			// today does not make asking it idle — and the arm's green is worth nothing on its
+			// own. `TestModuleDefinitionsAskTheValidator` carries the witness that it fires.
+			vst, scored := scoreModuleValidation(c)
 			in, st, ierr := opts.instantiate(c, registry)
 			remember(c, in, st, ierr, isGated(ierr))
+			if scored {
+				continue
+			}
+			// **The two paths that decode this image must agree**, and here that is a strictly
+			// narrower claim than the text arm's: both decode the *same bytes* under the same
+			// features, with no encoder in between, so a disagreement asserts only that the
+			// decoder is deterministic. Kept anyway, at one condition's cost, because the
+			// weaker claim is still a real one and dropping it would make the two arms differ
+			// for no reason a reader could recover.
+			if ierr != nil && vst == StratumValidate &&
+				(st == StratumEncode || st == StratumBinary) {
+				r.Fail++
+				key := c.Kind.String() + " two decode paths disagree"
+				r.Buckets[key] = append(r.Buckets[key], Failure{
+					Line: c.Line, Expect: key, Got: ierr.Error(), Kind: c.Kind,
+					Stratum: st,
+				})
+				continue
+			}
 			r.Pass++
 
 		case KindModuleQuote, KindModuleText, KindAssertMalformedText:
@@ -2315,52 +2464,13 @@ func (s *Script) run(opts runOpts) *Result {
 				// verdict on the module, and scoring it here would move 421 passes the reader
 				// earned into the third verdict. The decline travels to the vector whose question
 				// it actually blocks, exactly as an instantiation decline does.
-				requireValidator(c)
-				vst, verr := opts.Validate(c)
-				scored := false
-				switch {
-				case isGated(verr):
-					// Unchanged by design — see above.
-				case isDeclined(verr):
-					// The sibling assert_invalid arms' treatment, verbatim including the key's
-					// shape (see scoreValidation): a decline is a fail with the engine's own
-					// sentence as the key, so the buckets partition by the rule #9's next slice
-					// has to write, and the column drains as slices land rather than by anyone
-					// editing a number.
-					r.Fail++
-					scored = true
-					key := c.Kind.String() + " declined: " + verr.Error()
-					r.Buckets[key] = append(r.Buckets[key], Failure{
-						Line: c.Line, Expect: key, Got: verr.Error(), Kind: c.Kind,
-						Stratum: vst, Declined: true,
-					})
-				case verr != nil && vst != StratumValidate:
-					// **The module never reached the type checker**, so this is not evidence about
-					// the validator: `Validate` assembles and decodes first, and both of those
-					// steps are the harness reading its own output (see validateModule for why
-					// they are charged to StratumEncode). Scored rather than skipped for the
-					// reason KindModuleBinary's arm is scored — an unrun vector is invisible — and
-					// keyed apart from the validator's own answers so the encoder frontier drains
-					// in the column that owns it (#8) instead of inflating #9's.
-					r.Fail++
-					scored = true
-					key := c.Kind.String() + " must reach the validator"
-					r.Buckets[key] = append(r.Buckets[key], Failure{
-						Line: c.Line, Expect: key, Got: verr.Error(), Kind: c.Kind,
-						Stratum: vst,
-					})
-				case verr != nil:
-					// **The finding this arm exists for**: the type checker ran, finished, and
-					// refused a module the corpus asserts is valid. `OverRejected` rather than the
-					// stratum's wrong-message arm, for the reason that field records.
-					r.Fail++
-					scored = true
-					key := c.Kind.String() + " must validate"
-					r.Buckets[key] = append(r.Buckets[key], Failure{
-						Line: c.Line, Expect: key, Got: verr.Error(), Kind: c.Kind,
-						Stratum: StratumValidate, OverRejected: true,
-					})
-				}
+				//
+				// The four-outcome switch that used to stand inline here is
+				// `scoreModuleValidation`, unchanged in behaviour and moved because #353 gave it a
+				// second caller: the same fact 2, asked of `(module binary …)`. Its comments went
+				// with it, including the two that were written as *this* arm's — "the reason
+				// KindModuleBinary's arm is scored" now reads as the general statement it always was.
+				vst, scored := scoreModuleValidation(c)
 				// **Instantiation happens either way, and a validation refusal does not withhold
 				// the instance.** Withholding is the tidier-looking choice and it is wrong here:
 				// one missing subtyping rule would go red across every dependent vector of the

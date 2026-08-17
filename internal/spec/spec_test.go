@@ -7116,37 +7116,121 @@ var moduleOverRejections = map[string]string{}
 //  3. **Each refusal still names its own cause**, so a row that moves to a *different* wrong answer
 //     is reported instead of absorbed.
 func TestModuleDefinitionsAskTheValidator(t *testing.T) {
-	t.Run("a validator that refuses every module turns a module definition red", func(t *testing.T) {
-		// The M11 mutation: `modulePre` refusing unconditionally. Run against a module the reader
-		// accepts, so the *only* thing that can score this command is fact 2.
-		s, err := Parse("t.wast", []byte(`(module (func))`))
+	// The M11 mutation, once per form a module definition can take: `modulePre` refusing
+	// unconditionally, run against a module the *reader* accepts, so the only thing that can score
+	// these commands is fact 2.
+	//
+	// **Three rows because there are three ways to lose the call, not because three cases came to
+	// mind — and the first draft of this comment got the reason wrong.** It said "two arms, so a
+	// witness for one says nothing about the other", which is true of the binary row and over-claims
+	// for quote: `KindModuleText` and `KindModuleQuote` reach fact 2 through the *same* arm.
+	// Recorded rather than quietly reworded, because the corrected reason is the one that makes each
+	// row falsifiable, and each was watched die separately:
+	//
+	//   - **binary** — `KindModuleBinary` has its own arm and its own `scoreModuleValidation` call.
+	//     Deleting that call leaves the other two rows green.
+	//   - **quote** — shares text's arm, where the call sits under a *per-Kind guard*. Narrowing
+	//     that guard to `c.Kind == KindModuleText` is a one-token edit that text survives and quote
+	//     does not. #341 landed fact 2 for both forms with the text row alone as witness, so this
+	//     row is that omission repaired.
+	//   - **text** — the original M11 reproduction, unchanged.
+	//
+	// **The binary row is #353's only observable.** That slice's pre-registered board delta was a
+	// measured zero — 88 `KindModuleBinary` commands, all 88 validating clean in both lanes — so no
+	// board figure moves when its arm starts asking fact 2, and without this row the arm's green is
+	// indistinguishable from the arm not having landed. A clean population does not make the
+	// question idle: an over-rejection produces no error for any reject-direction bucket to catch,
+	// which is the hole this whole test exists for.
+	//
+	// The table is *enumerated*, and the domain is derivable — `classify` sets `Head: "module"` on
+	// every module definition, so the Kinds a top-level `module` head produces are a corpus-measured
+	// fact. That makes this an unchecked claim about its own coverage, declared and tracked as #354
+	// rather than left as an intention in a comment.
+	for _, tc := range []struct {
+		name   string
+		src    string
+		want   Kind
+		bucket string
+	}{
+		{"text", `(module (func))`, KindModuleText, "module text must validate"},
+		{"quote", `(module quote "(module (func))")`, KindModuleQuote, "module quote must validate"},
+		// `module`, not `module binary`: `Kind.String()` returns the bare word for this Kind
+		// (`wast.go`'s `Kind.String`), so the shared closure's `c.Kind.String() + " must validate"`
+		// produces a key that reads ambiguously on the board beside `(module binary ...) must
+		// decode`, which spells its own form out. Pinned as *measured* — #353's pre-registration
+		// named `module binary must validate`, which was a prediction about a mechanism rather than
+		// a reading of one, and a pre-registered string is as falsifiable as a pre-registered
+		// count. Left as the closure produces it: one key-forming mechanism for both arms is worth
+		// more than a prettier string in one of them, and the ambiguity is a board-legibility
+		// finding about `Kind.String`, not about this slice.
+		{"binary", `(module binary "\00asm\01\00\00\00")`, KindModuleBinary, "module must validate"},
+	} {
+		t.Run("a validator that refuses every module turns a "+tc.name+" definition red", func(t *testing.T) {
+			s, err := Parse("t.wast", []byte(tc.src))
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			if got := s.Commands[0].Kind; got != tc.want {
+				t.Fatalf("classified %v, want %v — this control needs the arm it is about", got, tc.want)
+			}
+			e := engine()
+			e.Validate = func(Command) (Stratum, error) {
+				return StratumValidate, errString("refuses every module")
+			}
+			r := s.RunGated(e)
+			if r.Pass != 0 || r.Fail != 1 {
+				t.Fatalf("got %d pass, %d fail; want 0/1 — a module definition scored green under a "+
+					"validator that refuses everything is exactly the hole #341 closed, and this "+
+					"assertion is the only thing standing between that hole and every reward figure "+
+					"the board quotes", r.Pass, r.Fail)
+			}
+			b := r.Buckets[tc.bucket]
+			if len(b) != 1 {
+				t.Fatalf("no failure under %q; got keys %v", tc.bucket, r.BucketsBySize())
+			}
+			if !b[0].OverRejected || b[0].Stratum != StratumValidate {
+				t.Errorf("OverRejected = %v, Stratum = %v; want true/%v — without the flag this row "+
+					"lands in the wrong-message arm of the validate stratum's split, a population "+
+					"whose ceiling is 0 (see Failure.OverRejected)",
+					b[0].OverRejected, b[0].Stratum, StratumValidate)
+			}
+		})
+	}
+
+	t.Run("an undecodable binary image is charged to fact 1, not to the validator", func(t *testing.T) {
+		// **The tripwire for an ordering constraint that is invisible in the code it constrains.**
+		// `ValidateFunc` implementations assemble before they decode and charge a decode refusal to
+		// `StratumEncode` — a claim that the image came out of the encoder, true for the text and
+		// quote forms and false here, there being no encoder on this path. The binary arm asks
+		// fact 1 first and `continue`s on any decode failure, so the mis-charge is unreachable *by
+		// statement order*, which is one edit away from a silently mis-charged column. Swap the two
+		// facts and this image lands under `module must reach the validator` at `StratumEncode`
+		// instead of where it belongs.
+		//
+		// The real `engine()` validator, deliberately: the mis-charge is `validateWith`'s own
+		// behaviour, so a stub that refused cleanly would make this arm agree with itself.
+		s, err := Parse("t.wast", []byte(`(module binary "\00asm")`))
 		if err != nil {
 			t.Fatalf("parse: %v", err)
 		}
-		if got := s.Commands[0].Kind; got != KindModuleText {
-			t.Fatalf("classified %v, want KindModuleText — this control needs the arm it is about", got)
+		if got := s.Commands[0].Kind; got != KindModuleBinary {
+			t.Fatalf("classified %v, want KindModuleBinary — this control needs the arm it is about", got)
 		}
-		e := engine()
-		e.Validate = func(Command) (Stratum, error) {
-			return StratumValidate, errString("refuses every module")
-		}
-		r := s.RunGated(e)
+		r := s.RunGated(engine())
 		if r.Pass != 0 || r.Fail != 1 {
-			t.Fatalf("got %d pass, %d fail; want 0/1 — a module definition scored green under a "+
-				"validator that refuses everything is exactly the hole #341 closed, and this "+
-				"assertion is the only thing standing between that hole and every reward figure "+
-				"the board quotes", r.Pass, r.Fail)
+			t.Fatalf("got %d pass, %d fail; want 0/1", r.Pass, r.Fail)
 		}
-		const key = "module text must validate"
+		const key = "(module binary ...) must decode"
 		b := r.Buckets[key]
 		if len(b) != 1 {
-			t.Fatalf("no failure under %q; got keys %v", key, r.BucketsBySize())
+			t.Fatalf("no failure under %q; got keys %v — a truncated image scored anywhere else "+
+				"means fact 2 ran first and answered for the decoder", key, r.BucketsBySize())
 		}
-		if !b[0].OverRejected || b[0].Stratum != StratumValidate {
-			t.Errorf("OverRejected = %v, Stratum = %v; want true/%v — without the flag this row "+
-				"lands in the wrong-message arm of the validate stratum's split, a population "+
-				"whose ceiling is 0 (see Failure.OverRejected)",
-				b[0].OverRejected, b[0].Stratum, StratumValidate)
+		if b[0].Stratum != StratumBinary || b[0].OverRejected {
+			t.Errorf("Stratum = %v, OverRejected = %v; want %v/false — `StratumEncode` here would "+
+				"assert this image came out of an encoder there is none of, and the ordering that "+
+				"prevents it has no other assertion",
+				b[0].Stratum, b[0].OverRejected, StratumBinary)
 		}
 	})
 

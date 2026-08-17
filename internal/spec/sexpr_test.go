@@ -34,6 +34,34 @@ var (
 	stubDeclined DeclinedFunc = func(error) bool { return false }
 )
 
+// withFact2 supplies *and declares* the permissive validator on a stub engine whose script
+// contains a top-level `(module binary …)`.
+//
+// #353 gave that form's arm fact 2, so its Kind carries `Needs: CapValidator` and a caller must do
+// both halves: hand over the component, and say it has it. The two halves are separate on purpose
+// (guard 1 of decision 0010 — the classifier derives what a command needs, the engine declares what
+// it has), and supplying without declaring is what the gap check refuses to guess about. It is a
+// named helper rather than a copy per site because the *reason* is what a reader needs: one place to
+// read why a probe about traps or exceptions carries a validator at all, and a name that says the
+// answer is "so the setup module can be defined", not "so validation is measured here". Its callers
+// are its own call sites and are not counted here — a count in a comment schedules its own next
+// increment, and `grep -c 'withFact2(Engine{'` is the instrument.
+//
+// It fills the fields only when they are empty, so a probe that supplies its own validator — the
+// ones whose subject *is* fact 2 — keeps it and is not silently overridden.
+func withFact2(e Engine) Engine {
+	if e.Validate == nil {
+		e.Validate = stubValidate
+	}
+	if e.IsDeclined == nil {
+		e.IsDeclined = stubDeclined
+	}
+	if !slices.Contains(e.Has, CapValidator) {
+		e.Has = append(e.Has, CapValidator)
+	}
+	return e
+}
+
 func TestParseStringEscapes(t *testing.T) {
 	cases := []struct {
 		src  string
@@ -339,7 +367,13 @@ func TestClassifyAndRun(t *testing.T) {
 			}
 			return []Val{{Kind: KindI32, Bits: 1}}, nil
 		},
-		Has: []Capability{CapWatReader, CapInterpreter},
+		// CapValidator joins the declaration with #353: the `(module binary …)` command above
+		// carries `Needs: CapValidator` now that its arm asks fact 2, and this caller was already
+		// supplying `Validate`/`IsDeclined` — it had simply not *declared* them. The two halves are
+		// separate by design (guard 1: the classifier derives what a command needs, the engine
+		// declares what it has), so supplying a component without declaring it is exactly the
+		// under-declaration the gap check refuses to guess about.
+		Has: []Capability{CapWatReader, CapInterpreter, CapValidator},
 	})
 	// 5 pass, 0 unsupported, 0 unimplemented. Two retirements are visible in that line:
 	// the quote vector, which was `unimplemented` while no reader existed, and the
@@ -685,7 +719,7 @@ func TestAssertTrapActionScoring(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: parse: %v", c.name, err)
 		}
-		r := s.RunWith(Engine{
+		r := s.RunWith(withFact2(Engine{
 			Decode:  func([]byte) error { return nil },
 			IsGated: func(error) bool { return false },
 			// errors.As rather than a type assertion, matching the board's own isTrap
@@ -697,7 +731,7 @@ func TestAssertTrapActionScoring(t *testing.T) {
 				return c.out, c.err
 			},
 			Has: []Capability{CapInterpreter},
-		})
+		}))
 		// The module command is one pass in every case; the assertion is the second.
 		if c.pass {
 			if r.Pass != 2 || r.Fail != 0 {
@@ -744,12 +778,20 @@ func TestAssertTrapActionNeedsATrapPredicate(t *testing.T) {
 			t.Errorf("panic does not name the missing component: %v", v)
 		}
 	}()
-	_ = s.RunWith(Engine{
+	// **withFact2 is load-bearing for this tripwire, not scaffolding for it.** The setup line is a
+	// `(module binary …)`, so as of #353 it needs a validator — and without one the run panics
+	// *there*, before the assert_trap arm is reached, leaving this test's `recover` holding a panic
+	// about the wrong missing component. That is what happened when #353 landed the arm, and the
+	// message check above is the only reason it was a red rather than a green test asserting nothing:
+	// the panic arrived, `v != nil` was satisfied, and only *"no TrapFunc was supplied"* separated
+	// this tripwire's own subject from an unrelated one. **A panic is not a verdict about which
+	// panic** — the sibling of the lesson this test's doc comment already carries.
+	_ = s.RunWith(withFact2(Engine{
 		Decode:      func([]byte) error { return nil },
 		Instantiate: func(Command) (Instance, Stratum, error) { return "stub", StratumUnset, nil },
 		Invoke:      func(Instance, string, []Val) ([]Val, error) { return nil, nil },
 		Has:         []Capability{CapInterpreter},
-	})
+	}))
 }
 
 // TestAssertExceptionClassification is TestAssertTrapSplitsByWrappedForm's own shape for
@@ -844,7 +886,7 @@ func TestAssertExceptionScoring(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: parse: %v", c.name, err)
 		}
-		r := s.RunWith(Engine{
+		r := s.RunWith(withFact2(Engine{
 			Decode:  func([]byte) error { return nil },
 			IsGated: func(error) bool { return false },
 			IsException: func(e error) bool {
@@ -856,7 +898,7 @@ func TestAssertExceptionScoring(t *testing.T) {
 				return c.out, c.err
 			},
 			Has: []Capability{CapInterpreter},
-		})
+		}))
 		if c.pass {
 			if r.Pass != 2 || r.Fail != 0 {
 				t.Errorf("%s: got %d pass / %d fail, want 2/0\n%s", c.name, r.Pass, r.Fail, r.Board())
@@ -894,12 +936,15 @@ func TestAssertExceptionNeedsAnExceptionPredicate(t *testing.T) {
 			t.Errorf("panic does not name the missing component: %v", v)
 		}
 	}()
-	_ = s.RunWith(Engine{
+	// withFact2 for the reason its sibling in TestAssertTrapActionNeedsATrapPredicate carries in
+	// full: without it the setup module's missing validator panics first, and this `recover` catches
+	// a panic about the wrong component while still looking like a pass.
+	_ = s.RunWith(withFact2(Engine{
 		Decode:      func([]byte) error { return nil },
 		Instantiate: func(Command) (Instance, Stratum, error) { return "stub", StratumUnset, nil },
 		Invoke:      func(Instance, string, []Val) ([]Val, error) { return nil, nil },
 		Has:         []Capability{CapInterpreter},
-	})
+	}))
 }
 
 // TestNoReaderLeavesKindAtItsZeroValue is the control the `register` arm's grave names: a reader
