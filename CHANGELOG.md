@@ -1438,6 +1438,38 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **`call_indirect` hardcoded `i32` for its table index operand, so every valid `table64` module using
+  it was refused** ([#343](https://github.com/scttfrdmn/burroughs/issues/343), cause 2 of four). The
+  reference takes the index operand at the table's own address type (`valid.ml:537,542`); this
+  validator asked for `i32` unconditionally, and also looked the table up through a `requireTable`
+  helper whose result it then discarded — the lookup existed to raise `unknown table`, and the type it
+  returned was thrown away. Four valid modules over-rejected (`call_indirect64.wast:3`,
+  `table_init64.wast:385,444,503`), all in the all-gates-on lane, since the default lane gates
+  `memory64` off and so can neither commit this defect nor be credited with the repair.
+  - **The answer was already in the file.** `tableAddrType` sits at `bulk.go:353` and had been
+    extracting exactly this from exactly this field since the bulk-memory operands landed;
+    `Limits.Addr64`'s own comment anticipated table64 wanting "the identical field from the identical
+    position." *Lessons are indexed by shape, not by file* — the shape had been solved one screen away
+    and the fix is three lines of delegation to it. `requireTable` is deleted rather than repaired: it
+    had exactly this one caller, and its doc comment described the defect as the design.
+  - **The fix's only witness in the corpus runs one direction.**
+    `TestCallIndirectIndexTypeComesFromTheTable` pins all four cells, and the fourth — an `i32` index
+    on a 64-bit table — is unwitnessed upstream. Established by mutation rather than asserted: a
+    validator strict on 32-bit tables and permissive on 64-bit ones leaves `go test ./internal/spec/` **entirely green**, while a fully
+    permissive one is caught by the board on exactly one vector (`call_indirect.wast:862`, via
+    `allOnPassFloor` dropping to 64566). The first draft of that test's comment claimed the board was
+    blind to both; it was wrong by one vector, and the correction is recorded at the site.
+  - **No cascade, and that is a property of a prior decision.** `allOnPassFloor` moves 64563 → 64567,
+    exactly the four module commands, because #341's arm produces the instance even when validation
+    refuses — so these modules' dependent vectors were already running and already scored. Forecast
+    before the board was run; landed exact.
+  - Not fixed here, and stated because the boundary was a judgement call: `call_indirect`'s **element
+    type** check (`valid.ml:539`, that the table's element type is a subtype of `funcref`) is missing
+    entirely — confirmed accepted-in-error by probe, with no corpus vector — and `table.init`
+    (`bulk.go:246`) shares the same latent shape. Both need the subtype relation that #343's remaining
+    three causes exist to build: `matches` (`stack.go:139`) is `got == want` plus wildcards, and there
+    is no subtype relation anywhere in the validator.
+
 - **Five shell counts of the suite population and one Go definition, and they were different
   definitions** ([#340](https://github.com/scttfrdmn/burroughs/issues/340)). `filepath.Glob("*.wast")`
   matches a **leading dot** and a POSIX shell's `*` does not, so a directory holding 257 vectors and 257

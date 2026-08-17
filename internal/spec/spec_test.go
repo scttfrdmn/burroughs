@@ -7007,7 +7007,20 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	// A floor falling on this lane says the same thing it says on the default one and is argued at
 	// `passFloor`: the assertion arrived, the engine did not regress. Pre-registered on #341 with both
 	// lanes' figures before the arm changed; the forecast was `64727 → 64563`.
-	const allOnPassFloor = 64563
+	//
+	// **64563 → 64567, #343 cause 2: +4, and this is the shape a repair makes rather than a slice.**
+	// `call_indirect` now takes its index operand from the table's address type, so four valid table64
+	// modules stop being refused. The +4 is *exactly* the four module commands and nothing else,
+	// forecast before the board was run and confirmed: over-rejections 13 → 9, all-on fail 483 → 479,
+	// **and no cascade**, because #341's arm produces the instance even when validation refuses — so
+	// these modules' dependent vectors were already running and already scored. A repair that unblocked
+	// downstream work would show a delta larger than its own row count; this one cannot, and the fact
+	// that it cannot is a property of that design decision rather than of this fix.
+	//
+	// The default lane is unmoved at 60790, all four vectors being table64. That is the structural zero
+	// `validateOverRejectCeiling` documents, seen from the other side: a lane that gates a feature off
+	// can neither over-reject it nor be credited with the repair.
+	const allOnPassFloor = 64567
 	boardBound(t, "allOnPassFloor", totalPass, allOnPassFloor, boardBoundSlack, floorBound,
 		"a gated feature regressed, which the Gated==0 assertion above cannot see: with every "+
 			"gate on, a broken feature turns a pass into a fail and leaves Gated at zero")
@@ -7028,12 +7041,18 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 //  1. **recursive type equivalence and subtyping at a `call`'s arguments** (7) — the validator
 //     compares type indices where the reference compares the types they name, so two structurally
 //     identical rec-group members read as different.
-//  2. **a 64-bit table's index type at `call_indirect`** (4) — `call_indirect` takes its index from
-//     the table's own index type, and this validator hard-codes `i32`.
-//  3. **`(ref null none) <: (ref null any)` at a block result** (1) — bottom-of-the-heap-hierarchy
+//  2. **`(ref null none) <: (ref null any)` at a block result** (1) — bottom-of-the-heap-hierarchy
 //     subtyping.
-//  4. **element-type subtyping at `table.copy`** (1) — the check demands equality where the spec
+//  3. **element-type subtyping at `table.copy`** (1) — the check demands equality where the spec
 //     allows the source's element type to be a subtype of the destination's.
+//
+// **A fourth cause was here and is fixed**, which is what this table's "no longer over-rejects" arm is
+// for: `call_indirect` read its index operand as a hardcoded `i32` where the reference takes it from
+// the table's own address type (`valid.ml:537,542`), refusing four valid table64 modules —
+// `call_indirect64.wast:3` and `table_init64.wast:385,444,503`. The four rows were deleted when the
+// fix landed, on the arm's own instruction. Recording the deletion rather than only performing it,
+// because a table that silently shrinks cannot be told from a table someone trimmed to make a test
+// pass.
 //
 // Keyed `file:line` → the substring of the refusal that names the cause, so a row moving to a
 // *different* wrong answer is a change this table reports rather than absorbs. Pre-registered on
@@ -7047,10 +7066,6 @@ var moduleOverRejections = map[string]string{
 	"type-equivalence.wast:49": "(call): type mismatch: expected (ref 2), got (ref 0)",
 	"type-subtyping.wast:68":   "(call): type mismatch: expected (ref 0), got (ref 1)",
 	"type-subtyping.wast:89":   "(call): type mismatch: expected (ref 0), got (ref 2)",
-	"call_indirect64.wast:3":   "(call_indirect): type mismatch: expected i32, got i64",
-	"table_init64.wast:385":    "(call_indirect): type mismatch: expected i32, got i64",
-	"table_init64.wast:444":    "(call_indirect): type mismatch: expected i32, got i64",
-	"table_init64.wast:503":    "(call_indirect): type mismatch: expected i32, got i64",
 	"ref_null.wast:23":         "(end): type mismatch: expected (ref null any), got (ref null none)",
 	"table-sub.wast:1":         "does not match destination element type funcref",
 }
