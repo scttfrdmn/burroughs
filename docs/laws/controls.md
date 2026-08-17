@@ -16,9 +16,12 @@ history rather than description**: `claudeMDCeiling` (the byte budget), `TestCla
 (the per-entry ledger), and `lawsFloor`, all retired with the economy they were instruments of.
 They are left in place because a **specimen is content** — the extent, unit, and total-is-not-a-ledger
 laws were minted *on* them, and rewriting a minting record to name a live control instead would
-falsify the occasion. Read them in the past tense; the laws they specimen are unaffected. Two
-passages assert them in the present tense and are wrong to (`is the specimen`, `two live controls`);
-amending law text needs a principal's word, so the correction is scoped here rather than made there.
+falsify the occasion. What was amended is the **tense**: two passages asserted them as live
+mechanisms (`is the specimen`, `two live controls`) and now say at the name that the instrument is
+retired, because **a body naming an instrument that no longer exists is a dangling reference** and a
+dangling reference is not testimony worth preserving. The lessons themselves are untouched, and the
+treatment matches the one `internal/testenv/laws_test.go` already gives `lawsFloor` in code — named as
+gone, with the reason — so the corpus and the code agree. (Ruling: Scott, on PR #377's relay.)
 
 `CLAUDE.md` links this family, and the two halves of that link are checked:
 `TestClaudeMDLinksResolve` (`internal/testenv`) that every pointer on the page resolves, and
@@ -203,10 +206,11 @@ reach is a law out of context.
   items are individually checkable.*** The law demotes an aggregate because a *forecast* about a
   distribution was being read off a sum. Where something downstream actually consumes the sum,
   the sum is a claim in its own right and stays fatal: it is no longer a proxy for the items, it
-  is the quantity itself. `claudeMDCeiling` (`internal/testenv/laws_test.go`) is the specimen —
-  the consumer of `CLAUDE.md` is a context window, and context cost is **total bytes**, not
-  per-entry bytes, so an index that stays under every per-entry bound and blows the file total
-  has broken the thing the ceiling protects. But the exception buys the total its life, not its
+  is the quantity itself. `claudeMDCeiling` (then in `internal/testenv/laws_test.go`, retired with
+  the index economy) was the specimen —
+  the consumer of `CLAUDE.md` was a context window, and context cost is **total bytes**, not
+  per-entry bytes, so an index that stayed under every per-entry bound and blew the file total
+  had broken the thing the ceiling protected. But the exception buys the total its life, not its
   primacy, and the second half of the clause is the operative half: the index's entries are
   individually enumerable, so one entry can bloat while the total stays green, and trimming an
   unrelated entry buys room for it — exactly the cancellation above. So the two instruments
@@ -284,8 +288,10 @@ reach is a law out of context.
   **Demoted on PR #317, and the heading above is the compressed key.** The index carried this law's
   whole sentence — *where items are enumerable, assert per item and let the total be a checksum on the
   ledger rather than a claim in its own right* — as its recall key, 347 bytes of `CLAUDE.md`. The
-  content is now enforced by two live controls that fail when it is violated: `TestClaudeMDIndexLedger`
-  over the index's own entries, and `alignmentAdmissions` in `internal/validate`. Under `claudeMDCeiling`'s
+  content was enforced by two controls that failed when it was violated — `TestClaudeMDIndexLedger`
+  over the index's own entries, and `alignmentAdmissions` in `internal/validate` — both since gone,
+  the ledger with the economy and `alignmentAdmissions` when #306 drained the population it named.
+  Under `claudeMDCeiling`'s
   ruling (PR #298) — *a law with a live control that fails when it's violated does not need index prose
   teaching it; the control teaches it, at the moment it matters* — that makes it the demotion candidate
   the ceiling's comment had already named by name. So the key is now four words and the sentence lives
