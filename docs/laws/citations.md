@@ -5,14 +5,16 @@
 A citation nobody resolves is a claim; provenance has categories.
 
 Relocated from `CLAUDE.md`'s `## Disciplines` section, **verbatim**, when that file
-became an index (see the restructure PR). Each law's one-line compressed form remains in
-`CLAUDE.md` as its recall key and points here for the specimen, the minting record, and the
-token it was granted on. Nothing was rewritten in the move: the bodies below are the text as
-it stood, which is why superseded wordings still appear inside them where a later ruling
-amended rather than replaced.
+became an index (see the restructure PR). Nothing was rewritten in the move: the bodies below
+are the text as it stood, which is why superseded wordings still appear inside them where a
+later ruling amended rather than replaced. The per-law recall keys `CLAUDE.md` carried were
+retired with the index economy when that file became a brief and a pointer page (Scott's
+directive, the four-workstream brief of 2026-08-17); the laws themselves were not touched.
 
-`CLAUDE.md`'s recall key and each heading here are checked equal by
-`TestEveryLawIsIndexed` (`internal/testenv`), so the two cannot drift.
+`CLAUDE.md` links this family, and the two halves of that link are checked:
+`TestClaudeMDLinksResolve` (`internal/testenv`) that every pointer on the page resolves, and
+`TestLawFamiliesAreReachable` that every family here is reachable from it — a law nobody can
+reach is a law out of context.
 
 ### Fixtures cite the suite, and the citations are checked.
 

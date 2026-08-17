@@ -40,7 +40,7 @@ SHELL := /bin/bash -o pipefail
 # anything globally.
 TOOL = $(GO) tool -modfile=tools/go.mod
 
-.PHONY: all build test race vet fmt fmt-check lint check vuln deadcode fuzz bench ratio cite close spec-tests spec-ref tidy conformance strict pipefail-check opcodes opcode-drift keywords keyword-drift opcodes-text opcodes-text-drift memarg memarg-drift gate-census claudemd-ledger xcorpus
+.PHONY: all build test race vet fmt fmt-check lint check vuln deadcode fuzz bench ratio cite close spec-tests spec-ref tidy conformance strict pipefail-check opcodes opcode-drift keywords keyword-drift opcodes-text opcodes-text-drift memarg memarg-drift gate-census xcorpus
 
 # The default gate. `check` is what must be green before a report — it is the
 # local mirror of CI, so a surprise in CI means a bug in this line, not a bug in
@@ -392,20 +392,12 @@ gate-census:
 	$(GO) test ./internal/binary/ -run TestGateCensusIsClassifiedArmByArm -update-census -count=1
 	@echo "regenerated internal/binary/testdata/gate-census.txt"
 
-# Re-base the CLAUDE.md byte ledger: one row per index entry, one per surrounding section
-# (#298, under `a total is not a ledger`'s exception clause).
-#
-# Same shape and the same no-corpus-dependency property as `gate-census` above — the sole
-# input is CLAUDE.md, committed — so its check is part of `check` and not `conformance`.
-#
-# **Re-basing is a normal motion and is never the whole motion.** A row moves because a
-# recall key changed, and the question the ledger asks is which branch that text is:
-# a law's *body*, which belongs in docs/laws/, or *governance*, which stays. Run this
-# after answering, and say which in the PR — a re-base with no answer is the ratchet the
-# docs/laws/ restructure exists to stop, laundered through a golden file.
-claudemd-ledger:
-	$(GO) test ./internal/testenv/ -run TestClaudeMDIndexLedger -update-ledger -count=1
-	@echo "regenerated internal/testenv/testdata/claudemd-ledger.txt"
+# The `claudemd-ledger` target stood here: a golden per-entry byte ledger over CLAUDE.md's
+# index entries, re-based whenever a recall key moved. It is retired with the rest of the
+# index economy (Scott's directive, the four-workstream brief) — CLAUDE.md is a brief and a
+# pointer page now, and a per-entry byte budget over a page of pointers rations nothing.
+# `internal/testenv/laws_test.go` carries the account of what dissolved and what was
+# re-pointed instead.
 
 # Regenerate the wat keyword table from the same vendored reference, one grammar over
 # (decision 0009). Same shape as `opcodes` above and deliberately not folded into it:

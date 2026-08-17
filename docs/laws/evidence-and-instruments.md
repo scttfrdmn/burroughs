@@ -5,14 +5,21 @@
 Which channel carries which answer, and what a measurement is worth.
 
 Relocated from `CLAUDE.md`'s `## Disciplines` section, **verbatim**, when that file
-became an index (see the restructure PR). Each law's one-line compressed form remains in
-`CLAUDE.md` as its recall key and points here for the specimen, the minting record, and the
-token it was granted on. Nothing was rewritten in the move: the bodies below are the text as
-it stood, which is why superseded wordings still appear inside them where a later ruling
-amended rather than replaced.
+became an index (see the restructure PR). Nothing was rewritten in the move: the bodies below
+are the text as it stood, which is why superseded wordings still appear inside them where a
+later ruling amended rather than replaced. The per-law recall keys `CLAUDE.md` carried were
+retired with the index economy when that file became a brief and a pointer page (Scott's
+directive, the four-workstream brief of 2026-08-17); the laws themselves were not touched.
 
-`CLAUDE.md`'s recall key and each heading here are checked equal by
-`TestEveryLawIsIndexed` (`internal/testenv`), so the two cannot drift.
+**`claudeMDCeiling`, named in the ninth specimen of the coverage law below, no longer resolves** — it
+was retired with that economy. The specimen stands because the lesson is about a *unit* (`len(str)`
+counts characters, `wc -c` counts bytes) and the ceiling is only the quantity it was mismeasured on;
+read that sentence's present tense as the past tense it now is.
+
+`CLAUDE.md` links this family, and the two halves of that link are checked:
+`TestClaudeMDLinksResolve` (`internal/testenv`) that every pointer on the page resolves, and
+`TestLawFamiliesAreReachable` that every family here is reachable from it — a law nobody can
+reach is a law out of context.
 
 ### The spec is the objective function; the suite samples it.
 
@@ -471,3 +478,34 @@ amended rather than replaced.
   domain that collapsed, an exact count catches one that shrank quietly, and a
   vacuity guard catches one that emptied. (Ruling: Scott, PR #285 relay; minted
   from #264, whose closing comment is the first specimen's own wording.)
+
+### A completion state can be true while its payload vanished — verify the artifact, not the flag.
+
+- **A completion state can be true while its payload vanished — verify the artifact, not the
+  flag.** *Presence-of-status is not presence-of-content*, and it is silence-is-not-evidence's
+  uglier cousin: silence at least *looks* like nothing, where a status field looks like
+  everything. The specimen: a grave issue read honestly **CLOSED** — the merge keyword did that,
+  correctly — while the closing comment carrying its lesson had been silently eaten, so every
+  query that asks "is it closed?" returns the reassuring answer and every reader who follows the
+  link finds a tombstone with no inscription. The only move that catches the class is checking
+  the **artifact's own measurable property** — the comment count, the body length, the row the
+  table should contain — rather than the state that is supposed to imply it. Sited here because
+  it is the same instrument confusion the `deadcode` and exit-code rules above name (a verdict
+  channel cannot say *why*, and a status channel cannot say *what*), pointed at the tracker
+  rather than at a tool: `gh issue close` reporting success is a verdict about the close, never a
+  witness to the comment. Generalizes past GitHub — any write whose confirmation is a state
+  transition needs its payload read back. **The recurrence is the point, and the specimens are
+  counted by a query rather than by this file** — `gh issue list --label type:grave --state
+  closed --limit 500 --json number,comments`, whose zero-comment rows *are* the list, and #303 is
+  the filed control that runs it mechanically.
+  The `--limit 500` is load-bearing, not decoration: `gh issue list` defaults to **30** silently, so
+  a count taken without it reports a page as the population — body in
+  [Coverage is a claim](#coverage-is-a-claim-an-instruments-domain-is-an-assertion-it-cannot-check-about-itself),
+  above in this family (the path was `docs/laws/evidence-and-instruments.md#…` while this law lived
+  in `CLAUDE.md`; **relocating the text unchanged would have changed what the link means**, since a
+  repo-root-relative path read from inside `docs/laws/` resolves to nothing. The target is the same
+  law it always was).
+  This rule kept a running tally here until it was pointed out
+  that a measured quantity in prose schedules its own next increment; the tally is generated or
+  it is deleted, and this one is deleted. (Lesson: Scott, on the PR #247 relay; recurrences
+  relayed by chat-Claude; count struck on his ruling, PR #317.)
