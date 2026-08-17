@@ -64,6 +64,29 @@
 #     one commit, so per-commit provenance does not survive into main's history. That path
 #     prints NOT AVAILABLE and names the reason: zero ordered lines would be a false verdict
 #     where the honest report is an absent measurement.
+#
+# ## Two ledgers, and they are never read as one (Scott's ruling, PR #363)
+#
+# `Ratio-Class` and purpose classification answer different questions about different subjects,
+# and the temptation is to treat an `ordered` trailer as though it argued about class:
+#
+#   - **`Ratio-Class` attributes lines *within* the instrument column** — who caused them. It
+#     moves nothing out of the column and nothing between classes; the total is still quoted
+#     whole, because the total is the drift figure.
+#   - **Purpose classification decides whether the PR is product or instrument**, and that is
+#     the quantity the two-consecutive-instrument-PRs stop condition counts (#159).
+#
+# So an order from a principal changes a PR's *priority* and never its class: it moves lines
+# into the `ordered` bucket and leaves the PR exactly as product or instrument as it was. #345
+# was instrument work, stayed instrument work, and the trailer only made the chair's share of
+# it visible. Written here because the tension is a natural misreading and was in fact raised
+# on #363 — "an order changes priority, never class" versus a `Ratio-Class: ordered #345`
+# trailer reads as a contradiction until the two subjects are separated, and then it isn't one.
+#
+# **And a chair-ordered PR with a zero reward figure is a cost the chair caused, reported as
+# such.** That is the trailer working as directed rather than an accounting embarrassment to be
+# smoothed: "I'd rather see it than not" (Scott, same ruling). The `ordered` bucket is not an
+# exemption surface — it is the chair's own line in the ledger.
 
 set -eu
 

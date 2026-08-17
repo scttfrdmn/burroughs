@@ -95,7 +95,8 @@
 //
 // An out-of-scope rule attached to an *instruction* is declined, because the walk meets the
 // instruction and has nothing to say about it: 391 of the corpus's `assert_invalid` vectors land
-// that way, each naming its opcode — the board's own `assert_invalid declined:` buckets summed,
+// that way, each naming its opcode — the board's own `declined:` buckets under the `assert_invalid`
+// forms, summed (the bare form's key spells `assert_invalid (module) declined:` since #364),
 // which is `validateDeclineCeiling`, not a separately-counted figure that could drift from it. An out-of-scope rule attached to anything the code-section
 // walk never visits is **accepted**, because there is nothing to decline — limits, duplicate
 // export names, and constant expressions in globals and segment offsets are not instructions this

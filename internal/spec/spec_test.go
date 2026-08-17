@@ -7173,16 +7173,24 @@ func TestModuleDefinitionsAskTheValidator(t *testing.T) {
 	}{
 		{"text", `(module (func))`, KindModuleText, "module text must validate"},
 		{"quote", `(module quote "(module (func))")`, KindModuleQuote, "module quote must validate"},
-		// `module`, not `module binary`: `Kind.String()` returns the bare word for this Kind
-		// (`wast.go`'s `Kind.String`), so the shared closure's `c.Kind.String() + " must validate"`
-		// produces a key that reads ambiguously on the board beside `(module binary ...) must
-		// decode`, which spells its own form out. Pinned as *measured* — #353's pre-registration
-		// named `module binary must validate`, which was a prediction about a mechanism rather than
-		// a reading of one, and a pre-registered string is as falsifiable as a pre-registered
-		// count. Left as the closure produces it: one key-forming mechanism for both arms is worth
-		// more than a prettier string in one of them, and the ambiguity is a board-legibility
-		// finding about `Kind.String`, not about this slice.
-		{"binary", `(module binary "\00asm\01\00\00\00")`, KindModuleBinary, "module must validate"},
+		// `module binary` since #364, and this row is where the previous slice's *deferred finding*
+		// came due. #353 pinned this key as `module must validate` and said so as measured rather
+		// than as intended: `Kind.String()` returned the bare word for this Kind, the shared closure
+		// forms `c.Kind.String() + " must validate"`, and the resulting key read ambiguously beside
+		// `(module binary …) must decode` — recorded there as "a board-legibility finding about
+		// `Kind.String`, not about this slice". Scott's ruling on `Kind.String()` (PR #364) is what
+		// closed it, and the honest scoring of the older pre-registration is that it named the right
+		// string one era early: it predicted the mechanism this row now has, and was a miss against
+		// the mechanism that existed.
+		//
+		// **The four expectations stay literal, which is not an oversight.** Deriving them as
+		// `tc.want.String() + " must validate"` would make this row an identity against the very
+		// closure it is checking — the shape a pin wearing a cross-check's clothes takes (grave
+		// #362) — so it would agree with any rename, including a wrong one. A hand-typed key is the
+		// only kind that can disagree, and the two disagreements #364 produced (this row and
+		// `admittedKeyPrefix`) are the instrument working: a rename should have to walk past every
+		// reader that claimed to know the string.
+		{"binary", `(module binary "\00asm\01\00\00\00")`, KindModuleBinary, "module binary must validate"},
 	} {
 		t.Run("a validator that refuses every module turns a "+tc.name+" definition red", func(t *testing.T) {
 			s, err := Parse("t.wast", []byte(tc.src))
@@ -7473,7 +7481,14 @@ func TestVerdictsPartitionCommands(t *testing.T) {
 //
 // It keyed a per-vector ledger for the alignment population until #306; see the census at
 // `validateAdmitCeiling` for what replaced it and why.
-const admittedKeyPrefix = "assert_invalid accepted, expected: "
+//
+// **Derived from the Kind rather than typed out, since #364 renamed the Kind under it.** The
+// comment above says this prefix is a string the corpus supplies; a hand-typed copy of it is
+// therefore a claim about `classify`'s key format maintained in a second place, and the rename from
+// `assert_invalid` to `assert_invalid (module)` broke exactly that copy while every derived reader
+// moved with it. The concatenation order matches `scoreValidation`'s (`form + " accepted, expected:
+// "`) because that is the one producer of these keys.
+var admittedKeyPrefix = KindAssertInvalid.String() + " accepted, expected: "
 
 // TestPhase1Files runs every suite file that phase 1 can meaningfully score,
 // so the board covers the byte-string corpus rather than one file.
@@ -9143,7 +9158,9 @@ func TestPhase1Files(t *testing.T) {
 	// **Every one of the 20 is the alignment gap, and it is one cause with two faces.** Established
 	// by diffing the bucket keys before and after rather than reasoned about — the only admitted
 	// bucket that changed is `alignment must not be larger than natural`, 38 → 54, and the only
-	// *new* key is `assert_invalid expected: alignment must not be larger than natural` at 4
+	// *new* key is the bare form's `expected:` bucket for `alignment must not be larger than
+	// natural` at 4 — spelled `assert_invalid expected: …` in the era this was measured, and
+	// `assert_invalid (module) expected: …` since #364 renamed the Kind
 	// (`simd_store{8,16,32,64}_lane.wast`, one each):
 	//
 	//   - **+16 accepted-but-invalid.** `decodeMemop` drops the memarg's alignment, deliberately

@@ -1,6 +1,11 @@
 package spec
 
 import (
+	"maps"
+	"os"
+	"path/filepath"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -52,11 +57,12 @@ func TestAssertInvalidKindsAreExactlyTheAssertInvalidForms(t *testing.T) {
 	}
 	// The other end of the range. KindUnsupported is the enum's last member and the loops rely on
 	// it; a Kind declared *after* it would be outside every scan, and unlike an insertion it would
-	// not move kindCount. It is visible in `String()` though: the default arm returns "unsupported"
+	// not move kindCount. It is visible in `String()` though: the default arm returns the
+	// unsupported rendering
 	// for anything unnamed, so an ordinal above the end that renders as something else has a case
 	// of its own and is therefore a real member sitting outside the domain.
 	for k := KindUnsupported + 1; k <= KindUnsupported+kindsPastUnsupported; k++ {
-		if got := k.String(); got != "unsupported" {
+		if got := k.String(); got != unsupportedRendering {
 			t.Errorf("Kind(%d).String() = %q, want %q — that ordinal has a String() case, so it is "+
 				"a declared Kind above KindUnsupported and outside the range every loop in this "+
 				"file scans. Move it into the block before KindUnsupported, which is where the "+
@@ -113,5 +119,122 @@ func TestAssertInvalidKindsAreExactlyTheAssertInvalidForms(t *testing.T) {
 				"unrecognized-bucket arm cannot catch", int(prev), int(k), k)
 		}
 		seen[k.String()] = k
+	}
+}
+
+// unsupportedRendering is `KindUnsupported`'s string and the default arm's, named once because two
+// checks depend on it being the *same* string: the range probe above reads an ordinal's rendering to
+// decide whether it is a declared Kind, and the vocabulary test below asserts this one is not
+// mistakable for a suite atom. A literal in both places is a literal that can be updated in one.
+const unsupportedRendering = "<unsupported>"
+
+// commandHeadRE matches a top-level command's head atom in a `.wast` file: an open paren in column
+// zero and the atom after it. Column zero is the corpus's own structure for commands — nested forms
+// are indented — so this is the head-atom set the suite actually uses, not every atom it contains.
+var commandHeadRE = regexp.MustCompile(`(?m)^\(([a-z_][a-z_0-9]*)`)
+
+// TestKindStringsSpeakTheSuitesVocabulary is Scott's ruling on `Kind.String()` (PR #364) made
+// executable: **a Kind's string names the question the harness asked, in the suite's words, plus any
+// distinction the Kind adds.**
+//
+// The reason the board's rows must be in the corpus's terms rather than the enum's, in his words:
+// `assert_invalid` is checkable against the `.wast` files by anyone, where `KindAssertInvalid` is
+// checkable only against source the reader does not have open. So this test derives the admissible
+// vocabulary **from the corpus** and never from a list typed beside the switch — a list would make
+// this a comparison of the enum against itself, which is the shape *a control scoped to the current
+// sample* names.
+//
+// # What it checks, and the two halves are different claims
+//
+//   - **Every Kind's head token is a head atom the corpus writes.** That is what caught the two
+//     strings #364 fixed, from the other direction: `module` and `assert_malformed` are both real
+//     corpus atoms, so the head check passes on them — it is the *sibling* check below that fails
+//     them.
+//   - **No Kind's string is a bare head atom shared with a sibling that discriminates.** This is the
+//     collapsing hazard Scott named, one step short of an actual collision: `module` for the binary
+//     form sat beside `module binary`-shaped siblings and named the *text* form's spelling, and
+//     `assert_malformed` named neither of its two wrapper forms. A bare atom is admissible only when
+//     no sibling Kind adds a discriminator to it — which is `assert_invalid`'s case exactly, its own
+//     corpus form being the unwrapped one.
+//
+// # What it deliberately does not check, because the answer would be a false green
+//
+// **`module text` is not a string the corpus contains**, and this test cannot ask it to be. The text
+// form's faithful spelling is the bare `module`, since its distinction is the *absence* of a
+// wrapper; printing that would leave a board row unable to distinguish one Kind from the head atom
+// of three. The added word is legibility bought against fidelity, and it is declared here — in the
+// control that would otherwise be assumed to have checked it — rather than left for a reader to
+// discover by grepping the suite for `(module text` and finding nothing.
+func TestKindStringsSpeakTheSuitesVocabulary(t *testing.T) {
+	requireSuite(t)
+
+	heads := map[string]bool{}
+	files, err := filepath.Glob(filepath.Join(suiteDir, "*.wast"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range files {
+		src, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatalf("%s: %v", f, err)
+		}
+		for _, m := range commandHeadRE.FindAllSubmatch(src, -1) {
+			heads[string(m[1])] = true
+		}
+	}
+	// The vacuity check, and it is not decoration: an empty or tiny set makes every membership
+	// test below an agreement with nothing, which is the failure mode *a comparison against an
+	// empty set succeeds* names. The suite's own command vocabulary is a dozen atoms and more.
+	if len(heads) < 8 {
+		t.Fatalf("found %d top-level command atoms across %d suite files (%v) — the scan is not "+
+			"reading the corpus, so every check below is vacuous", len(heads), len(files),
+			slices.Sorted(maps.Keys(heads)))
+	}
+
+	// The head token of every Kind, and the set of tokens that follow it per head — computed in one
+	// pass so the sibling test below asks about the enum rather than about a remembered grouping.
+	discriminated := map[string]bool{}
+	head := func(k Kind) (string, string) {
+		h, rest, _ := strings.Cut(k.String(), " ")
+		return h, rest
+	}
+	for k := KindModuleBinary; k < KindUnsupported; k++ {
+		if h, rest := head(k); rest != "" {
+			discriminated[h] = true
+		}
+	}
+
+	for k := KindModuleBinary; k < KindUnsupported; k++ {
+		h, rest := head(k)
+		if !heads[h] {
+			t.Errorf("Kind(%d) renders %q, whose head atom %q is not a command head the corpus "+
+				"writes — a board row naming a form no `.wast` file spells is checkable against "+
+				"nothing", int(k), k, h)
+		}
+		if rest == "" && discriminated[h] {
+			t.Errorf("Kind(%d) renders the bare atom %q while a sibling Kind discriminates on %q — "+
+				"so this row names the head atom of a group rather than its own form, which is the "+
+				"collapsing hazard one step short of a collision. Append the distinction this Kind "+
+				"adds", int(k), k, h)
+		}
+	}
+
+	// KindUnsupported is the one Kind with no head atom: it is the harness reporting that it
+	// recognized nothing, not a form the suite has. Its rendering must therefore be unmistakable
+	// for suite vocabulary, and the assertion is against the corpus rather than against a spelling
+	// preference — no `.wast` file can produce a `(<…` head, so a bracketed string cannot be read
+	// as one.
+	if s := KindUnsupported.String(); s != unsupportedRendering {
+		t.Errorf("KindUnsupported renders %q, want %q", s, unsupportedRendering)
+	}
+	for _, atom := range slices.Sorted(maps.Keys(heads)) {
+		if KindUnsupported.String() == atom || KindUnsupported.String() == "("+atom {
+			t.Errorf("KindUnsupported renders %q, which is a suite command atom — the one Kind that "+
+				"names no suite form would be reading as though it named one", KindUnsupported)
+		}
+	}
+	if !strings.ContainsAny(KindUnsupported.String(), "<>") {
+		t.Errorf("KindUnsupported renders %q with no bracket — the property that keeps it out of the "+
+			"corpus's vocabulary is that the suite cannot spell it", KindUnsupported)
 	}
 }

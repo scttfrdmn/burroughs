@@ -20,6 +20,36 @@ amended rather than replaced.
   in the same session. Graves get marked: a comment at the fix site naming
   the lesson and citing the issue.
 
+  **Specimen — a closing keyword closes the issue and never writes the lesson** (grave
+  #314; demoted here on Scott's order, PR #364). The law above says a grave gets marked
+  with a comment naming the lesson. The tracker-side half of that is where it gets lost:
+  `Closes #N` or `Fixes #N` anywhere in a PR body or a commit message makes GitHub close
+  the issue on merge, and it closes it *correctly* — the state transition is real, the
+  timestamp is right, every query asking "is it closed?" gets the reassuring answer, and
+  the closing comment carrying the lesson was never written. What is left is a tombstone
+  with no inscription, which is worse than an open issue because an open issue still
+  reads as work.
+
+  **The mechanism is that the parser reads tokens, not negations**, so no sentence around
+  the keyword can disarm it: "this does not close #N" closes #N. That is the whole reason
+  the rule is a banned *construct* rather than a banned *intention*. The remedy is two
+  commands in order — `gh issue comment` then `gh issue close` — so the lesson lands
+  first and the state follows it, and three phrasings that carry the reference without
+  the trigger: "Landed in #N", "Filed, deferred: #N", "see #N".
+
+  **This law has no key in `CLAUDE.md` and is not getting one.** `scripts/closecheck.sh`
+  scans the PR body and the commit messages, runs in CI's `citations` job, and its failure
+  message states both the rule and the remedy — the criterion (#339) under which a law
+  needs no index prose, because the control says the whole thing at the moment it matters.
+  It has now caught this same author three times, most recently on the report *about* a PR
+  whose own Graves section lectured on citations. A control that fires reliably at the
+  moment of the mistake is exactly the kind whose index line is redundant, so the order to
+  demote it frees no index bytes at all: there was nothing to take out, and this specimen
+  is where the lesson lives instead of in a shell script and a closed issue. It is also
+  the preventive face of *a completion state can be true while its payload vanished* —
+  the keyword is how the payload goes missing, and reading the artifact's own comment
+  count is how you find out.
+
 ### Sweep after a grave.
 
 - **Sweep after a grave.** A defined-but-never-returned error, an

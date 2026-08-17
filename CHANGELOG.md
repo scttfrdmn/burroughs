@@ -1035,6 +1035,86 @@ weakly-ordered platform.
 
 ### Changed
 
+- **A borrowed reward figure is refused, and the closing-keyword lesson gets a home**
+  (`docs/laws/`, Scott's rulings, PR #364). Two governance records written into the law corpus's
+  bodies, where they cost the index nothing.
+  - **`unmoved` plus a named subject, never another PR's delta.** An overhead PR offered the reward
+    figure of the product work it rides with; declined, because *a borrowed figure is a reward figure
+    with a different subject* — the same defect as a membership swap or a harness widening read as
+    engine capability. #235's substitution is not the precedent: it requires the ordinary figure to be
+    structurally zero **and** a same-subject substitute to exist, and neither holds here. An overhead
+    PR's reward figure is *none*, consistent with preferring `NOT RUN` to zero and absent to `0.0`.
+  - **The closing-keyword rule is demoted to a specimen under *artifacts become oracles*, and the
+    demotion frees no index bytes** — the triage found it never had a key: it exists as
+    `scripts/closecheck.sh`, a CI step, and grave #314. That is evidence for the demotion criterion
+    rather than against it, since the script's failure message already states both rule and remedy.
+    The specimen records the mechanism (GitHub's parser reads tokens, not negations, so no sentence
+    around the keyword disarms it), the two-command remedy, the three safe phrasings, and that this
+    is the preventive face of *a completion state can be true while its payload vanished*.
+
+- **The board's `Kind` rows speak the suite's vocabulary, and five of them did not**
+  (`internal/spec/wast.go`, Scott's ruling, PR #364). The rule: *a Kind's string names the question
+  the harness asked, in the suite's words, plus any distinction the Kind adds* — the board measures
+  the corpus, so `assert_invalid` is checkable against the `.wast` files by any reader where a Go
+  identifier is checkable only against source they do not have open. Five strings broke it the same
+  way, a **bare head atom in a family whose siblings discriminate**, so each named the head atom of a
+  group rather than its own form: `module` → `module binary`, `assert_malformed` →
+  `assert_malformed (binary)`, `assert_return` → `assert_return (invoke)`, `invoke` → `invoke "f"`,
+  `assert_invalid` → `assert_invalid (module)`. `assert_trap` already discriminated both of its arms,
+  so the three bare arms had made one switch inconsistent about one question. `KindUnsupported`, the
+  one Kind naming no suite form, renders `<unsupported>` — bracketed because no `.wast` file can
+  spell a `(<…` head, where the bare word sat in a board row beside real atoms *and* beside the
+  board's own `unsupported` column.
+  - **Two of the five had already been filed as findings and one was defended in a comment.** #353
+    pinned `module must validate` as measured and called the ambiguity "a board-legibility finding
+    about `Kind.String`, not about this slice"; its pre-registration had named `module binary must
+    validate`, which turns out to have been the right string one era early. The bare `assert_invalid`
+    was argued *for* in `String()`'s own doc comment — the Kind's corpus spelling is unwrapped, true
+    and not the question — and the control derived from the rule disagreed with the prose. Both
+    sequences are recorded at the sites rather than quietly corrected.
+  - **`TestKindStringsSpeakTheSuitesVocabulary` derives the admissible vocabulary from the corpus**,
+    scanning every suite file for column-zero command heads, so it is not the enum compared against a
+    list typed beside the switch. Two independent halves — every Kind's head token is an atom the
+    corpus writes, and no Kind's string is a bare atom shared with a discriminating sibling — plus a
+    vacuity floor on the scanned atom set. Watched die five ways: a non-corpus head atom, a
+    `KindUnsupported` rendering a real atom, an unbracketed one, a collapsed sibling, and a regex
+    matching nothing (which reports **0 atoms across 257 files** rather than passing). `module text`
+    is declared as the one string the corpus does not contain, in the control that would otherwise be
+    assumed to have checked it.
+  - **A rename is how you find out which readers were deriving and which were copying.** Moving
+    `KindAssertInvalid`'s string re-keyed 2697 buckets, and both sides moved together because both
+    call `Kind.String()`; two hand-typed copies did not, and are the finding — `admittedKeyPrefix` is
+    now derived, and #353's four expectations stay literal *deliberately*, since deriving them would
+    make the row an identity against the closure it checks (grave #362's shape).
+
+- **The `declined` column's zero is documented as a campaign milestone rather than a navigation
+  change** (Scott's ruling, PR #363). With `declined` reading zero in both of the `assert_invalid`
+  ledger's groups, the vocabulary question is closed — the validator has a rule for every instruction
+  the corpus asks it about — and everything remaining in that table is *correctness*. Stated at the
+  column's own description, because the readiest explanation for an empty column found later is a
+  broken counter, and two facts against that reading are named beside it: the tally is still
+  accumulated on every walk, and the board's remaining declines are pinned as this ledger's
+  complement. The direction of read inverts with the zero — the column estimated reward while it was
+  populated and is a **regression detector** now — so the inference is written down rather than left
+  to whoever reads it next.
+- **`Ratio-Class` and purpose classification are documented as two ledgers that are never read as
+  one** (Scott's ruling, PR #363), at the trailer's own site in `scripts/ratio.sh`. `Ratio-Class`
+  attributes lines *within* the instrument column — who caused them — and moves nothing between
+  classes; purpose classification decides whether a PR is product or instrument, which is what the
+  two-consecutive-instrument-PRs counter runs on (#159). So an order from a principal changes a PR's
+  priority and never its class: #345 was instrument work, stayed instrument work, and the trailer only
+  made the chair's share visible. Written because the apparent tension was raised on #363 and reads as
+  a contradiction until the two subjects are separated. A chair-ordered PR with a zero reward figure is
+  a cost the chair caused, reported as such — *"I'd rather see it than not"* — so the `ordered` bucket
+  is the chair's line in the ledger and not an exemption surface.
+- **ADR 0027 records that `ref.null`'s declared retention gap acquired its first consumer**
+  (Scott's order, PR #363), appended rather than amended per 0028's standing rule for accepted
+  records. The gap was declared with a named condition — closed when a consumer exists — and the
+  consumer the record identified was the text encoder (#8); the one that arrived is the validator's
+  `ref.null` rule (#359). The original reasoning stands unamended, and the append is what keeps a
+  reader from concluding the gap is still open: a declared limit whose cost has been *incurred* reads
+  differently from one still hypothetical.
+
 - **Seven board bounds re-based on #341's new question, pre-registered before the arm was touched.**
   Asking a question the harness had never asked moves numbers on already-merged slices, and *those
   movements are the finding rather than a regression* (Scott's condition on #341). Default lane
@@ -1532,6 +1612,28 @@ weakly-ordered platform.
   element segment's *offset* and an element *expression* are different lines of the user's module.
 
 ### Fixed
+
+- **A pipeline swallowed a failed fetch, so `citecheck.sh --pr` reported green having read
+  nothing** (grave #365, `scripts/citecheck.sh`). The fetch was
+  `diffout="$(gh pr view … | sed 's/^/+/')"`, and a pipeline's exit status belongs to whatever ran
+  last — `sed`, which succeeds on empty input — so `set -eu` never saw a rate-limited `gh`. The
+  script exited **0**, having scanned an empty string, announcing "self-citation check ran against
+  PR #N, over 0 prose line(s)" and "this diff cites nothing": a positive claim that it ran, then
+  the script's own vacuity confession reading as a benign finding about a diff. CI's `citations`
+  job runs that arm on `pull_request`, so the hole was load-bearing. Found by the figure being
+  suspiciously clean — 0 citation tokens in a body citing a dozen issues — with `gh`'s own rate
+  limit error one line above on the mechanism channel.
+  - **The existing guard tested the least likely cause.** Both checkers refuse to report green when
+    `gh` is *missing*, in identical words; a rate limit, an unauthenticated `gh`, and an
+    unresolvable PR number are all likelier and all leave the binary present.
+  - **The sibling was the correct version, and the difference is one pipe.** `closecheck.sh`'s arm
+    assigns the fetch with no pipeline, so `set -e` catches it and that script exits 1 on the same
+    input. Both now read the fetch's status explicitly and name the cause and remedy; relying on
+    the absence of a `|` that any edit could add is not a property.
+  - **`TestPRFetchFailureIsNeverAPass`** drives both scripts with a `gh` shim — binary present,
+    call failing, the case the old guard could not see — asserting a non-zero exit, a message
+    naming the fetch, and the *absence* of any line claiming a scan happened, with a success arm
+    beside it so the failure arm cannot pass by breaking the scripts for an unrelated reason.
 
 - **grave #362: an identity that closes against a hand-maintained literal is a pin wearing a
   cross-check's clothes** ([#362](https://github.com/scttfrdmn/burroughs/issues/362)). The

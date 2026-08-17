@@ -341,3 +341,36 @@ decisions 4, 1 and 1/6 and stand as consequences. Counted against the list rathe
   (type_of_ref r)`, and all 30 `assert_trap` vectors stop at the sentinel `cast failure` — so the
   tail is oracle-invisible and must be rendered from the reftypes actually compared, never
   reconstructed (grave #36; #38's refinement for why the sentinel half *is* covered).
+
+## `ref.null`'s retention gap acquired its consumer, appended 2026-08-17 — the cost is incurred rather than hypothetical
+
+**Order: Scott, on the PR #363 relay (session 2026-08-17).** Verbatim: *"append the note. A declared
+limit acquiring its first consumer changes the limit's cost from hypothetical to incurred, and this
+project records that rather than absorbing it. Append rather than amend, per 0028."*
+
+The consequence above reads *"`ref.null`'s retention gap is **not** closed by this ADR, and saying so
+is the point"*, and it names the reason: retention ahead of a consumer is what 0016 refuses, and the
+consumer it identified was the text encoder (#8), not the interpreter. **That reasoning stands
+unamended; what changed is that a consumer arrived, and it was neither of the two this record
+considered.** The validator's `ref.null` rule (#9 slice 6, #359, landed in #363) is the first arm that
+must know *which* of the thirteen heaptypes was spelled, so the side table was widened to the cast
+family plus `0xd0` and `refNull` reads its type from `Func.CastTypes`.
+
+**Why this is worth an append rather than silence.** The gap was declared with a named condition —
+closed when a consumer exists — so the condition firing is an event in this record's own terms, and a
+declared limit whose cost has been *incurred* reads differently from one still hypothetical. The
+original sentence remains true of the moment it was written, and a reader who finds it without this
+section would conclude the gap is open.
+
+**What the widening bought, in the direction that has no witness.** The alternative available to a
+validator without the retention is to invent a type, and `funcref` would pass the majority of the
+corpus, `(ref null func)` being what most `ref.null` vectors spell. It would then accept
+`(global externref (ref.null func))` — an accept-direction defect no `assert_invalid` vector scores
+(contract §9 G-3). So the retention is load-bearing for a class of module the suite cannot refuse on
+this engine's behalf, which is the strongest form the case for a retention takes in this project.
+
+**Nothing in the decision sections changes.** The side-table design is the one this record chose and
+the widening is that design used as intended, not a departure from it: one more instruction files a
+cast-type vector, `binary.TestEveryHeapTypeRowFilesACastType` extends to cover it, and
+`immStagedBits`/`optable.go` remain untouched — the dividend this record claimed for the option, still
+paid. #8 remains a consumer-in-waiting for the same retention; its arrival needs no further note.
