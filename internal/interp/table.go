@@ -96,6 +96,11 @@ type table struct {
 	// offered where an externref one was declared is `incompatible import type`, and nothing
 	// inside the slots (every one starts null) can tell the two apart.
 	elemType binary.ValType
+
+	// mod is the module `elemType`'s type index is read in when it is an indexed reference
+	// form. See `global.mod` for why the defining module rides on the allocation rather than on
+	// the Extern, and #368 for the four modules the comparison it feeds used to accept.
+	mod *binary.Module
 }
 
 // newTable allocates a table at its declared minimum, every slot null.
@@ -104,7 +109,7 @@ type table struct {
 // minimum exceeds the index width's cap, Type when the limits are inverted. Only the first is
 // reachable as a trap — inverted limits are #9's verdict, so that arm returns the layering debt,
 // exactly as newMemory does one file over.
-func newTable(t binary.Table) (*table, error) {
+func newTable(m *binary.Module, t binary.Table) (*table, error) {
 	lim := t.Limits
 	if !validTableSize(lim, lim.Min) {
 		// `table size overflow` — `eval.ml:24`. A trap, not a verdict: the module said a
@@ -133,7 +138,7 @@ func newTable(t binary.Table) (*table, error) {
 	for i := range slots {
 		slots[i] = ref{Null: true}
 	}
-	return &table{slots: slots, limits: lim, elemType: t.ElemType}, nil
+	return &table{slots: slots, limits: lim, elemType: t.ElemType, mod: m}, nil
 }
 
 // refSize bounds one slot's size in bytes for the allocation check above. Named so the bound

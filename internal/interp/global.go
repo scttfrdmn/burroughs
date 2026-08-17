@@ -32,6 +32,19 @@ type global struct {
 	typ     binary.ValType
 	mutable bool
 
+	// mod is the module `typ`'s type index is read in, when `typ` is an indexed reference form
+	// — the *defining* module, which is not always the module doing the exporting.
+	//
+	// **On the allocation rather than on the Extern, and the re-export case is why** (#368).
+	// The reference does not need the field at all: `subst_of inst` resolves a runtime object's
+	// type to `Def dt` at instantiation, so `type_of_global` hands back a self-contained type
+	// and `externtype_of` can be read from any instance holding the object. This engine's types
+	// stay indexed, so the resolution environment has to be stored somewhere, and the only
+	// place that survives a re-export is the object: a module that imports a global and exports
+	// it again shares this same *global, while `Instance.Export`'s own instance is the
+	// re-exporter, whose type section the index does not belong to.
+	mod *binary.Module
+
 	num   uint64
 	numHi uint64
 	ref   ref
@@ -62,7 +75,10 @@ func (in *Instance) newGlobal(g binary.Global) (*global, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &global{typ: g.Type, mutable: g.Mutable, num: v.lo, numHi: v.hi, ref: v.ref}, nil
+	return &global{
+		typ: g.Type, mutable: g.Mutable, mod: in.mod,
+		num: v.lo, numHi: v.hi, ref: v.ref,
+	}, nil
 }
 
 // globalFor resolves a global index to its storage. The *only* place that does, which is what

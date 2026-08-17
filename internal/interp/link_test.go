@@ -303,7 +303,7 @@ func TestUnsatisfiedImportKeepsItsSentinel(t *testing.T) {
 // distinct values, both plausible, so the wrong reading answers rather than failing — which is
 // what puts this in the accept-direction class (§9 G-3) with the row above.
 //
-// Falsified: returning `in` instead of `ext.fnInst`'s own resolution from `resolveCall`'s import
+// Falsified: returning `in` instead of `ext.owner`'s own resolution from `resolveCall`'s import
 // arm — the same index against the wrong receiver — fails this with 7.
 //
 // **Re-pointed rather than re-derived, and the subject grew.** The mutation used to be phrased

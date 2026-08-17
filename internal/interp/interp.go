@@ -218,7 +218,7 @@ func (in *Instance) build() *Trap {
 		in.globals[globOff+i] = g
 	}
 	for i := range m.Tables {
-		tab, err := newTable(m.Tables[i])
+		tab, err := newTable(m, m.Tables[i])
 		if err != nil {
 			if t := asTrap(err); t != nil {
 				return t
@@ -493,7 +493,7 @@ func (in *Instance) invokeIndex(idx uint32, name string, args []Value) ([]Value,
 		if ierr != nil {
 			return nil, ierr
 		}
-		return ext.fnInst.invokeIndex(ext.fnIdx, name, args)
+		return ext.owner.invokeIndex(ext.fnIdx, name, args)
 	}
 	ft, err := in.funcType(fn)
 	if err != nil {

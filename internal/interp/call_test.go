@@ -501,6 +501,16 @@ func TestSameFuncTypeDeclaredSupertypeWalkFalsification(t *testing.T) {
 // the measured false positive, asserted here as what currently happens — not as what should
 // happen — so a future rec-group-tracking fix has a red test turning green as its own evidence,
 // rather than this gap silently persisting under a green board.
+//
+// **The board coupling this test used to assert is struck, and the assertion is not (#368).** The
+// original error message promised that `type-subtyping.wast:752` and this assertion would flip
+// together. `:752` flipped and this did not, because the grave routed the *linker* through
+// `internal/validate`'s rolled relation — which retains `RecStart`/`RecLen` — while `matchDeftype`
+// kept serving `call_indirect`/`call_ref`/`ref.cast` unchanged. Two claims were bundled in one
+// sentence: "the gap is still here" (true, and still asserted below) and "the corpus will tell you
+// when it goes" (false as of #368, because the corpus row moved for an unrelated reason). *A
+// tripwire whose subject dissolves is re-pointed, never closed* — the risk is live and now has no
+// corpus witness at all, which makes this direct assertion the only instrument left on it.
 func TestSameFuncTypeCorpusScope(t *testing.T) {
 	exporter := &binary.Module{
 		Types: []binary.CompType{
@@ -525,7 +535,10 @@ func TestSameFuncTypeCorpusScope(t *testing.T) {
 			"positive): this reduction has no rec-group boundary to distinguish $f21's group " +
 			"(whose sibling $f22 cross-references an earlier group) from $f11's group (whose " +
 			"sibling $f12 self-references within the group) — if this assertion starts failing, " +
-			"a rec-group fix landed and this test should flip to the correct 'false' along with " +
-			"the board converting type-subtyping.wast:752 from fail to pass")
+			"a rec-group fix landed in matchDeftype itself and this test should flip to the " +
+			"correct 'false'. It no longer predicts a board row: #368 moved the linker onto " +
+			"internal/validate's rolled relation, so type-subtyping.wast:752 already passes " +
+			"while this gap remains, and call_indirect/call_ref/ref.cast are the live consumers " +
+			"with no corpus vector of this shape reaching them")
 	}
 }
