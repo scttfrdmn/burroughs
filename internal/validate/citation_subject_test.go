@@ -203,7 +203,18 @@ func TestRangeCitationSubjectsAreReadFromTheReference(t *testing.T) {
 	// own note walked into at 30-31-32, and it applies to a paragraph explaining an increment just
 	// as much as to one explaining a repair.
 	// Two keyed and three residue, against `match.go`'s five ranges in total.
-	const wantKeyed, wantResidue = 34, 14
+	//
+	// **#359's reference-type slice moved the keyed figure by seven and the residue by nothing, and
+	// that is the cleanest reading this pin has produced.** Six range citations arrived; every one of
+	// them sits on a line that also names its subject in backticks, so nothing landed in the excused
+	// column, and one of the six names two subjects — a rule shared by two opcodes, cited once and
+	// keyed twice, which is the per-subject counting working rather than a double count. A slice
+	// written by transcribing arms cannot help naming them, which is the same observation the
+	// paragraph above makes about the relation's port; the difference is that this time the residue
+	// did not move at all, so the increment is exactly the arm count and nothing else.
+	//
+	// Deliberately not spelled here either: which lines those are, for the reason two paragraphs up.
+	const wantKeyed, wantResidue = 41, 14
 	if keyed != wantKeyed || residue != wantResidue {
 		t.Errorf("keyed %d range citation(s) by named subject and left %d as residue, want %d and "+
 			"%d — recount and re-pin. A row moves from residue to keyed when its description starts "+

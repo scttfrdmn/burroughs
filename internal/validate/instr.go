@@ -166,6 +166,21 @@ func (v *validator) instr(i int, in binary.Instr) error {
 
 	case opGlobalGet, opGlobalSet:
 		return v.globalOp(in)
+
+	// The reference-type slice (#359). Its constants and its five rules are in ref.go; the arms
+	// are here because this switch is the one dispatch table, and a second one per slice is the
+	// shape the prefixed-region arm above already refused.
+	case opTableGet, opTableSet:
+		return v.tableOp(in)
+
+	case opRefNull:
+		return v.refNull(i)
+
+	case opRefIsNull:
+		return v.refIsNull()
+
+	case opRefFunc:
+		return v.refFunc(in)
 	}
 
 	// Not structural: the numeric, comparison, conversion and memory-access families, whose
@@ -604,11 +619,28 @@ func (v *validator) globalOp(in binary.Instr) error {
 
 // funcTypeAt resolves a *function index* — imports first, then defined — to its type.
 //
+// A delegation to funcTypeIndexAt since #359, which needed the index rather than the resolved
+// type: `ref.func`'s result is `(ref $t)` and names the type index. The walk stays in one place on
+// #241's rule, and the split is the one `tableTypeAt`'s comment describes from the other side — a
+// lookup that discards part of its answer is the special case, so the *full* answer is what the
+// shared function returns and each caller keeps what it needs. `funcTypeAt` keeping the resolution
+// here rather than at its callers is what makes `funcType`'s kind check (a struct type where a
+// functype is wanted) common to both.
+func (v *validator) funcTypeAt(idx uint32) (binary.FuncType, error) {
+	ti, err := v.funcTypeIndexAt(idx)
+	if err != nil {
+		return binary.FuncType{}, err
+	}
+	return funcType(v.mod, ti)
+}
+
+// funcTypeIndexAt resolves a *function index* to the *type index* it declares.
+//
 // The interleaving is the module's, not a convention: an imported function occupies function
 // index 0 before any defined function does. `internal/interp` resolves it the same way
 // (`call.go:142`), and getting it backwards would type-check every call in a module without
 // imports and misresolve every call in a module with them.
-func (v *validator) funcTypeAt(idx uint32) (binary.FuncType, error) {
+func (v *validator) funcTypeIndexAt(idx uint32) (uint32, error) {
 	imported := uint32(v.mod.ImportedFuncs())
 	if idx < imported {
 		n := 0
@@ -617,18 +649,18 @@ func (v *validator) funcTypeAt(idx uint32) (binary.FuncType, error) {
 				continue
 			}
 			if uint32(n) == idx {
-				return funcType(v.mod, v.mod.Imports[i].Index)
+				return v.mod.Imports[i].Index, nil
 			}
 			n++
 		}
-		return binary.FuncType{}, fmt.Errorf("%w %d (import scan found no match)", ErrUnknownFunc, idx)
+		return 0, fmt.Errorf("%w %d (import scan found no match)", ErrUnknownFunc, idx)
 	}
 	def := idx - imported
 	if def >= uint32(len(v.mod.Funcs)) {
-		return binary.FuncType{}, fmt.Errorf("%w %d (%d in scope)",
+		return 0, fmt.Errorf("%w %d (%d in scope)",
 			ErrUnknownFunc, idx, imported+uint32(len(v.mod.Funcs)))
 	}
-	return funcType(v.mod, v.mod.Funcs[def].TypeIndex)
+	return v.mod.Funcs[def].TypeIndex, nil
 }
 
 // globalAt resolves a global index across the same import-then-defined split.

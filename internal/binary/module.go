@@ -635,9 +635,19 @@ type Func struct {
 	// bare label. See the Catches type for the full shape rationale.
 	Catches Catches
 
-	// Casts holds the reference types the cast family tests against — `ref.test`/`ref.cast`'s
-	// one, `br_on_cast`/`br_on_cast_fail`'s two — keyed the same way Labels and Catches are
-	// (0027 Q1 option B).
+	// Casts holds the reference types an instruction names in its heaptype immediates —
+	// `ref.test`/`ref.cast`'s one, `br_on_cast`/`br_on_cast_fail`'s two, and `ref.null`'s one —
+	// keyed the same way Labels and Catches are (0027 Q1 option B).
+	//
+	// **`ref.null` shares the table rather than getting a fourth, and it is not a cast**, so the
+	// name is now one row wider than the family it was created for. It is here because the
+	// *mechanism* is what it needs — a per-instruction reftype that costs `immStagedBits` nothing
+	// — and because a second map keyed by instruction index, holding the same type, differing only
+	// in which opcodes populate it, would be one fact in two places for a naming reason. 0027 left
+	// `ref.null`'s retention open on a named condition ("closing it here would be retention ahead
+	// of its consumer"); #9's validator is the consumer, needing the static type `(Null, ht)`
+	// (valid.ml:714-716). Its *run-time* type is `BotHT` for every heaptype and that is untouched —
+	// 0027 decision 4 is about a value, this field is about an instruction.
 	//
 	// **A third side table rather than packed words, and the reason is a capacity control this
 	// project already paid for.** 0027's first draft packed a heaptype into `Instr`'s two words:
@@ -664,6 +674,10 @@ type Func struct {
 	//     bit 1 (`:644-645`), so one instruction can be nullable on one side and not the other.
 	//     For this pair the nullability *is* encoding, and a reader following the old sentence
 	//     would look for it in the opcode and find two rows that do not have it.
+	//   - `d0` reads a bare heaptype and is **always** `Null` — not by an opcode bit and not by an
+	//     encoded one, but because a null reference is what the instruction *means*
+	//     (decode.ml:604, valid.ml:714-716). A third source for one bit, which is the argument for
+	//     deriving it once here rather than at each consumer, stated for a third time.
 	//
 	// Either way a consumer reconstructing the reftype would have to re-derive the mapping — a
 	// switch for four rows, a bit test for two — at every call site. `castTypes` does it once, at

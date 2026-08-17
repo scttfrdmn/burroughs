@@ -413,9 +413,11 @@ func (in *Instance) segmentRefs(seg *binary.ElemSegment) ([]ref, error) {
 // evaluator that replaced it, and `leadingOp`, which existed only to render that error, went with
 // it.
 //
-// The retention gap it declared did *not* go with it: `immHeapType` stages no word, so
-// `ref.null func` and `ref.null extern` still decode to identical `Instr`s. That fact now lives
-// where the value is produced, at `opRefNull`'s arm in exec.go, which is where a reader of a null's
-// static type will be standing — and where the conditional it carried is now discharged, rung 5's
-// casts having asked the question and got `BotHT` (`value.ml:112`). The gap's remaining owner is
-// **#8**, the encoder, which needs the spelled heaptype as a static fact; no interpreter arm does.
+// The retention gap it declared did *not* go with it, and it is now **closed** rather than merely
+// re-homed. It said `immHeapType` stages no word, so `ref.null func` and `ref.null extern` decode
+// to identical `Instr`s; that was true until #359, which files the reftype in `Func.Casts` instead
+// of in a word — the side table 0027 built for the cast family, which costs `immStagedBits` nothing.
+// The owner it named was **#8**, the encoder; the consumer that actually arrived is **#9**'s
+// validator, and the reason both are static owners and no interpreter arm is one is unchanged
+// (rung 5's casts asked and got `BotHT`, `value.ml:112`). The full account is at `opRefNull`'s arm
+// in exec.go, which is where a reader of a null's static type will be standing.

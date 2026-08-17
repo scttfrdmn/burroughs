@@ -27,21 +27,31 @@ func compile(t *testing.T, src string) []byte {
 	return wasm
 }
 
-// The three fixtures, one per outcome. `declining` uses `ref.null`/`ref.is_null`, which #9's
-// validator has no rule for yet — instructions the *interpreter* implements, which is what makes the
-// decline case meaningful: the module runs and returns the right answer while carrying a statement
-// that one construct was never checked. A construct neither half supported would conflate decline
-// with ErrUnsupported.
+// The three fixtures, one per outcome. `declining` uses `i8x16.relaxed_swizzle`, which #9's
+// validator has no rule for yet — an instruction the *interpreter* implements, which is what makes
+// the decline case meaningful: the module runs and returns the right answer while carrying a
+// statement that one construct was never checked. A construct neither half supported would conflate
+// decline with ErrUnsupported.
 //
-// **Re-pointed by slice 5, and it is the fifth re-point in that one diff.** The specimen was
-// `memory.size`, which slice 5 types, so this fixture reported "either the vocabulary grew (retire
-// this fixture) or the decline was lost" — correctly, and the first of those. The pattern is now
-// established well enough to name: a hand-named decline specimen is drawn from a population *every
-// slice drains*, so it is not a risk that a specimen dissolves but a schedule. What the fixture
-// asserts is that the three outcomes stay distinguishable, which is a property of the API and not of
-// any instruction; deriving the specimen from the validator's own vocabulary instead of naming one is
-// #326. Until then the constraint on a replacement is the one this comment opens with — implemented
-// by the interpreter, not yet typed by the validator — and that pair is what makes candidates scarce.
+// **Re-pointed by the reference-type slice (#359), and this re-point changes the specimen's
+// *kind*.** Every previous one — `memory.size` at slice 5, `ref.null`/`ref.is_null` here — was drawn
+// from the population the next slice drains, so the note this comment used to carry was that a
+// hand-named decline specimen is not a risk but a *schedule*. That is still true of that population
+// and no longer true of this fixture: the relaxed-SIMD arm declines by **construction** rather than
+// by omission, because relaxed SIMD's gate is its own event (ADR 0025, #227), so the arm is a
+// deliberate refusal that no validator slice removes. This specimen retires when that gate flips,
+// which is a governance event with a stamp attached rather than the next PR.
+//
+// So the constraint on a replacement is unchanged — implemented by the interpreter, not yet typed by
+// the validator — and it is worth recording that it eliminated the obvious candidate: `ref.as_non_null`
+// is what `validate_test.go`'s decline row re-pointed to in this same diff, and it is **not usable
+// here**, because that test turns the GC gate on and this one exercises the default build, where the
+// module is ErrGated before the validator is asked. A fixture for the *public* API is constrained by
+// the default feature set as well as by the two halves.
+//
+// Deriving the specimen from the validator's own vocabulary instead of naming one is still #326, and
+// still open; what this re-point does is take the pressure off it, since a structural decline does
+// not dissolve underneath the fixture on a schedule.
 const (
 	validWAT = `(module
 		(func (export "answer") (result i32) i32.const 42)
@@ -51,7 +61,15 @@ const (
 
 	invalidWAT = `(module (func (export "f") (result i32) i64.const 42))`
 
-	decliningWAT = `(module (func (export "isnull") (result i32) (ref.is_null (ref.null func))))`
+	// The operands are chosen so the answer is deterministic: `relaxed_swizzle` is
+	// implementation-defined only for a lane index ≥ 16, and every index here is in range, so
+	// `a[s[0]] = a[3] = 4` is the spec's answer and not this engine's preference. A fixture asserting
+	// a relaxed operator's *relaxed* case would be pinning a choice the proposal leaves open.
+	decliningWAT = `(module (func (export "swizzle") (result i32)
+		(i8x16.extract_lane_s 0
+			(i8x16.relaxed_swizzle
+				(v128.const i8x16 7 6 5 4 3 2 1 0 0 0 0 0 0 0 0 0)
+				(v128.const i8x16 3 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))))`
 )
 
 // gatedWATs are well-formed modules from proposals whose gates are off in this build — grave #301's
@@ -127,20 +145,21 @@ func TestTheThreeOutcomesAreDistinguishable(t *testing.T) {
 		// The message is the campaign's public work plan (0029), so it has to name the construct.
 		// Asserted on the mnemonic rather than the whole string, which is the validator's to word.
 		//
-		// `ref_null` and not `ref_is_null`: the validator reports the *first* instruction it cannot
-		// type, and in this module that is the operand rather than the operator. Worth stating,
-		// because a fixture asserting the outer mnemonic would be asserting an evaluation order
-		// nothing promises.
-		if !strings.Contains(d.Error(), "ref_null") {
+		// `i8x16_relaxed_swizzle` and not `i8x16_extract_lane_s`: the validator reports the *first*
+		// instruction it cannot type, and in this module that is the operand rather than the operator.
+		// Worth stating, because a fixture asserting the outer mnemonic would be asserting an
+		// evaluation order nothing promises — and the outer one here is typed, so the assertion would
+		// fail rather than pass by luck.
+		if !strings.Contains(d.Error(), "i8x16_relaxed_swizzle") {
 			t.Errorf("the decline does not name the construct: %v", d)
 		}
 
-		res, err := in.Call("isnull")
+		res, err := in.Call("swizzle")
 		if err != nil {
 			t.Fatalf("a declined module did not run: %v", err)
 		}
-		if len(res) != 1 || res[0] != I32(1) {
-			t.Errorf("isnull() = %v, want [i32:1]", res)
+		if len(res) != 1 || res[0] != I32(4) {
+			t.Errorf("swizzle() = %v, want [i32:4] — a[s[0]] = a[3]", res)
 		}
 	})
 }
