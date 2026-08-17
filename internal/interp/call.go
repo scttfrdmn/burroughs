@@ -144,7 +144,7 @@ func (in *Instance) resolveCall(idx uint32) (*Instance, *binary.Func, *binary.Fu
 			if err != nil {
 				return nil, nil, nil, err
 			}
-			return ext.fnInst.resolveCall(ext.fnIdx)
+			return ext.owner.resolveCall(ext.fnIdx)
 		}
 		// Past the end of the index space, which is #9's `unknown function`.
 		return nil, nil, nil, fmt.Errorf("%w: call names function %d of %d",
@@ -405,7 +405,7 @@ func funcRefTarget(r ref, site string) (*Instance, *binary.Func, error) {
 	if ierr != nil {
 		return nil, nil, fmt.Errorf("%w (%s)", ierr, site)
 	}
-	target = ext.fnInst
+	target = ext.owner
 	fn, ok = target.mod.DefinedFunc(ext.fnIdx)
 	if !ok {
 		// Unreachable while `Export` resolves re-exported imports through to their definer, which
@@ -698,6 +698,23 @@ func (in *Instance) declaredFuncType(idx uint64) (*binary.FuncType, error) {
 // #164's four vectors (`type-subtyping.wast:602,610`, the `Final`-differing M2 pair) resolve
 // under that scope; the other two (:752,:767, M10/M11) do not, and stay in the same bucket for
 // the reason stated above — a genuine, cited, and tested scope boundary rather than a silent gap.
+//
+// # The scope boundary lost its corpus witness, and that is a re-pointing, not a repair (#368)
+//
+// `:752` and `:767` pass now, and **nothing in this function changed**. Grave #368 moved the
+// *linker* off this reduction and onto `internal/validate`'s rolled relation, which does retain the
+// rec-group boundary the paragraph above says the decoder does not — `binary.CompType.RecStart`/
+// `RecLen`, retained for #9 and never wired back to here. So those two verdicts now come from a
+// different comparator, and the boundary described above is unchanged, unrepaired, and
+// **unwitnessed**: its remaining consumers are `call_indirect`, `call_ref` and `ref.cast`, and no
+// corpus vector reaches the M10/M11 shape through any of them.
+//
+// A tripwire whose subject dissolves is re-pointed rather than closed, and this one's subject did
+// not dissolve — only its witness did. `TestSameFuncTypeCorpusScope` therefore keeps asserting the
+// false positive directly, with its board-row coupling struck. **Whether this reduction should be
+// replaced by `internal/validate`'s relation at the remaining call sites is a design question
+// flagged for Scott, not answered here**: it is a second comparator for the same judgement, which
+// 0019 declined in principle, and unifying it is a wider change than the grave that exposed it.
 //
 // **Still named for functypes after `matchDeftype` generalized past them (0027), and deliberately
 // so.** Every call site here has *already* resolved both sides through `funcType`/`declaredFuncType`

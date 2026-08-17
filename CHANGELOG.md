@@ -1711,6 +1711,48 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **grave #368: the linker compared type *indices*, so it refused four modules the reference links**
+  ([#368](https://github.com/scttfrdmn/burroughs/issues/368), `internal/interp/link.go`). Every arm of
+  `importTypeMismatch` asked whether the exporter's index equalled the importer's — two numbers drawn
+  from two *different* type sections, which carry no information about each other. `match_externtype`
+  (match.ml:174-183) compares the types those indices name, and the linker now calls the relation
+  #363 landed for the validator rather than a second comparator: `internal/validate` gained
+  `MatchDefType`/`MatchValType` and a two-module context, and `internal/interp` imports it.
+  - **This is #343 cause 1 one layer over.** #363 repaired the validator's index comparison; the
+    linker had the same defect and was never swept, because *lessons are indexed by shape, not by
+    file* and the shape was not looked for outside the package that produced it.
+  - **Four refusals, and the board could not have shown any of them.** A `(module …)` command's third
+    fact — that it instantiates — is unscored (#367, blocked on #366), so a module whose link fails
+    scores a pass. The rows are `linking.wast:112`, `type-equivalence.wast:218`,
+    `type-subtyping.wast:713` and `type-subtyping.wast:731`; the instrument that prints them is new
+    (see below) and its figure is the reward figure. Default lane: **unmoved in every column**.
+  - **Also fixed, and a distinct defect: `match_memorytype`'s address-type conjunct was missing
+    entirely.** The rule is `at1 = at2 && match_limits`, and the engine had only the limits, so an
+    `i64` memory satisfied an `i32` import. Eight all-on rows in `memory64-imports.wast` witness it —
+    that half of the change *is* board-visible.
+  - **The extern's defining module is now on the extern**, widened from the func-only `fnInst`: a
+    table's element type, a global's value type and a tag's functype are all type indices, and a
+    re-export hands back the shared allocation while the exporting instance is the re-exporter, so
+    tables, globals and tags read their module off the allocation and functions off the owner.
+  - **All-on lane: `pass 64654 → 64669`, `fail 392 → 377`**, with no pass→fail movement. Fifteen
+    `assert_unlinkable` vectors that had been linking successfully now refuse: the eight address-type
+    rows, two `tag.wast` and two `type-rec.wast` rows the rolled relation reaches through
+    `match_tagtype`, and three `type-subtyping.wast` rec-group-shape rows. Two `tag.wast` entries left
+    `TestGrave206KnownFailures` as stale pre-registrations.
+  - **The refusal message named indices at a reader who cannot resolve them**, which is the same
+    defect on the testimony channel: `expected func [(ref 4)] -> [], got func [(ref 3)] -> []`, and
+    `expected global const funcref, got global const (ref func)` — two spellings differing by one null
+    bit, neither of them the reference's. `internal/interp/typestring.go` is `types.ml`'s `string_of_*`
+    family as far as `string_of_externtype`, so a refusal now prints the rolled types themselves.
+  - **`TestModuleDefinitionLinkCensus`** is the population's instrument: it counts module-definition
+    link failures in the all-on lane, pins them per row in both directions, and asserts a floor on
+    the number of instantiations observed so a hook that stopped firing cannot report a clean zero.
+    Falsified three ways — an over-rejection reintroduced, the hook re-pointed at
+    `assert_unlinkable`, and a bogus row added — each failing with its own message.
+    `TestSpellerMatchesTheReferenceSpellings` transcribes sixteen `types.ml` spellings, and
+    `TestMatchDefType…` drives the two-module direction and the supertype walk's structural rung,
+    neither of which either lane witnesses.
+
 - **`make check` went red on a pristine tree whenever agents were running, because three tree-walk
   controls each carried their own idea of where the repo ends** (grave #369,
   `internal/testenv/inventory_test.go`, `internal/testenv/citation_test.go`). The agent harness keeps

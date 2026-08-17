@@ -101,6 +101,7 @@ import (
 //	f32SpellingFloor         1335     vacuity       —       same, per kind
 //	f64SpellingFloor         1551     vacuity       —       same, per kind
 //	agreementFloor           6498     vacuity       —       the cross-check compared something
+//	attemptedFloor           2494     vacuity       —       the link census's hook fired at all
 //
 // **Exact re-base** is the third kind and it is not a kind in the code, deliberately: it is
 // `ceilingBound` with slack 0, meaning "move me in the PR that moves the column". That the helper
@@ -406,7 +407,13 @@ func TestEveryBoardBoundIsChecked(t *testing.T) {
 	// and this time the flag and the bound landed in the PR that created the population rather than in
 	// the one that noticed the absorption. The row above stayed at 0 as a result, which is the only
 	// evidence available that the absorption did not happen.
-	const boundPopulation = 20
+	// 20 → 21 with `attemptedFloor` (#368), and it is the first row whose population the *board*
+	// cannot see: the link census counts module-definition instantiations, whose link verdict is
+	// unscored while fact 3 is unscored (#367). The floor is a `vacuityBound` for the ordinary
+	// reason — it exists to catch a hook that found nothing — and it is here for this walk's
+	// reason, which the walk itself supplied: the first draft compared it inline with a `t.Fatalf`
+	// and this test named it as a bound bypassing the staleness check, before any human read it.
+	const boundPopulation = 21
 	if len(bounds) != boundPopulation {
 		t.Errorf("found %d board bounds, want exactly %d. A new bound is welcome — add its row to "+
 			"this file's table with its kind and its reason, and re-base this constant in the same "+

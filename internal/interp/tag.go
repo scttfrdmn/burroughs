@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/scttfrdmn/burroughs/internal/binary"
+	"github.com/scttfrdmn/burroughs/internal/validate"
 )
 
 // tagInst is one tag: an allocation, matching runtime/tag.ml's Tag.alloc exactly — identity is
@@ -18,6 +19,23 @@ type tagInst struct {
 	// rejection, tag.wast:20-26 — a validation fact this package does not enforce, per the
 	// declared layering debt every other #9 question in this package already carries).
 	typ *binary.FuncType
+
+	// mod and typeIdx are the tag's declared type as a *deftype* rather than as a functype:
+	// the type index and the module that indexes it.
+	//
+	// **`match_tagtype` compares deftypes, and a functype is not one** (#368). The rule is
+	// `match_deftype c dt1 dt2 && match_deftype c dt2 dt1` (match.ml:157-160), and
+	// `match_deftype`'s equality is over *rolled* forms — the rec group's extent and the
+	// member's ordinal are part of the type's identity, and `typ` alone cannot express either.
+	// `tag.wast:48` is two two-member rec groups of identical `(func)`s where the import names
+	// the second member and the export the first: structurally identical functypes, different
+	// types, `incompatible import type`. Comparing `*binary.FuncType`s said they matched.
+	//
+	// This does not weaken the identity rule above: a *thrown* tag still matches a catch clause
+	// by pointer identity and never by type. These two fields are read at one site, the linker's
+	// import check, which is the reference's own only consumer of `match_tagtype`.
+	mod     *binary.Module
+	typeIdx uint32
 }
 
 // newTags allocates one tagInst per module-declared tag, in declaration order — `init_tag`'s
@@ -41,7 +59,7 @@ func (in *Instance) newTags() error {
 			return fmt.Errorf("%w: tag %d declares type %d, which is a %s",
 				ErrNotValidated, off+i, idx, ct.Kind)
 		}
-		in.tags[off+i] = &tagInst{typ: &ct.Func}
+		in.tags[off+i] = &tagInst{typ: &ct.Func, mod: in.mod, typeIdx: idx}
 	}
 	return nil
 }
@@ -97,14 +115,22 @@ func (t *Uncaught) Error() string {
 		len(t.exc.num), len(t.exc.refs))
 }
 
-// sameTagType is match_tagtype (match.ml:157-160) reduced the way sameFuncType already reduces
-// match_deftype for MVP function types: `match_deftype c dt1 dt2 && match_deftype c dt2 dt1`,
-// mutual containment, which for structurally-equal-or-not function types (no subtyping among
-// tags themselves in this package's scope) is symmetric and reduces to one structural
-// comparison rather than two. Used only for the *import* linking check (link.go's
-// importTypeMismatch) — a thrown tag is matched against a catch clause by pointer identity
-// (tagInst equality), never by type, which is #163's law and the entire reason tagInst exists
-// as an allocation rather than a value.
-func sameTagType(a, b *binary.FuncType) bool {
-	return structFuncTypeEqual(a, b)
+// matchTagType is match_tagtype (match.ml:157-160): `match_deftype c dt1 dt2 && match_deftype c
+// dt2 dt1`, mutual containment over the two *deftypes*.
+//
+// **Both directions are written out rather than reduced to one**, and the reduction is what #368
+// caught. The previous version's argument was that mutual containment of function types with no
+// declared supertypes is symmetric, so one structural comparison suffices — true of the *relation*
+// and false of the *operands*: it compared `*binary.FuncType`s, which are the unrolled function
+// signatures, where `match_deftype` compares rolled deftypes whose rec-group extent and member
+// ordinal are part of the identity. Two directions of the real rule, rather than one direction of
+// a reduction whose premise was about a different thing.
+//
+// Used only for the *import* linking check (link.go's importTypeMismatch), which is the
+// reference's only `match_tagtype` caller too — a thrown tag is matched against a catch clause by
+// pointer identity (tagInst equality), never by type, which is #163's law and the entire reason
+// tagInst exists as an allocation rather than a value.
+func matchTagType(gotMod *binary.Module, got uint32, wantMod *binary.Module, want uint32) bool {
+	return validate.MatchDefType(gotMod, got, wantMod, want) &&
+		validate.MatchDefType(wantMod, want, gotMod, got)
 }

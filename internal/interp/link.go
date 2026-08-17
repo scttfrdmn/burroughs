@@ -2,9 +2,9 @@ package interp
 
 import (
 	"fmt"
-	"strconv"
 
 	"github.com/scttfrdmn/burroughs/internal/binary"
+	"github.com/scttfrdmn/burroughs/internal/validate"
 )
 
 // Extern is one thing an instance exports and another can import: a memory, a table, a
@@ -28,8 +28,17 @@ type Extern struct {
 	glob *global
 	tag  *tagInst
 
-	// fn is a function *belonging to another instance*, which is why the instance travels
-	// with the index rather than the index alone.
+	// owner is the instance this extern belongs to, and therefore **the module its type
+	// indices are read in**. Set for every kind.
+	//
+	// It began as `fnInst`, set only on the func arm, because a function needed its instance
+	// to be *called*: fnIdx is a module-local index and nothing else can resolve it. The
+	// widening to every kind is #368's, and the fact it carries is the same one under a
+	// second reading — a table's element type, a global's value type and a tag's functype are
+	// all `binary.ValType`s and type indices, so `match_externtype` cannot compare them
+	// against an importer's declaration without knowing which type section each side's
+	// indices name. Before the widening the linker compared the two modules' indices with
+	// `==` and accepted four modules the spec refuses.
 	//
 	// **Q2's question in embryo, deliberately answered no further than this.** Decision
 	// 0017 records that a `ref` holding a bare module-local index cannot name another
@@ -37,8 +46,48 @@ type Extern struct {
 	// widening: it carries an instance for an *import slot*, which is a name the module
 	// resolves once at instantiation, where a table slot's funcref is a value that flows.
 	// Keeping them apart is what stops this from pre-deciding Q2 in the load-bearing spot.
-	fnInst *Instance
-	fnIdx  uint32
+	owner *Instance
+	fnIdx uint32
+}
+
+// typeSpace is the module this extern's type indices are read in.
+//
+// **Two sources, and which one applies is the re-export question.** A function's index space is
+// the owner's, because `fnIdx` is an index into it. A table's, global's or tag's type indices
+// belong to the module that *defined* the allocation, which is not the exporting instance when
+// the export re-exports an import — `Instance.Export` hands back the shared allocation while
+// `owner` is the re-exporter. So those three arms read the module off the allocation and the
+// allocation is where it is stored (see `global.mod`).
+//
+// A memory has no type indices at all, so it falls through to the owner and nothing consults the
+// answer. Nil is reachable only for the zero Extern, which `Export` only ever returns alongside
+// `false`; importTypeMismatch reports it rather than dereferencing it.
+func (e Extern) typeSpace() *binary.Module {
+	switch e.Kind {
+	case binary.ExternTable:
+		if e.tab != nil {
+			return e.tab.mod
+		}
+	case binary.ExternGlobal:
+		if e.glob != nil {
+			return e.glob.mod
+		}
+	case binary.ExternTag:
+		if e.tag != nil {
+			return e.tag.mod
+		}
+	case binary.ExternFunc, binary.ExternMemory:
+		// Named rather than left to a default, so that a sixth `ExternKind` arrives here as a
+		// lint failure and not as a silent owner's-module answer: whether a new sort's type
+		// indices live in the exporter or the definer is exactly the question this function
+		// exists to answer, and #368 is what getting it wrong costs. A function's `fnIdx` is
+		// an index into the owner's space by construction, and a memory has no type indices at
+		// all, so both take the fall-through below.
+	}
+	if e.owner == nil {
+		return nil
+	}
+	return e.owner.mod
 }
 
 // Export looks up one of an instance's exports by name.
@@ -58,7 +107,7 @@ func (in *Instance) Export(name string) (Extern, bool) {
 		}
 		switch e.Kind {
 		case binary.ExternFunc:
-			return Extern{Kind: e.Kind, fnInst: in, fnIdx: e.Index}, true
+			return Extern{Kind: e.Kind, owner: in, fnIdx: e.Index}, true
 		case binary.ExternMemory:
 			if int(e.Index) >= len(in.mems) || in.mems[e.Index] == nil {
 				// An export naming a slot this phase could not fill — an imported memory
@@ -67,22 +116,22 @@ func (in *Instance) Export(name string) (Extern, bool) {
 				// would make the *importer* fail with a confusing shape one layer later.
 				return Extern{}, false
 			}
-			return Extern{Kind: e.Kind, mem: in.mems[e.Index]}, true
+			return Extern{Kind: e.Kind, owner: in, mem: in.mems[e.Index]}, true
 		case binary.ExternTable:
 			if int(e.Index) >= len(in.tables) || in.tables[e.Index] == nil {
 				return Extern{}, false
 			}
-			return Extern{Kind: e.Kind, tab: in.tables[e.Index]}, true
+			return Extern{Kind: e.Kind, owner: in, tab: in.tables[e.Index]}, true
 		case binary.ExternGlobal:
 			if int(e.Index) >= len(in.globals) || in.globals[e.Index] == nil {
 				return Extern{}, false
 			}
-			return Extern{Kind: e.Kind, glob: in.globals[e.Index]}, true
+			return Extern{Kind: e.Kind, owner: in, glob: in.globals[e.Index]}, true
 		case binary.ExternTag:
 			if int(e.Index) >= len(in.tags) || in.tags[e.Index] == nil {
 				return Extern{}, false
 			}
-			return Extern{Kind: e.Kind, tag: in.tags[e.Index]}, true
+			return Extern{Kind: e.Kind, owner: in, tag: in.tags[e.Index]}, true
 		}
 		return Extern{}, false
 	}
@@ -262,122 +311,172 @@ func (in *Instance) link(imp Imports) error {
 }
 
 // importTypeMismatch reports why im and ext disagree on their *type*, once they already agree on
-// kind — `match_externtype`'s four kind-specific rules (match.ml). The func case now calls
-// `sameFuncType`'s widened `match_deftype` reduction (0019's own named gap, #164's remaining 4
-// vectors) — the declared-supertype walk, restricted to the scope `sameFuncType`'s own doc
-// comment states. The other three kinds stay `ValType`'s field-wise `==` (0018) rather than
-// reftype subtyping: right for the two ungated Wasm 2.0 forms, and for GC forms (a table's or
-// global's reftype) it is *equality* where the reference wants *subtyping*, a real but
-// unwidened gap — `match_reftype`/`match_heaptype` over table and global element types is 0019's
-// *other* consumer, not yet built, since ref.test/ref.cast are what motivated it and neither
-// exists as an interpreter arm yet.
+// kind — `match_externtype`'s five kind-specific rules (match.ml:174-183), each ported here as its
+// own arm and each routing its type comparisons through `internal/validate`'s relation.
+//
+// # Grave #368: every arm used to compare type *indices*
+//
+// A type index is an identity only relative to a type section, so `im.Index == …`, `im.GlobalType
+// == ext.glob.typ` and `im.Table.ElemType == ext.tab.elemType` compared numbers drawn from two
+// *different* modules' type spaces. The four witnesses, printed by the rows they produced:
+//
+//	expected func [(ref 4)] -> [], got func [(ref 3)] -> []              type-equivalence.wast:218
+//	expected func [] -> [(ref 2)], got func [] -> [(ref 0)]              type-subtyping.wast:713
+//	expected func [] -> [(ref 6)], got func [] -> [(ref 4)]              type-subtyping.wast:731
+//	expected global const funcref, got global const (ref func)           linking.wast:112
+//
+// The first three are refusals of types that *are* equal — the same rolled type at different
+// ordinals. The fourth is the global arm's `==` refusing `(ref func) <: (ref null func)`, which
+// `match_globaltype`'s covariance for a const global admits.
+//
+// It is #343's cause 1 exactly one layer up. #363 repaired this reading inside the validator and
+// the linker was not swept, which is what *sweep after a grave* and *lessons are indexed by shape,
+// not by file* both exist for: the shape is "a type index used as a type identity", and this
+// package held a second instance of it the whole time. The rows are invisible to the board because
+// they are module *definitions*, whose instantiation the harness does not score (#367) — contract
+// §9's G-3 accept-direction blind spot, found by a census rather than by a fail.
+//
+// The relation is `internal/validate`'s, *widened* to two type contexts rather than duplicated —
+// ADR 0019's "widened, not a second comparator", applied to the linker. What stays here is what
+// `match_externtype` has and `match_valtype` does not: limits, address types, mutability.
 //
 // Returns "" when the types match, and otherwise the spec's phrasing —
 // "expected ..., got ..." — the wording eval.ml's Link.error uses, so the caller's sentinel plus
-// this detail reproduces the reference's message rather than inventing a shape of its own.
+// this detail reproduces the reference's message rather than inventing a shape of its own. The two
+// types are spelled by `speller`, each against *its own* module: a message printing indices at a
+// reader who cannot resolve them was the same defect wearing its testimony clothes.
 func (in *Instance) importTypeMismatch(im *binary.Import, ext Extern) string {
+	gotMod := ext.typeSpace()
+	if gotMod == nil {
+		// The zero Extern, which Export only ever returns alongside `false`. A caller bug rather
+		// than a link fact, stated as a reachable check rather than a panic (grave 0003) and
+		// answered as a mismatch, since an extern whose types cannot be read cannot be said to
+		// have matching ones.
+		return "a supplier with no defining module"
+	}
+	want, got := speller{mod: in.mod}, speller{mod: gotMod}
 	switch im.Kind {
 	case binary.ExternFunc:
-		want, err := in.declaredFuncType(uint64(im.Index))
-		if err != nil {
-			// #9's layering debt, not a link fact — an import naming a type the decoder
-			// accepted but the validator would not have. Reported as a mismatch anyway: an
-			// import this engine cannot even state a type for cannot be said to match.
-			return "an unresolvable declared type: " + err.Error()
-		}
-		fn, ok := ext.fnInst.mod.DefinedFunc(ext.fnIdx)
+		// `ExternFuncT (Def dt1), ExternFuncT (Def dt2) -> match_deftype c dt1 dt2`.
+		//
+		// **Supplier first, importer second** — the reference's own argument order at this call
+		// site (`Match.match_externtype [] xt' xt`, `eval.ml:1187`, with `xt'` the actual
+		// export's type) so the declared-supertype walk climbs the *supplier's* chain, exactly as
+		// `match_deftype`'s disjunct 3 does.
+		fn, ok := gotMod.DefinedFunc(ext.fnIdx)
 		if !ok {
-			// Unreachable while Export resolves re-exported imports through to their
-			// definer (call.go's identical check on the call_indirect path states the
-			// invariant at length). Stated as a reachable check rather than a panic, per
-			// grave 0003.
+			// A re-exported function import: Export hands back the re-exporter and the index it
+			// used, and only resolveCall walks that indirection. Answered as a mismatch, and
+			// flagged rather than silently widened — an over-rejection with no vector on either
+			// board is a separate question from this one.
 			return "a supplier that does not define its own export"
 		}
-		got, err := ext.fnInst.funcType(fn)
-		if err != nil {
-			return "an unresolvable supplied type: " + err.Error()
-		}
-		// **`ext.fnInst.mod`/`fn.TypeIndex` first, `in.mod`/`im.Index` second** — matching the
-		// reference's own argument order at this call site (`match_deftype c dt1 dt2` with
-		// `dt1` the actual export's type, `dt2` the import's declared type, `eval.ml:1186-1187`)
-		// so the declared-supertype walk climbs the *supplier's* chain, exactly as
-		// `match_deftype`'s disjunct 3 does.
-		if sameFuncType(ext.fnInst.mod, fn.TypeIndex, in.mod, im.Index) {
+		if validate.MatchDefType(gotMod, fn.TypeIndex, in.mod, im.Index) {
 			return ""
 		}
-		return fmt.Sprintf("expected %s, got %s", funcTypeString(want), funcTypeString(got))
+		return fmt.Sprintf("expected %s, got %s",
+			want.externFunc(im.Index), got.externFunc(fn.TypeIndex))
 	case binary.ExternMemory:
-		if matchLimits(im.Memory.Limits, ext.mem.limits) {
+		// `match_memorytype c (MemoryT (at1, lim1)) (MemoryT (at2, lim2))` =
+		// `at1 = at2 && match_limits c lim1 lim2`.
+		if matchMemoryType(ext.mem.limits, im.Memory.Limits) {
 			return ""
 		}
-		return fmt.Sprintf("expected memory %s, got %s",
-			limitsString(im.Memory.Limits), limitsString(ext.mem.limits))
+		return fmt.Sprintf("expected %s, got %s",
+			want.externMemory(im.Memory.Limits), got.externMemory(ext.mem.limits))
 	case binary.ExternTable:
-		if im.Table.ElemType == ext.tab.elemType && matchLimits(im.Table.Limits, ext.tab.limits) {
+		// `match_tabletype` = `at1 = at2 && match_limits c lim1 lim2 && match_reftype c t1 t2 &&
+		// match_reftype c t2 t1` — the element type **mutually**, so it is the subtype relation
+		// used as an equality rather than an `==` on the representation.
+		if matchTableType(gotMod, ext.tab, in.mod, im.Table) {
 			return ""
 		}
-		return fmt.Sprintf("expected table %s %s, got table %s %s",
-			limitsString(im.Table.Limits), im.Table.ElemType,
-			limitsString(ext.tab.limits), ext.tab.elemType)
+		return fmt.Sprintf("expected %s, got %s",
+			want.externTable(im.Table.Limits, im.Table.ElemType),
+			got.externTable(ext.tab.limits, ext.tab.elemType))
 	case binary.ExternGlobal:
-		if im.GlobalType == ext.glob.typ && im.GlobalMutable == ext.glob.mutable {
+		// `match_globaltype` = `mut1 = mut2 && match_valtype c t1 t2 && (Cons -> true | Var ->
+		// match_valtype c t2 t1)`: mutability invariant, a const global **covariant** in its value
+		// type, a mutable one invariant. The covariance is the fourth witness above.
+		if matchGlobalType(gotMod, ext.glob, in.mod, im.GlobalType, im.GlobalMutable) {
 			return ""
 		}
-		return fmt.Sprintf("expected global %s %s, got global %s %s",
-			mutString(im.GlobalMutable), im.GlobalType, mutString(ext.glob.mutable), ext.glob.typ)
+		return fmt.Sprintf("expected %s, got %s",
+			want.externGlobal(im.GlobalMutable, im.GlobalType),
+			got.externGlobal(ext.glob.mutable, ext.glob.typ))
 	case binary.ExternTag:
-		// **`sameTagType`, not `sameFuncType`'s subtyping walk** — `match_tagtype`
-		// (match.ml:157-160) is mutual `match_deftype` containment, which for MVP function
-		// types with no declared supertypes reduces to one structural comparison (see
-		// sameTagType's own doc comment). `im.Index` is the importer's declared type,
-		// resolved against `in.mod.Types` the way every other #9-layered type index in this
-		// package is; a bad index is the layering debt, reported as a mismatch per
-		// declaredFuncType's own established reading — an import this engine cannot even
-		// state a type for cannot be said to match.
+		// `match_tagtype` = mutual `match_deftype` over the two *deftypes* (see matchTagType).
+		// `im.Index` is the importer's declared type index, resolved against `in.mod.Types` the
+		// way every other #9-layered type index in this package is; a bad index is the layering
+		// debt, reported as a mismatch per declaredFuncType's own established reading — an import
+		// this engine cannot even state a type for cannot be said to match.
 		if int(im.Index) >= len(in.mod.Types) || in.mod.Types[im.Index].Kind != binary.CompFunc {
 			return "an unresolvable declared type"
 		}
-		want := &in.mod.Types[im.Index].Func
-		if sameTagType(want, ext.tag.typ) {
+		if matchTagType(gotMod, ext.tag.typeIdx, in.mod, im.Index) {
 			return ""
 		}
-		return fmt.Sprintf("expected tag %s, got tag %s",
-			funcTypeString(want), funcTypeString(ext.tag.typ))
+		return fmt.Sprintf("expected %s, got %s",
+			want.externTag(im.Index), got.externTag(ext.tag.typeIdx))
 	}
 	return ""
 }
 
-// matchLimits is match.ml's match_limits: an importer's declared bound is satisfied by a
-// supplier whose actual minimum is at least as generous and whose actual maximum is at least as
-// tight — a supplier that promises *more* room than declared, never less. lim1 is the importer's
-// declaration, lim2 the supplier's actual limits, matching the reference's parameter order and
-// the direction imports.wast's accept vectors pin (a memory declared min 0 max unbounded accepts
-// a supplier of min 2 max 4; the reverse does not).
-func matchLimits(lim1, lim2 binary.Limits) bool {
-	if lim1.Min > lim2.Min {
+// matchMemoryType is `match_memorytype` (match.ml:167-168): the address type by equality, then the
+// limits.
+//
+// **The address type is the check that was missing**, and it was missing invisibly: `matchLimits`
+// alone accepts an i64-addressed memory where an i32 one was declared, so eight
+// `memory64-imports.wast` `assert_unlinkable` vectors were admissions on the all-gates-on board —
+// "the module linked and instantiated successfully" where the spec says `incompatible import
+// type`. A defect distinct from #368's, sharing only the site.
+func matchMemoryType(got, want binary.Limits) bool {
+	return got.Addr64 == want.Addr64 && matchLimits(got, want)
+}
+
+// matchTableType is `match_tabletype` (match.ml:170-172).
+func matchTableType(gotMod *binary.Module, got *table, wantMod *binary.Module, want binary.Table) bool {
+	return got.limits.Addr64 == want.Limits.Addr64 &&
+		matchLimits(got.limits, want.Limits) &&
+		validate.MatchValType(gotMod, got.elemType, wantMod, want.ElemType) &&
+		validate.MatchValType(wantMod, want.ElemType, gotMod, got.elemType)
+}
+
+// matchGlobalType is `match_globaltype` (match.ml:162-165).
+func matchGlobalType(gotMod *binary.Module, got *global, wantMod *binary.Module, want binary.ValType, wantMutable bool) bool {
+	if got.mutable != wantMutable {
 		return false
 	}
-	if !lim1.HasMax {
+	if !validate.MatchValType(gotMod, got.typ, wantMod, want) {
+		return false
+	}
+	if !wantMutable {
 		return true
 	}
-	return lim2.HasMax && lim2.Max <= lim1.Max
+	return validate.MatchValType(wantMod, want, gotMod, got.typ)
 }
 
-// limitsString and mutString spell a limits pair and a mutability flag the way the reference's
-// string_of_limits and string_of_mut do, for the same reason funcTypeString exists: the detail
-// half of a message the suite does not read past its sentinel is still ours to keep honest.
-func limitsString(lim binary.Limits) string {
-	if lim.HasMax {
-		return fmt.Sprintf("%d %d", lim.Min, lim.Max)
+// matchLimits is match.ml's match_limits (match.ml:64-68): a supplier whose actual minimum is at
+// least as generous as the declaration's and whose actual maximum is at least as tight — a
+// supplier that promises *more* room than declared, never less. The direction imports.wast's
+// accept vectors pin: a memory declared min 0 max unbounded accepts a supplier of min 2 max 4;
+// the reverse does not.
+//
+// **The parameters are (got, want), which is the reference's order — and the previous version's
+// doc comment claimed that while the code had them the other way round.** The behaviour was right
+// and the testimony was wrong (`lim1.min >= lim2.min` with `lim1` the *actual*, per
+// `eval.ml:1187`'s `match_externtype [] xt' xt`), so a reader checking this function against
+// match.ml found the inequality reversed with no way to tell which half was the error. Reordered
+// rather than re-commented, so it composes with the arms above — every one of which passes got
+// first.
+func matchLimits(got, want binary.Limits) bool {
+	if got.Min < want.Min {
+		return false
 	}
-	return strconv.FormatUint(lim.Min, 10)
-}
-
-func mutString(mutable bool) string {
-	if mutable {
-		return "mut"
+	if !want.HasMax {
+		return true
 	}
-	return "const"
+	return got.HasMax && got.Max <= want.Max
 }
 
 // ErrLinkFailed is a link failure: an import the supplier answered with the wrong kind.
