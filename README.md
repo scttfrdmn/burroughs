@@ -202,10 +202,12 @@ vendored suite, because a suite that skips passes by asking nothing.
 - **`docs/burroughs-contract-v0.1.md`** — the normative host contract.
   Start there.
 - **`docs/decisions/`** — accepted decision records (ADRs).
-- **`CLAUDE.md`** — implementation agent brief: phase ladder, governance,
-  reporting protocol, and the one-line index of the disciplines.
-- **`docs/laws/`** — the disciplines in full, by family: each law's specimen,
-  the finding that minted it, and the token it was granted on.
+- **`CLAUDE.md`** — implementation agent brief: orientation, the phase ladder,
+  where work is tracked, and the five behaviours that change what a PR does.
+  A pointer page, not the corpus.
+- **`docs/laws/`** — the disciplines, by family: each law's specimen, the
+  finding that minted it, and the token it was granted on. `CLAUDE.md` links
+  every family; read the one whose subject is in play.
 - **`CHANGELOG.md`** — what landed, newest first, with gate flips as **Added**
   and graves as **Fixed** beside their issue.
 
