@@ -8889,7 +8889,7 @@ func TestPhase1Files(t *testing.T) {
 	// and `memory.grow` was taken during the work and accounts for the difference between 350 and 358.
 	// So the pre-registered figure held on the population it was written about, and the extra 8 are
 	// named as a scope decision rather than folded into a delta that would then have matched nothing.
-	const validateFailCeiling = 81
+	const validateFailCeiling = 74
 	const validateDeclineCeiling = 31
 	boardBound(t, "validateDeclineCeiling", validateDeclined, validateDeclineCeiling, 0, ceilingBound,
 		"slice 1 declined more instructions than it did — either an opcode left the signature "+
@@ -8961,7 +8961,7 @@ func TestPhase1Files(t *testing.T) {
 	//
 	// A `simd_`-prefix predicate would have been a claim about the current sample rather than the
 	// space, and an under-matching trigger fails silently by construction.
-	const validateAdmitCeiling = 50
+	const validateAdmitCeiling = 43
 	boardBound(t, "validateAdmitCeiling", validateAdmitted, validateAdmitCeiling, 0,
 		ceilingBound,
 		"the validator accepted an invalid module it used to refuse. This is the accept direction: "+

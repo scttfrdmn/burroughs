@@ -45,6 +45,73 @@ amended rather than replaced.
   starvation. Re-running until green, with nothing explained, is the same reflex
   as scrolling past a warning. (Ruling: Scott, PR #27; the fix is #28.)
 
+### A failure establishes an event, not a condition — and "unavailable" is self-serving where "flake" is not.
+
+- **A failure establishes an event, not a condition — and "unavailable" is
+  self-serving where "flake" is not.** The law above run backwards. A green does
+  not refute a fail; a fail does not establish a *standing state* either. Two
+  timed-out probes are two events, and "the instrument is gone" is a claim about
+  every future run — a different kind of statement, needing different evidence,
+  and the cheapest evidence against it is to try the thing again.
+  - **The asymmetry is the reason this is a key and not a footnote on the flake
+    law.** Both diagnoses are inferences from a transient failure, and they differ
+    in which direction they cost the actor. Calling a fail a *flake* incurs an
+    obligation: bound the cause, or the diagnosis is inadmissible. Calling an
+    instrument *unavailable* **retires** one — the check need not run, and the
+    procedure that ordered it can be rewritten to match. So the incentive gradient
+    points at exactly one of the two readings, which means the reading has to be
+    earned against that gradient rather than adopted because it fits the evidence.
+    An actor's diagnosis about its own obligations is the class where the actor
+    does not rule: *state the case and flag it.*
+  - **The specimen.** `docker version` timed out twice on the arm64 dev box across
+    two PRs, and the absence was reported honestly both times. On the third
+    reading the honest report was replaced by an inference — the daemon is
+    unrecoverable — and three artifacts were built on it in one session: a
+    procedure change demoting the local cross-check, a `CLAUDE.md` edit ordering CI
+    as primary, and a *law* in this file blessing the demotion. Scott restarted the
+    daemon and it came back, then named `janus.local` — a native x86_64 machine
+    that had been on the network the entire time and that no procedure here had
+    ever mentioned. **The cheap remedies were a restart and a question, and neither
+    had been tried.** The question was the more expensive omission: it would have
+    produced a *better* instrument than the one declared dead, not merely the same
+    one revived.
+  - **A corrected law and a law on a refuted premise are different artifacts**
+    (ruling: Scott, on the mint). The demotion law was deleted rather than amended,
+    because a law is read by every future session and inherits the truth of its
+    example — a specimen ending in a false sentence teaches the false sentence,
+    and it teaches it with this corpus's authority. It exists nowhere in history:
+    it was written, falsified within the hour, and removed before its first commit.
+    That is the record it deserves, and this entry is the part of it worth keeping.
+  - Operative, for a check that will not run: report the **event** (this probe, this
+    time, this exit code), never the condition. Distinguish *hung* from *down* from
+    *absent*, since a hung mechanism does not refuse but hangs and everything built
+    on it inherits the hang — a bounded probe reading exit 124 is the cheapest
+    instance of *verdict channel and mechanism channel are different instruments*
+    applied to availability. Then repair, or escalate, before any procedure is
+    rewritten; `scripts/xcheck-amd64.sh` carries the shape as code, with `NOT RUN`
+    at exit 4 for both unavailability paths and every exit path naming its
+    instrument. (Ruling: Scott, PR #339 review, minting a corrected key over a
+    withdrawn one: *"a failure establishes an event, not a condition — and
+    'unavailable' is self-serving in a way 'flake' isn't, because it retires an
+    obligation. No control can reach it, which is exactly what index space is
+    for."*)
+  - **The funding was retroactive, and the sequence should read that way wherever
+    it is recorded.** The mint was authorized on a figure nobody had checked: the
+    PR claimed the index had returned **165 bytes**, and that was `len(str)` in
+    Python over a UTF-8 file dense with em-dashes, so it counted *characters*. By
+    `wc -c` the section had **grown by 132 bytes**. The order in which this actually
+    happened is: Scott authorized the key on a wrong number, the agent found the
+    error afterwards, and the 283 bytes were then paid for by trimming that same
+    section to **109 under its baseline**. Scott's own words on being shown it: *"I
+    authorized that mint on a number I didn't check, and you found it. The law is
+    real and the funding was retroactive — that's the honest sequence and it should
+    read that way wherever it's recorded."* Kept because a record that quietly
+    reorders the two makes a governance decision look better evidenced than it was,
+    which is the *status field is a citation to an approval* defect applied to a
+    number instead of to a stamp. The unit half is the ninth specimen under
+    *coverage is a claim*: `os.Stat` and `wc -c` answer in the unit the ceiling is
+    written in.
+
 ### Budget by the quantity the purpose names.
 
 - **Budget by the quantity the purpose names.** A gate whose budget unit differs
@@ -284,6 +351,47 @@ amended rather than replaced.
   error again: a tool's silent limit becoming a census. Worth a line wherever
   counts are taken from `gh`."* — the `boardFiles` he names is the third specimen's
   sibling, one instrument over.)
+
+  **Eighth specimen, where two globbers disagree about what `*` means and the
+  verifier holds the weaker one.** The amd64 cross-check copies the working tree to
+  a native x86_64 host, and macOS `tar` had written AppleDouble sidecars
+  (`._address.wast`) into `testdata/spec` on the far side. The board reddened
+  twenty instruments — every row a parse failure on a file named `._…`, which is
+  the tell, and the arch was not the subject. The verification I had run against
+  that copy was `ls testdata/spec/*.wast | wc -l`, and it reported **257 on the
+  poisoned tree and 257 on the clean one**: the shell's `*` skips a leading dot and
+  Go's `filepath.Glob` does not, so the consumer saw 514 files where the checker
+  could only ever see 257. An assertion sound in what it compared, over a
+  population defined by a *different globber than its subject's* — the third
+  specimen's shape with the domain chosen not by a tool's default flag but by two
+  tools' incompatible definitions of the same metacharacter. **A copy is verified
+  with the consumer's globber, not the shell's**, and the repair is a
+  reconciliation rather than a floor (`scripts/xcheck-amd64.sh`): `find`-based and
+  dot-aware on both ends, remote count checked *equal* to local so that too few
+  catches a lossy copy and too many catches junk. A floor would have passed 514
+  without a word. (Found this session, running the check Scott's `janus.local`
+  directive made available for the first time, PR #339.)
+
+  **Ninth specimen, where the domain was right and the *unit* was wrong: byte
+  counts come from the tool that measures bytes.** `claudeMDCeiling` is written in
+  bytes and `os.Stat` enforces it in bytes; the figure I reported a section's
+  change in — and reported to Scott as the funding for a new law's key — was
+  Python's `len(str)` over a UTF-8 file dense with em-dashes and `§`, which counts
+  **characters**. It said the section had shrunk 165; `wc -c` says it *grew* 132.
+  Wrong in magnitude and in sign, on a quantity a governance decision was then
+  taken against. The instrument was reading the right file, the whole file, and
+  nothing but the file — so no domain check reaches this — and it still answered a
+  different question than the one the ceiling asks. **A unit is an unchecked claim
+  the same way a domain is**, and the remedy has the same shape: ask the instrument
+  the *consumer* uses, which here is `wc -c` or `os.Stat` and never a length
+  function whose unit depends on encoding. Scott classified it on the relay as the
+  **third instance of a proxy quoted as the measurement in one campaign** — after
+  the single-line `grep` that undercounted the `unknown table` family by four
+  multi-line assertions, and the eighth specimen's shell glob — which is why it is
+  a specimen here and not a key: the shape is established, and what recurs is the
+  reflex of reaching for the convenient reader. (Found by re-measuring after the
+  law was already authorized on the wrong figure; ruling on the classification:
+  Scott, PR #339.)
 
   The two failure modes are worth keeping separate because they are found
   differently. An **assertion** defect is found by falsification — break it, watch

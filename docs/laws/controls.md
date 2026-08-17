@@ -559,3 +559,22 @@ amended rather than replaced.
   including the ones with no predicate at all — a registry, a corpus directory, a default
   search scope. (Ruling: Scott, PR #285 relay — "the index ceiling is real and one idea
   shouldn't buy two keys", so the two keys are two ideas or this one is wrong.)
+
+  **Fourth specimen — the *over*-matching direction, and it fired twice on one guard in one
+  PR.** `citecheck.sh`'s check 4 ("no citation names the artifact it is written in") was drafted
+  over a diff and failed on the *correct* prose of the PR adding it, because a code comment
+  citing its own PR is this repo's attribution convention; narrowed to the body, it failed
+  again, on a fenced block quoting `ratio.sh`'s output where the printed line **is** a commit's
+  `Ratio-Class: ordered — #339` trailer. Both boundaries were found the way this law says an
+  over-match is found: it fails loudly, on correct content, and each time the population turned
+  out to be narrower than the sentence describing it. What is new here is the **remedy
+  asymmetry**, and it is why an over-match is the more dangerous direction for a guard whose
+  subject is a document: an under-match tempts nobody, while an over-match makes *editing the
+  correct artifact* the cheapest way to green — here, deleting a token from a verbatim quotation,
+  which is fabricated evidence to satisfy a prose check and a strictly worse defect than the one
+  being gated. The rule that falls out: **when a guard fires on content you would have to falsify
+  to satisfy it, the guard's population is wrong, not the content.** The narrowing then owes two
+  things back, both taken — an odd-fence *failure*, since an unbalanced fence would swallow the
+  rest of the body into the excluded region and reintroduce this law's own silent under-match, and
+  the prose line count printed beside the verdict, so a population that collapsed to zero cannot
+  report a pass. (Both boundaries measured on PR #339's own body; the second on its CI red.)

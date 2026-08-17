@@ -1141,7 +1141,7 @@ func TestReferenceRangeCitationsAreWellFormed(t *testing.T) {
 	//	           export phase's placement after every body
 	//	vec.go     :885-937, :906-908, :938-955, :663-686 four section/rationale comments, :373-378
 	//	           `check_vec_binop`
-	const wantRanges = 27
+	const wantRanges = 28
 	if ranges != wantRanges {
 		t.Errorf("checked %d range citation(s) across %v, want %d — recount and re-pin, and if a "+
 			"file was added to citationFiles, read its point citations too",

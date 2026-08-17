@@ -16,7 +16,7 @@
 529	section	## The law
 1304	section	## Phase ladder
 1157	section	## Where the work is tracked
-9186	section	## Reporting protocol — the PR *is* the report
+9082	section	## Reporting protocol — the PR *is* the report
 2238	section	## Versioning and the changelog
 301	section	## Decision records
 1160	section	## Disciplines heading and preamble
@@ -30,6 +30,7 @@
 190	law	evidence-and-instruments/the-spec-is-the-objective-function-the-suite-samples-it
 171	law	evidence-and-instruments/a-verdict-without-an-identity-check-is-hearsay
 205	law	evidence-and-instruments/a-re-run-green-doesnt-refute-a-fail--explaining-the-fail-does
+283	law	evidence-and-instruments/a-failure-establishes-an-event-not-a-condition--and-unavailable-is-self-serving-where-flake-is-not
 159	law	evidence-and-instruments/budget-by-the-quantity-the-purpose-names
 215	law	evidence-and-instruments/a-stateful-instrument-measures-history-until-its-state-is-controlled
 1033	law	gates/gates

@@ -12,6 +12,12 @@
 #   scripts/citecheck.sh <rev>              # one commit, against its first parent
 #   scripts/citecheck.sh <base> <head>      # a range, e.g. a PR's merge base to its tip
 #   scripts/citecheck.sh --worktree [base]  # base (default `main`) against the working tree
+#   scripts/citecheck.sh --pr <number>      # the PR's title and body, which need the network
+#
+# `--pr` scans prose instead of a diff and is the only form that runs check 4 — closecheck.sh takes
+# its PR the same way and for the same reason, both tools asking a question about the body GitHub
+# will act on. The two forms are separate invocations rather than one flag, because a diff and a
+# body are different populations and folding them would hide which one a verdict came from.
 #
 # The two revision forms match ratio.sh deliberately: read the sibling before writing the
 # reader. Both tools answer a question about *a diff*, so both take a diff the same way.
@@ -24,7 +30,7 @@
 #
 # ## What is binding and what is printed
 #
-# Three checks, and they are not equally strong. Saying which is which is the point, because a
+# Four checks, and they are not equally strong. Saying which is which is the point, because a
 # tool that gates on existence while its name suggests it gates on correctness is testimony
 # about itself:
 #
@@ -37,13 +43,54 @@
 #      claim in the set that has a mechanical oracle: a citation whose immediately preceding word
 #      is "grave" must resolve to an **issue** (not a PR) labelled `type:grave`. `#283`'s failure
 #      mode was resolving to the wrong *kind* of artifact, and existence alone cannot see that.
+#   4. **No citation in a PR *body* names that PR — binding, needs the network, `--pr` only.** The
+#      second title-shaped claim with a mechanical oracle, mechanical because it needs no judgement
+#      about agreement: a body citing its own number is never intentional. Specimen on #339, which
+#      cited "PR #339 relay" for a ruling relayed on #337 — a guess at what the *next* PR number
+#      would be, written into prose before that PR existed, and the guess came true. Resolution
+#      cannot see it (a well-formed `#N` resolves to whatever `N` turns out to be) and neither can a
+#      reader, since the sentence reads perfectly. Only the comparison sees it, and it costs one `=`.
+#
+#      **Its population is the body's *prose*: fenced code blocks are excluded, and that second
+#      boundary was measured the same way the first was — by watching the check fail on correct
+#      content.** The very PR that added this check failed it, on a fenced block quoting `ratio.sh`'s
+#      output verbatim, where the printed line *is* a commit's `Ratio-Class: ordered — #339` trailer.
+#      A trailer naming the PR its commit lives in is the convention check 4's diff exclusion already
+#      allows; the body was reporting it as evidence, not making a claim. **The other available fix
+#      was to edit the quoted output so the token disappeared, and that is fabricated evidence to
+#      satisfy a prose check** — a strictly worse defect than the one being checked, and one this
+#      PR had already committed once. So: a claim is prose, a fence is a quotation, and only the
+#      first can cite. Checks 1–3 still read fenced content, deliberately — resolution is a property
+#      of the *number* and a fabricated one inside a quoted block is exactly what wants catching.
+#      An **odd fence count is a failure**, not a narrowing: an unbalanced fence would silently swallow
+#      the rest of the body into the excluded region, which is the under-matching trigger this file's
+#      own trigger-coverage note is careful about. And the prose line count is printed, so a
+#      population that collapsed to zero cannot report a pass as a verdict.
+#
+#      **The scope is the body and deliberately not the diff, and that boundary was measured rather
+#      than assumed.** The first draft applied this to the diff and it failed immediately — on the
+#      *correct* prose of the very PR that added it, because a code comment citing the PR it is
+#      written in is this repo's convention for attributing a ruling, and a ruling relayed on a
+#      review genuinely lives at that PR's number. `citation_subject_test.go`'s "(Ruling: Scott, PR
+#      #337 relay.)" was written in `3c9ab09`, which *is* #337, so the broad reading would have
+#      failed #337 retroactively. Body and comment are different populations: "never intentional"
+#      is true of one and false of the other. Recorded because an over-matching guard fails loudly
+#      and this one did, which is the only reason the distinction got drawn before merge.
 #
 # What is deliberately **not** gated: whether the resolved title matches the sentence citing it.
-# There is no oracle for that — agreement between a citation's context and an issue's title is a
-# judgement, and a fuzzy word-overlap gate would fail on correct prose and pass on wrong prose,
-# which is worse than no gate. So the title is **printed beside every citation** for the reviewer
-# and the CI log, and the verdict channel carries only what a machine can decide. Verdict channel
-# and mechanism channel are different instruments; this script uses both and says which.
+# There is no general oracle for that — agreement between a citation's context and an issue's title
+# is a judgement, and a fuzzy word-overlap gate would fail on correct prose and pass on wrong
+# prose, which is worse than no gate. So the title is **printed beside every citation** for the
+# reviewer and the CI log, and the verdict channel carries only what a machine can decide. Verdict
+# channel and mechanism channel are different instruments; this script uses both and says which.
+#
+# Checks 3 and 4 are the exceptions that prove the shape of the rule rather than weakening it: both
+# are title-*shaped* questions that turn out to have non-title answers — a label, and an integer
+# comparison — so neither is the judgement the printed title is there for. The pattern worth
+# reusing: when a printed field keeps catching the same class by eye, look for the sub-claim inside
+# it that a machine can decide, and assert that. Reading the printed title has caught or would have
+# caught four guessed numbers; the fourth is what promoted this sub-claim out of the print. (Directive:
+# Scott, PR #339 review.)
 #
 # ## The domain is printed, always
 #
@@ -104,17 +151,44 @@
 
 set -eu
 
-base="${1:?usage: citecheck.sh <rev> | <base> <head> | --worktree [base]}"
-head="${2-}"
-if [ "$base" = "--worktree" ]; then
+usage="usage: citecheck.sh <rev> | <base> <head> | --worktree [base] | --pr <number>"
+
+# `--pr` is its own mode rather than a modifier: it scans prose, so it has no base, no head and no
+# diff, and every later reference to those would have to special-case it anyway.
+selfpr=""
+prmode=0
+if [ "${1-}" = "--pr" ]; then
+	prmode=1
+	selfpr="${2:?$usage}"
+	base=""
+	head=""
+else
+	base="${1:?$usage}"
+	head="${2-}"
+fi
+if [ "$prmode" -eq 1 ]; then
+	if ! command -v gh >/dev/null 2>&1; then
+		echo "FAIL  gh is not installed, so PR #$selfpr's body was not scanned."
+		echo "      This is not a pass. A check that could not ask its question does not get to"
+		echo "      report green; CI is where this half is binding."
+		exit 1
+	fi
+	# Fed to the same `extract` as a diff, by prefixing every line with `+`. The alternative is a
+	# second scanner for prose, and two scanners over one grammar drift — the citation grammar is
+	# one concept and gets one place, which is the argument this script's own header makes for
+	# keeping the classification inside a single awk program.
+	diffout="$(gh pr view "$selfpr" --json title,body --jq '.title + "\n" + .body' | sed 's/^/+/')"
+elif [ "$base" = "--worktree" ]; then
 	base="${2-main}"
 	head="" # the empty head *is* the working tree, for git diff and for the label below
-elif [ -z "$head" ]; then
-	head="$base"
-	base="$base^"
+	diffout="$(git diff "$base" $head || true)"
+else
+	if [ -z "$head" ]; then
+		head="$base"
+		base="$base^"
+	fi
+	diffout="$(git diff "$base" $head || true)"
 fi
-
-diffout="$(git diff "$base" $head || true)"
 
 # In worktree mode, `git diff` is not the whole working tree: an **untracked** file is invisible
 # to it, which is the tracked-files defect this mode was added to avoid, one layer in. A new file
@@ -122,7 +196,7 @@ diffout="$(git diff "$base" $head || true)"
 # synthetic additions — `+++` first, so the paragraph join below cannot weld a new file's opening
 # line to the previous hunk's tail. Found while falsifying the check: the first `--worktree` run
 # could not see this script.
-if [ -z "$head" ]; then
+if [ "$prmode" -eq 0 ] && [ -z "$head" ]; then
 	for f in $(git ls-files --others --exclude-standard); do
 		diffout="$diffout
 +++ b/$f
@@ -291,6 +365,28 @@ extract() {
 cites="$(printf '%s\n' "$diffout" | extract | sort -u)"
 ncites="$(printf '%s' "$cites" | grep -c '' || true)"
 
+# Check 4's population: the body's prose, with fenced code blocks removed. See the header — a fence
+# is a quotation and a quotation is evidence, so only prose can cite. Computed as a second, narrower
+# stream rather than by tagging tokens in `extract`, because checks 1-3 keep the wide population and
+# one scanner over two domains is easier to read than one scanner carrying a flag through.
+prose_nums=""
+nprose=0
+nfences=0
+if [ "$prmode" -eq 1 ]; then
+	nfences="$(printf '%s\n' "$diffout" | grep -c '^+[[:space:]]*```' || true)"
+	if [ "$((nfences % 2))" -ne 0 ]; then
+		echo "FAIL  PR #$selfpr's body has $nfences fence markers — an odd count."
+		echo "      Check 4 excludes fenced blocks, so an unbalanced fence swallows the rest of the"
+		echo "      body into the excluded region and the check silently stops asking. Balance the"
+		echo "      fences; an under-matching population is not a pass."
+		exit 1
+	fi
+	prose_only="$(printf '%s\n' "$diffout" | awk '/^\+[[:space:]]*```/ { fence = !fence; next } !fence')"
+	nprose="$(printf '%s\n' "$prose_only" | grep -c '^+' || true)"
+	prose_nums="$(printf '%s\n' "$prose_only" | extract |
+		awk '$1 == "issue" || $1 == "grave" { print $2 }' | sort -u)"
+fi
+
 fail=0
 adrs=0
 issues=0
@@ -321,7 +417,10 @@ for n in $(printf '%s\n' "$cites" | awk '$1 == "adr" { print $2 }'); do
 	found="$(find docs/decisions -maxdepth 1 -name "$n-*.md" 2>/dev/null | head -1)"
 	if [ -z "$found" ]; then
 		echo "FAIL  decision $n -> no docs/decisions/$n-*.md"
-		fail=1
+		echo "      An ADR citation resolves to a file or it is a citation to a record that does"
+		echo "      not exist. Either the number is wrong — check \`ls docs/decisions/\` — or the"
+		echo "      record was never written, in which case write it before citing it: an ADR is"
+		echo "      the tombstone of a decision Scott has called, not a forward reference to one."
 	else
 		echo "ok    decision $n -> ${found#docs/decisions/}"
 	fi
@@ -334,6 +433,8 @@ for n in $(printf '%s\n' "$cites" | awk '$1 == "adrshort" { print $2 }'); do
 	adrs=$((adrs + 1))
 	echo "FAIL  decision $n -> ADR citations are four digits (docs/decisions/NNNN-*.md);" \
 		"a one-digit reference is a record's own numbered decision. This is neither."
+	echo "      Write the ADR's four-digit number if a record is meant, or name the record and"
+	echo "      its internal decision — \"0025's decision 2\" — if a sub-decision is."
 	fail=1
 done
 
@@ -358,12 +459,38 @@ if [ "$need_gh" -gt 0 ]; then
 		if ! meta="$(gh api "repos/{owner}/{repo}/issues/$n" \
 			--jq '(if .pull_request then "pr" else "issue" end) + "\t" + ([.labels[].name] | join(",")) + "\t" + .title' 2>/dev/null)"; then
 			echo "FAIL  #$n -> does not resolve: no such issue or PR in this repo"
+			echo "      A well-formed \`#N\` resolves to whatever N happens to be, so the number was"
+			echo "      never checked against the tracker. Two remedies, and they are different:"
+			echo "      if the artifact exists under another number, repoint the citation; if it does"
+			echo "      not exist yet, \`gh issue create\` it and cite what comes back. Never guess"
+			echo "      the next number — a guess that later comes true is a citation pointing at"
+			echo "      itself, which is the defect check 4 below exists for."
 			fail=1
 			continue
 		fi
 		what="$(printf '%s' "$meta" | cut -f1)"
 		labels="$(printf '%s' "$meta" | cut -f2)"
 		title="$(printf '%s' "$meta" | cut -f3)"
+		# Check 4, before the kind-specific arms: a self-citation resolves like any other and is
+		# wrong whatever kind it names, so the comparison belongs above the branch rather than
+		# duplicated inside both of its arms.
+		if [ -n "$selfpr" ] && [ "$n" = "$selfpr" ]; then
+			if printf '%s\n' "$prose_nums" | grep -qx "$selfpr"; then
+				echo "FAIL  #$n -> is the PR under review: $title"
+				echo "      A citation cannot name the artifact it is written in. This is what a number"
+				echo "      guessed before its PR existed looks like once the guess comes true: the"
+				echo "      sentence reads correctly, the number resolves, and it points at itself."
+				echo "      Cite the artifact that actually carries the ruling, or drop the number."
+				fail=1
+			else
+				# Not a pass reported as silence: the token is there, and the reason it is allowed is
+				# the sentence below. Doctoring the quoted block to remove it would be the fix that
+				# fabricates evidence, which is why this arm exists rather than a stricter check.
+				echo "note  #$n -> names this PR, but only inside a fenced block: quoted evidence, not"
+				echo "      a claim. Check 4's population is the body's prose; see this script's header."
+			fi
+			continue
+		fi
 		if [ "$kind" = grave ]; then
 			graves=$((graves + 1))
 			case ",$labels," in
@@ -378,6 +505,10 @@ if [ "$need_gh" -gt 0 ]; then
 			*)
 				echo "FAIL  grave #$n -> $what without type:grave [${labels:-no labels}]: $title"
 				echo "      Cited as a grave; the graveyard is \`label:type:grave\` and this is not in it."
+				echo "      If it is a grave, label it — \`gh issue edit $n --add-label type:grave\` —"
+				echo "      and put the lesson in the closing comment, since a tombstone with no"
+				echo "      inscription reads as closed to every query that asks. If it is not a grave,"
+				echo "      drop the word: cite it as a plain \`#$n\`."
 				fail=1
 				;;
 			esac
@@ -390,10 +521,27 @@ fi
 
 # The domain, printed whether or not anything failed. A checker that says OK without saying over
 # what has made a silent claim about its own coverage.
-printf 'citecheck %s..%s: %d added lines, %d citation-shaped tokens (%d issue, %d grave, %d ADR, %d qualified, %d verb)\n' \
-	"$(git rev-parse --short "$base")" \
-	"$([ -n "$head" ] && git rev-parse --short "$head" || echo worktree)" \
-	"$nlines" "$ncites" "$issues" "$graves" "$adrs" "$foreigns" "$verbs"
+if [ "$prmode" -eq 1 ]; then
+	domain="PR #$selfpr (title and body)"
+else
+	domain="$(git rev-parse --short "$base")..$([ -n "$head" ] && git rev-parse --short "$head" || echo worktree)"
+fi
+printf 'citecheck %s: %d added lines, %d citation-shaped tokens (%d issue, %d grave, %d ADR, %d qualified, %d verb)\n' \
+	"$domain" "$nlines" "$ncites" "$issues" "$graves" "$adrs" "$foreigns" "$verbs"
+
+# Check 4's own domain, on its own line, because it runs in exactly one of the two modes and a
+# reader of a diff-mode log would otherwise have no way to tell that it was not asked. *A skip is
+# not a verdict*, and the diff-mode line is the sentence that keeps this one from reading as a pass.
+if [ "$prmode" -eq 1 ]; then
+	# Check 4's own population, printed: a fence-exclusion that collapsed to zero prose lines would
+	# otherwise report a green from a check that asked nothing. *Coverage is a claim.*
+	printf 'citecheck: self-citation check ran against PR #%s, over %d prose line(s) of %d (%d fence marker(s)).\n' \
+		"$selfpr" "$nprose" "$nlines" "$nfences"
+else
+	echo "citecheck: self-citation check not applicable to a diff — a comment citing the PR it was" \
+		"written in is this repo's attribution convention, so check 4's population is the body" \
+		"alone. Run \`citecheck.sh --pr <n>\` for it; CI does, on the pull_request event."
+fi
 
 if [ "$fail" -ne 0 ]; then
 	echo "citecheck: at least one citation does not resolve to the artifact it names."

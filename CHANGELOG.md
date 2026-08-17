@@ -21,6 +21,80 @@ weakly-ordered platform.
 
 ### Added
 
+- **`scripts/citecheck.sh` gains a fourth check: no citation in a PR *body* may name that PR.** A body
+  citing itself is never intentional, and the comparison costs nothing. It exists because three comment
+  sites attributed a directive to the PR number one above the one that carried it — a *forward guess* at
+  the next PR's number, which then came true, so the citations resolved perfectly and pointed at the PR
+  they were written in. Resolution alone cannot see this; a well-formed `#N` resolves to whatever N is.
+  **Scoped to the body and not to the diff, and the boundary was found by watching the broad version
+  fail on correct prose**: a code comment citing its own PR is this repo's attribution convention
+  (`citation_subject_test.go`'s own "(Ruling: Scott, PR #337 relay.)" was written in the commit that
+  *is* #337), so the diff-wide reading would have retroactively failed #337. Needs the network, so it
+  runs as `--pr <n>` beside the diff half, in CI and locally. (Directive: Scott, PR #339 review.)
+  - **A second boundary, found the same way and on this PR's own CI red: fenced code blocks are
+    excluded, because a quotation is evidence and only prose can cite.** The check failed on a
+    fenced block quoting `ratio.sh`'s output, where the printed line *is* a commit's `Ratio-Class:
+    ordered` trailer naming the PR it lives in — the convention the diff exclusion already allows,
+    reported as evidence rather than claimed. **The other available fix was to edit the quoted
+    output until the token vanished, which is fabricated evidence to satisfy a prose check** and a
+    worse defect than the one gated. Filed as the fourth specimen under *a guard's trigger predicate
+    is a claim about the space*, for the direction the law had not recorded: **when a guard fires on
+    content you would have to falsify to satisfy it, the guard's population is wrong, not the
+    content.** Checks 1–3 still read fenced content — resolution is a property of the number, and a
+    fabricated one inside a quoted block is exactly what wants catching. The narrowing pays back
+    twice: an **odd fence count fails** (an unbalanced fence would swallow the rest of the body into
+    the excluded region — this law's own silent under-match, reintroduced), and check 4's prose line
+    count is printed beside its verdict, so a population that collapsed to zero cannot read as a
+    pass. All three paths watched die: prose self-citation exit 1, fenced quotation `note` and exit
+    0, odd fence exit 1.
+
+- **`scripts/xcheck-amd64.sh`: the pre-push cross-architecture check, on hardware.** Contract §9 wants
+  both memory models; CI gives both on push, and this is the half that answers before a claim is written
+  down. It prefers **native x86_64 over ssh** — real TSO hardware rather than an emulation of it — and
+  falls back to the amd64 container under QEMU. **Every exit path names its instrument**, and the two
+  unavailability paths are `NOT RUN` at exit 4 rather than a failure: a hung daemon (probe bounded at
+  10s, exit 124) and a missing daemon are mechanism, not verdict, and nothing about the code has been
+  learned. The bounded probe is there because a hung daemon does not refuse but hangs, and `docker run`
+  inherits the hang.
+  - **The copy carries two traps, which is why this is an executable and not a recipe.** macOS `tar`
+    writes AppleDouble sidecars into `testdata/spec` unless `COPYFILE_DISABLE=1` and
+    `--no-mac-metadata` are both given; the harness globs the directory, and twenty instruments redden
+    on a corpus that is half junk. **The obvious verification cannot see that** — `ls *.wast | wc -l`
+    reported 257 on the poisoned tree and 257 on the clean one, because a shell `*` skips a leading dot
+    and Go's `filepath.Glob` does not. So the script counts with `find`, dot-aware on both ends, and
+    **reconciles** remote against local rather than flooring: too few is a lossy copy, too many is junk,
+    and a floor would have passed 514 without a word. Filed as the eighth specimen under *coverage is a
+    claim* — *a copy is verified with the consumer's globber, not the shell's*.
+  - Both copy assertions were watched die (sidecars present → exit 3 at 268 detected; one vector
+    excluded → 257 ≠ 255 → exit 3), and the `NOT RUN` path was watched die with no host and no `docker`
+    on `PATH` → exit 4.
+
+- **`check_elem`'s table index: the element-segment phase.** An active element segment's table index
+  resolves against the module's table space, in `check_module`'s own sequence — `check_data` then
+  `check_elem` (`valid.ml:1163`), and inside it the Active arm's `table c x` before the reftype match
+  and before the offset's const check, which is what makes both of those deferrable without changing a
+  message. Passive and declarative segments name no table and are skipped, matching the reference's own
+  arms. **`validateAdmitCeiling` 50 → 43**; default 60817 → **60824 pass** / 208 → **201 fail** / 66
+  unsupported unmoved / 4053 gated unmoved, all-gates-on 64708 → **64715 pass** / 338 → **331 fail**.
+  - **The seven rows were named before the rule was written, and that is the practice this slice
+    introduces.** The admission bucket is keyed by *message*, and `unknown table` is a message `table c
+    x` produces from twelve call sites in `valid.ml`. So the bucket's size forecasts the reward and says
+    nothing about which rows supply it — a rule firing too broadly delivers the right total out of the
+    wrong rows and reads identically to a correct one. The predicted movers, all confirmed and nothing
+    else moved: `elem.wast:721`, `func_ptrs.wast:32`/`:33`, `table.wast:23`/`:24`/`:51`/`:52`. Writing
+    the list first corrected two facts a grep had wrong — **six of the seven live outside `elem.wast`**,
+    and four of the family's sixteen vectors are multi-line assertions no single-line search finds.
+  - **`func_ptrs.wast:35` is the negative control**, two lines below a positive row: the same segment
+    shape in a module where the table *does* exist, wanting `type mismatch` from the deferred offset
+    check. It must stay an admission, and does.
+  - **Five mutations, and two of them are why the unit rows exist beside the board.** Dropping the mode
+    guard, deleting the loop, and refusing on segment shape are all board-visible (60822/203, the seven
+    back, and 11 *below* the pre-slice figure respectively). The other two are not covered by each
+    other: rewriting `tableTypeAt`'s `(%d in scope)` parenthetical leaves the suite **entirely green**
+    at 60824/201 — every vector matches `unknown table` by substring, so the text after the index is
+    corpus-unconstrained — while treating an implicit index as absent fails **no unit row at all** and
+    shows up only as −7 on both lanes. The battery table is in `elem_test.go`'s header.
+
 - **The export phase: `check_export` and `check_names`.** Every export's index resolves against its
   own index space, then the names are checked for duplicates — the reference's sequence
   (`valid.ml:1128-1137`, `:1142-1149`, ordered at `:1168-1169`). This was the largest single-file
@@ -809,6 +883,120 @@ weakly-ordered platform.
   tail-call gate's own 0x12/0x13 when it lands.
 
 ### Changed
+
+- **The cross-architecture procedure names a script and a native host, not a container recipe.**
+  Scott's directive was a disjunction — *either the box gets fixed or the procedure should name CI as
+  primary rather than as the fallback* — and **the first branch is the one that happened**: the Docker
+  daemon came back on a restart, and a native x86_64 machine turned out to be available that no
+  procedure here had ever named. So local stays primary, with `scripts/xcheck-amd64.sh` in place of a
+  recipe, and CI stays the standing dual-arch verdict on push. The demotion was drafted and **discarded
+  on its premise**: it asserted the box was unfixable, one restart falsified that, and a law whose
+  specimen ends in a false sentence is testimony. Recorded because the near-miss is the point — two
+  failed probes were treated as a permanent condition, and the cheap remedies (restart it, ask) were
+  never tried. The recipe and its reasoning went to the script's header, and no room was bought from
+  `claudeMDCeiling`.
+  - **The law the review then ordered is minted, and the "165 bytes returned" that funded it was a
+    wrong number.** *A failure establishes an event, not a condition — and "unavailable" is self-serving
+    where "flake" is not*, in `docs/laws/evidence-and-instruments.md` beside the flake law it inverts.
+    The 165 was `len(str)` in Python over a UTF-8 file, so it counted **characters**; measured with
+    `wc -c` the section had *grown* by 132 bytes. The key's 283 bytes were funded by trimming that
+    section to **109 bytes under its baseline** instead.
+    - **The sequence is recorded as it happened: the mint was authorized on an unchecked number and
+      the funding was retroactive.** Scott's ruling — *"I authorized that mint on a number I didn't
+      check, and you found it. The law is real and the funding was retroactive — that's the honest
+      sequence and it should read that way wherever it's recorded."* Written into the law's own
+      attribution tail as well as here, because presenting the funding as prior to the authorization
+      would be the *status field is a citation to an approval* defect aimed at a number instead of a
+      stamp: the stamp was real, what it rested on was not yet true, and both facts belong in the
+      record.
+    - **The operational half, and its classification: `wc -c` measures bytes, `len` measures whatever
+      the encoding says.** *"Byte counts come from the tool that measures bytes, never from a length
+      function whose unit depends on encoding. Third instance of a proxy quoted as the measurement in
+      this campaign, after the grep and the shell glob"* — so it is filed as the **ninth specimen**
+      under *coverage is a claim*, where its two siblings already live, and the sentence it adds is
+      that **a unit is an unchecked claim the same way a domain is**: the domain was right, the file
+      was right, and the *unit* silently was not.
+
+- **The ratio's instrument column is split by provenance — carried by the work versus ordered in
+  review.** Scott's directive: *"a number I can move by ordering work isn't a measure of your
+  discipline… my own contribution to the ratio stops hiding inside yours"* (PR #339 review). The
+  whole-column figure keeps being quoted and the comparator is untouched (#113); beneath it
+  `scripts/ratio.sh` attributes the same added lines per commit from a `Ratio-Class: carried` or
+  `Ratio-Class: ordered <citation>` trailer, and prints a carried-only ratio, the ordered citations,
+  and a reconciliation of the per-commit sum against the range diff. The comparator itself moved into
+  one shared variable rather than being pasted into the second reader — a second copy of a
+  ruling-fixed rule is a second place for it to drift.
+  - **`ordered` must cite, absence is `unattributed`, and `--window` refuses.** An `ordered` claim
+    moves lines out of the column that measures the actor, so it points at an artifact outside the
+    actor and the citation is printed for review to refuse; an `ordered` with nothing after it, or an
+    unrecognized value, is counted unattributed **and named** — a malformed trailer landing silently
+    in the flattering column is the same defect as no trailer, one step better hidden. A commit with
+    no trailer is unattributed rather than carried, and unattributed lines are excluded from the
+    carried-only ratio, so a range nobody annotated **reports that instead of reporting a number**.
+    `--window` prints **NOT AVAILABLE**: squash merges erase per-commit provenance, and zero ordered
+    lines would be a verdict where the honest report is an absent measurement.
+  - **This PR's own split is mostly unattributed, which is the correct reading** — its first three
+    commits predate the trailer, and rewriting pushed history to annotate them would have moved the
+    commits Scott's review anchors to. The first clean comparison is the `check_global` slice against
+    the 1:8.3 baseline, which is what the directive asked for.
+  - Four classification paths and both reconciliation paths were watched die in a scratch repo
+    (carried; ordered-with-citation; ordered-uncited; an unrecognized value; exact reconciliation;
+    and an overlap gap on this PR's own range), plus the `--window` refusal and the empty-range
+    `n/a`.
+  - **The reconciliation residual is derived, not stated** (Scott's directive): *"stating a residual
+    you could compute is the thing this campaign keeps correcting."* The script now takes every
+    added-line **event** in the walk as a multiset keyed by `<path>\t<+line>`, compares it against
+    the range diff's added lines, and requires the count of superseded events to equal the gap
+    exactly — `+20` on this PR's range, derived per line as **20 superseded events**, every one a
+    line written in an earlier commit and rewritten in a later one. Keyed by path because line text
+    repeats across files, and a cancellation between two files is the failure mode the check exists
+    to catch rather than commit. Disagreement prints `UNEXPLAINED RESIDUAL` and says not to quote
+    the split, since a second cause hiding under a plausible number is the whole risk. Both new
+    branches watched die by perturbing the derived counts.
+  - **`CLAUDE.md` ends at 38400 of 38400 — zero bytes of headroom**, the split's four-line governance
+    clause having spent the last of it, paid for by compressing this agent's own prose in the same
+    section (the duplicated stop-condition restatement, and two paragraphs of the CI-waiting text).
+    Stated as the structural note it is: the next law or governance clause has no prose left to trim
+    and needs a law folded into a sibling as a specimen — Scott's #307 precedent — which is a
+    demotion, and therefore his call rather than this agent's.
+    - **Ruled on, and the answer was not to fix it:** *"the index at zero headroom is the ratchet
+      arriving, not a problem to solve. No pre-emptive demotion… if none is worth a key, the file
+      stops growing, which is what a ratchet is for."* No demotion is taken here.
+
+- **The demotion criterion is sharpened so the next one can be picked without Scott, and the sharpening
+  disqualified his own named candidate.** The rule (his ruling, PR #339 review): **a law is demotable
+  when its enforcing control's *failure message* states the rule and the remedy** — not merely when a
+  control exists — *"because the index is what a session reads before it acts, and a demoted law is one
+  a session doesn't need to have read, since the control will say it at the moment it matters."* Recorded
+  in `claudeMDCeiling`'s doc comment and in `TestClaudeMDStaysAnIndex`'s failure message, which is where
+  a session meets the question.
+  - **Triage, run rather than asserted.** The named strongest candidate — the closing-keyword rule — has
+    **no index key to demote**: it is a script, a CI step and grave #314, and its entry lives inside a
+    governance bullet retained in full. So it is evidence *for* the criterion rather than a candidate
+    under it, and checking that before acting is *check a ruling's premises, not just its conclusion*.
+  - **The citation-resolution keys are now pre-cleared, by repairing four messages rather than by
+    arguing they were clear enough** — *"if a message names the violation but not the remedy, fix the
+    message first and the demotion becomes free."* `scripts/citecheck.sh` now says, at the point of
+    failure: check `ls docs/decisions/` or write the record, since an ADR is a tombstone and not a
+    forward reference; repoint the citation or `gh issue create` and cite what comes back, never guess
+    the next number; `gh issue edit N --add-label type:grave` with the lesson in the closing comment, or
+    drop the word; and, for a two-or-three-digit ADR number, which of the two things it might have meant
+    and how each is written. Four messages that named a violation now also name the move.
+
+- **The blind-spot register gains the message oracle's resolution limit.** 0003's message match
+  discriminates *layers* and never *rules within a layer*: two rules producing the same string are one
+  row to it. Two structural instances make it a property of the oracle rather than a quirk of one
+  family — `type mismatch` (**2288 vectors across 124 files**) and now `unknown table` (**16 vectors in
+  8 files under two keys**, against twelve reference call sites). The consequence is precise: a census
+  delta is exactly right about *how many* rows moved and silent about *which*. The remedy is a habit,
+  not an instrument — name the rows before writing the rule — and it is now standard for the remaining
+  `#9` slices.
+  - **The no-corpus-witness register stays at seven, and the reason is a measurement.** The
+    `check_elem` slice's obvious candidate was the implicit-table form, where wire flags 0 resolves an
+    index nothing in the module wrote. Making the rule treat an implicit index as absent moves both
+    lanes by seven, so the arm is witnessed six times over — by economy rather than intent, since
+    `(elem (i32.const 0))` is the shortest active segment anyone can write. Recorded so a reader can
+    tell a register that was asked from one that was not.
 
 - **Description-from-source is mandatory for a range citation, and it has a tripwire.** A range
   citation's description is written by reading the cited lines, never from what the code around them
