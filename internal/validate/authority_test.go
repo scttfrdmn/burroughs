@@ -198,7 +198,7 @@ import (
 // shortest way to write an active segment, so the suite reaches the implicit form whenever it wants a
 // tableless-module vector at all. The register does not grow, and this paragraph is why a reader can
 // tell that from the register never having been asked — which is the same distinction between
-// collection and coverage the section above is about, one level down. (Directive: Scott, PR #339
+// collection and coverage the section above is about, one level down. (Directive: Scott, PR #337
 // relay, and the answer to the question he asked.)
 //
 // # The message oracle discriminates layers, never rules within a layer
@@ -232,7 +232,7 @@ import (
 // sixteen are multi-line assertions no single-line search finds, and six of the seven movers live
 // outside `elem.wast`. That the repo had already paid for this distinction once (`spec_test.go`'s "7
 // by key and 9 by cause") is the argument for making the list standard equipment for every remaining
-// slice rather than a one-off for this one. (Ruling: Scott, PR #339 relay.)
+// slice rather than a one-off for this one. (Ruling: Scott, PR #337 relay.)
 
 // TestUnknownCategoriesMatchTheReference is ErrUnknown*'s own promised control, in both
 // directions.
