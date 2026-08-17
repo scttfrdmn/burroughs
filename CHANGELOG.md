@@ -21,6 +21,25 @@ weakly-ordered platform.
 
 ### Added
 
+- **`check_elem`'s table index: the element-segment phase.** An active element segment's table index
+  resolves against the module's table space, in `check_module`'s own sequence — `check_data` then
+  `check_elem` (`valid.ml:1163`), and inside it the Active arm's `table c x` before the reftype match
+  and before the offset's const check, which is what makes both of those deferrable without changing a
+  message. Passive and declarative segments name no table and are skipped, matching the reference's own
+  arms. **`validateAdmitCeiling` 50 → 43**; default 60817 → **60824 pass** / 208 → **201 fail** / 66
+  unsupported unmoved / 4053 gated unmoved, all-gates-on 64708 → **64715 pass** / 338 → **331 fail**.
+  - **The seven rows were named before the rule was written, and that is the practice this slice
+    introduces.** The admission bucket is keyed by *message*, and `unknown table` is a message `table c
+    x` produces from twelve call sites in `valid.ml`. So the bucket's size forecasts the reward and says
+    nothing about which rows supply it — a rule firing too broadly delivers the right total out of the
+    wrong rows and reads identically to a correct one. The predicted movers, all confirmed and nothing
+    else moved: `elem.wast:721`, `func_ptrs.wast:32`/`:33`, `table.wast:23`/`:24`/`:51`/`:52`. Writing
+    the list first corrected two facts a grep had wrong — **six of the seven live outside `elem.wast`**,
+    and four of the family's sixteen vectors are multi-line assertions no single-line search finds.
+  - **`func_ptrs.wast:35` is the negative control**, two lines below a positive row: the same segment
+    shape in a module where the table *does* exist, wanting `type mismatch` from the deferred offset
+    check. It must stay an admission, and does.
+
 - **The export phase: `check_export` and `check_names`.** Every export's index resolves against its
   own index space, then the names are checked for duplicates — the reference's sequence
   (`valid.ml:1128-1137`, `:1142-1149`, ordered at `:1168-1169`). This was the largest single-file
@@ -809,6 +828,21 @@ weakly-ordered platform.
   tail-call gate's own 0x12/0x13 when it lands.
 
 ### Changed
+
+- **The blind-spot register gains the message oracle's resolution limit.** 0003's message match
+  discriminates *layers* and never *rules within a layer*: two rules producing the same string are one
+  row to it. Two structural instances make it a property of the oracle rather than a quirk of one
+  family — `type mismatch` (**2288 vectors across 124 files**) and now `unknown table` (**16 vectors in
+  8 files under two keys**, against twelve reference call sites). The consequence is precise: a census
+  delta is exactly right about *how many* rows moved and silent about *which*. The remedy is a habit,
+  not an instrument — name the rows before writing the rule — and it is now standard for the remaining
+  `#9` slices.
+  - **The no-corpus-witness register stays at seven, and the reason is a measurement.** The
+    `check_elem` slice's obvious candidate was the implicit-table form, where wire flags 0 resolves an
+    index nothing in the module wrote. Making the rule treat an implicit index as absent moves both
+    lanes by seven, so the arm is witnessed six times over — by economy rather than intent, since
+    `(elem (i32.const 0))` is the shortest active segment anyone can write. Recorded so a reader can
+    tell a register that was asked from one that was not.
 
 - **Description-from-source is mandatory for a range citation, and it has a tripwire.** A range
   citation's description is written by reading the cited lines, never from what the code around them

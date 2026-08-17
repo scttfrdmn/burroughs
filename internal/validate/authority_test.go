@@ -188,6 +188,51 @@ import (
 // and the counter says the next PRs are product. Cited as a tracked sweep rather than described as an
 // intention, which is *a design debt is discharged by a tripwire, never by an intention* honoured at
 // the only strength a deferral can honour it. (Ruling: Scott, PR #337 relay.)
+//
+// **Still seven after the `check_elem` slice, and the reason is a measurement rather than an
+// omission.** That slice carried an obvious candidate — the implicit-table form, where wire flags 0
+// means active-at-table-0 and the index the rule resolves is one nothing in the module wrote — so the
+// derivation above was run on it deliberately instead of waiting for the next slice to trip over it.
+// Making the rule treat an implicit index as absent moves **both** lanes by seven, so the arm is
+// witnessed six times over, and by economy rather than by intent: `(elem (i32.const 0))` is the
+// shortest way to write an active segment, so the suite reaches the implicit form whenever it wants a
+// tableless-module vector at all. The register does not grow, and this paragraph is why a reader can
+// tell that from the register never having been asked — which is the same distinction between
+// collection and coverage the section above is about, one level down. (Directive: Scott, PR #339
+// relay, and the answer to the question he asked.)
+//
+// # The message oracle discriminates layers, never rules within a layer
+//
+// A limit of 0003's message match distinct from the third blind spot above, which is about the
+// *direction* the instrument reads. This one is about its *resolution*, and it holds even on refusals
+// it can see: the oracle compares the refusal's text against the vector's expectation, so two rules
+// that produce the same string are one row to it. It can tell a validator refusal from a decoder
+// refusal — that is the layer question, and it answers it well. It cannot tell which of a layer's
+// rules refused.
+//
+// **Two structural instances, which is what makes this a property of the oracle rather than a quirk
+// of one family.** `type mismatch` is the long-standing one: **2288 vectors across 124 files** name
+// it, spanning most of the instruction validator, and no census keyed on that string can attribute a
+// single one of them to a rule. The second arrived with the `check_elem` slice and is small enough to
+// read whole: `unknown table` is named by **16 vectors in 8 files under two keys** (12 want the bare
+// string, 4 want `unknown table 0`), and `table c x` — the one reference lookup that produces it — has
+// **twelve call sites in `valid.ml`**: ten inside the instruction arms, of which `table.copy` alone
+// holds two (`:633-634`), plus `check_elemmode` (`:1090`) and `check_export` (`:1135`). The corpus
+// reaches five of those twelve, so a bucket labelled `unknown table` holds seven rows belonging to
+// `check_elemmode`, four to `table.init`, three to `check_export`, one to `call_indirect` and one to
+// `return_call_indirect` behind the tail-call gate — and reports that as one number.
+//
+// The consequence is specific and it is not "the census is untrustworthy": the census delta is exactly
+// right about *how many* rows moved and says nothing about *which*. So a rule that fires too broadly
+// can deliver the forecast total out of the wrong rows — over-converting rows belonging to a
+// neighbouring rule while under-converting its own — and the arithmetic reads identically to a correct
+// slice. **The remedy is a habit rather than an instrument, because the row list costs nothing:** name
+// the vectors the rule may move *before* writing it, and predict that only those move. `check_elem`'s
+// list is in `elem_test.go`'s header, where it also caught two facts a grep had wrong — four of the
+// sixteen are multi-line assertions no single-line search finds, and six of the seven movers live
+// outside `elem.wast`. That the repo had already paid for this distinction once (`spec_test.go`'s "7
+// by key and 9 by cause") is the argument for making the list standard equipment for every remaining
+// slice rather than a one-off for this one. (Ruling: Scott, PR #339 relay.)
 
 // TestUnknownCategoriesMatchTheReference is ErrUnknown*'s own promised control, in both
 // directions.

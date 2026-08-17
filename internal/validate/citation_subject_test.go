@@ -160,18 +160,36 @@ func TestRangeCitationSubjectsAreReadFromTheReference(t *testing.T) {
 	// naming its subject moves a row from the checked column into the excused one, and that has to be
 	// louder than a passing test with one fewer assertion in it.
 	//
-	// 27 keyed and 10 residue, and **six of the 27 are keyed because this PR named a subject that was
-	// not there before** — `TableInit`, `BrTable`, `Select (Some ts)`, `check_block`, `check_limits`
-	// and `check_memorytype`, which is the same list as the five wrong descriptions plus the one that
-	// was right. A description that names its subject is a description someone had to read the
-	// reference to write, so moving a row into the keyed column is the repair and not bookkeeping.
+	// 30 keyed and 10 residue. **Six became keyed when the rule was minted** — `TableInit`, `BrTable`,
+	// `Select (Some ts)`, `check_block`, `check_limits` and `check_memorytype`, the same list as the
+	// five wrong descriptions plus the one that was right. A description that names its subject is a
+	// description someone had to read the reference to write, so moving a row into the keyed column is
+	// the repair and not bookkeeping.
+	//
+	// **The three after that are the rule working on new prose rather than on a repair**, and they are
+	// worth distinguishing. The `check_elem` slice added two range citations, one in the engine comment
+	// and one in that slice's own test header, and the engine comment's first draft named its two
+	// reference functions *without backticks* — a description that resolved, described the right lines,
+	// and landed in residue anyway, because an unbackticked name is invisible to the subject extractor.
+	// The pin caught it as a residue increment. Backticking both moved the row into the checked column
+	// and keyed it twice, since both identifiers are written inside the range that comment cites. So the
+	// failure this pin catches in practice is not a wrong description but a *correct description the
+	// check cannot read*, which is a fourth thing to be exact about after the three the header lists.
+	//
+	// Note what this paragraph does not do: it does not spell those two ranges. An earlier draft did,
+	// and each draft that named a range beside a backticked reference function **keyed a further row**,
+	// so the pin chased the prose describing it — 30, then 31, then 32, one per revision. The count is a
+	// fixed point of what the file says about itself, and the way out is for commentary about citations
+	// to describe them rather than perform them. Left as a note because the loop is not obvious until it
+	// has been walked into, and the shape generalizes: an instrument whose domain includes its own
+	// documentation has no stable reading while that documentation quotes its subject.
 	//
 	// The residue, in full, because an excused row that nobody can enumerate is an exclusion:
 	// `vec.go`'s four section comments (:885-937, :906-908, :938-955, :663-686), `bulk.go`'s table-arms
 	// region and this file's sentence about it (:618-651), `validate.go`'s slice-4 summary pointing at
 	// `instr.go` (:442-446), and three rows in `vec_authority_test.go`'s own prose (:373-378, :390-393,
 	// :41-42) that describe what another instrument keys rather than naming a reference subject.
-	const wantKeyed, wantResidue = 27, 10
+	const wantKeyed, wantResidue = 30, 10
 	if keyed != wantKeyed || residue != wantResidue {
 		t.Errorf("keyed %d range citation(s) by named subject and left %d as residue, want %d and "+
 			"%d — recount and re-pin. A row moves from residue to keyed when its description starts "+

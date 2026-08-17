@@ -329,9 +329,14 @@ func tableTypeAt(m *binary.Module, idx uint32) (binary.Table, error) {
 	if defined := int(idx) - imported; defined >= 0 && defined < len(m.Tables) {
 		return m.Tables[defined], nil
 	}
-	// The message is `requireTable`'s verbatim, including its parenthetical: 12 corpus vectors
-	// match `unknown table` and `unknown table 0` as substrings (0003), and this function
-	// inherited their only producer.
+	// The message is `requireTable`'s verbatim, including its parenthetical, because the corpus
+	// matches it by substring (0003): 12 vectors expect the bare `unknown table` and a further 4
+	// expect `unknown table 0`, so any text between the category and the index breaks the second set
+	// while leaving the first green. The count is stated as the two keys it is rather than as one
+	// number — the sentence here read "12 corpus vectors match `unknown table` and `unknown table 0`",
+	// which is true on the reading that 12 want the bare string and misreads as the family's total,
+	// and the family is 16. Whose rules those 16 belong to is `authority_test.go`'s
+	// message-oracle-resolution section; this function is the producer for the bulk operands' four.
 	n := uint32(imported) + uint32(len(m.Tables))
 	return binary.Table{}, fmt.Errorf("%w %d (%d in scope)", ErrUnknownTable, idx, n)
 }

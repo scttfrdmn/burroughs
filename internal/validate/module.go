@@ -139,7 +139,8 @@ func checkTableType(tab binary.Table) error {
 //	check_table     defined tables            — this slice
 //	check_global    globals                   — not this slice (`constant expression required`)
 //	check_data      data segments             — MEMORY INDEX ONLY (not the offset's const check)
-//	check_elem      element segments          — not this slice (`unknown table`)
+//	check_elem      element segments          — TABLE INDEX ONLY (not the reftype match, and not the
+//	                                            offset's or the elements' const checks)
 //	check_func_body every body                — pre-existing, in Module between the two halves
 //	check_start     the start function        — not this slice, and not an admission either: its
 //	                                            three vectors are refused above the validator with
@@ -199,6 +200,34 @@ func modulePre(m *binary.Module) error {
 		}
 		if err := memoryExists(m, d.MemIndex); err != nil {
 			return fmt.Errorf("data segment %d: %w", i, err)
+		}
+	}
+	// `check_elem` → `check_elemmode` (valid.ml:1086-1102), and the same argument the data loop above
+	// makes for its own two absences: the Active arm resolves `table c x` at `valid.ml:1090` *before*
+	// the reftype match at :1091-1093 and before `check_const` on the offset at :1094, so a segment
+	// naming a table the module does not have reports `unknown table N` and can report nothing else.
+	// Both later halves are deferred, and the ordering is what makes deferring them message-preserving
+	// rather than merely convenient.
+	//
+	// **`tableTypeAt` rather than an existence helper, and the discarded descriptor is the point.** The
+	// reference destructures the table type here (`let TableT (at, _lim, rt) = table c x`) because both
+	// deferred halves consume it — the reftype match wants `rt`, the offset's const check wants the
+	// address type derived from `at`. Resolving through the function that already returns it means those
+	// halves land at this call site without rewriting it, where `indexInScope` would have to be replaced
+	// by their arrival. `data` next door genuinely has nothing to return (`valid.ml:52` answers unit),
+	// which is why that loop's helper throws the descriptor away and this one does not.
+	//
+	// Passive and Declarative segments name no table and are skipped. That is the reference's arms and
+	// not an optimization, and the two modes are skipped for *different* reasons the modes' own comment
+	// records: `check_datamode`'s Declarative arm is `assert false` where `check_elemmode`'s is `()`, so
+	// a declarative element segment is legal where a declarative data segment cannot be built at all.
+	for i := range m.Elems {
+		e := &m.Elems[i]
+		if e.Mode != binary.ElemActive {
+			continue
+		}
+		if _, err := tableTypeAt(m, e.TableIndex); err != nil {
+			return fmt.Errorf("element segment %d: %w", i, err)
 		}
 	}
 	return nil
