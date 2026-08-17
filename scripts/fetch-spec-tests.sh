@@ -30,7 +30,8 @@
 set -e
 
 repo="https://github.com/WebAssembly/testsuite"
-rev="de54fd27ecf3e68dfd16b6199c548df77b6a2cc1" # 2026-07-29, 257 .wast files
+rev="de54fd27ecf3e68dfd16b6199c548df77b6a2cc1" # 2026-07-29
+files="257"                                    # vectors at that rev — reconciled below, not a note
 dest="testdata/spec"
 
 # `rev=` deliberately, and in this exact shape: `gen.PinnedRev` already reads
@@ -38,6 +39,11 @@ dest="testdata/spec"
 # same way makes this pin readable by the existing reader with no second parser. *One
 # concept, one trigger* (#82) — a duplicated regexp is how a file comes to be registered
 # with a mechanism that cannot read it (#78).
+#
+# `files=` is an assignment for the same reason, one step further: it was a **comment** on the
+# `rev=` line ("257 .wast files") until #340, and a comment is a floor's worth of nothing. As a
+# field it is read by the control that reconciles it and by the check below, so the count and
+# the SHA it describes cannot drift apart silently.
 
 if [ -d "$dest/.git" ]; then
   if [ "$(git -C "$dest" rev-parse HEAD)" != "$rev" ]; then
@@ -75,9 +81,40 @@ fi
 # because a shell script cannot read a Go constant — and `TestSuitePinIsAssertedByTheFetchScript`
 # is what keeps the two agreeing, the same arrangement as `TestFetchScriptAssertsEveryAuthority`.
 min=250
-n=$(ls "$dest"/*.wast 2>/dev/null | wc -l | tr -d ' ')
+n=$(scripts/suite-count.sh "$dest")
 if [ "$n" -lt "$min" ]; then
   echo "suite vendored at $got but only $n .wast files (want >= $min)" >&2
   exit 1
 fi
-echo "spec suite vendored at $dest ($got, $n .wast files)"
+
+# And then the *exact* count for this pin, because a floor cannot see a small loss and cannot
+# see an addition at all (#340, *reconcile an extent, never floor it*). The floor above is the
+# class bound — it survives a pin bump and is the one Go duplicates as `testenv.MinSuiteFiles`
+# — where `files=` is a property of *this* SHA: 257 vectors at de54fd2. A pin bump that changes
+# the population must say so here, which is the reviewable diff #42 bought the pin for.
+#
+# What this catches and what it does not, measured rather than asserted, because the obvious
+# reading is wrong. Poisoning the vendored corpus with three sidecars:
+#
+#	suite-count.sh (both sides' definition)   257   ← unchanged
+#	ls testdata/spec/*.wast | wc -l           257   ← unchanged, for the wrong reason
+#	find … -name '*.wast'                     260
+#
+# So the reconciliation does **not** detect the AppleDouble specimen, and it is not supposed to:
+# a sidecar is excluded on both sides now, the count does not move, and the board is computed
+# over the right 257. That failure is *neutralized*, not policed — the fix is that nothing
+# downstream can see the junk, which is stronger than a check that reports it.
+#
+# What the reconciliation catches is a change in the **vector** count: a lossy fetch (too few,
+# which the floor would only notice below 250), a directory that gained a `.wast` from anywhere
+# (too many, which no floor can see at all), and a pin bump whose population differs from the
+# `files=` beside it. The floor and the reconciliation are two different questions and both are
+# asked.
+if [ "$n" -ne "$files" ]; then
+  echo "suite vendored at $got holds $n .wast files, but the pin records $files." >&2
+  echo "  If the pin was bumped, update files= beside rev=. If it was not, the corpus has" >&2
+  echo "  gained or lost vectors since it was fetched — a board over it would name a corpus" >&2
+  echo "  it did not measure." >&2
+  exit 1
+fi
+echo "spec suite vendored at $dest ($got, $n .wast files, reconciled)"

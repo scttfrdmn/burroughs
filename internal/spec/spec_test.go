@@ -810,12 +810,16 @@ func suitePin(t *testing.T) string {
 // corpus. An empty result here is impossible rather than skippable — requireSuite
 // asserted the count — so it is a Fatal: the two disagreeing would mean the glob
 // and the assertion are looking at different things.
+//
+// Through testenv.SuitePaths rather than its own glob, per #340: the population is one
+// definition or it is several, and this selector feeds the board itself (boardFiles), so a
+// local glob here is the one that decides what the board is computed over.
 func suitePaths(t *testing.T) []string {
 	t.Helper()
 	requireSuite(t)
-	paths, err := filepath.Glob(filepath.Join(suiteDir, "*.wast"))
+	paths, err := testenv.SuitePaths(suiteDir)
 	if err != nil || len(paths) == 0 {
-		t.Fatalf("glob %s after requireSuite passed: %d paths, err=%v", suiteDir, len(paths), err)
+		t.Fatalf("SuitePaths %s after requireSuite passed: %d paths, err=%v", suiteDir, len(paths), err)
 	}
 	return paths
 }

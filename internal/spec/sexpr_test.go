@@ -1007,11 +1007,11 @@ func TestSpectestExportsEveryNameTheCorpusAsksFor(t *testing.T) {
 	// Through `newParser` rather than a grep, because the question is which imports *exist* and
 	// that is a grammar question — a regexp measures text, the reader measures nodes. Every
 	// `(import "spectest" "n" …)` at any depth, since the form sits inside module bodies.
+	//
+	// The population comes from `suitePaths` — one definition of which files are vectors (#340),
+	// and it carries the vacuity floor this test's own glob did not have.
 	wanted := map[string]int{}
-	paths, err := filepath.Glob(filepath.Join(suiteDir, "*.wast"))
-	if err != nil {
-		t.Fatalf("glob: %v", err)
-	}
+	paths := suitePaths(t)
 	table64Sites := []string{}
 	for _, p := range paths {
 		src, err := os.ReadFile(p)

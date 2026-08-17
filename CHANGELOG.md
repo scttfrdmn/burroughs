@@ -1394,6 +1394,35 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **Five shell counts of the suite population and one Go definition, and they were different
+  definitions** ([#340](https://github.com/scttfrdmn/burroughs/issues/340)). `filepath.Glob("*.wast")`
+  matches a **leading dot** and a POSIX shell's `*` does not, so a directory holding 257 vectors and 257
+  AppleDouble sidecars counted 257 to every shell floor in the repo and **514** to Go. Now one definition
+  per side, with a control between them: `testenv.SuitePaths` in Go, `scripts/suite-count.sh` in shell —
+  two globs and a `case`, no pipe to swallow an exit code (grave #289), an absent directory an honest
+  zero. Both exclude `._*` and nothing else, `._` being AppleDouble's own marker rather than dotfiles
+  as a class. The four Go glob sites (`internal/spec` twice, `internal/gen/xcorpus`, `testenv` itself)
+  and the five shell sites (`Makefile`, both CI floors, the fetch script, `xcheck-amd64.sh`) resolve
+  through them.
+  - **#340's own prescription was wrong on its stated goal, established by measurement.** "Count with
+    `find … ! -name '._*'` in all three shell sites, so the shell counts what Go counts" reproduces the
+    **shell's** population (1 of 2 in the specimen directory), not Go's (2) — same disagreement, one
+    layer better disguised. The exclusion had to land on *both* sides, and the population picked for
+    being right rather than for being reachable from either end.
+  - **The old control certified the thresholds while the two sides measured different sets.**
+    `TestSuitePinIsAssertedByTheFetchScript` held `min=250` equal to `testenv.MinSuiteFiles` — an
+    agreement about a number, not about the population it is applied to.
+    `TestShellAndGoAgreeOnTheSuitePopulation` now runs both definitions over a **poisoned** tree and
+    requires the same integer, the fixture asserting its own discriminating property (vectors 3,
+    dot-blind 2, unfiltered 5 — three definitions, three numbers) because a clean corpus cannot tell
+    them apart, which is why the grave sat unlit.
+    `TestEveryShellSuiteCountGoesThroughOneScript` keeps the shell side at one expression, with its
+    caller floor for the direction where compliance and an empty subject look alike.
+  - **The pin reconciles instead of flooring.** `files="257"` beside `rev=` was a *comment* until now;
+    as a field it is compared exactly, so a lossy fetch, an added vector, or a pin bump whose
+    population nobody wrote down is a failure and not a number between 250 and infinity. Stated with
+    what it does **not** catch, measured: the sidecar poisoning is *neutralized* on both sides rather
+    than detected — the count does not move and no board sees the junk.
 - **An enumerated forward domain in the check built to catch unenumerated categories** (grave
   [#336](https://github.com/scttfrdmn/burroughs/issues/336)). `TestUnknownCategoriesMatchTheReference`
   compared the reference's `unknown *` messages against **nine literal strings**, so `ErrUnknownTag`
