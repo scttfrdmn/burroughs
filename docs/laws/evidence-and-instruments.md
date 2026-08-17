@@ -13,8 +13,10 @@ directive, the four-workstream brief of 2026-08-17); the laws themselves were no
 
 **`claudeMDCeiling`, named in the ninth specimen of the coverage law below, no longer resolves** — it
 was retired with that economy. The specimen stands because the lesson is about a *unit* (`len(str)`
-counts characters, `wc -c` counts bytes) and the ceiling is only the quantity it was mismeasured on;
-read that sentence's present tense as the past tense it now is.
+counts characters, `wc -c` counts bytes) and the ceiling is only the quantity it was mismeasured on.
+The sentence naming it is in the past tense, and says at the name that the instrument is retired: **a
+body naming an instrument that no longer exists is a dangling reference**, so the amendment is to the
+tense and to the one clause that carried it, never to the lesson (Scott's ruling, PR #377's relay).
 
 `CLAUDE.md` links this family, and the two halves of that link are checked:
 `TestClaudeMDLinksResolve` (`internal/testenv`) that every pointer on the page resolves, and
@@ -450,8 +452,10 @@ reach is a law out of context.
   directive made available for the first time, PR #339.)
 
   **Ninth specimen, where the domain was right and the *unit* was wrong: byte
-  counts come from the tool that measures bytes.** `claudeMDCeiling` is written in
-  bytes and `os.Stat` enforces it in bytes; the figure I reported a section's
+  counts come from the tool that measures bytes.** `claudeMDCeiling` — retired with
+  the index economy, and named here as the occasion rather than as a live control —
+  was written in
+  bytes and `os.Stat` enforced it in bytes; the figure I reported a section's
   change in — and reported to Scott as the funding for a new law's key — was
   Python's `len(str)` over a UTF-8 file dense with em-dashes and `§`, which counts
   **characters**. It said the section had shrunk 165; `wc -c` says it *grew* 132.

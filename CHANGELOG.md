@@ -1115,6 +1115,15 @@ weakly-ordered platform.
     caught a defect in the check itself: an unconditional `t.Logf` printed "all linked" beside the
     failure saying one was not, a witness contradicting the verdict in the same output, so the log
     is now guarded on `t.Failed()`.
+  - **The law bodies naming the retired instruments are amended in *tense*, not in content**
+    (`docs/laws/controls.md`, `docs/laws/evidence-and-instruments.md`; Scott's ruling on the PR #377
+    relay). `claudeMDCeiling`, `TestClaudeMDIndexLedger`, `lawsFloor` and `alignmentAdmissions` were
+    asserted in three passages as live mechanisms; **a body naming an instrument that no longer exists
+    is a dangling reference**, and a dangling reference is not testimony worth preserving. Each now
+    says at the name that the instrument is retired and why, which is the treatment
+    `internal/testenv/laws_test.go` already gives `lawsFloor` in code, so the corpus and the code
+    agree. The lessons — extent, unit, total-is-not-a-ledger — are untouched: *a specimen is content*,
+    and the occasion a law was minted on cannot be rewritten to name a live control instead.
 
 - **A borrowed reward figure is refused, and the closing-keyword lesson gets a home**
   (`docs/laws/`, Scott's rulings, PR #364). Two governance records written into the law corpus's
