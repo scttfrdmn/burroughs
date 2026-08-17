@@ -544,17 +544,6 @@ func TestDeclinesAreDeclinesAndNameTheirOpcode(t *testing.T) {
 			want: "ref_as_non_null",
 			gate: func(f *binary.Features) { f.GC = true },
 		},
-		{
-			// A prefixed region no slice has claimed. **Re-pointed by slice 5**: the specimen was
-			// `memory.copy` under the sentence "the prefixed regions, all four of which are later
-			// slices'", and two of the four are now this package's, so the sentence and the row moved
-			// together. `ref.i31` is `0xfb 0x1c`, and the gate is on to clear the *decoder* — what
-			// is being read is the validator's refusal below it.
-			name: "prefixed region",
-			wat:  `(module (func (result i31ref) (ref.i31 (i32.const 0))))`,
-			want: "prefixed opcode 0xfb",
-			gate: func(f *binary.Features) { f.GC = true },
-		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			_, err := validated(t, c.wat, c.gate)
@@ -567,6 +556,33 @@ func TestDeclinesAreDeclinesAndNameTheirOpcode(t *testing.T) {
 				t.Errorf("the decline does not name what it declined (want %q): %v", c.want, err)
 			}
 		})
+	}
+
+	// The prefixed-region half, and it left the table above because its specimen can no longer be
+	// carried by a module.
+	//
+	// **Re-pointed twice and re-mechanised once.** The specimen was `memory.copy` under the sentence
+	// "the prefixed regions, all four of which are later slices'"; slice 5 moved it to `ref.i31`
+	// (`0xfb 0x1c`) when 0xFC became this package's; slice 7 types 0xFB, so the only unclaimed region
+	// left is 0xFE — and **the text encoder has no operator for it** ("unknown operator
+	// memory.atomic.notify"), so no `wat` string in the table above can reach the arm. The row is
+	// therefore driven at the dispatch, which is the same move `vec_test.go` makes for relaxed SIMD
+	// and for the same stated reason: the layering is named rather than worked around.
+	//
+	// What survives the re-point is the assertion, not the specimen — an unclaimed prefixed region
+	// declines *and says which region*, because the decline census is the next slice's work plan.
+	// Deriving the specimen rather than naming it is still #326, and this row is now that issue's
+	// third quote.
+	v := &validator{mod: &binary.Module{}}
+	v.frames = []frame{{}}
+	err := v.instr(0, binary.Instr{Prefix: 0xfe, Op: 0})
+	if !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("want a decline (ErrUnsupported) for the 0xFE region, got %v.\nAccepting an "+
+			"instruction this slice cannot type reports *valid* for a module nothing type-checked, "+
+			"which is the accept-direction failure no board can see (§9 G-3)", err)
+	}
+	if !strings.Contains(err.Error(), "prefixed opcode 0xfe") {
+		t.Errorf("the decline does not name what it declined (want %q): %v", "prefixed opcode 0xfe", err)
 	}
 }
 

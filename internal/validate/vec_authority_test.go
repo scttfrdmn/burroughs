@@ -1158,7 +1158,22 @@ func TestReferenceRangeCitationsAreWellFormed(t *testing.T) {
 	// that no instrument in this package reads. That is a **coverage claim this test cannot check
 	// about itself**, recorded rather than fixed: widening the anchor is a second reference file's
 	// worth of line-number churn, and the one citation that needs it is named in `declaredFuncs`.
-	const wantRanges = 41
+	// Twenty-six more with slice 7's GC-instruction port, **all of them in `gc.go` and that measured
+	// rather than assumed**: the per-file counts are 2/2/26/3/1/17/6/0/1/4/5/0 in `citationFiles`
+	// order, which sums to the figure below and leaves the other eleven files unmoved. Worth stating
+	// because the slice also *edited* two files in this list — `instr.go`'s dispatch comment and
+	// `validate.go`'s declined-regions sentence, both of which quote the boundary they retired — and a
+	// pin that moved by 26 while two unrelated files were being rewritten is exactly where an
+	// attribution gets assumed. Neither edit added a range citation, and the per-file split is how
+	// that is known instead of hoped.
+	//
+	// They are not enumerated here, and that is a deliberate break with the four paragraphs above.
+	// Twenty-six lines of `file :n-m subject` would be a second copy of the citations themselves,
+	// maintained by hand, drifting on the first renumbering — the fixed-point trap
+	// `citation_subject_test.go`'s header walked into at 30-31-32, at a scale where it is certain
+	// rather than likely. What reads them is `TestRangeCitationSubjectsAreReadFromTheReference`, which
+	// resolves every range against the reference and needs no list here to do it.
+	const wantRanges = 67
 	if ranges != wantRanges {
 		t.Errorf("checked %d range citation(s) across %v, want %d — recount and re-pin, and if a "+
 			"file was added to citationFiles, read its point citations too",
@@ -1307,7 +1322,24 @@ func TestReferenceRangeCitationsContainTheirSubjectsSite(t *testing.T) {
 	// either column. So this pin's two figures do not sum to the range count and were never going to —
 	// which is worth stating, because `wantRanges` next door counts six and this counts five, and the
 	// discrepancy reads as an arithmetic slip until the third category is named.
-	const wantKeyed, wantResidue = 5, 16
+	// **Slice 7 moved keyed by ten and residue by eight against twenty-six new ranges, and the eight
+	// missing from the sum are the third category doing its job again.** Ten of the slice's blocks
+	// cite a rule whose message the reference writes verbatim — `immutable field`, `immutable array`,
+	// `array types do not match` and their neighbours are literals in `valid.ml`, so the range that
+	// cites the rule contains the string and keys on it. Eight land excused for the "built" reason
+	// this header gives: `unknown field 3` composes a category with an index, and `field is packed` is
+	// assembled by a conditional in the reference itself (`"field is " ^ (if exto = None then …)`), so
+	// neither is a complete literal on any reference line even though the reference emits both
+	// verbatim. The remaining eight blocks name no sentinel at all — arms that
+	// reject only through the shared operand-pop helpers, and the region's constants and its
+	// parameterized-constructor argument, which cite the reference's structure and raise nothing.
+	//
+	// So the two figures still do not sum to `wantRanges`, by 28 rather than by the 26 they missed by
+	// before, and the discrepancy is the same fact each time rather than an accumulating error. This
+	// is the paragraph the previous slice asked for when it noted the sum "reads as an arithmetic slip
+	// until the third category is named" — it is now named twice, at two different magnitudes, which
+	// is stronger evidence that the category is real than either statement alone.
+	const wantKeyed, wantResidue = 15, 24
 	if keyed != wantKeyed || residue != wantResidue {
 		t.Errorf("checked %d keyed range citation(s) and excused %d as constructed-message residue "+
 			"across %v, want %d and %d — recount and re-pin. A range becomes keyable when its "+

@@ -21,6 +21,33 @@ weakly-ordered platform.
 
 ### Added
 
+- **The validator types the 0xFB GC-instruction region — slice 7, 31 opcodes onto 21 arms**
+  (`internal/validate/gc.go`, `gc_test.go`; decision 0032, `gate:gc`, part of #9). `struct.*`,
+  `array.*`, `ref.test`/`ref.cast`, `br_on_cast`/`br_on_cast_fail`, the `extern`/`any` conversions and
+  the `i31` trio are ported from `valid.ml:492-855`. Eleven new sentinels, each the suite's expected
+  string verbatim per decision 0003: `immutable field`, `immutable array`, `array types do not match`,
+  `array type is not numeric or vector`, `unknown field`, and the packed/unpacked and
+  defaultability refusals. **0xFE (threads) is now the only prefixed region still declined**, and both
+  places that declared the old boundary are amended with the retired text quoted where it stood.
+  - **The bound is a representation, not a count.** The region's 31 opcodes are 21 reference arms
+    because eight of them are parameterized — `struct.get`/`_s`/`_u` differ by an `exto`, `ref.test`
+    and `ref.test null` by a nullability, `i31.get_s`/`_u` by an `ext`. Each lands here as *one*
+    function taking that parameter, so a per-opcode divergence is unrepresentable rather than merely
+    untested. This matters because a decline names only the *first* offending instruction, so a
+    shadowed sibling never reports: a one-path-per-opcode port could get `struct.get_s` right and
+    `struct.get_u` wrong and pass every vector.
+  - **All-gates-on lane: 303 fail, down from 377.** The reject direction is exact — 27 of 27
+    `assert_invalid` rows moved `declined → pass` with the admit bucket unmoved at 71 and the
+    wrong-message bucket at 12, so nothing moved laterally. The accept direction delivered 47 of 54;
+    the residue of 7 is rows that re-decline one instruction later on `ref_eq`, `ref.as_non_null`,
+    `br_on_null` or `br_on_non_null`, all of which are slice 6's leftovers rather than a GC arm being
+    wrong. Default lane byte-identical, structurally: `gate:gc` vectors score `gated`, not
+    `unsupported`.
+  - **`binary.BrOnCastLabel`** — the `br_on_cast` pair stages its flags byte before its label, so the
+    branch depth is `Imm1` and `Imm0` reads 0/1/2/3 on real corpus flags: a plausible, silently wrong
+    depth. `internal/interp` already knew this; rather than let the validator become its second
+    independent knower, the accessor moved into `internal/binary` and `internal/interp/castop.go`
+    delegates to it.
 - **The README's second phase — current state, a transcript that runs, the Go surface, and
   conformance by pointer** (`README.md`, `examples/add/`, `example_test.go`, `readme_test.go`,
   `cmd/burroughs/readme_test.go`; Scott's directive). Now that `burroughs run` exists, the README says
@@ -1720,6 +1747,30 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **grave #380: the co-blocking probe read sole-blockedness off single-term keys, and a validator
+  decline key is single-term by construction**
+  ([#380](https://github.com/scttfrdmn/burroughs/issues/380), `internal/spec/wast.go`). The `Buckets`
+  note's rule — a single-term bucket key is a sole blocker — holds for the `no instance` form, whose
+  key is an `errors.Join` union of every refusal a module hit. A validator decline names only the
+  *first* offending instruction, so its key has exactly one term whatever else blocks the row, and the
+  note's own remedy ("when it is not truncated at its first term") describes a condition this stratum
+  never meets. ADR 0032's `sole=81 co=0` was exact on the population and void on the `co`: 7 rows
+  re-declined one instruction later. `ref_eq.wast` read **7 fail before and 7 fail after** with one
+  key changing underneath. Third payout of the shape (#249, #359's miss of 4, now 7). The note is
+  amended per stratum, and the asymmetry is recorded as a forecasting rule: the reject direction is
+  reliable (27 of 27 exact) and the accept direction is an upper bound (47 of 54), because an
+  `assert_invalid` module is minimal by construction and a `module text` definition is not.
+- **grave #381: an `ErrUnknown*` control derived its authority from `lookup` alone, so the reference's
+  own hand-composed `unknown field` would have read as a fabricated category**
+  ([#381](https://github.com/scttfrdmn/burroughs/issues/381), `internal/validate/authority_test.go`).
+  `TestUnknownCategoriesMatchTheReference` parsed the ten `lookup "<category>"` bindings and treated
+  that as the reference's category set. `struct.get`/`struct.set` bound-check their field index inline
+  and build the message by hand (`valid.ml:763`, `:773`), because a field index is not a module index
+  space — so the control would have refused correct engine code, an instrument's own accept/reject
+  direction inverted. The authoritative set is now the `lookup` bindings **union** the literal
+  `"unknown <category> "` compositions elsewhere in the file, with the two halves pinned separately so
+  a regex that stops matching is attributed to the half that broke. Enumerating `field` as an
+  exception would have been the shape the control exists to refuse.
 - **grave #368: the linker compared type *indices*, so it refused four modules the reference links**
   ([#368](https://github.com/scttfrdmn/burroughs/issues/368), `internal/interp/link.go`). Every arm of
   `importTypeMismatch` asked whether the exporter's index equalled the importer's — two numbers drawn
