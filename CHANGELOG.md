@@ -39,6 +39,13 @@ weakly-ordered platform.
   - **`func_ptrs.wast:35` is the negative control**, two lines below a positive row: the same segment
     shape in a module where the table *does* exist, wanting `type mismatch` from the deferred offset
     check. It must stay an admission, and does.
+  - **Five mutations, and two of them are why the unit rows exist beside the board.** Dropping the mode
+    guard, deleting the loop, and refusing on segment shape are all board-visible (60822/203, the seven
+    back, and 11 *below* the pre-slice figure respectively). The other two are not covered by each
+    other: rewriting `tableTypeAt`'s `(%d in scope)` parenthetical leaves the suite **entirely green**
+    at 60824/201 — every vector matches `unknown table` by substring, so the text after the index is
+    corpus-unconstrained — while treating an implicit index as absent fails **no unit row at all** and
+    shows up only as −7 on both lanes. The battery table is in `elem_test.go`'s header.
 
 - **The export phase: `check_export` and `check_names`.** Every export's index resolves against its
   own index space, then the names are checked for duplicates — the reference's sequence

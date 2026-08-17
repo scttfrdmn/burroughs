@@ -50,6 +50,31 @@ import (
 // where the table *does* exist, wanting `type mismatch` from the deferred offset check, so an
 // implementation that refuses on segment shape rather than on index resolution converts a row this
 // slice has no right to convert. It sits two lines below a positive row in the same file.
+//
+// # The battery each row was watched die under
+//
+// Five mutations, each run against these rows and against both lanes, because a control's green is
+// worth what its falsification cost. The interesting column is the last one — whether the *board*
+// could have caught it without these rows:
+//
+//	mutation                              rows that fail        default lane      board sees it
+//	--------------------------------------+---------------------+-----------------+--------------
+//	drop the mode guard                    R4, R5                60822/203         yes, 2 vectors
+//	delete the loop                        R1, R3, R6 (+M6)      60817/208         yes, the 7 back
+//	refuse on segment shape                R2, R6 (+M6)          60806/219         yes, 11 below
+//	perturb `tableTypeAt`'s parenthetical  M6 only               60824/201         **no**
+//	treat an implicit index as absent      none                  60817/208         yes, −7 both lanes
+//
+// Two of those rows are the whole argument for this file existing beside the board. **The
+// parenthetical mutation leaves the suite entirely green** — every vector matches `unknown table` or
+// `unknown table 0` by substring, so the text after the index is unconstrained by the corpus and the
+// agreement test below is the only instrument that reads it. And **the implicit-index mutation fails
+// no row here at all**: it is board-only, which is why its seven is quoted in the blind-spot header
+// rather than asserted as a unit row. The two failure modes are disjoint, and neither instrument
+// covers the other's.
+//
+// Deleting the loop fails M6 through its *vacuity guard* rather than its comparison — two nils agree
+// perfectly about a rule neither applied, and the guard is what makes that a fatal instead of a pass.
 func TestElemSegmentTableIndexResolves(t *testing.T) {
 	table := []binary.Table{{Limits: binary.Limits{Min: 1}}}
 
@@ -87,8 +112,8 @@ func TestElemSegmentTableIndexResolves(t *testing.T) {
 			// table is legal, and its TableIndex field is 0 rather than absent — so an implementation
 			// that resolved the index unconditionally would refuse a valid module on the strength of a
 			// field the mode makes meaningless. This is the board-falsifiable half: the corpus has
-			// passive segments in tableless modules, so dropping the mode guard breaks passing vectors
-			// rather than merely failing here.
+			// passive segments in tableless modules, so dropping the mode guard breaks two passing
+			// vectors rather than merely failing here — measured, and in the battery table above.
 			name: "R4 passive segment, module declares no table",
 			mod:  binary.Module{Elems: []binary.ElemSegment{{Mode: binary.ElemPassive}}},
 			want: nil,
@@ -145,6 +170,12 @@ func TestElemSegmentTableIndexResolves(t *testing.T) {
 // each. They agree today, which is exactly the condition under which the board cannot see that they
 // are two: no vector needs both messages from one module, so a drift in either is invisible until a
 // vector arrives that reads the wrong one.
+//
+// **Invisible is measured, not argued.** Rewriting `tableTypeAt`'s `(%d in scope)` to `(%d declared)`
+// leaves the default lane at 60824/201 — an entirely green suite over a message this engine now spells
+// two ways — and fails this test and `TestBulkRejectsWithTheRuleThatRefused`, nothing else. Those two
+// are pinning different things and both are needed: the bulk test holds one producer's *text*, this one
+// holds the two producers' *agreement*, and a matched drift in both spellings passes the first.
 //
 // Asserted as text rather than by sentinel identity, because `errors.Is` passes on both while the
 // parenthetical is what the substring match consumes.
