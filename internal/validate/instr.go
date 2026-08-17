@@ -63,18 +63,26 @@ func (v *validator) instr(i int, in binary.Instr) error {
 	}
 	if in.Prefix != 0 {
 		// The prefixed regions are 0xFB (GC), 0xFC (bulk memory/table), 0xFD (SIMD), 0xFE
-		// (threads). Slice 2 (#305) types 0xFD and slice 5 types 0xFC; 0xFB and 0xFE stay
-		// declined — which is what keeps an unchecked module from being reported valid, and keeps
-		// the decline census a work plan for the slices that own them rather than a silence.
+		// (threads). Slice 2 (#305) types 0xFD, slice 5 types 0xFC, slice 7 types 0xFB; **0xFE
+		// alone stays declined** — which is what keeps an unchecked module from being reported
+		// valid, and keeps the decline census a work plan for the slice that owns it rather than a
+		// silence.
+		//
+		// The prior text said "0xFB and 0xFE stay declined", quoted here because a retired boundary
+		// is recorded rather than absorbed (ADR 0032, on 0025's and 0031's reasoning). The half
+		// about 0xFE is unchanged; what retired is the GC half, and its 81 declines are the ADR's
+		// pre-registered criterion.
 		//
 		// A region dispatch rather than one arm per region: the regions that decline decline
 		// *identically*, and a copy of that refusal per region is a place to forget when the next
-		// slice claims one of them.
+		// slice claims one of them. That prediction has now been paid out three times.
 		switch in.Prefix {
 		case prefixSIMD:
 			return v.vecInstr(in)
 		case prefixBulk:
 			return v.bulkInstr(in)
+		case prefixGC:
+			return v.gcInstr(i, in)
 		}
 		return fmt.Errorf("%w: prefixed opcode %#02x %#02x", ErrUnsupported, in.Prefix, in.Op)
 	}

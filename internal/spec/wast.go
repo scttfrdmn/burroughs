@@ -1366,6 +1366,24 @@ type Result struct {
 	//     is blocked on both*; the union key answers that directly when it is not truncated at
 	//     its first term.
 	//
+	//     **That last clause is the grave (#380), and it names a precondition this stratum never
+	//     meets.** The rule holds for the `no instance` form, whose key *is* an `errors.Join` union.
+	//     A **validator decline** key is single-term by construction — the validator stops at the
+	//     first offending instruction — so single-term-ness carries no information about the blocker
+	//     set, and reading it as sole-blockedness is the probe reporting its own blind spot. ADR
+	//     0032's `sole=81 co=0` was exact on the population and void on the `co`: 7 of the 81
+	//     re-declined one instruction later on `ref_eq`/`ref.as_non_null`/`br_on_null`/
+	//     `br_on_non_null`. `ref_eq.wast` read **7 fail before and 7 fail after** with one key
+	//     changing underneath — a decline moving *within* the column, which no single figure sees.
+	//     Third payout of the shape (#249, #359's miss of 4, #380's 7), and the magnitude tracks how
+	//     much of a region the slice claims, which is what a systematic blind spot looks like.
+	//
+	//     The blind spot is **asymmetric by direction**, measured: slice 7's reject side came out 27
+	//     of 27 exact and its accept side 47 of 54. An `assert_invalid` module is minimal by
+	//     construction, so single-term really does mean sole-blocked; a `module text` definition is a
+	//     working module that reaches for whatever else it needs. So a forecast states the reject
+	//     count as a number and the accept count as a number **with an upper-bound reading**.
+	//
 	// (Sited here on Scott's ruling, PR #250: a fact about an instrument lives at the instrument,
 	// per one-truth — not in CLAUDE.md. The miss itself stays marked in #249.)
 	Buckets map[string][]Failure

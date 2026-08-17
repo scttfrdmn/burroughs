@@ -214,7 +214,26 @@ func TestRangeCitationSubjectsAreReadFromTheReference(t *testing.T) {
 	// did not move at all, so the increment is exactly the arm count and nothing else.
 	//
 	// Deliberately not spelled here either: which lines those are, for the reason two paragraphs up.
-	const wantKeyed, wantResidue = 41, 14
+	//
+	// **Slice 7's GC-instruction port moved keyed by eleven and residue by fifteen, and the figure
+	// worth reading is neither of those — it is the gap.** The two columns summed to 55 against 41
+	// ranges before; they sum to 81 against 67 now, so the 14-row excess of keyed-subjects over
+	// ranges is *unchanged*. That excess is entirely multi-subject ranges — one citation whose line
+	// names two of the reference's identifiers, keyed twice on purpose — so an unchanged gap says
+	// every one of the twenty-six new citations names exactly one subject or none. A slice folding 31
+	// opcodes onto 21 arms is where a shared citation would have been most expected, and this is the
+	// cheap check that the folding did not quietly produce one: an arm serving two opcodes cites the
+	// reference's one rule, which is one subject, and the many-to-one is carried by the `switch`
+	// rather than by the prose.
+	//
+	// The residue moving *more* than the keyed column is the second reading, and it is the expected
+	// direction for this slice rather than a warning. Two thirds of `gc.go`'s doc blocks argue about
+	// representation — why a parameterized constructor makes a divergence unrepresentable, why one
+	// wire-format fact moved into `binary`, which of five witnessed strings the corpus never carries
+	// — and a block that cites the reference to say what this port does *differently* resolves
+	// correctly and keys nothing, which is the `check_elem` note at the top of this header working as
+	// described for a third slice.
+	const wantKeyed, wantResidue = 52, 29
 	if keyed != wantKeyed || residue != wantResidue {
 		t.Errorf("keyed %d range citation(s) by named subject and left %d as residue, want %d and "+
 			"%d — recount and re-pin. A row moves from residue to keyed when its description starts "+

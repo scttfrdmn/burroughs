@@ -293,27 +293,30 @@ func TestVecDeclinesWhatThisSliceDoesNotType(t *testing.T) {
 	// The prefixed regions that are still someone else's stay declined, and the message names the
 	// opcode so the bucket is a work item.
 	//
-	// **Re-pointed by slice 5, not retired.** This row's specimen was `memory.init` — `0xfc 0x08`,
-	// "whose slice is not this one" — and slice 5 is that slice, so the assertion became false by
-	// the work landing. The risk it was filed against is *a prefixed region falling through to an
-	// accept*, which is a property of the dispatch and not of any one region, so the specimen moves
-	// to a region that is still unclaimed rather than the test closing: `0xfb 0x1c` is `ref.i31`,
-	// GC's, and it needs the gate on only to get *past the decoder* — the validator's refusal is
-	// this slice's own and is what is being read.
+	// **Re-pointed by slice 5, then re-pointed and re-mechanised by slice 7.** This row's specimen
+	// was `memory.init` — `0xfc 0x08`, "whose slice is not this one" — and slice 5 was that slice;
+	// it moved to `ref.i31` (`0xfb 0x1c`) under the note that GC's region was still unclaimed, and
+	// slice 7 is that slice. The risk it was filed against is *a prefixed region falling through to
+	// an accept*, which is a property of the dispatch and not of any one region, so the row follows
+	// the boundary rather than closing with its second specimen.
 	//
-	// 0xFE (threads) has no specimen here because the text encoder has no operator for it
-	// ("unknown operator memory.atomic.notify"), so a module cannot be built to carry one. That
-	// half is covered at the dispatch instead, over all four prefixes as a partition —
-	// TestPrefixedRegionsPartitionIntoClaimedAndDeclined — which is where a control belongs when
-	// the space is larger than the specimens available for it.
-	_, err := validated(t, `(module (func (result i31ref) (ref.i31 (i32.const 0))))`,
-		func(f *binary.Features) { f.GC = true })
+	// What changed with the second re-point is the *mechanism*, because 0xFE is the last unclaimed
+	// region and the paragraph this one replaces had already recorded why no module can carry it:
+	// the text encoder has no operator for the region ("unknown operator memory.atomic.notify"). So
+	// this row now drives the dispatch directly, exactly as the relaxed-SIMD row above it does and
+	// for the same reason — the specimen is unreachable through `validated()` by design, and the
+	// layering is named instead of worked around. `TestPrefixedRegionsPartitionIntoClaimedAndDeclined`
+	// remains the control scoped to the whole space; this row is the one witness inside slice 2's own
+	// file, which is what keeps the boundary visible to whoever reads this file next.
+	v := &validator{mod: &binary.Module{}}
+	v.frames = []frame{{}}
+	err := v.instr(0, binary.Instr{Prefix: 0xfe, Op: 0})
 	if err == nil {
-		t.Fatal("a GC instruction validated; the regions no slice has claimed must decline " +
+		t.Fatal("a threads instruction validated; the regions no slice has claimed must decline " +
 			"rather than fall through to an accept")
 	}
-	if !errors.Is(err, ErrUnsupported) || !strings.Contains(err.Error(), "0xfb") {
-		t.Errorf("the 0xFB region declined with %q, want an ErrUnsupported naming the prefix", err)
+	if !errors.Is(err, ErrUnsupported) || !strings.Contains(err.Error(), "0xfe") {
+		t.Errorf("the 0xFE region declined with %q, want an ErrUnsupported naming the prefix", err)
 	}
 }
 

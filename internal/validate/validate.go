@@ -25,8 +25,15 @@
 //
 // This paragraph then said `select t` (#294) was the last instruction in the single-byte space slice
 // 1 left, which was true when it was written and is not now — slice 4 took it. **The single-byte
-// opcode space is fully in vocabulary as of that slice**, and what remains declined is the three
-// prefixed regions: 0xFB (GC), 0xFC (bulk memory/table), 0xFE (threads).
+// opcode space is fully in vocabulary as of that slice**, and what remains declined is **0xFE
+// (threads) alone**.
+//
+// Its prefixed-region list read "0xFB (GC), 0xFC (bulk memory/table), 0xFE (threads)", and it was
+// **stale on 0xFC from the moment slice 5 landed** — found by slice 7 reading its own boundary
+// rather than by anything that checks, which is the whole reason ADR 0032 amends both statements of
+// this boundary in one motion instead of the one it was opening. Two places declaring a boundary is
+// two places to update, and a list of regions is exactly the shape that goes quietly out of date:
+// nothing about a region typed by a new slice makes a *sentence elsewhere* fail.
 //
 // # Slice 3: the memarg's alignment
 //

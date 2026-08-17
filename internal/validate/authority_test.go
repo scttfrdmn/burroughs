@@ -258,28 +258,74 @@ import (
 // so." Phrased historically now, because #336 measured it and it was false: a slice adding `tag`
 // came, and nothing here made it say anything. What holds the claim today is the forward loop's
 // derived domain, described at its own site below.
+//
+// # `lookup` is not the reference's only category, and slice 7 is where that mattered (grave #381)
+//
+// The paragraph above read "The ten categories are ten one-line bindings (`:44-53`), so the
+// authority's set is *parsed* rather than transcribed" — true about `lookup` and wrong about the
+// reference. `struct.get`/`struct.set` bound-check their field index inline and compose the message
+// by hand, `("unknown field " ^ I32.to_string_u i)` at `:763` and `:773`, because a field index is
+// not a module index space and there is no context list to look it up in. So the GC slice's
+// `ErrUnknownField` names a category the reference genuinely spells and the `lookup` scan cannot
+// see, and the forward loop would have reported the reference's own message as "a category the
+// authority never uses".
+//
+// The fix keeps the derivation and widens its domain: the authoritative set is the `lookup` bindings
+// **union** the literal `"unknown <category> "` compositions elsewhere in the file. Enumerating
+// `field` as an exception would have been the shape this control exists to refuse — and the union is
+// what makes the reverse direction still mean something, since a literal category nothing here
+// claims now lands in the "gap wearing no label" arm exactly as a lookup one does. The two halves
+// are pinned separately below so that a regex which stops matching is attributed to the half that
+// broke rather than absorbed by the other half's count.
 func TestUnknownCategoriesMatchTheReference(t *testing.T) {
 	src := testenv.RequireSpecRef(t, testenv.RefValidML)
 
 	// `let <name> (c : context) x = lookup "<category>" ...` — keyed on the string literal
 	// argument, which is the thing the message is built from, not on the binding's name.
 	re := regexp.MustCompile(`lookup\s+"([^"]+)"`)
-	found := map[string]bool{}
+	lookups := map[string]bool{}
 	for _, m := range re.FindAllStringSubmatch(src, -1) {
-		found[m[1]] = true
+		lookups[m[1]] = true
 	}
 
-	// Vacuity, and pinned exactly rather than floored. A regex that stops matching yields an
-	// empty set, and an empty set agrees with every sentinel below by construction — the
-	// comparison-against-nothing shape. Exact because the reference is fetched at a pin (#42's
-	// discipline, applied to the interpreter rather than to the suite): upstream adding an
-	// eleventh category is a fact for a reader to record, not churn to absorb.
-	const wantCategories = 10
-	if len(found) != wantCategories {
+	// The hand-composed half: `("unknown field " ^ …)`. Anchored on the literal opening quote so
+	// the helper's own `"unknown " ^ category ^ …` at `:42`/`:57` does not match — that line has no
+	// category *in* it, which is the whole reason the first scan exists.
+	reLit := regexp.MustCompile(`"unknown ([a-z][a-z ]*[a-z]) "`)
+	literals := map[string]bool{}
+	for _, m := range reLit.FindAllStringSubmatch(src, -1) {
+		literals[m[1]] = true
+	}
+
+	found := map[string]bool{}
+	for cat := range lookups {
+		found[cat] = true
+	}
+	for cat := range literals {
+		found[cat] = true
+	}
+
+	// Vacuity, and pinned exactly rather than floored — **per half**, because two regexes summed
+	// into one total let a half that stopped matching hide behind the other's count. A regex that
+	// stops matching yields an empty set, and an empty set agrees with every sentinel below by
+	// construction: the comparison-against-nothing shape. Exact because the reference is fetched at
+	// a pin (#42's discipline, applied to the interpreter rather than to the suite): upstream adding
+	// a category either way is a fact for a reader to record, not churn to absorb.
+	const (
+		wantLookups  = 10 // `:44-53`, one binding per module index space
+		wantLiterals = 1  // `field`, at `:763` and `:773`
+	)
+	if len(lookups) != wantLookups {
 		t.Fatalf("parsed %d lookup categories from %s, want %d (%v); either the regex stopped "+
 			"matching — in which case every check below is comparing against nothing — or "+
 			"upstream changed the index spaces, which is a finding either way",
-			len(found), testenv.RefValidML, wantCategories, sortedKeys(found))
+			len(lookups), testenv.RefValidML, wantLookups, sortedKeys(lookups))
+	}
+	if len(literals) != wantLiterals {
+		t.Fatalf("parsed %d hand-composed `unknown <category>` messages from %s, want %d (%v); the "+
+			"reference does not route every category through `lookup`, and a slice whose sentinel "+
+			"names one of these needs it to be in the authoritative set rather than excepted from it",
+			len(literals), testenv.RefValidML, wantLiterals, sortedKeys(literals))
 	}
 
 	// Forward: every sentinel this package declares must name one of the reference's categories,
@@ -311,7 +357,7 @@ func TestUnknownCategoriesMatchTheReference(t *testing.T) {
 	// Pinned exactly, on the vacuity argument the categories carry above: a derived set that shrinks
 	// makes the reverse check quietly report unclaimed categories as gaps, and one that empties makes
 	// this loop assert nothing at all.
-	const wantSentinels = 10
+	const wantSentinels = 11 // ten index spaces plus slice 7's `field`
 	if len(lookupSentinels) != wantSentinels {
 		t.Fatalf("derived %d lookup sentinel(s) from this package's source, want %d (%v) — either a "+
 			"sentinel was removed or `packageSentinels` stopped reading a file, and both make the "+
@@ -336,9 +382,10 @@ func TestUnknownCategoriesMatchTheReference(t *testing.T) {
 		claimed[cat] = true
 	}
 
-	// Reverse: which of the ten no sentinel claims. **The list is now empty, and that is a board
-	// figure rather than a formality** — the export slice's `ErrUnknownTag` was the tenth, so this
-	// package names every index space the reference has a `lookup` for.
+	// Reverse: which of the authoritative categories no sentinel claims. **The list is now empty, and
+	// that is a board figure rather than a formality** — the export slice's `ErrUnknownTag` was the
+	// tenth index space and slice 7's `ErrUnknownField` the hand-composed eleventh, so this package
+	// names every category `valid.ml` spells.
 	//
 	// The two entries it used to hold are worth keeping as the record of what the list was *for*.
 	// `data segment` and `elem segment` sat here until slice 5 on the stated reason that the bulk

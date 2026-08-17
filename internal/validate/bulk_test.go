@@ -506,10 +506,17 @@ func TestPrefixBulkIsTheRegionBinaryDispatches(t *testing.T) {
 // TestPrefixedRegionsPartitionIntoClaimedAndDeclined covers the dispatch over the whole prefix
 // space rather than over the specimens available for it.
 //
-// Two regions are this package's and two are not, and the property worth asserting is not which —
-// that changes every slice — but that the partition is **total**: every prefix either types or
+// Three regions are this package's and one is not, and the property worth asserting is not which —
+// that changes every slice, and this sentence read "Two regions are this package's and two are not"
+// until slice 7 typed 0xFB — but that the partition is **total**: every prefix either types or
 // declines *naming itself*, and none falls through to an accept. A control listing today's regions
 // inherits today's blind spot; this one derives the claimed set by asking the dispatch.
+//
+// The derivation is what made the slice-7 edit here small and honest: the loop needed no change at
+// all, and what needed changing was the *landed* list below it, which is a claim about history rather
+// than about the dispatch. Nothing in this file failed when 0xFB moved — a passing partition test
+// whose prose calls a claimed region unclaimed is the drifted-testimony shape, and it is caught by
+// reading rather than by running, which is the argument for keeping the two lists adjacent.
 //
 // It is also where 0xFE (threads) is covered at all. The text encoder has no operator for its
 // instructions ("unknown operator memory.atomic.notify"), so no module can be built to carry one
@@ -524,7 +531,7 @@ func TestPrefixedRegionsPartitionIntoClaimedAndDeclined(t *testing.T) {
 		prefix byte
 		name   string
 	}{
-		{0xfb, "GC"},
+		{prefixGC, "GC"},
 		{prefixBulk, "bulk memory/table"},
 		{prefixSIMD, "SIMD"},
 		{0xfe, "threads"},
@@ -574,10 +581,10 @@ func TestPrefixedRegionsPartitionIntoClaimedAndDeclined(t *testing.T) {
 	}
 	if len(claimed) == len(regions) {
 		t.Error("every prefixed region is claimed, which leaves the decline half of this " +
-			"partition with no subject: 0xFB is GC's and 0xFE is threads', and a slice that " +
-			"typed them would be landing a gated proposal's capability")
+			"partition with no subject: 0xFE is threads', a v1 milestone behind its own gate, and " +
+			"a slice that typed it here would be landing a later phase's capability")
 	}
-	for _, p := range []byte{prefixBulk, prefixSIMD} {
+	for _, p := range []byte{prefixBulk, prefixSIMD, prefixGC} {
 		if !claimed[p] {
 			t.Errorf("region %#02x declined, but its slice has landed — a region that types "+
 				"nothing after its slice is a dispatch that stopped firing, which is invisible "+

@@ -1088,6 +1088,26 @@ func StageMemarg(memIdx uint64, alignExp uint32) uint64 {
 // 37 of the 45 rows, which is the shape that gets read anyway.
 func MemargLane(imm1 uint64) uint8 { return uint8(imm1 >> memargLaneShift) }
 
+// BrOnCastLabel is the branch depth of a `br_on_cast`/`br_on_cast_fail` instruction (`0xfb 0x18`,
+// `0xfb 0x19`).
+//
+// **A named accessor for one field read, because this is the only branching instruction in the
+// engine whose label is not `Imm0`.** Every other one — `br`, `br_if`, `br_table`, `br_on_null`,
+// `br_on_non_null` — stages its label first and so finds it in `Imm0`; this pair stages the flags
+// byte first (wire order, `decode.ml:641-642`), so the label lands in `Imm1`. A reader who copies a
+// neighbouring arm gets `Imm0`, which on the flags values the corpus actually contains is **0, 1, 2
+// or 3** — a plausible depth, silently wrong, and indistinguishable from a correct branch on any
+// vector whose intended depth happens to equal the flags value.
+//
+// **Here beside Memarg and MemargLane rather than in a consumer, because it now has two.** It lived
+// in `internal/interp` while the interpreter was the only reader of the slot; the validator's GC
+// slice made it the second, and a wire-format fact known independently in two packages is the
+// two-authorities-one-fact shape this file files tripwires against. `interp`'s accessor delegates
+// here and keeps its control — `TestBrOnCastSlotsAreFlagsThenLabel`, which decodes
+// `br_on_cast 2 (ref null any) (ref null i31)` and prints `Imm0=3 Imm1=2` rather than reasoning
+// about it (0027 decision 1).
+func BrOnCastLabel(ins Instr) uint64 { return ins.Imm1 }
+
 // Global is one global: its type, mutability, and initializer.
 type Global struct {
 	Type    ValType

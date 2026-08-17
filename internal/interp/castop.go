@@ -52,7 +52,12 @@ const (
 // `Imm0=3 Imm1=2`, and `TestBrOnCastSlotsAreFlagsThenLabel` is that print turned into a control so
 // the next reader inherits the measurement instead of re-deriving it. The helper is what makes
 // misreading require *ignoring* something rather than merely forgetting it.
-func brOnCastLabel(ins binary.Instr) uint64 { return ins.Imm1 }
+//
+// **Delegates to `binary.BrOnCastLabel` as of the validator's GC slice**, which made this package
+// the second reader of the slot. The fact is the wire format's, so it now lives beside `Memarg` and
+// `MemargLane` in the package that stages it; this stays as the local name the arms already read,
+// and the control above stays here, where the decode-and-print it performs is a test of both.
+func brOnCastLabel(ins binary.Instr) uint64 { return binary.BrOnCastLabel(ins) }
 
 // branchCastTargetAt resolves the type `br_on_cast`/`br_on_cast_fail` casts **to** — `rt2` alone.
 //
