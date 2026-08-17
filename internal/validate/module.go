@@ -134,7 +134,9 @@ func checkTableType(tab binary.Table) error {
 // `(rec (type (func (param (ref 1)))))` followed by `(rec (type (func)))` is invalid where the
 // byte-identical pair inside one `rec` is valid, and nothing in this representation can tell them
 // apart. Three admissions wait on it — `type-rec.wast:21,28` and `type-equivalence.wast:76`, all
-// expecting `unknown type`.
+// expecting `unknown type`. **Tracked as #357**, added in #353 rather than in the PR that wrote this
+// paragraph: it declared the debt and gave it no number, and *declared-and-tracked passes while
+// silent fails* — a "waits on it" with nothing to point at reads as tracked from every direction.
 //
 // The consequence for the rules that *are* here is one divergence, named because it is a real
 // difference and not a simplification: a supertype index pointing past the end of the type space
@@ -142,7 +144,8 @@ func checkTableType(tab binary.Table) error {
 // reference refuses it as `unknown type`. Same verdict, different message. It has no subject in
 // the corpus — no `assert_invalid` expects `unknown type` from a supertype position — so it is
 // recorded rather than worked around, since a workaround would be a second unresolvable-index rule
-// competing with `check_typeuse`'s.
+// competing with `check_typeuse`'s. **Tracked as #358**, for the reason #357 is: a zero-population
+// divergence is a legitimate never-fix, and what it is not is a debt with no number.
 func checkTypes(m *binary.Module) error {
 	for x := range m.Types {
 		for _, xi := range m.Types[x].Supertypes {
