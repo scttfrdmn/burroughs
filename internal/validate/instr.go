@@ -398,17 +398,28 @@ func (v *validator) matchLabel(ts, want []binary.ValType, role string, idx uint3
 }
 
 // callIndirect checks a call through a table.
+//
+// **The index operand's type comes from the table, not from a constant** (`valid.ml:537,542`):
+// `let TableT (at, _lim, t) = table c x` then `ts1 @ [NumT (numtype_of_addrtype at)]`, so a
+// table64 is indexed by an i64. Hardcoding i32 here refused four valid modules
+// (`call_indirect64.wast:3`, `table_init64.wast:385,444,503`) — over-rejections that produced no
+// error anyone could bucket until #341 gave the accept direction a witness, and #343's cause 2.
+//
+// `tableAddrType` already existed for the bulk operands, which is the part worth noticing: the
+// shape was diagnosed and paid for next door in `bulk.go`, and this call site re-earned the same
+// grave by reading a different field. *Lessons are indexed by shape, not by file.*
 func (v *validator) callIndirect(in binary.Instr) error {
 	// Immediates in written order: type index, then table index.
 	ft, err := funcType(v.mod, uint32(in.Imm0))
 	if err != nil {
 		return err
 	}
-	if err := v.requireTable(uint32(in.Imm1)); err != nil {
+	tab, err := tableTypeAt(v.mod, uint32(in.Imm1))
+	if err != nil {
 		return err
 	}
-	// The table index operand sits above the callee's arguments.
-	if err := v.popExpect(binary.I32); err != nil {
+	// The table index operand sits above the callee's arguments, at the table's address type.
+	if err := v.popExpect(tableAddrType(tab)); err != nil {
 		return err
 	}
 	if err := v.popExpectAll(ft.Params); err != nil {
@@ -625,22 +636,18 @@ func (v *validator) funcTypeAt(idx uint32) (binary.FuncType, error) {
 // A delegation since the check_global slice, which needed the same walk under a *narrower* scope
 // than a function body has — the reference grows the global context one global at a time while it
 // checks their initializers (valid.ml:1059), so the question "which globals are in scope" has two
-// answers and only one walk. This is `requireTable`→`tableTypeAt` again, and for the reason #241
-// gave: two functions answering one index-space question agree until one of them learns something.
+// answers and only one walk. It is the delegating shape #241 argued for — two functions answering
+// one index-space question agree until one of them learns something. The specimen that comment used
+// to name was `requireTable`→`tableTypeAt`, and **that specimen is now a grave rather than a
+// precedent**: `requireTable` discarded the table it resolved, its own doc comment described the
+// discard as the design ("a lookup whose result is discarded"), and the discarded value was exactly
+// the address type `call_indirect` needed (#343 cause 2). Delegation was never the problem;
+// delegating and then throwing the answer away was. Deleted with that fix, so this comment cites the
+// reason and not the corpse.
 // Full scope is the right argument here because every caller of this method validates a function
 // body, which the reference reaches at :1165, after the last global is folded in.
 func (v *validator) globalAt(idx uint32) (binary.ValType, bool, error) {
 	return globalTypeAt(v.mod, idx, len(v.mod.Globals))
-}
-
-// requireTable checks a table index resolves.
-//
-// A lookup whose result is discarded, delegating to `tableTypeAt` so that the index space is
-// walked in one place — see that function on why slice 5 made a second implementation of this
-// question a live risk rather than a hypothetical one.
-func (v *validator) requireTable(idx uint32) error {
-	_, err := tableTypeAt(v.mod, idx)
-	return err
 }
 
 // sameTypes compares two type sequences by identity.
