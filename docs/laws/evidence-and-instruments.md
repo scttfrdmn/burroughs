@@ -285,6 +285,26 @@ amended rather than replaced.
   counts are taken from `gh`."* — the `boardFiles` he names is the third specimen's
   sibling, one instrument over.)
 
+  **Eighth specimen, where two globbers disagree about what `*` means and the
+  verifier holds the weaker one.** The amd64 cross-check copies the working tree to
+  a native x86_64 host, and macOS `tar` had written AppleDouble sidecars
+  (`._address.wast`) into `testdata/spec` on the far side. The board reddened
+  twenty instruments — every row a parse failure on a file named `._…`, which is
+  the tell, and the arch was not the subject. The verification I had run against
+  that copy was `ls testdata/spec/*.wast | wc -l`, and it reported **257 on the
+  poisoned tree and 257 on the clean one**: the shell's `*` skips a leading dot and
+  Go's `filepath.Glob` does not, so the consumer saw 514 files where the checker
+  could only ever see 257. An assertion sound in what it compared, over a
+  population defined by a *different globber than its subject's* — the third
+  specimen's shape with the domain chosen not by a tool's default flag but by two
+  tools' incompatible definitions of the same metacharacter. **A copy is verified
+  with the consumer's globber, not the shell's**, and the repair is a
+  reconciliation rather than a floor (`scripts/xcheck-amd64.sh`): `find`-based and
+  dot-aware on both ends, remote count checked *equal* to local so that too few
+  catches a lossy copy and too many catches junk. A floor would have passed 514
+  without a word. (Found this session, running the check Scott's `janus.local`
+  directive made available for the first time, PR #339.)
+
   The two failure modes are worth keeping separate because they are found
   differently. An **assertion** defect is found by falsification — break it, watch
   it die. A **coverage** defect is found only by measuring the instrument's

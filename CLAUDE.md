@@ -176,24 +176,24 @@ about the right run.
 
 The dev box is arm64 — the weakly-ordered side, contract §9's own reason both CI
 runners exist (`ci.yml`'s own header: x86-64/TSO plus AArch64/weakly-ordered). CI
-gives both automatically on push, but a claim that needs confirming *before*
-pushing — a G-1 demonstration, a redistribution forecast, a flip's own board
-delta — needs the other architecture locally too, and Docker is the standing way
-to get it without a second machine:
+gives both on push; a claim needing confirmation *before* pushing — a G-1
+demonstration, a redistribution forecast, a flip's own board delta — needs the other
+architecture locally, and **`scripts/xcheck-amd64.sh` is how**:
 
 ```bash
-docker run --rm --platform linux/amd64 -v "$PWD":/src -w /src golang:1.26 \
-  sh -c "go test ./... 2>&1 | tail -30"
+./scripts/xcheck-amd64.sh                              # go test ./...
+./scripts/xcheck-amd64.sh go test ./internal/spec/ -run TestAllGatesOnLeavesNothingGated -v
 ```
 
-Requires Docker Desktop (or equivalent) with amd64 emulation enabled — `--platform
-linux/amd64` on an arm64 host runs under QEMU, slower than native but exact for
-this purpose: correctness across memory models, not speed. Mount the whole repo
-(`-v "$PWD":/src -w /src`) rather than copying, so the container sees the working
-tree's actual uncommitted state — the same reason a pre-push check exists at all.
-Swap the trailing command for whatever the claim needs (`go test ./internal/spec/...
--run TestAllGatesOnLeavesNothingGated -v -count=1`, for instance) rather than
-always running the full suite.
+It prefers **native x86_64 on `janus.local`** — real TSO hardware rather than an
+emulation of it — and falls back to the **amd64 container** under QEMU, which is
+slower but exact for this purpose: correctness across memory models, not speed. Its
+header carries the reasons it is a script and not a recipe here; the operative
+governance is only this. **Every exit path names its instrument, and a no says which
+no** — a copy that failed, a daemon that is hung rather than down, no host at all.
+The last two are `NOT RUN`, exit 4, *mechanism and not verdict*: nothing about the
+code has been learned, and the answer is CI's x86-64 runner one push later. A PR
+asserting a cross-architecture claim states which instrument confirmed it.
 
 ### After a squash merge, local main diverges from origin/main — verify, don't force
 

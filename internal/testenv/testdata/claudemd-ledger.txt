@@ -16,7 +16,7 @@
 529	section	## The law
 1304	section	## Phase ladder
 1157	section	## Where the work is tracked
-9186	section	## Reporting protocol — the PR *is* the report
+9318	section	## Reporting protocol — the PR *is* the report
 2238	section	## Versioning and the changelog
 301	section	## Decision records
 1160	section	## Disciplines heading and preamble

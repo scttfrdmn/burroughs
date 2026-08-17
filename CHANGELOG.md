@@ -21,6 +21,38 @@ weakly-ordered platform.
 
 ### Added
 
+- **`scripts/citecheck.sh` gains a fourth check: no citation in a PR *body* may name that PR.** A body
+  citing itself is never intentional, and the comparison costs nothing. It exists because three comment
+  sites attributed a directive to the PR number one above the one that carried it — a *forward guess* at
+  the next PR's number, which then came true, so the citations resolved perfectly and pointed at the PR
+  they were written in. Resolution alone cannot see this; a well-formed `#N` resolves to whatever N is.
+  **Scoped to the body and not to the diff, and the boundary was found by watching the broad version
+  fail on correct prose**: a code comment citing its own PR is this repo's attribution convention
+  (`citation_subject_test.go`'s own "(Ruling: Scott, PR #337 relay.)" was written in the commit that
+  *is* #337), so the diff-wide reading would have retroactively failed #337. Needs the network, so it
+  runs as `--pr <n>` beside the diff half, in CI and locally. (Directive: Scott, PR #339 review.)
+
+- **`scripts/xcheck-amd64.sh`: the pre-push cross-architecture check, on hardware.** Contract §9 wants
+  both memory models; CI gives both on push, and this is the half that answers before a claim is written
+  down. It prefers **native x86_64 over ssh** — real TSO hardware rather than an emulation of it — and
+  falls back to the amd64 container under QEMU. **Every exit path names its instrument**, and the two
+  unavailability paths are `NOT RUN` at exit 4 rather than a failure: a hung daemon (probe bounded at
+  10s, exit 124) and a missing daemon are mechanism, not verdict, and nothing about the code has been
+  learned. The bounded probe is there because a hung daemon does not refuse but hangs, and `docker run`
+  inherits the hang.
+  - **The copy carries two traps, which is why this is an executable and not a recipe.** macOS `tar`
+    writes AppleDouble sidecars into `testdata/spec` unless `COPYFILE_DISABLE=1` and
+    `--no-mac-metadata` are both given; the harness globs the directory, and twenty instruments redden
+    on a corpus that is half junk. **The obvious verification cannot see that** — `ls *.wast | wc -l`
+    reported 257 on the poisoned tree and 257 on the clean one, because a shell `*` skips a leading dot
+    and Go's `filepath.Glob` does not. So the script counts with `find`, dot-aware on both ends, and
+    **reconciles** remote against local rather than flooring: too few is a lossy copy, too many is junk,
+    and a floor would have passed 514 without a word. Filed as the eighth specimen under *coverage is a
+    claim* — *a copy is verified with the consumer's globber, not the shell's*.
+  - Both copy assertions were watched die (sidecars present → exit 3 at 268 detected; one vector
+    excluded → 257 ≠ 255 → exit 3), and the `NOT RUN` path was watched die with no host and no `docker`
+    on `PATH` → exit 4.
+
 - **`check_elem`'s table index: the element-segment phase.** An active element segment's table index
   resolves against the module's table space, in `check_module`'s own sequence — `check_data` then
   `check_elem` (`valid.ml:1163`), and inside it the Active arm's `table c x` before the reftype match
@@ -835,6 +867,18 @@ weakly-ordered platform.
   tail-call gate's own 0x12/0x13 when it lands.
 
 ### Changed
+
+- **The cross-architecture procedure names a script and a native host, not a container recipe.**
+  Scott's directive was a disjunction — *either the box gets fixed or the procedure should name CI as
+  primary rather than as the fallback* — and **the first branch is the one that happened**: the Docker
+  daemon came back on a restart, and a native x86_64 machine turned out to be available that no
+  procedure here had ever named. So local stays primary, with `scripts/xcheck-amd64.sh` in place of a
+  recipe, and CI stays the standing dual-arch verdict on push. The demotion was drafted and **discarded
+  on its premise**: it asserted the box was unfixable, one restart falsified that, and a law whose
+  specimen ends in a false sentence is testimony. Recorded because the near-miss is the point — two
+  failed probes were treated as a permanent condition, and the cheap remedies (restart it, ask) were
+  never tried. `CLAUDE.md` is **165 bytes smaller** than before the change: the recipe and its reasoning
+  went to the script's header, so no room was bought from `claudeMDCeiling`.
 
 - **The blind-spot register gains the message oracle's resolution limit.** 0003's message match
   discriminates *layers* and never *rules within a layer*: two rules producing the same string are one
