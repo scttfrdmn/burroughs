@@ -90,10 +90,12 @@ than described:
   precisely because each PR was individually defensible. **Quoted, never compared to a
   threshold**: #117 measured the trailing 31 merges and found the figure is dominated by PR
   size, so a bound on it is a bound on diff length. It is a **separate instrument from** the
-  two-consecutive-instrument-PRs stop condition, which counts a PR's *purpose* and not its
-  line-majority (#159's refinement, below): the ratio neither triggers that counter nor is
-  discharged by it, and is quoted every PR precisely so a purpose-classified product PR that is
-  also drifting stays visible.
+  two-consecutive-instrument-PRs stop condition (below, #159): the ratio neither triggers that
+  counter nor is discharged by it, and is quoted every PR precisely so a purpose-classified
+  product PR that is also drifting stays visible. Quoted **with its provenance split** —
+  carried by the work versus ordered in review, per commit via a `Ratio-Class: carried` or
+  `Ratio-Class: ordered <citation>` trailer, absence counted `unattributed` and never carried
+  (Scott's directive, #339).
 
 Two principals review: **Scott** (owner, all decisions) and **chat-Claude**
 (contract author, architecture review). Scott reviews in the GitHub UI and
@@ -126,14 +128,13 @@ gh run watch "$RUN" --compact --exit-status   # run this with run_in_background
 
 **The loop's negative has two meanings and must say which.** `ci.yml` triggers on
 `push` to `main` only, plus `pull_request` — so a push to a topic branch produces
-**no run at all** until its PR is opened, and `gh run watch ""` then 404s on
-`/actions/runs/`. That is the mechanism behaving correctly, but the bare loop
-reports it identically to "the run has not appeared yet", which is a different
-condition with a different remedy (open the PR versus wait longer). *A bounded
-wait that cannot distinguish its own failure modes is a timer with better
-manners* — the branch above asks the question that separates them. Found the way
-these things are always found: it fired for real, on #80, and the first reading
-was "flake in the poll". (Directive: Scott, PR #82.)
+**no run at all** until its PR is opened, and `gh run watch ""` then 404s. The
+mechanism is behaving correctly, but the bare loop reports that identically to
+"the run has not appeared yet" — a different condition with a different remedy
+(open the PR versus wait longer). *A bounded wait that cannot distinguish its own
+failure modes is a timer with better manners*; the branch above asks the question
+that separates them. It fired for real on #80, and the first reading was "flake
+in the poll". (Directive: Scott, PR #82.)
 
 Three separate mistakes are being avoided, and they were made in that order:
 
@@ -157,20 +158,18 @@ Three separate mistakes are being avoided, and they were made in that order:
 
 **And `sleep` is never how you wait for a signal that exists — background it and let the
 wake-up arrive.** This is mistake 1 restated because restating it was necessary: it was
-committed *again*, on an already-backgrounded watch, by running `sleep 200` to poll the task's
-own output file while its completion notification was in flight. Polling a background task with
-a timer is strictly worse than a bare `sleep`, because the signal already exists and the timer
-replaces it with a guess. The test is one question — **does a completion signal exist?** If
-yes, wait on the signal; if no (GitHub has no "run created" event), poll for the *condition* in
-a bounded loop that gives up loudly — the one honest `sleep` here, and honest because the loop
-re-asks a real question until it gets an answer where a bare `sleep` asserts one. If nothing
-else is ready to do, say what is pending and stop: an idle turn costs nothing, a blocked tool
-call costs the whole wait. (Directive: Scott, PR #103 — *"stop using sleep"*, and he was right
-to be terse about it, the rule having already been written here by the agent that broke it.)
+committed *again*, on an already-backgrounded watch: `sleep 200` polling a task's own output
+file while its completion notification was in flight. Polling a background task with a timer is
+strictly worse than a bare `sleep` — the signal exists and the timer replaces it with a guess.
+The test is one question — **does a completion signal exist?** If yes, wait on the signal; if
+no (GitHub has no "run created" event), poll for the *condition* in a bounded loop that gives up
+loudly — the one honest `sleep` here, honest because it re-asks a real question where a bare
+`sleep` asserts an answer. If nothing else is ready to do, say what is pending and stop: an idle
+turn costs nothing, a blocked tool call costs the whole wait. (Directive: Scott, PR #103 —
+*"stop using sleep"*; the rule was already written here, by the agent that broke it.)
 
-The first two are *verdict channel and mechanism channel are different
-instruments* applied to time and to identity: ask the right channel, and ask it
-about the right run.
+The first two are *verdict channel and mechanism channel are different instruments* applied to
+time and to identity: ask the right channel, and ask it about the right run.
 
 ### Local cross-architecture verification
 
@@ -185,15 +184,12 @@ architecture locally, and **`scripts/xcheck-amd64.sh` is how**:
 ./scripts/xcheck-amd64.sh go test ./internal/spec/ -run TestAllGatesOnLeavesNothingGated -v
 ```
 
-It prefers **native x86_64 on `janus.local`** — real TSO hardware rather than an
-emulation of it — and falls back to the **amd64 container** under QEMU, which is
-slower but exact for this purpose: correctness across memory models, not speed. Its
-header carries the reasons it is a script and not a recipe here; the operative
-governance is only this. **Every exit path names its instrument, and a no says which
-no** — a copy that failed, a daemon that is hung rather than down, no host at all.
-The last two are `NOT RUN`, exit 4, *mechanism and not verdict*: nothing about the
-code has been learned, and the answer is CI's x86-64 runner one push later. A PR
-asserting a cross-architecture claim states which instrument confirmed it.
+It prefers **native x86_64 on `janus.local`** — real TSO hardware, not an emulation
+of it — over the amd64 container under QEMU, and its header carries the reasons it is
+a script rather than a recipe here. The operative governance is only
+this: **every exit path names its instrument**; unavailability is `NOT RUN` at exit 4,
+*mechanism and not verdict*, with CI's x86-64 runner answering one push later; and **a
+PR asserting a cross-architecture claim states which instrument confirmed it**.
 
 ### After a squash merge, local main diverges from origin/main — verify, don't force
 
@@ -349,6 +345,7 @@ bullet carries operative text has that text nowhere else.
 - **The spec is the objective function; the suite samples it.** — [evidence-and-instruments](docs/laws/evidence-and-instruments.md#the-spec-is-the-objective-function-the-suite-samples-it)
 - **A verdict without an identity check is hearsay.** — [evidence-and-instruments](docs/laws/evidence-and-instruments.md#a-verdict-without-an-identity-check-is-hearsay)
 - **A re-run green doesn't refute a fail — explaining the fail does.** — [evidence-and-instruments](docs/laws/evidence-and-instruments.md#a-re-run-green-doesnt-refute-a-fail--explaining-the-fail-does)
+- **A failure establishes an event, not a condition — and "unavailable" is self-serving where "flake" is not.** — [evidence-and-instruments](docs/laws/evidence-and-instruments.md#a-failure-establishes-an-event-not-a-condition--and-unavailable-is-self-serving-where-flake-is-not)
 - **Budget by the quantity the purpose names.** — [evidence-and-instruments](docs/laws/evidence-and-instruments.md#budget-by-the-quantity-the-purpose-names)
 - **A stateful instrument measures history until its state is controlled.** — [evidence-and-instruments](docs/laws/evidence-and-instruments.md#a-stateful-instrument-measures-history-until-its-state-is-controlled)
 - **Gates.** — governance, retained; body in [gates](docs/laws/gates.md#gates). Proposals land

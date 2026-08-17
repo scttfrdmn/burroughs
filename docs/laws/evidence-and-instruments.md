@@ -45,6 +45,62 @@ amended rather than replaced.
   starvation. Re-running until green, with nothing explained, is the same reflex
   as scrolling past a warning. (Ruling: Scott, PR #27; the fix is #28.)
 
+### A failure establishes an event, not a condition — and "unavailable" is self-serving where "flake" is not.
+
+- **A failure establishes an event, not a condition — and "unavailable" is
+  self-serving where "flake" is not.** The law above run backwards. A green does
+  not refute a fail; a fail does not establish a *standing state* either. Two
+  timed-out probes are two events, and "the instrument is gone" is a claim about
+  every future run — a different kind of statement, needing different evidence,
+  and the cheapest evidence against it is to try the thing again.
+  - **The asymmetry is the reason this is a key and not a footnote on the flake
+    law.** Both diagnoses are inferences from a transient failure, and they differ
+    in which direction they cost the actor. Calling a fail a *flake* incurs an
+    obligation: bound the cause, or the diagnosis is inadmissible. Calling an
+    instrument *unavailable* **retires** one — the check need not run, and the
+    procedure that ordered it can be rewritten to match. So the incentive gradient
+    points at exactly one of the two readings, which means the reading has to be
+    earned against that gradient rather than adopted because it fits the evidence.
+    An actor's diagnosis about its own obligations is the class where the actor
+    does not rule: *state the case and flag it.*
+  - **The specimen.** `docker version` timed out twice on the arm64 dev box across
+    two PRs, and the absence was reported honestly both times. On the third
+    reading the honest report was replaced by an inference — the daemon is
+    unrecoverable — and three artifacts were built on it in one session: a
+    procedure change demoting the local cross-check, a `CLAUDE.md` edit ordering CI
+    as primary, and a *law* in this file blessing the demotion. Scott restarted the
+    daemon and it came back, then named `janus.local` — a native x86_64 machine
+    that had been on the network the entire time and that no procedure here had
+    ever mentioned. **The cheap remedies were a restart and a question, and neither
+    had been tried.** The question was the more expensive omission: it would have
+    produced a *better* instrument than the one declared dead, not merely the same
+    one revived.
+  - **A corrected law and a law on a refuted premise are different artifacts**
+    (ruling: Scott, on the mint). The demotion law was deleted rather than amended,
+    because a law is read by every future session and inherits the truth of its
+    example — a specimen ending in a false sentence teaches the false sentence,
+    and it teaches it with this corpus's authority. It exists nowhere in history:
+    it was written, falsified within the hour, and removed before its first commit.
+    That is the record it deserves, and this entry is the part of it worth keeping.
+  - Operative, for a check that will not run: report the **event** (this probe, this
+    time, this exit code), never the condition. Distinguish *hung* from *down* from
+    *absent*, since a hung mechanism does not refuse but hangs and everything built
+    on it inherits the hang — a bounded probe reading exit 124 is the cheapest
+    instance of *verdict channel and mechanism channel are different instruments*
+    applied to availability. Then repair, or escalate, before any procedure is
+    rewritten; `scripts/xcheck-amd64.sh` carries the shape as code, with `NOT RUN`
+    at exit 4 for both unavailability paths and every exit path naming its
+    instrument. (Ruling: Scott, PR #339 review, minting a corrected key over a
+    withdrawn one: *"a failure establishes an event, not a condition — and
+    'unavailable' is self-serving in a way 'flake' isn't, because it retires an
+    obligation. No control can reach it, which is exactly what index space is
+    for."* The room was **not** the 165 bytes that PR claimed to have returned —
+    that figure was `len(str)` in Python over a UTF-8 file full of em-dashes, so it
+    counted *characters*, and the section had in fact grown by 132 **bytes**. The
+    key's 283 bytes were paid for by trimming that same section to 109 under its
+    baseline. *Ask the instrument, not a proxy for it* — `os.Stat` and `wc -c`
+    answer in the unit the ceiling is written in.)
+
 ### Budget by the quantity the purpose names.
 
 - **Budget by the quantity the purpose names.** A gate whose budget unit differs

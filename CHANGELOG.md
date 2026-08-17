@@ -877,8 +877,47 @@ weakly-ordered platform.
   on its premise**: it asserted the box was unfixable, one restart falsified that, and a law whose
   specimen ends in a false sentence is testimony. Recorded because the near-miss is the point — two
   failed probes were treated as a permanent condition, and the cheap remedies (restart it, ask) were
-  never tried. `CLAUDE.md` is **165 bytes smaller** than before the change: the recipe and its reasoning
-  went to the script's header, so no room was bought from `claudeMDCeiling`.
+  never tried. The recipe and its reasoning went to the script's header, and no room was bought from
+  `claudeMDCeiling`.
+  - **The law the review then ordered is minted, and the "165 bytes returned" that funded it was a
+    wrong number.** *A failure establishes an event, not a condition — and "unavailable" is self-serving
+    where "flake" is not*, in `docs/laws/evidence-and-instruments.md` beside the flake law it inverts.
+    The 165 was `len(str)` in Python over a UTF-8 file, so it counted **characters**; measured with
+    `wc -c` the section had *grown* by 132 bytes. The key's 283 bytes were funded by trimming that
+    section to **109 bytes under its baseline** instead.
+
+- **The ratio's instrument column is split by provenance — carried by the work versus ordered in
+  review.** Scott's directive: *"a number I can move by ordering work isn't a measure of your
+  discipline… my own contribution to the ratio stops hiding inside yours"* (PR #339 review). The
+  whole-column figure keeps being quoted and the comparator is untouched (#113); beneath it
+  `scripts/ratio.sh` attributes the same added lines per commit from a `Ratio-Class: carried` or
+  `Ratio-Class: ordered <citation>` trailer, and prints a carried-only ratio, the ordered citations,
+  and a reconciliation of the per-commit sum against the range diff. The comparator itself moved into
+  one shared variable rather than being pasted into the second reader — a second copy of a
+  ruling-fixed rule is a second place for it to drift.
+  - **`ordered` must cite, absence is `unattributed`, and `--window` refuses.** An `ordered` claim
+    moves lines out of the column that measures the actor, so it points at an artifact outside the
+    actor and the citation is printed for review to refuse; an `ordered` with nothing after it, or an
+    unrecognized value, is counted unattributed **and named** — a malformed trailer landing silently
+    in the flattering column is the same defect as no trailer, one step better hidden. A commit with
+    no trailer is unattributed rather than carried, and unattributed lines are excluded from the
+    carried-only ratio, so a range nobody annotated **reports that instead of reporting a number**.
+    `--window` prints **NOT AVAILABLE**: squash merges erase per-commit provenance, and zero ordered
+    lines would be a verdict where the honest report is an absent measurement.
+  - **This PR's own split is mostly unattributed, which is the correct reading** — its first three
+    commits predate the trailer, and rewriting pushed history to annotate them would have moved the
+    commits Scott's review anchors to. The first clean comparison is the `check_global` slice against
+    the 1:8.3 baseline, which is what the directive asked for.
+  - Four classification paths and both reconciliation paths were watched die in a scratch repo
+    (carried; ordered-with-citation; ordered-uncited; an unrecognized value; exact reconciliation;
+    and an overlap gap of +8 on this PR's own range), plus the `--window` refusal and the
+    empty-range `n/a`.
+  - **`CLAUDE.md` ends at 38400 of 38400 — zero bytes of headroom**, the split's four-line governance
+    clause having spent the last of it, paid for by compressing this agent's own prose in the same
+    section (the duplicated stop-condition restatement, and two paragraphs of the CI-waiting text).
+    Stated as the structural note it is: the next law or governance clause has no prose left to trim
+    and needs a law folded into a sibling as a specimen — Scott's #307 precedent — which is a
+    demotion, and therefore his call rather than this agent's.
 
 - **The blind-spot register gains the message oracle's resolution limit.** 0003's message match
   discriminates *layers* and never *rules within a layer*: two rules producing the same string are one
