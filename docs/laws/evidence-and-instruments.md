@@ -111,6 +111,28 @@ amended rather than replaced.
     number instead of to a stamp. The unit half is the ninth specimen under
     *coverage is a claim*: `os.Stat` and `wc -c` answer in the unit the ceiling is
     written in.
+  - **The same organ in a different register: a hedge that drifts toward the
+    reading which retires an obligation** (cross-reference ordered by Scott, PR
+    #347 relay — *"they are the same organ; the second is already minted and the
+    first is its specimen in a different register"*). This law's register is
+    **diagnosis**, about a failure that already happened. The other is
+    **forecast**, about work not yet done, and it reads: while costing #343's
+    remaining causes, the agent wrote that a too-permissive port would be "caught
+    by the reject-direction corpus, which is large", then measured it and found
+    **21 admissions in one file** — a figure that was available the whole time and
+    that changed the plan when it arrived. Its own correction named the mechanism:
+    *vague in the direction that flattered the plan.* The gradient is identical.
+    "Unavailable" retires the obligation to run a check; a vague "the corpus will
+    catch it" retires the obligation to say **what** would catch it, **how many**
+    there are, and **which column** they sit in — and it retires it by being
+    unfalsifiable rather than by being wrong, which is why no verdict channel
+    reports it. What separates the two registers is only *when* the cheap
+    measurement was available: for the daemon it was a restart and a question,
+    here it was one `grep` and one board read. **Operative, and it is the
+    diagnosis law's rule run forwards:** a claim about what an instrument *will*
+    catch is stated as a population — a count, a file, a bucket — or it is stated
+    as unmeasured. A hedge with no number in it is not a cautious claim; it is an
+    absent one wearing caution.
 
 ### Budget by the quantity the purpose names.
 
@@ -192,6 +214,54 @@ amended rather than replaced.
         covers `cmd; echo`, `cmd || true`, `cmd &`, and the `$(…)` whose status the next link in a
         `; \` chain discards. #297 carries the port. (Ruling: Scott, PR #295; pointer supplied on
         PR #298.)
+
+### A command's exit status belongs to whatever ran last.
+
+- **A command's exit status belongs to whatever ran last.** If you need a
+  command's verdict, nothing runs after it: redirect its output and read the
+  file. Minted after **six** instances across four unrelated tools, which is what
+  established that the subject is command composition and not any one tool.
+  (Ruling: Scott, PR #347 relay — *"'a command's exit status belongs to whatever
+  ran last' is right, it covers all six, and no control can reach ad-hoc
+  composition, which is exactly what index space is for."*)
+  - **The five wordings that failed, in order, because the sequence is the
+    evidence.** `read the verdict from its own command` · `never off the end of a
+    watch pipeline` · `state the boundary` · `prefer a chain-free habit` · `never
+    append a status-reporting suffix to a command`. Every one of them describes
+    **care while composing a chain**, so each leaves the construct's premise
+    standing and asks only that it be written more carefully. The premise is the
+    thing to remove: the status is *already reported natively*, so the wrapper has
+    no job, and a construct with no job cannot be used carefully — only be absent.
+  - **The specimens.** `; echo "xcheck exit=$?"` on a cross-architecture run, so a
+    background task reported **exit 0** over a suite that never started (#344).
+    Then `gh run watch … --exit-status ; echo "watch done"` — a suffix appended to
+    a flag whose entire purpose is to supply the status the suffix discarded, on a
+    command printed correctly in `CLAUDE.md` two lines away.
+  - **The sixth is why the general form was needed, and it broke the fifth wording
+    within one tool call of that wording being recorded.** `xcheck … | grep -E
+    'board total|…'` on a run printing thousands of lines: the runner reported
+    **exit 0**, which was `grep`'s. A filter is **not** a status-reporting suffix
+    and it is appended for a completely real reason (volume), so "don't" is not
+    its remedy — *not in the same pipeline* is. Scott's own diagnosis of the mint:
+    *"I scoped my rule to the mechanism I'd just seen instead of to the class,
+    which is the over-narrow predicate committed in prose rather than in code."*
+    That is *a guard's trigger predicate is itself a claim about the space*,
+    committed by a rule instead of by a regex — and prose is the worse medium for
+    it, because an under-matching predicate in code can at least be falsified.
+  - **What rescued the sixth is not available in general.** `xcheck-amd64.sh`
+    prints `verdict from NATIVE x86_64 (host), exit N` itself, so the fact
+    survived in the *output* channel after the *status* channel was overwritten —
+    and only because that script was built to name its instrument on every path.
+    Any ordinary command in that position leaves a green from `grep` and no way to
+    know. Two laws land on it exactly: *verdict channel and mechanism channel are
+    different instruments* (two channels existed and the overwritten one was
+    read), and *a verdict without an identity check is hearsay* (`exit 0` was a
+    true statement about a different process than the one being asked about).
+  - Operative: run it bare. `cmd > /tmp/out 2>&1` then read `/tmp/out`, and take
+    the verdict from the runner's own exit code or from a dedicated query such as
+    `gh run view "$RUN" --json conclusion`. No control can reach this — it is
+    composition at the moment of writing, upstream of every gate in the repo,
+    which is the reason it is index-resident rather than a test.
 
 ### Second-order honesty: apply the discipline to its own output.
 
