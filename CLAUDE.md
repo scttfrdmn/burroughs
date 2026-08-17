@@ -5,8 +5,8 @@ language-directed for Go itself. The B5000 favored ALGOL; Burroughs favors Go. T
 was set up by chat-Claude with Scott; you are the implementation agent.
 
 [`docs/burroughs-contract-v0.1.md`](docs/burroughs-contract-v0.1.md) is **normative** — read it
-before writing any code. You MUST
-NOT edit its normative text (§§0–9) without Scott's explicit sign-off; §10 open questions are
+before writing any code. You MUST NOT edit its normative text (§§0–9) without Scott's explicit
+sign-off; §10 open questions are
 resolved *by decision doc*, never silently in code. Posture: **correctness-neutral,
 performance-partisan** (§0) — the upstream spec suite is the neutrality guarantee, and
 partisanship lives in API surface and optimization priorities only.
@@ -15,14 +15,14 @@ partisanship lives in API surface and optimization priorities only.
 of the corpus lives in `docs/laws/` and is read when its subject is in play. **No measured
 figure lives here** — any sentence asserting a measured quantity is generated or deleted
 (Scott's rider, [ADR 0029](docs/decisions/0029-the-public-boundary-run-on-a-validated-path-decline-as-a-third-outcome-and-a-value-that-converts.md)).
-Ask the instrument: `go test ./internal/spec/ -run TestPhase1Files -v`
-prints the board, `make ratio RATIO=<rev>` the engine/instrument lines.
+Ask the instrument: `go test ./internal/spec/ -run TestPhase1Files -v` prints the board,
+`make ratio RATIO=<rev>` the engine/instrument lines.
 
 ## Phase ladder
 
-- **v0 — interpreter.** Decoder → internal form ([0002](docs/decisions/0002-interpreter-strategy.md))
-  → validator → interpreter, Wasm
-  MVP core suite green with 3.0-feature gates present and off. No compiler.
+- **v0 — interpreter.** Decoder → internal form
+  ([0002](docs/decisions/0002-interpreter-strategy.md)) → validator → interpreter, Wasm MVP core
+  suite green with 3.0-feature gates present and off. No compiler.
 - **v1 — threads + safepoints.** Contract §§2–5: OS-thread spawn, futex wait/notify,
   engine-native epochs/STW, the §4 boundary memory model with its litmus battery.
 - **v2 — stack switching.** Contract §7: growable continuations, morestack analog.
@@ -145,15 +145,15 @@ dead ones.
   before any report; it is the local mirror of CI, so a surprise in CI is a bug in the Makefile.
   `make fuzz`, `make bench`, `make vuln`, `make cite`, `make close` for the rest. Tools are
   pinned in `tools/go.mod` via `tool` directives, never in CI YAML
-  ([0005](docs/decisions/0005-tooling-gates.md)), and the
-  engine's own `go.mod` stays dependency-free. Suppression is **noticed-and-named or not at
+  ([0005](docs/decisions/0005-tooling-gates.md)), and the engine's own `go.mod` stays
+  dependency-free. Suppression is **noticed-and-named or not at
   all**; **benchstat or it didn't happen**; fuzz corpora seed from the spec suite at run time and
   crashers are committed. A toolchain bump is its own gated PR.
 - Versioning is **SemVer 2.0.0** with minors mapped to milestones, so the version number is a
   conformance statement rather than a mood; the contract versions independently and every release
   states which contract version it implements
-  ([0004](docs/decisions/0004-versioning-and-contract-independence.md)). `CHANGELOG.md` follows **Keep a
-  Changelog 1.1.0**, hand-maintained, newest first, `[Unreleased]` at the top — gate flips are
+  ([0004](docs/decisions/0004-versioning-and-contract-independence.md)). `CHANGELOG.md` follows
+  **Keep a Changelog 1.1.0**, hand-maintained, newest first, `[Unreleased]` at the top — gate flips are
   **Added** with their `gate:` name, graves are **Fixed** with their `type:grave` link.
 - License **Apache 2.0**, © 2026 Scott Friedman. `LICENSE` is the verbatim upstream text; the
   copyright line lives in `NOTICE` (Apache 2.0 §4(d)).
