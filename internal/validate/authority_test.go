@@ -169,6 +169,25 @@ import (
 // assertion holding each one, `offset_test.go` for the first. (Ruling: Scott, PR #335 relay —
 // accumulate the set in the one place that already exists for it, or the next slice rediscovers the
 // shape.)
+//
+// # This register is a floor, not an extent, and that is #333's shape again
+//
+// The paragraph above says "seven found by seven bills" and stops one step short of naming why that
+// is a defect rather than a caveat. **The seven were collected from the mutations somebody happened
+// to run while working on some other slice**, so the register's domain is "the rules that got
+// mutated" — and a list assembled that way can only ever agree with itself. A fourth unwitnessed arm
+// in a file nobody mutated moves no entry here, exactly as #333's total summed over the registry
+// could only ever agree with the registry. Sited beside the list rather than left implicit because
+// the failure mode is that a *growing* register reads as a census: five slices, five entries, and no
+// reader can tell collection from coverage.
+//
+// The derivation exists and has been used informally at every discovery: **an arm is unwitnessed
+// exactly when mutating it moves neither lane.** That makes the extent computable rather than
+// collectable, so what stands between this floor and an extent is a full sweep across the package's
+// arms under that predicate — filed as **#338**, deliberately deferred, because it is instrument work
+// and the counter says the next PRs are product. Cited as a tracked sweep rather than described as an
+// intention, which is *a design debt is discharged by a tripwire, never by an intention* honoured at
+// the only strength a deferral can honour it. (Ruling: Scott, PR #337 relay.)
 
 // TestUnknownCategoriesMatchTheReference is ErrUnknown*'s own promised control, in both
 // directions.
@@ -178,9 +197,12 @@ import (
 // *parsed* rather than transcribed: a renamed category fails the forward direction and a new one
 // fails the reverse.
 //
-// The reverse direction is the half that matters. Slice 1 claims seven of the ten, and the three it
-// does not claim are pinned as a literal set — so a later slice adding `tag` has to come here and
-// say so, which is the difference between a scope declaration and a gap.
+// The reverse direction is the half that matters, and it spent five slices *saying* so on a
+// mechanism it did not have. This paragraph read: "Slice 1 claims seven of the ten, and the three it
+// does not claim are pinned as a literal set — so a later slice adding `tag` has to come here and say
+// so." Phrased historically now, because #336 measured it and it was false: a slice adding `tag`
+// came, and nothing here made it say anything. What holds the claim today is the forward loop's
+// derived domain, described at its own site below.
 func TestUnknownCategoriesMatchTheReference(t *testing.T) {
 	src := testenv.RequireSpecRef(t, testenv.RefValidML)
 

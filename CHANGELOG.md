@@ -823,6 +823,11 @@ weakly-ordered platform.
   `valid.ml`'s own bindings and arms — which is #333's lesson applied at construction. Six descriptions
   in `bulk.go`, `instr.go`, `stack.go`, `module.go` and `validate.go` were rewritten to name their
   subject, moving them from the residue column into the checked one. (Ruling: Scott, PR #335 relay.)
+  - **The tripwire enforces agreement, not provenance, and its header says so.** It catches a
+    description that *disagrees* with the cited lines; a description inferred from the surrounding Go
+    code that happens to land on the right subject passes untouched. The five specimens were found by
+    reading `valid.ml`, and a lucky sixth would have been a sixth pass — so the measurement that minted
+    the control is one the control could not have taken. (Ruling: Scott, PR #337 relay.)
 
 - **The blind-spot register gained its fourth entry, and #333 was re-sited.** The rules with **no
   corpus witness at any gate setting** now accumulate in `authority_test.go`'s header — seven members,
@@ -834,6 +839,13 @@ weakly-ordered platform.
   `docs/laws/controls.md`: the defect is upstream of any bound — a total computed over the registry
   itself can only agree with the registry — so it is a derive-the-domain grave and not an extent one.
   (Rulings: Scott, PR #335 relay.)
+  - **The register is recorded as a floor, not an extent, which is #333's shape a third time.** Its
+    domain is "the rules somebody happened to mutate", so a list built that way can only agree with
+    itself, and a growing one reads as a census. The derivation is known — an arm is unwitnessed exactly
+    when mutating it moves neither lane — so the extent is computable rather than collectable, and the
+    sweep that would compute it is filed as **#338**, deferred as instrument work. Separately, the
+    sentence in `TestUnknownCategoriesMatchTheReference`'s doc comment that #336 falsified is phrased
+    historically now instead of still asserting the mechanism it lost. (Ruling: Scott, PR #337 relay.)
 
 - **The citation instrument's domain is derived, not enumerated** (grave
   [#333](https://github.com/scttfrdmn/burroughs/issues/333)). `citationFiles` named four files under a

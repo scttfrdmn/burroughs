@@ -73,6 +73,23 @@ import (
 // A line carrying several ranges is checked against *any* of them rather than each: two subjects and
 // two ranges on one line are not claiming a pairing, and a per-clause parse is what a pairing check
 // would need. Stated because it means a swapped pair inside one line survives this check.
+//
+// # It enforces agreement, not provenance — a lucky inference passes
+//
+// The rule this holds is *the description is written by reading the cited lines*, and that is a claim
+// about **how the description was produced**, which no test can see. What this check asks is whether
+// the description *agrees* with the lines — so it catches a description that disagrees, and a
+// description inferred from the surrounding Go code that happened to land on the right subject passes
+// it untouched. Agreement is the correct proxy and this is the right control; it is not the rule, and
+// the gap between them is one-directional in the reassuring direction.
+//
+// Worth being exact about how the five specimens were actually found, since it is the same gap: they
+// were caught by **reading `valid.ml`**, before any of this existed. Six descriptions, five wrong, and
+// had the sixth been inferred rather than copied it would have been a sixth pass here with no more
+// provenance than the five. So the measurement that minted this control is a measurement this control
+// could not have taken — which is the honest statement of what it buys: it makes a *wrong* inference
+// findable by machine, and leaves a *right* one indistinguishable from a reading. (Ruling: Scott, PR
+// #337 relay.)
 func TestRangeCitationSubjectsAreReadFromTheReference(t *testing.T) {
 	ref := testenv.RequireSpecRef(t, testenv.RefValidML)
 	lines := strings.Split(ref, "\n")
