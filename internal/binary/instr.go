@@ -262,7 +262,7 @@ type instrCtx struct {
 	// heaps stages the heaptypes read by the current instruction, in wire order.
 	//
 	// **Deliberately not a reftype and deliberately not filed by `imms`.** The wire holds a bare
-	// *heaptype* everywhere this arm runs (decode.ml:603 for `ref.null`, :636-650 for the cast
+	// *heaptype* everywhere this arm runs (decode.ml:604 for `ref.null`, :636-650 for the cast
 	// family), so `decodeHeapType` always yields `null: false` and the nullability of the type
 	// actually being tested comes from somewhere else entirely: the opcode for `fb 14`-`fb 17`,
 	// the flags byte for `fb 18`/`fb 19`. An arm inside `imms` cannot see either — it is a switch
@@ -278,20 +278,38 @@ type instrCtx struct {
 	// `heaps`, nullability applied — and `hasCasts` distinguishes "filed" from "empty", on the
 	// same discipline `hasLabels` follows.
 	//
-	// Set by `castTypes` rather than by an `imms` arm, and only for the six cast-family opcodes:
-	// `ref.null` reads a heaptype too and files nothing, because 0027 decision 4 is that a null
-	// keeps no heaptype (the reference's `NullRef` takes no argument and `type_of_ref` maps every
-	// null to a single universal `BotHT`). A `ref.null` entry here would be a retained fact with
-	// no consumer, which is the shape `immVecValType`'s comment declines for the same reason.
+	// Set by `castTypes` rather than by an `imms` arm, and for seven opcodes: the six of the cast
+	// family plus `ref.null`, whose entry the previous revision of this comment declined as "a
+	// retained fact with no consumer". The decline was right on 0027's rule and is spent by the
+	// same rule — the consumer arrived. It cited decision 4, which holds and is about something
+	// else: a null *value* keeps no heaptype (`NullRef` is nullary, `type_of_ref` gives one
+	// universal `BotHT`), so no interpreter arm can want it. The *instruction's* static type is
+	// `(Null, ht)` (valid.ml:714-716), which #9's validator cannot do without. See castTypes.
 	casts    []ValType
 	hasCasts bool
 
 	// castsOut is where emit files a staged cast-type vector, or nil when this read is
-	// recognizing only — parallel to `labelsOut`/`catchesOut` and nil in exactly the same cases.
-	// Unlike those two the const-expression case is not vacuous by grammar: `ref.null` is
-	// const-legal and does read a heaptype. It is vacuous by the rule above instead — a
-	// const-expression read never reaches `castTypes`, because no cast-family opcode is
-	// const-legal.
+	// recognizing only — parallel to `labelsOut`/`catchesOut`, and nil for the same *set* of
+	// reads.
+	//
+	// **The const-expression case stopped being vacuous when `ref.null` began filing, and the
+	// difference is a declared gap rather than a dropped fact.** The previous revision argued
+	// vacuity from the grammar's other side — no cast-family opcode is const-legal, so nothing
+	// reached `castTypes` — and `ref.null` is const-legal, so a `ref.null` in a global
+	// initializer, an element expression or a data offset now stages a reftype that `constExpr`
+	// has nowhere to file: `Global.Init`, `ElemSegment.Offset`/`Exprs` and `DataSegment.Offset`
+	// are bare `[]Instr` with no side table beside them.
+	//
+	// Not plumbed, because the consumer that closed the function-body half has not asked for this
+	// half: `internal/validate` walks const expressions for `checkConstGlobals`' ordering rule and
+	// does not *type* them, so a field here would be retention ahead of its consumer — 0016 again,
+	// one level in. Declared rather than intended: TestConstExprRefNullFilesNoCastType pins the
+	// state and #361 tracks it, so const-expression typing arrives to a known gap instead of to a
+	// `CastTypes` that answers false for an instruction that has a type.
+	//
+	// Silent-loss is the failure this pin is against, and it is the only one available here:
+	// `emit` drops a staged vector when `castsOut` is nil, which is correct for a recognizing read
+	// and indistinguishable from it for a retaining one.
 	castsOut *map[int][]ValType
 
 	// selects stages `select`'s result-type annotation, and `hasSelects` distinguishes "filed"
@@ -381,9 +399,17 @@ func (c *instrCtx) emit(prefix byte, op uint32) {
 	c.labels, c.hasLabels = nil, false
 	c.catches, c.hasCatches = nil, false
 	c.selects, c.hasSelects = nil, false
-	// `heaps` is cleared here and not by `castTypes`, so an instruction that reads a heaptype
-	// and files nothing (`ref.null`) cannot leave one for the next instruction to inherit —
-	// the stale-field failure this whole staging area is documented against.
+	// `heaps` is cleared here and not by `castTypes`, so an instruction that reads a heaptype and
+	// files nothing cannot leave one for the next instruction to inherit — the stale-field failure
+	// this whole staging area is documented against.
+	//
+	// **`ref.null` was this comment's example and stopped being one** when it began filing, which
+	// leaves the clearing with no member of its class: the table's `immHeapType` rows are now
+	// exactly `castTypes`' filing rows, and a row that errors before filing never reaches `emit`
+	// at all. Kept and *declared* rather than deleted, because the invariant it enforces is that
+	// staging is per-instruction — and the class it guards is reopened by the next upstream row
+	// that reads a heaptype without a cast type to file. TestEveryHeapTypeRowFilesACastType is
+	// that tripwire, derived from the table rather than from this list of two.
 	c.heaps, c.casts, c.hasCasts = nil, nil, false
 }
 
@@ -644,6 +670,10 @@ func (c *instrCtx) instr(r *reader) error {
 	if err := c.imms(r, b, info.imms); err != nil {
 		return err
 	}
+	// Before `emit`, which is what files the staged side tables and then clears them. No
+	// structural row files a cast type, so this sits outside the branch below rather than
+	// inside it.
+	c.castTypes(0x00, uint32(b), 0)
 	// The structural arms emit themselves, because their extent is not known until the
 	// nested block and its terminator have been read — and because the emitted form has
 	// to place its END. See structural.
@@ -739,6 +769,18 @@ const (
 	brOnCastFail uint32 = 0x19
 )
 
+// opRefNull is `ref.null` (0xD0), named for brOnCast's reason arriving in the single-byte
+// region: `castTypes` now dispatches on it by opcode identity, and a bare `case 0xd0:` in a
+// function whose other arms are 0xFB sub-opcodes reads as a sub-opcode.
+//
+// **Checked against the generated table rather than trusted** — TestRefNullOpcodeMatchesTheTable
+// asserts `OpMnemonic(opRefNull) == "ref_null"`, which is the same two-authorities-one-fact
+// shape brOnCastImmSeq has. The hazard is sharper here than a misread hex digit: 0xD1 and 0xD2
+// are `ref.is_null` and `ref.func`, adjacent rows in the same family, and filing a heaptype
+// under either of those would stage a *neighbour's* type at an index a consumer reads as its
+// own — accept-direction, and invisible on a board (§9 G-3).
+const opRefNull uint32 = 0xD0
+
 // brOnCastImmSeq is what the generated table must hold for both br_on_cast rows, and what
 // brOnCastImms hand-codes. Two authorities, one fact, checked against each other rather
 // than trusted — the shape `structural` already has, for the same reason: a hand-written
@@ -818,13 +860,23 @@ func (c *instrCtx) brOnCastImms(r *reader, ims []imm) (byte, error) {
 // in the encoder both, which is the two-places-know-one-fact shape this package files tripwires
 // against.
 //
-// # Called for every prefixed opcode and answering for six
+// # Called for every opcode that reads a heaptype, and answering for seven
 //
 // The membership test is a switch rather than a table lookup, because the mapping *is* the
 // nullability and a table would hold the same three columns in a shape that reads as data. Rows
-// this switch does not name stage nothing and file nothing — including `ref.null` (0xD0), which
-// is not prefixed and so never arrives here at all, and which keeps no heaptype by 0027 decision
-// 4 in any case.
+// this switch does not name stage nothing and file nothing.
+//
+// **`ref.null` (0xD0) is the seventh and the only non-prefixed one**, added when its consumer
+// arrived. The previous revision of this paragraph said it "never arrives here at all, and keeps no
+// heaptype by 0027 decision 4 in any case", and both halves need correcting rather than one. The
+// call site moved: `instr` now calls this for every single-byte row. And decision 4 is about a
+// **value**, not an instruction — `NullRef` is nullary and `type_of_ref` maps every null to
+// `(Null, BotHT)`, so no *run-time* reader can want the spelled heaptype, which is why the
+// interpreter's arm pushes one value for all thirteen. The instruction's **static type** is a
+// different fact: `valid.ml:714-716` types `ref.null ht` as `[] --> [RefT (Null, ht)]`, and a validator that
+// cannot tell `ref.null func` from `ref.null extern` cannot reject the vectors that mix them. So
+// the gap 0027 left open closes on its own named condition — a consumer arriving — and the
+// consumer is #9's validator rather than the #8 encoder it forecast.
 //
 // `fb 18`/`fb 19` are here now, and they are the reason this function takes a flags byte. The
 // previous revision deferred them with the note that their malformedness requirement sits
@@ -840,6 +892,33 @@ func (c *instrCtx) brOnCastImms(r *reader, ims []imm) (byte, error) {
 // alone (interp/castop.go), so the wrong read has no syntax rather than a comment telling it not
 // to. The full pair stays available here because #9's validator genuinely needs `rt1`.
 func (c *instrCtx) castTypes(prefix byte, sub uint32, flags byte) {
+	if prefix == 0x00 && sub == opRefNull {
+		// `ref.null ht` — the one non-prefixed row that files, and it arrived when its consumer
+		// did. 0027's consequences left this gap open in as many words ("closing it here would be
+		// retention ahead of its consumer, which is the thing 0016 exists to refuse") and named the
+		// expected consumer as the text encoder; the one that actually knocked is #9's validator,
+		// which cannot type `ref.null` while all thirteen heaptypes decode to the same `Instr`.
+		//
+		// **Filed here rather than staged as a word, and that is the whole reason this site is
+		// reused.** `immStagedBits` keeps one global cost per immediate kind with no per-row
+		// exception, and that single cost is what lets `br_on_cast` carry two heaptypes at the
+		// 128-bit ceiling it already sits on. Making `immHeapType` claim a word to serve `ref.null`
+		// would spend `br_on_cast`'s headroom on the row that does not need it.
+		//
+		// **`Null`, unconditionally** — `decode.ml:604` is `ref_null (heaptype s)` and the type of
+		// that instruction is nullable by construction, so unlike `ref.test`/`ref.cast` there is no
+		// opcode bit and no flags bit to read. The nullability is the instruction's meaning, not an
+		// encoding detail.
+		if len(c.heaps) < 1 {
+			// Unreachable for the same reason the 0xFB guards below are: `instr` returns before
+			// calling this if the heaptype arm failed. Stated rather than assumed, because a
+			// filing site that indexes a staging slice must say what extent it requires.
+			return
+		}
+		c.casts = append(c.casts, refNull(c.heaps[0], true))
+		c.hasCasts = true
+		return
+	}
 	if prefix != 0xFB {
 		return
 	}
@@ -1115,7 +1194,7 @@ func (c *instrCtx) imm(r *reader, im imm) error {
 		c.stage(word)
 		return nil
 	case immHeapType:
-		// `let ht = heaptype s` (decode.ml:603, :636-639) — `heaptype`, not `reftype`.
+		// `let ht = heaptype s` (decode.ml:604, :636-639) — `heaptype`, not `reftype`.
 		//
 		// This read `decodeRefType`, and the two productions disagree in **both**
 		// directions: `heaptype`'s first branch is a type index, which `reftype` has no

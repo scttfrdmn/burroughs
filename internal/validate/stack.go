@@ -19,6 +19,12 @@ type validator struct {
 	// label vector is the one slice 1 reads.
 	curFunc *binary.Func
 
+	// refs is `context.refs` restricted to the function index space: the set `ref.func` may name
+	// (`valid.ml:1152`, and declaredFuncs for what contributes to it). Module-scoped and computed
+	// once, like the reference's, because it is a property of the module and not of the body — a
+	// body's own references are excluded from it by construction.
+	refs map[uint32]bool
+
 	// stack holds operand *types*. Its height is not the slot count — see slots().
 	stack  []binary.ValType
 	frames []frame

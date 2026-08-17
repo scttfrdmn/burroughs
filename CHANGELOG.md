@@ -21,6 +21,51 @@ weakly-ordered platform.
 
 ### Added
 
+- **The reference-type slice — `ref.null`, `ref.func`, `ref.is_null`, `table.get`, `table.set`
+  (`internal/validate/ref.go`, #9 slice 6, #359).** Five rules whose common subject is a *reference
+  type*, ported from `valid.ml` arm by arm. `ref.null ht` takes its type off 0027's cast-family side
+  table rather than inventing one — the alternative available to a validator without the retention is
+  to push `funcref`, which most of the corpus spells and which would then accept
+  `(global externref (ref.null func))`, an accept-direction defect no `assert_invalid` vector can
+  score (§9 G-3). `ref.func x` types as a concrete non-nullable `(ref $t)` naming the function's own
+  type index, and satisfies a `funcref` requirement through the relation rather than by weakening the
+  rule. `ref.is_null` **peeks before it pops**, because its signature is computed from its operand.
+  `table.get`/`table.set` read *both* types off the table — index at the table's address type, element
+  at its reference type — which is #343 cause 2's shape avoided rather than re-earned.
+  - **`refer_func`'s declaration rule is its own sentinel, `ErrUndeclaredFunc`, deliberately outside
+    the `ErrUnknown*` family.** The index resolves and the module is still invalid, so "unknown" would
+    be a false statement about a perfectly well known function; `elem.wast` keeps the two as separate
+    rows with separate expectations. The declared set is `Free.module_` over the module with **bodies
+    emptied and start removed** — exports of kind func, global initializers, element expressions in
+    every mode including the index form the front end desugars, and active-mode offsets.
+  - **One source is missing and it is declared: a table's own initializer expression.** `free.ml`'s
+    `table` contributes `const c` and `binary.Table` retains no initializer, so
+    `(table 1 funcref (ref.func $f))` would be reported undeclared. Reject-direction, gated behind GC,
+    and currently *unwitnessable one layer earlier* — the wat emitter has no such field (#8), so the
+    vector is declined by the encoder and this rule is never asked.
+  - **Board, default lane: `pass 60790 → 60837`, `fail 235 → 188`, and the whole delta is one
+    stratum** — `validateFailCeiling` 86 → 39, `validateDeclineCeiling` 55 → 8, with encode and exec
+    unmoved and the admission and wrong-message bounds unmoved at 31 and 0. That is a vocabulary
+    slice's signature: rules became *known*, none became *right*. The residue of 8 is the eight
+    relaxed-SIMD operators #341 named in the same breath as these five — a structural residue closing
+    on a pre-registered list two PRs later, not a slice's leftovers.
+  - **All-on lane: `pass 64592 → 64654`, `declined 258 → 196`, and the number is smaller than the rows
+    it moved.** 107 declines drain from the five mnemonics, each to exactly zero, and **45 of those
+    vectors decline again one instruction later** on a GC or tail-call operator the default lane never
+    decodes. 107 − 45 = 62 closes against the pass delta to the row. A decline moving *within* the
+    column is indistinguishable from a rule that did not land, so the composition was diffed
+    per-mnemonic rather than the total quoted — the five reaching exactly zero is what says the rules
+    work.
+  - Twelve falsifications, each confirmed to kill exactly the rows it should — pushing `funcref` for
+    `ref.null` leaves precisely the `func` row alive, dropping `ref.is_null`'s classification kills
+    only the four numeric rows, walking bodies in the declared set kills the bodies *and* start rows
+    together (the tell that the two exclusions are one rule).
+  - The `assert_invalid` destination ledger's `declined` column **reaches zero in both groups**, so
+    the rest of #9's work plan is no longer readable there — it is readable in `accepted` and in the
+    board's other command kinds. The CLI and public-API decline fixtures are re-pointed onto
+    `i8x16.relaxed_swizzle`, the first specimen whose retirement is a *gate flip* rather than the next
+    slice.
+
 - **`(module binary …)` asks fact 2 as well — the last module definition still scored on how it came
   into being (#353, #345's flagged remainder).** #341 gave the text and quote forms a validation
   check and left the byte-image form where it stood; the arm's own comment conceded it, in the words
@@ -1487,6 +1532,22 @@ weakly-ordered platform.
   element segment's *offset* and an element *expression* are different lines of the user's module.
 
 ### Fixed
+
+- **grave #362: an identity that closes against a hand-maintained literal is a pin wearing a
+  cross-check's clothes** ([#362](https://github.com/scttfrdmn/burroughs/issues/362)). The
+  `assert_invalid` destination ledger's cross-check asserted `62` while its message named
+  `validateDeclineCeiling + validateAdmitCeiling` as the derivation. #341 then raised the first
+  constant 31 → 55 — `module text` declines, a population the ledger's `assert_invalid`-restricted
+  left side structurally cannot hold — so the stated derivation evaluated to 86 for eight merges
+  while the assertion kept comparing against the literal. Nothing failed, because only one side was
+  computed and the other never moved; it surfaced only when #359 drained the column to zero and
+  forced the literal to be re-based.
+  - Both halves are now accumulated in the same walk and split by command kind, and where the two
+    populations genuinely differ the form is a **subset relation with the complement pinned**
+    (`stratumOther == 8`, the `module text` declines) rather than a wider tolerance that would have
+    absorbed exactly this drift. Falsified twice: dropping the split, and — the drift's own shape —
+    leaving the complement unmeasured, which fires the pin and the sum while the two-path identity
+    still holds.
 
 - **The text encoder dropped `rec` grouping, emitting bytes for a different type space than the source
   wrote** ([#343](https://github.com/scttfrdmn/burroughs/issues/343)'s own sweep). The wire type

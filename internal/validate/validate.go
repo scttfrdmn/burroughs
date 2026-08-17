@@ -380,8 +380,12 @@ func Module(m *binary.Module) (*Info, error) {
 		return nil, err
 	}
 	info := &Info{Funcs: make([]FuncInfo, len(m.Funcs))}
+	// `check_module`'s own first line, before the context is built and therefore before any body is
+	// walked (`valid.ml:1152`). Computed here rather than in funcBody because it is the module's
+	// property: see declaredFuncs on why a body cannot contribute to the set it is checked against.
+	refs := declaredFuncs(m)
 	for i := range m.Funcs {
-		fi, err := funcBody(m, &m.Funcs[i])
+		fi, err := funcBody(m, &m.Funcs[i], refs)
 		if err != nil {
 			return nil, fmt.Errorf("func %d: %w", i, err)
 		}
@@ -396,7 +400,7 @@ func Module(m *binary.Module) (*Info, error) {
 }
 
 // funcBody type-checks one body against its declared type.
-func funcBody(m *binary.Module, f *binary.Func) (FuncInfo, error) {
+func funcBody(m *binary.Module, f *binary.Func, refs map[uint32]bool) (FuncInfo, error) {
 	ft, err := funcType(m, f.TypeIndex)
 	if err != nil {
 		return FuncInfo{}, err
@@ -412,6 +416,7 @@ func funcBody(m *binary.Module, f *binary.Func) (FuncInfo, error) {
 		curFunc: f,
 		locals:  locals,
 		blocks:  map[int]Arity{},
+		refs:    refs,
 	}
 	// The body's own frame. Its label types are the function's results, which is what makes a
 	// bare `return` and a `br` to the outermost label the same check.

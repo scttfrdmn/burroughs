@@ -7045,7 +7045,26 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	// so that lane could neither see the defects nor be credited with the repair — the same asymmetry
 	// this bound's #341 and cause-2 entries above both record, and the reason #343's PR quotes this
 	// lane's fail delta as its reward figure.
-	const allOnPassFloor = 64592
+	// **64592 → 64654, the reference-type slice (#359): +62, and the number is smaller than the rows
+	// it moved.** 107 declines drain from the five mnemonics this slice types — `ref_null` 41,
+	// `ref_func` 36, `table_get` 18, `ref_is_null` 6, `table_set` 6, each to exactly zero — and **45 of
+	// those vectors decline again on the next out-of-slice instruction in the same module**, mostly
+	// `return_call_ref`, `ref_test` and `ref_i31`. So this lane's declined column reads 258 → 196
+	// rather than 258 → 151, and 107 − 45 = 62 closes against the pass delta to the row.
+	//
+	// **That shape is invisible to any single figure, and it is why the composition was diffed rather
+	// than the total quoted.** A decline that moves *within* the column looks identical to a rule that
+	// did not land: both leave the column higher than the drain predicted. The discriminator is
+	// per-mnemonic, and the five reaching exactly zero is what says the rules work — a partially
+	// correct rule would leave a remainder under its own name. The default lane has no such effect: its
+	// 47 drain straight to passes, because a module whose next unsupported instruction is a GC operator
+	// never decodes there in the first place.
+	//
+	// The #359 forecast pre-registered `258 → 192` for this lane and it **missed by 4**, having
+	// estimated 41 advances where there were 45. Recorded because the forecast's own text called this
+	// lane's figure "deliberately looser" — a hedge that turns out to have been pointing at the right
+	// mechanism and under-sizing it, which is a different thing from being right.
+	const allOnPassFloor = 64654
 	boardBound(t, "allOnPassFloor", totalPass, allOnPassFloor, boardBoundSlack, floorBound,
 		"a gated feature regressed, which the Gated==0 assertion above cannot see: with every "+
 			"gate on, a broken feature turns a pass into a fail and leaves Gated at zero")
@@ -9263,8 +9282,35 @@ func TestPhase1Files(t *testing.T) {
 	// The 24 are the *default* lane's figure. The all-on lane declines 129, which is the same
 	// population without the gates hiding four fifths of it, and that lane's fail count is printed
 	// rather than bounded (TestAllGatesOnLeavesNothingGated bounds `Gated` only).
-	const validateFailCeiling = 86
-	const validateDeclineCeiling = 55
+	//
+	// # 86 → 39 and 55 → 8: the reference-type slice (#359), and #341's residue closes on its own list
+	//
+	// The five `ref.*`/`table.*` rules land, and **47 of the 55 declines convert to passes** with
+	// `validateAdmitCeiling` unmoved at 31 and `validateMismatchCeiling` at 0 — slice 5's signature
+	// again, at a seventh of the size: a vocabulary slice drains `declined` alone, and the two unmoved
+	// neighbours are the evidence that every rule it newly typed types correctly rather than nearly so.
+	//
+	// **The 47 split 31 + 16 across two populations this bound cannot see, and the split is checked
+	// elsewhere rather than asserted here.** 31 are `assert_invalid` heads and are pinned per
+	// destination by TestAssertInvalidDestinationLedgerCloses, whose `declined` column reaches zero in
+	// this diff. The other 16 are `module text` commands — #341's own contribution to this bound — and
+	// they are 16 of the 24 that entry names. So this stratum's fall is the sum of a ledgered figure
+	// and a pre-registered row list, neither derived from the other.
+	//
+	// **The residue of 8 is the rest of #341's list, closing two PRs after it was written**: the eight
+	// relaxed-SIMD operators, whose gate is its own event (ADR 0025), so they are a *structural* residue
+	// and not a slice's leftovers. #341 named them in the same breath as the five this slice types, and
+	// the reason that matters is that a residue nobody predicted is indistinguishable from a rule that
+	// was missed. This one was predicted, by name, before either PR existed.
+	//
+	// The all-on lane's figure is 258 → 196, and its shape is *not* this one: 107 rows drain from the
+	// five mnemonics and 45 of them re-decline one instruction later on a GC or tail-call operator the
+	// default lane never decodes, netting the 62 that lane's pass delta reads. A decline moving within
+	// the column rather than out of it is invisible to any single figure, which is why the composition
+	// was diffed rather than the total quoted — and it is why the #359 forecast's all-on prediction
+	// (192) missed by 4 while its default prediction (8) was exact.
+	const validateFailCeiling = 39
+	const validateDeclineCeiling = 8
 	boardBound(t, "validateDeclineCeiling", validateDeclined, validateDeclineCeiling, 0, ceilingBound,
 		"slice 1 declined more instructions than it did — either an opcode left the signature "+
 			"table or a later slice's rule regressed into a decline")
@@ -9918,7 +9964,25 @@ func TestPhase1Files(t *testing.T) {
 	// `unsupported` is unmoved at 66 and the zero is **structural**: `classify` is untouched, so
 	// nothing the harness could not ask became askable. The reward figure with a subject is the fail
 	// column, +46 here and +164 in the all-on lane, every row an assertion that was not being made.
-	const passFloor = 60790
+	//
+	// **60790 → 60837, the reference-type slice (#359): +47, and the whole delta is one stratum.**
+	// `encodeFailCeiling` is unmoved at 68 and `execFailCeiling` at 81, so fail 235 → 188 is
+	// `validateFailCeiling` 86 → 39 and nothing else — which is what a validator slice should look like
+	// from here, and is not guaranteed: typing an instruction can unblock a module whose *later*
+	// commands then fail in the exec stratum, and this one does not because #341's arm already
+	// instantiated those modules.
+	//
+	// The forecast pre-registered on #359 read `pass +46, fail 235 → 189`, so the slice beat it by one
+	// row. The over-prediction is named rather than enjoyed: it expected the `unknown type` vector to
+	// stay red as #357's rec-group blocker, and that vector was already in the admission census rather
+	// than the decline column, so the residue it forecast had been counted in the baseline twice. An
+	// off-by-one in the reassuring direction is still an error in the account.
+	//
+	// `unsupported` is unmoved at 66 again, and the zero is **structural** for this entry's own reason
+	// rather than the one above: `classify` is untouched here too, and a validator slice cannot change
+	// what the harness is able to *ask*. The reward figure with a subject is the fail column, −47 here
+	// and −62 in the all-on lane.
+	const passFloor = 60837
 	boardBound(t, "passFloor", totalPass, passFloor, boardBoundSlack, floorBound,
 		"a regression in a grammar that used to answer, or the corpus moved")
 }

@@ -78,6 +78,16 @@ func TestAssertInvalidDestinationLedgerCloses(t *testing.T) {
 	var already, fresh tally
 	perArrived := map[string]tally{}
 
+	// The *flags* path's tallies, accumulated in the same walk and split by whether the command is an
+	// `assert_invalid` — the second half of the identity below, and the half that had rotted.
+	//
+	// `Failure.Declined`/`.Accepted` are form-blind and Kind-blind: they are what the board's stratum
+	// figures are computed from, over every command kind. The rows above are computed from bucket-key
+	// prefixes over `assert_invalid` heads only. Two paths, one population **if and only if** every
+	// decline and admission on the board belongs to an `assert_invalid`, and that stopped being true
+	// at #341. Splitting them here is what makes the difference a checked quantity.
+	var stratumAI, stratumOther tally
+
 	for _, f := range boardFiles(t) {
 		s, err := ParseFile(filepath.Join(suiteDir, f))
 		if err != nil {
@@ -118,6 +128,19 @@ func TestAssertInvalidDestinationLedgerCloses(t *testing.T) {
 		}
 		for key, fs := range r.Buckets {
 			for _, fl := range fs {
+				// The flags path, before the restriction below rather than in a second walk, so both
+				// paths read the same `run` over the same files. A separate loop would be two
+				// measurements of two things that happen to be spelled the same way.
+				st := &stratumOther
+				if fl.Kind.isAssertInvalid() {
+					st = &stratumAI
+				}
+				if fl.Declined {
+					st.declined++
+				}
+				if fl.Accepted {
+					st.accepted++
+				}
 				if !fl.Kind.isAssertInvalid() {
 					continue
 				}
@@ -201,7 +224,7 @@ func TestAssertInvalidDestinationLedgerCloses(t *testing.T) {
 		{
 			name: "already on the board (254 files) — the 2591 that left `unsupported`",
 			got:  already,
-			want: tally{total: 2591, pass: 2058, declined: 30, accepted: 31, mismatch: 10, gated: 462, precondition: 0},
+			want: tally{total: 2591, pass: 2088, declined: 0, accepted: 31, mismatch: 10, gated: 462, precondition: 0},
 			why: "the destination split IS the engine's contribution: 1615 passes is the reward, " +
 				"386 named declines are the next slices' work plan, 103 admissions are the " +
 				"accept-direction stratum, 10 are wrong-message on a right refusal, and 460 " +
@@ -285,12 +308,24 @@ func TestAssertInvalidDestinationLedgerCloses(t *testing.T) {
 				"expressions could not deliver both sub-counts, because a mutable-global check and an " +
 				"index-resolution check have no vectors in common. Two figures pinned separately are " +
 				"harder to hit by accident than one, and that is the only defence this row has against " +
-				"arithmetic that looks right",
+				"arithmetic that looks right. " +
+				"**The reference-type slice (#359) is the second single-destination *vocabulary* gain and " +
+				"it drains the column to zero**: `declined` 30 \u2192 0, `pass` 2058 \u2192 2088, with " +
+				"`accepted`, `mismatch`, `gated` and `total` unmoved. Slice 5's shape at a fiftieth of the " +
+				"scale \u2014 30 rules became known, none became right \u2014 and the part worth reading is " +
+				"not the 30 but the 0. This row's own header calls `declined` \"the next slices' work " +
+				"plan\", and that sentence has lost its subject: with both groups' declined columns empty, " +
+				"the remaining non-pass destinations are 31 admissions, 10 board-wide wrong-message rows and " +
+				"465 gated, none of which names an untyped instruction. The work plan for the rest of #9 is " +
+				"therefore no longer readable in this ledger \u2014 it is readable in `accepted` (the accept " +
+				"direction) and in the board's *other* command kinds, where the 8 remaining declines all " +
+				"live. **A column that reaches zero stops being an instrument**, and this entry says where " +
+				"the subject went rather than only that the row moved",
 		},
 		{
 			name: "arrived with the arm (2 files) — corpus admission, not verdicts earned",
 			got:  fresh,
-			want: tally{total: 123, pass: 119, declined: 1, accepted: 0, mismatch: 0, gated: 3, precondition: 0},
+			want: tally{total: 123, pass: 120, declined: 0, accepted: 0, mismatch: 0, gated: 3, precondition: 0},
 			why: "row 1 of #291's forecast, measured: these 123 were in no column before the arm, " +
 				"so their 119 passes must never be quoted as conversion. Slice 5 moved 2 of them, " +
 				"`declined` 3 → 1 into `pass`, and they are `memory_size3.wast`'s pair — the file " +
@@ -301,7 +336,17 @@ func TestAssertInvalidDestinationLedgerCloses(t *testing.T) {
 				"movement in it is a verdict changing. The 17-head slice moved this row by nothing, " +
 				"and the zero is a fact about the corpus rather than about the slice: all 17 widened " +
 				"heads live in files the arm already covered, so none of them landed here. Stated " +
-				"because an unmoved row beside a moved one invites the reading that it was missed",
+				"because an unmoved row beside a moved one invites the reading that it was missed. " +
+				"**The reference-type slice moved the last one**: `declined` 1 \u2192 0, `pass` 119 \u2192 " +
+				"120, everything else unmoved, and the vector is named because a row of 123 moving by one is " +
+				"otherwise unreadable \u2014 `unreached-invalid.wast:746`, the `$meet-bottom` module whose " +
+				"`br_table` meets an `externref` label against an i32 one and whose operand is `(ref.null " +
+				"extern)`. It declined on `ref_null` and now refuses with the `type mismatch` the corpus " +
+				"expects. Worth being exact about what that does *not* demonstrate: the expectation is the " +
+				"generic `type mismatch`, so this vector would also have passed had `ref.null` invented " +
+				"`funcref` instead of reading its heaptype \u2014 `funcref` against an i32 label mismatches " +
+				"too. The discriminator for that is in `internal/validate/ref_test.go`, not here, and " +
+				"claiming it here would be a corpus row taking credit for a control it cannot run",
 		},
 	} {
 		if c.got.total != c.want.total {
@@ -370,13 +415,54 @@ func TestAssertInvalidDestinationLedgerCloses(t *testing.T) {
 	// keyed on the literal `assert_invalid`, the eight new admissions would have fallen through to
 	// the unrecognized-bucket arm above — which is the failure this identity is *for*: two paths
 	// disagreeing because one stopped recognizing a population, not because the engine moved.
-	if got := already.declined + fresh.declined + already.accepted + fresh.accepted; got != 62 {
-		t.Errorf("validate-stratum declines + admissions = %d, want 62 to match "+
-			"validateDeclineCeiling (31) + validateAdmitCeiling (31). Those come from the stratum "+
-			"field and the arm's flags and this from the bucket keys; they must agree or one of them "+
-			"is describing a population the other is not. The stratum's third part "+
-			"(validateMismatchCeiling, 0) is deliberately outside this identity: the mismatch row "+
-			"below is board-wide and none of its 10 are the validator's", got)
+	//
+	// **And the identity itself had drifted, which is this slice's own finding about it.** It read
+	// `want 62 to match validateDeclineCeiling (31) + validateAdmitCeiling (31)`, and that citation
+	// was true when slice 5 wrote it. #341 then raised `validateDeclineCeiling` 31 → 55 by giving
+	// `module text` commands a validator verdict — a population no `assert_invalid`-restricted
+	// count can hold — so the stated derivation evaluated to 86 while the assertion compared
+	// against the literal 62. It stayed green for eight merges because **the right-hand side was a
+	// hand-maintained constant rather than a computed one**: the left side genuinely did not move at
+	// #341, so nothing failed, and the prose explaining what the number meant was the only thing that
+	// went wrong. An identity that closes against a literal is a pin wearing a cross-check's clothes;
+	// the header two sections up credits this very identity with catching the board's bound
+	// mis-measuring in slice 2, which is what makes the silence worth a grave (#362) rather than an
+	// edit. *A self-citation must resolve like any other.*
+	//
+	// The repair is to compute both sides. `stratumAI` is the flags path restricted to
+	// `assert_invalid`, which is the quantity the rows above are also measuring — so that
+	// equality is the real two-mechanism check and the one that must hold exactly. `stratumOther` is
+	// its complement, pinned rather than subtracted, and the board's own ceilings are then the sum of
+	// the two. Three figures, each from a path that cannot see the others' blind spot.
+	keyed := already.declined + fresh.declined + already.accepted + fresh.accepted
+	if got := stratumAI.declined + stratumAI.accepted; got != keyed {
+		t.Errorf("the two paths disagree over the same population: bucket keys say %d "+
+			"assert_invalid declines + admissions, the arm's flags say %d. One of them has stopped "+
+			"recognizing a bucket shape or a Kind; the engine moving cannot produce a disagreement "+
+			"here, because both figures are counted from the same failures in the same walk", keyed, got)
+	}
+	if keyed != 31 {
+		t.Errorf("assert_invalid declines + admissions = %d, want exactly 31 \u2014 0 declines and 31 "+
+			"admissions at this commit. The declines reached zero with the reference-type slice, so "+
+			"this figure is now the accept-direction stratum alone, and a nonzero declined component "+
+			"returning means a slice regressed rather than that one is owed", keyed)
+	}
+	if got := stratumOther.declined + stratumOther.accepted; got != 8 {
+		t.Errorf("non-assert_invalid declines + admissions = %d, want exactly 8: the relaxed-SIMD "+
+			"declines on `module text` commands, which are validate-stratum failures the ledger above "+
+			"structurally cannot contain. This is the complement #341 created and the drift above "+
+			"hid \u2014 pinned rather than derived by subtraction, so it is a second reading and not "+
+			"the first one restated", got)
+	}
+	// The board's two ceilings are this sum, and stating it here is what re-ties the identity to the
+	// constants it names. `validateMismatchCeiling` (0) stays deliberately outside: the mismatch row
+	// below is board-wide and none of its 10 are the validator's.
+	if got := keyed + stratumOther.declined + stratumOther.accepted; got != 39 {
+		t.Errorf("validate-stratum declines + admissions = %d, want 39 to match "+
+			"validateDeclineCeiling (8) + validateAdmitCeiling (31). Those are computed from the "+
+			"stratum field; this is computed from the arm's flags over both sub-populations. A "+
+			"disagreement means one path is describing a population the other is not \u2014 which is "+
+			"exactly what went unreported between #341 and #359", got)
 	}
 	if got := already.gated + fresh.gated; got != 465 {
 		t.Errorf("gated assert_invalid = %d, want 465 to match the unsupportedCeiling ledger's "+
@@ -384,20 +470,22 @@ func TestAssertInvalidDestinationLedgerCloses(t *testing.T) {
 			"board-wide where the 2591 above is the converted group alone, so the two are cross-checks "+
 			"of different populations and not two halves of one subtraction", got)
 	}
-	if got := already.pass + fresh.pass; got != 2177 {
-		t.Errorf("assert_invalid passes = %d, want 2177 to match passFloor's account — 1023 at "+
+	if got := already.pass + fresh.pass; got != 2208 {
+		t.Errorf("assert_invalid passes = %d, want 2208 to match passFloor's account — 1023 at "+
 			"slice 1, of which it names 18 as answered from above the validator, plus slice 2's 648, "+
 			"slice 3's 58, #294's 2, slice 5's 358 (356 converted + 2 from the arrived group), "+
 			"the 17-head slice's 7 — the only entry in this sum that raised the ledger's `total` "+
 			"instead of converting inside it — the limits slice's 30, the export slice's 31, the "+
-			"`check_elem` slice's 7 and the `check_global` slice's 12. "+
-			"**That sums to 2176 against an actual 2177, and the one-vector residue is stated rather "+
-			"than absorbed:** it predates the last four slices (the account read 2096 against a "+
+			"`check_elem` slice's 7 and the `check_global` slice's 12, and the reference-type slice's "+
+			"31 (30 converted + 1 from the arrived group, the same two-group split slice 5's entry "+
+			"has). "+
+			"**That sums to 2207 against an actual 2208, and the one-vector residue is stated rather "+
+			"than absorbed:** it predates the last five slices (the account read 2096 against a "+
 			"pinned 2097 before any of them), so it belongs to an entry above and not to them. Filed as "+
 			"a loose end as #334; an unexplained +1 folded into a named entry would make one of these "+
-			"figures a fudge and the whole account unreadable. The residue has now survived four "+
+			"figures a fudge and the whole account unreadable. The residue has now survived five "+
 			"re-basings unchanged, which is itself evidence for where it is not: an off-by-one in any "+
-			"of the four named deltas would have moved it", got)
+			"of the five named deltas would have moved it", got)
 	}
 	// The residual, and the reason it is asserted rather than logged: it is the *complement* of
 	// this ledger's subject, so it is where a command goes when `classify` stops recognizing one.

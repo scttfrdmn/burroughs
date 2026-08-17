@@ -525,16 +525,24 @@ func TestDeclinesAreDeclinesAndNameTheirOpcode(t *testing.T) {
 			// A single-byte opcode with no numeric type prefix: falls past every structural arm
 			// and out of `signature` as errNoSignature.
 			//
-			// **Re-pointed by slice 5, and this is the third re-point in that one diff** — the
-			// specimen was `memory.grow`, which slice 5 types. The population this row draws from
-			// is *drained by every slice*, so a hand-named specimen here is a scheduled failure
-			// rather than a risk: what the row asserts is that an unclaimed single-byte opcode
-			// declines by name, and the specimen is only the current witness to it. `ref.null` is
-			// slice 6's (11 of the 39 declines slice 5 leaves), and when slice 6 lands this row
-			// moves again. Deriving the specimen instead of naming it is #326.
+			// **Re-pointed by slice 6, exactly as the sentence below it predicted** — the
+			// specimen was `ref.null`, which #359 types, and before that `memory.grow`, which
+			// slice 5 typed. The population this row draws from is *drained by every slice*, so a
+			// hand-named specimen here is a scheduled failure rather than a risk: what the row
+			// asserts is that an unclaimed single-byte opcode declines by name, and the specimen is
+			// only the current witness to it. Deriving the specimen instead of naming it is #326,
+			// and each re-point is another quote for that issue's argument.
+			//
+			// `ref.as_non_null` (0xD4) is the new witness, and the choice is deliberate: slice 6
+			// claims 0xD0-0xD2 and stops, so the boundary now runs *through* the `ref.*` family
+			// rather than around it. 0xD3-0xD6 — `ref.eq` and three of the function-references five
+			// (0008) — are what is left, and a specimen from inside the family this slice just
+			// claimed is the one that would go stale silently if the arms were widened by mnemonic
+			// prefix rather than by opcode.
 			name: "single-byte, no signature",
-			wat:  `(module (func (result funcref) (ref.null func)))`,
-			want: "ref_null",
+			wat:  `(module (func (param funcref) (result (ref func)) (ref.as_non_null (local.get 0))))`,
+			want: "ref_as_non_null",
+			gate: func(f *binary.Features) { f.GC = true },
 		},
 		{
 			// A prefixed region no slice has claimed. **Re-pointed by slice 5**: the specimen was

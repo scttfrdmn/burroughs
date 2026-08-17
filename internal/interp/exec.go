@@ -901,9 +901,14 @@ func (in *Instance) runFrame(fn *binary.Func, locals *frame, st *stack, results,
 			// BotHT)`, so the reference itself does not retain the spelled heaptype and
 			// `ref.null any` is indistinguishable from `ref.null none` at run time (0027
 			// decision 4, `castop.go`'s `typeOfRef`). Every cast against a null is therefore
-			// decided by nullability alone. The one live consumer left is **#8**, the encoder,
-			// which must re-emit the heaptype the module spelled — a static fact, not a value's
-			// — so the retention gap belongs to that frontier and to no interpreter arm. The
+			// decided by nullability alone. The live consumers are **static** ones — #8's encoder,
+			// which must re-emit the heaptype the module spelled, and **#9's validator**, which
+			// types `ref.null ht` as `(Null, ht)` (valid.ml:714-716) and cannot otherwise reject a
+			// vector that mixes `ref.null func` with `ref.null extern`. The distinction this
+			// comment already drew is the one that holds — *a static fact, not a value's* — so the
+			// gap belongs to those frontiers and to no interpreter arm, and it is **closed** as of
+			// #359: the heaptype now lands in `Func.Casts` beside the cast family's (`binary`'s
+			// `castTypes`), read through `CastTypes` and untouched by anything here. The
 			// declaration used to live in
 			// `constExprRef`, deleted by #241, and it moved here rather than going with it —
 			// this arm is where the value is produced.

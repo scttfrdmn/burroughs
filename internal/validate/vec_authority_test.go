@@ -1150,7 +1150,15 @@ func TestReferenceRangeCitationsAreWellFormed(t *testing.T) {
 	//	module.go  :165-176 `check_subtype_sub`, :178-189 `check_rectype` twice (the rule and the
 	//	           phase-order comment that places it)
 	//	validate.go :170-174 the finality rule and the relation, at ErrSubType's sentinel
-	const wantRanges = 35
+	//
+	// Six more with #359's reference-type slice, all in `ref.go`: five rules and the declaration
+	// sentinel, with the address-and-element rule cited once for its two opcodes. A seventh range in
+	// that file cites `free.ml` and is invisible here by construction — the regexes are anchored on
+	// the reference's validation module, so a citation to its free-variable pass is well-formed prose
+	// that no instrument in this package reads. That is a **coverage claim this test cannot check
+	// about itself**, recorded rather than fixed: widening the anchor is a second reference file's
+	// worth of line-number churn, and the one citation that needs it is named in `declaredFuncs`.
+	const wantRanges = 41
 	if ranges != wantRanges {
 		t.Errorf("checked %d range citation(s) across %v, want %d — recount and re-pin, and if a "+
 			"file was added to citationFiles, read its point citations too",
@@ -1290,7 +1298,16 @@ func TestReferenceRangeCitationsContainTheirSubjectsSite(t *testing.T) {
 	// order, the one-group-at-a-time context, the finality arm — and a range cited for its structure
 	// contains the structure and not necessarily the string. Counted so that stays visible: if one of
 	// them ever starts containing its message verbatim it moves into the keyed column loudly.
-	const wantKeyed, wantResidue = 5, 11
+	// **#359 moved the residue by five against six new ranges, and the sixth is the informative
+	// one.** Five of the slice's blocks name a sentinel — three build a message from a category or an
+	// index, two are internal-channel errors the reference has no counterpart for — so all five land
+	// excused, for the "built" reason this header already gives. The sixth block names no sentinel at
+	// all: its rule rejects only through the shared operand-pop helpers, so it has no message of its
+	// own, and a block with ranges and no messages is skipped by the loop above rather than counted in
+	// either column. So this pin's two figures do not sum to the range count and were never going to —
+	// which is worth stating, because `wantRanges` next door counts six and this counts five, and the
+	// discrepancy reads as an arithmetic slip until the third category is named.
+	const wantKeyed, wantResidue = 5, 16
 	if keyed != wantKeyed || residue != wantResidue {
 		t.Errorf("checked %d keyed range citation(s) and excused %d as constructed-message residue "+
 			"across %v, want %d and %d — recount and re-pin. A range becomes keyable when its "+
