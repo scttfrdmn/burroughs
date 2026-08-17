@@ -152,6 +152,39 @@ const (
 	// with a control**, not a prompt to move the limit. Named candidate, on its own terms: *a total is
 	// not a ledger*, whose whole content is now enforced by `TestClaudeMDIndexLedger` sitting beside it.
 	//
+	// # The test is the control's failure *message*, not the control's existence (Scott, PR #339)
+	//
+	// The selection rule above says "a live control that fails when it's violated". Sharpened, in his
+	// words: **a law is demotable when its enforcing control's failure message states the rule and the
+	// remedy.** The reason is the index's own purpose — it is what a session reads *before* it acts, so
+	// a demoted law has to be one a session does not need to have read, because the control will say
+	// the whole thing at the moment it matters. A message naming the violation and not the remedy
+	// leaves the reader knowing they are wrong and not what to write instead, which is a control that
+	// still needs index prose behind it. Where that is the case, **fix the message first and the
+	// demotion becomes free** — an ordering that turns the criterion into cheap work rather than a
+	// blocked decision.
+	//
+	// Triage run on the two candidates he named, and the first one corrects the premise:
+	//
+	//   - **The closing-keyword rule has no index key to demote.** It was named the strongest
+	//     candidate — `closecheck.sh` is fully mechanical and has caught the same author twice — and
+	//     the check found no key for it in `CLAUDE.md` and no heading in `docs/laws/`: it exists as the
+	//     script, the CI step, and grave #314, and never was promoted. That is evidence *for* the
+	//     criterion rather than against it: a control whose message already states rule and remedy
+	//     (it names the token-parsing cause and spells the three safe phrasings plus the by-hand close)
+	//     never needed the prose, and never took the room.
+	//   - **The citation-resolution keys pass only after a message repair, which is now made.** Three
+	//     `citecheck.sh` failures named the violation and stopped there — an ADR number with no file,
+	//     an issue number that does not resolve, and a `grave #N` without `type:grave`. Each now states
+	//     its remedy (check the number, write the record, `gh issue create` and cite what comes back,
+	//     `--add-label type:grave` with the lesson in the closing comment). So *fixtures cite the suite*
+	//     and *a doc comment's identifier is a citation* are pre-cleared for demotion when a mint needs
+	//     the room.
+	//
+	// No demotion is taken here: **the next law pays for itself** (Scott, PR #339 — *"the index at zero
+	// headroom is the ratchet arriving, not a problem to solve"*). If no law is worth a key, the file
+	// stops growing, which is what a ratchet is for.
+	//
 	// Two consequences, kept here because they retire a branch that every message in this file used to
 	// offer:
 	//
@@ -424,6 +457,13 @@ fails when it is violated does not need index prose teaching it — the control 
 moment it matters — so index space goes to the laws no control can enforce, and a trip is a prompt
 to find the key that has become redundant with a control. See `+"`claudeMDCeiling`"+`'s comment for
 the rule and its named candidate.
+
+**The test for "redundant with a control" is the control's failure message, not the control's
+existence** (ruling: Scott, PR #339): a law is demotable when the message **states the rule and
+the remedy**. The index is what a session reads *before* it acts; a demoted law is one a session
+does not need to have read, because the control will say the whole thing at the moment it matters.
+A message that names the violation but not the remedy leaves the reader knowing they are wrong and
+not what to write instead — so **fix the message first, and the demotion becomes free**.
 
 What this must not become is a number nobody looks at, which is what raising it silently makes
 it.`, claudeMD, got, claudeMDCeiling)

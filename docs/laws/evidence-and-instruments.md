@@ -94,12 +94,23 @@ amended rather than replaced.
     withdrawn one: *"a failure establishes an event, not a condition — and
     'unavailable' is self-serving in a way 'flake' isn't, because it retires an
     obligation. No control can reach it, which is exactly what index space is
-    for."* The room was **not** the 165 bytes that PR claimed to have returned —
-    that figure was `len(str)` in Python over a UTF-8 file full of em-dashes, so it
-    counted *characters*, and the section had in fact grown by 132 **bytes**. The
-    key's 283 bytes were paid for by trimming that same section to 109 under its
-    baseline. *Ask the instrument, not a proxy for it* — `os.Stat` and `wc -c`
-    answer in the unit the ceiling is written in.)
+    for."*)
+  - **The funding was retroactive, and the sequence should read that way wherever
+    it is recorded.** The mint was authorized on a figure nobody had checked: the
+    PR claimed the index had returned **165 bytes**, and that was `len(str)` in
+    Python over a UTF-8 file dense with em-dashes, so it counted *characters*. By
+    `wc -c` the section had **grown by 132 bytes**. The order in which this actually
+    happened is: Scott authorized the key on a wrong number, the agent found the
+    error afterwards, and the 283 bytes were then paid for by trimming that same
+    section to **109 under its baseline**. Scott's own words on being shown it: *"I
+    authorized that mint on a number I didn't check, and you found it. The law is
+    real and the funding was retroactive — that's the honest sequence and it should
+    read that way wherever it's recorded."* Kept because a record that quietly
+    reorders the two makes a governance decision look better evidenced than it was,
+    which is the *status field is a citation to an approval* defect applied to a
+    number instead of to a stamp. The unit half is the ninth specimen under
+    *coverage is a claim*: `os.Stat` and `wc -c` answer in the unit the ceiling is
+    written in.
 
 ### Budget by the quantity the purpose names.
 
@@ -360,6 +371,27 @@ amended rather than replaced.
   catches a lossy copy and too many catches junk. A floor would have passed 514
   without a word. (Found this session, running the check Scott's `janus.local`
   directive made available for the first time, PR #339.)
+
+  **Ninth specimen, where the domain was right and the *unit* was wrong: byte
+  counts come from the tool that measures bytes.** `claudeMDCeiling` is written in
+  bytes and `os.Stat` enforces it in bytes; the figure I reported a section's
+  change in — and reported to Scott as the funding for a new law's key — was
+  Python's `len(str)` over a UTF-8 file dense with em-dashes and `§`, which counts
+  **characters**. It said the section had shrunk 165; `wc -c` says it *grew* 132.
+  Wrong in magnitude and in sign, on a quantity a governance decision was then
+  taken against. The instrument was reading the right file, the whole file, and
+  nothing but the file — so no domain check reaches this — and it still answered a
+  different question than the one the ceiling asks. **A unit is an unchecked claim
+  the same way a domain is**, and the remedy has the same shape: ask the instrument
+  the *consumer* uses, which here is `wc -c` or `os.Stat` and never a length
+  function whose unit depends on encoding. Scott classified it on the relay as the
+  **third instance of a proxy quoted as the measurement in one campaign** — after
+  the single-line `grep` that undercounted the `unknown table` family by four
+  multi-line assertions, and the eighth specimen's shell glob — which is why it is
+  a specimen here and not a key: the shape is established, and what recurs is the
+  reflex of reaching for the convenient reader. (Found by re-measuring after the
+  law was already authorized on the wrong figure; ruling on the classification:
+  Scott, PR #339.)
 
   The two failure modes are worth keeping separate because they are found
   differently. An **assertion** defect is found by falsification — break it, watch

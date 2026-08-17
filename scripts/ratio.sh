@@ -220,8 +220,18 @@ split_report() {
 		if (cites != "") printf "    ordered commits and their citations (challengeable, per #113):\n%s", cites
 		if (add == RANGEADD)
 			printf "    reconciled: per-commit added lines %d = range diff %d.\n", add, RANGEADD
-		else
-			printf "    reconciliation: per-commit added lines %d against the range diff %d (%+d) — a\n      path edited in more than one commit is counted in each. Reconciled and not\n      floored: a gap is stated in either direction, since too few means the walk\n      missed commits and too many means overlap.\n", add, RANGEADD, add - RANGEADD
+		else {
+			printf "    reconciliation: per-commit added lines %d against the range diff %d (%+d).\n", add, RANGEADD, add - RANGEADD
+			# The gap is not reported as overlap and left there: the superseded-event count is
+			# an independent derivation of the same number, so agreement explains it and
+			# disagreement says a second cause is hiding under a plausible figure.
+			if (add - RANGEADD == SUPERSEDED)
+				printf "      Explained exactly: %d added-line event(s) were superseded by a later commit\n      in the same range — rewritten or added-then-deleted. Derived per line and keyed\n      by path, not inferred from the gap.\n", SUPERSEDED
+			else
+				printf "      UNEXPLAINED RESIDUAL: the gap is %+d but only %d added-line event(s) were\n      superseded. A second cause is in here — a rename the walk resolved differently,\n      a binary row, a commit outside the walk. Do not quote the split until it is named.\n", add - RANGEADD, SUPERSEDED
+			if (FINALONLY > 0)
+				printf "      %d line(s) in the range diff correspond to no added-line event in the walk,\n      which should be impossible: the walk is missing a commit that the range contains.\n", FINALONLY
+		}
 		if (MERGES > 0)
 			printf "    %d merge commit(s) in range: skipped by the walk, present in the range diff.\n", MERGES
 	}
@@ -241,10 +251,34 @@ split() {
 	rangeadd=$(git diff --numstat "$b" "$h" | awk -F'\t' '$1 != "-" { s += $1 } END { print s + 0 }')
 	merges=$(git rev-list --merges "$b..$h" | wc -l | tr -d ' ')
 	ncommits=$(printf '%s\n' "$commits" | wc -l | tr -d ' ')
+
+	# The residual is **derived, not stated** (Scott's directive, PR #339): "overlap between commits
+	# is exactly the set of lines touched more than once — compute it and check it equals 20. Stating
+	# a residual you could compute is the thing this campaign keeps correcting; if it doesn't match,
+	# there's a second cause hiding under a plausible number."
+	#
+	# So: every added-line *event* in the walk as a multiset keyed by `<path>\t<+line>`, against the
+	# range diff's added lines as the same multiset. An event absent from the range's own diff was
+	# superseded by a later commit — rewritten, or added then deleted — and the count of those must
+	# equal the gap exactly. Keyed by path because line text repeats across files: an added blank
+	# line in one file would otherwise cancel a superseded one in another, and a cancellation is the
+	# failure mode this check exists to catch rather than commit.
+	events=$(mktemp) || exit 1
+	final=$(mktemp) || exit 1
+	trap 'rm -f "$events" "$final"' EXIT INT TERM
+	tag_added='/^\+\+\+ / { f = substr($0, 7); next } /^\+/ { print f "\t" $0 }'
+	for c in $commits; do
+		git show -U0 --format= "$c"
+	done | awk "$tag_added" | sort >"$events"
+	git diff -U0 "$b" "$h" | awk "$tag_added" | sort >"$final"
+	superseded=$(comm -23 "$events" "$final" | wc -l | tr -d ' ')
+	unexplained=$(comm -13 "$events" "$final" | wc -l | tr -d ' ')
+
 	for c in $commits; do
 		git show --numstat --format= "$c"
 		printf '# %s\t%s\n' "$(git rev-parse --short "$c")" "$(classify "$c")"
-	done | split_report -v RANGEADD="$rangeadd" -v MERGES="$merges" -v NCOMMITS="$ncommits"
+	done | split_report -v RANGEADD="$rangeadd" -v MERGES="$merges" -v NCOMMITS="$ncommits" \
+		-v SUPERSEDED="$superseded" -v FINALONLY="$unexplained"
 }
 
 if [ "${1-}" = "--window" ]; then

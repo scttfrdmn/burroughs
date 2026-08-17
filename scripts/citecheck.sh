@@ -417,7 +417,10 @@ for n in $(printf '%s\n' "$cites" | awk '$1 == "adr" { print $2 }'); do
 	found="$(find docs/decisions -maxdepth 1 -name "$n-*.md" 2>/dev/null | head -1)"
 	if [ -z "$found" ]; then
 		echo "FAIL  decision $n -> no docs/decisions/$n-*.md"
-		fail=1
+		echo "      An ADR citation resolves to a file or it is a citation to a record that does"
+		echo "      not exist. Either the number is wrong — check \`ls docs/decisions/\` — or the"
+		echo "      record was never written, in which case write it before citing it: an ADR is"
+		echo "      the tombstone of a decision Scott has called, not a forward reference to one."
 	else
 		echo "ok    decision $n -> ${found#docs/decisions/}"
 	fi
@@ -430,6 +433,8 @@ for n in $(printf '%s\n' "$cites" | awk '$1 == "adrshort" { print $2 }'); do
 	adrs=$((adrs + 1))
 	echo "FAIL  decision $n -> ADR citations are four digits (docs/decisions/NNNN-*.md);" \
 		"a one-digit reference is a record's own numbered decision. This is neither."
+	echo "      Write the ADR's four-digit number if a record is meant, or name the record and"
+	echo "      its internal decision — \"0025's decision 2\" — if a sub-decision is."
 	fail=1
 done
 
@@ -454,6 +459,12 @@ if [ "$need_gh" -gt 0 ]; then
 		if ! meta="$(gh api "repos/{owner}/{repo}/issues/$n" \
 			--jq '(if .pull_request then "pr" else "issue" end) + "\t" + ([.labels[].name] | join(",")) + "\t" + .title' 2>/dev/null)"; then
 			echo "FAIL  #$n -> does not resolve: no such issue or PR in this repo"
+			echo "      A well-formed \`#N\` resolves to whatever N happens to be, so the number was"
+			echo "      never checked against the tracker. Two remedies, and they are different:"
+			echo "      if the artifact exists under another number, repoint the citation; if it does"
+			echo "      not exist yet, \`gh issue create\` it and cite what comes back. Never guess"
+			echo "      the next number — a guess that later comes true is a citation pointing at"
+			echo "      itself, which is the defect check 4 below exists for."
 			fail=1
 			continue
 		fi
@@ -494,6 +505,10 @@ if [ "$need_gh" -gt 0 ]; then
 			*)
 				echo "FAIL  grave #$n -> $what without type:grave [${labels:-no labels}]: $title"
 				echo "      Cited as a grave; the graveyard is \`label:type:grave\` and this is not in it."
+				echo "      If it is a grave, label it — \`gh issue edit $n --add-label type:grave\` —"
+				echo "      and put the lesson in the closing comment, since a tombstone with no"
+				echo "      inscription reads as closed to every query that asks. If it is not a grave,"
+				echo "      drop the word: cite it as a plain \`#$n\`."
 				fail=1
 				;;
 			esac

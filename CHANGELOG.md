@@ -901,6 +901,21 @@ weakly-ordered platform.
     The 165 was `len(str)` in Python over a UTF-8 file, so it counted **characters**; measured with
     `wc -c` the section had *grown* by 132 bytes. The key's 283 bytes were funded by trimming that
     section to **109 bytes under its baseline** instead.
+    - **The sequence is recorded as it happened: the mint was authorized on an unchecked number and
+      the funding was retroactive.** Scott's ruling — *"I authorized that mint on a number I didn't
+      check, and you found it. The law is real and the funding was retroactive — that's the honest
+      sequence and it should read that way wherever it's recorded."* Written into the law's own
+      attribution tail as well as here, because presenting the funding as prior to the authorization
+      would be the *status field is a citation to an approval* defect aimed at a number instead of a
+      stamp: the stamp was real, what it rested on was not yet true, and both facts belong in the
+      record.
+    - **The operational half, and its classification: `wc -c` measures bytes, `len` measures whatever
+      the encoding says.** *"Byte counts come from the tool that measures bytes, never from a length
+      function whose unit depends on encoding. Third instance of a proxy quoted as the measurement in
+      this campaign, after the grep and the shell glob"* — so it is filed as the **ninth specimen**
+      under *coverage is a claim*, where its two siblings already live, and the sentence it adds is
+      that **a unit is an unchecked claim the same way a domain is**: the domain was right, the file
+      was right, and the *unit* silently was not.
 
 - **The ratio's instrument column is split by provenance — carried by the work versus ordered in
   review.** Scott's directive: *"a number I can move by ordering work isn't a measure of your
@@ -926,14 +941,47 @@ weakly-ordered platform.
     the 1:8.3 baseline, which is what the directive asked for.
   - Four classification paths and both reconciliation paths were watched die in a scratch repo
     (carried; ordered-with-citation; ordered-uncited; an unrecognized value; exact reconciliation;
-    and an overlap gap of +8 on this PR's own range), plus the `--window` refusal and the
-    empty-range `n/a`.
+    and an overlap gap on this PR's own range), plus the `--window` refusal and the empty-range
+    `n/a`.
+  - **The reconciliation residual is derived, not stated** (Scott's directive): *"stating a residual
+    you could compute is the thing this campaign keeps correcting."* The script now takes every
+    added-line **event** in the walk as a multiset keyed by `<path>\t<+line>`, compares it against
+    the range diff's added lines, and requires the count of superseded events to equal the gap
+    exactly — `+20` on this PR's range, derived per line as **20 superseded events**, every one a
+    line written in an earlier commit and rewritten in a later one. Keyed by path because line text
+    repeats across files, and a cancellation between two files is the failure mode the check exists
+    to catch rather than commit. Disagreement prints `UNEXPLAINED RESIDUAL` and says not to quote
+    the split, since a second cause hiding under a plausible number is the whole risk. Both new
+    branches watched die by perturbing the derived counts.
   - **`CLAUDE.md` ends at 38400 of 38400 — zero bytes of headroom**, the split's four-line governance
     clause having spent the last of it, paid for by compressing this agent's own prose in the same
     section (the duplicated stop-condition restatement, and two paragraphs of the CI-waiting text).
     Stated as the structural note it is: the next law or governance clause has no prose left to trim
     and needs a law folded into a sibling as a specimen — Scott's #307 precedent — which is a
     demotion, and therefore his call rather than this agent's.
+    - **Ruled on, and the answer was not to fix it:** *"the index at zero headroom is the ratchet
+      arriving, not a problem to solve. No pre-emptive demotion… if none is worth a key, the file
+      stops growing, which is what a ratchet is for."* No demotion is taken here.
+
+- **The demotion criterion is sharpened so the next one can be picked without Scott, and the sharpening
+  disqualified his own named candidate.** The rule (his ruling, PR #339 review): **a law is demotable
+  when its enforcing control's *failure message* states the rule and the remedy** — not merely when a
+  control exists — *"because the index is what a session reads before it acts, and a demoted law is one
+  a session doesn't need to have read, since the control will say it at the moment it matters."* Recorded
+  in `claudeMDCeiling`'s doc comment and in `TestClaudeMDStaysAnIndex`'s failure message, which is where
+  a session meets the question.
+  - **Triage, run rather than asserted.** The named strongest candidate — the closing-keyword rule — has
+    **no index key to demote**: it is a script, a CI step and grave #314, and its entry lives inside a
+    governance bullet retained in full. So it is evidence *for* the criterion rather than a candidate
+    under it, and checking that before acting is *check a ruling's premises, not just its conclusion*.
+  - **The citation-resolution keys are now pre-cleared, by repairing four messages rather than by
+    arguing they were clear enough** — *"if a message names the violation but not the remedy, fix the
+    message first and the demotion becomes free."* `scripts/citecheck.sh` now says, at the point of
+    failure: check `ls docs/decisions/` or write the record, since an ADR is a tombstone and not a
+    forward reference; repoint the citation or `gh issue create` and cite what comes back, never guess
+    the next number; `gh issue edit N --add-label type:grave` with the lesson in the closing comment, or
+    drop the word; and, for a two-or-three-digit ADR number, which of the two things it might have meant
+    and how each is written. Four messages that named a violation now also name the move.
 
 - **The blind-spot register gains the message oracle's resolution limit.** 0003's message match
   discriminates *layers* and never *rules within a layer*: two rules producing the same string are one
