@@ -103,8 +103,10 @@ is a **derived** artifact: `go run ./examples/add/gen.go` re-assembles it from
 
 ### Exit codes
 
-One code per question a caller can ask about the run, because a single non-zero
-code cannot tell a wrong module from an incomplete engine:
+One code per question a caller can ask, because a single non-zero code cannot
+tell a wrong module from an incomplete engine. **The table is the CLI's, not
+`run`'s** — `inspect` classifies a refused module the same way, so a script that
+inspects before running does not have to translate (decision 0033):
 
 | code | meaning |
 | --- | --- |
@@ -115,6 +117,11 @@ code cannot tell a wrong module from an incomplete engine:
 | `4` | the module executed correctly and the program went wrong — a trap |
 | `5` | the engine reached something it does not implement in this phase |
 | `6` | the module is fine; this build has that proposal's gate off |
+
+`inspect` never returns `4` or `5`: it decodes and dumps, so nothing it does can
+trap or reach an unimplemented instruction. It exits `0` on a module that fails
+*typing*, because it answered its question — the sections — completely. What it
+does not do is exit `0` on a module it could not read.
 
 ## Use from Go
 

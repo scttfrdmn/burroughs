@@ -1100,14 +1100,43 @@ weakly-ordered platform.
 
 ### Changed
 
+- **The exit codes are the CLI's, not `run`'s — `inspect` adopts the taxonomy** (`cmd/burroughs/`,
+  decision 0033, closing [#373](https://github.com/scttfrdmn/burroughs/issues/373)). One malformed
+  `.wasm` used to be exit `3` from `run` and exit `1` from `inspect`, and `1` means "this invocation's
+  own failure" — the tool blaming itself for the user's module. A gated module was `6` from one and `1`
+  from the other, which is grave #301 re-committed one subcommand to the left. `inspect` now
+  classifies its refusals onto the same public sentinels and travels the same `exitCode`: `3` for an
+  image the decoder refused, `6` for a construct from a gated proposal, `1` only for an unreadable
+  file. **Breaking for a script that branched on `inspect` exiting 1**, which `v0.x` is the place for
+  (decision 0004).
+  - **`4` and `5` stay unreachable from `inspect`, and a module that fails *typing* still exits `0`**:
+    it decodes without validating, so the sections were dumped and the question was answered. That is
+    a scope statement, so it is executable — `TestBothSubcommandsClassifyOneModuleTheSameWay` asserts
+    the disagreement row alongside the agreements.
+  - **The gate-before-malformed ordering now exists in two copies**, declared as one in `main.go`:
+    `inspect` cannot borrow `Config.Instantiate`'s classification, because `Instantiate` validates and
+    a module whose typing fails is exactly the module whose sections a reader wants. The alternatives
+    were a decode-only entry point in the *public* API — a compatibility promise minted for a
+    debugging convenience — or moving the decision into `exitCode`, which gets the number right by
+    making the message say "malformed module" about a well-formed one. The control holds both copies
+    equal *and* pins the absolute codes, since two copies wrong together agree perfectly.
+  - Three falsifications, each watched to fail: the gate arm deleted (the gated row alone fired, with
+    the lying diagnostic visible in its output), the whole classification reverted to the pre-#373
+    `return err` (the malformed and gated rows fired, naming exit 1), and the diagnostic's prefix logic
+    reverted (below). The coverage log says "codes this table asks for" rather than "exercised",
+    because `seen` is built from expectations and would have printed a reassuring `[0 1 3 6]` during
+    the two runs that failed.
+
 - **`main` is one `os.Exit` call and everything else returns** (`cmd/burroughs/main.go`). `dispatch`
   takes writers and returns an exit code, which is the shape `run` already had and the reason it had
   it: everything a user sees belongs inside a function a test can call. Its two siblings did not have
   it — `inspect` printed straight to `os.Stdout` and was covered by no test at all, the lesson `run`'s
-  own doc comment records, one case to the left and never swept. `inspect`'s codes and messages are
-  unchanged, including its disagreement with `run` about the same malformed file (exit 1 against exit
-  3): which code `inspect` owes a refusal is a live question about the CLI's contract, and a refactor
-  that threads writers is not the artifact that answers it.
+  own doc comment records, one case to the left and never swept. `inspect`'s codes and messages were
+  left unchanged by *this* entry, including its disagreement with `run` about the same malformed file
+  (exit 1 against exit 3): which code `inspect` owed a refusal was a live question about the CLI's
+  contract, and a refactor that threads writers was not the artifact that answered it. **The entry
+  above is that artifact** — both are in this same unreleased section, so the deferral is recorded
+  rather than left reading as the current state.
 
 - **`CLAUDE.md` is a brief and a pointer page** (Scott's directive, the four-workstream brief).
   The file that every session reads first now carries orientation (what the project is, the phase
@@ -1746,6 +1775,21 @@ weakly-ordered platform.
     re-pointed, so the retirement is readable at the site rather than only in this entry.
 
 ### Fixed
+
+- **grave #383: every library-classified diagnostic said the program's name twice**
+  ([#383](https://github.com/scttfrdmn/burroughs/issues/383), `cmd/burroughs/`). `burroughs: burroughs:
+  malformed module: magic header not detected`. Both halves were deliberate and neither wrong alone —
+  the public sentinels spell themselves `burroughs: …` so a host logging one bare says who spoke, and
+  the CLI prefixes so its own failures (`open x.wasm: no such file`) are attributable — and composed
+  they stutter, on exactly the messages that carry a classification. A doubled program name reads as a
+  defect in the tool at the one moment the tool is reporting a defect in the module. One `diagnose`
+  now owns the name; `run`'s decline and deferred reports had their own copies of the literal prefix
+  and were swept with it. It survived because the stderr assertions use `strings.Contains`, which is
+  the right assertion for "the message names the proposal" and blind to a duplicated prefix by
+  construction — so the new control counts the prefix at the *start of the line* over every subcommand
+  that emits one, and reports a diagnostic missing the prefix as the other half of the same silence.
+  Found while harmonizing `inspect` onto the taxonomy: that work would otherwise have spread the
+  doubling to a subcommand that did not have it.
 
 - **grave #380: the co-blocking probe read sole-blockedness off single-term keys, and a validator
   decline key is single-term by construction**
