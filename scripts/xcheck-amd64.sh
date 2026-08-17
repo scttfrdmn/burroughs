@@ -28,7 +28,17 @@
 #
 # It also refuses to conflate "the cross-check failed" with "the cross-check did not
 # run": every exit path names the instrument, and a no says *which* no. An unavailable
-# instrument is not a lenient one.
+# instrument is not a lenient one. **Command delivery is a third way to not-run** and was
+# not in that enumeration until #344: a far-side 126 or 127 is a `NOT RUN`, because a
+# command that was never found never judged anything.
+#
+# **The shape this script preserves, stated because it is the thing a future edit would
+# undo (#344): argument boundaries, across one round of far-side re-parsing.** Both
+# transports hand a shell a single string, so the words cannot be passed as words — they
+# can only be quoted such that the far-side shell reparses them into the same words. The
+# invocation `-run 'A|B'` must arrive as one argument containing a `|`, not as a remote
+# pipe. `cmd="$*"` collapsed them and made the script's real contract "I run whatever
+# this happens to reparse into"; `shquote "$@"` is what keeps it.
 #
 # Usage: scripts/xcheck-amd64.sh [command...]        (default: go test ./...)
 #        XCHECK_HOST=other.local scripts/xcheck-amd64.sh go test ./internal/spec/
@@ -37,10 +47,19 @@ set -eu
 host=${XCHECK_HOST:-janus.local}
 dest=${XCHECK_DEST:-burroughs-xcheck}
 image=${XCHECK_IMAGE:-golang:1.26}
+# Quote each argument for exactly one round of re-parsing on the far side. See the
+# header: this is #344's fix, and the single-quote escape (`'` -> `'\''`) is what makes
+# it total rather than merely usually-right.
+shquote() {
+	for a in "$@"; do
+		printf "'%s' " "$(printf '%s' "$a" | sed "s/'/'\\\\''/g")"
+	done
+}
+
 if [ "$#" -eq 0 ]; then
 	cmd="go test ./..."
 else
-	cmd="$*"
+	cmd=$(shquote "$@")
 fi
 
 if [ ! -f go.mod ] || [ ! -d internal ]; then
@@ -112,6 +131,24 @@ docker_state() {
 	esac
 }
 
+# A far-side 126 or 127 is the shell reporting that it never ran the command: 127 not
+# found, 126 found and not executable. Reporting either as a `verdict` is what #344 was
+# filed for — the run said `verdict from NATIVE x86_64, exit 127` and neither channel
+# could distinguish "the suite failed on x86-64" from "the suite never started". Note
+# what this cannot catch and does not claim to: a command that starts, runs partially,
+# and exits 1 is indistinguishable from a real fail, which is why the delivery *shape*
+# is fixed above rather than merely detected here.
+not_run_if_undelivered() {
+	case "$1" in
+	126 | 127)
+		echo "xcheck: NOT RUN — $2 could not run the command (exit $1: $([ "$1" = 127 ] && echo 'not found' || echo 'not executable'))." >&2
+		echo "  Delivered as: $cmd" >&2
+		echo "  A mechanism failure, not a verdict. Nothing about the code has been learned." >&2
+		exit 4
+		;;
+	esac
+}
+
 run_container() {
 	echo "xcheck: emulated amd64 via $image (QEMU) — no copy, mounting the tree; running: $cmd"
 	docker run --rm --platform linux/amd64 -v "$PWD":/src -w /src "$image" sh -c "$cmd"
@@ -123,6 +160,7 @@ if native; then
 	# passes — a report that can only say yes.
 	st=0
 	run_native || st=$?
+	not_run_if_undelivered "$st" "NATIVE x86_64 ($host)"
 	echo "xcheck: verdict from NATIVE x86_64 ($host), exit $st"
 	exit "$st"
 fi
@@ -133,6 +171,7 @@ case "$state" in
 serving)
 	st=0
 	run_container || st=$?
+	not_run_if_undelivered "$st" "EMULATED amd64 ($image under QEMU)"
 	echo "xcheck: verdict from EMULATED amd64 ($image under QEMU), exit $st"
 	exit "$st"
 	;;
