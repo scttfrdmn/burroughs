@@ -1141,7 +1141,16 @@ func TestReferenceRangeCitationsAreWellFormed(t *testing.T) {
 	//	           export phase's placement after every body
 	//	vec.go     :885-937, :906-908, :938-955, :663-686 four section/rationale comments, :373-378
 	//	           `check_vec_binop`
-	const wantRanges = 30
+	//
+	// Five more with #343's GC-subtyping slice, and note where they are *not*: `match.go` is a port of
+	// `match.ml`, so almost every range in it cites that file and this instrument does not read it. The
+	// five are the slice's `valid.ml` half —
+	//
+	//	match.go   :113-121 `check_typeuse`, named to say the index check is *not* the relation's
+	//	module.go  :165-176 `check_subtype_sub`, :178-189 `check_rectype` twice (the rule and the
+	//	           phase-order comment that places it)
+	//	validate.go :170-174 the finality rule and the relation, at ErrSubType's sentinel
+	const wantRanges = 35
 	if ranges != wantRanges {
 		t.Errorf("checked %d range citation(s) across %v, want %d — recount and re-pin, and if a "+
 			"file was added to citationFiles, read its point citations too",
@@ -1273,7 +1282,15 @@ func TestReferenceRangeCitationsContainTheirSubjectsSite(t *testing.T) {
 	// read straight out of the reference by `TestLimitsRangesMatchTheReference` and by the message-keyed
 	// point checks, which is the stronger instrument. Residue is counted so that a message the reference
 	// *starts* or *stops* writing verbatim moves a range between the columns loudly.
-	const wantKeyed, wantResidue = 5, 8
+	//
+	// **#343's five ranges all landed in residue, and for a third reason** — neither "built" nor
+	// "unchecked", but *the reference's own literal not being in the range the comment points at*.
+	// `sub type` and `forward use of type` are written verbatim by the reference, so the sentinels are
+	// message-keyed elsewhere; what these ranges cite is the rule's *shape* — the three `require`s in
+	// order, the one-group-at-a-time context, the finality arm — and a range cited for its structure
+	// contains the structure and not necessarily the string. Counted so that stays visible: if one of
+	// them ever starts containing its message verbatim it moves into the keyed column loudly.
+	const wantKeyed, wantResidue = 5, 11
 	if keyed != wantKeyed || residue != wantResidue {
 		t.Errorf("checked %d keyed range citation(s) and excused %d as constructed-message residue "+
 			"across %v, want %d and %d — recount and re-pin. A range becomes keyable when its "+

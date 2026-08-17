@@ -225,6 +225,16 @@ type compType struct {
 	supertypes []idxRef
 }
 
+// recExtent is one `rectype` field's extent in the explicit type space: the index of its first
+// member and how many members it has.
+//
+// Length 1 for a bare `(type …)` — the grammar's non-`rec` arm is `RecT [st]` (decode.ml:276), a
+// singleton group and not an absence of one — and length 0 for `(rec)`, which is legal and defines
+// nothing (`type-rec.wast:10`).
+type recExtent struct {
+	start, length uint32
+}
+
 // limits is a `limits` (parser.mly:466-468): a 64-bit minimum and an optional maximum.
 //
 // Both at 64 bits because the reference's arms are `nat64`, and `hasMax` rather than a `*uint64`

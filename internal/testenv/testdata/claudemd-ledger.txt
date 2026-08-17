@@ -16,7 +16,7 @@
 529	section	## The law
 1304	section	## Phase ladder
 1157	section	## Where the work is tracked
-9082	section	## Reporting protocol — the PR *is* the report
+8900	section	## Reporting protocol — the PR *is* the report
 2238	section	## Versioning and the changelog
 301	section	## Decision records
 1160	section	## Disciplines heading and preamble
@@ -60,6 +60,7 @@
 154	law	citations/three-provenance-categories-cited-derived-synthetic
 283	law	controls/a-guards-trigger-predicate-is-itself-a-claim-about-the-space-and-an-under-matching-one-fails-silently-by-construction
 205	law	evidence-and-instruments/verdict-channel-and-mechanism-channel-are-different-instruments
+182	law	evidence-and-instruments/a-commands-exit-status-belongs-to-whatever-ran-last
 302	law	citations/a-ruling-retroactively-falsifies-prose-written-before-it-so-accepting-a-ruling-includes-sweeping-for-the-sentences-it-orphaned
 253	law	evidence-and-instruments/coverage-is-a-claim-an-instruments-domain-is-an-assertion-it-cannot-check-about-itself
 198	law	evidence-and-instruments/second-order-honesty-apply-the-discipline-to-its-own-output

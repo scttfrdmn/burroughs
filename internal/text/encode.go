@@ -154,6 +154,11 @@ const (
 	tagSubFinal   byte = 0x4f
 )
 
+// tagRec is `rectype`'s explicit group form — 0x4e/-0x32, the byte `decodeRecType` peeks for
+// (sections.go) — followed by `vec(subtype)`. Written for every group whose member count is not 1,
+// the singleton being identical on the wire to a bare subtype (decode.ml:276's `RecT [st]`).
+const tagRec byte = 0x4e
+
 // packI8 and packI16 are `packtype`'s two forms — 0x78/-0x08, 0x77/-0x09 — folded to bytes the
 // same way `absoluteHeaptypeBytes`'s comment folds every other negative-s7 form this package
 // writes, and verified against `decodeStorageType`'s own two cases (sections.go, already merged).
@@ -625,31 +630,84 @@ func (p *parser) encodableOrErr() error {
 // (writing a vector for an array, or a bare fieldtype for a struct) produces a well-formed image
 // denoting a different composite type, decodable and wrong.
 func (p *parser) encodeTypes(w *writer) {
-	w.vec(len(p.ctx.typeCtx), func(w *writer, i int) {
-		ct := p.ctx.typeCtx[i]
-		if !ct.final || len(ct.supertypes) > 0 {
-			if ct.final {
-				w.byte1(tagSubFinal)
-			} else {
-				w.byte1(tagSubNoFinal)
-			}
-			w.vec(len(ct.supertypes), func(w *writer, j int) { w.u32(ct.supertypes[j]) })
+	// The section is a `vec(rectype)` and its count is the number of *groups*, which is not the
+	// number of types. It used to be: this wrote one bare subtype per entry in `typeCtx`, which
+	// flattened every `(rec …)` into singletons and emitted bytes denoting a different type
+	// space — see `context.recExtents` for the two vectors that witness it in opposite
+	// directions, and grave #349 for the lesson.
+	groups := p.recGroups()
+	w.vec(len(groups), func(w *writer, i int) {
+		g := groups[i]
+		// A singleton group is emitted bare: `RecT [st]` is exactly what decode.ml:276 makes of
+		// a lone subtype, so the two spellings denote the same deftype and the bare one is a
+		// byte shorter. Every other length needs the explicit form — including 0, since
+		// `(rec)` has no bare spelling at all and dropping it would be right only by accident
+		// (it defines nothing, so the difference is unobservable — but "unobservable" is a
+		// claim about today's consumers, and the group count is the thing being written).
+		if g.length == 1 {
+			p.subType(w, g.start)
+			return
 		}
-		switch ct.kind {
-		case compFunc:
-			w.byte1(tagFunc)
-			w.vec(len(ct.ft.params), func(w *writer, j int) { w.valType(ct.ft.params[j]) })
-			w.vec(len(ct.ft.results), func(w *writer, j int) { w.valType(ct.ft.results[j]) })
-		case compStruct:
-			w.byte1(tagStruct)
-			w.vec(len(ct.fields), func(w *writer, j int) { w.fieldType(ct.fields[j]) })
-		case compArray:
-			w.byte1(tagArray)
-			// Exactly one field, per arraytype's own arity (comptype parses it that way, and
-			// `resolveFields` never changes a slice's length) — bare, no count.
-			w.fieldType(ct.fields[0])
-		}
+		w.byte1(tagRec)
+		w.vec(int(g.length), func(w *writer, j int) { p.subType(w, g.start+uint32(j)) })
 	})
+}
+
+// recGroups is the type section's groups in wire order: the recorded extents for the explicit
+// types, then one singleton per implicit type.
+//
+// The tail is `inlineFuncType`'s interned signatures, which have no `rec` spelling to preserve and
+// so cannot be in a recorded extent. They are appended to `typeCtx` after `runDeferred` has rebuilt
+// it from `typeDefs` alone, so the explicit prefix is exactly `len(typeDefs)` long — asserted here
+// rather than assumed, because the two lengths drifting is the failure that would silently shift
+// every implicit type's index.
+func (p *parser) recGroups() []recExtent {
+	explicit := uint32(len(p.ctx.typeDefs))
+	groups := make([]recExtent, 0, len(p.ctx.recExtents)+len(p.ctx.typeCtx)-int(explicit))
+	groups = append(groups, p.ctx.recExtents...)
+	if n := uint32(len(p.ctx.typeCtx)); n < explicit {
+		// Unreachable: runDeferred builds typeCtx from typeDefs one-for-one and only ever
+		// appends past it. A panic rather than a short loop, on storageType's reason — a
+		// truncated type section is a well-formed module denoting different types.
+		panic(fmt.Sprintf("text: typeCtx has %d entries for %d explicit types", n, explicit))
+	}
+	for x := explicit; x < uint32(len(p.ctx.typeCtx)); x++ {
+		groups = append(groups, recExtent{start: x, length: 1})
+	}
+	return groups
+}
+
+// subType writes one `subtype` at type index x (encode.ml:171-177): the `sub`/`sub final` wrapper
+// with its declared supertypes when there is one, then the comptype.
+//
+// The wrapper is omitted for the bare form — final with no declared supertypes — which is
+// decode.ml:262-271's own default and so round-trips. It is *not* an optimization: emitting
+// `sub final []` instead would also decode to the same `SubT (Final, [], ct)`, but the bare
+// spelling is what the source wrote and the encoder's job is the source's module.
+func (p *parser) subType(w *writer, x uint32) {
+	ct := p.ctx.typeCtx[x]
+	if !ct.final || len(ct.supertypes) > 0 {
+		if ct.final {
+			w.byte1(tagSubFinal)
+		} else {
+			w.byte1(tagSubNoFinal)
+		}
+		w.vec(len(ct.supertypes), func(w *writer, j int) { w.u32(ct.supertypes[j]) })
+	}
+	switch ct.kind {
+	case compFunc:
+		w.byte1(tagFunc)
+		w.vec(len(ct.ft.params), func(w *writer, j int) { w.valType(ct.ft.params[j]) })
+		w.vec(len(ct.ft.results), func(w *writer, j int) { w.valType(ct.ft.results[j]) })
+	case compStruct:
+		w.byte1(tagStruct)
+		w.vec(len(ct.fields), func(w *writer, j int) { w.fieldType(ct.fields[j]) })
+	case compArray:
+		w.byte1(tagArray)
+		// Exactly one field, per arraytype's own arity (comptype parses it that way, and
+		// `resolveFields` never changes a slice's length) — bare, no count.
+		w.fieldType(ct.fields[0])
+	}
 }
 
 // fieldType writes one resolved field: its storage type, then its mutability byte

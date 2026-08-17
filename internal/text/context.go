@@ -476,6 +476,32 @@ type context struct {
 	typeCtx  []resolvedComp // the resolved table, built by runDeferred and extended by implicit types
 	deferred []func() error // stage-2 operations, in parse order
 
+	// recExtents is one entry per `rectype` field in source order — the grouping `typeDefs`
+	// flattens away, recorded because it is part of the types' identity rather than a detail of
+	// how they were written.
+	//
+	// **A flat type list cannot express iso-recursive equality, and the encoder used to emit
+	// one.** The wire form's type section is a `vec(rectype)` where each element is a bare
+	// subtype *or* `0x4e vec(subtype)` (decode.ml:274-277), and `encodeTypes` wrote one bare
+	// subtype per type — so `(rec (type $a …) (type $b …))` came out as two singleton groups.
+	// That is a different module: intra-group references become ordinals under
+	// `roll_deftypes`, so `type-equivalence.wast:49`'s two isomorphic two-member groups are
+	// equal types when grouped and unequal when flattened, and `type-rec.wast:28`'s
+	// cross-group forward reference is `unknown type` when grouped and legal when flattened.
+	// The encoder was silently rewriting one to the other in both directions.
+	//
+	// Nothing had consumed grouping until `internal/validate`'s `sameDefType` did, which is
+	// why no board saw it: the front end wrote bytes denoting a different type space and every
+	// oracle downstream agreed with itself about them. Grave #349.
+	//
+	// Recorded here rather than on `compType` — the shape `binary.CompType` chose — because
+	// this side's consumer is the *emitter*, which needs the groups in order and needs to know
+	// where the explicit prefix ends; a per-entry extent would have the emitter rediscovering
+	// boundaries it is being told. Every explicit type is in exactly one extent, and
+	// `typeCtx`'s implicit tail (inlineFuncType's interned signatures) is in none, which is
+	// exactly right: an implicit type has no `rec` spelling to preserve.
+	recExtents []recExtent
+
 	// The first module field that is not a type definition, for the encoder's frontier check
 	// (#8, encode.go). The keyword token itself, so the message can quote `Token.Text` and the
 	// error can carry `Token.Offset` — one field for both, because the token holds both. A bool

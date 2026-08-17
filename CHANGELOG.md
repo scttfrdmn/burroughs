@@ -21,6 +21,30 @@ weakly-ordered platform.
 
 ### Added
 
+- **The subtype relation — `internal/validate/match.go`, the whole of `match.ml` (#9 slice 5, #343,
+  decision 0031).** `matches` had been type-index equality plus a bottom wildcard, which is exactly
+  right for the numeric families and wrong for every reference form. That boundary was declared out of
+  scope in two places, and 0031 is the record of retiring both: it was not holding a slice in reserve,
+  it was holding **21 invalid modules this validator accepted**. The relation is ported by type index,
+  since `binary.Module` has one representation where the reference has `Idx` and `Def` — abstract
+  heaptype lattice, the four recursive bottom arms, `match_null`, struct width subtyping, functype
+  contravariance, invariant field mutability, and `match_deftype`'s three disjuncts.
+  - **One relation, two consumers, drained in opposite directions.** `matches` at every operand
+    comparison is the accept direction: nine valid modules this package refused, the last nine rows of
+    `moduleOverRejections`. A new `checkTypes` phase in `modulePre` — `check_subtype_sub`, the three
+    `require`s in the reference's order — is the reject direction: the 21. ADR 0031 pre-registered all
+    30 as the criterion and **all 30 converted**, confirmed row by row.
+  - **`ErrSubType` and `ErrForwardTypeUse`.** One sentinel covers both the finality rule and the
+    relation itself, because all 21 vectors expect the bare `sub type` and the suite cannot
+    discriminate; the forward-use rule is separate only because its message does not begin with that
+    substring.
+  - **`binary.CompType.RecStart`/`RecLen`, the rec-group extent.** `match_deftype`'s structural
+    disjunct compares *rolled* forms, in which the group's shape is part of the type's identity, so a
+    flat comptype list admits only the coarser equi-recursive relation — which accepts modules the
+    spec rejects, in the direction no board sees. `decodeRecType` now labels both its arms. The three
+    disjuncts turned out to be **coupled**: a port landing them one at a time regressed five
+    previously-passing modules, so the extent is not an optimization but the thing the slice needed.
+
 - **A `(module …)` command in a script is scored on the validator's answer, not the reader's alone
   (#341).** A module definition asserts the module *is valid*; the harness had been asking only
   whether it parsed, so `internal/validate`'s own mutation-testing row M11 could refuse **every**
@@ -1438,6 +1462,18 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **The text encoder dropped `rec` grouping, emitting bytes for a different type space than the source
+  wrote** ([#343](https://github.com/scttfrdmn/burroughs/issues/343)'s own sweep). The wire type
+  section is a `vec(rectype)` where each element is a bare subtype *or* `0x4e vec(subtype)`; the
+  emitter wrote one bare subtype per type, so `(rec (type $a …) (type $b …))` came out as two
+  singleton groups. That is not a formatting difference — intra-group references become ordinals under
+  `roll_deftypes`, so the rewrite is **wrong in both directions**: two isomorphic two-member groups are
+  equal types when grouped and unequal when flattened (`type-equivalence.wast:49`), and a cross-group
+  forward reference is `unknown type` when grouped and legal when flattened (`type-rec.wast:28`).
+  - **Nothing had consumed grouping, so no board could see it.** The front end wrote bytes denoting a
+    different module and every oracle downstream agreed with itself about them; the defect surfaced the
+    moment `internal/validate`'s structural equality became the first reader of the extent. The parser
+    now records one extent per `rectype` field and the emitter writes the groups it was given.
 - **`call_indirect` hardcoded `i32` for its table index operand, so every valid `table64` module using
   it was refused** ([#343](https://github.com/scttfrdmn/burroughs/issues/343), cause 2 of four). The
   reference takes the index operand at the table's own address type (`valid.ml:537,542`); this

@@ -449,7 +449,26 @@ func (d *Decoder) decodeCustom(size uint32, r *reader) error {
 // `peek` + `skip 1` (:274) precisely because a rectype group's *contents* must not be
 // re-judged as a bare subtype when a nested read fails. An `either` here would rewind and
 // report the second branch's error for a well-formed group with a bad member.
+//
+// # The group's extent is retained, and it is the type's identity rather than a grouping detail
+//
+// This function knew where each group started and ended and dropped both numbers, and that made
+// **iso-recursive type equality uncomputable downstream** — the defect #343's slice hit. A
+// deftype in the spec is `DefT (rectype, i)`: *the whole group plus the member's ordinal in it*,
+// not the member's own comptype. So `(rec (type $a (func)) (type (struct)))` and
+// `(rec (type (struct)) (type $b (func)))` hold two identical functypes that are **different
+// types**, and so do `$a` and the `(func)` in a three-member group. Without the extent, the only
+// relation a validator can compute is the *equi*-recursive one (bisimulation over indices), which
+// is strictly coarser and accepts modules the spec rejects — the accept-direction failure no board
+// sees by construction.
+//
+// `RecStart`/`RecLen` on each member is that extent, patched after the vector is read for
+// `decodeSubType`'s reason: the members do not exist to be labelled until their own reads have
+// appended them. A bare subtype is a **singleton group** and is labelled as one, which is not a
+// convenience — decode.ml:276's non-`rec` arm produces `RecT [st]`, a one-member rectype, so the
+// spec has no ungrouped types for this field to misreport.
 func (d *Decoder) decodeRecType(r *reader) error {
+	start := len(d.mod().Types)
 	if b, ok := r.peek(); ok && b == -0x32&0x7F { // 0x4e — `rec`
 		// A recursive type group is GC's, and the gate is checked before descending for
 		// decodeRefType's reason: otherwise the member read reports the error and it
@@ -458,9 +477,33 @@ func (d *Decoder) decodeRecType(r *reader) error {
 			return featureErr("gc")
 		}
 		r.skip(1) // the peeked discriminator — `skip 1 s` (decode.ml:275)
-		return d.decodeVec(r, d.decodeSubType)
+		if err := d.decodeVec(r, d.decodeSubType); err != nil {
+			return err
+		}
+		d.labelRecGroup(start)
+		return nil
 	}
-	return d.decodeSubType(r)
+	if err := d.decodeSubType(r); err != nil {
+		return err
+	}
+	d.labelRecGroup(start)
+	return nil
+}
+
+// labelRecGroup stamps the extent of the rec group occupying Types[start:] onto every member.
+//
+// **Stamped from the slice's own length rather than from the declared vector count**, which is the
+// difference between recording what was read and recording what was announced: `(rec)` is a legal
+// empty group (`type-rec.wast:10`) and contributes no members, and a group whose count and
+// contents disagreed would have failed the read before reaching here. Deriving the length from
+// what is present cannot disagree with what is present.
+func (d *Decoder) labelRecGroup(start int) {
+	types := d.mod().Types
+	n := uint32(len(types) - start)
+	for i := start; i < len(types); i++ {
+		types[i].RecStart = uint32(start)
+		types[i].RecLen = n
+	}
 }
 
 // decodeSubType reads a subtype: an optional supertype list, then a comptype

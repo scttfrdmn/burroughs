@@ -111,6 +111,64 @@ func checkTableType(tab binary.Table) error {
 	return checkLimits(tab.Limits, tabRangeI32, ErrTableSize, "2^32-1 for i32")
 }
 
+// checkTypes is `check_type` (valid.ml:1107) reduced to what it delegates to `check_subtype_sub`
+// (valid.ml:165-176) — the three `require`s a declared supertype list must satisfy, in the
+// reference's order, because a subtype with two defects reports the first:
+//
+//	require (xi < x)                       forward use of type xi in sub type definition
+//	require (fini = NoFinal)               sub type x has final super type xi
+//	require (match_comptype c.types ct cti) sub type x does not match super type xi
+//
+// This is the reject-direction half of decision 0031's slice, and it is a **different consumer of
+// the same relation** than the operand comparisons are: all 21 of the vectors it converts are bare
+// type sections with no functions at all, so `matches` could not have reached one of them. That
+// is why the slice is one relation and two call sites rather than one of either.
+//
+// # What is not here, and it is the same retention `matchDefType` names
+//
+// `check_rectype` (valid.ml:178-189) builds the context one rec group at a time — `c' = {c with
+// types = c.types @ dts}` — and `check_subtype c'` then resolves every type reference against
+// *that* context, so a reference to an index outside the groups declared so far is `unknown type`
+// while a reference *within the current group* is fine even when it points forward. Both halves
+// are the same fact about rec-group boundaries, and `binary.Module` retains none:
+// `(rec (type (func (param (ref 1)))))` followed by `(rec (type (func)))` is invalid where the
+// byte-identical pair inside one `rec` is valid, and nothing in this representation can tell them
+// apart. Three admissions wait on it — `type-rec.wast:21,28` and `type-equivalence.wast:76`, all
+// expecting `unknown type`.
+//
+// The consequence for the rules that *are* here is one divergence, named because it is a real
+// difference and not a simplification: a supertype index pointing past the end of the type space
+// is refused by the forward-use rule (`xi < x` fails for any `xi >= len(Types)`) where the
+// reference refuses it as `unknown type`. Same verdict, different message. It has no subject in
+// the corpus — no `assert_invalid` expects `unknown type` from a supertype position — so it is
+// recorded rather than worked around, since a workaround would be a second unresolvable-index rule
+// competing with `check_typeuse`'s.
+func checkTypes(m *binary.Module) error {
+	for x := range m.Types {
+		for _, xi := range m.Types[x].Supertypes {
+			// `require (xi < x)`. This subsumes the bounds check for every index at or above the
+			// type space's length, which is the divergence the header names — and it must run
+			// before the two rules below, both of which would otherwise index with xi.
+			if uint64(xi) >= uint64(x) {
+				return fmt.Errorf("%w %d in sub type definition", ErrForwardTypeUse, xi)
+			}
+			super := m.Types[xi]
+			// `require (fini = NoFinal)` — a `sub final` type may not be named as a supertype.
+			// `binary.CompType.Final` is `true` for a bare comptype as well as for an explicit
+			// `sub final`, which is the grammar's own default (`SubT (Final, [], ct)`), so a plain
+			// `(type $t (func))` is a final supertype and four of the 21 vectors are exactly that.
+			if super.Final {
+				return fmt.Errorf("%w %d has final super type %d", ErrSubType, x, xi)
+			}
+			// `require (match_comptype c.types ct cti)` — the relation, in match.go.
+			if !matchCompType(m, m.Types[x], super) {
+				return fmt.Errorf("%w %d does not match super type %d", ErrSubType, x, xi)
+			}
+		}
+	}
+	return nil
+}
+
 // modulePre checks the module-level rules that run *before* any function body, in
 // `check_module`'s order (valid.ml:1151-1164). Its other half is moduleExports.
 //
@@ -131,7 +189,9 @@ func checkTableType(tab binary.Table) error {
 //
 // Reference phases, and this slice's coverage:
 //
-//	check_type      types                    — not this slice
+//	check_type      types                    — checkTypes, below: check_subtype_sub's three rules.
+//	                                            `check_rectype`'s context *scoping* is not here —
+//	                                            see checkTypes on the retention it needs
 //	check_import    imports                  — LIMITS ONLY (memory/table descriptors)
 //	check_tag       tags                     — gated proposal
 //	check_func      function declarations     — not this slice
@@ -175,6 +235,13 @@ func checkTableType(tab binary.Table) error {
 // because a four-of-five census that says "five" is the coverage claim an instrument cannot
 // make about itself, and the next slice to touch tables needs the gap where it can see it.
 func modulePre(m *binary.Module) error {
+	// check_type → check_rectype → check_subtype_sub (valid.ml:178-189, :1107), the phase this
+	// table listed as "not this slice" until decision 0031 opened it. First in `check_module`'s
+	// order and therefore first here: a module with an ill-formed subtype declaration *and* a bad
+	// memory limit reports the subtype.
+	if err := checkTypes(m); err != nil {
+		return err
+	}
 	// check_import → check_externtype → check_memorytype / check_tabletype. An imported memory's
 	// limits are checked by the same rule as a defined one's, on the same descriptor fields, and
 	// `memory.wast:90-100` is the suite asserting exactly that: three vectors whose only

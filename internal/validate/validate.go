@@ -61,11 +61,31 @@
 // blocker for is the durable half of it.
 //
 // Out of scope by declaration, each with its own expected string in the suite and so its own
-// measurable slice: GC subtyping (21), constant expressions (24), limits (16), reference
-// instructions, the bulk memory/table ops, and exception handling. Two entries have left this list
-// and are worth naming as departures rather than deletions — SIMD lane immediates (48) with slice 2,
-// which is why `ErrInvalidLaneIndex` exists, and alignment (99) with slice 3, which is why
-// `ErrAlignmentTooLarge` does.
+// measurable slice: constant expressions (24), limits (16), reference instructions, the bulk
+// memory/table ops, and exception handling. Three entries have left this list and are worth naming
+// as departures rather than deletions — SIMD lane immediates (48) with slice 2, which is why
+// `ErrInvalidLaneIndex` exists; alignment (99) with slice 3, which is why `ErrAlignmentTooLarge`
+// does; and **GC subtyping (21) with slice 5**, which is why `ErrSubType` does.
+//
+// # Slice 5: the subtype relation
+//
+// The departure above is the one this register had to be *authorized* to make, and the difference is
+// worth stating where the register is. Slices 2 and 3 implemented rules already inside the declared
+// boundary; this one moved the boundary. It was declared in two places — here, and in `matches`'s own
+// doc comment in `stack.go` — and ADR 0031 is the record of retiring both, on the same reasoning
+// 0025's carve-out was recorded rather than absorbed. **The 21 are the criterion, not the estimate**:
+// the ADR pre-registered all 21 plus the 9 rows of `spec_test.go`'s `moduleOverRejections`, and the
+// slice is `match.go` — `match.ml` ported whole — plus `checkTypes` in `module.go`, which is
+// `check_subtype_sub` and the phase that runs it.
+//
+// **One relation, two consumers, and they drain opposite directions.** `matches` at every operand
+// comparison is the accept direction: the 9 over-rejections were valid modules this package refused,
+// a defect class no board could see before #341 built the arm that asks. `checkTypes` is the reject
+// direction: 21 invalid modules accepted, which is the direction this campaign had never had free
+// coverage in. That both halves are witnessed is the whole argument for taking it as a slice rather
+// than as a repair — and the halves turned out to be *coupled*, since the reject rule's supertype
+// comparison is a consumer of the equality the accept rows witness. A port that landed one disjunct
+// at a time regressed five previously-passing modules; the measurement is at `matchDefType`.
 //
 // # Out of scope divides in two, and only one half is a decline
 //
@@ -259,6 +279,40 @@ var (
 	// `checkOffset` for the ruling, and for the three-part condition under which the divergence
 	// becomes observable at all.
 	ErrOffsetOutOfRange = errors.New("offset out of range")
+
+	// ErrSubType is `check_subtype_sub`'s two `require`s about a declared supertype relationship
+	// — `valid.ml:170-174`, the finality rule and the relation itself.
+	//
+	// **The sentinel is the corpus's own substring and the index sits inside the message**, which
+	// is the one place this family's format differs from the `unknown ` categories above. The
+	// reference's strings are `"sub type " ^ x ^ " has final super type " ^ xi` and `"sub type " ^
+	// x ^ " does not match super type " ^ xi`, so the discriminating words come *after* an index
+	// rather than after the sentinel. All 21 vectors expect the bare `sub type`, which is
+	// ErrTypeMismatch's arrangement exactly: the harness matches the sentinel, the wrapped text
+	// says which of the two rules refused, and no vector can tell them apart.
+	//
+	// One sentinel for both rules because the suite cannot discriminate, not because they are one
+	// rule: four of the 21 are finality (a `sub` naming a `sub final` supertype) and seventeen are
+	// the relation. Splitting the sentinel would invent a distinction the authority's own strings
+	// do not carry — and `match.go` is where the seventeen are actually decided.
+	ErrSubType = errors.New("sub type")
+
+	// ErrForwardTypeUse is `check_subtype_sub`'s first `require` — a subtype naming a supertype at
+	// a *higher* index than its own (`valid.ml:169`, `"forward use of type " ^ xi ^ " in sub type
+	// definition"`).
+	//
+	// A separate sentinel from ErrSubType, and the reason is the reference's own word order rather
+	// than a judgement about how related the rules are: this message does not begin with `sub
+	// type`, so `%w`-wrapping ErrSubType could not produce it. It still *contains* the substring
+	// the corpus matches, which is why the vectors expecting `sub type` are satisfied either way —
+	// a coincidence of phrasing that is worth naming, because it means this sentinel's own reward
+	// figure is zero and its justification is completing the function.
+	//
+	// **It is also the property that makes the supertype walk terminate**, and that is not a
+	// coincidence: `xi < x` is what makes every declared chain strictly decreasing. See
+	// matchDeclaredSupertypes, which carries a depth bound anyway because it is reachable while
+	// this rule is still being established.
+	ErrForwardTypeUse = errors.New("forward use of type")
 
 	// ErrUnsupported is slice 1 declining an instruction whose rules belong to a later slice.
 	//

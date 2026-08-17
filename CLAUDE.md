@@ -141,11 +141,9 @@ Three separate mistakes are being avoided, and they were made in that order:
 1. **`sleep N && gh pr checks` — a duration is not a completion signal.** It
    guesses low and reports a pending run as though that were news, or guesses high
    and wastes the difference; either way the shell, not the CI system, decided
-   when to look. Same error as reading a verdict off a tool's stderr — and read the
-   verdict from `gh run view "$RUN" --json conclusion`, **never off the end of a watch
-   pipeline**: one command, no last-link ambiguity, nothing for a pipe to eat. A
-   procedure, not a control, because no repo gate reaches your own command
-   composition. (Directive: Scott, PR #331.)
+   when to look. Read the verdict from `gh run view "$RUN" --json conclusion` — the
+   CI instance of *a command's exit status belongs to whatever ran last*.
+   (Directive: Scott, PR #331.)
 2. **`gh pr checks --watch` races the run's creation.** It watches whatever checks
    exist *now*, so seconds after a push it finds the previous commit's run,
    reports pass, and exits 0 — a stale green. Always resolve the run id from the
@@ -393,6 +391,7 @@ bullet carries operative text has that text nowhere else.
 - **Three provenance categories: cited, derived, synthetic.** — [citations](docs/laws/citations.md#three-provenance-categories-cited-derived-synthetic)
 - **A guard's trigger predicate is itself a claim about the space, and an under-matching one fails silently by construction.** — [controls](docs/laws/controls.md#a-guards-trigger-predicate-is-itself-a-claim-about-the-space-and-an-under-matching-one-fails-silently-by-construction)
 - **Verdict channel and mechanism channel are different instruments.** — [evidence-and-instruments](docs/laws/evidence-and-instruments.md#verdict-channel-and-mechanism-channel-are-different-instruments)
+- **A command's exit status belongs to whatever ran last.** — [evidence-and-instruments](docs/laws/evidence-and-instruments.md#a-commands-exit-status-belongs-to-whatever-ran-last)
 - **A ruling retroactively falsifies prose written before it, so accepting a ruling includes sweeping for the sentences it orphaned.** — [citations](docs/laws/citations.md#a-ruling-retroactively-falsifies-prose-written-before-it-so-accepting-a-ruling-includes-sweeping-for-the-sentences-it-orphaned)
 - **Coverage is a claim: an instrument's domain is an assertion it cannot check about itself.** — [evidence-and-instruments](docs/laws/evidence-and-instruments.md#coverage-is-a-claim-an-instruments-domain-is-an-assertion-it-cannot-check-about-itself)
 - **Second-order honesty: apply the discipline to its own output.** — [evidence-and-instruments](docs/laws/evidence-and-instruments.md#second-order-honesty-apply-the-discipline-to-its-own-output)

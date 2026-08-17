@@ -255,7 +255,15 @@ func (p *parser) moduleField() error {
 //
 // The bindidx arm is sugar (`:1279`) and binds into the type space; the anonymous arm still
 // occupies an index, which is bindAnon's whole reason for existing.
+//
+// **Both arms record their extent**, because a `rectype` is one deftype-group either way and the
+// encoder has to emit the grouping it was given — see `context.recExtents` for what flattening it
+// cost. Recorded on the way *out* of the field, from the two lengths rather than from the member
+// count, for `binary.labelRecGroup`'s reason: the loop's own trip count would be a second answer to
+// a question `typeDefs` already answers, and the two would disagree the first time a member arm
+// appended anything but one entry.
 func (p *parser) typeField() error {
+	start := uint32(len(p.ctx.typeDefs))
 	if p.c.at(LParen) && p.c.peek2Keyword(kwRec) {
 		if err := p.lpar(kwRec); err != nil {
 			return err
@@ -265,9 +273,26 @@ func (p *parser) typeField() error {
 				return err
 			}
 		}
-		return p.rpar()
+		if err := p.rpar(); err != nil {
+			return err
+		}
+		p.noteRecExtent(start)
+		return nil
 	}
-	return p.typeDef()
+	if err := p.typeDef(); err != nil {
+		return err
+	}
+	p.noteRecExtent(start)
+	return nil
+}
+
+// noteRecExtent records the `rectype` field that started at explicit type index start, deriving its
+// length from how far `typeDefs` advanced.
+func (p *parser) noteRecExtent(start uint32) {
+	p.ctx.recExtents = append(p.ctx.recExtents, recExtent{
+		start:  start,
+		length: uint32(len(p.ctx.typeDefs)) - start,
+	})
 }
 
 // typeDef parses `type_def` (parser.mly:1276-1280).

@@ -189,7 +189,21 @@ func TestRangeCitationSubjectsAreReadFromTheReference(t *testing.T) {
 	// region and this file's sentence about it (:618-651), `validate.go`'s slice-4 summary pointing at
 	// `instr.go` (:442-446), and three rows in `vec_authority_test.go`'s own prose (:373-378, :390-393,
 	// :41-42) that describe what another instrument keys rather than naming a reference subject.
-	const wantKeyed, wantResidue = 32, 11
+	// **#343's `match.ml` port moved both figures, and the split is the rule working as designed.**
+	// The relation's own rules each cite the reference lines they transcribe and name the reference
+	// function in the same breath, so they land keyed without anyone aiming for it — which is the
+	// point: a rule ported by reading its arms cannot help naming them. The residue increment is the
+	// other half of the same file, the doc blocks that argue about *representation* rather than
+	// transcribe a rule — why an index-keyed port loses a disjunct, why one function alone reads the
+	// null bit, why the group extent had to be retained. Those cite the reference to say what it
+	// does differently, so they resolve and describe correctly and key nothing, exactly as the
+	// `check_elem` note above predicts.
+	//
+	// Deliberately not spelled: which ranges those are. That is the fixed-point trap this header's
+	// own note walked into at 30-31-32, and it applies to a paragraph explaining an increment just
+	// as much as to one explaining a repair.
+	// Two keyed and three residue, against `match.go`'s five ranges in total.
+	const wantKeyed, wantResidue = 34, 14
 	if keyed != wantKeyed || residue != wantResidue {
 		t.Errorf("keyed %d range citation(s) by named subject and left %d as residue, want %d and "+
 			"%d — recount and re-pin. A row moves from residue to keyed when its description starts "+

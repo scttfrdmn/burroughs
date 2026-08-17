@@ -389,7 +389,7 @@ func (v *validator) matchLabel(ts, want []binary.ValType, role string, idx uint3
 			ErrTypeMismatch, role, idx, typeList(want), typeList(ts))
 	}
 	for j := range want {
-		if !matches(ts[j], want[j]) {
+		if !v.matches(ts[j], want[j]) {
 			return fmt.Errorf("%w: br_table %s %d takes %s, stack has %s",
 				ErrTypeMismatch, role, idx, typeList(want), typeList(ts))
 		}
@@ -447,7 +447,7 @@ func (v *validator) selectUnannotated() error {
 	if !ok {
 		return fmt.Errorf("%w: select with one operand", ErrTypeMismatch)
 	}
-	if !matches(t1, t2) {
+	if !v.matches(t1, t2) {
 		return fmt.Errorf("%w: select operands are %s and %s", ErrTypeMismatch, t1, t2)
 	}
 	// The result is whichever operand is concrete; both may be bottom in an unreachable frame.
