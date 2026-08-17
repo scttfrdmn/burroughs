@@ -31,6 +31,22 @@ weakly-ordered platform.
   (`citation_subject_test.go`'s own "(Ruling: Scott, PR #337 relay.)" was written in the commit that
   *is* #337), so the diff-wide reading would have retroactively failed #337. Needs the network, so it
   runs as `--pr <n>` beside the diff half, in CI and locally. (Directive: Scott, PR #339 review.)
+  - **A second boundary, found the same way and on this PR's own CI red: fenced code blocks are
+    excluded, because a quotation is evidence and only prose can cite.** The check failed on a
+    fenced block quoting `ratio.sh`'s output, where the printed line *is* a commit's `Ratio-Class:
+    ordered` trailer naming the PR it lives in — the convention the diff exclusion already allows,
+    reported as evidence rather than claimed. **The other available fix was to edit the quoted
+    output until the token vanished, which is fabricated evidence to satisfy a prose check** and a
+    worse defect than the one gated. Filed as the fourth specimen under *a guard's trigger predicate
+    is a claim about the space*, for the direction the law had not recorded: **when a guard fires on
+    content you would have to falsify to satisfy it, the guard's population is wrong, not the
+    content.** Checks 1–3 still read fenced content — resolution is a property of the number, and a
+    fabricated one inside a quoted block is exactly what wants catching. The narrowing pays back
+    twice: an **odd fence count fails** (an unbalanced fence would swallow the rest of the body into
+    the excluded region — this law's own silent under-match, reintroduced), and check 4's prose line
+    count is printed beside its verdict, so a population that collapsed to zero cannot read as a
+    pass. All three paths watched die: prose self-citation exit 1, fenced quotation `note` and exit
+    0, odd fence exit 1.
 
 - **`scripts/xcheck-amd64.sh`: the pre-push cross-architecture check, on hardware.** Contract §9 wants
   both memory models; CI gives both on push, and this is the half that answers before a claim is written
