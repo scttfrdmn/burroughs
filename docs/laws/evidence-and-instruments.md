@@ -11,6 +11,11 @@ later ruling amended rather than replaced. The per-law recall keys `CLAUDE.md` c
 retired with the index economy when that file became a brief and a pointer page (Scott's
 directive, the four-workstream brief of 2026-08-17); the laws themselves were not touched.
 
+**`claudeMDCeiling`, named in the ninth specimen of the coverage law below, no longer resolves** — it
+was retired with that economy. The specimen stands because the lesson is about a *unit* (`len(str)`
+counts characters, `wc -c` counts bytes) and the ceiling is only the quantity it was mismeasured on;
+read that sentence's present tense as the past tense it now is.
+
 `CLAUDE.md` links this family, and the two halves of that link are checked:
 `TestClaudeMDLinksResolve` (`internal/testenv`) that every pointer on the page resolves, and
 `TestLawFamiliesAreReachable` that every family here is reachable from it — a law nobody can
@@ -495,7 +500,11 @@ reach is a law out of context.
   the filed control that runs it mechanically.
   The `--limit 500` is load-bearing, not decoration: `gh issue list` defaults to **30** silently, so
   a count taken without it reports a page as the population — body in
-  [evidence-and-instruments](docs/laws/evidence-and-instruments.md#coverage-is-a-claim-an-instruments-domain-is-an-assertion-it-cannot-check-about-itself).
+  [Coverage is a claim](#coverage-is-a-claim-an-instruments-domain-is-an-assertion-it-cannot-check-about-itself),
+  above in this family (the path was `docs/laws/evidence-and-instruments.md#…` while this law lived
+  in `CLAUDE.md`; **relocating the text unchanged would have changed what the link means**, since a
+  repo-root-relative path read from inside `docs/laws/` resolves to nothing. The target is the same
+  law it always was).
   This rule kept a running tally here until it was pointed out
   that a measured quantity in prose schedules its own next increment; the tally is generated or
   it is deleted, and this one is deleted. (Lesson: Scott, on the PR #247 relay; recurrences

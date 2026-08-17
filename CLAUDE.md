@@ -132,9 +132,10 @@ is dug.
   verification](docs/laws/operations.md#local-cross-architecture-verification), [post-squash
   divergence](docs/laws/operations.md#after-a-squash-merge-local-main-diverges-from-originmain--verify-dont-force).
 
-`TestLawFamiliesAreReachable` (`internal/testenv`) checks that every link on this page resolves
-and that every law family is reachable from it, so a page of pointers cannot rot into a page of
-dead ones.
+Two controls in `internal/testenv` keep this page from rotting into a page of dead pointers, and
+they are two because they fail for unrelated reasons (grave #34): `TestClaudeMDLinksResolve` that
+every link here names a file that exists and an anchor some heading slugs to, and
+`TestLawFamiliesAreReachable` that every family in the corpus is linked from here.
 
 ## Conventions
 

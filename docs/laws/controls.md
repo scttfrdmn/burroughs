@@ -11,6 +11,15 @@ later ruling amended rather than replaced. The per-law recall keys `CLAUDE.md` c
 retired with the index economy when that file became a brief and a pointer page (Scott's
 directive, the four-workstream brief of 2026-08-17); the laws themselves were not touched.
 
+**Three identifiers named in the bodies below no longer resolve, and the sentences naming them are
+history rather than description**: `claudeMDCeiling` (the byte budget), `TestClaudeMDIndexLedger`
+(the per-entry ledger), and `lawsFloor`, all retired with the economy they were instruments of.
+They are left in place because a **specimen is content** — the extent, unit, and total-is-not-a-ledger
+laws were minted *on* them, and rewriting a minting record to name a live control instead would
+falsify the occasion. Read them in the past tense; the laws they specimen are unaffected. Two
+passages assert them in the present tense and are wrong to (`is the specimen`, `two live controls`);
+amending law text needs a principal's word, so the correction is scoped here rather than made there.
+
 `CLAUDE.md` links this family, and the two halves of that link are checked:
 `TestClaudeMDLinksResolve` (`internal/testenv`) that every pointer on the page resolves, and
 `TestLawFamiliesAreReachable` that every family here is reachable from it — a law nobody can
