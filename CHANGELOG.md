@@ -1613,6 +1613,28 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **`make check` went red on a pristine tree whenever agents were running, because three tree-walk
+  controls each carried their own idea of where the repo ends** (grave #369,
+  `internal/testenv/inventory_test.go`, `internal/testenv/citation_test.go`). The agent harness keeps
+  full repo copies under `.claude/worktrees/agent-*/`, and every walk excluded only
+  `{testdata, bin, .git, tools}` — so the walks descended into sibling checkouts and reported that
+  tree's files as violations of this tree's rules: **12 findings, all inside `.claude/worktrees/`,
+  zero in the real tree.** A *false red*, which costs what a false green costs, since a red on a clean
+  checkout trains the reflex of scrolling past a red.
+  - **The sweep found a third site the grave named two of.** `citation_test.go`'s walk carried a
+    *fifth* entry (`third_party`) under a comment asserting its list was "the same exclusions as
+    `TestEverySkipSiteIsLicensed`, deliberately" — the defect stated as the rule, which makes a reader
+    confirm the drift as though it were the design. So the fix is not three added names: `skipWalkDir`
+    is now the one list, and a caller's own additions are passed at the call site where a divergence is
+    visible rather than copied where it is not.
+  - `TestEveryTreeWalkStopsAtTheRepoBoundary` is the control, and the routing half is the load-bearing
+    one: it **derives** every `filepath.WalkDir` site by parsing the package and requires each to route
+    through the shared helper, rather than checking a list of sites somebody remembered — which is the
+    *control scoped to the current sample* shape that put three copies of one list in the tree. Watched
+    die three ways, each a different assertion: dropping `.claude` (which also reopens the original
+    false red, so the fix is causal and not coincidental), hand-rolling one site's exclusions again, and
+    a floor above the real site count for the vacuity arm.
+
 - **A pipeline swallowed a failed fetch, so `citecheck.sh --pr` reported green having read
   nothing** (grave #365, `scripts/citecheck.sh`). The fetch was
   `diffout="$(gh pr view … | sed 's/^/+/')"`, and a pipeline's exit status belongs to whatever ran
