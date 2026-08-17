@@ -1613,6 +1613,28 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **A pipeline swallowed a failed fetch, so `citecheck.sh --pr` reported green having read
+  nothing** (grave #365, `scripts/citecheck.sh`). The fetch was
+  `diffout="$(gh pr view … | sed 's/^/+/')"`, and a pipeline's exit status belongs to whatever ran
+  last — `sed`, which succeeds on empty input — so `set -eu` never saw a rate-limited `gh`. The
+  script exited **0**, having scanned an empty string, announcing "self-citation check ran against
+  PR #N, over 0 prose line(s)" and "this diff cites nothing": a positive claim that it ran, then
+  the script's own vacuity confession reading as a benign finding about a diff. CI's `citations`
+  job runs that arm on `pull_request`, so the hole was load-bearing. Found by the figure being
+  suspiciously clean — 0 citation tokens in a body citing a dozen issues — with `gh`'s own rate
+  limit error one line above on the mechanism channel.
+  - **The existing guard tested the least likely cause.** Both checkers refuse to report green when
+    `gh` is *missing*, in identical words; a rate limit, an unauthenticated `gh`, and an
+    unresolvable PR number are all likelier and all leave the binary present.
+  - **The sibling was the correct version, and the difference is one pipe.** `closecheck.sh`'s arm
+    assigns the fetch with no pipeline, so `set -e` catches it and that script exits 1 on the same
+    input. Both now read the fetch's status explicitly and name the cause and remedy; relying on
+    the absence of a `|` that any edit could add is not a property.
+  - **`TestPRFetchFailureIsNeverAPass`** drives both scripts with a `gh` shim — binary present,
+    call failing, the case the old guard could not see — asserting a non-zero exit, a message
+    naming the fetch, and the *absence* of any line claiming a scan happened, with a success arm
+    beside it so the failure arm cannot pass by breaking the scripts for an unrelated reason.
+
 - **grave #362: an identity that closes against a hand-maintained literal is a pin wearing a
   cross-check's clothes** ([#362](https://github.com/scttfrdmn/burroughs/issues/362)). The
   `assert_invalid` destination ledger's cross-check asserted `62` while its message named

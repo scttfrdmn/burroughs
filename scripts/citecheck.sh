@@ -173,11 +173,40 @@ if [ "$prmode" -eq 1 ]; then
 		echo "      report green; CI is where this half is binding."
 		exit 1
 	fi
+	# **The fetch is its own statement, and the reason is grave #365.** This line used to read
+	# `diffout="$(gh pr view … | sed 's/^/+/')"`, and a pipeline's exit status belongs to whatever
+	# ran last — `sed`, which succeeds on empty input. So `set -eu` never saw the failure: a
+	# rate-limited or unauthenticated `gh` produced an empty body, `extract` found no citations in
+	# it, and the script exited **0** announcing "self-citation check ran against PR #N, over 0
+	# prose line(s)" — a positive claim that it ran, followed by the benign-sounding "this diff
+	# cites nothing", which is a finding about a diff and not a confession that nothing was read.
+	# CI's `citations` job runs exactly this arm on `pull_request`, so the hole was load-bearing.
+	#
+	# The sibling had it right. `closecheck.sh`'s `--pr` arm assigns the fetch with no pipe, so
+	# `set -e` catches it and that script exits 1 on the same input — the guard below existed here
+	# too, in the same words, and only ever tested `command -v gh`: **the binary's absence, which
+	# is the least likely way a fetch fails.** A guard's trigger predicate is a claim about the
+	# space, and this one under-matched by construction. Checked explicitly rather than by relying
+	# on `set -e` again, so the property is visible at the line that has it. Both scripts' `--pr`
+	# arms are asserted to refuse a green on a failing fetch by `TestPRFetchFailureIsNeverAPass`
+	# (`internal/testenv`), with a success arm beside it so the failure arm cannot pass by breaking
+	# the script for an unrelated reason.
+	if ! prbody="$(gh pr view "$selfpr" --json title,body --jq '.title + "\n" + .body')"; then
+		echo "FAIL  PR #$selfpr's body could not be fetched, so it was not scanned."
+		echo "      This is not a pass, for the same reason a missing gh is not: a check that"
+		echo "      could not ask its question does not get to report green. Common causes are"
+		echo "      an API rate limit, an unauthenticated gh, and a PR number that does not"
+		echo "      exist — run \`gh pr view $selfpr\` to see which, then re-run this."
+		exit 1
+	fi
 	# Fed to the same `extract` as a diff, by prefixing every line with `+`. The alternative is a
 	# second scanner for prose, and two scanners over one grammar drift — the citation grammar is
 	# one concept and gets one place, which is the argument this script's own header makes for
 	# keeping the classification inside a single awk program.
-	diffout="$(gh pr view "$selfpr" --json title,body --jq '.title + "\n" + .body' | sed 's/^/+/')"
+	#
+	# `printf` into `sed` is deliberately *not* the shape above: its leading command reads a shell
+	# variable and has no failure mode to swallow.
+	diffout="$(printf '%s\n' "$prbody" | sed 's/^/+/')"
 elif [ "$base" = "--worktree" ]; then
 	base="${2-main}"
 	head="" # the empty head *is* the working tree, for git diff and for the label below

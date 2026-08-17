@@ -164,7 +164,20 @@ if [ "$prmode" -eq 1 ]; then
 		echo "      get to report green; CI is where this half is binding."
 		exit 1
 	fi
-	body="$(gh pr view "$prnum" --json title,body --jq '.title + "\n" + .body')"
+	# **Explicit, though `set -e` already catches it here.** This assignment is not a pipeline, so
+	# a failing `gh` does abort the script — which is why this arm exits 1 where `citecheck.sh`'s
+	# equivalent exited 0 until grave #365 fixed it. Relying on that is relying on the absence
+	# of a `|` that any later edit could add, and the failure it guards is silent by construction:
+	# an empty body scans clean. So the status is read here, and the message names the cause the
+	# way the guard above names its own. Both scripts' `--pr` arms are asserted to refuse a green
+	# on a failing fetch by `TestPRFetchFailureIsNeverAPass` (`internal/testenv`).
+	if ! body="$(gh pr view "$prnum" --json title,body --jq '.title + "\n" + .body')"; then
+		echo "FAIL  PR #$prnum's body could not be fetched, so it was not scanned."
+		echo "      This is not a pass, for the same reason a missing gh is not. Common causes"
+		echo "      are an API rate limit, an unauthenticated gh, and a PR number that does not"
+		echo "      exist — run \`gh pr view $prnum\` to see which, then re-run this."
+		exit 1
+	fi
 	label="PR #$prnum (title and body)"
 	nlines="$(printf '%s\n' "$body" | grep -c '' || true)"
 	found="$(printf '%s\n' "$body" | scan | sort -u)"
