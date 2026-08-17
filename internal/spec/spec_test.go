@@ -7351,10 +7351,13 @@ func TestModuleDefinitionsAskTheValidator(t *testing.T) {
 // discovered by the fix's own falsification rather than assumed to hold from the original
 // diagnosis.
 //
-// **2 lines remain the already-tracked rec-group scope boundary** `sameFuncType`'s own doc
-// comment names (`TestSameFuncTypeCorpusScope`'s M10/M11 shape) — `tag.wast`'s cross-module
-// tag-import vectors reach the identical gap `sameTagType` inherits from `structFuncTypeEqual`.
-// Not #206, unaffected by this fix, unchanged from the original pre-registration.
+// **2 lines were the already-tracked rec-group scope boundary** `sameFuncType`'s own doc comment
+// named (`TestSameFuncTypeCorpusScope`'s M10/M11 shape) — `tag.wast`'s cross-module tag-import
+// vectors reached the identical gap `sameTagType` inherited from `structFuncTypeEqual`. Not #206,
+// and they are **gone**: grave #368 routed the linker's tag arm through `match_tagtype` over rolled
+// deftypes, which is the relation those two vectors were always about, so `:48` and `:59` pass and
+// their entries went stale. This test said so before the report did — the second stale-entry catch
+// after `:334`, and the same mechanism: a fail list rots by the system working.
 //
 // **1 unrelated pre-existing gap remains**: `try_table.wast:464`/`:465`/`:466`, the harness
 // limitation now correctly attributed to all three lines it actually covers.
@@ -7381,8 +7384,9 @@ func TestGrave206KnownFailures(t *testing.T) {
 			// validateAdmitCeiling (142); these are 2 of it.
 			18: "admission stratum: slice 1 has no tag-section rules, so `non-empty tag result type` is not checked and the module validates (#9, validateAdmitCeiling)",
 			22: "admission stratum: slice 1 has no tag-section rules, so `non-empty tag result type` is not checked and the module validates (#9, validateAdmitCeiling)",
-			48: "sameFuncType's own rec-group scope boundary (TestSameFuncTypeCorpusScope), reached via tag-import linking rather than func linking",
-			59: "sameFuncType's own rec-group scope boundary (TestSameFuncTypeCorpusScope), reached via tag-import linking rather than func linking",
+			// `:48` and `:59` were here — the rec-group scope boundary reached through tag-import
+			// linking — and grave #368's rolled `match_tagtype` closed it, so both pass. Removed
+			// rather than re-explained, exactly as `try_table.wast:334` was above.
 		},
 		"try_table.wast": {
 			// `:334` was here — `return_call` had no arm — and 0026's mechanism (#253) gave it
