@@ -35,8 +35,12 @@ generated tables are how those artifacts are known to be right; they are never t
 
 **GitHub is the tracker.** The repo's markdown footprint is frozen at standard repo files;
 project state lives in issues, milestones, and PRs. Milestones are the phase ladder (`v0
-interpreter`, one `v0.x` per proposal gate, then `v1`, `v2`, `v3`) and every issue attaches to
-one. Labels stay small: `phase:v0`…`phase:v3`, `gate:<proposal>`, `type:decision`, `type:grave`,
+interpreter`, one `v0.x` per proposal gate, then `v1`, `v2`, `v3`), and **an issue attaches to one
+when it is scheduled, not when it is filed** — a milestone is a commitment to do the work in a
+phase, so requiring it at filing time prices filing at the cost of scheduling and the unscheduled
+backlog becomes 32 standing violations of a rule nothing was gaining from (#324, retired by Scott).
+An unmilestoned issue is a filed issue, which is the state most of them should be in. Labels stay
+small: `phase:v0`…`phase:v3`, `gate:<proposal>`, `type:decision`, `type:grave`,
 `type:harness`, `type:contract`, and **`decision-needed:scott`** — that last one, assigned to
 Scott, *is* the decisions-needed queue, now queryable. Graves are closed issues labeled
 `type:grave`, lesson in the closing comment, with a comment at the fix site citing the number.
