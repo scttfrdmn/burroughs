@@ -458,7 +458,37 @@ type context struct {
 
 	// sawStart is `multiple start sections`. A bool, not a count, because the message is
 	// about the second one existing.
+	//
+	// It is also section 8's *grammar-side* counter — the `importsSeen`/`exportsSeen` role — and
+	// `haveStart` is the emitter's, which is why the pair reads redundantly two statements apart:
+	// see `defineStart`.
 	sawStart bool
+
+	// startFunc is the retained start function's index and haveStart says it was retained — the
+	// emitter's input for section 8 (#413, an #8 slice).
+	//
+	// **Two fields rather than a `*uint32`**, matching `Module.Start`/`HasStart` on the decoding
+	// side, which is the value this eventually has to agree with byte for byte. A pointer would
+	// make "no start section" and "a start section naming func 0" distinguishable only by a nil
+	// check that every reader has to remember, where the decoder already spells the same fact as a
+	// flag; two representations of one fact is how `textData.passive` nearly encoded an empty
+	// offset expression as a passive segment.
+	//
+	// `startFunc` is zero until `runDeferred` fills it, because the index resolves in stage 2.
+	//
+	// **And the corpus does not require that, which is why it is argued rather than cited.** All
+	// ten `(start …)` fields in the suite name a function defined *above* them — checked, the five
+	// files are `start.wast`, `start0.wast`, `linking.wast`, `linking3.wast` and `ref_func.wast` —
+	// so resolving at the cursor would score exactly the same board. The reference defers anyway:
+	// `module_fields1`'s start arm resolves `let x = $1 c` inside the innermost `fun () ->`
+	// (parser.mly:1367-1374 — the *export* arm's equivalent thunk, the one `defineExport`'s comment
+	// cites, is four arms later at :1380-1384), by which time every field has bound its names.
+	// So a `(start $main)` written before `$main` is a module the spec accepts, and resolving early
+	// would reject it with no vector to say so — §9 G-3's accept-direction blind spot, and the
+	// reason this is the *sibling* shape of `defineExport` rather than a simpler one. Written by
+	// `defineStart`.
+	startFunc uint32
+	haveStart bool
 
 	// The type index space's *content*, and the operations that read it — the reference's
 	// `c.types.list`/`c.types.ctx` (parser.mly:120) and its `deferred` thunks. See
@@ -864,8 +894,13 @@ func (c *context) noteNonTypeField(kw Token) {
 // an earlier field already refused, this field's own encodability does not matter.
 //
 // **The identity check's own falsification is `TestEncodeRefusesWhatItCannotWrite`'s mixed rows, and
-// it was watched die**: with the `Offset` comparison removed, `(module (func) (memory 1))` encodes and
-// drops the function. Recorded because the check reads like a defensive nicety and is the opposite.
+// it was watched die**: with the `Offset` comparison removed, all eleven of them encode — most
+// recently re-measured with the `(table 1 funcref (ref.func $f))` leader (#413), where the module
+// emitted has its *table* dropped. The vector this comment used to name, `(module (func) (memory 1))`,
+// is no longer one of those rows: the code section landed and a `(func)` encodes, so the sentence
+// outlived the row it cited. Recorded because the check reads like a defensive nicety and is the
+// opposite — and re-cited because a falsification naming a vector that no longer exists is a
+// falsification nobody can repeat.
 func (c *context) clearNonTypeField(kw Token) {
 	if c.haveNonType && c.firstNonType.Offset == kw.Offset {
 		c.haveNonType = false

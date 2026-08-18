@@ -337,7 +337,21 @@ func TestRangeCitationSubjectsAreReadFromTheReference(t *testing.T) {
 	// category rather than a fourth: the sentence says the message is the reference's own and cites the
 	// two lines it is copied from, naming no identifier because the thing being pointed at is a *string*.
 	// A citation whose subject is a sentence keys nothing and is right not to.
-	const wantKeyed, wantResidue = 85, 35
+	//
+	// **#413's start-section slice is keyed 86 and residue 36 — two new ranges, one into each column,
+	// and the residue one is this header's third category for the second time.** `module.go`'s
+	// `moduleStart` block cites the whole of `check_start` on a line naming it, so it keys — and the
+	// range is *described* here rather than quoted, because this pin's domain includes this file and
+	// the first draft of this paragraph quoted it and incremented the figure it was explaining.
+	// `validate.go`'s `ErrStartFunction` cites the rule's two message lines on a continuation line
+	// whose subject is the
+	// reference's *string* — the sentence names `check_start` one line above and the citation sits with
+	// the words being quoted — so it lands in residue for the same reason Rule C's message line did,
+	// and for the same reason it is right to: what is being pointed at is a sentence, not an
+	// identifier. Restating it would mean moving the range onto the `check_start` line and separating
+	// the citation from the text it certifies, which is the wrapping hazard two paragraphs up in
+	// reverse.
+	const wantKeyed, wantResidue = 86, 36
 	if keyed != wantKeyed || residue != wantResidue {
 		t.Errorf("keyed %d range citation(s) by named subject and left %d as residue, want %d and "+
 			"%d — recount and re-pin. A row moves from residue to keyed when its description starts "+

@@ -824,6 +824,47 @@ func moduleExports(m *binary.Module) error {
 	return nil
 }
 
+// moduleStart is `check_start`, whole (valid.ml:1110-1114):
+//
+//	let Start x = start.it in
+//	let ft = functype_of_comptype (expand_deftype (func c x)) in
+//	require (ft = ([], [])) start.at
+//	  "start function must not have parameters or results"
+//
+// Three steps, and the *first* is the one with a corpus vector: `func c x` is the index-space lookup,
+// so `(module (func) (start 1))` is `unknown function 1` and never reaches the `require`. See
+// ErrStartFunction for why that makes this rule two vectors rather than three.
+//
+// **Its position is `Option.iter (check_start c) m.it.start` at valid.ml:1166 — after every function
+// body, before the exports — and the position is observable.** A module with an ill-typed body and a
+// start function taking a parameter reports the body; one with a bad start and an unknown export
+// index reports the start. Whether the corpus can see either is a separate question from whether it
+// is the rule, and it cannot: no vector carries two defects across this seam. So the ordering is
+// transcribed on the reference's authority, which is `moduleExports`' arrangement exactly and is
+// argued at length there.
+//
+// The `Option.iter` is `m.HasStart`, which is why an absent start section is a `nil` from this
+// function rather than a zero index checked against something — see `binary.Module.HasStart`, and
+// `context.startFunc` in `internal/text` for the same two-fields decision on the writing side.
+func moduleStart(m *binary.Module) error {
+	if !m.HasStart {
+		return nil
+	}
+	ti, err := funcTypeIndexIn(m, m.Start)
+	if err != nil {
+		return err
+	}
+	ft, err := funcType(m, ti)
+	if err != nil {
+		return err
+	}
+	if len(ft.Params) != 0 || len(ft.Results) != 0 {
+		return fmt.Errorf("%w: start function %d has type %v -> %v",
+			ErrStartFunction, m.Start, ft.Params, ft.Results)
+	}
+	return nil
+}
+
 // exportExists is `check_export`'s five arms (valid.ml:1128-1137) with the externtype thrown away —
 // the same relationship memoryExists has to `memory c x`, and for the same reason: this phase needs
 // only whether the index resolves.

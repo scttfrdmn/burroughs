@@ -463,7 +463,24 @@ func TestModuleAcceptDirection(t *testing.T) {
 		{`(module (elem funcref))`, "elem_list:1155 with an empty elemexpr_list"},
 
 		{`(module (start 0))`, "start:1304"},
-		{`(module (start $f))`, "start with a symbolic index"},
+		// **`(module (start $f))` sat here for six PRs and the reference REJECTS it** — grave #415.
+		// `start` is `Start ($3 c func)` (:1306) and `func` is `lookup "function" c.funcs`
+		// (:157), which raises `unknown function $f` on an unbound name. The row could not fail
+		// while `startField` called `p.idx()` and threw the index away, so it asserted that a
+		// *missing resolution* was the reference's behaviour: an accept-direction error inside the
+		// instrument built because the corpus cannot score accepts. Its tell was in the second
+		// column — every sibling cites a production line and this one said "start with a symbolic
+		// index", which names no arm. The reject-direction row is in TestModuleRejectDirection.
+		//
+		// The two rows that replace it are the pair that matters, and the second is the deferral's
+		// only witness anywhere: the reference evaluates `let x = $1 c` in `module_fields1`'s
+		// *innermost* thunk (:1367-1374), the same nesting `export` uses, so a start naming a
+		// function defined below it is accepted. No suite vector writes that form — checked, all ten
+		// `(start …)` fields in the corpus name a function above them — so this row is the entire
+		// coverage for it.
+		{`(module (func $f) (start $f))`, "start:1306 → lookup \"function\":157, backward reference"},
+		{`(module (start $f) (func $f))`, "the same lookup, FORWARD — module_fields1:1367-1374 " +
+			"resolves start in the innermost thunk, after every field has bound"},
 
 		// Ordering and multiplicity that must be permitted.
 		{`(module (import "m" "a" (func)) (import "m" "b" (func)))`, "two imports, no definition"},
@@ -588,6 +605,13 @@ func TestModuleRejectDirection(t *testing.T) {
 		{`(module (tag) (import "m" "f" (func)))`, "import after tag definition", "imports.wast"},
 
 		{`(module (start 0) (start 0))`, "multiple start sections", "parser.mly:1372"},
+		// Grave #415's reject-direction half. A *numeric* index is never this error — `idx`'s NAT arm
+		// is `nat32 $1` with no lookup (:488), so `(module (start 7))` parses and `start.wast:2`
+		// asserts the refusal as `assert_invalid`, the validator's.
+		{
+			`(module (start $f))`, "unknown function $f",
+			"lookup:148-150 via func:157 — the row TestModuleAcceptDirection had backwards",
+		},
 
 		{
 			`(module (import "m" "\ef" (func)))`, "malformed UTF-8 encoding",

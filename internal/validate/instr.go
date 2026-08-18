@@ -704,31 +704,43 @@ func (v *validator) funcTypeAt(idx uint32) (binary.FuncType, error) {
 
 // funcTypeIndexAt resolves a *function index* to the *type index* it declares.
 //
+// A delegation since #413's start-section slice, which is `globalAt`→`globalTypeAt`'s arrangement
+// for the same reason: `check_start` asks this question at *module* level (valid.ml:1112, outside
+// any body), so there was no validator to hang it off, and writing the walk a second time is the
+// shape #241 argued against — two functions answering one index-space question agree until one of
+// them learns something. Unlike `globalAt` there is no narrowing parameter, because a function's
+// index space does not grow while the module is being checked.
+func (v *validator) funcTypeIndexAt(idx uint32) (uint32, error) {
+	return funcTypeIndexIn(v.mod, idx)
+}
+
+// funcTypeIndexIn is funcTypeIndexAt's body, over a module rather than a validator.
+//
 // The interleaving is the module's, not a convention: an imported function occupies function
 // index 0 before any defined function does. `internal/interp` resolves it the same way
 // (`call.go:142`), and getting it backwards would type-check every call in a module without
 // imports and misresolve every call in a module with them.
-func (v *validator) funcTypeIndexAt(idx uint32) (uint32, error) {
-	imported := uint32(v.mod.ImportedFuncs())
+func funcTypeIndexIn(m *binary.Module, idx uint32) (uint32, error) {
+	imported := uint32(m.ImportedFuncs())
 	if idx < imported {
 		n := 0
-		for i := range v.mod.Imports {
-			if v.mod.Imports[i].Kind != binary.ExternFunc {
+		for i := range m.Imports {
+			if m.Imports[i].Kind != binary.ExternFunc {
 				continue
 			}
 			if uint32(n) == idx {
-				return v.mod.Imports[i].Index, nil
+				return m.Imports[i].Index, nil
 			}
 			n++
 		}
 		return 0, fmt.Errorf("%w %d (import scan found no match)", ErrUnknownFunc, idx)
 	}
 	def := idx - imported
-	if def >= uint32(len(v.mod.Funcs)) {
+	if def >= uint32(len(m.Funcs)) {
 		return 0, fmt.Errorf("%w %d (%d in scope)",
-			ErrUnknownFunc, idx, imported+uint32(len(v.mod.Funcs)))
+			ErrUnknownFunc, idx, imported+uint32(len(m.Funcs)))
 	}
-	return v.mod.Funcs[def].TypeIndex, nil
+	return m.Funcs[def].TypeIndex, nil
 }
 
 // globalAt resolves a global index across the same import-then-defined split.

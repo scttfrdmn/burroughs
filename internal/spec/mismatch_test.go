@@ -369,18 +369,27 @@ var expectedMismatches = map[string]map[int]string{
 		28: "multi-memory: the writer module at :10 is declined, so $M's memory was never written",
 		29: "multi-memory: the writer module at :10 is declined, so $M's memory was never written",
 	},
-	// The paradigm file. `:609` is the encoder gap; the nine Q2 rows this map held through
-	// linking.wast:342-353/410/423, elem.wast:959/960/972/973/974 and linking0.wast:42 are gone
-	// — grave #163 (0017 Q2): `ref` gained an `Inst *Instance` field naming the instance a
-	// funcref's index belongs to, and `call_indirect` resolves through it instead of through
-	// the caller. Confirmed by the full-board bucket join, not by re-reading this file: 1228 →
-	// 1213, all 15 departures from `assert_return value mismatch`, zero arrivals elsewhere.
-	"linking.wast": {
-		609: "encoder: the module at :592 carries (start $main), which the emitter cannot write (#8)",
-	},
-	"linking3.wast": {
-		82: "encoder: the module at :65 carries (start $main), which the emitter cannot write (#8)",
-	},
+	// **`linking.wast:609` and `linking3.wast:82` retired, #413.** Both named the missing start
+	// section as their cause — "the module at :592 carries `(start $main)`, which the emitter cannot
+	// write (#8)" — and the emitter writes it now, so both rows stopped mismatching and this control's
+	// falsifiability half is what said so, for the second time in this file's history after the
+	// `table_grow`/`table_get` retirement above.
+	//
+	// The pair is worth one sentence beyond "the cause was answered", because the *shape* of their
+	// departure is the registry's own argument: these were `assert_return`s against a **different,
+	// healthy** instance whose table the refused module's start function was supposed to populate, so
+	// the wrong value was authored two modules away from the row that reported it. That is the same
+	// authorship this file's `load1.wast` entries record for the multi-memory gate, arriving through a
+	// frontier instead of a gate — and it is why a value mismatch's cause is read from the lanes
+	// rather than guessed from `Got`, which is the header's whole point.
+	//
+	// What the paradigm-file comment used to say about the nine Q2 rows stays true and stays here,
+	// because it is the record of how this map is drained: linking.wast:342-353/410/423,
+	// elem.wast:959/960/972/973/974 and linking0.wast:42 went with grave #163 (0017 Q2) — `ref` gained
+	// an `Inst *Instance` field naming the instance a funcref's index belongs to, and `call_indirect`
+	// resolves through it instead of through the caller. Confirmed by the full-board bucket join, not
+	// by re-reading this file: 1228 → 1213, all 15 departures from `assert_return value mismatch`,
+	// zero arrivals elsewhere.
 }
 
 // countMismatchRegistry is the registry's size, for the vacuity message. A literal would be a

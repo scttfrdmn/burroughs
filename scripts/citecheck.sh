@@ -485,8 +485,48 @@ if [ "$need_gh" -gt 0 ]; then
 	for row in $(printf '%s\n' "$cites" | awk '$1 == "issue" || $1 == "grave" { print $1 ":" $2 }'); do
 		kind="${row%:*}"
 		n="${row#*:}"
+		# **The category counters are incremented from the extractor's kind, here, and not from the
+		# resolution arms below** (grave #416). They used to live in the two success arms, so any
+		# citation whose lookup failed was counted in the total and in *no* category — and this
+		# file's own header claims the opposite: "the total counts what the extractor matched, and
+		# each category says what it was." The identity held on every green run and broke exactly
+		# when something was wrong, which is the direction that matters: a reader comparing
+		# `1 citation-shaped tokens (0 issue, 0 grave, …)` cannot tell a miscount from a failure.
+		# Found by #410's own control, whose fixture is one citation that never resolves.
+		if [ "$kind" = grave ]; then
+			graves=$((graves + 1))
+		else
+			issues=$((issues + 1))
+		fi
+		# **stderr is kept, and the branch below is why** (#410). Any nonzero exit used to become
+		# `does not resolve: no such issue or PR in this repo` — a claim about the *tracker* resting
+		# on an exit code that cannot tell "the answer is no" from "the question was never asked".
+		# Discarding stderr is what made the two indistinguishable, and the remedy names a wrong
+		# action ("file the missing artifact") when the number was fine, which invites minting a
+		# duplicate of an issue that already exists. Observed on a `--pr 409` run: #180 reported as
+		# unresolvable at 4931/5000 rate limit, with the identical request answering out of band.
+		#
+		# This is the distinction `:479` already draws correctly for the whole phase — a check that
+		# could not ask its question does not report green — applied at the granularity of one
+		# citation, which is where it was abandoned.
+		err="$(mktemp)"
 		if ! meta="$(gh api "repos/{owner}/{repo}/issues/$n" \
-			--jq '(if .pull_request then "pr" else "issue" end) + "\t" + ([.labels[].name] | join(",")) + "\t" + .title' 2>/dev/null)"; then
+			--jq '(if .pull_request then "pr" else "issue" end) + "\t" + ([.labels[].name] | join(",")) + "\t" + .title' 2>"$err")"; then
+			# **HTTP 404 is the verdict; anything else is a mechanism failure.** Both exit nonzero,
+			# because neither is a pass — but only one of them is a statement about the number, and
+			# only one of them has "repoint the citation" as its remedy.
+			if ! grep -q 'HTTP 404' "$err"; then
+				echo "FAIL  could not resolve #$n -- the request failed: $(tr '\n' ' ' <"$err" | cut -c1-200)"
+				echo "      This is a mechanism failure, not a verdict: the tracker was never asked, so"
+				echo "      nothing here says whether #$n exists. Do NOT repoint the citation and do NOT"
+				echo "      file a replacement artifact — either would act on an answer that was never"
+				echo "      given. Re-run once the transport is working. Nonzero because a check that"
+				echo "      could not ask its question does not get to report green (#410)."
+				rm -f "$err"
+				fail=1
+				continue
+			fi
+			rm -f "$err"
 			echo "FAIL  #$n -> does not resolve: no such issue or PR in this repo"
 			echo "      A well-formed \`#N\` resolves to whatever N happens to be, so the number was"
 			echo "      never checked against the tracker. Two remedies, and they are different:"
@@ -497,6 +537,7 @@ if [ "$need_gh" -gt 0 ]; then
 			fail=1
 			continue
 		fi
+		rm -f "$err"
 		what="$(printf '%s' "$meta" | cut -f1)"
 		labels="$(printf '%s' "$meta" | cut -f2)"
 		title="$(printf '%s' "$meta" | cut -f3)"
@@ -521,7 +562,6 @@ if [ "$need_gh" -gt 0 ]; then
 			continue
 		fi
 		if [ "$kind" = grave ]; then
-			graves=$((graves + 1))
 			case ",$labels," in
 			*,type:grave,*)
 				if [ "$what" != issue ]; then
@@ -542,7 +582,6 @@ if [ "$need_gh" -gt 0 ]; then
 				;;
 			esac
 		else
-			issues=$((issues + 1))
 			echo "ok    #$n -> $what [${labels:-no labels}] $title"
 		fi
 	done

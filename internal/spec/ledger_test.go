@@ -245,7 +245,7 @@ func TestAssertInvalidDestinationLedgerCloses(t *testing.T) {
 		{
 			name: "already on the board (254 files) — the 2591 that left `unsupported`",
 			got:  already,
-			want: tally{total: 2591, pass: 2119, declined: 0, accepted: 0, mismatch: 10, gated: 462, precondition: 0},
+			want: tally{total: 2591, pass: 2123, declined: 0, accepted: 0, mismatch: 6, gated: 462, precondition: 0},
 			why: "the destination split IS the engine's contribution: 1615 passes is the reward, " +
 				"386 named declines are the next slices' work plan, 103 admissions are the " +
 				"accept-direction stratum, 10 are wrong-message on a right refusal, and 460 " +
@@ -390,7 +390,32 @@ func TestAssertInvalidDestinationLedgerCloses(t *testing.T) {
 				"which is the entry's second point: they surfaced as over-rejections of four *valid* " +
 				"modules, and this ledger only scores `assert_invalid`. A rule that over-rejects and a " +
 				"rule that is absent are the same row here, which is why the over-rejection table is a " +
-				"separate instrument and not a column of this one",
+				"separate instrument and not a column of this one. " +
+				"**#413 is the first entry whose delta comes out of `mismatch` alone**: `mismatch` 10 " +
+				"→ 6, `pass` 2119 → 2123, with `declined`, `accepted`, `gated` and `total` " +
+				"unmoved. This row's vocabulary has two names for a single-destination move and " +
+				"neither fits — out of `declined` is a rule becoming *known*, out of `accepted` a " +
+				"rule becoming *right*, and these four rules were both already. They were refused " +
+				"with the wrong text because the refusal came from the wrong layer: the wat encoder " +
+				"could not write a `(start …)` field, so four `assert_invalid` modules never " +
+				"reached the validator at all and this ledger scored the emitter's frontier message " +
+				"against the corpus's expected one. So the third shape is **a rule becoming " +
+				"*reachable***, and it is the shape every `mismatch` row in this population has: all " +
+				"six that remain quote `(table …)` (#8), not a validator disagreement. A reader " +
+				"who takes `mismatch` for \"the validator's messages are wrong\" would read this " +
+				"column as six defects in `internal/validate` and every one of them is in " +
+				"`internal/text`. " +
+				"The four are named because a delta of four out of a row of ten is otherwise " +
+				"unattributable, and their split is the part worth keeping: `start.wast:1` " +
+				"(`unknown function`), `:6` (`start function`, a result) and `:13` (`start function`, " +
+				"a param) are the three that need `moduleStart`, which is new in this slice, so they " +
+				"needed *both* halves — the encoder to reach the validator and the rule to be " +
+				"there when they did. `ref_func.wast:112` needed only the encoder: " +
+				"`(module (start $f) (func $f (drop (ref.func $f))))` expects `undeclared function " +
+				"reference`, a rule this validator has had for slices, and the start field alone was " +
+				"holding it two layers upstream. That one row is the whole argument for keeping " +
+				"`mismatch` a destination of its own rather than folding it into a fail count: it is " +
+				"a vector whose verdict was owed to no missing rule at all",
 		},
 		{
 			name: "arrived with the arm (2 files) — corpus admission, not verdicts earned",
@@ -532,7 +557,9 @@ func TestAssertInvalidDestinationLedgerCloses(t *testing.T) {
 	}
 	// The board's two ceilings are this sum, and stating it here is what re-ties the identity to the
 	// constants it names. `validateMismatchCeiling` (0) stays deliberately outside: the mismatch row
-	// below is board-wide and none of its 10 are the validator's.
+	// below is board-wide and none of its 6 are the validator's — all six are the wat encoder's
+	// `(table …)` frontier, which is #413's entry in that row and the reason it says so with the
+	// package named.
 	if got := keyed + stratumOther.declined + stratumOther.accepted; got != 8 {
 		t.Errorf("validate-stratum declines + admissions = %d, want 8 to match "+
 			"validateDeclineCeiling (8) + validateAdmitCeiling (0). Those are computed from the "+
@@ -549,8 +576,8 @@ func TestAssertInvalidDestinationLedgerCloses(t *testing.T) {
 			"board-wide where the 2591 above is the converted group alone, so the two are cross-checks "+
 			"of different populations and not two halves of one subtraction", got)
 	}
-	if got := already.pass + fresh.pass; got != 2239 {
-		t.Errorf("assert_invalid passes = %d, want 2239 to match passFloor's account — 1023 at "+
+	if got := already.pass + fresh.pass; got != 2243 {
+		t.Errorf("assert_invalid passes = %d, want 2243 to match passFloor's account — 1023 at "+
 			"slice 1, of which it names 18 as answered from above the validator, plus slice 2's 648, "+
 			"slice 3's 58, #294's 2, slice 5's 358 (356 converted + 2 from the arrived group), "+
 			"the 17-head slice's 7 — the only entry in this sum that raised the ledger's `total` "+
@@ -562,14 +589,16 @@ func TestAssertInvalidDestinationLedgerCloses(t *testing.T) {
 			"#391's elem rows, contributed by a rider to a *scope* slice whose own three opcodes are "+
 			"gated off on this lane and add nothing here, and #328's 28 — the const-expression typing "+
 			"slice, the first entry in this sum whose subject needs no gate and therefore contributes "+
-			"its whole reward to this lane. "+
-			"**That sums to 2238 against an actual 2239, and the one-vector residue is stated rather "+
-			"than absorbed:** it predates the last eight slices (the account read 2096 against a "+
+			"its whole reward to this lane, and #413's 4 — the start section, the only entry in this "+
+			"sum whose rows came out of `mismatch`, three of them earning a new rule and the fourth "+
+			"(`ref_func.wast:112`) earning nothing but reachability. "+
+			"**That sums to 2242 against an actual 2243, and the one-vector residue is stated rather "+
+			"than absorbed:** it predates the last nine slices (the account read 2096 against a "+
 			"pinned 2097 before any of them), so it belongs to an entry above and not to them. Filed as "+
 			"a loose end as #334; an unexplained +1 folded into a named entry would make one of these "+
-			"figures a fudge and the whole account unreadable. The residue has now survived eight "+
+			"figures a fudge and the whole account unreadable. The residue has now survived nine "+
 			"re-basings unchanged, which is itself evidence for where it is not: an off-by-one in any "+
-			"of the eight named deltas would have moved it", got)
+			"of the nine named deltas would have moved it", got)
 	}
 	// The residual, and the reason it is asserted rather than logged: it is the *complement* of
 	// this ledger's subject, so it is where a command goes when `classify` stops recognizing one.

@@ -126,6 +126,7 @@ const (
 	secMemory    byte = 5
 	secGlobal    byte = 6
 	secExport    byte = 7
+	secStart     byte = 8
 	secElem      byte = 9
 	secCode      byte = 10
 	secData      byte = 11
@@ -313,7 +314,18 @@ func (p *parser) encode() ([]byte, error) {
 	if len(p.ctx.exports) > 0 {
 		w.section(secExport, p.encodeExports)
 	}
-	// Section 9 sits between export and data count, which is `module_`'s order (encode.ml:1150-1161)
+	// Section 8 sits between export and elem, which is `module_`'s order (encode.ml:1150-1161) and
+	// here is id order too (#413).
+	//
+	// **Its condition is `haveStart`, not `startFunc != 0`.** A start section naming function 0 is
+	// the common case, not the absent case — `start.wast:94` is `(start $print)` on a module whose
+	// only function is the imported `$print`, so index 0 — and a zero test would drop the section on
+	// exactly that vector while emitting it everywhere else. The same two-representations-of-one-fact
+	// trap `sawDataRef` and `textData.passive` each record, arriving a third time.
+	if p.ctx.haveStart {
+		w.section(secStart, p.encodeStart)
+	}
+	// Section 9 sits between start and data count, which is `module_`'s order (encode.ml:1150-1161)
 	// and here happens to be id order too — the two places the format departs from it are 12-before-10
 	// and 11-after, below.
 	if len(p.ctx.elemDefs) > 0 {
@@ -460,6 +472,18 @@ func (p *parser) encodableOrErr() error {
 	if got, want := len(p.ctx.exports), p.ctx.exportsSeen; got != want {
 		return fmt.Errorf("text: internal: %d exports retained, %d parsed — a spelling withdrew the "+
 			"encoder's frontier without recording its content (#8)", got, want)
+	}
+	// The same check for section 8, and **it is a tripwire rather than a live control, said in that
+	// word** (#413). `sawStart` is the grammar's, set by `checkStart`; `haveStart` is the emitter's,
+	// set by `defineStart`. Today they are set two statements apart in `startField`'s one arm, so no
+	// reachable input separates them — falsified by deleting the `defineStart` call, which makes
+	// `(module (func) (start 0))` emit no section 8 and fires this with `start retained false, parsed
+	// true`, and that is the *only* way to make it fire. Kept because `(start …)` acquires a second
+	// spelling the moment anything sugars it, and the memory/table rows above are the precedent for
+	// labelling a tripwire as one instead of letting a reader take it for coverage.
+	if p.ctx.haveStart != p.ctx.sawStart {
+		return fmt.Errorf("text: internal: start retained %t, parsed %t — an arm withdrew the "+
+			"encoder's frontier without recording its content (#8)", p.ctx.haveStart, p.ctx.sawStart)
 	}
 	// The same check for section 11, and it fires today: `datasSeen` is the grammar's, incremented in
 	// `noteData` at each of the two `(data` recognizers, and `len(dataDefs)` is the emitter's, appended
@@ -794,6 +818,15 @@ func (p *parser) encodeExports(w *writer) {
 		w.u32(ex.idx)
 	})
 }
+
+// encodeStart writes section 8's body: the start function's index, and nothing else (#413).
+//
+// `start` in the reference is `vu32 x` with no vector around it (encode.ml:1129-1130) — section 8
+// holds exactly one funcidx, which is why this is the only section body here that does not call
+// `w.vec`. A `w.vec(1, …)` would prepend a count byte the decoder reads as the index, so the module
+// would decode clean and start the wrong function — legal bytes, different program, the class
+// `externKindByte`'s cast probe is about.
+func (p *parser) encodeStart(w *writer) { w.u32(p.ctx.startFunc) }
 
 // externKindByte maps a retained import's kind to its binary kind byte.
 //
