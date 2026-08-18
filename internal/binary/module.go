@@ -1330,12 +1330,29 @@ func (m ElemMode) String() string {
 // place that bites is `ByExpr`. The reference does *not* keep the two element forms apart: it
 // normalizes a function index into a one-instruction `[ref_func x]` const-expr
 // (decode.ml:1150-1152) and recovers the distinction at encode time by asking whether every
-// expression has that shape (encode.ml:1052-1054). That recovery is **not available here**, and
-// the reason is measured rather than assumed: it turns on the reftype's *nullability* —
-// `is_elem_kind` accepts `(NoNull, FuncHT)` and rejects `(Null, FuncHT)` — and this engine's
-// ValType is a byte with no nullability bit, so both collapse to FuncRef.
+// expression has that shape (encode.ml:1052-1054).
 //
-// The suite has the pair that makes that concrete, and it annotates it itself:
+// **The first argument for `ByExpr` is retired — it rested on a premise grave #180 falsified**, and
+// this is #360's second finding. It said the reference's recovery is unavailable here because it
+// turns on nullability, "and this engine's ValType is a byte with no nullability bit, so both
+// collapse to FuncRef." `ValType` has been a struct with a `null bool` field since #180, whose own
+// comment four fields up in this file explains that the field exists *precisely* because `funcref`
+// and `(ref func)` are different spec types. The sentence described a `ValType` that had stopped
+// existing, in the file recording the correction.
+//
+// Its conclusion did survive, and the mechanism was the other half of #360: the decoder hardcoded
+// the nullable constant, so both forms did collapse — not for want of a bit. Fixing that (see
+// `constexpr.go`) falsifies the conclusion too, because flags 0–3 now carry exactly the
+// `(NoNull, FuncHT)` that `is_elem_kind` tests for. *A comment's premise ages independently of its
+// conclusion*, and a false premise supporting a true conclusion has no failing witness — which is
+// how this one survived long enough to be cited (`internal/interp/table_test.go`).
+//
+// `ByExpr` stays on the comment's **second** argument, which is independent and untouched: an empty
+// segment is legal in either form, so `len(Exprs) > 0` cannot tell them apart, and an empty flags-5
+// segment spelling `(ref func)` collides with an empty flags-1 segment even with nullability
+// faithful. One of two justifications went; the field did not.
+//
+// The suite has the pair that makes the round-trip argument concrete, and it annotates it itself:
 // elem.wast:259 is `\00\41\00\0b\01\00` commented `(i32.const 0) func 0`, and elem.wast:327 is
 // `\04\41\00\0b\01\d2\00\0b` commented `(i32.const 0) (ref.func 0)` — the same active-at-table-0
 // segment holding the same single function, once as an index and once as an expression.
@@ -1356,10 +1373,12 @@ type ElemSegment struct {
 	// Nil unless Mode is ElemActive.
 	Offset []Instr
 
-	// ElemType is the element type: FuncRef for the elemkind forms, whatever the reftype
-	// says for the expression forms — every reftype resolves to a real ValType as of 0018's
-	// implementation, including the ten further GC abstract forms and the indexed form the
-	// all-gates-on lane reaches; there is no longer a form decodeRefType declines to
+	// ElemType is the element type, and the two type-field-less forms do **not** agree on it:
+	// `(ref func)` = `(NoNull, FuncHT)` for the four elemkind forms, `funcref` =
+	// `(Null, FuncHT)` for flag 4, and whatever the reftype says for flags 5–7 (grave #360;
+	// this line said `FuncRef` for both). Every reftype resolves to a real ValType as of
+	// 0018's implementation, including the ten further GC abstract forms and the indexed form
+	// the all-gates-on lane reaches; there is no longer a form decodeRefType declines to
 	// represent here.
 	ElemType ValType
 

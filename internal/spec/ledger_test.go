@@ -386,7 +386,7 @@ func TestAssertInvalidDestinationLedgerCloses(t *testing.T) {
 				"admission census this slice took 66 → 28 — a figure measured against `main` on both " +
 				"sides rather than inferred, and disjoint from this lane's 28 by construction, since " +
 				"every one of the 28 that remain needs a gated feature to decode. " +
-				"Two decode-direction graves rode along (#400, #401) and moved this row by nothing, " +
+				"Two decode-direction graves rode along (#360, #401) and moved this row by nothing, " +
 				"which is the entry's second point: they surfaced as over-rejections of four *valid* " +
 				"modules, and this ledger only scores `assert_invalid`. A rule that over-rejects and a " +
 				"rule that is absent are the same row here, which is why the over-rejection table is a " +

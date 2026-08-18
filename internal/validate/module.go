@@ -503,7 +503,7 @@ func modulePre(m *binary.Module, refs map[uint32]bool) error {
 		// `match_reftype` and not identity, because the relation is subtyping in one direction: a
 		// `(ref $t)` segment may fill a `funcref` table and not the reverse. Two admissions,
 		// `elem.wast:978` (an index-form segment, implicitly `(ref func)` — **not** `funcref`, which is
-		// grave #400 and is what this comment said before it — against an `externref` table) and
+		// grave #360 and is what this comment said before it — against an `externref` table) and
 		// `elem.wast:983` (an `externref` segment against a `funcref` table): one in each direction,
 		// which is what makes them a witness for the relation rather than for a mismatch. Both refuse
 		// either way round, so *these two vectors* do not discriminate identity from subtyping. The
@@ -555,7 +555,7 @@ func modulePre(m *binary.Module, refs map[uint32]bool) error {
 // `indexInScope` rather than `funcTypeAt`: the reference resolves the *type* here because `check_block`
 // then matches it, and on this branch there is no const expression for `check_block` to run over, so
 // nothing consumes the type. The segment's element type is matched against its table's separately, in
-// `check_elemmode` — and it is `(ref func)`, not `funcref` (grave #400).
+// `check_elemmode` — and it is `(ref func)`, not `funcref` (grave #360).
 func elemFuncsInScope(m *binary.Module, idxs []uint32) error {
 	total := m.ImportedFuncs() + len(m.Funcs)
 	for _, x := range idxs {

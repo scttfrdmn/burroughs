@@ -10364,7 +10364,7 @@ func TestPhase1Files(t *testing.T) {
 	// Forecast at +28 before the rules were written.
 	//
 	// **Two decode-direction graves rode along and neither one moved this figure**, which is the entry
-	// worth reading twice. Grave #400 gave every index-form element segment `funcref` where the reference
+	// worth reading twice. Grave #360 gave every index-form element segment `funcref` where the reference
 	// gives `(ref func)` (decode.ml:1154-1163), and grave #401 gave the `(table rt (elem x…))` sugar
 	// `elemkind`'s type where the reference gives the table's own (parser.mly:1215). Both were invisible
 	// for as long as nothing compared an element segment's type against its table's — nullability is only

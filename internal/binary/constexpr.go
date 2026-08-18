@@ -118,7 +118,7 @@ func (d *Decoder) decodeElemSegment(r *reader) error {
 	// module that plainly declared one. That is grave #36's class in a field — an engine
 	// reporting a value its input never held.
 	//
-	// **The default is nullability-split, and the split is the whole of grave #400**: the
+	// **The default is nullability-split, and the split is the whole of grave #360**: the
 	// reference's four index forms yield `(NoNull, FuncHT)` — flag 0's own literal
 	// (decode.ml:1163) and `elem_kind`'s only value (decode.ml:1154-1157) — while flag 4,
 	// the expression form with no reftype field, yields `(Null, FuncHT)` (decode.ml:1183).
@@ -132,6 +132,19 @@ func (d *Decoder) decodeElemSegment(r *reader) error {
 	// accepts and this decoder made unrepresentable, because `(ref null func) <: (ref func)`
 	// is false in the one direction that matters. That is why a decode-direction defect is
 	// the accept direction's problem: the validator was right about the type it was handed.
+	//
+	// **The cause is one line up from here and was diagnosed before this fix, on #360.** Grave
+	// #180 made `FuncRef` mean `(ref null func)` — nullability normalized at decode time — so
+	// the constant that used to say "funcref, nullability unrepresentable" started saying
+	// "nullable funcref", and every default assignment inherited a new claim without being
+	// edited. *A grave that changes a constant's semantics has a blast radius equal to that
+	// constant's use sites*, and #180's sweep was over the type rather than over its consumers.
+	//
+	// #360 also predicted the exact consequence, in the accept direction, one slice before the
+	// slice that produced it — and it was re-derived from the board anyway, then filed a second
+	// time as #400 before the duplicate was noticed. Two closed graves say to read the family
+	// whose subject is in play; a *filed and open* one says the same thing about the tracker,
+	// and the tracker is not in any sweep's domain.
 	if flags&exprs != 0 {
 		seg.ElemType = FuncRef // flag 4's `(Null, FuncHT)`
 	} else {

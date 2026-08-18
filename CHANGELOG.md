@@ -2055,11 +2055,23 @@ weakly-ordered platform.
 ### Fixed
 
 - **Every index-form element segment decoded as `funcref` where the reference gives `(ref func)`**
-  ([#400](https://github.com/scttfrdmn/burroughs/issues/400), `type:grave`;
-  `internal/binary/constexpr.go`, `constexpr_test.go`). One default served both wire forms; the
-  reference splits them — `elem_kind` and flag 0's own literal are `(NoNull, FuncHT)`
+  ([#360](https://github.com/scttfrdmn/burroughs/issues/360), `type:grave`;
+  `internal/binary/constexpr.go`, `constexpr_test.go`, `module.go`). One default served both wire
+  forms; the reference splits them — `elem_kind` and flag 0's own literal are `(NoNull, FuncHT)`
   (`decode.ml:1154-1163`), and `funcref` = `(Null, FuncHT)` is reserved for flag 4 (`:1183`), which is
-  what `is_elem_kind` selects on (`encode.ml:1044-1046`).
+  what `is_elem_kind` selects on (`encode.ml:1044-1046`). The cause is grave #180 changing what
+  `FuncRef` *means*: every default assignment inherited a new claim without being edited, because
+  **#180's sweep was over the type rather than over its consumers.**
+  - **It was diagnosed on #360 one slice before the slice that produced it, predicted in the accept
+    direction, and re-derived from the board anyway** — then filed a second time as #400 before the
+    duplicate was noticed. #400 is closed as a duplicate and every citation re-points here. *Two
+    closed graves say to read the family whose subject is in play; a filed and open one says the same
+    about the tracker, and the tracker is in no sweep's domain.*
+  - **#360's second finding, the same fix's other half:** `ElemSegment`'s doc comment justified
+    `ByExpr` on "this engine's ValType is a byte with no nullability bit", a `ValType` that stopped
+    existing at #180 — in the file recording that correction. The conclusion survived on the *other*
+    half of #360 (the hardcoded constant), so *a false premise supporting a true conclusion has no
+    failing witness*. Retired; `ByExpr` stays on the comment's second, independent argument.
   - **Latent because nullability is only ever read by a subtype check.** Until something compared a
     segment's element type against its table's, a wrong element type was unobservable — and the first
     thing in this engine to make that comparison is #328's Rule C. So this contributed **zero** to any
