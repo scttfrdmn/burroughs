@@ -35,8 +35,12 @@ generated tables are how those artifacts are known to be right; they are never t
 
 **GitHub is the tracker.** The repo's markdown footprint is frozen at standard repo files;
 project state lives in issues, milestones, and PRs. Milestones are the phase ladder (`v0
-interpreter`, one `v0.x` per proposal gate, then `v1`, `v2`, `v3`) and every issue attaches to
-one. Labels stay small: `phase:v0`…`phase:v3`, `gate:<proposal>`, `type:decision`, `type:grave`,
+interpreter`, one `v0.x` per proposal gate, then `v1`, `v2`, `v3`), and **an issue attaches to one
+when it is scheduled, not when it is filed** — a milestone is a commitment to do the work in a
+phase, so requiring it at filing time prices filing at the cost of scheduling and the unscheduled
+backlog becomes 32 standing violations of a rule nothing was gaining from (#324, retired by Scott).
+An unmilestoned issue is a filed issue, which is the state most of them should be in. Labels stay
+small: `phase:v0`…`phase:v3`, `gate:<proposal>`, `type:decision`, `type:grave`,
 `type:harness`, `type:contract`, and **`decision-needed:scott`** — that last one, assigned to
 Scott, *is* the decisions-needed queue, now queryable. Graves are closed issues labeled
 `type:grave`, lesson in the closing comment, with a comment at the fix site citing the number.
@@ -159,3 +163,16 @@ every link here names a file that exists and an anchor some heading slugs to, an
   copyright line lives in `NOTICE` (Apache 2.0 §4(d)).
 - Fetched/vendored material (the spec suite) lives under gitignored paths; never commit upstream
   test corpora.
+- **An agent worktree lives outside the repo tree, or is removed when its agent finishes.** Three
+  were found inside `.claude/worktrees/` — 126M holding full copies of the engine whose work had
+  already squash-merged — and being untracked bought nothing: a stale duplicate is invisible to
+  `git status` and **in every grep's domain**, so it answers searches with a past version of the
+  tree. It had already cost one measurement (a caller search returned hits from the copy). Untracked
+  is not out of the way; *an artifact that answers a question is an oracle whether or not anyone
+  appointed it one*, and the reason this is one line rather than a control is that a control would
+  have to run inside the tree it is checking for copies of itself.
+- **`MEMORY.md`, the known limitation.** The agent's session memory is loaded beside this file and
+  lives outside the repository, so no instrument here can assert anything about it: every control in
+  `internal/testenv` has `CLAUDE.md` in its domain and `MEMORY.md` in nobody's. Stated because a gap
+  named on the page is a gap a reader can price, and because the alternative was an open issue no
+  work in this tree could ever discharge (#319, retired for exactly that reason).

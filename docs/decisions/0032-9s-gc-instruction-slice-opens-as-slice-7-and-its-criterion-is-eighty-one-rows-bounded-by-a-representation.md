@@ -1,6 +1,7 @@
 # 0032 — #9's GC-instruction slice opens as slice 7, and its criterion is eighty-one rows bounded by a representation
 
-Date: 2026-08-17 · Status: **proposed** — awaiting Scott's stamp
+Date: 2026-08-17 · Status: **accepted** — stamped by Scott, relayed on
+[the PR #382 stamp comment](https://github.com/scttfrdmn/burroughs/pull/382#issuecomment-5321968922)
 
 > *"Already answered: short ADR recording the boundary move and the thirty rows as its criterion,
 > then the port. Go."* — Scott, on the pre-clear relay. The disposition authorizes the slice; the

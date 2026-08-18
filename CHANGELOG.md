@@ -1100,6 +1100,57 @@ weakly-ordered platform.
 
 ### Changed
 
+- **An issue attaches to a milestone when it is *scheduled*, not when it is filed** (`CLAUDE.md`,
+  retiring [#324](https://github.com/scttfrdmn/burroughs/issues/324) on Scott's ruling). The deleted
+  sentence was *"every issue attaches to one"*, and the measurement against it read **32 of 61 open
+  issues in violation** — a rule at a 52% violation rate is a rule nothing was gaining from. A
+  milestone is a commitment to do the work in a phase, so requiring one at filing time prices filing
+  at the cost of scheduling; the ruling makes the 32 correct rather than making them a backlog of
+  repairs. The retired text is quoted where it stood, per 0031's and 0025's handling of retired
+  boundaries. **What does not retire with it:** 7 open issues carry no *labels*, in one contiguous
+  filing era (#183, #194, #199, #201, #204, #206, #210) — labels are not a scheduling commitment, and
+  the contiguity is still the tell that a batch was filed through a path that dropped fields.
+  - **No checker was built for either half**, per the ruling on
+    [#325](https://github.com/scttfrdmn/burroughs/issues/325): *the board is the work plan now, so a
+    tracker-hygiene checker doesn't unblock a slice or kill a dead end.* The queue was swept once by
+    hand instead, and it found **two more instances of #325's own specimen** — `encode_test.go:2594`
+    says *"closed #183"* and `instr_test.go:793` says *"closed with #210"*, in the tree, while both
+    issues stayed open. *The close is a side effect of prose, and prose is not a channel the tracker
+    reads.*
+
+- **Two conventions on the pointer page: agent worktrees, and `MEMORY.md`'s known limitation**
+  (`CLAUDE.md`, retiring [#319](https://github.com/scttfrdmn/burroughs/issues/319) and
+  [#117](https://github.com/scttfrdmn/burroughs/issues/117) on Scott's rulings).
+  - **An agent worktree lives outside the repo tree, or is removed when its agent finishes.** Three
+    were sitting in `.claude/worktrees/` — **126M** of full engine copies whose work had already
+    squash-merged — and being untracked bought nothing: a stale duplicate is invisible to `git status`
+    and **in every grep's domain**, so it answers searches with a past version of the tree. It had
+    already cost one measurement in the session that found it (a caller search returned hits from the
+    copy). *An artifact that answers a question is an oracle whether or not anyone appointed it one.*
+    Removed after checking each one's commits against `main` — squash-merged branches are never
+    ancestors of `main`, so "commits not upstream" cannot tell landed from lost, and the check had to
+    be for the *content* in `main` instead. Branch refs are kept, so the pre-squash history stays
+    recoverable at ~0 cost. One line rather than a control, because a control would have to run inside
+    the tree it is checking for copies of itself.
+  - **`MEMORY.md` is loaded beside `CLAUDE.md` and lives outside the repository**, so no instrument
+    here can assert anything about it. This retires #319, whose subject — the byte ceiling's domain —
+    WS4 removed: *a risk no repo instrument can reach is not a repo issue*, and an open number nothing
+    in the tree can discharge reads as tracked while being unactionable. #117 goes with the threshold
+    it wanted recalibrated (the brief now says the ratio is *"never compared to a threshold"*); its
+    risk was re-pointed onto the per-PR quote with its `Ratio-Class` provenance split, and the
+    spent-in-advance exemption token from PR #113 retires with the work it named rather than becoming
+    general licence.
+
+- **ADR 0032 is accepted** (`docs/decisions/0032-*.md`). Its `Status:` cites [the stamp relay on PR
+  #382](https://github.com/scttfrdmn/burroughs/pull/382#issuecomment-5321968922) rather than the
+  session turn the stamp was spoken in: *a `Status:` field is a citation to an approval, and an
+  approval is an artifact with provenance*, so "cite this message" had to be converted into something
+  a third party can read. The relay states that the words are relayed by the implementation agent and
+  that **the relay is the weak link**, and it flags one discrepancy rather than smoothing it — the
+  stamp's rationale ("a CLI convention I'd already delegated to you") describes **0033**, not 0032,
+  whose delegation was the pre-clear *"Go"*. The operative half is unambiguous and is what was
+  applied.
+
 - **The exit codes are the CLI's, not `run`'s — `inspect` adopts the taxonomy** (`cmd/burroughs/`,
   decision 0033, closing [#373](https://github.com/scttfrdmn/burroughs/issues/373)). One malformed
   `.wasm` used to be exit `3` from `run` and exit `1` from `inspect`, and `1` means "this invocation's
