@@ -2054,6 +2054,46 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **The spec-suite registry carried no gated state, so a `register` after a gate-declined module was
+  indistinguishable from a missing import**
+  ([#366](https://github.com/scttfrdmn/burroughs/issues/366),
+  [ADR 0037](docs/decisions/0037-the-registry-carries-its-gated-names-and-a-downstream-import-fails-as-gated-not-as-missing.md);
+  `internal/spec/wast.go`, `spec_test.go`, `registry_gated_test.go`). `cur` carried `curGated` and
+  `named` carried `namedGated`; `registry` carried nothing, so a declined `register` gated itself
+  correctly and **left the name unbound**, and every later import against it reported
+  `interp: link failed: unknown import` — true about the resolver and a lie about the cause.
+  `Registry` now carries its declined names beside its bindings, mutually exclusively, and the
+  engine-side adapter fails a module importing from one **as gated**.
+  **Default lane: exec-stratum fail 81 → 15, total fail 157 → 91, gated 4053 → 4124.** All-on lane
+  unmoved — nothing is declined there, which is the independent confirmation that all 66 rows were
+  gate consequences. `unsupported` is unmoved at 66 and that zero is **structural**: `classify` is
+  untouched, so nothing the harness could not ask became askable.
+  - **The −66 is a reclassification, not the interpreter getting anything right**, and it is said in
+    those words because a −66 on the interpreter's own column is exactly the shape a laundered figure
+    would have. What is left is the work plan the column exists to be: 7 `assert_return value
+    mismatch`, 3 `assert_trap (module) expected: unreachable`, 3 `register: no module named $I…`,
+    2 `trap: uninitialized element 0`.
+  - **A second defect in the same arm, with no corpus witness**: a re-register whose new module was
+    declined left the *stale* instance bound, and `register` is last-register-wins in the reference
+    (`runner.ml:314`), so an import satisfied from it would award a pass for a program the reference
+    replaced. Fixed by the same state; asserted by `TestRegistryCarriesItsGatedNames` row 3, since the
+    suite does not witness the shape at all.
+  - **0037's forecast missed in two rows and both misses are recorded** — exec 15 against a
+    pre-registered 19 (the forecast filtered on the `unknown import` *message* rather than the cause,
+    so it missed 4 rows with the same cause and a different message), and `pass` 60868 → 60863
+    against a pre-registered *unchanged*. The second one is grave #408.
+
+- **Five `assert_unlinkable` vectors passed on `unknown import` because their whole target module was
+  unbound, not because the export was missing**
+  ([#408](https://github.com/scttfrdmn/burroughs/issues/408), `type:grave`; fixed by 0037 above).
+  `imports.wast` :138/:297/:442/:540 and `linking3.wast`:14 each assert that a module *lacks one
+  export*; they passed because the module did not exist, which produces the same string about a
+  different fact. **An expectation text that a coarser failure can also produce is not a
+  discriminating oracle**, and a substring match (decision 0003) cannot tell the two apart — every
+  reject-direction instrument was satisfied and the all-on lane passes them for the right reason, so
+  lane comparison is blind to it too. Found only because 0037 pre-registered a `pass` column it
+  expected not to move and said in advance that movement was a finding rather than an adjustment.
+
 - **`inlineFuncType` reused a functype that is a member of a multi-member `(rec …)`, where
   `inline_functype` reuses only a singleton group**
   ([#402](https://github.com/scttfrdmn/burroughs/issues/402), `type:grave`;

@@ -1901,7 +1901,57 @@ type InstantiateFunc func(c Command) (Instance, Stratum, error)
 //
 // Nothing is passed for "the most recent module": an unnamed import in a script resolves
 // through the registry only, which is `runner.ml`'s behaviour and not a simplification.
-type LinkedInstantiateFunc func(c Command, registry map[string]Instance) (Instance, Stratum, error)
+//
+// # Why a struct rather than the bare map it used to be
+//
+// Because a name can be *unbound for a reason*, and the reason changes the verdict. See Registry
+// and decision 0037.
+type LinkedInstantiateFunc func(c Command, reg Registry) (Instance, Stratum, error)
+
+// Registry is what a script has bound for imports to resolve against, in the two states a name
+// can be in that a caller must tell apart.
+//
+// `Instances` is decision 0017's map: module name → opaque instance, written by `register`.
+// `Gated` is the names whose most recent `register` named a module the engine **declined**, and it
+// is here because the registry was the one of the run loop's three state slots carrying no gate
+// state at all — `cur` has `curGated`, `named` has `namedGated`, and this map had nothing
+// (#366). The cost of the omission was measured: 62 of the default lane's 81 exec-stratum fails
+// were a downstream import reporting `unknown import` — true about the resolver, and a lie about the
+// cause — where the reference expects `incompatible import type`. A gate consequence in the
+// interpreter's fail column, and invisible there, since nothing on the path carries a gated marker.
+//
+// **The two fields are mutually exclusive by construction and that is load-bearing.** A successful
+// register binds the name and clears its `Gated` mark; a declined register marks the name *and
+// deletes any binding under it*. The delete is not tidiness: `register` is last-register-wins in the
+// reference (`runner.ml:314`), so a re-register whose new module was declined must not leave the
+// **stale** instance resolvable — an import satisfied from it would award a pass for a program the
+// reference replaced, which is worse than the mis-attributed fail that motivated the change and is
+// in the direction no board can see.
+//
+// **What a caller is expected to do with `Gated`** is return an error that answers yes to
+// Engine.IsGated when a module it is about to instantiate imports from one of these names, so the
+// arms' existing gate paths classify it. The check is the *caller's* because reading a decoded
+// module's import section needs a decoder, which this package does not have and must not acquire;
+// the classification stays the harness's, exactly as it does for IsTrap. Decision 0037 records why
+// the alternative — binding a sentinel Instance under the name — cannot be built here.
+type Registry struct {
+	Instances map[string]Instance
+	Gated     map[string]bool
+}
+
+// bind records a successful register: the two fields are mutually exclusive, so binding a name
+// clears any gated mark it carried from an earlier declined register.
+func (reg Registry) bind(name string, in Instance) {
+	reg.Instances[name] = in
+	delete(reg.Gated, name)
+}
+
+// decline records a register whose module the engine refused to answer for. The delete is the half
+// that is easy to omit and the half that could award a false pass — see Registry.
+func (reg Registry) decline(name string) {
+	reg.Gated[name] = true
+	delete(reg.Instances, name)
+}
 
 // InvokeFunc calls an exported function and returns its results.
 //
@@ -2294,6 +2344,9 @@ func (s *Script) run(opts runOpts) *Result {
 	//
 	// `spectest` is in `registry` before the loop starts and is not special-cased anywhere
 	// else — part 3 of the decision, and the reason the resolver has no builtin arm.
+	//
+	// It carries a second field as of decision 0037 — the names a gate decline left unbound — for
+	// the reason the other two slots carry `curGated` and `namedGated`. See Registry.
 	registry := opts.spectestRegistry(s.Path)
 	named := map[string]Instance{}
 	// A named action's failures carry *why* its module has no instance, for the reason `curErr`
@@ -2671,7 +2724,7 @@ func (s *Script) run(opts runOpts) *Result {
 			// register with no linker binds an instance nobody will resolve against, which is
 			// harmless, where an unlinkable vector with no linker would award a pass.
 			if in, ok := registerTarget(c, cur, named); ok {
-				registry[c.Register] = in
+				registry.bind(c.Register, in)
 				r.Bound++
 				continue
 			}
@@ -2709,7 +2762,15 @@ func (s *Script) run(opts runOpts) *Result {
 			// 0 is what said so, and it said so *because* the binary column's ceiling is not shared
 			// with the others. A shared column would have absorbed seven declines into an
 			// encoder-sized number and reported nothing.
+			//
+			// **The decline is now *recorded* as well as scored, which is decision 0037**, and
+			// until it was, this arm did half its job invisibly: it gated itself correctly and
+			// left the name unbound, so every later import against it reported a plain, ungated
+			// `unknown import` — a gate consequence in the interpreter's fail column, 62 of the
+			// default lane's 81 exec fails. The line below is what makes the *downstream* vector's
+			// verdict right rather than merely explicable. See Registry.
 			if gated {
+				registry.decline(c.Register)
 				r.gate(c)
 				continue
 			}
@@ -3311,14 +3372,14 @@ func (s *Script) run(opts runOpts) *Result {
 // caller with no linker keeps the board it had. The arms that must *not* fall back
 // (`assert_unlinkable`) check the field themselves, because there the fallback would award
 // passes: see the arm.
-func (o runOpts) instantiate(c Command, registry map[string]Instance) (Instance, Stratum, error) {
+func (o runOpts) instantiate(c Command, reg Registry) (Instance, Stratum, error) {
 	// The stratum for the harness's *own* failures to instantiate. StratumExec is right
 	// here and wrong for the caller's errors: a missing InstantiateFunc is the interpreter
 	// being absent, where an encoder frontier is the encoder's.
 	if o.Instantiate == nil && o.InstantiateLinked == nil {
 		return nil, StratumExec, errNoInstance(c, "this run supplied no InstantiateFunc")
 	}
-	in, st, err := o.instantiateRaw(c, registry)
+	in, st, err := o.instantiateRaw(c, reg)
 	if err != nil {
 		if st == StratumUnset {
 			// A caller that returns an error without naming its layer gets StratumExec
@@ -3343,9 +3404,9 @@ func (o runOpts) instantiate(c Command, registry map[string]Instance) (Instance,
 // instantiateRaw picks the entry point. Split out so the normalization above — unset stratum,
 // nil-instance-with-nil-error — applies identically to both, rather than being written twice
 // and drifting on the next change.
-func (o runOpts) instantiateRaw(c Command, registry map[string]Instance) (Instance, Stratum, error) {
+func (o runOpts) instantiateRaw(c Command, reg Registry) (Instance, Stratum, error) {
 	if o.InstantiateLinked != nil {
-		return o.InstantiateLinked(c, registry)
+		return o.InstantiateLinked(c, reg)
 	}
 	return o.Instantiate(c)
 }
@@ -3437,8 +3498,8 @@ func spectestSource(withTable64 bool) string {
 // the *distinction* matters at the one place it does not — a caller with a linker whose
 // spectest failed to build must not silently look like a caller with no registry, so that case
 // panics. The registry running ahead of the engine is the shape those panics all have.
-func (o runOpts) spectestRegistry(path string) map[string]Instance {
-	reg := map[string]Instance{}
+func (o runOpts) spectestRegistry(path string) Registry {
+	reg := Registry{Instances: map[string]Instance{}, Gated: map[string]bool{}}
 	if o.InstantiateLinked == nil {
 		return reg
 	}
@@ -3451,7 +3512,9 @@ func (o runOpts) spectestRegistry(path string) map[string]Instance {
 		// imports nothing, so passing the map it is about to be written into would be a cycle
 		// waiting for its first typo. Measured off the reference — `spectest.ml` has no imports
 		// at all.
-		in, _, err := o.instantiate(c, map[string]Instance{})
+		in, _, err := o.instantiate(c, Registry{
+			Instances: map[string]Instance{}, Gated: map[string]bool{},
+		})
 		return in, err
 	}
 	exports := 14
@@ -3482,7 +3545,7 @@ func (o runOpts) spectestRegistry(path string) map[string]Instance {
 			"%v; 174 import sites resolve against it, so this is a defect in spectestFields "+
 			"rather than a board number", path, exports, err))
 	}
-	reg["spectest"] = in
+	reg.bind("spectest", in)
 	return reg
 }
 

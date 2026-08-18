@@ -259,8 +259,8 @@ func isException(err error) bool {
 // map and this function owns the conversion into `interp.Imports`, being the one place that
 // legitimately knows both `spec.Instance` and `*interp.Instance`. Same seam `invoke` cuts for
 // values, for the same reason.
-func instantiateLinked(c Command, registry map[string]Instance) (Instance, Stratum, error) {
-	return instantiateWith(binary.DefaultFeatures(), c, registry)
+func instantiateLinked(c Command, reg Registry) (Instance, Stratum, error) {
+	return instantiateWith(binary.DefaultFeatures(), c, reg)
 }
 
 // imports turns the harness's registry into the engine's resolver.
@@ -270,14 +270,50 @@ func instantiateLinked(c Command, registry map[string]Instance) (Instance, Strat
 // is always ours, but the map crosses a public boundary, and answering "no such export" for a
 // thing that is not an instance is the honest reading — the import genuinely cannot be
 // satisfied from it. A panic here would convert a caller's mistake into a harness crash mid-board.
-func imports(registry map[string]Instance) interp.Imports {
+func imports(reg Registry) interp.Imports {
 	return func(module, name string) (interp.Extern, bool) {
-		in, ok := registry[module].(*interp.Instance)
+		in, ok := reg.Instances[module].(*interp.Instance)
 		if !ok {
 			return interp.Extern{}, false
 		}
 		return in.Export(name)
 	}
+}
+
+// declinedImport reports whether this module imports from a name whose registration the engine
+// declined, as an error that answers yes to isGated — decision 0037, issue #366.
+//
+// **Why this is here and not in the harness.** The harness owns the fact (`reg.Gated`) and owns the
+// classification (`isGated`), but the question is *which names does this module import from*, and
+// answering it needs a decoder. `internal/spec` does not have one and must not acquire one, so the
+// check lands on the side of the seam that already decoded the image two lines up. Nothing about
+// the verdict is decided here: this returns an error, and the run loop's own gate paths — the same
+// ones that handle a decoder decline — decide what it means.
+//
+// **After the decode rather than off `c.Source`**, which is the version that would have been wrong:
+// deriving import names from the s-expression is blind to `(module binary "…")`, and
+// `linking{1,2,3}.wast`'s 9 rows are exactly that form. Acting at resolution time covers all three
+// module forms for free.
+//
+// **It also converted five passes into gates, and those five are grave #408.** `imports.wast`
+// :138/:297/:442/:540 and `linking3.wast`:14 assert that a module *lacks one export* and expect
+// `unknown import`; they passed because the whole target module was unbound, which produces the same
+// string about a different fact. A substring match cannot tell the two apart, so the reject-direction
+// instruments were all satisfied — the only thing that saw it was 0037 pre-registering a `pass`
+// column it expected not to move.
+//
+// **The message names the module and the import, not just the feature**, because its whole job is to
+// stop a reader chasing the wrong component: `unknown import: "test" "func"` sent them to the
+// linker, which was working correctly. `%w` on the engine's own sentinel is the verdict channel;
+// the sentence is testimony.
+func declinedImport(m *binary.Module, reg Registry) error {
+	for _, im := range m.Imports {
+		if reg.Gated[im.Module] {
+			return fmt.Errorf("import %q %q names module %q, whose registration was declined: %w",
+				im.Module, im.Name, im.Module, binary.ErrFeatureDisabled)
+		}
+	}
+	return nil
 }
 
 // instantiateWith is instantiate under a stated gate set.
@@ -300,7 +336,19 @@ func imports(registry map[string]Instance) interp.Imports {
 // an empty map, which is not a special case — it is the accurate statement that nothing has
 // been registered yet, and `interp.InstantiateLinked` under a resolver that answers no to
 // everything is exactly the pre-0017 behaviour it replaces.
-func instantiateWith(f binary.Features, c Command, registry map[string]Instance) (Instance, Stratum, error) {
+func instantiateWith(f binary.Features, c Command, reg Registry) (Instance, Stratum, error) {
+	return instantiateWithGate(f, c, reg, true)
+}
+
+// instantiateWithGate is instantiateWith with decision 0037's declined-import gate switchable.
+//
+// **The switch exists for one caller and it is a control, not a mode.** `TestGatedVectors` demands
+// every gated line be named, and the 71 lines this gate creates share one cause; establishing
+// *which* lines those are by enumerating them would pin today's population and inherit today's
+// blind spot. So the control derives the set the way a witness set is always derived here — neuter
+// the line and read the board — by running each file a second time through this entry point with
+// the gate off, and taking the difference. Nothing on the board's own path passes false.
+func instantiateWithGate(f binary.Features, c Command, reg Registry, declinedImportGate bool) (Instance, Stratum, error) {
 	image := c.Module
 	stratum := StratumBinary
 	if c.Kind != KindModuleBinary {
@@ -332,7 +380,31 @@ func instantiateWith(f binary.Features, c Command, registry map[string]Instance)
 	// image was well-formed, so it is not the decoder's. Charged to StratumExec because the
 	// interpreter is the component that reported it, and reported verbatim because
 	// `assert_unlinkable` matches on the text.
-	in, trap, err := interp.InstantiateLinked(m, imports(registry))
+	if derr := declinedImport(m, reg); declinedImportGate && derr != nil {
+		// **A gate decline reported one command downstream, which is decision 0037.** The
+		// harness cannot make this call: reading an import section needs a decoder, and this is
+		// the side that has one. It is the same seam `imports` above cuts — the conversion
+		// happens in the one place that knows both type systems — and the classification stays
+		// the harness's, since the error answers yes to `isGated` and the arms' existing gate
+		// paths do the rest.
+		//
+		// **StratumExec and not StratumBinary, and the first draft got it wrong in a way the
+		// stratum ledger caught.** Nothing about *this* module was declined — a module it imports
+		// from was — so this is not the decoder refusing an image, it is the link step reporting
+		// that a dependency is missing for a stated reason, and a link failure is the
+		// interpreter's phase by the same argument the trap and link channels below are charged
+		// there. Charging it to the decoder put **13 rows** through the module arms'
+		// two-decode-paths-disagree branch and broke a ceiling of 0.
+		//
+		// **The tempting fix was to exclude gate declines from that branch, and it would have
+		// deleted a deliberate assertion.** The branch's own comment says a gate decline is *not*
+		// excluded because one path declining on a gate the other honours is the lane-override
+		// defect `allOnLane` twice nearly shipped. So the branch was right and the stratum was
+		// wrong: a declined *import* is not a disagreement about decoding, and saying so with the
+		// stratum is the fix that keeps the check's teeth.
+		return nil, StratumExec, derr
+	}
+	in, trap, err := interp.InstantiateLinked(m, imports(reg))
 	if err != nil {
 		return nil, StratumExec, err
 	}
@@ -1136,6 +1208,45 @@ var gatedAssertInvalid = map[string]int{
 	"try_table.wast": 9, // gc ×5 + try_table ×3 + exception handling ×1
 	// Multi-memory, and the only entry here whose file is otherwise ungated.
 	"align.wast": 1, // multi-memory: `memarg flags bit 6, an explicit memory index`
+}
+
+// gatedDeclinedRegistration is TestGatedVectors's **third** bulk allowance, and it is keyed by
+// the gate's *cause* where wholeFileGated is keyed by file and gatedAssertInvalid by Kind: for
+// each file, the exact number of lines gated because the command's module imports from a module
+// name whose `(register …)` was itself gate-declined (decision 0037, issue #366).
+//
+// **71 across 7 files, all arriving in one PR, all one sentence.** Before 0037 these were not
+// gated at all: the registry carried no gate state, so the name stayed unbound and the command
+// failed with `unknown import` — 62 of the exec column's 81 fails, plus 4 with a different message
+// and the same cause, plus 5 that *passed* on a message that happened to match (grave #408). One
+// reason repeated 71 times is the situation the two allowances above were invented for.
+//
+// **Membership is derived, not enumerated, and that is the part worth reading.** A hand-written
+// line list would pin today's population and inherit today's blind spot, which is the defect
+// `gatedAssertInvalid`'s own predicate drifted into (grave #330). So the call site establishes the
+// set by *neutering the mechanism*: it runs each file a second time with 0037's gate switched off
+// (`instantiateWithGate`) and takes the difference between the two gated line sets. What the gate
+// creates is exactly what the difference names, across every arm, including ones nobody thought to
+// look in.
+//
+// **The counts are still what polices it**, and they have to be, because the derivation uses the
+// mechanism it is policing: an over-gating 0037 would enlarge both the population and the derived
+// set, and the exclusion would absorb it silently. Slack 0 per file closes that — any change in
+// what this gate declines moves a number here and fails. The derivation's job is only to keep the
+// per-line arm from demanding 71 names for one fact; the bound's job is to notice the 72nd.
+var gatedDeclinedRegistration = map[string]int{
+	// `imports.wast`'s auxiliary module carries `(tag …)` fields, so it is declined under EH-off
+	// and its `(register "test")` gates — one decline, 39 dependent lines.
+	"imports.wast": 39,
+	// `linking.wast`: `$Mm`/`$Mt` declined on the multi-memory memarg bit.
+	"linking.wast":  13,
+	"linking1.wast": 3,
+	"linking2.wast": 8,
+	"linking3.wast": 3,
+	// memory64's own gate, one register down.
+	"memory64-imports.wast": 4,
+	// One `assert_unlinkable` whose tag import reaches a declined registration.
+	"type-rec.wast": 1,
 }
 
 // wholeFileGatedVerdict is the bulk allowance's whole decision: whether `bulk` claims file `f`,
@@ -5619,6 +5730,57 @@ func TestGatedVectors(t *testing.T) {
 				"disagree, so this control is reading a subset it cannot name", f, r.Gated, len(r.GatedAt))
 		}
 
+		// **The third bulk allowance, keyed by cause and with its membership derived by neutering
+		// the mechanism** — see gatedDeclinedRegistration, decision 0037. The second run is this
+		// file scored with 0037's declined-import gate off; every line gated with it and not
+		// without it is gated *by* it, which is a claim about the cause that no property of the
+		// line itself could support.
+		byDeclinedReg := map[int]bool{}
+		{
+			e := engine()
+			e.InstantiateLinked = func(c Command, reg Registry) (Instance, Stratum, error) {
+				return instantiateWithGate(binary.DefaultFeatures(), c, reg, false)
+			}
+			without := map[int]bool{}
+			for _, line := range s.RunGated(e).GatedAt {
+				without[line] = true
+			}
+			for _, line := range r.GatedAt {
+				if !without[line] {
+					byDeclinedReg[line] = true
+				}
+			}
+			// A line gated *only* with the gate off is a contradiction: switching a decline on
+			// cannot make a decline disappear. Asserted rather than assumed, because it is the one
+			// way the difference above could be a subtraction of unrelated sets rather than of
+			// nested ones — and a difference over non-nested sets names the wrong lines while
+			// still producing a plausible count.
+			with := map[int]bool{}
+			for _, line := range r.GatedAt {
+				with[line] = true
+			}
+			for line := range without {
+				if !with[line] {
+					t.Errorf("%s:%d is gated with 0037's declined-import gate *off* and not with "+
+						"it on; the two gated sets are not nested, so the difference this control "+
+						"takes does not name the population it claims", f, line)
+				}
+			}
+		}
+		if n, ok := gatedDeclinedRegistration[f]; ok {
+			if len(byDeclinedReg) != n {
+				t.Errorf("%s: %d lines gated by a declined registration, want %d — 0037's "+
+					"population moved; re-base gatedDeclinedRegistration in this PR and say which "+
+					"register's decline gained or lost a dependent",
+					f, len(byDeclinedReg), n)
+			}
+		} else if len(byDeclinedReg) > 0 {
+			t.Errorf("%s: %d lines are gated because a `register` was declined and the file has "+
+				"no gatedDeclinedRegistration entry;\n\tadd one naming which register — an "+
+				"unlisted bulk population is the enumeration this control exists to prevent",
+				f, len(byDeclinedReg))
+		}
+
 		// **A whole-file entry replaces a per-line one when the population is homogeneous.**
 		// The harness v128 widening (decision 0024's forced question 5) moved 24115 lines
 		// across 63 SIMD/relaxed-SIMD files from Unsupported into Gated in one PR — every one
@@ -5685,6 +5847,9 @@ func TestGatedVectors(t *testing.T) {
 			declined[line] = true
 			if invalidOnly[line] {
 				continue // covered by the bulk count above, with its gate named there
+			}
+			if byDeclinedReg[line] {
+				continue // covered by gatedDeclinedRegistration, with its register named there
 			}
 			if _, ok := allowed[f][line]; !ok {
 				t.Errorf("%s:%d declined by a feature gate but is not in the allowed set;\n"+
@@ -6195,8 +6360,8 @@ func allOnLane(t *testing.T) (binary.Features, func([]byte) error, func() Engine
 		// func — so it would be this comment's own bug in a new field. A lane overrides the
 		// spelling the engine actually uses, and the way to know which that is is to read
 		// `engine()` rather than to assume the plain name is the live one.
-		e.InstantiateLinked = func(c Command, registry map[string]Instance) (Instance, Stratum, error) {
-			return instantiateWith(allOn, c, registry)
+		e.InstantiateLinked = func(c Command, reg Registry) (Instance, Stratum, error) {
+			return instantiateWith(allOn, c, reg)
 		}
 		// **The validator's path is a third entry point that decodes**, and it takes the lane's
 		// gates for the same reason the second one does. `validateModule` calls
@@ -9342,7 +9507,24 @@ func TestPhase1Files(t *testing.T) {
 	// execution, so the validator's arrival cannot touch it. Stated because a 243 → 81 re-base
 	// landing in a PR that also adds 1211 fails elsewhere is exactly the shape a laundered drift
 	// would have.
-	const execFailCeiling = 81
+	// **81 → 15, and 66 of the 66 are a reclassification rather than an engine getting anything
+	// right** — decision 0037, issue #366. The registry carried no gated state, so a `register`
+	// whose module was gate-declined left the name unbound and every later import against it
+	// reported `unknown import`: true about the resolver, a lie about the cause, and 62 of this
+	// column's 81 rows. Four more had a different `Got` and the same cause. They are now `gated`,
+	// which is the third verdict landing where it belongs and **not** progress in the direction
+	// this ceiling constrains.
+	//
+	// Stated in those words because a −66 on the interpreter's own column is exactly the shape a
+	// laundered figure would have, and the pre-registered forecast (0037, written before the
+	// mechanism existed) said 19: the 4-row miss is the forecast's, from filtering on the
+	// `unknown import` message instead of on the cause.
+	//
+	// What is left is the interpreter: 7 `assert_return value mismatch`, 2 `trap: uninitialized
+	// element 0`, 3 `assert_trap (module) expected: unreachable`, 3 `register: no module named
+	// $I/$I1/$I2`. That is the work plan this column exists to be, and it could not be read as one
+	// while three quarters of it named the wrong component.
+	const execFailCeiling = 15
 	boardBound(t, "execFailCeiling", execFail, execFailCeiling, 0, ceilingBound,
 		"the interpreter answered fewer vectors than it did: either an opcode arm regressed or "+
 			"a value comparison started disagreeing. A *rise* caused by #8 unblocking more "+
@@ -10419,7 +10601,22 @@ func TestPhase1Files(t *testing.T) {
 	//
 	// `unsupported` is unmoved at 66 and the zero is **structural** for the fifth entry running:
 	// `classify` is untouched, so nothing the harness could not ask became askable.
-	const passFloor = 60868
+	// **60868 → 60863, and the −5 is a finding rather than a regression** — decision 0037's
+	// pre-registration forecast this row unchanged and said in advance that any movement in it
+	// would be a finding to report rather than a number to adjust. Five moved, and they were
+	// **passes awarded by coincidence**: `imports.wast` :138/:297/:442/:540 and
+	// `linking3.wast`:14 are `assert_unlinkable` vectors expecting `unknown import` for a name
+	// their target module genuinely lacks, and they passed because the *whole target module* was
+	// unbound after a gate-declined `register`. The right text for the wrong fact — the engine was
+	// never asked whether `"test"` exports `unknown`, it was asked whether `"test"` exists.
+	//
+	// So this floor's own column held five false greens of the accept-direction shape, and the
+	// change that drained 66 mis-attributed fails converted them to honest gates in the same
+	// motion. Grave #408; the lesson is at the fix site.
+	//
+	// `unsupported` is unmoved at 66 and the zero is **structural** for the sixth entry running:
+	// `classify` is untouched, so nothing the harness could not ask became askable.
+	const passFloor = 60863
 	// Slack 0 as of #387's ruling, with `allOnPassFloor` and `unsupportedCeiling` — see
 	// `boardbound_test.go`'s retirement section. Two entries in the ledger above record taking a
 	// re-base *although the slack stayed silent* (58659 by a margin of 20, and the 416 that was four

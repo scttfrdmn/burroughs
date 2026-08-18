@@ -1287,10 +1287,10 @@ func (p *registryProbe) engine() Engine {
 		IsDeclined: stubDeclined,
 		IsGated:    func(error) bool { return false },
 		IsTrap:     func(error) bool { return false },
-		InstantiateLinked: func(c Command, registry map[string]Instance) (Instance, Stratum, error) {
-			keys := make([]string, 0, len(registry))
+		InstantiateLinked: func(c Command, reg Registry) (Instance, Stratum, error) {
+			keys := make([]string, 0, len(reg.Instances))
 			mods := map[string]string{}
-			for k, v := range registry {
+			for k, v := range reg.Instances {
 				keys = append(keys, k)
 				mods[k], _ = v.(string)
 			}
@@ -1696,7 +1696,7 @@ func TestAssertUnlinkableNeedsTheLinkerAndScoresBothWays(t *testing.T) {
 				IsDeclined: stubDeclined,
 				IsGated:    func(error) bool { return false },
 				IsTrap:     func(error) bool { return false },
-				InstantiateLinked: func(cmd Command, _ map[string]Instance) (Instance, Stratum, error) {
+				InstantiateLinked: func(cmd Command, _ Registry) (Instance, Stratum, error) {
 					// **The spectest bootstrap comes through this same door** (0017 part 3), and a
 					// stub that failed every call would panic in spectestRegistry before the vector
 					// was ever judged — which is how this row was first written, and the panic is

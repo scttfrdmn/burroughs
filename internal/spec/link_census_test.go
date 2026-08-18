@@ -94,8 +94,8 @@ func TestModuleDefinitionLinkCensus(t *testing.T) {
 		}
 		e := allOnEngine()
 		inner := e.InstantiateLinked
-		e.InstantiateLinked = func(c Command, registry map[string]Instance) (Instance, Stratum, error) {
-			in, st, ierr := inner(c, registry)
+		e.InstantiateLinked = func(c Command, reg Registry) (Instance, Stratum, error) {
+			in, st, ierr := inner(c, reg)
 			switch c.Kind {
 			case KindModuleText, KindModuleBinary, KindModuleQuote:
 			default:
