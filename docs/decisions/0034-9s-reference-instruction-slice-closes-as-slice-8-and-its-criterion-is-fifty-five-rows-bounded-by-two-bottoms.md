@@ -1,12 +1,21 @@
 # 0034 — #9's reference-instruction slice closes as slice 8, and its criterion is fifty-five rows bounded by two bottoms
 
-Date: 2026-08-17 · Status: **proposed** — held open until a stamp exists to cite
+Date: 2026-08-17 · Status: **accepted** — stamped by Scott, relayed on
+[the PR #387 pre-clear comment](https://github.com/scttfrdmn/burroughs/pull/387#issuecomment-5322477360)
 
 > *"Slice 8: go, self-merge on green."* — Scott, on the #385 relay. The disposition authorizes the
 > slice and its merge tier; the criterion below is the agent's, measured, and reviewable as any
-> other. Per the `Status:`-is-a-citation rule, this field stays **proposed** until the pre-clear is
-> relayed as a comment on the implementing PR and that comment's URL can be pointed at — a forged
-> provenance about the project's own governance being worse than a wrong option.
+> other. Per the `Status:`-is-a-citation rule, this field was held **proposed** until the pre-clear
+> was relayed as a comment on the implementing PR and that comment's URL could be pointed at — a
+> forged provenance about the project's own governance being worse than a wrong option. The relay is
+> the citation above, and #387's **Decisions needed** section says what to do if a merge-tier "go" is
+> read as too little authority for this field: the flip is reverted and the ADR waits for an explicit
+> stamp.
+>
+> What the measurement then did to the criterion is worth stating in the same breath as the stamp:
+> **it falsified part of it.** The structural bound is real and its localization was wrong, recorded
+> below rather than repaired out — a stamped record that quietly matches the outcome is the failure
+> mode this field's rule exists to prevent.
 
 ## Context
 
