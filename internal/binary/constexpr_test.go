@@ -248,7 +248,7 @@ func TestElemSegmentFlagFields(t *testing.T) {
 		// have omitted the `{Op: opEnd}` and the row would have been wrong about the engine
 		// while looking right about the format.
 		//
-		// **`ElemType` is the one column printing could not certify, and grave #400 is the
+		// **`ElemType` is the one column printing could not certify, and grave #360 is the
 		// price.** Every row here said `FuncRef` and five of them were wrong: the reference gives
 		// the four index forms `(NoNull, FuncHT)` — flag 0's own literal (decode.ml:1163) and
 		// `elem_kind`'s only value (decode.ml:1154-1157) — and reserves `(Null, FuncHT)` for flag
@@ -291,11 +291,11 @@ func TestElemSegmentFlagFields(t *testing.T) {
 		// retention half of ElemSegment's argument: the same segment as flags 0 above, same
 		// table, same single function, and the two must not decode to the same value.
 		//
-		// **It is now the row that discriminates the type default too**, which is grave #400's
+		// **It is now the row that discriminates the type default too**, which is grave #360's
 		// tripwire and costs nothing extra: flags 0 and 4 are the two forms with no type field on
 		// the wire, and they default *differently* — `(ref func)` above and `funcref` here. A
 		// decoder that went back to one constant for both would fail this row or the flags-0 one,
-		// whichever way it picked, where before #400 either choice was green.
+		// whichever way it picked, where before #360 either choice was green.
 		{
 			"flags 4: active table 0, element exprs, no type byte", []byte{0x04, 0x41, 0x00, 0x0B, 0x01, 0xD2, 0x00, 0x0B}, true, // elem.wast:327
 			&ElemSegment{
@@ -402,7 +402,7 @@ var i32ConstZero = []Instr{{Op: 0x41}, {Op: opEnd}}
 // element segment (decode.ml:1154-1157 for `elem_kind`, :1163 for flag 0's own literal).
 //
 // Spelled here rather than as `FuncRef` because the difference between the two is one field and the
-// whole of grave #400, and named after the wire production rather than after the type, so a reader
+// whole of grave #360, and named after the wire production rather than after the type, so a reader
 // checking a row against decode.ml is comparing the same words the reference uses. It is
 // deliberately *not* `binary.FuncRef.WithNull(false)` written inline at five call sites: five
 // literals are five chances to fix four of them.
