@@ -1118,6 +1118,29 @@ weakly-ordered platform.
     issues stayed open. *The close is a side effect of prose, and prose is not a channel the tracker
     reads.*
 
+- **Two conventions on the pointer page: agent worktrees, and `MEMORY.md`'s known limitation**
+  (`CLAUDE.md`, retiring [#319](https://github.com/scttfrdmn/burroughs/issues/319) and
+  [#117](https://github.com/scttfrdmn/burroughs/issues/117) on Scott's rulings).
+  - **An agent worktree lives outside the repo tree, or is removed when its agent finishes.** Three
+    were sitting in `.claude/worktrees/` — **126M** of full engine copies whose work had already
+    squash-merged — and being untracked bought nothing: a stale duplicate is invisible to `git status`
+    and **in every grep's domain**, so it answers searches with a past version of the tree. It had
+    already cost one measurement in the session that found it (a caller search returned hits from the
+    copy). *An artifact that answers a question is an oracle whether or not anyone appointed it one.*
+    Removed after checking each one's commits against `main` — squash-merged branches are never
+    ancestors of `main`, so "commits not upstream" cannot tell landed from lost, and the check had to
+    be for the *content* in `main` instead. Branch refs are kept, so the pre-squash history stays
+    recoverable at ~0 cost. One line rather than a control, because a control would have to run inside
+    the tree it is checking for copies of itself.
+  - **`MEMORY.md` is loaded beside `CLAUDE.md` and lives outside the repository**, so no instrument
+    here can assert anything about it. This retires #319, whose subject — the byte ceiling's domain —
+    WS4 removed: *a risk no repo instrument can reach is not a repo issue*, and an open number nothing
+    in the tree can discharge reads as tracked while being unactionable. #117 goes with the threshold
+    it wanted recalibrated (the brief now says the ratio is *"never compared to a threshold"*); its
+    risk was re-pointed onto the per-PR quote with its `Ratio-Class` provenance split, and the
+    spent-in-advance exemption token from PR #113 retires with the work it named rather than becoming
+    general licence.
+
 - **ADR 0032 is accepted** (`docs/decisions/0032-*.md`). Its `Status:` cites [the stamp relay on PR
   #382](https://github.com/scttfrdmn/burroughs/pull/382#issuecomment-5321968922) rather than the
   session turn the stamp was spoken in: *a `Status:` field is a citation to an approval, and an

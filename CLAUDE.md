@@ -163,3 +163,16 @@ every link here names a file that exists and an anchor some heading slugs to, an
   copyright line lives in `NOTICE` (Apache 2.0 §4(d)).
 - Fetched/vendored material (the spec suite) lives under gitignored paths; never commit upstream
   test corpora.
+- **An agent worktree lives outside the repo tree, or is removed when its agent finishes.** Three
+  were found inside `.claude/worktrees/` — 126M holding full copies of the engine whose work had
+  already squash-merged — and being untracked bought nothing: a stale duplicate is invisible to
+  `git status` and **in every grep's domain**, so it answers searches with a past version of the
+  tree. It had already cost one measurement (a caller search returned hits from the copy). Untracked
+  is not out of the way; *an artifact that answers a question is an oracle whether or not anyone
+  appointed it one*, and the reason this is one line rather than a control is that a control would
+  have to run inside the tree it is checking for copies of itself.
+- **`MEMORY.md`, the known limitation.** The agent's session memory is loaded beside this file and
+  lives outside the repository, so no instrument here can assert anything about it: every control in
+  `internal/testenv` has `CLAUDE.md` in its domain and `MEMORY.md` in nobody's. Stated because a gap
+  named on the page is a gap a reader can price, and because the alternative was an open issue no
+  work in this tree could ever discharge (#319, retired for exactly that reason).
