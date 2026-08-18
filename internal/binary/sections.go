@@ -82,7 +82,13 @@ type Features struct {
 	// rather than here: the mapping is hand-authored testimony with a citation per
 	// entry, and this struct is where the gates are *declared*, not where their scope is
 	// enumerated. Decision 0008.
-	ExceptionHandling bool // tag section (id 13), import/export kind 4; throw, throw_ref, try_table
+	// The type bytes are named here and not in gatemap.go on that file's own rule —
+	// "constructs that are not opcodes at all (limits flags, section ids, valtypes) stay where
+	// they are checked, in sections.go" — and they are named at all because #395 found them
+	// declared nowhere: 0008's mapping covers this gate's three opcodes and the two heap types
+	// were in GC's arm with no entry anywhere saying so. An unstated scope is what let a wrong
+	// one survive three PRs.
+	ExceptionHandling bool // tag section (id 13), import/export kind 4; throw, throw_ref, try_table; the exn (-0x17) and noexn (-0x0c) heap types, so exnref/nullexnref (#395)
 	SIMD              bool // v128 value type, including as a blocktype; the 0xfd region
 	Threads           bool // shared limits flags (2, 3)
 	Memory64          bool // 64-bit limits flags (4..7)
@@ -91,7 +97,7 @@ type Features struct {
 	// bool here is worse than a gate that never fires, because the reflection-derived
 	// lanes cannot exercise a gate that is not there to reflect over — the
 	// forgotten-fifth-gate scenario existing in the wild, four times.
-	GC          bool // the 0xfb region; ref.eq, and the function-references five (0008)
+	GC          bool // the 0xfb region; ref.eq, the function-references five (0008); eight abstract heap types and the (ref ht)/(ref null ht) prefixes — ten of reftype's twelve, not twelve (#395)
 	TailCall    bool // return_call, return_call_indirect
 	RelaxedSIMD bool // the fd 0x100..0x12f window, inside SIMD's region
 	MultiMemory bool // memarg flags bit 6: an explicit memory index on loads and stores
@@ -790,10 +796,13 @@ func (d *Decoder) decodeVecType(r *reader) error {
 // (decode.ml:201-218).
 //
 // The reference reads a signed LEB at width 7 and accepts **fourteen** forms, of which
-// this engine's original two (0x70 funcref, 0x6F externref) are the Wasm 2.0 subset. The
-// other twelve are GC's — the abstract heap types (-0x0c..-0x0f, -0x12..-0x17) and the
-// two *parameterized* prefixes -0x1c (ref, non-null) and -0x1d (ref null), each of which
-// is followed by a `heaptype`. Reading them as `malformed reference type` was #51's
+// this engine's original two (0x70 funcref, 0x6F externref) are the Wasm 2.0 subset. Ten of
+// the other twelve are GC's — eight abstract heap types and the two *parameterized* prefixes
+// -0x1c (ref, non-null) and -0x1d (ref null), each of which is followed by a `heaptype`. **Two
+// are the exception proposal's**, `-0x0c` (noexn) and `-0x17` (exn), and this sentence said
+// twelve until #395: the ranges `-0x0c..-0x0f` and `-0x12..-0x17` are contiguous in the byte
+// space and not in provenance, so a prose summary written from the switch's shape attributed by
+// adjacency. *A comment that describes the code's grouping inherits the grouping's errors.* Reading them as `malformed reference type` was #51's
 // accept-direction defect: the spec defines them, so the engine's own configuration is
 // what declines them, and it must say so (*gates never manufacture malformedness*).
 //
@@ -826,17 +835,45 @@ func (d *Decoder) decodeRefType(r *reader) error {
 		d.valType = refKind(byte(form&0x7F), true)
 		return nil
 
-	case -0x0C, -0x0D, -0x0E, -0x0F, // noexn, nofunc, noextern, none
-		-0x12, -0x13, -0x14, -0x15, -0x16, -0x17: // any, eq, i31, struct, array, exn
-		// GC's abstract heap types. Well-formed per Wasm 3.0, so the decline is
-		// feature-named (decision 0008 folds function references into the GC gate).
+	case -0x0C, -0x17: // noexn, exn — `nullexnref` (0x74) and `exnref` (0x69)
+		// **Exception handling's two, not GC's** (#395). These sat in the arm below for
+		// three PRs, grouped by adjacency in the byte space rather than by proposal, and
+		// the vendored proposal enumerates them per opcode
+		// (`proposals/exception-handling/Exceptions.md:337-349`): *"The type `exnref` is
+		// represented by the type opcode `-0x17`. … `noexn` is a new heap type with opcode
+		// `-0x0c`"*. Decision 0008's mapping gave exception handling `0x08`, `0x0a`, `0x1f`
+		// and never mapped these two anywhere; 0008's stated fold is function references
+		// into GC, which does not reach a type the exception proposal introduces.
+		//
+		// The cost of the mis-attribution was not a wrong verdict on any vector — it was
+		// that `gate:eh` did not admit its own proposal's value type, so every exception
+		// witness in the tree had to open `GC` for a reason unrelated to what it tested.
+		// **Neither board lane can see this in either direction**: the default lane has both
+		// gates off and the all-on lane has both on, so no lane holds them apart. It was
+		// found by writing #393's witness battery, and only its *accept* rows could have
+		// found it — a refusal that should not happen is invisible to a row expecting a
+		// refusal, which passes for the wrong reason.
+		if !d.Features.ExceptionHandling {
+			return featureErr("exception handling")
+		}
+		// Nullability as the arm below: the bare abstract form is the *(Null, ...)*
+		// abbreviation, so `exnref` is `(ref null exn)` — which is exactly what the
+		// proposal text quoted above says it is shorthand for.
+		d.valType = refKind(byte(form&0x7F), true)
+		return nil
+
+	case -0x0D, -0x0E, -0x0F, // nofunc, noextern, none
+		-0x12, -0x13, -0x14, -0x15, -0x16: // any, eq, i31, struct, array
+		// GC's abstract heap types — **eight, since #395 moved exn and noexn to the arm
+		// above.** Well-formed per Wasm 3.0, so the decline is feature-named (decision 0008
+		// folds function references into the GC gate).
 		if !d.Features.GC {
 			return featureErr("gc")
 		}
 		// **Resolved, as of 0018's implementation** — every abstract heaptype `reftype`
 		// names is representable now, so the real kind is written rather than the
 		// NoValType sentinel this arm used to write for lack of anywhere to put the
-		// answer. Unlike the Wasm 2.0 pair above, these ten have no pre-existing byte
+		// answer. Unlike the Wasm 2.0 pair above, these eight have no pre-existing byte
 		// behavior to preserve, so they get the reference's actual nullability:
 		// `reftype`'s bare abstract forms are the *(Null, ...)* abbreviations —
 		// `anyref` means `(Null, AnyHT)`, not `(NoNull, AnyHT)` — so null=true.
@@ -847,6 +884,16 @@ func (d *Decoder) decodeRefType(r *reader) error {
 		// The parameterized forms, each followed by a heaptype. The gate is checked
 		// *before* descending, because the heaptype read would otherwise be the thing
 		// that reports the error and it would report the wrong layer.
+		//
+		// **This prefix stays GC's after #395, and that is the boundary of what #395 fixed.**
+		// The prefix is function-references' grammar (folded into GC by 0008) whatever
+		// heaptype follows it, so `exnref` — the bare shorthand — needs only the exception
+		// gate, while the spelled-out `(ref exn)` needs GC as well. The exception proposal is
+		// layered on typed references and borrows this prefix rather than introducing it, so
+		// the split is the gate boundary telling the truth about two proposals rather than a
+		// leftover: the repair is complete for the shorthand and *deliberately partial* for
+		// the parameterized form. Stated because "the eh gate admits its own grammar" is now
+		// true of exactly the forms this proposal defines and no more.
 		if !d.Features.GC {
 			return featureErr("gc")
 		}
@@ -891,7 +938,10 @@ func (d *Decoder) decodeRefType(r *reader) error {
 //   - the **type index** branch is function-references — `ref.null 0` is not Wasm 2.0
 //   - `-0x10`/`-0x11` (func, extern) are Wasm 2.0's two, ungated, and `ref.null extern`
 //     must decode with every gate off or the corpus breaks
-//   - the other ten abstract forms are GC's
+//   - `-0x0c`/`-0x17` (noexn, exn) are the **exception proposal's** and gate on
+//     `ExceptionHandling` — #395, which found them in GC's arm for the three PRs since 0018's
+//     implementation; the grouping was by byte adjacency and the authority is per-opcode prose
+//   - the other eight abstract forms are GC's
 //
 // The type-index gate sits *after* the negativity check, not before, and the order is
 // load-bearing: `either` propagates `ErrFeatureDisabled` without backtracking (#86), so a
@@ -935,8 +985,14 @@ func (d *Decoder) decodeHeapType(r *reader) error {
 			case -0x10, -0x11: // func, extern — Wasm 2.0, ungated
 				d.valType = refKind(byte(form&0x7F), false)
 				return nil
-			case -0x0C, -0x0D, -0x0E, -0x0F, // noexn, nofunc, noextern, none
-				-0x12, -0x13, -0x14, -0x15, -0x16, -0x17: // any, eq, i31, struct, array, exn
+			case -0x0C, -0x17: // noexn, exn — the exception proposal's (#395)
+				if !d.Features.ExceptionHandling {
+					return featureErr("exception handling")
+				}
+				d.valType = refKind(byte(form&0x7F), false)
+				return nil
+			case -0x0D, -0x0E, -0x0F, // nofunc, noextern, none
+				-0x12, -0x13, -0x14, -0x15, -0x16: // any, eq, i31, struct, array
 				if !d.Features.GC {
 					return featureErr("gc")
 				}

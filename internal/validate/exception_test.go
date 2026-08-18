@@ -15,19 +15,25 @@ import (
 // one layer early and every assertion here would be about `binary` — `tailCallOn`'s reason next door.
 func ehOn(f *binary.Features) { f.ExceptionHandling = true }
 
-// ehAndRefsOn adds GC, and it is needed by more rows than it should be.
+// ehAndRefsOn adds GC, and **#395 is fixed, so it is now needed by exactly the rows that have their
+// own reason to need it** — three, down from eight.
 //
-// Two rows want it legitimately: `(ref $t)` and `(ref null $t)` as a block's result type are
-// function-references/GC syntax, and `checkCatch`'s relation cannot be witnessed as a *relation*
-// rather than as equality without them.
+// What each survivor wants it for, since a shared helper is where unrelated reasons collect:
 //
-// The rest want it because of **#395**, found by writing this file: the decoder puts `exn` (-0x17) and
-// `noexn` (-0x0C) in the same arm as GC's eight abstract heap types, so `exnref` — the exception
-// handling proposal's own value type, `Exceptions.md:337-349` — is refused with `gc: feature gate
-// disabled` when only `ExceptionHandling` is on. Every row below that spells `exnref` therefore opens a
-// gate that has nothing to do with what it is testing, and the rows say which reason applies at their
-// own site. Neither board lane can see this (default has both gates off, all-on has both on), which is
-// why it is filed with a unit witness owed in `internal/binary` rather than a board delta.
+//   - two rows spell `(ref $t)` / `(ref null $t)` as a block result type. A *type index* under a
+//     parameterized prefix is function-references/GC syntax on both counts, and `checkCatch`'s
+//     relation cannot be witnessed as a relation rather than as equality without them.
+//   - one row spells `(ref exn)`. The heap type is the exception proposal's after #395, but the
+//     `-0x1c` prefix that spells the non-null form is function-references' whatever follows it, so
+//     this row needs both gates and will keep needing both. That is the stated boundary of #395's
+//     repair, not a leftover — `sections.go`'s `-0x1C`/`-0x1D` arm carries the same note.
+//
+// The other five rows spelled the bare `exnref`, opened `GC` for #395's reason, and now run on
+// `ehOn`. That is this repair's whole measurable reward and it is worth stating plainly: **no board
+// row moved, because neither lane can hold these two gates apart** (default has both off, all-on has
+// both on), so the count of witnesses that no longer overstate their dependencies *is* the figure.
+// A gate that cannot admit its own proposal's value type unaided is a gate every future witness has
+// to work around, and the working-around is invisible in every column the project reports.
 func ehAndRefsOn(f *binary.Features) { f.ExceptionHandling, f.GC = true, true }
 
 // The exception-handling witnesses (slice 10, ADR 0036), and what the board can and cannot say about
@@ -145,7 +151,7 @@ func TestCatchClausesHandTheirLabelWhatTheArmSays(t *testing.T) {
 			name:  "catch_ref appends the exception reference",
 			wat:   `(module (tag $e (param i32)) (func (block (result i32 exnref) (try_table (catch_ref $e 0)) (unreachable)) (drop) (drop)))`,
 			valid: true,
-			gate:  ehAndRefsOn, // `exnref` under the wrong gate — #395
+			gate:  ehOn, // `exnref` bare: the eh gate alone, since #395
 		},
 		{
 			name:  "catch_ref's exnref has nowhere to go on a label that takes only the payload",
@@ -162,7 +168,7 @@ func TestCatchClausesHandTheirLabelWhatTheArmSays(t *testing.T) {
 			wat:   `(module (func (block (result exnref) (try_table (catch_all 0)) (unreachable)) (drop)))`,
 			msg:   "catch handler provides [] but label 0 takes [(ref null exn)]",
 			valid: false,
-			gate:  ehAndRefsOn, // #395
+			gate:  ehOn, // bare `exnref` — eh alone (#395)
 		},
 		{
 			// Two rules in one row, and both are load-bearing: `catch_all_ref` hands over exactly one
@@ -171,7 +177,7 @@ func TestCatchClausesHandTheirLabelWhatTheArmSays(t *testing.T) {
 			name:  "catch_all_ref hands a non-null exception reference to a nullable label",
 			wat:   `(module (func (block (result exnref) (try_table (catch_all_ref 0)) (unreachable)) (drop)))`,
 			valid: true,
-			gate:  ehAndRefsOn, // #395
+			gate:  ehOn, // bare `exnref` — eh alone (#395)
 		},
 		{
 			name:  "catch_all_ref's exnref has nowhere to go on a label that takes nothing",
@@ -186,7 +192,7 @@ func TestCatchClausesHandTheirLabelWhatTheArmSays(t *testing.T) {
 			name:  "a tag's non-null reference parameter flows into a nullable label",
 			wat:   `(module (type $t (func)) (tag $e (param (ref $t))) (func (block (result (ref null $t)) (try_table (catch $e 0)) (unreachable)) (drop)))`,
 			valid: true,
-			gate:  ehAndRefsOn,
+			gate:  ehAndRefsOn, // `(ref $t)` result: a type index under a prefix, both func-refs'
 		},
 		{
 			// And in the direction it does not — `try_table.wast:470,483`'s shape, which the row above
@@ -195,7 +201,7 @@ func TestCatchClausesHandTheirLabelWhatTheArmSays(t *testing.T) {
 			wat:   `(module (type $t (func)) (tag $e (param (ref null $t))) (func (block (result (ref $t)) (try_table (catch $e 0)) (unreachable)) (drop)))`,
 			msg:   "catch handler provides",
 			valid: false,
-			gate:  ehAndRefsOn,
+			gate:  ehAndRefsOn, // `(ref null $t)` result: same, the other direction
 		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -332,19 +338,19 @@ func TestThrowRefTakesANullableExnref(t *testing.T) {
 			name:  "a nullable exception reference",
 			wat:   `(module (func (param exnref) (local.get 0) (throw_ref)))`,
 			valid: true,
-			gate:  ehAndRefsOn, // #395
+			gate:  ehOn, // bare `exnref` — eh alone (#395)
 		},
 		{
 			name:  "a non-null exception reference flows in",
 			wat:   `(module (func (param (ref exn)) (local.get 0) (throw_ref)))`,
 			valid: true,
-			gate:  ehAndRefsOn, // #395
+			gate:  ehAndRefsOn, // `(ref exn)`: the -0x1c prefix stays GC's — #395's stated boundary
 		},
 		{
 			name:  "the frame is polymorphic afterwards",
 			wat:   `(module (func (param exnref) (result i32) (local.get 0) (throw_ref)))`,
 			valid: true,
-			gate:  ehAndRefsOn, // #395
+			gate:  ehOn, // bare `exnref` — eh alone (#395)
 		},
 		{
 			// `throw_ref.wast:117,118` expect the bare `type mismatch`, which is why this arm keeps

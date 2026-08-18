@@ -1980,6 +1980,44 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **The decoder gated `exnref` and `nullexnref` on GC, so `gate:exception-handling` did not admit its own
+  value type** ([#395](https://github.com/scttfrdmn/burroughs/issues/395), `type:grave`, `gate:eh`;
+  `internal/binary/sections.go`, `sections_test.go`, `valtype_test.go`, `refnull_test.go`,
+  `internal/validate/ref_test.go`, `exception_test.go`). The `exn` (-0x17) and `noexn` (-0x0c) heap types
+  sat in `decodeRefType`'s and `decodeHeapType`'s GC arms, where the vendored proposal assigns them to
+  exception handling (`third_party/spec/proposals/exception-handling/Exceptions.md:337-349`). Split into
+  their own arm gated on `Features.ExceptionHandling`; GC's abstract-heap arm is now **eight forms, not
+  ten**, and `decodeRefType`'s twelve non-`funcref`/`externref` forms are **ten GC's and two the exception
+  proposal's**.
+  - **No vector moved, and no vector could.** Both lanes measured identical to the pre-registered
+    baseline — default 60840 pass / 185 fail / 66 skip / 4053 unsupported, all-on 64862 / 184 / 0 — because
+    the defect is **invisible to both board lanes by construction**: the default lane has both gates off,
+    the all-on lane has both on, and only a configuration with EH on and GC off can see it. The
+    `unsupported` delta is **zero and structural** — this PR does not change what the harness can ask.
+  - **An accept row is the only witness that can see a spurious refusal; a reject row sees one only if it
+    is keyed on *why*.** Of the eight `exception_test.go` rows that opened `GC` to spell `exnref`, six were
+    `valid: true` and saw nothing; the two reject rows saw it only because `assertCatchRow` matches on the
+    **message**. That is the honest-error-message requirement paying for a defect from the opposite side,
+    and it is the first defect the reject-direction witness requirement is the sole reason anyone found.
+  - **The reward is the figure with a subject**: five bare-`exnref` rows in `exception_test.go` drop `GC`
+    from their feature set (`:154,171,180,341,353`), leaving three that keep it for stated reasons — two
+    type-index rows and one spelling `(ref exn)`. **The repair is deliberately partial**: the `-0x1c`/`-0x1d`
+    parameterized prefixes stay GC's, since they are function-references' grammar folded into GC by
+    decision 0008, so bare `exnref` needs one gate and spelled-out `(ref exn)` needs both. Recorded at
+    three sites so the asymmetry reads as a boundary rather than a miss.
+  - **A partition that asks *whether* a form is gated cannot see a form gated by the wrong gate.** The
+    128-form sweep in `sections_test.go` counted `gatedOff int`; it now keys on the feature name parsed out
+    of the error and asserts `{"gc": 8, "exception handling": 2}` exactly.
+    `TestHeapTypeGatesFormsNotThePosition` moves from `gate bool` to `gate string` and gains a
+    **sufficiency** half — *only* the named gate on must accept — because a necessity check alone passes
+    when a form needs two gates it should need one of. New
+    `TestTheExceptionGateAdmitsItsOwnValueType` derives GC's eight from `abstractHeapNames` rather than
+    listing them. Four mutations, each caught by a different set: revert 3 tests/6 rows · require both
+    gates 1/2 (the file's thinnest point, both witnesses new) · move GC's eight along 9/21 · either gate
+    admits 3/6.
+  - **No ADR is owed.** The authority is external — proposal text this project vendors — so the choice was
+    never the project's to make, and `gatemap.go` needs no entry either: its own rule puts non-opcode
+    constructs (valtypes, limits flags, section ids) in `sections.go`.
 - **`validate` never resolved the function indices an element segment's `ref.func` initialisers name,
   so `(module (table funcref (elem 0 0)))` was accepted** ([#391](https://github.com/scttfrdmn/burroughs/issues/391),
   `type:grave`; `internal/validate/module.go`, `elem_test.go`). `check_elem`'s `check_const`

@@ -101,7 +101,11 @@ func hasHeapTypeImm(info opInfo) bool {
 // in -64..-1 *is* `v & 0x7F`, so the constant and the wire byte are one arithmetic fact rather than
 // two transcriptions. `TestHeapKindsAreWhatTheReaderProduces` closes that loop already.
 func TestRefNullRetainsTheSpelledHeapType(t *testing.T) {
-	d := &Decoder{Features: Features{GC: true}}
+	// Every gate on, not `Features{GC: true}`, since #395: two of the thirteen rows below spell
+	// heap types the *exception* gate owns, and a GC-only decoder declined them — a retention
+	// test failing on a gate is a test answering a question it did not ask. The subject here is
+	// what the reader keeps, so the configuration is the one where nothing is declined at all.
+	d := &Decoder{Features: featuresAllOn(t)}
 	for _, tc := range []struct {
 		name string
 		ht   byte

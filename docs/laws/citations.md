@@ -106,3 +106,20 @@ reach is a law out of context.
   So a ruling is not applied when the decision is recorded; it is applied when
   everything the decision contradicts has been found. Grep for the old answer, not
   just for the place you expect it. (Ruling: Scott, #28.)
+
+### The word "grave" is a citation to a label, so the label lands before the body that cites it.
+
+- **The word "grave" is a citation to a label, so the label lands before the body that
+  cites it.** `citecheck.sh` resolves `grave #N` against `label:type:grave`, and it runs on
+  the `pull_request` event — the moment the body is *opened*, not the moment it is merged.
+  The closing ritual runs the other way round: comment, then close, then the tombstone is
+  complete. So an agent following the ritual and reaching for the label at close time has
+  written a body whose claim is false for the whole life of the PR, and the gate says so.
+  Specimen: #395's PR opened citing `grave #395` while #395 still carried only `phase:v0`
+  and `gate:eh`; the `citations` job failed on exactly that line while every other job was
+  still running. **Two orderings, and only one of them is negotiable** — the lesson comment
+  must precede the close or the close eats it, but nothing stops the *label* from being
+  applied when the defect is diagnosed. So it is: a grave is labeled when it is known to be
+  one, and the closing comment is what waits. The general form is that a body's citations are
+  checked against the world as it stands when the body is written, and *a plan to make a
+  citation true later is a citation that is false now*.

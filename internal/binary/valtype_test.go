@@ -112,7 +112,14 @@ func TestValTypeAlternationIsTheReference(t *testing.T) {
 
 		// reftype's other twelve. Every one of these was reported malformed before #88,
 		// and the spec defines all twelve, so every one was a wrongly-rejected module.
-		{"nullexnref", []byte{0x74}, "gc", nil},
+		//
+		// **Two of them name a different gate, as of #395.** `exnref` and `nullexnref` are the
+		// exception proposal's value type (Exceptions.md:337-349) and were asserted `"gc"` here
+		// for three PRs — which passed, because the byte *was* gated on GC and this column only
+		// ever asked whether the named gate declines it. Getting the wrong answer required the
+		// implementation and the expectation to be wrong together, which is what a hand-written
+		// expectation next to a hand-written arm buys.
+		{"nullexnref", []byte{0x74}, "exception handling", nil},
 		{"nullfuncref", []byte{0x73}, "gc", nil},
 		{"nullexternref", []byte{0x72}, "gc", nil},
 		{"nullref", []byte{0x71}, "gc", nil},
@@ -121,7 +128,7 @@ func TestValTypeAlternationIsTheReference(t *testing.T) {
 		{"i31ref", []byte{0x6C}, "gc", nil},
 		{"structref", []byte{0x6B}, "gc", nil},
 		{"arrayref", []byte{0x6A}, "gc", nil},
-		{"exnref", []byte{0x69}, "gc", nil},
+		{"exnref", []byte{0x69}, "exception handling", nil},
 
 		// The parameterized prefixes, each followed by a nested heaptype — so a *type
 		// index* is legal two productions down, which is the deepest thing the fix reaches.
@@ -178,6 +185,8 @@ func TestValTypeAlternationIsTheReference(t *testing.T) {
 				off.SIMD = false
 			case "gc":
 				off.GC = false
+			case "exception handling":
+				off.ExceptionHandling = false
 			default:
 				t.Fatalf("unknown gate %q", tc.gate)
 			}
@@ -348,13 +357,29 @@ func TestHeapTypeIsNotRefType(t *testing.T) {
 // would never reach it.
 func TestHeapTypeGatesFormsNotThePosition(t *testing.T) {
 	on := featuresAllOn(t)
-	withoutGC := on
-	withoutGC.GC = false
+
+	// The gate is a **name**, not a bool, as of #395. It was `gate bool` meaning "GC off must
+	// decline", and under that column `ref.null exn` asserted the true thing for the wrong
+	// reason: the byte declined with GC off, and the column had no way to say it should not
+	// have. A boolean can only ask whether some gate fires; the defect was *which*.
+	off := func(gate string) Features {
+		f := on
+		switch gate {
+		case "gc":
+			f.GC = false
+		case "exception handling":
+			f.ExceptionHandling = false
+		default:
+			t.Fatalf("unknown gate %q — a row naming a gate this helper cannot turn off would "+
+				"run against an all-on decoder and pass by asking nothing", gate)
+		}
+		return f
+	}
 
 	for _, tc := range []struct {
 		name string
 		ht   []byte
-		gate bool // true: GC off must decline. false: GC off must accept.
+		gate string // "": ungated, every gate off must accept. otherwise the gate that owns it.
 		why  string
 	}{
 		// Wasm 2.0's two. `ref.null func` is in the corpus — elem.wast encodes it inside
@@ -363,51 +388,83 @@ func TestHeapTypeGatesFormsNotThePosition(t *testing.T) {
 		// a transcription and deliberately so: the falsification table above *measured*
 		// the consequence (a misplaced gate turns the spec board red), which is a stronger
 		// statement than a copied byte string and has nothing in it that can drift.
-		{"ref.null func", []byte{0x70}, false, "-0x10 is Wasm 2.0's"},
-		{"ref.null extern", []byte{0x6F}, false, "-0x11 likewise"},
+		{"ref.null func", []byte{0x70}, "", "-0x10 is Wasm 2.0's"},
+		{"ref.null extern", []byte{0x6F}, "", "-0x11 likewise"},
 
 		// Function-references, folded into the GC gate by decision 0008 — and the branch
 		// whose check has to sit after the discriminator.
 		{
 			"ref.null 0",
 			[]byte{0x00},
-			true,
+			"gc",
 			"a type index is not Wasm 2.0; the check follows the negativity test, because a " +
 				"check ahead of it would decline ref.null extern as a GC construct",
 		},
-		{"ref.null 1", []byte{0x01}, true, "same branch, a different index"},
+		{"ref.null 1", []byte{0x01}, "gc", "same branch, a different index"},
 
-		// GC's abstract forms, one from each end of the switch's two ranges.
-		{"ref.null any", []byte{0x6E}, true, "-0x12"},
-		{"ref.null none", []byte{0x71}, true, "-0x0f, the other range"},
-		{"ref.null exn", []byte{0x69}, true, "-0x17"},
+		// GC's abstract forms, one from each end of the switch's two surviving ranges.
+		{"ref.null any", []byte{0x6E}, "gc", "-0x12"},
+		{"ref.null none", []byte{0x71}, "gc", "-0x0f, the other range"},
+
+		// The exception proposal's two — #395. Both are here rather than one, because the
+		// bytes sit at opposite ends of what used to be GC's two ranges (`-0x17` at the far
+		// end of one, `-0x0c` at the near end of the other), so a repair that moved only the
+		// range boundary it noticed would leave the other byte behind and one row could not
+		// tell. Each is now the first row in this file that fails if the arm goes back.
+		{"ref.null exn", []byte{0x69}, "exception handling", "-0x17, `exnref`'s heap type"},
+		{"ref.null noexn", []byte{0x74}, "exception handling", "-0x0c, `nullexnref`'s"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mod := refNullGlobal(tc.ht...)
 
-			// Every row decodes with GC on. That is what makes a decline below a *gate*
-			// rather than a permanent rejection wearing a feature name.
+			// Every row decodes with every gate on. That is what makes a decline below a
+			// *gate* rather than a permanent rejection wearing a feature name.
 			if _, err := (&Decoder{Features: on}).DecodeModule(mod); err != nil {
-				t.Fatalf("GC on: got %v, want accept\n\t%s", err, tc.why)
+				t.Fatalf("all gates on: got %v, want accept\n\t%s", err, tc.why)
 			}
 
-			_, err := (&Decoder{Features: withoutGC}).DecodeModule(mod)
-			t.Logf("GC off: % x -> %v", tc.ht, err)
-			if !tc.gate {
-				if err != nil {
-					t.Errorf("GC off: got %v, want accept — this form is Wasm 2.0's and gating "+
-						"it rejects modules the corpus contains\n\t%s", err, tc.why)
+			if tc.gate == "" {
+				if _, err := (&Decoder{}).DecodeModule(mod); err != nil {
+					t.Errorf("every gate off: got %v, want accept — this form is Wasm 2.0's and "+
+						"gating it rejects modules the corpus contains\n\t%s", err, tc.why)
 				}
 				return
 			}
+
+			_, err := (&Decoder{Features: off(tc.gate)}).DecodeModule(mod)
+			t.Logf("%s off: % x -> %v", tc.gate, tc.ht, err)
 			if !errors.Is(err, ErrFeatureDisabled) {
-				t.Fatalf("GC off: got %v, want ErrFeatureDisabled — with no check here the form "+
+				t.Fatalf("%s off: got %v, want ErrFeatureDisabled — with no check here the form "+
 					"decodes clean, which is accept-and-ignore, and neither lane can see it: "+
 					"the default lane is assert_malformed-only and the all-on lane's Gated==0 "+
-					"is trivially satisfied by a gate that never fires (#48)\n\t%s", err, tc.why)
+					"is trivially satisfied by a gate that never fires (#48)\n\t%s",
+					tc.gate, err, tc.why)
 			}
-			if !strings.Contains(err.Error(), "gc") {
-				t.Errorf("GC off: %q does not name the feature", err)
+			if !strings.Contains(err.Error(), tc.gate) {
+				t.Errorf("%s off: %q does not name the feature — and naming the *wrong* one is "+
+					"#395, which this column exists to pin", tc.gate, err)
+			}
+
+			// The other direction, and the one a boolean column could not express: with only
+			// the row's own gate on, the form decodes. Necessity above, sufficiency here —
+			// together they say the byte belongs to this gate and to no other. `ref.null 0`
+			// and `ref.null 1` are exempt because a type index needs a type *section*, which
+			// `refNullGlobal` does not build.
+			if tc.ht[0] == 0x00 || tc.ht[0] == 0x01 {
+				return
+			}
+			var only Features
+			switch tc.gate {
+			case "gc":
+				only.GC = true
+			case "exception handling":
+				only.ExceptionHandling = true
+			}
+			if _, err := (&Decoder{Features: only}).DecodeModule(mod); err != nil {
+				t.Errorf("only %s on: got %v, want accept — a gate that cannot admit its own "+
+					"proposal's grammar unaided is #395's defect exactly, and every witness "+
+					"elsewhere in the tree then has to open a second gate for no reason of its "+
+					"own\n\t%s", tc.gate, err, tc.why)
 			}
 		})
 	}
@@ -885,5 +942,86 @@ func TestAbstractRefTypeDerivesTheTwelve(t *testing.T) {
 				t.Errorf("AbstractRefType(%s, %v).Null() = %v", name, null, vt.Null())
 			}
 		}
+	}
+}
+
+// TestTheExceptionGateAdmitsItsOwnValueType is #395's witness, and it exists because **no board lane
+// can state this property in either direction.** The default lane runs with both gates off and the
+// all-on lane with both on, so no vector in the corpus is ever decoded in a configuration that holds
+// `ExceptionHandling` and `GC` apart — the defect was invisible to 65,000 vectors by construction,
+// and it will stay invisible now that it is fixed. A unit assertion is not a second-best witness
+// here; it is the only kind available.
+//
+// The two halves are the two directions of one claim, and they fail for unrelated reasons:
+//
+//   - **Sufficiency.** `ExceptionHandling` alone admits `exnref` (0x69) and `nullexnref` (0x74).
+//     This is the half that was broken: the module in #395's body — `(func (param exnref) ...)` —
+//     was refused `gc: feature gate disabled`, so the gate did not admit the value type its own
+//     proposal defines (`Exceptions.md:337-349`).
+//   - **Non-contamination.** `GC` alone still admits its eight, and refuses these two *naming the
+//     exception gate*. A repair that moved the bytes by widening GC's arm to accept them under
+//     either gate would pass the sufficiency half and fail here.
+//
+// The eight are **derived** from `abstractHeapNames` minus the four whose gate is not GC, not
+// enumerated: an enumeration written today inherits today's attribution, which is the mistake this
+// test is about. A form added to the map with no gate decision lands in the derived set and fails
+// here rather than being quietly absorbed — and the count is asserted so a *shrinking* map cannot
+// make the sweep vacuous.
+func TestTheExceptionGateAdmitsItsOwnValueType(t *testing.T) {
+	ehOnly := Features{ExceptionHandling: true}
+	gcOnly := Features{GC: true}
+
+	// Both spellings of the exception proposal's value type, as one-byte reftypes at a param
+	// position — #395's own repro, which is a param and not a table element type.
+	for _, tc := range []struct {
+		name string
+		vt   byte
+	}{
+		{"exnref", HeapExn},       // -0x17
+		{"nullexnref", HeapNoExn}, // -0x0c
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mod := funcTypeParam(tc.vt)
+			if _, err := (&Decoder{Features: ehOnly}).DecodeModule(mod); err != nil {
+				t.Errorf("only ExceptionHandling on: got %v, want accept — this is the type the "+
+					"proposal defines, so a gate that declines it is not independently usable and "+
+					"every witness elsewhere has to open GC for an unrelated reason (#395)", err)
+			}
+			_, err := (&Decoder{Features: gcOnly}).DecodeModule(mod)
+			if !errors.Is(err, ErrFeatureDisabled) {
+				t.Fatalf("only GC on: got %v, want ErrFeatureDisabled", err)
+			}
+			if !strings.Contains(err.Error(), "exception handling") {
+				t.Errorf("only GC on: %q names the wrong gate — the whole content of #395 was a "+
+					"decline that fired for a true reason under a false name", err)
+			}
+		})
+	}
+
+	// GC's eight, derived. func/extern are Wasm 2.0's and ungated; exn/noexn are the pair above.
+	eight := 0
+	for kind, name := range abstractHeapNames {
+		switch kind {
+		case HeapFunc, HeapExtern, HeapExn, HeapNoExn:
+			continue
+		}
+		eight++
+		t.Run("gc keeps "+name, func(t *testing.T) {
+			mod := funcTypeParam(kind)
+			if _, err := (&Decoder{Features: gcOnly}).DecodeModule(mod); err != nil {
+				t.Errorf("only GC on: %s got %v, want accept — moving two bytes out of GC's arm "+
+					"must not take any of the other eight with them", name, err)
+			}
+			_, err := (&Decoder{Features: ehOnly}).DecodeModule(mod)
+			if !errors.Is(err, ErrFeatureDisabled) || !strings.Contains(err.Error(), "gc") {
+				t.Errorf("only ExceptionHandling on: %s got %v, want a gc-named feature decline — "+
+					"the exception gate must not have acquired GC's forms in the move", name, err)
+			}
+		})
+	}
+	if eight != 8 {
+		t.Errorf("derived %d GC abstract forms, want 8 — twelve in `abstractHeapNames` minus "+
+			"func/extern (Wasm 2.0) minus exn/noexn (#395); a map that lost a row would make "+
+			"every sweep above agree with less of the space", eight)
 	}
 }

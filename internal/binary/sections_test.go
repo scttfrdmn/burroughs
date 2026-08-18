@@ -2,6 +2,8 @@ package binary
 
 import (
 	"errors"
+	"maps"
+	"strings"
 	"testing"
 )
 
@@ -668,7 +670,15 @@ func TestRefTypeReadsTheReferencesFourteenForms(t *testing.T) {
 			0x04, 0x04, 0x01, form, 0x00, 0x01,
 		}
 	}
-	on := &Decoder{Features: Features{GC: true}}
+	// Every gate on, and the gated class is keyed by the **feature the decline names** rather
+	// than tallied as one number. #395 is why: this sweep ran against a GC-only decoder and
+	// counted ten forms as "gated off", which stayed true when two of the ten were gated by the
+	// *wrong* proposal — `exn` and `noexn` are the exception proposal's (Exceptions.md:337-349)
+	// and sat in GC's arm for three PRs. A partition that asks *whether* a form is gated cannot
+	// see a form gated by the wrong gate; asking *which* gate is one more map key, and it turns
+	// this into the control that would have caught it. Same shape as
+	// TestHeapTypeGatesFormsNotThePosition's per-row gate, one production up.
+	on := &Decoder{Features: featuresAllOn(t)}
 
 	// Three bytes are not one-byte reftypes through this entry point, and each is
 	// excluded for a *named* reason rather than by shrinking a count until it matched.
@@ -687,7 +697,8 @@ func TestRefTypeReadsTheReferencesFourteenForms(t *testing.T) {
 	// a silently absorbed difference.
 	excluded := map[byte]string{0x40: "table initializer prefix", 0x63: "(ref null ht)", 0x64: "(ref ht)"}
 
-	var ungated, gatedOff, malformed int
+	var ungated, malformed int
+	gatedBy := map[string]int{}
 	seenExcluded := map[byte]bool{}
 	for v := -64; v < 64; v++ {
 		form := byte(v & 0x7F)
@@ -700,7 +711,11 @@ func TestRefTypeReadsTheReferencesFourteenForms(t *testing.T) {
 		case off == nil && all == nil:
 			ungated++
 		case errors.Is(off, ErrFeatureDisabled) && all == nil:
-			gatedOff++
+			// The feature name is the text before `featureErr`'s separator, which is the
+			// only place a decline says *which* gate declined — ErrFeatureDisabled cannot
+			// carry it, and that is the verdict/mechanism split: the sentinel says whether,
+			// the message says which.
+			gatedBy[strings.TrimSuffix(off.Error(), ": "+ErrFeatureDisabled.Error())]++
 		case errors.Is(off, ErrMalformedRefType) && errors.Is(all, ErrMalformedRefType):
 			malformed++
 		case excluded[form] != "":
@@ -712,16 +727,24 @@ func TestRefTypeReadsTheReferencesFourteenForms(t *testing.T) {
 	}
 
 	// The counts are the assertion: two ungated (funcref 0x70, externref 0x6F — the Wasm
-	// 2.0 subset), ten gated abstract forms (-0x0c..-0x0f, -0x12..-0x17), and the
-	// remaining 113 malformed. 2+10+113+3 = 128, which is the whole s7 space.
-	if ungated != 2 || gatedOff != 10 || malformed != 113 {
-		t.Errorf("reftype partition over s7: %d ungated, %d gated-off, %d malformed; "+
-			"want 2/10/113 (funcref+externref, ten GC abstract forms, the rest malformed)",
-			ungated, gatedOff, malformed)
+	// 2.0 subset), eight abstract forms gated by GC, **two gated by exception handling**
+	// (`exn` -0x17, `noexn` -0x0c), and the remaining 113 malformed. 2+8+2+113+3 = 128,
+	// which is the whole s7 space. The per-gate split is #395's pin: before it, both
+	// spellings of this line read `10` and agreed with a wrong attribution.
+	wantGated := map[string]int{"gc": 8, "exception handling": 2}
+	if ungated != 2 || malformed != 113 || !maps.Equal(gatedBy, wantGated) {
+		t.Errorf("reftype partition over s7: %d ungated, %v gated, %d malformed; "+
+			"want 2 / %v / 113 — funcref+externref ungated, eight GC abstract forms, "+
+			"exn and noexn under the exception gate (#395), the rest malformed",
+			ungated, gatedBy, malformed, wantGated)
 	}
 	// Vacuity floor: an all-zero tally satisfies a comparison against zeros, so the sweep
 	// asserts it actually classified the space rather than merely finishing the loop.
-	if n := ungated + gatedOff + malformed + len(seenExcluded); n != 128 {
+	gated := 0
+	for _, n := range gatedBy {
+		gated += n
+	}
+	if n := ungated + gated + malformed + len(seenExcluded); n != 128 {
 		t.Errorf("classified %d of 128 s7 forms; the sweep is not covering the space", n)
 	}
 	for form, why := range excluded {
