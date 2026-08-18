@@ -933,18 +933,22 @@ func diffRefType(rt1, rt2 binary.ValType) binary.ValType {
 	if !rt2.Null() {
 		return rt1
 	}
-	// `rt1` with its null bit cleared. Two constructors rather than one, the null bit and the
-	// heaptype living in different places for the indexed and the abstract forms; `binary` exports
-	// no nullability setter, and asking it for one would export a mutator for a wire fact.
-	if rt1.IsIndexed() {
-		return binary.RefType(rt1.Index(), false)
-	}
-	kind, ok := rt1.Kind()
-	if !ok {
-		// Neither indexed nor keyed by a wire byte: not a reference type at all, which
-		// `check_reftype` has already refused at both call sites. Returned unchanged rather than
-		// silently coerced, so a caller that skips that check sees its own type back.
-		return rt1
-	}
-	return refAbstract(kind, false)
+	// `rt1` with its null bit cleared.
+	//
+	// **This was a two-branch reconstruction under a comment saying `binary` exported no nullability
+	// setter, and slice 8 made that sentence false** — `ref.as_non_null` and the two `br_on_*null`
+	// rules need the same operation from outside `binary`, so `WithNull` is exported now and this is
+	// the operation it names. Quoted because a retired claim is recorded rather than absorbed:
+	//
+	//	Two constructors rather than one, the null bit and the heaptype living in different places
+	//	for the indexed and the abstract forms; `binary` exports no nullability setter, and asking
+	//	it for one would export a mutator for a wire fact.
+	//
+	// The branch it replaces also had a defect the unreachability of its own case was hiding: a
+	// non-reference `rt1` has a `Kind()` — the numeric wire bytes are kinds too — so it fell past the
+	// `!ok` guard into `refAbstract`, which answers `NoValType` for a byte that is not one of the
+	// twelve heaptypes. That is the silent-coercion outcome the guard's comment said it was there to
+	// prevent, reached by the path the guard did not cover. `WithNull` is identity for a numeric type
+	// by construction (its `null` is documented always-false), so the case now returns `rt1` for real.
+	return rt1.WithNull(false)
 }

@@ -21,6 +21,36 @@ weakly-ordered platform.
 
 ### Added
 
+- **The validator types the reference-instruction family, and the single-byte opcode space closes —
+  slice 8** (`internal/validate/ref.go`, `ref_test.go`; decision 0034, `gate:gc`, part of #9).
+  `ref.eq` (0xD3), `ref.as_non_null` (0xD4), `br_on_null` (0xD5), `br_on_non_null` (0xD6), `call_ref`
+  (0x14) and `return_call_ref` (0x15), ported from `valid.ml:477-490,532-534,552-558,728-743`. No new
+  sentinels: every one of the 27 reject rows expects `type mismatch`, already declared.
+  **All-gates-on lane: 248 fail, down from 303; declined 122 → 67; pass 64743 → 64798** — three
+  columns closing on the forecast's 55, with all six mnemonics reaching exactly zero. Default lane
+  byte-identical, all six being `gate:gc`.
+  - **Five single-byte opcodes remain declined, and the set is now derived rather than described.**
+    `throw` (0x08), `throw_ref` (0x0a), `return_call` (0x12), `return_call_indirect` (0x13),
+    `try_table` (0x1f) — exception handling and two thirds of tail calls, both deferred proposals.
+    `TestSingleByteDeclinesAreExactlyTheTwoDeferredProposals` walks `binary.OpMnemonic`'s single-byte
+    rows and asks the real dispatch, in both directions, over the domain of rows that *name* an
+    instruction: 192 named rows, 29 raw declines, 5 honest ones. Two earlier declarations that the
+    single-byte space was already closed are retired with the false text quoted where it stood.
+  - **The bound is a representation: the reference has two bottoms, and this is the slice where the
+    difference becomes a verdict.** `BotT` satisfies a numeric requirement; `RefT (nul, BotHT)` —
+    what `peek_ref` answers — satisfies every reference requirement and no numeric one. Exactly one
+    row of the 55 separates the readings, `unreached-invalid.wast:697`.
+  - **The forecast named the wrong line for that row, and the correction is measured.** Seventeen
+    one-at-a-time mutations are tabulated in the ADR with the rows each fails; making `peekRef` answer
+    the *valtype* bottom fails **none** of them, because all three callers re-emit the null bit, and
+    the row keys on the **push** instead. Three more mutations measured zero on the first attempt and
+    were answered by strengthening the controls — an accept-direction row, two `require` messages
+    asserted by substring, and a bottom-keyed match arm — rather than by weakening the claims.
+  - **`allOnPassFloor` was 89 stale**, at 64654 against an actual 64743, unmoved by #378 and by #382
+    (slice 7). It never fired because 89 sits inside the 250-wide slack, which means the bound could
+    not have caught any regression smaller than that. Re-based to 64798 with the accumulation recorded
+    in its ledger: the slack predicted decay by one large jump, and what happened was decay by moves
+    each too small to trip it.
 - **The validator types the 0xFB GC-instruction region — slice 7, 31 opcodes onto 21 arms**
   (`internal/validate/gc.go`, `gc_test.go`; decision 0032, `gate:gc`, part of #9). `struct.*`,
   `array.*`, `ref.test`/`ref.cast`, `br_on_cast`/`br_on_cast_fail`, the `extern`/`any` conversions and

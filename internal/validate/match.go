@@ -138,8 +138,14 @@ func matchNull(got, want bool) bool {
 //
 // Reads kind and index only; the null bit is matchRefType's, per this file's header.
 func matchHeap(c tctx, got, want binary.ValType) bool {
-	if got == unknown {
-		return true // `BotHT, _ -> true`
+	// `BotHT, _ -> true`. **The test is the bottom *heaptype*, not the whole of `unknown`**, and
+	// the difference arrived with slice 8: `peek_ref` yields `RefT (NoNull, BotHT)` for a bottom
+	// operand, which `ref.as_non_null` and `br_on_null` push, and that value is not `unknown` —
+	// only its nullable sibling is. Written as `got == unknown` this arm answered false for it and
+	// fell through to the indexed-versus-indexed case, where `matchDefType` would resolve a type
+	// index no module holds. See botHeapIdx for the two bottoms and why one index carries both.
+	if isBotHeap(got) {
+		return true
 	}
 
 	gk, gAbstract := got.Kind()

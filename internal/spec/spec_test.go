@@ -7064,7 +7064,36 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	// estimated 41 advances where there were 45. Recorded because the forecast's own text called this
 	// lane's figure "deliberately looser" — a hedge that turns out to have been pointing at the right
 	// mechanism and under-sizing it, which is a different thing from being right.
-	const allOnPassFloor = 64654
+	// **64654 → 64798, slice 8 (ADR 0034): +144, and only 55 of that is slice 8.** The other **89 is
+	// staleness this bound accumulated and nothing reported**, which is the finding of the entry and
+	// the reason it is written before the slice's own arithmetic. The constant stood at 64654, written
+	// by the #359 entry directly above, against an actual **64743** when this slice started. Two PRs
+	// moved the lane and left the bound behind: #378 (the linker's type comparison) and **#382, slice 7
+	// itself**, whose ADR records `377 fail → 303` on this very lane and which does not touch this
+	// constant. Neither fired, because 89 is inside `boardBoundSlack`'s 250, and a bound sitting 89
+	// under its subject cannot catch any regression smaller than 89.
+	//
+	// **The failure mode is accumulation, not a single large jump**, and that distinction is what the
+	// slack's own comment did not predict. It predicted the abstract version — "a bound left behind by
+	// a large jump degrades into decoration" — and the mechanism intended to make re-basing unnecessary
+	// is exactly the mechanism that made forgetting it invisible: each move was too small to trip the
+	// slack, so no PR was ever told. Recorded here and filed against the bound rather than against the
+	// slack, because widening the slack is this defect one level up and narrowing it is #42's business.
+	//
+	// Slice 8's own contribution is **+55, and it closes exactly**: 303 fail → 248, declined 122 → 67,
+	// pass 64743 → 64798, three columns on one figure, with all six mnemonics reaching exactly zero.
+	// It is the first slice in this ledger whose forecast did not lose rows to *re-declining*, and
+	// ADR 0034 argues that is a property of being **last** in the single-byte space rather than of the
+	// forecast being sharper: slice 7's residue was precisely these six opcodes, and there is nothing
+	// left behind them for these modules to decline on. A clean number that has an explanation is worth
+	// more than a clean number, and the per-file verification is in the ADR because an exactly-closing
+	// total is also what a blind instrument produces.
+	//
+	// The default lane is byte-identical — 60837 pass, 188 fail, 66 unsupported, 4053 gated, `fail by
+	// stratum` unchanged term for term — all six opcodes being `gate:gc`. That is the fourth entry in
+	// this comment to record the same asymmetry, and by now it is the expected shape of a gated slice
+	// rather than an observation.
+	const allOnPassFloor = 64798
 	boardBound(t, "allOnPassFloor", totalPass, allOnPassFloor, boardBoundSlack, floorBound,
 		"a gated feature regressed, which the Gated==0 assertion above cannot see: with every "+
 			"gate on, a broken feature turns a pass into a fail and leaves Gated at zero")

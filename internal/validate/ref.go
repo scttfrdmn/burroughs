@@ -9,6 +9,43 @@ import (
 	"github.com/scttfrdmn/burroughs/internal/binary"
 )
 
+// Slices **6 and 8** of #9's validator: the register's *reference instructions* entry, which is the
+// one entry that could not depart as a unit. Slice 6 (#359/#363) took the `ref.null`/`ref.is_null`/
+// `ref.func` rows and the two table accessors; slice 8 (ADR 0034) takes `ref.eq`,
+// `ref.as_non_null`, `br_on_null`, `br_on_non_null`, `call_ref` and `return_call_ref`. Both halves
+// are here because the register names one entry, and `validate.go`'s register now records the
+// two-slice departure rather than a single date.
+//
+// This header also answers a gap gc.go's names — slice 6 is called 6 in `bulk_test.go`, in
+// `validate_test.go` and in ADR 0027 and "never in `ref.go`'s own header", which is how the ordinal
+// came to be claimed twice elsewhere. It is claimed here now.
+//
+// # The boundary slice 8 retires, quoted where it stood
+//
+// `validate.go`'s slice-2 paragraph declared "**the single-byte opcode space is fully in vocabulary
+// as of that slice**, and what remains declined is **0xFE (threads) alone**", and slice 4's
+// paragraph called itself "the slice that closes the single-byte space". All three clauses were
+// **false when written**: eleven named single-byte opcodes were declined at the time. ADR 0032 swept
+// the sentence *immediately after* the first of them for staleness and left it standing, which is
+// the third payout of one shape and the reason slice 8's charged overhead is a control rather than a
+// corrected sentence.
+//
+// # What stays declined, and it is proposal boundaries rather than difficulty
+//
+// Five named single-byte opcodes remain after this slice, in exactly two deferred proposals:
+//
+//   - **tail calls** — `return_call` (0x12), `return_call_indirect` (0x13). `return_call_ref` (0x15)
+//     lands here instead of with them because it arrived with function references, so one of three
+//     tail-call shapes is typed and two are not. Stated so the residue is not read as an omission.
+//   - **exception handling** — `throw` (0x08), `throw_ref` (0x0a), `try_table` (0x1f), which is the
+//     register's own last entry and not a stray.
+//
+// That set is pinned by `TestSingleByteDeclinesAreExactlyTheTwoDeferredProposals` — as a literal set
+// of five with its mnemonics, derived by walking `binary.OpMnemonic`'s single-byte rows and asking
+// the real dispatch, over the domain of *rows that name an instruction* (the reserved-byte and
+// prefix rows cannot reach `instr` with `Prefix == 0`). The next slice that moves this boundary gets
+// a failing test rather than a sentence nobody reads.
+//
 // The reference-type slice's opcodes (#359): the three `ref.*` rows in the single-byte space and
 // the two table accessors, which are here rather than in bulk.go because bulk.go is the 0xFC
 // region and these are 0x25/0x26 — and because what both of them turn on is the *reftype* a
@@ -24,6 +61,34 @@ const (
 	opRefIsNull = 0xD1
 	opRefFunc   = 0xD2
 )
+
+// Slice 8's opcodes (#9, ADR 0034): the rest of the register's "reference instructions" entry — the
+// three null-manipulating rows and `ref.eq`, plus the two typed-function-reference calls.
+//
+// **In this file rather than a new one, and the reason is the register and not line count.** The
+// out-of-scope register in `validate.go` names *reference instructions* as one entry; slice 6 took
+// part of it and this slice takes the rest, so the two halves of one register entry live in one
+// file. `call_ref`/`return_call_ref` are here on the same reading — they are the
+// function-references proposal's calls, whose whole content is the reftype their operand carries,
+// which is this file's subject and not `instr.go`'s call family. Their *dispatch* still goes in
+// `instr.go`'s one switch, per the prefixed-region arm's argument against a second dispatch table.
+const (
+	opCallRef       = 0x14
+	opReturnCallRef = 0x15
+	opRefEq         = 0xD3
+	opRefAsNonNull  = 0xD4
+	opBrOnNull      = 0xD5
+	opBrOnNonNull   = 0xD6
+)
+
+// refNullEq is `RefT (Null, EqHT)` — `ref.eq`'s operand type, and its whole rule.
+//
+// A package-level var because the pair is fixed: `RefEq`'s arm names `EqHT` literally, twice, with
+// no operand or index feeding it. The discarded second result is `AbstractRefType`'s
+// is-this-one-of-the-twelve predicate over a *constant* from the same package that defines the
+// table, so it cannot be false — and `TestRefEqOperandIsANullableEqRef` prints what this holds
+// rather than leaving that claim to this sentence.
+var refNullEq, _ = binary.AbstractRefType(binary.HeapEq, true)
 
 // ErrUndeclaredFunc is `refer_func`'s rejection (`valid.ml:81-86`), and it is a category of its
 // own rather than a spelling of `ErrUnknownFunc`.
@@ -88,45 +153,327 @@ func (v *validator) refNull(i int) error {
 	return nil
 }
 
+// peekRef is `peek_ref`, at depth 0 (`valid.ml:286-293`): read the reference on top of the frame
+// without consuming it, and answer with the type whose heaptype the rule then re-emits.
+//
+// The subject is backticked alone rather than as the call `peek_ref 0 s e.at`, which is how the arms
+// spell it, because `citation_subject_test.go`'s extractor reads a backticked *identifier* and the
+// call form — with its dotted `e.at` — matches nothing. That file's header names this exact case as
+// the fourth thing to be exact about: a description that resolves, describes the right lines, and is
+// invisible to the instrument. Written this way so the row is keyed rather than excused.
+//
+// # It peeks before it pops, and the two steps answer different questions
+//
+// The four rules that call it have signatures *computed from the operand*, which is why none of
+// them is a `popExpect` of some fixed type: there is no fixed type to expect. This reads the top of
+// the frame, the requirement is then built as `(ref null ht)` — `WithNull(true)` on what comes back
+// — and that requirement is satisfied by construction: a nullable requirement admits a
+// non-nullable operand, and `ht` matches itself. So the popped type is never rejected by the
+// *match*; what can be rejected is the peeked type being a non-reference at all, and that is this
+// function's error.
+//
+// Writing it as one step would get two cases wrong in opposite directions. Requiring `funcref`
+// would reject every `externref` operand; requiring nothing would accept `(ref.is_null)` on an
+// `i32`, which is the accept direction. Hence: peek, classify, then consume.
+//
+// # Bottom answers `(ref bot)` and not `bot`, and the bit it answers with is unobservable
+//
+// `| BotT -> (NoNull, BotHT)`: a bottom operand yields the *non-nullable reference* bottom, which is
+// `botRef(false)` and is a different value from `unknown`. Transcribed as the reference writes it,
+// and then **measured, which falsified what the first draft of this paragraph claimed**. The draft
+// said returning `unknown` here is the reading that accepts `(unreachable) (ref.as_non_null)
+// (f32.abs)`; making that change fails **no row of the suite**, and neither does answering
+// `botRef(true)`. Both are the same fact: every caller re-emits the null bit it wants —
+// `rt.WithNull(true)` for the pop and `rt.WithNull(false)` for the push — so whatever bit this
+// function chose is overwritten before anything compares it, which is why the reference itself
+// binds `_nul` at all three call sites.
+//
+// What the one distinguishing row actually keys on is the **push**, not this answer: replacing
+// `v.push(rt.WithNull(false))` with `if isBotHeap(rt) { v.push(unknown) }` — bottom staying the
+// *valtype* bottom instead of remaining a reference — accepts that module, and fails exactly one
+// row. So the representation decision is real and it is load-bearing one line later than this
+// paragraph first said. Recorded rather than quietly re-worded, because a comment asserting the
+// wrong site for a property is how the next reader mutates the wrong line and concludes the
+// distinction does not matter. See botHeapIdx and ADR 0034's falsification bill.
+//
+// **It does not fail on an empty stack**, reachable or not — `peek` returns `BotT` out of range
+// unconditionally (`valid.ml:283-284`), and `BotT` is a reference as far as these rules care. So a
+// bare `ref.is_null` in a reachable frame is reported by the *pop*, as a stack shortage, and not as
+// "requires reference type but stack has nothing". `peekN` already implements that padding, and its
+// comment records the same reference division for `br_table`.
+//
+// The message is the reference's verbatim (0003), including its slightly odd "but stack has"
+// followed by a single type rather than a list — the corpus matches by substring, and the vectors
+// in `ref_is_null.wast`, `ref_as_non_null.wast` and `unreached-invalid.wast` that reach here expect
+// the `type mismatch` prefix.
+func (v *validator) peekRef() (binary.ValType, error) {
+	t := v.peekN(1)[0]
+	if t == unknown {
+		return botRef(false), nil
+	}
+	if !t.IsRef() {
+		return binary.ValType{}, fmt.Errorf("%w: instruction requires reference type but stack has %s",
+			ErrTypeMismatch, typeStr(t))
+	}
+	return t, nil
+}
+
 // refIsNull is `RefIsNull` (`valid.ml:724-726`):
 //
 //	| RefIsNull ->
 //	  let (_nul, ht) = peek_ref 0 s e.at in
 //	  [RefT (Null, ht)] --> [NumT I32T], []
 //
-// # It peeks before it pops, and the two steps answer different questions
-//
-// The signature is *computed from the operand*, which is why this is not `popExpect` of some fixed
-// type: there is no fixed type to expect. `peek_ref` reads the top of the frame without consuming
-// it and yields the heaptype, the requirement is then built as `(ref null ht)`, and that
-// requirement is satisfied by construction — a nullable requirement admits a non-nullable operand,
-// and `ht` matches itself. So the popped type is never rejected by the *match*; what can be
-// rejected is the peeked type being a non-reference at all, and that is `peek_ref`'s own error.
-//
-// Writing it as one step would get two cases wrong in opposite directions. Requiring `funcref`
-// would reject every `externref` operand; requiring nothing would accept `(ref.is_null)` on an
-// `i32`, which is the accept direction. Hence: peek, classify, then consume.
-//
-// **`peek_ref` does not fail on an empty stack**, reachable or not — `peek` returns `BotT` out of
-// range unconditionally (`valid.ml:283-284`), and `BotT` is a reference as far as this rule cares.
-// So a bare `ref.is_null` in a reachable frame is reported by the *pop*, as a stack shortage, and
-// not as "requires reference type but stack has nothing". `peekN` already implements that padding,
-// and its comment records the same reference division for `br_table`.
-//
-// The message is the reference's verbatim (0003), including its slightly odd "but stack has"
-// followed by a single type rather than a list — the corpus matches by substring, and the vectors
-// in `ref_is_null.wast` and `unreached-invalid.wast` that reach here expect the `type mismatch`
-// prefix.
+// The pop is spelled out rather than delegated to `popExpect(ht.WithNull(true))`, and the reason is
+// the message and not the check: the match is satisfied by construction (peekRef's second
+// paragraph), so the only outcome `popExpect` could add is its own "expected …, stack empty"
+// phrasing in place of this one, on a rule whose subject is a reference and not a named type.
+// refAsNonNull below does use `popExpect`, because it has to *keep* what it popped.
 func (v *validator) refIsNull() error {
-	if t := v.peekN(1)[0]; t != unknown && !t.IsRef() {
-		return fmt.Errorf("%w: instruction requires reference type but stack has %s",
-			ErrTypeMismatch, t)
+	if _, err := v.peekRef(); err != nil {
+		return err
 	}
 	if _, ok := v.pop(); !ok {
 		return fmt.Errorf("%w: instruction requires reference type but stack is empty",
 			ErrTypeMismatch)
 	}
 	v.push(binary.I32)
+	return nil
+}
+
+// refAsNonNull is `RefAsNonNull` (`valid.ml:728-730`):
+//
+//	| RefAsNonNull ->
+//	  let (_nul, ht) = peek_ref 0 s e.at in
+//	  [RefT (Null, ht)] --> [RefT (NoNull, ht)], []
+//
+// **The whole instruction is the null bit**, which is why it is one `peek_ref` and two `WithNull`
+// calls with nothing between them: the heaptype is carried through untouched, and a rule that
+// pushed `binary.FuncRef` or the peeked type unchanged would be a no-op wearing an opcode.
+//
+// The peeked *nullability* is discarded — `_nul` in the reference — because `ref.as_non_null` on an
+// already-non-nullable operand is valid and yields the same type back. So there is no "already
+// non-null" rejection to implement, and looking for one is how the arm acquires a check the
+// reference does not have.
+func (v *validator) refAsNonNull() error {
+	rt, err := v.peekRef()
+	if err != nil {
+		return err
+	}
+	if err := v.popExpect(rt.WithNull(true)); err != nil {
+		return err
+	}
+	v.push(rt.WithNull(false))
+	return nil
+}
+
+// refEq is `RefEq` (`valid.ml:742-743`):
+//
+//	| RefEq ->
+//	  [RefT (Null, EqHT); RefT (Null, EqHT)] --> [NumT I32T], []
+//
+// The only rule in this file with no index, no side table and no peek: two fixed operands and one
+// fixed result, which is why refNullEq is a package var and this is three lines. `popExpectAll` is
+// used rather than two `popExpect` calls so the pair goes through the one site that gets the
+// rightmost-first order right — here the two are identical and the order cannot be observed, and
+// that is exactly the case its comment says passes on coincidence.
+func (v *validator) refEq() error {
+	if err := v.popExpectAll([]binary.ValType{refNullEq, refNullEq}); err != nil {
+		return err
+	}
+	v.push(binary.I32)
+	return nil
+}
+
+// brOnNull is `BrOnNull x` (`valid.ml:477-479`):
+//
+//	| BrOnNull x ->
+//	  let (_nul, ht) = peek_ref 0 s e.at in
+//	  (label c x @ [RefT (Null, ht)]) --> (label c x @ [RefT (NoNull, ht)]), []
+//
+// # The label's types and the reference are stacked, not shared
+//
+// The reference operand sits *above* the label's own types and is not one of them, which is the
+// difference from br_on_non_null below and from brOnCast: this rule imposes **no** requirement on
+// the label at all. `(block (br_on_null 0))` with a void label is valid. So there is no non-empty
+// require here, and adding one by analogy with its sibling would reject the idiomatic use.
+//
+// What the branch carries is `label c x` — the null is consumed by the taken branch and does not
+// reach the label — and what falls through is the label's types with the reference back on top,
+// non-nullable now, because the fall-through is the not-null case. That is the whole point of the
+// instruction: it is the null test and the unwrap in one, so the fall-through type is strictly
+// better than what came in.
+func (v *validator) brOnNull(depth uint32) error {
+	rt, err := v.peekRef()
+	if err != nil {
+		return err
+	}
+	f, err := v.label(depth)
+	if err != nil {
+		return err
+	}
+	if err := v.popExpect(rt.WithNull(true)); err != nil {
+		return err
+	}
+	// The label's types are copied before the pushes: `f` points into v.frames and `labelTypes` is
+	// read, not written, but popExpectAll and pushAll both run while the slice is live and a future
+	// arm that reordered them would be reading a header it had already invalidated.
+	ts := f.labelTypes
+	if err := v.popExpectAll(ts); err != nil {
+		return err
+	}
+	v.pushAll(ts)
+	v.push(rt.WithNull(false))
+	return nil
+}
+
+// brOnNonNull is `BrOnNonNull x` (`valid.ml:481-490`):
+//
+//	| BrOnNonNull x ->
+//	  require (label c x <> []) e.at ("… but label has " ^ string_of_resulttype (label c x));
+//	  let ts0, t1 = Lib.List.split_last (label c x) in
+//	  require (is_reftype t1) e.at ("… but label has " ^ string_of_valtype t1);
+//	  let ht = match t1 with RefT (_nul, ht) -> ht | _ -> assert false in
+//	  (ts0 @ [RefT (Null, ht)]) --> ts0, []
+//
+// # The heaptype comes off the *label*, not off the stack, and that is the inversion
+//
+// br_on_null peeks the operand and leaves the label alone; this one reads the label's last type and
+// derives the operand requirement from it. Two rules that look like mirror images and take their
+// type from opposite ends — which is why they are two functions here rather than one with a flag,
+// and why the sibling hazard brOnCast's header names does not apply: there is no swap that turns one
+// into the other.
+//
+// So the reference's two `require`s are about the *label*, and both say "instruction requires
+// reference type but label has": an empty label prints the whole (empty) list, a non-reference last
+// type prints that type. Kept as two branches with one message shape, because the reference's two
+// strings differ only in which of the two it renders.
+//
+// **Bottom is admitted by the require and then not asserted about**, which is the one place this
+// arm reads differently from the reference and reads *weaker* deliberately. `is_reftype` is
+// `RefT _ | BotT -> true` (`types.ml:88-90`), so the require lets bottom through — and the next line
+// there is `match t1 with RefT … | _ -> assert false`, an assert bottom would fire. It cannot arrive:
+// `t1` is a label type, and label types come from declared block types, which have no bottom form.
+// Where the reference asserts, this proceeds — `WithNull(true)` on bottom is bottom — which is the
+// same claim about reachability made without a panic in a validator (isNumOrVec's posture).
+//
+// No explicit bottom arm is needed for that, and the first draft had one (`!t1.IsRef() && t1 !=
+// unknown`) that was **dead by construction**: both bottoms are spelled as indexed reference types
+// here (botHeapIdx), and `IsRef` reports true for the indexed kind, so the extra clause could never
+// change the branch. Left in, it would have read as *IsRef excludes bottom* — a condition asserting
+// the opposite of what the representation does, which is the shape that makes review confirm a bug.
+//
+// The branch carries `ts0 @ [t1]` — the non-null reference — and the fall-through is `ts0` alone:
+// the operand is *consumed* on the fall-through path, since a null has nothing to unwrap. The
+// mirror of br_on_null in both places.
+func (v *validator) brOnNonNull(depth uint32) error {
+	f, err := v.label(depth)
+	if err != nil {
+		return err
+	}
+	if len(f.labelTypes) == 0 {
+		return fmt.Errorf("%w: instruction requires reference type but label has %s",
+			ErrTypeMismatch, typeList(f.labelTypes))
+	}
+	ts0, t1 := f.labelTypes[:len(f.labelTypes)-1], f.labelTypes[len(f.labelTypes)-1]
+	if !t1.IsRef() {
+		return fmt.Errorf("%w: instruction requires reference type but label has %s",
+			ErrTypeMismatch, typeStr(t1))
+	}
+	if err := v.popExpect(t1.WithNull(true)); err != nil {
+		return err
+	}
+	if err := v.popExpectAll(ts0); err != nil {
+		return err
+	}
+	v.pushAll(ts0)
+	return nil
+}
+
+// callRef is `CallRef x` (`valid.ml:532-534`):
+//
+//	| CallRef x ->
+//	  let (ts1, ts2) = func_type c x in
+//	  (ts1 @ [RefT (Null, UseHT (Def (type_ c x)))]) --> ts2, []
+//
+// # The index is a *type* index, and the operand is a reference to that type
+//
+// `call` and `return_call` take a function index; these two take a type index, and the callee comes
+// off the stack as a `(ref null $t)`. Reading `funcTypeAt` — this package's function-index helper —
+// instead of `funcType` would resolve the wrong index space and be wrong only for modules where the
+// two spaces disagree, which is a majority of the corpus but not the small modules a slice is first
+// tested on.
+//
+// `func_type` is `call_indirect`'s own resolver, reused rather than re-derived: same reference
+// function, same message, and its kind-check disagreement with `struct_type`/`array_type` is ADR
+// 0032's open decisions-needed item. Slice 8 doubles that message's call sites and still brings no
+// witness — `non-function type` appears in no vector in the suite — so the item stands as flagged
+// rather than resolved here.
+//
+// The `Null` bit on the operand is the reference's, and it is what makes `(call_ref $t)` on a
+// `(ref null $t)` legal: the null is a *runtime* trap (`eval.ml`'s `NullFuncRef`), not a typing
+// error. Requiring the non-nullable form would reject the common case.
+func (v *validator) callRef(idx uint32) error {
+	ft, err := funcType(v.mod, idx)
+	if err != nil {
+		return err
+	}
+	if err := v.popExpect(binary.RefType(idx, true)); err != nil {
+		return err
+	}
+	if err := v.popExpectAll(ft.Params); err != nil {
+		return err
+	}
+	v.pushAll(ft.Results)
+	return nil
+}
+
+// returnCallRef is `ReturnCallRef x` (`valid.ml:552-558`):
+//
+//	| ReturnCallRef x ->
+//	  let (ts1, ts2) = func_type c x in
+//	  require (match_resulttype c.types ts2 c.results) e.at
+//	    ("type mismatch: current function requires result type " ^ … ^
+//	     " but callee returns " ^ …);
+//	  (ts1 @ [RefT (Null, UseHT (Def (type_ c x)))]) --> ... [], []
+//
+// # It is callRef plus a result-type require plus `-->...`, and each of the three is load-bearing
+//
+// The require is the tail call's whole safety condition: the callee's results become *this*
+// function's results without a frame in between, so they have to satisfy what this function
+// promised. `matchResultType` and not equality — a callee returning `(ref $t)` may tail-call from a
+// function declaring `funcref`, and the relation is the one place that is decided.
+//
+// `-->...` is the polymorphic tail: control does not come back, so the frame goes unreachable after
+// the operands are popped, exactly as `return` and `br` do. Omitting `setUnreachable` accepts
+// nothing extra and rejects every `(return_call_ref $t)` that is not the last instruction of a
+// void frame — the reject direction, and the one the corpus's `return_call_ref.wast` rows are
+// thickest on.
+//
+// **`c.results` is `v.frames[0].labelTypes`**, which is the function-body frame's, and it is read
+// from there rather than re-resolved from the module for `opReturn`'s reason: the body frame was
+// built from the function's declared results, so a second lookup would be a second derivation of a
+// fact one frame already carries. The other two tail-call opcodes — `return_call` 0x12 and
+// `return_call_indirect` 0x13 — are the *tail-call proposal* and stay declined; this one arrives
+// with function-references, which is the accident of proposal boundaries that puts one of three
+// siblings in this slice.
+func (v *validator) returnCallRef(idx uint32) error {
+	ft, err := funcType(v.mod, idx)
+	if err != nil {
+		return err
+	}
+	results := v.frames[0].labelTypes
+	if !matchResultType(tctx{gotMod: v.mod, wantMod: v.mod}, ft.Results, results) {
+		return fmt.Errorf("%w: current function requires result type %s but callee returns %s",
+			ErrTypeMismatch, typeList(results), typeList(ft.Results))
+	}
+	if err := v.popExpect(binary.RefType(idx, true)); err != nil {
+		return err
+	}
+	if err := v.popExpectAll(ft.Params); err != nil {
+		return err
+	}
+	v.setUnreachable()
 	return nil
 }
 

@@ -24,9 +24,12 @@
 // file's own header; what matters at this level is that the region is no longer declined.
 //
 // This paragraph then said `select t` (#294) was the last instruction in the single-byte space slice
-// 1 left, which was true when it was written and is not now — slice 4 took it. **The single-byte
-// opcode space is fully in vocabulary as of that slice**, and what remains declined is **0xFE
-// (threads) alone**.
+// 1 left, which was true when it was written and is not now — slice 4 took it. It then said the
+// single-byte space was **fully in vocabulary as of that slice** and that **0xFE (threads) alone**
+// remained declined, and both of those clauses were **false when they were written** — eleven named
+// single-byte opcodes were declined at the time, and ADR 0032 amended the sentence immediately after
+// this one for staleness while leaving these standing, in the very motion that was auditing them.
+// See slice 8 below for the measurement and for what replaced the sentence.
 //
 // Its prefixed-region list read "0xFB (GC), 0xFC (bulk memory/table), 0xFE (threads)", and it was
 // **stale on 0xFC from the moment slice 5 landed** — found by slice 7 reading its own boundary
@@ -60,19 +63,23 @@
 // the truth: `select t` genuinely was not in vocabulary, and now it is. Same cause, disjoint
 // destinations, one PR — see `passFloor`'s and `allOnPassFloor`'s accounts for both tables.
 //
-// It is also the slice that closes the single-byte space, and the last one whose rule was blocked on
-// a *different package*. What blocked the two rules named here next was this package itself: #311's
-// `check_valtype` on a block's valtype annotation was a call the walk never made, and #310's
-// `offset out of range` was a `require` never written. **Both are now written**, and the tense is
-// corrected in place rather than the sentence deleted, because *which* rules this package was the
-// blocker for is the durable half of it.
+// It is also the last slice whose rule was blocked on a *different package*. What blocked the two
+// rules named here next was this package itself: #311's `check_valtype` on a block's valtype
+// annotation was a call the walk never made, and #310's `offset out of range` was a `require` never
+// written. **Both are now written**, and the tense is corrected in place rather than the sentence
+// deleted, because *which* rules this package was the blocker for is the durable half of it.
+//
+// This paragraph also called slice 4 "the slice that closes the single-byte space", which is the
+// same false claim as the one above wearing a different subject and is what slice 8 closes for real.
 //
 // Out of scope by declaration, each with its own expected string in the suite and so its own
-// measurable slice: constant expressions (24), limits (16), reference instructions, the bulk
-// memory/table ops, and exception handling. Three entries have left this list and are worth naming
-// as departures rather than deletions — SIMD lane immediates (48) with slice 2, which is why
-// `ErrInvalidLaneIndex` exists; alignment (99) with slice 3, which is why `ErrAlignmentTooLarge`
-// does; and **GC subtyping (21) with slice 5**, which is why `ErrSubType` does.
+// measurable slice: constant expressions (24), limits (16), and exception handling. Five entries have
+// left this list and are worth naming as departures rather than deletions — SIMD lane immediates (48)
+// with slice 2, which is why `ErrInvalidLaneIndex` exists; alignment (99) with slice 3, which is why
+// `ErrAlignmentTooLarge` does; **GC subtyping (21) with slice 5**, which is why `ErrSubType` does;
+// the bulk memory/table ops with slice 5's 0xFC region; and **reference instructions across two
+// slices**, 6 taking the `ref.*`/table half and 8 the rest, which is why that entry could not depart
+// as a unit and why `ErrUndeclaredFunc` arrived one slice before the entry closed.
 //
 // # Slice 5: the subtype relation
 //

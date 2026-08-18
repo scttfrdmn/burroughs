@@ -1167,13 +1167,23 @@ func TestReferenceRangeCitationsAreWellFormed(t *testing.T) {
 	// attribution gets assumed. Neither edit added a range citation, and the per-file split is how
 	// that is known instead of hoped.
 	//
+	// **Seven more with slice 8, every one of them in `ref.go`, measured per file the way slice 7's
+	// were**: the counts are 2/2/26/3/1/17/13/0/1/4/5/0 in `citationFiles` order, so `ref.go` went 6 to
+	// 13 and the other eleven files did not move — including `validate.go` and `stack.go`, which the
+	// slice edited to retire a false boundary declaration and to name the second bottom. An eighth
+	// citation *moved* rather than arrived, from `refIsNull`'s block into the new `peekRef`'s, and this
+	// count cannot see it: a range that changes which doc block it sits in is the same range. It is
+	// visible in `TestReferenceRangeCitationsContainTheirSubjectsSite`'s residue below, which counts
+	// ranges *per block*, and naming it here is what keeps that pin's +3 from reading as an arithmetic
+	// slip against this pin's +7.
+	//
 	// They are not enumerated here, and that is a deliberate break with the four paragraphs above.
 	// Twenty-six lines of `file :n-m subject` would be a second copy of the citations themselves,
 	// maintained by hand, drifting on the first renumbering — the fixed-point trap
 	// `citation_subject_test.go`'s header walked into at 30-31-32, at a scale where it is certain
 	// rather than likely. What reads them is `TestRangeCitationSubjectsAreReadFromTheReference`, which
 	// resolves every range against the reference and needs no list here to do it.
-	const wantRanges = 67
+	const wantRanges = 74
 	if ranges != wantRanges {
 		t.Errorf("checked %d range citation(s) across %v, want %d — recount and re-pin, and if a "+
 			"file was added to citationFiles, read its point citations too",
@@ -1339,7 +1349,18 @@ func TestReferenceRangeCitationsContainTheirSubjectsSite(t *testing.T) {
 	// is the paragraph the previous slice asked for when it noted the sum "reads as an arithmetic slip
 	// until the third category is named" — it is now named twice, at two different magnitudes, which
 	// is stronger evidence that the category is real than either statement alone.
-	const wantKeyed, wantResidue = 15, 24
+	//
+	// **Slice 8 moved residue by three and keyed by nothing, against seven new ranges.** The three are
+	// `peekRef`'s two and `brOnNonNull`'s and `returnCallRef`'s one each, less one that left
+	// `refIsNull`'s block when the null-bit citation moved into `peekRef`'s — a range whose text did
+	// not change at all, which is why the sibling `wantRanges` pin cannot see the move and this one
+	// can. All four name `type mismatch`, and the reference *builds* that message rather than writing
+	// it — the head is concatenated with the expected and actual types — so they land excused for the
+	// oldest reason in this header. The other four new ranges name no sentinel of their own: they
+	// reject through `popExpect` and the block-arity check, so the loop above skips their blocks
+	// entirely, and the two figures miss `wantRanges` by 32 rather than 28 for that reason and no
+	// other.
+	const wantKeyed, wantResidue = 15, 27
 	if keyed != wantKeyed || residue != wantResidue {
 		t.Errorf("checked %d keyed range citation(s) and excused %d as constructed-message residue "+
 			"across %v, want %d and %d — recount and re-pin. A range becomes keyable when its "+
