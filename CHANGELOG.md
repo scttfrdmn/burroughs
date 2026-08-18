@@ -21,6 +21,58 @@ weakly-ordered platform.
 
 ### Added
 
+- **The validator types the exception-handling family, and the single-byte opcode space closes — slice
+  10** (`internal/validate/exception.go`, `exception_test.go`; decision 0036, `gate:exception-handling`,
+  #393, part of #9). `throw` (0x08), `throw_ref` (0x0a) and `try_table` (0x1f) plus the module-level
+  `check_tagtype`, ported from `valid.ml:191-195,270-276,572-586,974-989`. One new sentinel,
+  `ErrNonEmptyTagResult`. This is a **boundary move** and needed an ADR for it: exception handling was
+  `validate.go`'s out-of-scope register's third-to-last entry, and the entry was accurate when written
+  and could not say what made it stale — *it was written when there was no validator for it to be out
+  of scope of.*
+  **All-gates-on lane: pass 64833 → 64862, declines 33 → 8** — the pre-registered 25 declines and 4
+  admissions, closing at exactly 29 and checked three ways, because an exactly-closing total is also
+  what a miscount plus a compensating miscount looks like. The three mechanisms see **disjoint parts**:
+  `allOnPassFloor` all 29, the all-on decline census only the 25 (#391's rows are admissions, not
+  declines), and the `assert_invalid` ledger's `accepted` column only #391's 2 (`ExceptionHandling` is
+  off on its lane). Default lane: pass 60838 → 60840, fail 187 → 185, validate stratum 38 → 36.
+  - **The property is what was bought, not the count.** *Every single-byte opcode the decoder retains
+    is typed* is now assertable as **emptiness**, and all eight surviving validator declines in the
+    suite are relaxed SIMD — one gate, one event — so *every remaining decline has a single named
+    cause* is statable too. `TestSingleByteDeclinesAreExactlyExceptionHandling` is renamed
+    `TestTheSingleByteOpcodeSpaceIsFullyTyped` and asserts the empty set, keeping its walk extent as
+    the non-vacuity argument: *a tripwire whose subject dissolves is re-pointed, never retired.*
+  - **The reject side's discriminator is a wording pin, not a count.** A rule refusing all 14 reject
+    rows with a blanket `ErrTypeMismatch` scores 11 of 14, so the criterion leans on the three that
+    disagree — and two of them are the corpus's *only* vectors pinning `match_stack`'s operand-mismatch
+    sentence (`throw.wast:53,55`). Passing them needs `pop`'s padding rule: pad with bottom **only when
+    the frame is unreachable**, where `peekN` pads unconditionally and would print `[bot]` where the
+    reference prints `[]`. The divergence from the eight landed slices' wording is noticed-and-named as
+    #394 rather than repaired under this slice's stamp.
+  - **`try_table`'s clauses are checked in the *enclosing* context** — `check_catch c`, not `c'` — so a
+    clause's label depth is numbered from outside the `try_table` it is attached to. **No corpus vector
+    can distinguish the two readings**, since the idiomatic shape reads plausibly under either, so the
+    c/c′ pair in `exception_test.go` is the only witness in the repo that the rule is the reference's.
+  - **The out-of-scope register closes rather than shrinks, and two entries were found already
+    drained.** Limits (16) and constant expressions (24) had been taken by **riders** — #332's
+    `check_limits`, #342's `checkConstGlobals` — with nothing recorded, because a departure gets written
+    down when a *slice* takes an entry and quotes its criterion. The register had been naming four rules
+    that were written and two figures that had stopped describing anything; its only residue is two GC
+    admissions at `array.wast:302,315`. Found only by re-measuring instead of carrying: *a correct
+    repair makes its own site look settled.*
+  - **The falsification bill was run, not described** — nine mutations tabulated in `exception.go`'s
+    header with the rows that caught each. Eight caught, two of them by a *single* row each (named as
+    the file's thinnest points); the ninth, `ft.Params` appended to rather than copied, is caught by
+    **nothing anywhere** and was pre-registered as vacuous before the run confirmed it.
+  - **`unsupported` does not move and the zero is structural**, this being overhead-free product work
+    on a gated lane: what the harness can *ask* is unchanged, and the three `try_table.wast` rows
+    reading *"result 0 has type (ref null 0), which the harness cannot represent"* are a harness
+    representation gap. The reward figures with a subject are the two lane deltas above.
+  - **The ADR's own `instance.wast` mechanism claim was falsified by the measurement it forecast**, and
+    0036 is amended rather than left to read as a success. It said the three declines there cost eleven
+    downstream `no instance` rows; all three converted and the downstream rows did not — twelve of
+    them, caused by the harness's inability to build `(module instance $I1 $M)`, which fails at
+    `register` and cascades. The forecast surplus of zero was right and the reason was wrong: *a hedge
+    that is right for the wrong reason is not a successful forecast.*
 - **The validator types the tail-call proposal, and the single-byte space's last non-exception-handling
   declines close — slice 9** (`internal/validate/tailcall.go`, `tailcall_test.go`; decision 0035,
   `gate:tail-calls`, #389, part of #9). `return_call` (0x12) and `return_call_indirect` (0x13), ported
@@ -1928,6 +1980,26 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **`validate` never resolved the function indices an element segment's `ref.func` initialisers name,
+  so `(module (table funcref (elem 0 0)))` was accepted** ([#391](https://github.com/scttfrdmn/burroughs/issues/391),
+  `type:grave`; `internal/validate/module.go`, `elem_test.go`). `check_elem`'s `check_const`
+  (`valid.ml:1097-1101`) runs in every segment mode and resolves each initialiser; this package ran the
+  constant-expression check and never the lookup. Two admissions, both in files named for
+  `call_indirect` (`call_indirect.wast:1037`, `return_call_indirect.wast:600`), which is what made them
+  look like a tail-call slice's business: **a vector's file is not its stratum** — the rule runs in
+  `modulePre`, where the reference reaches it, and the code-section walk never visits an element
+  segment. Rode slice 10 per Scott's scheduling ruling rather than becoming its own artifact.
+  - **The fix and the vectors have to meet in the same branch.** A segment carries its functions either
+    as an index vector or as constant expressions, and the wat front end desugars `(elem 0 0)` into the
+    **index** form — so a resolution written only for the expression branch passes every test anyone
+    would think to write and moves no column. The first row of the battery reads `ByExpr` off the
+    decoded module rather than trusting the account.
+  - **Its accept rows are the half the board cannot score**: `(elem 0)` in a module whose only function
+    is *imported* is valid, and a rule counting `len(m.Funcs)` alone refuses it. No `assert_invalid`
+    vector can see a rule that refuses a valid module (contract §9 G-3).
+  - **It is #391's rows, not the family's, that move the default lane**, which ADR 0036 forecast from
+    the fix's own call site rather than from the gate map — grave #390's lesson applied *before* the
+    number existed instead of after it.
 - **`validate`'s `callIndirect` never checked what the table *held*, so `call_indirect` through a
   `(table 10 externref)` was accepted** ([#390](https://github.com/scttfrdmn/burroughs/issues/390),
   `type:grave`; `internal/validate/tailcall.go`). `valid.ml:563`'s

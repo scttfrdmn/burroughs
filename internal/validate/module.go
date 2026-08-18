@@ -42,9 +42,18 @@ var (
 	// ErrUnknownTag is the tag arm of `check_export`, and the tenth category of the reference's
 	// one `lookup` function (valid.ml:40-49) — the whole family is `"unknown " ^ category ^ " "
 	// ^ index`, which is why every sentinel here reads that way. Reachable only with the EH gate
-	// on; written because the arm is one of five and omitting it would be a silent accept, not a
-	// deferral.
+	// on; **written one slice before its instruction consumers**, which is what let slice 10's
+	// `tagTypeAt` land without a sentinel of its own.
 	ErrUnknownTag = errors.New("unknown tag")
+
+	// ErrNonEmptyTagResult is `check_tagtype`'s one `require` (valid.ml:194) and slice 10's only
+	// new sentinel — a tag is a thrown signature, so it has parameters and no results.
+	//
+	// Not part of the `unknown <category>` family, so it does not enter `authority_test.go`'s
+	// lookup-sentinel census: neither its identifier nor its message matches either half of that
+	// control's derived predicate, which is the correct answer rather than an escape — the census
+	// is about index-space verdicts and this is a well-formedness one.
+	ErrNonEmptyTagResult = errors.New("non-empty tag result type")
 )
 
 // The two address-type ranges per limits kind, from `check_memorytype`'s table at valid.ml:202-206
@@ -195,8 +204,10 @@ func checkTypes(m *binary.Module) error {
 //	check_type      types                    — checkTypes, below: check_subtype_sub's three rules.
 //	                                            `check_rectype`'s context *scoping* is not here —
 //	                                            see checkTypes on the retention it needs
-//	check_import    imports                  — LIMITS ONLY (memory/table descriptors)
-//	check_tag       tags                     — gated proposal
+//	check_import    imports                  — memory/table limits, and `check_tagtype` on a tag
+//	                                            import (slice 10; the func and global arms are not
+//	                                            this slice)
+//	check_tag       tags                     — slice 10, `checkTagType` below
 //	check_func      function declarations     — not this slice
 //	check_memory    defined memories          — this slice
 //	check_table     defined tables            — this slice
@@ -262,12 +273,33 @@ func modulePre(m *binary.Module) error {
 			if err := checkTableType(imp.Table); err != nil {
 				return fmt.Errorf("import %d: %w", i, err)
 			}
-		case binary.ExternFunc, binary.ExternGlobal, binary.ExternTag:
-			// `check_externtype`'s other three arms. Enumerated rather than defaulted because a
+		case binary.ExternTag:
+			// `check_externtype`'s `ExternTagT` arm (valid.ml:222-223), which is `check_tagtype` over
+			// an *imported* tag — the same rule the defined-tag loop below runs, reached one phase
+			// earlier. `tag.wast:22` is the vector, and it is the reason slice 10 could not write the
+			// rule at the `check_tag` site alone: an import arm named as "not this slice" in the table
+			// above was a live admission, exactly as that table's own note says.
+			if err := checkTagType(m, imp.Index); err != nil {
+				return fmt.Errorf("import %d: %w", i, err)
+			}
+		case binary.ExternFunc, binary.ExternGlobal:
+			// `check_externtype`'s other two arms. Enumerated rather than defaulted because a
 			// silent default here would absorb a *fourth* extern kind — a future proposal's — as
 			// "checked", which is the under-matching predicate that fails by construction. A func
-			// import's type index, a global's mutability, and a tag's attribute are real rules and
-			// are not this slice's; each is named in the phase table above.
+			// import's type index and a global's mutability are real rules and are not this slice's;
+			// each is named in the phase table above.
+		}
+	}
+	// check_tag (valid.ml:1049-1052, folded at :1157) → check_tagtype, in the reference's position:
+	// after every import, before the function declarations and the defined memories. Slice 10's
+	// module-level half, and the only rule in that family that is not an instruction rule.
+	//
+	// `m.Tags` is empty unless the exception-handling gate is on, since the decoder gates the tag
+	// section — which is why this loop's two vectors (`tag.wast:18` for here, `:22` for the import arm
+	// above) are all-on-lane rows and ADR 0036 forecasts no default-lane movement from them.
+	for i := range m.Tags {
+		if err := checkTagType(m, m.Tags[i].TypeIndex); err != nil {
+			return fmt.Errorf("tag %d: %w", i, err)
 		}
 	}
 	for i := range m.Memories {
@@ -346,12 +378,34 @@ func modulePre(m *binary.Module) error {
 		// `(item (global.get 0))` is as much a const expression as an active one's — and an *active*
 		// segment naming a missing table with a bad element expression reports the element, not the
 		// table, which is why this loop precedes the tableTypeAt call rather than following it.
+		//
+		// **The function indices those elements name are resolved here too (#391)**, which is the
+		// half of `check_const` that is a lookup rather than a type check: `check_block` walks the
+		// expression and its `RefFunc x` arm runs `func c x`, so `(module (table funcref (elem 0 0)))`
+		// is `unknown function 0` in the reference and was *accepted* here. Two admissions
+		// (`call_indirect.wast:1037`, `return_call_indirect.wast:600`), and they are **not** instruction
+		// rules — the code-section walk never visits an elem segment, which is why they were filed apart
+		// from the slice whose files they sit in. *A vector's file is not its stratum.*
+		//
+		// The reftype match against the element type stays deferred; what lands is the index
+		// resolution, in the position `check_const` reaches it, per element and after that element's
+		// const check.
 		if e.ByExpr {
 			for j := range e.Exprs {
 				if err := checkConstGlobals(m, e.Exprs[j], len(m.Globals)); err != nil {
 					return fmt.Errorf("element segment %d, element %d: %w", i, j, err)
 				}
+				if err := elemFuncsInScope(m, refFuncIndices(e.Exprs[j])); err != nil {
+					return fmt.Errorf("element segment %d, element %d: %w", i, j, err)
+				}
 			}
+		} else if err := elemFuncsInScope(m, e.Funcs); err != nil {
+			// The index form, which the wat front end desugars into `ref.func` const exprs
+			// (`declaredFuncs`'s own account of `decode.ml`'s `elem_index`) and this decoder keeps as
+			// a plain index vector. Both forms therefore have to resolve, and both admissions above
+			// arrive in *this* branch — a fix written only for the expression form would have passed
+			// every test anyone thought to write and moved no column.
+			return fmt.Errorf("element segment %d: %w", i, err)
 		}
 		if e.Mode != binary.ElemActive {
 			continue
@@ -366,6 +420,40 @@ func modulePre(m *binary.Module) error {
 		// and the reason the elem loop's absences were worth transcribing in order.
 		if err := checkConstGlobals(m, e.Offset, len(m.Globals)); err != nil {
 			return fmt.Errorf("element segment %d: %w", i, err)
+		}
+	}
+	return nil
+}
+
+// refFuncIndices is the function indices a constant expression names through `ref.func`.
+//
+// The same walk `declaredFuncs` does, and deliberately not shared with it: that one unions indices
+// from the whole module to build `context.refs` and cannot report *where* it found one, which is
+// exactly what an `unknown function N` verdict needs. Two walks over the same instruction shape
+// answering two different questions, rather than one walk whose caller has to reconstruct the
+// position.
+func refFuncIndices(body []binary.Instr) []uint32 {
+	var idxs []uint32
+	for k := range body {
+		if body[k].Prefix == 0 && body[k].Op == opRefFunc {
+			idxs = append(idxs, uint32(body[k].Imm0))
+		}
+	}
+	return idxs
+}
+
+// elemFuncsInScope is `func c x` over an element segment's function indices — the lookup half of
+// `check_elem`'s `check_const` (valid.ml:1100), and #391.
+//
+// `indexInScope` rather than `funcTypeAt`: the reference resolves the *type* here because
+// `check_block` then matches it, and that match is deferred — so this is the lookup-that-discards-
+// its-result case `tableTypeAt`'s comment describes from the other side, and taking the type would
+// mean resolving something no rule in this slice reads.
+func elemFuncsInScope(m *binary.Module, idxs []uint32) error {
+	total := m.ImportedFuncs() + len(m.Funcs)
+	for _, x := range idxs {
+		if err := indexInScope(x, total, ErrUnknownFunc); err != nil {
+			return err
 		}
 	}
 	return nil

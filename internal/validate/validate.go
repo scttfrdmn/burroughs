@@ -72,14 +72,73 @@
 // This paragraph also called slice 4 "the slice that closes the single-byte space", which is the
 // same false claim as the one above wearing a different subject and is what slice 8 closes for real.
 //
+// # The out-of-scope register, and it is empty
+//
 // Out of scope by declaration, each with its own expected string in the suite and so its own
-// measurable slice: constant expressions (24), limits (16), and exception handling. Five entries have
-// left this list and are worth naming as departures rather than deletions — SIMD lane immediates (48)
-// with slice 2, which is why `ErrInvalidLaneIndex` exists; alignment (99) with slice 3, which is why
-// `ErrAlignmentTooLarge` does; **GC subtyping (21) with slice 5**, which is why `ErrSubType` does;
-// the bulk memory/table ops with slice 5's 0xFC region; and **reference instructions across two
-// slices**, 6 taking the `ref.*`/table half and 8 the rest, which is why that entry could not depart
-// as a unit and why `ErrUndeclaredFunc` arrived one slice before the entry closed.
+// measurable slice — that was the register's form, and **every entry has now left it**. Eight
+// departures, named as departures rather than deleted, because which entry each slice took is the
+// durable half:
+//
+//   - **SIMD lane immediates (48)** with slice 2, which is why `ErrInvalidLaneIndex` exists.
+//   - **alignment (99)** with slice 3, which is why `ErrAlignmentTooLarge` does.
+//   - **GC subtyping (21)** with slice 5, which is why `ErrSubType` does — the first departure this
+//     register had to be *authorized* to make (ADR 0031; see the next paragraph).
+//   - **the bulk memory/table ops** with slice 5's 0xFC region.
+//   - **reference instructions across two slices**, 6 taking the `ref.*`/table half and 8 the rest,
+//     which is why that entry could not depart as a unit and why `ErrUndeclaredFunc` arrived one
+//     slice before the entry closed.
+//   - **exception handling** with slice 10 (`exception.go`, ADR 0036) — the second authorized
+//     departure, and the one that closed the whole single-byte opcode space. Its criterion was 25
+//     declines and 4 admissions, and it closed at exactly 29 in the all-gates-on lane.
+//   - **limits (16)** with **#332**, whose subject was the module-level pass and not this entry:
+//     `ErrMemorySize` and `ErrLimitsMinMax` are `check_limits`, and they landed as riders.
+//   - **constant expressions (24)** across two packages and neither of them a slice — the decoder's
+//     `binary.ErrConstExprRequired` refuses a non-constant instruction in a constant position, and
+//     `checkConstGlobals` (#342) is `is_const`'s `GlobalGet` arm. **Two rows of it survive as
+//     admissions** and they are named below rather than left inside a departure.
+//
+// **The last two entries were drained by riders, which is why this register went stale twice over.**
+// A departure gets recorded when a *slice* takes an entry, because a slice writes an ADR and quotes
+// its criterion; nothing recorded either of these, so the register kept naming two rules that were
+// written and two figures that had stopped describing anything. Slice 10 found it while re-measuring
+// rather than carrying the surviving figures, which is the only reason it is stated here: a correct
+// repair makes its own site look settled, and *nothing was wrong* at either fix site.
+//
+// # The re-measurement, and it is per lane because the carried figures were not
+//
+// By expected string over the whole `assert_invalid` population, through the board's own entry point.
+// `total` is the corpus population; the rest is where those vectors arrive:
+//
+//	                                                 default lane          all-gates-on lane
+//	constant expression required                     22 pass, 2 gated      22 pass, 2 accepted
+//	memory size                                      12 pass, 4 gated      16 pass
+//	size minimum must not be greater than maximum     3 pass, 3 gated       6 pass
+//
+// Both carried figures were *population* sizes — 24 and 16 are still exactly right as populations —
+// and that is what made them unreadable as work: the default lane's fail column had nothing from
+// either class, so the figures were describing corpus rows rather than debt, and a gated row and a
+// passing row are indistinguishable in a total. **The two surviving admissions are
+// `array.wast:302,315`**, GC array constant expressions, which the default lane never asks because
+// the GC gate is off; they are the whole of the constant-expressions entry that is still owed, and a
+// register entry reading "constant expressions (24)" priced them at twelve times their size.
+//
+// # What replaces the register
+//
+// **No `assert_invalid` vector on the board is declined.** That is the property this
+// register decayed into being a bad approximation of — the residual 8 declines in the validate
+// stratum are *module-definition* declines on relaxed SIMD, whose gate is its own event (ADR 0025) —
+// and it is what "out of scope" was reaching for when the register was written and the validator had
+// one slice. A vocabulary boundary is worth declaring while there is a vocabulary to be outside of;
+// once every vector gets a verdict, what is left is admissions, and an admission is not a declaration
+// this file can make about itself. `TestTheSingleByteOpcodeSpaceIsFullyTyped` pins the instruction
+// half of that closure, and the `assert_invalid` half is `declined: 0` in both rows of
+// `TestAssertInvalidDestinationLedgerCloses` — pinned exactly, so it fails if a vector ever declines
+// again.
+//
+// **The pin is the default lane's.** The all-gates-on lane measured 0 declines too when this was
+// written, and that half is *unpinned*: the ledger runs one lane, and the figure is stated as a
+// measurement rather than a property so a reader does not inherit a guarantee from a sentence. Pinning
+// it means a second ledger run and is an instrument's own PR, not this one's rider.
 //
 // # Slice 5: the subtype relation
 //
@@ -107,15 +166,24 @@
 // here — it is refused with ErrUnsupported." The measurement says otherwise, and the distinction
 // it forces is worth having.
 //
-// An out-of-scope rule attached to an *instruction* is declined, because the walk meets the
-// instruction and has nothing to say about it: 391 of the corpus's `assert_invalid` vectors land
+// An out-of-scope rule attached to an *instruction* was declined, because the walk met the
+// instruction and had nothing to say about it: 391 of the corpus's `assert_invalid` vectors landed
 // that way, each naming its opcode — the board's own `declined:` buckets under the `assert_invalid`
 // forms, summed (the bare form's key spells `assert_invalid (module) declined:` since #364),
-// which is `validateDeclineCeiling`, not a separately-counted figure that could drift from it. An out-of-scope rule attached to anything the code-section
+// which is `validateDeclineCeiling`, not a separately-counted figure that could drift from it.
+//
+// **That half is empty**, and the tense above is past for that reason rather than deleted, because the
+// two-way division is what the paragraph is for and one side of it having drained does not make the
+// division wrong. 391 → 30 with slice 5's 0xFC region, 30 → 0 with the reference-type slice (#359) on
+// the default lane, and the gated remainder — 25 exception-handling rows the default lane never asked
+// — with slice 10. `validateDeclineCeiling` is where the figure lives and it now bounds the *other*
+// command kinds, since every remaining decline board-wide is a module definition on relaxed SIMD.
+//
+// An out-of-scope rule attached to anything the code-section
 // walk never visits is **accepted**, because there is nothing to decline — limits, duplicate
 // export names, and constant expressions in globals and segment offsets are not instructions this
-// package refuses to type, they are questions it never asks. 104 vectors are accepted for that
-// reason.
+// package refuses to type, they are questions it never asks. 104 vectors were accepted for that
+// reason; the count is `validateAdmitCeiling` and its own history is two paragraphs down.
 //
 // Those 104 are the admission stratum, and the harness reports them as **fails with a named
 // cause**, not as passes — which is the property the original claim was reaching for and stated

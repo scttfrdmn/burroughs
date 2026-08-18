@@ -219,6 +219,20 @@ func (v *validator) instr(i int, in binary.Instr) error {
 
 	case opReturnCallIndirect:
 		return v.returnCallIndirect(in)
+
+	// Slice 10 (#393, ADR 0036): the exception-handling family, in `exception.go`. **With these three
+	// arms this switch and the numeric fallthrough below cover the single-byte space**, so the
+	// prefixed-region dispatch above is the only place a decline can still come from — which is what
+	// `ref_test.go`'s emptiness control asserts, and the reason it could stop being renamed once per
+	// slice.
+	case opThrow:
+		return v.throwInstr(uint32(in.Imm0))
+
+	case opThrowRef:
+		return v.throwRef()
+
+	case opTryTable:
+		return v.tryTable(i, in)
 	}
 
 	// Not structural: the numeric, comparison, conversion and memory-access families, whose
@@ -247,20 +261,31 @@ func (v *validator) openBlock(i int, in binary.Instr) error {
 			return err
 		}
 	}
+	return v.enterBlock(i, in.Op, params, results)
+}
+
+// enterBlock is the frame push every structural opener shares: consume the parameters, open the
+// frame, put the parameters back inside it, and file the arity.
+//
+// **Split out of openBlock for `try_table`** (slice 10), whose only difference from `block` is that
+// its handler clauses are checked in the enclosing context first — so it cannot call openBlock, and
+// duplicating the push would put the loop-label rule below in two places. `kind` rather than the
+// whole instruction, because that is all any of this reads.
+func (v *validator) enterBlock(i int, kind uint32, params, results []binary.ValType) error {
 	// The parameters move from the enclosing stack into the new frame.
 	if err := v.popExpectAll(params); err != nil {
 		return err
 	}
 
 	labelTypes := results
-	if in.Op == opLoop {
+	if kind == opLoop {
 		// A branch to a loop re-enters it, so it carries the loop's *parameters*. Getting this
 		// wrong is invisible on every block-shaped vector and on every loop whose params and
 		// results coincide, which is most of them.
 		labelTypes = params
 	}
 
-	v.pushFrame(in.Op, labelTypes, results)
+	v.pushFrame(kind, labelTypes, results)
 	v.top().params = params
 	v.pushAll(params)
 
