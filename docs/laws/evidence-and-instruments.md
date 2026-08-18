@@ -488,6 +488,27 @@ reach is a law out of context.
   law was already authorized on the wrong figure; ruling on the classification:
   Scott, PR #339.)
 
+  **Tenth specimen: a glob is not the corpus, and the claim it carried survives only
+  once it is scoped to what the glob actually saw.** #394's body argued from
+  `grep -rn "instruction requires" testdata/spec/*.wast` — "exactly those two rows in
+  the whole corpus". The tree holds **288 `.wast` files, not 257**: `legacy/` and
+  `proposals/` sit under the directory the glob names and outside what it matches, and
+  they carry **seven more** rows in that wording, one of them a spelling
+  (`type mismatch: block requires [] but stack has [i32]`) this validator produces
+  nowhere. The sentence was written as a claim about the corpus and is only true as a
+  claim about the **board** — which it happens to be, because `testenv.SuitePaths`
+  globs `filepath.Join(suiteDir, "*.wast")` and `boardFiles` is built from it, so the
+  subdirectories are outside the board by construction. **That disposition is the
+  reusable part**: the repair is to *scope* the claim to the population the instrument
+  had, not to delete it, because deleting it discards a true statement along with the
+  false one, and not to widen it silently either, because then nothing records that the
+  original reading was wrong. Scott's classification on the PR #397 review — the fourth
+  instance of *a pattern standing in for a population*, after the single-line `grep`
+  that undercounted the `unknown table` family, the eighth specimen's shell glob, and
+  the ninth's character count. What makes it the same defect rather than a new one is
+  that in every case a **convenient matcher's silence was read as the space's
+  emptiness**, and the tell is available every time for the price of one wider query.
+
   The two failure modes are worth keeping separate because they are found
   differently. An **assertion** defect is found by falsification — break it, watch
   it die. A **coverage** defect is found only by measuring the instrument's

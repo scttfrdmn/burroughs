@@ -77,8 +77,24 @@ reach is a law out of context.
       somewhere other than the bucket's name, the PR says so and the issue title is corrected —
       otherwise the tracker accumulates precise-sounding titles that send the next reader to the
       wrong layer, which is the cost #194 actually carried.
+    - **An issue's stated *plan* is subject to the same rule as its key and its title, and it is
+      the expensive one.** A title sends one reader to the wrong layer; a plan sends the *work*
+      there. #394 was filed to converge an operand-mismatch message "arm by arm, board re-measured
+      after each" across the eight landed slices, because eight arms is where the divergence
+      **appears**. It lives in two `fmt.Errorf`s in `popExpect` (`stack.go:211,214`), reached by
+      **62 call sites across seven files**, so the prescribed ordering was not merely wasteful but
+      impossible: converging one arm's wording means duplicating the helper or moving that arm off
+      it, and both are worse than the divergence. The plan was written from the symptom's location
+      by an author who had read the arms and not the helper. **What catches it is doing the census
+      before the commits** — the issue's own step 1, which is why an order of work that begins with
+      a measurement is worth more than one that begins with a schedule. Scott's classification on
+      the #395 relay: the third instance, after #194's title and `check_elem`'s file-as-rule-owner
+      proxy, where *a vector's file is not its stratum* had the same shape one layer down.
     (Ruling: Scott, on the 17-head slice's relay: *"Write that into the law when it lands —
-    without it the rule invites exactly the mislabel #194 carried."*)
+    without it the rule invites exactly the mislabel #194 carried."* Third bullet on the PR #397
+    review: *"#394's plan was written from where the divergence appears — eight arms — rather than
+    where it lives, two lines in `popExpect`. Doing the census before the commits is what keeps
+    catching it."*)
 
 ### Bucket size estimates the reward, not the job.
 
