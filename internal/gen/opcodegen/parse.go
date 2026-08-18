@@ -27,7 +27,7 @@ type Table struct {
 // (moved file, changed indentation, upstream refactor) produces zero arms and zero
 // unrecognized lines, and a drift check comparing an empty table against an empty
 // committed table agrees perfectly: a green with the mechanism intact and asserting
-// nothing. That is grave #29's shape relocated into a code generator.
+// nothing. That is grave #407's shape relocated into a code generator.
 //
 // The floors are set below the counts measured at bdd7164 with room for upstream to
 // *remove* an opcode without a false alarm, but far above zero and far above "a

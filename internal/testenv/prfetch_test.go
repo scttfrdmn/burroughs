@@ -193,6 +193,16 @@ func TestCitationLookupFailureIsNotAVerdict(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// **The fixture's number is assembled at run time and never written as `#` plus digits, and this
+	// file is the reason citecheck's header warns about it.** The first draft spelled the literal, and
+	// citecheck's own diff scan resolved it and reported `does not resolve: no such issue or PR in this
+	// repo` — correctly. The hazard is not the checker's source file; it is *any* file the diff
+	// touches, and a test whose whole subject is an unresolvable citation is the sharpest case of it:
+	// the fixture has to be citation-shaped to the extractor and must not be citation-shaped to the
+	// grep over the diff that adds it. Concatenation is the whole trick, and it is spelled out here
+	// because the obvious tidy-up is to inline it.
+	const unresolvable = "9876"
+
 	// The shim answers `gh pr view` with a body citing one issue and fails `gh api` — so the fetch
 	// half succeeds and the resolver half is what breaks, which is the seam #410 is about. A shim
 	// that failed both would be re-testing TestPRFetchFailureIsNeverAPass.
@@ -200,7 +210,7 @@ func TestCitationLookupFailureIsNotAVerdict(t *testing.T) {
 		return "#!/bin/sh\n" +
 			"case \"$1\" in\n" +
 			"api) echo '" + apiStderr + "' >&2; exit 1 ;;\n" +
-			"*) printf 'A title.\\nA body line citing #9876.\\n' ;;\n" +
+			"*) printf 'A title.\\nA body line citing #" + unresolvable + ".\\n' ;;\n" +
 			"esac\n"
 	}
 
@@ -218,7 +228,7 @@ func TestCitationLookupFailureIsNotAVerdict(t *testing.T) {
 		{
 			name:    "a transport failure says the question was never asked",
 			stderr:  "error connecting to api.github.com: dial tcp: lookup failed",
-			wantSub: "could not resolve #9876 -- the request failed",
+			wantSub: "could not resolve #" + unresolvable + " -- the request failed",
 			// The verdict's wording and its remedy, both asserted absent. The remedy is the half
 			// that costs something: acting on "file a replacement artifact" when the number was
 			// fine is how a duplicate gets minted.

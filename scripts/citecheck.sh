@@ -30,7 +30,7 @@
 #
 # ## What is binding and what is printed
 #
-# Four checks, and they are not equally strong. Saying which is which is the point, because a
+# Five checks, and they are not equally strong. Saying which is which is the point, because a
 # tool that gates on existence while its name suggests it gates on correctness is testimony
 # about itself:
 #
@@ -76,6 +76,87 @@
 #      failed #337 retroactively. Body and comment are different populations: "never intentional"
 #      is true of one and false of the other. Recorded because an over-matching guard fails loudly
 #      and this one did, which is the only reason the distinction got drawn before merge.
+#   5. **A closure claim in the tree names a *closed* issue — binding, rides check 2's request,
+#      diff modes only.** A comment saying `closing #N` or `closes #N` asserts that the code it sits
+#      beside dispatched #N. That is checkable, and #325's specimen is `sections.go:1238` — *"Retained
+#      in Index, not a new field, closing #204"* — written while #204 was open. The close was a side
+#      effect of prose, and **prose is not a channel the tracker reads**: the citation ran one way
+#      and nothing checked the other, so a fixed-but-open issue sat in the queue that "what is the
+#      next product PR" is chosen from. #325 sampled three engine-side issues and found three
+#      already fixed; the cost is a measurement per candidate that evaporates on contact, and for a
+#      `type:grave` it is worse, since a grave's lesson lives in its **closing** comment and
+#      `label:type:grave --state closed` — the graveyard — under-reports by exactly these.
+#
+#      **It needs the network and costs no extra request**: `.state` comes back in the same
+#      `gh api` payload check 2 already fetches per citation. #325's option (b) estimated "no
+#      network" and that estimate was wrong in the cheap direction — worth saying, because a
+#      forecast about an instrument's cost is as falsifiable as any other. The field is *validated*
+#      rather than trusted: a `state` that is neither `open` nor `closed` is reported as a mechanism
+#      failure, because the value is read positionally out of a tab-joined `--jq` and a reordered
+#      field would otherwise turn every closure claim into a silent pass.
+#
+#      **The verb set is English's and not GitHub's, and it excludes `resolve`.** `closecheck.sh`
+#      scans a PR body for the keywords *GitHub* acts on, so its set is GitHub's by necessity; here
+#      the actor is a reader and the defect is a false sentence, so `closing` — which GitHub ignores,
+#      and which is the specimen's own word — has to be in. `resolve` is out, measured rather than
+#      argued: over the tree it adds exactly one site, `call_test.go:482`'s "this reduction resolves
+#      #164's four vectors down to two", which claims a reduction and not a closure. It is also this
+#      script's own word for what it does to a citation, so admitting it would point the arm at the
+#      file that hosts it.
+#
+#      **A conditional or negated claim is exempt and prints a `note`.** "would fix #411", "cannot
+#      close #N", "to fix #N" assert nothing about state; a modal before the verb is what separates
+#      a claim of accomplished closure from a plan or a denial. The exemption is *printed and
+#      counted*, never dropped, on the precedent the `verb` and `qualified` arms set in this file: a
+#      token that vanished from the output would be an exemption mechanism, and the whole cost of an
+#      exclusion arm is that whatever it exempts stops being checked.
+#
+#      **Diff modes only, which is the mirror of check 4 and for the mirror reason.** A closing
+#      keyword in a PR *body* is not a claim to be verified — `closecheck.sh` forbids it outright
+#      (grave #314: a squash message is derived from the title and body, so `Filed, not fixed: #310`
+#      closed #310). Asking whether its target is open would be a second question about a token that
+#      is already banned. Body and tree are different populations with different rules for the same
+#      word, so check 4 runs in `--pr` alone and check 5 in the diff modes alone, and each prints a
+#      not-applicable line in the other so neither reads as a pass it did not compute.
+#
+#      **The falsification bill, and it found a defect a reader could not have.** Each mutation was
+#      applied, *confirmed applied by printing the mutated line*, run, and reverted — the confirmation
+#      step because two neuters on the sibling #411 control silently failed to apply and a mutation
+#      that never landed is indistinguishable from a tolerated one at the exit code:
+#
+#      (Every row below names its fixture's *form* and never spells it, for this arm's own reason: a
+#      literal `closes` beside a literal number is scanned by the run that documents it, and the
+#      target used throughout was an open issue, so the bill would fail check 5 on itself. The
+#      citation warning below records the same trap costing three dangling citations in a
+#      `CHANGELOG.md` paragraph; the fixtures used #411 and an unresolvable five-digit number.)
+#
+#        C1   the plain claim, on an open issue         the verdict itself
+#        C2   the verb behind `to`                      the modal exemption (must stay a note)
+#        C3   the verb with a colon before the number   the retained colon — grave #314's spelling
+#        C4   verb and number on two added lines        the paragraph join
+#        C5   `.state` and `.title` swapped in the jq   the positional-field guard
+#        C5b  C5 with the guard deleted                 the guard is not decoration
+#        C6   the claim on a number that 404s           the coverage arm (`3 of 4`)
+#        C7   the closing-row strip removed             grave #416's summary identity
+#        C8   the verb `resolve`, in a claim            the measured exclusion is in force, not just
+#                                                      documented — no verdict, no note, no count
+#        C9   `--pr 409`                                the mode boundary
+#
+#      **C1 failed on the first run: the check printed its whole FAIL paragraph and exited 0.** The
+#      `fail=1` was missing, so the finding reached the mechanism channel and never reached the
+#      verdict channel — a red diagnosis inside a green CI, which is grave #365's shape inside a
+#      check written to catch an unverified claim. No amount of reading the output finds it; the word
+#      FAIL was all there. C5b is the same lesson from the other end: with the guard removed and the
+#      field swapped, the fixture's citation printed `ok … claimed closed by this diff, and CI: the
+#      PR-body scans …` and exited 0 — a state comparison against a title, agreeing with nothing.
+#      C7's arithmetic is the record worth keeping in numbers: 28 tokens against categories summing
+#      to 22.
+#
+#      Prose *about* this defect instantiates it, exactly as the citation warning below says: the
+#      `CHANGELOG.md` paragraph recording #325 quotes *"closed #183"* and *"closed with #210"*, and
+#      is scanned. Both resolve closed, so it passes — by luck of the targets' state, not by design.
+#      A future writeup quoting a claim about a still-open issue fails, and the remedy is the one
+#      that arm already implies: describe the form, or name the number outside the verb's reach.
 #
 # What is deliberately **not** gated: whether the resolved title matches the sentence citing it.
 # There is no general oracle for that — agreement between a citation's context and an issue's title
@@ -84,9 +165,11 @@
 # reviewer and the CI log, and the verdict channel carries only what a machine can decide. Verdict
 # channel and mechanism channel are different instruments; this script uses both and says which.
 #
-# Checks 3 and 4 are the exceptions that prove the shape of the rule rather than weakening it: both
-# are title-*shaped* questions that turn out to have non-title answers — a label, and an integer
-# comparison — so neither is the judgement the printed title is there for. The pattern worth
+# Checks 3, 4 and 5 are the exceptions that prove the shape of the rule rather than weakening it:
+# all three are title-*shaped* questions that turn out to have non-title answers — a label, an
+# integer comparison, and a state field — so none is the judgement the printed title is there for.
+# Check 5 is the clearest case, since "does this comment's claim about #N hold" sounds like it needs
+# a reading of the sentence and needs one boolean. The pattern worth
 # reusing: when a printed field keeps catching the same class by eye, look for the sub-claim inside
 # it that a machine can decide, and assert that. Reading the printed title has caught or would have
 # caught four guessed numbers; the fourth is what promoted this sub-claim out of the print. (Directive:
@@ -139,6 +222,12 @@
 #   of them — so four digits is what a citation looks like and anything shorter is prose.
 #   A 2- or 3-digit run is neither shape and is reported as such (phase 1b) rather than dropped,
 #   because dropping it would trade the over-match for the silent under-match.
+# * **A closure claim triggers on the verb immediately before the citation**, with the same
+#   sentence-ish break stripped as the grave rule — but the break class keeps the **colon**, where
+#   the grave rule strips it. `fixed: #310` is grave #314's own specimen, so a strip that ate the
+#   colon would exempt the exact form the defect was written in. The adjacency is otherwise the
+#   grave rule's, including the paragraph join, so a claim wrapped across two added lines is caught
+#   here where `closecheck.sh`'s line-at-a-time scan states an under-match on it.
 # * Deleted lines are not scanned. A diff is responsible for the citations it *adds*; the ones it
 #   removes are the previous author's, and re-litigating them turns every edit into a sweep.
 #
@@ -148,6 +237,15 @@
 # 10 — five graves missing the label, five citations naming the wrong artifact — triaged in #286.
 # A checker that starts clean on a corpus it never read would be claiming coverage it does not
 # have, which is the law it was written under.
+#
+# **Check 5 was swept the same way and is reported the same way, including the part that makes it
+# look weaker.** 16 closure-claim sites across the tree, 9 distinct targets (#19 ×2, #127 ×2, #183,
+# #204, #210, #284 ×2, #310 ×3, #373 ×2), **all closed** — so the sweep produced zero findings, and
+# that is a fact about when it ran and not about the check. #325's specimen `closing #204` is in the
+# corpus and would have failed on the day it was written; #204 has since been closed, by the audit
+# #325 asked for. The one site the check has anything to say about today is a `note`: this session's
+# own "would fix #411", exempt as conditional, with #411 open. A zero-finding sweep is worth
+# printing because the alternative is a reader inferring the population was never read.
 
 set -eu
 
@@ -254,7 +352,7 @@ extract() {
 	function emit(kind, n) {
 		if (length(n) >= 1 && length(n) <= 4) print kind " " n
 	}
-	function scan(s,   t, tok, gap, num, isgrave, prevgrave, tail) {
+	function scan(s,   t, tok, gap, num, isgrave, prevgrave, tail, ctail) {
 		# ADR citations first: `decision 0025`, `decisions 0025`, `ADR 0025`. **Four digits,
 		# because that is the filename convention** — see the trigger-coverage note above on why a
 		# one-to-three digit run after the word is a sub-decision reference and not a citation.
@@ -372,6 +470,28 @@ extract() {
 			# ... or a continuation of a `graves #78/#105` run.
 			if (!isgrave && prevgrave && gap ~ /^[ ]*([\/,]|and)[ ]*$/) isgrave = 1
 
+			# **Check 5s trigger, on its own tail, because the break class differs.**
+			# The grave rule strips through the last `.`, `;` or `:`; this one keeps
+			# the colon, since `fixed: #310` is grave #314s own form and a strip that
+			# ate the colon would exempt the exact spelling the defect was written in.
+			# Emitted as an *extra* row about a token that already has one, which is
+			# why the shell strips these before taking the total: the summary identity
+			# grave #416 exists for counts what the extractor matched, once each.
+			#
+			# A modal or a negation before the verb means the sentence asserts nothing
+			# about state -- "would fix", "cannot close", "to fix" -- so it is emitted
+			# as exempt and printed, never dropped. The cost of any exclusion arm is
+			# that whatever it exempts stops being checked, and this file has two
+			# older arms (verb, qualified) that pay it the same way.
+			ctail = tolower(gap)
+			sub(/^.*[.;]/, "", ctail)
+			if (ctail ~ /(clos(e[sd]?|ing)|fix(e[sd])?)[ ]*:?[ ]*$/) {
+				if (ctail ~ /(would|could|should|shall|will|might|may|must|to|cannot|not|never|nor|if|when|once)[ ]+(clos(e[sd]?|ing)|fix(e[sd])?)[ ]*:?[ ]*$/)
+					emit("closingif", num)
+				else
+					emit("closing", num)
+			}
+
 			if (length(num) < 1 || length(num) > 4) { prevgrave = 0; continue }
 			emit(isgrave ? "grave" : "issue", num)
 			prevgrave = isgrave
@@ -392,6 +512,23 @@ extract() {
 }
 
 cites="$(printf '%s\n' "$diffout" | extract | sort -u)"
+
+# Check 5's population, split off *before* the total is taken. A closure claim is an extra row about
+# a token that already has an `issue` or `grave` row, so leaving it in `cites` would inflate `ncites`
+# past the sum of the five categories — which is precisely the identity grave #416 exists for. Held
+# as its own stream for the same reason `prose_nums` is: two populations, one grammar, and a verdict
+# a reader can attribute to the population it came from.
+#
+# Diff modes only. A closing keyword in a PR *body* is not a claim to verify — `closecheck.sh`
+# forbids it outright (grave #314), so asking whether its target is open would be a second question
+# about a banned token. The rows are stripped in both modes and consulted in one.
+closing_nums=""
+closing_exempt=""
+if [ "$prmode" -eq 0 ]; then
+	closing_nums="$(printf '%s\n' "$cites" | awk '$1 == "closing" { print $2 }' | sort -u)"
+	closing_exempt="$(printf '%s\n' "$cites" | awk '$1 == "closingif" { print $2 }' | sort -u)"
+fi
+cites="$(printf '%s\n' "$cites" | grep -v '^closing' || true)"
 ncites="$(printf '%s' "$cites" | grep -c '' || true)"
 
 # Check 4's population: the body's prose, with fenced code blocks removed. See the header — a fence
@@ -422,6 +559,8 @@ issues=0
 graves=0
 foreigns=0
 verbs=0
+nclosing=0
+nexempt=0
 
 # Phase 0a: Go format verbs whose `#` flag looked like a citation (#308). Not resolved, because
 # there is nothing to resolve; printed because a silently dropped token is an exemption mechanism.
@@ -510,8 +649,11 @@ if [ "$need_gh" -gt 0 ]; then
 		# could not ask its question does not report green — applied at the granularity of one
 		# citation, which is where it was abandoned.
 		err="$(mktemp)"
+		# `.state` is check 5's whole answer and rides this request rather than adding one; the
+		# **title stays last**, because it is the only free-text field and a tab inside it would
+		# shift every field after it.
 		if ! meta="$(gh api "repos/{owner}/{repo}/issues/$n" \
-			--jq '(if .pull_request then "pr" else "issue" end) + "\t" + ([.labels[].name] | join(",")) + "\t" + .title' 2>"$err")"; then
+			--jq '(if .pull_request then "pr" else "issue" end) + "\t" + ([.labels[].name] | join(",")) + "\t" + .state + "\t" + .title' 2>"$err")"; then
 			# **HTTP 404 is the verdict; anything else is a mechanism failure.** Both exit nonzero,
 			# because neither is a pass — but only one of them is a statement about the number, and
 			# only one of them has "repoint the citation" as its remedy.
@@ -540,7 +682,57 @@ if [ "$need_gh" -gt 0 ]; then
 		rm -f "$err"
 		what="$(printf '%s' "$meta" | cut -f1)"
 		labels="$(printf '%s' "$meta" | cut -f2)"
-		title="$(printf '%s' "$meta" | cut -f3)"
+		state="$(printf '%s' "$meta" | cut -f3)"
+		title="$(printf '%s' "$meta" | cut -f4)"
+		# **The state field is validated, not trusted, and that is not defensiveness about GitHub.**
+		# It is read *positionally* out of a tab-joined `--jq`, so a field added or reordered above
+		# it silently hands check 5 a label list or a title — neither of which equals `open`, so
+		# every closure claim in the tree would start passing and the check would report a green it
+		# never computed. A mechanism failure, in the words this file already uses for one.
+		case "$state" in
+		open | closed) ;;
+		*)
+			echo "FAIL  #$n -> the tracker reported state \"$state\", which is neither open nor closed."
+			echo "      Check 5 reads .state positionally out of this script's \`--jq\`; a reordered"
+			echo "      or added field lands here. This is a mechanism failure and not a verdict"
+			echo "      about #$n — nothing below has been established about whether it is closed."
+			fail=1
+			continue
+			;;
+		esac
+		# Check 5, above the kind arms for check 4's reason: a closure claim can sit on a grave or on
+		# a plain issue, and whether the label is right is a different question from whether the
+		# sentence is true.
+		if printf '%s\n' "$closing_nums" | grep -qx "$n"; then
+			nclosing=$((nclosing + 1))
+			if [ "$state" = open ]; then
+				echo "FAIL  #$n -> the diff claims to close it, and #$n is OPEN: $title"
+				echo "      A comment saying it closes #$n asserts the code beside it dispatched #$n."
+				echo "      Prose is not a channel the tracker reads, so the claim went one way and"
+				echo "      nothing came back: the issue stays in the queue that the next product PR"
+				echo "      is chosen from, and if it is a grave its lesson has nowhere to live, since"
+				echo "      that goes in the *closing* comment (#325). Two remedies: close #$n — from"
+				echo "      the PR, never by a keyword in the body, which is banned (closecheck.sh) —"
+				echo "      or, if the work is not actually done, say what the code does instead."
+				# **This line was missing in the first draft and the neuter is what found it.** The
+				# check printed the whole FAIL paragraph above and the script exited 0: the finding
+				# reached the mechanism channel and never reached the verdict channel, so CI would
+				# have been green with the diagnosis in the log. It is the shape of grave #365 in a
+				# check written to catch a claim nobody verified, and a reader of the output could
+				# not have seen it — the words "FAIL" were all there. Only the exit code was wrong,
+				# and only running the mutation reads the exit code.
+				fail=1
+			else
+				echo "ok    #$n -> claimed closed by this diff, and $state: $title"
+			fi
+		fi
+		if printf '%s\n' "$closing_exempt" | grep -qx "$n"; then
+			nexempt=$((nexempt + 1))
+			echo "note  #$n -> a conditional or negated closure claim, $state — exempt from check 5:"
+			echo "      a modal before the verb (\"would fix\", \"cannot close\") asserts nothing about"
+			echo "      state. Printed rather than dropped, because an exemption nobody sees is an"
+			echo "      exemption mechanism."
+		fi
 		# Check 4, before the kind-specific arms: a self-citation resolves like any other and is
 		# wrong whatever kind it names, so the comparison belongs above the branch rather than
 		# duplicated inside both of its arms.
@@ -609,6 +801,30 @@ else
 	echo "citecheck: self-citation check not applicable to a diff — a comment citing the PR it was" \
 		"written in is this repo's attribution convention, so check 4's population is the body" \
 		"alone. Run \`citecheck.sh --pr <n>\` for it; CI does, on the pull_request event."
+fi
+
+# Check 5's own domain, on its own line and for check 4's reason: it runs in exactly one of the two
+# modes, and *a skip is not a verdict*. Zero claims is a legitimate state and is said in those words,
+# because "no closure claim in this diff" and "no claim that was wrong" are different facts — the
+# same distinction the zero-citations line at the bottom draws.
+if [ "$prmode" -eq 1 ]; then
+	echo "citecheck: closure-claim check not applicable to a PR body — a closing keyword there is" \
+		"forbidden outright rather than verified (grave #314, closecheck.sh), so check 5's" \
+		"population is the tree alone. It runs in the diff and --worktree modes; CI does both."
+else
+	# The extractor's count beside the resolver's, because they can disagree and the disagreement is
+	# invisible otherwise: a claim whose number is dropped before check 5 runs — an unresolvable
+	# lookup, a state field that failed validation — leaves a claim nobody asked about, and the
+	# printed count would then be a claim about coverage this check does not have.
+	nclaims="$(printf '%s' "$closing_nums" | grep -c '' || true)"
+	nexempts="$(printf '%s' "$closing_exempt" | grep -c '' || true)"
+	printf 'citecheck: closure-claim check ran over %d of %d claim(s) in this diff, %d of %d exempt as conditional.\n' \
+		"$nclosing" "$nclaims" "$nexempt" "$nexempts"
+	if [ "$nclosing" -ne "$nclaims" ] || [ "$nexempt" -ne "$nexempts" ]; then
+		echo "citecheck: check 5 did not reach every closure claim the extractor found — see the" \
+			"failures above for which citation was dropped before its state could be read."
+		fail=1
+	fi
 fi
 
 if [ "$fail" -ne 0 ]; then

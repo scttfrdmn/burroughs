@@ -434,6 +434,45 @@ weakly-ordered platform.
     count is printed beside its verdict, so a population that collapsed to zero cannot read as a
     pass. All three paths watched die: prose self-citation exit 1, fenced quotation `note` and exit
     0, odd fence exit 1.
+- **`scripts/citecheck.sh` gains a fifth check: a closure claim in the tree must name a *closed*
+  issue** ([#325](https://github.com/scttfrdmn/burroughs/issues/325) option (b), charged to #413).
+  The existing four run from the tree outward; this is the direction back. A comment saying it closes
+  `#N` asserts the code beside it dispatched `#N`, and **prose is not a channel the tracker reads** —
+  #325's specimen is `sections.go:1238`'s *"Retained in Index, not a new field, closing #204"*, written
+  while #204 was open. The cost is not untidiness: the queue is what the next product PR is chosen
+  from, #325 sampled three engine-side issues and found three already fixed, and a `type:grave` fixed
+  but open has its lesson nowhere, since that goes in the **closing** comment.
+  - **It needs the network and costs no extra request** — `.state` rides the `gh api` payload check 2
+    already fetches per citation. #325's option (b) forecast "no network"; the forecast was wrong in
+    the cheap direction, and it is recorded because *cheap is a grammar claim*.
+  - **The verb set is English's, not GitHub's, and `resolve` is excluded by measurement.**
+    `closecheck.sh` scans for what GitHub *acts* on, so its set is GitHub's; here the actor is a reader
+    and the defect is a false sentence, so `closing` — which GitHub ignores and which is the specimen's
+    own word — has to be in. `resolve` adds exactly one site tree-wide, `call_test.go:482`'s "this
+    reduction resolves #164's four vectors down to two", which claims a reduction and not a closure;
+    it is also this script's own word for what it does to a citation. **A conditional or negated claim
+    is exempt and prints a `note`**, never dropped, on this file's own precedent that a token vanishing
+    from the output is an exemption mechanism.
+  - **Diff modes only, the mirror of check 4 and for the mirror reason.** A closing keyword in a PR
+    *body* is forbidden outright rather than verified (grave #314), so asking whether its target is
+    open would be a second question about a banned token. Each check prints a not-applicable line in
+    the other's mode, because *a skip is not a verdict*.
+  - **The one-time sweep found nothing, and that is a fact about when it ran.** 16 closure-claim sites,
+    9 distinct targets, all closed — #204 among them, closed by the audit #325 asked for, so the
+    specimen would have failed on the day it was written. Reported anyway: a checker that starts clean
+    on a corpus it never read is claiming coverage it does not have.
+  - **The bill's first run printed the whole `FAIL` paragraph and exited 0.** The `fail=1` was missing,
+    so the finding reached the mechanism channel and never reached the verdict channel — grave #365's
+    shape inside a check written to catch an unverified claim, and unfindable by reading the output,
+    since the word FAIL was all there. C5b is the same lesson inverted: with the state guard deleted
+    and the `--jq` fields swapped, the fixture printed `ok … claimed closed by this diff` and exited 0,
+    comparing a state against a title. Nine mutations, each **confirmed applied by printing the mutated
+    line** before its result was read, because two neuters on #411's control had silently failed to
+    apply and a mutation that never landed is indistinguishable from a tolerated one at the exit code.
+  - The bill is written naming each fixture's *form* and never spelling it: a literal verb beside a
+    literal number is scanned by the run that documents it, and the fixtures pointed at an open issue.
+    Same trap as the three dangling citations a `CHANGELOG.md` paragraph once minted while explaining
+    dangling citations.
 
 - **`scripts/xcheck-amd64.sh`: the pre-push cross-architecture check, on hardware.** Contract §9 wants
   both memory models; CI gives both on push, and this is the half that answers before a claim is written
@@ -2141,6 +2180,20 @@ weakly-ordered platform.
   **What this does not fix, stated rather than footnoted:** nothing re-scans between the last event and
   the merge click, so an edit-then-immediately-merge still races the run. Closing that means a
   `merge_group` trigger and a required-checks change, which is Scott's.
+- **Eight tree citations named the wrong artifact — #286's Class B, repointed from the artifacts**
+  ([#286](https://github.com/scttfrdmn/burroughs/issues/286); `Makefile`,
+  `.github/workflows/ci.yml`, `internal/gen/opcodegen/parse.go` and three `extract_test.go` files,
+  `internal/text/encode_test.go`). Six sites cited #29 as a grave; #29 is the all-gates-on lane's
+  *work* issue and the lesson — a control that skips for want of a corpus passes by asking nothing —
+  had never been in the tracker at all, so the remedy was Scott's on #29's own history: file it and
+  close it with the lesson, which is #407. Two more pointed at #181, a **PR**, where the grave is the
+  issue #181's own title names; that repoint reads off the artifact rather than being guessed, which is
+  what makes it different from the four sites left open below. A third site cited both and is reduced to
+  the one that resolves. **The class matters more than the count: a citation that resolves to the wrong
+  artifact passes checks 2 and 3 whenever the wrong artifact happens to be labelled**, so nothing
+  mechanical finds these — they came out of the one-time sweep the check's own header records, and the
+  remaining four are flagged for Scott rather than guessed, because a repoint with no artifact to read
+  it off is a fabricated provenance about this project's own history.
 - **The spec-suite registry carried no gated state, so a `register` after a gate-declined module was
   indistinguishable from a missing import**
   ([#366](https://github.com/scttfrdmn/burroughs/issues/366),

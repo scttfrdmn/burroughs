@@ -514,7 +514,7 @@ func TestOverlapIsAnErrorNotAPrecedenceRule(t *testing.T) {
 // Same shape as opcodegen's and keywordgen's: re-run the extraction against the pinned
 // reference, compare against the committed file byte for byte, and *refuse to run* without
 // the reference rather than skipping — a drift check that skips reports agreement with an
-// authority it never read (grave #29).
+// authority it never read (grave #407).
 //
 // One thing it inherits that the other two do not need: the join reads three sources, and it
 // stamps *one* SHA. That is a claim about the vendored tree, not about this test — see the

@@ -3335,7 +3335,7 @@ func decodeGC(t *testing.T, b []byte) *binary.Module {
 // cases respectively. This test's own ground is the *non-null abstract* form and the *indexed* form
 // at both nullabilities — the two shapes that had no byte at all before this PR — plus the
 // `(ref func)` != `FuncRef` pin the task calls out by name, which is the one assertion in this file
-// that most directly depends on grave #181 already being fixed: before it, `funcref` and
+// that most directly depends on grave #180 already being fixed: before it, `funcref` and
 // `(ref func)` decoded to the *same* ValType and no round trip could tell "wrote the abbreviation"
 // apart from "wrote the parameterized form".
 func TestParameterizedReferenceFormsRoundTrip(t *testing.T) {
@@ -3405,8 +3405,12 @@ func TestParameterizedReferenceFormsRoundTrip(t *testing.T) {
 	})
 
 	t.Run("(ref func) decodes distinct from FuncRef, and funcref decodes equal to it", func(t *testing.T) {
-		// The pin the task names directly: grave #181's fix is what makes this assertion possible at
-		// all. Before it, decodeRefType's Wasm 2.0 branch hardcoded null:false for the bare
+		// The pin the task names directly: grave #180's fix is what makes this assertion possible at
+		// all. (Cited as #181 until #286's Class B repoint: #181 is the *PR* that carried the fix, and
+		// its own title names `grave #180` — so the repoint reads off the artifact rather than being
+		// guessed, which is what the other three sites in that class could not do.)
+		//
+		// Before it, decodeRefType's Wasm 2.0 branch hardcoded null:false for the bare
 		// abbreviation, so `funcref` (bare 0x70) and `(ref func)` (0x64 0x70) decoded to the *same*
 		// ValType and this test could not have existed as a decoded-value assertion — only as a raw
 		// wire-byte comparison, which is exactly the workaround the task says is no longer needed.
@@ -3427,7 +3431,7 @@ func TestParameterizedReferenceFormsRoundTrip(t *testing.T) {
 		if gotRefFunc == binary.FuncRef {
 			t.Errorf("`(ref func)` decoded as %v, which equals binary.FuncRef — these are different "+
 				"spec types (funcref is nullable, (ref func) is not) and must decode to different "+
-				"ValTypes; this is the exact regression grave #180/#181 fixed on the decoder side, "+
+				"ValTypes; this is the exact regression grave #180 fixed on the decoder side, "+
 				"reached here through the encoder", gotRefFunc)
 		}
 		if gotRefFunc.Null() {
