@@ -1,24 +1,29 @@
 # 0034 — #9's reference-instruction slice closes as slice 8, and its criterion is fifty-five rows bounded by two bottoms
 
-Date: 2026-08-17 · Status: **proposed** — held open, and the one clause that would bind future work
-is flagged for a ruling below
+Date: 2026-08-17 · Status: **accepted on one clause** — Scott, [the #387 review
+relay](https://github.com/scttfrdmn/burroughs/pull/387#issuecomment-5323241867)
 
-> *"Slice 8: go, self-merge on green."* — Scott, on the #385 relay. The disposition authorizes the
-> slice and its merge tier and nothing else.
+> **What is binding is one sentence, and the ruling says so:** *"0034: accept it on that clause. The
+> two bottoms stay two values, nothing downstream collapses the non-nullable reference bottom into
+> the valtype bottom. That's a real invariant, it came out of the peekRef measurement rather than
+> from argument, and it binds. The rest being retrospective is fine — Status can go to accepted with
+> the clause named as what's binding."*
 >
-> **The field was briefly flipped to accepted citing that relay, and Scott reverted it** (#387):
-> *"'go, self-merge on green' authorized the slice and not a criterion I never read."* Correct, and
-> the error is worth naming precisely, because the mechanics were right and the reasoning was not: a
-> relay comment is a real approval artifact with a real URL, so the citation resolved — it just
-> pointed at an approval of something else. **A citation that resolves is not thereby a citation to
-> the right thing**, which is the same defect as a drifted reference range, one level up in the
-> governance stack.
+> So: **nothing downstream may collapse `RefT (NoNull, BotHT)` into `BotT`** — a constraint on #9's
+> remaining slices and on `internal/interp`, enforced today by the representation (`botRef(false)` is
+> a distinct value from `unknown`), by `matchHeap`'s index-keyed bottom arm, and by `typeStr`'s two
+> spellings. Everything else here is **retrospective**: the 55-row criterion, the forecast, the
+> falsification bill and the decline census describe what slice 8 did and bind nothing.
 >
-> **The one clause here that binds future work, in one line, for a ruling:** *the two bottoms stay
-> two values — nothing downstream may collapse the non-nullable reference bottom into the valtype
-> bottom.* That constrains #9's remaining slices and `internal/interp` alike. Everything else in
-> this record is retrospective: the 55-row criterion, the forecast, the falsification bill, and the
-> decline census all describe what slice 8 did and bind nothing.
+> **This field took two wrong values before it took this one, and the sequence is the lesson.** It
+> was first flipped to accepted citing *"Slice 8: go, self-merge on green"* (the #385 relay), which
+> Scott reverted: *"'go, self-merge on green' authorized the slice and not a criterion I never
+> read."* The mechanics were right and the reasoning was not — a relay comment is a real approval
+> artifact with a real URL, so the citation *resolved*; it just pointed at an approval of something
+> else. **A citation that resolves is not thereby a citation to the right thing**, the same defect as
+> a drifted reference range, one level up in the governance stack. It then stood at `proposed` with
+> the clause stated in a line for a ruling, which is the form the ruling arrived on, and the citation
+> above is to that ruling and not to a merge disposition.
 
 ## Context
 

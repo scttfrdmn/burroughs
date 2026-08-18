@@ -128,13 +128,22 @@ import (
 // between fetches**: the suite is not SHA-pinned (#42 — `git clone --depth 1` of the default branch),
 // so upstream adding vectors moves the actual with no local change and nobody to raise the bound."*
 //
-// **That consequence is now live and is the price of the ruling, stated rather than discovered.**
-// With slack 0, an upstream vector addition moves `totalPass` and these three bounds report staleness
-// on a tree nobody touched. The failure is loud, names the new value, and is a true statement about
-// the corpus having moved — which is the trade #285 ruled for: a bound that fires on a fetch is worth
-// more than one that cannot see 249 rows go missing. #42 (pin the fetch to a SHA) is what turns that
-// failure back into a local, scheduled event, and it is now on this mechanism's critical path rather
-// than being an improvement to it.
+// **That consequence is now live, and the first draft of this paragraph priced it wrongly.** With
+// slack 0, an upstream vector addition moves `totalPass` and these three bounds report staleness on a
+// tree nobody touched; this paragraph concluded from that that #42 (pin the fetch to a SHA) had moved
+// onto the mechanism's critical path. Scott's ruling on the same PR:
+//
+// > *"If the failure is loud and prints the new value, re-basing after an upstream fetch is a one-line
+// > edit with the answer in the message. That keeps #42 an ergonomics improvement rather than a
+// > blocker. The old slack wasn't protecting anything — it was silently absorbing corpus drift, which
+// > is an event worth seeing."*
+//
+// So the corpus-drift consequence is not a price at all: `boardBound` prints `actual` in the staleness
+// message, which makes the repair a one-line edit whose answer is already on the screen, and the event
+// the slack used to swallow is the one a maintainer most wants told — *the corpus you are measuring
+// against is not the corpus this constant was written against*. **A cost is only a cost after the
+// remedy is priced**, and the remedy here is a single number typed from the failure output. #42 stays
+// what it was: an improvement to this mechanism's ergonomics, not a dependency of it.
 //
 // Five ledger entries in `spec_test.go` reason about a live 250 — three of them explaining why a
 // re-base was taken *despite* the slack staying silent. They are left as written: each is a true

@@ -1138,16 +1138,42 @@ weakly-ordered platform.
   three were already at their measured values (60837, 64798, 66), so the retirement re-based nothing
   and is visible only as new exactness. Watched fire: each bound moved by one reports staleness with
   a distance of 1.
-  - **The consequence is stated rather than discovered.** The retired justification's real subject was
-    corpus drift between fetches — the suite is not SHA-pinned (#42) — so an upstream vector addition
-    now fails these bounds on a tree nobody touched. That failure is loud, names the new value, and is
-    a true statement about the corpus having moved. **#42 moves onto this mechanism's critical path**
-    rather than being an improvement to it.
-  - **ADR 0034 is back to `proposed`** (Scott's ruling on #387): "go, self-merge on green" authorized
-    the slice and its merge tier, not a criterion he had not read. A relay comment is a real approval
-    artifact with a resolving URL — it just pointed at an approval of something else, which is the
-    drifted-citation defect one level up in the governance stack. The one clause in 0034 that binds
-    future work is flagged in a line for a ruling; the rest is retrospective.
+  - **The consequence is stated, and its first statement of it over-priced #42.** The retired
+    justification's real subject was corpus drift between fetches — the suite is not SHA-pinned (#42) —
+    so an upstream vector addition now fails these bounds on a tree nobody touched, and this entry
+    concluded that #42 had therefore moved onto the mechanism's critical path. Scott's ruling: *"If the
+    failure is loud and prints the new value, re-basing after an upstream fetch is a one-line edit with
+    the answer in the message. That keeps #42 an ergonomics improvement rather than a blocker. The old
+    slack wasn't protecting anything — it was silently absorbing corpus drift, which is an event worth
+    seeing."* `boardBound` prints the actual and the value to move to, so the remedy is one typed
+    number; **a consequence is only a cost after its remedy is priced**. #42 stays an ergonomics
+    improvement.
+  - **ADR 0034 is `accepted` on one clause** (Scott's ruling on #387, after the same ruling sent it
+    back to `proposed`): *the two bottoms stay two values — nothing downstream may collapse the
+    non-nullable reference bottom into the valtype bottom.* That is what binds, it came out of the
+    `peekRef` measurement rather than from argument, and the rest of the record is retrospective. The
+    Status field's earlier flip cited a relay approving the *slice* — a real approval artifact with a
+    resolving URL, pointing at an approval of something else, which is the drifted-citation defect one
+    level up in the governance stack.
+
+- **Reports carry a seventh section, `Done since last review`** (`CLAUDE.md` behaviour 2; Scott's
+  ruling on #387, beside **Next**). Ordered after he asked three times for the disposition of work
+  that was already on main: *"I asked three times for something that was already on main, which is my
+  time and yours spent on a lookup you'd already done."* It lists the work landed between the
+  principal's last review and this report — each issue closed and each named ask discharged, one line
+  each — because **a report that only looks forward makes the reader do the lookup**, and *Next*
+  cannot answer a question about the past. A prior ask that is *not* done says which of in flight /
+  dropped / blocked it is, which was the form the three asks were asking for.
+
+- **The exit-status law gains its seventh specimen, and this one names the *tell***
+  (`docs/laws/evidence-and-instruments.md`). `go test ./... | tail -3 && make cite && git commit`
+  reported a real suite `FAIL` as `tail`'s 0 and **committed over a red tree**, caught on the next
+  read of the full log and amended. Scott's ruling: *"the pattern is that the pipe appears when you
+  want shorter output. Redirect to a file and read the file. Nothing gets to stand between a command
+  and its status."* The six prior wordings all describe the *construct*; this one describes the
+  **motive**, which is present before the construct is typed — `grep` on the sixth specimen, `tail` on
+  this one, volume both times. Index-resident rather than a control for the reason the law already
+  states: no gate can reach composition at the moment of writing.
 
 - **An issue attaches to a milestone when it is *scheduled*, not when it is filed** (`CLAUDE.md`,
   retiring [#324](https://github.com/scttfrdmn/burroughs/issues/324) on Scott's ruling). The deleted
