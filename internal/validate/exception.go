@@ -149,71 +149,6 @@ func checkTagType(m *binary.Module, typeIdx uint32) error {
 	return nil
 }
 
-// popSeqExpect is the reference's `pop` (`valid.ml:270-276`) with `match_stack`'s message
-// (`:259-267`), and it exists because two corpus vectors pin that message and nothing else in this
-// package produces it.
-//
-//	let n3 = if ell2 = Ellipses then (n1 - n) else 0 in
-//	match_stack c (Lib.List.make n3 BotT @ Lib.List.drop (n2 - n) ts2) ts1 at;
-//
-// # Why not popExpectAll, and the measurement that decides it
-//
-// The *verdicts* are identical: `popExpectAll` pops rightmost-first and `pop()` already answers
-// bottom below the frame height only when the frame is unreachable, so a stack that satisfies one
-// satisfies the other. What differs is the **testimony**. `popExpect` says `expected i32, stack
-// empty`; the reference says `type mismatch: instruction requires [i32] but stack has []`, and
-// `throw.wast:53,55` are the only two vectors in the whole corpus that pin that wording —
-// `grep -rn "instruction requires" testdata/spec/*.wast` returns exactly those two rows. So this is
-// a message the family needs and the eight landed slices have been diverging from silently.
-//
-// **The divergence is noticed-and-named rather than repaired here.** Converging every arm on this
-// wording is a refactor of eight slices' tested behaviour, unforecast by ADR 0036 and outside its
-// criterion; it is #394, with the board delta measured rather than assumed. What is *not* deferred
-// is the knowledge that a divergence exists, which is why this paragraph is here rather than in the
-// issue alone.
-//
-// # The two padding rules are different rules, and conflating them prints a false stack
-//
-// `peekN` pads with bottom **unconditionally** because peeking is not a claim the value is there.
-// This pads only when the frame is unreachable, because popping *is* that claim — the reference's
-// own division (`peek` returns `BotT` out of range; `pop` pads only for a polymorphic stack and
-// fails on length otherwise). Using `peekN` here would print `instruction requires [i32] but stack
-// has [bot]` for `throw.wast:53`, whose expectation is `[]`: a message asserting an operand the
-// module does not have, on a reachable frame, which is grave #36's class — and the vector would go
-// red while the verdict stayed right.
-//
-// The pad goes at the front, which is the bottom of the stack, because the operands the frame does
-// have are its topmost ones.
-func (v *validator) popSeqExpect(want []binary.ValType) error {
-	f := v.top()
-	avail := len(v.stack) - f.height
-	n := min(len(want), avail)
-
-	got := make([]binary.ValType, 0, len(want))
-	if f.unreachable {
-		for range len(want) - n {
-			got = append(got, unknown)
-		}
-	}
-	got = append(got, v.stack[len(v.stack)-n:]...)
-
-	if len(got) != len(want) {
-		return fmt.Errorf("%w: instruction requires %s but stack has %s",
-			ErrTypeMismatch, typeList(want), typeList(got))
-	}
-	for j := range want {
-		if !v.matches(got[j], want[j]) {
-			return fmt.Errorf("%w: instruction requires %s but stack has %s",
-				ErrTypeMismatch, typeList(want), typeList(got))
-		}
-	}
-	// The reference's second component: the residue after the matched operands come off. Popped
-	// only on success, unlike `popExpectAll`, which is invisible — a failed validation reports and
-	// stops — and is the shape a whole-sequence match has rather than a choice made here.
-	v.stack = v.stack[:len(v.stack)-n]
-	return nil
-}
-
 // throwInstr is `Throw x` (`valid.ml:572-576`):
 //
 //	let TagT ut = tag c x in
@@ -242,11 +177,13 @@ func (v *validator) throwInstr(idx uint32) error {
 //
 //	[RefT (Null, ExnHT)] -->... [], []
 //
-// One nullable `exnref` in, nothing out, frame unreachable. `popExpect` rather than `popSeqExpect`:
-// a one-operand pop's message differs from the reference's only in wording, and the two vectors that
-// pin the wording are `throw`'s — `throw_ref.wast:117,118` expect the bare `type mismatch`. Stated
-// so the inconsistency inside this one file is a choice with a reason rather than an oversight; #394
-// is where it converges.
+// One nullable `exnref` in, nothing out, frame unreachable. **`popExpect` here and `popSeqExpect` in
+// `throwInstr` was this file's deliberate inconsistency, and #394 dissolved it rather than resolving
+// it either way**: `popExpect` is now the one-element case of `popSeqExpect` (`stack.go`), so both
+// arms produce the reference's sentence and the choice of spelling is back to being about arity. What
+// the paragraph here used to record — that the two vectors pinning the wording are `throw`'s, while
+// `throw_ref.wast:117,118` expect the bare `type mismatch` — is still why this arm's own rows could
+// not have caught the divergence.
 func (v *validator) throwRef() error {
 	if err := v.popExpect(exnRef); err != nil {
 		return err

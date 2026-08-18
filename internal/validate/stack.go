@@ -204,38 +204,112 @@ func (v *validator) matches(got, want binary.ValType) bool {
 	return matchValType(tctx{gotMod: v.mod, wantMod: v.mod}, got, want)
 }
 
-// popExpect pops one operand and requires it to satisfy want.
-func (v *validator) popExpect(want binary.ValType) error {
-	got, ok := v.pop()
-	if !ok {
-		return fmt.Errorf("%w: expected %s, stack empty", ErrTypeMismatch, typeStr(want))
+// popSeqExpect is the reference's `pop` (`valid.ml:270-276`) with `match_stack`'s message
+// (`:259-267`), and it is **the** operand-consuming primitive of this package: `popExpect` and
+// `popExpectAll` below are its one-element and whole-sequence spellings.
+//
+//	let n3 = if ell2 = Ellipses then (n1 - n) else 0 in
+//	match_stack c (Lib.List.make n3 BotT @ Lib.List.drop (n2 - n) ts2) ts1 at;
+//
+// # Why the package has one of these and not two, which is #394
+//
+// It arrived in slice 10 as exception handling's private helper, because `throw.wast:53,55` are the
+// only two vectors on the board that pin the reference's operand-mismatch sentence and `popExpect`
+// said `expected i32, stack empty` instead. That left the package with two spellings of one
+// reference message, and which one an arm used was an accident of which slice wrote it.
+//
+// **The convergence is a delegation rather than a rewrite of eight arms, and the census is why.**
+// Both spellings came from two `fmt.Errorf`s in `popExpect`, reached by 62 call sites across seven
+// files, so there was never a per-arm wording to converge arm by arm — the issue's prescribed order
+// of work was written from where the divergence *appeared*. `pop` + `match_stack` is one operation
+// in the reference too, which is what makes one primitive with three names fidelity rather than
+// convenience.
+//
+// **The verdicts were identical before and after, and that is checked rather than asserted.**
+// `popExpectAll` popped rightmost-first while this compares in order, which pairs the same elements;
+// `pop()` answers bottom below the frame height only when the frame is unreachable and *without*
+// shrinking the stack (see `pop`), so both consume exactly `min(len(want), avail)` slots. The one
+// real difference is that this pops nothing on failure where `popExpectAll` popped as it went, and
+// that is invisible because all 62 call sites return the error immediately — a property of the
+// callers, so it is stated here and pinned by `TestEveryOperandPopIsFatalToItsArm`.
+//
+// # The two padding rules are different rules, and conflating them prints a false stack
+//
+// `peekN` pads with bottom **unconditionally** because peeking is not a claim the value is there.
+// This pads only when the frame is unreachable, because popping *is* that claim — the reference's
+// own division (`peek` returns `BotT` out of range; `pop` pads only for a polymorphic stack and
+// fails on length otherwise). Using `peekN` here would print `instruction requires [i32] but stack
+// has [bot]` for `throw.wast:53`, whose expectation is `[]`: a message asserting an operand the
+// module does not have, on a reachable frame, which is grave #36's class — and the vector would go
+// red while the verdict stayed right.
+//
+// The pad goes at the front, which is the bottom of the stack, because the operands the frame does
+// have are its topmost ones.
+//
+// # What did not converge, and it is a boundary rather than a miss
+//
+// `match_stack` has a second call site in the reference — the block-end check — whose sentence is
+// `type mismatch: block requires [] but stack has [i32]`. This package says `%d value(s) left on the
+// stack at the end of a block` there (`expectEmptyFrame`), and no vector on the board can see either
+// reading: the two rows pinning that spelling are `legacy/try_catch.wast:269,276`, in a directory
+// `testenv.SuitePaths` does not glob. Converging it would be a change no instrument in this repo
+// could score, which is the argument for leaving it and naming it.
+func (v *validator) popSeqExpect(want []binary.ValType) error {
+	f := v.top()
+	avail := len(v.stack) - f.height
+	n := min(len(want), avail)
+
+	got := make([]binary.ValType, 0, len(want))
+	if f.unreachable {
+		for range len(want) - n {
+			got = append(got, unknown)
+		}
 	}
-	if !v.matches(got, want) {
-		return fmt.Errorf("%w: expected %s, got %s", ErrTypeMismatch, typeStr(want), typeStr(got))
+	got = append(got, v.stack[len(v.stack)-n:]...)
+
+	if len(got) != len(want) {
+		return fmt.Errorf("%w: instruction requires %s but stack has %s",
+			ErrTypeMismatch, typeList(want), typeList(got))
 	}
+	for j := range want {
+		if !v.matches(got[j], want[j]) {
+			return fmt.Errorf("%w: instruction requires %s but stack has %s",
+				ErrTypeMismatch, typeList(want), typeList(got))
+		}
+	}
+	// The reference's second component: the residue after the matched operands come off. Popped
+	// only on success, unlike the `popExpectAll` this replaced, which is invisible — a failed
+	// validation reports and stops — and is the shape a whole-sequence match has rather than a
+	// choice made here.
+	v.stack = v.stack[:len(v.stack)-n]
 	return nil
 }
 
-// popExpectAll pops a sequence of operands, rightmost first.
+// popExpect pops one operand and requires it to satisfy want — `popSeqExpect` at n=1.
 //
-// The reversal is the whole point and is easy to get backwards: `types` reads in stack order
-// (first pushed first), so they must be popped from the end. A left-to-right version passes
-// every homogeneous signature — `(i32, i32) -> i32` never notices — and fails only on the mixed
-// ones, which is protection by coincidence for the majority of the corpus.
+// A named one-element case rather than 27 call sites spelling the slice literal, because arity is
+// what the arms differ in and a rule that takes one operand should read as taking one.
+func (v *validator) popExpect(want binary.ValType) error {
+	return v.popSeqExpect([]binary.ValType{want})
+}
+
+// popExpectAll pops a sequence of operands.
+//
+// **It used to pop rightmost-first in a loop, and that reversal was the whole point of the
+// function** — `types` reads in stack order, so a left-to-right loop passes every homogeneous
+// signature and fails only on mixed ones, which is protection by coincidence for most of the
+// corpus. The reversal is now `popSeqExpect`'s index alignment, where the same error is a
+// misalignment rather than a wrong direction, and the mixed-signature rows that guarded it guard
+// this too.
 func (v *validator) popExpectAll(types []binary.ValType) error {
-	for i := len(types) - 1; i >= 0; i-- {
-		if err := v.popExpect(types[i]); err != nil {
-			return err
-		}
-	}
-	return nil
+	return v.popSeqExpect(types)
 }
 
 // peekN reads the top n operand types without popping them, bottom-padded.
 //
 // The pad is what makes it different from n pops: a slot below the frame's entry height reads as
 // `unknown` **whether or not the frame is unreachable**, because peeking is not a claim that the
-// value is there. That claim is popExpectAll's, and separating them is the reference's own division
+// value is there. That claim is popSeqExpect's, and separating them is the reference's own division
 // (`peek` returns BotT out of range unconditionally; `pop` pads only for a polymorphic stack and
 // fails on length otherwise). br_table is the one caller: it needs the operand types in order to
 // check its arms *before* it is entitled to consume them.

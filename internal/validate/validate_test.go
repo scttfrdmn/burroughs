@@ -171,7 +171,7 @@ func TestAcceptsValidModulesTheBoardCannotSee(t *testing.T) {
 			why: "the else-arm begins where the then-arm did, which means the block's *parameters* " +
 				"are pushed again — here the else-arm has no instructions at all and is valid " +
 				"only because the restored param is the block's result. A reset that truncates " +
-				"without re-pushing refuses this with `expected i32, stack empty`",
+				"without re-pushing refuses this with `instruction requires [i32] but stack has []`",
 			wat: `(module
 				(type $t (func (param i32) (result i32)))
 				(func (param i32) (result i32)
@@ -233,24 +233,30 @@ func TestRejectsPerRuleWithItsOwnTestimony(t *testing.T) {
 			name:     "operand type",
 			wat:      `(module (func (result i32) (i32.const 1) (f64.const 1) (i32.add)))`,
 			sentinel: ErrTypeMismatch,
-			want:     "expected i32, got f64",
+			want:     "instruction requires [i32 i32] but stack has [i32 f64]",
 		},
 		{
 			name:     "operand missing entirely",
 			wat:      `(module (func (result i32) (i32.add)))`,
 			sentinel: ErrTypeMismatch,
-			want:     "expected i32, stack empty",
+			want:     "instruction requires [i32 i32] but stack has []",
 		},
 		{
 			// The arguments are pushed in the *wrong* order for a mixed signature, which is the
-			// only shape that discriminates: a popExpectAll that walked left to right pops f64
-			// first, finds an f64, and accepts this module. Its detail is necessarily the same
-			// string as the row above — what makes it a separate witness is the module, not the
-			// message.
+			// only shape that discriminates: a left-to-right walk pops f64 first, finds an f64, and
+			// accepts this module.
+			//
+			// **This row's detail used to be necessarily the same string as the row above** — both
+			// said `expected i32, got f64`, so what made it a separate witness was the module and
+			// not the message. #394's convergence prints the whole requirement against the whole
+			// stack, so the two now differ in their *testimony* (`[f64 i32]` vs `[i32 i32]`), and a
+			// rule that confused these two signatures would be caught by either row rather than by
+			// this one alone. A message that carries the sequence discriminates where a message
+			// carrying one element cannot.
 			name:     "mixed signature, arguments in the wrong order",
 			wat:      `(module (func (result i32) (i32.const 1) (f64.const 1) (call 1)) (func (param f64 i32) (result i32) (i32.const 0)))`,
 			sentinel: ErrTypeMismatch,
-			want:     "expected i32, got f64",
+			want:     "instruction requires [f64 i32] but stack has [i32 f64]",
 		},
 		{
 			// The reject half of the nil-label-types grave, and the direction that grave escaped
@@ -260,7 +266,7 @@ func TestRejectsPerRuleWithItsOwnTestimony(t *testing.T) {
 			name:     "return with the function's results missing",
 			wat:      `(module (func (result i32) (return)))`,
 			sentinel: ErrTypeMismatch,
-			want:     "expected i32, stack empty",
+			want:     "instruction requires [i32] but stack has []",
 		},
 		{
 			name:     "drop on an empty stack",

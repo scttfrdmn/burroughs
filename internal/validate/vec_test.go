@@ -220,7 +220,7 @@ func TestVecRejectsWithTheRuleThatRefused(t *testing.T) {
 			wat: `(module (func (result i32)
 				(i32x4.eq (v128.const i32x4 0 0 0 0) (v128.const i32x4 0 0 0 0))))`,
 			is:     ErrTypeMismatch,
-			detail: "expected i32",
+			detail: "instruction requires [i32] but stack has [v128]",
 		},
 		{
 			name: "a shift given a register as its count",
@@ -229,7 +229,7 @@ func TestVecRejectsWithTheRuleThatRefused(t *testing.T) {
 			wat: `(module (func (result v128)
 				(i32x4.shl (v128.const i32x4 0 0 0 0) (v128.const i32x4 1 1 1 1))))`,
 			is:     ErrTypeMismatch,
-			detail: "expected i32",
+			detail: "instruction requires [v128 i32] but stack has [v128 v128]",
 		},
 		{
 			name: "a load with no memory in the module",
@@ -246,7 +246,7 @@ func TestVecRejectsWithTheRuleThatRefused(t *testing.T) {
 				"instead and pass this one for the wrong reason",
 			wat:    `(module (func (result v128) (f64x2.splat (i64.const 0))))`,
 			is:     ErrTypeMismatch,
-			detail: "expected f64",
+			detail: "instruction requires [f64] but stack has [i64]",
 		},
 	} {
 		t.Run(c.name, func(t *testing.T) {

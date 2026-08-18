@@ -365,7 +365,7 @@ func TestThrowRefTakesANullableExnref(t *testing.T) {
 			// row that would keep passing after #395 is fixed *and* if the fix were wrong.
 			name:  "not an exception reference at all",
 			wat:   `(module (func (param i32) (local.get 0) (throw_ref)))`,
-			msg:   "expected (ref null exn), got i32",
+			msg:   "instruction requires [(ref null exn)] but stack has [i32]",
 			valid: false,
 			gate:  ehOn,
 		},
