@@ -3,9 +3,11 @@
 # Laws — Operations
 
 The operational recipes: waiting on a CI verdict, confirming a cross-architecture claim before
-pushing, and recovering from a squash merge's rewritten history.
+pushing, recovering from a squash merge's rewritten history, and running the two sweeps whose second
+population only exists once the PR does.
 
-Relocated from `CLAUDE.md`, **verbatim**, when that file became a brief and a pointer page.
+The first three were relocated from `CLAUDE.md`, **verbatim**, when that file became a brief and a
+pointer page.
 Nothing was rewritten in the move — only the heading depth, which does not change the anchors
 `CLAUDE.md` links to. These are recipes rather than laws, so they carry no `###` law heading and
 no recall key: they are here because they exist nowhere else, and a page of pointers is the wrong
@@ -112,3 +114,45 @@ An empty diff is the check that makes `reset --hard` safe here — it confirms t
 "divergence" is purely the squash rewriting the commit's identity, not a real
 content difference. This surfaced three times in one session, each time re-derived
 from scratch; the pattern is mechanical once named; don't re-derive it.
+
+## Opening a PR: the body is a scanned population, and `make check` cannot see it
+
+Two of the repo's sweeps scan **two populations each**, and the make targets reach only one of them:
+
+| target | population it scans | the population it cannot |
+|---|---|---|
+| `make close` | commit messages in `BASE..HEAD` | the PR title and body |
+| `make cite` | added lines of the diff | the PR title and body |
+
+The body half needs a PR number, so it can only run **after** `gh pr create` — which means it is not
+part of the local gate at all and has to be a step in the opening sequence:
+
+```bash
+gh pr create --title … --body-file /tmp/pr-N.md
+sh scripts/closecheck.sh --pr <n>     # the body channel: closing keywords
+sh scripts/citecheck.sh  --pr <n>     # the body channel: self-citation
+```
+
+**The specimen is #398**, whose body opened with the keyword `Closes` immediately followed by its
+issue reference. The PR's own plan said "closecheck and citecheck, both channels"; `make close` ran,
+reported `0 banned constructs` over 67 commit-message lines, and that green was read as the sweep's
+verdict. It was one channel's verdict. CI failed the `citations` job on the exact construct the ban
+exists for — a squash message is derived from the body, so the keyword would have taken the issue's
+state with no lesson comment first, which is grave #314's whole subject.
+
+**And the first draft of this entry tripped the other channel, twice, in the commit message that added
+it** — once quoting the offending line and once describing its effect, both with the reference on the
+same line as the keyword. That is *a ban reported in the banned form is still the banned form*: the
+scanner reads tokens, not quotation marks. Hence the phrasing above, which keeps the keyword and the
+reference apart, and hence the rule that the report about a sweep is inside that sweep's population —
+re-run `closecheck.sh` **after** writing the commit that describes a closecheck failure.
+
+Both halves' `--pr` arm fetches the body **live** rather than from the webhook payload, so a body
+edited after the failure is scanned by `gh run rerun --failed` without a new push. That is a property
+of the scripts, checked by `TestPRFetchFailureIsNeverAPass`, and not something to assume of a job in
+general.
+
+*A make target is a population, not a question* — this is the two-channel rule (`make check` is the
+local mirror of CI, so a surprise in CI is a bug in the Makefile) meeting the one check whose subject
+does not exist yet when the Makefile runs. The mirror is incomplete **by construction** here, which is
+why the sequence above is written down instead of a Makefile target being fixed.

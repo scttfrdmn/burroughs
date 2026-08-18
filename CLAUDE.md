@@ -140,7 +140,8 @@ is dug.
 - [operations.md](docs/laws/operations.md) — the recipes: [waiting on
   CI](docs/laws/operations.md#waiting-on-ci), [local cross-architecture
   verification](docs/laws/operations.md#local-cross-architecture-verification), [post-squash
-  divergence](docs/laws/operations.md#after-a-squash-merge-local-main-diverges-from-originmain--verify-dont-force).
+  divergence](docs/laws/operations.md#after-a-squash-merge-local-main-diverges-from-originmain--verify-dont-force),
+  [the PR body's own sweeps](docs/laws/operations.md#opening-a-pr-the-body-is-a-scanned-population-and-make-check-cannot-see-it).
 
 Two controls in `internal/testenv` keep this page from rotting into a page of dead pointers, and
 they are two because they fail for unrelated reasons (grave #34): `TestClaudeMDLinksResolve` that
