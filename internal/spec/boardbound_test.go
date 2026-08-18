@@ -81,9 +81,9 @@ import (
 // They partition into four kinds, and the kind decides whether slack applies:
 //
 //	bound                    actual   kind          slack   why
-//	passFloor                4162     board count   250     moves in strata; can go stale
-//	allOnPassFloor           64079    board count   250     same board plus gated vectors
-//	unsupportedCeiling       60872    board count   250     shrinks as capabilities land
+//	passFloor                60837    exact re-base  0      moves in strata; re-base with the lane
+//	allOnPassFloor           64798    exact re-base  0      same board plus gated vectors
+//	unsupportedCeiling       66       exact re-base  0      shrinks as capabilities land
 //	binaryFailCeiling        0        at terminal   —       0 cannot drift from 0
 //	textFailCeiling          0        at terminal   —       0 cannot drift from 0
 //	unimplementedCeiling     0        at terminal   —       0, and 0004 fixes it there
@@ -103,9 +103,52 @@ import (
 //	agreementFloor           6498     vacuity       —       the cross-check compared something
 //	attemptedFloor           2494     vacuity       —       the link census's hook fired at all
 //
-// **Exact re-base** is the third kind and it is not a kind in the code, deliberately: it is
-// `ceilingBound` with slack 0, meaning "move me in the PR that moves the column". That the helper
-// used to *exempt* those is grave #293, immediately below.
+// **Exact re-base** is the third kind and it is not a kind in the code, deliberately: it is a floor
+// or ceiling with slack 0, meaning "move me in the PR that moves the column". That the helper used
+// to *exempt* those is grave #293, immediately below.
+//
+// # The slack is retired, and the three board counts joined the exact-re-base kind (Scott, #387)
+//
+// The first three rows carried `boardBoundSlack` = 250 until this ruling:
+//
+// > *"The real defect is that a floor with 250 of slack cannot detect anything smaller than 250,
+// > which is a bound sitting inside its own tolerance, and #285 already ruled that's how a bound
+// > becomes decoration. Set it to the measured value and re-base it with the lane, same as
+// > passFloor."*
+//
+// It arrived on the PR that re-based `allOnPassFloor` from 64654 to 64798 — **89 stale, missed by two
+// PRs, and green the whole time because 89 < 250.** That is the third time a slack-sized gap was
+// discovered by reading the printed total beside the constant rather than by any control, and the
+// ledger entries at `allOnPassFloor` and `passFloor` name the other two. The slack was not absorbing
+// a jump; it was absorbing *accumulation*, each step too small to trip it, which is a failure mode
+// its own justification did not predict.
+//
+// The retired justification's load-bearing sentence, quoted because deleting the constant would
+// otherwise delete the argument for it: *"What the slack must genuinely absorb is **corpus drift
+// between fetches**: the suite is not SHA-pinned (#42 — `git clone --depth 1` of the default branch),
+// so upstream adding vectors moves the actual with no local change and nobody to raise the bound."*
+//
+// **That consequence is now live, and the first draft of this paragraph priced it wrongly.** With
+// slack 0, an upstream vector addition moves `totalPass` and these three bounds report staleness on a
+// tree nobody touched; this paragraph concluded from that that #42 (pin the fetch to a SHA) had moved
+// onto the mechanism's critical path. Scott's ruling on the same PR:
+//
+// > *"If the failure is loud and prints the new value, re-basing after an upstream fetch is a one-line
+// > edit with the answer in the message. That keeps #42 an ergonomics improvement rather than a
+// > blocker. The old slack wasn't protecting anything — it was silently absorbing corpus drift, which
+// > is an event worth seeing."*
+//
+// So the corpus-drift consequence is not a price at all: `boardBound` prints `actual` in the staleness
+// message, which makes the repair a one-line edit whose answer is already on the screen, and the event
+// the slack used to swallow is the one a maintainer most wants told — *the corpus you are measuring
+// against is not the corpus this constant was written against*. **A cost is only a cost after the
+// remedy is priced**, and the remedy here is a single number typed from the failure output. #42 stays
+// what it was: an improvement to this mechanism's ergonomics, not a dependency of it.
+//
+// Five ledger entries in `spec_test.go` reason about a live 250 — three of them explaining why a
+// re-base was taken *despite* the slack staying silent. They are left as written: each is a true
+// statement about the era it records, and the entries that describe taking the re-base anyway are the
+// reason the ruling has a paper trail rather than a single incident.
 //
 // **Derived** was a fifth kind and **no row is of that kind today**, which is worth a paragraph
 // rather than a deletion. It was exact re-base with the constant replaced by an expression over a
@@ -224,43 +267,6 @@ const (
 	// remembering to pass 0.
 	vacuityBound
 )
-
-// boardBoundSlack is the slack for the three tracked board counts — `passFloor`,
-// `allOnPassFloor`, `unsupportedCeiling`.
-//
-// **250, and what it is actually absorbing is not what the first draft claimed.** That draft
-// reasoned "large enough not to fire on ordinary progress", measured `passFloor` across
-// fifteen commits (783 → 1419 → 1628 → 1941 → 1953 → 1992 → 4122 → 4159 → 4161 → 4162), and
-// quoted two steps over 250. Recomputing the steps says **+636, +209, +313, +12, +39, +2130,
-// +37, +2, +1** — *three* over 250, not two, and one of them (+313) is a middling stratum
-// rather than a landmark. The figure was quoted from memory of the shape instead of from the
-// subtraction, which is the sin this ADR is about, committed in its own justification.
-//
-// The recomputation also shows the reasoning was aimed at the wrong quantity. **A PR that
-// moves the board and raises the bound in the same PR leaves a distance of zero**, so no
-// step size, however large, trips this — that is the rule (0013), the same rule as updating
-// `[Unreleased]` in the PR that earns the entry. The step distribution is therefore almost
-// irrelevant to the size.
-//
-// What the slack must genuinely absorb is **corpus drift between fetches**: the suite is not
-// SHA-pinned (#42 — `git clone --depth 1` of the default branch), so upstream adding vectors
-// moves the actual with no local change and nobody to raise the bound. 250 is roughly 6% of
-// a 4162 board, comfortably more than upstream's observed churn and far less than any real
-// regression. When #42 lands this constant should shrink hard or disappear in favour of an
-// exact count.
-//
-// So: still weather rather than a principle, but now weather about the right thing. The
-// second-order honesty point stands — if this fires on a PR that is genuinely routine, widen
-// it here **with the new observation recorded**, rather than raising the bound and moving on.
-// A slack quietly widened is the staleness defect one level up.
-//
-// It would not be needed at all if the corpus were pinned: an exact expected count is
-// strictly stronger, and #42 (the suite fetch is `git clone --depth 1` of the default
-// branch, not a SHA) is what makes an exact count fire on upstream's schedule rather than
-// ours. Contrast decision 0012's census, whose inputs are both committed and which
-// therefore gets the exact golden file this could not have. *The strongest control the
-// inputs admit, at each site.*
-const boardBoundSlack = 250
 
 // TestEveryBoardBoundIsChecked reads this package's AST and requires every board bound to
 // route through boardBound.

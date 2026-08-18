@@ -266,6 +266,20 @@ reach is a law out of context.
     different instruments* (two channels existed and the overwritten one was
     read), and *a verdict without an identity check is hearsay* (`exit 0` was a
     true statement about a different process than the one being asked about).
+  - **The seventh names the *tell*, which is what the first six were missing.**
+    `go test ./... | tail -3 && make cite && git add … && git commit …` on the
+    slice-8 branch: a real `FAIL` in the suite was reported as `tail`'s 0, `make
+    cite` ran, and **the commit landed over a red tree** — caught only on the next
+    read of the full log, and amended. Same class as the sixth, one tool call from
+    a page that already carried the general form, and Scott's ruling says why the
+    general form was not enough: *"the pattern is that the pipe appears when you
+    want shorter output. Redirect to a file and read the file. Nothing gets to
+    stand between a command and its status."* The first six wordings all describe
+    the *construct*; this one describes the **motive**, which is the thing present
+    in the writer's head *before* the construct is typed. Volume is the recurring
+    reason — `grep` in the sixth, `tail` here — so **"I want less output" is the
+    moment to redirect**, and it is checkable introspectively in a way "compose
+    carefully" is not.
   - Operative: run it bare. `cmd > /tmp/out 2>&1` then read `/tmp/out`, and take
     the verdict from the runner's own exit code or from a dedicated query such as
     `gh run view "$RUN" --json conclusion`. No control can reach this — it is

@@ -75,12 +75,18 @@ Their bodies — specimens, minting records, the token each was granted on — a
 2. **The PR *is* the report.** Work happens in PRs, even self-merged ones, and the description
    carries exactly these sections: **Board** (suite counts, build status, plus the two figures
    above) · **Landed** · **Decisions taken** · **Decisions needed from Scott** · **Graves** ·
-   **Next**. Two principals review: **Scott** (owner, all decisions) and **chat-Claude**
-   (contract author, architecture review), who is reached through Scott. Keep it terse and
-   factual, written for a reader who wasn't in the session; anything Scott must decide is
+   **Done since last review** · **Next**. Two principals review: **Scott** (owner, all decisions)
+   and **chat-Claude** (contract author, architecture review), who is reached through Scott. Keep it
+   terse and factual, written for a reader who wasn't in the session; anything Scott must decide is
    *flagged*, never decided for him, and a PR that would change the contract says so in
    **Decisions needed** and labels the issue `type:contract`. **A Landed section is a changelog
    entry wearing a different hat** — update `CHANGELOG.md`'s `[Unreleased]` in the same PR.
+   **Done since last review** is Scott's, ordered on the #387 review after he asked three times for
+   the disposition of work that was already on main: *"I asked three times for something that was
+   already on main, which is my time and yours spent on a lookup you'd already done."* It names the
+   work landed between his last review and this report — every issue closed and every named ask
+   discharged, one line each — because **a report that only looks forward makes the reader do the
+   lookup**, and *Next* cannot answer a question about the past.
 
 3. **Decision-before-code.** ([body](docs/laws/decisions-and-thesis.md#decision-before-code))
    Design choices get `docs/decisions/NNNN-*.md` — context, options, choice, consequences —
