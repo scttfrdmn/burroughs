@@ -384,8 +384,8 @@ func TestV128BoundaryRoundTripsAgainstTheCorpus(t *testing.T) {
 	// grave it records — decoding under all-on and instantiating under the default engine()'s
 	// empty Features would decline the SIMD-gated vectors at the instantiation boundary instead
 	// of running them.
-	e.InstantiateLinked = func(c Command, registry map[string]Instance) (Instance, Stratum, error) {
-		return instantiateWith(allOn, c, registry)
+	e.InstantiateLinked = func(c Command, reg Registry) (Instance, Stratum, error) {
+		return instantiateWith(allOn, c, reg)
 	}
 	// The validator decodes too, so it takes the lane's gates — see validateWith.
 	e.Validate = func(c Command) (Stratum, error) { return validateWith(allOn, c) }
