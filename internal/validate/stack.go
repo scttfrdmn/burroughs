@@ -17,13 +17,36 @@ type validator struct {
 
 	// curFunc is the body being checked, for the side tables 0016 puts beside it — br_table's
 	// label vector is the one slice 1 reads.
+	//
+	// **Nil when the walk is over a constant expression**, which is #328: `checkConst` runs the same
+	// instruction loop with no body behind it. Three of `Func`'s four side tables belong to
+	// instructions the const grammar refuses, so their arms are unreachable there and read this
+	// field directly; the fourth is `Casts`, which `ref.null` reads and which therefore moved behind
+	// `castVector` and the field below. See typeConstExpr for why that distinction is stated per
+	// table rather than defended with one nil check.
 	curFunc *binary.Func
+
+	// casts is the cast-family side table for whatever this walk is over: `curFunc.Casts` for a
+	// body, and the constant expression's own map for a const expr, where there is no `Func` to
+	// hang it off. Read through castVector, never directly, so the two-result "retained versus
+	// absent" distinction `Func.CastTypes` exists for survives having two sources.
+	casts map[int][]binary.ValType
 
 	// refs is `context.refs` restricted to the function index space: the set `ref.func` may name
 	// (`valid.ml:1152`, and declaredFuncs for what contributes to it). Module-scoped and computed
 	// once, like the reference's, because it is a property of the module and not of the body — a
 	// body's own references are excluded from it by construction.
 	refs map[uint32]bool
+
+	// globalScope is how many *defined* globals `global.get` may name — `len(c.globals)` minus the
+	// imports, and a field rather than `len(mod.Globals)` because the reference grows that index
+	// space *during* module checking. `check_global` folds one global in at a time (valid.ml:1059),
+	// so a global's own initializer sees the globals declared before it and not itself; every other
+	// consumer of this walk runs after :1162, by which time all of them are in.
+	//
+	// See globalTypeAt for the two vectors that answer opposite ways under a whole-module view, and
+	// checkConst for the only caller that passes anything but the full count.
+	globalScope int
 
 	// stack holds operand *types*. Its height is not the slot count — see slots().
 	stack  []binary.ValType

@@ -7127,7 +7127,39 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	// the decline column stops naming any *unwritten rule* on either lane. `try_table.wast`'s three
 	// remaining fails are the harness's own result-representation limit (`result 0 has type (ref null
 	// 0)`), which is `TestGrave206KnownFailures`' population and not this bound's.
-	const allOnPassFloor = 64862
+	//
+	// # 64862 → 64900 with #328: +38, all of it out of `accepted`, and 10 of it invisible to the other
+	// lane
+	//
+	// The all-on admission census goes **66 → 28** and the fail count 184 → 146, so three readings agree
+	// on 38 with no shared input: this floor's +38, the census's −38, and the fail column's −38. Single
+	// destination, so it is a *correctness* gain in the ledger's vocabulary — 38 rules became right and
+	// none became known, `declined` unmoved at 8.
+	//
+	// **The 28 the default lane converted are a subset, and the 10 remaining are the reason this bound
+	// is not redundant with `passFloor`.** Those 10 need a gate to decode at all — GC types and
+	// reference subtyping in const expressions — so they are rules the default lane cannot ask about.
+	// The residue of 28 breaks down 14 `unknown type`, 9 `type mismatch`, 4 `uninitialized local`, 1
+	// `constant expression required`, and it is the *entire* remaining admission stratum on either lane.
+	//
+	// The part worth reading is `type-rec.wast`'s 8 `type mismatch` admissions going to **3**, because
+	// those 8 are the pre-registered witnesses for iso- versus equi-recursive type equality — the
+	// population `binary.CompType.RecStart`/`RecLen` was retained for, whose falsifier was blocked
+	// behind exactly this slice's unwritten rule. Five convert, which is the answer: `sameDefType`'s
+	// group-shape comparison is right. The three that survive (`:51`, `:204`, `:216`) are **not** that
+	// relation failing — they are `inlineFuncType` reusing a functype that is a *member of a
+	// multi-member rec group* where `inline_functype` only ever reuses `DefT (RecT [st'], 0l)`, a
+	// singleton (parser.mly:222-235). So `ref.func $f` gets the group member's index, the want and the
+	// got are literally the same index, and no relation over them can disagree — so the module is
+	// admitted one layer below where anyone was looking. Filed as **grave #402** with that diagnosis
+	// rather than fixed here: the repair needs rec-group extent in `resolvedComp`, which the text type
+	// table does not carry, and un-reusing a type shifts every subsequent index in every module with an
+	// inline signature. Its own slice, with the 3 pre-registered there.
+	//
+	// **A split, not a verdict** — the available oracle answered its half (5 conversions certify
+	// `sameDefType`) and the residue turned out to be a different defect wearing the same vectors,
+	// which is why the 8 do not stay one number.
+	const allOnPassFloor = 64900
 	// **Slack 0 as of Scott's #387 ruling**, which this bound's own 89-row staleness above is what
 	// prompted: a floor with 250 of tolerance cannot detect anything smaller than 250, so it is a
 	// bound sitting inside its own tolerance. Exact from here — re-base it in the PR that moves the
@@ -9542,7 +9574,20 @@ func TestPhase1Files(t *testing.T) {
 	//
 	// A forecast from the fix's location and not from the work's: that is the transferable half, and it
 	// is the same sentence grave #390 produced read one step earlier in the process.
-	const validateFailCeiling = 36
+	//
+	// # 36 → 8 with #328, and this partition is now `validateDeclineCeiling` alone
+	//
+	// The whole of the 28 comes out of `validateAdmitCeiling` (28 → 0), so the account is there. What
+	// belongs here is what the identity between the two constants now means: this bound sums declines
+	// and admissions, the admissions are zero, and the eight declines are the eight relaxed-SIMD
+	// operators whose gate is its own event. So **this bound and `validateDeclineCeiling` have become
+	// the same number, and they are two bounds rather than one for the reason they always were** — one
+	// counts a structural residue and the other counts it plus a population that can rise. Collapsing
+	// them because they agree today would delete the only instrument that can report the rise, which
+	// is the movement `validateAdmitCeiling`'s own header calls the one that makes the engine less
+	// correct. The agreement is asserted rather than assumed: the arm-flag reconciliation below fires
+	// if the two paths ever describe different populations.
+	const validateFailCeiling = 8
 	const validateDeclineCeiling = 8
 	boardBound(t, "validateDeclineCeiling", validateDeclined, validateDeclineCeiling, 0, ceilingBound,
 		"slice 1 declined more instructions than it did — either an opcode left the signature "+
@@ -9647,7 +9692,32 @@ func TestPhase1Files(t *testing.T) {
 	// Two consecutive slices whose *default-lane* delta is entirely a rider's is now a pattern worth
 	// stating: a gated slice's default-lane forecast is a forecast about **everything else in the PR**,
 	// and reading it off the gate map returns zero every time.
-	const validateAdmitCeiling = 28
+	//
+	// # 28 → 0 with #328, and a bound that reaches zero has to say where its subject went
+	//
+	// The const-expression typing slice converts all 28 at once, which is the largest single-destination
+	// correctness gain this campaign has recorded and the last one available on this lane. Four rules,
+	// each a reference line this engine did not have: `check_const`'s typing half (23 rows),
+	// `check_import`'s `ExternFuncT` arm (2), `check_elemmode`'s `match_reftype` (2), and `ref.func`
+	// resolution inside a const expr (1). Forecast at 28 → 0 before the rules were written and landed
+	// there exactly.
+	//
+	// **A ceiling at 0 is a real assertion and not a lost instrument, but it is no longer a work plan**,
+	// which is the distinction `declined`'s own drain to zero (the reference-type slice) had to make and
+	// this bound now inherits. As an assertion it is the strongest form this bound has ever taken: any
+	// rise at all is a regression, where at 28 a rise of 1 was indistinguishable from a slice not having
+	// landed yet. As a work plan it has no subject — and the subject moved to the **all-on lane**, where
+	// the same census reads 28 after this slice took it from 66. That number is measured on both sides
+	// against `main`, not inferred: 66 → 28 there, all 38 out of `accepted`, with `allOnPassFloor`'s +38
+	// and the all-on fail count's −38 closing the arithmetic from two other directions.
+	//
+	// The 28-and-28 is a coincidence of two disjoint populations and is stated as one because the
+	// numbers invite the other reading — that this lane's 28 simply moved lanes. They did not: the
+	// all-on residue is 14 `unknown type`, 9 `type mismatch`, 4 `uninitialized local` and 1 `constant
+	// expression required`, none of which is a vector this lane can ask, since every one of them needs a
+	// gated feature to decode. An identical count on two lanes is exactly the shape a mis-scoped census
+	// produces, so it was measured rather than trusted.
+	const validateAdmitCeiling = 0
 	boardBound(t, "validateAdmitCeiling", validateAdmitted, validateAdmitCeiling, 0,
 		ceilingBound,
 		"the validator accepted an invalid module it used to refuse. This is the accept direction: "+
@@ -10282,7 +10352,36 @@ func TestPhase1Files(t *testing.T) {
 	// validator slices with a structural zero is not four confessions; it is the column having no
 	// mechanism by which a validator rule could move it, which is why the sentence names the mechanism
 	// each time rather than the number.
-	const passFloor = 60840
+	//
+	// # 60840 → 60868 with #328: +28, and for the first time in five entries the slice's own subject is
+	// the whole of it
+	//
+	// Const-expression typing needs no gate — a global's initializer is MVP core — so `check_const`'s
+	// typing half (23 rows), `check_import`'s `ExternFuncT` arm (2), `check_elemmode`'s `match_reftype`
+	// (2) and `ref.func` resolution inside a const expr (1) all land here. `validateAdmitCeiling` 28 → 0
+	// is where every one of them comes from; `encodeFailCeiling` unmoved at 68, `execFailCeiling` at 81,
+	// `validateDeclineCeiling` at 8 — so fail 185 → 157 decomposes to 28 admissions and nothing else.
+	// Forecast at +28 before the rules were written.
+	//
+	// **Two decode-direction graves rode along and neither one moved this figure**, which is the entry
+	// worth reading twice. Grave #400 gave every index-form element segment `funcref` where the reference
+	// gives `(ref func)` (decode.ml:1154-1163), and grave #401 gave the `(table rt (elem x…))` sugar
+	// `elemkind`'s type where the reference gives the table's own (parser.mly:1215). Both were invisible
+	// for as long as nothing compared an element segment's type against its table's — nullability is only
+	// ever read by a subtype check — and `check_elemmode` is the first such comparison this engine has
+	// had. So they surfaced as **over-rejections of four valid modules**, not as admissions: `elem.wast`
+	// :453 and :487, `br_table.wast:3`, `type-subtyping.wast:373`. Fixed in this PR, and their net
+	// contribution to this figure is zero, because a rule that over-rejects and a rule that is absent
+	// score the same on a corpus of invalid modules.
+	//
+	// The transferable half: **a new accept-direction rule audits the decoders that feed it**, and the
+	// audit is free only if the rule is landed before the pins are re-based. Had the four over-rejections
+	// been read as "#328's rule is too strict" the repair would have gone into `matchRefType` and both
+	// decoders would still be wrong — the validator was right about the types it was handed.
+	//
+	// `unsupported` is unmoved at 66 and the zero is **structural** for the fifth entry running:
+	// `classify` is untouched, so nothing the harness could not ask became askable.
+	const passFloor = 60868
 	// Slack 0 as of #387's ruling, with `allOnPassFloor` and `unsupportedCeiling` — see
 	// `boardbound_test.go`'s retirement section. Two entries in the ledger above record taking a
 	// re-base *although the slack stayed silent* (58659 by a margin of 20, and the 416 that was four

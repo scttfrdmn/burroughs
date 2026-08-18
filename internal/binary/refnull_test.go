@@ -242,59 +242,178 @@ func TestEveryHeapTypeRowFilesACastType(t *testing.T) {
 	}
 }
 
-// TestConstExprRefNullFilesNoCastType pins the half of `ref.null`'s retention that #359 did *not*
-// close, so the gap is declared rather than discovered.
+// TestConstExprRefNullRetainsItsHeapType is #361 closed, and it is the successor to the tripwire that
+// pinned the gap rather than a deletion of it.
 //
-// A const expression's instructions are retained (`decodeConstExprKeep`) and its `castsOut` is nil,
-// because `Global.Init`, `ElemSegment.Offset`/`Exprs` and `DataSegment.Offset` are bare `[]Instr`
-// with no side table beside them. `emit` therefore drops the staged reftype — correctly for a
-// recognizing read, and indistinguishably from one here.
+// Formerly `TestConstExprRefNullFilesNoCastType`, which asserted that `Global`,
+// `ElemSegment` and `DataSegment` carried **no** cast side table — the declared state, held on 0016's
+// rule that retention waits for a consumer. #328's `checkConst` types all four constant-expression
+// sites, which is the consumer #361 named, so the fields exist and that test failed exactly as
+// designed. **Its message said "delete this pin", and taking that literally would have been the
+// error**: a control whose subject closes is re-pointed at the closed state, because the silent-loss
+// failure it was against did not go away — it moved from "the map is never filed" to "the map is
+// filed for three of the four holders", which nothing would have noticed.
 //
-// **Not plumbed and not a bug, on the rule that closed the other half.** `internal/validate` walks
-// const expressions for `checkConstGlobals`' ordering rule and does not type them, so a field would
-// be retention ahead of its consumer (0016). What makes that a declaration rather than an intention
-// is this test plus #361: when const-expression typing arrives it meets a known gap instead of a
-// `CastTypes` that answers false for an instruction which has a static type.
+// So the domain here is the four holders, and the two halves are:
 //
-// The assertion is of the *current* state on purpose, and it is a tripwire in both directions, which
-// takes two different assertions because the two ways of closing the gap are observable in two
-// different places. Plumbing it into a **word** shows up in the retained `Instr` — Imm0/Imm1 stop
-// being zero — and plumbing it into a **side table** shows up in the struct that would hold it, since
-// `Global.Init` is a bare slice with nowhere to key by instruction index. Asserting only the first
-// would let the likelier of the two land silently, and the comment that used to stand here claimed
-// both directions off the first assertion alone.
+//   - **per site**, that a `ref.null` in that site's expression files its spelled heaptype, keyed by
+//     the instruction's own index;
+//   - **structurally**, that every constant expression a holder carries has a side table beside it,
+//     with the field list *derived* from the struct rather than enumerated — so the fifth site
+//     (`Table`'s initializer, which #7 introduces and which `modulePre`'s census names as absent)
+//     cannot arrive without one.
 //
-// A structural assertion is the only thing that can see the second direction: there is no value to
-// read, only the absence of a place to read one from.
-func TestConstExprRefNullFilesNoCastType(t *testing.T) {
-	// A global whose initializer is `ref.null func`, END — the shortest const expression that
-	// stages a reftype. Section 6, one global, type `funcref` immutable.
-	img := []byte{
+// The heaptype is read back rather than the map's presence checked, for the reason the old pin's
+// first assertion had: a filed-but-wrong vector and an unfiled one are different bugs, and only the
+// value tells them apart.
+func TestConstExprRefNullRetainsItsHeapType(t *testing.T) {
+	// Every gate on, matching TestRefNullRetainsTheSpelledHeapType's configuration and for its
+	// reason: the subject is what the reader keeps, so a declined feature would be a test answering
+	// a question it did not ask.
+	d := &Decoder{Features: featuresAllOn(t)}
+
+	// The four sites, each as a whole module image, because three of them need a memory or a table
+	// section for the segment to decode at all — a per-site fixture is the only form in which
+	// "which holder was it filed on" is a real question.
+	//
+	// `HeapExtern` and not `HeapFunc` throughout: `ref.null extern` is the spelling that a
+	// heaptype-blind retention cannot fake. A funcref null is what most vectors carry, so filing
+	// `funcref` unconditionally would pass a `HeapFunc` fixture — the accept-direction defect
+	// `refNull`'s own comment in `internal/validate` names, tested here from the retention side.
+	preamble := []byte{
 		0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
-		0x01, 0x04, 0x01, 0x60, 0x00, 0x00, // type: [] -> [] (so a typeidx heaptype would resolve)
-		0x06, 0x06, 0x01, 0x70, 0x00, 0xD0, HeapFunc, 0x0B,
+		0x01, 0x04, 0x01, 0x60, 0x00, 0x00, // type: [] -> []
 	}
-	m, err := (&Decoder{Features: Features{GC: true}}).DecodeModule(img)
-	if err != nil {
-		t.Fatalf("decode: %v", err)
+	for _, tc := range []struct {
+		name string
+		tail []byte
+		// read pulls the site's side table out of the decoded module, and the instruction index
+		// the `ref.null` sits at. The index is per-case because two of the four sites put the
+		// `ref.null` at 0 and the elem offset puts it after nothing — see each row.
+		read func(*Module) (map[int][]ValType, int, bool)
+	}{
+		{
+			// A global `(global externref (ref.null extern))`. Section 6: one global, type
+			// `externref` (0x6F), immutable, then the initializer.
+			name: "global initializer",
+			tail: []byte{0x06, 0x06, 0x01, 0x6F, 0x00, 0xD0, HeapExtern, 0x0B},
+			read: func(m *Module) (map[int][]ValType, int, bool) {
+				if len(m.Globals) != 1 {
+					return nil, 0, false
+				}
+				return m.Globals[0].InitCasts, 0, m.Globals[0].Init[0].Op == opRefNull
+			},
+		},
+		{
+			// A data segment whose *offset* is `ref.null extern`. Invalid as a module — an offset
+			// must type as an address — and that is the point: rejecting it is what needs the
+			// heaptype, so the reject direction has the same retention requirement the accept one
+			// does. Section 5 declares a memory so the segment decodes; the decoder does not type
+			// offsets.
+			name: "data segment offset",
+			tail: []byte{
+				0x05, 0x03, 0x01, 0x00, 0x01, // memory: one, min 1
+				0x0b, 0x06, 0x01, 0x00, 0xD0, HeapExtern, 0x0B, 0x00, // data: active mem 0, offset, 0 bytes
+			},
+			read: func(m *Module) (map[int][]ValType, int, bool) {
+				if len(m.Datas) != 1 {
+					return nil, 0, false
+				}
+				return m.Datas[0].OffsetCasts, 0, m.Datas[0].Offset[0].Op == opRefNull
+			},
+		},
+		{
+			// An element segment whose offset is `ref.null extern`, same shape and same reason as
+			// the data row. Flags 0x00 is active-at-table-0 with the elemkind form, so the element
+			// vector is function indices and is empty.
+			name: "element segment offset",
+			tail: []byte{
+				0x04, 0x04, 0x01, 0x70, 0x00, 0x01, // table: one funcref, min 1
+				0x09, 0x06, 0x01, 0x00, 0xD0, HeapExtern, 0x0B, 0x00, // elem: flags 0, offset, 0 funcs
+			},
+			read: func(m *Module) (map[int][]ValType, int, bool) {
+				if len(m.Elems) != 1 {
+					return nil, 0, false
+				}
+				return m.Elems[0].OffsetCasts, 0, m.Elems[0].Offset[0].Op == opRefNull
+			},
+		},
+		{
+			// The expression form, and **the `ref.null` is the second element while the first
+			// files nothing**. `ExprCasts` is the one site keyed twice — by expression and then by
+			// instruction — and the two ways it can be wrong need different first elements to
+			// witness. A build that returns expression 0's map for expression 1 is caught by the
+			// `ref.null` not being at 0; a build that appends to `ExprCasts` only where a cast was
+			// filed is caught by expression 0 filing *none*, which shortens the slice and moves
+			// every later index down one. A fixture whose first element were a second `ref.null`
+			// would see the first bug and be blind to the second — measured, not reasoned: that is
+			// exactly what the first draft of this row was, and the falsification that appends
+			// conditionally left it green.
+			//
+			// So expression 0 is `ref.func 0`, which needs the function and code sections below to
+			// keep the fixture a well-formed module in every respect but the one under test.
+			name: "element segment expression",
+			tail: []byte{
+				0x03, 0x02, 0x01, 0x00, // function: one func, type 0
+				0x09, 0x0a, 0x01, 0x05, 0x6F, 0x02, // elem: flags 5, reftype externref, 2 exprs
+				0xD2, 0x00, 0x0B, // expression 0: ref.func 0 — stages no cast type
+				0xD0, HeapExtern, 0x0B, // expression 1: ref.null extern
+				0x0a, 0x04, 0x01, 0x02, 0x00, 0x0B, // code: one empty body
+			},
+			read: func(m *Module) (map[int][]ValType, int, bool) {
+				if len(m.Elems) != 1 || len(m.Elems[0].ExprCasts) != 2 {
+					return nil, 0, false
+				}
+				return m.Elems[0].ExprCasts[1], 0, m.Elems[0].Exprs[1][0].Op == opRefNull
+			},
+		},
+	} {
+		m, err := d.DecodeModule(append(append([]byte{}, preamble...), tc.tail...))
+		if err != nil {
+			t.Errorf("%s: decode: %v", tc.name, err)
+			continue
+		}
+		casts, at, ok := tc.read(m)
+		if !ok {
+			t.Errorf("%s: the fixture did not decode into the shape this row reads — the "+
+				"instruction the assertion is about is not where it looks, so a green here would "+
+				"say nothing", tc.name)
+			continue
+		}
+		ts, filed := casts[at]
+		if !filed {
+			t.Errorf("%s: nothing retained for the ref.null at instruction %d — #361's gap, which "+
+				"#328's checkConst is the consumer for; a nil map here is `emit` dropping the "+
+				"staged reftype because this holder's castsOut never reached it", tc.name, at)
+			continue
+		}
+		if len(ts) != 1 {
+			t.Errorf("%s: retained %d types, want exactly 1 — the count is the discriminator and "+
+				"not a lower bound, a two-type vector being the cast pair's staging leaking in",
+				tc.name, len(ts))
+			continue
+		}
+		if got := ts[0].String(); got != "externref" {
+			t.Errorf("%s: retained %s, want externref — a retention that files `funcref` for every "+
+				"`ref.null` passes a HeapFunc fixture and is exactly the invented type "+
+				"`internal/validate`'s refNull refuses to fall back on", tc.name, got)
+		}
+		if !ts[0].null {
+			t.Errorf("%s: retained a non-nullable type — the null bit is `ref.null`'s meaning "+
+				"(decode.ml:604), unconditional and unencodable, the same in a constant "+
+				"expression as in a body", tc.name)
+		}
 	}
-	if len(m.Globals) != 1 {
-		t.Fatalf("%d globals, want 1", len(m.Globals))
-	}
-	init := m.Globals[0].Init
-	if len(init) == 0 || init[0].Op != opRefNull {
-		t.Fatalf("the initializer's first instruction is not the ref.null, so this asserts nothing "+
-			"about the staging path: %+v", init)
-	}
-	if init[0].Imm0 != 0 || init[0].Imm1 != 0 {
-		t.Errorf("the retained ref.null carries Imm0=%d Imm1=%d, so a heaptype is reaching a word "+
-			"— `immHeapType` stages none by 0027, and a word appearing here means the capacity "+
-			"control `immStagedBits` bounds has a new per-row cost", init[0].Imm0, init[0].Imm1)
-	}
-	// The side-table direction. `Func` carries `Casts map[int][]ValType`; the three const-expression
-	// holders carry no such field, and that absence *is* the gap. Checked structurally over all
-	// three rather than on `Global` alone, because whichever one a future consumer needs first is
-	// the one that would land while a control watching a different struct stayed green.
+
+	// The structural half, and its domain is **derived**: every field of a const-expression holder
+	// whose type is `[]Instr` must have a `map[int][]ValType` sibling, and every `[][]Instr` field a
+	// `[]map[int][]ValType` one. Enumerating the four sites instead would inherit today's list, which
+	// is precisely the mistake the old pin was one revision away from — it watched three structs and
+	// the fourth site (`Table`'s initializer) is on a fifth.
+	//
+	// `Table` is in the domain and contributes nothing today, which is the intent: its initializer is
+	// decoded and discarded, `modulePre`'s census names the absence, and #7 is what adds the field.
+	// When it does, this fires unless the side table comes with it.
 	for _, tc := range []struct {
 		name string
 		typ  reflect.Type
@@ -302,26 +421,45 @@ func TestConstExprRefNullFilesNoCastType(t *testing.T) {
 		{"Global", reflect.TypeFor[Global]()},
 		{"ElemSegment", reflect.TypeFor[ElemSegment]()},
 		{"DataSegment", reflect.TypeFor[DataSegment]()},
+		{"Table", reflect.TypeFor[Table]()},
 	} {
-		want := reflect.TypeFor[map[int][]ValType]()
+		var (
+			one  = reflect.TypeFor[[]Instr]()
+			many = reflect.TypeFor[[][]Instr]()
+			side = map[reflect.Type]reflect.Type{
+				one:  reflect.TypeFor[map[int][]ValType](),
+				many: reflect.TypeFor[[]map[int][]ValType](),
+			}
+			have = map[reflect.Type]int{}
+			want = map[reflect.Type]int{}
+		)
 		for i := range tc.typ.NumField() {
-			if f := tc.typ.Field(i); f.Type == want {
-				t.Errorf("%s.%s is a %s — a per-instruction cast side table beside a const "+
-					"expression, which is #361 closing. Delete this pin and re-point the "+
-					"`castsOut` comment, which still says the retention is declined",
-					tc.name, f.Name, f.Type)
+			switch ft := tc.typ.Field(i).Type; ft {
+			case one, many:
+				want[side[ft]]++
+			default:
+				have[ft]++
+			}
+		}
+		for st, n := range want {
+			if have[st] < n {
+				t.Errorf("%s holds %d constant expression(s) wanting a %s beside them and carries "+
+					"%d — a const expression with no side table is a `ref.null` whose heaptype is "+
+					"dropped, which is #361 reopening at a site nobody was watching",
+					tc.name, n, st, have[st])
 			}
 		}
 	}
-	// Vacuity half: the same instruction in a *function body* does file, so the absences above are
-	// about the call path and not about the opcode. Without this, the whole test would pass if
-	// `ref.null` had never begun filing at all.
-	fm, err := (&Decoder{Features: Features{GC: true}}).DecodeModule(oneFuncImage(0xD0, HeapFunc))
+
+	// Vacuity half, kept from the pin this replaces and inverted with it: the same instruction in a
+	// *function body* files too, so a green above is about both call paths rather than about one. If
+	// `ref.null` stopped filing altogether, every assertion here would fail and this would say which.
+	fm, err := d.DecodeModule(oneFuncImage(0xD0, HeapExtern))
 	if err != nil {
 		t.Fatalf("the function-body image does not decode, so the comparison has one side: %v", err)
 	}
-	if _, ok := fm.Funcs[0].CastTypes(0); !ok {
-		t.Fatal("a ref.null in a function body files no cast type either, so this test is pinning " +
-			"a gap that is actually the whole feature missing — the absence above says nothing")
+	if ts, ok := fm.Funcs[0].CastTypes(0); !ok || len(ts) != 1 || ts[0].String() != "externref" {
+		t.Fatalf("a ref.null in a function body retains %v (filed=%v), so the const-expression "+
+			"assertions above are measuring a feature that is broken on both paths", ts, ok)
 	}
 }

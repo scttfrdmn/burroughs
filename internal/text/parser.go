@@ -1546,11 +1546,23 @@ func (p *parser) tableField() error {
 // `importedTable` resolve, across both spellings each — and this arm is one of the six that still
 // accept.
 //
-// The two arms differ in the element list's form *and* in the element type, and the second difference is
-// not a detail: the `elemidx_list` arm states `let rt = (NoNull, FuncHT)` in its own action (:1217)
-// where the `elemexpr` arm takes `$2 c`, the reftype the text wrote. So `(table funcref (elem 0))` and
-// `(table funcref (elem (ref.func 0)))` have *different* element types — `(NoNull, FuncHT)` and
-// `(Null, FuncHT)` — and take flags 0x00 and 0x04. The table's own `RefType` is `$2 c` in both.
+// **The two arms do not differ in the element type, and the paragraph that stood here said they did**
+// — grave #401. It claimed the `elemidx_list` arm "states `let rt = (NoNull, FuncHT)` in its own action
+// (:1217)" where the `elemexpr` arm takes `$2 c`, and concluded that `(table funcref (elem 0))` and
+// `(table funcref (elem (ref.func 0)))` have different element types. Both arms take `$2 c`, the reftype
+// the text wrote: parser.mly:1208 for the expression form and **:1215** for the index form, whose action
+// opens `let (_, ht) as rt = $2 c in` and passes that `rt` to both the `Table` and the `Elem` it builds.
+// The cited `let rt = (NoNull, FuncHT) in` is real, and it is in a different production — the *offset*
+// sugar's bare-index arm at :1178, which is `elemIdxList`'s caller and not this one. So the citation
+// resolved to text that exists and describes an arm this function is not, which is the failure mode a
+// resolving-citation sweep cannot see: two arms of one grammar, one of them quoted onto the other.
+//
+// The defect it caused is one word wide and was invisible for as long as every table in play was
+// `funcref`, since `(NoNull, FuncHT) <: (Null, FuncHT)` holds. `(table $t (ref null $t) (elem $tf))`
+// (br_table.wast:1019) is where it shows: the reference gives that segment `(ref null $t)`, so it
+// encodes in the expression form and validates; this arm gave it `(ref func)`, which encodes as
+// `elemkind` and is not a subtype of `(ref null $t)` at all. Found by #328's `check_elemmode` port,
+// which is the first thing in this engine that ever compared the two types.
 func (p *parser) tableElemSugar(kw Token, idx uint32, addr64 bool) error {
 	rt, err := p.reftype()
 	if err != nil {
@@ -1569,19 +1581,19 @@ func (p *parser) tableElemSugar(kw Token, idx uint32, addr64 bool) error {
 	// these arms is what makes `govet`'s `shadow` and `gocritic`'s `sloppyReassign` want
 	// opposite things, and the two of them are describing one fact — an error held live across
 	// arms that have no business in it.
-	var (
-		elems    []instrSink
-		elemType = rt
-	)
+	// One variable where there were two: the element type is `rt` down both arms now, and a
+	// separate `elemType` initialized to `rt` and reassigned in one arm is exactly the shape that
+	// let grave #401 read as deliberate.
+	var elems []instrSink
 	if p.c.at(NatTok) || p.c.at(VarTok) || p.c.at(RParen) {
 		// elemidx_list (parser.mly:1147), whose idx_list has an empty arm — so
-		// `(table funcref (elem))` is well-formed. The element type is the action's own
-		// `(NoNull, FuncHT)`, not the reftype the table was given.
+		// `(table funcref (elem))` is well-formed. The element type is `rt`, the reftype the
+		// table was given (parser.mly:1215), and **not** `elemKindFuncref`: see the header.
 		list, err := p.elemIdxList()
 		if err != nil {
 			return err
 		}
-		elems, elemType = list, elemKindFuncref
+		elems = list
 	} else {
 		list, err := p.elemexprListRetained() // parser.mly:1205
 		if err != nil {
@@ -1605,7 +1617,7 @@ func (p *parser) tableElemSugar(kw Token, idx uint32, addr64 bool) error {
 	p.ctx.defineElem(textElem{
 		table:    idxRef{idx: idx},
 		offset:   sugarZeroOffset(addr64),
-		elemType: elemType,
+		elemType: rt,
 		elems:    elems,
 	})
 	p.ctx.clearNonTypeField(kw)

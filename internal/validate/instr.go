@@ -744,10 +744,16 @@ func (v *validator) funcTypeIndexAt(idx uint32) (uint32, error) {
 // the address type `call_indirect` needed (#343 cause 2). Delegation was never the problem;
 // delegating and then throwing the answer away was. Deleted with that fix, so this comment cites the
 // reason and not the corpse.
-// Full scope is the right argument here because every caller of this method validates a function
-// body, which the reference reaches at :1165, after the last global is folded in.
+// **The scope comes off the validator rather than off the module, and that is the sentence this
+// comment used to get wrong.** It read "full scope is the right argument here because every caller
+// of this method validates a function body" — true while the only walk was a body's, and false the
+// moment `checkConst` began typing a global's initializer with the same walk. Passing
+// `len(v.mod.Globals)` there makes `(module (global i32 (global.get 0)))` resolve to the global whose
+// initializer is being checked, which is `unknown global 0` in the reference: a rule that reads its
+// own subject as being in scope. `globalScope` is the field, and funcBody is the caller that sets it
+// to the full count for the reason the old sentence gave.
 func (v *validator) globalAt(idx uint32) (binary.ValType, bool, error) {
-	return globalTypeAt(v.mod, idx, len(v.mod.Globals))
+	return globalTypeAt(v.mod, idx, v.globalScope)
 }
 
 // sameTypes compares two type sequences by identity.

@@ -324,7 +324,20 @@ func TestRangeCitationSubjectsAreReadFromTheReference(t *testing.T) {
 	// range, `exception.go`'s `pop`/`match_stack` line two, and `elem_test.go`'s
 	// `check_elem`/`check_const` line two. Six and four is the whole +10, which is the check that no
 	// range went unread while the totals happened to agree.
-	const wantKeyed, wantResidue = 80, 34
+	// **#328's split is keyed 85 and residue 35, all four new ranges in `module.go` — 20/3 to 25/4 —
+	// and the reading is the multi-subject excess moving for the first time since slice 8.** Four
+	// citations, five keyed subjects: `check_externtype`/`ExternFuncT` on the import arm's line and
+	// `check_func`/`func_type` on the declaration loop's, two lines each naming a definition *and* the
+	// thing inside it that the range shows. Both are rules whose whole content is "resolve this index
+	// through that lookup", so the lookup's name is unavoidable in any true description of them — which
+	// is the slice-7 observation about shared citations arriving from the other direction: the excess
+	// grows when a rule's statement *needs* two of the reference's names, not when one name is reused.
+	//
+	// The single residue increment is the message line inside Rule C, and it is this header's third
+	// category rather than a fourth: the sentence says the message is the reference's own and cites the
+	// two lines it is copied from, naming no identifier because the thing being pointed at is a *string*.
+	// A citation whose subject is a sentence keys nothing and is right not to.
+	const wantKeyed, wantResidue = 85, 35
 	if keyed != wantKeyed || residue != wantResidue {
 		t.Errorf("keyed %d range citation(s) by named subject and left %d as residue, want %d and "+
 			"%d — recount and re-pin. A row moves from residue to keyed when its description starts "+

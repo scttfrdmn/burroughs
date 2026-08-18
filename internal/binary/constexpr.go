@@ -23,11 +23,12 @@ func (d *Decoder) decodeGlobal(r *reader) error {
 	if err != nil {
 		return err
 	}
-	init, err := d.decodeConstExprKeep(r)
+	init, casts, err := d.decodeConstExprKeep(r)
 	if err != nil {
 		return err
 	}
-	d.mod().Globals = append(d.mod().Globals, Global{Type: vt, Mutable: mut, Init: init})
+	d.mod().Globals = append(d.mod().Globals,
+		Global{Type: vt, Mutable: mut, Init: init, InitCasts: casts})
 	return nil
 }
 
@@ -78,7 +79,7 @@ func (d *Decoder) decodeElemSegment(r *reader) error {
 				return err
 			}
 		}
-		if seg.Offset, err = d.decodeConstExprKeep(r); err != nil { // offset
+		if seg.Offset, seg.OffsetCasts, err = d.decodeConstExprKeep(r); err != nil { // offset
 			return err
 		}
 	case flags&explicit != 0:
@@ -109,13 +110,33 @@ func (d *Decoder) decodeElemSegment(r *reader) error {
 	// Both were written and both were caught, one row apiece, which is the argument
 	// for a table of every observed encoding over a rule inferred from the first
 	// vector that fails. The two forms with no type field are exactly the two that
-	// default to table 0 with funcref elements.
+	// default to table 0 — and, as the paragraph below records, *not* to the same
+	// element type as each other.
 	// The default when no type field is present, and it is the *decoded* default rather
-	// than a zero value: flags 0 and 4 are funcref segments whose type the wire omits, so
+	// than a zero value: flags 0 and 4 are segments whose type the wire omits, so
 	// leaving ElemType at NoValType would make the field say "unrepresentable" about a
-	// module that plainly declared funcref. That is grave #36's class in a field — an engine
+	// module that plainly declared one. That is grave #36's class in a field — an engine
 	// reporting a value its input never held.
-	seg.ElemType = FuncRef
+	//
+	// **The default is nullability-split, and the split is the whole of grave #400**: the
+	// reference's four index forms yield `(NoNull, FuncHT)` — flag 0's own literal
+	// (decode.ml:1163) and `elem_kind`'s only value (decode.ml:1154-1157) — while flag 4,
+	// the expression form with no reftype field, yields `(Null, FuncHT)` (decode.ml:1183).
+	// So `elemkind` is `(ref func)` and flag 4 is `funcref`, one field apart, and this
+	// decoder gave every one of them `funcref`.
+	//
+	// It was unobservable until an element segment's type was compared against its table's:
+	// nullability is only ever *read* by a subtype check, and until #328's `check_elemmode`
+	// port there was none. It then showed up as an over-rejection rather than an admission —
+	// `(table 1 (ref func) …) (elem (i32.const 0) func 0)` is a valid module the reference
+	// accepts and this decoder made unrepresentable, because `(ref null func) <: (ref func)`
+	// is false in the one direction that matters. That is why a decode-direction defect is
+	// the accept direction's problem: the validator was right about the type it was handed.
+	if flags&exprs != 0 {
+		seg.ElemType = FuncRef // flag 4's `(Null, FuncHT)`
+	} else {
+		seg.ElemType = refNull(FuncRef, false) // `elemkind`'s `(NoNull, FuncHT)`
+	}
 	if flags&(passive|explicit) != 0 {
 		if flags&exprs != 0 {
 			if err := d.decodeRefType(r); err != nil {
@@ -130,8 +151,8 @@ func (d *Decoder) decodeElemSegment(r *reader) error {
 			if kind != 0x00 {
 				return fmt.Errorf("%w: %#02x", ErrMalformedElemKind, kind)
 			}
-			// 0x00 is the only defined elemkind and it means funcref, so nothing to read
-			// off: seg.ElemType already says so.
+			// 0x00 is the only defined elemkind and it means `(ref func)`, so nothing to
+			// read off: seg.ElemType already says so, from the non-expr default above.
 		}
 	}
 	// **Appended per element, never preallocated from the declared count** — grave #138's law,
@@ -148,11 +169,15 @@ func (d *Decoder) decodeElemSegment(r *reader) error {
 	}
 	if seg.ByExpr {
 		elem = func(r *reader) error {
-			e, err := d.decodeConstExprKeep(r)
+			e, casts, err := d.decodeConstExprKeep(r)
 			if err != nil {
 				return err
 			}
-			seg.Exprs = append(seg.Exprs, e)
+			// Appended in one statement with `Exprs`, which is what keeps `ExprCasts`
+			// index-parallel to it: two appends in sequence are two chances for an early
+			// return to leave the slices at different lengths, and a side table one row
+			// short answers a live index with its neighbour's heaptype.
+			seg.Exprs, seg.ExprCasts = append(seg.Exprs, e), append(seg.ExprCasts, casts)
 			return nil
 		}
 	}
@@ -217,7 +242,7 @@ func (d *Decoder) decodeDataSegmentMode(r *reader) (DataSegment, error) {
 	}
 	switch flags {
 	case 0x00: // active, memory 0 implied
-		seg.Offset, err = d.decodeConstExprKeep(r)
+		seg.Offset, seg.OffsetCasts, err = d.decodeConstExprKeep(r)
 		return seg, err
 	case 0x01: // passive: no memory index, no offset
 		seg.Passive = true
@@ -230,7 +255,7 @@ func (d *Decoder) decodeDataSegmentMode(r *reader) (DataSegment, error) {
 		if seg.MemIndex, err = r.u32(); err != nil {
 			return seg, err
 		}
-		seg.Offset, err = d.decodeConstExprKeep(r)
+		seg.Offset, seg.OffsetCasts, err = d.decodeConstExprKeep(r)
 		return seg, err
 	default:
 		return seg, fmt.Errorf("%w: %#02x", ErrMalformedDataSegKind, flags)

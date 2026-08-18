@@ -292,22 +292,22 @@ type instrCtx struct {
 	// recognizing only — parallel to `labelsOut`/`catchesOut`, and nil for the same *set* of
 	// reads.
 	//
-	// **The const-expression case stopped being vacuous when `ref.null` began filing, and the
-	// difference is a declared gap rather than a dropped fact.** The previous revision argued
-	// vacuity from the grammar's other side — no cast-family opcode is const-legal, so nothing
-	// reached `castTypes` — and `ref.null` is const-legal, so a `ref.null` in a global
-	// initializer, an element expression or a data offset now stages a reftype that `constExpr`
-	// has nowhere to file: `Global.Init`, `ElemSegment.Offset`/`Exprs` and `DataSegment.Offset`
-	// are bare `[]Instr` with no side table beside them.
+	// **The const-expression case stopped being vacuous when `ref.null` began filing, and it is
+	// now the case this field is set for.** An older revision argued vacuity from the grammar's
+	// other side — no cast-family opcode is const-legal, so nothing reached `castTypes` — and
+	// `ref.null` is const-legal, so a `ref.null` in a global initializer, an element expression or
+	// a data offset stages a reftype. That reftype had nowhere to go while `Global.Init`,
+	// `ElemSegment.Offset`/`Exprs` and `DataSegment.Offset` were bare `[]Instr`, which is the gap
+	// #361 tracked and #328 closed: `constExpr` sets this on its retaining side and the four
+	// holders each carry the map beside their expression.
 	//
-	// Not plumbed, because the consumer that closed the function-body half has not asked for this
-	// half: `internal/validate` walks const expressions for `checkConstGlobals`' ordering rule and
-	// does not *type* them, so a field here would be retention ahead of its consumer — 0016 again,
-	// one level in. Declared rather than intended: TestConstExprRefNullFilesNoCastType pins the
-	// state and #361 tracks it, so const-expression typing arrives to a known gap instead of to a
-	// `CastTypes` that answers false for an instruction that has a type.
+	// The three revisions this comment has had are worth one line, because the middle one is the
+	// state a reader should be able to recognize: vacuous by an argument about the *grammar*, then
+	// non-vacuous and declared-unplumbed by an argument about the *consumer* (0016 — retention
+	// ahead of its consumer is what 0027 refused), then plumbed when const-expression typing
+	// arrived and asked. Only the middle step needed a tripwire, and it had one.
 	//
-	// Silent-loss is the failure this pin is against, and it is the only one available here:
+	// Silent-loss is what that tripwire was against, and it remains the failure available here:
 	// `emit` drops a staged vector when `castsOut` is nil, which is correct for a recognizing read
 	// and indistinguishable from it for a retaining one.
 	castsOut *map[int][]ValType
@@ -561,11 +561,12 @@ func (c *instrCtx) gateCheck(prefix byte, sub uint32) {
 // the element and data sections (which put an expression *before* other fields) made
 // this worth an authority-derived table rather than a careful reading (#33 property 2).
 func (d *Decoder) decodeConstExpr(r *reader) error {
-	_, err := d.constExpr(r, false)
+	_, _, err := d.constExpr(r, false)
 	return err
 }
 
-// decodeConstExprKeep reads a constant expression and returns it in internal form.
+// decodeConstExprKeep reads a constant expression and returns it in internal form, together with
+// the cast-type side table for the `ref.null`s inside it.
 //
 // The retaining twin of decodeConstExpr, and a separate entry point rather than a bool
 // parameter on one, because the two have different *callers* rather than different
@@ -576,21 +577,34 @@ func (d *Decoder) decodeConstExpr(r *reader) error {
 // first, then a data segment's offset (0015), then an element segment's offset *and* its
 // expression-form elements (0016). The non-retaining twin now has exactly one caller left, and
 // when that goes the bool this refused to take will not need to exist either.
-func (d *Decoder) decodeConstExprKeep(r *reader) ([]Instr, error) {
+//
+// **The second result is #361, closed on its own declared condition.** `castsOut` was left nil here
+// while no consumer typed a constant expression, so `emit` dropped every staged reftype and a
+// `ref.null func` in a global initializer carried nothing saying `func` — the state every `ref.null`
+// was in before #359. #328's `checkConst` types all four const-expression sites, which is the
+// consumer #361 named as the discharge, so the map is filed rather than dropped. Returned beside the
+// instructions instead of reached through a holder, because all four callers store it in a different
+// field and only one of them (`Exprs`) stores a slice of them.
+func (d *Decoder) decodeConstExprKeep(r *reader) ([]Instr, map[int][]ValType, error) {
 	return d.constExpr(r, true)
 }
 
-func (d *Decoder) constExpr(r *reader, keep bool) ([]Instr, error) {
+func (d *Decoder) constExpr(r *reader, keep bool) ([]Instr, map[int][]ValType, error) {
 	c := &instrCtx{d: d, constOnly: true, nonConst: -1}
 	var out []Instr
+	var casts map[int][]ValType
 	if keep {
 		c.out = &out
+		// Only on the retaining side. A recognizing read has no instruction indices to key by —
+		// `emit` short-circuits on a nil `out` before it reaches any of the four side tables — so
+		// handing it a `castsOut` would be a map that can never receive a row.
+		c.castsOut = &casts
 	}
 	err := c.constExprBody(r)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return out, nil
+	return out, casts, nil
 }
 
 func (c *instrCtx) constExprBody(r *reader) error {

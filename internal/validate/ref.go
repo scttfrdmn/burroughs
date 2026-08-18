@@ -148,7 +148,7 @@ var errNoRefNullHeapType = errors.New("internal: ref.null 0xD0 with no retained 
 // (`decode.ml:604`, and `binary.TestRefNullRetainsTheSpelledHeapType` asserts it per heaptype).
 // Re-deriving it here would be a second place knowing one fact.
 func (v *validator) refNull(i int) error {
-	ts, ok := v.curFunc.CastTypes(i)
+	ts, ok := v.castVector(i)
 	if !ok {
 		return fmt.Errorf("%w: instruction %d", errNoRefNullHeapType, i)
 	}

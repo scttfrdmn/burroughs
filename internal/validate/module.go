@@ -204,20 +204,24 @@ func checkTypes(m *binary.Module) error {
 //	check_type      types                    — checkTypes, below: check_subtype_sub's three rules.
 //	                                            `check_rectype`'s context *scoping* is not here —
 //	                                            see checkTypes on the retention it needs
-//	check_import    imports                  — memory/table limits, and `check_tagtype` on a tag
-//	                                            import (slice 10; the func and global arms are not
-//	                                            this slice)
+//	check_import    imports                  — memory/table limits, `check_tagtype` on a tag import
+//	                                            (slice 10), and `check_externtype`'s `ExternFuncT`
+//	                                            arm (#328's Rule B). The global arm — `check_valtype`
+//	                                            over an imported global's declared type — is not this
+//	                                            slice: an indexed reference has to resolve its index,
+//	                                            which is the `unknown type` stratum
 //	check_tag       tags                     — slice 10, `checkTagType` below
 //	check_func      function declarations     — not this slice
 //	check_memory    defined memories          — this slice
 //	check_table     defined tables            — this slice
-//	check_global    globals                   — this slice, `is_const`'s GlobalGet arm only (the
-//	                                            declared type is checked; `check_block`'s type
-//	                                            check on the initializer is not)
-//	check_data      data segments             — memory index, and the offset's GlobalGet arm
-//	check_elem      element segments          — table index, and the GlobalGet arm on the offset and
-//	                                            on every expression-form element (not the reftype
-//	                                            match, and not `check_block`'s type check)
+//	check_global    globals                   — this slice, `check_const` whole: `is_const`'s
+//	                                            GlobalGet arm (#342) and `check_block`'s type check
+//	                                            on the initializer (#328's Rule A)
+//	check_data      data segments             — memory index, and `check_const` whole on the offset,
+//	                                            typed against the memory's address type
+//	check_elem      element segments          — table index, the reftype match (#328's Rule C), and
+//	                                            `check_const` whole on the offset and on every
+//	                                            expression-form element
 //	check_func_body every body                — pre-existing, in Module between the two halves
 //	check_start     the start function        — not this slice, and not an admission either: its
 //	                                            three vectors are refused above the validator with
@@ -232,15 +236,21 @@ func checkTypes(m *binary.Module) error {
 //
 // # The const-expression sites, counted against the reference rather than against this file
 //
-// `is_const`'s GlobalGet arm is one rule reached from **five** `check_const` call sites, and a
-// rule implemented at four of five is not a rule — *coverage is a claim*, so the claim is
-// enumerated and the absence is named:
+// `check_const` is one rule reached from **five** call sites, and a rule implemented at four of five
+// is not a rule — *coverage is a claim*, so the claim is enumerated and the absence is named. Both
+// halves now run at all four sites that have a subject, and the second column is the **expected type**
+// each site passes, which is the parameter #328 added and which had never been read by anything:
 //
-//	valid.ml:1058   global initializer          checkConstGlobals(…, i)               scope = i
+//	valid.ml:1058   global initializer          the global's declared type      scope = i
 //	valid.ml:1070   table initializer           NO SUBJECT — see below
-//	valid.ml:1078   data segment offset         checkConstGlobals(…, len(m.Globals))
-//	valid.ml:1094   element segment offset      checkConstGlobals(…, len(m.Globals))
-//	valid.ml:1100   element segment elements    checkConstGlobals(…, len(m.Globals)), every mode
+//	valid.ml:1078   data segment offset         the memory's address type       scope = len(m.Globals)
+//	valid.ml:1094   element segment offset      the table's address type        scope = len(m.Globals)
+//	valid.ml:1100   element segment elements    the segment's declared reftype  scope = len(m.Globals)
+//
+// The offset rows take their type from the *descriptor* rather than a fixed `i32`, and that is not
+// cosmetic: with both hardcoded to `i32`, the all-on lane loses 58 passes and
+// `TestModuleDefinitionsAskTheValidator` names the over-rejections (`address64.wast:3`,
+// `table_copy64.wast:1746`, …) while the default lane stays green, memory64 being gated off there.
 //
 // The table-initializer site is absent **by representation and not by omission**: a table's
 // initializer expression is decoded and then discarded, so there is no field in
@@ -248,7 +258,7 @@ func checkTypes(m *binary.Module) error {
 // introduces the form; until then a call site would have nothing to be passed. Recorded here
 // because a four-of-five census that says "five" is the coverage claim an instrument cannot
 // make about itself, and the next slice to touch tables needs the gap where it can see it.
-func modulePre(m *binary.Module) error {
+func modulePre(m *binary.Module, refs map[uint32]bool) error {
 	// check_type → check_rectype → check_subtype_sub (valid.ml:178-189, :1107), the phase this
 	// table listed as "not this slice" until decision 0031 opened it. First in `check_module`'s
 	// order and therefore first here: a module with an ill-formed subtype declaration *and* a bad
@@ -282,12 +292,29 @@ func modulePre(m *binary.Module) error {
 			if err := checkTagType(m, imp.Index); err != nil {
 				return fmt.Errorf("import %d: %w", i, err)
 			}
-		case binary.ExternFunc, binary.ExternGlobal:
-			// `check_externtype`'s other two arms. Enumerated rather than defaulted because a
-			// silent default here would absorb a *fourth* extern kind — a future proposal's — as
-			// "checked", which is the under-matching predicate that fails by construction. A func
-			// import's type index and a global's mutability are real rules and are not this slice's;
-			// each is named in the phase table above.
+		case binary.ExternFunc:
+			// `check_externtype`'s `ExternFuncT` arm (valid.ml:230-231):
+			//
+			//	| ExternFuncT ut -> let _ft = func_type c (idx_of_typeuse ut @@ at) in ()
+			//
+			// The type it resolves is discarded by the reference too — this phase asks only whether
+			// the index names a function type, and the *linker* is what consumes the type later. Two
+			// admissions, `func_ptrs.wast:49` and `imports.wast:100`, and the second is the one that
+			// makes the rule worth stating precisely: its module declares one type and imports
+			// `(func (type 1))`, so the index is in range of nothing and off by exactly one. A
+			// bounds check written against `len(m.Types)+1`, or against the import count, passes it.
+			if _, err := funcType(m, imp.Index); err != nil {
+				return fmt.Errorf("import %d: %w", i, err)
+			}
+		case binary.ExternGlobal:
+			// `check_externtype`'s last arm, `check_globaltype`, which is `check_valtype` over the
+			// declared type. Enumerated rather than folded into a default because a silent default
+			// here would absorb a *sixth* extern kind — a future proposal's — as "checked", which is
+			// the under-matching predicate that fails by construction. An imported global's declared
+			// valtype is a real rule and is not this slice's — `check_valtype` over an indexed
+			// reference has to resolve the index, which is the `unknown type` stratum the all-on
+			// lane's census shows and the default lane never asks, since a `(ref $t)` global needs
+			// the GC gate to decode at all.
 		}
 	}
 	// check_tag (valid.ml:1049-1052, folded at :1157) → check_tagtype, in the reference's position:
@@ -300,6 +327,22 @@ func modulePre(m *binary.Module) error {
 	for i := range m.Tags {
 		if err := checkTagType(m, m.Tags[i].TypeIndex); err != nil {
 			return fmt.Errorf("tag %d: %w", i, err)
+		}
+	}
+	// `check_func` (valid.ml:1013-1016), which is `func_type c x` over each *declaration* — the type
+	// index in the function section, checked one phase before the memories and eight before the body.
+	//
+	// **This rule has no vector and lands anyway, and the reason is position rather than verdict.**
+	// `funcBody` already resolves the same index through the same function, so every module this loop
+	// refuses was refused before; what changes is *which* message a module with two defects gets.
+	// `(module (func (type 42)) (memory 0x1_0000_0000))` is `unknown type 42` in the reference and was
+	// `memory size must be at most …` here. No `assert_invalid` on the board pairs those two defects,
+	// so this is transcribed on the reference's authority alone — the same standing `moduleExports`'
+	// two-loop split has, and stated the same way, because a rule justified by an ordering no
+	// instrument can score is a rule whose PR must say so rather than claim a fix.
+	for i := range m.Funcs {
+		if _, err := funcType(m, m.Funcs[i].TypeIndex); err != nil {
+			return fmt.Errorf("func %d: %w", i, err)
 		}
 	}
 	for i := range m.Memories {
@@ -325,7 +368,8 @@ func modulePre(m *binary.Module) error {
 	// A whole-module view answers both wrong, in opposite directions, and only one of those two
 	// vectors is an `assert_invalid` the board would notice.
 	for i := range m.Globals {
-		if err := checkConstGlobals(m, m.Globals[i].Init, i); err != nil {
+		g := &m.Globals[i]
+		if err := checkConst(m, refs, g.Init, g.InitCasts, g.Type, i); err != nil {
 			return fmt.Errorf("global %d: %w", i, err)
 		}
 	}
@@ -339,15 +383,27 @@ func modulePre(m *binary.Module) error {
 		if d.Passive {
 			continue
 		}
-		if err := memoryExists(m, d.MemIndex); err != nil {
+		// **`addrTypeAt` rather than `memoryExists`, and the discarded descriptor is the point** — the
+		// same trade `tableTypeAt` next door already makes, and the reason is now the same too. The
+		// reference destructures the memory type here (`let MemoryT (at, _) = memory c x`) because the
+		// offset's expected type is derived from it: `check_const c offset (NumT (numtype_of_addrtype
+		// at))`. So a `(memory i64 1)` takes an `i64` offset and an i32 memory an `i32`, and writing
+		// `binary.I32` here would pass every default-lane vector and over-reject in the all-on one —
+		// #343 cause 2's shape, one phase up from the instruction that earned it.
+		//
+		// The two functions' messages are identical by construction (see memoryExists on the shared
+		// `(module declares …)` parenthetical), so this substitution moves no verdict; `memoryExists`
+		// keeps its other caller in `exportExists`.
+		at, err := addrTypeAt(m, d.MemIndex)
+		if err != nil {
 			return fmt.Errorf("data segment %d: %w", i, err)
 		}
-		// `check_const c offset (addr_type_of_memory)` at :1076, after the memory resolves — the
-		// sequence the loop's own comment above relies on. Every defined global is in scope here,
+		// `check_const c offset (NumT (numtype_of_addrtype at))` at :1076, after the memory resolves —
+		// the sequence the loop's own comment above relies on. Every defined global is in scope here,
 		// unlike a global's initializer: `check_module` has already folded all of them in by the
 		// time it reaches the data segments (:1161 before :1163), which is why this passes the full
 		// count where the loop above passes `i`.
-		if err := checkConstGlobals(m, d.Offset, len(m.Globals)); err != nil {
+		if err := checkConst(m, refs, d.Offset, d.OffsetCasts, at, len(m.Globals)); err != nil {
 			return fmt.Errorf("data segment %d: %w", i, err)
 		}
 	}
@@ -387,15 +443,30 @@ func modulePre(m *binary.Module) error {
 		// rules — the code-section walk never visits an elem segment, which is why they were filed apart
 		// from the slice whose files they sit in. *A vector's file is not its stratum.*
 		//
-		// The reftype match against the element type stays deferred; what lands is the index
-		// resolution, in the position `check_const` reaches it, per element and after that element's
-		// const check.
+		// **The expression form's half of that lookup is now the walk's own**, which is #328 removing a
+		// duplicate rather than adding a rule: `refFuncIndices` scanned the expression for `ref.func`
+		// and resolved each index beside a const check that did not type anything, and `check_block`'s
+		// `RefFunc` arm does exactly that resolution — through `funcTypeIndexAt`, over the same
+		// imports-then-definitions total — because it needs the type to push. So the scan and its
+		// helper are gone from this branch and `elemFuncsInScope` keeps the branch it was written for,
+		// the index form, where both of #391's vectors are. Two functions resolving one index space
+		// agree until one of them learns something (#241), and the walk is the one that will.
 		if e.ByExpr {
 			for j := range e.Exprs {
-				if err := checkConstGlobals(m, e.Exprs[j], len(m.Globals)); err != nil {
-					return fmt.Errorf("element segment %d, element %d: %w", i, j, err)
+				// `check_const c const (RefT rt)` at :1100, per element, against the segment's *own*
+				// declared reftype and not the table's — the table's is `check_elemmode`'s comparison
+				// below, and conflating them would score `elem.wast:983` against the wrong descriptor.
+				// `ExprCasts` is built index-parallel to `Exprs` by the decoder, and the bounds
+				// test is not that parallelism being doubted — it is what a *hand-built* module
+				// gets, which is every module in this package's own tests. Out of range yields a
+				// nil map, so a `ref.null` in such an expression reports
+				// `errNoRefNullHeapType` rather than reading a neighbour's heaptype: the loud
+				// failure, which is the right one for an engine-internal absence.
+				var ec map[int][]binary.ValType
+				if j < len(e.ExprCasts) {
+					ec = e.ExprCasts[j]
 				}
-				if err := elemFuncsInScope(m, refFuncIndices(e.Exprs[j])); err != nil {
+				if err := checkConst(m, refs, e.Exprs[j], ec, e.ElemType, len(m.Globals)); err != nil {
 					return fmt.Errorf("element segment %d, element %d: %w", i, j, err)
 				}
 			}
@@ -405,56 +476,202 @@ func modulePre(m *binary.Module) error {
 			// a plain index vector. Both forms therefore have to resolve, and both admissions above
 			// arrive in *this* branch — a fix written only for the expression form would have passed
 			// every test anyone thought to write and moved no column.
+			//
+			// **`check_const`'s type half is vacuous on this branch and is therefore not written**,
+			// which is a claim about the wire and not a shortcut: the reference normalizes an index to
+			// `[ref_func x]` and types it against `RefT rt`, and the only `rt` this branch can carry is
+			// `funcref` — the elemkind byte admits nothing else (`decodeElemSegment`), and `ref.func`
+			// always pushes a function reference. A check that cannot fail is worse than an absent one
+			// because it reads as coverage, so what stands here is the lookup and a note of why its
+			// sibling would say nothing. The nullability the reference distinguishes at *encode* time
+			// is unrepresentable in this ValType, which ElemSegment's own comment records.
 			return fmt.Errorf("element segment %d: %w", i, err)
 		}
 		if e.Mode != binary.ElemActive {
 			continue
 		}
-		if _, err := tableTypeAt(m, e.TableIndex); err != nil {
+		tab, err := tableTypeAt(m, e.TableIndex)
+		if err != nil {
 			return fmt.Errorf("element segment %d: %w", i, err)
 		}
-		// `check_const c offset ...` at :1094, after `table c x` and after the reftype match that is
-		// still deferred. **The deferred check sits between these two, so a module with both a
-		// reftype mismatch and a non-constant offset reports this one where the reference reports
-		// the match** — a message inversion the board is measured for rather than assumed clear of,
-		// and the reason the elem loop's absences were worth transcribing in order.
-		if err := checkConstGlobals(m, e.Offset, len(m.Globals)); err != nil {
+		// `require (match_reftype c.types t rt)` at :1091-1093 — the segment's element type against the
+		// table's, the deferred half `tableTypeAt` was resolving a whole descriptor for. **It sits
+		// between the table lookup and the offset's const check, and that position is the rule**: the
+		// comment this replaces recorded the inversion its absence caused, a module with both a reftype
+		// mismatch and a bad offset reporting the offset where the reference reports the match.
+		//
+		// `match_reftype` and not identity, because the relation is subtyping in one direction: a
+		// `(ref $t)` segment may fill a `funcref` table and not the reverse. Two admissions,
+		// `elem.wast:978` (an index-form segment, implicitly `(ref func)` — **not** `funcref`, which is
+		// grave #400 and is what this comment said before it — against an `externref` table) and
+		// `elem.wast:983` (an `externref` segment against a `funcref` table): one in each direction,
+		// which is what makes them a witness for the relation rather than for a mismatch. Both refuse
+		// either way round, so *these two vectors* do not discriminate identity from subtyping. The
+		// corpus does, though, and the accept-direction unit control this slice pre-registered was
+		// therefore **not written** — see `TestModuleDefinitionsAskTheValidator`, which #341 built to
+		// score module definitions on the validator's answer. Measured, with this line replaced by
+		// `e.ElemType != tab.ElemType`: the default lane reports 194 over-rejections and 4
+		// wrong-message rows, and `passFloor` falls 60868 → 60670. §9 G-3's "no `assert_invalid` vector
+		// can witness this" is still true and is no longer the same thing as "the board cannot".
+		//
+		// This rule going in is also what first compared a segment's element type to anything, which is
+		// how the two decode-direction graves surfaced at all.
+		//
+		// The message is the reference's own sentence (valid.ml:1092-1093), which names both types
+		// because a mismatch between two descriptors is unreadable without them.
+		if !matchRefType(tctx{gotMod: m, wantMod: m}, e.ElemType, tab.ElemType) {
+			return fmt.Errorf("element segment %d: %w: element segment's type %s does not match "+
+				"table's element type %s", i, ErrTypeMismatch, e.ElemType, tab.ElemType)
+		}
+		// `check_const c offset (NumT (numtype_of_addrtype at))` at :1094, after `table c x` and after
+		// the reftype match above. The offset's type comes off the table's address type, so a table64
+		// takes an i64 offset — `tableAddrType` is the accessor the bulk operands already read it
+		// through, reused rather than re-derived for `tableOp`'s stated reason.
+		if err := checkConst(m, refs, e.Offset, e.OffsetCasts, tableAddrType(tab), len(m.Globals)); err != nil {
 			return fmt.Errorf("element segment %d: %w", i, err)
 		}
 	}
 	return nil
 }
 
-// refFuncIndices is the function indices a constant expression names through `ref.func`.
-//
-// The same walk `declaredFuncs` does, and deliberately not shared with it: that one unions indices
-// from the whole module to build `context.refs` and cannot report *where* it found one, which is
-// exactly what an `unknown function N` verdict needs. Two walks over the same instruction shape
-// answering two different questions, rather than one walk whose caller has to reconstruct the
-// position.
-func refFuncIndices(body []binary.Instr) []uint32 {
-	var idxs []uint32
-	for k := range body {
-		if body[k].Prefix == 0 && body[k].Op == opRefFunc {
-			idxs = append(idxs, uint32(body[k].Imm0))
-		}
-	}
-	return idxs
-}
-
 // elemFuncsInScope is `func c x` over an element segment's function indices — the lookup half of
 // `check_elem`'s `check_const` (valid.ml:1100), and #391.
 //
-// `indexInScope` rather than `funcTypeAt`: the reference resolves the *type* here because
-// `check_block` then matches it, and that match is deferred — so this is the lookup-that-discards-
-// its-result case `tableTypeAt`'s comment describes from the other side, and taking the type would
-// mean resolving something no rule in this slice reads.
+// **Its expression-form twin is deleted rather than kept, and it is the deletion that is worth the
+// note.** `refFuncIndices` scanned a const expression for top-level `ref.func` immediates so this
+// function could resolve them; `check_block`'s own `RefFunc` arm resolves the same index through
+// `funcTypeIndexAt` because it needs the type it pushes, so once #328 ran the walk over element
+// expressions the scan was a second answer to a question already answered.
+//
+// The deletion stands on that redundancy alone, and **not** on the reason first written here — that
+// "both of #391's vectors are in the index form, which is the branch that survives, so the surviving
+// call is the one with corpus rows behind it." Both vectors are in the *expression* form
+// (`parser.mly:1215` with `encode.ml:1044-1046`; grave #401 is why our own parser said otherwise), so
+// the corpus rows are refused by `checkConst` instead. Valid vectors do *reach* the loop below —
+// `elem.wast:978`'s bare-offset sugar is the index form — but no vector is *refused* by it: neuter it
+// and both lanes of the board stay green, measured, not reasoned. Its entire readership is one row in
+// `elem_test.go`, which is why that row was added when the account was corrected.
+//
+// `indexInScope` rather than `funcTypeAt`: the reference resolves the *type* here because `check_block`
+// then matches it, and on this branch there is no const expression for `check_block` to run over, so
+// nothing consumes the type. The segment's element type is matched against its table's separately, in
+// `check_elemmode` — and it is `(ref func)`, not `funcref` (grave #400).
 func elemFuncsInScope(m *binary.Module, idxs []uint32) error {
 	total := m.ImportedFuncs() + len(m.Funcs)
 	for _, x := range idxs {
 		if err := indexInScope(x, total, ErrUnknownFunc); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// checkConst is the reference's `check_const` (valid.ml:1041-1044), whole:
+//
+//	require (List.for_all (is_const c) const.it) const.at "constant expression required";
+//	check_block c const.it (InstrT ([], [t], [])) const.at
+//
+// Two requirements in the reference's order, and **the order is the rule** rather than a tidiness:
+// `(global i32 (global.get $mut) (i32.const 0))` has both defects — a mutable global in a constant
+// position and two values where one is wanted — and the reference reports `constant expression
+// required`, because the `for_all` predicate runs over the whole sequence before anything is typed.
+// A single fused walk that typed as it went would report `type mismatch` on exactly the modules
+// where both defects appear.
+//
+// # The second requirement is #328's, and it is one rule at four call sites
+//
+// The first half is `checkConstGlobals` (#342). The second — the type check — is what this function
+// adds, and until it existed the expected type of a constant expression was never read by anything:
+// a global initializer's declared type, a data segment offset's address type, an element segment
+// offset's, and an element expression's reftype were all retained and all unasked. 23 admissions
+// across five files, and they are admissions rather than declines for the reason `validate.go`'s
+// header gives: a rule attached to something the code-section walk never visits has no instruction to
+// refuse, so the module is *accepted*, which no board scoring only refusals can see (§9 G-3).
+//
+// # `definedInScope` is threaded through to the walk, not just to the first half
+//
+// It was `checkConstGlobals`' parameter alone, and the type check needs the same number for the same
+// reason: the walk's own `global.get` arm resolves an index, and resolving it at full scope makes a
+// global's initializer able to name itself. That is what `validator.globalScope` is, and it is why
+// this function takes the count rather than reading `len(m.Globals)` one layer down.
+func checkConst(m *binary.Module, refs map[uint32]bool, expr []binary.Instr,
+	casts map[int][]binary.ValType, want binary.ValType, definedInScope int,
+) error {
+	if err := checkConstGlobals(m, expr, definedInScope); err != nil {
+		return err
+	}
+	return typeConstExpr(m, refs, expr, casts, want, definedInScope)
+}
+
+// typeConstExpr is `check_block c const.it (InstrT ([], [t], []))` — the same typing walk a function
+// body gets, over an expression whose declared result is one value.
+//
+// **The walk is shared with function bodies rather than reimplemented, and that is the whole design
+// choice here.** A dedicated const-expr typer would be a second implementation of the operand stack,
+// the subtyping comparison and the block-end arity check, differing from the first one the day either
+// learns something — which is the divergence #394 converged one rule down, and the reference's own
+// answer: `check_const` calls `check_block`, the function every body goes through.
+//
+// What that buys, concretely, is that the const-expr sites inherit rules nobody wrote for them:
+//
+//   - `ref.func`'s index resolution, which is `ref_func.wast:68` (`unknown function 7`) — the arm
+//     already resolves through `funcTypeIndexAt` and had no const expression to run on.
+//   - the *empty* expression and the *two-value* expression, both of which are `endBlock`'s
+//     `popExpectAll` and `expectEmptyFrame` and neither of which is a rule about constants.
+//   - the subtyping comparison, so `(global funcref (ref.func 0))` is valid — the walk pushes the
+//     function's own `(ref $t)` and `matches` accepts it under `funcref`. An identity comparison would
+//     refuse a valid module, and **this slice pre-registered a unit control for that direction on the
+//     premise that nothing else could see it, which measurement falsified.** With `matchRefType`
+//     reduced to `got == want`, the default lane's over-rejection list names the sites: two globals
+//     (`ref_func.wast:6`, `:80`) and one element expression (`global.wast:3`), each with
+//     `requires [funcref] but stack has [(ref 0)]`, out of 399 rows. #341 is why — it scores a bare
+//     `(module …)` on the validator's answer instead of the text reader's, so an over-rejection is a
+//     board movement now. The controls were dropped rather than written: **a pre-registration is a
+//     forecast about the instruments, and #341 changed the instruments under it.**
+//
+// The expression carries its own terminating `end` (`constExprBody` emits one, like a function
+// body's), so the frame is closed by the walk and `endBlock` is what checks the result arity. The
+// frames-empty check below is `funcBody`'s, for the reason recorded there: the arity check lives at
+// `end` alone, and what has no other home is the structural question.
+//
+// # `curFunc` is nil, and the fourth side table had to be plumbed for that to be safe
+//
+// `locals` is empty and `curFunc` nil because a constant expression can hold neither a `local.get`
+// nor a `select t` annotation, a `br_table` vector or a `try_table` clause list — the decoder's
+// const-expr table refuses every opcode that would read one (`internal/binary/instr.go`). That is a
+// precondition supplied by another package, and it is named rather than defended with a nil check,
+// because no input this package can construct reaches those three arms.
+//
+// **`ref.null` is the exception, and the paragraph above stood here in a revision that claimed all
+// four.** `ref.null` *is* const-legal, its arm reads `Casts`, and `Casts` hung off `Func` — so the
+// first run of this walk over the corpus was a nil-pointer panic inside `refNull`, on the very first
+// global initializer holding one. That is #361, whose declared discharge was this consumer arriving;
+// the map is now a parameter, and `validator.castVector` is what reads it from either side. Recorded
+// at this length because the falsified sentence was a comment asserting the property its own code
+// lacked — the shape that makes review confirm the bug — and the thing that caught it was running
+// the board rather than re-reading the claim.
+func typeConstExpr(m *binary.Module, refs map[uint32]bool, expr []binary.Instr,
+	casts map[int][]binary.ValType, want binary.ValType, definedInScope int,
+) error {
+	v := &validator{
+		mod:         m,
+		refs:        refs,
+		casts:       casts,
+		blocks:      map[int]Arity{},
+		globalScope: definedInScope,
+	}
+	// The expression's own frame, typed as a block with no parameters and one result — the
+	// `InstrT ([], [t], [])` the reference passes. Both label and end types are `[want]`, which is
+	// `funcBody`'s shape and correct for the same reason: there is no `br` in a constant expression,
+	// so the label list is unobservable and giving it the results keeps the one frame consistent
+	// rather than inventing a second convention for it.
+	v.pushFrame(opFuncBody, []binary.ValType{want}, []binary.ValType{want})
+	if err := v.instrs(expr); err != nil {
+		return err
+	}
+	if len(v.frames) != 0 {
+		return fmt.Errorf("%w: %d block(s) still open at the end of a constant expression",
+			ErrTypeMismatch, len(v.frames))
 	}
 	return nil
 }
@@ -473,7 +690,11 @@ func elemFuncsInScope(m *binary.Module, idxs []uint32) error {
 //
 // It is **not** `check_const`. That rule is two requirements (`valid.ml:1041-1044`): the
 // `List.for_all (is_const c)` predicate, and then `check_block` typing the expression against the
-// expected result type. Only the first is this slice's, and only the GlobalGet arm of the first —
+// expected result type. This is the first, and only the GlobalGet arm of the first; the second is
+// `typeConstExpr` and the two are composed by `checkConst`, which is the function every call site
+// now goes through. **The sentence above read "only the first is this slice's" and that clause is
+// #328's**, retired rather than deleted because which half was owed and for how long is the durable
+// part: the type check was owed from #342 until #328, and 23 vectors were accepted in the interval.
 // `is_const`'s other arms are answered one layer down, by the decoder's own const-expr table
 // (`internal/binary/instr.go:588`), which refuses a non-const *opcode* with this same
 // `ErrConstExprRequired` identity before a Module exists. That split is the declared layering debt
