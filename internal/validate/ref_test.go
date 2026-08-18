@@ -14,6 +14,17 @@ import (
 // rows are not about.
 func gcOn(f *binary.Features) { f.GC = true }
 
+// heapVocabularyOn is what a row spanning the *whole* heaptype vocabulary needs at the decoder, and
+// it exists because #395 proved `gcOn` was the wrong name for that: two of the twelve abstract forms
+// (`exn`, `noexn`) are the exception proposal's, so once the decoder stopped gating them on GC these
+// rows failed at a layer they are not about — correctly, and with the right message, because
+// `validated` refuses to read a decoder decline as a validator verdict.
+//
+// Named for what the rows *span* rather than for the gates it flips: a helper called `gcAndEHOn`
+// would need renaming the next time a form in this vocabulary turns out to belong to a third
+// proposal, and the rename is exactly the step that gets skipped.
+func heapVocabularyOn(f *binary.Features) { f.GC, f.ExceptionHandling = true, true }
+
 // TestRefNullTypesTheHeapTypeItWasSpelledWith is the accept-direction control for `refNull`, and it
 // is the direction contract §9 G-3 says no corpus can score.
 //
@@ -70,7 +81,7 @@ func TestRefNullTypesTheHeapTypeItWasSpelledWith(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.spell, func(t *testing.T) {
 			ok := `(module (func (result ` + c.result + `) (ref.null ` + c.spell + `)))`
-			if _, err := validated(t, ok, gcOn); err != nil {
+			if _, err := validated(t, ok, heapVocabularyOn); err != nil {
 				t.Errorf("(ref.null %s) does not satisfy a %s result: %v", c.spell, c.result, err)
 			}
 			// The other family. `funcref` for everything that is not itself in the func hierarchy,
@@ -82,7 +93,7 @@ func TestRefNullTypesTheHeapTypeItWasSpelledWith(t *testing.T) {
 				other = "externref"
 			}
 			bad := `(module (func (result ` + other + `) (ref.null ` + c.spell + `)))`
-			_, err := validated(t, bad, gcOn)
+			_, err := validated(t, bad, heapVocabularyOn)
 			if !errors.Is(err, ErrTypeMismatch) {
 				t.Errorf("(ref.null %s) was accepted as a %s result (%v) — the retained heaptype is "+
 					"being widened or ignored, which is the accept direction", c.spell, other, err)
@@ -93,12 +104,12 @@ func TestRefNullTypesTheHeapTypeItWasSpelledWith(t *testing.T) {
 	// The indexed form, which is the only one `check_heaptype` does any work for.
 	t.Run("typeidx", func(t *testing.T) {
 		ok := `(module (type $t (func)) (func (result (ref null $t)) (ref.null $t)))`
-		if _, err := validated(t, ok, gcOn); err != nil {
+		if _, err := validated(t, ok, heapVocabularyOn); err != nil {
 			t.Errorf("(ref.null $t) does not satisfy a (ref null $t) result: %v", err)
 		}
 		// `check_heaptype`'s one non-trivial case, delegated to checkValType — and the message is the
 		// index-space category, not `type mismatch`, because the index does not resolve at all.
-		_, err := validated(t, `(module (func (result funcref) (ref.null 99)))`, gcOn)
+		_, err := validated(t, `(module (func (result funcref) (ref.null 99)))`, heapVocabularyOn)
 		if !errors.Is(err, ErrUnknownType) {
 			t.Errorf("(ref.null 99) in a module with one type reported %v, want ErrUnknownType — "+
 				"`check_heaptype c ht` is the half of this rule that is not the pushed type", err)
@@ -124,7 +135,7 @@ func TestRefIsNullTakesAnyReferenceAndOnlyAReference(t *testing.T) {
 	} {
 		t.Run(ref, func(t *testing.T) {
 			wat := `(module (func (param ` + ref + `) (result i32) (local.get 0) (ref.is_null)))`
-			if _, err := validated(t, wat, gcOn); err != nil {
+			if _, err := validated(t, wat, heapVocabularyOn); err != nil {
 				t.Errorf("ref.is_null refused a %s operand: %v", ref, err)
 			}
 		})
@@ -133,7 +144,7 @@ func TestRefIsNullTakesAnyReferenceAndOnlyAReference(t *testing.T) {
 	for _, num := range []string{"i32", "i64", "f32", "f64"} {
 		t.Run(num, func(t *testing.T) {
 			wat := `(module (func (param ` + num + `) (result i32) (local.get 0) (ref.is_null)))`
-			_, err := validated(t, wat, gcOn)
+			_, err := validated(t, wat, heapVocabularyOn)
 			if !errors.Is(err, ErrTypeMismatch) {
 				t.Errorf("ref.is_null accepted a %s operand (%v) — a rule that pops without "+
 					"classifying is the accept direction, and `peek_ref`'s error is the whole "+
