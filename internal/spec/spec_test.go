@@ -7094,7 +7094,12 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	// this comment to record the same asymmetry, and by now it is the expected shape of a gated slice
 	// rather than an observation.
 	const allOnPassFloor = 64798
-	boardBound(t, "allOnPassFloor", totalPass, allOnPassFloor, boardBoundSlack, floorBound,
+	// **Slack 0 as of Scott's #387 ruling**, which this bound's own 89-row staleness above is what
+	// prompted: a floor with 250 of tolerance cannot detect anything smaller than 250, so it is a
+	// bound sitting inside its own tolerance. Exact from here — re-base it in the PR that moves the
+	// lane, which is 0013's rule with the escape hatch removed. `boardbound_test.go`'s retirement
+	// section carries the ruling, the argument it retired, and the #42 consequence it accepts.
+	boardBound(t, "allOnPassFloor", totalPass, allOnPassFloor, 0, floorBound,
 		"a gated feature regressed, which the Gated==0 assertion above cannot see: with every "+
 			"gate on, a broken feature turns a pass into a fail and leaves Gated at zero")
 }
@@ -7880,7 +7885,11 @@ func TestPhase1Files(t *testing.T) {
 	// authorized here, because nothing was being substituted. (Ruling: Scott, PR #307, on the actor's
 	// flag asking whether the carve-out extended. It did not need to.)
 	const unsupportedCeiling = 66
-	boardBound(t, "unsupportedCeiling", totalUnsup, unsupportedCeiling, boardBoundSlack, ceilingBound,
+	// Slack 0 as of #387's ruling, with the other two tracked board counts — see
+	// `boardbound_test.go`'s retirement section. This is the one of the three where the retired
+	// slack's stated purpose bit hardest: a ceiling drains *toward* its column, so 250 of tolerance
+	// on a column standing at 66 was four times the population it bounded.
+	boardBound(t, "unsupportedCeiling", totalUnsup, unsupportedCeiling, 0, ceilingBound,
 		"either a capability regressed or the corpus moved; both need an explanation rather "+
 			"than a raised ceiling")
 
@@ -10033,7 +10042,12 @@ func TestPhase1Files(t *testing.T) {
 	// what the harness is able to *ask*. The reward figure with a subject is the fail column, −47 here
 	// and −62 in the all-on lane.
 	const passFloor = 60837
-	boardBound(t, "passFloor", totalPass, passFloor, boardBoundSlack, floorBound,
+	// Slack 0 as of #387's ruling, with `allOnPassFloor` and `unsupportedCeiling` — see
+	// `boardbound_test.go`'s retirement section. Two entries in the ledger above record taking a
+	// re-base *although the slack stayed silent* (58659 by a margin of 20, and the 416 that was four
+	// PRs' drift); under an exact bound neither of those is discretionary any more, which is what the
+	// ruling means by "re-base it with the lane".
+	boardBound(t, "passFloor", totalPass, passFloor, 0, floorBound,
 		"a regression in a grammar that used to answer, or the corpus moved")
 }
 

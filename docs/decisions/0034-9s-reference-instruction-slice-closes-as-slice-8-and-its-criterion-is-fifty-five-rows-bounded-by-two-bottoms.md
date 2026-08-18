@@ -1,21 +1,24 @@
 # 0034 — #9's reference-instruction slice closes as slice 8, and its criterion is fifty-five rows bounded by two bottoms
 
-Date: 2026-08-17 · Status: **accepted** — stamped by Scott, relayed on
-[the PR #387 pre-clear comment](https://github.com/scttfrdmn/burroughs/pull/387#issuecomment-5322477360)
+Date: 2026-08-17 · Status: **proposed** — held open, and the one clause that would bind future work
+is flagged for a ruling below
 
 > *"Slice 8: go, self-merge on green."* — Scott, on the #385 relay. The disposition authorizes the
-> slice and its merge tier; the criterion below is the agent's, measured, and reviewable as any
-> other. Per the `Status:`-is-a-citation rule, this field was held **proposed** until the pre-clear
-> was relayed as a comment on the implementing PR and that comment's URL could be pointed at — a
-> forged provenance about the project's own governance being worse than a wrong option. The relay is
-> the citation above, and #387's **Decisions needed** section says what to do if a merge-tier "go" is
-> read as too little authority for this field: the flip is reverted and the ADR waits for an explicit
-> stamp.
+> slice and its merge tier and nothing else.
 >
-> What the measurement then did to the criterion is worth stating in the same breath as the stamp:
-> **it falsified part of it.** The structural bound is real and its localization was wrong, recorded
-> below rather than repaired out — a stamped record that quietly matches the outcome is the failure
-> mode this field's rule exists to prevent.
+> **The field was briefly flipped to accepted citing that relay, and Scott reverted it** (#387):
+> *"'go, self-merge on green' authorized the slice and not a criterion I never read."* Correct, and
+> the error is worth naming precisely, because the mechanics were right and the reasoning was not: a
+> relay comment is a real approval artifact with a real URL, so the citation resolved — it just
+> pointed at an approval of something else. **A citation that resolves is not thereby a citation to
+> the right thing**, which is the same defect as a drifted reference range, one level up in the
+> governance stack.
+>
+> **The one clause here that binds future work, in one line, for a ruling:** *the two bottoms stay
+> two values — nothing downstream may collapse the non-nullable reference bottom into the valtype
+> bottom.* That constrains #9's remaining slices and `internal/interp` alike. Everything else in
+> this record is retrospective: the 55-row criterion, the forecast, the falsification bill, and the
+> decline census all describe what slice 8 did and bind nothing.
 
 ## Context
 

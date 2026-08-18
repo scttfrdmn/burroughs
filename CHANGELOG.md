@@ -1130,6 +1130,25 @@ weakly-ordered platform.
 
 ### Changed
 
+- **`boardBoundSlack` is deleted: the three tracked board counts are exact re-base bounds**
+  (`internal/spec/boardbound_test.go`, `spec_test.go`; Scott's ruling on #387). `passFloor`,
+  `allOnPassFloor` and `unsupportedCeiling` carried 250 of slack, which means none of them could
+  detect anything smaller than 250 — *a bound sitting inside its own tolerance*, which #285 already
+  ruled is how a bound becomes decoration. All three now pass slack 0 and are checked exactly; all
+  three were already at their measured values (60837, 64798, 66), so the retirement re-based nothing
+  and is visible only as new exactness. Watched fire: each bound moved by one reports staleness with
+  a distance of 1.
+  - **The consequence is stated rather than discovered.** The retired justification's real subject was
+    corpus drift between fetches — the suite is not SHA-pinned (#42) — so an upstream vector addition
+    now fails these bounds on a tree nobody touched. That failure is loud, names the new value, and is
+    a true statement about the corpus having moved. **#42 moves onto this mechanism's critical path**
+    rather than being an improvement to it.
+  - **ADR 0034 is back to `proposed`** (Scott's ruling on #387): "go, self-merge on green" authorized
+    the slice and its merge tier, not a criterion he had not read. A relay comment is a real approval
+    artifact with a resolving URL — it just pointed at an approval of something else, which is the
+    drifted-citation defect one level up in the governance stack. The one clause in 0034 that binds
+    future work is flagged in a line for a ruling; the rest is retrospective.
+
 - **An issue attaches to a milestone when it is *scheduled*, not when it is filed** (`CLAUDE.md`,
   retiring [#324](https://github.com/scttfrdmn/burroughs/issues/324) on Scott's ruling). The deleted
   sentence was *"every issue attaches to one"*, and the measurement against it read **32 of 61 open
