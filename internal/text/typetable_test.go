@@ -30,16 +30,23 @@ import (
 //	equal() compares arity only                    FunctypeEqualityIsStructural   unchanged
 //	`non-function type` reported as `unknown type`  NonFunctionTypeMessage         unchanged
 //	inlineFuncType appends without searching        ImplicitTypesShiftLaterIndices unchanged
+//	inlineFuncType reuses a rec-group member        InlineFuncTypeReusesOnly…      64900→64903 (all-on)
 //	subtype comparison defers to the supertype      SubtypeComparesItsOwnComptype  unchanged
 //	block arms wired to the create-helper           TypeuseSitesAllResolve         4147→4135
 //	externtype given a fifth typeuse+functype arm   ExterntypeTakesTypeuseXor…     unchanged
 //	importOrderErr before runDeferred               ResolutionErrorPrecedes…       unchanged
 //
-// **Nine of eleven defects are invisible on the board.** Two are not, and both are in the direction
-// the suite is built to see: an over-rejection that costs imports.wast a pass, and twelve mismatch
-// vectors going unrejected. Everything else — the whole index arithmetic, the equality's five axes,
-// the interning conditions, the error precedence — is a green either way. That is the measurement
+// **Nine of twelve defects are invisible on the board.** Three are not, and the first two are in the
+// direction the suite is built to see: an over-rejection that costs imports.wast a pass, and twelve
+// mismatch vectors going unrejected. Everything else — the whole index arithmetic, the equality's five
+// axes, the interning conditions, the error precedence — is a green either way. That is the measurement
 // behind *the suite samples the spec, it does not define it*, taken on this phase specifically.
+//
+// The third is board-visible on **one lane only**, and the row says which: grave #402's rec-group
+// condition moves the all-gates-on lane and leaves the default lane at rest, because every vector that
+// can ask the question needs GC types to decode. So "invisible on the board" turned out to have a third
+// value beyond yes and no — *visible, but not from here* — and a count of eleven taken on the default
+// lane alone would have called this one invisible too.
 //
 // One entry in that table is a defect this control set found *live* rather than one introduced to
 // test it: see TestNestedBlockTypeInternsBeforeItsEnclosingOne.
@@ -334,6 +341,135 @@ func TestImplicitTypesShiftLaterIndices(t *testing.T) {
 		`(module (func (param i64)) (func (param f32)) (func (type 1) (param f32)))`,
 	)); err != nil {
 		t.Errorf("ReadModule = %v; two distinct implicit signatures take indices 0 and 1", err)
+	}
+}
+
+// TestInlineFuncTypeReusesOnlySingletonGroups is grave #402's control: `inline_functype` reuses
+// `DefT (RecT [st'], 0l)` and nothing else, so a member of a multi-member `(rec …)` is never handed to
+// an inline signature.
+//
+//	Lib.List.index_where (function | DefT (RecT [st'], 0l) -> st = st' | _ -> false) c.types.ctx
+//
+// Observed through the same keyhole its sibling above uses — a numeric `(type N)` resolving or not —
+// because that is the one effect of an interning decision a reject-only front end can be asked about.
+// Reuse keeps the table short and `(type N)` is `unknown type N`; appending makes the same spelling
+// resolve. So each row below is a pair, and the *pair* is the measurement.
+//
+// # Why the corpus cannot be the control here
+//
+// The whole 3-vector gain is on the all-gates-on lane (`type-rec.wast:51`, `:204`, `:216`), and the
+// repair moved **nothing** in this package's own expectations — `internal/text` was green before and
+// after, unchanged. #402 predicted the opposite ("un-reusing a type shifts every subsequent type index
+// in every module with an inline signature"), and that prediction was wrong for a reason worth keeping:
+// the restriction only bites where a multi-member group holds a functype that an inline signature
+// happens to match structurally, which is rare enough that no existing vector in this package contains
+// one. **A change with no failing witness in its own package is a change whose control is the whole
+// evidence**, so these rows are written to die, and each one was watched to.
+//
+// # The third row is the one that is not obvious
+//
+// A one-member `(rec (type $t (func)))` **is** reusable. Both `rectype` arms call `define_deftype`
+// (parser.mly:1288-1298) and the REC arm with a single member produces `DefT (RecT [st], 0l)` — the
+// same deftype the bare arm produces, indistinguishable by the pattern. So the condition is the group's
+// *length*, not whether `rec` was written, and an implementation phrased as "skip anything spelled with
+// `rec`" is correct on every vector in the suite and wrong on the grammar. Row 3 is the only thing that
+// separates the two, which is why it is here rather than in a comment.
+//
+// # Every probe carries `(param i64)`, and the first draft of this test did not
+//
+// The observing field is `(func (type N) (param i64))` and the inline signature is **not decoration**:
+// with an *empty* one, `checkExplicit` takes `inline_functype_explicit`'s deferring arm (parser.mly:239)
+// and the range check never runs, so `(func (type 2))` in a two-type module is accepted and the row
+// asks nothing at all. Two rows below were written that way, passed in the direction that needed the
+// fix, and failed in the direction that did not — which is how the vacuity was found rather than
+// shipped. Its cost is that the probe's signature has to *match* the type it names, so the interned
+// signature is `([i64],[])` throughout and the group members are spelled to agree with it.
+//
+// The sibling above carries `(param i64)` on every one of its numeric probes for this same reason, and
+// nothing said so.
+//
+// # Watched die, four times, one defect each
+//
+// Every row was falsified rather than argued for, and the interesting column is the third — which rows
+// stay green, because a row that dies to every defect is not discriminating between them:
+//
+//	defect introduced into soleMemberOfItsGroup    rows that die      rows still green
+//	the conjunct dropped (the pre-#402 engine)     1, 5               2, 3, 4
+//	`return false` for every explicit type         2, 3               1, 4, 5
+//	`return x == g.start+g.length-1` (last member)  5                  1, 2, 3, 4
+//	`return x == g.start` (projection 0)           1                  2, 3, 4, 5
+//
+// The two single-row lines are the reason the table is five rows and not two: rows 1 and 5 each catch a
+// defect the other passes, and they differ only in which projection of a two-member group holds the
+// structural match. `typetable.go` was restored byte-identically after each, checked by hash rather
+// than by eye.
+func TestInlineFuncTypeReusesOnlySingletonGroups(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		src     string
+		wantErr string // "" = must be accepted
+		why     string
+	}{
+		{
+			name: "a two-member group's first member is not reused",
+			src: `(module (rec (type $a (func (param i64))) (type $b (func (param i32)))) ` +
+				`(func (param i64)) (func (type 2) (param i64)))`,
+			wantErr: "",
+			why: "`$a` is structurally `([i64],[])`, final, with no declared supertypes — every " +
+				"condition the old code checked — but it is one of two members, so the third " +
+				"field interns a *new* type at index 2 and `(type 2)` resolves. This row is the " +
+				"whole defect: before the fix it was `unknown type 2`. It is also the row that " +
+				"kills the misreading \"projection 0\", since the match here sits at projection 0 " +
+				"of a group the reference excludes for its length",
+		},
+		{
+			name: "the same types as singletons are reused",
+			src: `(module (type $a (func (param i64))) (type $b (func (param i32))) ` +
+				`(func (param i64)) (func (type 2) (param i64)))`,
+			wantErr: "unknown type 2",
+			why: "the vacuity twin of the row above, differing only in the `rec` wrapper. Two " +
+				"explicit types either way, so a fix that appended unconditionally — or one that " +
+				"read the group off the type *count* — would accept both and the pair would " +
+				"measure nothing",
+		},
+		{
+			name:    "a one-member rec group is reused",
+			src:     `(module (rec (type $a (func (param i64)))) (func (param i64)) (func (type 1) (param i64)))`,
+			wantErr: "unknown type 1",
+			why: "`RecT [st]` is what a singleton REC arm produces, so `$a` is reusable and the " +
+				"table stays one long. **This is the row that fails for an implementation keyed " +
+				"on the `rec` spelling instead of the group's length**, and nothing in the suite " +
+				"distinguishes the two",
+		},
+		{
+			name:    "and that group's own index still resolves",
+			src:     `(module (rec (type $a (func (param i64)))) (func (param i64)) (func (type 0) (param i64)))`,
+			wantErr: "",
+			why: "the twin for the row above: `unknown type 1` has to mean \"the table is one " +
+				"long\", not \"this module is broken for some other reason\" — an assertion on an " +
+				"error message cannot tell those apart on its own",
+		},
+		{
+			name: "a two-member group's second member is not reused either",
+			src: `(module (rec (type $a (func (param i32))) (type $b (func (param i64)))) ` +
+				`(func (param i64)) (func (type 2) (param i64)))`,
+			wantErr: "",
+			why: "the matching member sits at projection 1 here, where row 1 put it at 0. Row 1 " +
+				"cannot see a condition keyed on the member's *position* in its group rather than " +
+				"the group's size — \"reusable iff it is the last member\" passes row 1 and fails " +
+				"here, which is the off-by-one the extent scan is one character away from",
+		},
+	} {
+		err := ReadModule([]byte(c.src))
+		switch {
+		case c.wantErr == "" && err != nil:
+			t.Errorf("%s: ReadModule(%s) = %v; want accepted — %s", c.name, c.src, err, c.why)
+		case c.wantErr != "" && err == nil:
+			t.Errorf("%s: ReadModule(%s) accepted; want %q — %s", c.name, c.src, c.wantErr, c.why)
+		case c.wantErr != "" && !strings.Contains(err.Error(), c.wantErr):
+			t.Errorf("%s: ReadModule(%s) = %q, want it to contain %q — %s",
+				c.name, c.src, err.Error(), c.wantErr, c.why)
+		}
 	}
 }
 

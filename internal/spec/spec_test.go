@@ -7159,7 +7159,45 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	// **A split, not a verdict** — the available oracle answered its half (5 conversions certify
 	// `sameDefType`) and the residue turned out to be a different defect wearing the same vectors,
 	// which is why the 8 do not stay one number.
-	const allOnPassFloor = 64900
+	//
+	// # 64900 → 64903 with #402: the 3 pre-registered admissions, and nothing else moved
+	//
+	// `inlineFuncType` now carries `inline_functype`'s third condition — the reused type must be the
+	// sole member of its rec group — and `type-rec.wast` goes 19/26 → 22/26, the `type mismatch`
+	// admission bucket 3 → 0. Three readings agree on 3 with no shared input, as with #328: this
+	// floor's +3, the fail column's 146 → 143, and this lane's admission total 28 → 25 — that last
+	// one summed from the per-file boards `RunGated` prints, by `admittedKeyPrefix`, because the
+	// census *loop* below is the default lane's instrument and this lane has none of its own.
+	//
+	// **One of #402's own premises was false and the fix is smaller than its issue predicted.** It
+	// said the repair "needs rec-group extent in `resolvedComp`, which the text type table does not
+	// carry"; `context.recExtents` has carried exactly that since grave #349, for the encoder, and
+	// `soleMemberOfItsGroup` reads it. No field was added and no type shifted that the extent list
+	// could not already explain. The estimate was written from the wrong side of the seam — the
+	// grouping is a property of the *table*, not of an entry — which is the same distinction
+	// `recExtents`' own comment draws in the sentence declining to put it on `compType`.
+	//
+	// **#351's witness was spent here, and it performed** — which is the half that issue said a slice
+	// could get wrong by converting the eight and counting them. With `sameDefType`'s ordinal-and-
+	// group-length condition replaced by `if false`, `type-rec.wast` goes 22/26 back to 19/26: exactly
+	// `:51`, `:204`, `:216` revert to admissions. Before #402 the same neuter left those three
+	// untouched, because `inlineFuncType` had given want and got the same index and no relation over
+	// them could disagree. So the rows now reach the comparison, and the comparison is what rejects.
+	//
+	// Two caveats on that, neither of them softening it. The neuter removes the *representation-
+	// dependent* fact #351 said was asserted by construction; it is not a full bisimulation port, so it
+	// falsifies that specific claim rather than standing in for equi-recursive equality entire. And the
+	// same neuter costs a fourth row — `tag.wast`'s `assert_unlinkable` — which dies with or without
+	// #402 applied, so the corpus had a live witness for this property all along, in the linking
+	// stratum that #351's file-and-expected-text enumeration could not see. `sameDefType`'s header
+	// carries that finding and ADR 0031 has a second dated falsification section for it.
+	//
+	// **The forecast pre-registered on #402 was 3 here and 0 on the default lane, and both halves
+	// held**: `passFloor` did not move and the default board is 60868/157/66/4053 unchanged. That zero
+	// is not structural — it is the gates doing their job, since every one of these vectors needs GC
+	// types to decode at all, so the default lane cannot ask the question. Which is also why the
+	// residue of this bucket was invisible until #328: it took a typing rule *and* a gate to reach.
+	const allOnPassFloor = 64903
 	// **Slack 0 as of Scott's #387 ruling**, which this bound's own 89-row staleness above is what
 	// prompted: a floor with 250 of tolerance cannot detect anything smaller than 250, so it is a
 	// bound sitting inside its own tolerance. Exact from here — re-base it in the PR that moves the

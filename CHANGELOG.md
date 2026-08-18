@@ -2054,6 +2054,40 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **`inlineFuncType` reused a functype that is a member of a multi-member `(rec …)`, where
+  `inline_functype` reuses only a singleton group**
+  ([#402](https://github.com/scttfrdmn/burroughs/issues/402), `type:grave`;
+  `internal/text/typetable.go`, `typetable_test.go`). The reference's predicate is a pattern on the
+  deftype — `DefT (RecT [st'], 0l)` (`parser.mly:222-235`) — and this engine checked two of its three
+  conditions, the `sub` wrapper's shape and the comptype's equality, but never the group's *size*. So an
+  inline signature could resolve to a type whose identity includes a grouping it does not share, and
+  `ref.func $f` would hand the want and the got literally the same index. **The condition is group
+  length, not `rec` spelling**: both `rectype` arms call `define_deftype` (`:1288-1298`) and a one-member
+  `(rec (type $t (func)))` is reusable exactly as the bare form is.
+  **All-gates-on lane: pass 64900 → 64903, `type-rec.wast` 19/26 → 22/26, admissions 28 → 25.** Default
+  lane unchanged at 60868/157/66/4053 — and that zero is the gates working, not a structural zero: every
+  vector that can ask needs GC types to decode.
+  - **This spends #351's pre-registered witness, and the witness performed.** The 8 discriminating
+    iso-/equi-recursive vectors split 5–3 across #328 and here; with `sameDefType`'s ordinal-and-group-
+    length condition neutered to `if false`, exactly `:51`, `:204`, `:216` revert to admissions, where
+    before this fix the same neuter left them untouched. #351's own warning was that a slice could
+    convert the eight and *spend the witness on a count*.
+  - **#351's claim to be the corpus's only witness for that property was false when filed**, and the
+    falsifier is what found it: the same neuter also costs `tag.wast` an `assert_unlinkable`, which dies
+    with or without this fix applied. That witness reaches the rule through **linking**, so an
+    enumeration by file and expected text could not see it. `sameDefType`'s header and a second dated
+    falsification section on ADR 0031 carry the correction. *A search for witnesses that enumerates
+    files enumerates the strata you already thought of.*
+  - **Both of #402's own predictions about blast radius were wrong** — the repair needed no new field
+    (`context.recExtents` has carried the extent since grave #349) and shifted no index in
+    `internal/text`, which was green before and after. So the corpus does not witness the change in this
+    package at all, and the control is the whole evidence:
+    `TestInlineFuncTypeReusesOnlySingletonGroups` is five rows, each watched die against four distinct
+    defects, with the two single-row lines showing which rows discriminate what.
+  - Two rows of that control were **vacuous in their first draft** and said so on the way in: a probe
+    spelled `(func (type N))` with an empty inline signature takes
+    `inline_functype_explicit`'s deferring arm, so the range check never runs and the row asks nothing.
+    Every probe now carries `(param i64)` — which is the unstated reason its sibling always did.
 - **Every index-form element segment decoded as `funcref` where the reference gives `(ref func)`**
   ([#360](https://github.com/scttfrdmn/burroughs/issues/360), `type:grave`;
   `internal/binary/constexpr.go`, `constexpr_test.go`, `module.go`). One default served both wire
