@@ -695,7 +695,7 @@ func (v *validator) arrayInitElem(x, y uint32) error {
 // the same `err`: the fix for a defensible-looking pair of findings was that the check was in the
 // wrong function, which is the spirit clause pointing at the code instead of at the config.
 func (v *validator) castTypes(i, want int) ([]binary.ValType, error) {
-	ts, ok := v.curFunc.CastTypes(i)
+	ts, ok := v.castVector(i)
 	if !ok || len(ts) != want {
 		return nil, fmt.Errorf("%w (instruction %d: got %d, want %d)", errNoCastTypes, i, len(ts), want)
 	}
@@ -705,6 +705,23 @@ func (v *validator) castTypes(i, want int) ([]binary.ValType, error) {
 		}
 	}
 	return ts, nil
+}
+
+// castVector is the retained reftypes for the instruction at index i, and whether any were retained.
+//
+// **One read for two sources, which is what #328 needed and #361 supplied.** `Func.CastTypes` reads
+// the table hanging off a function body; a constant expression has no `Func`, so its own map is
+// handed to the walk and this method is where the walk stops caring which it got. The two-result form
+// is `CastTypes`' verbatim and load-bearing for its reason: a nil slice means "not a cast
+// instruction" *and* "a cast instruction whose types were dropped", and only the second is an engine
+// bug — `errNoCastTypes` and `errNoRefNullHeapType` are the two sentinels that say so.
+//
+// The three sibling tables (`Labels`, `Catches`, `Selects`) get no such method, and deliberately: the
+// instructions that read them are not const-legal, so their arms have one source and a second read
+// path would be an abstraction over a distinction that does not exist. See validator.curFunc.
+func (v *validator) castVector(i int) ([]binary.ValType, bool) {
+	ts, ok := v.casts[i]
+	return ts, ok
 }
 
 // errNoCastTypes is a cast-family instruction reaching the validator without its retained reftypes.

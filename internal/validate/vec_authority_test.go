@@ -1217,7 +1217,14 @@ func TestReferenceRangeCitationsAreWellFormed(t *testing.T) {
 	// `citation_subject_test.go`'s header walked into at 30-31-32, at a scale where it is certain
 	// rather than likely. What reads them is `TestRangeCitationSubjectsAreReadFromTheReference`, which
 	// resolves every range against the reference and needs no list here to do it.
-	const wantRanges = 87
+	// **#328 adds four, all `module.go`'s, and three of the four are again invisible to the two pins
+	// below** — the import arm's `ExternFuncT` line, the `check_func` declaration loop and Rule C's
+	// message line all sit in inline comments inside `modulePre`'s body, so only `checkConst`'s doc block
+	// reaches them. That is the sixth slice for which this reconciliation has had to be written, and it
+	// is now a property of where module-level rules live rather than an accident: `modulePre` is one
+	// function holding a dozen phases, so its citations are inline by construction and a pin keyed on doc
+	// blocks can never see them. Recorded rather than fixed, because the fix is splitting `modulePre`.
+	const wantRanges = 91
 	if ranges != wantRanges {
 		t.Errorf("checked %d range citation(s) across %v, want %d — recount and re-pin, and if a "+
 			"file was added to citationFiles, read its point citations too",
@@ -1435,7 +1442,18 @@ func TestReferenceRangeCitationsContainTheirSubjectsSite(t *testing.T) {
 	// delegation, and the gap absorbed it without needing a fourth. The sibling `wantRanges` pin's
 	// account names those two `module.go` ranges from its own side, which is what keeps a +9 there
 	// against a +3 here from reading as an arithmetic slip.
-	const wantKeyed, wantResidue = 16, 31
+	// **#328 moves residue by one and keyed by nothing, and its one row is `checkConst`'s block.**
+	// The slice's other three ranges are inline comments and are skipped, exactly as the sibling pin's
+	// account says from its side. `checkConst` itself is excused for the oldest reason: it refuses
+	// through `checkConstGlobals` and `typeConstExpr`, whose sentinels are `ErrConstExprRequired` and
+	// `ErrTypeMismatch` — a message this file's own header calls `match_stack`'s head with two type
+	// lists concatenated onto it, constructed at run time and written verbatim nowhere. So the slice
+	// that finally *typed* every constant expression added no keyable row, which is worth one line: the
+	// reference's `check_const` has two `require`s, and the one with a verbatim string
+	// (`"constant expression required"`) was keyed by #342 already, while the half this slice wrote
+	// delegates its message to the type algebra. A range's column here tracks its rule's *message
+	// provenance*, not the rule's size.
+	const wantKeyed, wantResidue = 16, 32
 	if keyed != wantKeyed || residue != wantResidue {
 		t.Errorf("checked %d keyed range citation(s) and excused %d as constructed-message residue "+
 			"across %v, want %d and %d — recount and re-pin. A range becomes keyable when its "+

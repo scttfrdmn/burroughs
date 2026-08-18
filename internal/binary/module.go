@@ -1143,6 +1143,26 @@ type Global struct {
 	// instruction grammar (decode.ml:983) — const-ness is a validation fact, which is
 	// why `ErrConstExprRequired` is a declared layering debt rather than a grammar rule.
 	Init []Instr
+
+	// InitCasts is `Init`'s cast-type side table, keyed by instruction index exactly as
+	// `Func.Casts` is.
+	//
+	// **No accessor method beside it, unlike `Func.Casts`, and that is a decision rather than an
+	// omission.** `CastTypes` exists because `f.Casts[i]` cannot distinguish "not a cast
+	// instruction" from "a cast instruction whose types were dropped", and a two-result map read
+	// makes that distinction on its own — the method's whole content is `v, ok := f.Casts[i]`. Its
+	// value there is that `Func` is reached through a pointer whose four tables are read in four
+	// places; here the only consumer holds the map itself, having been handed it by whichever of the
+	// four holders it is walking, so a method per holder would be three names for one map read.
+	//
+	// **One form for both was true of the instructions and false of what sat beside them**, which
+	// is #361: `Func` carried four side tables and this struct carried none, so a `ref.null func`
+	// here was indistinguishable from a `ref.null extern` while the same instruction inside a body
+	// was not. Closed by #328, whose `checkConst` is the consumer 0016 required before the field
+	// could exist. `ref.null` is the only cast-family instruction the const grammar admits, so this
+	// map has at most one row per `ref.null` and the other three of `Func`'s tables have no
+	// const-expression twin — `br_table`, `try_table` and `select` are not const-legal.
+	InitCasts map[int][]ValType
 }
 
 // Tag is one tag declaration — the tag section's element, `tagtype = TagT of typeuse`
@@ -1355,6 +1375,18 @@ type ElemSegment struct {
 
 	// Exprs is the element vector in const-expr form; nil unless ByExpr.
 	Exprs [][]Instr
+
+	// OffsetCasts and ExprCasts are the cast-type side tables for `Offset` and for each of
+	// `Exprs`, keyed by instruction index the way `Func.Casts` is. See Global.InitCasts for why
+	// they exist and why `ref.null` is the only instruction that fills them.
+	//
+	// `ExprCasts` is index-parallel to `Exprs` and is the one place this retention is a slice of
+	// maps rather than a map: an element segment holds *n* independent constant expressions, so an
+	// instruction index means nothing without saying which expression it indexes into. Built at
+	// the same `append` as `Exprs` so the two cannot come apart in length — the property
+	// `emit` keeps between an instruction's index and its staged vector, one level up.
+	OffsetCasts map[int][]ValType
+	ExprCasts   []map[int][]ValType
 }
 
 // DataSegment is one data segment: where it goes, and what goes there.
@@ -1376,6 +1408,13 @@ type DataSegment struct {
 	// Offset is the offset constant expression, in the same internal form as a function
 	// body — one form for both, for Global.Init's reason. Nil when Passive.
 	Offset []Instr
+
+	// OffsetCasts is `Offset`'s cast-type side table; see Global.InitCasts.
+	//
+	// Reachable rather than theoretical even though an offset must type as an address: the type
+	// check is what *rejects* `(data (ref.null func) "")`, and rejecting it needs the heaptype the
+	// same way accepting `(global funcref (ref.null func))` does.
+	OffsetCasts map[int][]ValType
 
 	// Init is the segment's bytes, aliasing the decoder's image (the in-place posture).
 	// Never nil for a segment that decoded, and empty is legal: `(data "")` is a real

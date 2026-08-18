@@ -247,17 +247,29 @@ func TestElemSegmentFlagFields(t *testing.T) {
 		// terminating END rather than stopping before it. A hand-reasoned expectation would
 		// have omitted the `{Op: opEnd}` and the row would have been wrong about the engine
 		// while looking right about the format.
+		//
+		// **`ElemType` is the one column printing could not certify, and grave #400 is the
+		// price.** Every row here said `FuncRef` and five of them were wrong: the reference gives
+		// the four index forms `(NoNull, FuncHT)` — flag 0's own literal (decode.ml:1163) and
+		// `elem_kind`'s only value (decode.ml:1154-1157) — and reserves `(Null, FuncHT)` for flag
+		// 4 (decode.ml:1183). Printing agreed with the decoder because the decoder is what
+		// printed. Nothing in this file could have caught it and nothing in the rejection corpus
+		// could either, because nullability is only ever read by a subtype check and there was no
+		// subtype check on an element segment's type until #328's `check_elemmode` port. This is
+		// the accept-direction hole §9 G-3 names, in a decoder rather than a validator: these
+		// five columns are now read off decode.ml as a decision table, and the flag-4 row below
+		// is the one that keeps the split from collapsing back into a constant.
 		{
 			"flags 0: active table 0, func indices", []byte{0x00, 0x41, 0x00, 0x0B, 0x01, 0x00}, true, // elem.wast:259
-			&ElemSegment{Mode: ElemActive, ElemType: FuncRef, Offset: i32ConstZero, Funcs: []uint32{0}},
+			&ElemSegment{Mode: ElemActive, ElemType: elemKindRefFunc, Offset: i32ConstZero, Funcs: []uint32{0}},
 		},
 		{
 			"flags 1: passive, elemkind, func indices", []byte{0x01, 0x00, 0x01, 0x00}, true, // elem.wast:276
-			&ElemSegment{Mode: ElemPassive, ElemType: FuncRef, Funcs: []uint32{0}},
+			&ElemSegment{Mode: ElemPassive, ElemType: elemKindRefFunc, Funcs: []uint32{0}},
 		},
 		{
 			"flags 2: active explicit table, elemkind", []byte{0x02, 0x00, 0x41, 0x00, 0x0B, 0x00, 0x01, 0x00}, true, // elem.wast:293
-			&ElemSegment{Mode: ElemActive, ElemType: FuncRef, Offset: i32ConstZero, Funcs: []uint32{0}},
+			&ElemSegment{Mode: ElemActive, ElemType: elemKindRefFunc, Offset: i32ConstZero, Funcs: []uint32{0}},
 		},
 		// derived from elem.wast:293 — the suite's flags-2 vector names **table 0**, which is
 		// also what every implicit-index form defaults to, so it cannot distinguish a decoder
@@ -269,20 +281,33 @@ func TestElemSegmentFlagFields(t *testing.T) {
 			"flags 2 with a nonzero table index",
 			[]byte{0x02, 0x03, 0x41, 0x00, 0x0B, 0x00, 0x01, 0x00},
 			true,
-			&ElemSegment{Mode: ElemActive, TableIndex: 3, ElemType: FuncRef, Offset: i32ConstZero, Funcs: []uint32{0}},
+			&ElemSegment{Mode: ElemActive, TableIndex: 3, ElemType: elemKindRefFunc, Offset: i32ConstZero, Funcs: []uint32{0}},
 		},
 		{
 			"flags 3: declarative, elemkind", []byte{0x03, 0x00, 0x01, 0x00}, true, // elem.wast:310
-			&ElemSegment{Mode: ElemDeclarative, ElemType: FuncRef, Funcs: []uint32{0}},
+			&ElemSegment{Mode: ElemDeclarative, ElemType: elemKindRefFunc, Funcs: []uint32{0}},
 		},
 		// flags 4 carries NO type field — the row that kills `flags != 0`. It is also the
 		// retention half of ElemSegment's argument: the same segment as flags 0 above, same
 		// table, same single function, and the two must not decode to the same value.
+		//
+		// **It is now the row that discriminates the type default too**, which is grave #400's
+		// tripwire and costs nothing extra: flags 0 and 4 are the two forms with no type field on
+		// the wire, and they default *differently* — `(ref func)` above and `funcref` here. A
+		// decoder that went back to one constant for both would fail this row or the flags-0 one,
+		// whichever way it picked, where before #400 either choice was green.
 		{
 			"flags 4: active table 0, element exprs, no type byte", []byte{0x04, 0x41, 0x00, 0x0B, 0x01, 0xD2, 0x00, 0x0B}, true, // elem.wast:327
 			&ElemSegment{
 				Mode: ElemActive, ElemType: FuncRef, Offset: i32ConstZero, ByExpr: true,
 				Exprs: [][]Instr{{{Op: 0xD2}, {Op: opEnd}}}, // ref.func 0, end
+				// **One nil entry, not an empty slice**, and the two rows carrying this are where
+				// the index-parallelism invariant is asserted rather than described: an expression
+				// holding no `ref.null` still occupies its position in `ExprCasts`, because the
+				// only thing that makes `ExprCasts[j]` mean expression *j* is that every j has an
+				// entry. A build that appended only where a cast was filed would pass a
+				// single-element fixture and misattribute every segment with two.
+				ExprCasts: []map[int][]ValType{nil},
 			},
 		},
 		// flags 5 carries one — the row that kills `flags&explicit != 0`.
@@ -290,7 +315,8 @@ func TestElemSegmentFlagFields(t *testing.T) {
 			"flags 5: passive, reftype, element exprs", []byte{0x05, 0x70, 0x01, 0xD2, 0x00, 0x0B}, true, // elem.wast:360
 			&ElemSegment{
 				Mode: ElemPassive, ElemType: FuncRef, ByExpr: true,
-				Exprs: [][]Instr{{{Op: 0xD2}, {Op: opEnd}}},
+				Exprs:     [][]Instr{{{Op: 0xD2}, {Op: opEnd}}},
+				ExprCasts: []map[int][]ValType{nil},
 			},
 		},
 		// `ref.null`'s heap type is **not** in the retained instruction, and this row is where
@@ -298,15 +324,19 @@ func TestElemSegmentFlagFields(t *testing.T) {
 		// first written as `Imm0: uint64(FuncRef)` by reasoning from the immediate's name, and
 		// the print said otherwise — `immHeapType` reads the heaptype and stages no word
 		// (instr.go's arm ends `return c.d.decodeHeapType(r)`), so `ref.null func` and
-		// `ref.null extern` are the same two words. That is a retention gap of exactly the kind
-		// 0016 governs and it is *not* fixed here; it is filed, because nothing in this PR's
-		// path consumes a null's type — a funcref table's nulls are funcref nulls. Asserting
-		// the true value keeps the row honest about what the engine keeps.
+		// `ref.null extern` were the same two words. **That gap is #361 and it is closed** — the
+		// heaptype is filed in `ExprCasts` now, which is what the third field below asserts, and
+		// the row is the only one here whose `ExprCasts` is non-empty. The paragraph this
+		// replaces said the retention was declined "because nothing in this PR's path consumes a
+		// null's type"; #328's const-expression typing is that consumer, and a `funcref` table's
+		// nulls being funcref nulls stopped being the whole story when
+		// `(global externref (ref.null func))` became a module something had to refuse.
 		{
 			"flags 5 with ref.null funcref", []byte{0x05, 0x70, 0x01, 0xD0, 0x70, 0x0B}, true, // elem.wast:376
 			&ElemSegment{
 				Mode: ElemPassive, ElemType: FuncRef, ByExpr: true,
-				Exprs: [][]Instr{{{Op: 0xD0}, {Op: opEnd}}},
+				Exprs:     [][]Instr{{{Op: 0xD0}, {Op: opEnd}}},
+				ExprCasts: []map[int][]ValType{{0: {refNull(FuncRef, true)}}},
 			},
 		},
 		// binary.wast:373 — flags 5 with a non-reftype where the reftype goes.
@@ -367,6 +397,16 @@ func TestElemSegmentFlagFields(t *testing.T) {
 // two instructions because that is what the decoder produced when printed — the END is part
 // of the retained expression, exactly as it is for a global's initializer.
 var i32ConstZero = []Instr{{Op: 0x41}, {Op: opEnd}}
+
+// elemKindRefFunc is `(NoNull, FuncHT)` — `(ref func)`, the element type of every index-form
+// element segment (decode.ml:1154-1157 for `elem_kind`, :1163 for flag 0's own literal).
+//
+// Spelled here rather than as `FuncRef` because the difference between the two is one field and the
+// whole of grave #400, and named after the wire production rather than after the type, so a reader
+// checking a row against decode.ml is comparing the same words the reference uses. It is
+// deliberately *not* `binary.FuncRef.WithNull(false)` written inline at five call sites: five
+// literals are five chances to fix four of them.
+var elemKindRefFunc = refNull(FuncRef, false)
 
 // TestSlebIsNotUlebWithACast pins the signed LEB reader's two-sided range check.
 //

@@ -2295,19 +2295,31 @@ var encodableModules = []struct {
 	},
 	// The `(table … (elem …))` sugar, which defines a table *and* a segment from one field: the table is
 	// sized `min = max = len(einit)` (parser.mly:1216-1222) and the segment is active at that table with
-	// a synthesized zero offset. Two rows because the sugar's two arms differ in the element list's form,
-	// and the encoded flag differs with it — the idx-list arm is `(NoNull, FuncHT)` by the action's own
-	// `let rt`, the elemexpr arm takes whatever reftype was written.
+	// a synthesized zero offset.
 	//
-	// This is the row the section-9 withdrawal check is a live control for: the arm must `defineElem` as
-	// well as `defineTable`, and before it did, the table's size came out of an element count whose
-	// elements went nowhere.
+	// **Three rows, and the third is why the first two agree** — grave #401. The paragraph here used to
+	// say two rows sufficed because "the sugar's two arms differ in the element list's form, and the
+	// encoded flag differs with it: the idx-list arm is `(NoNull, FuncHT)` by the action's own `let rt`".
+	// Both arms take `$2 c`, the reftype the text wrote (parser.mly:1208 and :1215), so the two `funcref`
+	// rows now take the *same* flag — 4, because `is_elem_kind (Null, FuncHT)` is false
+	// (encode.ml:1044-1046) and the `Active (0, c) when rt = (Null, FuncHT)` arm is the one that fires
+	// (encode.ml:1078-1079). Their agreement is the assertion: an arm that reverted to `elemkind` for the
+	// index list would drop the first row back to flag 0.
+	//
+	// Two rows that agree cannot tell "always `rt`" from "always `funcref`", which is what the third row
+	// is for: `(ref func)` is `is_elem_kind`'s one true case, so the *same* index list encodes as flag 0
+	// there. Both bytes come from encode.ml read as a decision table, not from what this emitter now
+	// prints — a repair confirmed by the thing that made the mess agrees with itself.
+	//
+	// This is also the row the section-9 withdrawal check is a live control for: the arm must
+	// `defineElem` as well as `defineTable`, and before it did, the table's size came out of an element
+	// count whose elements went nowhere.
 	{
 		src:         `(module (func) (table funcref (elem 0 0)))`,
 		want:        []binary.CompType{{Kind: binary.CompFunc}},
 		wantTabs:    []binary.Table{{ElemType: binary.FuncRef, Limits: binary.Limits{Min: 2, Max: 2, HasMax: true}}},
 		wantFuncs:   []binary.Func{{TypeIndex: 0, Body: []binary.Instr{{Op: 0x0b}}}},
-		wantElemSec: []byte{0x01, 0x00, 0x41, 0x00, 0x0b, 0x02, 0x00, 0x00},
+		wantElemSec: []byte{0x01, 0x04, 0x41, 0x00, 0x0b, 0x02, 0xd2, 0x00, 0x0b, 0xd2, 0x00, 0x0b},
 	},
 	{
 		src:         `(module (func) (table funcref (elem (ref.func 0))))`,
@@ -2315,6 +2327,23 @@ var encodableModules = []struct {
 		wantTabs:    []binary.Table{{ElemType: binary.FuncRef, Limits: binary.Limits{Min: 1, Max: 1, HasMax: true}}},
 		wantFuncs:   []binary.Func{{TypeIndex: 0, Body: []binary.Instr{{Op: 0x0b}}}},
 		wantElemSec: []byte{0x01, 0x04, 0x41, 0x00, 0x0b, 0x01, 0xd2, 0x00, 0x0b},
+	},
+	{
+		// The discriminating row: same index list, non-nullable table type, so `is_elem_kind` is
+		// true and the segment takes flag 0 with a bare `vec(funcidx)` — `00 41 00 0b 01 00`.
+		//
+		// **Not a validity claim, and the distinction is the reference's own**: this sugar writes
+		// the table's initializer as `[RefNull ht]` unconditionally (parser.mly:1216), so a
+		// non-nullable table type gets a `ref.null func` initializer that does not type against
+		// it. The module the reference's parser builds from this text is invalid, which is why
+		// elem.wast:449 spells the same thing longhand with an explicit `(ref.func 0)` initializer
+		// instead. This table asserts encoding, not admission, and the row is here for the flag
+		// byte.
+		src:         `(module (func) (table (ref func) (elem 0)))`,
+		want:        []binary.CompType{{Kind: binary.CompFunc}},
+		wantTabs:    []binary.Table{{ElemType: binary.FuncRef.WithNull(false), Limits: binary.Limits{Min: 1, Max: 1, HasMax: true}}},
+		wantFuncs:   []binary.Func{{TypeIndex: 0, Body: []binary.Instr{{Op: 0x0b}}}},
+		wantElemSec: []byte{0x01, 0x00, 0x41, 0x00, 0x0b, 0x01, 0x00},
 	},
 
 	// # The seven `immIdxIdx`/`immIdxNat32` mnemonics (#8, this row's PR)

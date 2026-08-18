@@ -108,7 +108,8 @@ func TestGlobalInitializerSeesTheGlobalsDeclaredBeforeIt(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			err := modulePre(&binary.Module{Globals: tc.globals})
+			m := &binary.Module{Globals: tc.globals}
+			err := modulePre(m, declaredFuncs(m))
 			switch {
 			case tc.want == nil && err != nil:
 				t.Errorf("modulePre refused a valid module: %v — the scope is narrower than the "+
@@ -144,7 +145,7 @@ func TestSegmentOffsetsSeeEveryDefinedGlobal(t *testing.T) {
 			Globals:  globals,
 			Datas:    []binary.DataSegment{{Offset: gg(0)}},
 		}
-		if err := modulePre(m); err != nil {
+		if err := modulePre(m, declaredFuncs(m)); err != nil {
 			t.Errorf("modulePre refused a data segment whose offset reads a defined immutable "+
 				"global: %v — the offset's scope must be every global, not the count a global's "+
 				"own initializer would see", err)
@@ -156,7 +157,7 @@ func TestSegmentOffsetsSeeEveryDefinedGlobal(t *testing.T) {
 			Globals: globals,
 			Elems:   []binary.ElemSegment{{Mode: binary.ElemActive, ElemType: binary.FuncRef, Offset: gg(0)}},
 		}
-		if err := modulePre(m); err != nil {
+		if err := modulePre(m, declaredFuncs(m)); err != nil {
 			t.Errorf("modulePre refused an element segment whose offset reads a defined immutable "+
 				"global: %v", err)
 		}
@@ -185,7 +186,7 @@ func TestElementExpressionsAreCheckedInEveryMode(t *testing.T) {
 				ByExpr: true, Exprs: [][]binary.Instr{gg(0)},
 			}},
 		}
-		err := modulePre(m)
+		err := modulePre(m, declaredFuncs(m))
 		if !errors.Is(err, binary.ErrConstExprRequired) {
 			t.Errorf("modulePre answered %v for a passive element segment whose element reads a "+
 				"mutable global, want %v — a segment that names no table still has its elements "+
@@ -204,7 +205,7 @@ func TestElementExpressionsAreCheckedInEveryMode(t *testing.T) {
 				ByExpr: true, Exprs: [][]binary.Instr{gg(0)}, Offset: c0(),
 			}},
 		}
-		err := modulePre(m)
+		err := modulePre(m, declaredFuncs(m))
 		switch {
 		case errors.Is(err, ErrUnknownTable):
 			t.Errorf("modulePre reported %v, want %v: the table index was resolved before the "+
@@ -259,7 +260,7 @@ func TestUnknownGlobalMessagePinsTheIndexAndTheScope(t *testing.T) {
 		{Type: binary.I32, Init: c0()},
 		{Type: binary.I32, Init: gg(9)},
 	}}
-	err := modulePre(m)
+	err := modulePre(m, declaredFuncs(m))
 	if err == nil {
 		t.Fatal("modulePre accepted a global initializer naming global 9 of a 3-global module")
 	}

@@ -78,10 +78,11 @@ func TestExportMemoryMessageIsTheDataSegmentPaths(t *testing.T) {
 				Memories: tc.mems,
 				Exports:  []binary.Export{{Name: "m", Kind: binary.ExternMemory, Index: tc.idx}},
 			})
-			viaData := modulePre(&binary.Module{
+			dataMod := &binary.Module{
 				Memories: tc.mems,
 				Datas:    []binary.DataSegment{{MemIndex: tc.idx}},
-			})
+			}
+			viaData := modulePre(dataMod, declaredFuncs(dataMod))
 			// Vacuity guard first: two nils compare equal and would report agreement about a rule
 			// neither path applied.
 			if viaExport == nil || viaData == nil {

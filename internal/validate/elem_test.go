@@ -108,6 +108,14 @@ import (
 //
 // Deleting the loop fails M6 through its *vacuity guard* rather than its comparison — two nils agree
 // perfectly about a rule neither applied, and the guard is what makes that a fatal instead of a pass.
+// **Every active row below carries `Offset: c0()`, and it was not decoration when it was added.**
+// The rows were written with the offset field left at nil, which cost nothing while `check_const`'s
+// type half was unwritten — an absent expression is a sequence of no instructions, and the only rule
+// reading it counted `global.get`s. #328 made the offset *typed*, and a typed empty expression is a
+// frame that never closes, so R2 began failing in the accept direction and R6 began reporting segment
+// 0 instead of segment 1. Neither is a defect in the rule these rows test; both are the fixture being
+// under-specified in a field the rule does not read. A fixture is well-formed in every respect but the
+// one under test, or the row moves when some *other* rule arrives.
 func TestElemSegmentTableIndexResolves(t *testing.T) {
 	table := []binary.Table{{Limits: binary.Limits{Min: 1}}}
 
@@ -122,21 +130,24 @@ func TestElemSegmentTableIndexResolves(t *testing.T) {
 			// flags 0 means active-at-table-0, not active-at-no-table — so a module with no table at
 			// all refuses here rather than silently treating the implicit index as absent.
 			name: "R1 active implicit table, module declares none",
-			mod:  binary.Module{Elems: []binary.ElemSegment{{Mode: binary.ElemActive}}},
+			mod:  binary.Module{Elems: []binary.ElemSegment{{Mode: binary.ElemActive, Offset: c0()}}},
 			want: ErrUnknownTable, detail: "unknown table 0",
 		},
 		{
 			// R2: the negative control, and the reason the row list was written first. The table
 			// exists, so this rule must accept and leave the vector to the deferred checks.
 			name: "R2 active implicit table, module declares one",
-			mod:  binary.Module{Tables: table, Elems: []binary.ElemSegment{{Mode: binary.ElemActive}}},
+			mod: binary.Module{
+				Tables: table,
+				Elems:  []binary.ElemSegment{{Mode: binary.ElemActive, Offset: c0()}},
+			},
 			want: nil,
 		},
 		{
 			name: "R3 active explicit table out of scope",
 			mod: binary.Module{
 				Tables: table,
-				Elems:  []binary.ElemSegment{{Mode: binary.ElemActive, TableIndex: 4}},
+				Elems:  []binary.ElemSegment{{Mode: binary.ElemActive, TableIndex: 4, Offset: c0()}},
 			},
 			want: ErrUnknownTable, detail: "unknown table 4",
 		},
@@ -165,15 +176,15 @@ func TestElemSegmentTableIndexResolves(t *testing.T) {
 			mod: binary.Module{
 				Tables: table,
 				Elems: []binary.ElemSegment{
-					{Mode: binary.ElemActive},
-					{Mode: binary.ElemActive, TableIndex: 9},
+					{Mode: binary.ElemActive, Offset: c0()},
+					{Mode: binary.ElemActive, TableIndex: 9, Offset: c0()},
 				},
 			},
 			want: ErrUnknownTable, detail: "element segment 1",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			err := modulePre(&tc.mod)
+			err := modulePre(&tc.mod, declaredFuncs(&tc.mod))
 			if tc.want == nil {
 				if err != nil {
 					t.Fatalf("modulePre refused a module this rule has no rule against: %v", err)
@@ -229,10 +240,11 @@ func TestElemPhaseAndExportPhaseAgreeOnUnknownTable(t *testing.T) {
 		{"module declares some", []binary.Table{{}}, 3},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			viaElem := modulePre(&binary.Module{
+			elemMod := &binary.Module{
 				Tables: tc.tables,
 				Elems:  []binary.ElemSegment{{Mode: binary.ElemActive, TableIndex: tc.idx}},
-			})
+			}
+			viaElem := modulePre(elemMod, declaredFuncs(elemMod))
 			viaExport := moduleExports(&binary.Module{
 				Tables:  tc.tables,
 				Exports: []binary.Export{{Name: "t", Kind: binary.ExternTable, Index: tc.idx}},
@@ -260,16 +272,32 @@ func TestElemPhaseAndExportPhaseAgreeOnUnknownTable(t *testing.T) {
 // `check_elem`'s `check_const` (`valid.ml:1097-1101`), which resolves the function indices a segment's
 // `ref.func` initialisers name.
 //
-// # Two wire forms, and the fix goes in the branch the vectors actually take
+// # Two wire forms, and #391 named the wrong one — the assertion that was supposed to catch that
+// # agreed with the bug
 //
 // An element segment carries its functions either as a plain index vector or as a vector of constant
-// expressions, and the wat front end desugars `(elem 0 0)` into the **index** form
-// (`declaredFuncs`'s account of `decode.ml`'s `elem_index`). Both admissions
-// (`call_indirect.wast:1037`, `return_call_indirect.wast:600`) are that spelling, so a resolution
-// written only for the expression branch passes every test anyone would think to write and moves no
-// column. The first row asserts the decode shape rather than trusting the account — `ByExpr` is read
-// off the decoded module, so the claim "this vector takes the non-expression branch" is checked here
-// and not merely cited.
+// expressions. #391 recorded that the wat front end desugars the two admissions
+// (`call_indirect.wast:1037`, `return_call_indirect.wast:600`, both literally
+// `(module (table funcref (elem 0 0)))`) into the **index** form, and put the fix there. That account
+// is **false under the reference**: the inline-table sugar takes the table's own reftype down the
+// element arm (`parser.mly:1215`), so the segment's type is `funcref` = `(Null, FuncHT)`, for which
+// `is_elem_kind` is false (`encode.ml:1044-1046`) and the encoder must reach for flag 4 — the
+// **expression** form. Grave #401 was our parser writing `(ref func)` there instead, which is the only
+// reason the account read true.
+//
+// The instructive part is the assertion written to guard exactly this. #391 did not cite the branch, it
+// *asserted* it: `ByExpr` was read off the decoded module so that "this vector takes the
+// non-expression branch" would be checked rather than trusted. It passed, because the decode it read
+// was our own parser's, and our own parser was wrong in precisely the shape the account described. **A
+// decode of our own text checks the front end against itself** — the authority for what wire form a
+// wat spelling takes is the reference's parser and encoder, never a round trip through the two
+// components under test. So the assertion below is retained, with its verdict inverted to what the
+// reference says, and a second row added for the index branch: an inverted-but-still-self-referential
+// assertion is worth keeping only because the *reference* is now what set its direction.
+//
+// Both branches keep a refusal row, because #391's fix and Rule D's `ref.func` resolution inside
+// `checkConst` (ADR 0037) are two different code paths reaching one verdict, and the corpus reaches
+// only the second of them.
 //
 // # It is not an instruction rule, which is why it is not part of slice 10's criterion
 //
@@ -284,21 +312,51 @@ func TestElemPhaseAndExportPhaseAgreeOnUnknownTable(t *testing.T) {
 // alone refuses it — the function index space is imports-then-definitions, and no `assert_invalid`
 // vector can catch a rule that refuses a valid module (contract §9 G-3).
 func TestElemSegmentFunctionIndicesResolve(t *testing.T) {
-	t.Run("the corpus spelling takes the index branch", func(t *testing.T) {
-		m := decodedModule(t, `(module (func) (table funcref (elem 0)))`, nil)
-		if len(m.Elems) != 1 {
-			t.Fatalf("decoded %d element segment(s), want 1 — the rest of this row asserts nothing "+
-				"about a module with no segment in it", len(m.Elems))
-		}
-		if m.Elems[0].ByExpr {
-			t.Errorf("`(elem 0)` decoded into the expression form, so the branch this rule was written " +
-				"for is not the branch #391's two vectors take. The fix and the vectors have to meet in " +
-				"the same branch, and this is the only assertion that says they do")
-		}
-		if len(m.Elems[0].Funcs) != 1 {
-			t.Errorf("the index form carries %d function index(es), want 1", len(m.Elems[0].Funcs))
-		}
-	})
+	// Which spelling reaches which branch — the direction of both rows is set by the reference, not by
+	// what our decoder happens to produce (see the header). Neither branch may be left unread: the
+	// corpus reaches only the expression one, so the index row is the whole readership of the other.
+	for _, c := range []struct {
+		name       string
+		wat        string
+		wantByExpr bool
+		why        string
+	}{
+		{
+			name:       "the corpus spelling takes the expression branch",
+			wat:        `(module (func) (table funcref (elem 0)))`,
+			wantByExpr: true,
+			why: "the inline-table sugar takes the table's `funcref` = `(Null, FuncHT)` down the " +
+				"element arm (parser.mly:1215), and `is_elem_kind` is false for it " +
+				"(encode.ml:1044-1046), so the encoder reaches flag 4. This is the row #391 asserted " +
+				"in the opposite direction and grave #401 agreed with",
+		},
+		{
+			name:       "the bare-offset sugar takes the index branch",
+			wat:        `(module (func) (table 1 funcref) (elem (i32.const 0) 0))`,
+			wantByExpr: false,
+			why: "this is the arm that really does say `let rt = (NoNull, FuncHT) in` " +
+				"(parser.mly:1175-1179) — the citation grave #401 quoted onto the wrong production. " +
+				"`(ref func)` is `is_elem_kind`, so this one is flag 0",
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			m := decodedModule(t, c.wat, nil)
+			if len(m.Elems) != 1 {
+				t.Fatalf("decoded %d element segment(s), want 1 — the rest of this row asserts nothing "+
+					"about a module with no segment in it", len(m.Elems))
+			}
+			if m.Elems[0].ByExpr != c.wantByExpr {
+				t.Errorf("%s decoded with ByExpr=%v, want %v\n%s", c.wat, m.Elems[0].ByExpr,
+					c.wantByExpr, c.why)
+			}
+			if got := len(m.Elems[0].Funcs); (got == 1) == c.wantByExpr {
+				t.Errorf("the segment carries %d entry in `Funcs`, which does not match ByExpr=%v — "+
+					"the index vector is where the index form puts its functions and the expression "+
+					"form leaves it empty, so a form claim nothing else reads is not a form claim",
+					got, c.wantByExpr)
+			}
+		})
+	}
 
 	for _, c := range []struct {
 		name  string
@@ -307,17 +365,30 @@ func TestElemSegmentFunctionIndicesResolve(t *testing.T) {
 		valid bool
 	}{
 		{
-			// #391's own shape: no functions at all, two indices naming function 0.
-			name:  "the index form names a function the module does not have",
+			// Both admissions, verbatim: no functions at all, two `ref.func 0` initialisers. Not the
+			// index form — see the header — so what refuses this is Rule D inside `checkConst`, and
+			// #391's own lookup never runs on it.
+			name:  "the corpus shape names a function the module does not have",
 			wat:   `(module (table funcref (elem 0 0)))`,
 			msg:   "unknown function 0 (0 in scope)",
 			valid: false,
 		},
 		{
-			// The expression form, which no corpus vector exercises for this rule — so this row is the
-			// only reader of the `ByExpr` branch's call.
+			// The explicit expression spelling, reaching the same branch by a different route through
+			// the parser: `(item …)` rather than the inline sugar's synthesised `[RefNull ht]`.
 			name:  "the expression form names a function the module does not have",
 			wat:   `(module (elem funcref (item (ref.func 0))))`,
+			msg:   "unknown function 0 (0 in scope)",
+			valid: false,
+		},
+		{
+			// The index branch's only refusal row, and the sole reader of `elemFuncsInScope`: neuter
+			// that loop and this is the one row that fails, while the two corpus-shaped rows above go
+			// on refusing through `checkConst`. Both lanes of the board stay green with the rule dead
+			// — measured, which is what makes "the corpus does not reach this branch" a finding rather
+			// than an inference from the header.
+			name:  "the index form names a function the module does not have",
+			wat:   `(module (elem func 0))`,
 			msg:   "unknown function 0 (0 in scope)",
 			valid: false,
 		},
@@ -336,6 +407,14 @@ func TestElemSegmentFunctionIndicesResolve(t *testing.T) {
 			// The accept row that separates `ImportedFuncs() + len(m.Funcs)` from `len(m.Funcs)`.
 			name:  "an imported function, which occupies index 0",
 			wat:   `(module (import "m" "f" (func)) (table funcref (elem 0)))`,
+			valid: true,
+		},
+		{
+			// And the same separation on the index branch, which is a different count in different
+			// code: the row above reaches it through `checkConst`. One accept row per branch, for the
+			// same reason there is one refusal row per branch.
+			name:  "an imported function, through the index form",
+			wat:   `(module (import "m" "f" (func)) (elem func 0))`,
 			valid: true,
 		},
 	} {

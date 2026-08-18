@@ -459,14 +459,21 @@ type Arity struct {
 // section." Limits and the data segments' memory index stopped being later slices' here; the rest
 // of that list still is, and module()'s table is now where it is recorded.
 func Module(m *binary.Module) (*Info, error) {
-	if err := modulePre(m); err != nil {
+	// `check_module`'s own first line, before the context is built and therefore before any rule at
+	// all (`valid.ml:1152`). Computed here rather than in funcBody because it is the module's
+	// property: see declaredFuncs on why a body cannot contribute to the set it is checked against.
+	//
+	// **It moved above modulePre when `checkConst` began typing constant expressions**, which is the
+	// reference's position for it and not a convenience: a global initializer may hold `ref.func`, so
+	// the module-level phase now has a consumer for the set that the code-section walk used to be the
+	// only one of. `ref_func.wast:68` is the vector, and computing refs after modulePre would have
+	// meant either passing an empty set — every `ref.func` in a const expr an undeclared reference —
+	// or computing it twice.
+	refs := declaredFuncs(m)
+	if err := modulePre(m, refs); err != nil {
 		return nil, err
 	}
 	info := &Info{Funcs: make([]FuncInfo, len(m.Funcs))}
-	// `check_module`'s own first line, before the context is built and therefore before any body is
-	// walked (`valid.ml:1152`). Computed here rather than in funcBody because it is the module's
-	// property: see declaredFuncs on why a body cannot contribute to the set it is checked against.
-	refs := declaredFuncs(m)
 	for i := range m.Funcs {
 		fi, err := funcBody(m, &m.Funcs[i], refs)
 		if err != nil {
@@ -500,6 +507,13 @@ func funcBody(m *binary.Module, f *binary.Func, refs map[uint32]bool) (FuncInfo,
 		locals:  locals,
 		blocks:  map[int]Arity{},
 		refs:    refs,
+		// The body's own cast-family side table. Nil for a body that has none, which is
+		// indistinguishable from an absent row and is exactly what castVector's second result
+		// is for.
+		casts: f.Casts,
+		// Every global is in scope in a body: `check_func_body` runs at valid.ml:1165, after
+		// :1162 has folded the last one in. See validator.globalScope.
+		globalScope: len(m.Globals),
 	}
 	// The body's own frame. Its label types are the function's results, which is what makes a
 	// bare `return` and a `br` to the outermost label the same check.

@@ -21,6 +21,35 @@ weakly-ordered platform.
 
 ### Added
 
+- **The validator types constant expressions, and the admitted stratum closes — #328**
+  (`internal/validate/module.go`, `instr.go`, `ref.go`, `stack.go`; #9). Four rules from
+  `check_module`, ported from `valid.ml:230-231,1041-1044,1086-1102`: `check_const`'s type half at all
+  four call sites that have a subject, `check_externtype`'s `ExternFuncT` arm, `check_elemmode`'s
+  `match_reftype`, and `ref.func`'s index resolution inside a const expression. The typing walk is
+  **shared with function bodies rather than reimplemented** — `check_const` calls `check_block`, so the
+  const-expr sites inherit `ref.func`'s resolution, the empty- and two-value expression checks, and the
+  subtyping comparison from rules nobody wrote for them.
+  **Default lane: pass 60840 → 60868, validate stratum fail 36 → 8, and the `assert_invalid` ledger's
+  `accepted` column reaches 0 — the admitted stratum is empty on this lane.** All-gates-on lane: pass
+  64862 → 64900, admissions 66 → 28. Three readings agree on the all-on +38 with no shared input: the
+  floor's rise, the census's fall, and the fail column's fall.
+  - **The 28-and-28 is two disjoint populations, not one number counted twice**, and that symmetry was
+    checked rather than admired: measuring `main` in a throwaway worktree gives 66 all-on admissions
+    against 28 on the default lane. *A suspiciously clean result is a tell.*
+  - **`type-rec.wast`'s 8 pre-registered iso-/equi-recursive witnesses split 5–3**, which answers the
+    question they were retained for: `sameDefType`'s group-shape comparison over
+    `CompType.RecStart`/`RecLen` is right. The 3 survivors are a different defect wearing the same
+    vectors, filed as grave #402. *Split at the oracle seam: the available oracle unblocks its half.*
+  - **The accept-direction unit controls this slice pre-registered were dropped, not written**, because
+    the premise was falsified by measurement: with `matchRefType` reduced to `got == want`, the default
+    lane's over-rejection list names the sites (`ref_func.wast:6`, `:80`, `global.wast:3`) with the
+    exact message. #341 scores a bare `(module …)` on the validator's answer, so §9 G-3's "no
+    `assert_invalid` vector can witness this" is no longer the same claim as "the board cannot". *A
+    pre-registration is a forecast about the instruments, and #341 changed the instruments under it.*
+  - Closes **#361**: `ref.null`'s heaptype is retained per holder and read through
+    `validator.castVector`. Its tripwire was **re-pointed rather than deleted** when its subject closed
+    — the silent-loss failure moved from "never filed" to "filed for three of the four holders". This
+    also falsified #361's own "not blocked on another package".
 - **The validator types the exception-handling family, and the single-byte opcode space closes — slice
   10** (`internal/validate/exception.go`, `exception_test.go`; decision 0036, `gate:exception-handling`,
   #393, part of #9). `throw` (0x08), `throw_ref` (0x0a) and `try_table` (0x1f) plus the module-level
@@ -2025,6 +2054,40 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **Every index-form element segment decoded as `funcref` where the reference gives `(ref func)`**
+  ([#400](https://github.com/scttfrdmn/burroughs/issues/400), `type:grave`;
+  `internal/binary/constexpr.go`, `constexpr_test.go`). One default served both wire forms; the
+  reference splits them — `elem_kind` and flag 0's own literal are `(NoNull, FuncHT)`
+  (`decode.ml:1154-1163`), and `funcref` = `(Null, FuncHT)` is reserved for flag 4 (`:1183`), which is
+  what `is_elem_kind` selects on (`encode.ml:1044-1046`).
+  - **Latent because nullability is only ever read by a subtype check.** Until something compared a
+    segment's element type against its table's, a wrong element type was unobservable — and the first
+    thing in this engine to make that comparison is #328's Rule C. So this contributed **zero** to any
+    `assert_invalid` count and surfaced as an **over-rejection of valid modules** (`elem.wast:453`,
+    `:487`, all-on lane). *A new accept-direction rule audits the decoders that feed it*: the validator
+    was right about the types it was handed, and loosening `matchRefType` to green the board would have
+    buried it.
+  - The five expectations that should have caught this were **printed, not reasoned** — the discipline
+    could not certify this column, because the decoder is what printed it.
+- **The inline `(table rt (elem …))` sugar ignored the table's reftype — and the citation defending it
+  belonged to another production** ([#401](https://github.com/scttfrdmn/burroughs/issues/401),
+  `type:grave`; `internal/text/parser.go`, `encode_test.go`, `internal/validate/elem_test.go`,
+  `module.go`). The reference takes the table's own reftype down **both** arms (`parser.mly:1208`,
+  `:1215`). The comment defending the divergence quoted `let rt = (NoNull, FuncHT) in`, which is real —
+  at `parser.mly:1178`, in the *bare-offset* sugar. **This is the failure mode a resolving-citation
+  sweep cannot see: two arms of one grammar, one of them quoted onto the other.** Every character
+  checked out; the production was wrong.
+  - **It falsified #391's account, and the assertion written to catch that agreed with the bug.** #391
+    recorded that its two admissions (`call_indirect.wast:1037`, `return_call_indirect.wast:600`, both
+    `(module (table funcref (elem 0 0)))`) take the index form, and *asserted* it by reading `ByExpr`
+    off the decoded module rather than merely citing it. It passed because the decode it read was our
+    own parser's. **A decode of our own text checks the front end against itself**; the authority for a
+    wat spelling's wire form is the reference's parser and encoder. Consequence, measured: neuter
+    `elemFuncsInScope` and both lanes stay green — its whole readership is now one unit row, and
+    `TestElemSegmentFunctionIndicesResolve` keeps a refusal and an accept row **per branch**.
+  - The re-based encode row was confirmed against `encode.ml` read as a decision table, **not** against
+    what the fixed emitter prints, and a third row was added because *two rows that agree cannot tell
+    "always `rt`" from "always `funcref`"*.
 - **The decoder gated `exnref` and `nullexnref` on GC, so `gate:exception-handling` did not admit its own
   value type** ([#395](https://github.com/scttfrdmn/burroughs/issues/395), `type:grave`, `gate:eh`;
   `internal/binary/sections.go`, `sections_test.go`, `valtype_test.go`, `refnull_test.go`,
