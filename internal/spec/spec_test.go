@@ -7093,7 +7093,20 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	// stratum` unchanged term for term — all six opcodes being `gate:gc`. That is the fourth entry in
 	// this comment to record the same asymmetry, and by now it is the expected shape of a gated slice
 	// rather than an observation.
-	const allOnPassFloor = 64798
+	// **64798 → 64833, slice 9 (ADR 0035): +35, and every one of the 35 was pre-registered.** The
+	// forecast named 28 reject rows, 6 accept rows and 1 admission; the lane moved 248 fail → 213 and
+	// 64798 pass → 64833. An exactly-closing total is also what a blind instrument produces, so it was
+	// read three ways rather than once: per file (`return_call.wast` 34/49 → **49/49**,
+	// `return_call_indirect.wast` +19 to 80/81, `call_indirect.wast` +1 to 169/170), per opcode (the
+	// all-on decline census 67 → **33**, which is −34 and is exactly `return_call_indirect` 18 +
+	// `return_call` 16), and by residue (the 33 that remain are exception handling 25 and relaxed SIMD
+	// 8, both declared out of scope). Three readings of one number, agreeing.
+	//
+	// The two rows *not* claimed are the two this slice declared out of scope: `unknown function 0` in
+	// `return_call_indirect.wast` and `unknown function 7` in `call_indirect.wast`, both #391's
+	// elem-segment rule and both still admissions. A file at 80/81 is the honest shape of a slice that
+	// closed its own stratum and not its neighbour's.
+	const allOnPassFloor = 64833
 	// **Slack 0 as of Scott's #387 ruling**, which this bound's own 89-row staleness above is what
 	// prompted: a floor with 250 of tolerance cannot detect anything smaller than 250, so it is a
 	// bound sitting inside its own tolerance. Exact from here — re-base it in the PR that moves the
@@ -7195,11 +7208,13 @@ func TestModuleDefinitionsAskTheValidator(t *testing.T) {
 	// question idle: an over-rejection produces no error for any reject-direction bucket to catch,
 	// which is the hole this whole test exists for.
 	//
-	// The table is *enumerated*, and the domain is derivable — `classify` sets `Head: "module"` on
-	// every module definition, so the Kinds a top-level `module` head produces are a corpus-measured
-	// fact. That makes this an unchecked claim about its own coverage, declared and tracked as #354
-	// rather than left as an intention in a comment.
-	for _, tc := range []struct {
+	// The table was *enumerated* and the domain is derivable, which made this an unchecked claim
+	// about its own coverage — declared and tracked as #354, and closed by the
+	// `the three rows are every Kind a module head classifies to` subtest below. The table stays a
+	// named variable rather than an inline literal so that subtest derives its expectation from the
+	// rows themselves; a re-typed copy of the same three Kinds would agree with the table by
+	// construction and check nothing.
+	rows := []struct {
 		name   string
 		src    string
 		want   Kind
@@ -7225,7 +7240,8 @@ func TestModuleDefinitionsAskTheValidator(t *testing.T) {
 		// `admittedKeyPrefix`) are the instrument working: a rename should have to walk past every
 		// reader that claimed to know the string.
 		{"binary", `(module binary "\00asm\01\00\00\00")`, KindModuleBinary, "module binary must validate"},
-	} {
+	}
+	for _, tc := range rows {
 		t.Run("a validator that refuses every module turns a "+tc.name+" definition red", func(t *testing.T) {
 			s, err := Parse("t.wast", []byte(tc.src))
 			if err != nil {
@@ -7257,6 +7273,98 @@ func TestModuleDefinitionsAskTheValidator(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("the three rows are every Kind a module head classifies to", func(t *testing.T) {
+		// #354, and the reason it is a separate control rather than a fourth row: it fails when the
+		// *domain* moves, where the rows above fail when a *call* is lost. Two failure causes, two
+		// controls (grave #34) — and the one thing it must not do is enumerate, since enumerating the
+		// same three Kinds a second time is the blind spot it was filed against wearing a check's
+		// clothes.
+		//
+		// The domain is corpus-measured: `classify` records `Head` verbatim, so every module
+		// definition in the suite — whatever form it takes — answers `Head == "module"`, and the set
+		// of Kinds those commands carry is the set the witness table has to cover. Measured over
+		// `suitePaths` and **not** `boardFiles`: `boardFiles` selects on `scorableCommands > 0`, so a
+		// module form arriving in a file the board does not yet select would be invisible to a domain
+		// derived from it. That is one instrument's blind spot inherited by the instrument built to
+		// remove another's, and the wider walk costs nothing this test was not already paying.
+		//
+		// **`KindUnsupported` is the one excused Kind, and it is excused by name rather than by
+		// filtering.** The 9 are `(module definition …)` and `(module instance …)` (`wast.go:602`,
+		// #320's widening): module heads that reach no validator at all, so there is no fact-2 call
+		// for a witness row to falsify. When #320 lands they acquire real Kinds and this control goes
+		// red, which is the intended reading — a widening owes a witness.
+		//
+		// **What this cannot see, stated because the issue's premise was slightly wider than the
+		// mechanism.** #354 reasoned that "a new form arrives as a new Kind in `classify`"; that holds
+		// for a form someone gives an arm, and not for a bare new keyword. `moduleFormKeyword` is
+		// deliberately not an allowlist (`wast.go:1136`), so `(module newthing …)` falls through to
+		// the wat reader as `KindModuleText`. The Kind census cannot report it — and does not need to:
+		// a form landing on `KindModuleText` lands on the arm the text row above already falsifies.
+		// The hole this control closes is the other one, a Kind gaining an arm without gaining a
+		// witness, which is exactly how the quote row came to be missing until #353.
+		want := map[Kind]bool{KindUnsupported: true}
+		for _, tc := range rows {
+			want[tc.want] = true
+		}
+		// Counts pinned exactly beside the set, because set equality alone is satisfied by a
+		// population that drained to one command: a floor bounds the catastrophic case, and the
+		// interesting loss here is a classifier arm that stops firing for most of its inputs while
+		// still firing for one. Re-base in the PR that moves the corpus or an arm.
+		wantCounts := map[Kind]int{
+			KindModuleText:   2143,
+			KindModuleBinary: 88,
+			KindUnsupported:  9,
+			KindModuleQuote:  7,
+		}
+		got := map[Kind]int{}
+		where := map[Kind]string{}
+		for _, p := range suitePaths(t) {
+			s, err := ParseFile(p)
+			if err != nil {
+				t.Errorf("%s: parse: %v", p, err)
+				continue
+			}
+			for _, c := range s.Commands {
+				if c.Head != "module" {
+					continue
+				}
+				got[c.Kind]++
+				if _, seen := where[c.Kind]; !seen {
+					where[c.Kind] = fmt.Sprintf("%s:%d", filepath.Base(p), c.Line)
+				}
+			}
+		}
+		for k, n := range got {
+			if !want[k] {
+				t.Errorf("a `module` head classifies to %v (%d commands, first %s) and no row above "+
+					"witnesses it — add a row to the table, or, if the Kind reaches no validator, "+
+					"excuse it here by name with the reason. This is the #353 omission's shape: an arm "+
+					"that scores fact 2 with nothing falsifying that it does.", k, n, where[k])
+			}
+		}
+		for k := range want {
+			if got[k] == 0 {
+				t.Errorf("the table witnesses %v but no `module` head in the corpus classifies to it — "+
+					"the row is asserting something about a population that is not there, which passes "+
+					"and says nothing", k)
+			}
+		}
+		if len(got) != len(wantCounts) {
+			t.Errorf("module-head Kinds: %d distinct, want %d — %v", len(got), len(wantCounts), got)
+		}
+		for k, n := range wantCounts {
+			if got[k] != n {
+				at := where[k]
+				if at == "" {
+					at = "no command carries it"
+				}
+				t.Errorf("module heads classifying to %v: %d, want exactly %d (%s). The set above "+
+					"is satisfied by one surviving command; this is the figure that is not",
+					k, got[k], n, at)
+			}
+		}
+	})
 
 	t.Run("an undecodable binary image is charged to fact 1, not to the validator", func(t *testing.T) {
 		// **The tripwire for an ordering constraint that is invisible in the code it constrains.**
@@ -9368,7 +9476,28 @@ func TestPhase1Files(t *testing.T) {
 	// the column rather than out of it is invisible to any single figure, which is why the composition
 	// was diffed rather than the total quoted — and it is why the #359 forecast's all-on prediction
 	// (192) missed by 4 while its default prediction (8) was exact.
-	const validateFailCeiling = 39
+	// # 39 → 38, slice 9 (ADR 0035), and the one row that moved is the row the forecast said could not
+	//
+	// **The tail-call arms contribute nothing to this lane and the ADR said so correctly** — `TailCall`
+	// is absent from `DefaultFeatures()`, so `return_call` and `return_call_indirect` are refused at
+	// *decode* here and never reach a validator column. What the ADR then said, and got wrong, is that
+	// the default lane would therefore be byte-identical: the slice also repaired grave #390, the
+	// element-type `require` missing from `call_indirect`, and **`call_indirect` is MVP core**. So
+	// `call_indirect.wast:994` — a `(table 10 externref)` module this validator was accepting — converts
+	// on the default lane too, and it lands in `validateAdmitCeiling` (31 → 30) rather than in
+	// `declined`, taking this partition's total with it.
+	//
+	// The shape worth keeping: a gated slice's *forecast* was reasoned from the gate map, which is sound
+	// for the instructions the slice ports and silent about a grave the port happens to expose. **A
+	// repair rides the lane its subject ships on, not the lane its discoverer was working in** — and the
+	// discovery direction here was the reverse of the usual one, since reading `ReturnCallIndirect` is
+	// what showed `CallIndirect` was short a require. Pre-registration cannot cover what the work has not
+	// found yet; what it can do is make the miss a stated one, which is why this paragraph exists rather
+	// than a re-based constant.
+	//
+	// `validateDeclineCeiling` is unmoved at 8, the eight relaxed-SIMD operators, for the reason its own
+	// paragraph gives: a structural residue whose gate is its own event.
+	const validateFailCeiling = 38
 	const validateDeclineCeiling = 8
 	boardBound(t, "validateDeclineCeiling", validateDeclined, validateDeclineCeiling, 0, ceilingBound,
 		"slice 1 declined more instructions than it did — either an opcode left the signature "+
@@ -9440,7 +9569,21 @@ func TestPhase1Files(t *testing.T) {
 	//
 	// A `simd_`-prefix predicate would have been a claim about the current sample rather than the
 	// space, and an under-matching trigger fails silently by construction.
-	const validateAdmitCeiling = 31
+	// **31 → 30 with slice 9 (ADR 0035), and a fall on this bound is the rarest movement the board has.**
+	// Every other slice in this campaign has drained `declined`; this is the first to convert an
+	// *admission* — a module the validator was calling valid and the corpus calls invalid — and it did so
+	// on the default lane, where the slice's own opcodes are not even decoded. The row is
+	// `call_indirect.wast:994`, `(table 10 externref)` with a `call_indirect` through it, accepted since
+	// the arm landed because the arm read the table's address type and never its element type (grave
+	// #390, `valid.ml:563`).
+	//
+	// Two things about it are worth keeping. It was found by porting the *sibling* opcode, so **the
+	// authority for a landed arm was read while implementing a new one** — a call site corrected on one
+	// axis (#343 cause 2's address-type repair) was still wrong on another, and nothing in the campaign
+	// would have re-read it on its own account. And it was invisible to every fail column by
+	// construction: an over-*acceptance* produces no message to bucket, which is the whole reason this
+	// bound is a ceiling rather than a floor.
+	const validateAdmitCeiling = 30
 	boardBound(t, "validateAdmitCeiling", validateAdmitted, validateAdmitCeiling, 0,
 		ceilingBound,
 		"the validator accepted an invalid module it used to refuse. This is the accept direction: "+
@@ -10041,7 +10184,23 @@ func TestPhase1Files(t *testing.T) {
 	// rather than the one above: `classify` is untouched here too, and a validator slice cannot change
 	// what the harness is able to *ask*. The reward figure with a subject is the fail column, −47 here
 	// and −62 in the all-on lane.
-	const passFloor = 60837
+	// **60837 → 60838, slice 9 (ADR 0035): +1, and the whole of it is a grave rather than a slice.**
+	// The tail-call arms are gated off here, so the slice's 34 declines never appear on this lane at all;
+	// the single row is `call_indirect.wast:994`, the admission grave #390's repair converts, and
+	// `validateAdmitCeiling` 31 → 30 is where it lands. `encodeFailCeiling` unmoved at 68,
+	// `execFailCeiling` at 81, `validateDeclineCeiling` at 8 — so fail 188 → 187 decomposes to one
+	// admission and nothing else.
+	//
+	// **The ADR forecast this lane as byte-identical and it was wrong by exactly this row**, for a reason
+	// worth naming: the forecast reasoned from the gate map, which covers the instructions a slice
+	// *ports* and says nothing about a landed arm the port happens to audit. The paragraph at
+	// `validateAdmitCeiling` carries the finding; this entry carries the arithmetic. A +1 that a forecast
+	// did not predict is a smaller error than a +35 that one did, and it is recorded at the same volume
+	// because the direction of a miss is not what makes it a miss.
+	//
+	// `unsupported` is unmoved at 66 and the zero is **structural** for the third entry running:
+	// `classify` is untouched, so nothing the harness could not ask became askable.
+	const passFloor = 60838
 	// Slack 0 as of #387's ruling, with `allOnPassFloor` and `unsupportedCeiling` — see
 	// `boardbound_test.go`'s retirement section. Two entries in the ledger above record taking a
 	// re-base *although the slack stayed silent* (58659 by a margin of 20, and the 416 that was four

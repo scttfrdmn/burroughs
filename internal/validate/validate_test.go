@@ -4,6 +4,9 @@ package validate
 
 import (
 	"errors"
+	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"testing"
 
@@ -536,25 +539,34 @@ func TestDeclinesAreDeclinesAndNameTheirOpcode(t *testing.T) {
 			// `ref.as_non_null` (0xD4) was the witness slice 6 chose, deliberately from inside the
 			// family it had half-claimed, and **slice 8 typed it, which is the fourth re-point.**
 			//
-			// `return_call` (0x12) is the new witness, and it is the last time this row can be
-			// re-pointed quietly. Slice 8 closes the single-byte space down to five opcodes — `throw`
-			// (0x08), `throw_ref` (0x0a), `return_call` (0x12), `return_call_indirect` (0x13),
-			// `try_table` (0x1f) — and that set is no longer a fact about what a hand-picked specimen
-			// happens to hit: `TestSingleByteDeclinesAreExactlyTheTwoDeferredProposals` in
-			// `ref_test.go` derives it by walking `binary.OpMnemonic`'s single-byte rows and asking
-			// the real dispatch, in both directions. So the population this row draws from is now
-			// *enumerated*, which is #326's answer arriving for the single-byte half, and the next
-			// slice that drains it fails the derived control first and this one second.
+			// `return_call` (0x12) was slice 8's witness, chosen because the boundary ran *through*
+			// the tail-call family — and **slice 9 typed it, which is the fifth re-point.**
 			//
-			// The choice within the five is the same argument slice 6 made: `return_call_ref` (0x15)
-			// landed with slice 8 while its two siblings did not, so the boundary runs *through* the
-			// tail-call family, and a specimen from inside a half-claimed family is the one that goes
-			// stale loudly rather than silently. The expected string carries the opcode byte as well
-			// as the mnemonic, because the byte is what makes the decline a lookup-free work item.
+			// `throw_ref` (0x0a) is the new witness, and the reason it is expected to outlast its four
+			// predecessors is that the single-byte residue is no longer a *slice's* backlog: three
+			// opcodes remain, all exception handling, all named in `validate.go`'s out-of-scope list.
+			// Moving this row now takes a scope decision rather than the next port. `throw_ref` over
+			// `throw` and `try_table` because it carries no immediate — no tag index, no block type —
+			// so the specimen is a two-token module and the row cannot fail for an encoding reason
+			// while claiming to be about a decline.
+			//
+			// **The re-point is priced, which is why the specimen stays literal.** A wat module cannot
+			// be synthesized per opcode (#326's unfinished half), but the failure below derives the
+			// still-declined set from `binary.OpMnemonic` and the real dispatch and *prints it*, so a
+			// slice that drains this row is handed its replacement in the message: the repair is a
+			// one-line edit, not an investigation. That is Scott's #42 ruling applied to a different
+			// mechanism — a consequence is only a cost after its remedy is priced — and it is also why
+			// this row is no longer a "quote for #326": the cost the issue was arguing from is gone
+			// while the specimen remains hand-named.
+			//
+			// The derived set itself is pinned in both directions by
+			// `TestSingleByteDeclinesAreExactlyExceptionHandling` in `ref_test.go`, which fails *first*
+			// when the boundary moves. The expected string carries the opcode byte as well as the
+			// mnemonic, because the byte is what makes the decline a lookup-free work item.
 			name: "single-byte, no signature",
-			wat:  `(module (func $f) (func (return_call $f)))`,
-			want: "return_call (0x12)",
-			gate: func(f *binary.Features) { f.TailCall = true },
+			wat:  `(module (func (throw_ref)))`,
+			want: "throw_ref (0x0a)",
+			gate: func(f *binary.Features) { f.ExceptionHandling = true },
 		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -562,7 +574,8 @@ func TestDeclinesAreDeclinesAndNameTheirOpcode(t *testing.T) {
 			if !errors.Is(err, ErrUnsupported) {
 				t.Fatalf("want a decline (ErrUnsupported), got %v.\nAccepting an instruction this "+
 					"slice cannot type reports *valid* for a module nothing type-checked, which is "+
-					"the accept-direction failure no board can see (§9 G-3)", err)
+					"the accept-direction failure no board can see (§9 G-3).\n%s", err,
+					stillDeclinedSingleByte())
 			}
 			if !strings.Contains(err.Error(), c.want) {
 				t.Errorf("the decline does not name what it declined (want %q): %v", c.want, err)
@@ -596,6 +609,61 @@ func TestDeclinesAreDeclinesAndNameTheirOpcode(t *testing.T) {
 	if !strings.Contains(err.Error(), "prefixed opcode 0xfe") {
 		t.Errorf("the decline does not name what it declined (want %q): %v", "prefixed opcode 0xfe", err)
 	}
+}
+
+// singleByteDeclines walks the single-byte opcode space and asks the **real dispatch** which rows
+// decline, returning them by byte with the mnemonic and the number of rows walked.
+//
+// Domain: rows `binary.OpMnemonic` names. A row with no name is a reserved byte or an escape prefix,
+// neither of which reaches `instr` with `Prefix == 0`, so counting them would report 24 permanent
+// declines inside a figure whose subject is what is *left to do*.
+//
+// One derivation, two callers, and the direction of trust runs from the pinned one: `ref_test.go`'s
+// `TestSingleByteDeclinesAreExactlyExceptionHandling` compares this against a literal set, and
+// `stillDeclinedSingleByte` only formats it. So a broken walk fails the control rather than quietly
+// printing an empty repair hint — which is the arrangement grave "a control can test the helper, not
+// the path" asks for, read in the other direction.
+func singleByteDeclines() (map[uint32]string, int) {
+	got, named := map[uint32]string{}, 0
+	for op := range uint32(0x100) {
+		name, ok := binary.OpMnemonic(op)
+		if !ok || name == "" {
+			continue
+		}
+		named++
+		v := &validator{mod: &binary.Module{}, curFunc: &binary.Func{}, blocks: map[int]Arity{}}
+		v.pushFrame(opFuncBody, nil, nil)
+		if err := v.instr(0, binary.Instr{Op: op}); errors.Is(err, ErrUnsupported) {
+			got[op] = name
+		}
+	}
+	return got, named
+}
+
+// stillDeclinedSingleByte renders the current single-byte decline set for a failure message, and it
+// exists so that a hand-named specimen going stale costs one edit rather than an investigation.
+//
+// Five slices have re-pointed `TestDeclinesAreDeclinesAndNameTheirOpcode`'s single-byte row, and every
+// one of them read a failure that said only "your specimen now types" — leaving the reader to find
+// which opcode still declines. Printing the set makes the remedy part of the message, which is the
+// difference between a consequence and a cost (Scott, on #42: *"a consequence is only a cost after
+// its remedy is priced"*). If the printed set is **empty**, the row's whole population is drained and
+// the repair is to delete the row, not re-point it.
+func stillDeclinedSingleByte() string {
+	got, named := singleByteDeclines()
+	if len(got) == 0 {
+		return fmt.Sprintf("No single-byte opcode declines any more (%d named rows walked): this row's "+
+			"population is drained, so delete it rather than re-pointing it — and retire "+
+			"TestSingleByteDeclinesAreExactlyExceptionHandling in the same PR.", named)
+	}
+	bytes := slices.Sorted(maps.Keys(got))
+	names := make([]string, 0, len(bytes))
+	for _, op := range bytes {
+		names = append(names, fmt.Sprintf("%s (%#02x)", got[op], op))
+	}
+	return fmt.Sprintf("Still declined, derived from the dispatch over %d named single-byte rows — "+
+		"re-point this row at one of these and update `want` to match: %s",
+		named, strings.Join(names, ", "))
 }
 
 // TestFuncInfoArityDistinguishesLoopFromBlock is the metadata half, and it exists because nothing

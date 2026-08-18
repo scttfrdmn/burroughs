@@ -1177,13 +1177,29 @@ func TestReferenceRangeCitationsAreWellFormed(t *testing.T) {
 	// ranges *per block*, and naming it here is what keeps that pin's +3 from reading as an arithmetic
 	// slip against this pin's +7.
 	//
+	// **Four more with slice 9, all in the new `tailcall.go`, and the per-file split is the whole
+	// attribution**: 2/2/26/3/1/17/13/0/1/**4**/4/5/0 in `citationFiles` order — the list grew a
+	// thirteenth entry rather than any existing count moving. That matters because the slice also
+	// edited `instr.go` (two dispatch arms, and a rewritten `callIndirect` doc block carrying grave
+	// #390) and `ref.go`'s header, both of which are in this domain: `instr.go` holds at 3 and `ref.go`
+	// at 13, so the +4 is the new file's and not a rewrite's. The four are `:544-550` (`ReturnCall`),
+	// `:560-565` (the element-type require #390 restores), `:560-570` (`ReturnCallIndirect` as a
+	// region) and `:546-549` (the result-type require).
+	//
+	// A fifth range citation in that file is **invisible to this instrument by construction**, and it
+	// is named for the reason the `free.ml` paragraph above names its own gap: `requireTailResults`
+	// cites the reference's two textually identical requires as ``:546-549`, `:566-569``, and the second
+	// is a bare continuation with no `valid.ml` prefix, so `rangeRe` does not see it. Nothing
+	// bounds-checks it. The shape is worth a sentence because the abbreviation is idiomatic in this
+	// package's prose and every use of it is a citation outside every sweep's domain.
+	//
 	// They are not enumerated here, and that is a deliberate break with the four paragraphs above.
 	// Twenty-six lines of `file :n-m subject` would be a second copy of the citations themselves,
 	// maintained by hand, drifting on the first renumbering — the fixed-point trap
 	// `citation_subject_test.go`'s header walked into at 30-31-32, at a scale where it is certain
 	// rather than likely. What reads them is `TestRangeCitationSubjectsAreReadFromTheReference`, which
 	// resolves every range against the reference and needs no list here to do it.
-	const wantRanges = 74
+	const wantRanges = 78
 	if ranges != wantRanges {
 		t.Errorf("checked %d range citation(s) across %v, want %d — recount and re-pin, and if a "+
 			"file was added to citationFiles, read its point citations too",
@@ -1360,7 +1376,21 @@ func TestReferenceRangeCitationsContainTheirSubjectsSite(t *testing.T) {
 	// reject through `popExpect` and the block-arity check, so the loop above skips their blocks
 	// entirely, and the two figures miss `wantRanges` by 32 rather than 28 for that reason and no
 	// other.
-	const wantKeyed, wantResidue = 15, 27
+	// **Slice 9 moved residue by two and keyed by nothing, against four new ranges, and the split is
+	// along the two-versus-third-category line the paragraphs above spent three slices naming.** The
+	// two are `requireTailResults`' `:546-549` and `indirectTarget`'s `:560-565`: both subjects raise
+	// `ErrTypeMismatch` directly, and the reference *builds* both messages — the result-type require
+	// concatenates two type lists onto its head, and the element-type require concatenates
+	// `string_of_reftype t` — so they are excused for the oldest reason in this header even though the
+	// reference emits each one verbatim at run time. `returnCall`'s `:544-550` and
+	// `returnCallIndirect`'s `:560-570` name no sentinel at all: both arms refuse only through
+	// `requireTailResults`, `indirectTarget` and the operand-pop helpers, so `subjectMessages` answers
+	// nil for them and the loop above skips their blocks. The two figures now miss `wantRanges` by 34.
+	//
+	// Which makes this the fourth consecutive slice where the miss grew by exactly the count of new
+	// no-message blocks — 26→28→32→34 — and that regularity is the useful part: the gap is a stable
+	// property of how arms delegate their refusals, not an error accumulating in either pin.
+	const wantKeyed, wantResidue = 15, 29
 	if keyed != wantKeyed || residue != wantResidue {
 		t.Errorf("checked %d keyed range citation(s) and excused %d as constructed-message residue "+
 			"across %v, want %d and %d — recount and re-pin. A range becomes keyable when its "+

@@ -30,21 +30,27 @@ import (
 // the third payout of one shape and the reason slice 8's charged overhead is a control rather than a
 // corrected sentence.
 //
-// # What stays declined, and it is proposal boundaries rather than difficulty
+// # What stays declined, and it is a scope declaration rather than difficulty
 //
-// Five named single-byte opcodes remain after this slice, in exactly two deferred proposals:
+// **Three** named single-byte opcodes remain, in one deferred proposal:
 //
-//   - **tail calls** — `return_call` (0x12), `return_call_indirect` (0x13). `return_call_ref` (0x15)
-//     lands here instead of with them because it arrived with function references, so one of three
-//     tail-call shapes is typed and two are not. Stated so the residue is not read as an omission.
 //   - **exception handling** — `throw` (0x08), `throw_ref` (0x0a), `try_table` (0x1f), which is the
-//     register's own last entry and not a stray.
+//     register's own last entry and not a stray, and which is named in `validate.go`'s out-of-scope
+//     list. So what is left here is declined *by declaration*: moving it is a scope decision, where
+//     the pair below was only ever waiting for arms.
 //
-// That set is pinned by `TestSingleByteDeclinesAreExactlyTheTwoDeferredProposals` — as a literal set
-// of five with its mnemonics, derived by walking `binary.OpMnemonic`'s single-byte rows and asking
-// the real dispatch, over the domain of *rows that name an instruction* (the reserved-byte and
-// prefix rows cannot reach `instr` with `Prefix == 0`). The next slice that moves this boundary gets
-// a failing test rather than a sentence nobody reads.
+// Slice 8 left five in two proposals; `return_call` (0x12) and `return_call_indirect` (0x13) were the
+// other two, and **slice 9 typed them** (`tailcall.go`, ADR 0035) — the validator having been their
+// sole blocker, which is why they were a slice and not a decision. `return_call_ref` (0x15) landed
+// here rather than with them because it arrived with function references, so this file holds one
+// tail-call shape and `tailcall.go` holds the other two: proposal boundaries winning over family
+// resemblance, stated because the reverse is what a reader expects.
+//
+// That set is pinned by `TestSingleByteDeclinesAreExactlyExceptionHandling` — as a literal set with
+// its mnemonics, derived by walking `binary.OpMnemonic`'s single-byte rows and asking the real
+// dispatch, over the domain of *rows that name an instruction* (the reserved-byte and prefix rows
+// cannot reach `instr` with `Prefix == 0`). The next slice that moves this boundary gets a failing
+// test rather than a sentence nobody reads — and it got one: the rename above is that test firing.
 //
 // The reference-type slice's opcodes (#359): the three `ref.*` rows in the single-byte space and
 // the two table accessors, which are here rather than in bulk.go because bulk.go is the 0xFC
