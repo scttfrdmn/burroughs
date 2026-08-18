@@ -4,6 +4,7 @@ package validate
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/scttfrdmn/burroughs/internal/binary"
@@ -312,6 +313,525 @@ func TestRefFuncDeclarationCountsEverySourceTheReferenceFreeVariablePassDoes(t *
 	// `(table … (ref.func $f))` field yet (#8). Two layers short of a witness, which is why it is
 	// declared in `declaredFuncs`' comment and asserted nowhere: the honest record of an untestable
 	// claim is the claim, not a test that passes for a different reason.
+}
+
+// TestSingleByteDeclinesAreExactlyTheTwoDeferredProposals is slice 8's charged overhead (ADR 0034),
+// and its subject is a *sentence*, not an instruction.
+//
+// `validate.go` declared the single-byte space "fully in vocabulary" with "0xFE (threads) alone"
+// remaining, twice, in two paragraphs, and both clauses were false when written — eleven named
+// opcodes were declined at the time. ADR 0032 swept the sentence immediately following one of them
+// and left it standing. That is one shape paying out three times, so the boundary is pinned here as a
+// **set** and the prose in ref.go's header points at this test rather than the reverse.
+//
+// # The domain is rows that name an instruction, and the exclusion is not a convenience
+//
+// `binary.OpMnemonic`'s `ok` means "there is a row", and 24 single-byte rows have an **empty**
+// mnemonic: `illegal: true` rows (bytes the reference defines in order to reject) and `escape: true`
+// prefix bytes. Both decline here, correctly and permanently — an illegal byte never reaches this
+// package with a verdict to give, and a prefix byte reaches it as `Prefix != 0` — so counting them
+// would put 24 rows that can never move into a set whose whole purpose is to name what is *left to
+// do*. The raw count is 29 and the honest one is 5; this control states the difference rather than
+// reporting the flattering figure.
+//
+// Both bounds on the walk, for TestEveryNumericOpcodeHasASignature's reason: the floor catches the
+// derivation collapsing, and the exact figure catches a handful of rows dropping out of a domain that
+// comes from a **committed** table and therefore never moves on upstream's schedule.
+func TestSingleByteDeclinesAreExactlyTheTwoDeferredProposals(t *testing.T) {
+	// The set, with the proposal each byte belongs to — which is the fact that makes this a boundary
+	// and not a to-do list. `return_call_ref` (0x15) is *not* here: it is the third tail-call shape and
+	// it arrived with function references, so it is typed while its two siblings are not.
+	want := map[uint32]string{
+		0x08: "throw",                // exception handling
+		0x0a: "throw_ref",            // exception handling
+		0x1f: "try_table",            // exception handling
+		0x12: "return_call",          // tail calls
+		0x13: "return_call_indirect", // tail calls
+	}
+
+	got := map[uint32]string{}
+	named := 0
+	for op := range uint32(0x100) {
+		name, ok := binary.OpMnemonic(op)
+		if !ok || name == "" {
+			continue // see the doc comment: a row without a name is not an instruction
+		}
+		named++
+		// The real dispatch, asked the way `Func` asks it. A hand-written list of "what slice 8
+		// implements" would be this package agreeing with its own notes.
+		v := &validator{mod: &binary.Module{}, curFunc: &binary.Func{}, blocks: map[int]Arity{}}
+		v.pushFrame(opFuncBody, nil, nil)
+		if err := v.instr(0, binary.Instr{Op: op}); errors.Is(err, ErrUnsupported) {
+			got[op] = name
+		}
+	}
+
+	const (
+		namedRowFloor = 150
+		namedRowExact = 192
+	)
+	if named < namedRowFloor {
+		t.Fatalf("walked only %d named single-byte rows, want ≥%d — the domain derivation stopped "+
+			"matching, and every set comparison below would be this test reporting its own "+
+			"blindness", named, namedRowFloor)
+	}
+	if named != namedRowExact {
+		t.Errorf("walked %d named single-byte rows, want exactly %d — `optable.go` is committed, so "+
+			"this moves on a table edit (re-base it in that PR) and never on upstream's clock; a "+
+			"floor cannot tell a loss of six rows from a healthy walk", named, namedRowExact)
+	}
+
+	for op, name := range want {
+		switch mn, ok := got[op]; {
+		case !ok:
+			t.Errorf("%#02x (%s) is no longer declined — if a slice typed it, delete this row and "+
+				"say so in that PR's ADR; the two proposals named in ref.go's header are the "+
+				"claim this test holds", op, name)
+		case mn != name:
+			t.Errorf("%#02x declines under the mnemonic %q, this set calls it %q — the authority's "+
+				"table was re-spelled and the boundary is now stated in two vocabularies",
+				op, mn, name)
+		}
+	}
+	for op, name := range got {
+		if _, ok := want[op]; !ok {
+			t.Errorf("%#02x (%s) is declined and is not in the deferred set — either a slice's "+
+				"dispatch arm was lost, or the space grew an instruction nothing has claimed. "+
+				"Both are the boundary moving without the sentence moving", op, name)
+		}
+	}
+
+	t.Logf("%d named single-byte rows; %d declined: %v", named, len(got), got)
+}
+
+// TestRefEqOperandIsANullableEqRef prints what `refNullEq` holds, which its own comment declines to
+// assert in prose.
+//
+// The var is built by `binary.AbstractRefType(binary.HeapEq, true)` with the predicate discarded, and
+// the argument for discarding it is that the input is a constant from the package that owns the
+// table. That argument is checkable, so it is checked here rather than trusted: if the twelve ever
+// stop including `eq`, the var silently becomes `NoValType` — a zero ValType, which `IsRef` reports
+// **false** for, so `ref.eq` would refuse every operand with a message naming a type that does not
+// exist. An engine asserting a type its input does not have is grave #36's class.
+func TestRefEqOperandIsANullableEqRef(t *testing.T) {
+	rt, ok := binary.AbstractRefType(binary.HeapEq, true)
+	if !ok {
+		t.Fatalf("binary.AbstractRefType(HeapEq, true) reports HeapEq is not one of the twelve "+
+			"abstract forms, so refNullEq is %v — every ref.eq operand would be refused against a "+
+			"type this format cannot spell", rt)
+	}
+	if rt != refNullEq {
+		t.Errorf("refNullEq is %v, the same constructor answers %v — the var is not what this test "+
+			"checks", refNullEq, rt)
+	}
+	if !refNullEq.IsRef() {
+		t.Errorf("refNullEq (%v) is not a reference type", refNullEq)
+	}
+	if !refNullEq.Null() {
+		t.Errorf("refNullEq (%v) is non-nullable; the reference's operand is `RefT (Null, EqHT)` and a "+
+			"non-nullable requirement rejects `(ref.eq (ref.null eq) …)`, which is valid", refNullEq)
+	}
+	if k, hasKind := refNullEq.Kind(); !hasKind || k != binary.HeapEq {
+		t.Errorf("refNullEq's kind byte is (%#02x, %v), want (%#02x, true) — the heaptype is the "+
+			"whole content of this rule", k, hasKind, binary.HeapEq)
+	}
+	t.Logf("refNullEq = %s (kind %#02x, nullable %v)", refNullEq, binary.HeapEq, refNullEq.Null())
+}
+
+// TestRefAsNonNullCarriesTheHeapTypeAndClearsOnlyTheNullBit is `refAsNonNull`'s control, and the row
+// that earns it is the last one.
+//
+// The first two families are the ordinary halves: the heaptype must come through untouched (a rule
+// pushing `funcref` passes the funcref row and fails every other), and a numeric operand must be
+// refused (`peekRef`'s classification, without which the rule is a pop and a push).
+//
+// **The bottom row is the slice's one structural bound.** `peek_ref` answers `(NoNull, BotHT)` for a
+// bottom operand — a *reference* bottom, which satisfies every reference requirement and no numeric
+// one — and not `BotT`, which satisfies both. `(unreachable) (ref.as_non_null) (f32.abs)` is
+// `unreached-invalid.wast:697`, and it is the **only row of that file's 55 slice-8 rows** that
+// separates the two readings.
+//
+// **Which mutation it separates was measured, and it is not the one this header first named.**
+// Making `peekRef` return this package's `unknown` fails nothing — the arm overwrites the null bit
+// on both the pop and the push, so the two spellings are the same value by the time anything
+// compares them. The reading this row kills is the *push* collapsing a bottom heaptype back to the
+// valtype bottom, which fails here and nowhere else. The correction is left visible because the
+// first version of this paragraph would have sent a reader to mutate a line that this row cannot
+// see, and concluding from that that the distinction is decorative is worse than not having the
+// paragraph.
+//
+// Its accept-direction mirror is here beside it, because a rule that refused *both* would also pass
+// the reject row and be wrong about reachability instead.
+func TestRefAsNonNullCarriesTheHeapTypeAndClearsOnlyTheNullBit(t *testing.T) {
+	// spell is the parameter type; result is what the instruction's own type satisfies exactly.
+	for _, c := range []struct{ spell, result string }{
+		{"funcref", "(ref func)"},
+		{"externref", "(ref extern)"},
+		{"anyref", "(ref any)"},
+		{"eqref", "(ref eq)"},
+		{"i31ref", "(ref i31)"},
+		{"structref", "(ref struct)"},
+	} {
+		t.Run(c.spell, func(t *testing.T) {
+			wat := `(module (func (param ` + c.spell + `) (result ` + c.result + `)
+				(local.get 0) (ref.as_non_null)))`
+			if _, err := validated(t, wat, gcOn); err != nil {
+				t.Errorf("(ref.as_non_null) on a %s does not satisfy a %s result: %v — the heaptype "+
+					"is carried through and only the null bit changes", c.spell, c.result, err)
+			}
+			// The other family, so the accept row above is not satisfiable by a rule that pushes one
+			// fixed reference type.
+			other := "(ref func)"
+			if c.spell == "funcref" {
+				other = "(ref extern)"
+			}
+			bad := `(module (func (param ` + c.spell + `) (result ` + other + `)
+				(local.get 0) (ref.as_non_null)))`
+			if _, err := validated(t, bad, gcOn); !errors.Is(err, ErrTypeMismatch) {
+				t.Errorf("(ref.as_non_null) on a %s was accepted as a %s result (%v) — the peeked "+
+					"heaptype is being replaced", c.spell, other, err)
+			}
+		})
+	}
+
+	t.Run("already non-null", func(t *testing.T) {
+		// Valid, and the rule the reference does *not* have is the one to check for: `_nul` is
+		// discarded, so there is no "already non-nullable" rejection to invent.
+		wat := `(module (type $t (func)) (func (param (ref $t)) (result (ref $t))
+			(local.get 0) (ref.as_non_null)))`
+		if _, err := validated(t, wat, gcOn); err != nil {
+			t.Errorf("(ref.as_non_null) on an already non-nullable operand was rejected: %v — the "+
+				"peeked nullability is discarded, and a check on it is a rule the reference has "+
+				"no line for", err)
+		}
+	})
+
+	t.Run("numeric operand", func(t *testing.T) {
+		wat := `(module (func (param i32) (result i32) (local.get 0) (ref.as_non_null)))`
+		if _, err := validated(t, wat, gcOn); !errors.Is(err, ErrTypeMismatch) {
+			t.Errorf("(ref.as_non_null) accepted an i32 operand (%v) — `peekRef` classifies before "+
+				"the pop, and without it this rule is a no-op wearing an opcode", err)
+		}
+	})
+
+	// The two bottoms, which is the pair this arm exists to keep apart.
+	t.Run("bottom satisfies no numeric requirement", func(t *testing.T) {
+		wat := `(module (func (result f32) (unreachable) (ref.as_non_null) (f32.abs)))`
+		if _, err := validated(t, wat, gcOn); !errors.Is(err, ErrTypeMismatch) {
+			t.Errorf("`(unreachable) (ref.as_non_null) (f32.abs)` was accepted (%v) — this is "+
+				"unreached-invalid.wast:697, and accepting it is the arm pushing `BotT` where the "+
+				"reference pushes `RefT (NoNull, BotHT)`: a *reference* bottom matches no numeric "+
+				"requirement, because the mixed-sort pair falls to match_valtype's `_, _ -> false`",
+				err)
+		}
+	})
+
+	t.Run("bottom satisfies every reference requirement", func(t *testing.T) {
+		// The row above must fail because the bottom is a *reference*, not because this rule refuses
+		// bottom outright, and these are what tell the two apart. The concrete and abstract wants are
+		// separate rows because `matchHeap` reaches them through different arms — `matchDefType` and
+		// `compTypeAt` respectively — and its bottom arm is the only thing that stops either from
+		// resolving `botHeapIdx` as a type index the module is supposed to hold.
+		for _, c := range []struct{ name, wat string }{
+			{"ref.is_null consumes it", `(module (func (result i32)
+				(unreachable) (ref.as_non_null) (ref.is_null)))`},
+			{"concrete reference requirement", `(module (type $t (func))
+				(func (result (ref $t)) (unreachable) (ref.as_non_null)))`},
+			{"abstract reference requirement", `(module (func (result funcref)
+				(unreachable) (ref.as_non_null)))`},
+		} {
+			t.Run(c.name, func(t *testing.T) {
+				if _, err := validated(t, c.wat, gcOn); err != nil {
+					t.Errorf("a bottom reference did not satisfy a reference requirement (%v) — "+
+						"`matchHeap`'s `BotHT, _ -> true` arm has to test the bottom *heaptype*, "+
+						"because the value pushed here is `botRef(false)` and only its nullable "+
+						"sibling is `unknown`", err)
+				}
+			})
+		}
+	})
+}
+
+// TestBrOnNullAndBrOnNonNullTakeTheirHeapTypeFromOppositeEnds is the two branch arms' control, and
+// the pairing is the whole content of it.
+//
+// `br_on_null` peeks the *operand* and imposes **no** requirement on the label; `br_on_non_null`
+// reads the label's *last type* and derives the operand requirement from it. So the discriminating
+// rows are the ones each rule's sibling would get wrong: a void label (fine for `br_on_null`, an
+// error for `br_on_non_null`) and a numeric label tail (invisible to `br_on_null`, the other's own
+// message). An implementation that shared one code path with a flag fails both.
+//
+// The fall-through types are the second axis, and they invert too: `br_on_null` leaves the reference
+// on the stack non-nullable — the unwrap — and `br_on_non_null` consumes it, because a null has
+// nothing to unwrap.
+func TestBrOnNullAndBrOnNonNullTakeTheirHeapTypeFromOppositeEnds(t *testing.T) {
+	for _, c := range []struct {
+		name, wat string
+		want      error  // nil for an accept row
+		detail    string // a substring of the wrapped message, where the sentinel is not enough
+	}{
+		{
+			// The idiomatic use, and the row a label requirement copied from the sibling rejects.
+			name: "br_on_null, void label",
+			wat: `(module (func (param (ref null func)) (result i32)
+				(block (local.get 0) (br_on_null 0) (drop))
+				(i32.const 0)))`,
+		},
+		{
+			// The fall-through is the *unwrapped* form, and the `return` is what asserts it: this
+			// function's result is `(ref $t)`, so a rule that left the operand's own `(ref null $t)`
+			// on the stack fails here — and it is the only row in this table that would.
+			name: "br_on_null, fall-through is non-nullable",
+			wat: `(module (type $t (func)) (func (param (ref null $t)) (result (ref $t))
+				(block (local.get 0) (br_on_null 0) (return))
+				(unreachable)))`,
+		},
+		{
+			name: "br_on_null, label types pass through",
+			wat: `(module (func (param (ref null func)) (result i32)
+				(block (result i32)
+					(i32.const 7)
+					(local.get 0)
+					(br_on_null 0)
+					(drop))))`,
+		},
+		{
+			// The label's types are *required*, not merely passed through: the instruction type is
+			// `(ts @ [ref null ht]) --> (ts @ [ref ht])`, so a stack holding the reference alone
+			// against an `[i32]` label is invalid. **Accept-direction row** — dropping the
+			// `popExpectAll(ts)`/`pushAll(ts)` pair makes exactly this module validate, and the
+			// pass-through row above still passes, because there the label's type happens to be on
+			// the stack already.
+			name: "br_on_null, label types absent from the stack",
+			wat: `(module (func (param (ref null func)) (result i32)
+				(block (result i32)
+					(local.get 0)
+					(br_on_null 0)
+					(drop)
+					(i32.const 0))))`,
+			want: ErrTypeMismatch,
+		},
+		{
+			name: "br_on_null, numeric operand",
+			wat:  `(module (func (param i32) (block (local.get 0) (br_on_null 0))))`,
+			want: ErrTypeMismatch,
+		},
+		{
+			name: "br_on_null, unknown label",
+			wat:  `(module (func (param funcref) (local.get 0) (br_on_null 4) (drop)))`,
+			want: ErrUnknownLabel,
+		},
+		{
+			// The label's last type is the source of the heaptype, and the operand is consumed.
+			name: "br_on_non_null, reference label",
+			wat: `(module (func (param (ref null func)) (result funcref)
+				(block $l (result funcref)
+					(local.get 0)
+					(br_on_non_null $l)
+					(ref.null func))))`,
+		},
+		{
+			name: "br_on_non_null, label types below the reference pass through",
+			wat: `(module (func (param (ref null func)) (result i32) (result funcref)
+				(block $l (result i32) (result funcref)
+					(i32.const 7)
+					(local.get 0)
+					(br_on_non_null $l)
+					(ref.null func))))`,
+		},
+		{
+			// The reference's first `require`, and the row br_on_null must *not* fail.
+			//
+			// **The detail is asserted and not the sentinel**, because deleting both requires leaves
+			// this module invalid anyway: the operand nothing consumed is still on the stack at the
+			// block's `end`. Measured — with the requires dropped, both of these rows still refuse,
+			// from `popExpect` and from the block's arity check, which is a row passing while
+			// asserting nothing about the arm it is named for.
+			name:   "br_on_non_null, void label",
+			wat:    `(module (func (param (ref null func)) (block (local.get 0) (br_on_non_null 0))))`,
+			want:   ErrTypeMismatch,
+			detail: "requires reference type but label has []",
+		},
+		{
+			// The reference's second `require`: the label's last type is not a reference.
+			name: "br_on_non_null, numeric label tail",
+			wat: `(module (func (param (ref null func)) (result i32)
+				(block $l (result i32)
+					(local.get 0)
+					(br_on_non_null $l)
+					(i32.const 0))))`,
+			want:   ErrTypeMismatch,
+			detail: "requires reference type but label has i32",
+		},
+		{
+			name: "br_on_non_null, operand of the wrong heaptype",
+			wat: `(module (func (param externref) (result funcref)
+				(block $l (result funcref)
+					(local.get 0)
+					(br_on_non_null $l)
+					(ref.null func))))`,
+			want: ErrTypeMismatch,
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := validated(t, c.wat, gcOn)
+			switch {
+			case c.want == nil && err != nil:
+				t.Errorf("a valid module was rejected: %v", err)
+			case c.want != nil && !errors.Is(err, c.want):
+				t.Errorf("reported %v, want %v — the two rules take their heaptype from opposite "+
+					"ends, so a shared code path is right about one of them", err, c.want)
+			case c.detail != "" && err != nil && !strings.Contains(err.Error(), c.detail):
+				t.Errorf("reported %v, which does not contain %q — the refusal came from somewhere "+
+					"other than the require this row is named for", err, c.detail)
+			}
+		})
+	}
+}
+
+// TestCallRefResolvesATypeIndexAndReturnCallRefChecksTheResults is the two calls' control, and its
+// first row is the index space.
+//
+// `call`/`return_call` take a **function** index; these take a **type** index. Reading this package's
+// `funcTypeAt` instead of `funcType` resolves the wrong space, and it is wrong only where the two
+// disagree — so the module here has a type the function indices do not line up with, which is the
+// case a small hand-written module normally hides.
+//
+// `return_call_ref`'s own content is the result-type require and the polymorphic tail. The require is
+// `matchResultType` and not equality, so a callee returning `(ref $t)` may tail-call from a function
+// declaring `funcref`; the tail is why `(return_call_ref $t)` before other instructions is valid.
+func TestCallRefResolvesATypeIndexAndReturnCallRefChecksTheResults(t *testing.T) {
+	// Two types and one function, arranged so type index 1 and function index 0 name different
+	// signatures: a rule resolving the operand's index in the function space would type the callee as
+	// `[] -> []` and accept the row below only by discarding the answer.
+	const twoSpaces = `(module
+		(type $void (func))
+		(type $inc (func (param i32) (result i32)))
+		(func $unrelated (type $void)) `
+
+	for _, c := range []struct {
+		name, wat string
+		want      error
+	}{
+		{
+			name: "call_ref, type index not function index",
+			wat: twoSpaces + `(func (param (ref null $inc)) (result i32)
+				(i32.const 1) (local.get 0) (call_ref $inc)))`,
+		},
+		{
+			name: "call_ref, nullable operand is legal",
+			wat: twoSpaces + `(func (result i32)
+				(i32.const 1) (ref.null $inc) (call_ref $inc)))`,
+		},
+		{
+			name: "call_ref, operand of another type",
+			wat: twoSpaces + `(func (param (ref null $void)) (result i32)
+				(i32.const 1) (local.get 0) (call_ref $inc)))`,
+			want: ErrTypeMismatch,
+		},
+		{
+			name: "call_ref, missing parameter",
+			wat: twoSpaces + `(func (param (ref null $inc)) (result i32)
+				(local.get 0) (call_ref $inc)))`,
+			want: ErrTypeMismatch,
+		},
+		{
+			name: "call_ref, unknown type index",
+			wat: twoSpaces + `(func (result i32)
+				(i32.const 1) (ref.null $inc) (call_ref 9)))`,
+			want: ErrUnknownType,
+		},
+		{
+			name: "return_call_ref, results match exactly",
+			wat: twoSpaces + `(func (param (ref null $inc)) (result i32)
+				(i32.const 1) (local.get 0) (return_call_ref $inc)))`,
+		},
+		{
+			name: "return_call_ref, the tail is polymorphic",
+			// An instruction after it that produces nothing, in a frame that owes an i32: without
+			// `setUnreachable` the `end` demands a result the frame no longer has, and every
+			// `(return_call_ref …)` that is not the last instruction of a void frame is rejected.
+			wat: twoSpaces + `(func (param (ref null $inc)) (result i32)
+				(i32.const 1) (local.get 0) (return_call_ref $inc)
+				(nop)))`,
+		},
+		{
+			name: "return_call_ref, callee results do not satisfy this function's",
+			wat: twoSpaces + `(func (param (ref null $inc)) (result f32)
+				(i32.const 1) (local.get 0) (return_call_ref $inc)))`,
+			want: ErrTypeMismatch,
+		},
+		{
+			// `matchResultType` and not equality: `(ref $void)` satisfies a `funcref` result.
+			name: "return_call_ref, callee results are a subtype",
+			wat: `(module
+				(type $void (func))
+				(type $mk (func (result (ref $void))))
+				(func (param (ref null $mk)) (result funcref)
+					(local.get 0) (return_call_ref $mk)))`,
+		},
+		{
+			name: "return_call_ref, this function's results are the subtype",
+			wat: `(module
+				(type $void (func))
+				(type $mk (func (result funcref)))
+				(func (param (ref null $mk)) (result (ref $void))
+					(local.get 0) (return_call_ref $mk)))`,
+			want: ErrTypeMismatch,
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := validated(t, c.wat, gcOn)
+			switch {
+			case c.want == nil && err != nil:
+				t.Errorf("a valid module was rejected: %v", err)
+			case c.want != nil && !errors.Is(err, c.want):
+				t.Errorf("reported %v, want %v", err, c.want)
+			}
+		})
+	}
+}
+
+// TestRefEqTakesTwoNullableEqRefsAndOnlyThose is `refEq`'s control: the one rule in this file with no
+// index, no side table and no peek, so the only thing to get wrong is the operand type.
+//
+// A rule expecting `anyref` accepts `(ref.eq (ref.null any) …)`, which is invalid — the accept
+// direction, and the reason the `anyref` row is here rather than only the `funcref` one. A rule
+// expecting `(ref eq)` rejects the nullable operands every corpus module uses.
+func TestRefEqTakesTwoNullableEqRefsAndOnlyThose(t *testing.T) {
+	for _, c := range []struct {
+		operand string
+		want    error
+	}{
+		{operand: "eqref"},
+		{operand: "i31ref"},    // a subtype of eq
+		{operand: "structref"}, /* also a subtype */
+		{operand: "nullref"},
+		{operand: "anyref", want: ErrTypeMismatch},  // a *super*type: the accept-direction row
+		{operand: "funcref", want: ErrTypeMismatch}, // the other hierarchy
+		{operand: "externref", want: ErrTypeMismatch},
+		{operand: "i32", want: ErrTypeMismatch},
+	} {
+		t.Run(c.operand, func(t *testing.T) {
+			wat := `(module (func (param ` + c.operand + `) (param ` + c.operand + `) (result i32)
+				(local.get 0) (local.get 1) (ref.eq)))`
+			_, err := validated(t, wat, gcOn)
+			switch {
+			case c.want == nil && err != nil:
+				t.Errorf("ref.eq refused two %s operands: %v — the requirement is `(ref null eq)` "+
+					"and every subtype of eq satisfies it", c.operand, err)
+			case c.want != nil && !errors.Is(err, c.want):
+				t.Errorf("ref.eq on two %s operands reported %v, want %v", c.operand, err, c.want)
+			}
+		})
+	}
+
+	t.Run("one operand only", func(t *testing.T) {
+		wat := `(module (func (param eqref) (result i32) (local.get 0) (ref.eq)))`
+		if _, err := validated(t, wat, gcOn); !errors.Is(err, ErrTypeMismatch) {
+			t.Errorf("ref.eq with one operand reported %v, want a type mismatch — the rule pops two", err)
+		}
+	})
 }
 
 // TestTableGetSetReadBothTypesFromTheTable is `tableOp`'s control, and it is #343 cause 2's shape

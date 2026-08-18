@@ -533,16 +533,28 @@ func TestDeclinesAreDeclinesAndNameTheirOpcode(t *testing.T) {
 			// only the current witness to it. Deriving the specimen instead of naming it is #326,
 			// and each re-point is another quote for that issue's argument.
 			//
-			// `ref.as_non_null` (0xD4) is the new witness, and the choice is deliberate: slice 6
-			// claims 0xD0-0xD2 and stops, so the boundary now runs *through* the `ref.*` family
-			// rather than around it. 0xD3-0xD6 — `ref.eq` and three of the function-references five
-			// (0008) — are what is left, and a specimen from inside the family this slice just
-			// claimed is the one that would go stale silently if the arms were widened by mnemonic
-			// prefix rather than by opcode.
+			// `ref.as_non_null` (0xD4) was the witness slice 6 chose, deliberately from inside the
+			// family it had half-claimed, and **slice 8 typed it, which is the fourth re-point.**
+			//
+			// `return_call` (0x12) is the new witness, and it is the last time this row can be
+			// re-pointed quietly. Slice 8 closes the single-byte space down to five opcodes — `throw`
+			// (0x08), `throw_ref` (0x0a), `return_call` (0x12), `return_call_indirect` (0x13),
+			// `try_table` (0x1f) — and that set is no longer a fact about what a hand-picked specimen
+			// happens to hit: `TestSingleByteDeclinesAreExactlyTheTwoDeferredProposals` in
+			// `ref_test.go` derives it by walking `binary.OpMnemonic`'s single-byte rows and asking
+			// the real dispatch, in both directions. So the population this row draws from is now
+			// *enumerated*, which is #326's answer arriving for the single-byte half, and the next
+			// slice that drains it fails the derived control first and this one second.
+			//
+			// The choice within the five is the same argument slice 6 made: `return_call_ref` (0x15)
+			// landed with slice 8 while its two siblings did not, so the boundary runs *through* the
+			// tail-call family, and a specimen from inside a half-claimed family is the one that goes
+			// stale loudly rather than silently. The expected string carries the opcode byte as well
+			// as the mnemonic, because the byte is what makes the decline a lookup-free work item.
 			name: "single-byte, no signature",
-			wat:  `(module (func (param funcref) (result (ref func)) (ref.as_non_null (local.get 0))))`,
-			want: "ref_as_non_null",
-			gate: func(f *binary.Features) { f.GC = true },
+			wat:  `(module (func $f) (func (return_call $f)))`,
+			want: "return_call (0x12)",
+			gate: func(f *binary.Features) { f.TailCall = true },
 		},
 	} {
 		t.Run(c.name, func(t *testing.T) {

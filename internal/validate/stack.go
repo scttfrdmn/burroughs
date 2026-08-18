@@ -124,14 +124,55 @@ func (v *validator) pop() (binary.ValType, bool) {
 	return t, true
 }
 
-// unknown is valid.ml's bottom type: the operand an unreachable frame supplies on demand.
+// unknown is valid.ml's bottom *valtype* — `BotT` — the operand an unreachable frame supplies on
+// demand.
 //
 // Spelled as an indexed reftype with an index no module can hold rather than as a new field on
 // binary.ValType, because bottom is this package's concept and not the wire format's. The wire
 // has no encoding for it; putting it in `binary` would be inventing a type the format does not
 // have, and every `switch` over kinds elsewhere would gain a case for something no image can
 // contain.
-var unknown = binary.RefType(^uint32(0), true)
+var unknown = binary.RefType(botHeapIdx, true)
+
+// botHeapIdx is `BotHT`, the bottom *heaptype*, as an index sentinel — and the reason it is named
+// apart from `unknown` is that the reference has two bottoms and slice 8 is where the difference
+// became a verdict.
+//
+// `BotT` (this file's `unknown`) is `match_valtype`'s `BotT, _ -> true`: it satisfies a numeric
+// requirement. `RefT (nul, BotHT)` is `match_heaptype`'s `BotHT, _ -> true` reached *through*
+// `match_reftype`, so it satisfies every reference requirement and **no numeric one** — the
+// mixed-sort pair falls to `match_valtype`'s `_, _ -> false`.
+//
+// `unreached-invalid.wast:697` — `(unreachable) (ref.as_non_null) (f32.abs)` — is the single row in
+// the whole 55-row slice-8 population that can tell the two readings apart, and **which mutation it
+// tells apart was measured rather than reasoned**, because the first draft of this sentence named
+// the wrong one. Conflating the two bottoms *where peekRef answers* fails nothing: the arms
+// overwrite the null bit on both the pop and the push, so `unknown` and `botRef(false)` are
+// indistinguishable there. The row keys on the **push** — a bottom operand that comes back out as
+// the valtype bottom rather than as a reference bottom is what makes `f32.abs` typecheck against
+// it. See botRef, peekRef's third section, and ADR 0034's falsification bill.
+//
+// One index for both, with the null bit carrying the difference in representation: `unknown` is
+// `botRef(true)` by construction below, so the valtype bottom and the *nullable* reference bottom
+// are the same value. That coincidence is sound and is not an accident to be tolerated silently —
+// the nullable reference bottom only ever appears as a **want** (`br_on_null` and
+// `ref.as_non_null` pop `RefT (Null, ht)` and push `RefT (NoNull, ht)`), and a want is reached only
+// after `peekRef` has already found bottom on the stack, which means the got side is bottom too.
+// So no comparison can distinguish them. The **non-nullable** reference bottom is the one that gets
+// pushed, and that one is a distinct value from `unknown`.
+const botHeapIdx = ^uint32(0)
+
+// botRef is `peek_ref`'s bottom answer — `RefT (nul, BotHT)` (`valid.ml:288`, `| BotT -> (NoNull,
+// BotHT)`).
+//
+// A function rather than two vars so that a caller spells the null bit it means, which is the whole
+// content of the rule it appears in: `ref.as_non_null` pops the nullable one and pushes the
+// non-nullable one, and those are the two halves of what the instruction does.
+func botRef(null bool) binary.ValType { return binary.RefType(botHeapIdx, null) }
+
+// isBotHeap reports whether t is a reference whose heaptype is bottom — either bottom, since
+// `match_heaptype` never reads the null bit (matchRefType's division).
+func isBotHeap(t binary.ValType) bool { return t.IsIndexed() && t.Index() == botHeapIdx }
 
 // matches reports whether an operand of type `got` satisfies a requirement of type `want`.
 //
@@ -167,10 +208,10 @@ func (v *validator) matches(got, want binary.ValType) bool {
 func (v *validator) popExpect(want binary.ValType) error {
 	got, ok := v.pop()
 	if !ok {
-		return fmt.Errorf("%w: expected %s, stack empty", ErrTypeMismatch, want)
+		return fmt.Errorf("%w: expected %s, stack empty", ErrTypeMismatch, typeStr(want))
 	}
 	if !v.matches(got, want) {
-		return fmt.Errorf("%w: expected %s, got %s", ErrTypeMismatch, want, got)
+		return fmt.Errorf("%w: expected %s, got %s", ErrTypeMismatch, typeStr(want), typeStr(got))
 	}
 	return nil
 }
@@ -223,15 +264,33 @@ func typeList(ts []binary.ValType) string {
 		if i > 0 {
 			b.WriteString(" ")
 		}
-		if t == unknown {
-			// The bottom type has no wire encoding and so no String() a reader would recognize.
-			b.WriteString("bot")
-			continue
-		}
-		fmt.Fprintf(&b, "%s", t)
+		b.WriteString(typeStr(t))
 	}
 	b.WriteByte(']')
 	return b.String()
+}
+
+// typeStr renders one type for an error message, which for the bottoms is the only place they can
+// be rendered honestly.
+//
+// **`binary.ValType.String()` cannot do this and must not be asked to.** The two bottoms are
+// spelled as indexed reference types naming an index no module can hold — this package's own
+// sentinel choice, per `unknown`'s comment — so `String()` prints `(ref 4294967295)`, an index the
+// module does not have and never had. A message asserting that is grave #36's class: the engine
+// inventing a fact about its input. `binary` is the wrong place for the fix because bottom is not a
+// wire form, so the renderer lives beside the sentinels that need it.
+//
+// The two are printed apart. `bot` is the valtype bottom an unreachable frame supplies; `(ref bot)`
+// is `peek_ref`'s reference bottom, and telling a reader which one a message is about is the
+// difference slice 8 exists to make representable.
+func typeStr(t binary.ValType) string {
+	switch {
+	case t == unknown:
+		return "bot"
+	case isBotHeap(t):
+		return "(ref bot)"
+	}
+	return t.String()
 }
 
 // pushAll pushes a sequence in stack order.

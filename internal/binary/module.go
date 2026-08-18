@@ -188,7 +188,32 @@ func refKind(kind byte, null bool) ValType {
 // `castTypes` does not spell out a `ValType{...}` literal and cannot silently drop `idx` when the
 // heaptype is the indexed form. Dropping it is the live hazard — `(ref null $t)` and
 // `(ref null any)` differ only in the two fields a partial copy loses.
+//
+// **A one-line delegation to the exported WithNull since #9's slice 8**, which needed the same
+// operation from outside this package. Kept as a name rather than replaced at its five call sites
+// because "the heaptype and the null bit come from different places in the wire" is a *decoder*
+// fact, and the paragraph above is where it is written down; the method below is the general
+// operation with no such story attached.
 func refNull(t ValType, null bool) ValType {
+	return t.WithNull(null)
+}
+
+// WithNull returns t with its nullability set to null, preserving kind and idx.
+//
+// **Exported for the validator's `peek_ref` family** — `ref.as_non_null`, `br_on_null` and
+// `br_on_non_null` all read a heaptype off an operand or a label type and re-emit it with the
+// other null bit (`valid.ml:477-489, :728-730`). The alternative available to a caller outside this
+// package is to reconstruct the type from its accessors — `RefType(t.Index(), null)` for the
+// indexed form and `AbstractRefType(k, null)` for the twelve — which is a two-branch copy of the
+// field layout at every call site and is exactly the "silently drop `idx`" hazard refNull's own
+// comment names, moved into a package that cannot see the fields at all.
+//
+// Meaningless, and a no-op in effect, for a numeric or vector ValType, whose `null` is documented
+// always-false: setting it would manufacture a type this format has no encoding for. Callers are
+// the reference's own rules, which reach here only after `is_reftype`, so the guard is theirs
+// rather than a silent normalization here — a method that quietly refused would make a caller's
+// missing `IsRef` check invisible.
+func (t ValType) WithNull(null bool) ValType {
 	t.null = null
 	return t
 }

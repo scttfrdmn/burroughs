@@ -233,7 +233,24 @@ func TestRangeCitationSubjectsAreReadFromTheReference(t *testing.T) {
 	// — and a block that cites the reference to say what this port does *differently* resolves
 	// correctly and keys nothing, which is the `check_elem` note at the top of this header working as
 	// described for a third slice.
-	const wantKeyed, wantResidue = 52, 29
+	//
+	// **Slice 8 moved keyed by seven and residue by nothing, and the gap is still 14.** Seven new
+	// citations, all in `ref.go`, all naming exactly one of the reference's identifiers on the line
+	// that cites it; the two columns sum to 88 against 74 ranges, so the excess of keyed subjects over
+	// ranges is the same 14 multi-subject rows it was before slice 7 and after it. Three slices now
+	// agree that the excess is a property of a fixed set of shared citations rather than something a
+	// port accumulates, which is the reading the paragraph above wanted a second instance of.
+	//
+	// **One of the seven arrived by repair, and it is this header's fourth category again.** The
+	// `peek_ref` block's first draft named its subject as the reference spells the call —
+	// `peek_ref 0 s e.at` in backticks — and landed in residue: the extractor reads a backticked
+	// *identifier*, and the dotted argument makes the whole span match nothing, so a description that
+	// resolved and described the right lines was invisible for a reason that has nothing to do with
+	// whether it was true. Backticking the bare name and saying in the block why the call form is not
+	// used moved it into the keyed column. That is the same failure the `check_elem` note records for
+	// an unbackticked name, now with a second spelling: the check reads names, and every way of
+	// writing a name that is not a name is a residue increment waiting to be misread as a gap.
+	const wantKeyed, wantResidue = 59, 29
 	if keyed != wantKeyed || residue != wantResidue {
 		t.Errorf("keyed %d range citation(s) by named subject and left %d as residue, want %d and "+
 			"%d — recount and re-pin. A row moves from residue to keyed when its description starts "+

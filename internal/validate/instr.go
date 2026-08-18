@@ -189,6 +189,28 @@ func (v *validator) instr(i int, in binary.Instr) error {
 
 	case opRefFunc:
 		return v.refFunc(in)
+
+	// Slice 8 (#9, ADR 0034): the rest of the register's reference-instruction entry. Grouped by
+	// slice rather than by family — `opCallRef` next to `opCallIndirect` would read better and would
+	// put one slice's six arms in two places, which is the arrangement the #359 block above already
+	// declined for the same reason.
+	case opRefEq:
+		return v.refEq()
+
+	case opRefAsNonNull:
+		return v.refAsNonNull()
+
+	case opBrOnNull:
+		return v.brOnNull(uint32(in.Imm0))
+
+	case opBrOnNonNull:
+		return v.brOnNonNull(uint32(in.Imm0))
+
+	case opCallRef:
+		return v.callRef(uint32(in.Imm0))
+
+	case opReturnCallRef:
+		return v.returnCallRef(uint32(in.Imm0))
 	}
 
 	// Not structural: the numeric, comparison, conversion and memory-access families, whose
