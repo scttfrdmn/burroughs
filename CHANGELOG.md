@@ -2086,7 +2086,7 @@ weakly-ordered platform.
 - **Five `assert_unlinkable` vectors passed on `unknown import` because their whole target module was
   unbound, not because the export was missing**
   ([#408](https://github.com/scttfrdmn/burroughs/issues/408), `type:grave`; fixed by 0037 above).
-  `imports.wast` :138/:297/:442/:540 and `linking3.wast`:14 each assert that a module *lacks one
+  `imports.wast` :136/:295/:440/:538 and `linking3.wast`:14 each assert that a module *lacks one
   export*; they passed because the module did not exist, which produces the same string about a
   different fact. **An expectation text that a coarser failure can also produce is not a
   discriminating oracle**, and a substring match (decision 0003) cannot tell the two apart — every

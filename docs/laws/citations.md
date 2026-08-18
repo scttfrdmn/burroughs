@@ -25,6 +25,39 @@ reach is a law out of context.
   had drifted, one truncated from 11 bytes to 8. Prefer deriving corpora from
   the suite at run time: no transcription step, no drift.
 
+### A `file:N` resolves to a line, not to the thing it names — and the miss is systematic, not careless.
+
+- **A `file:N` resolves to a line, not to the thing it names.** Every number in a
+  `somefile.wast:N` is well-formed, so following one lands somewhere and the
+  reader confirms whatever is there. Five published citations of the same five
+  vectors — ADR 0037's table, the `passFloor` ledger, `CHANGELOG.md`, grave #408,
+  PR #409's body, the merged commit message — were **two lines off**: they named
+  the `"unknown import"` expectation line, and every instrument here keys on the
+  command's *opening* line (`Command.Line`).
+
+  **The bias has a mechanism, which is why "be careful" is not the remedy.**
+  Writing the citation and confirming the expectation are the same act, and the
+  expectation's line is the one under the eye — so the error is one-directional
+  and roughly constant in size, exactly like a mis-calibrated instrument rather
+  than like noise. In the same list, `linking3.wast:14` was right, because that
+  command happens to open on the line it is read from; *one citation in five
+  correct for a reason unrelated to care is the tell*, and an inconsistency
+  inside a single list is worth more suspicion than a uniformly wrong one.
+
+  What caught it was re-deriving the set from the mechanism rather than
+  re-reading it: printing `Command.Line` for every `KindAssertUnlinkable` in the
+  file. **Measure with the instrument, not with the eye** — the same rule that
+  applies to a scoping figure applies to a line number, and for the same reason.
+
+  Nothing swept it. `citecheck.sh` resolves issue and ADR tokens only, and the
+  one control that does check a `<file>.wast:N` — `TestFixtureProvenance`, above
+  — ranges over citations *sharing a line with a byte-slice literal*, which no
+  prose citation is. Filed as
+  [#412](https://github.com/scttfrdmn/burroughs/issues/412), whose own first
+  draft asserted there was no such control at all: **a gap claimed without
+  searching for its existing instrument is this family's own defect one level
+  up**, and the correction is on the issue rather than folded silently into it.
+
 ### A doc comment's identifier is a citation, and it gets a resolving check.
 
 - **A doc comment's identifier is a citation, and it gets a resolving check.** The

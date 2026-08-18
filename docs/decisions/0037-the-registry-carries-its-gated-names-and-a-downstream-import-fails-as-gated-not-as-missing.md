@@ -1,14 +1,18 @@
 # 0037 — The registry carries its gated names, and a downstream import fails *as gated* rather than as missing
 
-Date: 2026-08-18 · Status: **accepted, self-decided** — the shape of a harness-internal state slot,
-which no principal has been asked about and no token is claimed for.
+Date: 2026-08-18 · Status: **accepted** — the design self-decided (the shape of a harness-internal
+state slot, which no principal was asked about and no token is claimed for); **the board-shape
+consequence stamped by Scott on PR #409**, on the condition discharged in the ruling section below.
+The two halves carry different provenance on purpose, and the citation for the second is a ruling
+that exists rather than an inference from silence.
 
 **What is *not* self-decided is the board-shape consequence**, and it is separated from the design
 here rather than bundled with it: this change moves **62 rows out of the fail column** — 66 as
 measured, see the scoring section, and the forecast below is left as written — which is a reward
 figure produced by reclassification rather than by an engine getting anything right. It is
-pre-registered below, before the code exists, and flagged in the PR that lands it. Scott can reverse
-it by deleting one branch.
+pre-registered below, before the code exists, and flagged in the PR that lands it. Scott could reverse
+it by deleting one branch — **an offer he closed on 2026-08-18 by accepting it against a named
+enumeration of the five passes it costs; see the ruling section.**
 
 ## Context
 
@@ -131,7 +135,9 @@ argument expires here.
 
 **Rollback is one branch.** Deleting the adapter's import check restores today's classification
 exactly; the gated-name set becomes unread state, and the control below fails, which is the honest
-way for a reverted decision to announce itself.
+way for a reverted decision to announce itself. — **Retired on the ruling below (2026-08-18); this
+paragraph is kept because it was the offer the reclassification was accepted against, and a reader
+who stops here must not carry away a promise that no longer stands.**
 
 **The control asserts the mechanism, not the count.** A row-count assertion would pass on a board
 that reclassified the right number of rows for the wrong reason. The control is a script whose
@@ -160,7 +166,7 @@ supplied). **A forecast derived from a symptom under-counts a population defined
 number was right about what it measured and measured the wrong thing.
 
 **Miss 2 — `pass` moved by 5, and the paragraph above said what that meant before the number
-existed.** Five `assert_unlinkable` vectors (`imports.wast` :138/:297/:442/:540, `linking3.wast`:14)
+existed.** Five `assert_unlinkable` vectors (`imports.wast` :136/:295/:440/:538, `linking3.wast`:14)
 assert that a module *lacks one export* and expect `unknown import`; they passed because the module
 did not exist at all. Right text, wrong fact, and a substring match cannot tell them apart. Filed and
 closed as **grave #408**, not adjusted — which is the whole reason the row was pre-registered as a
@@ -172,3 +178,63 @@ module arms' *two decode paths disagree* branch, breaking a ceiling of 0. The te
 gate declines from that branch — would have deleted a deliberate assertion whose own comment records
 that `allOnLane` twice nearly shipped the defect it catches. The branch was right and the stratum was
 wrong: a declined *import* is not a disagreement about decoding.
+
+## The reclassification, accepted — Scott's ruling on PR #409, 2026-08-18
+
+**Stamped, and the asymmetry in it is the reusable part.** *"66 fail→gated re-attributes an
+already-failing population and costs nothing to accept. 5 pass→gated removes green, and that
+direction always gets named — either those five were passing for a reason that doesn't survive the
+correction, in which case say which, or one of them is a finding."* The condition was met below, so
+the reclassification stands and **the rollback offer above is retired**: the classification this ADR
+chose is now simply how the board reads, not a change held open against a reversal.
+
+The order also disposed of the question this ADR could not settle for itself — whether a harness slice
+discharges an exec-first assignment. It does, and the premise it was issued on was withdrawn by the
+principal who issued it: *"I read 'exec 81' as the interpreter getting answers wrong. Sixty-six of
+them were the harness misnaming who failed."*
+
+### The five, derived rather than spotted
+
+Neuter the declined-import gate and re-run: a line gated **with** it that was neither gated nor
+failing **without** it is a pass the correction removed. Board-wide the set has exactly five members,
+and the per-file pass deltas sum to the aggregate −5 — so no file gained a pass that masked a sixth
+loss. *A set derived from a difference needs its size checked against an independently measured
+level*, and this is that check rather than an assurance.
+
+| vector | the fact it asserts | why it passed before |
+|---|---|---|
+| `imports.wast:136` | `"test"` does not export `unknown` (func) | `"test"` was unbound entirely |
+| `imports.wast:295` | same, global `i32` | same |
+| `imports.wast:440` | same, table `10 funcref` | same |
+| `imports.wast:538` | same, memory `1` | same |
+| `linking3.wast:14` | `"Mm"` does not export `tab` — the corpus's own comment is `;; does not exist`, and the same module imports `"Mm" "mem1"`, which does exist | `"Mm"` was unbound entirely, so the *memory* import failed first and the table assertion was never reached |
+
+`"test"` is exported by an auxiliary module carrying `(tag …)`, declined under EH-off; `$Mm` declares
+three memories, declined under multi-memory-off. In both cases the reference has the name bound and
+this engine does not, so all five were asking about a module that, here, did not exist. **None of the
+five is a finding of a second kind** — every one is the single shape grave #408 already records, and
+the reason each survives the correction as a gate rather than as a pass is that the question it asks
+cannot be asked at all until its target module exists.
+
+**The corpus supplies the discriminating control for free.** Each of the four `imports.wast` vectors
+is immediately followed by the identical assertion against `"spectest" "unknown"` (`:140`, `:299`,
+`:444`, `:542`) — same expected text, same shape, a module name that is never declined — and those
+four still score verdicts, unchanged. So *the module name is the discriminator, not the
+expectation*, which is precisely the fact a substring match cannot see. No new control is owed:
+`gatedDeclinedRegistration["imports.wast"]` is pinned at slack 0, so a gate that widened to the twins
+would fail that bound instead of passing quietly. **The gap named in grave #408 is narrower than it
+was written** — it said discriminating would need per-vector knowledge of which fact each vector is
+about, and for these four the corpus states it by construction.
+
+### A third miss, in the citations rather than the numbers
+
+:138/:297/:442/:540 was published in this document, `CHANGELOG.md`, grave #408, PR #409's body and the
+merged commit message. Those are the `"unknown import"` **text** lines; the harness records a
+command's opening line, so each number named a neighbour of the vector it was about. Corrected above
+and at the `passFloor` ledger. `linking3.wast:14` was right, and its being right is the tell: that
+command opens on the line it is read from, so one citation in five was correct for a reason unrelated
+to care. **The bias is systematic** — confirming what an `assert_unlinkable` expects puts the
+expectation's line under the eye, while every instrument here keys on the command's start — and the
+only control that checks a `file:N`, `TestFixtureProvenance`, ranges over citations that share a line
+with a byte-slice literal, which excludes every prose citation by construction. Filed as #412, whose
+own first draft claimed no such control existed at all.

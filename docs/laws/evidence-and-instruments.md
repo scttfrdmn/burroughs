@@ -314,6 +314,31 @@ reach is a law out of context.
   domain is stated, derived from the space rather than enumerated, and floored;
   and an instrument that reports a clean result has to say *over what*.
 
+  **A population derived from what a mechanism prints is not the population the
+  mechanism has — filter on the mechanism, not on its output.** ADR 0037's
+  pre-registration forecast 19 surviving exec fails and 15 survived, because the
+  population was derived by filtering the fail column on the string
+  `unknown import` (62 rows) while the mechanism it was forecasting keys on a
+  *cause*: a module importing from a declined name. Four more rows had that cause
+  and printed something else entirely — out-of-bounds memory and table accesses,
+  where the module linked against `spectest`'s memory instead of the one its
+  declined dependency would have supplied. The forecast was **right about what it
+  measured and measured the wrong thing**, which is the same defect as an
+  under-covered domain with the error moved one step earlier: the domain was
+  derived from a symptom, so it could not contain a member that shares the cause
+  and not the symptom. The remedy is the one this section already prescribes,
+  applied to *forecasts* and not only to controls — derive the population from
+  the mechanism (here: neuter the gate and diff the boards, which is what
+  `gatedDeclinedRegistration`'s membership does) and never from a string the
+  mechanism happens to emit. Scott's classification on the PR #409 review: the
+  fourth instance of the key-versus-cause distinction in this campaign, *"worth
+  carrying into fact 3 explicitly rather than as a memory"* — so [#367](https://github.com/scttfrdmn/burroughs/issues/367)
+  carries it, since its population has the same hazard and no string on today's
+  board identifies the vectors that would flip. (His three priors are not
+  enumerated here: the count is recorded as his, and inventing the list to make
+  it resolve would be exactly the kind of manufactured provenance
+  [citations.md](citations.md) exists to forbid.)
+
   **First specimen, and the one that names the shape: a control that names the
   fact it expects cannot notice that fact is missing** (#264, whose closing
   comment is that sentence). `ErrMalformedBrOnCastFlags` landed with its

@@ -296,7 +296,7 @@ func imports(reg Registry) interp.Imports {
 // module forms for free.
 //
 // **It also converted five passes into gates, and those five are grave #408.** `imports.wast`
-// :138/:297/:442/:540 and `linking3.wast`:14 assert that a module *lacks one export* and expect
+// :136/:295/:440/:538 and `linking3.wast`:14 assert that a module *lacks one export* and expect
 // `unknown import`; they passed because the whole target module was unbound, which produces the same
 // string about a different fact. A substring match cannot tell the two apart, so the reject-direction
 // instruments were all satisfied — the only thing that saw it was 0037 pre-registering a `pass`
@@ -10604,11 +10604,51 @@ func TestPhase1Files(t *testing.T) {
 	// **60868 → 60863, and the −5 is a finding rather than a regression** — decision 0037's
 	// pre-registration forecast this row unchanged and said in advance that any movement in it
 	// would be a finding to report rather than a number to adjust. Five moved, and they were
-	// **passes awarded by coincidence**: `imports.wast` :138/:297/:442/:540 and
-	// `linking3.wast`:14 are `assert_unlinkable` vectors expecting `unknown import` for a name
-	// their target module genuinely lacks, and they passed because the *whole target module* was
-	// unbound after a gate-declined `register`. The right text for the wrong fact — the engine was
-	// never asked whether `"test"` exports `unknown`, it was asked whether `"test"` exists.
+	// **passes awarded by coincidence**: `assert_unlinkable` vectors expecting `unknown import`
+	// for a name their target module genuinely lacks, which passed because the *whole target
+	// module* was unbound after a gate-declined `register`. The right text for the wrong fact —
+	// the engine was never asked whether `"test"` exports `unknown`, it was asked whether
+	// `"test"` exists.
+	//
+	// **The five are derived, not spotted**, on Scott's condition for accepting the −66 (his
+	// ruling on PR #409: *"5 pass→gated removes green, and that direction always gets named"*).
+	// Neuter the declined-import gate and re-run: a line gated *with* the gate that was neither
+	// gated nor failing *without* it was a pass the correction removed. Board-wide that set has
+	// exactly five members, and the per-file pass deltas sum to the aggregate −5, so no file
+	// gained a pass that masked a sixth loss — the size and the level agree, which is the check
+	// a set derived from a diff needs before it is trusted.
+	//
+	//   imports.wast:136   (import "test" "unknown" (func))         — asserts the *export* is absent
+	//   imports.wast:295   (import "test" "unknown" (global i32))   — same, global
+	//   imports.wast:440   (import "test" "unknown" (table 10 funcref)) — same, table
+	//   imports.wast:538   (import "test" "unknown" (memory 1))     — same, memory
+	//   linking3.wast:14   (table (import "Mm" "tab") …)            — the corpus itself comments
+	//                      `;; does not exist`, and the same module imports `"Mm" "mem1"`, which
+	//                      *does*, so the vector is about the table alone
+	//
+	// `"test"` is exported by an auxiliary module carrying `(tag …)`, declined under EH-off; `$Mm`
+	// declares three memories, declined under multi-memory-off. In both cases the reference has the
+	// name bound and this engine does not, so every one of the five was asking a question about a
+	// module that, here, did not exist.
+	//
+	// **The corpus supplies the control for free, and it is why "wrong fact" is a measurement and
+	// not a reading.** Each of the four `imports.wast` vectors is immediately followed by the
+	// identical assertion against `"spectest" "unknown"` (:140, :299, :444, :542) — same expected
+	// text, same shape, a module name that is never declined. Those four still score verdicts,
+	// unchanged. The discriminator is therefore the *module name*, not the expectation, which is
+	// exactly the fact a substring match cannot see. No new control is owed for it either:
+	// `gatedDeclinedRegistration["imports.wast"]` is pinned at slack 0, so a gate that widened to
+	// the twins would fail that bound rather than pass quietly.
+	//
+	// **The published line citations were wrong by two, and the error has a shape worth naming.**
+	// This entry, ADR 0037, the CHANGELOG, grave #408 and PR #409 all first cited :138/:297/:442/:540
+	// — the `"unknown import"` *text* lines, which is where a reader's eye lands when confirming what
+	// a vector expects. The harness records the command's opening line, so the numbers named a
+	// neighbour of the thing they were about; `linking3.wast:14` was right only because that command
+	// opens where it was read. Nothing caught it: `citecheck.sh` resolves issue and ADR tokens and
+	// has no oracle for a `file:N`, and the one control that does check such a citation —
+	// `TestFixtureProvenance`, against the suite's own bytes — has a domain of citations sharing a
+	// line with a byte-slice literal, which no prose citation is. Filed as #412.
 	//
 	// So this floor's own column held five false greens of the accept-direction shape, and the
 	// change that drained 66 mis-attributed fails converted them to honest gates in the same
