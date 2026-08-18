@@ -1274,13 +1274,66 @@ func (c *context) inlineFuncType(ft resolvedFunc) uint32 {
 		// or not, with or without declared supertypes) would collapse two nominally distinct
 		// declared types into one index because their comptypes happen to agree structurally,
 		// which is exactly the defect this fix exists to stop repeating one layer up.
-		if e.kind == compFunc && e.final && len(e.supertypes) == 0 && e.ft.equal(ft) {
+		//
+		// **And `soleMemberOfItsGroup`, which is grave #402** — the third conjunct of the same
+		// pattern, read off the same line of the reference and missed twice. See that method.
+		if e.kind == compFunc && e.final && len(e.supertypes) == 0 &&
+			c.soleMemberOfItsGroup(uint32(i)) && e.ft.equal(ft) {
 			return uint32(i)
 		}
 	}
 	c.typeCtx = append(c.typeCtx, resolvedComp{kind: compFunc, ft: ft, final: true})
 	c.types.count++
 	return uint32(len(c.typeCtx) - 1)
+}
+
+// soleMemberOfItsGroup reports whether explicit type index x is the whole of its rec group, which is
+// `inline_functype`'s third condition and grave #402.
+//
+// The reference's predicate is a *pattern on the deftype*, not a structural comparison:
+//
+//	Lib.List.index_where (function | DefT (RecT [st'], 0l) -> st = st' | _ -> false) c.types.ctx
+//
+// `RecT [st']` is a one-element list and `0l` is the projection. Three conditions, therefore, and this
+// engine had two: the wrapper shape (`SubT (Final, [], _)`, checked above) and the comptype's equality.
+// The group's *size* was not checked, so an inline signature could resolve to a type that is a member
+// of a multi-member `(rec …)`.
+//
+// **Group length, not `rec` spelling.** `rectype`'s two arms both call `define_deftype`
+// (parser.mly:1288-1298) and a one-member `(rec (type $t (func)))` produces `DefT (RecT [st], 0l)`
+// exactly as the bare `(type $t (func))` does — so it is reusable, and a predicate written as "was not
+// spelled with `rec`" would be right on the corpus and wrong on the grammar.
+//
+// Why it matters, and why nothing saw it: an intra-group reference is an *ordinal* under
+// `roll_deftypes`, so a member of a two-member group is a different type from a structurally identical
+// singleton even though their comptypes compare equal. Reusing one for an inline signature hands out an
+// index whose type has different identity — and until `internal/validate` compared rec-group shape
+// (`sameDefType`, #351's population), every oracle downstream agreed with itself about it. That is
+// grave #349's lesson arriving one production later: **a flat type list cannot express iso-recursive
+// equality, and neither can a structural equality that ignores grouping.**
+//
+// `recExtents` is contiguous, ascending, and covers exactly `[0, len(typeDefs))` — `typeField` records
+// one extent per `rectype` field on the way out, deriving its length from how far `typeDefs` advanced —
+// which is what licenses "the first extent whose end passes x is x's own". Stated because the scan
+// depends on it and the invariant lives in another file.
+func (c *context) soleMemberOfItsGroup(x uint32) bool {
+	if x >= uint32(len(c.typeDefs)) {
+		// The implicit tail: `inlineFuncType` appends each interned signature as its own type and
+		// they are in no extent, which `context.recExtents` calls "exactly right — an implicit type
+		// has no `rec` spelling to preserve". The reference agrees at the same point, defining one
+		// with `DefT (RecT [st], 0l)`: a singleton, hence reusable by the next inline signature.
+		return true
+	}
+	for _, g := range c.recExtents {
+		if x < g.start+g.length {
+			return g.length == 1
+		}
+	}
+	// Unreachable given the invariant above, and a panic rather than a `true` on `recGroups`'s
+	// reason: falling through to "reusable" would silently restore the defect this method exists
+	// to stop, and a wrong type index is a well-formed module denoting different types.
+	panic(fmt.Sprintf("text: explicit type %d in no rec extent (%d extents, %d types)",
+		x, len(c.recExtents), len(c.typeDefs)))
 }
 
 // internImplicit is `inline_functype` reached from a parse-time signature: resolve, then intern,

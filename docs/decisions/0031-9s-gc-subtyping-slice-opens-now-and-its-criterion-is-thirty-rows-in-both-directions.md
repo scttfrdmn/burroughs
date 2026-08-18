@@ -103,3 +103,35 @@ Two things follow, and only the first is about this ADR:
 *A suspiciously clean result is a tell*, and "the criterion is exactly the population that could
 witness the risk" was one. The prediction that the eight *currently pass* was also made, in a
 comment, and was wrong in the same direction — measured, then corrected before landing.
+
+## The falsification above was itself too pessimistic — 2026-08-18 (#402)
+
+Appended on the same ground the section above gives: an accepted record's claims are testimony, and
+that includes the claims made *while* correcting it. Two sentences of the 2026-08-16 section are
+false, and this time the error is in the safe direction — the risk was better defended than the
+correction said.
+
+**"Every vector that discriminates the two is a `type mismatch` admission in `type-rec.wast`."** It is
+not. Replacing `sameDefType`'s ordinal-and-group-length condition with `if false` and reading the
+all-gates-on lane costs six rows, and one of them is in `tag.wast` — an `assert_unlinkable` whose tag
+import differs from the export only in grouping, so the coarser relation calls the two compatible and
+the module links. It dies to that neuter with grave #402 applied and without it, so it was never
+blocked behind the global initializer's check or behind anything else. Two further `type-rec.wast`
+rows were also already live.
+
+**"What actually caught the coarseness was not a vector."** A vector did, in a stratum the search did
+not cover: `tag.wast` reaches the rule through **linking**, not validation. The enumeration was by
+file and by expected text (`type mismatch` admissions), and both filters were blind to it.
+
+What survives is the first bullet's reasoning, strengthened rather than weakened: the representation
+*was* the stronger bound, and it is now also the one with a machine check. What does not survive is
+the second bullet's premise that the eight were the corpus's only route to the property. Three of
+them — `:51`, `:204`, `:216` — were blocked on something the section never names, `inlineFuncType`
+handing an inline signature a member of a multi-member rec group, and they convert with grave #402;
+the other five converted with #328. So the eight are spent, and they did perform the discrimination
+they were kept for: with the condition neutered, exactly those rows revert to admissions.
+
+The lesson is one the corpus keeps re-teaching in new clothing: **a search for witnesses that
+enumerates files enumerates the strata you already thought of.** The falsifier — neuter the line, read
+the board — is what finds the ones you did not, and it is cheaper than the argument for why none
+exist.

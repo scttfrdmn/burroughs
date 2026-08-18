@@ -326,12 +326,32 @@ func matchDefType(c tctx, got, want uint32) bool {
 // So this compares, for two indices:
 //
 //   - the **ordinal within the group** must agree, and the **group lengths** must agree. This is
-//     the half a bisimulation has no way to express — and the corpus has **no free witness** that
-//     this engine is iso-recursive rather than equi-recursive, because all eight discriminating
-//     vectors are blocked behind a deferred rule (#351, and ADR 0031's own falsification). So this
-//     comparison is asserted by construction here and nowhere else, and it is what makes
+//     the half a bisimulation has no way to express, and it is what makes
 //     `(rec (type $a (func)) (type (struct)))` and `(rec (type (struct)) (type $b (func)))`
 //     different types despite holding identical functypes.
+//
+//     **This line is witnessed by six corpus vectors, and the claim that stood here said zero.**
+//     What it said was that the corpus has "no free witness" for iso- versus equi-recursive
+//     equality because all eight discriminating vectors were blocked behind a deferred rule (#351,
+//     and ADR 0031's own falsification), so the comparison was "asserted by construction here and
+//     nowhere else". Measured by replacing the condition below with `if false` and reading the
+//     all-gates-on lane, that is wrong twice over:
+//
+//     Three of the six were already live when the sentence was written — one in `tag.wast`, whose
+//     `assert_unlinkable` links a tag import whose type differs only in grouping, and two more in
+//     `type-rec.wast`. `tag.wast`'s dies to the neuter with or without grave #402 applied, so it
+//     was never blocked by anything; it was simply in a **different stratum** from the one #351
+//     enumerated, and an enumeration by file cannot find a witness that reaches the rule through
+//     the linker. The other three are #402's, converted once `inlineFuncType` stopped handing an
+//     inline signature a rec-group member's index — those genuinely were blocked, and their
+//     conversion is what spends #351's witness.
+//
+//     So the property was machine-checked the whole time and the comment claiming otherwise was
+//     the only thing standing between a reader and that fact. *A design debt discharged by an
+//     intention* was the diagnosis; the debt had in fact been discharged by a vector nobody had
+//     looked for. **A search for witnesses that enumerates files enumerates the strata you thought
+//     of** — the falsifier is what finds the rest, and it costs one run.
+//
 //   - every member of one group against the positionally corresponding member of the other,
 //     which is why this walks the whole group rather than only the two named types. Two groups
 //     agree or they do not; a per-member answer would be meaningless.
