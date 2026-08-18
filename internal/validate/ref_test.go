@@ -315,8 +315,15 @@ func TestRefFuncDeclarationCountsEverySourceTheReferenceFreeVariablePassDoes(t *
 	// claim is the claim, not a test that passes for a different reason.
 }
 
-// TestSingleByteDeclinesAreExactlyTheTwoDeferredProposals is slice 8's charged overhead (ADR 0034),
-// and its subject is a *sentence*, not an instruction.
+// TestSingleByteDeclinesAreExactlyExceptionHandling is slice 8's charged overhead (ADR 0034), and its
+// subject is a *sentence*, not an instruction.
+//
+// **Renamed by slice 9 (ADR 0035), which is the control working.** It was
+// `TestSingleByteDeclinesAreExactlyTheTwoDeferredProposals` while the set held two proposals; slice 9
+// types the tail-call pair, so the set holds one and the old name asserted a falsehood about its own
+// contents. A test name is a checkable citation, and the citation this one carries is a *count of
+// proposals* — which means the name moves whenever the set does, and the next slice to drain it (only
+// exception handling is left) retires the test rather than renaming it again.
 //
 // `validate.go` declared the single-byte space "fully in vocabulary" with "0xFE (threads) alone"
 // remaining, twice, in two paragraphs, and both clauses were false when written — eleven named
@@ -331,40 +338,31 @@ func TestRefFuncDeclarationCountsEverySourceTheReferenceFreeVariablePassDoes(t *
 // prefix bytes. Both decline here, correctly and permanently — an illegal byte never reaches this
 // package with a verdict to give, and a prefix byte reaches it as `Prefix != 0` — so counting them
 // would put 24 rows that can never move into a set whose whole purpose is to name what is *left to
-// do*. The raw count is 29 and the honest one is 5; this control states the difference rather than
-// reporting the flattering figure.
+// do*. The raw count was 29 when this landed and the honest one 5; slice 9 took two, so it is 27 and 3
+// — and the gap is the same 24, because that half of the count never moves. This control states the
+// difference rather than reporting the flattering figure.
 //
 // Both bounds on the walk, for TestEveryNumericOpcodeHasASignature's reason: the floor catches the
 // derivation collapsing, and the exact figure catches a handful of rows dropping out of a domain that
 // comes from a **committed** table and therefore never moves on upstream's schedule.
-func TestSingleByteDeclinesAreExactlyTheTwoDeferredProposals(t *testing.T) {
+func TestSingleByteDeclinesAreExactlyExceptionHandling(t *testing.T) {
 	// The set, with the proposal each byte belongs to — which is the fact that makes this a boundary
-	// and not a to-do list. `return_call_ref` (0x15) is *not* here: it is the third tail-call shape and
-	// it arrived with function references, so it is typed while its two siblings are not.
+	// and not a to-do list. All three are exception handling, which is in `validate.go`'s declared
+	// out-of-scope list: unlike the tail-call pair slice 9 removed from this set, these are declined
+	// *by declaration* rather than for want of an arm, so the next move here is a scope decision and
+	// not a slice.
 	want := map[uint32]string{
-		0x08: "throw",                // exception handling
-		0x0a: "throw_ref",            // exception handling
-		0x1f: "try_table",            // exception handling
-		0x12: "return_call",          // tail calls
-		0x13: "return_call_indirect", // tail calls
+		0x08: "throw",     // exception handling
+		0x0a: "throw_ref", // exception handling
+		0x1f: "try_table", // exception handling
 	}
 
-	got := map[uint32]string{}
-	named := 0
-	for op := range uint32(0x100) {
-		name, ok := binary.OpMnemonic(op)
-		if !ok || name == "" {
-			continue // see the doc comment: a row without a name is not an instruction
-		}
-		named++
-		// The real dispatch, asked the way `Func` asks it. A hand-written list of "what slice 8
-		// implements" would be this package agreeing with its own notes.
-		v := &validator{mod: &binary.Module{}, curFunc: &binary.Func{}, blocks: map[int]Arity{}}
-		v.pushFrame(opFuncBody, nil, nil)
-		if err := v.instr(0, binary.Instr{Op: op}); errors.Is(err, ErrUnsupported) {
-			got[op] = name
-		}
-	}
+	// The real dispatch, asked the way `Func` asks it — a hand-written list of "what this package
+	// implements" would be the package agreeing with its own notes. The walk lives in
+	// `singleByteDeclines` (validate_test.go) because slice 9 gave it a second reader: the specimen
+	// row's failure message prints the same set so its re-point is a one-line edit. The set is pinned
+	// *here* and only formatted there, so a walk that breaks fails this test.
+	got, named := singleByteDeclines()
 
 	const (
 		namedRowFloor = 150
@@ -384,9 +382,9 @@ func TestSingleByteDeclinesAreExactlyTheTwoDeferredProposals(t *testing.T) {
 	for op, name := range want {
 		switch mn, ok := got[op]; {
 		case !ok:
-			t.Errorf("%#02x (%s) is no longer declined — if a slice typed it, delete this row and "+
-				"say so in that PR's ADR; the two proposals named in ref.go's header are the "+
-				"claim this test holds", op, name)
+			t.Errorf("%#02x (%s) is no longer declined — if a slice typed it, delete this row, "+
+				"re-name this test for what the set now holds, and say so in that PR's ADR; the "+
+				"proposal named in ref.go's header is the claim this test holds", op, name)
 		case mn != name:
 			t.Errorf("%#02x declines under the mnemonic %q, this set calls it %q — the authority's "+
 				"table was re-spelled and the boundary is now stated in two vocabularies",

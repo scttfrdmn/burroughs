@@ -245,7 +245,7 @@ func TestAssertInvalidDestinationLedgerCloses(t *testing.T) {
 		{
 			name: "already on the board (254 files) — the 2591 that left `unsupported`",
 			got:  already,
-			want: tally{total: 2591, pass: 2088, declined: 0, accepted: 31, mismatch: 10, gated: 462, precondition: 0},
+			want: tally{total: 2591, pass: 2089, declined: 0, accepted: 30, mismatch: 10, gated: 462, precondition: 0},
 			why: "the destination split IS the engine's contribution: 1615 passes is the reward, " +
 				"386 named declines are the next slices' work plan, 103 admissions are the " +
 				"accept-direction stratum, 10 are wrong-message on a right refusal, and 460 " +
@@ -344,7 +344,19 @@ func TestAssertInvalidDestinationLedgerCloses(t *testing.T) {
 				"the subject went rather than only that the row moved. The zero is a campaign milestone and " +
 				"not merely a navigation change — with no instruction in this population left untyped, " +
 				"everything remaining here is correctness — and the header states what that means for " +
-				"reading the column, since an empty one invites the theory that the counter broke",
+				"reading the column, since an empty one invites the theory that the counter broke. " +
+				"**Slice 9 (ADR 0035) moves this row by one, out of `accepted` and into `pass`, and the " +
+				"delta is a grave rather than a slice**: `accepted` 31 \u2192 30, `pass` 2088 \u2192 2089, " +
+				"with `declined`, `mismatch`, `gated` and `total` unmoved. The slice's own two opcodes are " +
+				"gated off on this lane and contribute nothing here; the row is `call_indirect.wast:994`, " +
+				"which grave #390's repair converts — `valid.ml:563`'s element-type require, missing from " +
+				"a `call_indirect` arm that had already been corrected once on its *address* type. So this " +
+				"is the fifth single-destination correctness gain in this ledger and the smallest, and its " +
+				"provenance is the part worth keeping: it was found by porting the sibling opcode, not by " +
+				"auditing the arm. **A −1/+1 is the shape this row's own instruction warns can disguise a " +
+				"reclassification**, so the discriminator is stated: the repair makes the validator *refuse* " +
+				"a module it was accepting, which is correctness, and a vocabulary gain would have had to " +
+				"come out of `declined` — which is empty and stayed empty",
 		},
 		{
 			name: "arrived with the arm (2 files) — corpus admission, not verdicts earned",
@@ -465,11 +477,13 @@ func TestAssertInvalidDestinationLedgerCloses(t *testing.T) {
 			"recognizing a bucket shape or a Kind; the engine moving cannot produce a disagreement "+
 			"here, because both figures are counted from the same failures in the same walk", keyed, got)
 	}
-	if keyed != 31 {
-		t.Errorf("assert_invalid declines + admissions = %d, want exactly 31 \u2014 0 declines and 31 "+
+	if keyed != 30 {
+		t.Errorf("assert_invalid declines + admissions = %d, want exactly 30 \u2014 0 declines and 30 "+
 			"admissions at this commit. The declines reached zero with the reference-type slice, so "+
 			"this figure is now the accept-direction stratum alone, and a nonzero declined component "+
-			"returning means a slice regressed rather than that one is owed", keyed)
+			"returning means a slice regressed rather than that one is owed. Slice 9 (ADR 0035) took it "+
+			"from 31 to 30, which is the first time a *grave* rather than a slice moved this figure: "+
+			"the row is `call_indirect.wast:994` and the repair is #390's", keyed)
 	}
 	if got := stratumOther.declined + stratumOther.accepted; got != 8 {
 		t.Errorf("non-assert_invalid declines + admissions = %d, want exactly 8: the relaxed-SIMD "+
@@ -481,9 +495,9 @@ func TestAssertInvalidDestinationLedgerCloses(t *testing.T) {
 	// The board's two ceilings are this sum, and stating it here is what re-ties the identity to the
 	// constants it names. `validateMismatchCeiling` (0) stays deliberately outside: the mismatch row
 	// below is board-wide and none of its 10 are the validator's.
-	if got := keyed + stratumOther.declined + stratumOther.accepted; got != 39 {
-		t.Errorf("validate-stratum declines + admissions = %d, want 39 to match "+
-			"validateDeclineCeiling (8) + validateAdmitCeiling (31). Those are computed from the "+
+	if got := keyed + stratumOther.declined + stratumOther.accepted; got != 38 {
+		t.Errorf("validate-stratum declines + admissions = %d, want 38 to match "+
+			"validateDeclineCeiling (8) + validateAdmitCeiling (30). Those are computed from the "+
 			"stratum field; this is computed from the arm's flags over both sub-populations. A "+
 			"disagreement means one path is describing a population the other is not \u2014 which is "+
 			"exactly what went unreported between #341 and #359", got)
@@ -494,22 +508,23 @@ func TestAssertInvalidDestinationLedgerCloses(t *testing.T) {
 			"board-wide where the 2591 above is the converted group alone, so the two are cross-checks "+
 			"of different populations and not two halves of one subtraction", got)
 	}
-	if got := already.pass + fresh.pass; got != 2208 {
-		t.Errorf("assert_invalid passes = %d, want 2208 to match passFloor's account — 1023 at "+
+	if got := already.pass + fresh.pass; got != 2209 {
+		t.Errorf("assert_invalid passes = %d, want 2209 to match passFloor's account — 1023 at "+
 			"slice 1, of which it names 18 as answered from above the validator, plus slice 2's 648, "+
 			"slice 3's 58, #294's 2, slice 5's 358 (356 converted + 2 from the arrived group), "+
 			"the 17-head slice's 7 — the only entry in this sum that raised the ledger's `total` "+
 			"instead of converting inside it — the limits slice's 30, the export slice's 31, the "+
 			"`check_elem` slice's 7 and the `check_global` slice's 12, and the reference-type slice's "+
 			"31 (30 converted + 1 from the arrived group, the same two-group split slice 5's entry "+
-			"has). "+
-			"**That sums to 2207 against an actual 2208, and the one-vector residue is stated rather "+
-			"than absorbed:** it predates the last five slices (the account read 2096 against a "+
+			"has), and slice 9's 1 — grave #390's `call_indirect.wast:994`, the only entry in this "+
+			"sum contributed by a repair to an arm the slice was not porting. "+
+			"**That sums to 2208 against an actual 2209, and the one-vector residue is stated rather "+
+			"than absorbed:** it predates the last six slices (the account read 2096 against a "+
 			"pinned 2097 before any of them), so it belongs to an entry above and not to them. Filed as "+
 			"a loose end as #334; an unexplained +1 folded into a named entry would make one of these "+
-			"figures a fudge and the whole account unreadable. The residue has now survived five "+
+			"figures a fudge and the whole account unreadable. The residue has now survived six "+
 			"re-basings unchanged, which is itself evidence for where it is not: an off-by-one in any "+
-			"of the five named deltas would have moved it", got)
+			"of the six named deltas would have moved it", got)
 	}
 	// The residual, and the reason it is asserted rather than logged: it is the *complement* of
 	// this ledger's subject, so it is where a command goes when `classify` stops recognizing one.

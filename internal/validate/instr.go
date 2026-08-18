@@ -211,6 +211,14 @@ func (v *validator) instr(i int, in binary.Instr) error {
 
 	case opReturnCallRef:
 		return v.returnCallRef(uint32(in.Imm0))
+
+	// Slice 9 (#389, ADR 0035): the tail-call proposal's two opcodes, in `tailcall.go` beside the
+	// require they share with the arm above them.
+	case opReturnCall:
+		return v.returnCall(uint32(in.Imm0))
+
+	case opReturnCallIndirect:
+		return v.returnCallIndirect(in)
 	}
 
 	// Not structural: the numeric, comparison, conversion and memory-access families, whose
@@ -453,13 +461,18 @@ func (v *validator) matchLabel(ts, want []binary.ValType, role string, idx uint3
 // `tableAddrType` already existed for the bulk operands, which is the part worth noticing: the
 // shape was diagnosed and paid for next door in `bulk.go`, and this call site re-earned the same
 // grave by reading a different field. *Lessons are indexed by shape, not by file.*
+//
+// **And it re-earned a second one at the same site, in the other direction** (#390). This arm read the
+// table for its address type and never asked what the table *held*, so `valid.ml:563`'s
+// `match_reftype t (Null, FuncHT)` was missing and `(table 10 externref)` with a `call_indirect`
+// through it was accepted — `call_indirect.wast:994`, an admission from the day the arm landed until
+// slice 9 wrote the require in `indirectTarget` for both call sites. So the fix for one field arrived
+// while another was still absent: *a call site corrected on one axis is not thereby correct on the
+// others*, and the reason it stayed hidden is that this direction over-accepts, which only #341's arm
+// scores.
 func (v *validator) callIndirect(in binary.Instr) error {
 	// Immediates in written order: type index, then table index.
-	ft, err := funcType(v.mod, uint32(in.Imm0))
-	if err != nil {
-		return err
-	}
-	tab, err := tableTypeAt(v.mod, uint32(in.Imm1))
+	ft, tab, err := v.indirectTarget(uint32(in.Imm0), uint32(in.Imm1))
 	if err != nil {
 		return err
 	}

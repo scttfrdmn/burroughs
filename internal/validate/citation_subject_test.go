@@ -250,7 +250,43 @@ func TestRangeCitationSubjectsAreReadFromTheReference(t *testing.T) {
 	// used moved it into the keyed column. That is the same failure the `check_elem` note records for
 	// an unbackticked name, now with a second spelling: the check reads names, and every way of
 	// writing a name that is not a name is a residue increment waiting to be misread as a gap.
-	const wantKeyed, wantResidue = 59, 29
+	// **Slice 9 moved keyed by two and residue by two against four new ranges, and one of the two keyed
+	// arrived by repair — this header's fourth category, in a third spelling.** `returnCall`'s block
+	// names `ReturnCall` on the line that cites it and keyed on the first reading.
+	// `returnCallIndirect`'s did not, and the reason is the extractor's character class: it admits
+	// letters, spaces, apostrophes and parentheses, so `` `ReturnCall x` `` keys on its head, but a
+	// **comma** is not in the class, so `` `ReturnCallIndirect (x, y)` `` matched nothing and a correct
+	// description of the right lines sat in the excused column. Writing the arm's name alone and its
+	// payload outside the backticks moved it across. The three spellings that have now done this are an
+	// unbackticked name (`check_elem`), a dotted call form (`peek_ref 0 s e.at`) and a comma inside a
+	// payload — all three descriptions true, all three invisible, which is why this pin is read as
+	// *which column* rather than as a total.
+	//
+	// **The repair also demonstrated something the earlier two did not: the range and the name must
+	// share a line.** The first attempt put the payload on a continuation line and left the citation
+	// alone on the second, which keyed nothing — the loop above reads a line at a time. That is worth a
+	// sentence because the fix looked applied and the figure did not move, which is the shape of a
+	// repair confirmed by its author rather than by the instrument.
+	//
+	// The two residue increments are `requireTailResults`' `:546-549`, whose line names `call` and
+	// `call_indirect` — this format's instruction names, not the reference's `Call`/`CallIndirect`
+	// arms — and `indirectTarget`'s `:560-565`, which sits alone above a quoted block.
+	//
+	// **Three more rows arrived from the slice's witness file, and they are not the fixed-point trap
+	// this header warns about.** `tailcall_test.go` cites `:546-549`, `:544-550` and `:560-565` to say
+	// which rule each battery witnesses; the `:544-550` line names `func` — the reference's own lookup —
+	// so it keys, and the other two land in residue. That is prose citing a *rule*, which is the domain
+	// this pin is for. The trap is prose citing a *citation*, which is why the paragraphs above describe
+	// their subjects instead of quoting the ranges: this pin's domain includes its own file.
+	//
+	// So the final split is keyed 62 and residue 33, summing to 95 against 78 ranges — an excess of 17
+	// where three slices running read 14. **The increment is exactly those three test-file rows**, which
+	// this pin counts and `wantRanges` does not, its domain being engine files only. The excess is
+	// therefore two things added together — multi-subject ranges and test-prose ranges — and it held at
+	// 14 for three slices because none of them cited a rule from a test file. It moves here for that
+	// reason and not because a citation went unread, which is the difference the arithmetic alone
+	// cannot say.
+	const wantKeyed, wantResidue = 62, 33
 	if keyed != wantKeyed || residue != wantResidue {
 		t.Errorf("keyed %d range citation(s) by named subject and left %d as residue, want %d and "+
 			"%d — recount and re-pin. A row moves from residue to keyed when its description starts "+

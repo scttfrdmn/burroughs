@@ -21,6 +21,32 @@ weakly-ordered platform.
 
 ### Added
 
+- **The validator types the tail-call proposal, and the single-byte space's last non-exception-handling
+  declines close — slice 9** (`internal/validate/tailcall.go`, `tailcall_test.go`; decision 0035,
+  `gate:tail-calls`, #389, part of #9). `return_call` (0x12) and `return_call_indirect` (0x13), ported
+  from `valid.ml:544-550,560-570`. The validator was the **sole** blocker for both: `internal/interp`
+  already executed them as real tail calls (ADR 0026), the decoder read them under `gateTailCall`, and
+  the wat encoder emitted them — the shape ADR 0025's G-1 carve-out names, arriving in the direction
+  that retires it.
+  **All-gates-on lane: 213 fail, down from 248; pass 64798 → 64833; declined 67 → 33** — the
+  pre-registered 35, closing exactly and verified three independent ways, because a total that closes
+  exactly is also what a miscount plus a compensating miscount looks like: the pass count (+35), the
+  per-file decline census (−34), and the `assert_invalid` ledger's `accepted` column (−1). The split is
+  the criterion's content rather than arithmetic — 34 declines became verdicts and the 35th was an
+  admission becoming a refusal, a different kind of gain in a different column.
+  - **The reject side is not one sentinel**, which slice 8's could not say: 23 of the 28 reject rows
+    expect `type mismatch`, 2 `unknown function`, 2 `unknown type`, 1 `unknown table`, so a rule
+    refusing everything with `ErrTypeMismatch` scores 23 of 28 and the five that disagree are the three
+    index-space lookups.
+  - **The default lane moved by +1 and the ADR forecast zero.** The forecast was right about the two
+    opcodes — `TailCall` is absent from `DefaultFeatures()` — and wrong about the slice, because the
+    grave below rides `call_indirect`, which is MVP core and ungated. Recorded as a miss at all three
+    re-based bounds: *a repair rides the lane its subject ships on, not the lane its discoverer was
+    working in.*
+  - **The remaining single-byte declines are 3 opcodes in 1 proposal**, so slice 8's charged control is
+    renamed `TestSingleByteDeclinesAreExactlyTheTwoDeferredProposals` →
+    `TestSingleByteDeclinesAreExactlyExceptionHandling`: a test name is a checkable citation, and one
+    asserting *two* proposals over a set holding one is a false one.
 - **The validator types the reference-instruction family, and the single-byte opcode space closes —
   slice 8** (`internal/validate/ref.go`, `ref_test.go`; decision 0034, `gate:gc`, part of #9).
   `ref.eq` (0xD3), `ref.as_non_null` (0xD4), `br_on_null` (0xD5), `br_on_non_null` (0xD6), `call_ref`
@@ -1902,6 +1928,22 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **`validate`'s `callIndirect` never checked what the table *held*, so `call_indirect` through a
+  `(table 10 externref)` was accepted** ([#390](https://github.com/scttfrdmn/burroughs/issues/390),
+  `type:grave`; `internal/validate/tailcall.go`). `valid.ml:563`'s
+  `require (match_reftype c.types t (Null, FuncHT))` was missing. The arm read the table for its
+  *address* type — that much was #343 cause 2's repair — and then never asked about its element type:
+  *a call site corrected on one axis is not thereby correct on the others.* The require now lives once
+  in the shared `indirectTarget` and both arms call it, because writing it only in the new arm would
+  have left the grave standing in the file whose authority proved it exists. Found by porting the
+  sibling opcode; invisible to every reject-direction bucket, since it over-**accepts**
+  (`call_indirect.wast:994`, an admission on the board since the arm landed).
+- **`TestModuleDefinitionsAskTheValidator`'s mutation table enumerated the three module-definition
+  `Kind`s where it can derive them** ([#354](https://github.com/scttfrdmn/burroughs/issues/354),
+  `type:harness`; `internal/spec/spec_test.go`). A fourth subtest now derives the domain from the table
+  itself over `suitePaths` — not `boardFiles`, whose selector would lend its own blind spot to the
+  instrument built to remove another's — and pins each Kind's count exactly beside the set. Watched die
+  three ways, including re-creating the #353 omission it was filed against.
 - **grave #383: every library-classified diagnostic said the program's name twice**
   ([#383](https://github.com/scttfrdmn/burroughs/issues/383), `cmd/burroughs/`). `burroughs: burroughs:
   malformed module: magic header not detected`. Both halves were deliberate and neither wrong alone —
