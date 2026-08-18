@@ -1208,6 +1208,51 @@ weakly-ordered platform.
 
 ### Changed
 
+- **The validator has one operand-consuming primitive, so the reference's operand-mismatch sentence
+  is spelled one way** (`internal/validate/stack.go`, `exception.go`, `popsite_test.go`; #394).
+  `popSeqExpect` arrived in slice 10 as exception handling's private helper because
+  `throw.wast:53,55` are the only two board vectors that pin the reference's wording, while
+  `popExpect` said `expected i32, stack empty`. It is now the package's primitive in `stack.go`, with
+  `popExpect` its n=1 case and `popExpectAll` its whole-sequence case, so 61 arm sites that said the
+  old sentence now say `instruction requires [i32] but stack has [f32]` — `pop` plus `match_stack`
+  (`valid.ml:270-276,259-267`) is one operation in the reference too, which makes one primitive with
+  three names fidelity rather than convenience.
+  - **The issue's prescribed order of work was impossible, and the census before the commits is what
+    found that.** #394 said "arm by arm" across eight slices; both spellings came from two
+    `fmt.Errorf`s in `popExpect` reached by **62 call sites across seven files**, so there was never a
+    per-arm wording to converge. Written up as the third instance of an issue's *plan* being shaped by
+    the symptom's location rather than the cause's (`docs/laws/boards-and-buckets.md`), and the same
+    census retired the body's "the whole corpus" as a claim about a glob
+    (`docs/laws/evidence-and-instruments.md`, tenth specimen).
+  - **Both lanes measured identical to the pre-registered baseline** — default 60840 pass / 185 fail /
+    66 unsupported / 4053 gated, all-on 64862 / 184 / 0 — because the harness matches expectations with
+    `strings.Contains` — `internal/spec/wast.go:2134` and five more sites, every expectation match
+    the harness has — so lengthening a message can only break a row whose expectation the longer
+    sentence stops containing, and no board row expects
+    the retired phrasing. The `unsupported` delta is **zero and structural**: this PR does not change
+    what the harness can ask. What moved is 11 in-package witness rows, updated to the reference's
+    sentence.
+  - **The pop-on-failure difference is a property of the callers, so it is pinned rather than
+    asserted** (`TestEveryOperandPopIsFatalToItsArm`). `popExpectAll` popped as it went and
+    `popSeqExpect` pops nothing on failure; that is invisible only because every call site returns the
+    error immediately, which a doc comment claiming it would turn into the defect stated as the rule.
+    The control parses the package, licenses exactly `return v.popX(…)` and `if err := v.popX(…); err
+    != nil { … return }`, and pins 62 arm sites plus 2 delegations — the split keyed on *the enclosing
+    function is itself a helper* rather than on the file name, which is the proxy this project has paid
+    for twice. Watched die five times, one mutation per trigger, with the two rows the count cannot see
+    named.
+  - **What did not converge is a boundary, not a miss.** `match_stack`'s other reference call site is
+    the block-end check, whose sentence is `type mismatch: block requires [] but stack has [i32]`;
+    this package says `%d value(s) left on the stack at the end of a block` there, and the only two
+    rows that pin the reference's spelling are `legacy/try_catch.wast:269,276`, in a directory
+    `testenv.SuitePaths` does not glob. Converging it would be a change no instrument in this repo
+    could score.
+- **The column labels in #395's entry were wrong** — it read `66 skip / 4053 unsupported` where the
+  board prints `66 unsupported, 4053 gated` and every other entry uses the board's own words. Both
+  deltas were zero either way, so the structural zero it confessed still stands; corrected here rather
+  than silently, because an entry that misnames the column it quotes is a citation to a figure the
+  instrument does not print.
+
 - **`boardBoundSlack` is deleted: the three tracked board counts are exact re-base bounds**
   (`internal/spec/boardbound_test.go`, `spec_test.go`; Scott's ruling on #387). `passFloor`,
   `allOnPassFloor` and `unsupportedCeiling` carried 250 of slack, which means none of them could
@@ -1990,7 +2035,7 @@ weakly-ordered platform.
   ten**, and `decodeRefType`'s twelve non-`funcref`/`externref` forms are **ten GC's and two the exception
   proposal's**.
   - **No vector moved, and no vector could.** Both lanes measured identical to the pre-registered
-    baseline — default 60840 pass / 185 fail / 66 skip / 4053 unsupported, all-on 64862 / 184 / 0 — because
+    baseline — default 60840 pass / 185 fail / 66 unsupported / 4053 gated, all-on 64862 / 184 / 0 — because
     the defect is **invisible to both board lanes by construction**: the default lane has both gates off,
     the all-on lane has both on, and only a configuration with EH on and GC off can see it. The
     `unsupported` delta is **zero and structural** — this PR does not change what the harness can ask.

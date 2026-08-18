@@ -97,7 +97,7 @@ func TestReturnCallResultsMustSatisfyTheCallersDeclaredResults(t *testing.T) {
 			// separates them.
 			name:  "argument of the wrong type",
 			wat:   `(module (func $g (param i32)) (func (f32.const 1) (return_call $g)))`,
-			msg:   "expected i32, got f32",
+			msg:   "instruction requires [i32] but stack has [f32]",
 			valid: false,
 			gate:  tailCallOn,
 		},

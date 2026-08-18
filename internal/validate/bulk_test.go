@@ -261,7 +261,7 @@ func TestBulkRejectsWithTheRuleThatRefused(t *testing.T) {
 				"see for a defect it cannot",
 			wat:    `(module (memory i64 1) (func (memory.fill (i64.const 0) (i64.const 0) (i64.const 1))))`,
 			is:     ErrTypeMismatch,
-			detail: "expected i32",
+			detail: "instruction requires [i64 i32 i64] but stack has [i64 i64 i64]",
 			gate:   func(f *binary.Features) { f.Memory64 = true },
 		},
 		{
@@ -274,7 +274,7 @@ func TestBulkRejectsWithTheRuleThatRefused(t *testing.T) {
 			// Both halves, because the operands are each other's wrong type and a message naming
 			// only one of them would read the same under either ordering: the params are popped in
 			// reverse, so the delta's i32 is expected against a funcref on top.
-			detail: "expected i32, got funcref",
+			detail: "instruction requires [funcref i32] but stack has [i32 funcref]",
 		},
 		{
 			name: "memory.size on a module with no memory",

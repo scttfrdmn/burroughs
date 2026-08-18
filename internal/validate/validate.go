@@ -519,7 +519,9 @@ func funcBody(m *binary.Module, f *binary.Func, refs map[uint32]bool) (FuncInfo,
 	// place.** The decoder keeps the body's terminating `end` as an instruction, so endBlock
 	// already ran the check on the body frame; repeating it against the stack that check had just
 	// emptied rejected every valid non-void function (`(func (result i32) (i32.const 1))` →
-	// "expected i32, stack empty") *and* accepted every body ending in `return`, whose frame is
+	// "expected i32, stack empty", the wording of the time; the same failure prints
+	// `instruction requires [i32] but stack has []` since #394) *and* accepted every body ending
+	// in `return`, whose frame is
 	// unreachable by then and so satisfies any second demand. One bug in each direction from one
 	// duplicated check.
 	//

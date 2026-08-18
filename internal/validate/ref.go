@@ -235,8 +235,9 @@ func (v *validator) peekRef() (binary.ValType, error) {
 //
 // The pop is spelled out rather than delegated to `popExpect(ht.WithNull(true))`, and the reason is
 // the message and not the check: the match is satisfied by construction (peekRef's second
-// paragraph), so the only outcome `popExpect` could add is its own "expected …, stack empty"
-// phrasing in place of this one, on a rule whose subject is a reference and not a named type.
+// paragraph), so the only outcome `popExpect` could add is its own phrasing in place of this one —
+// since #394 that is the reference's `instruction requires [(ref null $t)] but stack has []`, which
+// names a *type* on a rule whose subject is any reference at all.
 // refAsNonNull below does use `popExpect`, because it has to *keep* what it popped.
 func (v *validator) refIsNull() error {
 	if _, err := v.peekRef(); err != nil {
