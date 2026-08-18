@@ -7106,7 +7106,28 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	// `return_call_indirect.wast` and `unknown function 7` in `call_indirect.wast`, both #391's
 	// elem-segment rule and both still admissions. A file at 80/81 is the honest shape of a slice that
 	// closed its own stratum and not its neighbour's.
-	const allOnPassFloor = 64833
+	//
+	// # 64833 → 64862, slice 10 (ADR 0036): +29, and the split is the content
+	//
+	// **25 declines and 4 admissions**, pre-registered in the ADR as the criterion and closing at exactly
+	// that. The 25 are the exception-handling family becoming vocabulary — `throw`, `throw_ref`,
+	// `try_table` and the clause forms — and the 4 are refusals this validator was not making: 2 tag
+	// result types (`check_tagtype` over both the defined and the *imported* tags, `tag.wast:18,22`) and
+	// 2 element-segment `ref.func` resolutions, which are the two rows the entry above declined to claim
+	// and #391 now closes. So the slice above's honest 80/81 becomes 81/81 here, by the rule it named.
+	//
+	// An exactly-closing total is what compensating errors produce, so it was read three ways with three
+	// unshared mechanisms, on Scott's instruction: this floor's +29, the all-on **decline census 33 → 8**
+	// (−25, per opcode), and the ledger's **`accepted` 71 → 67** (−4, per destination). −25 + −4 = −29,
+	// and no reading shares an input with another. Per file: `tag.wast` 6 → 8, `throw.wast` 9 → 13,
+	// `throw_ref.wast` 12 → 15, `try_table.wast` 48 → 63, `call_indirect.wast` 169 → 170,
+	// `return_call_indirect.wast` 80 → 81, `instance.wast` 0 → 3.
+	//
+	// The residue is **8**, all relaxed SIMD, whose gate is its own event (ADR 0025) — so with this slice
+	// the decline column stops naming any *unwritten rule* on either lane. `try_table.wast`'s three
+	// remaining fails are the harness's own result-representation limit (`result 0 has type (ref null
+	// 0)`), which is `TestGrave206KnownFailures`' population and not this bound's.
+	const allOnPassFloor = 64862
 	// **Slack 0 as of Scott's #387 ruling**, which this bound's own 89-row staleness above is what
 	// prompted: a floor with 250 of tolerance cannot detect anything smaller than 250, so it is a
 	// bound sitting inside its own tolerance. Exact from here — re-base it in the PR that moves the
@@ -7509,27 +7530,30 @@ func TestModuleDefinitionsAskTheValidator(t *testing.T) {
 // caught it, which is the pre-registration behaving exactly as designed: a fail list is supposed to
 // rot by the system working, and a stale entry overstates what is broken. Recorded here rather than
 // silently decremented, because the count in a doc comment is a citation like any other.
+//
+// **The `tag.wast` pair is gone and the file's key with it, so this list is one file wide** — slice 10
+// (ADR 0036) wrote `check_tagtype` at both its call sites. That is the *fourth* stale entry this
+// pre-registration has reported, after `:334`, `:48` and `:59`, and the tally is worth keeping because
+// it is the argument for the shape: every one of the four was found by the list refusing to pass, and
+// none by anybody re-reading it. What remains is three lines of harness limitation, no engine defect,
+// and a population that has now rotted from 19 to 3 by the system working.
 func TestGrave206KnownFailures(t *testing.T) {
 	requireSuite(t)
 
 	// file → line → citation. Every entry needs one, on TestGatedVectors' own principle: an
 	// unexplained pre-registration is a suppression wearing a disguise.
 	known := map[string]map[int]string{
-		"tag.wast": {
-			// The admission stratum, arriving with #9's first validator slice: `(tag (result
-			// i32))` and its imported twin are modules the type checker *accepts* against an
-			// expected "non-empty tag result type". The rule is a tag-section rule, and the
-			// code-section walk never visits a tag definition — so there is no instruction to
-			// decline and the module comes out valid. Cited rather than filtered, because an
-			// accept-direction gap is the one class no negative vector can falsify (§9 G-3) and
-			// a filter here would be the second place it hides. Held in aggregate by
-			// validateAdmitCeiling (142); these are 2 of it.
-			18: "admission stratum: slice 1 has no tag-section rules, so `non-empty tag result type` is not checked and the module validates (#9, validateAdmitCeiling)",
-			22: "admission stratum: slice 1 has no tag-section rules, so `non-empty tag result type` is not checked and the module validates (#9, validateAdmitCeiling)",
-			// `:48` and `:59` were here — the rec-group scope boundary reached through tag-import
-			// linking — and grave #368's rolled `match_tagtype` closed it, so both pass. Removed
-			// rather than re-explained, exactly as `try_table.wast:334` was above.
-		},
+		// `tag.wast` has no entries left and the key is gone with them.
+		//
+		// `:18` and `:22` were the admission stratum arriving with #9's first validator slice: `(tag
+		// (result i32))` and its imported twin, modules the type checker *accepted* against an expected
+		// "non-empty tag result type", because the rule is a tag-section rule and the code-section walk
+		// never visits a tag definition. **Slice 10 wrote it** (`checkTagType`, ADR 0036) at both of
+		// `check_tagtype`'s call sites — the defined tags and `check_import`'s `ExternTagT` arm — which
+		// is what those two vectors were always a pair *for*: a rule written at the defined site alone
+		// passes `:18` and leaves `:22` red. Removed rather than re-explained, as `:48`/`:59` were when
+		// grave #368's rolled `match_tagtype` closed the rec-group boundary they reached, and as
+		// `try_table.wast:334` was when 0026's tail-call mechanism landed.
 		"try_table.wast": {
 			// `:334` was here — `return_call` had no arm — and 0026's mechanism (#253) gave it
 			// one, so the entry went stale and this test said so. Removed rather than
@@ -7564,16 +7588,24 @@ func TestGrave206KnownFailures(t *testing.T) {
 		for _, fs := range r.Buckets {
 			for _, fail := range fs {
 				// **A decline is not a verdict, so it is not a finding about #206.**
-				// `try_table.wast` carries 10 `assert_invalid` vectors on the `try_table` opcode
-				// itself, which slice 1 of the validator does not type; they are fails in their
-				// own named bucket, held by validateDeclineCeiling, and they say nothing about
-				// whether `drop` lost a value. Filtered on the flag rather than pre-registered by
-				// line, because ten citations reading "the validator has not got there yet" is
-				// the repeated-reason testimony the bulk allowances exist to avoid — and a
-				// per-line list would go stale the moment slice 2 lands, one entry at a time.
+				// `try_table.wast` carried 10 `assert_invalid` vectors on the `try_table` opcode
+				// itself, which the validator did not type; they were fails in their own named
+				// bucket, held by validateDeclineCeiling, and they said nothing about whether
+				// `drop` lost a value. Filtered on the flag rather than pre-registered by line,
+				// because ten citations reading "the validator has not got there yet" is the
+				// repeated-reason testimony the bulk allowances exist to avoid — and a per-line
+				// list would have gone stale one entry at a time as slices landed.
 				//
-				// The *admission* half is not filtered: an accepted-but-invalid module is a real
-				// gap and gets a citation above. See the two tag.wast entries.
+				// **The filter's population is empty**: slice 10 types the family (ADR 0036), so
+				// none of those ten declines any more. The `continue` stays because the *reason*
+				// it exists outlives them — an all-on lane can still decline (relaxed SIMD does,
+				// eight operators' worth) and a proposal retained by the decoder ahead of its
+				// typing rules is how this population filled in the first place. A filter deleted
+				// with its subject is a filter the next arrival re-earns.
+				//
+				// The *admission* half was never filtered: an accepted-but-invalid module is a
+				// real gap and gets a citation above. The two `tag.wast` entries were that half,
+				// and slice 10 closed them too.
 				if fail.Declined {
 					continue
 				}
@@ -9497,7 +9529,20 @@ func TestPhase1Files(t *testing.T) {
 	//
 	// `validateDeclineCeiling` is unmoved at 8, the eight relaxed-SIMD operators, for the reason its own
 	// paragraph gives: a structural residue whose gate is its own event.
-	const validateFailCeiling = 38
+	//
+	// # 38 → 36 with slice 10 (ADR 0036), and the delta was forecast from the fix's own call site
+	//
+	// The whole of it comes out of `validateAdmitCeiling` (30 → 28), so the account is there. What
+	// belongs *here* is that the figure was **pre-registered before the measurement**, on the lesson the
+	// paragraph above this one had to learn the hard way: slice 9's forecast reasoned from the gate map,
+	// which is sound about the opcodes a gated slice ports and silent about anything else the PR carries.
+	// Slice 10 carries #391 — `check_elem`'s missing `RefFunc` resolution, a rule about `(elem …)` and
+	// not about exception handling — and `(table funcref (elem 0 0))` is MVP core, so the two rows it
+	// converts were forecast to land in this lane rather than discovered in it afterwards.
+	//
+	// A forecast from the fix's location and not from the work's: that is the transferable half, and it
+	// is the same sentence grave #390 produced read one step earlier in the process.
+	const validateFailCeiling = 36
 	const validateDeclineCeiling = 8
 	boardBound(t, "validateDeclineCeiling", validateDeclined, validateDeclineCeiling, 0, ceilingBound,
 		"slice 1 declined more instructions than it did — either an opcode left the signature "+
@@ -9583,7 +9628,26 @@ func TestPhase1Files(t *testing.T) {
 	// would have re-read it on its own account. And it was invisible to every fail column by
 	// construction: an over-*acceptance* produces no message to bucket, which is the whole reason this
 	// bound is a ceiling rather than a floor.
-	const validateAdmitCeiling = 30
+	//
+	// # 30 → 28 with slice 10 (ADR 0036), and it is the second consecutive fall on this bound
+	//
+	// Two rows, both `(module (table funcref (elem 0 0)))` in shape, accepted since the element slice
+	// landed because `check_elem`'s `check_const` walk resolved a segment's *globals* and never the
+	// function indices its `ref.func` initialisers name (#391, `valid.ml:1097-1101`). They convert out of
+	// this bound and into `pass` with `declined`, `mismatch`, `gated` and `total` all unmoved, which is
+	// this table's signature for a correctness gain: two rules became right and none became known.
+	//
+	// **The slice's own subject contributed nothing to this lane**, exactly as slice 9's did not: the
+	// exception-handling gate is off by default, so `throw`/`throw_ref`/`try_table` and the tag section
+	// are refused at decode here and the family's whole reward is in the all-on lane (25 declines and 4
+	// admissions, ADR 0036's criterion). What moves the default lane is the rider, and the rider was
+	// named in the forecast rather than found in the diff — see `validateFailCeiling` above for why that
+	// ordering is the lesson and not the arithmetic.
+	//
+	// Two consecutive slices whose *default-lane* delta is entirely a rider's is now a pattern worth
+	// stating: a gated slice's default-lane forecast is a forecast about **everything else in the PR**,
+	// and reading it off the gate map returns zero every time.
+	const validateAdmitCeiling = 28
 	boardBound(t, "validateAdmitCeiling", validateAdmitted, validateAdmitCeiling, 0,
 		ceilingBound,
 		"the validator accepted an invalid module it used to refuse. This is the accept direction: "+
@@ -10200,7 +10264,25 @@ func TestPhase1Files(t *testing.T) {
 	//
 	// `unsupported` is unmoved at 66 and the zero is **structural** for the third entry running:
 	// `classify` is untouched, so nothing the harness could not ask became askable.
-	const passFloor = 60838
+	//
+	// **60838 → 60840, slice 10 (ADR 0036): +2, and the whole of it is the rider again.**
+	// The exception-handling gate is off here, so the family's 25 declines and 2 tag admissions are all in
+	// the other lane; the two rows are #391's `(elem …)` `ref.func` resolution, and `validateAdmitCeiling`
+	// 30 → 28 is where they land. `encodeFailCeiling` unmoved at 68, `execFailCeiling` at 81,
+	// `validateDeclineCeiling` at 8 — so fail 187 → 185 decomposes to two admissions and nothing else.
+	//
+	// **This time the +2 was forecast**, which is the only difference between this entry and the one above
+	// it and is the whole reason both are here: the entry above records a gated slice's forecast reasoning
+	// from the gate map and missing a repair that rode along, and this one is that lesson applied one PR
+	// later — the rider was located, its call site read (`check_elem` runs in every mode and `(table
+	// funcref (elem 0 0))` needs no gate), and the figure written down before the board was run.
+	//
+	// `unsupported` is unmoved at 66 and the zero is **structural** for the fourth entry running:
+	// `classify` is untouched, so nothing the harness could not ask became askable. Four consecutive
+	// validator slices with a structural zero is not four confessions; it is the column having no
+	// mechanism by which a validator rule could move it, which is why the sentence names the mechanism
+	// each time rather than the number.
+	const passFloor = 60840
 	// Slack 0 as of #387's ruling, with `allOnPassFloor` and `unsupportedCeiling` — see
 	// `boardbound_test.go`'s retirement section. Two entries in the ledger above record taking a
 	// re-base *although the slack stayed silent* (58659 by a margin of 20, and the 416 that was four

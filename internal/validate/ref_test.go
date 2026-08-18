@@ -315,53 +315,58 @@ func TestRefFuncDeclarationCountsEverySourceTheReferenceFreeVariablePassDoes(t *
 	// claim is the claim, not a test that passes for a different reason.
 }
 
-// TestSingleByteDeclinesAreExactlyExceptionHandling is slice 8's charged overhead (ADR 0034), and its
-// subject is a *sentence*, not an instruction.
+// TestTheSingleByteOpcodeSpaceIsFullyTyped is slice 8's charged overhead (ADR 0034) in its third and
+// final form, and its subject is a *sentence*, not an instruction.
 //
-// **Renamed by slice 9 (ADR 0035), which is the control working.** It was
-// `TestSingleByteDeclinesAreExactlyTheTwoDeferredProposals` while the set held two proposals; slice 9
-// types the tail-call pair, so the set holds one and the old name asserted a falsehood about its own
-// contents. A test name is a checkable citation, and the citation this one carries is a *count of
-// proposals* — which means the name moves whenever the set does, and the next slice to drain it (only
-// exception handling is left) retires the test rather than renaming it again.
+// # It has been renamed twice and is now pointed at a property instead
+//
+// It began as `TestSingleByteDeclinesAreExactlyTheTwoDeferredProposals` and was formerly
+// `TestSingleByteDeclinesAreExactlyExceptionHandling`, renamed when slice 9 typed the tail-call pair;
+// its own comment prescribed what happens here: *"the next slice to drain it (only exception handling
+// is left) retires the test rather than renaming it again."* Slice 10 drains it, so this is that
+// retirement — and the retirement is a **re-pointing**, not a deletion, because the risk outlives the
+// specimens. What the three-name history says is that a control naming a *population* moves whenever
+// the population does; the population is now empty, and emptiness is a property that cannot go stale.
+//
+// **The property is worth more than the count it replaces**, which is Scott's ruling on the scope
+// move (ADR 0036): *"closing the single-byte space outright turns a count into a statable property of
+// v0, which is worth more than either number."* The statable property is the test's name.
 //
 // `validate.go` declared the single-byte space "fully in vocabulary" with "0xFE (threads) alone"
 // remaining, twice, in two paragraphs, and both clauses were false when written — eleven named
 // opcodes were declined at the time. ADR 0032 swept the sentence immediately following one of them
-// and left it standing. That is one shape paying out three times, so the boundary is pinned here as a
-// **set** and the prose in ref.go's header points at this test rather than the reverse.
+// and left it standing. That is one shape paying out three times, and it is why the claim is checked
+// here rather than asserted in prose: **this test is the reason the sentence may now be written at
+// all.**
+//
+// # What can still fail, so that emptiness is not vacuity
+//
+// A single-byte opcode arriving untyped. That happens two ways and neither is hypothetical: a future
+// proposal's byte becomes retained by the decoder before this package gains an arm for it (which is
+// how all three exception-handling bytes got here), or a slice's dispatch arm is lost in a
+// refactor. Either lands in the printed set below and fails this test with the byte named.
 //
 // # The domain is rows that name an instruction, and the exclusion is not a convenience
 //
 // `binary.OpMnemonic`'s `ok` means "there is a row", and 24 single-byte rows have an **empty**
 // mnemonic: `illegal: true` rows (bytes the reference defines in order to reject) and `escape: true`
-// prefix bytes. Both decline here, correctly and permanently — an illegal byte never reaches this
-// package with a verdict to give, and a prefix byte reaches it as `Prefix != 0` — so counting them
-// would put 24 rows that can never move into a set whose whole purpose is to name what is *left to
-// do*. The raw count was 29 when this landed and the honest one 5; slice 9 took two, so it is 27 and 3
-// — and the gap is the same 24, because that half of the count never moves. This control states the
-// difference rather than reporting the flattering figure.
+// prefix bytes. Both decline in `Func` — an illegal byte never reaches this package with a verdict to
+// give, and a prefix byte reaches it as `Prefix != 0`, where the region dispatch answers — so
+// counting them would make this assertion unsatisfiable by construction. The raw decline count is 24
+// and the honest one 0, and the gap is exactly that half, which never moves.
 //
-// Both bounds on the walk, for TestEveryNumericOpcodeHasASignature's reason: the floor catches the
-// derivation collapsing, and the exact figure catches a handful of rows dropping out of a domain that
-// comes from a **committed** table and therefore never moves on upstream's schedule.
-func TestSingleByteDeclinesAreExactlyExceptionHandling(t *testing.T) {
-	// The set, with the proposal each byte belongs to — which is the fact that makes this a boundary
-	// and not a to-do list. All three are exception handling, which is in `validate.go`'s declared
-	// out-of-scope list: unlike the tail-call pair slice 9 removed from this set, these are declined
-	// *by declaration* rather than for want of an arm, so the next move here is a scope decision and
-	// not a slice.
-	want := map[uint32]string{
-		0x08: "throw",     // exception handling
-		0x0a: "throw_ref", // exception handling
-		0x1f: "try_table", // exception handling
-	}
-
+// Both bounds on the walk carry the whole non-vacuity argument now that the set is empty, because
+// **empty agrees with empty** and a derivation that stopped matching would deliver this test's
+// passing state: the floor catches the derivation collapsing, and the exact figure catches a handful
+// of rows dropping out of a domain that comes from a **committed** table and therefore never moves on
+// upstream's schedule.
+func TestTheSingleByteOpcodeSpaceIsFullyTyped(t *testing.T) {
 	// The real dispatch, asked the way `Func` asks it — a hand-written list of "what this package
 	// implements" would be the package agreeing with its own notes. The walk lives in
-	// `singleByteDeclines` (validate_test.go) because slice 9 gave it a second reader: the specimen
-	// row's failure message prints the same set so its re-point is a one-line edit. The set is pinned
-	// *here* and only formatted there, so a walk that breaks fails this test.
+	// `singleByteDeclines` (validate_test.go), where slice 9 put it to give the specimen row a second
+	// reader; that row is gone with its population, so this is now the walk's only caller and the
+	// helper stays there rather than moving, because moving it would be a rename in the same PR that
+	// drains it.
 	got, named := singleByteDeclines()
 
 	const (
@@ -370,8 +375,8 @@ func TestSingleByteDeclinesAreExactlyExceptionHandling(t *testing.T) {
 	)
 	if named < namedRowFloor {
 		t.Fatalf("walked only %d named single-byte rows, want ≥%d — the domain derivation stopped "+
-			"matching, and every set comparison below would be this test reporting its own "+
-			"blindness", named, namedRowFloor)
+			"matching, and the emptiness below would be this test reporting its own blindness",
+			named, namedRowFloor)
 	}
 	if named != namedRowExact {
 		t.Errorf("walked %d named single-byte rows, want exactly %d — `optable.go` is committed, so "+
@@ -379,27 +384,15 @@ func TestSingleByteDeclinesAreExactlyExceptionHandling(t *testing.T) {
 			"floor cannot tell a loss of six rows from a healthy walk", named, namedRowExact)
 	}
 
-	for op, name := range want {
-		switch mn, ok := got[op]; {
-		case !ok:
-			t.Errorf("%#02x (%s) is no longer declined — if a slice typed it, delete this row, "+
-				"re-name this test for what the set now holds, and say so in that PR's ADR; the "+
-				"proposal named in ref.go's header is the claim this test holds", op, name)
-		case mn != name:
-			t.Errorf("%#02x declines under the mnemonic %q, this set calls it %q — the authority's "+
-				"table was re-spelled and the boundary is now stated in two vocabularies",
-				op, mn, name)
-		}
-	}
-	for op, name := range got {
-		if _, ok := want[op]; !ok {
-			t.Errorf("%#02x (%s) is declined and is not in the deferred set — either a slice's "+
-				"dispatch arm was lost, or the space grew an instruction nothing has claimed. "+
-				"Both are the boundary moving without the sentence moving", op, name)
-		}
+	if len(got) != 0 {
+		t.Errorf("%d single-byte opcode(s) decline: %v — the space closed with slice 10 (ADR 0036), "+
+			"so either a proposal's byte became retained by the decoder before this package gained an "+
+			"arm for it, or a slice's arm was lost. Name the byte's proposal and either type it or "+
+			"move the boundary in an ADR; do not re-point this test at the new set, which is the "+
+			"loop the two renames above paid for", len(got), got)
 	}
 
-	t.Logf("%d named single-byte rows; %d declined: %v", named, len(got), got)
+	t.Logf("%d named single-byte rows, %d declined", named, len(got))
 }
 
 // TestRefEqOperandIsANullableEqRef prints what `refNullEq` holds, which its own comment declines to

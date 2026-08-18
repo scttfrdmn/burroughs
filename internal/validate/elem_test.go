@@ -255,3 +255,107 @@ func TestElemPhaseAndExportPhaseAgreeOnUnknownTable(t *testing.T) {
 		})
 	}
 }
+
+// TestElemSegmentFunctionIndicesResolve is #391, riding slice 10 (ADR 0036) — the *lookup* half of
+// `check_elem`'s `check_const` (`valid.ml:1097-1101`), which resolves the function indices a segment's
+// `ref.func` initialisers name.
+//
+// # Two wire forms, and the fix goes in the branch the vectors actually take
+//
+// An element segment carries its functions either as a plain index vector or as a vector of constant
+// expressions, and the wat front end desugars `(elem 0 0)` into the **index** form
+// (`declaredFuncs`'s account of `decode.ml`'s `elem_index`). Both admissions
+// (`call_indirect.wast:1037`, `return_call_indirect.wast:600`) are that spelling, so a resolution
+// written only for the expression branch passes every test anyone would think to write and moves no
+// column. The first row asserts the decode shape rather than trusting the account — `ByExpr` is read
+// off the decoded module, so the claim "this vector takes the non-expression branch" is checked here
+// and not merely cited.
+//
+// # It is not an instruction rule, which is why it is not part of slice 10's criterion
+//
+// The code-section walk never visits an element segment: this runs in `modulePre`, where the reference
+// reaches it. Both rows live in files named for `call_indirect`, which is what made them look like a
+// tail-call slice's business — *a vector's file is not its stratum.* The default lane's whole +2 for
+// slice 10's PR comes from these two, since the exception-handling family is gated off there.
+//
+// # The accept rows are the half the board cannot score
+//
+// `(elem 0)` in a module whose only function is *imported* is valid, and a rule counting `len(m.Funcs)`
+// alone refuses it — the function index space is imports-then-definitions, and no `assert_invalid`
+// vector can catch a rule that refuses a valid module (contract §9 G-3).
+func TestElemSegmentFunctionIndicesResolve(t *testing.T) {
+	t.Run("the corpus spelling takes the index branch", func(t *testing.T) {
+		m := decodedModule(t, `(module (func) (table funcref (elem 0)))`, nil)
+		if len(m.Elems) != 1 {
+			t.Fatalf("decoded %d element segment(s), want 1 — the rest of this row asserts nothing "+
+				"about a module with no segment in it", len(m.Elems))
+		}
+		if m.Elems[0].ByExpr {
+			t.Errorf("`(elem 0)` decoded into the expression form, so the branch this rule was written " +
+				"for is not the branch #391's two vectors take. The fix and the vectors have to meet in " +
+				"the same branch, and this is the only assertion that says they do")
+		}
+		if len(m.Elems[0].Funcs) != 1 {
+			t.Errorf("the index form carries %d function index(es), want 1", len(m.Elems[0].Funcs))
+		}
+	})
+
+	for _, c := range []struct {
+		name  string
+		wat   string
+		msg   string
+		valid bool
+	}{
+		{
+			// #391's own shape: no functions at all, two indices naming function 0.
+			name:  "the index form names a function the module does not have",
+			wat:   `(module (table funcref (elem 0 0)))`,
+			msg:   "unknown function 0 (0 in scope)",
+			valid: false,
+		},
+		{
+			// The expression form, which no corpus vector exercises for this rule — so this row is the
+			// only reader of the `ByExpr` branch's call.
+			name:  "the expression form names a function the module does not have",
+			wat:   `(module (elem funcref (item (ref.func 0))))`,
+			msg:   "unknown function 0 (0 in scope)",
+			valid: false,
+		},
+		{
+			name:  "one past the end",
+			wat:   `(module (func) (table funcref (elem 0 1)))`,
+			msg:   "unknown function 1 (1 in scope)",
+			valid: false,
+		},
+		{
+			name:  "a defined function",
+			wat:   `(module (func) (table funcref (elem 0)))`,
+			valid: true,
+		},
+		{
+			// The accept row that separates `ImportedFuncs() + len(m.Funcs)` from `len(m.Funcs)`.
+			name:  "an imported function, which occupies index 0",
+			wat:   `(module (import "m" "f" (func)) (table funcref (elem 0)))`,
+			valid: true,
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := validated(t, c.wat, nil)
+			switch {
+			case c.valid && err != nil:
+				t.Errorf("valid module refused: %v\n%s\nThe function index space is "+
+					"imports-then-definitions, and no `assert_invalid` vector can see a rule that "+
+					"refuses a valid module.", err, c.wat)
+			case !c.valid && err == nil:
+				t.Errorf("invalid module accepted\n%s\nThis is #391: the segment's `ref.func` "+
+					"initialisers were never resolved, so the module reached the interpreter naming a "+
+					"function that does not exist.", c.wat)
+			case !c.valid && !errors.Is(err, ErrUnknownFunc):
+				t.Errorf("refused with the wrong sentinel: want %v, got %v", ErrUnknownFunc, err)
+			case !c.valid && !strings.Contains(err.Error(), c.msg):
+				t.Errorf("refused, but not with %q: %v\nThe corpus matches by substring (0003), so the "+
+					"category and the index are load-bearing text.", c.msg, err)
+			}
+		})
+	}
+}

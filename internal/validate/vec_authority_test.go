@@ -1193,13 +1193,31 @@ func TestReferenceRangeCitationsAreWellFormed(t *testing.T) {
 	// bounds-checks it. The shape is worth a sentence because the abbreviation is idiomatic in this
 	// package's prose and every use of it is a citation outside every sweep's domain.
 	//
+	// **Nine more with slice 10, and this is the first slice since #343 where an existing file's count
+	// moved**: 2/2/**7**/26/3/1/**19**/13/0/1/4/4/5/0 in `citationFiles` order. The list grew a
+	// fourteenth entry — `exception.go`, seven ranges: `:191-195` (`check_tagtype`), `:270-276`
+	// (`pop`), `:572-575` (`tag c x`), `:572-576` (`Throw`), `:578-579` (`ThrowRef`), `:581-586`
+	// (`TryTable`) and `:974-989` (`check_catch`) — and `module.go` went 17 to 19. Those two are one
+	// rule cited at each of its two call sites: `:222-223` for `check_externtype`'s `ExternTagT` arm,
+	// which reaches an imported tag, and `:1049-1052` for `check_tag` over the defined ones. The
+	// `folded at :1157` beside the second is a *point*, so the point sweep reads it and this count does
+	// not. Every other file holds, `instr.go` and `validate.go` included, which is how the two
+	// module-level ranges are known to be the slice's rather than a rewrite's.
+	//
+	// **Neither `module.go` range is visible to the two pins below, and that is the +9-against-+1-and-+2
+	// reconciliation.** Both sit in inline comments inside `modulePre`'s body rather than in a doc
+	// block naming a sentinel, so `TestReferenceRangeCitationsContainTheirSubjectsSite` skips them for
+	// the no-message reason its header has now named five times, and this slice's whole movement there
+	// is `exception.go`'s three blocks. Stated here because a reader comparing the three pins' deltas
+	// has no other way to tell a skipped block from an uncounted range.
+	//
 	// They are not enumerated here, and that is a deliberate break with the four paragraphs above.
 	// Twenty-six lines of `file :n-m subject` would be a second copy of the citations themselves,
 	// maintained by hand, drifting on the first renumbering — the fixed-point trap
 	// `citation_subject_test.go`'s header walked into at 30-31-32, at a scale where it is certain
 	// rather than likely. What reads them is `TestRangeCitationSubjectsAreReadFromTheReference`, which
 	// resolves every range against the reference and needs no list here to do it.
-	const wantRanges = 78
+	const wantRanges = 87
 	if ranges != wantRanges {
 		t.Errorf("checked %d range citation(s) across %v, want %d — recount and re-pin, and if a "+
 			"file was added to citationFiles, read its point citations too",
@@ -1390,7 +1408,34 @@ func TestReferenceRangeCitationsContainTheirSubjectsSite(t *testing.T) {
 	// Which makes this the fourth consecutive slice where the miss grew by exactly the count of new
 	// no-message blocks — 26→28→32→34 — and that regularity is the useful part: the gap is a stable
 	// property of how arms delegate their refusals, not an error accumulating in either pin.
-	const wantKeyed, wantResidue = 15, 29
+	//
+	// **Slice 10 moved keyed by one and residue by two, and the keyed one is the first arrival in that
+	// column since slice 7** — every slice between them added only excused ranges and no-message
+	// blocks, so a keyed increment is the event this pin was pinned to catch. It is
+	// `checkTagType`'s `:191-195`, whose sentinel spells `non-empty tag result type` and whose
+	// reference line writes that string as a complete literal at `:193`, inside the cited range. That
+	// is the whole keyable condition, and it is met here because `check_tagtype` is five lines long and
+	// one of them is the `require` — a rule small enough that its message and its range cannot come
+	// apart.
+	//
+	// The two residue ranges are `tagTypeAt`'s `:572-575` and `popSeqExpect`'s `:270-276`, excused for
+	// the oldest reason in this header and for it twice over: `unknown tag` is `lookup`'s
+	// `"unknown " ^ category ^ " "`, and `type mismatch` is `match_stack`'s head with two type lists
+	// concatenated onto it. Both are emitted verbatim at run time and written nowhere verbatim in the
+	// source, which is the distinction this column exists to hold.
+	//
+	// **The slice's other six ranges in this domain name no sentinel and are skipped, so the miss grew
+	// by six to 40.** Four are `exception.go` blocks — `throwInstr`, `throwRef`, `tryTable` and
+	// `checkCatch`, arms that refuse only through `tagTypeAt`, the pop helpers and `catchMismatch`,
+	// whose own block cites `try_table.wast` and no reference range at all — and two are `module.go`
+	// inline comments that are not doc blocks in the first place. That is the fifth consecutive slice
+	// where the miss grew by exactly the count of new no-message ranges — 26→28→32→34→40 — and the
+	// fifth statement of a regularity is worth less than the first, except in one respect: this is the
+	// first time the third category was fed by a *file's* inline prose rather than by an arm's
+	// delegation, and the gap absorbed it without needing a fourth. The sibling `wantRanges` pin's
+	// account names those two `module.go` ranges from its own side, which is what keeps a +9 there
+	// against a +3 here from reading as an arithmetic slip.
+	const wantKeyed, wantResidue = 16, 31
 	if keyed != wantKeyed || residue != wantResidue {
 		t.Errorf("checked %d keyed range citation(s) and excused %d as constructed-message residue "+
 			"across %v, want %d and %d — recount and re-pin. A range becomes keyable when its "+

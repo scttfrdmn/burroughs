@@ -30,27 +30,30 @@ import (
 // the third payout of one shape and the reason slice 8's charged overhead is a control rather than a
 // corrected sentence.
 //
-// # What stays declined, and it is a scope declaration rather than difficulty
+// # Nothing stays declined, and that claim is checked rather than asserted
 //
-// **Three** named single-byte opcodes remain, in one deferred proposal:
+// **Zero** named single-byte opcodes decline. Slice 8 left five in two proposals: `return_call`
+// (0x12) and `return_call_indirect` (0x13), typed by **slice 9** (`tailcall.go`, ADR 0035) — the
+// validator having been their sole blocker, which is why they were a slice and not a decision — and
+// `throw` (0x08), `throw_ref` (0x0a), `try_table` (0x1f), typed by **slice 10** (`exception.go`,
+// ADR 0036), which took a scope decision first because exception handling was named in
+// `validate.go`'s out-of-scope register and was therefore declined *by declaration* rather than for
+// want of arms.
 //
-//   - **exception handling** — `throw` (0x08), `throw_ref` (0x0a), `try_table` (0x1f), which is the
-//     register's own last entry and not a stray, and which is named in `validate.go`'s out-of-scope
-//     list. So what is left here is declined *by declaration*: moving it is a scope decision, where
-//     the pair below was only ever waiting for arms.
+// `return_call_ref` (0x15) landed here rather than with the tail-call pair because it arrived with
+// function references, so this file holds one tail-call shape and `tailcall.go` holds the other two:
+// proposal boundaries winning over family resemblance, stated because the reverse is what a reader
+// expects.
 //
-// Slice 8 left five in two proposals; `return_call` (0x12) and `return_call_indirect` (0x13) were the
-// other two, and **slice 9 typed them** (`tailcall.go`, ADR 0035) — the validator having been their
-// sole blocker, which is why they were a slice and not a decision. `return_call_ref` (0x15) landed
-// here rather than with them because it arrived with function references, so this file holds one
-// tail-call shape and `tailcall.go` holds the other two: proposal boundaries winning over family
-// resemblance, stated because the reverse is what a reader expects.
-//
-// That set is pinned by `TestSingleByteDeclinesAreExactlyExceptionHandling` — as a literal set with
-// its mnemonics, derived by walking `binary.OpMnemonic`'s single-byte rows and asking the real
-// dispatch, over the domain of *rows that name an instruction* (the reserved-byte and prefix rows
-// cannot reach `instr` with `Prefix == 0`). The next slice that moves this boundary gets a failing
-// test rather than a sentence nobody reads — and it got one: the rename above is that test firing.
+// The claim is pinned by `TestTheSingleByteOpcodeSpaceIsFullyTyped` — as **emptiness** of the set
+// derived by walking `binary.OpMnemonic`'s single-byte rows and asking the real dispatch, over the
+// domain of *rows that name an instruction* (the reserved-byte and prefix rows cannot reach `instr`
+// with `Prefix == 0`), with the walk's extent bounded both ways because an empty set agrees with a
+// walk that stopped walking. It was a *literal set* of the declined mnemonics through slices 8 and 9,
+// and the two renames that cost are what earned the emptiness form: a control naming a population
+// moves whenever the population does. Whatever next makes a single-byte opcode reachable here without
+// an arm gets a failing test rather than a sentence nobody reads — and that is not hypothetical, since
+// it is how all three of slice 10's bytes arrived.
 //
 // The reference-type slice's opcodes (#359): the three `ref.*` rows in the single-byte space and
 // the two table accessors, which are here rather than in bulk.go because bulk.go is the 0xFC
@@ -460,9 +463,15 @@ func (v *validator) callRef(idx uint32) error {
 // from there rather than re-resolved from the module for `opReturn`'s reason: the body frame was
 // built from the function's declared results, so a second lookup would be a second derivation of a
 // fact one frame already carries. The other two tail-call opcodes — `return_call` 0x12 and
-// `return_call_indirect` 0x13 — are the *tail-call proposal* and stay declined; this one arrives
-// with function-references, which is the accident of proposal boundaries that puts one of three
-// siblings in this slice.
+// `return_call_indirect` 0x13 — are the *tail-call proposal* and live in `tailcall.go` (slice 9,
+// ADR 0035); this one arrives with function-references, which is the accident of proposal boundaries
+// that puts one of three siblings in this slice.
+//
+// This sentence said they "stay declined" until slice 10 swept it, which is one slice after the one
+// that falsified it: slice 9 typed the pair and re-pointed the controls that name them, and left the
+// prose beside the *third* sibling — the site a reader would reach from this function, and the one
+// place the pair is described rather than implemented. A repair that makes its own site look settled
+// is the staleness nobody goes looking for.
 func (v *validator) returnCallRef(idx uint32) error {
 	ft, err := funcType(v.mod, idx)
 	if err != nil {

@@ -286,7 +286,45 @@ func TestRangeCitationSubjectsAreReadFromTheReference(t *testing.T) {
 	// 14 for three slices because none of them cited a rule from a test file. It moves here for that
 	// reason and not because a citation went unread, which is the difference the arithmetic alone
 	// cannot say.
-	const wantKeyed, wantResidue = 62, 33
+	// **The split above was slice 9's. Slice 10's is keyed 80 and residue 34, and the interesting part
+	// is that both of this header's recorded spellings recurred inside the slice's own new file.**
+	// Per file: `exception.go` arrives at 8/0 and `exception_test.go` at 5/0, `elem_test.go` goes 1 to
+	// 3, `module.go` goes 17/2 to 20/3, and the other sixteen files hold — so +18 keyed and +1 residue,
+	// against `wantRanges`' +9.
+	//
+	// The recurrences, both caught here and neither prevented by the paragraphs above them:
+	// `tryTable`'s block first read ``TryTable (bt, cs, es)``, which is the **comma inside a payload**
+	// exactly as slice 9 diagnosed it, in a file written three paragraphs' distance from the warning.
+	// And `tagTypeAt`'s citation first sat on the line naming `deftype_of_typeuse` and
+	// `functype_of_comptype` — a **fifth category**, and the first that no rewording repairs: both are
+	// the reference's own identifiers, correctly spelled, and both are defined in the type algebra
+	// rather than in `valid.ml`, whose definitions and arms are the only names `refSubjects` reads. The
+	// repair was to move the range up beside `tag c x`, which *is* one of them.
+	//
+	// **That repair produced the finding worth more than either recurrence: a citation can be destroyed
+	// by reflowing a paragraph, and the destruction reads here as an improvement.** The first attempt
+	// wrapped the citation itself — ``valid.ml:572-`` ending one line and ``575`` opening the next — so
+	// `rangeRe` matched nothing on either, and the row left the residue column without entering the
+	// keyed one: keyed held while residue fell by one. **Residue falling is therefore ambiguous in this
+	// pin alone** — a row repaired into `keyed` and a row deleted from the domain move it the same
+	// direction — and what separated them was `wantRanges` next door falling from 87 to 86 in the same
+	// run. The two pins are read together for this reason and not merely for arithmetic, and the
+	// wrapping is now annotated at the site, since reflowing that paragraph is a semantic act.
+	//
+	// `module.go`'s residue increment is conformance rather than drift: the new `check_tag` phase line
+	// joined the two unbackticked phase-list rows already in `modulePre` — `check_type → check_rectype`
+	// and `check_global` — making three. Backticking all three is an edit to two other slices' prose
+	// and is not this slice's to make; backticking only the new one would leave the local convention
+	// with a single exception, which is worse than either.
+	//
+	// So the excess over `wantRanges` is 27 where slice 9 read 17, and it decomposes exactly: **six**
+	// test-file ranges this pin's domain contains and `wantRanges`' does not (`exception_test.go`'s
+	// five, `elem_test.go`'s one) plus **four** extra subjects from three multi-subject lines —
+	// `module.go`'s `check_externtype`/`ExternTagT`/`check_tagtype` line keys three subjects for one
+	// range, `exception.go`'s `pop`/`match_stack` line two, and `elem_test.go`'s
+	// `check_elem`/`check_const` line two. Six and four is the whole +10, which is the check that no
+	// range went unread while the totals happened to agree.
+	const wantKeyed, wantResidue = 80, 34
 	if keyed != wantKeyed || residue != wantResidue {
 		t.Errorf("keyed %d range citation(s) by named subject and left %d as residue, want %d and "+
 			"%d — recount and re-pin. A row moves from residue to keyed when its description starts "+
