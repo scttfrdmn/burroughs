@@ -2022,11 +2022,21 @@ func (p *parser) elemListRetained() (textElem, error) {
 	return textElem{}, p.expectedInstr()
 }
 
-// startField parses `start` (parser.mly:1304-1306) and applies the multiple-start check.
+// startField parses `start` (parser.mly:1304-1306), applies the multiple-start check, and retains
+// the index for section 8 (#413).
 //
-// The check is on the LPAR's token, matching the reference's `error x.at` where `x` is the
-// Start node spanning the whole field.
+// The multiple-start check is on the LPAR's token, matching the reference's `error x.at` where `x`
+// is the Start node spanning the whole field. The **frontier withdrawal** is on the keyword token,
+// because that is the token `moduleField` noted — `clearNonTypeField` compares offsets and the LPAR's
+// is one byte earlier, so passing the wrong one of these two adjacent tokens withdraws nothing and
+// silently refuses every module with a start section. Two tokens, two jobs, and they are read in
+// separate statements for that reason rather than for style.
+//
+// **The withdrawal is last, after `rpar`.** Every earlier return leaves the refusal standing, which
+// is what makes a half-parsed field un-emittable rather than emittable-and-short — `clearNonTypeField`'s
+// own comment states the rule and this arm is one of the ones it is about.
 func (p *parser) startField() error {
+	kw := p.c.peek2()
 	tok := p.c.peek()
 	if err := p.lpar(kwStart); err != nil {
 		return err
@@ -2034,10 +2044,16 @@ func (p *parser) startField() error {
 	if err := p.ctx.checkStart(tok); err != nil {
 		return err
 	}
-	if err := p.idx(); err != nil {
+	ref, err := p.idxValue()
+	if err != nil {
 		return err
 	}
-	return p.rpar()
+	if err := p.rpar(); err != nil {
+		return err
+	}
+	p.ctx.defineStart(ref)
+	p.ctx.clearNonTypeField(kw)
+	return nil
 }
 
 // instrList parses `instr_list` (parser.mly:546-550) as far as this stratum goes, which is: the

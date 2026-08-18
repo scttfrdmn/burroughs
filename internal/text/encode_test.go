@@ -3335,7 +3335,7 @@ func decodeGC(t *testing.T, b []byte) *binary.Module {
 // cases respectively. This test's own ground is the *non-null abstract* form and the *indexed* form
 // at both nullabilities — the two shapes that had no byte at all before this PR — plus the
 // `(ref func)` != `FuncRef` pin the task calls out by name, which is the one assertion in this file
-// that most directly depends on grave #181 already being fixed: before it, `funcref` and
+// that most directly depends on grave #180 already being fixed: before it, `funcref` and
 // `(ref func)` decoded to the *same* ValType and no round trip could tell "wrote the abbreviation"
 // apart from "wrote the parameterized form".
 func TestParameterizedReferenceFormsRoundTrip(t *testing.T) {
@@ -3405,8 +3405,12 @@ func TestParameterizedReferenceFormsRoundTrip(t *testing.T) {
 	})
 
 	t.Run("(ref func) decodes distinct from FuncRef, and funcref decodes equal to it", func(t *testing.T) {
-		// The pin the task names directly: grave #181's fix is what makes this assertion possible at
-		// all. Before it, decodeRefType's Wasm 2.0 branch hardcoded null:false for the bare
+		// The pin the task names directly: grave #180's fix is what makes this assertion possible at
+		// all. (Cited as #181 until #286's Class B repoint: #181 is the *PR* that carried the fix, and
+		// its own title names `grave #180` — so the repoint reads off the artifact rather than being
+		// guessed, which is what the other three sites in that class could not do.)
+		//
+		// Before it, decodeRefType's Wasm 2.0 branch hardcoded null:false for the bare
 		// abbreviation, so `funcref` (bare 0x70) and `(ref func)` (0x64 0x70) decoded to the *same*
 		// ValType and this test could not have existed as a decoded-value assertion — only as a raw
 		// wire-byte comparison, which is exactly the workaround the task says is no longer needed.
@@ -3427,7 +3431,7 @@ func TestParameterizedReferenceFormsRoundTrip(t *testing.T) {
 		if gotRefFunc == binary.FuncRef {
 			t.Errorf("`(ref func)` decoded as %v, which equals binary.FuncRef — these are different "+
 				"spec types (funcref is nullable, (ref func) is not) and must decode to different "+
-				"ValTypes; this is the exact regression grave #180/#181 fixed on the decoder side, "+
+				"ValTypes; this is the exact regression grave #180 fixed on the decoder side, "+
 				"reached here through the encoder", gotRefFunc)
 		}
 		if gotRefFunc.Null() {
@@ -3544,12 +3548,15 @@ func TestStructAndArrayFieldsRoundTrip(t *testing.T) {
 func TestEncodeRefusesWhatItCannotWrite(t *testing.T) {
 	for _, tc := range []struct{ src, contains string }{
 		// `(module (func))` was here and is now in `encodableModules`, which is what the code section
-		// *is*. The `(start 0)` row below still needs a func to be well-formed and is still refused —
-		// by the start field, now, rather than by the func that precedes it.
+		// *is*.
 		//
 		// `(module (global i32 (i32.const 0)))` was here and is now in `encodableModules`, which is what
 		// section 6 *is* — the fourth field to make that move, after `func`, `data` and `elem`.
-		{`(module (start 0) (func))`, "(start …) field"},
+		//
+		// **`(module (start 0) (func))` was here and is now in `encodableModules`, which is what
+		// section 8 *is* (#413) — the sixth field to make this move, after `func`, `data`, `elem`,
+		// `global` and `tag`.** It was the last *field* leader this table had, and the countdown
+		// comment below is where that is accounted for.
 		// `(module (data "abc"))` was here and is now in `encodableModules`, which is what section 11
 		// *is* — the same move `(module (func))` made when the code section landed.
 		//
@@ -3625,66 +3632,78 @@ func TestEncodeRefusesWhatItCannotWrite(t *testing.T) {
 		// field that follows it.
 		//
 		// **The leader was `(func)`, then `(data "abc")`, then `(elem)`, then `(global …)`, then
-		// `(tag)`, and is now `(start 0)` — re-pointed five times for the same reason.** This is the
-		// tripwire-re-pointing rule (#33) at test-row scale, and by the fifth application it is
-		// routine rather than remarkable: the rows name a *risk* — a later field withdrawing an
-		// earlier field's refusal — and each landing section dissolves whichever leader it implements
-		// without touching the risk. `func` moved to follower when the code section landed; `data`
-		// when section 11 did; `elem` when section 9 did; `global` when section 6 did; `tag` now that
-		// section 13 does (#199). Deleting the rows instead would have retired a live control five
-		// times on a technicality, and the instruction the previous version of this comment left —
-		// "re-point again, not delete" — is what is being carried out here.
+		// `(tag)`, then `(start 0)`, and is now `(table 1 funcref (ref.func $f))` — re-pointed six
+		// times for the same reason.** This is the tripwire-re-pointing rule (#33) at test-row scale,
+		// and by the sixth application it is routine rather than remarkable: the rows name a *risk* —
+		// a later field withdrawing an earlier field's refusal — and each landing section dissolves
+		// whichever leader it implements without touching the risk. `func` moved to follower when the
+		// code section landed; `data` when section 11 did; `elem` when section 9 did; `global` when
+		// section 6 did; `tag` when section 13 did (#199); `start 0` now that section 8 does (#413).
+		// Deleting the rows instead would have retired a live control six times on a technicality.
 		//
-		// **`(start 0)` is the only leader left, and that is now worth stating as a closed countdown
-		// rather than an open one.** One field remains unencodable — the `(tag)`-leader rows this
-		// comment used to describe (memory+table, memory+data, func+memory followers) are gone rather
-		// than re-pointed, because `(start 0)` already carries an equivalent follower for each of
-		// those same risk shapes below, and a second leader asserting the identical risk a second time
-		// is redundant coverage rather than a distinct witness. When `(start 0)` itself is no longer
-		// the sole subject (nothing is planned to encode it differently; it names a function index
-		// and always will), this control's subject dissolves with no re-pointing available. The risk
-		// does not: `clearNonTypeField`'s offset comparison will still be the only thing standing
-		// between a later field and an earlier field's record. So the re-pointing that will be
-		// required then is not to another field but to another *frontier* — the typeuse rows below are
-		// refusals that outlive every section, and the leader becomes one of those. (The table/global
-		// element-type rows this comment used to point at, `(table 1 (ref func))` among them, are
-		// gone: decision 0018's encoder-side implementation closed that frontier, so it can no longer
-		// serve as the next re-pointing target either — and decision 0021's encoder-side
-		// implementation closed the `CompType.Fields` frontier this comment used to name as the next
-		// candidate, for the identical reason: a struct or array type no longer refuses outright, so
-		// it cannot lead a follower row either.) Named here because a tripwire whose next re-pointing
-		// is not obvious is one that gets closed instead.
-		{`(module (start 0) (memory 1) (func))`, "(start …) field"},
-		{`(module (start 0) (table 1 funcref) (func))`, "(start …) field"},
-		// **A `(data …)` field as the *follower*, which is where its departure makes it a better
-		// witness than it was as a leader.** `dataField` has three arms and every one of them calls
-		// `clearNonTypeField` after its closing paren, so it is the newest candidate for clearing a
+		// **The instruction the previous version of this comment left was wrong in both halves, and
+		// this is the record of that (#413).** It said `(start 0)` was the last *field* leader, so the
+		// next re-pointing would have to be to "another *frontier* — the typeuse rows below". Both
+		// claims fail on inspection:
+		//
+		//   - **"One field remains unencodable" was already false when written.** The table-with-an-
+		//     initializer row immediately above this block, `(table 1 funcref (ref.func $f))`, is a
+		//     refused field and has been since before the countdown was declared closed — the comment
+		//     counted the leaders it had re-pointed *through* and forgot the frontier sitting in its
+		//     own file. So the countdown was never closed and the leader is a field again.
+		//   - **The typeuse rows cannot lead.** They refuse through a direct `return` from
+		//     `code.go`'s typeuse path, not through a `noteNonTypeField` record, so there is no record
+		//     for a follower to clear wrongly and nothing for the identity check to be about. A
+		//     frontier is only a candidate leader here if it is a *recorded* one, and the previous
+		//     comment did not check which kind it was naming.
+		//
+		// Which is the same defect twice: a forecast about instruments written from the shape of the
+		// prose rather than from the mechanism (#412's shape). The re-pointing rule survives it —
+		// what needed correcting was the census, not the rule.
+		//
+		// Both orders of leader and definition, because `(ref.func $f)` resolves in stage 2: the
+		// forward form proves the leader's record is noted at the keyword and not at resolution.
+		{`(module (table 1 funcref (ref.func $f)) (memory 1) (func $f))`, "(table …) field"},
+		{`(module (table 1 funcref (ref.func $f)) (func $f) (memory 1))`, "(table …) field"},
+		// **A `(data …)` field as the *follower*.** `dataField` has three arms and every one of them
+		// calls `clearNonTypeField` after its closing paren, so it is a candidate for clearing a
 		// record that is not its own — and the sugar arm clears one too. Falsified by dropping the
-		// offset comparison in `clearNonTypeField`: these three encode, emitting a module whose start
+		// offset comparison in `clearNonTypeField`: these two encode, emitting a module whose table
 		// is gone.
-		{`(module (start 0) (data "abc") (func))`, "(start …) field"},
-		{`(module (start 0) (memory (data "x")) (func))`, "(start …) field"},
-		// **`(elem …)` as a follower, and it is the sharpest of them**, which is the dividend of its
-		// promotion out of this table. Five arms, each calling `clearNonTypeField` after its own closing
-		// paren — more distinct withdrawal sites than any other field has — plus the `(table … (elem …))`
-		// sugar, whose arm withdraws once for two definitions. Every one of those is a place to clear a
-		// record belonging to the `(start 0)` in front of it.
-		{`(module (start 0) (elem func) (func))`, "(start …) field"},
-		{`(module (start 0) (elem (i32.const 0)) (func))`, "(start …) field"},
-		{`(module (start 0) (elem declare func) (func))`, "(start …) field"},
-		{`(module (start 0) (table funcref (elem)) (func))`, "(start …) field"},
-		// **`(global …)` as a follower, which is where its promotion out of this table makes it a
-		// witness.** `globalField`'s defining arm is the newest `clearNonTypeField` caller in the file,
-		// and it is the one whose withdrawal now runs on every well-formed global rather than never —
-		// so the record it could clear wrongly is the `(start 0)`'s in front of it. Both spellings,
-		// because the import arm withdraws through `importField`'s path and the defining arm through its
-		// own tail, and they are different call sites.
-		{`(module (start 0) (global i32 (i32.const 0)) (func))`, "(start …) field"},
-		{`(module (start 0) (global (import "m" "g") i32) (func))`, "(start …) field"},
-		// `func` as a follower, unchanged: `funcField`'s tail calls `noteDefined` and
-		// `clearNonTypeField` after retaining its body, and unlike the memory and table arms it reaches
-		// that call on every well-formed func.
-		{`(module (start 0) (func))`, "(start …) field"},
+		{`(module (table 1 funcref (ref.func $f)) (data "abc") (func $f))`, "(table …) field"},
+		{`(module (table 1 funcref (ref.func $f)) (memory (data "x")) (func $f))`, "(table …) field"},
+		// **`(elem …)` as a follower, and it is the sharpest of them.** Five arms, each calling
+		// `clearNonTypeField` after its own closing paren — more distinct withdrawal sites than any
+		// other field has — plus the `(table … (elem …))` sugar, whose arm withdraws once for two
+		// definitions. Every one of those is a place to clear a record belonging to the leader in
+		// front of it.
+		{`(module (table 1 funcref (ref.func $f)) (elem func) (func $f))`, "(table …) field"},
+		{`(module (table 1 funcref (ref.func $f)) (elem (i32.const 0)) (func $f))`, "(table …) field"},
+		{`(module (table 1 funcref (ref.func $f)) (elem declare func) (func $f))`, "(table …) field"},
+		{`(module (table 1 funcref (ref.func $f)) (table funcref (elem)) (func $f))`, "(table …) field"},
+		// **`(global …)` as a follower.** `globalField`'s defining arm withdraws on every well-formed
+		// global, so the record it could clear wrongly is the leader's.
+		{`(module (table 1 funcref (ref.func $f)) (global i32 (i32.const 0)) (func $f))`, "(table …) field"},
+		// **The import-spelled follower is gone and cannot be re-pointed, which is a loss rather than
+		// a simplification and is said in that word (#413).** There was a second global row here,
+		// `(global (import "m" "g") i32)`, covering `importField`'s withdrawal site — a different call
+		// site from the defining arm's tail. It cannot survive this leader: `(table 1 funcref …)` is a
+		// *definition*, and the grammar forbids an import after one, so the vector is rejected before
+		// the encoder is reached ("import after table definition") and would be the wrong-vector kind
+		// of row this test refuses on principle. `(start 0)` could carry it because a start field is
+		// not a definition; every remaining recorded frontier is one. So the shape that restores this
+		// coverage is any unencodable field that is *not* a func/table/memory/global definition, or an
+		// unencodable import — and until one exists, `importField`'s withdrawal has no follower row.
+		// Named because a row deleted without a note reads as a row that was redundant.
+		// **`(start …)` as a follower, which is where its promotion out of this table makes it a
+		// witness (#413).** `startField` withdraws on its tail after `rpar`, on every well-formed
+		// start field, so the record it could clear wrongly is the leader's in front of it.
+		{`(module (table 1 funcref (ref.func $f)) (start $f) (func $f))`, "(table …) field"},
+		// `func` as a follower: `funcField`'s tail calls `noteDefined` and `clearNonTypeField` after
+		// retaining its body, and unlike the memory and table arms it reaches that call on every
+		// well-formed func. Here the func the leader references *is* the follower, which is the
+		// minimal form of the row.
+		{`(module (table 1 funcref (ref.func $f)) (func $f))`, "(table …) field"},
 
 		// # The typeuse frontier, which is a *wrong index* rather than a missing section
 		//

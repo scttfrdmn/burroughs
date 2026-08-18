@@ -296,7 +296,7 @@ func imports(reg Registry) interp.Imports {
 // module forms for free.
 //
 // **It also converted five passes into gates, and those five are grave #408.** `imports.wast`
-// :138/:297/:442/:540 and `linking3.wast`:14 assert that a module *lacks one export* and expect
+// :136/:295/:440/:538 and `linking3.wast`:14 assert that a module *lacks one export* and expect
 // `unknown import`; they passed because the whole target module was unbound, which produces the same
 // string about a different fact. A substring match cannot tell the two apart, so the reject-direction
 // instruments were all satisfied — the only thing that saw it was 0037 pre-registering a `pass`
@@ -3568,6 +3568,30 @@ func TestGatedVectors(t *testing.T) {
 			265: "memory64: an i64 index type at :34 — the module this action runs against",
 			268: "memory64: (memory i64 1) at :34 — an i64 index type",
 			269: "memory64: (memory i64 1) at :34 — an i64 index type",
+		},
+		// **Eight lines that arrived by a *frontier* being withdrawn, which is a provenance no other
+		// entry in this map has** (#413). They were fail rows until the encoder learned section 8:
+		// `start0.wast`'s module carries `(start $main)`, so the whole module was refused before its
+		// memargs were ever decoded, and the multi-memory decline underneath was unreachable. Writing
+		// the start section moves the refusal one layer down and the eight dependents from `fail` to
+		// here — the module command itself keeping its pass on an instantiation decline (#124's ruling,
+		// stated at the `KindModuleText` arm).
+		//
+		// So a first-blocker census over-predicts *passes* even when it is exactly right about
+		// *fails*, and this is the specimen: #413's forecast said `start0.wast` 0/9 → 9/9 and the
+		// board delivered 1 pass + 8 gated. The fail forecast was exact (91 → 56) because all 35 rows
+		// did leave that column; the pass forecast missed by exactly these 8 because a *second* blocker
+		// can be a gate, which moves a row to a third column rather than back to fail. The all-on lane
+		// is what proves the attribution rather than asserting it: it gained the full 35.
+		"start0.wast": {
+			32: "multi-memory: 3 memories at :2, so a memarg carries flags bit 6",
+			33: "multi-memory: 3 memories at :2, so a memarg carries flags bit 6",
+			35: "multi-memory: 3 memories at :2, so a memarg carries flags bit 6",
+			36: "multi-memory: 3 memories at :2, so a memarg carries flags bit 6",
+			37: "multi-memory: 3 memories at :2, so a memarg carries flags bit 6",
+			39: "multi-memory: 3 memories at :2, so a memarg carries flags bit 6",
+			40: "multi-memory: 3 memories at :2, so a memarg carries flags bit 6",
+			41: "multi-memory: 3 memories at :2, so a memarg carries flags bit 6",
 		},
 		"store0.wast": {
 			22: "multi-memory: 2 memories at :3, so a memarg carries flags bit 6",
@@ -7362,7 +7386,22 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	// is not structural — it is the gates doing their job, since every one of these vectors needs GC
 	// types to decode at all, so the default lane cannot ask the question. Which is also why the
 	// residue of this bucket was invisible until #328: it took a typing rule *and* a gate to reach.
-	const allOnPassFloor = 64903
+	//
+	// # 64903 → 64938 with #413's start section, and this lane's job in that slice was to hold the
+	// # other lane's attribution
+	//
+	// The default lane gained 27 where its own census forecast 35 (`passFloor`), and the eight-row gap
+	// was diagnosed to `start0.wast`: three memories at :2, so the row's *second* blocker is the
+	// multi-memory gate and eight rows land gated instead of passing. That diagnosis is a claim about
+	// a gate, and **this lane is the instrument that can refute it** — with every gate on, a
+	// multi-memory blocker does not exist, so the eight must appear here or the diagnosis was wrong
+	// and the engine is answering eight vectors incorrectly.
+	//
+	// +35, the full count, all 35 of the rows that left the default lane's fail column. So the gap is
+	// the gate and not the engine, measured rather than argued. Stated as this lane's *purpose* in the
+	// slice because the alternative reading of a +35 here is that this lane simply gained more than
+	// the other one, which is the shape of every uninformative two-lane comparison.
+	const allOnPassFloor = 64938
 	// **Slack 0 as of Scott's #387 ruling**, which this bound's own 89-row staleness above is what
 	// prompted: a floor with 250 of tolerance cannot detect anything smaller than 250, so it is a
 	// bound sitting inside its own tolerance. Exact from here — re-base it in the PR that moves the
@@ -9003,7 +9042,25 @@ func TestPhase1Files(t *testing.T) {
 	// earlier by the emitter. Charging these to `validateFail` would raise #9's column by 22 rows
 	// the type checker never saw, which is the confusion `validateModule`'s own comment names and
 	// this ceiling exists to keep separated. Slack stays 0.
-	const encodeFailCeiling = 68
+	// # 68 → 40, and the −28 is one form leaving, verified by the 40 that stayed being *the same 40*
+	//
+	// #413 taught the emitter section 8, so every `(start …)` refusal is gone: `start.wast` 18,
+	// `start0.wast` 9, `ref_func.wast:112` 1. The fall was measured rather than subtracted — the
+	// stratum was dumped with file, line, kind and refusal text on both sides of the change, and the
+	// pre-slice side decomposes 28 `(start …)` + 33 `(table …)` + 4 #77 + 3 `unknown data segment
+	// $d` = 68, the post-slice side 33 + 4 + 3 = 40 over **the same file:line rows**. That identity
+	// is the whole account: a delta of 28 with the residue unchanged row-for-row says one form
+	// departed and nothing else moved, which a pair of totals could not have said. Compare the
+	// previous section, which reports `6 (start …) fields` — that was the module-definition arm's
+	// share of one wave, not the form's population, and reading it as the population would have
+	// forecast −6.
+	//
+	// **The residue is now three frontiers and the largest is one issue.** 33 `(table …)` fields
+	// (#8) across `table.wast` 13, `elem.wast` 9, `global.wast` 7, `i31.wast` 4; 4 symbolic locals
+	// under a typeuse (#77) in `func.wast`; 3 `unknown data segment $d` in `memory-multi.wast`. Two
+	// of the three are the encode work list this ceiling was built to expose, so the next fall this
+	// bound should see is #8's, and it should be −33 with the other seven unchanged.
+	const encodeFailCeiling = 40
 	boardBound(t, "encodeFailCeiling", encodeFail, encodeFailCeiling, 0, ceilingBound,
 		"the wat encoder lost ground: either it stopped emitting an instruction it used to "+
 			"emit, or the corpus moved. This ceiling is deliberately not shared with the text "+
@@ -9524,7 +9581,23 @@ func TestPhase1Files(t *testing.T) {
 	// element 0`, 3 `assert_trap (module) expected: unreachable`, 3 `register: no module named
 	// $I/$I1/$I2`. That is the work plan this column exists to be, and it could not be read as one
 	// while three quarters of it named the wrong component.
-	const execFailCeiling = 15
+	// **15 → 8, and all 7 are the start section landing (#413) — the first time this column has moved
+	// because the *interpreter* gained something rather than because a reclassification found its
+	// column.** The seven were the three `assert_trap (module) expected: unreachable` rows
+	// (`linking.wast:592`, `linking3.wast:65`, `start.wast:97`), the two `assert_return value mismatch`
+	// rows the sibling registry has just retired, and the two `trap: uninitialized element 0` rows —
+	// and the four below the three `assert_trap`s were *downstream* of them, each asserting against a
+	// different, healthy instance whose table or memory the refused module's start function was
+	// supposed to write.
+	//
+	// Which is the reading worth keeping: **not one of the seven was the interpreter computing a wrong
+	// answer.** They were fail rows in the exec stratum because a module the *encoder* could not write
+	// produced no instance, and the stratum ledger charges the row where it lands. That extends
+	// Scott's own withdrawal of the "exec 81 means the interpreter gets answers wrong" premise (#409)
+	// from the 66 to seven more of the 15 — leaving the residue this column now names: 5 `assert_return
+	// value mismatch` (all `load1.wast`, all #414's gate-decline collateral) and 3 `register: no module
+	// named $I/$I1/$I2`.
+	const execFailCeiling = 8
 	boardBound(t, "execFailCeiling", execFail, execFailCeiling, 0, ceilingBound,
 		"the interpreter answered fewer vectors than it did: either an opcode arm regressed or "+
 			"a value comparison started disagreeing. A *rise* caused by #8 unblocking more "+
@@ -10604,11 +10677,51 @@ func TestPhase1Files(t *testing.T) {
 	// **60868 → 60863, and the −5 is a finding rather than a regression** — decision 0037's
 	// pre-registration forecast this row unchanged and said in advance that any movement in it
 	// would be a finding to report rather than a number to adjust. Five moved, and they were
-	// **passes awarded by coincidence**: `imports.wast` :138/:297/:442/:540 and
-	// `linking3.wast`:14 are `assert_unlinkable` vectors expecting `unknown import` for a name
-	// their target module genuinely lacks, and they passed because the *whole target module* was
-	// unbound after a gate-declined `register`. The right text for the wrong fact — the engine was
-	// never asked whether `"test"` exports `unknown`, it was asked whether `"test"` exists.
+	// **passes awarded by coincidence**: `assert_unlinkable` vectors expecting `unknown import`
+	// for a name their target module genuinely lacks, which passed because the *whole target
+	// module* was unbound after a gate-declined `register`. The right text for the wrong fact —
+	// the engine was never asked whether `"test"` exports `unknown`, it was asked whether
+	// `"test"` exists.
+	//
+	// **The five are derived, not spotted**, on Scott's condition for accepting the −66 (his
+	// ruling on PR #409: *"5 pass→gated removes green, and that direction always gets named"*).
+	// Neuter the declined-import gate and re-run: a line gated *with* the gate that was neither
+	// gated nor failing *without* it was a pass the correction removed. Board-wide that set has
+	// exactly five members, and the per-file pass deltas sum to the aggregate −5, so no file
+	// gained a pass that masked a sixth loss — the size and the level agree, which is the check
+	// a set derived from a diff needs before it is trusted.
+	//
+	//   imports.wast:136   (import "test" "unknown" (func))         — asserts the *export* is absent
+	//   imports.wast:295   (import "test" "unknown" (global i32))   — same, global
+	//   imports.wast:440   (import "test" "unknown" (table 10 funcref)) — same, table
+	//   imports.wast:538   (import "test" "unknown" (memory 1))     — same, memory
+	//   linking3.wast:14   (table (import "Mm" "tab") …)            — the corpus itself comments
+	//                      `;; does not exist`, and the same module imports `"Mm" "mem1"`, which
+	//                      *does*, so the vector is about the table alone
+	//
+	// `"test"` is exported by an auxiliary module carrying `(tag …)`, declined under EH-off; `$Mm`
+	// declares three memories, declined under multi-memory-off. In both cases the reference has the
+	// name bound and this engine does not, so every one of the five was asking a question about a
+	// module that, here, did not exist.
+	//
+	// **The corpus supplies the control for free, and it is why "wrong fact" is a measurement and
+	// not a reading.** Each of the four `imports.wast` vectors is immediately followed by the
+	// identical assertion against `"spectest" "unknown"` (:140, :299, :444, :542) — same expected
+	// text, same shape, a module name that is never declined. Those four still score verdicts,
+	// unchanged. The discriminator is therefore the *module name*, not the expectation, which is
+	// exactly the fact a substring match cannot see. No new control is owed for it either:
+	// `gatedDeclinedRegistration["imports.wast"]` is pinned at slack 0, so a gate that widened to
+	// the twins would fail that bound rather than pass quietly.
+	//
+	// **The published line citations were wrong by two, and the error has a shape worth naming.**
+	// This entry, ADR 0037, the CHANGELOG, grave #408 and PR #409 all first cited :138/:297/:442/:540
+	// — the `"unknown import"` *text* lines, which is where a reader's eye lands when confirming what
+	// a vector expects. The harness records the command's opening line, so the numbers named a
+	// neighbour of the thing they were about; `linking3.wast:14` was right only because that command
+	// opens where it was read. Nothing caught it: `citecheck.sh` resolves issue and ADR tokens and
+	// has no oracle for a `file:N`, and the one control that does check such a citation —
+	// `TestFixtureProvenance`, against the suite's own bytes — has a domain of citations sharing a
+	// line with a byte-slice literal, which no prose citation is. Filed as #412.
 	//
 	// So this floor's own column held five false greens of the accept-direction shape, and the
 	// change that drained 66 mis-attributed fails converted them to honest gates in the same
@@ -10616,7 +10729,36 @@ func TestPhase1Files(t *testing.T) {
 	//
 	// `unsupported` is unmoved at 66 and the zero is **structural** for the sixth entry running:
 	// `classify` is untouched, so nothing the harness could not ask became askable.
-	const passFloor = 60863
+	// **60863 → 60890, +27 against a forecast of +35, and the miss is the entry worth reading.**
+	//
+	// #413 landed the start section across the three layers that lacked it, and 35 fail rows left the
+	// fail column — 28 from the encode stratum (`encodeFailCeiling` 68 → 40) and 7 from exec
+	// (`execFailCeiling` 15 → 8), with every other stratum unmoved, so nothing migrated between
+	// columns on the way. The **fail** forecast was exact: 91 → 56, to the row. The **pass** forecast
+	// was 60898 and the board delivered 60890.
+	//
+	// The eight are one file. `start0.wast` had 9 encode-stratum rows and scored 1 pass + 8 **gated**,
+	// not 9 passes: the file declares three memories at :2, so once section 8 encodes, the next
+	// blocker the module meets is a memarg carrying flags bit 6 and the multi-memory gate declines it.
+	// `start.wast`'s 18 and `ref_func.wast:112` became the other 20 passes; exec's 7 became the rest.
+	// 20 + 7 = 27.
+	//
+	// **So a first-blocker census over-predicts passes even when it is exactly right about fails**,
+	// and this is the specimen. Both halves of the forecast were derived the same way — one blocker
+	// per row, removed — and that reasoning is sound for the fail column, because a row with any
+	// remaining blocker leaves it either way. It is unsound for the pass column, because the *second*
+	// blocker can be a **gate**, which moves the row to a third verdict rather than back to fail. A
+	// census that names first blockers can therefore only bound passes from above; the number it
+	// yields is `fails removed`, and the gap is whatever share of them a gate catches next.
+	//
+	// **The attribution is proven by a second lane rather than asserted.** If the eight were engine
+	// wrongness they would be absent in the all-gates-on lane too; if they are the multi-memory gate,
+	// that lane must collect the full 35. It gained 35 (`allOnPassFloor` 64903 → 64938), which is the
+	// check this reading needs before "it's a gate" is a measurement instead of a story.
+	//
+	// `unsupported` is unmoved at 66 and the zero is **structural** for the seventh entry running:
+	// `classify` is untouched, so nothing the harness could not ask became askable.
+	const passFloor = 60890
 	// Slack 0 as of #387's ruling, with `allOnPassFloor` and `unsupportedCeiling` — see
 	// `boardbound_test.go`'s retirement section. Two entries in the ledger above record taking a
 	// re-base *although the slack stayed silent* (58659 by a margin of 20, and the 416 that was four

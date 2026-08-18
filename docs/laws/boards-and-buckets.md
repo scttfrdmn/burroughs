@@ -89,7 +89,33 @@ reach is a law out of context.
       before the commits** — the issue's own step 1, which is why an order of work that begins with
       a measurement is worth more than one that begins with a schedule. Scott's classification on
       the #395 relay: the third instance, after #194's title and `check_elem`'s file-as-rule-owner
-      proxy, where *a vector's file is not its stratum* had the same shape one layer down.
+      proxy, where *a vector's file is not its stratum* had the same shape one layer down. (A fourth
+      followed on PR #409 — the next sub-bullet.)
+    - **A mis-attributed bucket can be built entirely out of true sentences, and that is what makes
+      it invisible.** The registry defect (#366, ADR 0037) put 66 rows in the exec stratum — the one
+      column whose fails are supposed to mean *the interpreter answered wrongly* — where the actual
+      cause was the harness losing a gate decline. Every one of those rows carried
+      `interp: link failed: unknown import`, which is **correct about the resolver**: after a declined
+      `register` the name really was unbound, so the engine really could not resolve it. Nothing on
+      the board was false. The board was **answering a different question than the one being read off
+      it**, and no amount of scrutiny applied to a row finds that, because the row is right. What
+      finds it is asking what a bucket's rows have in common besides their message — here, that all
+      66 vanished rather than shrank in the all-gates-on lane, which no single row could have said.
+      - **The consumer of a mis-attributed bucket can be a principal, and the rule does not stop at
+        the tracker.** Scott's assignment — *"exec's 81, then encode's 68 — exec first because it's
+        the interpreter getting answers wrong, which is the most product-shaped defect on the
+        board"* — was a work order derived from a bucket key, and 66 of the 81 were not the
+        interpreter. He withdrew the premise himself on the PR #409 review (*"That's your own lesson
+        landing on the person who issued the order: a mis-attributed bucket recommends the wrong
+        work, and I recommended from it"*). So the qualifier's audience is not only the agent filing
+        an issue: **an order sourced from a bucket inherits the bucket's attribution**, and the
+        instrument-shaped response to one is to re-measure the population before working it, then
+        report the discrepancy rather than quietly serving the purpose behind the words.
+      - Fourth instance by this ledger's own count, after #194's title, `check_elem`'s
+        file-as-rule-owner proxy, and #394's plan. Scott called it the third, counting the two he
+        had named before; the difference is #394's, recorded in the bullet above, and it is noted
+        here rather than reconciled silently because *a ledger that counts instances is wrong the
+        moment its count is*.
     (Ruling: Scott, on the 17-head slice's relay: *"Write that into the law when it lands —
     without it the rule invites exactly the mislabel #194 carried."* Third bullet on the PR #397
     review: *"#394's plan was written from where the divergence appears — eight arms — rather than

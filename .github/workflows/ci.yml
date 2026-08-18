@@ -14,12 +14,46 @@ name: ci
 on:
   push:
     branches: [main]
+  # `edited` is here because two of this workflow's checks have the PR body as their
+  # population, and a default `pull_request:` trigger fires on `opened`, `synchronize` and
+  # `reopened` only — never on an edit. So `citecheck --pr` and `closecheck --pr` were
+  # reading the body *as of the event that started the run*, and a green from them was a
+  # statement about a revision of the body rather than about the body (#411).
+  #
+  # Both directions were in one run. PR #409's citations job reported two grave-label
+  # failures that had already been fixed — the harmless one, a red naming work already done.
+  # The other direction is the reason this line exists: `closecheck.sh` scans the body
+  # because the squash message is derived from the PR title and body by default (grave #314),
+  # so a `Closes #N` added *after* a green rides into the merge commit past a check that
+  # already answered zero.
+  #
+  # Naming the list means naming all four: `types:` replaces the default set rather than
+  # adding to it, so omitting `synchronize` here would stop the workflow running on pushes
+  # to a PR branch — which is the whole per-commit gate, traded away for a body scan.
+  #
+  # The cost is that `types:` is workflow-wide and an edit cannot change a byte the compiler
+  # sees, so every job whose subject is the *tree* carries `if: github.event.action !=
+  # 'edited'`. `citations` is the only job without it, because it is the only job whose
+  # subject is the body. `github.event.action` is empty on a `push`, so the condition is
+  # true there and the main-branch lane is unchanged.
+  #
+  # What this does not fix, stated rather than footnoted: nothing re-scans between the last
+  # event and the merge click. An edit-then-immediately-merge still races the run, so this
+  # buys a narrower window and not a closed hole. A check that must hold *at merge time*
+  # belongs on a `merge_group` trigger, which is a required-checks change and therefore
+  # Scott's (#411).
   pull_request:
+    types: [opened, synchronize, reopened, edited]
 
 permissions:
   contents: read
 
-# Skip-forbidden mode, workflow-wide (grave #29, Scott's directive on #30).
+# Skip-forbidden mode, workflow-wide (grave #407, Scott's directive on #30).
+#
+# **The grave is #407 and it was cited as #29 for six PRs across six files** — #29 is the
+# all-gates-on conformance lane, and the skip-is-not-a-verdict lesson had been minted in the
+# law corpus and in the tree but never in the tracker (#286's Class B). A citation that
+# resolves to the wrong artifact is #283's failure mode; a label is part of the citation.
 #
 # A skip is not a verdict: it reports that the question could not be asked, and
 # every board control in internal/spec declines that way when testdata/spec is
@@ -65,6 +99,10 @@ defaults:
 
 jobs:
   build:
+    # A tree job: its subject is the code, which a body edit cannot change (#411, reasoning
+    # in the `on:` block). `internal/testenv` holds a control over this condition, because
+    # the failure mode of gating six jobs one at a time is the seventh one added later.
+    if: github.event.action != 'edited'
     strategy:
       fail-fast: false
       matrix:
@@ -231,6 +269,9 @@ jobs:
   lint:
     # One arch is enough: these linters are not architecture-sensitive, and the
     # matrix above is about memory ordering, not vet.
+    #
+    # A tree job (#411).
+    if: github.event.action != 'edited'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
@@ -270,6 +311,9 @@ jobs:
   citations:
     # Every `#NNNN` a diff adds must resolve to a real issue or PR, every `decision NNNN` to a
     # file in docs/decisions/, and every `grave #N` to something actually labelled `type:grave`.
+    # The first invocation below also runs the check in the *other* direction (#325): a comment
+    # claiming to close an issue that is still open is a finding, since prose is not a channel
+    # the tracker reads and a fixed-but-open issue sits in the queue the next PR is chosen from.
     #
     # **This job is where the check is binding, and that is a scoping ruling, not an accident**
     # (Scott, PR #285 relay). `make cite` exists so it is runnable locally, but the local run
@@ -282,6 +326,14 @@ jobs:
     #
     # `issues: read` explicitly, because the resolution is a real API call and a job whose
     # permissions are implied is a job that breaks when the repo's default changes.
+    #
+    # **The one job with no `if: github.event.action != 'edited'`, and that absence is the
+    # point of #411.** Its second and fourth invocations take the PR *body* as their
+    # population, so it is the only job here whose subject an edit can change. The condition's
+    # absence is asserted by a control in `internal/testenv` rather than left to this comment:
+    # a job that stopped running on `edited` would be a body scan reading a snapshot again,
+    # which is the defect, and the way it would arrive is someone adding the condition
+    # uniformly.
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -345,6 +397,10 @@ jobs:
           fi
 
   vuln:
+    # A tree job — its subject is this module's dependency graph, which a body edit cannot
+    # change (#411). The vulnerability *data* does change without the tree changing, and that
+    # case is nightly.yml's, on a clock.
+    if: github.event.action != 'edited'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
@@ -380,6 +436,10 @@ jobs:
     #
     # Both lanes live in one job on purpose: they share the suite fetch, and a lane
     # that could be skipped independently of the other is a lane that will be.
+    #
+    # A tree job, and the most expensive one — it fetches the suite and runs both lanes, so
+    # it is the job an `edited` event would waste the most of (#411).
+    if: github.event.action != 'edited'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
@@ -536,6 +596,9 @@ jobs:
     # variance cannot reach it, tight enough that a hang is caught. Naming it
     # separately keeps the two concerns distinct — the budget asks a fixed number
     # of questions, the timeout says something is structurally wrong.
+    #
+    # A tree job (#411).
+    if: github.event.action != 'edited'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:

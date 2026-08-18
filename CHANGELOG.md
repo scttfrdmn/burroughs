@@ -21,6 +21,40 @@ weakly-ordered platform.
 
 ### Added
 
+- **The start section, across three layers — [#413](https://github.com/scttfrdmn/burroughs/issues/413)**
+  (`internal/text/parser.go`, `context.go`, `encode.go`, `typetable.go`; `internal/validate/module.go`,
+  `validate.go`, `instr.go`; `internal/interp/interp.go`; part of #8). One feature, one blocker, three
+  packages: `internal/text` parses `(start …)`, retains it and emits section 8; `internal/validate`
+  gains `check_start` (`valid.ml:1110-1114`, positioned at `:1166` — after every function body, before
+  the exports) as `moduleStart`; `internal/interp` calls the start function after the data copies
+  (`eval.ml:1294-1296`, `:1325`'s `es_elem @ es_data @ es_start`). The name resolution is
+  `lookup "function"` (`parser.mly:1306` → `:157`), so an unbound `$f` is `unknown function` — and
+  because `module_fields1` evaluates in its innermost thunk (`:1367-1374`), a start naming a function
+  defined *below* it resolves.
+  **Default lane: pass 60863 → 60890, fail 91 → 56, gated 4124 → 4132; encode stratum 68 → 40.**
+  All-gates-on lane: pass 64903 → 64938. `unsupported` unmoved at 66 and that zero is **structural** —
+  `classify` is untouched, so nothing the harness could not ask became askable.
+  - **The census forecast 35 rows and delivered 27 passes plus 8 gated, and the gap is the lesson.**
+    `start0.wast`'s nine rows were forecast to go green; one did and eight moved to `gated`, because
+    their second blocker is the multi-memory gate (three memories at `:2`). *A first-blocker census
+    over-predicts passes even when it is exactly right about fails* — the fail column fell by exactly
+    the forecast 35. The all-on lane's +35 is the independent confirmation: **the gap is the gate and
+    not the engine, measured rather than argued.**
+  - **The `assert_invalid` ledger's delta comes out of `mismatch` alone**, which is that ledger's
+    third shape — out of `declined` is a rule becoming *known*, out of `accepted` a rule becoming
+    *right*, and this one a rule becoming **reachable**. Four rows: `start.wast:1`, `:6` and `:13`
+    needed `moduleStart` *and* the encoder; `ref_func.wast:112` needed only the encoder. All six
+    surviving `mismatch` rows are now `internal/text`'s `(table …)` frontier, not validator
+    disagreements.
+  - **The falsification bill is one table for three packages** (`internal/validate/start_test.go`),
+    because the nine mutations are alternatives to *one* feature. Five move a lane and were re-run with
+    their rows named — which is what distinguishes M1's −3 from M8's −3, two different populations
+    behind the same total. M3/M4/M5 partition M1 exactly one vector per condition. M6 (the start call
+    moved above the data copies) costs 8 rows default and 11 all-on, which **discharges #413's promised
+    data-copies-before-start probe by re-measuring the gap** rather than paying for a second instrument
+    for a property the board already witnesses by name. M2 and M9 move nothing, so `check_start`'s two
+    position seams get the only two unit rows in the file — each watched die under its own mutation and
+    not the other's.
 - **The validator types constant expressions, and the admitted stratum closes — #328**
   (`internal/validate/module.go`, `instr.go`, `ref.go`, `stack.go`; #9). Four rules from
   `check_module`, ported from `valid.ml:230-231,1041-1044,1086-1102`: `check_const`'s type half at all
@@ -400,6 +434,45 @@ weakly-ordered platform.
     count is printed beside its verdict, so a population that collapsed to zero cannot read as a
     pass. All three paths watched die: prose self-citation exit 1, fenced quotation `note` and exit
     0, odd fence exit 1.
+- **`scripts/citecheck.sh` gains a fifth check: a closure claim in the tree must name a *closed*
+  issue** ([#325](https://github.com/scttfrdmn/burroughs/issues/325) option (b), charged to #413).
+  The existing four run from the tree outward; this is the direction back. A comment saying it closes
+  `#N` asserts the code beside it dispatched `#N`, and **prose is not a channel the tracker reads** —
+  #325's specimen is `sections.go:1238`'s *"Retained in Index, not a new field, closing #204"*, written
+  while #204 was open. The cost is not untidiness: the queue is what the next product PR is chosen
+  from, #325 sampled three engine-side issues and found three already fixed, and a `type:grave` fixed
+  but open has its lesson nowhere, since that goes in the **closing** comment.
+  - **It needs the network and costs no extra request** — `.state` rides the `gh api` payload check 2
+    already fetches per citation. #325's option (b) forecast "no network"; the forecast was wrong in
+    the cheap direction, and it is recorded because *cheap is a grammar claim*.
+  - **The verb set is English's, not GitHub's, and `resolve` is excluded by measurement.**
+    `closecheck.sh` scans for what GitHub *acts* on, so its set is GitHub's; here the actor is a reader
+    and the defect is a false sentence, so `closing` — which GitHub ignores and which is the specimen's
+    own word — has to be in. `resolve` adds exactly one site tree-wide, `call_test.go:482`'s "this
+    reduction resolves #164's four vectors down to two", which claims a reduction and not a closure;
+    it is also this script's own word for what it does to a citation. **A conditional or negated claim
+    is exempt and prints a `note`**, never dropped, on this file's own precedent that a token vanishing
+    from the output is an exemption mechanism.
+  - **Diff modes only, the mirror of check 4 and for the mirror reason.** A closing keyword in a PR
+    *body* is forbidden outright rather than verified (grave #314), so asking whether its target is
+    open would be a second question about a banned token. Each check prints a not-applicable line in
+    the other's mode, because *a skip is not a verdict*.
+  - **The one-time sweep found nothing, and that is a fact about when it ran.** 16 closure-claim sites,
+    9 distinct targets, all closed — #204 among them, closed by the audit #325 asked for, so the
+    specimen would have failed on the day it was written. Reported anyway: a checker that starts clean
+    on a corpus it never read is claiming coverage it does not have.
+  - **The bill's first run printed the whole `FAIL` paragraph and exited 0.** The `fail=1` was missing,
+    so the finding reached the mechanism channel and never reached the verdict channel — grave #365's
+    shape inside a check written to catch an unverified claim, and unfindable by reading the output,
+    since the word FAIL was all there. C5b is the same lesson inverted: with the state guard deleted
+    and the `--jq` fields swapped, the fixture printed `ok … claimed closed by this diff` and exited 0,
+    comparing a state against a title. Nine mutations, each **confirmed applied by printing the mutated
+    line** before its result was read, because two neuters on #411's control had silently failed to
+    apply and a mutation that never landed is indistinguishable from a tolerated one at the exit code.
+  - The bill is written naming each fixture's *form* and never spelling it: a literal verb beside a
+    literal number is scanned by the run that documents it, and the fixtures pointed at an open issue.
+    Same trap as the three dangling citations a `CHANGELOG.md` paragraph once minted while explaining
+    dangling citations.
 
 - **`scripts/xcheck-amd64.sh`: the pre-push cross-architecture check, on hardware.** Contract §9 wants
   both memory models; CI gives both on push, and this is the half that answers before a claim is written
@@ -2054,6 +2127,73 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **The accept-direction table asserted the reference *accepts* `(module (start $f))`**
+  (grave [#415](https://github.com/scttfrdmn/burroughs/issues/415); `internal/text/parser_test.go`).
+  The reference rejects it — `start` is `Start ($3 c func)` (`parser.mly:1306`) and `func` is
+  `lookup "function" c.funcs` (`:157`), which raises `unknown function $f`. The row could not fail
+  while `startField` called `p.idx()` and threw the index away, so **it asserted that a missing
+  resolution was the reference's behaviour**: the implementation's gap and the table's claim were the
+  same fact written twice, and the table confirmed the gap instead of finding it. Six PRs. Its tell was
+  in the second column — every sibling row cites a production line and this one said "start with a
+  symbolic index", which names no arm. Replaced by two rows, and the forward one
+  (`(module (start $f) (func $f))`) is the **only witness anywhere** for `module_fields1`'s
+  innermost-thunk resolution: all ten `(start …)` fields in the corpus name a function above them.
+- **citecheck's summary breakdown dropped every citation whose lookup failed**
+  (grave [#416](https://github.com/scttfrdmn/burroughs/issues/416); `scripts/citecheck.sh`,
+  `internal/testenv/prfetch_test.go`). The `issues` and `graves` counters were incremented inside the
+  two resolution *success* arms, so a failed lookup was counted in the total and in no category —
+  `1 citation-shaped tokens (0 issue, 0 grave, 0 ADR, 0 qualified, 0 verb)`, five categories summing to
+  zero. The file's own header claims the opposite ("the total counts what the extractor matched, and
+  each category says what it was"), and **the identity held on every green run and broke exactly when
+  something was wrong**, which is the direction that matters: on a red run a reader cannot tell a
+  miscount from a lookup failure. Counters now key off the extractor's kind. Found by #410's own
+  control, whose fixture is one citation that never resolves; its `summaryCounts` helper names all five
+  categories so a sixth fails to match rather than being silently dropped from the sum.
+- **A citation whose lookup failed was reported as a citation that does not resolve — a mechanism
+  failure in a verdict's words** ([#410](https://github.com/scttfrdmn/burroughs/issues/410);
+  `scripts/citecheck.sh`, `internal/testenv/prfetch_test.go`). Any nonzero exit from the resolution
+  became `does not resolve: no such issue or PR in this repo` — a claim about the *tracker* resting on
+  an exit code that cannot tell "the answer is no" from "the question was never asked", because stderr
+  was discarded. **A 404 is the tracker's answer; anything else means the question never got asked, and
+  neither is a pass.** The remedy each reported also differs in kind: the wrong one names a wrong action
+  ("file the missing artifact"), which invites minting an artifact to satisfy a check that was broken.
+  The script now keeps stderr and branches on `HTTP 404`, with the non-404 arm saying in as many words
+  not to repoint the citation and not to file a replacement. `TestCitationLookupFailureIsNotAVerdict`
+  asserts both arms separately, each against its own shim, since a single arm cannot show the two are
+  distinguished.
+- **CI's PR-body scans read an event-time snapshot, so a body edited after a green was never
+  re-scanned** ([#411](https://github.com/scttfrdmn/burroughs/issues/411);
+  `.github/workflows/ci.yml`, `internal/testenv/prtrigger_test.go`). `on: pull_request` with no
+  `types:` never fires on `edited`, so a green from `citecheck --pr` / `closecheck --pr` was a statement
+  about *a revision of* the body. The direction that matters: a squash message is derived from the PR
+  title and body by default (grave #314), so a `Closes #N` added post-green rode into the merge commit
+  past a check that had already answered zero. The trigger now names
+  `[opened, synchronize, reopened, edited]` — all four, because `types:` *replaces* the default set and
+  dropping `synchronize` would trade the entire per-commit gate for a body scan — and the five jobs
+  whose subject is the tree carry `if: github.event.action != 'edited'`. `citations` is the only job
+  without it, which is the property `TestBodyEditRetriggersOnlyTheBodyScans` asserts in **both**
+  directions: a tree job missing the condition wastes a runner, but a body job carrying it is the
+  defect restored, and it arrives by someone gating the jobs uniformly. Its domain is parsed from the
+  YAML rather than listed, so the seventh job is in scope. **A step-level `if:` was invisible to the
+  first draft and a falsification found it** — gating the scan one level down passed — so the check
+  now forbids the condition at any depth inside a body-scan job, excluding comments.
+  **What this does not fix, stated rather than footnoted:** nothing re-scans between the last event and
+  the merge click, so an edit-then-immediately-merge still races the run. Closing that means a
+  `merge_group` trigger and a required-checks change, which is Scott's.
+- **Eight tree citations named the wrong artifact — #286's Class B, repointed from the artifacts**
+  ([#286](https://github.com/scttfrdmn/burroughs/issues/286); `Makefile`,
+  `.github/workflows/ci.yml`, `internal/gen/opcodegen/parse.go` and three `extract_test.go` files,
+  `internal/text/encode_test.go`). Six sites cited #29 as a grave; #29 is the all-gates-on lane's
+  *work* issue and the lesson — a control that skips for want of a corpus passes by asking nothing —
+  had never been in the tracker at all, so the remedy was Scott's on #29's own history: file it and
+  close it with the lesson, which is #407. Two more pointed at #181, a **PR**, where the grave is the
+  issue #181's own title names; that repoint reads off the artifact rather than being guessed, which is
+  what makes it different from the four sites left open below. A third site cited both and is reduced to
+  the one that resolves. **The class matters more than the count: a citation that resolves to the wrong
+  artifact passes checks 2 and 3 whenever the wrong artifact happens to be labelled**, so nothing
+  mechanical finds these — they came out of the one-time sweep the check's own header records, and the
+  remaining four are flagged for Scott rather than guessed, because a repoint with no artifact to read
+  it off is a fabricated provenance about this project's own history.
 - **The spec-suite registry carried no gated state, so a `register` after a gate-declined module was
   indistinguishable from a missing import**
   ([#366](https://github.com/scttfrdmn/burroughs/issues/366),
@@ -2086,7 +2226,7 @@ weakly-ordered platform.
 - **Five `assert_unlinkable` vectors passed on `unknown import` because their whole target module was
   unbound, not because the export was missing**
   ([#408](https://github.com/scttfrdmn/burroughs/issues/408), `type:grave`; fixed by 0037 above).
-  `imports.wast` :138/:297/:442/:540 and `linking3.wast`:14 each assert that a module *lacks one
+  `imports.wast` :136/:295/:440/:538 and `linking3.wast`:14 each assert that a module *lacks one
   export*; they passed because the module did not exist, which produces the same string about a
   different fact. **An expectation text that a coarser failure can also produce is not a
   discriminating oracle**, and a substring match (decision 0003) cannot tell the two apart — every

@@ -397,6 +397,21 @@ var (
 	// this rule is still being established.
 	ErrForwardTypeUse = errors.New("forward use of type")
 
+	// ErrStartFunction is `check_start`'s only `require` — a start function with a parameter or a
+	// result (`valid.ml:1113-1114`, the reference's text verbatim per 0003).
+	//
+	// **The corpus expects `start function`, which is a prefix of this and not a paraphrase of it**,
+	// so the substring match of 0003 is satisfied by keeping the whole sentence — the same
+	// arrangement ErrAlignmentTooLarge has, and for the same reason: the reference's words say
+	// *which* rule refused where the vector's three cannot.
+	//
+	// Two of `start.wast`'s three `assert_invalid` vectors expect it (a start with a result at
+	// `:7`, one with a param at `:14`); the third, `(module (func) (start 1))` at `:2`, expects
+	// `unknown function` and is ErrUnknownFunc's, arriving through `funcTypeIndexIn` before this
+	// rule is reached. That split is `check_start`'s own order — `func c x` resolves before the
+	// `require` runs — and it is why the start rule converts two vectors rather than three.
+	ErrStartFunction = errors.New("start function must not have parameters or results")
+
 	// ErrUnsupported is slice 1 declining an instruction whose rules belong to a later slice.
 	//
 	// **A decline, and deliberately not an accept.** The alternative — treating an unknown
@@ -480,6 +495,11 @@ func Module(m *binary.Module) (*Info, error) {
 			return nil, fmt.Errorf("func %d: %w", i, err)
 		}
 		info.Funcs[i] = fi
+	}
+	// The start section, between the bodies and the exports, which is `check_module`'s own position
+	// for it (valid.ml:1166). See moduleStart.
+	if err := moduleStart(m); err != nil {
+		return nil, err
 	}
 	// `check_module` checks the exports *last*, after every body (valid.ml:1168-1169). See
 	// moduleExports on why that placement is observable and therefore not ours to tidy.

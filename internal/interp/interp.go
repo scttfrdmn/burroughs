@@ -304,6 +304,39 @@ func (in *Instance) build() *Trap {
 			in.deferred = errors.Join(in.deferred, err)
 		}
 	}
+	// **The start function, last, after every segment has been copied** — `es_elem @ es_data @
+	// es_start` (`eval.ml:1325`), and the position is the whole reason a start section is worth
+	// having: `start.wast:20`'s module has `(memory (data "A"))` and a start function that increments
+	// byte 0 three times, then asserts `(get) = 68` at :44 — 65 for the `"A"` plus three. A start that
+	// ran before the data copy would read zero, increment a byte the copy then overwrites, and the
+	// module would answer `65` — the `"A"` alone — which is a *plausible* wrong answer rather than a
+	// crash. Measured, not asserted: moving this block above the data loop costs 8 board rows in the
+	// default lane and 11 with every gate on, and the bill in `internal/validate/start_test.go` names
+	// them (mutation M6).
+	//
+	// **`in.call` rather than `in.invokeIndex`, because the reference's `run_start` is literally
+	// `[Call x]`** (`eval.ml:1294-1296`): a wasm call inside the instance's own config, not a host
+	// boundary crossing. The two differ where it is observable — `invokeIndex` applies the boundary's
+	// argument and frame-ceiling checks and would report a missing export by name — and the import
+	// crossing this needs (`start.wast:94` is `(start $print)` on an *imported* function) is
+	// `resolveCall`'s, which `call` already goes through.
+	//
+	// Depth 0, so the start function gets a full exhaustion budget minus its own frame. That is one
+	// frame less than a boundary `Invoke` grants and it is the reference's shape rather than a
+	// rounding: `Call x` is an administrative instruction at the top of the config, so the start
+	// function's frame is the first one pushed.
+	//
+	// The empty stack is the config's `[]` operand stack. A `[] -> []` start leaves it empty, and
+	// nothing reads it afterwards either way — the validator's `check_start` is what makes the arity
+	// true (`moduleStart`), and this path does not depend on having run it.
+	if m.HasStart {
+		if err := in.call(m.Start, &stack{}, 0); err != nil {
+			if t := asTrap(err); t != nil {
+				return t
+			}
+			in.deferred = errors.Join(in.deferred, err)
+		}
+	}
 	return nil
 }
 

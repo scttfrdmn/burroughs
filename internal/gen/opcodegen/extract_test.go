@@ -389,7 +389,7 @@ func TestMultiMnemonicArmSplitsByCode(t *testing.T) {
 // The failure mode: an upstream refactor the parser does not recognize yields zero arms
 // and zero unrecognized lines, the generator writes an empty table, and the drift check
 // compares empty against empty and agrees. A green with the mechanism fully intact,
-// asserting nothing — grave #29 relocated into a code generator.
+// asserting nothing — grave #407 relocated into a code generator.
 //
 // Each case names *which* control must catch it, and the check is not errors.Is.
 // Both controls report ErrVacuous, so errors.Is cannot tell them apart — and that is

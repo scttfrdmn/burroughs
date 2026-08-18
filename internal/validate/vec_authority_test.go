@@ -1224,7 +1224,15 @@ func TestReferenceRangeCitationsAreWellFormed(t *testing.T) {
 	// is now a property of where module-level rules live rather than an accident: `modulePre` is one
 	// function holding a dozen phases, so its citations are inline by construction and a pin keyed on doc
 	// blocks can never see them. Recorded rather than fixed, because the fix is splitting `modulePre`.
-	const wantRanges = 91
+	// **#413 adds two — `module.go`'s `moduleStart` block and `validate.go`'s `ErrStartFunction` — and
+	// for the first time in seven slices the reconciliation is trivial: both are visible to the two
+	// pins below, because both sit in doc blocks naming a subject whose message the reference writes
+	// verbatim.** So the movement is +2 here and +2 keyed there, with no invisible remainder to
+	// explain. The reason is the one the paragraph above names as a property rather than an accident:
+	// `check_start` is a module-level rule that got its *own function* instead of a phase inside
+	// `modulePre`, so its citation lives in a doc block by construction. That is the fix that paragraph
+	// says is "splitting `modulePre`", arriving one rule at a time.
+	const wantRanges = 93
 	if ranges != wantRanges {
 		t.Errorf("checked %d range citation(s) across %v, want %d — recount and re-pin, and if a "+
 			"file was added to citationFiles, read its point citations too",
@@ -1453,7 +1461,15 @@ func TestReferenceRangeCitationsContainTheirSubjectsSite(t *testing.T) {
 	// (`"constant expression required"`) was keyed by #342 already, while the half this slice wrote
 	// delegates its message to the type algebra. A range's column here tracks its rule's *message
 	// provenance*, not the rule's size.
-	const wantKeyed, wantResidue = 16, 32
+	// **#413 moves keyed by two and residue by nothing, which is the first slice to do that** — and the
+	// two rows are `moduleStart`'s block and `ErrStartFunction`'s. Both key because `check_start`'s
+	// single `require` carries a verbatim string, so the sentinel spells the reference's own sentence
+	// and this pin can check the range contains the line the sentence is on. Read against the paragraph
+	// above: #328 wrote a large rule whose message the type algebra constructs and keyed nothing, and
+	// this slice wrote a four-line rule whose message the reference states and keyed both its blocks.
+	// The column tracks message provenance, and two adjacent slices now demonstrate it in opposite
+	// directions.
+	const wantKeyed, wantResidue = 18, 32
 	if keyed != wantKeyed || residue != wantResidue {
 		t.Errorf("checked %d keyed range citation(s) and excused %d as constructed-message residue "+
 			"across %v, want %d and %d — recount and re-pin. A range becomes keyable when its "+

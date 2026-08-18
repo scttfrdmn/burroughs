@@ -287,8 +287,14 @@ func TestRefFuncDeclarationCountsEverySourceTheReferenceFreeVariablePassDoes(t *
 	})
 
 	// The start section, the second of `check_module`'s two exclusions. Hand-assembled rather than
-	// written as wat, because `text.EncodeModule` emits no start section yet (#8) and a row the
-	// encoder refuses says nothing about this package.
+	// written as wat, and **the reason it was hand-assembled has expired while the hand assembly is
+	// kept, which is worth the two sentences** (#413). The original reason was that
+	// `text.EncodeModule` emitted no start section (#8), so a wat row would have been refused by the
+	// encoder and would have said nothing about this package. Section 8 now encodes, so
+	// `(module (func) (func (result funcref) (ref.func 0)) (start 0))` would reach here — and the image
+	// stays anyway, because what it buys is different from what it bought: this row is the only one in
+	// the file that asks the question without the text front end in the answer, and the exclusion it
+	// checks is a `check_module` line that no wat notation makes more legible.
 	//
 	// type 0 is `[] -> []` for the start function; type 1 is `[] -> [funcref]` for the body that
 	// reads the reference. Function 0 is named by `start` and by nothing else.

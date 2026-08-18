@@ -1078,6 +1078,30 @@ func (c *context) defineExport(name string, kind importKind, resolve func() (uin
 	})
 }
 
+// defineStart records the start function, deferring the index resolution to stage 2 (#413).
+//
+// `defineExport`'s shape with one entry instead of a list, and the deferral is there for the same
+// *kind* of reason with weaker evidence — see `context.startFunc`, which owns the argument and says
+// plainly that no corpus vector forces it.
+//
+// **The resolution is `lookup "function"`, so the message is `unknown function`** — the reference's
+// start arm is `Start {sfunc = func c x}` (parser.mly:1304-1306) and `func` is
+// `lookup "function" c.funcs` (:157), which is what `resolveSpaceIdx` spells off `s.kind`. A
+// *numeric* index is returned unresolved and is therefore never `unknown function` here: `(start 1)`
+// on a module with one function is the validator's refusal, not the parser's, and `start.wast:2`
+// is that vector — an `assert_invalid`, not an `assert_malformed`.
+func (c *context) defineStart(r idxRef) {
+	c.haveStart = true
+	c.deferOp(func() error {
+		idx, err := c.spaceFor(importFunc).resolveSpaceIdx(r)
+		if err != nil {
+			return err
+		}
+		c.startFunc = idx
+		return nil
+	})
+}
+
 // deferOp records one stage-2 operation. See the file header for why parse order is stage-2 order.
 func (c *context) deferOp(f func() error) { c.deferred = append(c.deferred, f) }
 

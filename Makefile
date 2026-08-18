@@ -137,7 +137,7 @@ pipefail-check:
 		exit 1; \
 	fi
 
-# Skip-forbidden mode (grave #29). Exported so every recipe below inherits it —
+# Skip-forbidden mode (grave #407). Exported so every recipe below inherits it —
 # see internal/testenv for what it revokes and why. `check` deliberately does NOT
 # set it: `check` must stay green on a fresh clone, and the local-dev skip license
 # is exactly the case that makes it so.
