@@ -1107,10 +1107,17 @@ func (d *Decoder) decodeTable(r *reader) error {
 	return nil
 }
 
-// decodeTableForm is decodeTable's grammar, returning what it read. Split so that
-// decodeImport can read a table type *without* appending to m.Tables — an imported table
-// occupies the table index space, but the module's own table section is a different
-// population, and merging them here would make an import look like a definition.
+// decodeTableForm is decodeTable's grammar, returning what it read — `table` (decode.ml:1049-1064),
+// which is the `0x40` form or a bare tabletype whose initializer the reference *synthesizes*.
+//
+// Split from decodeTable so the result can be inspected before it is appended, and **not** shared
+// with decodeImport, which is grave #420. The comment here used to say the split existed so
+// "decodeImport can read a table type without appending to m.Tables", a split about the
+// *population* — true as far as it went, and it silently asserted that the two callers wanted the
+// same grammar. They do not: an import's descriptor is `tabletype` (`externtype`'s `0x01` arm,
+// decode.ml:309), a production with no `0x40` arm, so reading an import through here accepted
+// `0x40 0x00 tabletype const` in an import descriptor where the reference answers `malformed
+// reference type`. Measured on the all-gates-on lane, with no corpus vector in either direction.
 func (d *Decoder) decodeTableForm(r *reader) (Table, error) {
 	var tbl Table
 	if b, ok := r.peek(); ok && b == 0x40 {
@@ -1131,19 +1138,60 @@ func (d *Decoder) decodeTableForm(r *reader) (Table, error) {
 		if z != 0x00 {
 			return tbl, fmt.Errorf("%w: %#02x", ErrZeroByteExpected, z)
 		}
-		if tbl, err = d.decodeTableType(r); err != nil {
+		tt, err := d.decodeTableType(r)
+		if err != nil {
 			return tbl, err
 		}
+		tbl.ElemType, tbl.Limits = tt.ElemType, tt.Limits
 		// The initializer, through the existing const-expr grammar — which is why this
 		// is a small change rather than a new reader: #25's authority-derived table
 		// already knows every const instruction's immediate widths.
 		//
-		// The initializer expression is **not retained** (#7): this form is GC-gated, so
-		// no accepted module on the default board has one, and the interpreter has no GC
-		// consumer to hand it to. Declared here rather than left to be noticed.
-		return tbl, d.decodeConstExpr(r)
+		// **Retained as of #419**, where this said "not retained (#7): this form is GC-gated, so
+		// no accepted module on the default board has one, and the interpreter has no GC consumer
+		// to hand it to." Both halves of that were true and both expired together: the validator's
+		// `check_table` rule and the interpreter's `init_table` are the consumers, and the *plain*
+		// form's synthesized initializer below is what puts a default-lane module on this field.
+		if tbl.Init, tbl.InitCasts, err = d.decodeConstExpr(r); err != nil {
+			return tbl, err
+		}
+		return tbl, nil
 	}
-	return d.decodeTableType(r)
+	tt, err := d.decodeTableType(r)
+	if err != nil {
+		return tbl, err
+	}
+	tbl.ElemType, tbl.Limits = tt.ElemType, tt.Limits
+	// `let c = [RefNull ht @@ at] @@ at` (decode.ml:1058-1063): the bare form is **sugar**, not a
+	// table without an initializer. Synthesizing it here rather than letting each consumer read
+	// "empty means null" is what keeps the two wire forms from being two cases anywhere else —
+	// `check_table` runs one rule and `init_table` evaluates one expression, whichever form the
+	// module was written in.
+	tbl.Init, tbl.InitCasts = synthesizedRefNull(tbl.ElemType)
+	return tbl, nil
+}
+
+// synthesizedRefNull builds `[RefNull ht; end]` for a tabletype's own heap type — the initializer
+// `decode.ml:1061` invents for the plain table form.
+//
+// **The cast row is the whole reason this is a function rather than two literals.** `ref.null`'s
+// heaptype claims no immediate word (`immHeapType` stages into `heaps` and files through
+// `castTypes`), so an `Instr{Op: opRefNull}` on its own carries *no* record of which null it is —
+// `ref.null func` and `ref.null extern` are the identical struct. The side-table row is where the
+// type lives, and a synthesized initializer that omitted it would type as `ref.null` of nothing at
+// all: #361's shape, one construct over.
+//
+// `WithNull(true)` and not the reftype as written, because the reference destructures the heap type
+// out of it (`TableT (_, _at, (_, ht))`) and `valid.ml:714-716` types `ref.null ht` as
+// `RefT (Null, ht)`. So a `(table 1 (ref func) …)` synthesizes `ref.null func`, whose type is
+// `funcref` — nullable, where the table's element type is not. That is the reference's own answer
+// and it is why the plain form of such a table is invalid rather than merely unusual.
+// The results are named because they are the two halves of one expression and a caller reading
+// `([]Instr, map[int][]ValType)` cannot tell which map keys what: `casts` is `Table.InitCasts`'
+// shape, keyed by instruction index within `init`.
+func synthesizedRefNull(elem ValType) (init []Instr, casts map[int][]ValType) {
+	return []Instr{{Op: opRefNull}, {Op: opEnd}},
+		map[int][]ValType{0: {elem.WithNull(true)}}
 }
 
 // decodeTableType reads a tabletype: element type then limits (decode.ml:301-304).
@@ -1151,8 +1199,13 @@ func (d *Decoder) decodeTableForm(r *reader) (Table, error) {
 // Split out of decodeTable because the 0x40 form needs it too, and because the reference
 // has it as its own production. Both callers are in this file, so this is not the
 // premature-sharing case decision 0006 warns about — the second consumer exists now.
-func (d *Decoder) decodeTableType(r *reader) (Table, error) {
-	var tbl Table
+//
+// **It returns a `TableType`, and that return type is the fix for grave #420.** Two callers wanted
+// two different productions from one function while the return type could not tell them apart; a
+// `tabletype` reader that returns a `tabletype` cannot be mistaken for the `table` reader, and
+// `decodeImport` is now the caller that says so.
+func (d *Decoder) decodeTableType(r *reader) (TableType, error) {
+	var tbl TableType
 	if err := d.decodeRefType(r); err != nil {
 		return tbl, err
 	}
@@ -1216,11 +1269,17 @@ func (d *Decoder) decodeImport(r *reader) error {
 			return err
 		}
 	case 0x01:
-		// Read through decodeTableForm, *not* decodeTable: an imported table must not
-		// land in m.Tables. Both occupy the table index space, but the section holds
-		// definitions and an import is not one — merging them would make the two
-		// populations indistinguishable to every later consumer.
-		if im.Table, err = d.decodeTableForm(r); err != nil {
+		// **`decodeTableType`, which is `tabletype` — not `decodeTableForm`, which is `table`.**
+		// `externtype`'s table arm is `ExternTableT (tabletype s)` (decode.ml:309), and `tabletype`
+		// has no `0x40` arm: the initializer form belongs to the table *section*'s production. This
+		// read `decodeTableForm` and therefore accepted `0x40 0x00 tabletype const` in an import
+		// descriptor, which the reference answers `malformed reference type` — grave #420, and the
+		// reason its diagnosis needed the reference rather than the board (no vector, either lane).
+		//
+		// It is also still true that an imported table must not land in `m.Tables`: both occupy the
+		// table index space, but the section holds definitions and an import is not one. That was
+		// this comment's whole content and it was the *weaker* of the two reasons.
+		if im.Table, err = d.decodeTableType(r); err != nil {
 			return err
 		}
 	case 0x02:

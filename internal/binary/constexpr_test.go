@@ -11,6 +11,20 @@ import (
 // Vectors are cited to binary.wast and checked by TestFixtureProvenance
 // (internal/spec), or marked synthetic with a reason.
 
+// constExprErr is `decodeConstExpr` reporting only whether the expression read, with the
+// expression itself discarded.
+//
+// A *test-side* helper, because the engine no longer has such a caller: the non-retaining twin
+// and the `keep bool` it was spelled with went with #419's table initializer, discharging the
+// condition `decodeConstExprKeep`'s own doc pre-registered ("collapse the two when nothing
+// wants the recognize-only form"). The discard is these controls' actual question — every one
+// below asks what verdict a byte sequence gets, none asks what it decodes to — so naming it
+// once is what keeps ten call sites from each spelling a `_, _,` that reads like an oversight.
+func constExprErr(d *Decoder, r *reader) error {
+	_, _, err := d.decodeConstExpr(r)
+	return err
+}
+
 // TestConstExprExtentIsDiscovered pins that the reader finds an expression's end by
 // reading instructions, not by trusting a length — and that each opcode's immediate
 // width is right.
@@ -48,7 +62,7 @@ func TestConstExprExtentIsDiscovered(t *testing.T) {
 		// A trailing sentinel byte no const-expr would consume, so "consumed exactly
 		// want" is distinguishable from "consumed everything available".
 		r := &reader{b: append(append([]byte{}, tc.in...), 0xFF), eof: ErrPayloadEnd}
-		if err := d.decodeConstExpr(r); err != nil {
+		if err := constExprErr(d, r); err != nil {
 			t.Errorf("%s: got %v, want accept", tc.name, err)
 			continue
 		}
@@ -100,7 +114,7 @@ func TestConstExprSeparatesMalformedFromInvalid(t *testing.T) {
 		{"0xf3 (no such opcode) — binary.wast:345's byte", 0xF3, ErrIllegalOpcode, "constant expression required"},
 	} {
 		r := &reader{b: []byte{tc.b, 0x0B}, eof: ErrPayloadEnd}
-		err := d.decodeConstExpr(r)
+		err := constExprErr(d, r)
 		if !errors.Is(err, tc.want) {
 			t.Errorf("%s: got %v, want %v", tc.name, err, tc.want)
 			continue
@@ -151,7 +165,7 @@ func TestConstExprDefersTheConstVerdict(t *testing.T) {
 
 	// Non-const instruction, then the image ends before any END. Malformed wins.
 	r := &reader{b: []byte{0x0A}, eof: ErrPayloadEnd}
-	if err := d.decodeConstExpr(r); !errors.Is(err, ErrPayloadEnd) {
+	if err := constExprErr(d, r); !errors.Is(err, ErrPayloadEnd) {
 		t.Errorf("non-const then truncation: got %v, want ErrPayloadEnd — an invalid verdict "+
 			"that pre-empts a malformed one is reporting the wrong layer's answer", err)
 	}
@@ -159,7 +173,7 @@ func TestConstExprDefersTheConstVerdict(t *testing.T) {
 	// The same non-const instruction with a well-formed expression around it. Now the
 	// grammar completes, so the deferred verdict is released.
 	r = &reader{b: []byte{0x0A, 0x0B}, eof: ErrPayloadEnd}
-	if err := d.decodeConstExpr(r); !errors.Is(err, ErrConstExprRequired) {
+	if err := constExprErr(d, r); !errors.Is(err, ErrConstExprRequired) {
 		t.Errorf("non-const then END: got %v, want ErrConstExprRequired — the deferred verdict "+
 			"must actually be released, or deferring it is just dropping it", err)
 	}
@@ -167,7 +181,7 @@ func TestConstExprDefersTheConstVerdict(t *testing.T) {
 	// And the *first* non-const instruction is the one reported, which is what a
 	// validator reading left to right would say. 0x01 is nop, 0x92 is f32.add.
 	r = &reader{b: []byte{0x01, 0x92, 0x0B}, eof: ErrPayloadEnd}
-	err := d.decodeConstExpr(r)
+	err := constExprErr(d, r)
 	if !errors.Is(err, ErrConstExprRequired) {
 		t.Fatalf("two non-const instructions: got %v, want ErrConstExprRequired", err)
 	}

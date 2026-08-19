@@ -664,7 +664,7 @@ func TestIntoSinkGatesOnTheModeNotTheSink(t *testing.T) {
 			}
 			// The sugar's second observable: `min = max = len(einit)` (parser.mly:1216-1222) is
 			// computed at the cursor from the very slice the gate emptied.
-			if got := p.ctx.tabDefs[0].lim; got.min != tc.tabMin || got.max != tc.tabMin || !got.hasMax {
+			if got := p.ctx.tabDefs[0].typ.lim; got.min != tc.tabMin || got.max != tc.tabMin || !got.hasMax {
 				t.Errorf("the sugar's table is %+v, want min=max=%d with hasMax: the size is derived "+
 					"from len(einit), so an empty element list writes a zero-sized table — the same "+
 					"grave observed as a wrong table type rather than a short vector", got, tc.tabMin)

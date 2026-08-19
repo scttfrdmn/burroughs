@@ -21,6 +21,64 @@ weakly-ordered platform.
 
 ### Added
 
+- **The table initializer, across four layers — [#419](https://github.com/scttfrdmn/burroughs/issues/419)**
+  (`internal/text/parser.go`, `context.go`, `encode.go`, `typetable.go`; `internal/binary/module.go`,
+  `sections.go`, `constexpr.go`; `internal/validate/module.go`, `ref.go`; `internal/interp/table.go`,
+  `link.go`; part of #8 and #9). A table's own initializer expression, from the text through to the
+  slots: `tableField`'s `constexpr1` arm (`parser.mly:1196`) retains what it parses and the emitter
+  writes the `0x40 0x00 tabletype const` wire form; `decodeTableForm` reads **both** forms and
+  synthesizes `[ref.null ht; end]` for the one that spells no initializer (`decode.ml:1058-1063`), so
+  every later consumer sees a table with an `Init`; `check_table` types it with `check_const` against
+  the table's element type at scope `0` — imported globals only, `valid.ml:1160-1161`; and `newTable`
+  evaluates it once and fills every slot (`eval.ml:1219-1228`, folded at `:1315` after
+  `init_global`). The `0x40` form is behind the GC gate, decision 0008 having folded function
+  references into it, so a table that *spells* an initializer is an all-on-lane module and the plain
+  form's synthesized `ref.null` is what puts default-lane tables on the same code path.
+  **Default lane: pass 60890 → 60909, fail 56 → 23, gated 4132 → 4146; encode stratum 40 → 7.**
+  All-gates-on lane: pass 64938 → 64978, fail 108 → 68. `unsupported` unmoved at 66 and that zero is
+  **structural** — `classify` is untouched, so nothing the harness could not ask became askable. The
+  `assert_invalid` ledger's `mismatch` row reaches **0**, its whole membership having been this
+  emitter's `(table …)` frontier.
+  - **The default lane's +19 against a 33-row fall in the fail column, and the 14-row gap is the
+    gate.** A first-blocker census bounds passes from above: of the 33 rows that left `fail`, 19
+    became passes and 14 became `gated`, because the module the emitter can now write is the `0x40`
+    form and the decoder gates it — `elem.wast` +8/+1, `global.wast` +6/+1, `i31.wast` +1/+3,
+    `table.wast` +4/+9. Only the fail forecast was pre-registered, and it held to the row.
+  - **The three layers' removal figures are not a partition, and the sum being larger than the whole
+    is the tell.** Measured one layer at a time with the other three in place: the encoder's own
+    contribution is 33 rows, `check_table`'s `check_const` 10, `newTable`'s fill 7 — 50 against an
+    all-on total of 38, because a vector whose module the emitter could not write *and* whose verdict
+    needs the new rule is counted by both tests. Each of the validate and interp layers scores 0 on
+    the default lane, which is why each shipped a unit control
+    (`TestTableInitializerSeesNoDefinedGlobal`, `TestTableSlotsHoldTheInitializersValue`) rather than
+    leaning on the board.
+  - **`ref`'s zero value is function 0, not null**, which is what makes the interp control's shape
+    load-bearing: its module defines two functions so the expected `Addr` is 1, since a table nobody
+    filled would agree with an expected 0. Certified by three mutations, not one — the pre-#419 null
+    fill fails the explicit form only, no fill at all fails both rows, and a `if !v.ref.Null` guard
+    fails the plain form only.
+  - **A fifth layer nobody planned, found by the accept direction.** `declaredFuncs` — the
+    validator's `Free.module_` analog — did not walk a table's initializer, so
+    `(table $t 10 (ref func) (ref.func $f))` reported `$f` undeclared when the table field is the
+    thing that declares it. Two valid modules over-rejected (`elem.wast:87`, `table.wast:93`), worth
+    the last 2 of the all-on lane's +40. The reject direction's corpus is blind to it by construction
+    — no `assert_invalid` watches a rule that refuses too much — so the finder was the all-on
+    over-rejection table, whose own vacuity floor this PR also had to re-point. `declaredFuncs`'
+    comment had predicted the failure and named its surfacing condition exactly; its tracking
+    citation was #8, the *encoder's* issue, and nothing tracked the gap itself. **A deferral whose
+    tripwire is another issue's completion fires for nobody.**
+- **`closecheck.sh --body <file>` — a body is a file before it is a PR** (`scripts/closecheck.sh`,
+  `Makefile`, `internal/testenv/closebody_test.go`; overhead charged to #419). Ordered by Scott on the
+  #396 report and carried by this slice's product work: the `--pr` form needs a number that does not
+  exist until after the push, so `make check` could not mirror CI on the body axis — and at #398 that
+  gap cost a CI failure, `make close` having reported green over the *commit* half while the banned
+  construct sat in the body. Two refusals rather than one, both on the rule that a check which could
+  not ask its question does not report green: an unreadable path, and an **empty file**, which is the
+  likelier mistake since a redirect that went elsewhere leaves a readable file with no body in it. The
+  title stays out of the domain and is said to — a local file holds only the body, and `--pr` remains
+  the binding form because it covers both channels. Four arms, and both refusals were watched die
+  under their own mutation: without the empty-file guard the form prints `0 lines scanned, 0 banned
+  constructs` and exits 0.
 - **The start section, across three layers — [#413](https://github.com/scttfrdmn/burroughs/issues/413)**
   (`internal/text/parser.go`, `context.go`, `encode.go`, `typetable.go`; `internal/validate/module.go`,
   `validate.go`, `instr.go`; `internal/interp/interp.go`; part of #8). One feature, one blocker, three
@@ -2127,6 +2185,43 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **The public-path differential trusted modules whose imports nothing supplied — the trust break was
+  on the supply side** (grave [#421](https://github.com/scttfrdmn/burroughs/issues/421);
+  `publicpath_test.go`). The driver has no linking surface (0029's scope) and broke trust at
+  `(register …)`, which the *next* module command clears; the demand side — an `(import …)` in the
+  module being armed — had no guard, so 180 of 2238 module forms were driven anyway, 324 of their
+  asserts landing in `compared` and 599 in `callFailed`, that bucket being where an absent import
+  usually surfaces because it is reached through a call that then fails on both paths.
+  `global.wast:634` is the exception and the finder: an imported `i32` read by two defined globals that
+  are in turn two `elem` and two `data` offsets, so the missing value survives instantiation into
+  table and memory contents — `get-elem (i32.const 4)` answered `ref.null` for a `funcref`. It reached
+  the driver for the first time in #419, its table carrying a spelled initializer the emitter used to
+  refuse. **A trust break belongs on the demand side**, stated as a property of the module being armed
+  (`len(m.Imports) > 0`, total and syntactic) rather than as a memory of a command that went past. The
+  other half: `Instance.Deferred` had been publishing "this module did not come to life completely",
+  naming the unsupplied import as its own example, and the differential never read it — now asserted
+  at zero for import-free modules, and certified by neutering the import predicate, which makes it
+  report 51 (`data.wast:100` first). The domain paragraph's arithmetic was re-measured while there:
+  "1067 ran + 720 declined, 43% of comparisons on a declining module" had been wrong by two orders of
+  magnitude on main already.
+- **An imported table's descriptor read the table *section*'s grammar, so the `0x40` initializer form
+  was accepted in an import** (grave [#420](https://github.com/scttfrdmn/burroughs/issues/420);
+  `internal/binary/sections.go`, `sections_test.go`). `externtype`'s table arm is
+  `ExternTableT (tabletype s)` (`decode.ml:306-313`) and `tabletype` (`:301-304`) is `reftype` then
+  `limits` with **no `0x40` arm**; the `0x40 0x00 tabletype const` form belongs to the table section's
+  own `table` production (`:1050-1064`). `decodeImport` went through `decodeTableForm`, which peeks
+  `0x40`, so with every gate on a module the spec calls **malformed decodes clean** — and the
+  initializer it carries was read and discarded, so nothing downstream could notice either. Zero
+  vectors: no `assert_malformed` in the corpus puts a `0x40` in an import descriptor, which makes this
+  accept-direction on a gated lane, §9 G-3's blind spot exactly. **A helper factored on one difference
+  silently asserted the absence of the other** — `decodeTableForm`'s split from `decodeTable` was about
+  the *population* (an import appends to no `m.Tables`) while the reference's split is one production
+  deeper. `TestRefTypeReadsTheReferencesFourteenForms` excludes `0x40` by name because "the enclosing
+  grammar owns the byte", which is true and is the sentence that hid this: **there are two enclosing
+  grammars and the exclusion was written against one of them.** `decodeImport` now calls
+  `decodeTableType` directly and `decodeTableForm` is the table section's grammar alone; #419 forces
+  the split independently, since a shared reader would file an `Init` on an import that has none by
+  construction.
 - **The accept-direction table asserted the reference *accepts* `(module (start $f))`**
   (grave [#415](https://github.com/scttfrdmn/burroughs/issues/415); `internal/text/parser_test.go`).
   The reference rejects it — `start` is `Start ($3 c func)` (`parser.mly:1306`) and `func` is

@@ -540,7 +540,7 @@ func TestGateDeclineYieldsToMalformed(t *testing.T) {
 	// (0x0a) is binary.wast:112's byte.
 	d := &Decoder{Features: off}
 	r := &reader{b: []byte{0x0a}, eof: ErrPayloadEnd}
-	if err := d.decodeConstExpr(r); !errors.Is(err, ErrPayloadEnd) {
+	if err := constExprErr(d, r); !errors.Is(err, ErrPayloadEnd) {
 		t.Errorf("gated opcode then truncation: got %v, want ErrPayloadEnd — a gate decline that "+
 			"pre-empts a malformed verdict reports the wrong layer's answer, and would also park "+
 			"binary.wast:112 in `gated` where TestGatedVectors demands an allowlist entry for a "+

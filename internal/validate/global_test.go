@@ -26,6 +26,26 @@ import (
 //	M10  a global's initializer sees itself (i+1)          default 60835/190   all-on 64726/320   −1 / −1
 //	M11  one global too few (i-1), accept direction        default 60836/189   all-on 64727/319   — no change
 //
+// #419 adds a **fifth** const-expr call site — `check_table`'s — and with it three rows, measured on
+// this branch's own base of default 60909/23 and all-on 64969/77:
+//
+//	M12  drop the table-initializer check                 default 60909/23    all-on 64959/87    — / −10
+//	M13  table initializer sees whole-module scope        default 60909/23    all-on 64968/78    — / −1
+//	M14  table initializer sees the tables' own index (i) default 60909/23    all-on 64969/77    — no change
+//
+// **All three dashes in the default column are one fact and it is a gate, not a sample gap.** A table
+// that spells an initializer encodes to the `0x40` wire form, which `decodeTableForm` holds behind GC,
+// so the default lane's every table carries the *synthesized* `ref.null` — an expression that reads no
+// global, names no index and validates under any scope. The rule is unaskable there rather than
+// unasked, which is the distinction M3's and M7's rows do not get to make.
+//
+// M13's −1 is the row that corrects this file's opening sentence for the new site. The four properties
+// above are ones the board cannot see; this one it can, in one lane, at `global.wast:674-680` — and the
+// draft that said otherwise had argued it from a `grep` for `unknown global`, which found four files
+// and no table site because the vector's text says `(table $t 10 funcref (global.get $g))` and the
+// grep was looking for the expected-error string in the wrong one of the two. Mutate and read the
+// board; do not enumerate.
+//
 // M1 + M9 + M5 + M6 partition the twelve converted vectors twice over, from two directions: by
 // *site* (4 global initializers, 4 data offsets, 4 element-segment offsets) and by *message* (5
 // `constant expression required`, 7 `unknown global`). M5 loses exactly the 5 and M6 turns exactly
@@ -61,6 +81,32 @@ func c0() []binary.Instr {
 
 func gg(idx uint64) []binary.Instr {
 	return []binary.Instr{{Op: opGlobalGet, Imm0: idx}, {Op: opEnd}}
+}
+
+// decodedTable is a table as the *decoder* hands one over: a tabletype plus the `ref.null ht` initializer
+// `decode.ml:1058-1063` synthesizes for the plain wire form, cast row included.
+//
+// Every fixture in this package that needs a table for some other rule's sake goes through here,
+// because as of #419 a `binary.Table{ElemType: …}` literal is not a module the decoder can produce
+// — it has an *empty* initializer, and `check_table`'s const check refuses one with `1 block(s)
+// still open`. Six rows across three tests read that way before this existed, each reporting a
+// table's defect while asserting something about an element segment or an export.
+//
+// It transcribes `binary.synthesizedRefNull` rather than calling it, that function being unexported,
+// and **the transcription cannot drift silently**: the rule that now reads this field types the
+// expression against the element type, so a fixture that stops matching what the decoder builds
+// fails its own test loudly rather than quietly describing a module no decoder emits.
+//
+// `size` rather than `min`, which shadows the builtin — `revive`'s `redefines-builtin-id`, and the
+// rename is the fix rather than a suppression because `Limits.Min` is what the parameter fills and
+// the field's own name is the one a caller is thinking in.
+func decodedTable(elem binary.ValType, size uint64) binary.Table {
+	return binary.Table{
+		ElemType:  elem,
+		Limits:    binary.Limits{Min: size},
+		Init:      []binary.Instr{{Op: opRefNull}, {Op: opEnd}},
+		InitCasts: map[int][]binary.ValType{0: {elem.WithNull(true)}},
+	}
 }
 
 // TestGlobalInitializerSeesTheGlobalsDeclaredBeforeIt is the M11 row: `check_global` folds one
@@ -125,6 +171,114 @@ func TestGlobalInitializerSeesTheGlobalsDeclaredBeforeIt(t *testing.T) {
 	}
 }
 
+// TestTableInitializerSeesNoDefinedGlobal is the M12 row, and it is the third distinct answer this
+// file gives to one question: `check_module` folds tables *before* globals (valid.ml:1160-1161), so a
+// table's initializer is typed in a context holding the imported globals and no defined one.
+//
+// **The corpus has this rule in one lane and the row list was written on the premise that it had it in
+// neither — the premise being wrong is what the last two rows are for.** M13 in the bill above is
+// `len(m.Globals)`, and it costs exactly 1 all-on pass: `global.wast:674-680`, which is
+// `(global $g funcref (ref.null func))` followed by `(table $t 10 funcref (global.get $g))` asserted
+// `unknown global`. Found by mutating the argument and reading the board rather than by enumerating
+// files, after a draft of this comment argued from a `grep` for `unknown global` that no table site
+// existed. It is an all-on row and not a default one because a table that *spells* an initializer
+// encodes to the `0x40` wire form, which `decodeTableForm` gates behind GC — so the whole rule is
+// unaskable in the default lane, where every table's initializer is the synthesized `ref.null` that
+// reads no global at all.
+//
+// **The scope argument still needs a unit witness, and M14 is why: `i` moves neither lane.** With one
+// table `i` is 0, so a per-table fold and no fold at all agree on every corpus module and on the first
+// four rows below. The fifth row is a module with *two* tables whose second initializer reads the
+// defined global, where `i` is 1 and admits it — the protection-by-coincidence shape, caught by writing
+// the mutation before trusting the row list.
+//
+// The accept direction is `table.wast:94` importing a global and `:102-103` reading it from two table
+// initializers, and it passes under all three candidates, imports being counted by `globalTypeAt`
+// outside this argument entirely. Rows 3 and 4 are the discriminating pair for `len(m.Globals)`: with
+// an import *and* a definition, index 0 resolves and index 1 must not, where a single global of either
+// kind leaves two of the three candidates agreeing.
+func TestTableInitializerSeesNoDefinedGlobal(t *testing.T) {
+	// An imported immutable funcref global, legal to read in any const expression.
+	imported := []binary.Import{{Kind: binary.ExternGlobal, GlobalType: binary.FuncRef}}
+	// A defined one of the same type, so nothing but the scope can refuse a read of it.
+	defined := []binary.Global{{
+		Type: binary.FuncRef, Init: []binary.Instr{{Op: opRefNull}, {Op: opEnd}},
+		InitCasts: map[int][]binary.ValType{0: {binary.FuncRef}},
+	}}
+
+	// The table under test in every row: funcref, initialized by reading the global at `idx`.
+	tab := func(idx uint64) []binary.Table {
+		return []binary.Table{{
+			ElemType: binary.FuncRef,
+			Limits:   binary.Limits{Min: 1},
+			Init:     gg(idx),
+		}}
+	}
+
+	for _, tc := range []struct {
+		name    string
+		mod     binary.Module
+		wantErr bool
+	}{
+		{
+			// table.wast:102 — the corpus's own shape, and the one every candidate accepts.
+			name: "an imported global",
+			mod:  binary.Module{Imports: imported, Tables: tab(0)},
+		},
+		{
+			// The module has a global 0. It is a *defined* global, and no defined global is in
+			// scope at `check_table`. A scope of `i` accepts this, and `i` is 0 here.
+			name:    "the sole global, defined",
+			mod:     binary.Module{Globals: defined, Tables: tab(0)},
+			wantErr: true,
+		},
+		{
+			// Both index spaces populated: 0 is the import and 1 is the definition.
+			name: "index 0 with an import ahead of a definition",
+			mod:  binary.Module{Imports: imported, Globals: defined, Tables: tab(0)},
+		},
+		{
+			// Same module, one index along. `len(m.Globals)` accepts this one.
+			name:    "index 1, the defined half of the same space",
+			mod:     binary.Module{Imports: imported, Globals: defined, Tables: tab(1)},
+			wantErr: true,
+		},
+		{
+			// M14: two tables, and it is the *second* one that reads the defined global. A scope of
+			// `i` is 1 here and admits it, which is the reading no corpus module can refuse — every
+			// vector on the board has one table, where `i` and 0 are the same number.
+			//
+			// **The first table has to be innocent, and the first draft's was not.** Written with
+			// both tables reading the global, the row passed under `i` for the wrong reason: table 0
+			// is refused at `i` = 0 and the loop returns, so the assertion was satisfied by a table
+			// whose scope every candidate gets right and the row proved nothing about the second one.
+			name: "the second table reads a defined global",
+			mod: binary.Module{
+				Globals: defined,
+				Tables:  append([]binary.Table{decodedTable(binary.FuncRef, 1)}, tab(0)...),
+			},
+			wantErr: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := modulePre(&tc.mod, declaredFuncs(&tc.mod))
+			switch {
+			case tc.wantErr && err == nil:
+				t.Errorf("modulePre accepted a table initializer reading a global that is not in "+
+					"scope at check_table, want %v — the scope is wider than the reference's fold, "+
+					"which accepts modules the spec rejects and is a direction no corpus vector "+
+					"reaches at this site", ErrUnknownGlobal)
+			case tc.wantErr && !errors.Is(err, ErrUnknownGlobal):
+				t.Errorf("modulePre = %v, want %v", err, ErrUnknownGlobal)
+			case !tc.wantErr && err != nil:
+				t.Errorf("modulePre refused a table initializer reading an imported global: %v — "+
+					"imports are counted outside the scope argument, and this is the direction "+
+					"`table.wast:102-103` witnesses", err)
+			}
+		})
+	}
+}
+
 // TestSegmentOffsetsSeeEveryDefinedGlobal is the M3 row: a data or element segment's offset is
 // checked after `check_module` has folded in every global (`valid.ml:1162-1163` run after `:1161`),
 // so the scope those call sites pass is the full defined count and not a partial one.
@@ -153,7 +307,7 @@ func TestSegmentOffsetsSeeEveryDefinedGlobal(t *testing.T) {
 	})
 	t.Run("element segment offset", func(t *testing.T) {
 		m := &binary.Module{
-			Tables:  []binary.Table{{ElemType: binary.FuncRef}},
+			Tables:  []binary.Table{decodedTable(binary.FuncRef, 0)},
 			Globals: globals,
 			Elems:   []binary.ElemSegment{{Mode: binary.ElemActive, ElemType: binary.FuncRef, Offset: gg(0)}},
 		}

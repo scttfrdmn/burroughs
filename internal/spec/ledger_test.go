@@ -245,7 +245,7 @@ func TestAssertInvalidDestinationLedgerCloses(t *testing.T) {
 		{
 			name: "already on the board (254 files) — the 2591 that left `unsupported`",
 			got:  already,
-			want: tally{total: 2591, pass: 2123, declined: 0, accepted: 0, mismatch: 6, gated: 462, precondition: 0},
+			want: tally{total: 2591, pass: 2123, declined: 0, accepted: 0, mismatch: 0, gated: 468, precondition: 0},
 			why: "the destination split IS the engine's contribution: 1615 passes is the reward, " +
 				"386 named declines are the next slices' work plan, 103 admissions are the " +
 				"accept-direction stratum, 10 are wrong-message on a right refusal, and 460 " +
@@ -400,11 +400,12 @@ func TestAssertInvalidDestinationLedgerCloses(t *testing.T) {
 				"could not write a `(start …)` field, so four `assert_invalid` modules never " +
 				"reached the validator at all and this ledger scored the emitter's frontier message " +
 				"against the corpus's expected one. So the third shape is **a rule becoming " +
-				"*reachable***, and it is the shape every `mismatch` row in this population has: all " +
-				"six that remain quote `(table …)` (#8), not a validator disagreement. A reader " +
-				"who takes `mismatch` for \"the validator's messages are wrong\" would read this " +
-				"column as six defects in `internal/validate` and every one of them is in " +
-				"`internal/text`. " +
+				"*reachable***, and it is the shape every `mismatch` row in this population had: all " +
+				"six that remained quoted `(table …)` (#8), not a validator disagreement. A reader " +
+				"who took `mismatch` for \"the validator's messages are wrong\" would have read this " +
+				"column as six defects in `internal/validate` when every one of them was in " +
+				"`internal/text` — which is why #419's entry below empties the row instead of " +
+				"halving it. " +
 				"The four are named because a delta of four out of a row of ten is otherwise " +
 				"unattributable, and their split is the part worth keeping: `start.wast:1` " +
 				"(`unknown function`), `:6` (`start function`, a result) and `:13` (`start function`, " +
@@ -415,7 +416,21 @@ func TestAssertInvalidDestinationLedgerCloses(t *testing.T) {
 				"reference`, a rule this validator has had for slices, and the start field alone was " +
 				"holding it two layers upstream. That one row is the whole argument for keeping " +
 				"`mismatch` a destination of its own rather than folding it into a fail count: it is " +
-				"a vector whose verdict was owed to no missing rule at all",
+				"a vector whose verdict was owed to no missing rule at all. " +
+				"**#419 — the table initializer — is the first entry in this row that moves nothing " +
+				"into `pass`**: `mismatch` 6 → 0, `gated` 462 → 468, `pass` and `total` unmoved. The " +
+				"pair is equal and opposite and is therefore reported as what it is, a " +
+				"reclassification: the same six vectors, named on both sides of the move rather than " +
+				"counted — `elem.wast:516`, `global.wast:674` and `table.wast:54,58,62,66`, dumped from " +
+				"`main` and from the branch and matched row for row. Their frontier was the field this " +
+				"slice taught the emitter to write, so the emitter's message stopped being the thing " +
+				"this ledger scored; what it now writes is the `0x40` table form (or a `(ref …)` " +
+				"element type), which decision 0008 puts behind the GC gate, so on this lane the six " +
+				"land in `gated` and their verdicts are earned one lane over. A row that empties into " +
+				"`gated` is the *fourth* shape this population has shown, and it is the one a reader " +
+				"is most likely to misread as progress: an emitter frontier became a decoder gate, " +
+				"which is a real move — the refusal is now the runtime's own and says so — but no rule " +
+				"was learned and no vector was answered on this lane for it",
 		},
 		{
 			name: "arrived with the arm (2 files) — corpus admission, not verdicts earned",
@@ -557,9 +572,11 @@ func TestAssertInvalidDestinationLedgerCloses(t *testing.T) {
 	}
 	// The board's two ceilings are this sum, and stating it here is what re-ties the identity to the
 	// constants it names. `validateMismatchCeiling` (0) stays deliberately outside: the mismatch row
-	// below is board-wide and none of its 6 are the validator's — all six are the wat encoder's
+	// below was board-wide and none of its 6 were the validator's — all six were the wat encoder's
 	// `(table …)` frontier, which is #413's entry in that row and the reason it says so with the
-	// package named.
+	// package named. **That row is 0 as of #419**, which is the same sentence read one slice later:
+	// the frontier those six quoted was the table field, and a `mismatch` population whose whole
+	// membership is one package's frontier empties when that frontier does.
 	if got := keyed + stratumOther.declined + stratumOther.accepted; got != 8 {
 		t.Errorf("validate-stratum declines + admissions = %d, want 8 to match "+
 			"validateDeclineCeiling (8) + validateAdmitCeiling (0). Those are computed from the "+
@@ -570,8 +587,8 @@ func TestAssertInvalidDestinationLedgerCloses(t *testing.T) {
 			"`keyed` and the pin above it is what still does \u2014 stated because an identity whose "+
 			"left side has gone to zero agrees with itself for free", got)
 	}
-	if got := already.gated + fresh.gated; got != 465 {
-		t.Errorf("gated assert_invalid = %d, want 465 to match the unsupportedCeiling ledger's "+
+	if got := already.gated + fresh.gated; got != 471 {
+		t.Errorf("gated assert_invalid = %d, want 471 to match the unsupportedCeiling ledger's "+
 			"own gated count, summed across both groups — note this figure's subject is "+
 			"board-wide where the 2591 above is the converted group alone, so the two are cross-checks "+
 			"of different populations and not two halves of one subtraction", got)

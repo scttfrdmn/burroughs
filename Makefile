@@ -326,8 +326,13 @@ cite:
 # Local face only, on `cite`'s scoping ruling: the `--pr` half needs the network, so CI is where
 # the verdict is binding.
 #
+# The `--body` form is the offline half of that split, ordered by Scott on the #396 report: a body is
+# a file before it is a PR, so the file can be scanned before the push instead of the PR after it.
+# `--pr` remains the binding form because it also covers the title.
+#
 #   make close                       # commit messages on this branch, base `main`
 #   make close CLOSE="--pr 313"      # the PR title and body; needs gh
+#   make close CLOSE="--body pr.md"  # a body before it is a PR, offline
 CLOSE ?= --worktree main
 close:
 	@./scripts/closecheck.sh $(CLOSE)

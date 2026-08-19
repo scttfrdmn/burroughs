@@ -1160,6 +1160,26 @@ var wholeFileGated = map[string]int{
 // would have hidden the defect: it said to add the lines to `allowed` with the feature named,
 // which would have been a per-line entry papering over a bulk-arm predicate that had stopped
 // matching. A bucket names where a symptom surfaces, not where the defect lives (#194). Recorded as grave #330.
+//
+// # 471 across 41 files after #419, and the +6 is the second legitimate cause the sum's own message
+// # names — the harness learning to *ask*
+//
+// The emitter learned the `(table …)` field's initializer, so `assert_invalid` vectors whose table
+// spells one now reach the decoder instead of stopping at `cannot yet encode`. The decoder declines
+// the `0x40` form without GC (decision 0008), so each arrives here. Six rows, every one identified by
+// line rather than inferred from a count moving:
+//
+//	table.wast:54,58,62,66   6 → 10  the four whose table field carries an initializer —
+//	                                 `(i32.const 0)`, `(ref.null extern)`, `(ref.null func)` ×2
+//	elem.wast:516            1 → 2   `(table 1 (ref func) (ref.func 0))` in text, beside the
+//	                                 `(module binary …)` twin at :524 that was already here
+//	global.wast:674          new     `(table $t 10 funcref (global.get $g))`, the vector whose
+//	                                 expected `unknown global` is #419's own reject direction
+//
+// **The three that did not move are the check that this is the right cause.** `table.wast`'s other
+// six (:70, :74, :78, :119, :127, :135) are the *plain* form with a non-nullable element type — no
+// initializer to encode — and they were gated on main and are gated now, unchanged. So the delta is
+// exactly the population whose encoding changed, which a total moving by 6 could not have said.
 var gatedAssertInvalid = map[string]int{
 	// memory64 — the whole of `align64`/`load64`/`memory_*64`, plus the mixed files below.
 	"align64.wast":          37,
@@ -1181,15 +1201,16 @@ var gatedAssertInvalid = map[string]int{
 	"br_on_cast_fail.wast":  6,
 	"br_on_non_null.wast":   1,
 	"br_on_null.wast":       1,
-	"elem.wast":             1, // gc — a `(module binary …)` form, see the note below
+	"elem.wast":             2, // gc — the 0x40 table form at :516 and a `(module binary …)` twin at :524
 	"func.wast":             1,
+	"global.wast":           1, // gc — the 0x40 table form at :674, `(table $t 10 funcref (global.get $g))`
 	"local_init.wast":       4,
 	"local_tee.wast":        1,
 	"ref.wast":              12,
 	"ref_as_non_null.wast":  1,
 	"select.wast":           1,
 	"struct.wast":           4,
-	"table.wast":            6,
+	"table.wast":            10, // gc — 6 plain `(ref …)` element types, 4 spelled initializers
 	"type-equivalence.wast": 1,
 	"type-rec.wast":         10,
 	"type-subtyping.wast":   36,
@@ -4723,6 +4744,18 @@ func TestGatedVectors(t *testing.T) {
 			121: "gc: (ref i31) result, second module at :61",
 			148: "gc: (ref i31) result, third module at :140",
 
+			// #419: the module at :128 is `(table $t 3 3 (ref i31) (ref.i31 (global.get $g)))` — a
+			// table initializer over an imported i32 global. The emitter writes the field now, so
+			// these three reach the decoder, and here the gated construct **is** the `0x40` table
+			// form: the import is a plain `i32`, the type section holds no GC type, and
+			// `decodeTableForm` declines the 0x40 byte before it reads the `(ref i31)` element type.
+			// Measured the same way as `table.wast`'s five — a module carrying nothing but a funcref
+			// table with a spelled initializer is already gated — so the two files' reasons differ
+			// because their modules do, not because the entries were written at different times.
+			136: "gc: the 0x40 table form with an initializer at :130 — the module at :128 this action runs against",
+			137: "gc: the 0x40 table form with an initializer at :130 — the module at :128 this action runs against",
+			138: "gc: the 0x40 table form with an initializer at :130 — the module at :128 this action runs against",
+
 			// #8: reftypeRetained's ref.cast now converts these — the module at :150 and :168
 			// decode far enough to reach the GC gate rather than refusing at the encoder.
 			164: "gc: ref.test/ref.cast/br_on_cast opcode (0xfb prefix) — the module at :150 this action runs against",
@@ -5040,10 +5073,34 @@ func TestGatedVectors(t *testing.T) {
 			450: "gc: (global $g (import \"M\" \"g\") (ref $dummy)), second occurrence at :434",
 			454: "gc: (global $g (import \"M\" \"g\") (ref $dummy)), second occurrence at :434",
 		},
-		// `(table (export "t") (ref $f) (ref.func $f))` at :91, an import module registered under
-		// "M" — the indexed reftype as a table's element type.
+		// The module registered under "M" at :86, whose `(global (export "g") (ref $f) (ref.func $f))`
+		// carries an indexed reftype — so the `register` at :91 is declined with it.
+		//
+		// **The reason text said "a table element type" and the module has no table.** Under the
+		// pinned corpus :86-:90 is a global, and the drift is the ordinary kind: this entry was
+		// written when the section's subject was table initializers, and the construct it named came
+		// from the section rather than from the line. Corrected here because #419 is the change that
+		// reads it, and a `file:N` in prose has no resolver (#412) — the only thing that checks it is
+		// someone standing where these five new rows put them.
 		"table.wast": {
-			91: "gc: (ref $f) as a table element type at :86",
+			91: "gc: (ref $f) as a global type at :87 — the module the register at :91 exports from",
+			// The module at :93, whose five tables are the corpus's own table-initializer suite:
+			// two spelled `(ref.func $dummy)`, two `(global.get $g)`, one plain. #419's emitter
+			// writes the field, so these five `assert_return`s reach the decoder for the first time
+			// and meet the GC gate there.
+			//
+			// **The gated construct is the imported global's reftype at :94, not the `0x40` table
+			// form**, and the difference was measured rather than read off the section heading: a
+			// module cut down to `(global $g (import "M" "g") (ref $dummy))` with *plain* tables is
+			// already `gc: feature gate disabled`, and the import section precedes the table section
+			// on the wire. What the table initializer changed is which layer refuses — the emitter
+			// used to, and now the decoder does. Naming the 0x40 form here would have been the
+			// slice's subject standing in for the module's first gated byte.
+			112: "gc: (ref $dummy) on the imported global at :94 — the module at :93 this action runs against",
+			113: "gc: (ref $dummy) on the imported global at :94 — the module at :93 this action runs against",
+			114: "gc: (ref $dummy) on the imported global at :94 — the module at :93 this action runs against",
+			115: "gc: (ref $dummy) on the imported global at :94 — the module at :93 this action runs against",
+			116: "gc: (ref $dummy) on the imported global at :94 — the module at :93 this action runs against",
 		},
 		// Two files sharing one shape — `(ref $s0)`-style indexed reftypes threaded through
 		// param/result signatures used to test structural type equivalence and subtyping, which
@@ -5903,25 +5960,29 @@ func TestGatedVectors(t *testing.T) {
 		}
 	}
 
-	// The total, pinned as one number beside the 40 that decompose it.
+	// The total, pinned as one number beside the 41 that decompose it.
 	//
 	// **Not redundant with the per-file counts, and the direction it catches is the one they
-	// cannot.** Forty comparisons each say "this file declines exactly n"; none of them says how
+	// cannot.** Forty-one comparisons each say "this file declines exactly n"; none of them says how
 	// many files there are. A file dropping out of `boardFiles` takes its whole entry with it and
 	// every remaining comparison still passes — the reverse check above catches that only because
 	// the key survives, and a PR that deletes the key *and* the file passes both. This sum is the
-	// second end: 463 is the validator arm's own gate population, and it moves only when a gate
-	// flips or the corpus does.
+	// second end: this is the validator arm's own gate population, and it moves only when a gate
+	// flips, the corpus does, or the harness learns to ask a form it previously scored unsupported.
+	// The figure is not restated here — it is the constant below, and a prose copy of a number the
+	// code holds two lines down is the second place it can drift from (it read 463 against a live
+	// 465 until #419).
 	sum := 0
 	for _, n := range gatedAssertInvalid {
 		sum += n
 	}
-	if sum != 465 {
-		t.Errorf("gatedAssertInvalid sums to %d, want 465 — the gated assert_invalid population "+
+	if sum != 471 {
+		t.Errorf("gatedAssertInvalid sums to %d, want 471 — the gated assert_invalid population "+
 			"changed size. Two causes are legitimate and each re-bases this figure with its subject "+
 			"named: a gate flip (name the proposal), or the harness learning to *ask* a form it "+
 			"previously scored as unsupported (name the Kind — the 17-head slice added 2 this way, "+
-			"`align.wast` and `elem.wast`, both `(module binary …)`). The second is not a gate "+
+			"`align.wast` and `elem.wast`, both `(module binary …)`, and #419's table-initializer "+
+			"emitter added 6 across `table.wast`, `elem.wast` and `global.wast`). The second is not a gate "+
 			"moving and not a corpus moving, which is why it is spelled out here rather than left "+
 			"to be argued: the gates declined those two vectors all along and nothing was listening. "+
 			"Anything else is a file or a population that moved unremarked", sum)
@@ -7401,7 +7462,48 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	// the gate and not the engine, measured rather than argued. Stated as this lane's *purpose* in the
 	// slice because the alternative reading of a +35 here is that this lane simply gained more than
 	// the other one, which is the shape of every uninformative two-lane comparison.
-	const allOnPassFloor = 64938
+	//
+	// # 64938 → 64978 with #419's table initializer, and this lane's job was to hold the *layer*
+	// # attribution rather than the gate one
+	//
+	// +40 where the default lane took +19, and 38 of the 40 are the four planned layers: the 19-row
+	// difference is where the two lanes' accounts meet, 14 of it the `0x40` form's GC gate
+	// (`passFloor`'s table names those rows per file, and with every gate on they pass here instead of
+	// gating), and the remaining **5 are commands this lane scores and the default lane does not** —
+	// `table.wast`'s all-on-only rows, 6 of which were failing on main and 5 of which now pass. So
+	// 33 + 5 = 38, against a default 19 + 14 gated = 33, and the same 33 rows are visible in both.
+	// The other 2 have their own section at the end of this comment.
+	//
+	// **The three layers' figures are removal tests, and they are not a partition — they overlap, and
+	// they have to.** Each was measured by neutering one layer with the other three in place: dropping
+	// `check_table`'s `check_const` costs 10 rows here and 0 on the default lane, neutering `newTable`'s
+	// fill costs 7 and 0, and the encoder's own contribution is the 33 above. 33 + 10 + 7 = 50 against
+	// a total of 38, which is not an error in any of the three: a vector whose module the emitter could
+	// not write *and* whose verdict needs the new validator rule is counted by both tests, because
+	// either omission alone leaves it red. Stated because summing removal tests into a partition is the
+	// arithmetic this decomposition invites, and the sum being larger than the whole is the tell.
+	//
+	// The 0 on the default lane in both of those removal tests is not structural and not a gate doing
+	// its job for free: it is the same fact from the other side. The rules' witnesses are vectors whose
+	// tables carry a spelled initializer, which is the gated form, so **the default lane cannot ask
+	// either question** — which is exactly why #419's validate and interp layers each shipped with a
+	// unit control (`TestTableInitializerSeesNoDefinedGlobal`,
+	// `TestTableSlotsHoldTheInitializersValue`) rather than leaning on this lane.
+	//
+	// **The last 2 of the 40 are the fifth layer nobody planned, and this lane is the only instrument
+	// that found it.** `declaredFuncs` — the validator's `Free.module_` analog — did not walk a
+	// table's initializer, so `(table $t 10 (ref func) (ref.func $f))` reported `$f` undeclared when
+	// the table field is the very thing that declares it. That is an **over-rejection**: two valid
+	// modules refused, `elem.wast:87` and `table.wast:93`, both of which had been arriving here as
+	// encoder declines and started reaching the validator in this PR. The reject direction's whole
+	// corpus is blind to it by construction — no `assert_invalid` watches a rule that refuses too
+	// much — so the finder was the over-rejection table below, whose own vacuity guard this PR also
+	// had to move. `declaredFuncs`' comment had *predicted* the failure and named the surfacing
+	// condition ("the moment the encoder learns the field"), and its tracking citation was #8, the
+	// encoder's issue; nothing tracked the gap itself. Which is the fifth layer's lesson and not a
+	// grave: the prose was right, the tripwire was somebody else's issue number, and an instrument
+	// caught what a citation did not.
+	const allOnPassFloor = 64978
 	// **Slack 0 as of Scott's #387 ruling**, which this bound's own 89-row staleness above is what
 	// prompted: a floor with 250 of tolerance cannot detect anything smaller than 250, so it is a
 	// bound sitting inside its own tolerance. Exact from here — re-base it in the PR that moves the
@@ -7715,7 +7817,7 @@ func TestModuleDefinitionsAskTheValidator(t *testing.T) {
 		// non-empty now is the set of rows the walk looked at.
 		_, _, allOnEngine := allOnLane(t)
 		got := map[string]string{}
-		files, scored := 0, 0
+		files, asked, fails, scored := 0, 0, 0, 0
 		for _, f := range boardFiles(t) {
 			s, err := ParseFile(filepath.Join(suiteDir, f))
 			if err != nil {
@@ -7723,7 +7825,10 @@ func TestModuleDefinitionsAskTheValidator(t *testing.T) {
 				continue
 			}
 			files++
-			for _, fs := range s.RunGated(allOnEngine()).Buckets {
+			r := s.RunGated(allOnEngine())
+			asked += r.Pass + r.Fail
+			fails += r.Fail
+			for _, fs := range r.Buckets {
 				for _, fail := range fs {
 					scored++
 					if fail.OverRejected {
@@ -7732,15 +7837,33 @@ func TestModuleDefinitionsAskTheValidator(t *testing.T) {
 				}
 			}
 		}
-		// A plausibility floor on the walk, not a bound on the board: the numbers it guards against
-		// are 0 and 1, so it is pinned well below the all-on lane's own figures and says only that
-		// the suite was found, parsed, and run. `allOnPassFloor` is where the board's actual counts
-		// are tracked, and duplicating them here would make two places move for one event.
-		if files < 200 || scored < 100 {
-			t.Fatalf("the walk covered %d file(s) and scored %d failure(s) — with the table drained "+
+		// A plausibility floor on the walk, not a bound on the board: pinned far below the all-on
+		// lane's own figures, it says only that the suite was found, parsed, and asked. Its subject
+		// is deliberately the *answered* count and not the fail count. **This floor stood at
+		// `scored < 100` and #419 tripped it** — the all-on fail column went 108 → 70, so a bound
+		// written as "well below the figures" had been aimed at a number this project is paid to
+		// drive to zero, and the first slice large enough to move it reported the reward as a broken
+		// instrument. A floor belongs on a quantity that *rises* as the engine improves; `Pass+Fail`
+		// is that quantity and the fail column is its opposite. `allOnPassFloor` is where the
+		// board's actual counts are tracked, and duplicating them here would make two places move
+		// for one event.
+		if files < 200 || asked < 10000 {
+			t.Fatalf("the walk covered %d file(s) and asked %d command(s) — with the table drained "+
 				"this loop's only remaining assertion is that `got` is empty, and an empty `got` "+
 				"from a walk that ran over nothing is the reassuring answer for the wrong reason",
-				files, scored)
+				files, asked)
+		}
+		// The second half of the same worry, and the half a floor cannot state: `got` is read out of
+		// `Buckets`, so a `Buckets` map that under-reports would empty `got` without emptying the
+		// board. Pinned as an identity against `Result.Fail`, a count kept by a different path in
+		// the same run. At a zero-fail board this reads 0 == 0 and says nothing — which is why the
+		// mechanism's own witnesses are the four sibling arms above ("a validator that refuses every
+		// module turns a … definition red"), where a stub validator makes `OverRejected` true and
+		// this arm's non-vacuity therefore does not rest on the fail column at all.
+		if scored != fails {
+			t.Errorf("the walk pulled %d row(s) out of `Buckets` against %d counted in `Result.Fail` "+
+				"— `got` is filled from the former, so a shortfall here is an over-rejection this "+
+				"arm cannot see rather than one that is not there", scored, fails)
 		}
 		// Reconciled in both directions, never floored: a row that starts passing is the reward a
 		// validator slice earns, and a floor would report it as fine.
@@ -9060,7 +9183,26 @@ func TestPhase1Files(t *testing.T) {
 	// under a typeuse (#77) in `func.wast`; 3 `unknown data segment $d` in `memory-multi.wast`. Two
 	// of the three are the encode work list this ceiling was built to expose, so the next fall this
 	// bound should see is #8's, and it should be −33 with the other seven unchanged.
-	const encodeFailCeiling = 40
+	// # 40 → 7, and the forecast above is what this move reports rather than the number
+	//
+	// #419 taught the emitter the `(table …)` field's initializer, and the fall is **−33 with the other
+	// seven unchanged** — the pre-registered figure, to the row. The residue was dumped by line, kind,
+	// expected text and refusal text, and it decomposes as 4 symbolic locals under a typeuse (#77) at
+	// `func.wast:459,483,484,485` and 3 `unknown data segment $d` at `memory-multi.wast:5,22,23`: the
+	// same seven rows the previous section named, still refused for the same two reasons.
+	//
+	// A pre-registered forecast that lands exactly is worth less than one that misses, and it is worth
+	// something only if the *identity* is checked rather than the total: 40 − 33 = 7 is also what a
+	// board that dropped 33 unrelated rows and gained the 33 `(table …)` ones would print. The
+	// file:line residue is the check, and it is the same method the −28 above used, applied to its own
+	// prediction.
+	//
+	// **The two that remain are not this slice's to drain and neither is #8's any more.** The `(table
+	// …)` frontier was the largest member and the last one belonging to the emitter's table work; what
+	// is left is #77's four (a parser-context gap, not an emitter one) and three rows whose subject is
+	// a symbolic data-segment name. So the next fall this bound should see is #77's, −4, and there is
+	// no longer a −33-sized member for it to see.
+	const encodeFailCeiling = 7
 	boardBound(t, "encodeFailCeiling", encodeFail, encodeFailCeiling, 0, ceilingBound,
 		"the wat encoder lost ground: either it stopped emitting an instruction it used to "+
 			"emit, or the corpus moved. This ceiling is deliberately not shared with the text "+
@@ -10758,7 +10900,41 @@ func TestPhase1Files(t *testing.T) {
 	//
 	// `unsupported` is unmoved at 66 and the zero is **structural** for the seventh entry running:
 	// `classify` is untouched, so nothing the harness could not ask became askable.
-	const passFloor = 60890
+	// # 60890 → 60909, +19 against −33 fails, and the 14 is a gate again — the specimen above,
+	// # reproduced one slice later
+	//
+	// #419 landed the table initializer across text, decode, validate and interp. The fail column fell
+	// exactly 33 (56 → 23), all of it the encode stratum (`encodeFailCeiling` 40 → 7, residue identical
+	// row-for-row), and the pass column rose 19. The 14 that did not become passes became **gated**:
+	// 4132 → 4146, the third column moving by precisely the gap, which is what says the rows went
+	// somewhere rather than vanishing.
+	//
+	// The gate is nameable and it is this slice's own doing. A table that *spells* an initializer
+	// encodes to the `0x40` form, and `decodeTableForm` declines that form without GC (decision 0008),
+	// so teaching the emitter the field turned "cannot encode this (table …) field" into "gc: feature
+	// gate disabled" for every vector whose table needed the spelled form — a fail becoming a third
+	// verdict, not a pass. Per file, measured by diffing the two boards' own lines rather than by
+	// bucket arithmetic:
+	//
+	//	                 default passes   default gated
+	//	elem.wast              +8              +1
+	//	global.wast            +6              +1
+	//	i31.wast               +1              +3
+	//	table.wast             +4              +9
+	//	                      ---             ---
+	//	                       19              14   = the 33 that left the fail column
+	//
+	// **The fail forecast was pre-registered and the pass forecast was not**, which is the honest
+	// version of "as predicted": the previous section committed to −33 with seven rows unchanged and
+	// that is what landed, to the row. Nothing named a pass figure, and the entry above is why one
+	// would have been wrong if it had: a first-blocker census bounds passes from above, and the share a
+	// gate catches next is not derivable from the census. What *is* new here is that the gate was
+	// identifiable in advance from the wire form — so the missing forecast was available and simply not
+	// written, which is a smaller failure than #413's but the same one.
+	//
+	// `unsupported` is unmoved at 66 and the zero is **structural** for the eighth entry running:
+	// `classify` is untouched, so nothing the harness could not ask became askable.
+	const passFloor = 60909
 	// Slack 0 as of #387's ruling, with `allOnPassFloor` and `unsupportedCeiling` — see
 	// `boardbound_test.go`'s retirement section. Two entries in the ledger above record taking a
 	// re-base *although the slack stayed silent* (58659 by a margin of 20, and the 416 that was four

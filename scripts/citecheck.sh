@@ -645,9 +645,10 @@ if [ "$need_gh" -gt 0 ]; then
 		# duplicate of an issue that already exists. Observed on a `--pr 409` run: #180 reported as
 		# unresolvable at 4931/5000 rate limit, with the identical request answering out of band.
 		#
-		# This is the distinction `:479` already draws correctly for the whole phase — a check that
+		# This is the distinction `:620` already draws correctly for the whole phase — a check that
 		# could not ask its question does not report green — applied at the granularity of one
-		# citation, which is where it was abandoned.
+		# citation, which is where it was abandoned. (That number was 479 when written and was
+		# wrong before its own PR merged: grave #418, whose repair this is.)
 		err="$(mktemp)"
 		# `.state` is check 5's whole answer and rides this request rather than adding one; the
 		# **title stays last**, because it is the only free-text field and a tab inside it would

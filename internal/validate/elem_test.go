@@ -117,7 +117,7 @@ import (
 // under-specified in a field the rule does not read. A fixture is well-formed in every respect but the
 // one under test, or the row moves when some *other* rule arrives.
 func TestElemSegmentTableIndexResolves(t *testing.T) {
-	table := []binary.Table{{Limits: binary.Limits{Min: 1}}}
+	table := []binary.Table{decodedTable(binary.FuncRef, 1)}
 
 	for _, tc := range []struct {
 		name   string
@@ -130,7 +130,9 @@ func TestElemSegmentTableIndexResolves(t *testing.T) {
 			// flags 0 means active-at-table-0, not active-at-no-table — so a module with no table at
 			// all refuses here rather than silently treating the implicit index as absent.
 			name: "R1 active implicit table, module declares none",
-			mod:  binary.Module{Elems: []binary.ElemSegment{{Mode: binary.ElemActive, Offset: c0()}}},
+			mod: binary.Module{Elems: []binary.ElemSegment{
+				{Mode: binary.ElemActive, ElemType: binary.FuncRef, Offset: c0()},
+			}},
 			want: ErrUnknownTable, detail: "unknown table 0",
 		},
 		{
@@ -139,7 +141,9 @@ func TestElemSegmentTableIndexResolves(t *testing.T) {
 			name: "R2 active implicit table, module declares one",
 			mod: binary.Module{
 				Tables: table,
-				Elems:  []binary.ElemSegment{{Mode: binary.ElemActive, Offset: c0()}},
+				Elems: []binary.ElemSegment{
+					{Mode: binary.ElemActive, ElemType: binary.FuncRef, Offset: c0()},
+				},
 			},
 			want: nil,
 		},
@@ -147,7 +151,9 @@ func TestElemSegmentTableIndexResolves(t *testing.T) {
 			name: "R3 active explicit table out of scope",
 			mod: binary.Module{
 				Tables: table,
-				Elems:  []binary.ElemSegment{{Mode: binary.ElemActive, TableIndex: 4, Offset: c0()}},
+				Elems: []binary.ElemSegment{
+					{Mode: binary.ElemActive, ElemType: binary.FuncRef, TableIndex: 4, Offset: c0()},
+				},
 			},
 			want: ErrUnknownTable, detail: "unknown table 4",
 		},
@@ -159,14 +165,18 @@ func TestElemSegmentTableIndexResolves(t *testing.T) {
 			// passive segments in tableless modules, so dropping the mode guard breaks two passing
 			// vectors rather than merely failing here — measured, and in the battery table above.
 			name: "R4 passive segment, module declares no table",
-			mod:  binary.Module{Elems: []binary.ElemSegment{{Mode: binary.ElemPassive}}},
+			mod: binary.Module{Elems: []binary.ElemSegment{
+				{Mode: binary.ElemPassive, ElemType: binary.FuncRef},
+			}},
 			want: nil,
 		},
 		{
 			// Declarative is the arm where the two segment kinds diverge: `check_elemmode` answers `()`
 			// where `check_datamode` answers `assert false`.
 			name: "R5 declarative segment, module declares no table",
-			mod:  binary.Module{Elems: []binary.ElemSegment{{Mode: binary.ElemDeclarative}}},
+			mod: binary.Module{Elems: []binary.ElemSegment{
+				{Mode: binary.ElemDeclarative, ElemType: binary.FuncRef},
+			}},
 			want: nil,
 		},
 		{
@@ -176,8 +186,8 @@ func TestElemSegmentTableIndexResolves(t *testing.T) {
 			mod: binary.Module{
 				Tables: table,
 				Elems: []binary.ElemSegment{
-					{Mode: binary.ElemActive, Offset: c0()},
-					{Mode: binary.ElemActive, TableIndex: 9, Offset: c0()},
+					{Mode: binary.ElemActive, ElemType: binary.FuncRef, Offset: c0()},
+					{Mode: binary.ElemActive, ElemType: binary.FuncRef, TableIndex: 9, Offset: c0()},
 				},
 			},
 			want: ErrUnknownTable, detail: "element segment 1",
@@ -237,7 +247,7 @@ func TestElemPhaseAndExportPhaseAgreeOnUnknownTable(t *testing.T) {
 		idx    uint32
 	}{
 		{"module declares no table", nil, 0},
-		{"module declares some", []binary.Table{{}}, 3},
+		{"module declares some", []binary.Table{decodedTable(binary.FuncRef, 0)}, 3},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			elemMod := &binary.Module{

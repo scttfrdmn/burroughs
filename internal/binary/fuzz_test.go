@@ -320,7 +320,7 @@ func FuzzConstExprProgress(f *testing.F) {
 	f.Fuzz(func(t *testing.T, b []byte) {
 		d := &Decoder{}
 		r := &reader{b: b, eof: ErrPayloadEnd}
-		err := d.decodeConstExpr(r)
+		err := constExprErr(d, r)
 
 		if r.off == 0 {
 			// Zero bytes consumed is only defensible on an empty input, where there

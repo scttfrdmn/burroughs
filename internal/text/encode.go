@@ -1,6 +1,7 @@
 package text
 
 import (
+	"bytes"
 	"fmt"
 
 	"github.com/scttfrdmn/burroughs/internal/binary"
@@ -364,6 +365,16 @@ func (p *parser) encode() ([]byte, error) {
 //     spaces: `space.count` advances for *imported* entries too, so a count-based test could not
 //     tell `(func)` from `(import "" "" (func))`, and — worse — an export binds no space at all, so
 //     an export-only module would pass a count-based check and be emitted with the export dropped.
+//     **This branch cannot currently be made to fire, and it is labelled rather than left to be
+//     found**: #419's `constexpr1` arm was the last field the emitter could not write, so every arm
+//     of every field now withdraws its record. Measured with `if false && p.ctx.haveNonType` — the
+//     whole `internal/text` package passes, and so does the whole spec board, all 2591 vectors, which
+//     is the wider of the two domains and the one that matters for a frontier keyed on field kinds.
+//     Kept for the arm that does not exist yet, exactly as the retention loop below is: the next
+//     field whose parse completes and whose content this emitter cannot write reaches this line
+//     first. `TestEncodeRefusesWhatItCannotWrite`'s countdown comment cites this branch as its
+//     precedent for keeping such a check, which is the second reason it says so here — a precedent
+//     that does not state its own status is a citation to an assumption.
 //
 //   - **A type the encoder has no byte for.** Every valtype the parser accepts is not yet
 //     encodable: `(ref func)` needs GC's 0x64 prefix, and a struct or array comptype has no
@@ -381,9 +392,17 @@ func (p *parser) encodableOrErr() error {
 		// so the reader is told which field to look at and not which arm. Accepted rather than
 		// papered over — naming the arm needs the arm threaded into the record, and the field is
 		// what a reader edits.
-		return errf(p.ctx.firstNonType, "cannot yet encode this (%s …) field: the emitter writes "+
-			"the type, import, function, table, memory, export, element, code, data and data count "+
-			"sections (#8)", p.ctx.firstNonType.Text)
+		//
+		// **It no longer enumerates the sections that exist, and the enumeration is why.** It read
+		// "the emitter writes the type, import, function, table, memory, export, element, code, data
+		// and data count sections", which was missing global (6), start (8) and tag (13) — three
+		// sections that landed without this list moving, in a string no test can print because the
+		// branch is unreachable (see the header). A list of what *is* implemented has to be revised by
+		// every PR that implements something and is checked by nothing; the field name and the issue
+		// are what a reader needs, and they cannot go stale. The header's `secType` const block is
+		// where the section set is enumerated once, beside the code that writes it.
+		return errf(p.ctx.firstNonType, "cannot yet encode this (%s …) field: no emitter for it yet "+
+			"(#8)", p.ctx.firstNonType.Text)
 	}
 	// **The withdrawal check.** Every *defined* memory and table must have been retained, or a
 	// section is short by one and the image means something else. `clearNonTypeField` is a claim an
@@ -548,9 +567,9 @@ func (p *parser) encodableOrErr() error {
 		}
 	}
 	for i, t := range p.ctx.tabDefs {
-		if _, ok := valTypeBytes(t.elem); !ok {
+		if _, ok := valTypeBytes(t.typ.elem); !ok {
 			return fmt.Errorf("cannot yet encode table %d: element type %s needs a parameterized "+
-				"reference encoding, which arrives with the GC gate (#8)", i, t.elem)
+				"reference encoding, which arrives with the GC gate (#8)", i, t.typ.elem)
 		}
 	}
 	// A defined global's type is the same frontier, and it is the *widest* of the three: a globaltype's
@@ -559,10 +578,17 @@ func (p *parser) encodableOrErr() error {
 	// through `valTypeBytes`, the one predicate, so this cannot disagree with what `encodeGlobals` writes.
 	//
 	// The *initializer* needs no check here: its instructions are refused at the cursor by
-	// `refuseUnencodable`, which is where an unencodable instruction has a token to point at, and the
-	// frontier record it sets is what the `haveNonType` check above reports. So the two halves of a
-	// global are refused by two different mechanisms, and that is the same division the code section uses
-	// — a func's signature is checked in the type loop below and its body at the cursor.
+	// `refuseUnencodable`, which is where an unencodable instruction has a token to point at. So the
+	// two halves of a global are refused by two different mechanisms, and that is the same division the
+	// code section uses — a func's signature is checked in the type loop below and its body at the
+	// cursor.
+	//
+	// **The two mechanisms do not meet, and the sentence removed here said they did**: it read "the
+	// frontier record it sets is what the `haveNonType` check above reports". `refuseUnencodable`
+	// *returns an error* and records nothing (`code.go`), and it runs during the parse, which is
+	// finished before `encode` calls `encodableOrErr` at all — so an initializer refusal never reaches
+	// that check and is not one of its rows. Written the wrong way round, the sentence made a reader
+	// look for the initializer's frontier in a record that has never held one.
 	for i, g := range p.ctx.globalDefs {
 		if _, ok := valTypeBytes(g.typ.val); !ok {
 			return fmt.Errorf("cannot yet encode global %d: type %s needs a parameterized reference "+
@@ -910,12 +936,68 @@ func (w *writer) mutability(mut bool) {
 // for `(table 1 funcref)` that is `0x70`, `malformed limits flags`, which is the *lucky* failure. The
 // unlucky one is a reftype byte that happens to be a legal flags value: `funcref`'s 0x70 is not, but
 // a future one-byte type could be, and then the image decodes clean as a different table.
+//
+// # The two forms, and why the choice is a question about the initializer
+//
+// `encode.ml:958-963` is one `match` on the initializer, not on how the table was written:
+//
+//	| [{it = RefNull ht2; _}] when ht1 = ht2 -> tabletype tt
+//	| _ -> byte 0x40; byte 0x00; tabletype tt; const c
+//
+// Three conditions, all about `c`: a **single** instruction, that instruction is **ref.null**, and its
+// heap type equals the tabletype's — with **nullability ignored**, because `ht1` is the tabletype's
+// heap type and a heaptype has no nullability field. `(table 1 (ref func) (ref.null func))` therefore
+// takes the `0x40` form even though the spelled initializer is what the bare form would have
+// synthesized, since `(ref func)`'s own initializer would be `ref.null` typed `(ref null func)` and
+// the table's type is not nullable. That asymmetry is the whole reason the rule reads the expression
+// instead of the arm.
+//
+// All three conditions are tested by **one byte-string comparison** against the initializer the bare
+// arm synthesizes, and the equivalence is exact rather than approximate: `constExprBytes` writes
+// `op ++ imm` per instruction then one `0x0b`, `ref.null`'s `imm` is a bare heaptype and never empty,
+// so no multi-instruction sequence can produce `d0 <ht> 0b` — a second instruction would have to fit
+// inside `ref.null`'s own immediate. Nullability drops out because both sides go through
+// `heapTypeBytes`, which reads `abs`/`isIdx` and deliberately ignores `null`. And the two sides cannot
+// disagree on *encoding* because they are the same function: `synthesizedRefNull`'s patch calls
+// `heaptypeBytesOf`, which calls this.
+//
+// Deriving it as a comparison rather than as a `plain bool` set at parse time is the point #419 turns
+// on. A flag would be the arm wearing the initializer's name, and it would be right on every module
+// the corpus has — the disagreement is exactly the `(ref func)` row above, which `table.wast:70-81`
+// spells only as `assert_invalid`, so nothing on the board reads the accept direction of it.
 func (p *parser) encodeTables(w *writer) {
 	w.vec(len(p.ctx.tabDefs), func(w *writer, i int) {
 		t := p.ctx.tabDefs[i]
-		w.valType(t.elem)
-		w.limits(t.addr64, t.lim)
+		if bytes.Equal(t.init, plainTableInit(t.typ.elem)) {
+			w.valType(t.typ.elem)
+			w.limits(t.typ.addr64, t.typ.lim)
+			return
+		}
+		w.byte1(tableInitPrefix)
+		w.byte1(0x00)
+		w.valType(t.typ.elem)
+		w.limits(t.typ.addr64, t.typ.lim)
+		w.bytes(t.init)
 	})
+}
+
+// plainTableInit is the encoding of `ref.null <elem's heap type>` — the initializer a bare
+// `tabletype` synthesizes, and therefore the one byte string that selects the plain form.
+//
+// Returns nil when the heap type has no bytes, which makes the comparison fail and the `0x40` form be
+// written for a table whose element type `encodableOrErr` has already refused: `valTypeBytes` and
+// `heapTypeBytes` bottom out in the same `absoluteHeaptypeBytes` lookup for a reftype, so an element
+// type that reaches here at all has bytes. Stated because a silent nil would otherwise be a form
+// choice made by a missing table entry.
+func plainTableInit(elem resolvedVal) []byte {
+	ht, ok := heapTypeBytes(elem)
+	if !ok {
+		return nil
+	}
+	out := make([]byte, 0, 2+len(ht))
+	out = append(out, opRefNull)
+	out = append(out, ht...)
+	return append(out, opEnd)
 }
 
 // encodeGlobals writes section 6: one entry per *defined* global, in source order (#8).
@@ -1245,6 +1327,22 @@ func valTypeBytes(v resolvedVal) ([]byte, bool) {
 const (
 	refPrefixNull    byte = 0x63 // -0x1D, `(ref null ht)`
 	refPrefixNonNull byte = 0x64 // -0x1C, `(ref ht)`
+)
+
+// tableInitPrefix and opRefNull are the two bytes the table section's second form is built from
+// (#419): `byte 0x40; byte 0x00; tabletype tt; const c` (encode.ml:962), whose `const c` for the
+// synthesized case is `ref.null`'s opcode and a heaptype.
+//
+// **0x40 is not a reftype and this is the only production that reads it as anything**, which is the
+// distinction grave #420 is about: an import descriptor is `tabletype` and has no such arm, so a
+// constant named for the *table section's* form is also a statement about where it may be written.
+// `opRefNull` is a literal here rather than an `opBytes("ref.null")` call because this is the
+// comparator's side of the choice and must not be able to fail — `synthesizedRefNull` is the side that
+// consults the generated table, and `TestPlainTableFormIsDerivedFromTheInitializer` is what holds the
+// two to the same byte.
+const (
+	tableInitPrefix byte = 0x40
+	opRefNull       byte = 0xD0
 )
 
 // absoluteHeaptypeBytes is `heaptype`'s twelve keyword arms as the bytes encode.ml writes

@@ -176,8 +176,11 @@ func TestPRFetchFailureIsNeverAPass(t *testing.T) {
 // carries `HTTP 404` (the verdict arm, which keeps the original wording) and one whose stderr carries
 // a transport error (the mechanism arm, which must not claim anything about whether #N exists).
 //
-// Both are asserted to exit non-zero. A mechanism failure is not a pass either — that is `:479`'s own
-// rule for the whole phase, and #410 is that rule reaching one citation.
+// Both are asserted to exit non-zero. A mechanism failure is not a pass either — that is
+// `scripts/citecheck.sh:620`'s own rule for the whole phase, and #410 is that rule reaching one
+// citation. The number was 479, written without a file and stale before the PR that wrote it merged (grave #418); the
+// file name is spelled here because a bare `:NNN` in a *different* file names nothing a reader can
+// resolve, which is the half of #418 that needs no convention ruling.
 //
 // # closecheck.sh is confirmed here rather than changed
 //

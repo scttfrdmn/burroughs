@@ -563,13 +563,17 @@ type context struct {
 	// a reversal of it: the rule is 0006's, that retention grows out of what a *section's grammar*
 	// requires when that section is written, and these are exactly that — written because sections 4
 	// and 5 now have emitters, shaped by what `encode.ml:187-200` reads, and no wider. `tabDefs` holds
-	// `resolvedTable` rather than `tabType` because the element type resolves in the deferred phase and
-	// what survives it is the resolved form.
+	// `resolvedTableDef` rather than `tabType` because the element type resolves in the deferred phase
+	// and what survives it is the resolved form — and it is the `…Def` type rather than
+	// `resolvedTable` because a *defined* table is a tabletype **and** an initializer (#419), which is
+	// the `resolvedGlobalDef`/`resolvedGlobal` split one section along.
 	//
 	// Defined entries only. An imported memory or table is an `Import`, and its type belongs to a
-	// section this emitter does not write — the same split `decodeTableForm` names on the binary side.
+	// section this emitter does not write — the same split `decodeTableForm` names on the binary side,
+	// and on the table side that split is now a grammar difference rather than a population one: an
+	// import's descriptor has no initializer arm at all (grave #420).
 	memDefs []memType
-	tabDefs []resolvedTable
+	tabDefs []resolvedTableDef
 
 	// The retained imports, in source order — the emitter's input for section 2 (#8). Both
 	// spellings land here: the `(import …)` field and the five inline-import sugar arms, because

@@ -138,7 +138,7 @@ func TestExportTagArmResolvesTagIndexes(t *testing.T) {
 func TestExportExistsCoversEveryExternKind(t *testing.T) {
 	one := &binary.Module{
 		Funcs:    []binary.Func{{}},
-		Tables:   []binary.Table{{}},
+		Tables:   []binary.Table{decodedTable(binary.FuncRef, 0)},
 		Memories: []binary.Memory{{}},
 		Globals:  []binary.Global{{}},
 		Tags:     []binary.Tag{{}},

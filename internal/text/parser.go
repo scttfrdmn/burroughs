@@ -206,15 +206,21 @@ func (p *parser) moduleField() error {
 	if kw.Kind != KeywordTok {
 		return p.unexpectedAt(kw)
 	}
-	// Everything but a type definition is past the encoder's frontier (#8). Recorded here, at the
-	// dispatch, because this is the one place that sees every field kind exactly once — a check
-	// added to each field's own function would be twelve places to forget one, and the omission
-	// would be a *silently dropped section* rather than a compile error.
-	// The exemption list grows as sections land, and it is a *list of keywords* rather than a check
-	// each field makes, on the argument the paragraph above gives. `func` is exempt now because
-	// section 3 and section 10 exist — but only conditionally: `funcField` withdraws the record at its
-	// tail on the arms it can write and leaves it standing on the ones it cannot, which is why the
-	// note is still taken here for every field and cleared there rather than skipped.
+	// A field past the encoder's frontier (#8) is recorded here, at the dispatch, because this is the
+	// one place that sees every field kind exactly once — a check added to each field's own function
+	// would be twelve places to forget one, and the omission would be a *silently dropped section*
+	// rather than a compile error.
+	//
+	// **The note is taken for every field and withdrawn by the arms that can write themselves**, which
+	// is the shape that survived the sections landing one at a time: `funcField` clears the record at
+	// its tail on its encodable arms and leaves it standing on the rest, so the exemption is per *arm*
+	// and never per keyword. The sentence that stood here read "everything but a type definition is
+	// past the encoder's frontier" and then described `func` as a growing exemption list; as of #419
+	// no field is past the frontier at all — every arm of every field withdraws — so the *only*
+	// content left in this note is the shape, not the population. `encodableOrErr`'s reader of it is
+	// labelled unreachable-today for exactly that reason, and the condition below stays as it is
+	// because the note costs one field's token and the alternative is knowing, here, which arm the
+	// field will turn out to be.
 	if kw.Keyword != kwType && kw.Keyword != kwRec {
 		// The *keyword* token, not the LPAR `p.c.peek()` would give: the message quotes the token's
 		// text, and the LPAR's text is "(", which names nothing. Its offset is one byte later than
@@ -1458,11 +1464,19 @@ func sugarZeroOffset(addr64 bool) instrSink {
 // Five arms. Two are sugar forms taking `(elem …)` and sizing the table to it, and both create
 // an elem segment. The `tabletype constexpr1` arm reaches the instruction boundary; the bare
 // `tabletype` arm (`:1192`) completes, because the reference synthesizes a `ref.null` init.
-// **Two of its five arms are encodable (#8): `tabletype` with no initializer**, the bare form at
-// :1192, and the inline-import arm since section 2 landed in #119. The `constexpr1` arm has an
-// initializer expression the emitter cannot write (no instruction emitter yet), and both `(elem …)`
-// sugar arms define an elem segment there is no elem section for. An inline export is not among the
-// refusals and never was an arm — see memoryField, which owns the paragraph correcting that count.
+//
+// **All five arms encode as of #419, and the sentence this replaces had been wrong by two arms
+// before that.** It read "two of its five arms are encodable (#8)" and named them: the bare form at
+// :1192 and the inline-import arm since section 2 landed in #119. What it said about the other three
+// was that the `constexpr1` arm's initializer expression could not be written and that both `(elem …)`
+// sugar arms "define an elem segment there is no elem section for" — and section 9 landed, so the
+// sugar arms started encoding and this paragraph did not move with them. #419 takes the last one,
+// the `constexpr1` arm, which makes the count 5 and the frontier empty; the frontier was 3 when it
+// was written, 1 when #419 began, and the difference was never anybody's failing test. Measured on
+// `main` against this branch, arm by arm, rather than recounted from the prose.
+//
+// An inline export is not among the arms and never was — see memoryField, which owns the paragraph
+// correcting that count.
 func (p *parser) tableField() error {
 	kw := p.c.peek2()
 	if err := p.lpar(kwTable); err != nil {
@@ -1499,28 +1513,91 @@ func (p *parser) tableField() error {
 	if err != nil {
 		return err
 	}
+	elemTok := p.c.peek()
 	elem, err := p.reftype()
 	if err != nil {
 		return err
 	}
 	p.ctx.markDefined(importTable)
+	tt := tabType{addr64: addr64, lim: lim, elem: elem}
 	if p.c.at(RParen) { // the bare-tabletype arm, parser.mly:1192
-		if err := p.rpar(); err != nil {
-			return err
+		// `rpErr` rather than a shadowing `err`, on this function's own convention (`idxErr`,
+		// `ttErr`): the outer `err` is live past this arm, which is what `govet`'s `shadow` is
+		// reporting — and `tableElemSugar`'s comment records the standoff a reused `err` sets up
+		// between that check and `gocritic`'s `sloppyReassign`.
+		if rpErr := p.rpar(); rpErr != nil {
+			return rpErr
 		}
-		// The reference synthesizes a `ref.null ht` initializer for this arm (:1193-1194), and
-		// `encode.ml:960-962` writes the *plain* tabletype whenever the initializer is exactly
-		// `ref.null` of the table's own heap type — which is precisely this arm. So the bare form
-		// round-trips with no initializer to write, and the 0x40 form is never needed here.
-		p.ctx.defineTable(tabType{addr64: addr64, lim: lim, elem: elem})
+		// **The reference synthesizes an initializer here, so this arm is sugar rather than a table
+		// without one** (parser.mly:1194-1195), and synthesizing it too is what leaves one rule
+		// downstream instead of an arm. `encode.ml:958-963` writes the plain tabletype exactly when
+		// the initializer is a single `ref.null` of the table's own heap type — so the bare form
+		// round-trips as the bare form *because its initializer satisfies that rule*, not because
+		// `encodeTables` was told which arm parsed. The same synthesis is the binary decoder's
+		// (`synthesizedRefNull`, sections.go), from the same line of the same reference.
+		p.ctx.defineTable(textTable{typ: tt, init: p.synthesizedRefNull(elem, elemTok)})
 		p.ctx.noteDefined(importTable)
 		p.ctx.clearNonTypeField(kw)
 		return nil
 	}
-	if err := p.constexpr1(); err != nil { // tabletype constexpr1
+	// `tabletype constexpr1` (parser.mly:1196). Read into its own sink, for the reason
+	// `globalField`'s initializer is: a const expression is a self-contained `const c` with its own
+	// terminator, so instructions belonging to one table must not run together with a neighbour's.
+	init, err := p.intoSink(p.constexpr1)
+	if err != nil {
 		return err
 	}
-	return p.rpar()
+	if err := p.rpar(); err != nil {
+		return err
+	}
+	// **After the closing paren**, on `globalField`'s rule: a field that errors out mid-way must leave
+	// no trace, or the section's count disagrees with the grammar's on a module that never finished
+	// parsing. `clearNonTypeField` for the same reason, and it is reached from neither early return.
+	p.ctx.defineTable(textTable{typ: tt, init: init})
+	p.ctx.noteDefined(importTable)
+	p.ctx.clearNonTypeField(kw)
+	return nil
+}
+
+// synthesizedRefNull builds the `ref.null ht` initializer the reference synthesizes for a bare
+// `tabletype` (parser.mly:1194-1195, `let c = [RefNull ht @@ at] @@ at`).
+//
+// **A patch rather than bytes, because the heap type may forward-reference.**
+// `(table 1 (ref null $t)) (type $t (func))` is a valid module — `defineTable`'s whole argument — and
+// the synthesized instruction names the same heap type the tabletype does, so its immediate resolves
+// in stage 2 through `heaptypeBytesOf`: the one resolve-then-encode pair `heaptypeRetained` uses, so
+// the bytes this writes and the bytes a *spelled* `(ref.null func)` writes cannot differ. That
+// identity is load-bearing rather than tidy — `encodeTables` compares the two byte strings to decide
+// the plain form, so two encoders here would make the choice depend on which one ran.
+//
+// **Gated on the mode, `p.retain`, which is `intoSink`'s condition and grave #144's lesson.** A
+// recognize-only parse installs no sink and encodes nothing, and running the patch there would let a
+// heap type this encoder has no bytes for fail a parse that is only being recognized — turning the
+// encoder's frontier into the recognizer's verdict.
+//
+// The mnemonic token is built at the *reftype's* position, which is where the reference puts the
+// synthesized instruction's region: `@@ at` is the tabletype's, there being no `ref.null` in the
+// source to point at.
+func (p *parser) synthesizedRefNull(elem valType, at Token) instrSink {
+	if !p.retain {
+		return instrSink{}
+	}
+	op, ok := opBytes("ref.null")
+	if !ok {
+		// Unreachable: `ref.null` is in the generated table and is not one of the three ambiguous
+		// mnemonics. Stated rather than ignored, and answered with an empty sink so the failure is a
+		// missing initializer the round-trip control reports, never a wrong opcode.
+		return instrSink{}
+	}
+	// A *diagnostic site*, not a lexed token: `heaptypeBytesOf` reads only `.Text`, and there is no
+	// `ref.null` in the source for a cursor to have produced. Left without a `Kind` for that reason —
+	// a `KeywordTok` here would claim the lexer made it.
+	mnemonic := Token{Text: "ref.null", Offset: at.Offset, Line: at.Line}
+	var s instrSink
+	s.add(instr{op: op, patch: func() ([]byte, error) {
+		return p.heaptypeBytesOf(mnemonic, elem.heap, at)
+	}})
+	return s
 }
 
 // tableElemSugar parses the tail of `(table <addrtype> reftype (elem …))` (parser.mly:1205/1216).
@@ -1564,6 +1641,7 @@ func (p *parser) tableField() error {
 // `elemkind` and is not a subtype of `(ref null $t)` at all. Found by #328's `check_elemmode` port,
 // which is the first thing in this engine that ever compared the two types.
 func (p *parser) tableElemSugar(kw Token, idx uint32, addr64 bool) error {
+	rtTok := p.c.peek()
 	rt, err := p.reftype()
 	if err != nil {
 		return err
@@ -1612,7 +1690,16 @@ func (p *parser) tableElemSugar(kw Token, idx uint32, addr64 bool) error {
 	// After the closing paren, on `memoryDataSugar`'s rule, and in the reference's own order: the table
 	// first, then the segment that sizes it.
 	n := uint64(len(elems))
-	p.ctx.defineTable(tabType{addr64: addr64, lim: limits{min: n, max: n, hasMax: true}, elem: rt})
+	// **Both `(elem …)` arms synthesize the same `ref.null ht` initializer the bare `tabletype` arm
+	// does** — `let tinit = [RefNull ht @@ loc] @@ loc` appears verbatim at parser.mly:1209 and :1216,
+	// once per arm — so a table written as sugar for a segment is still a table with an initializer,
+	// and it encodes as the plain form for the reason `encodeTables` derives rather than assumes. The
+	// heap type is the *same* `ht` the elem segment's type destructures, which is why one `rt` serves
+	// three consumers here (grave #401 is what two of them being separate variables cost).
+	p.ctx.defineTable(textTable{
+		typ:  tabType{addr64: addr64, lim: limits{min: n, max: n, hasMax: true}, elem: rt},
+		init: p.synthesizedRefNull(rt, rtTok),
+	})
 	p.ctx.noteDefined(importTable)
 	p.ctx.defineElem(textElem{
 		table:    idxRef{idx: idx},

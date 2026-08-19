@@ -103,13 +103,42 @@ type table struct {
 	mod *binary.Module
 }
 
-// newTable allocates a table at its declared minimum, every slot null.
+// newTable allocates a table at its declared minimum, every slot holding the value its initializer
+// evaluates to — `init_table` (`eval.ml:1219-1228`) and `Table.alloc`'s `create lim.min r`.
 //
 // It reports `alloc`'s two failures separately, as `table.ml:30-34` does: SizeOverflow when the
 // minimum exceeds the index width's cap, Type when the limits are inverted. Only the first is
 // reachable as a trap — inverted limits are #9's verdict, so that arm returns the layering debt,
 // exactly as newMemory does one file over.
-func newTable(m *binary.Module, t binary.Table) (*table, error) {
+//
+// # The initializer is evaluated before the size checks, which is the reference's order
+//
+// `init_table` runs `eval_const inst c` and *then* calls `Table.alloc`, whose first two lines are
+// `valid_size` and `valid_limits`. So a table that is both too large and has an unevaluable
+// initializer reports the initializer. No vector on either lane pairs those two defects — a const
+// expression that fails at all is `assert_invalid` territory, so the modules that reach here have
+// initializers that work — and the order is transcribed rather than chosen for that reason: an
+// ordering with no witness is one to take from the authority, not from whichever branch was already
+// written first.
+//
+// # A method, because the initializer is evaluated against the instance
+//
+// `eval_const inst c` reads the instance as it stands, exactly as `init_global`'s does, and the fold
+// puts `init_table` after `init_global` (`eval.ml:1314-1315`) — so a table initializer can read a
+// global this instance has already built. `newGlobal` is a method for the same reason and this is now
+// its shape: one call to `in.constExpr`, the want taken from the declared element type, and no branch
+// on what kind of value comes back (grave #239's lesson, recorded on `newGlobal`).
+//
+// The reference's non-reference arm is `Crash.error c.at "non-reference table initializer"` — a
+// *crash*, not a trap and not a verdict, because `check_table` has already typed the expression
+// against `RefT rt`. `constExpr`'s arity check is this engine's spelling of the same guarantee: it
+// asks for one reference slot and reports a mismatch through the deferred channel, which is where a
+// validator debt belongs (0015).
+func (in *Instance) newTable(t binary.Table) (*table, error) {
+	v, err := in.constExpr(t.Init, t.ElemType, "a table initializer")
+	if err != nil {
+		return nil, err
+	}
 	lim := t.Limits
 	if !validTableSize(lim, lim.Min) {
 		// `table size overflow` — `eval.ml:24`. A trap, not a verdict: the module said a
@@ -123,22 +152,23 @@ func newTable(m *binary.Module, t binary.Table) (*table, error) {
 	if lim.Min > math.MaxInt/refSize {
 		return nil, &Trap{Reason: "out of memory"}
 	}
-	// **Null-filled, and the fill is load-bearing rather than a Go-zero coincidence.** The
-	// reference's `create lim.min r` takes the fill value from the table's *initializer*, and
-	// for the plain (non-0x40) table form `decode.ml:1063` synthesizes that initializer as
-	// `RefNull ht`. So a fresh table's slots are not "empty" — they hold a value, and reading
-	// one is `uninitialized element`, not an out-of-bounds access. `ref`'s zero value is
-	// `{Null: false, Addr: 0}`, which is *function 0*, so leaving Go's zeroing to speak here
-	// would fill every new table with references to the module's first function.
+	// **Filled from the initializer, and the explicit fill is load-bearing rather than a Go-zero
+	// coincidence.** `ref`'s zero value is `{Null: false, Addr: 0}`, which is *function 0*, so a
+	// `make` alone would fill a table with references to the module's first function whatever its
+	// initializer said. Even for the plain wire form — whose initializer is the `ref.null ht` the
+	// decoder synthesizes (`decode.ml:1058-1063`) — the null has to be written.
 	//
-	// The 0x40 form's initializer may be any const-expr and is **not retained** by the decoder
-	// (sections.go decodeTableForm says so, and that form is GC-gated), so no accepted module
-	// on the default board reaches here wanting a non-null fill.
+	// This paragraph said "every slot null" and named that as the whole story until #419, which was
+	// true of what the *decoder retained* rather than of the rule: the 0x40 form's initializer was
+	// read and discarded, so there was no other value to fill with. Both halves changed together —
+	// the field is retained and this fill reads it — and a fresh table's slots are still not
+	// "empty": they hold whatever `v.ref` is, and reading a null one is `uninitialized element`
+	// rather than an out-of-bounds access.
 	slots := make([]ref, lim.Min)
 	for i := range slots {
-		slots[i] = ref{Null: true}
+		slots[i] = v.ref
 	}
-	return &table{slots: slots, limits: lim, elemType: t.ElemType, mod: m}, nil
+	return &table{slots: slots, limits: lim, elemType: t.ElemType, mod: in.mod}, nil
 }
 
 // refSize bounds one slot's size in bytes for the allocation check above. Named so the bound

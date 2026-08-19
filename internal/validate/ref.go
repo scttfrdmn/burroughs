@@ -605,23 +605,31 @@ func (v *validator) tableOp(in binary.Instr) error {
 //     which contribute nothing in practice — an offset must be i32-typed — and are walked anyway,
 //     because whether they *can* contain a `ref.func` is a fact about a rule this function does not
 //     implement.
+//   - **tables'** initializer expressions (`table` = `tabletype tt ++ const c`), which is the
+//     source the section below records arriving.
 //
-// # One source is missing and it is a known over-rejection
+// # The sixth source arrived with #419, and it arrived on the schedule this comment predicted
 //
-// `free.ml`'s `table` is `tabletype tt ++ const c`: a table's own initializer expression
-// contributes, and `binary.Table` does not retain one — the decoder reads it and drops it
-// (`sections.go`'s `decodeTableForm`). So `(table 1 funcref (ref.func $f))` cannot reach this set
-// and its `ref.func` is reported undeclared. That is **reject-direction**, which is the reason it is
-// declared here rather than fixed here: it is a retention gap in `binary` of exactly 0027's shape,
-// gated behind GC, and its failure mode is a refusal rather than a module accepted unchecked.
+// What stood here was a declared over-rejection: `free.ml`'s `table` contributes a table's own
+// initializer, `binary.Table` retained none — the decoder read it and dropped it — so `(table 1
+// funcref (ref.func $f))` could not reach this set and its `ref.func` was reported undeclared. The
+// comment named the surfacing condition exactly: *"it is queued behind #8, and it will become one
+// the moment the encoder learns the field."* #419 is that moment, all four of its layers, and this
+// walk is the last of them.
 //
-// **Where it surfaces is one layer earlier than that, and the distinction matters for what "declared"
-// buys.** The suite reaches a table-with-initializer module as *module text*, and the wat encoder has
-// no such `(table …)` field yet (#8) — so today the vector is declined by the encoder and this rule
-// is never asked. The omission is therefore not currently visible as a red validator row either; it
-// is queued behind #8, and it will become one the moment the encoder learns the field. Stated in that
-// order because the weaker claim is the true one: this is declared prose plus a retention gap with a
-// named cause, not a failure some board is already reporting.
+// **The prediction was right and the tracking was not, which is the part worth keeping.** The
+// deferral's citation was #8 — the *encoder's* issue, not this gap's — so the only thing standing
+// between #419 and shipping an over-rejection was an instrument, and one fired: the all-on lane's
+// over-rejection table (#341's accept direction) reported `elem.wast:87` and `table.wast:93`, two
+// modules whose sole mention of the function outside a body is the table initializer
+// (`(table $t 10 (ref func) (ref.func $f))`; `(table $t2 10 funcref (ref.func $dummy))`). Had that
+// table not existed, the reject direction's own corpus could not have found this — a rule that
+// over-rejects refuses a module no `assert_invalid` is watching. A declared gap whose surfacing
+// condition is *another issue's completion* has no tripwire of its own, and nothing here fails when
+// the condition is met.
+//
+// Nothing shipped wrong: `Init` arrived in the same branch as this walk, so main never had a
+// retained initializer for this set to miss. That is why the record is a discharge and not a grave.
 //
 // Computed once per module and carried on the validator for the reference's reason — `refs` is a
 // field of `context`, computed before the first `check_func` — and not per body, which would make
@@ -642,6 +650,11 @@ func declaredFuncs(m *binary.Module) map[uint32]bool {
 	}
 	for i := range m.Globals {
 		add(m.Globals[i].Init)
+	}
+	// `free.ml`'s `table`, and only the defined tables have one: an imported table is a
+	// `binary.TableType` in `m.Imports` with no initializer to walk (see `binary.Table.Init`).
+	for i := range m.Tables {
+		add(m.Tables[i].Init)
 	}
 	for i := range m.Elems {
 		add(m.Elems[i].Offset)

@@ -36,10 +36,32 @@
 #   scripts/closecheck.sh <base> <head>      # a range: a PR merge base to its tip
 #   scripts/closecheck.sh --worktree [base]  # base (default `main`) against HEAD
 #   scripts/closecheck.sh --pr <number>      # the PR body and title, which need the network
+#   scripts/closecheck.sh --body <file>      # a body before it is a PR, offline
 #
 # The revision forms match citecheck.sh and ratio.sh deliberately: three tools that answer a
 # question about a diff should take a diff the same way. Read the siblings before writing the
 # reader.
+#
+# ## `--body <file>`, and the gap it closes
+#
+# Ordered by Scott on the #396 report: *"It rides the next slice. No issue — filing one costs more
+# than the fix, and 'a body is a file before it is a PR' is the whole design."* The `--pr` form can
+# only run **after** a push, so `make check` cannot mirror CI on the body axis and the recipe in
+# `docs/laws/operations.md` has to compensate by hand after `gh pr create`. It compensates
+# imperfectly: at #398 the body opened with a banned construct, `make close` reported green over the
+# *commit* half, and that green was read as the sweep's verdict — a verdict about a population that
+# was not the one at risk.
+#
+# So this form takes the file the body is written into and scans it before the push. Two refusals
+# rather than one, both for the reason the `--pr` arm refuses a failing fetch: **an unreadable file
+# and an empty one are both "the question was not asked"**, and an empty body is the likelier
+# mistake of the two, since a file that does not exist yet reads as zero lines under a redirect that
+# went somewhere else.
+#
+# **The title is a stated under-match.** GitHub parses the title too, and a local file holds only the
+# body; supplying the title as a second argument would invent a second convention for the caller to
+# get wrong. The `--pr` form covers both channels and CI runs it, which is the same split as
+# everywhere else here: the local run is runnable, the CI run is binding.
 #
 # ## Both channels, because GitHub acts on both
 #
@@ -88,6 +110,13 @@
 # checker enforced that against its own author before a human read the page. That third case is the
 # one worth keeping: the first two were arranged, and this one was not.
 #
+# `--body` arrived with its own four-arm control (`internal/testenv/closebody_test.go`), and both of
+# its refusals were watched die under their own mutation: with the empty-file guard removed the form
+# prints `0 lines scanned, 0 banned constructs` and exits 0, which is the exact green it exists to
+# prevent. Its first real run was over the body of the PR that added it — 161 lines against the `--pr`
+# form's 162, the difference being the title, which is this form's stated under-match rather than an
+# off-by-one.
+#
 # One arithmetic note, because the figure was checked against its subject and did not match. The
 # line count is one lower than `git log --format=%B <range> | grep -c ''` emits: command
 # substitution strips trailing newlines, so a message ending in a blank line loses it. The count is
@@ -100,12 +129,18 @@ set -eu
 
 prmode=0
 prnum=""
-base="${1:?usage: closecheck.sh <rev> | <base> <head> | --worktree [base] | --pr <number>}"
+bodymode=0
+bodyfile=""
+base="${1:?usage: closecheck.sh <rev> | <base> <head> | --worktree [base] | --pr <number> | --body <file>}"
 head="${2-}"
 case "$base" in
 --pr)
 	prmode=1
 	prnum="${2:?--pr needs a number}"
+	;;
+--body)
+	bodymode=1
+	bodyfile="${2:?--body needs a file}"
 	;;
 --worktree)
 	base="${2-main}"
@@ -181,6 +216,22 @@ if [ "$prmode" -eq 1 ]; then
 	label="PR #$prnum (title and body)"
 	nlines="$(printf '%s\n' "$body" | grep -c '' || true)"
 	found="$(printf '%s\n' "$body" | scan | sort -u)"
+elif [ "$bodymode" -eq 1 ]; then
+	if [ ! -r "$bodyfile" ]; then
+		echo "FAIL  $bodyfile could not be read, so no body was scanned."
+		echo "      This is not a pass, for the reason a missing gh is not: a check that could"
+		echo "      not ask its question does not get to report green."
+		exit 1
+	fi
+	nlines="$(grep -c '' <"$bodyfile" || true)"
+	if [ "$nlines" -eq 0 ]; then
+		echo "FAIL  $bodyfile is empty, so the scan below would have found nothing in nothing."
+		echo "      An empty file is the likelier of this form's two mistakes — a redirect that"
+		echo "      went elsewhere leaves a readable file with no body in it."
+		exit 1
+	fi
+	label="the body file $bodyfile"
+	found="$(scan <"$bodyfile" | sort -u)"
 else
 	msgs="$(git log --format='%B' "$base..$head" || true)"
 	label="commit messages in $(git rev-parse --short "$base")..$(git rev-parse --short "$head")"

@@ -435,7 +435,7 @@ func matchMemoryType(got, want binary.Limits) bool {
 }
 
 // matchTableType is `match_tabletype` (match.ml:170-172).
-func matchTableType(gotMod *binary.Module, got *table, wantMod *binary.Module, want binary.Table) bool {
+func matchTableType(gotMod *binary.Module, got *table, wantMod *binary.Module, want binary.TableType) bool {
 	return got.limits.Addr64 == want.Limits.Addr64 &&
 		matchLimits(got.limits, want.Limits) &&
 		validate.MatchValType(gotMod, got.elemType, wantMod, want.ElemType) &&

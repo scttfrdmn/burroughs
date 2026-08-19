@@ -636,6 +636,43 @@ type resolvedTable struct {
 	elem   resolvedVal
 }
 
+// textTable is one *defined* table as the parse read it: its type and its initializer (#419).
+//
+// **`textGlobal`'s shape, copied rather than re-derived** (*lessons are indexed by shape*), because a
+// table is the same two things a global is: `let Table (tt, c) = t.it in tabletype tt; const c`
+// (encode.ml:958-963). The type stays unresolved for `tabType`'s reason and the initializer is an
+// `instrSink` for `textGlobal.init`'s — position is the one thing a stage-2 thunk cannot recover.
+//
+// Distinct from `resolvedTable`, which is the *type* alone and is what an import descriptor holds: an
+// imported table has a `tabletype` and no initializer by construction, and that is not a default. The
+// reference says so one production up — `externtype`'s table arm is `tabletype`, with no initializer
+// arm to take (decode.ml:309) — and reading the two grammars through one function is grave #420.
+type textTable struct {
+	typ  tabType
+	init instrSink
+}
+
+// resolvedTableDef is a defined table after stage 2: the element type resolved and the initializer
+// encoded, so the writer cannot fail. `resolvedGlobalDef`'s sibling, field-for-field.
+type resolvedTableDef struct {
+	typ resolvedTable
+	// init is the const expression's bytes **including** its `0x0b` terminator, as
+	// `resolvedGlobalDef.init` holds a global's.
+	//
+	// **Never empty for a defined table, and that is what makes the emitter armless.** The bare
+	// `tabletype` arm has no expression in the source, so `tableField` synthesizes `ref.null ht`
+	// there (parser.mly:1194-1195) exactly as the binary decoder synthesizes one for the bare wire
+	// form — which leaves `encodeTables` deriving the plain-versus-`0x40` choice from the
+	// initializer it holds rather than from which arm parsed.
+	//
+	// A bare `0x0b` — a zero-instruction expression — only on a **recognize-only** parse, where
+	// `tableField` installs no sink at all for the reason `intoSink` gates on the mode. Nothing
+	// reads these bytes on that path, and the value is stated rather than left as "empty" because
+	// `constExprBytes` writes the terminator unconditionally: the same one-byte result a passive
+	// data segment's absent offset produces, and the same reason it is never emitted.
+	init []byte
+}
+
 // idxRef is a `typeuse`'s operand (parser.mly:470-471, `idx` at :487-489), kept unresolved.
 //
 // **The two arms fail differently and the reference's messages say so.** `idx`'s NAT arm is
@@ -802,15 +839,26 @@ func (c *context) defineMemory(mt memType) { c.memDefs = append(c.memDefs, mt) }
 // discarded and with it the lookup. Measured, and the suite has no vector for it — `ref.wast:42`
 // spells the numeric form as `assert_invalid`, the validator's, so nothing on the board could see
 // the symbolic one.
-func (c *context) defineTable(tt tabType) {
+//
+// **The initializer defers for `defineGlobal`'s second reason, not for the type's** (#419): a table's
+// const expression can be `global.get $g` naming an *imported* global bound later in the field list,
+// which `table.wast:102` spells — `(table $t4 10 funcref (global.get $g))` with `$g` imported. Its
+// instructions were retained at the cursor by `tableField`; this thunk only encodes them, which is
+// the division of labour `defineGlobal` and `defineData` both state.
+func (c *context) defineTable(t textTable) {
 	i := len(c.tabDefs)
-	c.tabDefs = append(c.tabDefs, resolvedTable{addr64: tt.addr64, lim: tt.lim})
+	c.tabDefs = append(c.tabDefs, resolvedTableDef{})
 	c.deferOp(func() error {
-		rv, err := c.resolveVal(tt.elem)
+		rv, err := c.resolveVal(t.typ.elem)
 		if err != nil {
 			return err
 		}
-		c.tabDefs[i].elem = rv
+		c.tabDefs[i].typ = resolvedTable{addr64: t.typ.addr64, lim: t.typ.lim, elem: rv}
+		init, err := c.constExprBytes(t.init)
+		if err != nil {
+			return err
+		}
+		c.tabDefs[i].init = init
 		return nil
 	})
 }
