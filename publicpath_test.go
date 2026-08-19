@@ -53,10 +53,14 @@ import (
 //
 // Asserted: path agreement; agreement with the vectors over the population this driver can drive; that
 // no gate refusal is classified as anything but ErrGated (grave #301); that the validator now on the
-// run path refuses **no** module the corpus offers as valid; that the buckets partition. Counted and
-// logged: the decline census, which is #9's frontier stated in modules a user would actually hand this
-// engine, and the domain split — 14500 of the comparisons run on a fully-checked module and 11166 on a
-// declining one, a decline being callable rather than refused.
+// run path refuses **no** module the corpus offers as valid; that no import-free module arms carrying a
+// deferred shortfall (grave #421); that the buckets partition. Counted and logged: the decline census,
+// which is #9's frontier stated in modules a user would actually hand this engine, and the domain
+// split, a decline being callable rather than refused.
+//
+// The split's *figures* are printed by the run and deliberately not repeated here — see the long
+// domain section at the vector assertion for the two generations of stale arithmetic that decided
+// that.
 //
 // (An earlier draft of this paragraph listed vector agreement under "counted and logged" while the code
 // below asserted it. Comments are testimony and the executable outranks; corrected here rather than
@@ -238,12 +242,23 @@ type publicTally struct {
 	refusedOther      int // a trap at time zero, an unsupplied import, an encoder frontier
 	gateMisclassified int // a gate refusal wearing another sentinel — asserted at zero
 
+	// importing is **not one of the buckets above** — it cuts across them, which is why it is
+	// stated apart from a partition whose whole readability rests on membership being exclusive. A
+	// module carrying imports still instantiates, so it lands in `ran`, `declined` or a refusal
+	// like any other; what this counts is that it was not *driven*, because nothing supplied what
+	// it imports. Grave #421's counter.
+	importing int
+	// incomplete counts armed, import-free modules whose `Deferred` is non-nil — asserted at zero,
+	// and orthogonal to the buckets for `importing`'s reason. Grave #421's other half.
+	incomplete int
+
 	asserts    int // assert_return commands seen
 	compared   int // driven down both paths and judged
 	comparedOn struct {
 		ran, declined int // which kind of instance the comparison ran against
 	}
 	noInstance int // nothing trustworthy to call: the module was refused, or the script diverged
+	unlinked   int // the module imports something no linking surface exists to supply (grave #421)
 	unpassable int // an argument or result shape this API cannot carry
 	callFailed int // both paths failed the call the same way
 	disagreed  int // THE assertion: the two paths answered differently
@@ -265,7 +280,7 @@ func TestConformanceThroughThePublicPath(t *testing.T) {
 	}
 
 	tally := publicTally{declines: map[string]int{}}
-	var disagreements, mismatches []string
+	var disagreements, mismatches, incompletes []string
 
 	for _, path := range paths {
 		s, err := spec.ParseFile(path)
@@ -291,11 +306,16 @@ func TestConformanceThroughThePublicPath(t *testing.T) {
 		// domain is a claim about this instrument, and "the declines are the excluded population" is
 		// a plausible reading of the module census that happens to be false.
 		declinedNow := false
+		// Whether the armed module imports something nothing supplied — the trust break's reason,
+		// kept apart from the others so the asserts it costs are named rather than pooled into
+		// `noInstance`. Grave #421.
+		unlinkedNow := false
 
 		for _, c := range s.Commands {
 			switch c.Kind {
 			case spec.KindModuleBinary, spec.KindModuleText, spec.KindModuleQuote:
 				pub, raw, trusted, declinedNow = nil, nil, false, false
+				unlinkedNow = false
 				tally.modules++
 
 				image := c.Module
@@ -368,6 +388,60 @@ func TestConformanceThroughThePublicPath(t *testing.T) {
 						base, c.Line, rtrap))
 					continue
 				}
+				// **A module whose imports nothing supplied is not the script's module, and this is
+				// grave #421.** The trust break for linking was installed on the *supply* side —
+				// `(register …)` sets `trusted = false` three arms down — and a module command
+				// clears the flag again, so it protected nothing: the demand side, an `(import …)`
+				// in the module itself, armed and was driven with the imported global reading zero,
+				// the imported function absent, the imported memory a different memory. The
+				// condition arises at two places and the guard was at one of them, which is this
+				// file's own grave twice already (`publicArgs` above, in both of its arms).
+				//
+				// Latent rather than harmless: `global.wast:634` is the module that surfaced it, an
+				// imported `i32` read by two *defined* globals which are in turn two active segment
+				// offsets, so the corpus asks a question whose answer survives instantiation and is
+				// readable from an export. It reached this driver for the first time in #419 — its
+				// table carries a spelled initializer, so the emitter had refused it — and answered
+				// `ref.null` for a `funcref` at index 4 and 0 for `0x44444444` at address 4, both of
+				// them the offsets collapsing to zero because global 0 was never supplied. Every
+				// other import-bearing module in the corpus had been trusted too and got away with
+				// it, because an absent import is usually reached *through a call*, which then fails
+				// identically on both paths and lands in `callFailed`.
+				//
+				// The property is read off the module rather than off the failure: `len(m.Imports)`
+				// is total and syntactic, where matching the decline's text would be a guess about
+				// which absences the instance happened to notice. Imports are unsupplied *by
+				// construction* here — this API has no linking surface at all (0029's scope, stated
+				// at the `KindRegister` arm) — so the predicate needs no second condition.
+				if len(m.Imports) > 0 {
+					tally.importing++
+					pub, raw, trusted, unlinkedNow = in, rin, false, true
+					continue
+				}
+				// **And the channel the boundary already published for this fact, now read.**
+				// `Instance.Deferred` exists precisely to say "a nil trap is not the same claim as
+				// this module came to life completely", and its doc names the unsupplied-import case
+				// as its example — so the fact was available at the boundary all along and this
+				// driver did not ask. That is the other half of #421, and the reason the import
+				// predicate above is not written as `Deferred() != nil`: the two catch different
+				// populations. A shortfall is only recorded where instantiation *reached* it, so an
+				// imported function nothing calls at load defers nothing while still being absent;
+				// and conversely a module with **no imports at all** that defers anything is a
+				// finding, since every other cause is an engine shortfall this driver would
+				// otherwise drive straight past and judge.
+				//
+				// Asserted at zero rather than counted, on the same argument as `refusedInvalid`
+				// below: the population is not a legitimate exclusion, it is a claim that the
+				// instance is incomplete for a reason unrelated to linking.
+				if d := in.Deferred(); d != nil {
+					tally.incomplete++
+					incompletes = append(incompletes, fmt.Sprintf(
+						"%s:%d: an import-free module armed carrying a deferred shortfall, so the "+
+							"instance is incomplete and its exports would be judged anyway: %v",
+						base, c.Line, d))
+					pub, raw, trusted = in, rin, false
+					continue
+				}
 				pub, raw, trusted = in, rin, true
 
 			case spec.KindInvoke, spec.KindAssertTrapAction, spec.KindAssertException:
@@ -410,7 +484,15 @@ func TestConformanceThroughThePublicPath(t *testing.T) {
 			case spec.KindAssertReturn:
 				tally.asserts++
 				if !trusted {
-					tally.noInstance++
+					// Two reasons, two buckets. An unlinked module is an exclusion this API's scope
+					// implies and can be quoted as such; a plain no-instance is a refusal or a
+					// divergence upstream. Pooling them would put the linking gap's whole cost
+					// inside a number that already had a different meaning.
+					if unlinkedNow {
+						tally.unlinked++
+					} else {
+						tally.noInstance++
+					}
 					continue
 				}
 				args, ok := publicArgs(c.Args)
@@ -506,15 +588,18 @@ func TestConformanceThroughThePublicPath(t *testing.T) {
 
 	t.Logf("the public path over %d scripts:\n"+
 		"  modules  %5d = %d ran + %d declined + %d gated + %d malformed + %d other + %d INVALID\n"+
-		"  asserts  %5d = %d compared + %d no-instance + %d unpassable + %d call-failed + %d DISAGREED\n"+
+		"  of the %d modules, %d carry imports and are therefore not driven (no linking surface)\n"+
+		"  asserts  %5d = %d compared + %d no-instance + %d unlinked + %d unpassable + "+
+		"%d call-failed + %d DISAGREED\n"+
 		"  of the %d compared, %d ran on a fully-checked module and %d on a declining one\n"+
 		"  of the %d compared, %d disagreed with their vector — engine fails the board already owns,\n"+
 		"  which is a reading the zero above licenses and nothing else would",
 		tally.files,
 		tally.modules, tally.ran, tally.declined, tally.refusedGated, tally.refusedMalformed,
 		tally.refusedOther, tally.refusedInvalid,
-		tally.asserts, tally.compared, tally.noInstance, tally.unpassable, tally.callFailed,
-		tally.disagreed,
+		tally.modules, tally.importing,
+		tally.asserts, tally.compared, tally.noInstance, tally.unlinked, tally.unpassable,
+		tally.callFailed, tally.disagreed,
 		tally.compared, tally.comparedOn.ran, tally.comparedOn.declined,
 		tally.compared, tally.mismatched)
 	t.Logf("the declining constructs — #9's frontier as a host meets it: %s", topN(tally.declines, 8))
@@ -528,8 +613,8 @@ func TestConformanceThroughThePublicPath(t *testing.T) {
 		tally.refusedMalformed + tally.refusedOther; got != tally.modules {
 		t.Errorf("the module buckets sum to %d, not %d", got, tally.modules)
 	}
-	if got := tally.compared + tally.noInstance + tally.unpassable + tally.callFailed +
-		tally.disagreed; got != tally.asserts {
+	if got := tally.compared + tally.noInstance + tally.unlinked + tally.unpassable +
+		tally.callFailed + tally.disagreed; got != tally.asserts {
 		t.Errorf("the assert buckets sum to %d, not %d", got, tally.asserts)
 	}
 
@@ -560,24 +645,56 @@ func TestConformanceThroughThePublicPath(t *testing.T) {
 	// nose**; a tolerated count is exactly the second ledger this design refuses.
 	// (Ruling: chat-Claude, PR #302, on the flag this comment used to carry.)
 	//
-	// # The domain, stated — and it is not the 1067
+	// # The domain, stated — and every figure this section ever carried has gone stale once
 	//
 	// The ruling came with a reading of the census: that the declines carry the legitimate exclusions,
-	// so the comparison's domain is the 1067 fully-checked modules. **Measured, that is false, and by
-	// a wide margin.** A decline is not a refusal — it says this validator slice could not check every
-	// instruction, not that the module is rejected — so a declining module instantiates, arms, and has
-	// its exports called like any other. 11166 of the 25666 comparisons, 43%, run on one. The domain
-	// is therefore **1787 module forms (1067 ran + 720 declined)**, and the split is printed above so
-	// the next reader does not have to re-derive it from the module census.
+	// so the comparison's domain is the fully-checked modules alone. That is false in principle and
+	// stays false — a decline is not a refusal, it says this validator slice could not check every
+	// instruction, not that the module is rejected, so a declining module instantiates, arms, and has
+	// its exports called like any other. What *has* changed is the arithmetic the section used to
+	// argue it with: "11166 of the 25666 comparisons, 43%, run on one", over a domain of "1787 module
+	// forms (1067 ran + 720 declined)".
 	//
-	// The exclusions are the other buckets, and they are already what the ruling asks for — named, with
-	// a reason each, never a tolerated count: 429 gated, 22 encoder-frontier, 26146 no-instance (a
-	// refused module or a trust break upstream), 78 unpassable argument or result shapes, 599 calls
-	// that failed identically on both paths.
+	// **Measured at #419: 8 declined, and 0 comparisons run on a declining module.** Nor is that this
+	// PR's doing — main measures 8 too, so the sentence had been wrong by two orders of magnitude for
+	// some number of PRs before this one, and the correction section had rotted exactly the way the
+	// claim it corrected did. The declines drained as the interpreter learned instructions: what is
+	// left is the seven relaxed-SIMD constructs in the log line above, and the modules carrying them
+	// pass v128 arguments this API cannot spell, so their asserts land in `unpassable` and the
+	// declining population contributes no comparisons at all. The split stays printed above, and the
+	// live figures belong in that log rather than in this paragraph, which is the second-order half of
+	// the lesson: a prose figure is a measurement with no instrument watching it.
+	//
+	// The domain today is therefore **1608 module forms** — 1788 ran + 8 declined, less the 180 that
+	// import something no linking surface supplies (grave #421) — carrying 25353 comparisons.
+	//
+	// The exclusions are the other buckets, and they are already what the ruling asks for — named,
+	// with a reason each, never a tolerated count: 440 gated, 2 encoder-frontier, 26135 no-instance (a
+	// refused module or a trust break upstream), 923 unlinked, 78 unpassable argument or result
+	// shapes, 0 calls that failed identically on both paths — that last one having been 599 until
+	// #421, every one of them a call into a module whose import was missing, which is why they were
+	// failing on both paths in the first place.
 	if tally.mismatched != 0 {
 		t.Errorf("%d of %d assertions driven through the public path disagreed with their vector "+
 			"(showing %d):\n%s", tally.mismatched, tally.compared, min(len(mismatches), 20),
 			sample(mismatches, 20))
+	}
+
+	// The second half of grave #421, asserted rather than counted — see the module arm for why the
+	// population is not a legitimate exclusion. Zero today, and the value is in the direction it
+	// would move: engine capability growth cannot make this non-zero, only an engine shortfall
+	// reached at instantiation can, and this driver is the only place that reads the channel.
+	//
+	// **Watched fire before being believed.** A zero over a condition the corpus may not contain is
+	// an unreached branch wearing a pass, so the residual was certified against real data: neutering
+	// the import predicate in the module arm — the only thing standing between this check and the 180
+	// import-bearing modules — makes it report **51**, `data.wast:100` first, each one an active data
+	// segment whose target memory is an unsupplied import. So the mechanism reaches the channel, reads
+	// it, and formats it; with the predicate in place the 51 are all inside the 180 and the remainder
+	// is a measured zero.
+	if tally.incomplete != 0 {
+		t.Errorf("%d import-free modules armed with a deferred shortfall (showing %d):\n%s",
+			tally.incomplete, min(len(incompletes), 10), sample(incompletes, 10))
 	}
 
 	// Grave #301's control. Zero is the only readable answer: the message names a proposal, so a
