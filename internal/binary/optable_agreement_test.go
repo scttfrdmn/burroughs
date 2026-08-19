@@ -880,7 +880,7 @@ func TestEveryNonConstByteGetsTheRightVerdict(t *testing.T) {
 		// runs out of bytes, so the expected error depends on the bucket and the test
 		// says which rather than accepting any error.
 		r := &reader{b: []byte{byte(b)}, eof: ErrPayloadEnd}
-		err := d.decodeConstExpr(r)
+		err := constExprErr(d, r)
 
 		info, ok := opTable[uint32(b)]
 		switch {
@@ -947,7 +947,7 @@ func TestEveryNonConstByteGetsTheRightVerdict(t *testing.T) {
 			// is released. Without this, the assertion above is satisfied by a reader that
 			// *never* reports non-constness at all.
 			if img, ok := wellFormedExpr(c, byte(b), info); ok {
-				err := d.decodeConstExpr(&reader{b: img, eof: ErrPayloadEnd})
+				err := constExprErr(d, &reader{b: img, eof: ErrPayloadEnd})
 				if !errors.Is(err, ErrConstExprRequired) {
 					t.Errorf("%#02x (%s): % x is a well-formed expression containing a non-const "+
 						"instruction; want ErrConstExprRequired, got %v", b, info.mnemonic, img, err)
@@ -1070,7 +1070,7 @@ func TestPrefixedOpcodeVerdicts(t *testing.T) {
 		img = append(img, prefix)
 		img = append(img, ulebBytes(unknown)...)
 		r := &reader{b: img, eof: ErrPayloadEnd}
-		err := d.decodeConstExpr(r)
+		err := constExprErr(d, r)
 		if !errors.Is(err, ErrIllegalOpcode) {
 			t.Errorf("%#02x %#x (unknown sub-opcode): want ErrIllegalOpcode, got %v", prefix, unknown, err)
 			continue

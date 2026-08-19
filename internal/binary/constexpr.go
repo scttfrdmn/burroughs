@@ -23,7 +23,7 @@ func (d *Decoder) decodeGlobal(r *reader) error {
 	if err != nil {
 		return err
 	}
-	init, casts, err := d.decodeConstExprKeep(r)
+	init, casts, err := d.decodeConstExpr(r)
 	if err != nil {
 		return err
 	}
@@ -79,7 +79,7 @@ func (d *Decoder) decodeElemSegment(r *reader) error {
 				return err
 			}
 		}
-		if seg.Offset, seg.OffsetCasts, err = d.decodeConstExprKeep(r); err != nil { // offset
+		if seg.Offset, seg.OffsetCasts, err = d.decodeConstExpr(r); err != nil { // offset
 			return err
 		}
 	case flags&explicit != 0:
@@ -182,7 +182,7 @@ func (d *Decoder) decodeElemSegment(r *reader) error {
 	}
 	if seg.ByExpr {
 		elem = func(r *reader) error {
-			e, casts, err := d.decodeConstExprKeep(r)
+			e, casts, err := d.decodeConstExpr(r)
 			if err != nil {
 				return err
 			}
@@ -245,8 +245,9 @@ func (d *Decoder) decodeDataSegment(r *reader) error {
 // signal about the shape rather than about the config (decision 0005's spirit
 // clause). Narrowing the scope so neither applies is the fix both were asking for.
 // Retaining as of 0015: it returns the staged segment rather than reporting only whether the
-// mode read. `decodeConstExprKeep` is the retaining twin whose doc comment named #7 as its
-// missing consumer; this is that consumer arriving.
+// mode read, through what was then `decodeConstExprKeep` — the retaining twin whose doc comment
+// named #7 as its missing consumer, this being that consumer arriving. The twin is now the only
+// entry point (#419), so the name here is the plain one.
 func (d *Decoder) decodeDataSegmentMode(r *reader) (DataSegment, error) {
 	var seg DataSegment
 	flags, err := r.u32()
@@ -255,7 +256,7 @@ func (d *Decoder) decodeDataSegmentMode(r *reader) (DataSegment, error) {
 	}
 	switch flags {
 	case 0x00: // active, memory 0 implied
-		seg.Offset, seg.OffsetCasts, err = d.decodeConstExprKeep(r)
+		seg.Offset, seg.OffsetCasts, err = d.decodeConstExpr(r)
 		return seg, err
 	case 0x01: // passive: no memory index, no offset
 		seg.Passive = true
@@ -268,7 +269,7 @@ func (d *Decoder) decodeDataSegmentMode(r *reader) (DataSegment, error) {
 		if seg.MemIndex, err = r.u32(); err != nil {
 			return seg, err
 		}
-		seg.Offset, seg.OffsetCasts, err = d.decodeConstExprKeep(r)
+		seg.Offset, seg.OffsetCasts, err = d.decodeConstExpr(r)
 		return seg, err
 	default:
 		return seg, fmt.Errorf("%w: %#02x", ErrMalformedDataSegKind, flags)

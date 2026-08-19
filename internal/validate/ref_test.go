@@ -242,28 +242,36 @@ func TestRefFuncTypesAsTheFunctionsOwnType(t *testing.T) {
 // walked declarative element segments only, on the strength of `(elem declare …)` being the
 // idiomatic spelling; the passive, active and index-form rows are what that draft would have failed.
 //
-// Measured, per source: dropping the export walk fails 1 row, the global walk 1, the element index
-// form 1 here and 6 elsewhere in this file. Adding the function bodies to the set fails 2 — the
-// bodies row and the start row, which is the tell that those two exclusions are one rule; adding the
-// start section fails 1. Every source is therefore load-bearing for at least one row, which is what
-// makes the enumeration a domain rather than a list of examples.
+// Measured, per source: dropping the export walk fails 1 row, the global walk 1, the table walk 1,
+// the element index form 1 here and 6 elsewhere in this file. Adding the function bodies to the set
+// fails 2 — the bodies row and the start row, which is the tell that those two exclusions are one
+// rule; adding the start section fails 1. Every source is therefore load-bearing for at least one
+// row, which is what makes the enumeration a domain rather than a list of examples.
 func TestRefFuncDeclarationCountsEverySourceTheReferenceFreeVariablePassDoes(t *testing.T) {
 	// Each row's module declares `$f` through exactly one source and then reads it from a *body*,
 	// which is the one place that cannot declare it.
-	sources := []struct{ name, decl string }{
-		{"export", `(export "f" (func $f))`},
-		{"global initializer", `(global funcref (ref.func $f))`},
-		{"elem declarative, index form", `(elem declare func $f)`},
-		{"elem declarative, expr form", `(elem declare funcref (item (ref.func $f)))`},
-		{"elem passive, expr form", `(elem funcref (item (ref.func $f)))`},
-		{"elem passive, index form", `(elem func $f)`},
-		{"elem active, index form", `(table 1 funcref) (elem (i32.const 0) func $f)`},
-		{"elem active, expr form", `(table 1 funcref) (elem (i32.const 0) funcref (item (ref.func $f)))`},
+	//
+	// `gate` is nil for every row but the last: a `(table … (ref.func $f))` field is the `0x40` wire
+	// form, which decision 0008 puts behind GC, so the row that needs it says so instead of the
+	// whole table running on a lane it does not need.
+	sources := []struct {
+		name, decl string
+		gate       func(*binary.Features)
+	}{
+		{"export", `(export "f" (func $f))`, nil},
+		{"global initializer", `(global funcref (ref.func $f))`, nil},
+		{"elem declarative, index form", `(elem declare func $f)`, nil},
+		{"elem declarative, expr form", `(elem declare funcref (item (ref.func $f)))`, nil},
+		{"elem passive, expr form", `(elem funcref (item (ref.func $f)))`, nil},
+		{"elem passive, index form", `(elem func $f)`, nil},
+		{"elem active, index form", `(table 1 funcref) (elem (i32.const 0) func $f)`, nil},
+		{"elem active, expr form", `(table 1 funcref) (elem (i32.const 0) funcref (item (ref.func $f)))`, nil},
+		{"table initializer", `(table 1 funcref (ref.func $f))`, gcOn},
 	}
 	for _, s := range sources {
 		t.Run(s.name, func(t *testing.T) {
 			wat := `(module (func $f) ` + s.decl + ` (func (result funcref) (ref.func $f)))`
-			if _, err := validated(t, wat, nil); err != nil {
+			if _, err := validated(t, wat, s.gate); err != nil {
 				t.Errorf("a $f declared only by %s was reported undeclared: %v — `Free.module_` "+
 					"unions every mode and every holder, and a set built from the idiomatic "+
 					"spelling alone rejects valid modules", s.name, err)
@@ -324,12 +332,19 @@ func TestRefFuncDeclarationCountsEverySourceTheReferenceFreeVariablePassDoes(t *
 		}
 	})
 
-	// The source that is *not* covered, stated rather than omitted. `free.ml`'s `table` contributes a
-	// table's own initializer expression and `binary.Table` retains none, so this is a known
-	// over-rejection — and it cannot be witnessed here either, because the wat encoder has no
-	// `(table … (ref.func $f))` field yet (#8). Two layers short of a witness, which is why it is
-	// declared in `declaredFuncs`' comment and asserted nowhere: the honest record of an untestable
-	// claim is the claim, not a test that passes for a different reason.
+	// What stood here was the source that was *not* covered: `free.ml`'s `table` contributes a
+	// table's own initializer expression, `binary.Table` retained none, and the paragraph's own
+	// account of why it was prose rather than a row was "two layers short of a witness" — the wat
+	// encoder had no `(table … (ref.func $f))` field (#8) and the decoder dropped the expression.
+	// #419 built both layers, so the claim became testable and is now the table's last row, which is
+	// the ending that paragraph asked for: *"the honest record of an untestable claim is the claim,
+	// not a test that passes for a different reason."*
+	//
+	// **It failed before `declaredFuncs` walked `m.Tables`, and it was not the first instrument to
+	// say so** — the all-on lane's over-rejection table got there first, with `elem.wast:87` and
+	// `table.wast:93`. That order is the lesson worth leaving here: this row is the *cheap* witness
+	// and it did not exist, because the prose that named the gap named its blocker (#8) instead of
+	// filing it, and a deferral whose tripwire is another issue's completion fires for nobody.
 }
 
 // TestTheSingleByteOpcodeSpaceIsFullyTyped is slice 8's charged overhead (ADR 0034) in its third and

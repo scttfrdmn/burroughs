@@ -3,6 +3,7 @@ package binary
 import (
 	"errors"
 	"maps"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -616,10 +617,12 @@ func TestTagSectionIsWellFormedButGated(t *testing.T) {
 //     the thing declining it is the engine's configuration, and it must say so. Asserted
 //     negatively as well — `ErrMalformedRefType` specifically, since that is the string
 //     the defect produced and a regression would produce it again.
-//  2. **Gate on**: accepted. This is the half that proves the fix is a decode and not a
-//     relabelled rejection. It also reaches the initializer through decodeConstExpr, so a
-//     pass here says the const-expr descent works, not merely that the prefix was
-//     recognised.
+//  2. **Gate on**: accepted, **and the initializer read back** rather than the accept taken as
+//     proof of one. Until #419 the expression was decoded and dropped, so "accepted" was the
+//     strongest thing available and it said only that the const-expr descent did not error.
+//     A status flag cannot distinguish a retained `ref.func 0` from a retained nothing
+//     (evidence-and-instruments.md: read the write's payload, not its status), and with the
+//     field now populated the payload is the assertion.
 //
 // The vector is **cited**, not transcribed: the literal below is the assembled image of
 // elem.wast:453, and TestFixtureProvenance compares it against what the parser builds
@@ -643,8 +646,74 @@ func TestTableInitializerFormIsGatedNotMalformed(t *testing.T) {
 	}
 
 	on := &Decoder{Features: Features{GC: true}}
-	if _, err := on.DecodeModule(img); err != nil {
+	m, err := on.DecodeModule(img)
+	if err != nil {
 		t.Errorf("0x40 table form, GC gate on: got %v, want accept", err)
+		return
+	}
+	if len(m.Tables) != 1 {
+		t.Fatalf("decoded %d tables, want 1", len(m.Tables))
+	}
+	// `\d2\00\0b` is `ref.func 0` then END, and both instructions are asserted: an
+	// initializer truncated at the terminator still evaluates to the right value here, so a
+	// check on the first instruction alone would pass on a retention that lost the extent
+	// the whole grammar exists to discover.
+	want := []Instr{{Op: 0xD2, Imm0: 0}, {Op: 0x0B}}
+	if got := m.Tables[0].Init; !slices.Equal(got, want) {
+		t.Errorf("table initializer: got %+v, want %+v — the const expr is decoded and retained "+
+			"as of #419, so an accept no longer stands in for the value", got, want)
+	}
+}
+
+// TestImportedTableDescriptorHasNoInitializerForm is grave #420, pinned in the direction
+// that produced it.
+//
+// The reference's `externtype` reads an imported table's descriptor with `tabletype`
+// (decode.ml:309), which is `reftype limits` and has **no `0x40` arm**. The `0x40 0x00
+// tabletype const` form belongs to the table *section*'s `table` production
+// (decode.ml:1050-1064). This decoder read both through one helper — factored on the
+// difference that an import must not append to `m.Tables` — so an import descriptor
+// admitted a form the reference calls `malformed reference type`, on the all-gates-on lane,
+// where nothing in the corpus asks.
+//
+// Both lanes are asserted because the defect had a different shape on each. Gate off it was
+// already a refusal, but by the *wrong* mechanism — `gc: feature gate disabled` names a gated
+// construct, and here the byte is not a construct at all — so a fix that only moved the
+// all-on lane would leave the gate-off error still testifying to a feature. Gate on it was an
+// accept, which is the half with no vector: §9 G-3's blind spot.
+//
+// synthetic, and necessarily so: `binary.wast:397` is the suite's only `malformed reference
+// type` vector and its subject is an element segment's reftype. No vector in either direction
+// puts a `0x40` in an import descriptor, which is why this control is the only thing standing
+// between the fix and its own regression.
+func TestImportedTableDescriptorHasNoInitializerForm(t *testing.T) {
+	img := []byte{
+		0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00,
+		0x02, 0x0E, 0x01, // import section, one entry
+		0x01, 0x6D, 0x01, 0x74, 0x01, // "m" "t", kind 0x01 (table)
+		0x40, 0x00, 0x70, 0x00, 0x01, // the table section's form, in a descriptor that has no such arm
+		0xD0, 0x70, 0x0B, // ref.null func, END — the initializer it would have carried
+	}
+	for _, tc := range []struct {
+		name string
+		d    *Decoder
+	}{
+		{"GC gate off", &Decoder{}},
+		{"every gate on", &Decoder{Features: featuresAllOn(t)}},
+	} {
+		_, err := tc.d.DecodeModule(img)
+		if !errors.Is(err, ErrMalformedRefType) {
+			t.Errorf("%s: got %v, want ErrMalformedRefType — 0x40 is not a reftype and an "+
+				"import descriptor is `tabletype`, which has no arm that would make it one (grave #420)",
+				tc.name, err)
+			continue
+		}
+		// The gate-off half of the defect: a refusal that named a feature. `0x40` reaching
+		// this production is malformed regardless of which proposals are on, so an error
+		// mentioning a gate here is the old mechanism surviving behind the new verdict.
+		if got := err.Error(); strings.Contains(got, "feature gate") {
+			t.Errorf("%s: error %q declines by feature name for a byte no feature defines here", tc.name, got)
+		}
 	}
 }
 
@@ -685,10 +754,21 @@ func TestRefTypeReadsTheReferencesFourteenForms(t *testing.T) {
 	// Measured, not predicted — the first draft of this test asserted 2/10/114 over all
 	// 128 forms and found all three:
 	//
-	//	0x40  never reaches decodeRefType at all. decodeTable peeks it and takes the
-	//	      initializer form, so with GC on the `\00\01` limits are re-read as a zero
-	//	      byte plus a reftype and the error names `0x01`. The enclosing grammar owns
+	//	0x40  never reaches decodeRefType *through this image*. decodeTableForm peeks it and
+	//	      takes the initializer form, so with GC on the `\00\01` limits are re-read as a
+	//	      zero byte plus a reftype and the error names `0x01`. The enclosing grammar owns
 	//	      the byte; TestTableInitializerFormIsGatedNotMalformed is its control.
+	//
+	//	      **GRAVE (#420): "the enclosing grammar" was two grammars.** This exclusion is
+	//	      right about the table *section*'s `table` production and was written as though
+	//	      that were the only one; an import descriptor is `tabletype` (decode.ml:309),
+	//	      which has no `0x40` arm, so there the byte *is* decodeRefType's and is
+	//	      malformed. The exclusion note is the sentence that hid it — a control's
+	//	      carve-out inherits the domain its reason was written against, and this one's
+	//	      reason quantified over one caller while its wording quantified over all of
+	//	      them. TestImportedTableDescriptorHasNoInitializerForm is the other grammar's
+	//	      control, and the reason the two exist separately is that they now disagree
+	//	      about this byte on purpose.
 	//	0x63  -0x1d, `(ref null ht)` — takes a following heaptype, so a one-byte image
 	//	0x64  -0x1c, `(ref ht)`      — truncates instead of deciding. Both are covered by
 	//	      TestHeapTypeFollowsTheParameterizedForms, which supplies the second byte.

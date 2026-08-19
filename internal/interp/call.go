@@ -430,11 +430,19 @@ func funcRefTarget(r ref, site string) (*Instance, *binary.Func, error) {
 //  2. the slot holds null — `uninitialized element i` (`func_ref`, `:129`);
 //  3. the slot's function has the wrong type — `indirect call type mismatch` (`:277-280`).
 //
-// Checking 2 before 1 would report `uninitialized element` for an out-of-bounds index on every
-// table whose slots are null, which is *every table this engine builds* (newTable null-fills). So
-// the ordering is not a stylistic matter: `call_indirect.wast` has 6 vectors wanting the first
-// string and `elem.wast` 5 wanting the second, and a swapped pair fails both sets in opposite
-// directions.
+// Checking 2 before 1 would report `uninitialized element` for an out-of-bounds index on every table
+// whose slots are null. That used to be *every* table this engine builds, on the strength of
+// `newTable` null-filling unconditionally; as of #419 it fills from the table's initializer, so a
+// `(table 1 funcref (ref.func $f))` has no null slot in it at all. **The ordering argument survives
+// the premise it was written on, and is stronger without it**: the population at risk is now "every
+// table with a null slot" rather than "every table", and the 6 `call_indirect.wast` vectors wanting
+// `undefined element` still name in-range-looking indices into tables that are null where it counts —
+// so a swapped pair fails those 6 and `elem.wast`'s 5 in opposite directions exactly as before.
+//
+// Restated rather than left standing, because a parenthetical asserting what `newTable` does is a
+// citation to a sibling function, and this one had gone false while the sentence around it stayed
+// true. A reader checking the claim would have found the code disagreeing and no way to tell which
+// half was stale.
 //
 // # Why the type check compares functypes structurally
 //

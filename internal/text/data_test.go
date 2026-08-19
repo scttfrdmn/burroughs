@@ -26,15 +26,39 @@ import (
 //
 //   - **The sink is nil after the parse.** Without the restore it holds the offset's instructions —
 //     `&{[{[65] [0] <nil>}]}`, an `i32.const 0` still installed after the field closed.
-//   - **A later field's refusal names the field, not an instruction.** The leaked sink makes
+//   - **A later field's refusal names the field, not an instruction.** The leaked sink made
 //     `p.retaining()` true at module-field level, so `(table 1 funcref (ref.null func))` following a
-//     data segment reports *"cannot yet encode the ref.null instruction's immediates"* where it must
-//     report *"this (table …) field"*. An error from the wrong layer, this project's standing tell for
-//     lost structure — and the half worth having, because the leak is otherwise invisible: four of the
-//     six probed modules encode byte-identically with and without the restore.
+//     data segment reported *"cannot yet encode the ref.null instruction's immediates"* where it had
+//     to report *"this (table …) field"*. An error from the wrong layer, this project's standing tell
+//     for lost structure — and it was the half worth having, because the leak is otherwise invisible:
+//     four of the six probed modules encode byte-identically with and without the restore.
+//
+// **That second half is gone as of #419, and its loss is recorded here rather than in the deletion's
+// diff.** The probe worked by putting a *field-level* refusal after the data segment, and #419 closed
+// the last one: `tableField`'s `constexpr1` arm now retains its initializer and withdraws the
+// frontier, so no well-formed module field is refused as a field any more and there is nothing whose
+// layer the leak can change. Re-measured before deleting, by neutering the `defer` on this branch:
+// half one fails on four of its five rows and **nothing else in the package fails at all** — not one
+// image differs, not one verdict flips. So the deletion is what the measurement says, and this
+// paragraph is what a reader gets instead of a row that would pass either way.
+//
+// What would make the leak visible again, stated because it is a live risk rather than a retired one
+// (the re-pointing rule, #33): a construct parsed at **module-field scope that consults
+// `retaining()` without establishing a sink**. There is none today because every instruction-parsing
+// site outside a function body goes through `intoSink`, which gates on the *mode* (`p.retain`, grave
+// #144) and therefore installs its own sink whether or not one leaked. `expr1`'s leader splice
+// (parser.go's `retaining()`-and-not-`p.retain` site) is exactly such a consulting caller, and its
+// own comment already forecasts the module-field-scope case — under a leak it would splice a leader
+// into *the data segment's offset expression* rather than nil-dereference, which is a corrupted
+// image and not a crash. Half one is what stands between the two.
 func TestRetainedOffsetRestoresTheOuterSink(t *testing.T) {
-	// Half one: the sink is clear when the field is done. Every arm that installs one, since the
-	// spellings reach `retainedOffset` by three different paths in `dataField` plus the sugar's.
+	// The sink is clear when the field is done. Every arm that installs one, since the spellings
+	// reach `retainedOffset` by three different paths in `dataField` — **plus one row that does not
+	// reach it at all**, which the neutering above measured and this now says: `(module (memory (data
+	// "a")))` synthesizes its offset through `sugarZeroOffset`, which builds a sink and never installs
+	// it, so that row is the only one of the five the restore cannot fail. Kept, because it is the row
+	// that says the sugar path leaves no sink behind *either* — a different claim from the other four,
+	// and the one that would break if the sugar ever started parsing its offset instead of building it.
 	for _, src := range []string{
 		`(module (memory 1) (data (i32.const 0) "a"))`,
 		`(module (memory 1) (data (offset (i32.const 0)) "a"))`,
@@ -53,28 +77,6 @@ func TestRetainedOffsetRestoresTheOuterSink(t *testing.T) {
 					"parses as though it were inside a function body", p.sink)
 			}
 		})
-	}
-
-	// Half two: the consequence, which is what makes the first half worth asserting. A leaked sink
-	// turns the *field* frontier into the *instruction* frontier for whatever follows.
-	//
-	// `(table … (ref.null func))` is the probe that separates them: its refusal is the field's when
-	// the sink is nil (nothing is retaining, so `refuseUnencodable` is silent and `encodableOrErr`
-	// speaks) and the instruction's when it is not. A field whose refusal does not depend on
-	// retention — `(global …)`, `(elem …)` — cannot tell the two apart and passes either way, which is
-	// how a row picked for looking representative would have missed this.
-	const src = `(module (memory 1) (data (i32.const 0) "a") (table 1 funcref (ref.null func)))`
-	_, err := EncodeModule([]byte(src))
-	if err == nil {
-		t.Fatalf("%s encoded, want a refusal: neither the table section's initializer nor ref.null is "+
-			"encodable yet, so this row cannot pin which layer refuses", src)
-	}
-	if got := err.Error(); !strings.Contains(got, "(table …) field") {
-		t.Errorf("refusal is %q, want it to name the (table …) field.\n\tAn instruction-level refusal "+
-			"here means retainedOffset's sink outlived its field: p.retaining() is true at module-field "+
-			"level, so refuseUnencodable answers before encodableOrErr can. That is an error from the "+
-			"wrong layer — the tell for lost structure — and it is the only externally visible symptom "+
-			"of the leak.", got)
 	}
 }
 

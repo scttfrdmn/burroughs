@@ -217,8 +217,14 @@ func (in *Instance) build() *Trap {
 		}
 		in.globals[globOff+i] = g
 	}
+	// **After the globals loop, which is `eval.ml:1314-1315`'s order and is now load-bearing twice
+	// over.** It always mattered for the reason the paragraph above gives — a global's initializer
+	// reads earlier globals — and as of #419 a *table's* initializer is evaluated too, against the
+	// same partially built instance, so `(global funcref (ref.func $f)) (table 1 funcref
+	// (global.get 0))` needs global 0's slot filled before this loop runs. Moving these two loops
+	// past each other answers that module with a nil-slot report instead of a table of `$f`.
 	for i := range m.Tables {
-		tab, err := newTable(m, m.Tables[i])
+		tab, err := in.newTable(m.Tables[i])
 		if err != nil {
 			if t := asTrap(err); t != nil {
 				return t

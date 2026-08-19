@@ -351,7 +351,31 @@ func TestRangeCitationSubjectsAreReadFromTheReference(t *testing.T) {
 	// identifier. Restating it would mean moving the range onto the `check_start` line and separating
 	// the citation from the text it certifies, which is the wrapping hazard two paragraphs up in
 	// reverse.
-	const wantKeyed, wantResidue = 86, 36
+	// **#419's split is keyed 87 and residue 37 — two new ranges, one into each column, and the residue
+	// one is the *unbackticked phase line* category rather than either of the two this header has
+	// recorded.**
+	// `module.go`'s tables loop opens with the whole of `check_table` cited on a line that names it
+	// without backticks — quoted here as a description rather than as the range, because this pin's
+	// domain includes its own file and the first draft of this paragraph incremented the figure it was
+	// explaining, exactly as the fixed-point paragraph above records happening at 30-31-32. It joins the
+	// three unbackticked phase-list rows already in `modulePre` that slice 10's paragraph above
+	// describes — `check_type → check_rectype`, `check_global`, and `check_tag`. So the description
+	// *does* name the reference's own identifier and this pin cannot see it, the backtick being half the
+	// trigger.
+	//
+	// Written that way deliberately, which is the part worth pinning rather than repairing. Backticking
+	// this one row alone would make the local convention inside one function's body read four ways
+	// where it currently reads one, and the alternative — backticking all four — is an edit to three
+	// other slices' prose, which is the same judgement slice 10 recorded and declined for the same
+	// reason. What the residue count buys here is that the choice is *counted*: a fourth unbackticked
+	// phase row is a number moving, not a silent convention.
+	//
+	// The keyed one is in `global_test.go`, on a line naming `check_module` and citing the two lines of
+	// its fold that put tables ahead of globals — the "cited range lies within the identifier's own
+	// definition" reading, and the second test-file range this pin's domain holds that `wantRanges`'
+	// does not. So the excess over that pin grows by one while both totals move by one, which is the
+	// arithmetic slice 9's paragraph set up to be readable.
+	const wantKeyed, wantResidue = 87, 37
 	if keyed != wantKeyed || residue != wantResidue {
 		t.Errorf("keyed %d range citation(s) by named subject and left %d as residue, want %d and "+
 			"%d — recount and re-pin. A row moves from residue to keyed when its description starts "+

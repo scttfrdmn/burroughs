@@ -553,53 +553,41 @@ func (c *instrCtx) gateCheck(prefix byte, sub uint32) {
 	}
 }
 
-// decodeConstExpr reads a constant expression up to and including its END.
+// decodeConstExpr reads a constant expression up to and including its END, and returns it in
+// internal form together with the cast-type side table for the `ref.null`s inside it.
 //
 // The extent is discovered by reading instructions, not by trusting a length. Getting
 // an immediate width wrong does not fail loudly — it shifts every byte after it, so
 // the failure surfaces elsewhere as a size mismatch or a bogus opcode, which is why
 // the element and data sections (which put an expression *before* other fields) made
 // this worth an authority-derived table rather than a careful reading (#33 property 2).
-func (d *Decoder) decodeConstExpr(r *reader) error {
-	_, _, err := d.constExpr(r, false)
-	return err
-}
-
-// decodeConstExprKeep reads a constant expression and returns it in internal form, together with
-// the cast-type side table for the `ref.null`s inside it.
 //
-// The retaining twin of decodeConstExpr, and a separate entry point rather than a bool
-// parameter on one, because the two have different *callers* rather than different
-// behaviour. Sharing the body means the grammar has one definition site — the property
-// grave #83 keeps being about.
+// # One entry point, on the condition its own predecessor pre-registered
 //
-// The split has held while the callers moved to this side one at a time: a global's initializer
-// first, then a data segment's offset (0015), then an element segment's offset *and* its
-// expression-form elements (0016). The non-retaining twin now has exactly one caller left, and
-// when that goes the bool this refused to take will not need to exist either.
+// This was two functions and a `keep bool` for four PRs: a recognizing `decodeConstExpr` that
+// returned only an error, and a retaining `decodeConstExprKeep`. They were split by *caller* rather
+// than by behaviour, and the callers moved to the retaining side one at a time — a global's
+// initializer first, then a data segment's offset (0015), then an element segment's offset and its
+// expression-form elements (0016). `decodeConstExprKeep`'s doc named the discharge condition in
+// advance: "the non-retaining twin now has exactly one caller left, and when that goes the bool this
+// refused to take will not need to exist either." #419's table initializer is that caller going, so
+// the bool, the second name, and the recognize-only configuration are gone together rather than left
+// as a path nothing in the engine takes. Its test callers read the retained slice and discard it,
+// which is what they were always asking for.
 //
-// **The second result is #361, closed on its own declared condition.** `castsOut` was left nil here
-// while no consumer typed a constant expression, so `emit` dropped every staged reftype and a
-// `ref.null func` in a global initializer carried nothing saying `func` — the state every `ref.null`
-// was in before #359. #328's `checkConst` types all four const-expression sites, which is the
-// consumer #361 named as the discharge, so the map is filed rather than dropped. Returned beside the
-// instructions instead of reached through a holder, because all four callers store it in a different
-// field and only one of them (`Exprs`) stores a slice of them.
-func (d *Decoder) decodeConstExprKeep(r *reader) ([]Instr, map[int][]ValType, error) {
-	return d.constExpr(r, true)
-}
-
-func (d *Decoder) constExpr(r *reader, keep bool) ([]Instr, map[int][]ValType, error) {
+// **The second result is #361, closed on its own declared condition.** `castsOut` was left nil while
+// no consumer typed a constant expression, so `emit` dropped every staged reftype and a `ref.null
+// func` in a global initializer carried nothing saying `func` — the state every `ref.null` was in
+// before #359. #328's `checkConst` types all four const-expression sites, which is the consumer #361
+// named as the discharge, so the map is filed rather than dropped. Returned beside the instructions
+// instead of reached through a holder, because the five callers store it in a different field and
+// only one of them (`Exprs`) stores a slice of them.
+func (d *Decoder) decodeConstExpr(r *reader) ([]Instr, map[int][]ValType, error) {
 	c := &instrCtx{d: d, constOnly: true, nonConst: -1}
 	var out []Instr
 	var casts map[int][]ValType
-	if keep {
-		c.out = &out
-		// Only on the retaining side. A recognizing read has no instruction indices to key by —
-		// `emit` short-circuits on a nil `out` before it reaches any of the four side tables — so
-		// handing it a `castsOut` would be a map that can never receive a row.
-		c.castsOut = &casts
-	}
+	c.out = &out
+	c.castsOut = &casts
 	err := c.constExprBody(r)
 	if err != nil {
 		return nil, nil, err

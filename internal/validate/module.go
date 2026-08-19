@@ -113,7 +113,7 @@ func checkMemoryType(mem binary.Memory) error {
 // this engine: an unrecognized reftype byte never reaches a `binary.Table`. That is the same
 // division of labour ErrUnknownDataSegment's comment records, and it is a division rather than a
 // gap because the byte has no valid reading to defer.
-func checkTableType(tab binary.Table) error {
+func checkTableType(tab binary.TableType) error {
 	if tab.Limits.Addr64 {
 		return checkLimits(tab.Limits, tabRangeI64, ErrTableSize, "2^64-1 for i64")
 	}
@@ -237,12 +237,13 @@ func checkTypes(m *binary.Module) error {
 // # The const-expression sites, counted against the reference rather than against this file
 //
 // `check_const` is one rule reached from **five** call sites, and a rule implemented at four of five
-// is not a rule — *coverage is a claim*, so the claim is enumerated and the absence is named. Both
-// halves now run at all four sites that have a subject, and the second column is the **expected type**
-// each site passes, which is the parameter #328 added and which had never been read by anything:
+// is not a rule — *coverage is a claim*, so the claim is enumerated. Both halves now run at all five,
+// and the columns are the **expected type** each site passes — the parameter #328 added and which had
+// never been read by anything — and the *scope*, which is how many defined globals the fold has put
+// in the context by the time the site is reached:
 //
 //	valid.ml:1058   global initializer          the global's declared type      scope = i
-//	valid.ml:1070   table initializer           NO SUBJECT — see below
+//	valid.ml:1070   table initializer           the table's element type        scope = 0
 //	valid.ml:1078   data segment offset         the memory's address type       scope = len(m.Globals)
 //	valid.ml:1094   element segment offset      the table's address type        scope = len(m.Globals)
 //	valid.ml:1100   element segment elements    the segment's declared reftype  scope = len(m.Globals)
@@ -252,12 +253,28 @@ func checkTypes(m *binary.Module) error {
 // `TestModuleDefinitionsAskTheValidator` names the over-rejections (`address64.wast:3`,
 // `table_copy64.wast:1746`, …) while the default lane stays green, memory64 being gated off there.
 //
-// The table-initializer site is absent **by representation and not by omission**: a table's
-// initializer expression is decoded and then discarded, so there is no field in
-// `binary.Table` for a rule here to read. It arrives with the GC gate (#7), which is what
-// introduces the form; until then a call site would have nothing to be passed. Recorded here
-// because a four-of-five census that says "five" is the coverage claim an instrument cannot
-// make about itself, and the next slice to touch tables needs the gap where it can see it.
+// **The scope column is now three distinct values, and the middle one is why this census earns its
+// second column.** Every site sits at a different point in `check_module`'s fold, so "which globals
+// can this expression read" is answered per site and not once for the file: a global sees the ones
+// declared before it, a table sees none, and the segments see all of them. Three values that a
+// single-table, single-global module cannot distinguish — see the tables loop for the vector that
+// does.
+//
+// This row read `NO SUBJECT — see below` until #419, on the argument that a table's initializer was
+// discarded by the decoder and so there was "no field in `binary.Table` for a rule here to read",
+// arriving with the GC gate (#7). It was right about the field and wrong about the gate: the bare
+// tabletype form is MVP, the reference *synthesizes* an initializer for it (`decode.ml:1058-1063`),
+// so the site had a subject in every module on the board and what was missing was retention rather
+// than a proposal. The gap is recorded as having been mis-attributed rather than quietly re-pointed,
+// because a census whose absent row names the wrong cause tells the next reader to wait for a gate
+// instead of writing four lines.
+//
+// The gate was not irrelevant, which is the part worth keeping from the sentence it replaces: every
+// initializer that *does anything* is behind it. A default-lane table's expression is the synthesized
+// `ref.null`, which types against the element type and reads no index, so this row's whole measurable
+// effect is in the all-on lane — 10 passes, per the M12 row in `global_test.go`. A site with a subject
+// in both lanes and a verdict in one is the honest description, and neither half of it is what the
+// old note said.
 func modulePre(m *binary.Module, refs map[uint32]bool) error {
 	// check_type → check_rectype → check_subtype_sub (valid.ml:178-189, :1107), the phase this
 	// table listed as "not this slice" until decision 0031 opened it. First in `check_module`'s
@@ -350,8 +367,47 @@ func modulePre(m *binary.Module, refs map[uint32]bool) error {
 			return fmt.Errorf("memory %d: %w", i, err)
 		}
 	}
+	// check_table (valid.ml:1066-1071), both halves, in the reference's position: after the defined
+	// memories, before check_global.
+	//
+	//	let Table (tt, const) = tab.it in
+	//	let TableT (_at, _lim, rt) = tt in
+	//	check_tabletype c tt tab.at;
+	//	check_const c const (RefT rt);
+	//
+	// **The scope argument is 0, and it is not a stand-in for `i`.** `check_module`'s fold puts
+	// `check_list check_table` *before* `check_list check_global` (:1160-1161) and `check_table`
+	// folds nothing into `c.globals`, so the context a table initializer is typed in holds no
+	// defined global at all — only the imported ones, which `globalTypeAt` counts separately from
+	// this argument. A table's `global.get` therefore behaves unlike a global's:
+	// `(module (global i32 (i32.const 0)) (table 1 funcref (global.get 0)))` is `unknown global 0`
+	// even though the module declares a global 0 and the table is written after it, because index 0
+	// there is the *defined* global and no defined global is in scope yet.
+	//
+	// **The board holds both directions, in one lane, and `0` versus `i` is still transcribed.** The
+	// accept direction is `table.wast:102-103`, two initializers reading the
+	// `(global $g (import "M" "g") (ref $dummy))` declared at `:94`, and it passes under every
+	// candidate argument — imports are counted outside this one entirely. The reject direction is
+	// `global.wast:674-680`, `(global $g funcref (ref.null func))` then
+	// `(table $t 10 funcref (global.get $g))` asserted `unknown global`, which `len(m.Globals)`
+	// here costs exactly one all-on pass. Both are all-on rows: a table that spells an initializer
+	// encodes to the `0x40` form, gated behind GC in `decodeTableForm`, so the default lane's tables
+	// all carry the synthesized `ref.null` and read no global at all.
+	//
+	// What no vector separates is `0` from `i`, every corpus module with a table initializer having
+	// one table — where the two are the same number. That one is the fold order on the reference's
+	// authority alone, and TestTableInitializerSeesNoDefinedGlobal is its witness, with the M12-M14
+	// measurements beside it.
 	for i := range m.Tables {
-		if err := checkTableType(m.Tables[i]); err != nil {
+		t := &m.Tables[i]
+		if err := checkTableType(t.Type()); err != nil {
+			return fmt.Errorf("table %d: %w", i, err)
+		}
+		// `RefT rt` is the tabletype's own reftype, which `binary.Table` holds as `ElemType` — so
+		// the expected type is read off the descriptor exactly as the two offset sites read theirs,
+		// and a table whose text spelled no initializer is typed against the `ref.null ht` the
+		// decoder synthesized for it (`Table.Init`'s comment on why that field is never absent).
+		if err := checkConst(m, refs, t.Init, t.InitCasts, t.ElemType, 0); err != nil {
 			return fmt.Errorf("table %d: %w", i, err)
 		}
 	}

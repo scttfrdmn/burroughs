@@ -124,6 +124,49 @@ func decodeForTest(t *testing.T, b []byte) *binary.Module {
 	return m
 }
 
+// sameTable compares a decoded table against an `encodableModules` row's expectation.
+//
+// Not `==`, because `binary.Table` grew an initializer and a cast side table in #419 and a map is not
+// comparable. What replaces it is not a field-by-field `==` in disguise, and the split is the point:
+//
+//   - The **tabletype** is compared against the row, which is a second reading of the wat by hand and
+//     is why this table is a check rather than a tautology (see the paragraph below).
+//   - The **initializer** is asserted *relationally*, because the rows have nothing to state about it.
+//     Every module here writes its tables without an initializer — the bare `tabletype` arm or the
+//     `(elem …)` sugar — so a `want.Init` would be a transcription of the decoder's own synthesis
+//     compared against itself, which is the confirm-a-repair-with-the-tool-that-made-it shape aimed
+//     at a round trip.
+//
+// The relation is the reference's rule read from the far side. A table that decodes with the plain
+// wire form has the initializer `decode.ml:1061` invents: one `ref.null` whose heap type is the
+// table's own, END, and a cast row saying which null it is. So this asserts the two-instruction shape
+// and that the cast row's heap type agrees with `ElemType` — **nullability normalized on both sides**,
+// since `valid.ml:714-716` types the synthesized `ref.null ht` as nullable while the tabletype's own
+// reftype need not be, and `(table 1 (ref func) …)` is exactly the row where they differ.
+//
+// A future row whose text *spells* an initializer will fail here rather than pass quietly, and that is
+// the intended reading: such a module encodes in the `0x40` form, which is a different assertion and
+// belongs in `TestPlainTableFormIsDerivedFromTheInitializer` with the rest of that rule.
+func sameTable(t *testing.T, i int, got, want binary.Table) {
+	t.Helper()
+	if got.Type() != want.Type() {
+		t.Errorf("table %d is %+v, want %+v", i, got.Type(), want.Type())
+		return
+	}
+	if len(got.Init) != 2 || got.Init[0].Op != 0xD0 || got.Init[1].Op != 0x0B {
+		t.Errorf("table %d decodes with initializer %+v, want the synthesized `ref.null; end`: every "+
+			"module in this table writes its tables with no initializer, so the plain wire form is "+
+			"what the encoder must have chosen (#419)", i, got.Init)
+		return
+	}
+	casts := got.InitCasts[0]
+	if len(casts) != 1 || casts[0].WithNull(true) != got.ElemType.WithNull(true) {
+		t.Errorf("table %d's synthesized ref.null has cast row %v against element type %s — the two "+
+			"must name one heap type, since a `ref.null` with no cast row is the same struct whichever "+
+			"null it is (#361's shape)", i, casts, got.ElemType)
+	}
+}
+
 // encodableModules are wat modules this encoder can write in full, with the type index space each
 // denotes stated independently of the encoder.
 //
@@ -590,7 +633,7 @@ var encodableModules = []struct {
 	{
 		src: `(module (import "m" "x" (table 1 funcref)))`,
 		wantImports: []binary.Import{
-			{Module: "m", Name: "x", Kind: binary.ExternTable, Table: binary.Table{ElemType: binary.FuncRef, Limits: binary.Limits{Min: 1}}},
+			{Module: "m", Name: "x", Kind: binary.ExternTable, Table: binary.TableType{ElemType: binary.FuncRef, Limits: binary.Limits{Min: 1}}},
 		},
 	},
 	// Both mutabilities, because the byte is one bit of difference and `(global i32)` versus
@@ -642,7 +685,7 @@ var encodableModules = []struct {
 		src: `(module (import "a" "1" (memory 1)) (import "b" "2" (table 1 funcref)))`,
 		wantImports: []binary.Import{
 			{Module: "a", Name: "1", Kind: binary.ExternMemory, Memory: binary.Memory{Limits: binary.Limits{Min: 1}}},
-			{Module: "b", Name: "2", Kind: binary.ExternTable, Table: binary.Table{ElemType: binary.FuncRef, Limits: binary.Limits{Min: 1}}},
+			{Module: "b", Name: "2", Kind: binary.ExternTable, Table: binary.TableType{ElemType: binary.FuncRef, Limits: binary.Limits{Min: 1}}},
 		},
 	},
 	// Empty names, which are legal and are the suite's own shape at imports.wast:677. A `name` writer
@@ -721,7 +764,7 @@ var encodableModules = []struct {
 	{
 		src: `(module (table (import "m" "x") 1 funcref))`,
 		wantImports: []binary.Import{
-			{Module: "m", Name: "x", Kind: binary.ExternTable, Table: binary.Table{ElemType: binary.FuncRef, Limits: binary.Limits{Min: 1}}},
+			{Module: "m", Name: "x", Kind: binary.ExternTable, Table: binary.TableType{ElemType: binary.FuncRef, Limits: binary.Limits{Min: 1}}},
 		},
 	},
 	// A named inline import: the identifier binds a parse-time name into the index space and must
@@ -752,7 +795,7 @@ var encodableModules = []struct {
 		src:      `(module (table (import "m" "x") 1 funcref) (table 2 externref))`,
 		wantTabs: []binary.Table{{ElemType: binary.ExternRef, Limits: binary.Limits{Min: 2}}},
 		wantImports: []binary.Import{
-			{Module: "m", Name: "x", Kind: binary.ExternTable, Table: binary.Table{ElemType: binary.FuncRef, Limits: binary.Limits{Min: 1}}},
+			{Module: "m", Name: "x", Kind: binary.ExternTable, Table: binary.TableType{ElemType: binary.FuncRef, Limits: binary.Limits{Min: 1}}},
 		},
 	},
 
@@ -2791,9 +2834,7 @@ func TestEncodeRoundTripsThroughTheDecoder(t *testing.T) {
 					b, len(m.Tables), len(tc.wantTabs), m.Tables)
 			}
 			for i, want := range tc.wantTabs {
-				if got := m.Tables[i]; got != want {
-					t.Errorf("table %d is %+v, want %+v", i, got, want)
-				}
+				sameTable(t, i, m.Tables[i], want)
 			}
 			if len(m.Imports) != len(tc.wantImports) {
 				t.Fatalf("encoded % x, which decodes to %d imports, want %d: %v",
@@ -3604,106 +3645,37 @@ func TestEncodeRefusesWhatItCannotWrite(t *testing.T) {
 		// The `(import …)` field has no inline-export arm at all (:1250), so there was never a row for
 		// it — the asymmetry is the grammar's, and `importField`'s unconditional withdrawal is why it
 		// never needed the lookahead the other five have now lost.
-		// An initializer expr. This row read `"(func …) field"` until the code section landed, because
-		// the func was refused before the table was reached — so what it *checked* was the func
-		// frontier, and the table's own arm was never the thing under test. Now the func encodes and
-		// the row says what its comment always claimed.
-		{`(module (func $f) (table 1 funcref (ref.func $f)))`, "(table …) field"},
-		// The table-element-type rows (`(table 1 (ref func))`, `anyref`, `(ref null $t)` both orders)
-		// and the global-type rows (`(global anyref)`, `(mut anyref)`, `(ref func)`, `(ref null $t)`
-		// both orders) were here and are now in `encodableModules`/
-		// `TestParameterizedReferenceFormsRoundTrip` — `valTypeBytes` answers every one of these types
-		// since decision 0018's encoder-side implementation, including the forward-reference cases the
-		// deferral comments here used to document.
-
-		// # An encodable field *after* an unencodable one — the withdrawal's identity check
+		// # The field frontier is empty as of #419, and this is where that is accounted for
 		//
-		// **These four rows exist because the check they falsify was unfalsifiable without them, and
-		// the comment on `clearNonTypeField` had already claimed otherwise.** Removing that function's
-		// `firstNonType.Offset == kw.Offset` comparison passes every other row in this file: each of
-		// them puts the unencodable field first *and last*, so there is no later encodable field to
-		// withdraw the wrong record. With the comparison gone, `(module (func) (memory 1))` encodes —
-		// the memory arm withdraws the *func's* refusal — and emits a module whose function is
-		// silently dropped. That is the accept-direction defect arriving through the mechanism built
-		// to prevent it, and until these rows existed nothing could see it.
+		// **Every row that stood here is gone, and the reason is a section landing rather than a
+		// cleanup.** The block was twelve follower modules led by `(table 1 funcref (ref.func $f))` — a
+		// table with an initializer expression, the last well-formed module *field* this emitter could
+		// not write — plus the four inline-import, two memory-data-sugar and seven inline-export rows that
+		// had already left for `encodableModules` in earlier PRs. #419 gives the `constexpr1` arm its
+		// initializer and its `clearNonTypeField`, so no `(…)` field is refused as a field any more:
+		// probed over `(table … (ref.func $f))`, `(table … (ref.null func))`, both `(elem …)` sugars,
+		// `(memory (data …))`, `(rec …)`, a v128 body, a memarg body and a `(ref null $t)` element type,
+		// every one encodes.
 		//
-		// Two orders and two kinds, because the defect is about *which* record gets cleared: the
-		// unencodable field is the one whose name must appear in the message, never the encodable
-		// field that follows it.
+		// **So the leader countdown is over, and its closing is the seventh application of the
+		// re-pointing rule (#33) rather than an exemption from it.** `func`, `data`, `elem`, `global`,
+		// `tag` and `start 0` each led this block and each was dissolved by the section that implemented
+		// it; `table` was the seventh leader and there is no eighth, because the risk those rows named —
+		// *a later field withdrawing an earlier field's refusal* — needs an earlier field's refusal to
+		// exist. The rule says a control whose subject dissolves is re-pointed and not retired, and that
+		// is what happened: the twelve follower rows moved intact to
+		// TestAFollowerFieldDoesNotDropItsLeader, which asserts the same twelve modules keep **both**
+		// fields' content in the image. What changed is the direction of the assertion, from "the refusal
+		// names the leader" to "the image holds the leader", and the second one is the property the first
+		// was a proxy for.
 		//
-		// **The leader was `(func)`, then `(data "abc")`, then `(elem)`, then `(global …)`, then
-		// `(tag)`, then `(start 0)`, and is now `(table 1 funcref (ref.func $f))` — re-pointed six
-		// times for the same reason.** This is the tripwire-re-pointing rule (#33) at test-row scale,
-		// and by the sixth application it is routine rather than remarkable: the rows name a *risk* —
-		// a later field withdrawing an earlier field's refusal — and each landing section dissolves
-		// whichever leader it implements without touching the risk. `func` moved to follower when the
-		// code section landed; `data` when section 11 did; `elem` when section 9 did; `global` when
-		// section 6 did; `tag` when section 13 did (#199); `start 0` now that section 8 does (#413).
-		// Deleting the rows instead would have retired a live control six times on a technicality.
-		//
-		// **The instruction the previous version of this comment left was wrong in both halves, and
-		// this is the record of that (#413).** It said `(start 0)` was the last *field* leader, so the
-		// next re-pointing would have to be to "another *frontier* — the typeuse rows below". Both
-		// claims fail on inspection:
-		//
-		//   - **"One field remains unencodable" was already false when written.** The table-with-an-
-		//     initializer row immediately above this block, `(table 1 funcref (ref.func $f))`, is a
-		//     refused field and has been since before the countdown was declared closed — the comment
-		//     counted the leaders it had re-pointed *through* and forgot the frontier sitting in its
-		//     own file. So the countdown was never closed and the leader is a field again.
-		//   - **The typeuse rows cannot lead.** They refuse through a direct `return` from
-		//     `code.go`'s typeuse path, not through a `noteNonTypeField` record, so there is no record
-		//     for a follower to clear wrongly and nothing for the identity check to be about. A
-		//     frontier is only a candidate leader here if it is a *recorded* one, and the previous
-		//     comment did not check which kind it was naming.
-		//
-		// Which is the same defect twice: a forecast about instruments written from the shape of the
-		// prose rather than from the mechanism (#412's shape). The re-pointing rule survives it —
-		// what needed correcting was the census, not the rule.
-		//
-		// Both orders of leader and definition, because `(ref.func $f)` resolves in stage 2: the
-		// forward form proves the leader's record is noted at the keyword and not at resolution.
-		{`(module (table 1 funcref (ref.func $f)) (memory 1) (func $f))`, "(table …) field"},
-		{`(module (table 1 funcref (ref.func $f)) (func $f) (memory 1))`, "(table …) field"},
-		// **A `(data …)` field as the *follower*.** `dataField` has three arms and every one of them
-		// calls `clearNonTypeField` after its closing paren, so it is a candidate for clearing a
-		// record that is not its own — and the sugar arm clears one too. Falsified by dropping the
-		// offset comparison in `clearNonTypeField`: these two encode, emitting a module whose table
-		// is gone.
-		{`(module (table 1 funcref (ref.func $f)) (data "abc") (func $f))`, "(table …) field"},
-		{`(module (table 1 funcref (ref.func $f)) (memory (data "x")) (func $f))`, "(table …) field"},
-		// **`(elem …)` as a follower, and it is the sharpest of them.** Five arms, each calling
-		// `clearNonTypeField` after its own closing paren — more distinct withdrawal sites than any
-		// other field has — plus the `(table … (elem …))` sugar, whose arm withdraws once for two
-		// definitions. Every one of those is a place to clear a record belonging to the leader in
-		// front of it.
-		{`(module (table 1 funcref (ref.func $f)) (elem func) (func $f))`, "(table …) field"},
-		{`(module (table 1 funcref (ref.func $f)) (elem (i32.const 0)) (func $f))`, "(table …) field"},
-		{`(module (table 1 funcref (ref.func $f)) (elem declare func) (func $f))`, "(table …) field"},
-		{`(module (table 1 funcref (ref.func $f)) (table funcref (elem)) (func $f))`, "(table …) field"},
-		// **`(global …)` as a follower.** `globalField`'s defining arm withdraws on every well-formed
-		// global, so the record it could clear wrongly is the leader's.
-		{`(module (table 1 funcref (ref.func $f)) (global i32 (i32.const 0)) (func $f))`, "(table …) field"},
-		// **The import-spelled follower is gone and cannot be re-pointed, which is a loss rather than
-		// a simplification and is said in that word (#413).** There was a second global row here,
-		// `(global (import "m" "g") i32)`, covering `importField`'s withdrawal site — a different call
-		// site from the defining arm's tail. It cannot survive this leader: `(table 1 funcref …)` is a
-		// *definition*, and the grammar forbids an import after one, so the vector is rejected before
-		// the encoder is reached ("import after table definition") and would be the wrong-vector kind
-		// of row this test refuses on principle. `(start 0)` could carry it because a start field is
-		// not a definition; every remaining recorded frontier is one. So the shape that restores this
-		// coverage is any unencodable field that is *not* a func/table/memory/global definition, or an
-		// unencodable import — and until one exists, `importField`'s withdrawal has no follower row.
-		// Named because a row deleted without a note reads as a row that was redundant.
-		// **`(start …)` as a follower, which is where its promotion out of this table makes it a
-		// witness (#413).** `startField` withdraws on its tail after `rpar`, on every well-formed
-		// start field, so the record it could clear wrongly is the leader's in front of it.
-		{`(module (table 1 funcref (ref.func $f)) (start $f) (func $f))`, "(table …) field"},
-		// `func` as a follower: `funcField`'s tail calls `noteDefined` and `clearNonTypeField` after
-		// retaining its body, and unlike the memory and table arms it reaches that call on every
-		// well-formed func. Here the func the leader references *is* the follower, which is the
-		// minimal form of the row.
-		{`(module (table 1 funcref (ref.func $f)) (func $f))`, "(table …) field"},
+		// What is *lost* and is said in that word: `clearNonTypeField`'s `firstNonType.Offset ==
+		// kw.Offset` comparison is now unfalsifiable. Deleting it passes the whole package — measured, not
+		// assumed — because no input leaves a record standing for a follower to clear wrongly. It is kept
+		// on `encodableOrErr`'s own precedent for a check whose arm does not exist yet (that loop's
+		// comment argues the case at length), and the arm this one waits for is named there: any future
+		// field, gated or otherwise, whose parse completes and whose content this emitter cannot write.
+		// The moment one exists it becomes this block's eighth leader.
 
 		// # The typeuse frontier, which is a *wrong index* rather than a missing section
 		//
@@ -3747,8 +3719,10 @@ func TestEncodeRefusesWhatItCannotWrite(t *testing.T) {
 				t.Errorf("refusal says %q, want it to name %q", err, tc.contains)
 			}
 			// **Either tracking issue, not a substring that any `#` satisfies.** The section frontiers
-			// are #8's; the typeuse rows are #77's, that gap being a wrong *index* rather than a
-			// missing emitter. Spelled as two accepted numbers rather than as `strings.Contains(err,
+			// were #8's and both surviving rows are #77's, that gap being a wrong *index* rather than
+			// a missing emitter — so the `#8` half of this disjunction currently matches nothing, and it
+			// stays because #8 is the frontier's own number and whatever arrives here next will cite it.
+			// Spelled as two accepted numbers rather than as `strings.Contains(err,
 			// "#")` — a predicate matching any hash would pass on a message citing #0 or on the word
 			// "channel #", which is a citation nobody can resolve wearing a tracked deferral's clothes.
 			if !strings.Contains(err.Error(), "#8") && !strings.Contains(err.Error(), "#77") {
@@ -3763,6 +3737,242 @@ func TestEncodeRefusesWhatItCannotWrite(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestAFollowerFieldDoesNotDropItsLeader is the twelve follower rows
+// `TestEncodeRefusesWhatItCannotWrite` carried for seven leaders, re-pointed to the direction that
+// survives the field frontier's closing (#419, #33).
+//
+// **The risk is unchanged and the proxy is gone.** Those rows asserted that a module field which the
+// emitter *can* write does not withdraw an earlier field's refusal — `clearNonTypeField`'s offset
+// comparison — and they could assert it because the leader was refused, so a wrong withdrawal showed
+// up as an image where a refusal should have been. #419 gives every field an emitter, so there is no
+// refusal left to withdraw, and the honest version of the same question is the one the refusal was a
+// proxy for: **is the leader's content in the image?**
+//
+// Which makes the assertion *stronger* than the one it replaces, on the leader chosen for it. The
+// leader is `(table 1 funcref (ref.func $f))`, whose initializer is the only thing in these modules
+// that a section writer can lose while emitting a module that decodes clean, validates, and is a
+// different module: `encode.ml:958-963` writes the plain `tabletype` when the initializer is a single
+// `ref.null` of the table's own heap type, so an emitter that dropped this initializer would write
+// `70 00 01` and the table would decode as a table of nulls. Nothing in `encodableModules` can see
+// that — every row there writes its tables *without* an initializer, which is exactly the form the
+// loss produces. So `Init[0].Op` is asserted to be `ref.func` and not `ref.null`, and the `0x40` form
+// is asserted through the value rather than through the bytes.
+//
+// The `wantSecs` column is the other direction, which is the one the original rows were about: the
+// follower's own section must be there too. Both directions, because either loss is a module that
+// decodes clean — the leader dropped is the defect the offset comparison prevented, and the follower
+// dropped is what a fix that cleared *its own* record too eagerly would produce.
+//
+// The twelve sources are unchanged, including both orders of leader and definition and all four
+// `(elem …)` spellings, for the reasons the original block gave: `(elem …)` has the most distinct
+// withdrawal sites of any field, and the forward form proves the leader is recorded at its keyword
+// rather than at resolution. What no longer has a row here is the import-spelled follower, and it is
+// still absent for the grammar's reason rather than a new one: an import may not follow a table
+// definition, so no module of this shape can carry one.
+func TestAFollowerFieldDoesNotDropItsLeader(t *testing.T) {
+	const leader = `(table 1 funcref (ref.func $f))`
+	for _, tc := range []struct {
+		src string
+		// wantSecs are the sections the *follower* fields contribute, written from the text. The table
+		// and code sections are asserted for every row below and are not repeated here.
+		wantSecs []binary.SectionID
+		// wantTables is the table section's entry count, which is 2 only on the `(table … (elem …))`
+		// sugar row — the one follower that is itself a table definition, and therefore the one place a
+		// wrong withdrawal could produce a table section of the right length holding the wrong table.
+		wantTables int
+	}{
+		// The leader last rather than first, which is the row the original block opened with: it says the
+		// initializer survives when there is no follower to blame, so a failure in the eleven rows below
+		// is attributable to the follower.
+		{`(module (func $f) ` + leader + `)`, nil, 1},
+		{`(module ` + leader + ` (memory 1) (func $f))`, []binary.SectionID{binary.SectionMemory}, 1},
+		{`(module ` + leader + ` (func $f) (memory 1))`, []binary.SectionID{binary.SectionMemory}, 1},
+		{`(module ` + leader + ` (data "abc") (func $f))`, []binary.SectionID{binary.SectionData}, 1},
+		{
+			`(module ` + leader + ` (memory (data "x")) (func $f))`,
+			[]binary.SectionID{binary.SectionMemory, binary.SectionData},
+			1,
+		},
+		{`(module ` + leader + ` (elem func) (func $f))`, []binary.SectionID{binary.SectionElement}, 1},
+		{`(module ` + leader + ` (elem (i32.const 0)) (func $f))`, []binary.SectionID{binary.SectionElement}, 1},
+		{`(module ` + leader + ` (elem declare func) (func $f))`, []binary.SectionID{binary.SectionElement}, 1},
+		{`(module ` + leader + ` (table funcref (elem)) (func $f))`, []binary.SectionID{binary.SectionElement}, 2},
+		{`(module ` + leader + ` (global i32 (i32.const 0)) (func $f))`, []binary.SectionID{binary.SectionGlobal}, 1},
+		{`(module ` + leader + ` (start $f) (func $f))`, []binary.SectionID{binary.SectionStart}, 1},
+		{`(module ` + leader + ` (func $f))`, nil, 1},
+	} {
+		t.Run(tc.src, func(t *testing.T) {
+			b, err := EncodeModule([]byte(tc.src))
+			if err != nil {
+				t.Fatalf("EncodeModule refused a module every field of which has an emitter: %v", err)
+			}
+			m := decodeForTest(t, b)
+			if len(m.Tables) != tc.wantTables {
+				t.Fatalf("the image holds %d tables, want %d: a field after the table withdrew the "+
+					"table's own record, so section 4 is short by an entry (% x)", len(m.Tables),
+					tc.wantTables, b)
+			}
+			// The leader's initializer, which is the half `encodableModules` structurally cannot assert.
+			// `d2 00 0b` is `ref.func 0`, END — `$f` being the module's only function in every row.
+			want := []binary.Instr{{Op: 0xD2, Imm0: 0}, {Op: 0x0B}}
+			if got := m.Tables[0].Init; !slices.Equal(got, want) {
+				if len(got) == 2 && got[0].Op == 0xD0 {
+					t.Fatalf("table 0's initializer is the synthesized `ref.null; end`, want ref.func 0: "+
+						"the emitter wrote the plain tabletype form for a table whose text spells an "+
+						"initializer, which decodes as a table of nulls and validates (% x)", b)
+				}
+				t.Fatalf("table 0's initializer decodes as %+v, want %+v (% x)", got, want, b)
+			}
+			for _, id := range append([]binary.SectionID{binary.SectionTable, binary.SectionCode}, tc.wantSecs...) {
+				if _, ok := sectionPayload(m, id); !ok {
+					t.Errorf("the image has no section %d: a field's content is missing from a module "+
+						"that decodes clean, which is the accept-direction defect the follower rows exist "+
+						"for (% x)", id, b)
+				}
+			}
+		})
+	}
+}
+
+// TestPlainTableFormIsDerivedFromTheInitializer is `encode.ml:958-963`, one row per condition in it
+// (#419).
+//
+//	let table tab =
+//	  let Table (tt, c) = tab.it in
+//	  match tt, c.it with
+//	  | TableT (_, _at, (_, ht1)), [{it = RefNull ht2; _}] when ht1 = ht2 -> tabletype tt
+//	  | _ -> op 0x40; op 0x00; tabletype tt; const c
+//
+// Three conditions and all three are about the *initializer*: the expression is a **single**
+// instruction, that instruction is **ref.null**, and its heap type equals the table's — with
+// nullability **ignored**, which is what `(_, ht1)` destructures away. `encodeTables` implements all
+// three as one comparison against `plainTableInit`, so this table is where the equivalence is
+// checked rather than argued: a row per condition, each mutating exactly one of them.
+//
+// **The witness has to be the bytes, and that is forced rather than chosen.** The decoder normalizes
+// the two forms — `decode.ml:1049-1064` synthesizes `ref.null ht` for the plain arm, so both arms
+// produce the same `binary.Table` — which is the whole reason the plain form is safe to write, and
+// also the reason no round trip can see which arm was written. `sectionPayload` reads section 4
+// through the decoder's own segmentation, so the extent is not this test's arithmetic; the want
+// column is section 4's payload written by hand from the format above, count byte included.
+//
+// **Four rows do not validate, and that is the point of having them rather than a defect in them.**
+// The emitter is not the validator: `(table 1 (ref func) (ref.null func))` is
+// `assert_invalid "type mismatch"` in `table.wast:70-81`, and the two-instruction rows leave the
+// wrong number of values on the stack. Every one of them is well-formed text that the reference's
+// encoder writes, and the *accept* direction of the form choice is exactly what no `assert_invalid`
+// vector can witness (§9 G-3) — the suite spells the nullability-differing case only as a rejection,
+// so if the form choice were wrong for it nothing on the board would say so.
+func TestPlainTableFormIsDerivedFromTheInitializer(t *testing.T) {
+	// The two spellings whose payloads must be byte-identical: the bare `tabletype` arm and the
+	// `constexpr1` arm holding exactly what the bare arm's synthesis produces (parser.mly:1192-1195).
+	const bareArm = `(module (table 1 funcref))`
+	const spelledArm = `(module (table 1 funcref (ref.null func)))`
+	got := map[string][]byte{}
+	for _, tc := range []struct {
+		src string
+		// wantSec4 is section 4's payload: the entry count, then the entry. A `40 00` second byte is
+		// the initializer form; anything else is a bare `tabletype`.
+		wantSec4 []byte
+		why      string
+	}{
+		// The plain form, and the pair that says both arms reach it.
+		{spelledArm, []byte{0x01, 0x70, 0x00, 0x01}, "a spelled ref.null of the table's own heap type"},
+		{bareArm, []byte{0x01, 0x70, 0x00, 0x01}, "the bare tabletype arm, whose initializer is synthesized"},
+		// A second absolute heap type, so the row above is not read as a fact about funcref.
+		{`(module (table 1 externref))`, []byte{0x01, 0x6f, 0x00, 0x01}, "externref, bare"},
+		// **Condition three with nullability the only difference — plain, not `0x40`.** The tabletype
+		// is `(ref func)` (`64 70`) and the initializer is `ref.null func`, typed nullable by
+		// `valid.ml:714-716`; `ht1 = ht2` compares the heap types the destructuring leaves, so the
+		// forms match and the plain arm is taken. An implementation comparing whole reftypes writes
+		// `0x40` here and is wrong on a module the board only ever rejects.
+		{
+			`(module (table 1 (ref func) (ref.null func)))`,
+			[]byte{0x01, 0x64, 0x70, 0x00, 0x01},
+			"heap types equal, nullability differing",
+		},
+		// The index form of a heap type, both directions. `63 00` is `(ref null $t)` with `$t` = type 0.
+		{
+			`(module (type $t (func)) (table 1 (ref null $t) (ref.null $t)))`,
+			[]byte{0x01, 0x63, 0x00, 0x00, 0x01},
+			"an indexed heap type equal to its own",
+		},
+		{
+			`(module (type $t (func)) (table 1 (ref null $t) (ref.null func)))`,
+			[]byte{0x01, 0x40, 0x00, 0x63, 0x00, 0x00, 0x01, 0xd0, 0x70, 0x0b},
+			"an indexed heap type against an absolute one",
+		},
+		// Condition three failing on the heap type itself.
+		{
+			`(module (table 1 funcref (ref.null extern)))`,
+			[]byte{0x01, 0x40, 0x00, 0x70, 0x00, 0x01, 0xd0, 0x6f, 0x0b},
+			"heap types differing",
+		},
+		// **Condition two: a single instruction that is not `ref.null`.** Two spellings, because the
+		// distinction between them is the one a value-based implementation would miss: `ref.func 0`
+		// evaluates to a non-null reference, and `global.get` of a null-valued global evaluates to
+		// *null* — the same value the plain form's synthesized initializer has. The rule is syntactic,
+		// so both take `0x40`.
+		{
+			`(module (func $f) (table 1 funcref (ref.func $f)))`,
+			[]byte{0x01, 0x40, 0x00, 0x70, 0x00, 0x01, 0xd2, 0x00, 0x0b},
+			"a non-ref.null single instruction",
+		},
+		{
+			`(module (global $g funcref (ref.null func)) (table 1 funcref (global.get $g)))`,
+			[]byte{0x01, 0x40, 0x00, 0x70, 0x00, 0x01, 0x23, 0x00, 0x0b},
+			"a single instruction whose value is null but whose opcode is not ref.null",
+		},
+		// **Condition one: more than one instruction, with a `ref.null` among them.** Three rows for
+		// three positions, and the middle one is the row that matters: its expression *begins* with
+		// exactly the plain form's instruction, so a comparison that read the first instruction and
+		// stopped — or compared a truncated byte string — would write the plain form and lose the rest
+		// of the expression. Every one of these evaluates to a null reference on top of the stack.
+		{
+			`(module (table 1 funcref (i32.const 0) (ref.null func)))`,
+			[]byte{0x01, 0x40, 0x00, 0x70, 0x00, 0x01, 0x41, 0x00, 0xd0, 0x70, 0x0b},
+			"a multi-instruction expression ending in ref.null",
+		},
+		{
+			`(module (table 1 funcref (ref.null func) (i32.const 0)))`,
+			[]byte{0x01, 0x40, 0x00, 0x70, 0x00, 0x01, 0xd0, 0x70, 0x41, 0x00, 0x0b},
+			"a multi-instruction expression beginning with the plain form's own instruction",
+		},
+		{
+			`(module (table 1 funcref (ref.null func) (ref.null func)))`,
+			[]byte{0x01, 0x40, 0x00, 0x70, 0x00, 0x01, 0xd0, 0x70, 0xd0, 0x70, 0x0b},
+			"the plain form's instruction twice",
+		},
+	} {
+		t.Run(tc.why, func(t *testing.T) {
+			b, err := EncodeModule([]byte(tc.src))
+			if err != nil {
+				t.Fatalf("EncodeModule refused %s: %v", tc.src, err)
+			}
+			// Decoded first, so a payload comparison below is over an image the decoder accepts: a
+			// `0x40` entry this project cannot read back would be a form choice nobody can use.
+			m := decodeForTest(t, b)
+			pay, ok := sectionPayload(m, binary.SectionTable)
+			if !ok {
+				t.Fatalf("no table section in % x", b)
+			}
+			got[tc.src] = pay
+			if !slices.Equal(pay, tc.wantSec4) {
+				t.Errorf("section 4 is % x, want % x — the form is encode.ml:958-963's, keyed on the "+
+					"initializer and not on which text arm parsed", pay, tc.wantSec4)
+			}
+		})
+	}
+	// The pairing, asserted between two encoder outputs rather than against a literal. #419's
+	// definition of done says both arms hand the emitter the same shape; the want columns above each
+	// say so against a hand-written row, and this says it about the two runs — which is the assertion
+	// that survives someone editing both wants together.
+	if a, b := got[bareArm], got[spelledArm]; !slices.Equal(a, b) {
+		t.Errorf("the bare arm emits % x and the spelled arm % x: the two must be indistinguishable in "+
+			"the image, or the text's sugar is observable in the bytes (parser.mly:1194-1195)", a, b)
 	}
 }
 

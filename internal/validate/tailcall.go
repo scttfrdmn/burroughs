@@ -88,17 +88,17 @@ func (v *validator) requireTailResults(callee []binary.ValType) error {
 // type with no table, `:1004` and `:590` name a valid table with an out-of-range type. So this is an
 // unwitnessed ordering, adopted from the authority because the alternative is two arms disagreeing
 // about which lookup comes first, and recorded here as unwitnessed rather than asserted as covered.
-func (v *validator) indirectTarget(typeIdx, tableIdx uint32) (binary.FuncType, binary.Table, error) {
+func (v *validator) indirectTarget(typeIdx, tableIdx uint32) (binary.FuncType, binary.TableType, error) {
 	tab, err := tableTypeAt(v.mod, tableIdx)
 	if err != nil {
-		return binary.FuncType{}, binary.Table{}, err
+		return binary.FuncType{}, binary.TableType{}, err
 	}
 	ft, err := funcType(v.mod, typeIdx)
 	if err != nil {
-		return binary.FuncType{}, binary.Table{}, err
+		return binary.FuncType{}, binary.TableType{}, err
 	}
 	if !matchRefType(tctx{gotMod: v.mod, wantMod: v.mod}, tab.ElemType, binary.FuncRef) {
-		return binary.FuncType{}, binary.Table{}, fmt.Errorf(
+		return binary.FuncType{}, binary.TableType{}, fmt.Errorf(
 			"%w: instruction requires table of function type but table has element type %s",
 			ErrTypeMismatch, typeStr(tab.ElemType))
 	}

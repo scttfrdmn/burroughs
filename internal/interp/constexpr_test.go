@@ -12,7 +12,7 @@ import (
 )
 
 // twoI32 is a constant expression that leaves **two** numeric values where one is wanted, which is
-// the shortest way to provoke the arity message from any of the four call sites.
+// the shortest way to provoke the arity message from any of the five call sites.
 //
 // It works because the implicit label of a const-expr does not truncate on falling off the end — the
 // same reason a `v128` initializer used to fail against a hard-coded `1` rather than silently keeping
@@ -22,12 +22,12 @@ func twoI32() []binary.Instr {
 	return []binary.Instr{{Op: 0x41, Imm0: 1}, {Op: 0x41, Imm0: 2}, {Op: opEnd}}
 }
 
-// TestConstExprMessageNamesItsOwnCallerNotAnother is grave #240's control: each of the four
+// TestConstExprMessageNamesItsOwnCallerNotAnother is grave #240's control: each of the five
 // constant-expression call sites reports **its own** construct.
 //
 // # Why this is a partition check and not an `errors.Is`
 //
-// All four messages wrap `ErrNotValidated`, so `errors.Is` scores every member as every other member
+// All five messages wrap `ErrNotValidated`, so `errors.Is` scores every member as every other member
 // — the exact defect grave #34 records. What distinguishes them is the *site string*, so that is what
 // is asserted, and each row also asserts the **absence** of the other three sites' words. The
 // absence half is the one that fails on the pre-#241 engine: `constExprValue` was shared by three
@@ -45,9 +45,25 @@ func twoI32() []binary.Instr {
 // The fourth site is why the count is four and not #241's three: an element segment's *offset* and an
 // element *expression* are different lines of the user's module, so folding them into one string would
 // send a reader of `(elem (offset …) (item …))` to the wrong half of their own segment.
+//
+// **The fifth is #419's, and it arrived by breaking this test rather than by being remembered.** A
+// table initializer is a const expression, and the row list is a claim about how many there are — so
+// adding `newTable`'s call without a row here would have left a five-site partition asserted over
+// four. What actually happened is smaller and worth recording: the *fixture* broke first. The table
+// below carried no initializer, which was a module no decoder emits and cost nothing while nothing
+// read the field, and the element rows began reporting a table's arity failure instead of their own.
+// A fixture is well-formed in every respect but the one under test, and the partition check is what
+// noticed — this test's own subject being that a message names the right construct.
 func TestConstExprMessageNamesItsOwnCallerNotAnother(t *testing.T) {
-	// funcref-typed table, so the element rows have somewhere to point.
-	table := []binary.Table{{ElemType: binary.FuncRef, Limits: binary.Limits{Min: 1}}}
+	// funcref-typed table, so the element rows have somewhere to point — with the `ref.null func`
+	// initializer the decoder synthesizes for the plain wire form (`decode.ml:1058-1063`), because
+	// as of #419 `newTable` evaluates that expression and an empty one is an arity failure.
+	table := []binary.Table{{
+		ElemType:  binary.FuncRef,
+		Limits:    binary.Limits{Min: 1},
+		Init:      []binary.Instr{{Op: opRefNull}, {Op: opEnd}},
+		InitCasts: map[int][]binary.ValType{0: {binary.FuncRef}},
+	}}
 
 	rows := []struct {
 		site string
@@ -91,12 +107,25 @@ func TestConstExprMessageNamesItsOwnCallerNotAnother(t *testing.T) {
 				Globals: []binary.Global{{Type: binary.I32, Init: twoI32()}},
 			},
 		},
+		{
+			// #419's site. Two numbers where the element type wants one reference, so the failure is
+			// the same arity one every other row provokes and the only thing that can differ is the
+			// construct named.
+			"a table initializer",
+			&binary.Module{
+				Tables: []binary.Table{{
+					ElemType: binary.FuncRef,
+					Limits:   binary.Limits{Min: 1},
+					Init:     twoI32(),
+				}},
+			},
+		},
 	}
 
 	// The vacuity floor. A partition check over an empty or shrunken row set agrees with itself
 	// perfectly, and this one's rows are also the *count* being claimed above.
-	if len(rows) != 4 {
-		t.Fatalf("%d rows, want the four call sites named in this test's comment", len(rows))
+	if len(rows) != 5 {
+		t.Fatalf("%d rows, want the five call sites named in this test's comment", len(rows))
 	}
 
 	for _, r := range rows {

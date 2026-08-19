@@ -1199,7 +1199,7 @@ type Import struct {
 	// module's own type space, already carried in Index — the linker resolves it through
 	// Module.Types like any other type-indexed use, rather than duplicating the functype
 	// here.
-	Table         Table
+	Table         TableType
 	Memory        Memory
 	GlobalType    ValType
 	GlobalMutable bool
@@ -1275,11 +1275,56 @@ type Limits struct {
 	Addr64 bool
 }
 
-// Table is one table: its element type and limits.
-type Table struct {
+// TableType is a `tabletype` (decode.ml:301-304): an element type and limits, and nothing else.
+//
+// **A separate type from Table because they are separate productions, and grave #420 is the cost of
+// that not being spelled.** An import's table descriptor is `ExternTableT (tabletype s)`
+// (decode.ml:309) — a production with no initializer arm at all — while the table *section* reads
+// `table`, which is the `0x40` form or a bare tabletype whose initializer the reference synthesizes.
+// While `Import.Table` was a `Table`, the struct said an imported table might carry an initializer,
+// which is a claim no grammar can produce and which is exactly what the shared reader went on to
+// admit from the wire.
+//
+// So the two fields are written twice rather than embedded, and that is a deliberate trade: embedding
+// would make every `Table{ElemType: …}` literal in the engine and its controls say
+// `Table{TableType: TableType{…}}` for no gain in what either type means. `Table.Type` is the one
+// place the two are bridged.
+type TableType struct {
 	ElemType ValType
 	Limits   Limits
 }
+
+// Table is one table: its element type, its limits, and its initializer.
+type Table struct {
+	ElemType ValType
+	Limits   Limits
+
+	// Init is the initializer expression, in the same internal form `Global.Init` holds — and it
+	// is present for **both** wire forms, because the reference synthesizes one for the form that
+	// does not spell it: `let c = [RefNull ht @@ at] @@ at` (`decode.ml:1058-1063`), where `ht` is
+	// the heap type of the tabletype's own reftype. So `decodeTableForm` is the one place that
+	// distinguishes the two forms, and every later consumer sees a table with an initializer.
+	//
+	// **An imported table has no `Init` because it is not one of these at all** — it is a
+	// `TableType`, above, whose comment records what the shared representation cost. `check_externtype`
+	// reaches `check_tabletype` and never `check_table`, so there is no rule that would read one.
+	Init []Instr
+
+	// InitCasts is `Init`'s cast-type side table, keyed by instruction index exactly as
+	// `Global.InitCasts` is — and it is never empty when `Init` is present, because every
+	// initializer this decoder produces either was read from the wire (where a `ref.null` files a
+	// row through `castTypes`) or was synthesized as a `ref.null`, which files the same row from
+	// the tabletype's reftype. A validator that could not tell `ref.null func` from `ref.null
+	// extern` could not type this expression against the table's element type.
+	InitCasts map[int][]ValType
+}
+
+// Type is this table's `tabletype` — the half of it an import descriptor also has.
+//
+// The one bridge between the two structs' duplicated fields, so a caller that needs the *type* of a
+// defined table (the limits check, a match against an import's expectation) asks for it rather than
+// being handed a `Table` and trusted to ignore the initializer.
+func (t Table) Type() TableType { return TableType{ElemType: t.ElemType, Limits: t.Limits} }
 
 // Memory is one memory: its limits, which carry its address type (see Limits.Addr64).
 type Memory struct {

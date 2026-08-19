@@ -1232,7 +1232,20 @@ func TestReferenceRangeCitationsAreWellFormed(t *testing.T) {
 	// `check_start` is a module-level rule that got its *own function* instead of a phase inside
 	// `modulePre`, so its citation lives in a doc block by construction. That is the fix that paragraph
 	// says is "splitting `modulePre`", arriving one rule at a time.
-	const wantRanges = 93
+	// **#419 adds one — `module.go`'s `check_table` phase line, `:1066-1071` — and it is invisible to
+	// both pins below, so the reconciliation is the sixth-slice one again rather than #413's trivial
+	// case.** The range sits in an inline comment inside `modulePre`'s tables loop, which is where a
+	// module-level rule's citation lives when the rule is a phase rather than a function; the paragraph
+	// four above named that as a property of `modulePre` holding a dozen phases, and this is its
+	// seventh instance.
+	//
+	// Worth one more line because the slice *deleted* a citation too and the total still moved by +1.
+	// `modulePre`'s five-site `check_const` census carried `valid.ml:1070` for a row reading `NO
+	// SUBJECT`, and that citation survives — it is a **point**, so this pin never counted it, and what
+	// replaced its prose is a row with the same point citation and a true description. The +1 is
+	// therefore wholly the new range, and the deletion this slice made to that census is one only the
+	// point sweep's domain contains.
+	const wantRanges = 94
 	if ranges != wantRanges {
 		t.Errorf("checked %d range citation(s) across %v, want %d — recount and re-pin, and if a "+
 			"file was added to citationFiles, read its point citations too",

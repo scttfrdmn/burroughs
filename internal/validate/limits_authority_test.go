@@ -72,7 +72,7 @@ func TestLimitsRangesMatchTheReference(t *testing.T) {
 		{
 			fn: "check_tabletype", sent: ErrTableSize,
 			i32: tabRangeI32, i64: tabRangeI64,
-			refuse: func(lim binary.Limits) error { return checkTableType(binary.Table{Limits: lim}) },
+			refuse: func(lim binary.Limits) error { return checkTableType(binary.TableType{Limits: lim}) },
 		},
 	} {
 		t.Run(tc.fn, func(t *testing.T) {

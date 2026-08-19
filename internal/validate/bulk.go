@@ -312,7 +312,12 @@ func minAddrType(a, b binary.ValType) binary.ValType {
 // resolve" would agree until one of them learned about imports and the other did not. This one
 // returns the *type*, because slice 5 needs the element type and the address width and slice 1
 // needed neither — a bound check is the special case of a lookup that discards its result.
-func tableTypeAt(m *binary.Module, idx uint32) (binary.Table, error) {
+//
+// **`binary.TableType`, which is what "the type" was already claiming**: the two arms below are an
+// import's descriptor and a definition, and only the second has an initializer. Returning `Table`
+// made the import arm widen its value to a struct with fields it can never fill — the shape grave
+// #420 was, one package along — while every caller here reads exactly the two fields both arms have.
+func tableTypeAt(m *binary.Module, idx uint32) (binary.TableType, error) {
 	imported := m.ImportedTables()
 	if int(idx) < imported {
 		n := 0
@@ -327,7 +332,7 @@ func tableTypeAt(m *binary.Module, idx uint32) (binary.Table, error) {
 		}
 	}
 	if defined := int(idx) - imported; defined >= 0 && defined < len(m.Tables) {
-		return m.Tables[defined], nil
+		return m.Tables[defined].Type(), nil
 	}
 	// The message is `requireTable`'s verbatim, including its parenthetical, because the corpus
 	// matches it by substring (0003): 12 vectors expect the bare `unknown table` and a further 4
@@ -338,7 +343,7 @@ func tableTypeAt(m *binary.Module, idx uint32) (binary.Table, error) {
 	// and the family is 16. Whose rules those 16 belong to is `authority_test.go`'s
 	// message-oracle-resolution section; this function is the producer for the bulk operands' four.
 	n := uint32(imported) + uint32(len(m.Tables))
-	return binary.Table{}, fmt.Errorf("%w %d (%d in scope)", ErrUnknownTable, idx, n)
+	return binary.TableType{}, fmt.Errorf("%w %d (%d in scope)", ErrUnknownTable, idx, n)
 }
 
 // tableAddrType is a table's address type — i64 for a table64, else i32.
@@ -349,7 +354,7 @@ func tableTypeAt(m *binary.Module, idx uint32) (binary.Table, error) {
 // deliberately not merged: they read the same bit off different index spaces, and a shared
 // helper taking `Limits` would hide which space a caller resolved against, the distinction the
 // `unknown table` / `unknown memory` split exists to keep.
-func tableAddrType(t binary.Table) binary.ValType {
+func tableAddrType(t binary.TableType) binary.ValType {
 	if t.Limits.Addr64 {
 		return binary.I64
 	}

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/scttfrdmn/burroughs/internal/binary"
+	"github.com/scttfrdmn/burroughs/internal/text"
 )
 
 // TestElemExprOpcodesAgreeWithTheDecoder is the check `opRefNull`/`opRefFunc` cite, and it is
@@ -440,6 +441,123 @@ func TestCallCheckesArityPerStack(t *testing.T) {
 	if len(got) != 1 || int32(got[0].Bits) != 0 {
 		t.Errorf("ref-is-null = %v, want 0 (the elem segment filled slot 0, so it is not null)", got)
 	}
+}
+
+// TestTableSlotsHoldTheInitializersValue is #419's interp layer, and it exists because the board
+// does not cover it in the direction that matters.
+//
+// **Measured, not assumed.** Replacing `newTable`'s `slots[i] = v.ref` with `slots[i] = ref{Null:
+// true}` — the pre-#419 behaviour, a table of nulls whatever its initializer said — costs 7 all-on
+// corpus rows, 0 default rows, and **0 rows in this package**: `ok
+// github.com/scttfrdmn/burroughs/internal/interp` with the fill neutered. That is the accept-direction
+// gap §9 G-3 names: every module below is valid, every wrong fill is a legal table, and the only
+// witnesses were in a lane the default board never runs. The forecast that this layer "must ship with
+// its own unit control rather than leaning on the board" was written before the number was taken; the
+// number is what makes it an obligation rather than a preference.
+//
+// # Two rows because there are two wire forms, and the three mutations were watched to land
+//
+// The explicit form's slots must hold the initializer's ref; the plain form's must hold null. Which
+// row catches what is measured rather than argued, because the natural claim — "each row kills its own
+// mutation" — is not what the runs said:
+//
+//	slots[i] = ref{Null: true}      pre-#419 behaviour   explicit fails, plain passes
+//	no fill at all                  make() and return    both fail
+//	if !v.ref.Null { fill }         "make already nulls" plain fails, explicit passes
+//
+// The middle row is why **$f is function 1 and $a exists only to push it there**: `ref`'s zero value is
+// `{Null: false, Addr: 0}`, a non-null reference to function 0, so with a single function the explicit
+// row's expected value *is* what an unfilled table holds and it would have agreed with the mutation.
+// The third row is the plain form's whole reason for being here — the fill looks redundant for a null
+// initializer, it is not, and the explicit row cannot say so.
+//
+// **The board's verdict on the third mutation is not a fail column, it is a panic.** A default-lane
+// table whose null slots hold function 0 makes `call_indirect` dispatch where the spec traps
+// `uninitialized element`, and `TestPhase1Files` comes back as a stack trace out of `tailcall.go`
+// rather than as a count. That is a board that cannot report which vectors moved, which is the
+// difference between a corpus that notices and an instrument that says what happened.
+//
+// # The lanes are split deliberately, and the split is the subject
+//
+// The explicit row decodes with GC on, because `decodeTableForm` gates the `0x40` form behind that
+// gate (decision 0008 folds function references into it) — so a table that *spells* an initializer is
+// an all-on module and the 7 rows it moves are all-on rows. The plain row goes through `instantiate1`,
+// the default decoder, because its initializer is the one `decodeTableForm` synthesizes
+// (`decode.ml:1058-1063`) and the whole point of synthesizing it is that the default lane's tables are
+// on this code path too. Running both through one helper would have hidden which lane each fact lives
+// in, which is the distinction that made the gap invisible in the first place.
+//
+// # What is *not* here: a row whose initializer reads a global
+//
+// `eval.ml:1314-1315` folds `init_table` after `init_global`, so a table initializer can read a global
+// this instance has already built — and `newTable`'s doc cites that order. It cannot be pinned from
+// this package. `check_table` folds nothing into `c.globals` (`valid.ml:1160-1161`), so a table
+// initializer's `global.get` resolves against **imported globals only**, and an import is what nothing
+// here can supply (contract §3, `tableFor`'s own decline). The corpus does hold the row —
+// `table.wast:94,102-103` imports a global and reads it from two table initializers — and it is
+// among the 7. Stated rather than left as an absence, because an untestable direction that goes
+// unnamed reads as one nobody thought of.
+func TestTableSlotsHoldTheInitializersValue(t *testing.T) {
+	// $a exists only to push $f off index 0. With one function the expected `Addr` would be 0,
+	// which is `ref{}`'s own value, and the row would agree with a table nobody filled.
+	const explicit = `(module
+		(func $a)
+		(func $f)
+		(table 2 funcref (ref.func $f)))`
+
+	in := instantiateGC(t, explicit)
+	tab := in.tables[0]
+	if got := tab.size(); got != 2 {
+		t.Fatalf("table size = %d, want 2", got)
+	}
+	want := ref{Addr: 1, Inst: in}
+	for i, got := range tab.slots {
+		if got != want {
+			t.Errorf("explicit form: slot %d = %+v, want %+v (ref.func $f, function 1)", i, got, want)
+		}
+	}
+
+	// The plain form, default lane. Its slots are null — not `ref{}`, which is function 0 and is
+	// what a table allocated without its synthesized initializer would hold.
+	in = invoke1t(t, `(module (func $a) (func $f) (table 2 funcref))`)
+	tab = in.tables[0]
+	if got := tab.size(); got != 2 {
+		t.Fatalf("plain table size = %d, want 2", got)
+	}
+	for i, got := range tab.slots {
+		if !got.Null {
+			t.Errorf("plain form: slot %d = %+v, want a null ref (the decoder's synthesized "+
+				"`ref.null func`)", i, got)
+		}
+	}
+}
+
+// instantiateGC is instantiate1 with the GC gate on, requiring success.
+//
+// A separate helper rather than a features parameter on `instantiate1`, because the two callers are
+// asserting different things about the *lane*: `instantiate1`'s rows are default-board modules and
+// stating their features would blur that. `runGCErr` next door in structop_test.go is the same shape
+// for the same reason; this one instantiates without invoking, since a table's contents are the
+// subject and no export needs to read them.
+func instantiateGC(t *testing.T, src string) *Instance {
+	t.Helper()
+	img, err := text.EncodeModule([]byte(src))
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	d := &binary.Decoder{Features: binary.Features{GC: true}}
+	m, err := d.DecodeModule(img)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	in, trap := Instantiate(m)
+	if trap != nil {
+		t.Fatalf("instantiate: %v", trap)
+	}
+	if err := in.Deferred(); err != nil {
+		t.Fatalf("instantiate fell short: %v", err)
+	}
+	return in
 }
 
 // invoke1t is instantiate1 requiring success, the local shorthand this file's new rows share —
