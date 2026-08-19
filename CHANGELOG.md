@@ -19,37 +19,6 @@ weakly-ordered platform.
 ## [Unreleased]
 *Implements contract v0.1.*
 
-### Fixed
-
-- **A named type's params are bound into the local index space — [#77](https://github.com/scttfrdmn/burroughs/issues/77)**
-  (`internal/text/parser.go`, `code.go`; part of #8). A `(func (type $sig) …)` whose typeuse is not
-  re-stated contributes the referenced type's params as anonymous locals
-  (`parser.mly:238-247`), so `p.ctx.locals` held only the *declared* ones and every symbolic local in
-  the body sat one slot per param too low: `(local.get $var)` encoded as slot 0 where `$sig`'s param
-  owns 0 — a well-formed image that decodes clean, validates, and denotes a different function. The
-  emitter had been refusing that case rather than emitting it, which was honest and cost four vectors.
-  `funcField` now arms a thunk for the duration of the body and `retainIdxIn` resolves the local's
-  **ordinal** at the cursor — where the locals space is the right function's — deferring only the
-  **offset** to stage 2, where the type table is complete. One deferral suffices because only one
-  number is unknown: a deferred *space* lookup would run against the last function parsed, while an
-  ordinal read now plus an offset added later never touches the space after the cursor leaves it. The
-  reference forces the same count from `bind_local` (`parser.mly:195`), a point unavailable to a
-  single-pass parser because `module_fields1` stages every `type_` a closure shallower than every
-  `func` (`:1314-1355`); the available analog is that staging rather than that forcing point. Numeric
-  indices are **not** offset — the text already spells them in the full space.
-  **Default lane: pass 60909 → 60913, fail 23 → 19; encode stratum 7 → 3, the pre-registered −4 to the
-  row, with `func.wast` reaching 174/174 and the three survivors all `memory-multi.wast`'s (#130).**
-  All-gates-on lane: pass 64978 → 64982, the same delta, which is what a fix with no gate in it should
-  do. `unsupported` unmoved at 66 and that zero is **structural** — `classify` is untouched, so nothing
-  the harness could not ask became askable. Every row that left the fail column arrived in the pass
-  column, no third verdict taking a share, because no new wire form is produced: one index byte changed
-  inside an image the emitter already wrote. Corroborated against the authority rather than only
-  against our own decoder — all eight sources of the new control are **byte-identical to `wast2json`
-  (wabt 1.0.41)**, whole image. `TestEncodeRefusesWhatItCannotWrite`'s two typeuse rows are re-pointed
-  (not retired) to `TestEncodeOffsetsASymbolicLocalByItsTypeuseParams`, which asserts the index each one
-  writes; that empties the refusal table, so its three predicates are hoisted into
-  `frontierComplaints` and watched failing, an empty `for` being the vacuum a passing test conceals.
-
 ### Added
 
 - **The table initializer, across four layers — [#419](https://github.com/scttfrdmn/burroughs/issues/419)**
@@ -2228,6 +2197,35 @@ weakly-ordered platform.
     re-pointed, so the retirement is readable at the site rather than only in this entry.
 
 ### Fixed
+
+- **A named type's params are bound into the local index space — [#77](https://github.com/scttfrdmn/burroughs/issues/77)**
+  (`internal/text/parser.go`, `code.go`; part of #8). A `(func (type $sig) …)` whose typeuse is not
+  re-stated contributes the referenced type's params as anonymous locals
+  (`parser.mly:238-247`), so `p.ctx.locals` held only the *declared* ones and every symbolic local in
+  the body sat one slot per param too low: `(local.get $var)` encoded as slot 0 where `$sig`'s param
+  owns 0 — a well-formed image that decodes clean, validates, and denotes a different function. The
+  emitter had been refusing that case rather than emitting it, which was honest and cost four vectors.
+  `funcField` now arms a thunk for the duration of the body and `retainIdxIn` resolves the local's
+  **ordinal** at the cursor — where the locals space is the right function's — deferring only the
+  **offset** to stage 2, where the type table is complete. One deferral suffices because only one
+  number is unknown: a deferred *space* lookup would run against the last function parsed, while an
+  ordinal read now plus an offset added later never touches the space after the cursor leaves it. The
+  reference forces the same count from `bind_local` (`parser.mly:195`), a point unavailable to a
+  single-pass parser because `module_fields1` stages every `type_` a closure shallower than every
+  `func` (`:1314-1355`); the available analog is that staging rather than that forcing point. Numeric
+  indices are **not** offset — the text already spells them in the full space.
+  **Default lane: pass 60909 → 60913, fail 23 → 19; encode stratum 7 → 3, the pre-registered −4 to the
+  row, with `func.wast` reaching 174/174 and the three survivors all `memory-multi.wast`'s (#130).**
+  All-gates-on lane: pass 64978 → 64982, the same delta, which is what a fix with no gate in it should
+  do. `unsupported` unmoved at 66 and that zero is **structural** — `classify` is untouched, so nothing
+  the harness could not ask became askable. Every row that left the fail column arrived in the pass
+  column, no third verdict taking a share, because no new wire form is produced: one index byte changed
+  inside an image the emitter already wrote. Corroborated against the authority rather than only
+  against our own decoder — all eight sources of the new control are **byte-identical to `wast2json`
+  (wabt 1.0.41)**, whole image. `TestEncodeRefusesWhatItCannotWrite`'s two typeuse rows are re-pointed
+  (not retired) to `TestEncodeOffsetsASymbolicLocalByItsTypeuseParams`, which asserts the index each one
+  writes; that empties the refusal table, so its three predicates are hoisted into
+  `frontierComplaints` and watched failing, an empty `for` being the vacuum a passing test conceals.
 
 - **The public-path differential trusted modules whose imports nothing supplied — the trust break was
   on the supply side** (grave [#421](https://github.com/scttfrdmn/burroughs/issues/421);

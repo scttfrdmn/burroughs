@@ -57,6 +57,18 @@ reach is a law out of context.
   fallback is not "whatever is available"** — see *a zero-fail board is not a green
   light, it is a lost instrument* above: the plan becomes the largest unsupported
   stratum and the artifact it names.
+  - **And it holds per stratum, so the sentence to keep is: *a zero there is a lost
+    instrument, not a target*.** The whole-board rule is easy to read as being about the
+    total, which lets a *stratum* ceiling drain to zero while the board still has buckets
+    elsewhere and nothing registers what was lost. It is the same inversion at smaller
+    scale: a stratum's bound is only able to catch a regression while it has a distance
+    to its subject, so the last member leaving is simultaneously the work's success and
+    the instrument's death. Say it in the ceiling's own comment at the point it becomes
+    reachable rather than after — `encodeFailCeiling`'s entry says it at 3, with the three
+    named, which is one slice before it can happen. **A ceiling approaching zero is
+    therefore a scheduling signal and not a finish line**: what the next slice needs is
+    the bound's replacement named, not the bound congratulated. (Ruling: Scott, PR #424 —
+    *"worth keeping verbatim wherever ceilings get read"*.)
   - **A bucket names where a symptom surfaces, not where the defect lives — so a slice's first
     act is locating the defect, not fixing the named one.** This is the qualifier the rule above
     needs rather than a separate rule, because without it the rule invites exactly one mislabel:
