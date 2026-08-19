@@ -67,6 +67,18 @@ weakly-ordered platform.
     comment had predicted the failure and named its surfacing condition exactly; its tracking
     citation was #8, the *encoder's* issue, and nothing tracked the gap itself. **A deferral whose
     tripwire is another issue's completion fires for nobody.**
+- **`closecheck.sh --body <file>` — a body is a file before it is a PR** (`scripts/closecheck.sh`,
+  `Makefile`, `internal/testenv/closebody_test.go`; overhead charged to #419). Ordered by Scott on the
+  #396 report and carried by this slice's product work: the `--pr` form needs a number that does not
+  exist until after the push, so `make check` could not mirror CI on the body axis — and at #398 that
+  gap cost a CI failure, `make close` having reported green over the *commit* half while the banned
+  construct sat in the body. Two refusals rather than one, both on the rule that a check which could
+  not ask its question does not report green: an unreadable path, and an **empty file**, which is the
+  likelier mistake since a redirect that went elsewhere leaves a readable file with no body in it. The
+  title stays out of the domain and is said to — a local file holds only the body, and `--pr` remains
+  the binding form because it covers both channels. Four arms, and both refusals were watched die
+  under their own mutation: without the empty-file guard the form prints `0 lines scanned, 0 banned
+  constructs` and exits 0.
 - **The start section, across three layers — [#413](https://github.com/scttfrdmn/burroughs/issues/413)**
   (`internal/text/parser.go`, `context.go`, `encode.go`, `typetable.go`; `internal/validate/module.go`,
   `validate.go`, `instr.go`; `internal/interp/interp.go`; part of #8). One feature, one blocker, three
