@@ -1741,12 +1741,20 @@ type DecodeFunc func(image []byte) error
 // 17-head slice needed a boundary that hands back the module, and the first draft widened this one
 // — which made the three Kinds it serves (`KindModuleQuote`, `KindModuleText`,
 // `KindAssertMalformedText`) run the engine's *build*-mode assembler instead of its recognizer, and
-// **58 vectors** regressed from pass to fail because the emitter cannot yet write `(table …)`,
+// **58 vectors** regressed from pass to fail because the emitter could not then write `(table …)`,
 // `(start …)` or #77's symbolic locals (#8). The module a build-mode parse cannot produce is not a
 // module the recognizer needs, so the two are different questions and get different signatures —
 // exactly the argument the next paragraph already made against a mode flag, arrived at a second
 // time by breaking the board. AssembleFunc is the widened boundary; decision 0011's error-only
 // surface stands here.
+//
+// **The 58 is spent and the tense above is corrected to say so (#423).** `(start …)` closed with #413,
+// `(table …)` with #419, and the symbolic locals with #77 — all three blockers that measurement named,
+// so the figure no longer describes what a widening would cost and the encode stratum is at 3. That
+// does not reopen the choice, because the sentence after the number is the argument that carries it and
+// it never depended on the count. What it does do is retire the *number* as evidence: #423 asks for the
+// re-measurement, with #329's lesson attached — the probe's domain must cover all three Kinds before any
+// figure read off it means anything.
 //
 // Injected rather than called directly, for the reason DecodeFunc is: this package is
 // the oracle, and an oracle that imports the engine it scores can no longer be read as

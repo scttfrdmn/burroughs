@@ -31,6 +31,7 @@ if [ -z "$RUN" ]; then   # no run — say WHICH no, don't just time out
   exit 1
 fi
 gh run watch "$RUN" --compact --exit-status   # run this with run_in_background
+gh run view "$RUN" --json jobs -q '.jobs[] | "\(.conclusion)\t\(.name)"'   # the verdict is here
 ```
 
 **The loop's negative has two meanings and must say which.** `ci.yml` triggers on
@@ -48,7 +49,7 @@ Three separate mistakes are being avoided, and they were made in that order:
 1. **`sleep N && gh pr checks` — a duration is not a completion signal.** It
    guesses low and reports a pending run as though that were news, or guesses high
    and wastes the difference; either way the shell, not the CI system, decided
-   when to look. Read the verdict from `gh run view "$RUN" --json conclusion` — the
+   when to look. Read the verdict from the run rather than from the shell — the
    CI instance of *a command's exit status belongs to whatever ran last*.
    (Directive: Scott, PR #331.)
 2. **`gh pr checks --watch` races the run's creation.** It watches whatever checks
@@ -60,6 +61,22 @@ Three separate mistakes are being avoided, and they were made in that order:
 3. **Blocking the tool call wastes the wait.** Watch with `run_in_background` and
    keep working; the completion arrives as a notification. A five-minute CI run
    should cost five minutes of *CI*, not five minutes of doing nothing.
+4. **`--json conclusion` cannot tell "everything passed" from "nothing ran".** A run's
+   conclusion is an **aggregate**, and a run whose jobs were all skipped concludes
+   `success` — truthfully. On #422, one SHA had **three** `pull_request` runs; the one
+   that finished in under a minute had `citations` green and `build`, `lint`,
+   `conformance`, `vuln` and `fuzz-smoke` all **`skipped`**, while the run carrying the
+   verdict was still `in_progress` for another ten minutes. Reading the fast one's
+   conclusion is a green over a population of one job. So read `.jobs[]` and assert the
+   named jobs are **present and `success`, never `skipped`** — both `build` matrix legs
+   included. Note that this is *not* mistake 2 with a different symptom: mistake 2 is the
+   **wrong instance** (a stale SHA) and identity-checking fixes it, while this is the
+   **empty instance** on the *right* SHA, which no amount of SHA-binding can catch. It is
+   [a skip is not a verdict](boards-and-buckets.md#a-skip-is-not-a-verdict) one level up —
+   a skipped job passes by asking nothing, and an aggregate over skips passes by asking
+   nothing louder. A body-only `gh pr edit` creates a fresh `pull_request` run that is
+   *supposed* to skip everything but the citations sweep, which is exactly why the skip has
+   to be read rather than summed away. (Directive: Scott, this PR.)
 
 **And `sleep` is never how you wait for a signal that exists — background it and let the
 wake-up arrive.** This is mistake 1 restated because restating it was necessary: it was
@@ -74,7 +91,9 @@ turn costs nothing, a blocked tool call costs the whole wait. (Directive: Scott,
 *"stop using sleep"*; the rule was already written here, by the agent that broke it.)
 
 The first two are *verdict channel and mechanism channel are different instruments* applied to
-time and to identity: ask the right channel, and ask it about the right run.
+time and to identity: ask the right channel, and ask it about the right run. The fourth is the
+same pair applied to *extent* — the right channel, the right run, and a question narrow enough
+that the answer cannot be true of an empty set.
 
 ## Local cross-architecture verification
 

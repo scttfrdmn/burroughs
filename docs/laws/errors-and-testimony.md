@@ -185,3 +185,43 @@ reach is a law out of context.
   overstates the difficulty of the case it decided is this. (Ruling: Scott, PR #285 relay —
   filed as a specimen and explicitly **not** minted as a key: "it's a specimen, not a key",
   the index ceiling being real.)
+
+### A deferral's stated cost is part of the record's content, and it is the one class of claim nothing ever audits.
+
+- **A deferral's stated cost is part of the record's content, and it is the one class of
+  claim nothing ever audits.** The same organ as the hedge law above — what a record says
+  about its own grounds is content, not framing — pointed at the sentence a scope note uses
+  to *decline* work. Specimen: `internal/text/typetable.go`'s note deferred binding a
+  typeuse's params into the local space on a named price, *"honouring that here would mean
+  carrying a live local space per pending operation."* Having named a mechanism, the note
+  made the deferral read as structural. It was false: only one number is unknown, so one
+  thunk supplies it and nothing is carried per operation (#77).
+
+  **The asymmetry is the law, and it generalizes past this file.** An estimate that argues
+  *for* doing the work is audited the moment someone does it: the bill arrives and the
+  figure is checkable against it, which is the mechanism
+  [bucket size estimates the reward, not the job](boards-and-buckets.md#bucket-size-estimates-the-reward-not-the-job)
+  relies on — that law's specimens are all forecasts someone paid out and could therefore
+  compare. An estimate that argues *against* gets no audit ever, because **the bill only
+  arrives with the work the estimate prevented.** The only event that can falsify it is
+  someone doing the work anyway, which the estimate exists to discourage. So deferral costs
+  are structurally the least-checked claims in this repo, and this one had sat for slices
+  while the gap it protected produced a wrong index byte in shipped output — a well-formed
+  image denoting a different function, which no suite vector can see.
+
+  Note what that does to the symmetry the bucket law claims for itself. It says the estimate
+  errs in *both* directions and prescribes a symmetric census — true of the estimates it can
+  see, which are the ones attached to scheduled work. A deferral's cost is an estimate with
+  **no scheduled work to attach to**, so it is outside that census by construction rather
+  than by oversight. Two laws, one subject, and the seam between them is who pays.
+
+  **How to apply.** When declining work on cost grounds, price the *alternative*
+  implementation too, not only the one being rejected. The sentence to distrust is the one
+  that names a mechanism — "a live X per Y", "this would need a second pass" — without
+  having looked for the cheaper mechanism the deferral makes it comfortable not to look
+  for; a cost sentence with a mechanism in it is doing the work of a measurement while
+  being an assertion. And when one is falsified, **append the correction with the body
+  intact**, on the same precedent 0003's LEB section set above: a scope note can be right
+  about where work does not belong and wrong about what it would cost, and only one of
+  those two halves was ever checkable from the file it sits in. Deleting it destroys the
+  record of which half failed. (Ruling: Scott, PR #424.)

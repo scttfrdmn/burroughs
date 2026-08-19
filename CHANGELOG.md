@@ -1368,6 +1368,19 @@ weakly-ordered platform.
 
 ### Changed
 
+- **A CI verdict is read from `.jobs[]`, never from a run's `conclusion`**
+  (`docs/laws/operations.md`; Scott's directive, riding #77). A run's conclusion is an **aggregate**, so
+  a run whose jobs were all skipped concludes `success` truthfully — on #422 one SHA had three
+  `pull_request` runs and the one that finished in under a minute had `citations` green with `build`,
+  `lint`, `conformance`, `vuln` and `fuzz-smoke` all `skipped`, while the run carrying the verdict was
+  `in_progress` for another ten minutes. `gh run view "$RUN" --json conclusion` is what made that look
+  like a pass, so the recipe now reads the job list and the rule is to assert the named jobs are present
+  and `success`, **never `skipped`** — both `build` matrix legs included. Filed as a **fourth** mistake
+  rather than folded into the second: mistake 2 is the *wrong instance* on a stale SHA and identity
+  checking fixes it, while this is the *empty instance* on the right SHA, which no amount of SHA-binding
+  catches. A body-only `gh pr edit` creates a run that is supposed to skip everything but the citations
+  sweep, which is why the skip has to be read rather than summed away.
+
 - **The validator has one operand-consuming primitive, so the reference's operand-mismatch sentence
   is spelled one way** (`internal/validate/stack.go`, `exception.go`, `popsite_test.go`; #394).
   `popSeqExpect` arrived in slice 10 as exception handling's private helper because
@@ -2184,6 +2197,35 @@ weakly-ordered platform.
     re-pointed, so the retirement is readable at the site rather than only in this entry.
 
 ### Fixed
+
+- **A named type's params are bound into the local index space — [#77](https://github.com/scttfrdmn/burroughs/issues/77)**
+  (`internal/text/parser.go`, `code.go`; part of #8). A `(func (type $sig) …)` whose typeuse is not
+  re-stated contributes the referenced type's params as anonymous locals
+  (`parser.mly:238-247`), so `p.ctx.locals` held only the *declared* ones and every symbolic local in
+  the body sat one slot per param too low: `(local.get $var)` encoded as slot 0 where `$sig`'s param
+  owns 0 — a well-formed image that decodes clean, validates, and denotes a different function. The
+  emitter had been refusing that case rather than emitting it, which was honest and cost four vectors.
+  `funcField` now arms a thunk for the duration of the body and `retainIdxIn` resolves the local's
+  **ordinal** at the cursor — where the locals space is the right function's — deferring only the
+  **offset** to stage 2, where the type table is complete. One deferral suffices because only one
+  number is unknown: a deferred *space* lookup would run against the last function parsed, while an
+  ordinal read now plus an offset added later never touches the space after the cursor leaves it. The
+  reference forces the same count from `bind_local` (`parser.mly:195`), a point unavailable to a
+  single-pass parser because `module_fields1` stages every `type_` a closure shallower than every
+  `func` (`:1314-1355`); the available analog is that staging rather than that forcing point. Numeric
+  indices are **not** offset — the text already spells them in the full space.
+  **Default lane: pass 60909 → 60913, fail 23 → 19; encode stratum 7 → 3, the pre-registered −4 to the
+  row, with `func.wast` reaching 174/174 and the three survivors all `memory-multi.wast`'s (#130).**
+  All-gates-on lane: pass 64978 → 64982, the same delta, which is what a fix with no gate in it should
+  do. `unsupported` unmoved at 66 and that zero is **structural** — `classify` is untouched, so nothing
+  the harness could not ask became askable. Every row that left the fail column arrived in the pass
+  column, no third verdict taking a share, because no new wire form is produced: one index byte changed
+  inside an image the emitter already wrote. Corroborated against the authority rather than only
+  against our own decoder — all eight sources of the new control are **byte-identical to `wast2json`
+  (wabt 1.0.41)**, whole image. `TestEncodeRefusesWhatItCannotWrite`'s two typeuse rows are re-pointed
+  (not retired) to `TestEncodeOffsetsASymbolicLocalByItsTypeuseParams`, which asserts the index each one
+  writes; that empties the refusal table, so its three predicates are hoisted into
+  `frontierComplaints` and watched failing, an empty `for` being the vacuum a passing test conceals.
 
 - **The public-path differential trusted modules whose imports nothing supplied — the trust break was
   on the supply side** (grave [#421](https://github.com/scttfrdmn/burroughs/issues/421);

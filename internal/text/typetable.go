@@ -77,9 +77,51 @@ import (
 // the consequence is a *declined* module instead of a wrong one — and #77 is what makes the
 // question answerable rather than merely refusable.
 //
+// **#77 has landed, and the paragraph above is falsified in the one place it was load-bearing: the
+// cost.** "Honouring that here would mean carrying a live local space per pending operation" named a
+// price and, having named it, made the deferral look structural. It was not. The reference forces a
+// typeuse's params when a *named local* is declared (`force_locals` is reached only from `bind_local`,
+// parser.mly:195) and can do so because `module_fields1` stages every `type_` a closure shallower than
+// every `func` (:1314-1355), which a single-pass parser cannot copy — but the *available* analog is
+// cheaper than the one this paragraph priced. `funcField` arms a `func() (uint32, error)` for the
+// duration of the body; `retainIdxIn` reads the local's **ordinal** at the cursor, where the space is
+// live and correct, and defers only the **offset**. Nothing is carried per pending operation, because
+// only one number is unknown and it is unknown for one reason.
+//
+// So "the consequence is a declined module instead of a wrong one" is false too, and in the good
+// direction: the emitter now writes the right index. What stays true is this file's own not-doing —
+// `typeTable` still holds no local space, and the fix lives in the parser's context and the code
+// emitter rather than here. That distinction is the point of appending a third layer instead of
+// deleting the second: the scope note was right about where the work does not belong and wrong about
+// what it would cost, and only one of those two was ever checkable from this file.
+//
 // Kept as a correction with its body intact rather than rewritten, because a scope note that went
 // stale by the code around it growing a consumer is the drifted-citation defect's own shape, and the
 // record of what was believed is the part worth keeping.
+//
+// # The general form, because this one generalizes past this file
+//
+// **A deferral's stated cost is part of the record's content, and it is the one class of claim nothing
+// ever audits.** An estimate that argues *for* doing work is audited the moment someone does it: the
+// bill arrives, and the figure is checkable against it. An estimate that argues *against* gets no audit
+// ever, because **the bill only arrives with the work the estimate prevented** — the single event that
+// could falsify it is someone doing the work anyway, which is precisely what the estimate exists to
+// discourage. So a deferral's price is not merely unchecked here; it is unchecked *structurally*, and
+// the sentence above is what that costs: it sat for slices while the gap it protected wrote a wrong
+// index byte into shipped output.
+//
+// The tell is in the grammar of the excuse. A cost sentence that names a **mechanism** — "a live local
+// space per pending operation", "this would need a second pass" — is doing a measurement's work while
+// being an assertion, and it is persuasive for exactly that reason. What it does not do is price the
+// *alternative* implementation, which the deferral makes it comfortable never to look for: here the
+// alternative was one thunk, because only one number is unknown.
+//
+// Filed with the testimony family rather than with estimates
+// (`docs/laws/errors-and-testimony.md`), on the ruling that this is the same organ as a hedge being
+// part of a record's content — what a record says about its own grounds is content, not framing. It is
+// deliberately *not* filed under the bucket-size law, whose claimed symmetry it does not fit: that law
+// audits estimates attached to scheduled work, and a deferral's cost is an estimate with no scheduled
+// work to attach to. (Ruling: Scott, PR #424.)
 
 // valType is one wat value type, carrying as much as a structural comparison needs
 // (parser.mly:391-394).

@@ -3587,7 +3587,7 @@ func TestStructAndArrayFieldsRoundTrip(t *testing.T) {
 // input. So each row asserts three things — ReadModule accepts, EncodeModule refuses, and the
 // message says what is missing without borrowing a spec string.
 func TestEncodeRefusesWhatItCannotWrite(t *testing.T) {
-	for _, tc := range []struct{ src, contains string }{
+	rows := []struct{ src, contains string }{
 		// `(module (func))` was here and is now in `encodableModules`, which is what the code section
 		// *is*.
 		//
@@ -3677,33 +3677,31 @@ func TestEncodeRefusesWhatItCannotWrite(t *testing.T) {
 		// field, gated or otherwise, whose parse completes and whose content this emitter cannot write.
 		// The moment one exists it becomes this block's eighth leader.
 
-		// # The typeuse frontier, which is a *wrong index* rather than a missing section
+		// # The typeuse frontier is gone, and its two rows left rather than being retired
 		//
-		// Every row above refuses a field with no emitter. These two refuse a func the emitter can
-		// otherwise write completely, because one immediate inside it would be **wrong**: a typeuse
-		// with no re-stated signature contributes its referenced type's params as anonymous locals
-		// (parser.mly:241-244), the count is unknowable at the cursor (the type may be defined later),
-		// and `p.ctx.locals` is therefore short by it. `(local.get $var)` resolved to slot 0 where the
-		// param owns 0 — 77 bytes agreeing with wabt everywhere except `20 00` against `20 01`, found
-		// by the corpus and invisible to all 4162 vectors.
+		// Two rows stood here until #77 landed, and they were the one pair in this table that refused
+		// a func the emitter could otherwise write completely — because one immediate inside it would
+		// have been **wrong** rather than missing. They are now in
+		// TestEncodeOffsetsASymbolicLocalByItsTypeuseParams, which asserts the index each one writes.
 		//
-		// So the assertion is the same in shape and different in kind: refusing here is not "no
-		// section yet", it is "this index would be a lie". The tracking issue is #77's rather than
-		// #8's, which is why the loop below accepts either.
-		{
-			`(module (type $sig (func (param i32))) (func (type $sig) (local $var i32) (local.get $var) drop))`,
-			"typeuse supplies its params",
-		},
-		// The **over-refusal**, stated as a row rather than left in a comment. `$t` has no params, so
-		// `$v` really is slot 0 and this module is encodable — and it is refused, because "does the
-		// type have params" is the same unanswerable question at this cursor as "how many". A frontier
-		// that declines an encodable module is a cost; one that writes a wrong index is a defect no
-		// vector can see. If #77 lands and this row still refuses, the fix did not reach the predicate.
-		{
-			`(module (type $t (func)) (func (type $t) (local $v i32) (local.get $v) drop))`,
-			"typeuse supplies its params",
-		},
-	} {
+		// **The move is the re-pointing rule (#33) and not an eighth leader's closing**, because the
+		// risk did not dissolve: a symbolic local resolved against a short space is still a legal image
+		// denoting a different function, and the assertion that catches it changed direction from "the
+		// encoder refuses" to "the encoder writes 1". The old rows even pre-registered this transition
+		// — *"if #77 lands and this row still refuses, the fix did not reach the predicate"* — so the
+		// tripwire fired as designed and the population it guarded moved intact.
+	}
+
+	// **`rows` is empty, so the loop below asserts nothing, and that is said here rather than left for
+	// a reader to discover from an indentation.** Every frontier this emitter had is drained: the field
+	// leaders by #413/#419, the memory and table arms by section 11 and 12, and the typeuse pair by #77.
+	// A `for` over an empty slice is the vacuum this project has a family of graves for — it passes by
+	// asking nothing, exactly as a skipped test does — so the predicates are hoisted into
+	// `frontierComplaints` and *watched failing* below, on the reasoning that a control nobody has seen
+	// die is not yet a control (#108). The loop stays because the predicates are the durable half: the
+	// next gap this emitter grows gets a row here and inherits three assertions it would otherwise have
+	// to re-derive.
+	for _, tc := range rows {
 		t.Run(tc.src, func(t *testing.T) {
 			if err := ReadModule([]byte(tc.src)); err != nil {
 				t.Fatalf("the parser rejects this module, so it is the wrong vector for a frontier "+
@@ -3715,29 +3713,283 @@ func TestEncodeRefusesWhatItCannotWrite(t *testing.T) {
 					"module with a section silently dropped is an accept-direction defect no suite "+
 					"vector can see (§9 G-3)", b)
 			}
-			if !strings.Contains(err.Error(), tc.contains) {
-				t.Errorf("refusal says %q, want it to name %q", err, tc.contains)
-			}
-			// **Either tracking issue, not a substring that any `#` satisfies.** The section frontiers
-			// were #8's and both surviving rows are #77's, that gap being a wrong *index* rather than
-			// a missing emitter — so the `#8` half of this disjunction currently matches nothing, and it
-			// stays because #8 is the frontier's own number and whatever arrives here next will cite it.
-			// Spelled as two accepted numbers rather than as `strings.Contains(err,
-			// "#")` — a predicate matching any hash would pass on a message citing #0 or on the word
-			// "channel #", which is a citation nobody can resolve wearing a tracked deferral's clothes.
-			if !strings.Contains(err.Error(), "#8") && !strings.Contains(err.Error(), "#77") {
-				t.Errorf("refusal says %q, want it to cite #8 or #77: an unexplained gap is the "+
-					"declared-and-tracked ruling's silent half (#6)", err)
-			}
-			for _, spec := range []string{"malformed", "unexpected", "unknown", "invalid"} {
-				if strings.Contains(err.Error(), spec) {
-					t.Errorf("refusal says %q, which contains the spec word %q: reporting a "+
-						"malformedness for a module the spec calls well-formed lies about the "+
-						"input to conceal a gap in the engine (#5)", err, spec)
-				}
+			for _, c := range frontierComplaints(err.Error(), tc.contains) {
+				t.Error(c)
 			}
 		})
 	}
+
+	// The falsification, and it is the only thing in this function with a live population.
+	t.Run("the predicates fail on demand", func(t *testing.T) {
+		const contains = "no section for it"
+		// A refusal that satisfies all three: it names the gap, it cites a tracked issue, and it borrows
+		// no spec word. Hand-written rather than taken from the engine, because there is no engine
+		// refusal left to take — which is the condition this subtest exists to keep visible.
+		if got := frontierComplaints("text: cannot write a widget field: there is "+
+			"no section for it yet (#8)", contains); len(got) != 0 {
+			t.Errorf("a conforming refusal drew %d complaints, want 0: %v — the predicates reject "+
+				"what they are meant to accept, so every row added above would fail for the "+
+				"instrument's reason", len(got), got)
+		}
+		for _, bad := range []struct{ name, msg string }{
+			{"does not name the gap", "text: cannot write this field yet (#8)"},
+			{"cites nothing", "text: cannot write a widget field: there is no section for it yet"},
+			{"borrows a spec word", "text: malformed widget field: there is no section for it yet (#8)"},
+		} {
+			if got := frontierComplaints(bad.msg, contains); len(got) != 1 {
+				t.Errorf("%s: %q drew %d complaints, want exactly 1: %v", bad.name, bad.msg, len(got), got)
+			}
+		}
+	})
+}
+
+// frontierComplaints is the three assertions each row of `TestEncodeRefusesWhatItCannotWrite` made,
+// returning one message per violation so the empty-population case can watch them fail.
+//
+// **Either tracking issue, not a substring that any `#` satisfies.** The section frontiers were #8's
+// and the two rows this table last held were #77's, that gap being a wrong *index* rather than a
+// missing emitter — so both halves of the disjunction currently match nothing, and both stay because #8
+// is the frontier's own number and whatever arrives here next will cite it. Spelled as two accepted
+// numbers rather than as `strings.Contains(msg, "#")` — a predicate matching any hash would pass on a
+// message citing issue zero or on the word "channel #", which is a citation nobody can resolve wearing
+// a tracked deferral's clothes.
+//
+// The zero is spelled in words for a reason worth one line: `citecheck` reads citation-shaped **tokens**
+// and cannot see quotation marks or the word "would", so the digit form in this sentence was itself a
+// dangling citation — the ban reported in the banned form, one layer out from where #314 found it.
+func frontierComplaints(msg, contains string) []string {
+	var out []string
+	if !strings.Contains(msg, contains) {
+		out = append(out, fmt.Sprintf("refusal says %q, want it to name %q", msg, contains))
+	}
+	if !strings.Contains(msg, "#8") && !strings.Contains(msg, "#77") {
+		out = append(out, fmt.Sprintf("refusal says %q, want it to cite #8 or #77: an unexplained "+
+			"gap is the declared-and-tracked ruling's silent half (#6)", msg))
+	}
+	for _, spec := range []string{"malformed", "unexpected", "unknown", "invalid"} {
+		if strings.Contains(msg, spec) {
+			out = append(out, fmt.Sprintf("refusal says %q, which contains the spec word %q: "+
+				"reporting a malformedness for a module the spec calls well-formed lies about the "+
+				"input to conceal a gap in the engine (#5)", msg, spec))
+		}
+	}
+	return out
+}
+
+// TestEncodeOffsetsASymbolicLocalByItsTypeuseParams is #77, and it is the two rows
+// `TestEncodeRefusesWhatItCannotWrite` refused re-pointed to the direction that survives the fix (#33).
+//
+// **The defect this replaces was a legal image denoting a different function.** A `(func (type $sig)
+// …)` whose typeuse is not re-stated contributes the referenced type's params as anonymous locals
+// (parser.mly:238-247), so the local index space starts *after* them while `p.ctx.locals` holds only
+// the declared ones. `(local.get $var)` resolved to slot 0 where the param owns 0 — an image agreeing
+// with wabt in all 77 bytes except `20 00` against `20 01`, which decodes clean, validates, and reads
+// a parameter instead of a local. That is the accept-direction defect no `assert_malformed` or
+// `assert_invalid` vector can witness (§9 G-3), which is why the encoder refused rather than guessed.
+//
+// **The witness has to be the index byte.** A round trip through our own decoder would agree with
+// whatever we wrote — the reference's parser and encoder are the authority for a wire form, and asking
+// our front end to confirm our back end is the self-agreement shape. `func.wast:459` is the corpus's
+// oracle for the one-param case and it now passes; these rows are the cases the corpus has no vector
+// for, read out of the bytes by `firstLocalIdx`.
+//
+// **And the want column was corroborated by the authority rather than only argued for.** Having said
+// that the reference is what settles a wire form, this table would still have been eight numbers written
+// by the same hand that wrote the encoder — so all eight sources were put through `wast2json` (wabt
+// 1.0.41) and compared whole-image against `EncodeModule`: **8 of 8 byte-identical**, magic and version
+// included. That independently confirms every index below, including the three a reader has most reason
+// to doubt — the ordinal 4, the forward-referenced 2, and the numeric 0 that is *not* offset.
+//
+// The run was ad hoc and cannot be repeated by `make check`, which is a stated limitation and not a
+// hedge: wabt is deliberately absent from this project's dependency set, so its output is committed at
+// generation time (`testdata/xcorpus/`, the `xcorpus` target) rather than invoked. Those committed images
+// are #67 half 2's comparator and today only the *decode* direction reads them — nothing compares this
+// emitter's bytes to them, which is exactly the instrument that would have caught #77 without a hand
+// run. Reported on #67 with the feasibility figure above, since a differential nobody automated is an
+// operator habit wearing a control's clothes.
+//
+// The rows are chosen so that each one falsifies a different way of being wrong:
+//
+//   - offset **applied**: the one-param typeuse, `20 01`. A fix that never resolves writes `20 00`.
+//   - offset **zero**: the param-less typeuse, `20 00`. This module was always encodable and was
+//     refused anyway, because "does the type have params" is the same unanswerable question at the
+//     cursor as "how many" — so an unconditional +1, or any fix keyed on the *presence* of a typeuse
+//     rather than on its resolved count, writes `20 01` here and is wrong on a module the old
+//     frontier at least declined honestly.
+//   - the **ordinal** survives: three params, two locals, the second local. `20 04` — a fix that
+//     offsets but loses the position within the declared locals writes `20 03`.
+//   - the type is defined **after** the func, `20 02`. This is the row the deferral is for: at the
+//     cursor the name has nothing to resolve to, so an implementation reading the count eagerly
+//     cannot produce this at all.
+//   - **numeric indices are absolute and are not offset**, `20 00` for `local.get 0` under a
+//     one-param typeuse, where 0 denotes the param. The offset belongs to name resolution; adding it
+//     to a number the text already spells in the full space would corrupt every numeric access in a
+//     typeuse'd body — a much larger population than the one the fix is for.
+//   - the two paths the fix must **not** touch: a func with no typeuse, and a typeuse whose signature
+//     is re-stated (`inline_functype_explicit`, parser.mly:238-247). In both, the params are bound
+//     into `p.ctx.locals` by the parser as it goes, so the space is already whole and a second offset
+//     would double-count.
+//   - `local.set`, so the assertion is about the local index space rather than about one opcode.
+//
+// **The table was watched dying twice, and the row split is the record** (#108) — a control that has
+// only ever passed is a claim, not an instrument. Dropping the offset (`ord` for `ord + n`) fails
+// exactly *offset applied*, *three params*, *defined after* and *local.set*, with the four rows that
+// must not move staying green. Keying it on the presence of a typeuse instead (`ord + 1`) fails
+// *param-less*, *three params* and *defined after* — and **the param-less row is the only witness
+// among them that a one-param table would have had**, since both 1-param rows pass under that
+// implementation. That is the row the old frontier's over-refusal comment argued for in prose; here it
+// earns its place by being the one that fires.
+//
+// `wantDecls` was not neutered, and the reason is stated rather than hidden: padding the declaration
+// vector means editing the code-section writer, and what the assertion needs is already visible —
+// `firstLocalIdx` returns 2 on the three-param row and 1 elsewhere, so it reads the vector rather than
+// returning a constant.
+func TestEncodeOffsetsASymbolicLocalByItsTypeuseParams(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		src  string
+		// wantIdx is the index operand of the first local.get/set/tee in the body.
+		wantIdx uint64
+		// wantDecls is the number of locals the code entry *declares*, which the params are deliberately
+		// not part of: the offset comes from the type section, so a fix that instead padded the
+		// declaration vector would satisfy `wantIdx` and change the function's arity. Asserted on every
+		// row for that reason.
+		wantDecls uint64
+	}{
+		{
+			"one param, offset applied",
+			`(module (type $sig (func (param i32))) (func (type $sig) (local $var i32) (local.get $var) drop))`,
+			1, 1,
+		},
+		{
+			"param-less type, offset zero",
+			`(module (type $t (func)) (func (type $t) (local $v i32) (local.get $v) drop))`,
+			0, 1,
+		},
+		{
+			"three params, second declared local",
+			`(module (type $sig (func (param i32) (param i64) (param f32)))` +
+				` (func (type $sig) (local $a i32) (local $b i64) (local.get $b) drop))`,
+			4, 2,
+		},
+		{
+			"the type is defined after the func",
+			`(module (func (type $sig) (local $var i32) (local.get $var) drop)` +
+				` (type $sig (func (param i32) (param i64))))`,
+			2, 1,
+		},
+		{
+			"a numeric index is absolute",
+			`(module (type $sig (func (param i32))) (func (type $sig) (local $v i32) (local.get 0) drop))`,
+			0, 1,
+		},
+		{
+			"no typeuse: the parser binds the params itself",
+			`(module (func (param $p i32) (local $l i32) (local.get $l) drop))`,
+			1, 1,
+		},
+		{
+			"a typeuse that re-states its signature",
+			`(module (type $sig (func (param i32))) (func (type $sig) (param $p i32) (local $v i32) (local.get $v) drop))`,
+			1, 1,
+		},
+		{
+			"local.set, same space",
+			`(module (type $sig (func (param i32))) (func (type $sig) (local $v i32) i32.const 1 local.set $v))`,
+			1, 1,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b, err := EncodeModule([]byte(tc.src))
+			if err != nil {
+				t.Fatalf("EncodeModule refused a well-formed module: %v", err)
+			}
+			idx, decls, err := firstLocalIdx(b)
+			if err != nil {
+				t.Fatalf("locating the local index in % x: %v", b, err)
+			}
+			if decls != tc.wantDecls {
+				t.Errorf("the code entry declares %d locals, want %d: the typeuse's params belong to "+
+					"the type section, and padding the declaration vector with them instead would "+
+					"change the function's arity while the index below still read right (% x)",
+					decls, tc.wantDecls, b)
+			}
+			if idx != tc.wantIdx {
+				t.Errorf("the local index is %d, want %d: an off-by-the-param-count index is a legal "+
+					"image that decodes clean and validates, denoting a different function — the "+
+					"accept-direction defect no suite vector can see (§9 G-3) (% x)",
+					idx, tc.wantIdx, b)
+			}
+		})
+	}
+}
+
+// firstLocalIdx returns the index operand of the first local.get/set/tee in a single-function module's
+// body, and the number of locals that body declares.
+//
+// It walks the framing for the reason `bytesIndex` and `memargFlags` do — `0x20` is a legal LEB byte, a
+// legal valtype and a legal count, so a search for it finds the wrong one — and it refuses rather than
+// guessing, so a module it cannot read is a loud failure instead of a byte from somewhere else.
+//
+// It differs from `memargFlags` in the one place that matters here: that helper requires a body with no
+// local declarations, and every row above has them. The declaration vector is therefore walked and its
+// total returned rather than skipped, which is what lets the caller assert the params are *not* in it.
+//
+// Narrow on purpose, with the notice attached: one function, one-byte LEBs throughout, and a body whose
+// only instructions before the local access are `i32.const` and `drop`. Widening the rows past any of
+// those needs this widened first, and it will say so by erroring.
+func firstLocalIdx(b []byte) (idx, decls uint64, err error) {
+	i := bytesIndex(b, secCode)
+	if i < 0 {
+		return 0, 0, errors.New("no code section")
+	}
+	_, n := uvarint(b[i+1:]) // section size
+	if n <= 0 {
+		return 0, 0, errors.New("malformed code section size")
+	}
+	p := i + 1 + n
+	count, n := uvarint(b[p:])
+	if n <= 0 || count != 1 {
+		return 0, 0, errors.New("this helper reads a single-function module")
+	}
+	p += n
+	if _, n = uvarint(b[p:]); n <= 0 { // body size
+		return 0, 0, errors.New("malformed body size")
+	}
+	p += n
+	groups, n := uvarint(b[p:])
+	if n <= 0 {
+		return 0, 0, errors.New("malformed local declaration count")
+	}
+	p += n
+	for range groups {
+		c, cn := uvarint(b[p:])
+		if cn <= 0 {
+			return 0, 0, errors.New("malformed local group count")
+		}
+		decls += c
+		p += cn + 1 // the group's count, then its one valtype byte
+	}
+	for p < len(b) {
+		switch op := b[p]; {
+		case op >= 0x20 && op <= 0x22: // local.get, local.set, local.tee
+			idx, n = uvarint(b[p+1:])
+			if n <= 0 {
+				return 0, 0, errors.New("malformed local index")
+			}
+			return idx, decls, nil
+		case op == 0x41: // i32.const — skip the operand
+			if _, n = uvarint(b[p+1:]); n <= 0 {
+				return 0, 0, errors.New("malformed const operand")
+			}
+			p += 1 + n
+		case op == 0x1a: // drop
+			p++
+		default:
+			return 0, 0, fmt.Errorf("unexpected opcode %#02x in a body this helper is meant to read", op)
+		}
+	}
+	return 0, 0, errors.New("no local access in the body")
 }
 
 // TestAFollowerFieldDoesNotDropItsLeader is the twelve follower rows
