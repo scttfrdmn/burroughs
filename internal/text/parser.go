@@ -73,25 +73,25 @@ type parser struct {
 	// lives here instead). Set by `reftypeRetained`, which has the operand in hand; consumed and
 	// cleared by `plaininstr` in place of the `opBytes` lookup.
 	opOverride []byte
-	// localsMissParams is non-zero while the func being parsed has a typeuse whose params this
-	// stratum could not bind into `p.ctx.locals` — see funcField, and #77.
+	// localsParamOffset is non-nil while the func being parsed has a typeuse that supplies its
+	// params, in which case `p.ctx.locals` holds **only the declared locals** and every symbolic
+	// local's absolute index is its ordinal in that space *plus* the referenced type's param count.
+	// The thunk reports that count, and it is a thunk because the count is not knowable at this
+	// cursor: the type may be defined later in the field list (#77, and see funcField).
 	//
-	// **A flag rather than a refusal at the func**, because the refusal has to be *narrow*: a typeuse
-	// whose referenced type happens to have no params costs nothing, and refusing every typeuse threw
-	// away `(module (func (type $t)) (type $t (func)))`, an encodable row already in the round-trip
-	// table. The count is unknowable at this cursor (the type may be defined later), so the honest
-	// predicate is not "how many params" but "is a local index about to be resolved against a space
-	// that may be short" — which is a question only `retainIdx` is standing at.
+	// **The name resolves at the cursor and only the offset defers**, which is what makes one deferral
+	// enough. A deferred *space* lookup would run against whatever function was parsed last — the
+	// hazard code.go's header names — but an ordinal read now and an offset added later never touch
+	// the space after the cursor has left it.
 	//
-	// It carries the typeuse's own token so the message points at `(type $sig)`, the thing that is
-	// unencodable, rather than at the `local.get` that merely revealed it.
+	// It carries the typeuse's own token because the errors the thunk can raise (`unknown type`,
+	// `non-function type`) are facts about `(type $sig)` and not about the `local.get` that spent it.
 	//
-	// **A separate bool, not a zero-Token test**, and that is grave #120's lesson one type over:
-	// `LParen` is `TokenKind`'s ordinal 0, so `tok.Kind != 0` reads a zero value as a paren token and
-	// the guard would fire in every func. The zero value of a struct is not a sentinel unless someone
-	// made it one — `spaceKind` has `spaceUnset` for exactly this and `Token` has no equivalent.
-	localsMissParams    bool
-	localsMissParamsTok Token
+	// **Non-nil is the sentinel, and that is deliberate after grave #120**: the predecessor was a bool
+	// beside a Token, because `LParen` is `TokenKind`'s ordinal 0 and a zero-Token test reads as a
+	// paren token in every func. A func value has a real zero — nil — so the pair collapses to one
+	// field without reintroducing that trap.
+	localsParamOffset func() (uint32, error)
 	// funcs is the retained body of every *defined* function, in definition order — which is
 	// the order sections 3 and 10 both require, and the reason they are fed from one list
 	// (encode.ml:1141/:1159). Imported funcs are absent: they have no body and their type index
@@ -812,40 +812,67 @@ func (p *parser) funcField() error {
 	}
 	typeIdx := p.deferSignature(use, haveUse, ft)
 	// **A typeuse with no re-stated signature contributes its referenced type's params as anonymous
-	// locals, and this stratum cannot compute them** — so `p.ctx.locals` is missing them and every
-	// symbolic local index in the body is off by the param count. The flag says so; `retainIdx`
-	// refuses at the index that would be wrong. See localsMissParams for why the refusal is there and
-	// not here.
+	// locals**, so `p.ctx.locals` holds only the declared ones and every symbolic local in the body
+	// sits one slot per param too low. The thunk installed here supplies the missing offset and
+	// `retainIdx` adds it; see localsParamOffset for why one deferral is enough.
 	//
-	// `inline_functype_explicit`'s deferred branch binds them: `defer_locals c (fun () -> let (ts1,
-	// _ts2) = func_type c x in bind "local" c.locals (length ts1) x.at)` (parser.mly:241-244), with the
-	// reference's own comment at :239 saying why it is deferred. The count is `length ts1` of a type
-	// that may be **defined later in the field list** — `(func (type $late) …) (type $late (func (param
-	// i32)))` is legal wat, and this parser accepts it — so at this cursor the number does not exist
-	// yet. Locals, meanwhile, resolve *at the cursor* by design (see code.go's header: a deferred local
-	// resolution would run against the last function's space), so the two timings are incompatible
-	// without the reference's `force_locals` machinery.
+	// `inline_functype_explicit`'s deferred branch is the reference's version:
 	//
-	// The bug this replaces was live and the corpus is what found it: `(func (type $sig) (local $var
-	// i32) (local.get $var))` encoded `$var` as local **0** where `$sig`'s param owns 0, so `func#2`
-	// disagreed with wabt at one byte — 77 bytes each, `20 00` against `20 01`. A well-formed image
-	// denoting a different function, which is why refusing is the only honest option short of the full
-	// machinery: this stratum's alternative was not "slightly wrong indices", it was silent
-	// miscompilation on the commonest typeuse spelling in the corpus.
+	//	defer_locals c (fun () ->
+	//	  let (ts1, _ts2) = func_type c x in
+	//	  bind "local" c.locals (Lib.List32.length ts1) x.at)     (parser.mly:241-244)
 	//
-	// #77 tracked exactly this, on the premise that it had "zero board effect either way" because "this
-	// stratum resolves no local at all". The code section is the reader that premise did not have, so
-	// the note in typetable.go's header is now historical and the refusal is #77's until #77 lands.
+	// with the comment at :239 saying why: *"Deferring ensures that type lookup is only triggered when
+	// symbolic identifiers are used, and not for desugared functions."* The count is `length ts1` of a
+	// type that may be **defined later in the field list** — `(func (type $late) …) (type $late (func
+	// (param i32)))` is legal wat, and both parsers accept it — so at this cursor the number does not
+	// exist.
+	//
+	// # Where the reference forces, and why we cannot force in the same place
+	//
+	// `force_locals` runs from **`bind_local`** (:195) and nowhere else, so the reference resolves the
+	// count when a *named local is declared*, not when one is used. That is a point where its type
+	// table is already complete, and the staging is why: `module_fields1`'s `type_` arm is two closures
+	// deep (`fun c -> … fun () -> tf (); mff ()`, :1314-1315) where its `func` arm is three
+	// (:1349-1355), so every type is defined a whole stage before any func body is produced.
+	//
+	// This parser is single-pass with a stage-2 deferred-op list, so `(local $var i32)` is read while
+	// the type table may still be incomplete — the reference's forcing point is not available here. The
+	// analog that is available is its *staging*: resolve the name at the cursor, where the locals space
+	// is the right function's, and add the offset in stage 2, where the type table is complete. That is
+	// the same split `catFunc` already makes for a forward `call`, one field narrower.
+	//
+	// # What this replaces, and what the corpus had to say about it
+	//
+	// Until this slice `retainIdx` **refused** here, and the refusal was earned: `(func (type $sig)
+	// (local $var i32) (local.get $var))` had encoded `$var` as local **0** where `$sig`'s param owns
+	// 0, so `func#2` disagreed with wabt at one byte — 77 bytes each, `20 00` against `20 01`. A
+	// well-formed image denoting a different function, which no suite vector can see and the wabt
+	// differential caught. `func.wast:459` is the vector that distinguishes the two readings from
+	// *inside* the suite, and it does it by arithmetic rather than by rejection: `f` takes an `i32`
+	// param, sets nothing, and returns `$var`, so slot 1 answers 0 where slot 0 would answer the
+	// argument. The three `assert_return`s at :483-485 are the oracle, and the neighbouring `p` — whose
+	// `$proc` has no params — is the row that fails if the offset is applied unconditionally.
 	//
 	// It is set from `p.retain` — the *mode* — and not from `p.retaining()`, which asks whether the
 	// sink is installed. The sink goes in below, at the body, so `retaining()` is false here in
-	// **both** modes and a guard written against it silently never fires: the first draft did exactly
-	// that, and the probe showed the offending row still encoding `20 00`. A predicate that is false
-	// everywhere it is called is the stillborn control shape (#108) arriving in engine code, and the
-	// two spellings are one letter apart.
+	// **both** modes and a guard written against it silently never fires: the refusal's first draft did
+	// exactly that, and the probe showed the offending row still encoding `20 00`. A predicate that is
+	// false everywhere it is called is the stillborn control shape (#108) arriving in engine code, and
+	// the two spellings are one letter apart.
 	if haveUse && ft.isEmpty() && p.retain {
-		p.localsMissParams, p.localsMissParamsTok = true, use.tok
-		defer func() { p.localsMissParams = false }()
+		p.localsParamOffset = func() (uint32, error) {
+			idx, idxErr := typeIdx()
+			if idxErr != nil {
+				return 0, idxErr
+			}
+			sig, sigErr := p.ctx.funcTypeAt(use.tok, idx)
+			if sigErr != nil {
+				return 0, sigErr
+			}
+			return uint32(len(sig.params)), nil
+		}
+		defer func() { p.localsParamOffset = nil }()
 	}
 	locals, err := p.locals()
 	if err != nil {

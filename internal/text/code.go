@@ -790,31 +790,44 @@ func (p *parser) retainIdxIn(mnemonic Token, r idxRef, cat idxCategory) error {
 	if space == nil {
 		return errf(r.tok, "cannot yet encode a symbolic index on %s (#8)", mnemonic.Text)
 	}
-	// **The locals space may be short, and this is the one place that can tell.** A typeuse with no
-	// re-stated signature contributes its referenced type's params as anonymous locals, and this
-	// stratum cannot count them (`funcField`, #77) — so every symbolic local in the body resolves one
-	// slot too low. `(func (type $sig) (local $var i32) (local.get $var))` encoded `$var` as **0**
-	// where `$sig`'s param owns 0: a well-formed image denoting a different function, which the wabt
-	// corpus caught at one byte and no suite vector can see.
+	// **The locals space is short here, and this is the one place that can tell.** A typeuse with no
+	// re-stated signature contributes its referenced type's params as anonymous locals, so the space
+	// holds only the *declared* locals and a symbolic name resolves one slot per param too low. The
+	// ordinal is read now, against this function's space; the param count arrives in stage 2 through
+	// `localsParamOffset`, and the two are added where the immediate is finally written (#77).
 	//
-	// Refused *here* rather than at the func, because the narrow predicate is the honest one. Refusing
-	// every typeuse costs `(module (func (type $t)) (type $t (func)))`, whose `$t` has no params and
-	// whose body is fine — a row already in the round-trip table. What is actually unencodable is a
-	// symbolic *local* read against a space that may be missing entries, and a numeric one is not
-	// affected: `local.get 0` means slot 0 whatever the space holds, so it is the resolution and not
-	// the typeuse that is blocked. The error names the typeuse token all the same, that being the
-	// field the engine cannot write.
+	// **A numeric index is untouched, and that asymmetry is the whole shape of the fix.** `local.get 0`
+	// means slot 0 whatever the space holds — it is absolute, and the arm above has already returned.
+	// What needed the offset was never the typeuse, it was the *resolution of a name* against a space
+	// the typeuse left incomplete.
 	//
-	// **It still over-refuses, and by how much is stated rather than left to be inferred.** A typeuse
-	// naming a *param-less* type is harmless — `(type $t (func))` binds nothing, so `$v` really is slot
-	// 0 — and this refuses it anyway, because the param count is what cannot be known at the cursor
-	// and "does it have params" is the same unanswerable question as "how many". So the predicate is
-	// deliberately the coarser one on the side that refuses; a frontier that occasionally declines an
-	// encodable module is a cost, where one that occasionally writes a wrong index is a defect no
-	// vector can see. #77's `force_locals` machinery is what makes the question answerable.
-	if cat == catLocal && p.localsMissParams {
-		return errf(p.localsMissParamsTok,
-			"cannot yet encode a symbolic local in a func whose typeuse supplies its params (#77)")
+	// The predecessor refused instead, and it also over-refused: a typeuse naming a param-less type
+	// (`(type $t (func))`) binds nothing, so `$v` really was slot 0, and it was declined anyway because
+	// "does it have params" was as unanswerable at the cursor as "how many". Both costs go together,
+	// because a thunk that reports 0 needs no special case for the type that has no params.
+	if cat == catLocal && p.localsParamOffset != nil {
+		ord, err := space.resolveSpaceIdx(r)
+		if err != nil {
+			return err
+		}
+		// The patch discipline is `catFunc`'s below, for the same reason and with the same two
+		// refusals: one patch replaces the immediates entirely, so a second deferral or a preceding
+		// immediate would need a position the byte slice does not carry. Neither is reachable from a
+		// local-index mnemonic — `catLocal` is `local.get`/`local.set`/`local.tee`, each with exactly
+		// one immediate — so these are structural guards over a population of zero, kept because the
+		// alternative is a silent overwrite if that ever stops being true.
+		if p.immPatch != nil || len(p.imm) != 0 {
+			return errf(r.tok, "cannot yet encode a deferred local index beside another immediate (#77)")
+		}
+		off := p.localsParamOffset
+		p.immPatch = func() ([]byte, error) {
+			n, err := off()
+			if err != nil {
+				return nil, err
+			}
+			return encodeLocalIdx(ord + n), nil
+		}
+		return nil
 	}
 	if cat == catFunc {
 		// Forward references are legal here, so the resolution is stage 2's. One patch per

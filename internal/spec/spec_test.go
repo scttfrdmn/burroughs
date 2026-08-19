@@ -197,8 +197,11 @@ func readText(src []byte) error { return text.ReadModule(src) }
 // **Separate from readText because a measurement said so, and the measurement's own domain is the
 // lesson.** The first draft of the 17-head slice widened `ReadTextFunc` to return the image and
 // pointed it here, which put the three Kinds that arm serves through the emitter. The board
-// answered: `text 0 -> 58`, and the buckets named the cause — the emitter cannot yet write
-// `(table ...)` or `(start ...)` fields, or #77's symbolic locals (#8).
+// answered: `text 0 -> 58`, and the buckets named the cause — the emitter could not then write
+// `(table ...)` or `(start ...)` fields, or #77's symbolic locals (#8). **All three have since closed
+// (#413, #419, #77), so the 58 is a spent figure and #423 carries the re-measurement**; the tense is
+// corrected here rather than the sentence deleted, because the paragraph below is about the probe's
+// domain and that lesson does not expire with the number.
 //
 // It was pre-measured and the measurement still missed it, which is the part worth keeping. The
 // probe compared `ReadModule` against `EncodeModule` over `KindModuleQuote` and
@@ -7503,7 +7506,15 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	// encoder's issue; nothing tracked the gap itself. Which is the fifth layer's lesson and not a
 	// grave: the prose was right, the tripwire was somebody else's issue number, and an instrument
 	// caught what a citation did not.
-	const allOnPassFloor = 64978
+	// # 64978 → 64982, +4, and the fact worth recording is that it equals the default lane's
+	//
+	// #77's four `func.wast` rows move both lanes by the same amount, which is what a fix with no gate in
+	// it should do and is therefore a check rather than a note: a slice whose lanes move *unequally* has
+	// touched a gated path, and the two entries before this one are both of that kind — #413's and #419's
+	// falls were partly absorbed by the GC gate, so their default and all-on deltas differ by exactly the
+	// gated share. Here the emitter's output is the same wire form with one index byte corrected, so a
+	// divergence between the lanes would have meant the fix reached a feature path it has no business in.
+	const allOnPassFloor = 64982
 	// **Slack 0 as of Scott's #387 ruling**, which this bound's own 89-row staleness above is what
 	// prompted: a floor with 250 of tolerance cannot detect anything smaller than 250, so it is a
 	// bound sitting inside its own tolerance. Exact from here — re-base it in the PR that moves the
@@ -9202,7 +9213,28 @@ func TestPhase1Files(t *testing.T) {
 	// is left is #77's four (a parser-context gap, not an emitter one) and three rows whose subject is
 	// a symbolic data-segment name. So the next fall this bound should see is #77's, −4, and there is
 	// no longer a −33-sized member for it to see.
-	const encodeFailCeiling = 7
+	// # 7 → 3, the forecast above to the row, and the residue is now a single file
+	//
+	// #77 binds a typeuse's params into the local index space, and the fall is **−4 with the other three
+	// unchanged** — the figure the section above committed to. The identity check is the same one the −28
+	// and −33 entries used, and here it is cheap enough to read straight off the per-file lines:
+	// `func.wast` went 170/174 to **174/174**, so all four departures are that file's, and
+	// `memory-multi.wast` still reports 1/4 pass, 3 fail, so all three survivors are that file's. No row
+	// crossed between the two groups.
+	//
+	// **The board and this ceiling bucket the three survivors differently, and that is a fact about the
+	// keys rather than a disagreement.** The board's fail list shows `no instance: unknown data segment
+	// $d` twice and `module text must reach the validator` once, because it buckets by the *expected
+	// spec text*; this ceiling buckets by the *refusal text*, where all three are the one refusal. Same
+	// three rows, two totals, and reading either as the population is how a right figure gets
+	// "corrected" into a wrong one.
+	//
+	// **What is left is one issue and it is not the emitter's**: three rows in `memory-multi.wast` whose
+	// subject is a symbolic data-segment name (grave #130). So the next fall this bound should see is
+	// −3, to zero — and a zero here is the condition this ceiling was built to make visible rather than
+	// a target, because at zero the encode stratum stops being a work list and this bound stops being
+	// able to catch anything at all (#87's shape, one column over).
+	const encodeFailCeiling = 3
 	boardBound(t, "encodeFailCeiling", encodeFail, encodeFailCeiling, 0, ceilingBound,
 		"the wat encoder lost ground: either it stopped emitting an instruction it used to "+
 			"emit, or the corpus moved. This ceiling is deliberately not shared with the text "+
@@ -10934,7 +10966,27 @@ func TestPhase1Files(t *testing.T) {
 	//
 	// `unsupported` is unmoved at 66 and the zero is **structural** for the eighth entry running:
 	// `classify` is untouched, so nothing the harness could not ask became askable.
-	const passFloor = 60909
+	// # 60909 → 60913, +4 against −4 fails, and this time the two columns are the *same four rows*
+	//
+	// #77 binds a typeuse's params into the local index space, and the delta is the smallest and
+	// cleanest this ledger holds: every row that left the fail column arrived in the pass column, no
+	// third verdict took a share, and `func.wast` went 170/174 to **174/174**. That one-to-one identity
+	// is worth naming because the two entries above are both cases where it did *not* hold — #413 and
+	// #419 each lost part of their fall to `gated`, and the reason this slice cannot is that no new wire
+	// form is produced: the fix changes an index byte from 0 to 1 inside an image the emitter already
+	// wrote, so there is no gate for the rows to fall into.
+	//
+	// The pass forecast was **not** pre-registered and the fail forecast was, which is the same
+	// asymmetry the previous entry confessed and the same reason it is defensible: `encodeFailCeiling`
+	// committed to −4 with the three `memory-multi.wast` rows unchanged, and that is what landed to the
+	// row. What was *newly* available here and still not written is that this slice's fall could not be
+	// gate-absorbed — see the paragraph above, which is derivable from the wire form before running
+	// anything. So +4 was forecastable and was not forecast; noted rather than excused.
+	//
+	// `unsupported` is unmoved at 66 and the zero is **structural** for the ninth entry running:
+	// `classify` is untouched, so nothing the harness could not ask became askable. #323 remains the
+	// one open issue that moves this column.
+	const passFloor = 60913
 	// Slack 0 as of #387's ruling, with `allOnPassFloor` and `unsupportedCeiling` — see
 	// `boardbound_test.go`'s retirement section. Two entries in the ledger above record taking a
 	// re-base *although the slack stayed silent* (58659 by a margin of 20, and the 416 that was four

@@ -845,6 +845,12 @@ func (c *context) spaceFor(k importKind) *space {
 // refused in `retainIdx` — returned them. So a frontier's *width* is worth six modules here, which
 // is the concrete reason the narrow predicate was worth finding rather than a stylistic preference.
 //
+// **The refusal that narrowing produced is itself gone now (#77): `retainIdxIn` resolves the ordinal at
+// the cursor and defers only the param offset, so the case encodes.** Left as written because the six
+// modules are what this paragraph is evidence for and they are unaffected — a width that had been wrong
+// by a whole grammatical form is the measurement, and it would have been the same measurement if the
+// narrow predicate had been the last word instead of one slice's.
+//
 // The number missed for a reason the histogram could not have shown, and it is the same limitation
 // this comment already states rather than a new one: a first-blocker count over *fields* cannot see
 // a frontier *inside* a field. The substring scan that produced 1228 looked for `(elem`, `(data`,

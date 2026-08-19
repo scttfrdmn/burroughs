@@ -77,9 +77,31 @@ import (
 // the consequence is a *declined* module instead of a wrong one — and #77 is what makes the
 // question answerable rather than merely refusable.
 //
+// **#77 has landed, and the paragraph above is falsified in the one place it was load-bearing: the
+// cost.** "Honouring that here would mean carrying a live local space per pending operation" named a
+// price and, having named it, made the deferral look structural. It was not. The reference forces a
+// typeuse's params when a *named local* is declared (`force_locals` is reached only from `bind_local`,
+// parser.mly:195) and can do so because `module_fields1` stages every `type_` a closure shallower than
+// every `func` (:1314-1355), which a single-pass parser cannot copy — but the *available* analog is
+// cheaper than the one this paragraph priced. `funcField` arms a `func() (uint32, error)` for the
+// duration of the body; `retainIdxIn` reads the local's **ordinal** at the cursor, where the space is
+// live and correct, and defers only the **offset**. Nothing is carried per pending operation, because
+// only one number is unknown and it is unknown for one reason.
+//
+// So "the consequence is a declined module instead of a wrong one" is false too, and in the good
+// direction: the emitter now writes the right index. What stays true is this file's own not-doing —
+// `typeTable` still holds no local space, and the fix lives in the parser's context and the code
+// emitter rather than here. That distinction is the point of appending a third layer instead of
+// deleting the second: the scope note was right about where the work does not belong and wrong about
+// what it would cost, and only one of those two was ever checkable from this file.
+//
 // Kept as a correction with its body intact rather than rewritten, because a scope note that went
 // stale by the code around it growing a consumer is the drifted-citation defect's own shape, and the
-// record of what was believed is the part worth keeping.
+// record of what was believed is the part worth keeping. **A deferral's stated cost is as falsifiable
+// as any other claim in a comment**, and the shape here is one this corpus already knows in the other
+// direction: "cheap" is a grammar claim, so a pre-registered number makes the miss findable. An
+// *expensive* is the same claim with its sign flipped, and it went unpriced for as long as it did
+// because nothing re-measures a cost that argues for doing nothing.
 
 // valType is one wat value type, carrying as much as a structural comparison needs
 // (parser.mly:391-394).
