@@ -468,6 +468,25 @@ reach is a law out of context.
         than at a single reference — an approximately-correct list of citations reads exactly like an
         exact one.
       (Mint: chat-Claude, relayed by Scott, on grave #266; Scott's veto standing.)
+  - **A mutant that doesn't compile tests the compiler, not the control.** The trichotomy's
+    precondition, and it is stated separately because it is not one of the three answers — it is the
+    case where the exercise **never ran** and the transcript looks like it did. #429's M4 was
+    supposed to neuter `binary.PrefixedOp`'s `0xfd` arm; a scripted single-substitution hit an
+    earlier `case 0xfd: tab = opTableFD` inside a bool-returning function and produced
+    `module.go:1532: too many return values`. `go test` exits non-zero, the output is red, and a
+    ledger row reading "M4: killed" writes itself — while the guard that was being certified never
+    executed once. Anchored inside the right function it died properly, on the assertion.
+    - **The tell is the channel the redness arrives on**, which is the standing verdict-versus-mechanism
+      distinction pointed at a mutation: a build error is the toolchain refusing the input, an
+      assertion failure is the control refusing the behaviour, and only the second is a control dying.
+      So a mutation battery's per-row evidence is the **failing assertion's own message**, never an
+      exit code — and a row whose recorded death names no assertion is unproven, however red it was.
+      The cheap discipline is to build the mutant before believing it: `go vet` (or a plain build)
+      between patch and run, so a compile failure is classified as a *bad mutation* rather than
+      counted as a kill.
+    - **A build failure counted as a kill is the quietest way to leave a guard unwatched** — quieter
+      than a stillbirth, which at least leaves a green where a red was predicted. This one leaves the
+      red. (Mint: Scott, on the #429 report — "worth having written down somewhere".)
   - **A control must fail, never hang — a timeout names no row.** The birth requirement's
     second failure mode, and it is not stillbirth: the control fires, it is technically red, and it
     is *worse* than red, because `panic: test timed out` identifies no case and takes the whole test

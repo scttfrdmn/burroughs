@@ -89,6 +89,7 @@ import (
 //	unimplementedCeiling     0        at terminal   —       0, and 0004 fixes it there
 //	encodeFailCeiling        46       exact re-base  0      drains as the encoder learns forms
 //	execFailCeiling          81       exact re-base  0      drains as the interpreter lands rules
+//	allOnFailCeiling         38       exact re-base  0      the work plan, now that execFail is 0
 //	validateFailCeiling      492      exact re-base  0      the whole validator stratum
 //	validateDeclineCeiling   389      exact re-base  0      its declines, named per opcode
 //	validateAdmitCeiling     103      exact re-base  0      its admissions — the accept direction
@@ -419,7 +420,17 @@ func TestEveryBoardBoundIsChecked(t *testing.T) {
 	// reason — it exists to catch a hook that found nothing — and it is here for this walk's
 	// reason, which the walk itself supplied: the first draft compared it inline with a `t.Fatalf`
 	// and this test named it as a bound bypassing the staleness check, before any human read it.
-	const boundPopulation = 21
+	// 21 → 22 with `allOnFailCeiling` (#414, decision 0038), and it is the first arrival caused by a
+	// bound *emptying* rather than by a population appearing. `execFailCeiling` reached 0, so the
+	// default lane's fail column became a tripwire with no subject and the remaining work plan is the
+	// all-gates-on lane's 38 — a figure this repo had tracked in a comment chain ("All-on `fail` 61 →
+	// 53 → 38") and asserted nowhere. That is this file's own defect one column over: not a bound far
+	// from what it bounds, but a *column with no bound at all*, which the same fifteen-commit drift
+	// that motivated everything above is free to work on.
+	//
+	// So the arrival is worth the row for the reason the four above it are: a number the ladder is
+	// steered by, previously unasserted, and the PR that moved the steering is the PR that bounds it.
+	const boundPopulation = 22
 	if len(bounds) != boundPopulation {
 		t.Errorf("found %d board bounds, want exactly %d. A new bound is welcome — add its row to "+
 			"this file's table with its kind and its reason, and re-base this constant in the same "+
