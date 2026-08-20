@@ -59,14 +59,27 @@ import (
 // therefore **accepted** by this package, which is the admission stratum `validate.go` describes:
 // reported as a fail with a named cause, never as a pass.
 //
-// **Relaxed SIMD is not typed.** `mnemonics.ml` gives it families like everything else, and the
-// twenty arms would cover all twenty of its rows — but relaxed SIMD is its own proposal behind its
-// own gate (`gateRelaxedSIMD`, `binary/gatemap.go`), and `gateFor` resolves `fd 0x100..0x12f` to
-// it inside SIMD's region. With that gate off the decoder refuses those opcodes before validation
-// sees them, so typing them here would be a rule with no reachable subject; with it on, a flip is
-// its own stamp-tier event and not a line in a typing PR. The dispatch below therefore declines at
-// `0x100` and says so, which keeps the decline census a work plan for the relaxed-SIMD gate rather
-// than a silence.
+// **Relaxed SIMD is typed, and the paragraph that said otherwise was wrong for three days before
+// anyone read it against the gate.** It said: *"With that gate off the decoder refuses those opcodes
+// before validation sees them, so typing them here would be a rule with no reachable subject; with
+// it on, a flip is its own stamp-tier event and not a line in a typing PR."* Both halves were false
+// when written. `DefaultFeatures()` has been `{SIMD: true, RelaxedSIMD: true}` since `7315b57`
+// (#275/ADR 0028), so the decoder admits `fd 0x100..0x12f`, the arm below *was* reachable, and the
+// flip it was waiting for had already happened — which left the 20 rows declining with a sentence
+// that told the reader there was nothing here to do (grave #427).
+//
+// The typing itself costs nothing, and that is the measure of what the sentence cost: `vecFamily`
+// already carries all 20 rows, because its domain is the whole region rather than what this file
+// happens to type (*scope controls to the space*), and every one of them lands in a family whose arm
+// was already written — `VecBinary` 7, `VecTernary` 9, `VecConvert` 4. So the repair is the deletion
+// of a guard, and the eight board rows it was holding were unworked engine sitting behind a comment.
+//
+// **What relaxed SIMD's own proposal defers is nondeterminism, and that is not a typing question.**
+// Every one of the 20 has a fully determined signature; what the proposal leaves to the
+// implementation is *which* of several results a lowering produces, which is `ADR 0028 d1`'s
+// architecture-uniformity promise and is held by `TestRelaxedLoweringChoicesArePinned` rather than by
+// anything here. A validator that declines an instruction because its *result* is
+// implementation-chosen would be confusing a type with a value.
 //
 // **Multi-memory addressing follows slice 1 exactly.** `addrType` reads memory 0's index type and
 // a memop's own memory index is not consulted, here or in `sig.go`. That is one behaviour rather
@@ -177,14 +190,13 @@ const relaxedSIMDFirst = 0x100
 // Three-valued exactly as `signature` is, and for the same reason: `nil` means the type is known,
 // `ErrUnsupported` means this slice has no rule for the opcode and it lands in a named bucket, and
 // anything else is a rule that *is* known and that the module fails.
+// The relaxed range is *not* special-cased here, and the guard that used to stand at the top of this
+// function is grave #427. It read `if in.Op >= relaxedSIMDFirst` and declined — see the header for why
+// it was wrong. What replaces it is nothing: the region's rows are in `vecFamily` and the families
+// they name have arms, so the range types by falling through the same path core SIMD takes. That is
+// the shape the deletion argues for — a proposal inside another proposal's opcode range is a fact
+// about *gates*, and a gate is read by the decoder, which is the layer that owns it.
 func vecSignature(m *binary.Module, in binary.Instr) (sig, error) {
-	if in.Op >= relaxedSIMDFirst {
-		// Relaxed SIMD's own gate, not this slice's rule. Unreachable while the gate is off — the
-		// decoder refuses these opcodes first — and stated anyway, so the census names the gate
-		// rather than reporting a typing gap.
-		return sig{}, fmt.Errorf("%w: %s (%#02x %#02x) is relaxed SIMD, whose gate is its own event",
-			ErrUnsupported, mnemonic(in), in.Prefix, in.Op)
-	}
 	name, _, ok := binary.PrefixedOp(in.Prefix, in.Op)
 	if !ok {
 		return sig{}, errNoVecSignature(in)

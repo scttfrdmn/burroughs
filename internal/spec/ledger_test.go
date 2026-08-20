@@ -563,12 +563,19 @@ func TestAssertInvalidDestinationLedgerCloses(t *testing.T) {
 			"movements is why this figure is pinned rather than derived: the *slices* were 2 opcodes "+
 			"and 3, and neither moved it at all", keyed)
 	}
-	if got := stratumOther.declined + stratumOther.accepted; got != 8 {
-		t.Errorf("non-assert_invalid declines + admissions = %d, want exactly 8: the relaxed-SIMD "+
-			"declines on `module text` commands, which are validate-stratum failures the ledger above "+
-			"structurally cannot contain. This is the complement #341 created and the drift above "+
-			"hid \u2014 pinned rather than derived by subtraction, so it is a second reading and not "+
-			"the first one restated", got)
+	// **8 \u2192 0 with #427, and this is the pin whose *prose* was the defect.** The sentence said these
+	// were relaxed-SIMD declines the ledger "structurally cannot contain" \u2014 true of the ledger's shape,
+	// and it sat one clause away from the claim that the rows themselves were structural, which is what
+	// grave #427 turned out to be. The rows were a typing gap: `internal/validate` had no rule for
+	// `fd 0x100..0x12f` while the decoder had admitted the range since the gate flipped. What this pin
+	// *correctly* said is unchanged and is why it is kept at 0 rather than deleted \u2014 the complement is a
+	// population the rows above cannot see, so a nonzero value here is a decline nothing else reports.
+	if got := stratumOther.declined + stratumOther.accepted; got != 0 {
+		t.Errorf("non-assert_invalid declines + admissions = %d, want exactly 0: the validate stratum "+
+			"is drained across all four partitions as of #427, so this complement has no owed member "+
+			"and any nonzero value is a regression. Do not read a rise here as \"a new slice's work\" "+
+			"without checking which arm produced it \u2014 the eight rows this pin used to hold were "+
+			"read that way for three days and were a deleted guard away from green", got)
 	}
 	// The board's two ceilings are this sum, and stating it here is what re-ties the identity to the
 	// constants it names. `validateMismatchCeiling` (0) stays deliberately outside: the mismatch row
@@ -577,15 +584,25 @@ func TestAssertInvalidDestinationLedgerCloses(t *testing.T) {
 	// package named. **That row is 0 as of #419**, which is the same sentence read one slice later:
 	// the frontier those six quoted was the table field, and a `mismatch` population whose whole
 	// membership is one package's frontier empties when that frontier does.
-	if got := keyed + stratumOther.declined + stratumOther.accepted; got != 8 {
-		t.Errorf("validate-stratum declines + admissions = %d, want 8 to match "+
-			"validateDeclineCeiling (8) + validateAdmitCeiling (0). Those are computed from the "+
+	// **This identity is now fully vacuous and is kept as a tripwire on that basis alone**, which the
+	// previous entry saw coming one term early: it already recorded that `validateAdmitCeiling` reaching
+	// 0 had stopped it constraining `keyed`. With #427 draining `stratumOther` too, every term on both
+	// sides is 0, so `0 == 0 + 0` agrees for free \u2014 the two-mechanism check it was built to be has no
+	// subject, and saying so is the whole of what it can honestly claim today.
+	//
+	// Kept, not deleted, for the reason a drained-to-empty table is still watched: the *direction* it
+	// fires in is a rise, and a rise here is the one movement that means a path started describing a
+	// population the other cannot see. The three pins above it are what carry the load now, and each is
+	// exact, so the vacuity is annotated rather than papered over \u2014 *empty versus empty agrees
+	// perfectly, and breaking the assertion never finds it.*
+	if got := keyed + stratumOther.declined + stratumOther.accepted; got != 0 {
+		t.Errorf("validate-stratum declines + admissions = %d, want 0 to match "+
+			"validateDeclineCeiling (0) + validateAdmitCeiling (0). Those are computed from the "+
 			"stratum field; this is computed from the arm's flags over both sub-populations. A "+
 			"disagreement means one path is describing a population the other is not \u2014 which is "+
-			"exactly what went unreported between #341 and #359. With `validateAdmitCeiling` at 0 the "+
-			"whole of this figure is now `stratumOther`, so the identity has stopped constraining "+
-			"`keyed` and the pin above it is what still does \u2014 stated because an identity whose "+
-			"left side has gone to zero agrees with itself for free", got)
+			"exactly what went unreported between #341 and #359. Both sides being zero means this "+
+			"identity currently agrees vacuously; a nonzero value on either path is the finding, and "+
+			"which path moved is the first thing to read", got)
 	}
 	if got := already.gated + fresh.gated; got != 471 {
 		t.Errorf("gated assert_invalid = %d, want 471 to match the unsupportedCeiling ledger's "+

@@ -75,11 +75,56 @@ func TestVecAcceptsValidModules(t *testing.T) {
 		},
 		{
 			name: "bitselect takes three registers",
-			why: "VecTernaryBits is core SIMD's only three-operand instruction — the lanewise " +
-				"ternary family is entirely relaxed SIMD, which is why VecTernary's arm has no " +
-				"reachable subject in this slice",
+			why: "VecTernaryBits is core SIMD's only three-operand instruction, so it is the whole " +
+				"of that arm's subject — and the sentence that used to stand here said VecTernary " +
+				"had *no* reachable subject, which is the claim grave #427 was: the lanewise " +
+				"ternary family is relaxed SIMD, and relaxed SIMD has been reachable since the flip",
 			wat: `(module (func (result v128) (v128.bitselect
 				(v128.const i32x4 0 0 0 0) (v128.const i32x4 0 0 0 0) (v128.const i32x4 0 0 0 0))))`,
+		},
+		{
+			// The four relaxed rows below are grave #427's accept direction, and they are the half
+			// that needed writing: the board's eight `module text declined` rows are already the
+			// reject-shaped evidence, and they went green the moment the guard came out. What no
+			// board row can show is a relaxed instruction *wrongly refused* once it is typed, which
+			// is the same §9 G-3 argument the header makes for the region as a whole.
+			//
+			// One row per family that carries relaxed rows — `VecTernary` 9, `VecBinary` 7,
+			// `VecConvert` 4, twenty in total — rather than one row per opcode: the families are
+			// what `vecSignature` dispatches on, so a per-opcode table would be the same assertion
+			// twenty times while `TestVecFamiliesMatchTheReference` already binds each opcode to its
+			// family against `mnemonics.ml`.
+			name: "relaxed_madd takes three registers — VecTernary's first reachable subject",
+			why: "the arm that had no witness at all while the guard stood: `[t; t; t] --> [t]` " +
+				"(valid.ml:902), and the plausible wrong reading is the *bits* ternary's, which is " +
+				"the same signature and would have hidden a missing arm rather than a wrong one",
+			wat: `(module (func (result v128) (f32x4.relaxed_madd
+				(v128.const f32x4 1 1 1 1) (v128.const f32x4 2 2 2 2) (v128.const f32x4 3 3 3 3))))`,
+		},
+		{
+			name: "relaxed_swizzle takes two registers — the opcode the deleted guard keyed on",
+			why: "`fd 0x100` exactly, `relaxedSIMDFirst` itself, so this row is the boundary the " +
+				"guard tested written as a module that must now validate",
+			wat: `(module (func (result v128) (i8x16.relaxed_swizzle
+				(v128.const i8x16 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)
+				(v128.const i8x16 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0))))`,
+		},
+		{
+			name: "relaxed_trunc yields a register — VecConvert, not a lane extraction",
+			why: "`[t] --> [t]` (valid.ml:910): the name says `trunc_f32x4_s` and a signature " +
+				"written from the *numeric* `i32.trunc_f32_s` would take and return scalars",
+			wat: `(module (func (result v128)
+				(i32x4.relaxed_trunc_f32x4_s (v128.const f32x4 1 1 1 1))))`,
+		},
+		{
+			name: "relaxed_dot_add takes three registers where its two-operand sibling takes two",
+			why: "the one relaxed pair that splits across two arms — `i16x8.relaxed_dot_…` is " +
+				"VecBinary and `i32x4.relaxed_dot_…_add_s` is VecTernary — so a table keyed on the " +
+				"`relaxed_dot` prefix rather than on the reference's families gets one of them wrong",
+			wat: `(module (func (result v128) (i32x4.relaxed_dot_i8x16_i7x16_add_s
+				(v128.const i8x16 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)
+				(v128.const i8x16 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)
+				(v128.const i32x4 0 0 0 0))))`,
 		},
 		{
 			name: "extract_lane yields the shape's lane type",
@@ -248,6 +293,22 @@ func TestVecRejectsWithTheRuleThatRefused(t *testing.T) {
 			is:     ErrTypeMismatch,
 			detail: "instruction requires [f64] but stack has [i64]",
 		},
+		{
+			// Grave #427's reject direction, and the reason it is one row rather than four: what the
+			// deleted guard did was refuse *every* relaxed module, which means it also refused every
+			// invalid one — with `ErrUnsupported` instead of a rule. So the accept rows above are
+			// what the repair earns and this row is what it *risks*: a relaxed range that types by
+			// falling through core SIMD's path could fall through to an accept, which is the door
+			// `vecSignature`'s trailing decline exists to close and the one no board row can watch.
+			name: "a relaxed ternary given a scalar for its third operand",
+			why: "`f32x4.relaxed_madd` is `[t; t; t] --> [t]`, so an i32 in the third position is a " +
+				"mismatch — and under the guard this module was refused for the wrong reason, which " +
+				"is indistinguishable from this one on any board",
+			wat: `(module (func (result v128) (f32x4.relaxed_madd
+				(v128.const f32x4 1 1 1 1) (v128.const f32x4 2 2 2 2) (i32.const 3))))`,
+			is:     ErrTypeMismatch,
+			detail: "instruction requires [v128 v128 v128] but stack has [v128 v128 i32]",
+		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			_, err := validated(t, c.wat, nil)
@@ -273,21 +334,30 @@ func TestVecRejectsWithTheRuleThatRefused(t *testing.T) {
 // TestVecDeclinesWhatThisSliceDoesNotType is the decline direction, and it is a census not a pass.
 //
 // A decline is `ErrUnsupported`, which the harness scores as a **fail with a named cause** rather
-// than as a pass — so these rows assert that the two things slice 2 leaves out say so, in words that
-// name the gate or the slice rather than reporting a typing gap.
+// than as a pass — so the rows here assert that what slice 2 leaves out says so, in words that name
+// the region or the slice rather than reporting an anonymous typing gap.
+//
+// **What it leaves out is now one thing rather than two**, and the count falling is the finding
+// rather than a tidying: relaxed SIMD was the other member and it was never a decline anyone had
+// decided on (#427). The population this test asserts over is therefore the unclaimed *prefix*
+// regions, which is a fact about the phase ladder — 0xFE is threads', a v1 milestone — and not about
+// a gate whose state can move underneath the sentence.
 func TestVecDeclinesWhatThisSliceDoesNotType(t *testing.T) {
-	// Relaxed SIMD, whose gate is its own stamp-tier event. The decoder refuses these before
-	// validation sees them with the gate off, which is why this row asserts the *decoder's* refusal
-	// is what happens — the validator's arm is unreachable by design and stated as such in vec.go.
-	// Driving it through `validated()` would `Fatalf` on the decoder, correctly, so the arm is
-	// exercised directly here and the layering is named rather than worked around.
-	if _, err := vecSignature(nil, instrAt(relaxedSIMDFirst)); err == nil {
-		t.Error("vecSignature typed a relaxed-SIMD opcode; the flip is its own event, so typing " +
-			"it here would land a proposal's capability in a typing PR")
-	} else if !errors.Is(err, ErrUnsupported) || !strings.Contains(err.Error(), "relaxed SIMD") {
-		t.Errorf("relaxed SIMD declined with %q, want an ErrUnsupported naming the gate — a "+
-			"decline that does not name its gate makes the census a silence rather than a work "+
-			"plan for the flip", err)
+	// **Relaxed SIMD used to be this census's first row and is now its inverse**, kept here rather
+	// than deleted because a census that loses a member silently cannot report that the member left.
+	// The row read: *"vecSignature typed a relaxed-SIMD opcode; the flip is its own event, so typing
+	// it here would land a proposal's capability in a typing PR"* — and its comment asserted the arm
+	// was unreachable because the decoder refuses these with the gate off. The gate had been on for a
+	// day when that was written (`7315b57`, #275/ADR 0028) and the board was reaching the arm eight
+	// times a run. Grave #427.
+	//
+	// So the assertion flips: `relaxedSIMDFirst` must **type**, and it is asserted here — at the
+	// boundary the deleted guard keyed on — rather than only through `validated()` above, because
+	// what went wrong was a claim about this function's dispatch and this is the direct question.
+	if _, err := vecSignature(nil, instrAt(relaxedSIMDFirst)); err != nil {
+		t.Errorf("relaxedSIMDFirst (%#x) declined with %v; the range is typed since #427, and a "+
+			"decline here is either the guard restored or a family that lost its arm — check "+
+			"`vecFamily`'s 20 relaxed rows before re-adding anything", relaxedSIMDFirst, err)
 	}
 
 	// The prefixed regions that are still someone else's stay declined, and the message names the

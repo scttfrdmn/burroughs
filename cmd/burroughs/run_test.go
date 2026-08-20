@@ -169,17 +169,14 @@ func TestRunSubcommandOutcomes(t *testing.T) {
 		(func (export "divz") (param i32) (result i32) local.get 0 i32.const 0 i32.div_s)
 		(func (export "nothing"))
 		(memory (export "mem") 1))`)
-	// `i8x16.relaxed_swizzle`: implemented by the interpreter, not yet typed by the validator.
-	// Re-pointed by #359, which types the previous specimen `ref.null`/`ref.is_null` — see the note on
-	// decliningWAT in the root package for why this one is a *structural* decline and so retires on a
-	// gate flip rather than on the next slice, and why the in-range lane indices make the answer
-	// deterministic despite the operator being a relaxed one.
-	declining := writeModule(t, "declining.wasm",
-		`(module (func (export "swizzle") (result i32)
-			(i8x16.extract_lane_s 0
-				(i8x16.relaxed_swizzle
-					(v128.const i8x16 7 6 5 4 3 2 1 0 0 0 0 0 0 0 0 0)
-					(v128.const i8x16 3 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))))`)
+	// The `declining` fixture is retired with #427, which typed `fd 0x100..0x12f` and so drained the
+	// population every specimen here was drawn from — see the note where `decliningWAT` used to be in
+	// the root package. Two rows go with it, "a decline runs and reports on stderr" and "--strict
+	// refuses a decline", and what they asserted is worth naming as lost coverage rather than quietly
+	// dropped: that a decline exits 0 with its result on stdout and its report on stderr, and that
+	// `--strict` turns the same module into `exitRefused` with empty stdout. Both are properties of code
+	// paths with no reachable input at this boundary now. #326 is the vehicle if a derived specimen ever
+	// gives them one again.
 	invalid := writeModule(t, "invalid.wasm", `(module (func (export "f") (result i32) i64.const 42))`)
 	gated := writeModule(t, "gated.wasm", `(module (memory i64 1))`)
 	malformed := filepath.Join(t.TempDir(), "malformed.wasm")
@@ -210,15 +207,6 @@ func TestRunSubcommandOutcomes(t *testing.T) {
 		"list exports": {
 			argv: []string{valid}, code: exitOK,
 			stdout: "answer\nadd\ndivz\nnothing\n", stderrNone: true,
-		},
-		"a decline runs and reports on stderr": {
-			argv: []string{declining, "swizzle"}, code: exitOK,
-			stdout:    "i32:4\n",
-			stderrHas: []string{"i8x16_relaxed_swizzle", "--strict"},
-		},
-		"--strict refuses a decline": {
-			argv: []string{"--strict", declining, "swizzle"}, code: exitRefused,
-			emptyOut: true, stderrHas: []string{"i8x16_relaxed_swizzle"},
 		},
 		"invalid is refused, naming the rule": {
 			argv: []string{invalid, "f"}, code: exitRefused,

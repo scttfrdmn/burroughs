@@ -176,8 +176,14 @@
 // two-way division is what the paragraph is for and one side of it having drained does not make the
 // division wrong. 391 → 30 with slice 5's 0xFC region, 30 → 0 with the reference-type slice (#359) on
 // the default lane, and the gated remainder — 25 exception-handling rows the default lane never asked
-// — with slice 10. `validateDeclineCeiling` is where the figure lives and it now bounds the *other*
-// command kinds, since every remaining decline board-wide is a module definition on relaxed SIMD.
+// — with slice 10. `validateDeclineCeiling` is where the figure lives, and it is **0**: the sentence
+// that used to end this paragraph said the ceiling "now bounds the *other* command kinds, since every
+// remaining decline board-wide is a module definition on relaxed SIMD", which #427 falsified by typing
+// that range — there is no remaining decline of any command kind. It is recorded rather than replaced
+// because of how it was found: not by the author of #427 re-reading this file, but by the
+// foreclosing-word sweep in the same PR, which flagged the paragraph for resting a claim on a gate
+// (`RelaxedSIMD`, on by default) without checking the gate. Two out of three of this shape have now
+// been caught by an instrument rather than by a reader.
 //
 // An out-of-scope rule attached to anything the code-section
 // walk never visits is **accepted**, because there is nothing to decline — limits, duplicate

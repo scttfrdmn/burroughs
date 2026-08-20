@@ -521,8 +521,13 @@ func TestPrefixBulkIsTheRegionBinaryDispatches(t *testing.T) {
 // It is also where 0xFE (threads) is covered at all. The text encoder has no operator for its
 // instructions ("unknown operator memory.atomic.notify"), so no module can be built to carry one
 // and `validated()` cannot reach it — which is why the instruction is constructed directly here.
-// That is the same layering `TestVecDeclinesWhatThisSliceDoesNotType` names for relaxed SIMD:
-// where no module can reach an arm, the arm is exercised directly and the reason is stated.
+//
+// **This sentence used to cite relaxed SIMD as the second example of that layering, and the citation
+// outlived its subject** (#427): relaxed SIMD was reachable through `validated()` from the day its
+// gate flipped, so "no module can reach this arm" was true of 0xFE alone. The distinction the
+// remaining example rests on is which layer refuses — 0xFE has no entry in `binary`'s table at all,
+// which is a different fact from a gate being off, and it is the durable one because a prefix with no
+// table cannot be reached by flipping anything.
 func TestPrefixedRegionsPartitionIntoClaimedAndDeclined(t *testing.T) {
 	// The four regions of the instruction grammar. 0xFE has no table in `binary` at all, which is
 	// itself the fact that keeps it out of the claimed set — and asserting over it anyway is the

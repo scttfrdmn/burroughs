@@ -536,10 +536,36 @@ func TestBulkTableCopyTrapsWithTheTableString(t *testing.T) {
 // **This PR is the one that drains the region, not just moves the row within it.** `fc 0b`
 // (memory.fill) retired the first row this test held, and `fc 10` (table.size, filed alongside
 // `fc 0f`/`fc 11`) retires the second — `opTableFC` has 18 entries and `execFC` now answers all
-// 18, so there is no nineteenth unhandled sub-opcode to name. `0xfd`'s region is not a
-// replacement candidate: SIMD is declined at *decode* time when its gate is off
-// (`gatemap.go:180`), so a v128 module never reaches an interpreter switch at all on the default
-// board, and the two regions are not the same risk.
+// 18, so there is no nineteenth unhandled sub-opcode to name.
+//
+// **`0xfd` was ruled out here on a premise that stopped being true four days later, and the
+// conclusion does not survive it.** What stood here was: "`0xfd`'s region is not a replacement
+// candidate: SIMD is declined at *decode* time when its gate is off (`gatemap.go:180`), so a v128
+// module never reaches an interpreter switch at all on the default board, and the two regions are
+// not the same risk." The conditional half is still exactly right. The clause about the default
+// board was true when written (2026-08-07, #171) and false from `0e41f9d` (2026-08-11, #227/ADR
+// 0025) onward, because SIMD flipped default-on and v128 modules have reached the interpreter ever
+// since — so the region *is* a candidate, and it is one with the same shape rather than the same
+// population. Measured, both halves: `binary.PrefixedOp` has **275** entries under `0xfd` and **19**
+// of them still render `interp: no arm for opcode fd NN` (`fd 9a a2 a5 a6 af b0 b2 b3 b4 c2 c5 c6
+// cf d0 d2 d3 d4 e2 ee`) — `execFD`'s header describing itself accurately, "unhandled sub-opcodes
+// fall through to `unsupported`, rendering as `fd NN` — the board's existing bucket key" — and the
+// board carries **0** rows in that bucket, because no corpus module reaches any of the 19. So the
+// code population is live and the board population is empty, which is not a reason to look
+// elsewhere: it is the position this test was *already* in when its own row dissolved, and the
+// answer then was to move off the corpus and onto a direct call. `0xfd` supports the identical move
+// with 19 subjects instead of one.
+//
+// Left as a correction rather than as a re-pointing, because the re-pointing belongs beside
+// `execFD` and not in `execFC`'s file, and because choosing between "19 direct calls" and "one
+// derived sweep over `PrefixedOp`" is a design question this paragraph should not settle in
+// passing — **#429**. What this paragraph is for now is the shape: nobody re-read a tripwire's
+// rationale while flipping a gate, and nothing asked them to. The foreclosing-word sweep in
+// `internal/testenv` is what asked, one PR after being written for a different instance of the same
+// defect, and this is the instance that makes its case — the other three were wrong when written,
+// and a careful reader could in principle have caught them. This one was *right* when written and
+// was falsified by a commit in another package four days later. **Grave #428**, and the correction is
+// recorded here rather than in the tracker alone because this is the paragraph a reader arrives at.
 //
 // **So the row moves off the corpus and onto a direct call**, which is the only way left to
 // present `execFC` with a sub-opcode it does not have: the decoder itself rejects anything
