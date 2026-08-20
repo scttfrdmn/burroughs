@@ -1600,6 +1600,37 @@ weakly-ordered platform.
   argument exceeds it — declared at the arm, flagged for a decision, and shared with the
   tail-call gate's own 0x12/0x13 when it lands.
 
+- **The `want.Kind != got.Kind` census, and the pinned control the corpus cannot supply**
+  ([#441](https://github.com/scttfrdmn/burroughs/issues/441),
+  [0039](docs/decisions/0039-a-references-payload-kind-crosses-the-two-boundaries-as-one-enumerated-kind-and-the-static-type-gate-is-its-own-census.md)
+  decision 2). `Matches` gates the non-null reference path on a static-type equality the authority does
+  not have — `assert_ref_pat` (`runner.ml:464-476`) dispatches a pattern against the runtime
+  *constructor* and reads no static type — and removing it is an **accept-direction** change no
+  negative-direction vector can falsify. So the evidence comes first: `TestKindGateCensusIsPinned`
+  threads a recorder through `matches` (rather than re-deriving the reach condition at the call site,
+  which would be a second copy of that function's control flow) and prints, unconditionally, both
+  lanes' arrivals at the gate.
+  **The issue's first question turned out to be analytic**: a refusal here fails its vector, so the
+  passing population's zero could not have come out otherwise, and the derivation is what showed the
+  question could not be load-bearing. That forced a second channel, `Result.KindGateFailPrefix`, which
+  is the only population in which this gate can be observed refusing — and it holds **seven all-on
+  fails**, in two groups with two different authorities: three `try_table.wast` rows where
+  `RefTypePat FuncHT` admits a `FuncRef` constructor and this harness says false, and four
+  `local_init.wast` rows where `assert_ref_pat` is not the authority at all (`RefResult (RefPat r)`
+  compares two concrete references by identity). In all seven, `got.Kind` is the **placeholder**
+  `fromInterpValue` documents as *"a placeholder, not a claim"* — and whose comment records that
+  `KindAnyRef` was chosen precisely to make this gate agree, which inverts the dependency: the gate is
+  why the placeholder needed care.
+  `TestCrossKindNumericComparisonsAreRefused` is the other half and is **pre-registered before the
+  change it guards**. Two candidate replacements — delete the gate outright, or split it by family and
+  keep kind equality on the numeric path — produce **byte-identical boards in both lanes**, so the
+  corpus cannot tell a correct replacement from a reckless one. Five hand-built pairs can: with the
+  gate deleted, `i32 1` satisfies an `i64 1` expectation and a 128-bit result satisfies a 32-bit one by
+  its low word, because `matches` falls through to `want.Bits == got.Bits` with no kind in the
+  question. Nothing in `testdata/spec` asserts such a pair — vectors are written by people who know the
+  types — which is why this control had to be written by hand and was watched disagreeing with the
+  alternative before either landed. The replacement itself is held for the ruling on #441.
+
 ### Changed
 
 - **The ratio comparator's blind spot is written where its domain is described** (Scott, on the #443

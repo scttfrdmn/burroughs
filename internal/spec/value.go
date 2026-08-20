@@ -666,6 +666,75 @@ func (v Val) String() string {
 	return fmt.Sprintf("%s %d", v.Kind, int64(v.Bits))
 }
 
+// kindGateReach is one arrival at `matches`' `want.Kind != got.Kind` gate, on a vector that went
+// on to pass. `Want == Got` means the gate let the pair through; the two differing means it
+// refused, and refusal is the whole point of the census — see #441.
+//
+// **Enumerated rather than counted, and the two are not interchangeable here.** A count would say
+// how much traffic the gate sees; #441 needs to know *which* vectors' green depends on it, because
+// the change under consideration is in the accept direction and no vector in the corpus can
+// witness a wrong acceptance. A line and a result index are what make a row re-checkable by hand
+// against the reference.
+// **Kind is not enough to re-check a row, so the pattern and the constructor travel with it.**
+// The question a reader has to answer for each refusal is what `assert_ref_pat` would say, and that
+// function reads neither Kind: it dispatches a `RefTypePat <heaptype>` against a runtime
+// constructor. A row saying only "want externref, got anyref" cannot be adjudicated — `RefTypePat
+// ExternHT, _ -> true` admits every constructor, so whether the refusal is wrong depends on
+// `WantClass`/`WantPat`, which the Kind pair does not carry.
+type kindGateReach struct {
+	Line   int     // the assert_return's line, stamped by the run loop
+	Result int     // which result of that command, for the multi-value case
+	Want   ValKind // the expectation's Kind as the gate read it
+	Got    ValKind // the engine result's Kind as the gate read it
+	InAlt  bool    // the reach happened inside an `(either …)`'s alternatives — see matchingAlt
+
+	WantClass  RefClass   // which reference shape the expectation is, if any
+	WantPat    RefPat     // the heaptype it names, read only for RefTypePattern
+	GotClass   RefClass   // which reference shape the result is
+	GotPayload RefPayload // the constructor the result is — what the authority dispatches on
+}
+
+// kindGateCensus accumulates every arrival at that gate for one command.
+//
+// **Two channels, because two populations of wildly different size answer two different
+// questions.** `numericEqual` is the bulk — every `i32 1` against `i32 1` in the corpus reaches
+// this gate and is let through — and enumerating it would bury the rows that matter under six
+// figures of noise; it is counted so that the census can be checked for vacuity, since a census
+// reporting no numeric traffic has stopped walking rather than found nothing. Everything else is
+// enumerated: any reach touching a reference kind on either side (the population #441's
+// replacement changes the reading of) and any numeric pair the gate refuses.
+//
+// The census's domain is the **passing** population, and the run loop enforces that by discarding
+// it on the fail path — `AltChoices`' scoping for `AltChoices`' reason. That is not a limitation
+// being hidden: a failing vector's census is a *prefix*, since `firstMismatch` stops at the first
+// bad result, and a prefix of a walk reported beside complete walks would be a silent
+// under-count.
+type kindGateCensus struct {
+	numericEqual int
+	reaches      []kindGateReach
+
+	// line and result are the run loop's stamp for the command being compared, set before each
+	// call rather than passed down through `matches` — the matcher has no business knowing what
+	// line it is serving, and threading it would put a harness concern in a comparison.
+	line, result int
+
+	// inAlt is a depth rather than a bool because `either` nests in the grammar (`parser.mly:1536`
+	// takes `result`s, and `EitherResult` is an arm of `result`). No corpus vector nests one,
+	// measured — and a bool would be wrong the day one does, in the direction of under-reporting.
+	inAlt int
+}
+
+func (c *kindGateCensus) record(want, got Val) {
+	if want.Kind == got.Kind && !want.Kind.isRef() {
+		c.numericEqual++
+		return
+	}
+	c.reaches = append(c.reaches, kindGateReach{
+		Line: c.line, Result: c.result, Want: want.Kind, Got: got.Kind, InAlt: c.inAlt > 0,
+		WantClass: want.Class, WantPat: want.Pat, GotClass: got.Class, GotPayload: got.Payload,
+	})
+}
+
 // MatchingAlt reports which alternative of an `(either …)` expectation `got` satisfies, and
 // whether any does. It returns `(-1, false)` for an expectation that is not a disjunction: the
 // question "which alternative" has no answer there, and a zero index would be a wrong one.
@@ -684,14 +753,28 @@ func (v Val) String() string {
 // is a property of the corpus rather than a fact about the engine; `Of` beside the index in
 // AltChoice is what lets a reader see the width of the freedom being reported on.
 func (want Val) MatchingAlt(got Val) (int, bool) { //nolint:revive // `want`/`got` names the asymmetry, as on Matches below — the two must agree, since this is the method Matches delegates its Alts arm to
+	return want.matchingAlt(got, nil)
+}
+
+func (want Val) matchingAlt(got Val, rec *kindGateCensus) (int, bool) { //nolint:revive // `want`/`got` again: this is MatchingAlt's body and the two must agree, per that method's own note
 	if want.Alts == nil {
 		return -1, false
 	}
 	// Recursion, not a loop over scalars: an alternative is a `result`, so it may be a NaN
 	// class, a shaped v128, a ref pattern, or another `either`, and each of those has its own
 	// arm in Matches. Calling Matches is what reuses them all.
+	//
+	// **The census is told it is inside a disjunction, and this is the only place that can tell
+	// it.** An alternative that does not match is not a defect here — `List.exists` is *supposed*
+	// to be told no by every alternative but one — so a `Kind` gate firing under this loop is the
+	// one context in which the gate returns false inside a vector that goes on to pass. Every
+	// other false it produces is the vector's own verdict. See kindGateCensus.
+	if rec != nil {
+		rec.inAlt++
+		defer func() { rec.inAlt-- }()
+	}
 	for i, alt := range want.Alts {
-		if alt.Matches(got) {
+		if alt.matches(got, rec) {
 			return i, true
 		}
 	}
@@ -716,6 +799,21 @@ func (want Val) MatchingAlt(got Val) (int, bool) { //nolint:revive // `want`/`go
 // an expectation there — so the two linters that want one name per type are suppressed here, at
 // the site that earns it, rather than the pair being made consistent and less clear.
 func (want Val) Matches(got Val) bool { //nolint:revive,staticcheck // `want`/`got` names the asymmetry; see above
+	return want.matches(got, nil)
+}
+
+// matches is Matches' body, with an optional census of the `want.Kind != got.Kind` gate below.
+//
+// **The recorder is threaded rather than the condition re-derived**, which is #441's own
+// requirement and `AltChoices`' rule ("recorded by the run loop rather than re-derived by the
+// control"). Whether a pair *reaches* that gate is a fact about this function's control flow —
+// two arms return before it — so a census computed at the call site would be a second copy of
+// that flow, and the two copies could be pointed at different sets without either looking wrong.
+// A nil recorder is the production path and costs one branch per gate.
+// `revive` only, where the exported `Matches` needs `staticcheck` too: nolintlint reported the
+// `staticcheck` half unused here, and a suppression carried for a complaint that is not made is a
+// suppression nobody has read. Narrowed rather than copied from the line above.
+func (want Val) matches(got Val, rec *kindGateCensus) bool { //nolint:revive // `want`/`got` names the asymmetry; see Matches
 	if want.Alts != nil {
 		// `| _, EitherResult rs -> List.exists (assert_result v) rs` (runner.ml:485). **First**,
 		// and before Kind is read, because the reference's arm matches on the *pattern* with a
@@ -727,7 +825,7 @@ func (want Val) Matches(got Val) bool { //nolint:revive,staticcheck // `want`/`g
 		// authority: MatchingAlt answers *which*, this answers *whether*, and a `List.exists`
 		// written twice is the two-places-know-one-fact shape on a question the lowering pin
 		// depends on.
-		_, ok := want.MatchingAlt(got)
+		_, ok := want.matchingAlt(got, rec)
 		return ok
 	}
 	// **No `want.AnyNull` fast path here** — it used to be the first thing this function did
@@ -785,6 +883,14 @@ func (want Val) Matches(got Val) bool { //nolint:revive,staticcheck // `want`/`g
 		}
 		return false
 	}
+	// **#441's subject.** The authority has no analogue for this comparison: `assert_ref_pat`
+	// (`script/runner.ml:464-476`) matches a pattern against the runtime *constructor* and reads
+	// no static type, so on the reference path this gate asks a question the reference does not
+	// ask. It is recorded before it is read, and both outcomes are recorded — a census of arrivals
+	// is the accept-direction evidence #441 needs, and no negative-direction vector can supply it.
+	if rec != nil {
+		rec.record(want, got)
+	}
 	if want.Kind != got.Kind {
 		return false
 	}
@@ -797,7 +903,7 @@ func (want Val) Matches(got Val) bool { //nolint:revive,staticcheck // `want`/`g
 		// `got`'s bits into comparable lanes, never the other way around.
 		gotLanes := sliceV128Lanes(got.Hi, got.Bits, want.Lanes)
 		for i := range want.Lanes {
-			if !want.Lanes[i].Matches(gotLanes[i]) {
+			if !want.Lanes[i].matches(gotLanes[i], rec) {
 				return false
 			}
 		}

@@ -103,6 +103,16 @@ import (
 //	f64SpellingFloor         1551     vacuity       —       same, per kind
 //	agreementFloor           6498     vacuity       —       the cross-check compared something
 //	attemptedFloor           2494     vacuity       —       the link census's hook fired at all
+//	kindGateNumericFloor     143256   vacuity       —       the #441 census walked the corpus
+//
+// `kindGateNumericFloor`'s violation means the *census* stopped, not that the gate went quiet:
+// every numeric `assert_return` in the corpus reaches the gate it counts, so a low figure leaves
+// the exactly-pinned rows beside it (`kindGateRefReaches`, `kindGateRefusals`) agreeing about
+// nothing. It is the vacuity guard for an accept-direction control, which is the case where a
+// vacuous agreement is most expensive: no negative-direction vector can witness a wrong
+// acceptance, so if this census is empty there is no second channel to notice. Its own comment
+// records why a vacuity floor still tracks its measurement within a few percent — the exemption
+// is from slack, not from #87.
 //
 // **Exact re-base** is the third kind and it is not a kind in the code, deliberately: it is a floor
 // or ceiling with slack 0, meaning "move me in the PR that moves the column". That the helper used
@@ -430,7 +440,7 @@ func TestEveryBoardBoundIsChecked(t *testing.T) {
 	//
 	// So the arrival is worth the row for the reason the four above it are: a number the ladder is
 	// steered by, previously unasserted, and the PR that moved the steering is the PR that bounds it.
-	const boundPopulation = 22
+	const boundPopulation = 23
 	if len(bounds) != boundPopulation {
 		t.Errorf("found %d board bounds, want exactly %d. A new bound is welcome — add its row to "+
 			"this file's table with its kind and its reason, and re-base this constant in the same "+
