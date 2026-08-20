@@ -576,6 +576,18 @@ func valType(k ValKind) (binary.ValType, bool) {
 		// all twelve abstract heaptypes and a thirteenth named constant beside it would be a second
 		// registry for the same fact (which `TestValTypeNamedConstantsAreNotAlias` polices).
 		return anyRefType, true
+	case KindUnnameableRef:
+		// **The refusal that keeps a sentinel out of the engine.** This Kind exists because
+		// `valKind` could not name a type; handing it back a type here would invent the answer that
+		// function declined to give, and the invented type would then be checked against a real
+		// signature. `toInterpValue` has no other route to a `binary.ValType`, so refusing here
+		// refuses every argument path at once — which is the sentence `valKind`'s default arm has
+		// always carried ("still a refusal on the argument side"), stated where a linter can see it
+		// rather than left to hold because of who calls whom.
+		//
+		// An arm rather than the post-switch return, so `exhaustive` confirms this member has a
+		// stated reading — the same reason `width` uses a `default` and `String` names every case.
+		return binary.NoValType, false
 	}
 	return binary.NoValType, false
 }
@@ -629,9 +641,11 @@ func valKind(t binary.ValType) (ValKind, bool) {
 		// defect.
 		//
 		// **On the result side this is no longer a refusal**, since 0039: `fromInterpValue` catches
-		// the `!ok` and substitutes KindAnyRef as a *placeholder* Kind, exactly as grave #266 already
-		// did for a null. It is still a refusal on the **argument** side, where a placeholder type
-		// would be handed to the engine and checked against a real signature.
+		// the `!ok` and substitutes KindUnnameableRef, exactly as grave #266 already did for a null.
+		// (KindAnyRef until ADR 0040, whose only reason was the Kind gate that decision deleted.) It
+		// is still a refusal on the **argument** side, where a placeholder type would be handed to
+		// the engine and checked against a real signature — and `valType` refuses the sentinel by
+		// name, so that sentence is now checkable rather than a claim about who calls what.
 		return 0, false
 	}
 }
@@ -785,12 +799,17 @@ func toInterpValue(a Val) (interp.Value, bool) {
 // would have moved nothing. `Val.Pat` is the expectation shape that paragraph said did not exist;
 // `Val.Payload` is what this function now carries to meet it.
 //
-// **Nothing is refused here any more, and that is a real narrowing rather than a coercion.** The
-// placeholder Kind is unobservable for the same reason #266's was: every one of these results is
-// compared by *pattern* against `got.Payload`, and the `want.Kind != got.Kind` gate is inert because
-// both sides of every such row are KindAnyRef (ValKind's own comment on that, and #441 for the gate).
-// The **argument** direction still refuses — `valType` has no type to give a placeholder Kind that
-// came from a refusal, which is where a fabricated type would reach the engine.
+// **Nothing is refused here any more, and that is a real narrowing rather than a coercion.** What
+// this paragraph used to add — that the placeholder Kind is *unobservable*, both sides of every such
+// row being KindAnyRef so the `want.Kind != got.Kind` gate was inert — was the gate's property and
+// not the Kind's, and ADR 0040 (#441) removed the gate. The Kind is observable now: `Val.String`
+// reads it on the RefExternIdentity path and printed a fabricated `ref.host N` there (#450) for
+// exactly as long as it was called KindAnyRef. It is KindUnnameableRef, a sentinel, and what makes
+// the substitution safe is no longer that nothing looks — it is that everything which looks has an
+// arm for it. The **argument** direction still refuses, and `valType` now says so in code rather
+// than by way of the call graph — it is `toInterpValue`'s only route to a `binary.ValType`, so one
+// arm there refuses every argument path: a type that came from a refusal is the one thing that must
+// not reach the engine.
 func fromInterpValue(o interp.Value) (Val, bool) {
 	k, ok := valKind(o.Type)
 	if !ok {
@@ -813,17 +832,21 @@ func fromInterpValue(o interp.Value) (Val, bool) {
 			return Val{Kind: KindFuncRef, Class: RefLiteralNull}, true
 		}
 		// A **non-null** reference of a type the harness cannot name: `structref`, `arrayref`,
-		// `exnref`, `(ref $t)` and the rest. Placeholder Kind for #266's reason one step further on —
+		// `exnref`, `(ref $t)` and the rest. Sentinel Kind for #266's reason one step further on —
 		// the value is expressible even though its type is not, because what the oracle reads is the
-		// constructor and Payload carries that faithfully. KindAnyRef rather than KindFuncRef, and the
-		// choice is load-bearing where #266's was arbitrary: the bare patterns these results are
-		// asserted against carry KindAnyRef too (`refPatterns`), so this is what makes the Kind gate
-		// agree instead of refusing 22 of the 28 rows on a placeholder.
+		// constructor and Payload carries that faithfully.
+		//
+		// **KindUnnameableRef, and it used to be KindAnyRef "load-bearing where #266's was
+		// arbitrary".** That sentence was true and its subject is gone: what it was load-bearing
+		// *for* was making `Matches`' Kind gate agree instead of refusing 22 of #270's 28 rows on a
+		// placeholder, and ADR 0040 deleted the gate. A constant whose only recorded reason has been
+		// deleted is the next reader's invitation to infer a new one, so it is a sentinel now — see
+		// KindUnnameableRef's own comment for what reads it and what refuses it.
 		//
 		// Note the direction of the fall-through: `o.Type` is discarded and `o.RefKind` is kept, which
 		// is the whole of 0039 in one line. The type was the thing the harness could not name; the
 		// constructor is the thing the oracle asks about.
-		return refVal(KindAnyRef, o), true
+		return refVal(KindUnnameableRef, o), true
 	}
 	if !k.isRef() {
 		// Hi is meaningful only for KindV128 (Val's own doc comment) and zero for every other
@@ -7861,7 +7884,23 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	// the other 22**, on the ground that being able to ask a question predicts nothing about its
 	// answer. It was conservative by 22, which is stated in that direction rather than left to read as
 	// a 28-for-28 hit.
-	const allOnPassFloor = 65042
+	// # 65042 → 65049, +7, and the figure was pre-registered before the diff existed (ADR 0040)
+	//
+	// #441's fork: `matches` no longer compares static types on the reference path, because the
+	// authority does not — `assert_ref_pat` dispatches a pattern against a *constructor* and
+	// `RefResult (RefPat r)` compares two concrete references by identity. Seven rows were refused by
+	// the removed comparison and all seven now pass, `try_table` 3 and `local_init` 4, which is the
+	// whole delta: `allOnFailCeiling` below falls by exactly 7 on the same run.
+	//
+	// **The +7 was measured and posted before Scott ruled, and it was measured on *two* candidate
+	// diffs that produce byte-identical boards** — this fork, and deleting the comparison outright.
+	// That identity is why the pin beside it (`TestCrossKindNumericComparisonsAreRefused`) is
+	// hand-built rather than drawn from the corpus: the board cannot distinguish a correct
+	// replacement from a reckless one here, so the board is not what chose.
+	//
+	// The default lane's reward is structurally 0 — all seven rows sit in GC- or EH-gated files, so
+	// they are `gated` there and this is the only lane in which they can be counted.
+	const allOnPassFloor = 65049
 	// **Slack 0 as of Scott's #387 ruling**, which this bound's own 89-row staleness above is what
 	// prompted: a floor with 250 of tolerance cannot detect anything smaller than 250, so it is a
 	// bound sitting inside its own tolerance. Exact from here — re-base it in the PR that moves the
@@ -7899,7 +7938,18 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	// split above is unchanged in every row. The floor beside this moved +28 on the same run, which is
 	// what makes the pair readable: reward in one column, no motion in the other, and a fall here would
 	// have meant the 28 included vectors the engine was answering wrongly while unmeasured.
-	const allOnFailCeiling = 38
+	// **38 → 31 with #441's fork (ADR 0040), and the fall is a re-base rather than a drain of the
+	// kind this ceiling was built to record.** The seven rows the fork admits were not vectors the
+	// engine was getting wrong; they were vectors the *harness* was refusing on a comparison the
+	// reference does not make, so what left this column is harness error and not engine error. That
+	// distinction is worth the sentence because a ceiling falling normally means capability landed,
+	// and reading these 7 that way would credit the interpreter with work it did not do.
+	//
+	// 31 across 8 files: `ref` 6, `array` 5, `type-subtyping` 5, `local_init` 4, `type-equivalence` 4,
+	// `type-rec` 4, `struct` 2, `func` 1. `try_table` leaves the list entirely (3 → 0) and
+	// `local_init` halves (8 → 4); every other row is unchanged, which is the check that the fork
+	// touched only what it was measured to touch.
+	const allOnFailCeiling = 31
 	boardBound(t, "allOnFailCeiling", totalFail, allOnFailCeiling, 0, ceilingBound,
 		"the all-gates-on lane is the interpreter's and validator's remaining work plan now that "+
 			"the default lane's exec column is empty: a rise here is a regression no gated-lane "+
@@ -8487,8 +8537,17 @@ func TestModuleInstanceFailurePathsAreWatched(t *testing.T) {
 // their entries went stale. This test said so before the report did — the second stale-entry catch
 // after `:334`, and the same mechanism: a fail list rots by the system working.
 //
-// **1 unrelated pre-existing gap remains**: `try_table.wast:464`/`:465`/`:466`, the harness
-// limitation now correctly attributed to all three lines it actually covers.
+// **Those three lines are gone too, and not because the harness limitation was fixed.**
+// `try_table.wast:464`/`:465`/`:466` are the unnameable-reference placeholder arriving at
+// `matches`, and ADR 0040 (#441) split that function on `want.Kind.isRef()`, so a reference
+// expectation is now decided by its pattern instead of by the placeholder's static kind. The
+// placeholder is still unnameable — what changed is that nothing refuses it. Stated in that
+// direction because the rule below cuts both ways: a stale pre-registration overstates what is
+// broken, and removing one can *understate* it just as easily. The residue is filed rather than
+// left sitting in this list, because these three lines have stopped witnessing it: the got-side
+// sentinel is #441's own ruling 3, and the nullability defect `valKind` refuses `(ref extern)`
+// on is #450. **A pre-registration whose subject stops being observable is removed here and
+// re-pointed there**, never closed as no-longer-applicable.
 //
 // It was **2**, the other being `:334` — `return_call` had no arm in this engine at all — and #253
 // landed 0026's tail-call mechanism, so that line passes and the entry became stale. This test
@@ -8500,8 +8559,16 @@ func TestModuleInstanceFailurePathsAreWatched(t *testing.T) {
 // (ADR 0036) wrote `check_tagtype` at both its call sites. That is the *fourth* stale entry this
 // pre-registration has reported, after `:334`, `:48` and `:59`, and the tally is worth keeping because
 // it is the argument for the shape: every one of the four was found by the list refusing to pass, and
-// none by anybody re-reading it. What remains is three lines of harness limitation, no engine defect,
-// and a population that has now rotted from 19 to 3 by the system working.
+// none by anybody re-reading it. **The fifth report emptied the table**: the `try_table.wast` trio went
+// stale under ADR 0040, so the map is zero files wide and the population has rotted from 19 to 0 by the
+// system working. Nothing in this file is pre-registered as failing any more.
+//
+// **An emptied table takes its own domain with it, so the domain is no longer read off its keys.**
+// The loop below used to range over `known`, which made the map two things at once: which lines are
+// excused, and which files are watched at all. Drained to empty, that loop runs zero times and the
+// second arm — *any* fail here must carry a citation — silently stops asserting, which is a table
+// dying the way a stillborn control dies, with a green. `governed` is the domain now, and the
+// allowance is just an allowance.
 func TestGrave206KnownFailures(t *testing.T) {
 	requireSuite(t)
 
@@ -8519,24 +8586,42 @@ func TestGrave206KnownFailures(t *testing.T) {
 		// passes `:18` and leaves `:22` red. Removed rather than re-explained, as `:48`/`:59` were when
 		// grave #368's rolled `match_tagtype` closed the rec-group boundary they reached, and as
 		// `try_table.wast:334` was when 0026's tail-call mechanism landed.
-		"try_table.wast": {
-			// `:334` was here — `return_call` had no arm — and 0026's mechanism (#253) gave it
-			// one, so the entry went stale and this test said so. Removed rather than
-			// re-explained: that is the whole point of a fail list that rots by the system
-			// working, and its own doc comment's arithmetic is corrected above.
-			464: "harness limitation: \"which the harness cannot represent\" -- the spec test framework's own result matcher, not an engine defect",
-			465: "harness limitation: \"which the harness cannot represent\" -- was misattributed to grave #206, which was masking this same pre-existing gap (found when #206's own fix in PR converted this line's *symptom* but not its underlying cause)",
-			466: "harness limitation: \"which the harness cannot represent\" -- was misattributed to grave #206, which was masking this same pre-existing gap (found when #206's own fix in PR converted this line's *symptom* but not its underlying cause)",
-		},
+		// `try_table.wast` has no entries left and the key is gone with them.
+		//
+		// `:334` was here — `return_call` had no arm — and 0026's mechanism (#253) gave it one, so
+		// the entry went stale and this test said so. `:464`, `:465` and `:466` were the harness
+		// limitation, correctly attributed to all three lines after #206's fix unmasked the two
+		// that had been misattributed; ADR 0040's family split in `matches` stopped the
+		// unnameable-reference placeholder from being refused, so all three pass and all three
+		// went stale together. Removed rather than re-explained, as `:334` was and as
+		// `tag.wast`'s two pairs were, and the doc comment's arithmetic is corrected above.
 	}
 
+	// The files this pre-registration governs. **Kept apart from `known`, which is now empty** —
+	// the domain of the check and the list of excuses were the same map until the excuses ran out,
+	// and a domain that dissolves with its allowances leaves the second arm below ranging over
+	// nothing. These are the three files #201's rung 2c walked and the only ones whose fails this
+	// test has ever spoken for; a fourth arriving is a new pre-registration's business, not a
+	// silent extension of this one's.
+	governed := []string{"tag.wast", "throw_ref.wast", "try_table.wast"}
+
 	_, _, allOnEngine := allOnLane(t)
-	for f, lines := range known {
+	for _, f := range governed {
+		lines := known[f]
 		s, err := ParseFile(filepath.Join(suiteDir, f))
 		if err != nil {
 			t.Fatalf("%s: parse: %v", f, err)
 		}
 		r := s.RunGated(allOnEngine())
+		// **The file has to have run something**, or both arms agree with an empty population.
+		// This bounds the catastrophic case only — a file renamed upstream, or parsed to no
+		// commands — and deliberately not the partial one: an exact per-file count here would be a
+		// second pin on a number `allOnPassFloor` already holds, and two pins on one fact drift
+		// apart without either saying so.
+		if r.Pass == 0 {
+			t.Errorf("%s: 0 pass in the all-on lane — the arms below are agreeing with an empty "+
+				"population, not with the engine", f)
+		}
 		failed := make(map[int]bool)
 		for _, fs := range r.Buckets {
 			for _, fail := range fs {
