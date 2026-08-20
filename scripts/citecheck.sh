@@ -210,8 +210,13 @@
 #      The three sites that grave lived at assert openness by paraphrase — "has no vocabulary",
 #      "waits on", "carries it alone" — which is unbounded English, and nothing here reaches it. One
 #      catch in three was the pre-registered forecast and the narrowing took it to zero of three; the
-#      historical catch on PR #433's body is what the check has, and #432 stays open for the
-#      paraphrase half. What it does gate is the stated form, which the tree uses in 7 places.
+#      historical catch on PR #433's body is what the check has — and on inspection it is not this
+#      check's at all, since the broad draft made it by co-occurrence and was wrong about which noun
+#      the sentence was about. **So the measured yield is zero true positives**, over 7 agreeing stated
+#      claims in the tree. The declaration lives beside the arm, on Scott's order, because a tripwire
+#      with no witness is a legitimate thing to be only if it says so where the code is. What it does
+#      gate is the stated form. **The paraphrase half gets no instrument, by ruling** — the remedy
+#      there is not code: source the premise from the tracker rather than from a paragraph.
 #
 #      **My own pricing of this check was measured with the wrong instrument.** "26 citations, 0
 #      disagreements" was produced by *reading* — a human resolving aboutness — so it forecast nothing
@@ -892,6 +897,26 @@ if [ "$need_gh" -gt 0 ]; then
 		# beside check 5 because it is the same question in the other direction — check 5 verifies a
 		# claim that a citation *became* closed, this one a claim about what it *is* — and both read
 		# the `.state` already in hand.
+		#
+		# **Two sentences this check carries at its site, on the order that landed it (Scott, PR #437
+		# review), so that neither can be inferred away by a later reader.**
+		#
+		# **It does not catch grave #434's shape, and the reason is predication rather than proximity.**
+		# That grave asserted openness by *paraphrase* — "has no vocabulary", "waits on", "carries it
+		# alone" — and the question such a sentence turns on is which noun a state word is predicated
+		# of, which is unbounded. This arm reads only the form where a copula makes the citation the
+		# subject, so aboutness is settled by grammar and never guessed. The draft that appeared to
+		# catch #434 matched the two state words anywhere in the sentence and was wrong about the
+		# subject: in *"the issue stays open because #328's 103 vectors have no vocabulary yet"* the
+		# subject of "stays open" is the issue, meaning #9, and not #328. Co-occurrence, not the
+		# predicate. **Nobody should read this check as covering that shape.**
+		#
+		# **Measured yield to date: zero true positives.** Every failure it has printed was a mutation
+		# fired by hand. Over the tracked tree the narrow form appears in **7 places and all 7 agree**
+		# with the tracker (#111, #260, #326, #432, #9 open; #400, #53 closed), and the one historical
+		# catch credited to this check belonged to the broad draft, on co-occurrence, wrongly. So this
+		# is a tripwire with no witness — which is a legitimate thing to be, as long as it says so
+		# rather than borrowing a catch that was never its own.
 		#
 		# **Every claim on the number, not the first one, and this PR's own body is why.** The first
 		# draft took `head -1`. A population can carry two contradictory claims about one number — a

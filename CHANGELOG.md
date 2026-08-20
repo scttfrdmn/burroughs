@@ -40,7 +40,14 @@ weakly-ordered platform.
   **aboutness** is, and a copula settles it by grammar. Present tense only, with `was`/`were` **absent
   from the verb list rather than filtered out of it**, since a past-tense account is correct by
   construction. **Stated under-match: this does not catch #434's three sites**, which assert openness by
-  paraphrase — unbounded English that nothing here reaches. #432 stays open for that half.
+  paraphrase — unbounded English that nothing here reaches. **Measured yield to date: zero true
+  positives**, over 7 agreeing stated claims in the tree — every failure it has printed was a mutation
+  fired by hand, and the one historical catch belonged to the broad draft, made by co-occurrence and
+  wrong about which noun the sentence was about. Declared at the arm on Scott's order, because a
+  tripwire with no witness is a legitimate thing to be only if it says so where the code is.
+  **The paraphrase half of [#432](https://github.com/scttfrdmn/burroughs/issues/432) gets no
+  instrument, by ruling**: detecting what a sentence is *about* is unbounded, and the remedy there is
+  not code — source the premise from the tracker rather than from a paragraph.
   **Every claim on a number is compared, not the first, and the report about the check is what found
   that.** The first draft took `head -1`; a population can carry two contradictory claims about one
   number, and a table reporting both directions of this check is exactly such a population — so one was
