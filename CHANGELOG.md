@@ -21,6 +21,34 @@ weakly-ordered platform.
 
 ### Added
 
+- **The script grammar's two remaining module forms — `(module definition …)` and `(module instance
+  $I $M)` — are read, scored, and instantiated
+  ([#426](https://github.com/scttfrdmn/burroughs/issues/426)).** Both were `KindUnsupported`, so nine
+  corpus commands sat in the column that means *the harness could not ask*. A definition form's whole
+  content is its **second** fact: it reads and it validates and it deliberately stops, which is why
+  upstream writes it for `memory.wast:8`'s 4 GiB memory and `table.wast:9`'s 4 G-slot table —
+  instantiating those would allocate to answer a question nobody asked. An instance form is where the
+  third fact gets asked, so it and not the definition is what moves `cur` and what a `(register …)`
+  can name. **The two wat grammars differ by exactly one token** (`script_module` is `module_` plus
+  `definition_opt`, `parser.mly:1417` vs `:1389`), so a definition's wat body is its own span with the
+  keyword excised rather than anything reconstructed — pinned byte-exact in
+  `TestDefinitionSourceExcisesTheKeyword`, since `definition_opt` also composes with the string forms
+  and `(module definition binary "…")` must stay unsupported rather than be handed to the wat reader.
+  Board: `unsupported` **57 (−9)**, `pass` **60928 (+6)**, `fail` **5 (−3)**, and the all-on lane
+  **65014 (+21)**. The `fail` movement is a **reclassification, not a repair**: three
+  `register: no module named $I/$I1/$I2` rows were red because nothing bound those names, and the
+  registers now gate with the instance forms they name (decision 0037's shape, a decline consequence
+  rather than a defect). In the **all-on** lane the same three names bind, their importing modules
+  link, and that is what drained `TestModuleDefinitionLinkCensus`' pre-registered table to empty —
+  the rows having said all along that their cause was registry semantics and not the type matcher, so
+  the deletion is recorded at the table with the count it carried rather than performed silently. **The pre-registration scored honestly:
+  `fail`, `unsupported`, and conservation landed exactly; the pass/gated split was off by four.** All
+  four misses were one error — *aboutness is not proximity*, applied to a forecast: a gate decline
+  *near* a command was read as a decline *of* it, when memory64's declines are elsewhere in its file
+  and a `(tag …)` field's EH gate sits at **instantiation**, which a definition form never reaches. Six
+  `instance.wast` rows join `gatedVectors` for the reason the form has: their definitions read, and the
+  gate declines one command later.
+
 - **`citecheck` check 6 — a *stated* claim about a citation's state is compared against the tracker's
   (`scripts/citecheck.sh`, discharging half of
   [#432](https://github.com/scttfrdmn/burroughs/issues/432) on Scott's order to build it).** `#N is
@@ -1466,6 +1494,24 @@ weakly-ordered platform.
   tail-call gate's own 0x12/0x13 when it lands.
 
 ### Changed
+
+- **`TestUnhandledFCSubOpcodeStaysOnTheWorkList`'s risk is re-pointed onto `0xfd`, as a sweep whose
+  domain the decoder's own table supplies
+  ([#429](https://github.com/scttfrdmn/burroughs/issues/429), declared by grave
+  [#428](https://github.com/scttfrdmn/burroughs/issues/428)).** *A tripwire names a risk, not a code
+  shape* — and the risk (an unhandled sub-opcode losing its `<prefix> NN` rendering, and with it the
+  partition the board's fail buckets and the work list are read off) had no subject left in `0xfc`,
+  whose 18 rows are all answered. It has 19 in `0xfd`. #429 named two shapes and this took the second:
+  `TestUnhandledFDSubOpcodesStayOnTheWorkList` derives its domain from `binary.PrefixedOp`, so it moves
+  as the table does, where a call per arm would inherit today's population and go stale exactly the way
+  the `fc 0b` row did — the treadmill #428 came from. `execFD`'s header has asserted this property
+  since it was written and nothing checked it, which is *the defect stated as the rule* with the sign
+  it usually has. Three guards against dying quietly, none of which sees another's mutation: a floor on
+  the unhandled population (whose failure message says **re-point, do not delete**, per #33), a floor
+  on the derived domain, and a headroom check on the scan's ceiling — a range claim of the kind a map
+  gives no way to ask, asserted the way `kindCount`'s probe-above-the-end asserts the other one.
+  Reports 275 rows, 256 answered, 19 on the work list: `fd 9a a2 a5 a6 af b0 b2 b3 b4 c2 c5 c6 cf d0
+  d2 d3 d4 e2 ee`.
 
 - **Correlated errors preserve deltas — the third specimen of one organ, landed under the vacuity
   law rather than as a new key** (`docs/laws/controls.md`; Scott's ruling on the #130 diagnosis relay,

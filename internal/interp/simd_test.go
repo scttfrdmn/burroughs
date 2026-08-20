@@ -1,6 +1,9 @@
 package interp
 
 import (
+	"errors"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/scttfrdmn/burroughs/internal/binary"
@@ -259,4 +262,156 @@ func TestV128SurvivesABranchOutOfABlock(t *testing.T) {
 	if out[1].Type != binary.I32 || out[1].Bits != 42 {
 		t.Errorf("result 1: got %+v, want i32 42", out[1])
 	}
+}
+
+// TestUnhandledFDSubOpcodesStayOnTheWorkList is **#429**: the re-pointing declared by grave #428
+// and deliberately not made there.
+//
+// # The risk, which is #33's ruling applied for the second time
+//
+// A tripwire names a risk, not a code shape. The risk
+// `TestUnhandledFCSubOpcodeStaysOnTheWorkList` was written for is that an unhandled sub-opcode
+// stops rendering as `<prefix> NN` and collapses either into one bucket for the whole region or
+// into a bare `NN` that reads as a single-byte opcode. The board's fail buckets are keyed by that
+// message and the work list is read off them, so a change that erased the partition would erase
+// the schedule.
+//
+// `execFC`'s region is drained — all 18 sub-opcodes answered — so over there the risk survives only
+// as a format pin on an input the decoder can never admit. `0xfd` is where the risk still has a
+// *subject*: `execFD`'s own header states the property this test checks ("unhandled sub-opcodes
+// fall through to `unsupported`, rendering as `fd NN` — the board's existing bucket key"), and
+// *the defect stated as the rule* is exactly the shape where a header asserting a property is what
+// makes review confirm its absence. This is the assertion that header was missing.
+//
+// # Why a derived sweep and not 19 direct calls
+//
+// #429 named two shapes and this is the second. A call per unhandled arm would pin the format just
+// as well and would inherit today's blind spot: the population drains as SIMD families land, so a
+// test naming `fd 9a` goes stale the same way the `fc 0b` row did, and the treadmill that produced
+// #428 starts again. The domain here is derived from `binary.PrefixedOp` — every `0xfd` row the
+// decoder's own table admits — so it moves on its own as the table does. *Scope controls to the
+// space, never to the sample.*
+//
+// The literal `fd ` in `want` is hand-written rather than derived from `unsupported`, which is the
+// half that keeps this from checking a formatter against itself: the collapse worth catching is a
+// message that drops the prefix, and a test that asked `unsupported` how it renders the prefix
+// could not see it. What it cannot see is `%x` in place of `%02x`, since no currently-unhandled
+// sub-opcode is below `0x10` — stated because a reader would otherwise assume the format is pinned
+// whole.
+//
+// # The three ways it dies quietly, each with its own guard
+//
+//   - **The population drains to zero.** Then every message check is quantified over nothing and
+//     the sweep is a green that asked no questions — *a comparison against an empty set succeeds*.
+//     `len(unhandled) > 0` is the floor, and its message says re-point rather than delete, because
+//     at that point the risk has dissolved for a second time and #33's ruling is what it was.
+//   - **The domain stops being read.** A `PrefixedOp` that lost its `0xfd` arm, or a scan that
+//     never entered the region, yields an empty domain and the same clean zero one layer up.
+//     `inTableFloor` catches it, well below the measured 275 so corpus-independent table growth
+//     does not fail a test about message format.
+//   - **The table grows past the scan.** `scanCeiling` is a range *claim* — that no `0xfd` row
+//     lives above it — of exactly the kind an iota block or a map gives no way to ask, so it is
+//     asserted the way `kindCount`'s probe-above-the-end asserts the other one: the last row found
+//     must sit at least `headroom` below the ceiling, so a region that grows toward the bound fails
+//     here and asks for a re-base instead of silently leaving its top unswept.
+//
+// Watched dying on five mutations, and the point of listing them is that no two share a guard:
+// rendering the sub-opcode without its prefix (`unsupported`'s `%02x %02x` → `%02x` on `Op`
+// alone) fails the message check on all 19; dropping the bytes entirely fails it the same way with
+// a different diff; `execFD`'s `default` returning `nil` empties the population and trips the
+// floor; making `PrefixedOp` refuse `0xfd` trips `inTableFloor`; and lowering `scanCeiling` to
+// `0x120` — above the table's real top, so the sweep still finds every row — trips the headroom
+// check, which is the one mutation the other four are all blind to.
+func TestUnhandledFDSubOpcodesStayOnTheWorkList(t *testing.T) {
+	const (
+		// A little over twice the region's top row (`0x113`), so the sweep covers the table with
+		// room for the relaxed-SIMD tail to grow into.
+		scanCeiling = 0x200
+		// The gap the top row must keep below the ceiling. 0x40 rather than 1 because a region
+		// grows a family at a time, and a bound that fails only once something has already gone
+		// unswept is a bound that reports the damage rather than preventing it.
+		headroom = 0x40
+		// The vacuity floor on the domain, well below the measured 275.
+		inTableFloor = 200
+	)
+
+	inTable, handled := 0, 0
+	var unhandled []uint32
+	lastInTable := uint32(0)
+	for op := range uint32(scanCeiling) {
+		if _, _, ok := binary.PrefixedOp(0xfd, op); !ok {
+			continue
+		}
+		inTable++
+		lastInTable = op
+
+		err := execFDOnAnEmptyStack(op)
+		if !errors.Is(err, ErrUnsupportedOp) {
+			// The arm exists: it returned nil, or a trap, or the `needNum` validation verdict every
+			// arm opens with, or it panicked reaching for state a bare `&Instance{}` does not have.
+			// Which of those it was is not this test's question — anything other than
+			// `ErrUnsupportedOp` means the sub-opcode is off the work list.
+			handled++
+			continue
+		}
+		unhandled = append(unhandled, op)
+		want := fmt.Sprintf("fd %02x", op)
+		if got := err.Error(); !strings.Contains(got, want) {
+			t.Errorf("fd %02x: message is %q, want it to name %q — the board's fail buckets are "+
+				"keyed by this string and the work list is read off them, so %02x alone would read "+
+				"as a single-byte opcode and a message without the bytes would collapse 275 "+
+				"sub-opcodes into one bucket", op, got, want, op)
+		}
+	}
+
+	if inTable < inTableFloor {
+		t.Fatalf("the scan found %d rows under 0xfd, want at least %d — `binary.PrefixedOp` is not "+
+			"answering for this region, so every message check above was quantified over nothing "+
+			"and this test is a clean zero rather than a pass", inTable, inTableFloor)
+	}
+	if lastInTable+headroom >= scanCeiling {
+		t.Errorf("the region's top row is fd %02x, within %#x of the scan's ceiling %#x — rows at "+
+			"or above the ceiling are unswept and this test would not say so. Raise scanCeiling",
+			lastInTable, headroom, scanCeiling)
+	}
+	if len(unhandled) == 0 {
+		t.Errorf("every one of the %d sub-opcodes under 0xfd has an arm, so this tripwire's subject "+
+			"has dissolved for the second time (`fc` was the first, grave #428). **Re-point it, do "+
+			"not delete it**: a tripwire names a risk and the risk — an unhandled sub-opcode losing "+
+			"its `<prefix> NN` rendering and with it the board's partition — belongs to whichever "+
+			"prefixed region still has unanswered rows (0xfb next). That is #33's ruling, and "+
+			"closing this as no longer applicable would retire a live risk", inTable)
+	}
+	t.Logf("0xfd: %d rows in the decoder's table, %d with arms, %d still on the work list: %s",
+		inTable, handled, len(unhandled), fdOpList(unhandled))
+}
+
+// execFDOnAnEmptyStack asks `execFD` what it does with a sub-opcode, on a zero `Instance` and an
+// empty stack, and reports a panic as an ordinary error.
+//
+// The recover is not defensive coding, it is the classification: an arm that reaches for memory,
+// a table, or a stack slot that is not there has *demonstrated it exists*, which is the only fact
+// this sweep needs from it. Letting the panic out would make a test about message formatting fail
+// on the first arm that happens to dereference something — and skipping the arms that panic would
+// mean choosing the domain by hand again, which is what #429 exists to avoid.
+func execFDOnAnEmptyStack(op uint32) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("arm panicked on an empty stack: %v", r)
+		}
+	}()
+	return (&Instance{}).execFD(binary.Instr{Prefix: 0xfd, Op: op}, &stack{})
+}
+
+// fdOpList renders the work list the way `execFD`'s header and #429 both write it, so the logged
+// set can be pasted into either.
+func fdOpList(ops []uint32) string {
+	var b strings.Builder
+	for i, op := range ops {
+		if i > 0 {
+			b.WriteByte(' ')
+		}
+		fmt.Fprintf(&b, "%02x", op)
+	}
+	return b.String()
 }
