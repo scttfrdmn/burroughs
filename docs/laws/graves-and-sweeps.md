@@ -74,6 +74,25 @@ reach is a law out of context.
   not a place to invent — and title a grave by its shape, not its site. (Ruling: Scott, PR
   #108; grave #105.)
 
+### A repair to a defect whose file records a prior instance of the same shape isn't done until it sweeps.
+
+- **A repair to a defect whose file records a prior instance of the same shape isn't done until it
+  sweeps.** The stronger form of the rule above, and it names *when* the backwards sweep is owed:
+  when the file you are editing already carries a header, a sibling entry, or a paragraph about the
+  shape you just fixed. Then the lesson is not being learned, it is being **re-read and not applied** —
+  and one fix at the site the checker pointed at leaves the same defect standing everywhere the file
+  documents it. Scott issued it on grave #449, from three instances in one session: the stable key in
+  #447, `fail=1` in #449 itself, and a `0040` token repaired in one section of a PR body and left
+  standing in *Next*. *"In two of the three the lesson was already written down in the file's own
+  header or its sibling."*
+  It paid immediately, twice, in the PR that recorded it (#448): `publicpath_test.go`'s domain
+  paragraph, whose own title is *"every figure this section ever carried has gone stale once"*, was
+  carrying its third generation of stale figures with the falsifier 120 lines below it in the same
+  file; and `foreclose_test.go`'s licence map turned out to hold three reasons that were false of the
+  paragraphs they license — read only because an unrelated edit three packages away forced a re-key.
+  The habit is cheap and the direction matters: *a FAIL names a site, not the population*, so after
+  fixing the site, re-scan the channel the checker cannot see.
+
 ### Unreachability is a grave only when it's silent.
 
 - **Unreachability is a grave only when it's silent.** Declared and tracked,
