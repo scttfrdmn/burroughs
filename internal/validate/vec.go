@@ -15,9 +15,12 @@ import (
 // vectors whose *file* is a SIMD one. 668 is the count whose decline this region's typing actually
 // removes, and the difference is vectors that decline for a second reason as well — chiefly the
 // bulk-memory and reference instructions that share those files. 648 of the 668 became passes and
-// **20 landed in the admission stratum**, every one of them the alignment gap this file's own
-// non-goals section declares. The ledger is at `spec_test.go`'s `validateAdmitCeiling`, because a
-// figure that moves belongs beside the bound that watches it.
+// **20 landed in the admission stratum**, every one of them the alignment gap this slice did not
+// close. The ledger is at `spec_test.go`'s `validateAdmitCeiling`, because a figure that moves
+// belongs beside the bound that watches it — and it has since moved to **0**, that gap having been
+// closed by #306 in #313. The 20 is kept in the past tense it belongs in rather than restated as a
+// present figure; the non-goals section below records what happened to the sentence that used to
+// carry the forward pointer.
 //
 // # The same argument as `signature`, one authority further along
 //
@@ -52,12 +55,43 @@ import (
 //
 // # What this slice does not do
 //
-// **Alignment is not checked, and it cannot be here.** The decoder deliberately drops the memarg's
-// alignment (`decodeMemop`: "Alignment is a validation constraint ... so keeping it would be
-// storing a fact only #9 reads"), so the 99 alignment vectors stay the separately-declared slice
-// `validate.go` lists them as. A vector whose only defect is an over-aligned SIMD access is
-// therefore **accepted** by this package, which is the admission stratum `validate.go` describes:
-// reported as a fail with a named cause, never as a pass.
+// **Alignment is checked — in `align.go` — and the paragraph that stood here claimed the opposite for
+// two weeks.** It said: *"Alignment is not checked, and it cannot be here. The decoder deliberately
+// drops the memarg's alignment (`decodeMemop`: 'Alignment is a validation constraint ... so keeping it
+// would be storing a fact only #9 reads'), so the 99 alignment vectors stay the separately-declared
+// slice `validate.go` lists them as. A vector whose only defect is an over-aligned SIMD access is
+// therefore accepted by this package."* Every clause was falsified by #306, landed in #313
+// (`5df86cf`): the decoder retains the alignment exponent (`binary.Memarg` returns it), that slice
+// *is* the 99 vectors, `checkAlignment` states the rule against 45 natural widths derived from
+// `mnemonics.ml`, and an over-aligned SIMD access is **refused** — `v128.load align=32` gives
+// "alignment must not be larger than natural: v128_load aligns to 32 bytes, natural is 16",
+// `v128.store8_lane align=2` likewise, and the legal `align=16` still passes. A second mechanism
+// agrees rather than the same one twice: `validateAdmitCeiling` is 0, so the 20 admissions this file's
+// opening paragraph attributes to the gap have no members left. Quoted inline and refuted in the same
+// breath, which is grave #427's arrangement and now also a constraint — see below.
+//
+// **Grave #431, and it is #427's shape four lines from #427's own correction.** Why it outlived the
+// sweep that landed in the very PR repairing #427 belongs here and not only in the issue: that sweep's
+// teeth are the *gate table*, and this foreclosure's mutable premise was not a gate but what the
+// decoder retains. The sweep flagged the paragraph and a licence cleared it — a note that restated
+// this paragraph's premise back at it, correctly observing the premise was gate-independent while
+// never asking whether it was true (#432). So what the word `cannot` earns on its second grave in one
+// file is not a lesson about gates: **a foreclosure's premise is a fact held somewhere else, and an
+// instrument for it has to name the somewhere.** The quotation is the cheapest handle on that — it is
+// attributed to `decodeMemop`, and that sentence no longer exists there.
+//
+// **Why the refutation is inline rather than an indented block, which is a fact about the sweep and
+// not a matter of taste.** `foreclosingParagraphs` splits on blank comment lines, so an indented
+// quotation is *its own paragraph* with nothing marking it as a quotation — the first draft of this
+// correction block-quoted the stale text and the sweep read it as a live assertion at the quote's own
+// line, correctly by its own rules. Block-quoted testimony therefore needs a licence where inline
+// testimony needs none, and the cheaper convention is the one that also satisfies Scott's ruling on
+// #430: the reason travels with the word, in the same paragraph.
+//
+// What this section has left to say about alignment is only where the rule lives, which is not here:
+// `align.go` is a file of its own because the constraint is per-opcode arithmetic against a width
+// table, and `sig.go`'s posture — derived, not transcribed — covers those 45 widths for the same
+// accept-direction reason it covers the 236 rows below.
 //
 // **Relaxed SIMD is typed, and the paragraph that said otherwise was wrong for three days before
 // anyone read it against the gate.** It said: *"With that gate off the decoder refuses those opcodes

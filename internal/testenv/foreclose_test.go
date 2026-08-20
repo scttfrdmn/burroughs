@@ -259,11 +259,14 @@ const (
 	foreclosingFileFloor      = 200
 	foreclosingParagraphFloor = 700
 	// foreclosingInScopeFloor is the deferred-reason sweep's own vacuity floor: the paragraphs it
-	// examines, not the ones it flags. **200 against a measured 225**, and the 25 of slack is the
+	// examines, not the ones it flags. **200 against a measured 227**, and the 27 of slack is the
 	// honest bound rather than the tight one, because the population is every comment anyone writes
-	// in a bound-account or non-goals position and it moves every PR. A floor bounds the
-	// catastrophic case only — a moved walk, a broken parse, a filter inverted — so the residual 25
-	// is covered the other way, by `t.Logf`ing the count beside it every run. That is the pairing
+	// in a bound-account or non-goals position and it moves every PR — it moved by one in the very
+	// next PR (#431's repair added a paragraph) and by one again inside that same PR (grave #434's
+	// correction added another), which is the demonstration rather than the hypothetical: two
+	// re-bases of this sentence in two commits. A floor bounds the catastrophic case only — a moved walk, a broken parse, a
+	// filter inverted — so the residual is covered the other way, by `t.Logf`ing the count beside it
+	// every run and re-basing this sentence when it moves. That is the pairing
 	// `allOnPassFloor` did not have when it sat 3380 behind its measurement: the number was never
 	// printed next to the constant, so nothing made the distance visible to a reader.
 	foreclosingInScopeFloor = 200
@@ -322,10 +325,10 @@ var foreclosingLicensed = map[string]string{
 	// Grave #427's record at the fix site. This is the paragraph the falsification probe restored to
 	// confirm the sweep can see the original defect, so it is licensed at the *repaired* version and
 	// fires at the defective one — which is the only arrangement that proves both directions.
-	"internal/validate/vec.go:62 non-goals register no reachable SIMD": "grave #427's record: the " +
+	"internal/validate/vec.go:96 non-goals register no reachable SIMD": "grave #427's record: the " +
 		"falsified sentence is quoted, and the paragraph's own next clause is that both its halves " +
 		"were false and `DefaultFeatures()` has had both gates on since `7315b57`",
-	"internal/validate/vec.go:62 non-goals register no reachable RelaxedSIMD": "as above — the " +
+	"internal/validate/vec.go:96 non-goals register no reachable RelaxedSIMD": "as above — the " +
 		"quoted sentence names the gate it was wrong about",
 
 	// Grave #428's record, the same annotate-rather-than-correct treatment as #427's two above.
@@ -351,13 +354,34 @@ var foreclosingLicensed = map[string]string{
 		"would blind the sweep in the one file whose author is least likely to be re-read",
 
 	// Claims that are true for reasons no gate can move.
-	"internal/validate/vec.go:24 non-goals register cannot SIMD": "the claim is that vector families " +
+	//
+	// **This class is the one that failed, and #432 is filed on it.** Its predecessor held a licence
+	// for `vec.go`'s alignment paragraph reading "alignment `cannot` be checked here because
+	// `decodeMemop` drops the memarg's alignment before this package sees it — a fact about what the
+	// decoder retains, stated with its call site, and independent of every gate". Every word of that
+	// about *gate-independence* was right, and the premise it restated had been false since #306
+	// landed in #313 — so the sweep flagged grave #431's paragraph and this map cleared it. The class
+	// heading says "true"; the only property anything examined was gate-independence. A licence
+	// asserts a fact and nothing checks the licence's own fact.
+	//
+	// Until #432 rules, the standard applied to entries here is the narrowest one available: **the
+	// ground must be checkable by reading the licensed paragraph itself**, not by trusting a claim it
+	// makes about another file. "The word sits inside a verbatim quotation this paragraph refutes" is
+	// such a ground. "The premise is a fact about the decoder" is not — that is a forward reference,
+	// and a forward reference is what a citation-presence rule would have accepted from all four
+	// founding specimens.
+	"internal/validate/vec.go:27 non-goals register cannot SIMD": "the claim is that vector families " +
 		"`cannot` be classified from their mnemonics by eye — a fact about the names " +
 		"(`i32x4_bitmask` vs `i32x4_neg`), which is why the table is generated. Flipping any gate " +
-		"leaves it exactly as true",
-	"internal/validate/vec.go:55 non-goals register cannot SIMD": "alignment `cannot` be checked here " +
-		"because `decodeMemop` drops the memarg's alignment before this package sees it — a fact " +
-		"about what the decoder retains, stated with its call site, and independent of every gate",
+		"leaves it exactly as true, and the ground is legible in the paragraph: it names the two " +
+		"mnemonics it is about",
+	"internal/validate/vec.go:58 non-goals register cannot SIMD": "the `cannot` is inside a verbatim " +
+		"quotation of the falsified claim this paragraph exists to refute (grave #431), and the " +
+		"refutation is in the same paragraph and in the same breath — clause-by-clause, with the " +
+		"validator's own message printed. Checkable without leaving the paragraph, which is this " +
+		"class's standard until #432 rules. The quote is inline rather than block-indented for a " +
+		"mechanical reason recorded at the site: `foreclosingParagraphs` splits on blank comment " +
+		"lines, so an indented quotation becomes its own paragraph and reads as a live assertion",
 	"internal/validate/validate.go:175 non-goals register never SIMD": "the surviving `never` is " +
 		"past-tense (\"the default lane never asked\") about slice 10's gated remainder; the " +
 		"gate-dependent sentence that used to end this paragraph is quoted as falsified, which is " +
