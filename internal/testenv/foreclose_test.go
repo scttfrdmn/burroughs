@@ -294,9 +294,16 @@ var deferredReasonLicensed = map[string]string{}
 // below; anyone re-keying from a single delta will mis-key the entries in the other regions. Take the
 // pairs from the output.
 //
-// The fragility is the reason the scheme stays. A key that survived a rewrite of the paragraph it
-// licenses would carry the reason over prose that no longer says it — which is the defect this whole
-// file is about, one level up.
+// The fragility is the reason the scheme stays, and **the requirement is two-sided**: a key must be
+// insertion-immune *and* rewrite-fragile. A key that survived a rewrite of the paragraph it licenses
+// would carry the reason over prose that no longer says it — the defect this whole file is about, one
+// level up — so the obvious replacement (a digest of the key, a stable id) buys immunity by
+// discarding the half that is fragile on purpose. #447 carries that requirement, the take-pairs-from-
+// output remedy above, and the finding that the stable key already exists twenty lines away in the
+// walk this file shares with `TestEverySkipSiteIsLicensed`: `foreclosingSite` carries `para`, and the
+// position classifier already resolves the enclosing `const`. **"Same idiom as X" inherits the
+// properties you can see** — the allow-map with per-entry justifications is right there in a literal,
+// and the stable key lives three functions away where copying the pattern never looked.
 var foreclosingLicensed = map[string]string{
 	// The historical-account class. `spec_test.go`'s bound comments are a changelog of past
 	// measurements, so a foreclosing word inside a dated PR narrative is a claim about the board as
