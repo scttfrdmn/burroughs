@@ -212,8 +212,10 @@
 #      catch in three was the pre-registered forecast and the narrowing took it to zero of three; the
 #      historical catch on PR #433's body is what the check has — and on inspection it is not this
 #      check's at all, since the broad draft made it by co-occurrence and was wrong about which noun
-#      the sentence was about. **So the measured yield is zero true positives**, over 7 agreeing stated
-#      claims in the tree. The declaration lives beside the arm, on Scott's order, because a tripwire
+#      the sentence was about. **So the measured yield is one true positive** — taken on this file's own
+#      prose, when the ruling that disposed of #432 falsified a sentence written minutes earlier — over
+#      6 agreeing stated claims in the tree. The declaration lives beside the arm, on Scott's order,
+#      because a tripwire
 #      with no witness is a legitimate thing to be only if it says so where the code is. What it does
 #      gate is the stated form. **The paraphrase half gets no instrument, by ruling** — the remedy
 #      there is not code: source the premise from the tracker rather than from a paragraph.
@@ -666,8 +668,20 @@ fi
 #
 # **Stated cost, because an under-matching trigger fails silently: this does not catch #434.** The
 # paraphrase channel that grave travelled through — "has no vocabulary", "waits on", "carries it
-# alone" — is unbounded English, and nothing here reaches it. #432 stays open for that half. What this
-# does catch is the *stated* form of the same claim, which the tree uses in 7 distinct places.
+# alone" — is unbounded English, and nothing here reaches it. What this does catch is the *stated* form
+# of the same claim, which the tree uses in 7 distinct places. **The paraphrase half gets no instrument
+# at all, by ruling** (#432, closed at the #437 review): detecting what a sentence is about is
+# unbounded, and the remedy is a habit rather than code — source a premise the tracker holds from the
+# tracker, not from an adjacent paragraph.
+#
+# **This sentence used to say that #432 stayed open, and that is how the check took its first true
+# positive — on itself, live and unmutated.** The ruling that granted the paraphrase half no instrument
+# also closed #432, so a sentence written twenty minutes earlier became false, and `make cite` failed
+# with the arm's own FAIL paragraph pointing here. Recorded because it is the cheapest possible
+# demonstration of the thing the check is for: **the sentence did not change, the world did**, and
+# nothing in the tree except this arm could have noticed. Note which remedy applied — the work really
+# was disposed of, so the *sentence* was stale; had the disposition been wrong, reopening #432 would
+# have been the fix. The arm prints both because they are different repairs.
 state_claims=""
 if [ -n "$diffout" ]; then
 	state_claims="$(printf '%s\n' "$diffout" | awk '
@@ -911,12 +925,21 @@ if [ "$need_gh" -gt 0 ]; then
 		# subject of "stays open" is the issue, meaning #9, and not #328. Co-occurrence, not the
 		# predicate. **Nobody should read this check as covering that shape.**
 		#
-		# **Measured yield to date: zero true positives.** Every failure it has printed was a mutation
-		# fired by hand. Over the tracked tree the narrow form appears in **7 places and all 7 agree**
-		# with the tracker (#111, #260, #326, #432, #9 open; #400, #53 closed), and the one historical
-		# catch credited to this check belonged to the broad draft, on co-occurrence, wrongly. So this
-		# is a tripwire with no witness — which is a legitimate thing to be, as long as it says so
-		# rather than borrowing a catch that was never its own.
+		# **Measured yield to date: one true positive, and it was taken on this file's own prose within
+		# the hour.** The paragraph above the population stream said that #432 stayed open; the same
+		# ruling that granted #432's paraphrase half no instrument *closed #432*, so a sentence written
+		# minutes earlier became false and `make cite` failed with this arm's FAIL paragraph pointing at
+		# it. **The sentence did not change, the world did** — which is the entire failure mode, and
+		# nothing else in the tree could have noticed. It is a weak witness in one specific way, worth
+		# saying: the author of the prose, the author of the check and the reader of the verdict were
+		# the same session, so it demonstrates the mechanism rather than an independent catch.
+		#
+		# Before that it was **zero**: every other failure it has printed was a mutation fired by hand,
+		# and the one historical catch credited to it belonged to the broad draft, made by co-occurrence
+		# and wrong about which noun the sentence was about. Over the tracked tree the narrow form now
+		# appears in **6 places and all 6 agree** with the tracker (#111, #260, #326, #9 open; #400, #53
+		# closed). A tripwire with one self-inflicted witness is still close enough to no witness that it
+		# says so here, rather than borrowing a catch that was never its own.
 		#
 		# **Every claim on the number, not the first one, and this PR's own body is why.** The first
 		# draft took `head -1`. A population can carry two contradictory claims about one number — a

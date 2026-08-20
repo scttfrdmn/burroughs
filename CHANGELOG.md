@@ -40,11 +40,16 @@ weakly-ordered platform.
   **aboutness** is, and a copula settles it by grammar. Present tense only, with `was`/`were` **absent
   from the verb list rather than filtered out of it**, since a past-tense account is correct by
   construction. **Stated under-match: this does not catch #434's three sites**, which assert openness by
-  paraphrase — unbounded English that nothing here reaches. **Measured yield to date: zero true
-  positives**, over 7 agreeing stated claims in the tree — every failure it has printed was a mutation
-  fired by hand, and the one historical catch belonged to the broad draft, made by co-occurrence and
-  wrong about which noun the sentence was about. Declared at the arm on Scott's order, because a
-  tripwire with no witness is a legitimate thing to be only if it says so where the code is.
+  paraphrase — unbounded English that nothing here reaches. **Measured yield: one true positive, taken
+  on the check's own prose within the hour.** A comment said #432 stayed open; the ruling that granted
+  #432's paraphrase half no instrument *closed* #432, so a sentence written minutes earlier became false
+  and `make cite` failed with the arm's own FAIL paragraph pointing at it — **the sentence did not
+  change, the world did**, and nothing else in the tree could have noticed. A weak witness in one
+  specific way, said so at the site: prose author, check author and verdict reader were one session.
+  Every other failure it has printed was a mutation fired by hand, and the one historical catch belonged
+  to the broad draft, made by co-occurrence and wrong about which noun the sentence was about. Declared
+  at the arm on Scott's order, because a tripwire with no witness is a legitimate thing to be only if it
+  says so where the code is.
   **The paraphrase half of [#432](https://github.com/scttfrdmn/burroughs/issues/432) gets no
   instrument, by ruling**: detecting what a sentence is *about* is unbounded, and the remedy there is
   not code — source the premise from the tracker rather than from a paragraph.
