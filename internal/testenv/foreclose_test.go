@@ -146,6 +146,109 @@ func TestForeclosingClaimsAboutGatesMatchTheGateTable(t *testing.T) {
 	}
 }
 
+// TestForeclosingBoundAccountsCarryTheirReasonInline is the second half of Scott's ruling, and it is
+// a separate test from the one above because the two fail for unrelated reasons.
+//
+// The gate-premise sweep asks whether a foreclosure's premise is *true*. This one asks whether the
+// reason is *present*, which is a different defect with a different cost: a deferring paragraph is
+// usually right, so nothing about it looks wrong, and what it does is charge the reader a lookup to
+// find out whether the foreclosure still holds. The four instances that made the sweep necessary all
+// survived a re-reading. A pointer to a paragraph ten entries up is how the next one will.
+//
+// Scope is the two positions where the deferral is load-bearing — bound accounts and non-goals
+// registers — and deliberately not decline arms, where "same reason as the arm above" describes two
+// adjacent arms of one switch and the reader is already looking at both. Gate-independent by
+// construction: `foreclosingSites` emits a site whether or not the paragraph names a gate, and this
+// test reads all of them.
+// # Watched fail on its first run, and the one thing it found is also its precision limit
+//
+// It fired on `internal/spec/spec_test.go:8854`, a residue table whose `unknown label` row ended
+// "Name resolution, same stratum as" — and pointed at the row above it. That row is now "Name
+// resolution rather than grammar", which is shorter and says the thing.
+//
+// **But the foreclosing word in that paragraph was three rows away and unrelated**: a `never` about
+// `assert_invalid` modules the text reader is not handed, carrying its own reason inline. So the
+// pairing was a paragraph-scope coincidence, and the report was right about the prose for a reason
+// that was not the one the message gave. Paragraph scope is exactly right for the gate check — the
+// word and the gate it rests on are what sit lines apart — and it is *loose* here, where two
+// unrelated rows of one table can be read as one claim. Recorded rather than tightened: the
+// alternative is sentence scope, which would have missed the founding specimen of the sweep above,
+// and a false positive that improves the prose it flags is the cheap direction to be wrong in.
+//
+// # Probes, all three watched to fail
+//
+//  1. **The repaired row restored verbatim → FAILED**, naming the file, line, position, word and the
+//     matched phrase. The finding leg.
+//  2. **The position filter short-circuited so nothing is examined → FAILED on the vacuity floor**,
+//     `examined 0 … want at least 200`. Without this leg a green would be indistinguishable from a
+//     filter that selects nothing, which is this test's own pass state.
+//  3. **A licence added for a paragraph that does not defer → FAILED as stale.** The allow-map cannot
+//     accumulate exemptions whose subjects are gone.
+//
+// The word-boundary anchoring in `deferredReason` was found the same way and before any of these: the
+// unanchored draft matched "assertion above" inside this file's own vacuity-floor comment, which is a
+// bound account, so the control's first false positive would have been about itself.
+func TestForeclosingBoundAccountsCarryTheirReasonInline(t *testing.T) {
+	sites, _, _ := foreclosingSites(t, gateVariants(t))
+
+	inScope := 0
+	seen := map[string]bool{}
+	for _, s := range sites {
+		if s.position == "decline arm" {
+			continue
+		}
+		inScope++
+		if !deferredReason.MatchString(s.para) {
+			continue
+		}
+		key := fmt.Sprintf("%s:%d %s %s", s.file, s.line, s.position, s.word)
+		if seen[key] {
+			continue // one paragraph, one report, however many gates it happens to name
+		}
+		seen[key] = true
+		if _, ok := deferredReasonLicensed[key]; ok {
+			continue
+		}
+		t.Errorf("%s:%d is a %s that uses %q and points at another paragraph for its reason "+
+			"(%q).\n\nScott's ruling on the PR that added this file: the word is fine when the reason "+
+			"travels with it. A pointer is not the reason — it is a lookup charged to whoever reads "+
+			"the bound next, and the paragraph it lands in was written about a different PR. State "+
+			"the mechanism here, in one clause; if the earlier entry is genuinely load-bearing, keep "+
+			"both and license the pair.\n\nParagraph:\n%s",
+			s.file, s.line, s.position, s.word, deferredReason.FindString(s.para), indent(s.para))
+	}
+
+	// The vacuity leg, and it is the one this test needs most: its *pass* state is "nothing defers",
+	// which is also what a filter that selects nothing reports. A floor over the paragraphs actually
+	// examined separates the two. Deliberately not a floor over the *findings* — those should be
+	// zero and stay zero — which is the direction the sibling above states as well: a control whose
+	// green and whose blindness look identical needs a second number, and the second number is the
+	// size of the population it looked at.
+	if inScope < foreclosingInScopeFloor {
+		t.Fatalf("examined %d bound-account and non-goals paragraphs holding a foreclosing word, "+
+			"want at least %d: a green here means none of them defers its reason, and a filter that "+
+			"selected nothing reports the identical green", inScope, foreclosingInScopeFloor)
+	}
+	t.Logf("%d foreclosing paragraphs in bound-account or non-goals position, %d deferring", inScope, len(seen))
+
+	var stale []string
+	for key := range deferredReasonLicensed {
+		if !seen[key] {
+			stale = append(stale, key)
+		}
+	}
+	sort.Strings(stale)
+	for _, key := range stale {
+		// Stated inline and not as "see the gate map's stale check", which is this test's own subject
+		// applied to its own error message: a licence whose subject is gone is a reason held over
+		// prose that no longer says it, and a reader of *this* failure should not have to go and
+		// read a different one to find that out.
+		t.Errorf("`deferredReasonLicensed` has an entry for %s and this sweep no longer finds it. "+
+			"Drop it: a licence whose subject is gone is a reason held over prose that no longer "+
+			"says it, so it reads as a checked exemption while checking nothing", key)
+	}
+}
+
 // featureGateFloor and the two below are vacuity floors, not budgets: they catch the walk that
 // finds nothing and the parse that returns nothing, both of which pass every assertion above by
 // asking no question. Exact-count pins would be a maintenance tax with no defect to catch — the
@@ -155,7 +258,21 @@ const (
 	featureGateFloor          = 9
 	foreclosingFileFloor      = 200
 	foreclosingParagraphFloor = 700
+	// foreclosingInScopeFloor is the deferred-reason sweep's own vacuity floor: the paragraphs it
+	// examines, not the ones it flags. **200 against a measured 225**, and the 25 of slack is the
+	// honest bound rather than the tight one, because the population is every comment anyone writes
+	// in a bound-account or non-goals position and it moves every PR. A floor bounds the
+	// catastrophic case only — a moved walk, a broken parse, a filter inverted — so the residual 25
+	// is covered the other way, by `t.Logf`ing the count beside it every run. That is the pairing
+	// `allOnPassFloor` did not have when it sat 3380 behind its measurement: the number was never
+	// printed next to the constant, so nothing made the distance visible to a reader.
+	foreclosingInScopeFloor = 200
 )
+
+// deferredReasonLicensed carries one entry per (file, position, word) paragraph that keeps its
+// pointer to an earlier entry. Keyed without the gate, because the deferral is a property of the
+// sentence and a paragraph naming two gates is still one sentence.
+var deferredReasonLicensed = map[string]string{}
 
 // foreclosingLicensed carries one entry per (file, position, word, gate) the sweep finds where the
 // gate is on and the paragraph is right anyway. The value is the reason, and it must name why the
@@ -296,6 +413,28 @@ var nonGoalHeading = regexp.MustCompile(`(?i)^\s*//\s*#+\s.*(does not|do not|not
 var boundName = regexp.MustCompile(`(?i)(ceiling|floor)$`)
 
 var camelBoundary = regexp.MustCompile(`([a-z0-9])([A-Z])`)
+
+// deferredReason matches a paragraph that points at *another* paragraph for its reason instead of
+// carrying one — "same reason as the tenth", "as above", "see the ninth entry", "for the reason the
+// tenth gave".
+//
+// Scott's ruling on the PR that landed this file: *"'66 unsupported (unmoved, structural)' should
+// carry its mechanism inline like every other survivor — classify is untouched, so the column can't
+// move. The word is fine when the reason travels with it."* The gate-premise test above cannot see
+// this failure at all, because a deferring paragraph is not wrong — the reason exists, ten entries
+// up, and it is even correct. What it does is make the *reader* do a lookup to find out whether a
+// foreclosure still holds, which is how a stale one survives a re-reading: nobody follows the
+// pointer, so nobody notices that the paragraph it lands in was itself about a different PR.
+//
+// The rule is checkable in exactly one direction, so that is the direction it is written in: a
+// deferral phrase is banned in these positions, licensed or not present. "Also carries the
+// mechanism" is not mechanically decidable, and a predicate that tried to decide it would be the
+// unfalsifiable kind — so a paragraph that states its reason *and* points at the earlier entry
+// either drops the pointer, which costs nothing, or licenses it with the reason it is keeping both.
+// Word-boundaried on every alternative, because the unanchored first draft of `\bas above\b` would
+// have matched inside "assertion above" — the phrase standing over this file's own vacuity floors,
+// which is a bound account and would have been the control's first false positive, in itself.
+var deferredReason = regexp.MustCompile(`(?i)(\bsame reason as\b|\bfor the (same )?reason the \w+ (gave|did)\b|\bas above\b|\bsee the \w+ (entry|paragraph)\b|\bditto\b)`)
 
 // gateVariants derives one gate per field of `binary.Features`, with its default state read from
 // `DefaultFeatures`' own literal. Both by parsing `sections.go`, and neither by a copy kept here: a
@@ -455,14 +594,29 @@ func foreclosingSites(t *testing.T, gates []gate) (sites []foreclosingSite, scan
 				if word == "" {
 					continue
 				}
+				matched := false
 				for _, g := range gates {
 					if !g.re.MatchString(para.text) {
 						continue
 					}
+					matched = true
 					sites = append(sites, foreclosingSite{
 						file: rel, line: para.line, position: position,
 						word: strings.ToLower(word), gate: g.field, gateOn: g.onByDefault,
 						para: para.text,
+					})
+				}
+				// A foreclosing paragraph naming *no* gate is still a site, with an empty gate and
+				// `gateOn` false. The gate-premise test above skips it by construction — its premise
+				// does not rest on a gate, so there is nothing to check it against — and the
+				// deferred-reason test below wants it, since "the reason travels with the word" is a
+				// property of the sentence rather than of what the sentence rests on. Emitting one
+				// site set for two tests keeps the walk count at one; the alternative was a fifth
+				// tree walk over the same files for a different predicate.
+				if !matched {
+					sites = append(sites, foreclosingSite{
+						file: rel, line: para.line, position: position,
+						word: strings.ToLower(word), para: para.text,
 					})
 				}
 			}

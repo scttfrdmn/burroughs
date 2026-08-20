@@ -8858,7 +8858,7 @@ func TestPhase1Files(t *testing.T) {
 	//	                           signature against the explicit `(type n)` and needs the type
 	//	                           section resolved plus functype equality. #64's second half.
 	//	 2  unknown label          token.wast:101/:117 — `$l0` and `$l$l` lex as one VAR, so the
-	//	                           label does not resolve. Name resolution, same stratum as above.
+	//	                           label does not resolve. Name resolution rather than grammar.
 	//	 1  unknown type           func.wast:456 — `(func (type 2) (param i32))` where the module
 	//	                           defines fewer types. The file holds four `unknown type` vectors
 	//	                           and this is the only one in a `(module quote …)`; the other three
@@ -11115,7 +11115,16 @@ func TestPhase1Files(t *testing.T) {
 	// remain are both harness attribution holes, #414's five and #426's three: **no row in this column
 	// is now the interpreter computing a wrong answer, and none of the eight is engine work.**
 	//
-	// `unsupported` unmoved at 66, structural for the eleventh entry running, same reason as the tenth.
+	// `unsupported` unmoved at 66, and the zero is **structural because `classify` is untouched by this
+	// PR** — the column moves only when what the harness *can ask* changes, and nothing here changed it.
+	// The mechanism is stated here rather than by pointing at the earlier entry that holds it, on Scott's
+	// ruling on this PR: a foreclosing word is admissible when the reason travels with it, and a pointer
+	// to the paragraph holding the reason is not the reason. This is the first such line written after
+	// the foreclosing-word sweep landed, so it is the one that sets the form for the entries after it —
+	// and the form is now checked, by `TestForeclosingBoundAccountsCarryTheirReasonInline`, rather than
+	// promised. A convention promised in prose is what failed four times over; the phrase this entry
+	// avoids is the one that instrument bans, which is why it is described here instead of quoted.
+	//
 	// The reward figure that does have a subject is this one: the validate stratum reaches 0 across all
 	// four of its partitions (`declined`, `admitted`, `over-rejected`, `wrong-message`), which is #9's
 	// instruction vocabulary complete over the space the decoder can name under `DefaultFeatures`.

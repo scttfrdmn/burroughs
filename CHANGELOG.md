@@ -51,6 +51,21 @@ weakly-ordered platform.
     **fifth** instance found this session sits in a position the three do not cover — an inline note on
     a test fixture (`cmd/burroughs/run_test.go`). Widening to unscoped prose is the 276-occurrence
     transcription the header rules out, so the gap is stated so it can be priced.
+  - **A second check, on Scott's ruling that the reason must travel with the word**
+    (`TestForeclosingBoundAccountsCarryTheirReasonInline`). Separate from the gate sweep because the
+    two fail for unrelated reasons: the first asks whether a foreclosure's premise is *true*, this one
+    whether the reason is *present*. A paragraph ending "same reason as the tenth entry" is usually
+    right, which is what makes it survive a re-reading — it charges the reader a lookup, and the
+    paragraph the pointer lands in was written about a different PR. Banned in bound accounts and
+    non-goals registers, and deliberately **not** in decline arms, where "same reason as the arm above"
+    names two adjacent arms of one switch the reader is already looking at. Gate-independent, sharing
+    the existing walk rather than adding a fifth. **It found exactly one instance in the tree** and its
+    own precision limit with it: the deferral and the foreclosing word were three rows apart in one
+    residue table, so the pairing was a paragraph-scope coincidence and the report was right about the
+    prose for a reason the message did not give. Recorded rather than tightened — sentence scope would
+    have missed the founding specimen of the sweep it rides with. Three probes, each watched to fail,
+    including a vacuity floor of **200 against a measured 225 paragraphs examined**, because this
+    test's pass state ("nothing defers") is also what a filter selecting nothing reports.
   - The 20 licences are classed, not blanket: past-tense historical accounts, the `structural`
     homonym, quoted testimony from graves #427 and #428, and gate-independent truths. Three are
     **self-licences for this file's own header, specimen list, and probe record** — licensed rather
