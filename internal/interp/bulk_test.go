@@ -564,7 +564,8 @@ func TestBulkTableCopyTrapsWithTheTableString(t *testing.T) {
 // `internal/testenv` is what asked, one PR after being written for a different instance of the same
 // defect, and this is the instance that makes its case — the other three were wrong when written,
 // and a careful reader could in principle have caught them. This one was *right* when written and
-// was falsified by a commit in another package four days later.
+// was falsified by a commit in another package four days later. **Grave #428**, and the correction is
+// recorded here rather than in the tracker alone because this is the paragraph a reader arrives at.
 //
 // **So the row moves off the corpus and onto a direct call**, which is the only way left to
 // present `execFC` with a sub-opcode it does not have: the decoder itself rejects anything
