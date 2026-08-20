@@ -212,10 +212,17 @@
 #      catch in three was the pre-registered forecast and the narrowing took it to zero of three; the
 #      historical catch on PR #433's body is what the check has — and on inspection it is not this
 #      check's at all, since the broad draft made it by co-occurrence and was wrong about which noun
-#      the sentence was about. **So the measured yield is one true positive** — taken on this file's own
-#      prose, when the ruling that disposed of #432 falsified a sentence written minutes earlier — over
-#      6 agreeing stated claims in the tree. The declaration lives beside the arm, on Scott's order,
-#      because a tripwire
+#      the sentence was about. **So the measured yield is two true positives, both from one tracker
+#      state change and both on this PR's own prose.** The ruling that disposed of #432 falsified a
+#      sentence in this file written minutes earlier (caught locally, at the line below), and then
+#      falsified a second one in PR #437's body (caught by CI, on the run for the pushed SHA, after
+#      the local repair — because I fixed the file and did not think to re-scan the body against the
+#      changed world). The second is the better witness of the two: *the author had already applied
+#      the lesson and still left a site standing.* Measured over 9 agreeing stated claims across
+#      tracked files, counted with this check's own trigger rather than by hand — an earlier count of
+#      6 was mine and was wrong, which is the same sourcing defect one remove out. Note the scope:
+#      the population is *added lines*, so those 9 are ungated until a diff touches them.
+#      The declaration lives beside the arm, on Scott's order, because a tripwire
 #      with no witness is a legitimate thing to be only if it says so where the code is. What it does
 #      gate is the stated form. **The paraphrase half gets no instrument, by ruling** — the remedy
 #      there is not code: source the premise from the tracker rather than from a paragraph.
@@ -925,21 +932,33 @@ if [ "$need_gh" -gt 0 ]; then
 		# subject of "stays open" is the issue, meaning #9, and not #328. Co-occurrence, not the
 		# predicate. **Nobody should read this check as covering that shape.**
 		#
-		# **Measured yield to date: one true positive, and it was taken on this file's own prose within
-		# the hour.** The paragraph above the population stream said that #432 stayed open; the same
-		# ruling that granted #432's paraphrase half no instrument *closed #432*, so a sentence written
-		# minutes earlier became false and `make cite` failed with this arm's FAIL paragraph pointing at
-		# it. **The sentence did not change, the world did** — which is the entire failure mode, and
-		# nothing else in the tree could have noticed. It is a weak witness in one specific way, worth
-		# saying: the author of the prose, the author of the check and the reader of the verdict were
-		# the same session, so it demonstrates the mechanism rather than an independent catch.
+		# **Measured yield to date: two true positives, one tracker state change, both on the prose of
+		# the PR that added this arm.** The paragraph above the population stream said that #432 stayed
+		# open; the same ruling that granted #432's paraphrase half no instrument *closed #432*, so a
+		# sentence written minutes earlier became false and `make cite` failed with this arm's FAIL
+		# paragraph pointing at it. **The sentence did not change, the world did** — which is the entire
+		# failure mode, and nothing else in the tree could have noticed.
 		#
-		# Before that it was **zero**: every other failure it has printed was a mutation fired by hand,
+		# The second catch is the one worth keeping. After repairing this file I pushed, and CI's
+		# `--pr` half failed on **PR #437's own body**, which still said #432 stayed open in two places.
+		# So the author had already been shown the lesson, applied it at the site he was looking at, and
+		# left a second site standing in a channel he had stopped scanning: *the repair corrects the
+		# instance and leaves the sourcing running.* That one was not self-inflicted in the same way —
+		# no mutation, no hand, and the verdict arrived from a machine the author was not consulting.
+		#
+		# Before those it was **zero**: every other failure it has printed was a mutation fired by hand,
 		# and the one historical catch credited to it belonged to the broad draft, made by co-occurrence
-		# and wrong about which noun the sentence was about. Over the tracked tree the narrow form now
-		# appears in **6 places and all 6 agree** with the tracker (#111, #260, #326, #9 open; #400, #53
-		# closed). A tripwire with one self-inflicted witness is still close enough to no witness that it
-		# says so here, rather than borrowing a catch that was never its own.
+		# and wrong about which noun the sentence was about. Over the tracked tree the narrow form
+		# appears in **9 places and all 9 agree** with the tracker (#111 ×2, #260, #326, #9 ×2 open;
+		# #400, #53 ×2 closed), counted by running this arm's own trigger over `git ls-files` — an
+		# earlier count of 6 was a search of the author's own devising and was short by three, which is
+		# *measure with the instrument, not by hand* at one remove. Two of the nine sit inside quotation
+		# marks, in prose about an earlier grave, and this arm counts them: a scanner reads tokens, not
+		# quotation marks, and a false claim in a quotation is still on the page.
+		#
+		# Population caveat, since a yield figure invites the wrong reading: this arm sees **added
+		# lines**, so those 9 standing claims are ungated until a diff touches them. Both catches were
+		# lines this PR added.
 		#
 		# **Every claim on the number, not the first one, and this PR's own body is why.** The first
 		# draft took `head -1`. A population can carry two contradictory claims about one number — a
