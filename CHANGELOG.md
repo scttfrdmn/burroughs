@@ -1368,6 +1368,24 @@ weakly-ordered platform.
 
 ### Changed
 
+- **Correlated errors preserve deltas — the third specimen of one organ, landed under the vacuity
+  law rather than as a new key** (`docs/laws/controls.md`; Scott's ruling on the #130 diagnosis relay,
+  riding [#130](https://github.com/scttfrdmn/burroughs/issues/130)). *Arms that share a fault agree
+  exactly the way empty arms do*, so a comparison needs a leg **outside** the shared mechanism. Sited
+  as a sub-bullet of *a control that compares needs a vacuity check* because empty-vs-empty and
+  broken-vs-identically-broken are the same failure at different degeneracies — a comparison that
+  cannot disagree. Three instances, all already paid for here: #123's witness denominator, where the
+  module *form* `KindModuleText` stood in for encodability and excluded `(module quote …)`, giving a
+  flawless agreement ratio over the wrong population; PR #159's pair floor set at **8**, which is
+  exactly the degraded alternation reader's own output where the positional one yields 10, remedied by
+  a discrimination check rather than a tighter count; and #130's both-orders differential, where the
+  scratch staging dropped the same `memory.init` memory-index byte from *both* field orders and the
+  comparison reported `identical` — caught only by the absolute leg, `wast2json`'s 48-byte image with
+  `fc 08 00 00`. The operative test is one question — **could a single defect move both arms?** A
+  differential is **necessary and not sufficient**: attach the absolute leg, never swap one for the
+  other. And the consequence that prices #130's own control — *a category with no board vector is
+  certified by nothing but the control, so a blind control there is not a weak check but the absence
+  of one* — since four of the five staging categories have no corpus witness at all.
 - **A CI verdict is read from `.jobs[]`, never from a run's `conclusion`**
   (`docs/laws/operations.md`; Scott's directive, riding #77). A run's conclusion is an **aggregate**, so
   a run whose jobs were all skipped concludes `success` truthfully — on #422 one SHA had three
