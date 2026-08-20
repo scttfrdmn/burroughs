@@ -2469,6 +2469,24 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **The gofumpt liveness probe discarded its own mechanism channel — [grave
+  #444](https://github.com/scttfrdmn/burroughs/issues/444)** (`.github/workflows/ci.yml`, `Makefile`).
+  CI failed on a **docs-only** PR with `exit 1`, 37 seconds, and **not one output line** — both of the
+  step's `::error::` branches print, so neither was reached. A command substitution that exits non-zero
+  in an assignment aborts a `set -e` shell where it stands, and the probe had routed its stderr to
+  `/dev/null`: the instrument #322 added to give this gate a mechanism channel was throwing away its
+  own, so a formatter that never started was indistinguishable from one that answered unchanged. The
+  Makefile copy is the same two lines under a shell that is *not* `set -e`, where the same failure falls
+  into the `-z` branch and prints **"a deliberately misformatted probe came back unchanged"** — a
+  visible message naming the wrong cause, which is why `make check` could not have predicted the CI
+  fail. Both measured, not argued: the old form prints that wrong message, and under `bash -e` it never
+  reaches the `if`s at all. Repaired to three outcomes with three messages — could not run (stderr
+  printed), ran but is not opinionated, tree disagrees — and the new branch was watched fire against
+  `TOOL=…nosuchtool` before it was believed. The stream is still suppressed *for the comparison*, since
+  `go: downloading …` on a cold cache would otherwise be compared against the probe; the error was
+  having no reader for it at all. The underlying tool failure is **unbounded and stated as unbounded**,
+  not called a flake: the only evidence that could have bounded it is what the probe discarded.
+
 - **`citecheck`'s summary block: a coverage comparison that fired on a case it was not written for, and a
   terminal verdict naming a cause it could not know — [grave
   #435](https://github.com/scttfrdmn/burroughs/issues/435)** (`scripts/citecheck.sh`). Found while

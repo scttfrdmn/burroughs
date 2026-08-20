@@ -154,9 +154,24 @@ jobs:
         # run or is not gofumpt — and the tree check would then have passed
         # vacuously. See the Makefile target for the full reasoning; the two must
         # stay mirrors, a surprise in CI being a bug in the Makefile.
+        #
+        # The probe's stderr is captured rather than discarded, and its exit status is
+        # tested in an `if` rather than left to `set -e`, because that is how this step
+        # failed on PR #443: exit 1, 37 seconds, and **not one output line**, since both
+        # `::error::` branches below print and neither was reached. A failing command
+        # substitution in an assignment aborts a `set -e` shell where it stands, and the
+        # only stream that could have named the cause was routed to /dev/null by the
+        # probe itself — the instrument that exists to give this gate a mechanism channel
+        # (#322) throwing away its own (grave #444).
         run: |
           probe="$(printf 'package p\n\nfunc F() {\n\n\tx := 0\n\t_ = x\n}\n')"
-          got="$(printf '%s\n' "$probe" | go tool -modfile=tools/go.mod golangci-lint fmt --diff --stdin 2>/dev/null)"
+          err="$(mktemp)"
+          if ! got="$(printf '%s\n' "$probe" | go tool -modfile=tools/go.mod golangci-lint fmt --diff --stdin 2>"$err")"; then
+            echo "::error::gofumpt could not run at all: the formatter exited non-zero before answering the liveness probe, so neither a clean tree nor a dirty one is known — its stderr follows (grave #444)"
+            cat "$err"
+            exit 1
+          fi
+          rm -f "$err"
           if [ -z "$got" ] || [ "$got" = "$probe" ]; then
             echo "::error::gofumpt liveness probe failed: a deliberately misformatted probe came back unchanged, so this step cannot distinguish a formatted tree from a formatter that never ran (#322)"
             exit 1
