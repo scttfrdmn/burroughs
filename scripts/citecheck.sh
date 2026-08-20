@@ -767,6 +767,21 @@ for n in $(printf '%s\n' "$cites" | awk '$1 == "adr" { print $2 }'); do
 		echo "      not exist. Either the number is wrong — check \`ls docs/decisions/\` — or the"
 		echo "      record was never written, in which case write it before citing it: an ADR is"
 		echo "      the tombstone of a decision Scott has called, not a forward reference to one."
+		# GRAVE #449: this line was missing, so the arm printed all five lines above and the
+		# script returned 0 — a located, named, correctly-diagnosed finding that never reached
+		# the verdict channel, on a green `make cite` and a green CI step. It is the **second**
+		# time in this file: the header's C1 note records the same missing `fail=1` in another
+		# arm, and that repair fixed the site the falsification pointed at without sweeping the
+		# rest. A FAIL names a site, not the population.
+		#
+		# Phase 1b twenty lines down had it right the whole time, which is what makes the class
+		# hard to see: a correct FAIL site and an incorrect one look identical locally — both
+		# print, neither assigns — and what distinguishes them is whether some *other* line is
+		# keyed on the same condition. `closecheck.sh:246` is the legitimate version of the
+		# absence (its print is inside a piped `while`, so a flag would die with the subshell,
+		# and its verdict is keyed on the same `$nfound`), which is why the sweep for this grave
+		# had to be read rather than trusted.
+		fail=1
 	else
 		echo "ok    decision $n -> ${found#docs/decisions/}"
 	fi

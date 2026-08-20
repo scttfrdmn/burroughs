@@ -2567,6 +2567,30 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **`citecheck.sh`'s ADR-resolution arm printed FAIL and exited 0 —
+  [grave #449](https://github.com/scttfrdmn/burroughs/issues/449)** (`scripts/citecheck.sh:765`). The
+  `if [ -z "$found" ]` branch echoed all five lines of its diagnosis — the number, the missing file, the
+  reason, the remedy — and fell through without `fail=1`, so the finding reached the mechanism channel
+  and never reached the verdict channel. `make cite` was green; CI's step is
+  `./scripts/citecheck.sh --pr "$SELF"` under `set -e`, so it inherits the 0 and the job passes. Every
+  FAIL of this class ever printed on a green run went unacted on.
+  **The second time in this file.** The script's own header (lines 161-165) records the identical
+  missing `fail=1` in another arm — *"the check printed its whole FAIL paragraph and exited 0 […] the
+  words FAIL were all there. Only the exit code was wrong."* That repair fixed the site its
+  falsification pointed at and never swept the rest: **a FAIL names a site, not the population.** So
+  the deliverable here is the sweep — every `echo "FAIL` in `scripts/*.sh` checked for a verdict
+  reachable in its enclosing block, **two sites, one real**. `closecheck.sh:246` is the legitimate
+  absence: its print sits inside a piped `while`, where a flag would die with the subshell, and its
+  verdict at `:288` is keyed on the same `$nfound` that decided to print at all. That false positive
+  names why the class resists reading — **a correct FAIL site and an incorrect one look identical
+  locally**, both printing and neither assigning, and what separates them is whether some *other* line
+  shares the condition, which the FAIL paragraph cannot show. Found by running the gate over the body
+  of the PR that carries this entry, which named a forward-reference ADR number: the arm caught it
+  correctly and said nothing the exit code could carry. Watched dying — `EXIT 0, 1 FAIL` became
+  `EXIT 1, 1 FAIL` before the body was corrected. The residual is flagged rather than built: nothing
+  asserts that a FAIL-printing site sets a verdict, and a control for it would need to reason about
+  condition-sharing across a subshell boundary.
+
 - **A type pattern's expected spelling came from the val-type vocabulary, and the fixture asserting it
   was written from the same one — [grave #445](https://github.com/scttfrdmn/burroughs/issues/445)**
   (`internal/spec/refboundary_test.go`). `TestNullRendersWithoutAHeaptype` pinned the harness's rendering
