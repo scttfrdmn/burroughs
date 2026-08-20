@@ -272,13 +272,14 @@ func TestNullRendersWithoutAHeaptype(t *testing.T) {
 		}
 	}
 	// A pattern's heaptype is real and must survive — and **it is printed back in the corpus's own
-	// spelling**, which is 0039's correction here. This loop used to hold two hand-written rows
+	// spelling**, which is grave #445, corrected here. This loop used to hold two hand-written rows
 	// expecting `(ref.funcref)` and `(ref.externref)`: those are *val type* names, and the grammar's
 	// pattern arms are over heaptypes (`(ref.func)`, `(ref.extern)`), so a mismatch message quoted an
 	// expectation in a syntax no vector can contain. It was invisible while Kind was the only thing a
-	// pattern carried, because there was nothing else to print; the rows are derived from `refPatterns`
-	// now, so all eight spellings are checked and the six that were unrepresentable before are the
-	// reason the count moved from two.
+	// pattern carried, because there was nothing else to print — and the right spelling was ten lines
+	// down this file the whole time, in a test-case *label* that nothing asserted. The rows are derived
+	// from `refPatterns` now, whose keys are the strings the parser matches, so the expectation comes
+	// from where the vectors do; all eight arms are covered rather than two.
 	for spelling, r := range refPatterns {
 		want := "(" + spelling + ")"
 		if got := refPat(r.pat).String(); got != want {
