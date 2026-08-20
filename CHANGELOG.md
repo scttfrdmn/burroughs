@@ -1380,6 +1380,18 @@ weakly-ordered platform.
   checking fixes it, while this is the *empty instance* on the right SHA, which no amount of SHA-binding
   catches. A body-only `gh pr edit` creates a run that is supposed to skip everything but the citations
   sweep, which is why the skip has to be read rather than summed away.
+  **Extended after the second occurrence, on #424's own SHA, where the cause is now known**
+  (Scott's directive on the merge, riding #130): `gh pr edit` spawns a run that fires **only** the
+  body-scoped jobs, so an empty instance is *expected after every body edit* rather than being an
+  anomaly to watch for — and since the body is the report, every PR here gets at least one after the
+  push it describes. The operative consequence is an ordering one: **the newest run on a SHA is
+  systematically the emptiest and the verdict-carrying run is the oldest**, so resolving "the latest
+  run for this SHA" is the reliably wrong tie-break rather than a neutral one. The same edit sequence
+  also strands real reds on the merge candidate — #424's middle run failed on a self-citation *in the
+  PR body*, fixed by an edit, so no later SHA supersedes it — which mints the disposition rule: a red
+  whose subject is a superseded body is superseded only when a later run on the corrected body **ran
+  the same check** and was green. Both halves, because the failing assertion alone is an excuse and a
+  run that skipped the job is a green from a different question.
 
 - **The validator has one operand-consuming primitive, so the reference's operand-mismatch sentence
   is spelled one way** (`internal/validate/stack.go`, `exception.go`, `popsite_test.go`; #394).
