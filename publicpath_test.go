@@ -757,11 +757,19 @@ func TestConformanceThroughThePublicPath(t *testing.T) {
 	// be visible rather than silent.
 	//
 	// Two things this does *not* say, because both are easy to read into it. It does not say #9 is
-	// complete: the validator still *admits* modules it should refuse — alignment is not checked at
-	// all (`validate/vec.go`, `decodeMemop` drops the memarg) — and an admission is a different
-	// stratum from a decline. And it does not flip `Config.Strict`'s default, which its own doc comment
-	// schedules for this moment; that is a default-behaviour change and so a stamp-tier event, flagged
-	// for Scott rather than taken here.
+	// complete: **#328's 103 module-and-section vectors have no vocabulary**, so the population most
+	// likely to hold an accept-direction miss is the one no board partition can even ask about, and an
+	// admission is a different stratum from a decline. And it does not flip `Config.Strict`'s default,
+	// which its own doc comment schedules for this moment; that is a default-behaviour change and so a
+	// stamp-tier event, flagged for Scott rather than taken here.
+	//
+	// **The example this paragraph reached for first was wrong: "alignment is not checked at all
+	// (`validate/vec.go`, `decodeMemop` drops the memarg)".** It is checked — `internal/validate/align.go`
+	// — and has been since #306 landed in #313. The clause came from `vec.go`'s non-goals section, which
+	// #306 falsified and nobody re-read (grave #431), and it was written into this file by the PR whose
+	// own subject was that shape. Recorded rather than swapped out, because the failure was not picking a
+	// weak example: it was sourcing a premise from a *paragraph* when an instrument was one call away, and
+	// this file exists to prefer the instrument.
 	if tally.declined != 0 {
 		t.Errorf("%d modules declined at the public path, and since #427 nothing should: the "+
 			"validator types every instruction the decoder can name under DefaultFeatures. A decline "+

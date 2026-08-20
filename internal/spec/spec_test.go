@@ -11131,9 +11131,18 @@ func TestPhase1Files(t *testing.T) {
 	//
 	// **That is not #9 done, and the distance is worth stating where the figure is.** A drained stratum
 	// says no *board row* is attributed to a validator shortfall; it does not say the validator refuses
-	// everything it should. Alignment is not checked at all — `decodeMemop` drops the memarg — and #328's
-	// 103 module-and-section vectors have no vocabulary yet. A negative-vector corpus cannot falsify what
-	// a validator wrongly *accepts*, which is why this column reaching 0 leaves #9 open.
+	// everything it should. #328's 103 module-and-section vectors have no vocabulary yet, and a
+	// negative-vector corpus cannot falsify what a validator wrongly *accepts*, which is why this column
+	// reaching 0 leaves #9 open.
+	//
+	// **This paragraph had a second leg and it was false: "alignment is not checked at all — `decodeMemop`
+	// drops the memarg".** Alignment is checked (`internal/validate/align.go`, 45 natural widths derived
+	// from `mnemonics.ml`) and has been since #306 landed in #313, two weeks before this sentence was
+	// written. The clause was copied out of `internal/validate/vec.go`'s non-goals section — a foreclosing
+	// paragraph #306 falsified and nobody re-read — in the same PR whose subject was foreclosing prose
+	// resting on premises that had moved (grave #431). The wrong leg is recorded rather than deleted
+	// because the argument is *stronger* for having one leg fewer: #328 carries it alone, and a reader who
+	// finds two reasons where one is false has no way to tell which half of the conclusion survives.
 	const passFloor = 60922
 	// Slack 0 as of #387's ruling, with `allOnPassFloor` and `unsupportedCeiling` — see
 	// `boardbound_test.go`'s retirement section. Two entries in the ledger above record taking a
