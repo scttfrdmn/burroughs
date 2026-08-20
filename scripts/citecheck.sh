@@ -892,9 +892,17 @@ if [ "$need_gh" -gt 0 ]; then
 		# beside check 5 because it is the same question in the other direction — check 5 verifies a
 		# claim that a citation *became* closed, this one a claim about what it *is* — and both read
 		# the `.state` already in hand.
-		claimed="$(printf '%s\n' "$state_claims" | awk -v n="$n" '$1 == n { print $2 }' | head -1)"
-		if [ -n "$claimed" ]; then
-			state_seen="${state_seen}${n}
+		#
+		# **Every claim on the number, not the first one, and this PR's own body is why.** The first
+		# draft took `head -1`. A population can carry two contradictory claims about one number — a
+		# mutation table reporting *both* directions of this check does exactly that, so the report
+		# about the check was the specimen — and `head -1` compares one, passes or fails on it, and
+		# says nothing about the other. Two opposite claims about one issue is itself a defect worth a
+		# verdict, and the arm that would hide it is the arm that looks like it is working. Caught by
+		# the coverage line below, which read `3 of 4` on this PR's body: *coverage is a claim*, and it
+		# is the one instrument that can see an arm silently declining to ask.
+		for claimed in $(printf '%s\n' "$state_claims" | awk -v n="$n" '$1 == n { print $2 }'); do
+			state_seen="${state_seen}${n} ${claimed}
 "
 			if [ "$claimed" = "$state" ]; then
 				echo "ok    #$n -> the sentence says $claimed and the tracker says $state: $title"
@@ -913,7 +921,7 @@ if [ "$need_gh" -gt 0 ]; then
 				echo "      that happens to be nearby — that is the same defect with a fresh subject."
 				fail=1
 			fi
-		fi
+		done
 		# Check 4, before the kind-specific arms: a self-citation resolves like any other and is
 		# wrong whatever kind it names, so the comparison belongs above the branch rather than
 		# duplicated inside both of its arms.

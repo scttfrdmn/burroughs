@@ -41,6 +41,14 @@ weakly-ordered platform.
   from the verb list rather than filtered out of it**, since a past-tense account is correct by
   construction. **Stated under-match: this does not catch #434's three sites**, which assert openness by
   paraphrase — unbounded English that nothing here reaches. #432 stays open for that half.
+  **Every claim on a number is compared, not the first, and the report about the check is what found
+  that.** The first draft took `head -1`; a population can carry two contradictory claims about one
+  number, and a table reporting both directions of this check is exactly such a population — so one was
+  compared, the other silently unasked. Caught by the coverage line reading `3 of 4` on the PR body that
+  documented the check, which is *coverage is a claim* doing the one job an arm cannot do for itself. Run
+  over its own report, the check also failed that body twice more, both correctly: a citation to an ADR
+  not yet written, and a mutation table spelling its fixtures — *a ban reported in the banned form is
+  still the banned form*, since a scanner reads tokens and not quotation marks.
 
 - **A sweep over foreclosing claims about gates, on Scott's order to *"do the sweep, and widen it past
   the one word"*** (`internal/testenv/foreclose_test.go`, riding
