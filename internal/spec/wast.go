@@ -1430,6 +1430,35 @@ type Result struct {
 	// with a bucket, and an unmatched disjunction has no choice to report.
 	AltChoices []AltChoice
 
+	// KindGateNumericEqual and KindGateReaches are #441's census: every arrival at `matches`'
+	// `want.Kind != got.Kind` gate on a vector that passed. The split is kindGateCensus' own —
+	// the numeric-equal bulk counted, everything touching a reference kind enumerated — and the
+	// reason it lives on Result rather than in a control is `AltChoices`' and `GatedAt`'s: a
+	// control that re-derives which pairs reached a gate is asking a second oracle the same
+	// question, and the two can disagree without either looking wrong.
+	//
+	// Two fields rather than one census struct because they aggregate differently — one sums
+	// across commands, the other concatenates — and a struct with a `+=` field and an `append`
+	// field invites a merge helper that gets one of them wrong once.
+	KindGateNumericEqual int
+	KindGateReaches      []kindGateReach
+
+	// KindGateFailPrefix is the same census taken on the **fail** path, and it exists because the
+	// passing population cannot answer #441's first question.
+	//
+	// A refusal by that gate returns false from `matches`, which mismatches the result, which
+	// fails the vector. So "which *passing* vector reaches the gate with the kinds unequal" is
+	// **0 by construction** and not by measurement — the only exception is a reach inside an
+	// `(either …)`, where a false is expected of every alternative but one, and the corpus has no
+	// reference-typed disjunction. A census over passing vectors therefore reports a zero it could
+	// not have contradicted, which is this repo's most-repeated instrument failure wearing a new
+	// hat, and the fix is not a better assertion but a second population.
+	//
+	// **A prefix, and named as one:** `firstMismatch` stops at the first bad result, so this holds
+	// the reaches up to and including the refusal and says nothing about later results of the same
+	// command. It is not summed with KindGateReaches for that reason.
+	KindGateFailPrefix []kindGateReach
+
 	// Bound counts `(register "name" $M?)` commands that successfully bound a name.
 	//
 	// **A sixth term because a register asks no question, and "not scored" must not be
@@ -3748,8 +3777,12 @@ func (s *Script) run(opts runOpts) *Result {
 				})
 				continue
 			}
-			if bad := firstMismatch(c.Results, out); bad >= 0 {
+			census := kindGateCensus{line: c.Line}
+			if bad := firstMismatch(c.Results, out, &census); bad >= 0 {
 				r.Fail++
+				// The prefix census, kept rather than discarded: this is the only population
+				// in which the Kind gate can be observed refusing anything. See the field.
+				r.KindGateFailPrefix = append(r.KindGateFailPrefix, census.reaches...)
 				const key = "assert_return value mismatch"
 				r.Buckets[key] = append(r.Buckets[key], Failure{
 					Line:    c.Line,
@@ -3760,6 +3793,12 @@ func (s *Script) run(opts runOpts) *Result {
 				})
 				continue
 			}
+			// The command passed, so its census is a complete walk and can be reported beside
+			// the others. Merged here rather than inside firstMismatch for exactly the reason
+			// stated on that function: a failing command's census is a prefix.
+			r.KindGateNumericEqual += census.numericEqual
+			r.KindGateReaches = append(r.KindGateReaches, census.reaches...)
+
 			// Every result matched, so the disjunctions among them have a choice to record.
 			// Asked of MatchingAlt rather than of a second search, and asked here rather than
 			// inside firstMismatch, whose subject is the *first* failure and which stops early
@@ -4044,9 +4083,18 @@ func errNoInstance(c Command, why string) error {
 // The *index* rather than a bool, so the failure names which result differed. A vector
 // returning several values with the third wrong is common in `const.wast`, and "want 1 2 3,
 // got 1 2 4" makes the reader do the diff the harness already did.
-func firstMismatch(want, got []Val) int {
+//
+// `rec` may be nil, and when it is not it is stamped with the result index before each
+// comparison — the matcher records *what the gate saw*, this records *where*, and neither knows
+// the other's half. Note that a non-nil census here is a **prefix** whenever this returns ≥ 0:
+// the loop stops at the first bad result, so the caller must not report a failing command's
+// census beside a passing one's. See kindGateCensus.
+func firstMismatch(want, got []Val, rec *kindGateCensus) int {
 	for i := range want {
-		if !want[i].Matches(got[i]) {
+		if rec != nil {
+			rec.result = i
+		}
+		if !want[i].matches(got[i], rec) {
 			return i
 		}
 	}

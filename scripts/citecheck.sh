@@ -689,6 +689,18 @@ fi
 # nothing in the tree except this arm could have noticed. Note which remedy applied — the work really
 # was disposed of, so the *sentence* was stale; had the disposition been wrong, reopening #432 would
 # have been the fix. The arm prints both because they are different repairs.
+#
+# **Two spellings hide a claim from this arm, and both were found the same way the true positive
+# above was — in prose written about #432, in the diff that reports them (#441).** The match is
+# local, so anything between the copula and the state word blocks it: `#432 is **closed**`, where the
+# emphasis markers are the intervening text, and `#432 is` / `closed on Scott's ruling`, where a line
+# wrap is, since the extraction is per added line and never a window over the paragraph. Both claims
+# were about this check's own subject and both read as claims to a human; the run said `0 of 0`. Not
+# repaired here, and the reason is the ruling above rather than effort: widening to skip emphasis and
+# to join wrapped lines re-opens the sentence-window direction that was 5-of-5 false, and a wrapped
+# window is exactly where aboutness stops being decidable by a copula. Written down instead, because
+# what needs to not happen is a reader taking `0 of 0` for *no claims were made* — an author who
+# wants a claim checked can put it on one line unadorned, which is what this diff did once it knew.
 state_claims=""
 if [ -n "$diffout" ]; then
 	state_claims="$(printf '%s\n' "$diffout" | awk '
@@ -767,6 +779,21 @@ for n in $(printf '%s\n' "$cites" | awk '$1 == "adr" { print $2 }'); do
 		echo "      not exist. Either the number is wrong — check \`ls docs/decisions/\` — or the"
 		echo "      record was never written, in which case write it before citing it: an ADR is"
 		echo "      the tombstone of a decision Scott has called, not a forward reference to one."
+		# GRAVE #449: this line was missing, so the arm printed all five lines above and the
+		# script returned 0 — a located, named, correctly-diagnosed finding that never reached
+		# the verdict channel, on a green `make cite` and a green CI step. It is the **second**
+		# time in this file: the header's C1 note records the same missing `fail=1` in another
+		# arm, and that repair fixed the site the falsification pointed at without sweeping the
+		# rest. A FAIL names a site, not the population.
+		#
+		# Phase 1b twenty lines down had it right the whole time, which is what makes the class
+		# hard to see: a correct FAIL site and an incorrect one look identical locally — both
+		# print, neither assigns — and what distinguishes them is whether some *other* line is
+		# keyed on the same condition. `closecheck.sh:246` is the legitimate version of the
+		# absence (its print is inside a piped `while`, so a flag would die with the subshell,
+		# and its verdict is keyed on the same `$nfound`), which is why the sweep for this grave
+		# had to be read rather than trusted.
+		fail=1
 	else
 		echo "ok    decision $n -> ${found#docs/decisions/}"
 	fi

@@ -148,6 +148,17 @@ func TestRefNullMatchesAcrossTwoHeaptypes(t *testing.T) {
 		funcVal    = Val{Kind: KindFuncRef, Class: RefConcrete, Payload: PayloadFunc}
 		extern3    = Val{Kind: KindExternRef, Class: RefExternIdentity, Extern: 3, Payload: PayloadHost}
 		extern4    = Val{Kind: KindExternRef, Class: RefExternIdentity, Extern: 4, Payload: PayloadHost}
+
+		// The two shapes an **aggregate** result takes, added for ADR 0040: same RefConcrete return
+		// from `refVal`, differing only in the (Kind, Payload) pair, which is the axis the six
+		// aggregate patterns are decided on. `bareI31` is `extern.wast:53`'s own result —
+		// `externalize-ii` round-trips through `extern.convert_any`/`any.convert_extern` and hands
+		// back the *unwrapped* i31 at static type `anyref`. `externI31` is `externalize-i`'s —
+		// still wrapped, static type `externref` — and the corpus asserts that one only against the
+		// `(ref.extern)` wildcard, which is why the two rows below can disagree with each other
+		// without any vector noticing.
+		bareI31   = Val{Kind: KindAnyRef, Class: RefConcrete, Payload: PayloadI31}
+		externI31 = Val{Kind: KindExternRef, Class: RefConcrete, Payload: PayloadI31}
 	)
 
 	type row struct {
@@ -194,22 +205,55 @@ func TestRefNullMatchesAcrossTwoHeaptypes(t *testing.T) {
 		{"(ref.extern) / ref.extern 4", refPat(PatExtern), extern4, true, "identity is not compared by a pattern"},
 		{"(ref.extern) / null extern", refPat(PatExtern), externNull, true, "runner.ml:475 admits NullRef"},
 		{"(ref.extern) / null func", refPat(PatExtern), funcNull, true, "admits a null whatever Kind tags it"},
-		// **A stated divergence, not an oversight.** `RefTypePat ExternHT, _ -> true` admits a
-		// *FuncRef* too, where this harness's Kind comparison refuses it. The deviation has no
-		// witness and cannot acquire one: `(assert_return (invoke "f") (ref.extern))` against a
-		// function returning a funcref does not type-check, so no vector can distinguish the two
-		// readings. Recorded as a row with the reference's answer named, rather than left out,
-		// because an undocumented deviation is indistinguishable from a defect nobody noticed —
-		// and if a future proposal makes the shape reachable, this row is where the question is
-		// already written down.
-		{"(ref.extern) / non-null func", refPat(PatExtern), funcVal, false, "diverges: runner.ml:475 would admit it; no vector can type-check the shape"},
+		// **The divergence this row recorded is retired, and the row is how that was noticed.**
+		// It used to read `false`, with the deviation named: `RefTypePat ExternHT, _ -> true`
+		// admits a *FuncRef* and the harness's Kind comparison refused one. #441's fork removed
+		// that comparison, so the answer is the reference's now — and the change arrived here
+		// *without being aimed here*, which is what the row was written for. The paragraph then
+		// said "if a future proposal makes the shape reachable, this row is where the question is
+		// already written down"; what made it reachable was a repair one screen away, and the row
+		// paid for itself by failing.
+		//
+		// Still no vector can distinguish the two readings — `(assert_return (invoke "f")
+		// (ref.extern))` against a function returning a funcref does not type-check — so this is an
+		// **accept-direction** widening with no corpus witness, and it is stated in ADR 0040's
+		// consequences rather than left to be inferred from a board that cannot move on it.
+		{"(ref.extern) / non-null func", refPat(PatExtern), funcVal, true, "runner.ml:475's wildcard, agreed with since ADR 0040"},
+
+		// **The aggregate patterns, and the divergence ADR 0040 uncovered by removing the gate that
+		// cancelled it.** In the reference, externalization is a *constructor*: an externalized i31
+		// is `Extern.ExternRef (I31Ref …)`, so `RefTypePat I31HT`'s arm — which matches `I31Ref _` —
+		// does not match it, and only `RefTypePat AnyHT`'s catch-all does. Here externalization
+		// rides on Kind and the payload underneath survives, so `admits` sees `PayloadI31` either
+		// way and cannot tell the two apart. The old Kind comparison hid that by refusing the
+		// externalized row for an unrelated reason (want anyref, got externref) and the two errors
+		// cancelled; the fork removed one of them.
+		//
+		// So these two rows read the same and the authority reads them differently, and that is
+		// filed as #451 with the payload nesting as its subject rather than patched here — the fix
+		// is a change to what a Val *carries*, not to what `admits` concludes from what it has.
+		// 0 corpus vectors either way, by the same argument as the `(ref.extern)` row above:
+		// `externalize-i`'s results are asserted against `(ref.extern)` alone.
+		{"(ref.i31) / bare i31", refPat(PatI31), bareI31, true, "RefTypePat I31HT vs I31Ref — extern.wast:53's own shape"},
+		{"(ref.i31) / externalized i31", refPat(PatI31), externI31, true, "DIVERGENCE (#451): the reference refuses this, we admit it"},
+		// The other half of the same removal, in the other direction: `(ref.any)` against an
+		// externalized value is `RefTypePat AnyHT, _ -> true` after the FuncRef arm, and the Kind
+		// comparison used to refuse it. **This row was a real disagreement and now agrees** — the
+		// paragraph `RefPat.admits` carried about it is corrected in the same diff.
+		{"(ref.any) / externalized i31", refPat(PatAny), externI31, true, "runner.ml:468's AnyHT catch-all, agreed with since ADR 0040"},
+		{"(ref.func) / bare i31", refPat(PatFunc), bareI31, false, "RefTypePat FuncHT has no I31Ref arm"},
 
 		// `RefResult (RefPat r)` compares two concrete references by identity.
 		{"ref.extern 3 / ref.extern 3", extern3, extern3, true, "identity equal"},
 		{"ref.extern 3 / ref.extern 4", extern3, extern4, false, "identity differs"},
 		{"ref.extern 3 / null extern", extern3, externNull, false, "a null is not a concrete reference"},
 		{"ref.extern 3 / null func", extern3, funcNull, false, "a null is not a concrete reference"},
-		{"ref.extern 3 / non-null func", extern3, funcVal, false, "wrong Kind"},
+		// The `why` here read "wrong Kind" until ADR 0040, and the answer is unchanged while the
+		// reason is not: nothing compares the two kinds any more, and this is false because a
+		// RefConcrete "some non-null reference" is not an identity to compare against. A row whose
+		// stated reason names a mechanism the code no longer has is the same defect as a comment
+		// asserting a property the code lacks — it makes a reader confirm the wrong thing.
+		{"ref.extern 3 / non-null func", extern3, funcVal, false, "an identity expectation needs a RefExternIdentity result"},
 	}
 
 	for _, r := range rows {
@@ -484,6 +528,71 @@ func TestEveryRefPatHasASpelling(t *testing.T) {
 			"value); the counts are asserted as well as the membership because a table drained to "+
 			"empty satisfies every loop above", n, int(patPastEnd)-1, patPastEnd)
 	}
+}
+
+// TestUnnameableRefIsInTheReferenceHalf is ADR 0040's sentinel control: the four properties
+// KindUnnameableRef's doc comment claims for it, each asserted where a wrong answer would be quiet.
+//
+// The properties are separable on purpose. `isRef` true is the *only* claim the sentinel makes about
+// its value, and Matches' reference/numeric fork reads exactly that predicate — a sentinel outside
+// the reference half would send an unnameable reference down the numeric path, where `want.Kind !=
+// got.Kind` would refuse it and reintroduce the gate ADR 0040 removed for precisely the population
+// that cannot spell its own type. `valType` refusing it is the other side: that refusal is what keeps
+// a Kind born from `valKind`'s *inability to name a type* from being handed back to the engine as a
+// type, and it has to be checked against a kind that does convert, or "refuses" would be indis-
+// tinguishable from "converts nothing".
+//
+// **What this test does not bound**: a ValKind appended *after* the sentinel falls outside the loop
+// below, which counts up to it. ValKind has no `iota`-maintained past-end sentinel the way `RefPat`
+// and `interp.RefPayload` do (TestEveryRefPatHasASpelling's own domain argument), so the instrument
+// for a new member is `exhaustive` — `String` and `valType` both name every case, so a new kind
+// cannot compile without a stated reading in each. Named rather than left implicit: a loop bounded by
+// the member it is about is a domain that stops growing when the enum does not.
+func TestUnnameableRefIsInTheReferenceHalf(t *testing.T) {
+	if !KindUnnameableRef.isRef() {
+		t.Errorf("KindUnnameableRef.isRef() is false — Matches forks on this predicate, so an "+
+			"unnameable reference would be compared as a number and refused on the kind inequality "+
+			"ADR 0040 deleted; %d must sit in the reference half", KindUnnameableRef)
+	}
+
+	// The discriminating pair for the argument-side refusal: every *other* reference kind converts.
+	for _, k := range []ValKind{KindFuncRef, KindExternRef, KindAnyRef} {
+		if _, ok := valType(k); !ok {
+			t.Errorf("valType(%v) refuses a reference kind the harness can name; the sentinel's own "+
+				"refusal below then says nothing, because a function that converts nothing refuses "+
+				"everything", k)
+		}
+	}
+	if tv, ok := valType(KindUnnameableRef); ok {
+		t.Errorf("valType(KindUnnameableRef) returned %v — this Kind exists because `valKind` could "+
+			"not name a type, so returning one here invents the answer that function declined to "+
+			"give, and `toInterpValue` would hand it to the engine to check against a real signature",
+			tv)
+	}
+
+	// Distinct spellings, over the members from the zero value up to the sentinel. A copy-pasted
+	// String arm returning "anyref" would restore exactly the fabrication ADR 0040 removed — the
+	// sentinel printing as a type the value does not have — and nothing else here would notice.
+	spelled := map[string]ValKind{}
+	for k := KindI32; k <= KindUnnameableRef; k++ {
+		s := k.String()
+		if s == "unknown" {
+			t.Errorf("ValKind ordinal %d prints as %q, the String fallthrough — a kind with no arm "+
+				"of its own reaches a mismatch message as a non-answer", k, s)
+		}
+		if prev, dup := spelled[s]; dup {
+			t.Errorf("ValKind ordinals %d and %d both print as %q; two kinds with one spelling make "+
+				"a message name a type the value may not have", prev, k, s)
+		}
+		spelled[s] = k
+	}
+
+	// The behavioural claim is already witnessed next door and is not restated here: the
+	// `(ref.i31) / bare i31` row in TestRefNullMatchesAcrossTwoHeaptypes pairs a *sentinel* want with
+	// an `anyref` got and expects true, which is only reachable through the reference family — the
+	// numeric one refuses an unequal pair on its first line. A second copy of that assertion here
+	// would be a control testing a helper rather than the path — grave #246's shape, whose own control
+	// (`TestRefLocalDefaultsToNull`) states the rule.
 }
 
 func TestInterpPayloadsCoverTheEngineVocabulary(t *testing.T) {
