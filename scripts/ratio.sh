@@ -24,6 +24,17 @@
 #                internal/interp/dispatchbench — tests, generators, harness
 #   other      = everything else (markdown, YAML, testdata), reported but in neither column
 #
+# **The comparator's blind spot, stated so it is readable (Scott, #443 relay): it sees neither
+# Makefiles nor workflow files.** Both land in `other`, so a repair to `make check` or to a CI job
+# — gate work, and some of the most load-bearing there is — moves neither column and shows up only
+# in the parenthesized count. Not a change to the rule: the rule is fixed by #113 and the `other`
+# bucket is where a non-`.go` path belongs — and [#436](https://github.com/scttfrdmn/burroughs/issues/436)
+# already asked the question for `scripts/` and was ruled on: *"the uniform rule's whole value is
+# that it isn't re-litigated per PR, and n/a with 269 lines in `other` is a more honest report than
+# a manufactured ratio. If `other` keeps growing, that's a signal to read rather than a definition
+# to change."* This paragraph is the reading made cheap. A blind spot on the page can be priced by
+# whoever reads the figure; one that isn't reads as a zero.
+#
 # **Added lines, not net.** That is what the #113 quote used — 127/844 reproduces exactly as the
 # added columns of its feature commit — and the two differ: net rewards deletion in a way that
 # lets a refactor of instruments read as engine work. Stated here because a comparator whose

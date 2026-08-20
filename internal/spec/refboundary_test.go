@@ -3,6 +3,8 @@ package spec
 import (
 	"path/filepath"
 	"testing"
+
+	"github.com/scttfrdmn/burroughs/internal/interp"
 )
 
 // TestReferenceBoundaryRoundTrips is the falsifiable control on #196/#197's widening: a
@@ -134,12 +136,18 @@ func TestRefNullMatchesAcrossTwoHeaptypes(t *testing.T) {
 	// funcNull's Kind is the *placeholder* one fromInterpValue assigns a null of a type valKind
 	// cannot name (grave #266's own arm), so every row it appears in is simultaneously the check
 	// that the placeholder is unobservable.
+	//
+	// The non-null shapes carry a Payload since 0039, and they must: `RefPat.admits` refuses
+	// `PayloadNone` on the way in, because a non-null result whose constructor the engine could not
+	// name is an engine inconsistency the authority has no arm for. A fixture that left it at the zero
+	// value would therefore be asserting against a shape `fromInterpValue` does not produce, and every
+	// pattern row would read false for the wrong reason.
 	var (
 		funcNull   = Val{Kind: KindFuncRef, Class: RefLiteralNull}
 		externNull = Val{Kind: KindExternRef, Class: RefLiteralNull}
-		funcVal    = Val{Kind: KindFuncRef, Class: RefConcrete}
-		extern3    = Val{Kind: KindExternRef, Class: RefExternIdentity, Extern: 3}
-		extern4    = Val{Kind: KindExternRef, Class: RefExternIdentity, Extern: 4}
+		funcVal    = Val{Kind: KindFuncRef, Class: RefConcrete, Payload: PayloadFunc}
+		extern3    = Val{Kind: KindExternRef, Class: RefExternIdentity, Extern: 3, Payload: PayloadHost}
+		extern4    = Val{Kind: KindExternRef, Class: RefExternIdentity, Extern: 4, Payload: PayloadHost}
 	)
 
 	type row struct {
@@ -175,17 +183,17 @@ func TestRefNullMatchesAcrossTwoHeaptypes(t *testing.T) {
 		// `RefTypePat FuncHT, Instance.FuncRef _ -> true` and **no NullRef arm** — so a
 		// `(ref.func)` expectation refuses a null. This is the asymmetry that makes the null
 		// dispatch's RefTypePattern arm a Kind test rather than a bare `true`.
-		{"(ref.func) / non-null func", refPat(KindFuncRef), funcVal, true, "RefTypePat FuncHT vs FuncRef"},
-		{"(ref.func) / null func", refPat(KindFuncRef), funcNull, false, "no RefTypePat FuncHT arm for NullRef"},
-		{"(ref.func) / null extern", refPat(KindFuncRef), externNull, false, "no RefTypePat FuncHT arm for NullRef"},
-		{"(ref.func) / ref.extern 3", refPat(KindFuncRef), extern3, false, "no RefTypePat FuncHT arm for ExternRef"},
+		{"(ref.func) / non-null func", refPat(PatFunc), funcVal, true, "RefTypePat FuncHT vs FuncRef"},
+		{"(ref.func) / null func", refPat(PatFunc), funcNull, false, "no RefTypePat FuncHT arm for NullRef"},
+		{"(ref.func) / null extern", refPat(PatFunc), externNull, false, "no RefTypePat FuncHT arm for NullRef"},
+		{"(ref.func) / ref.extern 3", refPat(PatFunc), extern3, false, "no RefTypePat FuncHT arm for ExternRef"},
 
 		// `RefTypePat ExternHT, _ -> true` (runner.ml:475) — admits anything of this Kind,
 		// null included, which is the other half of the asymmetry.
-		{"(ref.extern) / ref.extern 3", refPat(KindExternRef), extern3, true, "RefTypePat ExternHT, _ -> true"},
-		{"(ref.extern) / ref.extern 4", refPat(KindExternRef), extern4, true, "identity is not compared by a pattern"},
-		{"(ref.extern) / null extern", refPat(KindExternRef), externNull, true, "runner.ml:475 admits NullRef"},
-		{"(ref.extern) / null func", refPat(KindExternRef), funcNull, true, "admits a null whatever Kind tags it"},
+		{"(ref.extern) / ref.extern 3", refPat(PatExtern), extern3, true, "RefTypePat ExternHT, _ -> true"},
+		{"(ref.extern) / ref.extern 4", refPat(PatExtern), extern4, true, "identity is not compared by a pattern"},
+		{"(ref.extern) / null extern", refPat(PatExtern), externNull, true, "runner.ml:475 admits NullRef"},
+		{"(ref.extern) / null func", refPat(PatExtern), funcNull, true, "admits a null whatever Kind tags it"},
 		// **A stated divergence, not an oversight.** `RefTypePat ExternHT, _ -> true` admits a
 		// *FuncRef* too, where this harness's Kind comparison refuses it. The deviation has no
 		// witness and cannot acquire one: `(assert_return (invoke "f") (ref.extern))` against a
@@ -194,7 +202,7 @@ func TestRefNullMatchesAcrossTwoHeaptypes(t *testing.T) {
 		// because an undocumented deviation is indistinguishable from a defect nobody noticed —
 		// and if a future proposal makes the shape reachable, this row is where the question is
 		// already written down.
-		{"(ref.extern) / non-null func", refPat(KindExternRef), funcVal, false, "diverges: runner.ml:475 would admit it; no vector can type-check the shape"},
+		{"(ref.extern) / non-null func", refPat(PatExtern), funcVal, false, "diverges: runner.ml:475 would admit it; no vector can type-check the shape"},
 
 		// `RefResult (RefPat r)` compares two concrete references by identity.
 		{"ref.extern 3 / ref.extern 3", extern3, extern3, true, "identity equal"},
@@ -263,18 +271,26 @@ func TestNullRendersWithoutAHeaptype(t *testing.T) {
 			}
 		}
 	}
-	// A pattern's heaptype is real and must survive.
-	for _, tc := range []struct {
-		k    ValKind
-		want string
-	}{
-		{KindFuncRef, "(ref.funcref)"},
-		{KindExternRef, "(ref.externref)"},
-	} {
-		if got := refPat(tc.k).String(); got != tc.want {
+	// A pattern's heaptype is real and must survive — and **it is printed back in the corpus's own
+	// spelling**, which is grave #445, corrected here. This loop used to hold two hand-written rows
+	// expecting `(ref.funcref)` and `(ref.externref)`: those are *val type* names, and the grammar's
+	// pattern arms are over heaptypes (`(ref.func)`, `(ref.extern)`), so a mismatch message quoted an
+	// expectation in a syntax no vector can contain. It was invisible while Kind was the only thing a
+	// pattern carried, because there was nothing else to print — and the right spelling was ten lines
+	// down this file the whole time, in a test-case *label* that nothing asserted. The rows are derived
+	// from `refPatterns` now, whose keys are the strings the parser matches, so the expectation comes
+	// from where the vectors do; all eight arms are covered rather than two.
+	for spelling, r := range refPatterns {
+		want := "(" + spelling + ")"
+		if got := refPat(r.pat).String(); got != want {
 			t.Errorf("refPat(%v).String() = %q, want %q — a type pattern's heaptype is a real "+
-				"distinction (assert_ref_pat's two RefTypePat arms differ by it)", tc.k, got, tc.want)
+				"distinction (assert_ref_pat's eight RefTypePat arms differ by it), and the printed "+
+				"form is the spelling the vector wrote", r.pat, got, want)
 		}
+	}
+	if n := len(refPatterns); n < 8 {
+		t.Errorf("refPatterns has %d rows; the grammar's `result` production has 8 RefTypePat arms "+
+			"(parser.mly:1517-1530), and a loop over a drained table agrees about nothing", n)
 	}
 }
 
@@ -317,8 +333,8 @@ func TestToInterpValueRefusesEveryUnpassableShape(t *testing.T) {
 		why         string
 	}{
 		// Predicates: no single value to pass, refused by both.
-		{"(ref.func) type pattern", refPat(KindFuncRef), false, false, "names any funcref, not one"},
-		{"(ref.extern) type pattern", refPat(KindExternRef), false, false, "names any externref, not one"},
+		{"(ref.func) type pattern", refPat(PatFunc), false, false, "names any funcref, not one"},
+		{"(ref.extern) type pattern", refPat(PatExtern), false, false, "names any externref, not one"},
 		{"nan:canonical f32", Val{Kind: KindF32, NaN: NaNCanonical}, false, false, "a set of bit patterns; Bits is 0"},
 		{"nan:arithmetic f64", Val{Kind: KindF64, NaN: NaNArithmetic}, false, false, "a set of bit patterns; Bits is 0"},
 		{"v128 with a nan:canonical lane", nanLane, false, false, "one lane is a predicate, so the vector is"},
@@ -375,9 +391,21 @@ func bareNull() Val {
 	return Val{Kind: KindFuncRef, Class: RefLiteralNull, AnyNull: true}
 }
 
-// refPat is the bare `(ref.func)` / `(ref.extern)` type-pattern expectation for a given Kind.
-func refPat(k ValKind) Val {
-	return Val{Kind: k, Class: RefTypePattern}
+// refPat is the bare `(ref.<ht>)` type-pattern expectation for a given pattern.
+//
+// **The Kind comes out of `refPatterns`, not out of an argument.** 0039 made the pattern and the Kind
+// two fields, and a fixture that set them independently could pair them in a way `readRefConst` never
+// produces — which would make every row below a test of a Val the reader cannot build. Looking the
+// Kind up in the reader's own table is what keeps these rows about `Matches` rather than about a
+// hand-assembled shape; the panic is for a pattern the table has no row for, which is
+// TestEveryRefPatHasASpelling's subject and not something a row here should limp past.
+func refPat(p RefPat) Val {
+	for _, r := range refPatterns {
+		if r.pat == p {
+			return Val{Kind: r.kind, Class: RefTypePattern, Pat: p}
+		}
+	}
+	panic("refPat: no spelling in refPatterns for " + p.String())
 }
 
 // TestRefFuncAsArgumentIsOutOfScope pins the judgment call this task's own investigation made
@@ -397,6 +425,110 @@ func TestRefFuncAsArgumentIsOutOfScope(t *testing.T) {
 				"at 0 corpus vectors and is documented as out of scope — if the corpus now "+
 				"uses this shape, widen readRefConst deliberately rather than let this test "+
 				"silently start passing", src)
+		}
+	}
+}
+
+// TestEveryRefPatHasASpelling and TestInterpPayloadsCoverTheEngineVocabulary are **the harness half
+// of Scott's condition on the 0039 stamp**, quoted so the condition and the code that answers it sit
+// together: *"the payload kind is handled exhaustively at both boundaries, with a test that enumerates
+// the kinds from the type's own definition and fails on any unmapped one. No `default` case that
+// silently absorbs a future member — an enum whose whole purpose is to grow must fail loudly the first
+// time it does."*
+//
+// Both derive their domain the same way: count up from the zero value to the `iota`-maintained
+// sentinel declared inside the enum's own const block. That is what makes them enumerate *the type's*
+// definition rather than a list of members someone remembered — a ninth `RefPat` added above
+// `patPastEnd` widens this loop in the same commit that declares it, and fails here until its row
+// exists.
+func TestEveryRefPatHasASpelling(t *testing.T) {
+	// PatNone first, in the other direction: it is the zero value and **not** a pattern, so a table
+	// row for it would mean `readRefConst` can return a RefTypePattern that admits by accident.
+	for spelling, r := range refPatterns {
+		if r.pat == PatNone {
+			t.Errorf("refPatterns[%q] maps to PatNone, the zero value — a spelling that reads as "+
+				"'not a pattern' makes `admits` the wrong question about a Val the reader built", spelling)
+		}
+	}
+
+	spelled := map[RefPat]string{}
+	for spelling, r := range refPatterns {
+		if prev, dup := spelled[r.pat]; dup {
+			t.Errorf("refPatterns has two spellings for %v (%q and %q); the grammar's arms are "+
+				"one-to-one with its keywords, so one of these rows is a typo that silently shadows "+
+				"the other", r.pat, prev, spelling)
+		}
+		spelled[r.pat] = spelling
+	}
+
+	for p := PatNone + 1; p < patPastEnd; p++ {
+		spelling, ok := spelled[p]
+		if !ok {
+			t.Errorf("RefPat %v (ordinal %d) has no row in refPatterns — every member of this enum "+
+				"is one of `parser.mly:1517-1530`'s RefTypePat arms, so an unspelled member is a "+
+				"pattern the reader declines and a vector scored `unsupported`", p, p)
+			continue
+		}
+		// The spelling and String() must agree, which is what catches a member that got a table row
+		// but no String arm: `String`'s fallthrough answers "no-pattern" for anything it does not
+		// name, and a mismatch message quoting `(ref.no-pattern)` is the invented-bits class again.
+		if want := "ref." + p.String(); spelling != want {
+			t.Errorf("refPatterns spells RefPat ordinal %d %q while its String is %q (so %q); the "+
+				"table and the printer disagree about the same member, and only one of them appears "+
+				"in a mismatch message", p, spelling, p.String(), want)
+		}
+	}
+
+	if n := len(refPatterns); n != int(patPastEnd)-1 {
+		t.Errorf("refPatterns has %d rows for %d patterns (patPastEnd %d, less the PatNone zero "+
+			"value); the counts are asserted as well as the membership because a table drained to "+
+			"empty satisfies every loop above", n, int(patPastEnd)-1, patPastEnd)
+	}
+}
+
+func TestInterpPayloadsCoverTheEngineVocabulary(t *testing.T) {
+	// The domain is the *engine's* enum, bounded by `interp.PayloadPastEnd` — which is exported for
+	// exactly this, the harness and the public boundary both needing to name the bound to derive it.
+	// PayloadNone is included: it is a real answer here (a null, or a constructor the engine could not
+	// determine), so an unmapped zero value would be `refVal`'s silent fallback rather than a Val.
+	for p := interp.RefPayload(0); p < interp.PayloadPastEnd; p++ {
+		if _, ok := interpPayloads[p]; !ok {
+			t.Errorf("interp.RefPayload %v (ordinal %d) has no row in interpPayloads — `refVal` would "+
+				"report it as PayloadNone, which makes every `(ref.<ht>)` pattern refuse a result the "+
+				"engine named correctly, and the vector fails without naming why", p, p)
+		}
+	}
+	if _, ok := interpPayloads[interp.PayloadPastEnd]; ok {
+		t.Errorf("interpPayloads has a row for interp.PayloadPastEnd, which is a bound and not a " +
+			"payload kind; a row for it would make the loop above pass for a member that does not exist")
+	}
+	if n := len(interpPayloads); n != int(interp.PayloadPastEnd) {
+		t.Errorf("interpPayloads has %d rows for %d engine payload kinds; the count is asserted as "+
+			"well as the membership so a table with extra rows outside the domain is visible too",
+			n, int(interp.PayloadPastEnd))
+	}
+
+	// The other direction. This package's own `RefPayload` exists **only** to receive the engine's, so
+	// a member of it that nothing maps onto is not a widening waiting for a consumer — it is a member
+	// the harness can write into a Val and the engine can never produce, which would make a mismatch
+	// message name a constructor no result has.
+	hit := map[RefPayload]interp.RefPayload{}
+	for e, s := range interpPayloads {
+		if prev, dup := hit[s]; dup {
+			t.Errorf("interpPayloads maps both %v and %v onto %v; two engine constructors collapsing "+
+				"into one makes `admits` answer about the wrong one, and neither vector can tell",
+				prev, e, s)
+		}
+		hit[s] = e
+		if s >= payloadPastEnd {
+			t.Errorf("interpPayloads maps %v onto ordinal %d, past this package's own vocabulary "+
+				"(payloadPastEnd %d)", e, s, payloadPastEnd)
+		}
+	}
+	for p := RefPayload(0); p < payloadPastEnd; p++ {
+		if _, ok := hit[p]; !ok {
+			t.Errorf("spec.RefPayload %v (ordinal %d) is in nothing's image; no engine result can "+
+				"carry it", p, p)
 		}
 	}
 }

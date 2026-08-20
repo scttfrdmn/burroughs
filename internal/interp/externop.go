@@ -88,23 +88,37 @@ func execExternConvertAny(st *stack) error {
 // at `:53-56` are `(ref.i31)`, `(ref.struct)`, `(ref.array)`, `(ref.host 0)`, i.e. that the wrapper
 // preserved the inner runtime constructor across the pair.
 //
-// **Today it does not, and this comment's first draft said it does.** All four of those lines are
+// **It did not until #270, and this comment's first draft said it did.** All four of those lines were
 // scored `unsupported`, not pass or fail: their expectations are `RefTypePat` heaptype patterns
-// (`parser.mly:1517-1530`), which `valKind` refuses, so the harness declines the assertion before the
-// engine is asked. Tracking is **#270** — the widening is a public-surface question (an `anyref`
-// named ValType in `internal/binary`, plus payload-kind discrimination on `interp.Value`) and so its
-// own ADR-and-stamp, not this slice's.
+// (`parser.mly:1517-1530`), which `valKind` refused, so the harness declined the assertion before the
+// engine was asked. #270 is what made them askable — the widening was a public-surface question (an
+// `anyref` named ValType, plus payload-kind discrimination on `interp.Value`) and so had its own ADR
+// and stamp (0039), not this slice's.
 //
-// **So `IsHost` is scored by nothing at all today, and the arithmetic says which vectors will score
-// it: exactly the three that mention a host reference, `:39`, `:42` and `:56`, all three
-// unsupported.** Measured rather than counted: of `extern.wast`'s 18 commands, 12 pass all-on and 6
-// are unsupported, and the six are `{39, 42, 53, 54, 55, 56}`. `:56` is the one that needs `IsHost`
-// specifically — slot 4 was filled by `init` with `(any.convert_extern (local.get $x))` where `$x` is
-// the script's `(ref.extern 0)`, so it holds a host reference and nothing else in the file does.
-// Until #270 the field's whole defence is accept-direction: `script.ml:80` (a host reference's
-// dynamic heaptype is `any`), `script.ml:93` (its identity is its index), and the unit controls in
+// **The pre-registration this paragraph carried, and its result.** It read: "`IsHost` is scored by
+// nothing at all today, and the arithmetic says which vectors will score it: exactly the three that
+// mention a host reference, `:39`, `:42` and `:56`, all three unsupported" — against the measured
+// six, `{39, 42, 53, 54, 55, 56}`, of `extern.wast`'s 18 commands. #270 landed all six as passes in
+// the all-on lane, and the claim was checked the only way a "scored by" claim can be: **mutate the
+// boundary and read which vectors go red.**
+//
+//   - Identity-only mutation (`fromRef`'s `v.RefID = r.Addr` → `r.Addr + 1`, payload kind untouched):
+//     **`:39`, `:42`, `:56` and nothing else.** Confirmed to the vector.
+//   - Kind mutation (`payloadOf`'s host arm → `PayloadNone`): those three **plus `:49`**. Not a
+//     fourth identity vector — `:49`'s expectation is the bare `(ref.extern)` wildcard, and it fails
+//     because `RefPat.admits` refuses `PayloadNone` up front as an engine inconsistency. So the second
+//     probe is coarser than the claim: it scores payload *determinacy*, which the wildcard does check.
+//
+// Recorded as two probes rather than one because the first was the one that could falsify the
+// sentence, and the second's extra row would have read as the forecast being wrong by one.
+//
+// The field is `RefKind == PayloadHost` now rather than a boolean `IsHost`, which is #270's retyping.
+// Before it, the whole defence was accept-direction: `script.ml:80` (a host reference's dynamic
+// heaptype is `any`), `script.ml:93` (its identity is its index), and the unit controls in
 // `externop_test.go` — which is §9 G-3's case for such controls being product work rather than
-// overhead, since the suite scores a fabricated identity green by construction.
+// overhead, since the suite scored a fabricated identity green by construction. Those controls stay:
+// three corpus vectors are three, and `TestFromRefDoesNotFabricateAHostIdentity` still separates
+// "identity zero" from "no identity" at the boundary rather than one command downstream.
 //
 // **Internalizing a non-null reference that is not externalized is an error, and that is a
 // correction to what this arm was first written as.** The first draft returned the operand unchanged

@@ -6,6 +6,8 @@ package burroughs
 import (
 	"math"
 	"slices"
+	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -61,6 +63,29 @@ func spellableValues(t *testing.T) map[Kind][]Value {
 	}
 	out[KindExternRef] = append(out[KindExternRef], ExternRef(0), ExternRef(7), ExternRef(math.MaxUint32))
 
+	// Bare host references, at both nullabilities of the type the corpus crosses them at (0039):
+	// `anyref` is a host reference's own dynamic heaptype, and the non-nullable sample is here
+	// because the *type* is half of what this spelling carries, so a round trip that dropped
+	// nullability would otherwise pass on the null form alone. Identity 0 is included on purpose —
+	// it is a legitimate identity, not an absence, which is 0027 decision 3's whole argument.
+	for _, null := range []bool{true, false} {
+		typ, ok := AbstractRefType(KindAnyRef, null)
+		if !ok {
+			t.Fatalf("AbstractRefType(KindAnyRef, %v) refused", null)
+		}
+		ids := []uint32{0}
+		if null {
+			ids = []uint32{0, 7, math.MaxUint32}
+		}
+		for _, id := range ids {
+			v, ok := HostRef(typ, id)
+			if !ok {
+				t.Fatalf("HostRef(%v, %d) refused a reference type", typ, id)
+			}
+			out[KindAnyRef] = append(out[KindAnyRef], v)
+		}
+	}
+
 	// The coverage claim this helper makes about itself: every named Kind has samples, except the
 	// one documented as unspellable. Without this the helper could silently stop covering a kind and
 	// the round-trip test below would keep passing on the rest.
@@ -112,10 +137,74 @@ func TestValueRoundTripsThroughItsOwnSpelling(t *testing.T) {
 
 	// A vacuity floor, because a helper that returned an empty map would make every assertion above
 	// unexecuted and this test green. The number is the sample count, not a guess at it.
-	// 5 i32 + 5 i64 + 10 f32 + 10 f64 + 3 v128 + 12 null references + 3 externrefs.
-	if want := 5 + 5 + 10 + 10 + 3 + 12 + 3; n != want {
+	// 5 i32 + 5 i64 + 10 f32 + 10 f64 + 3 v128 + 12 null references + 3 externrefs + 4 host
+	// references (three identities at `(ref null any)`, one at `(ref any)`).
+	if want := 5 + 5 + 10 + 10 + 3 + 12 + 3 + 4; n != want {
 		t.Errorf("round-tripped %d values, expected %d — the sample set moved, so the floor is "+
 			"measuring history rather than the samples", n, want)
+	}
+}
+
+// TestEveryPayloadSpellingIsReadOrRefusedByName is the parse boundary's half of Scott's condition on
+// 0039: every payload kind gets a *reading* here, and a member added to the enum fails rather than
+// being absorbed.
+//
+// The domain is `payloadPastEnd` — the type's own definition — and not a list of the payloads that
+// exist today, which is what the round-trip test above cannot supply: its domain is the Kind
+// vocabulary, and a payload is not a Kind, so all four spellings 0039 added to String were outside
+// every control in this file until this one. The assertion is deliberately weak about *what* the
+// answer is and strict about there being one: `host` must read back to the identical value, and every
+// other payload must be refused with an error naming that payload, because a refusal that does not
+// say which payload it refused is indistinguishable from a parser that did not recognize the syntax.
+func TestEveryPayloadSpellingIsReadOrRefusedByName(t *testing.T) {
+	typ, ok := AbstractRefType(KindAnyRef, true)
+	if !ok {
+		t.Fatal("AbstractRefType(KindAnyRef, true) refused")
+	}
+
+	covered := 0
+	for p := PayloadNone; p < payloadPastEnd; p++ {
+		name, ok := payloadNames[p]
+		if !ok {
+			t.Errorf("RefPayload(%d) is in the vocabulary and payloadNames has no row for it, so "+
+				"it has no spelling to read or refuse", uint8(p))
+			continue
+		}
+		covered++
+		// Built by struct literal because most of these have no constructor — which is the fact
+		// under test, and a probe that could only be built through a constructor would be scoped to
+		// the payloads that have one. Only `ref` is set: a payload's spelling carries the payload's
+		// *own* field, so filling `i31` here too would have the probe assert that a host reference
+		// round-trips a field its payload does not own, and the first draft of this test did exactly
+		// that and failed on it.
+		probe := Value{typ: typ, refKind: p, ref: 3}
+		s := probe.String()
+		got, err := ParseValue(s)
+		if p == PayloadHost {
+			if err != nil {
+				t.Errorf("ParseValue(%q): %v — the one payload with a public constructor must "+
+					"read back", s, err)
+			} else if got != probe {
+				t.Errorf("round trip of %q: got %#v, want %#v", s, got, probe)
+			}
+			continue
+		}
+		if err == nil {
+			t.Errorf("ParseValue(%q) succeeded, giving %#v: %s has no public constructor, so a "+
+				"value read back at that payload was invented by the parser", s, got, name)
+			continue
+		}
+		// The **quoted** name, not the bare one. Asking for the bare substring made this check pass
+		// vacuously for `struct`, which appears inside the word `constructor` in the refusal's own
+		// sentence: the falsification probe that should have failed on six payloads failed on five,
+		// and the shape of what survived named the bug.
+		if !strings.Contains(err.Error(), strconv.Quote(name)) {
+			t.Errorf("ParseValue(%q) refused with %q, which does not name %q: a refusal that "+
+				"cannot say which payload it refused reads as a syntax error", s, err, name)
+		}
+	}
+	if covered != int(payloadPastEnd) {
+		t.Errorf("read or refused %d payload kinds, and the vocabulary has %d", covered, payloadPastEnd)
 	}
 }
 

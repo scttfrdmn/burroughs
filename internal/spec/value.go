@@ -38,6 +38,33 @@ const (
 	// unchanged instead of teaching it a second, wider comparison shape. See Val's own doc
 	// comment on `Lanes`.
 	KindV128
+
+	// KindAnyRef is #270/0039's widening, and it is here — appended rather than slotted beside the
+	// other two reference kinds — because nothing in this file derives anything from the members'
+	// numeric order (unlike `burroughs.Kind`, whose IsRef is a range check and whose ordering is
+	// therefore pinned by a control). Appending keeps every existing member's value fixed, which
+	// costs nothing and means a stale serialized Kind cannot appear as a different one.
+	//
+	// **It is a measured necessity and not a tidying.** `extern.wast:42` passes a bare
+	// `(ref.host 2)` at an **`anyref`** parameter. Carried as KindExternRef — the placeholder every
+	// unnameable reference used before this — `toInterpValue` would build an `externref`, the engine
+	// would set `Externalized`, `typeOfRef` would report `extern`, and `matchRefType(extern, any)` is
+	// false: the vector would fail on a type mismatch the corpus does not contain. So the harness
+	// needs to be able to *name* `anyref` before it can pass that argument, which is the third of the
+	// three things #270 needed and the only one that touches this enum.
+	//
+	// It is also what keeps `(ref.host N)` and `(ref.extern N)` apart now that both are readable:
+	// same identity, same Class, different Kind — exactly the distinction `interp.HostRef` and
+	// `interp.ExternRef` make with their static types.
+	//
+	// **And it is the placeholder Kind for every reference this harness still cannot name** —
+	// `structref`, `(ref $t)`, `exnref` and the rest all arrive as this, from `valKind`'s own refusal
+	// path (spec_test.go). That is what makes the `want.Kind != got.Kind` gate in Matches *inert* for
+	// #270's vectors rather than something #270 had to unpick: both sides of every one of the 28 rows
+	// land here. The gate's own incorrectness survives and is [#441]'s subject, not this widening's.
+	//
+	// [#441]: https://github.com/scttfrdmn/burroughs/issues/441
+	KindAnyRef
 )
 
 func (k ValKind) String() string {
@@ -56,6 +83,8 @@ func (k ValKind) String() string {
 		return "externref"
 	case KindV128:
 		return "v128"
+	case KindAnyRef:
+		return "anyref"
 	}
 	return "unknown"
 }
@@ -63,7 +92,14 @@ func (k ValKind) String() string {
 // isRef reports whether this kind lives in the reference half of a Val rather than the
 // numeric half — the harness's own mirror of `binary.ValType.IsRef`, restated rather than
 // imported for ValKind's own neutrality reason (see the type's doc comment).
-func (k ValKind) isRef() bool { return k == KindFuncRef || k == KindExternRef }
+//
+// Enumerated rather than range-checked, unlike `burroughs.Kind.IsRef`, because this enum's members
+// are *not* ordered with the references contiguous — KindV128 sits between KindExternRef and
+// KindAnyRef, and appending KindAnyRef was the choice that kept the older members' values fixed. So
+// the partition is stated here and TestKindOrderingIsTheRefPartition's analogue does not apply.
+func (k ValKind) isRef() bool {
+	return k == KindFuncRef || k == KindExternRef || k == KindAnyRef
+}
 
 // bits reports the width in bits.
 //
@@ -185,6 +221,224 @@ const (
 	RefConcrete
 )
 
+// RefPat is the heap type a bare `(ref.<ht>)` **expectation** names — `RefTypePat`'s argument in the
+// reference's own script grammar, meaningful only when Class is RefTypePattern.
+//
+// **Separate from Kind, because the pattern's heaptype and the value's static kind are different
+// facts and conflating them was #270's harness-side wall.** Until 0039 the heaptype was *implied* by
+// Kind, which worked only while there were two of each: `KindFuncRef` meant `FuncHT` and
+// `KindExternRef` meant `ExternHT`. `parser.mly:1517-1530`'s `result` production has **eight**
+// `RefTypePat` arms, so an implied heaptype could not spell six of them — `(ref.array)` had no
+// representation at all, and 17 vectors were declined for that one alone.
+//
+// Eight members plus a zero value, which is the authority's own arm count rather than the four the
+// corpus exercises: the domain is a fixed grammar production, so enumerating it fully costs two lines
+// and leaves nothing for a later slice to discover.
+type RefPat byte
+
+const (
+	// PatNone is the zero value: this Val is not a RefTypePattern and the field is unread.
+	PatNone RefPat = iota
+
+	// PatAny is `(ref.any)`. Admits **everything except a function reference**, which is the one
+	// arm order in `assert_ref_pat` that matters: `RefTypePat AnyHT, Instance.FuncRef _ -> false`
+	// precedes `RefTypePat AnyHT, _ -> true`, so a null and an externalized value both satisfy it.
+	PatAny
+
+	// PatEq is `(ref.eq)`. Admits exactly `I31Ref | StructRef | ArrayRef` — an or-pattern over three
+	// constructors, and *not* an externalized one of the three, because the or-pattern matches the
+	// outer constructor.
+	PatEq
+
+	// PatI31, PatStruct and PatArray are the three single-constructor aggregates' patterns.
+	PatI31
+	PatStruct
+	PatArray
+
+	// PatFunc is `(ref.func)`: `FuncRef _` only, with no arm for a null, which is why the bare
+	// funcref pattern refuses one where the bare externref pattern does not.
+	PatFunc
+
+	// PatExn is `(ref.exn)`: `ExnRef _` only.
+	PatExn
+
+	// PatExtern is `(ref.extern)`: `RefTypePat ExternHT, _ -> true`, the widest arm in the function —
+	// it admits a null, a funcref, and everything else.
+	PatExtern
+
+	// patPastEnd is **not a pattern**; it is the domain's upper bound, declared inside this block so
+	// `iota` maintains it. See `interp.RefPayload`'s own sentinel for the full argument and the
+	// condition on 0039's stamp that asks for it.
+	patPastEnd
+)
+
+func (p RefPat) String() string {
+	switch p {
+	case PatAny:
+		return "any"
+	case PatEq:
+		return "eq"
+	case PatI31:
+		return "i31"
+	case PatStruct:
+		return "struct"
+	case PatArray:
+		return "array"
+	case PatFunc:
+		return "func"
+	case PatExn:
+		return "exn"
+	case PatExtern:
+		return "extern"
+	case PatNone, patPastEnd:
+		// Neither is a pattern, so neither has a spelling in the grammar. Named rather than left to
+		// a default so `exhaustive` confirms a stated reading exists for every member.
+		return "no-pattern"
+	}
+	return "no-pattern"
+}
+
+// admits reports whether this pattern is satisfied by a **non-null** reference result of the given
+// constructor — `assert_ref_pat` (`interpreter/script/runner.ml:464-476`) transcribed arm for arm,
+// with the null cases living in admitsNull below because Matches answers a null `got` before Kind is
+// ever read (grave #266).
+//
+// **Two faithful divergences, stated rather than smoothed over, and both are the `want.Kind !=
+// got.Kind` gate's doing rather than this function's.** In the reference, externalization is a
+// *constructor*: an externalized i31 is `Extern.ExternRef (I31Ref …)`, so `RefTypePat EqHT`'s
+// or-pattern does not match it and `RefTypePat AnyHT`'s catch-all does. Here externalization is
+// carried by Kind and the payload underneath it survives, so:
+//
+//   - `(ref.i31)`/`(ref.eq)`/`(ref.struct)`/`(ref.array)` against an **externalized** payload: this
+//     function would say true and the reference says false — but Matches never asks, because the
+//     Kind gate (want KindAnyRef, got KindExternRef) refuses the row first. The answers agree for a
+//     different reason, which is worth knowing precisely because it means fixing the gate changes
+//     these rows.
+//   - `(ref.any)` against an externalized value: the reference says **true** and Matches says false,
+//     for the same Kind gate. A real disagreement, in the safe direction, over 0 corpus vectors —
+//     `(ref.any)` appears nowhere in the suite.
+//
+// Both belong to [#441](https://github.com/scttfrdmn/burroughs/issues/441), which is the gate's own
+// issue with the accept-direction census it needs; 0039 decision 2 is why they are separate.
+func (p RefPat) admits(payload RefPayload) bool {
+	// A non-null reference naming no constructor is an **engine inconsistency**, not a value: the
+	// reference interpreter has no such thing to feed `assert_ref_pat`, so there is no arm to
+	// transcribe. Refused by every pattern including the two catch-alls, which is a deliberate
+	// divergence in the safe direction — admitting it would score a shape the authority cannot spell
+	// as a pass, and `interp.payloadOf` produces it exactly where the engine has contradicted itself.
+	if payload == PayloadNone {
+		return false
+	}
+	switch p {
+	case PatAny:
+		// `RefTypePat AnyHT, Instance.FuncRef _ -> false` **precedes** `RefTypePat AnyHT, _ -> true`,
+		// and the order is the whole content of the arm: `any` is the top of the internal hierarchy,
+		// so it admits every constructor except the one that is not under it.
+		return payload != PayloadFunc
+	case PatEq:
+		// `(I31.I31Ref _ | Aggr.StructRef _ | Aggr.ArrayRef _)` — three constructors, one arm. The
+		// only pattern in the grammar that is not one-to-one, which is why a `want.Pat == got.Payload`
+		// comparison could not have stood in for this function.
+		return payload == PayloadI31 || payload == PayloadStruct || payload == PayloadArray
+	case PatI31:
+		return payload == PayloadI31
+	case PatStruct:
+		return payload == PayloadStruct
+	case PatArray:
+		return payload == PayloadArray
+	case PatFunc:
+		return payload == PayloadFunc
+	case PatExn:
+		return payload == PayloadExn
+	case PatExtern:
+		// `RefTypePat ExternHT, _ -> true`: the widest arm, and it is a wildcard on the value rather
+		// than a check that the value is externalized — `extern.wast:46-49` rely on exactly that.
+		return true
+	case PatNone, patPastEnd:
+		// Neither is a pattern, so neither admits anything. Named so `exhaustive` confirms a stated
+		// reading for every member rather than a `default` absorbing a ninth arriving later.
+		return false
+	}
+	return false
+}
+
+// admitsNull reports whether this pattern is satisfied by a **null** result.
+//
+// Two arms admit one, and it is not the two a reader would guess: `NullPat _` is a different pattern
+// class entirely (RefLiteralNull here), and among the `RefTypePat`s only `ExternHT`'s wildcard and
+// `AnyHT`'s catch-all match `NullRef` — every other heaptype has an arm naming a constructor, and a
+// null matches none of them, falling through to `| _ -> false`.
+//
+// Separate from admits rather than a `PayloadNone` case inside it, because PayloadNone means
+// something else there (see its refusal) and one function answering two questions by overloading a
+// zero value is how the two get confused.
+func (p RefPat) admitsNull() bool {
+	switch p {
+	case PatAny, PatExtern:
+		return true
+	case PatEq, PatI31, PatStruct, PatArray, PatFunc, PatExn, PatNone, patPastEnd:
+		return false
+	}
+	return false
+}
+
+// RefPayload is which **constructor** a non-null reference *result* is — `assert_ref_pat`'s other
+// operand, and the got-side half of what 0039 adds here.
+//
+// The harness restates the engine's `interp.RefPayload` rather than importing it, for ValKind's own
+// neutrality reason: this package is the oracle, and an oracle that imports the engine's vocabulary
+// can no longer be read as independent of it. The glue that owns both converts (`fromInterpValue` in
+// the test file), which is where every other engine fact crosses this boundary too.
+//
+// **Why a result needs this and a Kind will not do.** `assert_ref_pat` dispatches on the runtime
+// value's constructor and reads no static type at all, and a reference's type is an upper bound: an
+// `anyref` result can be a host reference, an i31, a struct or an array, and Kind says only `anyref`.
+// So without this field the harness can *receive* eleven of the 28 vectors' results and answer none
+// of them.
+type RefPayload byte
+
+const (
+	// PayloadNone is the zero value: not a reference, or a **null** one (whose constructor is
+	// nullary — grave #266's fact, and the reason Class rather than this field carries nullity), or
+	// a non-null reference whose constructor the engine could not determine, which is an engine
+	// inconsistency rather than a payload.
+	PayloadNone RefPayload = iota
+
+	// PayloadHost is `HostRef` — the thing `(ref.host N)` names bare and `(ref.extern N)` wraps.
+	// Which of the two spellings a Val is holding is carried by Kind, not here.
+	PayloadHost
+
+	PayloadI31
+	PayloadStruct
+	PayloadArray
+	PayloadFunc
+	PayloadExn
+
+	// payloadPastEnd is **not a payload kind** — the domain's upper bound, `iota`-maintained inside
+	// this block for the reason `interp.RefPayload`'s own sentinel states.
+	payloadPastEnd
+)
+
+func (p RefPayload) String() string {
+	switch p {
+	case PayloadHost:
+		return "host"
+	case PayloadI31:
+		return "i31"
+	case PayloadStruct:
+		return "struct"
+	case PayloadArray:
+		return "array"
+	case PayloadFunc:
+		return "func"
+	case PayloadExn:
+		return "exn"
+	case PayloadNone, payloadPastEnd:
+		return "reference"
+	}
+	return "reference"
+}
+
 // Val is one wasm value crossing the harness boundary, a NaN-class expectation, or a
 // reference-shaped value/expectation (#196/#197).
 //
@@ -212,10 +466,26 @@ type Val struct {
 	// reference one.
 	Class RefClass
 
-	// Extern is the opaque identity for RefExternIdentity — `ref.extern N`'s N, read as a plain
-	// uint32 per Extern's own comment. Unread for every other Class, and 0 is a legitimate
-	// identity (`ref.extern 0` appears in the corpus), so it must never be read as "unset".
+	// Extern is the opaque identity for RefExternIdentity — `ref.extern N`'s and `ref.host N`'s N,
+	// read as a plain uint32 per Extern's own comment. Unread for every other Class, and 0 is a
+	// legitimate identity (`ref.extern 0` appears in the corpus), so it must never be read as
+	// "unset".
 	Extern uint32
+
+	// Pat is the heaptype a bare `(ref.<ht>)` expectation names — **`want`-side only**, and unread
+	// for every Class but RefTypePattern. See RefPat.
+	Pat RefPat
+
+	// Payload is which constructor a non-null reference **result** is — **`got`-side only**, set by
+	// `fromInterpValue` and read only by Matches' RefTypePattern arms. See RefPayload.
+	//
+	// **The two fields are one dispatch's two operands and that is why they are two fields rather
+	// than one shared one.** `assert_ref_pat` matches a *pattern* against a *value*: they range over
+	// different sets (eight heaptypes against seven constructors, related by a table and not by a
+	// bijection — `PatEq` admits three), and a Val is never both. A single field would make
+	// `want.X == got.X` look like the comparison, which is exactly the wrong comparison: `(ref.eq)`
+	// must match an array.
+	Payload RefPayload
 
 	// AnyNull is set only for the bare `(ref.null)` expectation — 13 vectors in the corpus,
 	// `ref_null.wast`/`select.wast`/`table.wast`/`instance.wast` — which the reference's own
@@ -335,10 +605,30 @@ func (v Val) String() string {
 			// with less detail beats a detailed one that invents.
 			return "ref.null"
 		case RefExternIdentity:
-			return fmt.Sprintf("ref.extern %d", v.Extern)
+			// **Which of the two spellings, decided by Kind**, because the class covers both: a host
+			// identity is `(ref.extern N)` when it has been externalized and a bare `(ref.host N)`
+			// when it has not (`parser.mly:1502` against `:1501`), and printing the wrapper on a
+			// value that has none would fabricate an externalization — the same fabrication
+			// `interp.ExternRef`/`interp.HostRef` keep apart with their static types.
+			if v.Kind == KindExternRef {
+				return fmt.Sprintf("ref.extern %d", v.Extern)
+			}
+			return fmt.Sprintf("ref.host %d", v.Extern)
 		case RefTypePattern:
-			return "(ref." + v.Kind.String() + ")"
+			// The **pattern's** heaptype, not the Kind's name: this used to print
+			// `(ref.externref)` — the Kind's spelling, one letter's worth of coincidence away from
+			// the corpus's own `(ref.extern)` — and there was no way at all to print `(ref.array)`
+			// because the heaptype was implied by a Kind that had no member for it. Since 0039 the
+			// heaptype is carried, so the message quotes what the vector wrote.
+			return "(ref." + v.Pat.String() + ")"
 		case RefConcrete:
+			// The **constructor**, since 0039 carries it: "a non-null array" rather than "a non-null
+			// anyref", which named the upper bound the result crossed at and not the result. Falls
+			// back to the Kind's own name when the payload is PayloadNone, where there is nothing
+			// more specific to say — RefPayload's String spells that case "reference".
+			if v.Payload != PayloadNone {
+				return "a non-null " + v.Payload.String()
+			}
 			return "a non-null " + v.Kind.String()
 		case RefNone:
 			// Unreachable given v.Kind.isRef() (RefNone means "not a reference Val" by its own
@@ -476,7 +766,14 @@ func (want Val) Matches(got Val) bool { //nolint:revive,staticcheck // `want`/`g
 			// `RefTypePat ExternHT, _ -> true` (runner.ml:475) admits anything including a
 			// null; `RefTypePat FuncHT` has no NullRef arm and so refuses one. That asymmetry
 			// is the reference's, and it is why this is not `return true`.
-			return want.Kind == KindExternRef
+			//
+			// **Dispatched on the pattern's heaptype since 0039, where it used to read
+			// `want.Kind == KindExternRef`.** The two agreed while there were only two patterns —
+			// `KindExternRef` *was* ExternHT — and stop agreeing the moment six more exist, because
+			// five of them carry Kind KindAnyRef and one of those five (`(ref.any)`) admits a null
+			// while the other four refuse it. A Kind comparison cannot express that, and would have
+			// answered *false* for `(ref.any)` against a null: a wrong answer, not a decline.
+			return want.Pat.admitsNull()
 		case RefExternIdentity:
 			// `RefResult (RefPat r)` compares two concrete references; a null is not one.
 			return false
@@ -509,20 +806,16 @@ func (want Val) Matches(got Val) bool { //nolint:revive,staticcheck // `want`/`g
 	if want.Kind.isRef() {
 		switch want.Class {
 		case RefTypePattern:
-			// `assert_ref_pat`'s two RefTypePat arms differ by heaptype: ExternHT admits any
-			// value including null (`RefTypePat ExternHT, _ -> true`), FuncHT admits only a
-			// non-null funcref (`RefTypePat FuncHT, Instance.FuncRef _ -> true`, with no arm at
-			// all for `NullRef`, which falls through to the catch-all `false`). Kind already
-			// matched above, and this harness's two Kind.isRef() members map exactly to those
-			// two heaptypes, so the dispatch is on Kind rather than on a heaptype this Val does
-			// not carry.
+			// `assert_ref_pat`'s eight RefTypePat arms, against the **constructor** the result is —
+			// which is what `got.Payload` carries and what this arm could not see before 0039. It
+			// used to `return true` unconditionally, correctly, because the only two patterns
+			// representable were FuncHT and ExternHT and Kind had already separated them; with six
+			// more patterns and five of them sharing Kind KindAnyRef, Kind no longer decides
+			// anything and the bare `true` would admit an array where `(ref.i31)` was asked for.
 			//
-			// **The null half of that distinction now lives above**, in the null-`got` dispatch
-			// (grave #266) — so `got` here is non-null and both heaptypes admit it. Stated as a
-			// plain `true` with the reason, rather than kept as `got.Class != RefLiteralNull`:
-			// that comparison is now *always* true, and a condition that cannot be false is a
-			// missing check wearing a disguise (0003) even when it was a real check yesterday.
-			return true
+			// **The null half stays above**, in the null-`got` dispatch (grave #266), so `got` here
+			// is non-null.
+			return want.Pat.admits(got.Payload)
 		case RefLiteralNull:
 			// A non-null `got` against a `ref.null <heaptype>` expectation — always a mismatch.
 			// The null-vs-null case, which is the one `NullPat _, NullRef -> true` governs, is
@@ -858,10 +1151,9 @@ func readRefConst(n node) (Val, bool) {
 		}
 		return Val{Kind: k, Class: RefLiteralNull}, true
 	case "ref.extern":
-		switch len(n.list) {
-		case 1:
-			return Val{Kind: KindExternRef, Class: RefTypePattern}, true
-		case 2:
+		// The keyworded form is an identity; the bare form is a pattern and falls through to the
+		// table below, which is where all eight bare spellings now live.
+		if len(n.list) == 2 {
 			if n.list[1].isList() || n.list[1].isS {
 				return Val{}, false
 			}
@@ -871,16 +1163,64 @@ func readRefConst(n node) (Val, bool) {
 			}
 			return Val{Kind: KindExternRef, Class: RefExternIdentity, Extern: uint32(id)}, true
 		}
-		return Val{}, false
-	case "ref.func":
-		// Bare only — see the function comment for why a literal `ref.func N`/`ref.func $x`
-		// is out of this reader's scope rather than merely unhandled.
-		if len(n.list) != 1 {
-			return Val{}, false
+	case "ref.host":
+		// `literal_ref`'s other arm (`parser.mly:1501`): `LPAR REF_HOST NAT RPAR` is a **bare**
+		// `Script.HostRef N`, with no `Extern.ExternRef` wrapper — the same identity `(ref.extern N)`
+		// carries, minus the externalization. Same Class, and the difference rides on Kind:
+		// KindAnyRef here against KindExternRef above, which is `script.ml:80`'s placement of a host
+		// reference's own heaptype at `any`.
+		//
+		// **There is no bare `(ref.host)` pattern**, so this form requires its N: the grammar's
+		// pattern arms are `RefTypePat`s over heaptypes, and `host` is not a heaptype. A
+		// one-element `(ref.host)` therefore falls through to the refusal below rather than being
+		// read as a pattern nothing in the grammar spells.
+		if len(n.list) == 2 && !n.list[1].isList() && !n.list[1].isS {
+			id, ok := readNat(n.list[1].atom, 32)
+			if !ok {
+				return Val{}, false
+			}
+			return Val{Kind: KindAnyRef, Class: RefExternIdentity, Extern: uint32(id)}, true
 		}
-		return Val{Kind: KindFuncRef, Class: RefTypePattern}, true
+		return Val{}, false
+	}
+	// The bare `(ref.<ht>)` patterns, from one table over the RefPat vocabulary rather than eight
+	// switch arms — so a RefPat member without a spelling is a missing row that a control can see,
+	// which is the same reason `byteKinds` is computed and `kindNames` is a map.
+	if p, ok := refPatterns[n.head()]; ok && len(n.list) == 1 {
+		return Val{Kind: p.kind, Class: RefTypePattern, Pat: p.pat}, true
 	}
 	return Val{}, false
+}
+
+// refPatterns pairs each bare `(ref.<ht>)` spelling with the pattern it names and the ValKind a Val
+// carrying it takes — the reader's whole pattern half, and the domain
+// TestEveryRefPatHasASpelling checks the RefPat vocabulary against.
+//
+// **The Kind column is what keeps Matches' `want.Kind != got.Kind` gate inert for #270's vectors**,
+// and it is chosen by asking what `fromInterpValue` will produce for the results these patterns are
+// asserted against, not by picking a plausible name: every reference type this harness cannot name
+// arrives as KindAnyRef from `valKind`'s refusal path, so five of the eight patterns must be
+// KindAnyRef to meet them. `func` and `extern` keep the two kinds they have always had, because
+// `valKind` *can* name `funcref` and `externref` and does.
+//
+// Populations, measured over the corpus rather than assumed: `ref.array` 17, `ref.eq` 4, `ref.i31` 2,
+// `ref.struct` 2 — and **`ref.any` and `ref.exn` are 0**. The two zero rows are here because the
+// domain is a fixed grammar production (eight `RefTypePat` arms, `parser.mly:1517-1530`) rather than
+// a population that might grow: enumerating it fully costs two lines, and the alternative is a reader
+// that declines a shape the reference accepts, which scores as *unsupported* — a vector nobody had
+// got to yet rather than a reader that stopped short.
+var refPatterns = map[string]struct {
+	pat  RefPat
+	kind ValKind
+}{
+	"ref.any":    {PatAny, KindAnyRef},
+	"ref.eq":     {PatEq, KindAnyRef},
+	"ref.i31":    {PatI31, KindAnyRef},
+	"ref.struct": {PatStruct, KindAnyRef},
+	"ref.array":  {PatArray, KindAnyRef},
+	"ref.exn":    {PatExn, KindAnyRef},
+	"ref.func":   {PatFunc, KindFuncRef},
+	"ref.extern": {PatExtern, KindExternRef},
 }
 
 // heapKind maps a `ref.null` heaptype keyword to the harness's own two-member reference

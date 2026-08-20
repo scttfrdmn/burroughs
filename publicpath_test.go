@@ -107,6 +107,17 @@ func specToPublic(v spec.Val) (Value, bool) {
 			kind, bits = KindF64, v.Bits
 		}
 		return Value{typ: Type{kind: kind}, bits: bits}, true
+	case spec.KindAnyRef:
+		// **A refusal with an arm, not an absence.** 0039 added this kind and `publicToSpec` below
+		// carries it, so this *argument* direction not carrying it is a claim that needs saying out
+		// loud: a `(ref.host N)` argument needs the reference's *type*, and the harness takes that
+		// from the declared parameter (`toInterpValue` is handed `t`), while this converter sees a
+		// `spec.Val` and nothing else. It would have to **guess** `anyref` — wrong wherever the
+		// parameter is narrower, and reported as a decline rather than as the refusal it really is.
+		// The one corpus row concerned stays in `unpassable`, counted. `exhaustive` is what asked for
+		// the arm, and the arm is the better spelling: absence relying on a fallthrough is
+		// indistinguishable from an omission.
+		return Value{}, false
 	case spec.KindFuncRef, spec.KindExternRef:
 		kind := KindFuncRef
 		if v.Kind == spec.KindExternRef {
@@ -150,24 +161,71 @@ func publicToSpec(v Value) (spec.Val, bool) {
 	case KindV128:
 		lo, hi := v.V128()
 		return spec.Val{Kind: spec.KindV128, Bits: lo, Hi: hi}, true
-	case KindFuncRef, KindExternRef:
+	case KindFuncRef, KindExternRef, KindAnyRef:
 		kind := spec.KindFuncRef
-		if k == KindExternRef {
+		switch k {
+		case KindExternRef:
 			kind = spec.KindExternRef
+		case KindAnyRef:
+			kind = spec.KindAnyRef
+		default:
 		}
 		if v.IsNull() {
 			return spec.Val{Kind: kind, Class: spec.RefLiteralNull}, true
 		}
+		// The payload joins both arms since 0039, because `spec.Val.String` prints it and this
+		// differential compares the two arms' printed Vals — an arm that dropped it would report
+		// disagreement on every reference result rather than on a real difference.
+		payload := specPayload(v)
 		if id, ok := v.ExternID(); ok {
-			return spec.Val{Kind: kind, Class: spec.RefExternIdentity, Extern: id}, true
+			return spec.Val{Kind: kind, Class: spec.RefExternIdentity, Extern: id, Payload: payload}, true
 		}
-		return spec.Val{Kind: kind, Class: spec.RefConcrete}, true
+		return spec.Val{Kind: kind, Class: spec.RefConcrete, Payload: payload}, true
 	default:
-		// KindNone and the GC reference kinds. The harness's `spec.Kind` has no member for them, so
-		// there is nothing to map *to* — a result of one is unrepresentable rather than unhandled,
-		// and it is refused here and counted at the call site rather than approximated.
+		// KindNone and the remaining GC reference kinds. The harness's `spec.ValKind` has no member
+		// for them, so there is nothing to map *to* — a result of one is unrepresentable rather than
+		// unhandled, and it is refused here and counted at the call site rather than approximated.
+		// `KindAnyRef` left this arm with 0039; the other eleven abstract kinds and `KindTypedRef`
+		// have not, because `spec.ValKind` deliberately has one reference Kind for all of them and
+		// carries the distinction as a payload instead.
 	}
 	return spec.Val{}, false
+}
+
+// specPayload maps a public result's payload kind onto the harness's, for publicToSpec.
+//
+// Written out rather than reaching for `payloadKinds`: that table is part of what this file
+// cross-examines, and a shared table is a shared defect. It is a *third* transcription of the same
+// seven rows, which is the point — TestPayloadConversionCoversTheWholeVocabulary asserts that the
+// vocabulary is covered, and this arm asserts, against the raw arm, that two independent readings
+// of it agree.
+func specPayload(v Value) spec.RefPayload {
+	p, ok := v.RefPayload()
+	if !ok {
+		// Numeric, or a null reference — publicToSpec's null arm returns before reaching here, so
+		// this is the numeric case, which has no payload to name.
+		return spec.PayloadNone
+	}
+	switch p {
+	case PayloadHost:
+		return spec.PayloadHost
+	case PayloadI31:
+		return spec.PayloadI31
+	case PayloadStruct:
+		return spec.PayloadStruct
+	case PayloadArray:
+		return spec.PayloadArray
+	case PayloadFunc:
+		return spec.PayloadFunc
+	case PayloadExn:
+		return spec.PayloadExn
+	case PayloadNone, payloadPastEnd:
+		return spec.PayloadNone
+	}
+	// Not a default: a switch with no default over an enum that exists to grow is what makes the
+	// growth visible. A new member reaches here and reads as `none`, and the coverage control is what
+	// fails first — this line is the fallback for a build that somehow ran without it.
+	return spec.PayloadNone
 }
 
 // specToRaw and rawToSpec are the differential's other arm: the same mapping, against the engine's
@@ -215,17 +273,49 @@ func rawToSpec(v interp.Value) (spec.Val, bool) {
 	if !v.Type.IsRef() {
 		return spec.Val{}, false
 	}
-	kind := spec.KindFuncRef
-	if v.Type == binary.ExternRef {
+	// `KindAnyRef` is the default rather than an arm, which is this arm's independent reading of the
+	// rule the harness spells the other way round (name the type, else fall back): `spec.ValKind` has
+	// one member per *nameable* reference type and one placeholder for the rest, so every reference
+	// type that is not exactly `funcref` or `externref` — nullable `anyref`, a typed `(ref $t)`, the
+	// nine other abstract heaptypes — lands on the placeholder. Two spellings, one answer, which is
+	// what the comparison is for.
+	kind := spec.KindAnyRef
+	switch v.Type {
+	case binary.FuncRef:
+		kind = spec.KindFuncRef
+	case binary.ExternRef:
 		kind = spec.KindExternRef
 	}
-	switch {
-	case v.Null:
+	if v.Null {
 		return spec.Val{Kind: kind, Class: spec.RefLiteralNull}, true
-	case v.IsHost:
-		return spec.Val{Kind: kind, Class: spec.RefExternIdentity, Extern: v.RefID}, true
 	}
-	return spec.Val{Kind: kind, Class: spec.RefConcrete}, true
+	payload := rawPayload(v.RefKind)
+	if v.RefKind == interp.PayloadHost {
+		return spec.Val{Kind: kind, Class: spec.RefExternIdentity, Extern: v.RefID, Payload: payload}, true
+	}
+	return spec.Val{Kind: kind, Class: spec.RefConcrete, Payload: payload}, true
+}
+
+// rawPayload is specPayload's independent twin against the engine's own enum, for the same reason the
+// rest of this arm is written twice. It reaches neither `payloadKinds` nor `interpPayloads`.
+func rawPayload(p interp.RefPayload) spec.RefPayload {
+	switch p {
+	case interp.PayloadHost:
+		return spec.PayloadHost
+	case interp.PayloadI31:
+		return spec.PayloadI31
+	case interp.PayloadStruct:
+		return spec.PayloadStruct
+	case interp.PayloadArray:
+		return spec.PayloadArray
+	case interp.PayloadFunc:
+		return spec.PayloadFunc
+	case interp.PayloadExn:
+		return spec.PayloadExn
+	case interp.PayloadNone, interp.PayloadPastEnd:
+		return spec.PayloadNone
+	}
+	return spec.PayloadNone
 }
 
 // publicTally is what the walk measures. Every command lands in exactly one bucket, which is what

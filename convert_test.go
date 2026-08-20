@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/scttfrdmn/burroughs/internal/binary"
+	"github.com/scttfrdmn/burroughs/internal/interp"
 )
 
 // The exhaustiveness guard decision 0029 orders, since Go has no exhaustive `switch`: every type in
@@ -277,7 +278,108 @@ func TestValueConversionCarriesEveryField(t *testing.T) {
 			n++
 		}
 	}
-	if n != 48 {
-		t.Errorf("round-tripped %d values, want 48 — the sample set moved", n)
+	// 52 since 0039 added four bare-host-reference samples to the shared helper — a pinned count
+	// rather than a floor, so a sample set that shrank by one is as visible as one that moved wholesale.
+	if n != 52 {
+		t.Errorf("round-tripped %d values, want 52 — the sample set moved", n)
+	}
+}
+
+// TestPayloadConversionCoversTheWholeVocabulary is **the public boundary's half of Scott's condition
+// on the 0039 stamp**, quoted here so the condition sits beside the code that answers it: *"the payload
+// kind is handled exhaustively at both boundaries, with a test that enumerates the kinds from the
+// type's own definition and fails on any unmapped one. No `default` case that silently absorbs a
+// future member — an enum whose whole purpose is to grow must fail loudly the first time it does."*
+// The harness's half is `TestInterpPayloadsCoverTheEngineVocabulary`.
+//
+// The domain is counted up from the zero value to `payloadPastEnd`, the sentinel `iota` maintains
+// inside `RefPayload`'s own const block, and to `interp.PayloadPastEnd` on the other side — so a new
+// member widens this loop in the commit that declares it, and there is no list of members to forget to
+// update. That matters more here than a switch's exhaustiveness would: the two enums live in different
+// packages, so `exhaustive` cannot check a map at all and could only check a switch over one of them.
+//
+// **The tables and the converters are both asserted**, because a table can be complete while nothing
+// reads it: `valueToInternal`/`valueFromInternal` are the only two functions that cross this boundary,
+// and the second half of this test drives a Value carrying each payload through both.
+func TestPayloadConversionCoversTheWholeVocabulary(t *testing.T) {
+	for p := RefPayload(0); p < payloadPastEnd; p++ {
+		in, ok := payloadKinds[p]
+		if !ok {
+			t.Errorf("RefPayload %v (ordinal %d) has no row in payloadKinds — valueToInternal would "+
+				"refuse every Value carrying it, so a public caller could hold a reference this API "+
+				"cannot hand to the engine at all", p, p)
+			continue
+		}
+		if back, ok := kindPayloads[in]; !ok || back != p {
+			t.Errorf("RefPayload %v maps to engine %v, which maps back to %v (present: %v); the two "+
+				"directions must be inverses or a result comes back as a different constructor than "+
+				"the argument went in as", p, in, back, ok)
+		}
+		// The printer is the third table over the same vocabulary, and it is checked here rather than
+		// in its own test because a member missing from it is missing from *this* enum's definition in
+		// exactly the same way: `String` falls back to `RefPayload(N)`, so the member is nameable but
+		// not named, and every error message and `Value.String` about it says an ordinal.
+		if _, ok := payloadNames[p]; !ok {
+			t.Errorf("RefPayload ordinal %d has a payloadKinds row but none in payloadNames, so it "+
+				"prints as %q — a public error message or a Value.String naming it would give a "+
+				"caller a number where every other payload gives a word", p, p.String())
+		}
+	}
+	if _, ok := payloadKinds[payloadPastEnd]; ok {
+		t.Error("payloadKinds has a row for payloadPastEnd, which is the domain's bound and not a " +
+			"payload kind; a row for it makes the loop above pass for a member that does not exist")
+	}
+	if n := len(payloadKinds); n != int(payloadPastEnd) {
+		t.Errorf("payloadKinds has %d rows for %d public payload kinds; the count is asserted as well "+
+			"as the membership, so a table carrying rows outside the domain is visible too",
+			n, int(payloadPastEnd))
+	}
+
+	// The engine's vocabulary, which is the direction that will fire first in practice: a proposal's
+	// new reference constructor lands in `interp` and reaches `valueFromInternal` before this package
+	// has a member for it.
+	for p := interp.RefPayload(0); p < interp.PayloadPastEnd; p++ {
+		if _, ok := kindPayloads[p]; !ok {
+			t.Errorf("interp.RefPayload %v (ordinal %d) has no row in kindPayloads — valueFromInternal "+
+				"would refuse every result carrying it, which turns a reference the engine produced "+
+				"correctly into an error at the public boundary", p, p)
+		}
+	}
+	if n := len(kindPayloads); n != int(interp.PayloadPastEnd) {
+		t.Errorf("kindPayloads has %d rows for %d engine payload kinds", n, int(interp.PayloadPastEnd))
+	}
+
+	// The path, not the table. A Value per payload kind, built here rather than taken from
+	// `spellableValues`: the `ref:` family has no `ParseValue` arm and never had one (see Value.String),
+	// so these shapes are unspellable by construction and no sample set drawn from the spelling can
+	// reach them. `anyref` carries all of them — it is the widest type a payload can sit under, and the
+	// one `extern.wast`'s own results arrive at.
+	anyref, ok := AbstractRefType(KindAnyRef, true)
+	if !ok {
+		t.Fatal("AbstractRefType(KindAnyRef, true) failed; this test cannot build its own subjects")
+	}
+	crossed := 0
+	for p := RefPayload(0); p < payloadPastEnd; p++ {
+		want := Value{typ: anyref, refKind: p, ref: 7, i31: 9}
+		iv, err := valueToInternal(want)
+		if err != nil {
+			t.Errorf("valueToInternal of a %v reference: %v", p, err)
+			continue
+		}
+		got, err := valueFromInternal(iv)
+		if err != nil {
+			t.Errorf("valueFromInternal of a %v reference: %v", p, err)
+			continue
+		}
+		if got != want {
+			t.Errorf("round trip of a %v reference gave %#v, want %#v", p, got, want)
+			continue
+		}
+		crossed++
+	}
+	if crossed != int(payloadPastEnd) {
+		t.Errorf("crossed the boundary with %d of %d payload kinds; the vacuity check, since a loop "+
+			"that continued on every error would report agreement about nothing",
+			crossed, int(payloadPastEnd))
 	}
 }

@@ -1,10 +1,28 @@
 # 0039 — A reference's payload kind crosses the two boundaries as one enumerated kind, and the static-type gate is its own census
 
-Date: 2026-08-19 · Status: **proposed** — no stamp exists yet. This record is held open on purpose:
-it widens the **public** `burroughs.Value`, which [0029](0029-the-public-boundary-run-on-a-validated-path-decline-as-a-third-outcome-and-a-value-that-converts.md)
+Date: 2026-08-19 · Status: **accepted** — stamped by Scott on the #443 relay ("0039 stamped.
+Implement #270."), **with one condition**, quoted because it changed the implementation rather than
+approving it as drafted: *"the payload kind is handled exhaustively at both boundaries, with a test
+that enumerates the kinds from the type's own definition and fails on any unmapped one. No `default`
+case that silently absorbs a future member — an enum whose whole purpose is to grow must fail loudly
+the first time it does."*
+
+The condition is discharged by three controls, one per restated vocabulary — the vocabularies are
+restated rather than imported (see decision 1), so a single control could not have covered them:
+`TestPayloadConversionCoversTheWholeVocabulary` (root, the public enum and the path through
+`valueToInternal`/`valueFromInternal`), `TestInterpPayloadsCoverTheEngineVocabulary` and
+`TestEveryRefPatHasASpelling` (`internal/spec`). Each enumerates from an `iota`-maintained in-block
+sentinel placed after the last real member rather than from a hand-written list, each asserts count
+equality and injectivity in both directions, none has an absorbing `default`, and **each was watched
+failing on an injected member before it was believed** — a control isn't born until it's watched die.
+`interp`'s sentinel is exported (`PayloadPastEnd`) because two other packages must be able to name
+the bound; the other two stay unexported.
+
+The record was held open until that stamp existed, on purpose: it widens the **public**
+`burroughs.Value`, which [0029](0029-the-public-boundary-run-on-a-validated-path-decline-as-a-third-outcome-and-a-value-that-converts.md)
 established as the surface a host crosses, and [0027](0027-an-externref-is-a-one-bit-wrapper-a-host-reference-is-an-anyref-payload-and-the-cast-familys-reftypes-live-in-a-side-table.md)'s
 decision 3 is the precedent for the size of that question — adding *one bit* (`IsHost`) to a
-boundary value was an ADR with a stamp. Written now, ahead of implementation, on Scott's order of
+boundary value was an ADR with a stamp. Written ahead of implementation on Scott's order of
 2026-08-19 ("proceed with 270"); the sentence at the end is his.
 
 ## Context
@@ -213,6 +231,36 @@ scored honest-but-incomplete for:
   arm for every new enum member, which is the control doing its job.
 - **Ratio**: engine lines non-zero for the first time in three PRs — `internal/interp/value.go`,
   `convert.go`, `value.go` are all in the module path.
+
+### Settled, measured
+
+Recorded here because a forecast that is only scored in the PR that ran it is a forecast whose
+result does not outlive the review. The account lives with the bounds it moved
+(`internal/spec/spec_test.go`, the `unsupportedCeiling` and `allOnPassFloor` sections); the verdict
+is:
+
+- **Confirmed to the vector**: `unsupported` 57 → **29** in both lanes, the 28 landing in `gated`
+  (4159 → **4187**), default-lane `fail` **0**.
+- **Conservative in one direction, and named as that**: **all 28 pass all-on**, where the forecast
+  claimed only `extern.wast`'s 6 and declined to forecast the other 22. `allOnPassFloor` +28 to
+  **65042**; `allOnFailCeiling` **did not move** from 38, and that zero is *derived* rather than
+  observed — the 28 were `unsupported`, a third verdict, so none of them was ever a red to lose.
+- **Wrong in one premise, kept**: the forecast's per-file split of the 22 (`array.wast` 21) was the
+  *shape* census, not the file census; measured, the 28 spread over six files. Both total 28 and
+  neither is a re-spelling of the other, because a `(ref.array)` expectation appears in three files.
+- **One consequence the forecast did not name at all, and the gate did**: `HostRef` — the constructor
+  this record's "one more as an *argument*" consequence rests on — had no caller in the module, so the
+  deadcode gate refused it. The allowlist for that gate is empty by policy, so the resolution is a
+  production caller: `ParseValue` now reads `ref:host:0:(ref null any)`, which also closes a
+  print/parse asymmetry this record opened without noticing — `String` gained four payload spellings
+  and no reader, outside the round-trip control's domain because that domain is the *Kind* vocabulary
+  and a payload is not a Kind. A third exhaustiveness control
+  (`TestEveryPayloadSpellingIsReadOrRefusedByName`) covers the parse seam, enumerating from
+  `payloadPastEnd`.
+- The controls fired as forecast, with one addition the forecast missed: `foreclosingLicensed`
+  (`internal/testenv`) is keyed by line number, so editing `spec_test.go` invalidated twelve licences
+  at once. That is the scheme working — it double-reports, unlicensed at the new line and stale at
+  the old — but it belonged in the control list and was not in it.
 
 ## Consequences
 

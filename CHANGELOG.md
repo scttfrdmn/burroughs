@@ -21,11 +21,68 @@ weakly-ordered platform.
 
 ### Added
 
+- **A reference's payload kind now crosses both value boundaries, and the `unsupported` column falls
+  57 → 29** ([#270](https://github.com/scttfrdmn/burroughs/issues/270),
+  [0039](docs/decisions/0039-a-references-payload-kind-crosses-the-two-boundaries-as-one-enumerated-kind-and-the-static-type-gate-is-its-own-census.md),
+  stamped on the #443 relay). #270 was **two-sided**, and either half alone would have moved the column
+  by zero: the *want* side could not spell six of `parser.mly:1517-1530`'s eight `RefTypePat` arms —
+  `(ref.array)` had no representation at all, and 17 of the 28 decline on that one — while the *got*
+  side could not build a non-null reference of a type `valKind` cannot name, so a readable
+  `(ref.array)` would have had nothing to be judged against. The repair is the authority's own two
+  operands (`assert_ref_pat`, `runner.ml:464-476`): a `RefPat` for the pattern the vector wrote and a
+  `RefPayload` for the constructor the result is. The vocabulary is **one enumerated kind, restated
+  per layer rather than imported** — `interp.RefPayload`, a public `burroughs.RefPayload` mapped in
+  `convert.go`, and in `internal/spec` a got-side `RefPayload` beside the want-side `RefPat` — which is
+  what keeps `internal/spec` from importing `interp` in non-test code. `interp.Value.IsHost` **migrates
+  into** it as `RefKind == PayloadHost` rather than sitting beside it; 0027 decision 3's stamped bit is
+  not repudiated, it is the enum's first member.
+  Scott's stamp carried one condition — *"the payload kind is handled exhaustively at both boundaries,
+  with a test that enumerates the kinds from the type's own definition and fails on any unmapped one.
+  No `default` case that silently absorbs a future member"* — discharged by three controls, one per
+  restated vocabulary, each enumerating from an `iota`-maintained in-block sentinel after the last real
+  member, each asserting count equality and injectivity both ways, none with an absorbing `default`,
+  and **each watched failing on an injected member** before it was believed. Cross-package `exhaustive`
+  cannot see two enums in two packages, which is why both seams are maps with coverage controls rather
+  than switches.
+  Board: `unsupported` **29 (−28)**, `gated` **4187 (+28)**, `pass` **60928 (unchanged)**, `fail`
+  **0 (unchanged)**; all-on lane **65042 pass (+28), 38 fail (unchanged), 0 gated**. The 28 land in
+  `gated` rather than `pass` because every one is in a GC-gated file and this is a harness widening,
+  not an engine capability — a **reclassification, not a reward**; the figure with a subject is the
+  all-on lane's +28. That all 28 pass all-on **exceeded the forecast**, which claimed only
+  `extern.wast`'s 6 and declined to forecast the other 22: being able to ask a question is not a
+  prediction of its answer, and the conservatism is stated in that direction rather than read back as
+  a 28-for-28 hit. `allOnFailCeiling` did not move, and that zero is **derived** — the 28 were
+  `unsupported`, a third verdict, so none was ever a red to lose.
+  **The CLI's argument syntax reads back a bare host reference**, `ref:host:0:(ref null any)`, which is
+  the print/parse asymmetry the payload kinds would otherwise have opened: four new spellings arrived at
+  the public boundary with a printer and no reader, and the round-trip control could not see them
+  because its domain is the *Kind* vocabulary and a payload is not a Kind. Found by the **deadcode
+  gate** — `HostRef` had no caller in the module, and the allowlist for that is empty by policy — so the
+  resolution is a production caller rather than an entry, which is what that empty allowlist is for.
+  Exactly one payload reads back, because exactly one has a public constructor; the other six are
+  refused *by name*, and `TestEveryPayloadSpellingIsReadOrRefusedByName` enumerates them from
+  `payloadPastEnd`. Its own first draft asked for the payload name by bare substring, under which the
+  word `constructor` in the refusal's sentence satisfied the check for `struct` — the falsification
+  probe failed on five payloads where six were expected, and the name is quoted now.
+  Two things found in passing: the pattern-spelling defect below (grave
+  [#445](https://github.com/scttfrdmn/burroughs/issues/445)), and
+  `TestFromRefDoesNotFabricateAHostIdentity` asserted only its guard, so it now also asserts the fix
+  (an externalized i31 arrives as `PayloadI31`, and a host reference at address 0 keeps `PayloadHost`
+  with identity 0). `internal/interp/externop.go`'s pre-registration is **settled by mutation rather
+  than left as prose**: an identity-only probe at `fromRef` fails exactly `extern.wast:39,42,56` — the
+  three named vectors, confirmed — while a kind-only probe adds `:49`, which is not a fourth identity
+  witness but the bare `(ref.extern)` wildcard scoring payload *determinacy*, since `RefPat.admits`
+  refuses `PayloadNone` up front. `Matches`' `want.Kind != got.Kind` gate is untouched and stays a
+  declared incorrectness tracked as [#441](https://github.com/scttfrdmn/burroughs/issues/441): it is
+  inert over all 28 rows, its oracle is an accept-direction census, and a negative-direction corpus
+  cannot witness a wrong acceptance.
+
 - **Decision 0039, held open: a reference's payload kind crosses the two boundaries as one enumerated
   kind** ([#270](https://github.com/scttfrdmn/burroughs/issues/270),
   [0039](docs/decisions/0039-a-references-payload-kind-crosses-the-two-boundaries-as-one-enumerated-kind-and-the-static-type-gate-is-its-own-census.md)).
-  The record only; no implementation, and `Status:` stays **proposed** because it widens the public
-  `burroughs.Value` and 0027's one-bit precedent for that was stamped. Re-measuring the population
+  The record only; it was held at **proposed** until a stamp existed to point at, because it widens the
+  public `burroughs.Value` and 0027's one-bit precedent for that was stamped. (Stamped since, on the
+  #443 relay — the implementation is the entry above.) Re-measuring the population
   corrected two claims it was scoped on: #270 is **28** vectors and the 39 in the `assert_return`
   sub-column includes #323's 11 global-`get` actions, so the `unsupported` column decomposes
   28 + 11 + 15 + 3 = 57 with nothing left over; and `internal/binary` needs no widening at all, since
@@ -1545,6 +1602,16 @@ weakly-ordered platform.
 
 ### Changed
 
+- **The ratio comparator's blind spot is written where its domain is described** (Scott, on the #443
+  relay: *"just making the blind spot readable, the same way the board's are"*). `scripts/ratio.sh`
+  sees neither Makefiles nor workflow files: both land in `other`, so a repair to `make check` or to a
+  CI job — gate work, and some of the most load-bearing there is — moves neither column and appears
+  only in the parenthesized count. **The rule is unchanged**; #113 fixes the comparator, a non-`.go`
+  path belongs in `other`, and [#436](https://github.com/scttfrdmn/burroughs/issues/436) already put
+  the same question for `scripts/` to Scott and was ruled the same way — *"if `other` keeps growing,
+  that's a signal to read rather than a definition to change."* This is that reading made cheap: a gap
+  on the page can be priced by whoever reads the figure, and one that isn't reads as a zero.
+
 - **"A mutant that doesn't compile tests the compiler, not the control" is minted into the controls
   family** (Scott, on the #429 report). Stated as the trichotomy's *precondition* rather than a fourth
   answer, because it is the case where the exercise never ran and the transcript looks like it did:
@@ -2468,6 +2535,22 @@ weakly-ordered platform.
     re-pointed, so the retirement is readable at the site rather than only in this entry.
 
 ### Fixed
+
+- **A type pattern's expected spelling came from the val-type vocabulary, and the fixture asserting it
+  was written from the same one — [grave #445](https://github.com/scttfrdmn/burroughs/issues/445)**
+  (`internal/spec/refboundary_test.go`). `TestNullRendersWithoutAHeaptype` pinned the harness's rendering
+  of a reference pattern to `(ref.funcref)` and `(ref.externref)` — **val type** names, where the
+  grammar's pattern arms are over **heaptypes** (`parser.mly:1517-1530` spells them `(ref.func)` and
+  `(ref.extern)`) — so a mismatch message quoted an expectation in a syntax no vector contains, sending
+  its reader to grep the corpus for a string that is not there. Nothing could disagree: before 0039 a
+  pattern Val carried only a `Kind`, so the printed form was the only place the spelling existed, and
+  **the expectation and the renderer were written from the same enum**. That is *asserting a shape
+  against itself* one level up — a spelling checked against the vocabulary that produced it, when the
+  authority for a spelling is the grammar the vectors are written in. The right answer was ten lines
+  away the whole time, in a test-case *label* nothing asserted. No board row moved and no vector was
+  mis-scored; what was at risk was testimony. The rows derive from `refPatterns` now — whose keys are
+  the strings the parser matches — with a `len(refPatterns) < 8` vacuity floor under the loop and
+  `TestEveryRefPatHasASpelling` pinning the table's injectivity and its agreement with `String()`.
 
 - **The gofumpt liveness probe discarded its own mechanism channel — [grave
   #444](https://github.com/scttfrdmn/burroughs/issues/444)** (`.github/workflows/ci.yml`, `Makefile`).

@@ -703,6 +703,103 @@ func (s *stack) pushF64(v float64) { s.pushNum(math.Float64bits(v)) }
 
 func (s *stack) popF64() float64 { return math.Float64frombits(s.popNum()) }
 
+// RefPayload names which constructor a non-null reference value's payload is — the boundary's
+// mirror of `ref`'s own payload discriminators, carried as **one enumerated field rather than a
+// family of bools** (decision 0039 decision 1).
+//
+// **Why an enum and not the three or four bools `ref` itself uses.** The kinds are mutually
+// exclusive and a bitfield does not say so, so `IsI31 && IsStruct` would be constructible at a
+// boundary the host writes to and every reader would need a precedence order to be safe. Inside
+// `ref` the bools are right — each earlier kind announces itself by a non-nil pointer, and 0020's
+// one-field-per-payload-kind shape is that package's own — but a *boundary* value should not be
+// able to spell a value the engine cannot produce. 0039 priced both and chose this; the ADR's
+// option 1 is the bool family, declined on exactly that invalid-combination ground.
+//
+// **It reads against the authority rather than against `ref`.** `assert_ref_pat`
+// (`script/runner.ml:464-476`) dispatches on the runtime **value constructor** and reads no static
+// type at all, and a constructor is what OCaml's own `ref_` type is: `NullRef`, `HostRef`,
+// `I31Ref`, `StructRef`, `ArrayRef`, `FuncRef`, `ExnRef`. So the harness's oracle needs the
+// constructor, which is the fact `fromRef` used to drop.
+//
+// **`IsHost` migrated into this rather than being joined by it.** `RefKind == PayloadHost` is the
+// same fact the bool stated, and keeping both would be two places holding one fact. 0027 decision
+// 3's stamped bit is not repudiated — it is member one of the enum that generalizes it, and its
+// argument (identity 0 is a legitimate host reference, so a zero `RefID` cannot select the kind) is
+// *why* the discriminator has to be a field at all.
+type RefPayload uint8
+
+// The payload kinds. Members are the reference's own constructor set; `PayloadNone` is the zero
+// value so a `Value` nobody set names no payload rather than naming the first one.
+const (
+	// PayloadNone is the zero value, and it covers three separate situations rather than one: a
+	// numeric Value, a **null** reference (whose payload is the absence of one — `NullRef` is
+	// nullary, grave #266), and a non-null reference with no discriminator set at all, which is
+	// the engine inconsistency `typeOfRef`'s own default arm reports rather than a payload kind.
+	PayloadNone RefPayload = iota
+
+	// PayloadHost is `script.ml`'s `HostRef of int32` — the harness's `(ref.host N)`, whose
+	// identity is RefID. Member one because it is `IsHost` generalized (see the type's comment).
+	PayloadHost
+
+	// PayloadI31 is `i31.ml`'s `I31Ref of int` — the payload itself crosses, in I31.
+	PayloadI31
+
+	// PayloadStruct and PayloadArray are `aggr.ml`'s `StructRef`/`ArrayRef`. The payload itself
+	// does **not** cross: a `*gcObj` is guest-allocated and is not expressible in a Value (0002's
+	// GC-precision pin, and 0039's option 4 declines exporting a predicate over it instead). What
+	// crosses is which of the two constructors it is, which is all `assert_ref_pat` reads.
+	PayloadStruct
+	PayloadArray
+
+	// PayloadFunc is `instance.ml`'s `FuncRef of func_inst`. The function index rides in Bits and
+	// the defining instance does not cross at all — Value.RefID's own scope statement.
+	PayloadFunc
+
+	// PayloadExn is `exn.ml`'s `ExnRef of exn`, and like the aggregates only the constructor
+	// crosses.
+	PayloadExn
+
+	// PayloadPastEnd is **not a payload kind**, and it is *exported anyway* — the one thing about it
+	// that needs an argument, since a sentinel that is not part of the vocabulary would naturally be
+	// unexported. It is exported because the boundary it guards is crossed by **two other packages**:
+	// the public `burroughs` package maps this enum at `convert.go`, and `internal/spec`'s harness
+	// glue maps it again, and a control in either one can only derive the domain from the type's own
+	// definition if it can name the bound. Unexported, each would have to enumerate the members it
+	// knew about — which is the enumerated-domain defect the sentinel exists to prevent, reappearing
+	// in the instrument built to prevent it. The name carries the warning that unexportedness would
+	// have carried, and no switch treats it as a kind.
+	//
+	// It is the domain's upper bound, declared inside
+	// this block so that `iota` maintains it: a member added above this line moves it, and every
+	// control that iterates `PayloadNone`..`PayloadPastEnd` sees the new member without anyone
+	// remembering to update a count written down somewhere else. That is the difference between a
+	// domain derived from the type's own definition and one enumerated beside it, which is Scott's
+	// condition on the 0039 stamp — *an enum whose whole purpose is to grow must fail loudly the
+	// first time it does*. Every switch over this type names it, for the same reason the RefClass
+	// switches in `internal/spec` name their own unreachable members: so `exhaustive` can confirm a
+	// stated reading exists for each, rather than one being absorbed by a `default`.
+	PayloadPastEnd
+)
+
+// payloadNames spells each member for String, and is the domain the exhaustiveness control checks
+// the conversion tables against — one map, so a member added without a name is a missing row.
+var payloadNames = map[RefPayload]string{
+	PayloadNone:   "none",
+	PayloadHost:   "host",
+	PayloadI31:    "i31",
+	PayloadStruct: "struct",
+	PayloadArray:  "array",
+	PayloadFunc:   "func",
+	PayloadExn:    "exn",
+}
+
+func (p RefPayload) String() string {
+	if n, ok := payloadNames[p]; ok {
+		return n
+	}
+	return fmt.Sprintf("RefPayload(%d)", uint8(p))
+}
+
 // Value is one wasm value crossing the host boundary, carrying its type.
 //
 // **Tagged, unlike the stack**, and the asymmetry is the point rather than an inconsistency. On the
@@ -726,10 +823,20 @@ type Value struct {
 
 	// Bits is the value's representation, read according to Type — the same discipline as the
 	// numeric stack, so crossing the boundary is a tag being attached rather than a
-	// representation being converted. Unread when Type.IsRef(); a reference's representation
-	// is Null/RefID below, never a bit pattern, because a Go pointer (what `ref.Inst` carries
-	// internally) cannot honestly be flattened into a `uint64` without reintroducing the
-	// GC-invisibility hazard 0002's whole parallel-array pin exists to avoid.
+	// representation being converted. A reference's representation is Null/RefKind/RefID/I31
+	// below, never a bit pattern, because a Go pointer (what `ref.Inst` carries internally)
+	// cannot honestly be flattened into a `uint64` without reintroducing the GC-invisibility
+	// hazard 0002's whole parallel-array pin exists to avoid.
+	//
+	// **One exception, and it is stated because this sentence used to deny it.** It read "unread
+	// when Type.IsRef()", while `fromRef` had been writing a **funcref's function index** here for
+	// as long as it had a non-externref arm, and `toRef` had been reading it back — so the comment
+	// asserted the property the code lacked, which is the shape that makes review confirm a bug.
+	// The index rides here rather than in RefID because RefID's own scope statement is about a
+	// funcref's *identity* (which needs the defining instance too, and does not cross); a bare
+	// index in the caller's own instance is the one thing that does. Read exactly when
+	// RefKind == PayloadFunc, and measured: 0 corpus vectors read it in either direction, so it is
+	// a shape the boundary carries rather than one it is exercised on.
 	Bits uint64
 
 	// Hi is a v128 value's high 64 bits (decision 0024) — meaningful only when Type == V128, in
@@ -748,37 +855,46 @@ type Value struct {
 	// harness-side literal — the two scope statements are the same measurement, cited once.
 	Null bool
 
-	// IsHost is whether RefID below carries a **host identity** — `ref.IsHost`'s mirror at the
-	// boundary, and decision 0027 decision 3's arrival in the public type.
+	// RefKind is **which constructor** this non-null reference is — see RefPayload above for why
+	// it is one enumerated field and not a family of bools, and for what it replaced. Meaningful
+	// only when Type.IsRef() && !Null, where it is also the field that selects which of RefID and
+	// I31 below carries a payload at all.
 	//
-	// **Why a discriminator is needed here and was not before.** Until slice 3 the only non-null
-	// reference this boundary could carry with an identity was an externref, and the only externref
-	// the corpus spells is `(ref.extern N)` — so `Type == ExternRef && !Null` implied "identity in
-	// RefID" and the bit would have been redundant. It stopped implying it the moment
+	// **This is `IsHost` generalized, and the generalization was forced by measurement rather than
+	// by taste.** The bit's own argument survives verbatim in the enum: until slice 3 the only
+	// non-null reference this boundary could carry with an identity was an externref, and the only
+	// externref the corpus spells is `(ref.extern N)` — so `Type == ExternRef && !Null` implied
+	// "identity in RefID" and no discriminator was needed. It stopped implying it the moment
 	// `extern.convert_any` got an arm: `externalize-i` (`extern.wast:29-31`) returns an externref
 	// wrapping an **i31**, a **struct** or an **array**, none of which has an identity at all, and
-	// `r.Addr` is 0 for every one of them. Without this bit `fromRef` would hand those results out as
-	// `RefID: 0` — i.e. as `(ref.extern 0)`, a host identity the value does not have and that
-	// `extern.wast:37` genuinely uses for a *different* reference. No vector catches it (`:46-49`
-	// expect the bare `(ref.extern)` pattern, which admits any non-null externref), which is exactly
-	// §9 G-3's accept direction: the fabrication is green by construction, so the bit is the only
-	// thing that can be wrong instead.
+	// `r.Addr` is 0 for every one of them. Without a discriminator `fromRef` would hand those
+	// results out as `RefID: 0` — i.e. as `(ref.extern 0)`, a host identity the value does not have
+	// and that `extern.wast:37` genuinely uses for a *different* reference. No vector catches that
+	// (`:46-49` expect the bare `(ref.extern)` pattern, which admits any non-null externref), which
+	// is the accept direction: the fabrication is green by construction, so the discriminator is the
+	// only thing that can be wrong instead.
 	//
-	// Meaningful only when Type.IsRef() && !Null. True for `(ref.extern N)` in both directions —
-	// `parser.mly:1502` is `Extern.ExternRef (Script.HostRef N)`, an externalized *host* reference,
-	// which is why `ExternRef` below sets it. False for a non-null reference whose identity this
-	// boundary does not track: a funcref (RefID's own scope comment) and an externref wrapping a
-	// GC payload.
-	IsHost bool
+	// What #270/0039 added is that **naming three kinds is not enough when the corpus asks about
+	// five**: `assert_ref_pat` dispatches on the constructor, so `(ref.i31)`, `(ref.struct)` and
+	// `(ref.array)` as expected results each need the constructor to arrive here, and a bool that
+	// only distinguishes host-from-not answers none of them.
+	//
+	// PayloadHost for `(ref.extern N)` in both directions — `parser.mly:1502` is
+	// `Extern.ExternRef (Script.HostRef N)`, an externalized *host* reference, which is why
+	// `ExternRef` below sets it, and equally for a **bare** `(ref.host N)` at an `anyref` parameter
+	// (`parser.mly:1501`, `extern.wast:42`), which differs in its static Type and not in its
+	// payload. `PayloadNone` for a non-null reference whose constructor the engine could not
+	// determine, which is an engine inconsistency rather than a kind (see the member's comment).
+	RefKind RefPayload
 
-	// RefID is an externref's opaque host identity — this Value's mirror of `ref.extern N`'s
-	// N, present so a caller can construct and inspect a non-null externref without reaching
-	// into the package-internal `ref`/`Extern` types. Meaningful exactly when **IsHost** — which
-	// used to read "when Type == ExternRef and !Null", a condition that stopped being equivalent
-	// when an externref could wrap a GC payload (see IsHost above). Zero is a legitimate identity,
-	// exactly as spec.Val.Extern's own comment states, so RefID must never be read as "unset" —
-	// Null is the field that means that, and IsHost is the field that says whether this one is a
-	// value at all.
+	// RefID is a **host** reference's opaque identity — this Value's mirror of `ref.extern N`'s
+	// and `ref.host N`'s N, present so a caller can construct and inspect one without reaching
+	// into the package-internal `ref`/`Extern` types. Meaningful exactly when
+	// **RefKind == PayloadHost** — a condition that used to read "when Type == ExternRef and
+	// !Null", stopped being equivalent when an externref could wrap a GC payload, and was `IsHost`
+	// before the kind subsumed it. Zero is a legitimate identity, exactly as spec.Val.Extern's own
+	// comment states, so RefID must never be read as "unset" — Null is the field that means that,
+	// and RefKind is the field that says whether this one is a value at all.
 	//
 	// **No funcref-identity field, and that is a scope boundary stated rather than hidden.** A
 	// non-null funcref crossing this boundary would need to name *which* function in *which*
@@ -792,6 +908,21 @@ type Value struct {
 	// gap rather than a silent one — a future non-null funcref argument surfaces as
 	// ErrUnsupportedOp at invokeIndex's parameter loop, named, rather than as a wrong value.
 	RefID uint32
+
+	// I31 is an i31 reference's payload — the 31-bit value itself, held unsigned exactly as
+	// `ref.I31` holds it internally, so the sign interpretation stays the one decision that made
+	// it (`i31.get_s`/`i31.get_u` are two instructions over one representation) and this boundary
+	// does not pick a side. Meaningful exactly when RefKind == PayloadI31.
+	//
+	// **Separate from RefID rather than sharing it**, though they are the same width and never both
+	// live. A shared field would need every reader to consult RefKind before it could name what it
+	// read, and the two are different *kinds* of thing: RefID is an identity the host chose and the
+	// engine only carries, I31 is a value the guest computed. `extern.wast:53` round-trips one
+	// through `externalize`/`internalize` and asserts `(ref.i31)`, so the payload crosses outward;
+	// nothing in the corpus passes one inward, and `toRef` reconstructs it anyway because the
+	// reconstruction is total and a one-directional field would be the asymmetry needing the
+	// comment.
+	I31 uint32
 }
 
 // F64 constructs an f64 Value from a float.
@@ -822,11 +953,29 @@ func NullRef(t binary.ValType) Value { return Value{Type: t, Null: true} }
 // refuses a non-null operand whose `Externalized` bit is clear (`externop.go`, and `eval.ml:929-933`
 // has no arm for one), so `extern.wast:37`'s `(invoke "init" (ref.extern 0))` reached the engine as
 // a shape the reference cannot produce and was reported as unvalidated. `(ref.host N)` is the bare
-// spelling (`parser.mly:1501`) and has no constructor here yet: the corpus passes one only at
-// `extern.wast:42`, whose parameter type is `anyref`, and this boundary has no way to name that
-// type — see fromRef's own note.
+// spelling (`parser.mly:1501`) and is HostRef below: the two differ in their static Type — an
+// externalized host reference is an `externref`, a bare one is an `anyref` (`script.ml:80`) — and
+// not at all in their payload, which is why one enumerated kind serves both.
 func ExternRef(id uint32) Value {
-	return Value{Type: binary.ExternRef, IsHost: true, RefID: id}
+	return Value{Type: binary.ExternRef, RefKind: PayloadHost, RefID: id}
+}
+
+// HostRef constructs a **bare** host reference Value carrying the given opaque identity, at the
+// given reference type — the harness's `(ref.host N)`, which `parser.mly:1501` makes a plain
+// `Script.HostRef N` with no `Extern.ExternRef` wrapper around it.
+//
+// The type is a parameter rather than fixed, because a bare host reference's static type is
+// whatever the signature it is crossing at says: `extern.wast:42` passes one at an **`anyref`**
+// parameter, and `script.ml:80` places a host reference's own dynamic heaptype at `any`, so
+// `anyref` is the type the corpus needs and `binary.AbstractRefType(binary.HeapAny, true)` is where
+// it comes from. Not defaulted here, so that a caller crossing at a *narrower* type cannot get a
+// silently-widened one.
+//
+// **Distinct from ExternRef by the Type it is given, not by anything this constructor does
+// differently** — which is exactly the fact `toRef` reads to decide whether `Externalized` is set,
+// and the reason the corpus can tell `(ref.host 2)` from `(ref.extern 2)` at all.
+func HostRef(t binary.ValType, id uint32) Value {
+	return Value{Type: t, RefKind: PayloadHost, RefID: id}
 }
 
 // Float64 reads a Value as an f64, by bit pattern.
@@ -847,59 +996,141 @@ func (v Value) Int64() int64 { return int64(v.Bits) }
 // mean "a function index in the callee's own instance", and the corpus never supplies a
 // non-null one at all, so this path is reachable only via a future widening's own arm, not by
 // anything in today's corpus.
+// **Externalization is read off the static type and not off the payload**, which is the one place
+// this pair deliberately does not mirror `typeOfRef`'s dispatch: `ref.Externalized` is set exactly
+// when t is `externref`, because that is what the two spellings differ in (`ExternRef` vs `HostRef`
+// above) and what `any.convert_extern` clears. The payload kind says what is *underneath* the
+// wrapper; the type says whether there is one.
 func (v Value) toRef(in *Instance) ref {
 	if v.Null {
 		return ref{Null: true}
 	}
-	if v.Type == binary.ExternRef {
-		// externref's "address" is the opaque host identity, stored in the same Addr field a
-		// funcref's function index uses — the two never collide because a slot's Kind decides
-		// which reading applies, exactly as ref's own Addr field comment already states for
-		// the function-index case. Inst is left nil: an externref never resolves through an
-		// instance's index space, so nothing here would ever read it.
-		//
-		// **Both bits, because `(ref.extern N)` is a wrapper around a host reference and not a
-		// primitive** — `ExternRef`'s own doc comment has the citation and the defect this
-		// corrects. `Externalized` is what `any.convert_extern` clears (leaving the host
-		// reference `extern.wast:19` stores into table slot 4) and `IsHost` is what says the
-		// thing underneath it is `script.ml`'s `HostRef` rather than a GC payload. Reading only
-		// `v.RefID` and setting neither, which is what this line did, produced a non-null
-		// reference with **no discriminator set at all** — a shape `typeOfRef`'s default arm
-		// exists to report, and a value the reference cannot construct.
-		//
-		// `IsHost` is carried through rather than asserted, so the one non-null externref shape
-		// this boundary can hold *without* an identity — an externref wrapping a GC payload,
-		// which `externalize-i` returns — does not acquire a fabricated one by being handed
-		// back. That direction is out of scope rather than supported: the payload itself cannot
-		// cross (a `*gcObj` is not expressible in a `Value`), so such a reference round-trips to
-		// `ref{Externalized: true}` and would be reported by `typeOfRef`'s default arm if
-		// anything used it. No corpus vector does — 0 vectors pass a non-null externref result
-		// back as an argument — which is the same measured scope boundary RefID's own comment
-		// states for a non-null funcref.
-		return ref{Externalized: true, IsHost: v.IsHost, Addr: v.RefID}
+	// Set for an `externref` and clear for every other reference type — including `anyref`, which
+	// is how a bare `(ref.host N)` stays bare. `any.convert_extern` refuses a non-null operand
+	// whose bit is clear (`externop.go`, and `eval.ml:929-933` has no arm for one), so getting this
+	// backwards is reported rather than absorbed.
+	ext := v.Type == binary.ExternRef
+	switch v.RefKind {
+	case PayloadHost:
+		// The opaque host identity goes in the same Addr field a funcref's function index uses —
+		// the two never collide because a slot's Kind decides which reading applies, exactly as
+		// ref's own Addr field comment already states for the function-index case. Inst is left
+		// nil: a host reference never resolves through an instance's index space.
+		return ref{Externalized: ext, IsHost: true, Addr: v.RefID}
+	case PayloadI31:
+		return ref{Externalized: ext, IsI31: true, I31: v.I31}
+	case PayloadFunc:
+		// The instance is the *caller's*, per RefID's doc comment on why a cross-instance funcref
+		// argument is out of scope: an externally-supplied funcref can only mean "a function index
+		// in the callee's own instance". Measured at 0 corpus vectors, so this arm is reachable
+		// only through a future widening rather than by anything the suite passes today — and
+		// `invokeIndex`'s parameter loop refuses a non-null funcref argument before it gets here.
+		return ref{Externalized: ext, Addr: uint32(v.Bits), Inst: in}
+	case PayloadStruct, PayloadArray, PayloadExn:
+		// **The payload cannot cross inward and the result says so rather than inventing one.** A
+		// `*gcObj`/`*excObj` is guest-allocated and not expressible in a Value (0002's GC-precision
+		// pin), so the kind arrives here with nothing to rebuild from. The returned reference is
+		// non-null with **no discriminator set** — precisely the shape `typeOfRef`'s default arm
+		// exists to report as an engine inconsistency — so a future caller that starts passing one
+		// gets a named error at its first use and not a wrong value. Measured: 0 corpus vectors
+		// pass a GC payload back as an argument, the same scope boundary RefID's own comment states
+		// for a non-null funcref.
+		return ref{Externalized: ext}
+	case PayloadNone, PayloadPastEnd:
+		// A non-null reference naming no kind is not a shape this boundary can honour either; it is
+		// the same engine inconsistency, arriving from the other direction. Named rather than
+		// folded into the arm above because the cause is different: there, a kind with an
+		// unexpressible payload; here, no kind at all.
+		return ref{Externalized: ext}
 	}
-	return ref{Addr: uint32(v.Bits), Inst: in}
+	// Unreachable: the switch above names every RefPayload member, and `exhaustive` fails the build
+	// if a new one arrives without an arm. Present because Go requires a terminating statement.
+	return ref{Externalized: ext}
+}
+
+// payloadOf reports which constructor a non-null internal ref is, and is the one place `ref`'s
+// discriminator family collapses into RefPayload.
+//
+// **It mirrors `typeOfRef`'s dispatch order minus the Externalized arm**, deliberately: `typeOfRef`
+// answers "what heaptype is this", so externalization overrides the payload there and must, while
+// this answers "what constructor is this", where externalization is the wrapper and not the thing.
+// The rest of the order is `typeOfRef`'s and is load-bearing for the same reasons — a host reference
+// is checked before an i31 because both are payload-carrying non-pointer kinds, and `Inst != nil`
+// comes last because an aggregate carries one too.
+func payloadOf(r ref) RefPayload {
+	switch {
+	case r.IsHost:
+		return PayloadHost
+	case r.IsI31:
+		return PayloadI31
+	case r.Obj != nil:
+		// **Struct versus array is not a field on `gcObj`** — it is the composite type's own kind,
+		// read back through the defining module exactly as every other aggregate operation reads
+		// it. So the discrimination the corpus's `(ref.struct)`/`(ref.array)` patterns need comes
+		// from the type section rather than from the object.
+		ct, ok := compTypeAt(r.Obj.mod, r.Obj.typeIdx)
+		if !ok {
+			// An allocated object whose type index does not resolve is an engine inconsistency, not
+			// a payload kind; PayloadNone is what carries that outward (see its own comment).
+			return PayloadNone
+		}
+		switch ct.Kind {
+		case binary.CompStruct:
+			return PayloadStruct
+		case binary.CompArray:
+			return PayloadArray
+		case binary.CompFunc:
+			// A gcObj allocated against a functype cannot be produced by `struct.new`/`array.new`,
+			// so this is the same inconsistency as the unresolved index above.
+			return PayloadNone
+		}
+		return PayloadNone
+	case r.Exc != nil:
+		return PayloadExn
+	case r.Inst != nil:
+		return PayloadFunc
+	}
+	return PayloadNone
 }
 
 // fromRef converts an internal ref back to its public Value, at static type t.
+//
+// **This is where the payload kind used to be dropped**, which is what #270/0039 is: for any t that
+// was not `externref` the whole discriminator family collapsed to `Bits: uint64(r.Addr)`, so an
+// `internalize`d host reference arrived as `Value{Type: anyref, Bits: 1}` and an `externalize`d i31
+// could not say which constructor it wrapped. The harness could then neither build nor recognise
+// five of the eight patterns `assert_ref_pat` dispatches on.
 func fromRef(r ref, t binary.ValType) Value {
 	if r.Null {
+		// `NullRef` is nullary in the reference's own value type, so a null reference's payload is
+		// the absence of one and RefKind stays PayloadNone — grave #266's fact, restated as the
+		// enum's zero value rather than as a special case.
 		return Value{Type: t, Null: true}
 	}
-	if t == binary.ExternRef {
-		// **The identity is reported only when there is one**, which is IsHost's whole reason for
-		// existing at this boundary — see its own doc comment for the fabrication this avoids and
-		// why no vector can catch it. `r.Addr` is read under the same guard rather than
-		// unconditionally: a non-host externref's Addr is 0, and handing out
-		// `Value{RefID: 0, IsHost: false}` versus `Value{RefID: 0, IsHost: true}` is exactly the
-		// distinction between "no identity" and "identity zero", which `extern.wast` uses for two
-		// different references in one file (`:37`'s `(ref.extern 0)` and `:46`'s i31).
-		if r.IsHost {
-			return Value{Type: t, IsHost: true, RefID: r.Addr}
-		}
-		return Value{Type: t}
+	v := Value{Type: t, RefKind: payloadOf(r)}
+	switch v.RefKind {
+	case PayloadHost:
+		// **The identity is reported only when there is one.** `r.Addr` is read under the kind
+		// rather than unconditionally: a non-host reference's Addr is 0, and handing out
+		// `RefID: 0` with a host kind versus without one is exactly the distinction between
+		// "identity zero" and "no identity", which `extern.wast` uses for two different references
+		// in one file (`:37`'s `(ref.extern 0)` and `:46`'s i31).
+		v.RefID = r.Addr
+	case PayloadI31:
+		v.I31 = r.I31
+	case PayloadFunc:
+		v.Bits = uint64(r.Addr)
+	case PayloadStruct, PayloadArray, PayloadExn:
+		// The constructor crosses and the payload does not — which is enough for every pattern in
+		// `assert_ref_pat`, since it dispatches on the constructor and reads no contents. The
+		// unexpressibility is stated at PayloadStruct's own declaration.
+	case PayloadNone:
+		// Either a payload kind the engine could not determine (see payloadOf) or a non-null
+		// reference with no discriminator at all. Nothing to carry; the kind itself is the report.
+	case PayloadPastEnd:
+		// Not a payload kind. Named so `exhaustive` can see a reading exists for every member.
 	}
-	return Value{Type: t, Bits: uint64(r.Addr)}
+	return v
 }
 
 // Equal reports whether two values are identical, **bit for bit**, which is what
@@ -937,11 +1168,20 @@ func (v Value) Equal(w Value) bool {
 		return false
 	}
 	if v.Type.IsRef() {
-		// **IsHost joins the comparison, and it is not decoration**: without it a non-null
-		// externref with no identity (`externalize-i`'s result, IsHost false, RefID 0) compares
-		// equal to `(ref.extern 0)`, which is a different reference — the same fabrication
-		// `fromRef` is guarded for, arriving here as a wrong *equality* rather than a wrong value.
-		return v.Null == w.Null && v.IsHost == w.IsHost && v.RefID == w.RefID
+		// **RefKind joins the comparison, and it is not decoration**: without it a non-null
+		// reference with no identity (`externalize-i`'s result, RefID 0) compares equal to
+		// `(ref.extern 0)`, which is a different reference — the same fabrication `fromRef` is
+		// guarded for, arriving here as a wrong *equality* rather than a wrong value. Since 0039 it
+		// also separates the five constructors that were one shape before: an i31 and a struct at
+		// the same static type are not equal, and no field they share could have said so.
+		//
+		// I31 joins for the same reason RefID does — it is a payload, so two i31 references are
+		// equal exactly when their payloads are. Bits is left out: it carries only a funcref's
+		// index (see its own comment), and comparing two funcrefs by index alone would call
+		// same-index functions in *different instances* equal, which is grave #163's shape. So a
+		// funcref comparison here is deliberately coarse and 0 vectors reach it — the harness
+		// compares in `spec.Val.Matches` instead.
+		return v.Null == w.Null && v.RefKind == w.RefKind && v.RefID == w.RefID && v.I31 == w.I31
 	}
 	return v.Bits == w.Bits
 }

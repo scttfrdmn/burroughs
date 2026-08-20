@@ -148,19 +148,33 @@ func TestExternRoundTripPreservesThePayload(t *testing.T) {
 // between *no identity* and *identity zero*.
 //
 // `externalize-i` (`extern.wast:46-49`) returns a non-null externref with no host identity behind it;
-// `(ref.extern 0)` is a host reference whose identity is the index 0. A `fromRef` that dropped the
-// `IsHost` guard reports the first as the second, because `RefID`'s zero value is a legal index — and
-// the whole file passes either way, which is the mutation above.
+// `(ref.extern 0)` is a host reference whose identity is the index 0. A `fromRef` that reported every
+// non-null reference as a host one reports the first as the second, because `RefID`'s zero value is a
+// legal index — and the whole file passes either way, which is the mutation above.
+//
+// The guard was the boolean `IsHost` field until #270 retyped it as `RefKind`, so the fabrication this
+// asserts against is now "reports `PayloadHost` for a payload that is something else" — and the
+// something else is nameable, which is the second half of what the first probe now checks: an
+// externalized i31 arrives at the boundary as an i31 rather than as an unspecified non-null reference.
 func TestFromRefDoesNotFabricateAHostIdentity(t *testing.T) {
 	got := fromRef(ref{Externalized: true, IsI31: true, I31: 1}, binary.ExternRef)
-	if got.IsHost || got.RefID != 0 {
+	if got.RefKind == PayloadHost || got.RefID != 0 {
 		t.Fatalf("fromRef of a non-host externref = %+v, want no identity", got)
+	}
+	// Not merely "not a host": the payload it *is* survives the crossing. Before #270 the boundary
+	// had one bit here and every non-host reference collapsed into the same shape, which is what made
+	// `(ref.i31)` unaskable — so asserting the positive is asserting the fix and not just its guard.
+	if got.RefKind != PayloadI31 || got.I31 != 1 {
+		t.Errorf("fromRef of an externalized i31 = %+v, want RefKind %v with I31 1 — the payload kind "+
+			"is what an `(ref.i31)` expectation is judged against, and a boundary that reported it as "+
+			"an unspecified non-null reference would decline every such vector while passing this file",
+			got, PayloadI31)
 	}
 	// The discriminating half: a control that only ever watched `fromRef` report "no identity"
 	// would be satisfied by one that never reports an identity at all.
 	host := fromRef(ref{IsHost: true, Addr: 0}, binary.ExternRef)
-	if !host.IsHost || host.RefID != 0 {
-		t.Errorf("fromRef of host reference 0 = %+v, want IsHost with RefID 0 — index zero is a "+
+	if host.RefKind != PayloadHost || host.RefID != 0 {
+		t.Errorf("fromRef of host reference 0 = %+v, want PayloadHost with RefID 0 — index zero is a "+
 			"legal identity, and it is exactly the value a fabricating boundary would also produce, "+
 			"so the pair above is the only thing that separates them", host)
 	}

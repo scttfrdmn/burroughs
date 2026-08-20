@@ -17,8 +17,11 @@ import (
 // Decision 0029 decision 2, which is Scott's ruling: hoisting `interp.Value` out of `internal/`
 // would freeze the interpreter's representation as public API while the GC work is still widening
 // it. `binary.ValType` took one widening for GC (the nullability bit and the type index), and
-// `interp.Value` has taken two more since — 0024's v128 high word and 0027's host-reference
-// discriminator. A type that widened three times in three slices is not a type to publish.
+// `interp.Value` has taken three more since — 0024's v128 high word, 0027's host-reference
+// discriminator, and 0039 *replacing* that discriminator with an enumerated payload kind plus an i31
+// payload. A type that widened four times in four slices is not a type to publish, and the fourth is
+// the sharpest specimen: it did not add to the surface, it **retyped a field**, which for a published
+// type is a compatibility break rather than a minor version.
 //
 // The cost is real and bounded: this is crossed once per argument and once per result of a Call,
 // never per instruction. Nothing here does arithmetic — it is a bit-pattern copy and a tag map,
@@ -87,6 +90,45 @@ var byteKinds = func() map[byte]Kind {
 	return out
 }()
 
+// payloadKinds pairs each public RefPayload with the engine's, and is the forward half of the one
+// mapping decision 0039 puts at this seam.
+//
+// **A table and not a cast, though both enums have the same members in the same order.** Equal
+// numbering is a coincidence that holds today and is exactly what a public vocabulary must not
+// depend on: the engine's enum can gain a member for an internal reason (a proposal's new reference
+// constructor arrives there first), and `RefPayload(iv.RefKind)` would then silently rename every
+// member above it. The table makes that a missing row instead — and a missing row is a named error
+// at the seam, which is what Scott's condition on the 0039 stamp asks for: *an enum whose whole
+// purpose is to grow must fail loudly the first time it does*.
+var payloadKinds = map[RefPayload]interp.RefPayload{
+	PayloadNone:   interp.PayloadNone,
+	PayloadHost:   interp.PayloadHost,
+	PayloadI31:    interp.PayloadI31,
+	PayloadStruct: interp.PayloadStruct,
+	PayloadArray:  interp.PayloadArray,
+	PayloadFunc:   interp.PayloadFunc,
+	PayloadExn:    interp.PayloadExn,
+}
+
+// kindPayloads is the reverse direction, computed from the forward table rather than written out —
+// byteKinds' reason, applied to the second bijection this file carries. Two independently maintained
+// maps over one mapping is the drift the repo's two-registry rule names.
+//
+// It panics at init on a forward table that is not injective, because a collision would make one
+// engine payload kind convert to whichever public member the map iteration reached last — a wrong
+// answer produced nondeterministically, where this is a loud one and the package cannot function
+// either way.
+var kindPayloads = func() map[interp.RefPayload]RefPayload {
+	out := make(map[interp.RefPayload]RefPayload, len(payloadKinds))
+	for pub, in := range payloadKinds {
+		if prev, dup := out[in]; dup {
+			panic(fmt.Sprintf("burroughs: %v and %v both map to engine payload %v", prev, pub, in))
+		}
+		out[in] = pub
+	}
+	return out
+}()
+
 // typeToInternal converts a public Type to the engine's.
 func typeToInternal(t Type) (binary.ValType, error) {
 	if vt, ok := numericValTypes[t.kind]; ok {
@@ -134,13 +176,23 @@ func valueToInternal(v Value) (interp.Value, error) {
 	if err != nil {
 		return interp.Value{}, err
 	}
+	rk, ok := payloadKinds[v.refKind]
+	if !ok {
+		// A public payload kind with no engine counterpart. Unreachable while payloadKinds covers the
+		// vocabulary — which `TestPayloadConversionCoversTheWholeVocabulary` is what checks — and an
+		// error rather than a zero because PayloadNone is a *meaning* here ("no payload"), so
+		// defaulting to it would convert an unmapped struct reference into a reference naming no
+		// constructor and lose the failure.
+		return interp.Value{}, fmt.Errorf("burroughs: no engine payload kind for %v", v.refKind)
+	}
 	return interp.Value{
-		Type:   vt,
-		Bits:   v.bits,
-		Hi:     v.hi,
-		Null:   v.null,
-		IsHost: v.host,
-		RefID:  v.ref,
+		Type:    vt,
+		Bits:    v.bits,
+		Hi:      v.hi,
+		Null:    v.null,
+		RefKind: rk,
+		RefID:   v.ref,
+		I31:     v.i31,
 	}, nil
 }
 
@@ -150,12 +202,22 @@ func valueFromInternal(iv interp.Value) (Value, error) {
 	if err != nil {
 		return Value{}, err
 	}
+	rk, ok := kindPayloads[iv.RefKind]
+	if !ok {
+		// The direction that will actually fire when the engine's enum grows first, which is the
+		// likely order: a proposal's new reference constructor lands in `interp` and reaches here
+		// before this package has a member for it. Named, with the engine's own spelling in the
+		// message, rather than converted to PayloadNone — a result silently reporting "no
+		// constructor" is the fabrication this whole seam exists to prevent (see Value.RefKind).
+		return Value{}, fmt.Errorf("burroughs: no public payload kind for engine payload %v", iv.RefKind)
+	}
 	return Value{
-		typ:  t,
-		bits: iv.Bits,
-		hi:   iv.Hi,
-		null: iv.Null,
-		host: iv.IsHost,
-		ref:  iv.RefID,
+		typ:     t,
+		bits:    iv.Bits,
+		hi:      iv.Hi,
+		null:    iv.Null,
+		refKind: rk,
+		ref:     iv.RefID,
+		i31:     iv.I31,
 	}, nil
 }
