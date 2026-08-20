@@ -7900,7 +7900,19 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	//
 	// The default lane's reward is structurally 0 — all seven rows sit in GC- or EH-gated files, so
 	// they are `gated` there and this is the only lane in which they can be counted.
-	const allOnPassFloor = 65049
+	// # 65049 → 65064, +15, and the lanes agreeing exactly is the reading
+	//
+	// #440's `assert_exhaustion` arm. The default lane moved +15 too (`passFloor`), and the two lanes
+	// landing on the same figure is what says **no gate is anywhere near this slice**: all 15 vectors
+	// live in `call`, `call_indirect`, `fac` and `skip-stack-guard-page.wast`, all MVP core, so
+	// turning every gate on changes nothing about them. That equality is the check on the diagnosis
+	// — the last three entries above are all cases where the two lanes *diverged*, each divergence
+	// naming a gate that was declining the slice, and a divergence here would have meant the arm was
+	// admitting something the default lane could not see.
+	//
+	// `allOnFailCeiling` below does not move either: 15 conversions, 15 passes, 0 new reds. The
+	// forecast's 10 predicted fails were predicted for both lanes and appeared in neither.
+	const allOnPassFloor = 65064
 	// **Slack 0 as of Scott's #387 ruling**, which this bound's own 89-row staleness above is what
 	// prompted: a floor with 250 of tolerance cannot detect anything smaller than 250, so it is a
 	// bound sitting inside its own tolerance. Exact from here — re-base it in the PR that moves the
@@ -9122,7 +9134,29 @@ func TestPhase1Files(t *testing.T) {
 	//
 	// The residue is 11 `assert_return` (#323), 15 `assert_exhaustion` (#440), 3 no-head-atom (#320) —
 	// three named subjects, one issue each, and no unattributed remainder.
-	const unsupportedCeiling = 29
+	//
+	// # 29 → 14: #440 takes the 15 `assert_exhaustion`, and the decomposition holds a second time
+	//
+	// One `classify` arm and one predicate member, no engine change: `callBudget` and `trapExhaustion`
+	// had been in `internal/interp/call.go` since the bulk trio, so these 15 were unsupported because
+	// the *directive* was outside the harness's vocabulary, not because the engine could not answer.
+	// Forecast −15 and measured −15, off a corpus enumeration that normalized every
+	// `assert_exhaustion` line in the suite: 15 uses, 4 files, two spellings, zero naming a module.
+	//
+	// **The split inside that 15 was forecast wrong, and the record says so.** The pre-registration
+	// predicted 5 pass and 10 fail — the ten `skip-stack-guard-page.wast` vectors were to fail *by
+	// construction*, on the argument that the file probes a host guard page while `callBudget` is a
+	// host-independent 10000-frame counter that a recursion bounded at 901 frames never reaches.
+	// Measured: **15 pass, 0 fail.** The premise was wrong because it came from the first 30 lines of
+	// a 2284-line file: `$function-with-many-locals` **calls itself** (`:154-155`, whose own comment
+	// says it recurses first on purpose), so the recursion is unbounded and the budget is genuinely
+	// reached. The engine's behaviour was right and the forecast's *reasoning* was not, which is a
+	// different correction from a number being off — a design consequence was about to be escalated
+	// to Scott on the strength of a sample.
+	//
+	// The residue is 11 `assert_return` (#323) + 3 no-head-atom (#320) = 14, still with no
+	// unattributed remainder.
+	const unsupportedCeiling = 14
 	// Slack 0 as of #387's ruling, with the other two tracked board counts — see
 	// `boardbound_test.go`'s retirement section. This is the one of the three where the retired
 	// slack's stated purpose bit hardest: a ceiling drains *toward* its column, so 250 of tolerance
@@ -11858,7 +11892,23 @@ func TestPhase1Files(t *testing.T) {
 	// The three figures the forecast got right are the ones derived rather than associated: `fail` −3
 	// and `unsupported` −9 exactly, and 12 rows conserved. Recorded because a pre-registration that
 	// half-misses is only useful if which half is said out loud.
-	const passFloor = 60928
+	// # 60928 → 60943, +15, and the +15 is the whole of `unsupported`'s −15
+	//
+	// #440's `assert_exhaustion` arm. No gate participates and no command is added, so the conversion
+	// is one column into another and the two figures are the same event counted twice: `unsupported`
+	// 29 → 14 and this floor +15, with `gated` flat at 4187 and `fail` flat at 0. The account of what
+	// the 15 are, and of the forecast that got the *split* wrong while getting the total exactly
+	// right, lives on `unsupportedCeiling` above — the column that drained is where a drain's story
+	// belongs, and repeating it here would give a reader two copies to keep in agreement.
+	//
+	// What is worth stating on *this* side is the direction the miss ran. The pre-registration
+	// forecast 5 of the 15 reaching this floor and 10 landing in `fail`; all 15 landed here. A floor
+	// forecast low and beaten is not the reassuring case it reads as: the 10 were predicted to fail
+	// *by construction*, so beating the forecast means the construction argument was false, not that
+	// the engine over-delivered. The +15 is banked because the engine answered 15 questions right,
+	// which is checkable; the forecast is recorded as a miss because its reasoning was wrong, which
+	// is a separate fact about the forecaster.
+	const passFloor = 60943
 	// Slack 0 as of #387's ruling, with `allOnPassFloor` and `unsupportedCeiling` — see
 	// `boardbound_test.go`'s retirement section. Two entries in the ledger above record taking a
 	// re-base *although the slack stayed silent* (58659 by a margin of 20, and the 416 that was four

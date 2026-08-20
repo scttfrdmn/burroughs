@@ -121,6 +121,7 @@ const (
 	KindNamedAssertTrap                 // (assert_trap (invoke $M "f" arg*) "text") — 0017
 	KindNamedInvoke                     // (invoke $M "f" arg*) at top level — 0017
 	KindAssertException                 // (assert_exception (invoke "f" arg*)) — an uncaught exception, #201 rung 2a
+	KindAssertExhaustion                // (assert_exhaustion (invoke "f" arg*) "text") — the call budget ran out, #440
 	KindAssertInvalid                   // (assert_invalid (module …) "text") — the module must fail validation, #9
 	KindAssertInvalidBinary             // (assert_invalid (module binary …) "text") — decodes, then must fail validation
 	KindAssertInvalidQuote              // (assert_invalid (module quote …) "text") — assembles, then must fail validation
@@ -198,6 +199,8 @@ func (k Kind) String() string {
 		return "invoke $M"
 	case KindAssertException:
 		return "assert_exception"
+	case KindAssertExhaustion:
+		return "assert_exhaustion"
 	case KindAssertInvalid:
 		return "assert_invalid (module)"
 	case KindAssertInvalidBinary:
@@ -277,8 +280,36 @@ func (k Kind) selectsModule() bool {
 	}
 }
 
+// wantsTrap reports whether the Kind's expectation is *an error that is a trap, carrying text* —
+// which is a question about the expectation's shape and not about the directive's spelling. Three
+// members, and the third one is why the distinction is worth stating.
+//
+// **`KindAssertExhaustion` joins rather than forking, and the reference is where that stops being
+// obvious.** In `runner.ml` exhaustion is a *different outcome from a trap*: `Exhaustion` is its own
+// exception (`runner.ml:19,29`), and `AssertExhaustion` matches only `exception Exhaustion (_, msg)`
+// (`:585-590`), so a plain trap does not satisfy it there. Here the engine has no separate exhaustion
+// type by design — `trapExhaustion` is a `*Trap` carrying `eval.ml:1115`'s string, argued in
+// `internal/interp/call.go` — so the type-level distinction the reference draws is carried **by the
+// message instead**, and this predicate is sound only because of that.
+//
+// What makes it sound rather than merely convenient is measured, not assumed: `call stack exhausted`
+// has exactly **one** production site in the engine, `trapExhaustion` at `call.go:118`, so no other
+// trap's text can satisfy an `assert_exhaustion` expectation. That is a fact about today's engine, in
+// precisely the sense the trap arm's own `isTrap` comment means it — a second producer of that phrase
+// would make this predicate accept a trap the reference refuses, and the phrase is short enough that
+// the hazard is real rather than theoretical. It is why the string lives in one `var` and not in a
+// literal at each site.
+//
+// **The two rules also differ, and the difference does not show here.** `assert_message`
+// (`runner.ml:498-501`) is a **prefix** match — `String.sub msg 0 (String.length re) <> re`, despite
+// the parameter being named `re` — while every expected-text arm in this file matches by *substring*
+// (decision 0003). Substring is strictly the looser of the two, so the harness can accept where the
+// reference refuses; on these 15 vectors it cannot, because all 15 expect exactly `call stack
+// exhausted` and the engine produces exactly that, where prefix, substring and equality coincide. The
+// general divergence is filed rather than repaired here, since it is seven call sites and one board
+// measurement of its own.
 func (k Kind) wantsTrap() bool {
-	return k == KindAssertTrapAction || k == KindNamedAssertTrap
+	return k == KindAssertTrapAction || k == KindNamedAssertTrap || k == KindAssertExhaustion
 }
 
 func (k Kind) wantsNothing() bool {
@@ -948,6 +979,52 @@ func classify(n node, src []byte) Command {
 		if len(n.list) == 2 && n.list[1].isList() {
 			if c, ok := invokeAction(n.list[1]); ok {
 				c.Kind, c.Line, c.Head = KindAssertException, n.line, head
+				return c
+			}
+		}
+		return Command{Kind: KindUnsupported, Line: n.line, Head: head}
+
+	case "assert_exhaustion":
+		// `(assert_exhaustion (invoke "f" arg*) "text")` — three elements, so the same grammar
+		// shape as `assert_trap`'s action half and one longer than `assert_exception`'s, which
+		// carries no expected text at all. Read against the reference's handler rather than
+		// inferred from the vectors: `AssertExhaustion (act, re)` at `runner.ml:585-590` runs the
+		// action and matches the message, so the trailing string is part of the assertion and not
+		// decoration.
+		//
+		// **One reader and one Kind, because that is what the corpus has.** All 15 uses across 4
+		// files are the unnamed action form — enumerated by normalizing every `assert_exhaustion`
+		// line in the suite, which yields exactly two spellings, `(invoke "S")` and
+		// `(invoke "S" (iN.const N))`, and **zero** naming a module. So there is no
+		// `KindNamedAssertExhaustion` to pair this with and no second reader to add, the same
+		// argument `assert_exception`'s arm makes above and for the same kind of measurement.
+		// `namedInvokeAction` is deliberately not consulted: a `(invoke $M …)` under this directive
+		// would fall out of this arm unsupported *with its head recorded*, which is the honest
+		// answer to a form the corpus does not contain, and adding a reader for it now would be a
+		// branch no falsification can reach (the stillborn-guard shape the `assert_trap` arm names).
+		//
+		// **Why these 15 sat unsupported, and what changed.** Not engine capability: the call-depth
+		// trap has been in `internal/interp/call.go` since the bulk trio — `callBudget` at `:87`,
+		// `trapExhaustion` at `:118`, `TestCallStackExhaustionIsReportedNotCrashed` running `runaway`
+		// and asserting the trap arrives rather than the process dying. What was missing is this
+		// arm: the directive was not in the harness's command vocabulary, so the rows landed in
+		// `KindUnsupported` with their heads recorded, exactly as designed. A column that reads
+		// "cannot ask" while the engine can answer is the third-column drift `assert_trap`'s own arm
+		// was corrected for (#157), one directive over.
+		//
+		// **One consequence of ADR 0026 becomes assertable here for the first time.** The tail-call
+		// decision's negative half reads *"`assert_exhaustion`'s existing vectors must stay green …
+		// a mechanism that accidentally stopped counting non-tail frames would buy the five and lose
+		// `call.wast:337`"*. `call.wast:337` is `(assert_exhaustion (invoke "runaway") …)` and it
+		// scored `unsupported` on the day that was written, in both lanes — so the named witness
+		// could not have gone red and the sentence pointed at a row nothing was asking. The *risk*
+		// was covered, by `TestCallStackExhaustionIsReportedNotCrashed` rather than by the board row
+		// the ADR named, which is why this is recorded rather than filed: the falsifier existed and
+		// the citation was to the wrong one. It is now both. (0026 is a tombstone and is not edited.)
+		if len(n.list) == 3 && n.list[1].isList() && n.list[2].isS {
+			if c, ok := invokeAction(n.list[1]); ok {
+				c.Kind, c.Line, c.Head = KindAssertExhaustion, n.line, head
+				c.Expect = string(n.list[2].str)
 				return c
 			}
 		}
@@ -3482,15 +3559,25 @@ func (s *Script) run(opts runOpts) *Result {
 			})
 
 		case KindAssertReturn, KindInvoke, KindAssertTrapAction,
-			KindNamedAssertReturn, KindNamedInvoke, KindNamedAssertTrap, KindAssertException:
-			// **Seven kinds, one arm, and the sharing is the point.** All seven call an exported
+			KindNamedAssertReturn, KindNamedInvoke, KindNamedAssertTrap, KindAssertException,
+			KindAssertExhaustion:
+			// **Eight kinds, one arm, and the sharing is the point.** All eight call an exported
 			// function on an instance, so they need the same instance lookup, the same
 			// no-instance accounting, the same gate handling, and the same panic on a
 			// declared-but-absent component. A bare `(invoke …)` is an assert_return with no
 			// expectation; an `assert_trap` action is one whose expectation is an error;
-			// `assert_exception` is a sibling expectation with no text to match; the three named
-			// forms differ only in *which* instance. A separate arm would be a second copy of all
-			// the state handling, drifting from this one on the next change.
+			// `assert_exception` is a sibling expectation with no text to match; `assert_exhaustion`
+			// is one whose expectation is a trap the reference spells as a distinct outcome; the
+			// three named forms differ only in *which* instance. A separate arm would be a second
+			// copy of all the state handling, drifting from this one on the next change.
+			//
+			// **`KindAssertExhaustion` is the eighth, and it cost nothing here at all** (#440) — it
+			// joined `wantsTrap()` (see that predicate for the reference's type-level distinction and
+			// the one-production-site measurement that makes the message carry it), so the scoring,
+			// the `IsTrap` tripwire and the three failure keys below were already written for it. The
+			// only line it added in this arm is its name in the case list. That is the two-axis
+			// design being paid back a second time: a new *expectation* that reuses an existing
+			// outcome shape is a predicate edit, not an arm.
 			//
 			// **`KindAssertException` joined rather than forked for `wantsTrap`'s own reason,
 			// one Kind short of a pair.** Unlike the three named Kinds (which came in a matched
@@ -3669,6 +3756,17 @@ func (s *Script) run(opts runOpts) *Result {
 				//     folded into it, because "trapped wrongly" is a much smaller job than
 				//     "did not trap".
 				key := "assert_trap (invoke) expected: " + c.Expect
+				if c.Kind == KindAssertExhaustion {
+					// **Its own key prefix, and the two trap Kinds keep sharing one.** A bucket key
+					// is a work-plan line, so an exhaustion failure filed under `assert_trap`
+					// would name a directive the vector does not use. The literal above is left
+					// alone rather than derived from `c.Kind.String()`: that would silently re-key
+					// every `KindNamedAssertTrap` failure from `assert_trap (invoke)` to
+					// `assert_trap (invoke $M)`, which is a board change with no finding behind it,
+					// in a PR whose forecast is about a different column. Filed as a defect of its
+					// own if it is one; not fixed in passing.
+					key = "assert_exhaustion expected: " + c.Expect
+				}
 				switch {
 				case err == nil:
 					got = fmt.Sprintf("the call returned %d results (%s) without trapping",

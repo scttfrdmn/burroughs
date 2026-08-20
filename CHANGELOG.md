@@ -21,6 +21,45 @@ weakly-ordered platform.
 
 ### Added
 
+- **`assert_exhaustion` enters the harness's command vocabulary, and the `unsupported` column falls
+  29 → 14** ([#440](https://github.com/scttfrdmn/burroughs/issues/440)). One `classify` arm, one
+  `Kind`, one `wantsTrap()` member, and **no engine change at all**: `callBudget` and
+  `trapExhaustion` have been in `internal/interp/call.go` since the bulk trio, and
+  `TestCallStackExhaustionIsReportedNotCrashed` has been running `runaway` and asserting the trap
+  arrives rather than the process dying. These 15 rows were `unsupported` because the *directive* was
+  outside the harness's vocabulary, not because the engine could not answer — the third-column drift
+  `assert_trap`'s own arm was corrected for in
+  [#157](https://github.com/scttfrdmn/burroughs/issues/157), one directive over.
+  `KindAssertExhaustion` joins `wantsTrap()` rather than getting a fourth outcome, and the reason is
+  a **measurement**: the reference treats `Exhaustion` as its own exception type (`runner.ml:585-590`
+  matches `exception Exhaustion (_, msg)` and a plain `Trap` does not satisfy it), so this engine —
+  which has no separate exhaustion type by design — carries the distinction **in the message
+  instead**, sound only because `call stack exhausted` has exactly *one* production site in the
+  engine. The bucket key is overridden to `assert_exhaustion expected: …` rather than derived from
+  `Kind.String()`, deliberately, since deriving it would silently re-key every
+  `KindNamedAssertTrap` failure. **One reader and one `Kind`, because that is what the corpus has**:
+  all 15 uses across 4 files are the unnamed action form and **zero** name a module, so there is no
+  `KindNamedAssertExhaustion` to pair it with and adding one would be a branch no falsification can
+  reach.
+  Board: default lane **60943 pass (+15)**, 0 fail, **14 unsupported (−15)**, 4187 gated over 256
+  files; all-on lane **65064 pass (+15)**, 31 fail unchanged. `passFloor`, `allOnPassFloor` and
+  `unsupportedCeiling` re-base with the lane, and the two lanes agreeing on +15 is the check on the
+  diagnosis — no gate is anywhere near this slice, so a divergence would have meant the arm was
+  admitting something the default lane could not see. `unsupported` delta **−15**, the whole of the
+  column's movement, and the residue is now 11 `assert_return`
+  ([#323](https://github.com/scttfrdmn/burroughs/issues/323)) + 3 no-head-atom
+  ([#320](https://github.com/scttfrdmn/burroughs/issues/320)) = 14, with no unattributed remainder
+  for the third census in a row.
+  **The pre-registration got the total exactly right and the split exactly wrong, and both are on the
+  record.** It forecast 5 pass / 10 fail, predicting every `skip-stack-guard-page.wast` vector would
+  fail *by construction* — a file probing a host guard page cannot be answered by a host-independent
+  frame counter. Measured **15 pass, 0 fail**: `$function-with-many-locals` calls itself
+  (`skip-stack-guard-page.wast:154-155`), so the recursion is unbounded and the budget is genuinely
+  reached. The engine's behaviour was right and the forecast's *reasoning* was not, which is a
+  different correction from a number being off — a design consequence was one step from being
+  escalated on the strength of 30 lines read out of a 2284-line file. The premise it ran on is
+  [grave #454](https://github.com/scttfrdmn/burroughs/issues/454) below.
+
 - **A reference's payload kind now crosses both value boundaries, and the `unsupported` column falls
   57 → 29** ([#270](https://github.com/scttfrdmn/burroughs/issues/270),
   [0039](docs/decisions/0039-a-references-payload-kind-crosses-the-two-boundaries-as-one-enumerated-kind-and-the-static-type-gate-is-its-own-census.md),
@@ -1633,6 +1672,24 @@ weakly-ordered platform.
 
 ### Changed
 
+- **Closing is a state transition on an issue, but a queue label is a claim about the world**
+  (`docs/laws/graves-and-sweeps.md`; Scott's ruling, relayed on the #448 merge). Amends grave
+  [#314](https://github.com/scttfrdmn/burroughs/issues/314)'s specimen rather than opening a new law,
+  because *the harm is identical*: #314 is the **keyword** path and this is the **hand** path, and in
+  this repo the label *is* the queue — `CLAUDE.md` defines the decisions-needed queue as open issues
+  carrying `decision-needed:scott`, assigned to Scott. So `gh issue comment` then `gh issue close`
+  discharges #314 in full and still leaves the second failure standing: an issue's state is a fact
+  *about the issue* and both paths get it right, while a queue label asserts something *outside* it —
+  that a person owes a decision — and that claim does not become false when the issue closes.
+  Caught one command short on [#441](https://github.com/scttfrdmn/burroughs/issues/441), which carried
+  the label while none of the three successors its PR body listed under *Decisions needed from Scott*
+  did. The remedy is a third command in the order — **before closing, list the labels** — and for each
+  one defining a queue, either transfer it (label *and* assignee) and verify the count landed where
+  expected, or say in the closing comment that the queue shrank and why. Measured *after*, not before.
+  **All the risk is in the transfer direction**, because the convention is `--state open` plus the
+  label: ten closed issues carry `decision-needed:scott` today and none is a false entry, so a stale
+  label on a closed issue costs nothing and a dropped one costs the whole ask.
+
 - **The ratio comparator's blind spot is written where its domain is described** (Scott, on the #443
   relay: *"just making the blind spot readable, the same way the board's are"*). `scripts/ratio.sh`
   sees neither Makefiles nor workflow files: both land in `other`, so a repair to `make check` or to a
@@ -2566,6 +2623,43 @@ weakly-ordered platform.
     re-pointed, so the retirement is readable at the site rather than only in this entry.
 
 ### Fixed
+
+- **Three `call.go:N` citations re-pointed, one of which this PR's own diff broke**
+  ([#456](https://github.com/scttfrdmn/burroughs/issues/456)). Adding 29 lines to `callBudget`'s doc
+  block moved every symbol in the file, silently invalidating `internal/validate/instr.go`'s
+  `call.go:142` — a citation that was **exact** at `20a3639` and whose subject is now at `:185` — plus
+  two in `internal/spec/wast.go`. Repaired by re-pointing *and* naming the symbol, so the next such
+  edit fails loudly instead of landing on plausible unrelated English. Found by grepping for
+  `call.go:` after the edit; **no control saw it**, and `make cite` resolves issue numbers, grave
+  labels and ADR filenames but no `file.go:N` at all. #456 carries the population (91 such tokens) and
+  a hand-checked sample of the five citations into `call.go` from outside it: one exact, one 4 lines
+  off, three misresolved by 19 to 240 lines. Filed rather than swept, since converting 91 citations to
+  symbol names touches a dozen files and two ADR tombstones, moves no board column, and is exactly the
+  pure-overhead work that needs charging to product.
+
+- **"The spec's own interpreter models stack overflow with a counter" — three valid citations and an
+  invented quantifier ([grave #454](https://github.com/scttfrdmn/burroughs/issues/454))**
+  (`internal/interp/call.go`). `callBudget`'s doc block cited `flags.ml:9`'s `let budget = ref 256`,
+  its decrement at `eval.ml:1080` and its check at `:1114`, and all three resolve exactly. The
+  universal between them does not: `eval.ml:1167-1168` is `try List.rev (eval c) with Stack_overflow
+  -> Exhaustion.error at "call stack exhausted"`, so the reference has **two** exhaustion sources — a
+  counter and a genuine host-stack catch — producing the identical message. This is the shape that
+  survives every sweep checking whether a cited line *exists*, because the defect is in a claim the
+  citations do not support rather than in a pointer that does not resolve.
+  The clause is **replaced rather than cut, and the repair strengthens the decision**: Go cannot take
+  the reference's second path at all, since a goroutine stack overflow is a fatal runtime error and
+  not a recoverable panic, so the counter is the *only* mechanism available here. `eval.ml:1167-1168`
+  is now cited beside `:1114` so the next reader sees both.
+  The false half was load-bearing exactly once, and it is why #440's forecast predicted ten failures
+  that did not occur. Third instance of *a premise sourced from a paragraph when the authority was one
+  fetch away* ([#431](https://github.com/scttfrdmn/burroughs/issues/431),
+  [#434](https://github.com/scttfrdmn/burroughs/issues/434)) and the **second inside this one doc
+  block** — the sentence immediately below it, repaired in the same PR, asserted a harness behaviour
+  (`assert_exhaustion` matching by substring) that did not exist at all while `classify` had no arm
+  for the directive. Two adjacent comments, one about the layer above and one about the layer below,
+  both describing a mechanism nobody had read.
+  `unsupported` delta for this entry alone: **0, structural** — a comment cannot move a board column.
+  It is charged as overhead to #440's arm, which is the same PR and carries the −15.
 
 - **`matches` gated every comparison on a static-type equality the authority does not have, and the
   seven vectors it refused are green — [#441](https://github.com/scttfrdmn/burroughs/issues/441),
