@@ -2272,7 +2272,15 @@ weakly-ordered platform.
     mutant at the byte the deferral writes, each caught. The control's domain is **derived** — an AST
     scan of the package's own source for every function that builds a deferred immediate, pinned at 5
     functions and 6 sites, since #130's cost was an enumeration. Ten of its eleven rows fail against
-    the unfixed tree; the eleventh is #77's deferral and is labelled as such.
+    the unfixed tree; the eleventh is #77's deferral and is labelled as such. The substitution is
+    **taken as built on Scott's ruling, under two conditions carried at the site**: its scope is
+    stated — for those three rows the leg certifies *meaning*, not byte-identity, so what is pinned is
+    that the bytes are *a* correct encoding and never that they are the canonical one — and it is
+    **self-retiring**, `TestDeferredImmReferenceIsStillThePinnedWabt` asserting the manifest's own
+    `wabt_version`, so a toolchain bump cannot land without this file failing and naming the move to
+    the byte leg. Carved out the way [ADR 0025](docs/decisions/0025-g-1-carves-out-vectors-whose-sole-blocker-is-9s-deferred-validator.md)
+    carves out, and for its reason: a carve-out with no stated end condition becomes permanent by
+    nobody deciding anything.
 
 - **A named type's params are bound into the local index space — [#77](https://github.com/scttfrdmn/burroughs/issues/77)**
   (`internal/text/parser.go`, `code.go`; part of #8). A `(func (type $sig) …)` whose typeuse is not
