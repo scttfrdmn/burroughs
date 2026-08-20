@@ -168,7 +168,13 @@ func TestValueMismatchBucketIsEmptyAndSaysWhoWroteAnyRow(t *testing.T) {
 	// still live — the same "append rather than edit" rule the ADR's own census correction
 	// follows. The bucket now holds the 7 that remain: 5 multi-memory, 2 encoder, both unrelated
 	// to Q2 and unmoved by it.
-	if len(rows) == 0 {
+	// **The condition gained its second clause, and the clause is the whole re-pointing** (decision
+	// 0038): an empty bucket is only a finding while something is *registered* to be in it. With the
+	// registry drained this arm would otherwise report "0 rows, where 0 are registered", which is a
+	// control complaining about an agreement — and the same vacuity the header's own history records
+	// twice, once in each direction. The forward direction below is what carries the claim in this
+	// state: any row that appears has no missing arm and no gate to hide behind.
+	if len(rows) == 0 && countMismatchRegistry() > 0 {
 		t.Errorf("value mismatches: 0, where %d rows are registered below.\n"+
 			"Every registered row names a live defect or frontier, so an empty bucket means either\n"+
 			"one of the three causes was fixed without this list being updated, or the corpus moved.\n"+
@@ -362,13 +368,27 @@ var expectedMismatches = map[string]map[int]string{
 	// falsifiability check is what caught the entries going stale (a registered mismatch that no
 	// longer mismatches), which is the control working exactly as designed rather than a defect
 	// to route around.
-	"load1.wast": {
-		25: "multi-memory: the writer module at :10 is declined, so $M's memory was never written",
-		26: "multi-memory: the writer module at :10 is declined, so $M's memory was never written",
-		27: "multi-memory: the writer module at :10 is declined, so $M's memory was never written",
-		28: "multi-memory: the writer module at :10 is declined, so $M's memory was never written",
-		29: "multi-memory: the writer module at :10 is declined, so $M's memory was never written",
-	},
+	// **`load1.wast:25-29` retired, and this one is different from the two retirements around it**
+	// (decision 0038, issue #414). The other two departed because the *cause* was answered — a
+	// harness gap closed, an emitter learned a section — and the rows became passes. These five are
+	// still exactly as described above: the writer at `:10` is still declined, `$M` still honestly
+	// reads 0, and the engine's behaviour has not changed by one instruction. What changed is the
+	// **verdict**: `sideEffectOfDecline` scores them `gated`, so they leave this bucket by leaving the
+	// fail column entirely.
+	//
+	// Which makes the departure worth reading in the direction this file's header cares about. The
+	// entry above ended by saying a mismatch's cause is read from the *lanes* rather than guessed from
+	// `Got`, and these five were the file's own demonstration: absent with every gate on, present with
+	// multi-memory off. That is not a defect diagnosis, it is a **scoring** diagnosis, and a row whose
+	// diagnosis is "a gate is off" was never this bucket's business — it was sitting here because the
+	// harness had no way to say so. Five rows correctly registered, correctly diagnosed, and in the
+	// wrong column the whole time.
+	//
+	// So this registry drains to empty, and the vacuity arm inverts back to the state the second
+	// paragraph of the test above describes — an empty bucket is expected, an unlisted row is the
+	// finding — for the third time in this file's history. The re-pointing is at the `len(rows) == 0`
+	// check, which now requires a *non-empty registry* to fire, because "0 rows against 0 registered"
+	// is agreement rather than staleness.
 	// **`linking.wast:609` and `linking3.wast:82` retired, #413.** Both named the missing start
 	// section as their cause — "the module at :592 carries `(start $main)`, which the emitter cannot
 	// write (#8)" — and the emitter writes it now, so both rows stopped mismatching and this control's

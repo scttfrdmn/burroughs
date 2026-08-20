@@ -3,6 +3,8 @@ package spec
 import (
 	"fmt"
 	"os"
+	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -2100,6 +2102,103 @@ func (reg Registry) decline(name string) {
 	delete(reg.Instances, name)
 }
 
+// sideEffectOfDecline is decision 0038's registry: assertion lines whose expected value is a side
+// effect a **gate-declined** module was supposed to have on a *third* instance, which the harness
+// answers with the third verdict rather than a fail.
+//
+// # Why the three slots above cannot reach these
+//
+// Decision 0037 gave the run loop gate state in every slot a declined module's *own identity* lives
+// in — `cur`/`curGated`, `named`/`namedGated`, `registry`/`Registry.Gated` — so a command asking
+// about the declined module gets the third verdict. Every one of them is keyed by the declined
+// module. These lines are the case where the decline's consequence lands on somebody else: the row's
+// subject is a healthy instance and only its *expectation* belongs to the declined module. Nothing
+// keyed by the declined module can see that, and the row carries a true sentence, which is why it
+// looks like nothing is wrong.
+//
+// # Why a table with prose rather than a derivation
+//
+// Because the derivation that would replace it also hides a defect. Every member of this population
+// is a default-lane exec fail that is *not* a fail in the all-on lane — but so is a construct the
+// decoder refuses that it should **not** refuse. Auto-gating on that signature would absorb decoder
+// over-gating into the third verdict silently, which is the failure `gatedAssertInvalid`'s "if not,
+// the decoder is over-gating and hiding a failure" exists to prevent. So causation is written down by
+// hand, once, and *membership* is machine-checked: TestDeclineSideEffectsAreRegistered derives the
+// population from the two lanes the board already runs and errors on any row without an entry here,
+// which is what keeps the table from being scoped to today's corpus.
+//
+// # Why proximity is not the key
+//
+// The key is a line, and the entry names the instance whose reported value the declined write
+// determined — because a gate's *location* decides which forms reach it, so "gated" is a fact about
+// the instantiation path and not about what a line sits next to. Four declined modules in the corpus
+// carry an instantiation-time write into an allocation they import (`imports1.wast:1`,
+// `imports2.wast:9`, `load1.wast:10`, `store2.wast:6`) and **only one of them mis-scores**: in the
+// other three every later action targets `cur`, which *is* the declined module, so 0037 already
+// covers them. A rule keyed on "a declined writer is in this file" would have gated four files.
+//
+// The rule keyed on the *allocation* rather than the instance is worse than that, and it is priced:
+// `imports2.wast`'s declined module at `:9` writes offset 10 of `spectest.memory`, a second and
+// undeclined module at `:22-27` imports the same memory, writes the same offset itself, and `:28-31`
+// read it back. Those four rows pass in both lanes and do not depend on the declined write at all.
+// Gating by shared allocation converts 4 correct passes into third verdicts to repair 5 mis-scored
+// fails, which is not obviously better than the defect.
+//
+// **Declared blind spot**, since it is the other side of that choice: an undeclined instance reading
+// a declined module's write through a shared *host* allocation is not covered, and scores as it does
+// today. `imports2.wast:28-31` is the witness that the gap is currently benign and the first site to
+// look at if it stops being.
+type sideEffectEntry struct {
+	// Lines are the assertion lines gated, and the map's slack is 0: an entry naming a line that
+	// is not in the derived population is as much an error as a derived line with no entry.
+	Lines []int
+	// Module is the *declined* module command's line, and it is a **condition rather than a
+	// citation**: the consult gates only when the module command at this line was actually
+	// declined in the run that is scoring. Written as prose first, and the all-on lane caught it
+	// within one run — an unconditional consult gated the five rows in the lane where nothing is
+	// declined and they legitimately pass, costing 5 passes and putting 5 in a column
+	// `TestAllGatesOnLeavesNothingGated` requires to be empty. A registry keyed only on lines
+	// cannot be lane-correct, because *whether* a line's expectation is unwritten is exactly the
+	// question the gate's state answers.
+	Module int
+	// Gate is the proposal whose gate declines that module and Writes the instantiation-time
+	// channel it would have written through. Two facts rather than one sentence because each is
+	// separately checkable against the file.
+	Gate   string
+	Writes string
+	// Reads names the instance the gated lines actually target — the third party. This is the
+	// field that distinguishes this population from 0037's, and writing it per entry is what makes
+	// an entry falsifiable by reading the vector.
+	Reads string
+}
+
+var sideEffectOfDecline = map[string]sideEffectEntry{
+	"load1.wast": {
+		Lines:  []int{25, 26, 27, 28, 29},
+		Module: 10,
+		Gate:   "multi-memory",
+		Writes: "two active data segments into the memory it imports as \"M\" \"mem\", " +
+			"offsets 20-24 of `$M`'s own memory",
+		Reads: "$M, which instantiated cleanly, is not gated, and honestly reports the zeros " +
+			"its memory still holds",
+	},
+}
+
+// coversSideEffect reports whether a line's expectation belongs to a declined module's unwritten side
+// effect, in the run doing the asking. Keyed on the base name because the registry is about corpus
+// files and the board's paths are relative to the caller's directory.
+//
+// `declined` is the run's own record of which module command lines were gate-declined, and consulting
+// it is what makes the answer lane-dependent: the same line is a mis-scored fail in the default lane
+// and a legitimate pass with every gate on. See sideEffectEntry.Module for the run that proved it.
+func coversSideEffect(path string, line int, declined map[int]bool) bool {
+	e, ok := sideEffectOfDecline[filepath.Base(path)]
+	if !ok {
+		return false
+	}
+	return slices.Contains(e.Lines, line) && declined[e.Module]
+}
+
 // InvokeFunc calls an exported function and returns its results.
 //
 // Values cross as []Val — the harness's own type — for the reason ValKind is not
@@ -2194,6 +2293,12 @@ type Engine struct {
 type runOpts struct {
 	Engine
 	has map[Capability]bool
+	// skipSideEffectRegistry neuters decision 0038's consult, and it exists because the control
+	// over that registry has to watch its own table die. Once the fix is in, the derived
+	// population is **0** — the rows are gated, not failed — and a comparison against an empty set
+	// agrees perfectly with any table at all. So the control re-runs the file with this set and
+	// derives from a board that still holds the defect. Nothing outside the control sets it.
+	skipSideEffectRegistry bool
 }
 
 // Run executes a script's assertions against a decoder, scoring every gate as
@@ -2241,12 +2346,18 @@ func (s *Script) RunGated(e Engine) *Result {
 // The explicit form stays for tests that need to declare a capability the engine cannot
 // honour — a capability with no registered entry, or one whose component was left nil —
 // which must panic rather than score.
-func (s *Script) RunWith(e Engine) *Result {
+func (s *Script) RunWith(e Engine) *Result { return s.runWith(e, false) }
+
+// runWith is RunWith with the one run-loop knob a control needs to reach, and it exists as a seam
+// rather than as a second copy of the four lines above: the control over decision 0038's registry has
+// to score a file with that registry neutered, and a control that builds its own `runOpts` would be
+// exercising its own reconstruction of this function instead of this function.
+func (s *Script) runWith(e Engine, skipSideEffectRegistry bool) *Result {
 	set := make(map[Capability]bool, len(e.Has))
 	for _, c := range e.Has {
 		set[c] = true
 	}
-	return s.run(runOpts{Engine: e, has: set})
+	return s.run(runOpts{Engine: e, has: set, skipSideEffectRegistry: skipSideEffectRegistry})
 }
 
 func (s *Script) run(opts runOpts) *Result {
@@ -2502,6 +2613,9 @@ func (s *Script) run(opts runOpts) *Result {
 	namedErr := map[string]error{}
 	namedStratum := map[string]Stratum{}
 	namedGated := map[string]bool{}
+	// declinedModuleAt is decision 0038's slot, and it is a fourth one because it is keyed by a
+	// fourth thing: the *source line* of a module command that was gate-declined. See remember.
+	declinedModuleAt := map[int]bool{}
 	// **A third namespace, and it is three because a definition and an instance are different
 	// types** (#426). `named` holds instances, keyed by script `$name`; this holds *definitions*,
 	// keyed the same way. The reference keeps both in one script environment and distinguishes them
@@ -2524,6 +2638,15 @@ func (s *Script) run(opts runOpts) *Result {
 	// the same command — four arms each assigning five variables is the shape that drifts.
 	remember := func(c Command, in Instance, st Stratum, err error, gated bool) {
 		cur, curStratum, curErr, curGated = in, st, err, gated
+		// **Keyed by line rather than by name or by recency**, which is the fourth slot and the
+		// only one decision 0038 can use. A declined module whose side effect lands on a third
+		// instance is typically *anonymous* — `load1.wast:10` carries no `$name`, so `namedGated`
+		// never sees it — and by the time its consequence is asserted, `cur` may have moved on. The
+		// line is the one handle that is stable and is what a registry entry can be checked
+		// against by reading the file.
+		if gated {
+			declinedModuleAt[c.Line] = true
+		}
 		if c.Name == "" {
 			return
 		}
@@ -3459,6 +3582,17 @@ func (s *Script) run(opts runOpts) *Result {
 					Line: c.Line, Expect: "an instance from the preceding module command",
 					Got: got, Kind: c.Kind, Stratum: st,
 				})
+				continue
+			}
+			// **Decision 0038, and its position is the decision's last detail.** The consult
+			// sits *after* the two branches above, so a target that is missing or broken is
+			// still diagnosed by the layer that lost it: the registry says "this line's
+			// expectation belongs to a declined module", which is a claim about a question that
+			// would otherwise be *asked and answered wrongly*, not a licence to swallow a
+			// structural failure upstream of it. Same ordering argument as `targetGated` before
+			// the fail branch, one step further along.
+			if !opts.skipSideEffectRegistry && coversSideEffect(s.Path, c.Line, declinedModuleAt) {
+				r.gate(c)
 				continue
 			}
 			out, err := opts.Invoke(target, c.Invoke, c.Args)

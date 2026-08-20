@@ -21,6 +21,43 @@ weakly-ordered platform.
 
 ### Added
 
+- **A gate decline's side effect on a *third* instance is scored as the third verdict, and the default
+  lane's fail column reaches 0** ([#414](https://github.com/scttfrdmn/burroughs/issues/414), decision
+  [0038](docs/decisions/0038-a-declines-side-effect-on-a-third-instance-is-registered-per-line-and-the-derivation-is-the-control-not-the-fix.md)).
+  Decision 0037 gave the run loop gate state in every slot a declined module's *own identity* lives in,
+  so a command asking about the declined module gets the third verdict. `load1.wast:25-29` is the case
+  where the consequence lands on somebody else: a module declined on the multi-memory memarg bit was
+  the only writer of five bytes in `$M`'s memory, and `$M` — healthy, ungated, instantiated cleanly —
+  honestly reports the zeros it still holds. Five rows red, every one correct behaviour under a gate
+  that is off by design, and **the row carries a true sentence**, which is why nothing on the board
+  looked wrong. `sideEffectOfDecline` registers them per line with the declined writer, its
+  instantiation-time write channel, and the third instance named; the `Module` field is a **condition
+  rather than a citation**, so the consult fires only in a lane where that module really is declined —
+  written as prose first, and the all-on lane caught it inside one run by losing 5 passes.
+  **The fix is a table and the derivation is the control**, because the signature this population has
+  (a default-lane fail that passes with every gate on) is also the signature of the *decoder
+  over-gating*, and a mechanism gating on it would absorb that defect into the third verdict silently.
+  So `TestDeclineSideEffectsAreRegistered` derives membership from the two lanes the board already runs
+  and errors on any row without an entry — which is what keeps the registry from being scoped to
+  today's corpus — while causation is written down by hand. Its own vacuity is real and handled: after
+  the fix the derived population is 0, so it scores each file with the registry **neutered** and asserts
+  a non-empty floor, the mutation that check exists for being the one a future edit makes by accident.
+  Domain derived rather than taken from the issue: four declined modules in the corpus carry an
+  instantiation-time write into an allocation they import, and **only one mis-scores** — a rule keyed on
+  "a declined writer is in this file" would have gated four. The rule keyed on the *allocation* is
+  priced at **4 correct passes** (`imports2.wast:28-31`, which read `spectest.memory` through a second,
+  undeclined module that writes the same offset itself), and a fix converting 4 correct passes into third
+  verdicts to repair 5 mis-scored fails is not obviously better than the defect. Aliasing is the declared
+  blind spot, with that site named as the witness.
+  Board: `fail` **0 (−5)**, `gated` **4159 (+5)**, `pass` **60928 (unchanged)**, `unsupported` **57
+  (unchanged)**; all-on lane unchanged at `65014 pass, 38 fail, 0 gated`. The forecast was
+  pre-registered per file and per line before the code and **hit exactly**, including the four
+  must-not-move rows. **Not one of the five was the interpreter computing a wrong answer** — the fifth
+  consecutive reclassification out of this column, which retires "the exec column is the interpreter's
+  work plan" as a premise. `execFailCeiling` **5 → 0**, where it is the most sensitive it has ever
+  been, and the work plan moves to the all-gates-on lane's 38 fails across 9 files — a figure this repo
+  had tracked in a comment chain and asserted nowhere, now bounded by **`allOnFailCeiling`** at slack 0.
+
 - **The script grammar's two remaining module forms — `(module definition …)` and `(module instance
   $I $M)` — are read, scored, and instantiated
   ([#426](https://github.com/scttfrdmn/burroughs/issues/426)).** Both were `KindUnsupported`, so nine
@@ -1494,6 +1531,25 @@ weakly-ordered platform.
   tail-call gate's own 0x12/0x13 when it lands.
 
 ### Changed
+
+- **"A mutant that doesn't compile tests the compiler, not the control" is minted into the controls
+  family** (Scott, on the #429 report). Stated as the trichotomy's *precondition* rather than a fourth
+  answer, because it is the case where the exercise never ran and the transcript looks like it did:
+  #429's own M4 produced `too many return values`, `go test` exited non-zero, and a ledger row reading
+  "killed" writes itself while the guard being certified never executes. The tell is the channel the
+  redness arrives on — a build error is the toolchain refusing the input, an assertion failure is the
+  control refusing the behaviour — so a row's evidence is the failing assertion's message and never an
+  exit code, and the cheap discipline is to build the mutant before believing it. **A build failure
+  counted as a kill is quieter than a stillbirth**, which at least leaves a green where a red was
+  predicted; this one leaves the red.
+
+- **`TestValueMismatchBucketIsEmptyAndSaysWhoWroteAnyRow`'s vacuity arm gained its second clause, and
+  the registry drains to empty for the third time in its history** (#414). The five `load1.wast` rows
+  it held are retired **without their cause being answered** — the writer is still declined and `$M`
+  still reads 0 — because the change is to the *verdict*, not the behaviour. Which is the reading that
+  matters: a row whose diagnosis is "a gate is off" was never this bucket's business, and these five sat
+  in it only because the harness had no way to say so. The empty-bucket check now requires a **non-empty
+  registry** to fire, since "0 rows against 0 registered" is a control complaining about an agreement.
 
 - **`TestUnhandledFCSubOpcodeStaysOnTheWorkList`'s risk is re-pointed onto `0xfd`, as a sweep whose
   domain the decoder's own table supplies

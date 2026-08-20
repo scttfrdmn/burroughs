@@ -5893,6 +5893,64 @@ func TestGatedVectors(t *testing.T) {
 				f, len(byDeclinedReg))
 		}
 
+		// **The fourth allowance, and its bound is the fix's own registry rather than a number
+		// written here** — decision 0038, issue #414. Same derivation as the third: score the file a
+		// second time with the mechanism neutered, and every line gated with it and not without it is
+		// gated *by* it.
+		//
+		// The count it is checked against is `len(sideEffectOfDecline[f].Lines)`, which makes this
+		// slack 0 in both directions **by construction**: a line the registry claims but the run does
+		// not gate, and a line the run gates that the registry does not claim, are the same
+		// disagreement seen from the two ends. Writing a separate integer here — the shape the three
+		// allowances above have — would have created a third place for one fact to live, and the third
+		// place is where it drifts.
+		//
+		// **Watched die on the mutation that makes the registry lie without changing a line of it**:
+		// pointing `sideEffectOfDecline["load1.wast"].Module` at `:11`, which is not a module command,
+		// so the consult's condition never holds and nothing is gated — `load1.wast: 0 lines gated by
+		// decision 0038's side-effect registry, want 5`. `TestDeclineSideEffectsAreRegistered` stays
+		// *quiet* under that same mutation, correctly: the rows are fails again and its derivation finds
+		// them registered. Two controls, and the mutation each one catches is the other's blind spot.
+		bySideEffect := map[int]bool{}
+		{
+			// Mirrors RunGated's one assignment on purpose: the capability derivation and the set
+			// building stay in `runWith`, so this is the same path the board runs with one flag moved.
+			e := engine()
+			e.Has = EngineCapabilities()
+			without := map[int]bool{}
+			for _, line := range s.runWith(e, true).GatedAt {
+				without[line] = true
+			}
+			for _, line := range r.GatedAt {
+				if !without[line] {
+					bySideEffect[line] = true
+				}
+			}
+			// The nestedness check the third allowance carries, for the identical reason: neutering a
+			// consult that only ever *adds* declines cannot make one disappear, so a line gated with
+			// the registry off and not on means the difference is over unrelated sets and names the
+			// wrong lines while still producing a plausible count.
+			with := map[int]bool{}
+			for _, line := range r.GatedAt {
+				with[line] = true
+			}
+			for line := range without {
+				if !with[line] {
+					t.Errorf("%s:%d is gated with decision 0038's registry *off* and not with it on; "+
+						"the two gated sets are not nested, so the difference this control takes does "+
+						"not name the population it claims", f, line)
+				}
+			}
+		}
+		wantSideEffect := len(sideEffectOfDecline[filepath.Base(f)].Lines)
+		if len(bySideEffect) != wantSideEffect {
+			t.Errorf("%s: %d lines gated by decision 0038's side-effect registry, want %d — the "+
+				"registry and the run disagree about this file;\n\tif a line stopped being gated the "+
+				"entry is stale and the fail it hid is back, and if one started the entry is missing "+
+				"the declined module that writes it (see sideEffectOfDecline)",
+				f, len(bySideEffect), wantSideEffect)
+		}
+
 		// **A whole-file entry replaces a per-line one when the population is homogeneous.**
 		// The harness v128 widening (decision 0024's forced question 5) moved 24115 lines
 		// across 63 SIMD/relaxed-SIMD files from Unsupported into Gated in one PR — every one
@@ -5962,6 +6020,9 @@ func TestGatedVectors(t *testing.T) {
 			}
 			if byDeclinedReg[line] {
 				continue // covered by gatedDeclinedRegistration, with its register named there
+			}
+			if bySideEffect[line] {
+				continue // covered by sideEffectOfDecline, with its declined writer named there
 			}
 			if _, ok := allowed[f][line]; !ok {
 				t.Errorf("%s:%d declined by a feature gate but is not in the allowed set;\n"+
@@ -7622,6 +7683,33 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	boardBound(t, "allOnPassFloor", totalPass, allOnPassFloor, 0, floorBound,
 		"a gated feature regressed, which the Gated==0 assertion above cannot see: with every "+
 			"gate on, a broken feature turns a pass into a fail and leaves Gated at zero")
+
+	// **This lane's fail column, bounded for the first time, and the reason is that the work plan
+	// just moved into it** (decision 0038). Every "All-on `fail` 61 → 53 → 38" above is *prose* — the
+	// figure the ladder is steered by has been tracked in a comment chain and asserted by nothing,
+	// which is exactly the unasserted distance the pass floor beside it exists to refuse.
+	//
+	// It was defensible while `execFailCeiling` held the default lane's residue: a rise there caught a
+	// regression first, and this number was the larger, slower one. `execFailCeiling` is now **0**, so
+	// the default lane's column is a tripwire with no population and this is the only fail column with
+	// a subject. A work plan nothing bounds is how `allOnPassFloor` sat at 798 against 4178 for fifteen
+	// commits (#87), one column over.
+	//
+	// **Charged as overhead to #414**, and the charge is the point rather than an aside: this is not a
+	// new instrument invented alongside the fix, it is the fix relocating a column and its bound having
+	// to follow. Predicate over data this lane already computes — `totalFail` is summed six lines up
+	// for the log line.
+	//
+	// 38 across 9 files: `local_init` 8, `ref` 6, `array` 5, `type-subtyping` 5, `type-equivalence` 4,
+	// `type-rec` 4, `try_table` 3, `struct` 2, `func` 1. GC in seven of the nine, EH in `try_table`,
+	// one row in `func`. Slack 0 in both directions for the #387 reason the floor above carries: a
+	// ceiling with tolerance cannot see anything smaller than its tolerance, and a *fall* is the drain
+	// this lane exists to record, so it re-bases in the PR that earns it.
+	const allOnFailCeiling = 38
+	boardBound(t, "allOnFailCeiling", totalFail, allOnFailCeiling, 0, ceilingBound,
+		"the all-gates-on lane is the interpreter's and validator's remaining work plan now that "+
+			"the default lane's exec column is empty: a rise here is a regression no gated-lane "+
+			"bound can see, and a fall is the GC or EH work landing and re-bases this in its PR")
 }
 
 // moduleOverRejections are the modules this validator refuses that the corpus asserts are valid —
@@ -10096,7 +10184,26 @@ func TestPhase1Files(t *testing.T) {
 	// listed them beside the five `load1.wast` rows without claiming a defect. The residue is now
 	// exactly those five — `assert_return value mismatch`, all `load1.wast`, all #414's gate-decline
 	// collateral — which makes this column a single-subject work plan for the first time.
-	const execFailCeiling = 5
+	// **5 → 0, and it is the fifth consecutive reclassification rather than the first repair.** Decision
+	// 0038: the five `load1.wast` rows the entry above named as the whole residue are a side effect a
+	// gate-declined module was supposed to have on a *third* instance — `$M`, which instantiated cleanly
+	// and honestly reports the zeros its memory still holds. `sideEffectOfDecline` gates them, so this
+	// column empties for the reason the previous four entries emptied their share: the row was charged to
+	// the interpreter and belonged to a gate that is off by design.
+	//
+	// **Not one of the five was the interpreter computing a wrong answer**, and with that the whole
+	// chain above resolves to the same sentence: this column has never once named an interpreter defect
+	// since the stratum ledger was built. Worth stating exactly there, because five reclassifications in
+	// a row is the point at which "the exec column is the interpreter's work plan" stops being a premise
+	// and becomes a claim the board has falsified — the premise Scott withdrew on #409, now spent.
+	//
+	// **A ceiling at 0 is the most sensitive this bound has ever been**, which is the one thing to say
+	// against the reflex that an emptied column is a lost instrument. It was, at 243, unable to notice
+	// anything smaller than a 162-row drift; at 0 with slack 0 any single new exec fail anywhere in the
+	// corpus fails it and has to be named. The column stops being a work plan and becomes a tripwire,
+	// and the work plan moves to the all-gates-on lane's 38 (see allOnFail…, and decision 0038's
+	// consequences section, which names the nine files).
+	const execFailCeiling = 0
 	boardBound(t, "execFailCeiling", execFail, execFailCeiling, 0, ceilingBound,
 		"the interpreter answered fewer vectors than it did: either an opcode arm regressed or "+
 			"a value comparison started disagreeing. A *rise* caused by #8 unblocking more "+
