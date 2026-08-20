@@ -2567,6 +2567,96 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **`matches` gated every comparison on a static-type equality the authority does not have, and the
+  seven vectors it refused are green — [#441](https://github.com/scttfrdmn/burroughs/issues/441),
+  [0040](docs/decisions/0040-matches-forks-on-the-patterns-family-and-the-type-the-harness-cannot-name-gets-a-sentinel-kind.md)**
+  (`internal/spec/value.go`). `assert_ref_pat` (`runner.ml:464-476`) dispatches on the runtime
+  **constructor** and reads no static type at all, and `RefResult (RefPat r)` compares two concrete
+  references where neither side's static type is an operand — so `want.Kind != got.Kind` was a
+  precondition with no analogue in the reference. `matches` **forks on the family** now: the reference
+  path requires `got.Class != RefNone` and switches on `want.Class`, reading no static type, while the
+  numeric path keeps kind equality because `i32 1` and `i64 1` are genuinely different claims. Two
+  candidate arrangements produced **identical boards in both lanes**, which is the corpus declining to
+  choose, so the decision went to Scott on which arrangement states a reason; the fork's edges are
+  pinned by hand-built matrix rows against the reference's arms rather than by any vector.
+  **In every one of the seven refusals, `got.Kind` was a documented placeholder** chosen — in
+  `fromInterpValue`'s own words — to make this gate agree. So the gate never compared two static types;
+  it compared a real one against a value whose type the harness had already said it could not name, and
+  removing the gate retires the constraint that picked the placeholder. That placeholder is now a
+  **sentinel**: `ValKind`'s ninth member `KindUnnameableRef`, `isRef()`-true, printing `unnameable-ref`
+  (a hyphen no Wasm type name has) and refused by name in `valType`, the argument side's only route to
+  a `binary.ValType`. The *null* placeholder stays `KindFuncRef` ([grave
+  #266](https://github.com/scttfrdmn/burroughs/issues/266)) because its reason was never the gate.
+  `refPatterns`' Kind column follows the same rule — `func`/`extern`/`any` keep the kinds `valKind` can
+  name, the five whose heaptype has no member carry the sentinel — and the column is a *statement* now
+  rather than a mechanism.
+  Board: default lane **unchanged** at 60928 pass, 0 fail, 29 unsupported, 4187 gated over 256 files —
+  the seven rows are honestly `gated` there. All-on lane **65049 pass (+7)** and **31 fail (−7)**,
+  matching the pre-registration; `allOnFailCeiling` re-bases 38 → 31 and the fall is recorded as a
+  **re-base, not a drain**, because what left the column is harness error and reading it as capability
+  would credit the interpreter with work it did not do. `unsupported` delta **0, structural**: this
+  changes what the harness answers, not what it can ask.
+  The census earned its keep on an edit not aimed at it. `kindGateRefReaches` went 118 → 125 (the +7
+  being the seven rows, which could only be counted once they passed) and then **stayed at 125 while
+  `kindGateUnequalPasses` went 7 → 11** — arrivals versus comparisons, and the sentinel splitting one
+  member in two turned four previously-*equal* pairs (`extern.wast:53,54,55`, `struct.wast:122`) into
+  four admissions that had to be adjudicated. They had been passing the gate by coincidence.
+  **A cancelled error pair lost one half.** `RefPat.admits` has recorded since 0039 that it cannot tell
+  an externalized aggregate from a bare one — externalization is a wrapping constructor in the reference
+  (`extern.ml:7`) and a sibling field here — and the gate had been refusing those rows first, for an
+  unrelated reason, so the harness agreed by cancellation. `(ref.i31)`/`(ref.eq)`/`(ref.struct)`/`(ref.array)`
+  against an externalized payload is now **live and filed as
+  [#451](https://github.com/scttfrdmn/burroughs/issues/451)**, pinned over 0 corpus vectors; the mirror
+  case, `(ref.any)`, went the other way and now **agrees** (`runner.ml:468`). Removing an error can
+  understate a divergence as easily as repair one.
+  Also: `Val.String()`'s `RefExternIdentity` arm was a two-way `if` whose else branch served both a
+  genuine bare `(ref.host N)` and a result whose type had been refused, printing `ref.host 3` for a
+  value the reference calls `ref.extern 3` — a two-way decision cannot report that it does not know. It
+  is three-way plus a malformed-Val default, so those rows now decline (`host identity 3,
+  externalization not carried`) instead of fabricating; that is the message half of
+  [#450](https://github.com/scttfrdmn/burroughs/issues/450), whose naming half is untouched and now
+  unblocked. The public boundary's two independent transcriptions were swept too
+  (`publicpath_test.go`): `rawToSpec` carried #450's own defect — comparing against
+  `binary.FuncRef`/`binary.ExternRef`, the *nullable* spellings, so a non-null `(ref func)` came back
+  named `anyref` — and now reads the heaptype byte, with **0 corpus rows reaching the fallback**,
+  confirmed by neutering the `anyref` arm and watching the differential stay green. `local_init.wast`'s
+  four remaining all-on fails are **not** this residue: they are that file's `assert_invalid` vectors,
+  a missing local-initialization rule, filed as
+  [#452](https://github.com/scttfrdmn/burroughs/issues/452).
+
+- **The public path's domain paragraph went stale a third time, so its figures are deleted rather than
+  corrected** (`publicpath_test.go`). The section is titled *"every figure this section ever carried has
+  gone stale once"* and records the lesson — *a prose figure is a measurement with no instrument
+  watching it* — and then carried its own crop: "8 declined", "the seven relaxed-SIMD constructs in the
+  log line above", and the module and comparison counts. Most are now wrong, and the falsifier is
+  **this same file 120 lines down**, where #427's typing of the last untyped prefix region drained the
+  declines to zero and inverted the guard to catch a decline *re-appearing*. Two paragraphs in one
+  function disagreed about one measurement and nothing in the tree could notice. Correcting is what the
+  previous two generations did and each correction re-created the channel, so what stays is the rule
+  with no number in it and a pointer at the log line the run prints. Found by the sweep rule Scott
+  issued on #449 — *a repair to a defect whose file records a prior instance of the same shape isn't
+  done until it sweeps* — applied while carrying #441's sentinel into this file.
+
+- **Three of the four `structural` licences in the foreclosing sweep's allow-map carried a reason that
+  is false of the paragraph they license** (`internal/testenv/foreclose_test.go`), a second located
+  instance of [#432](https://github.com/scttfrdmn/burroughs/issues/432)'s class and the second one
+  written in the PR that landed the map. #441's edit shifted this file's `spec_test.go` keys, so the
+  sweep reported 13 stale licences against 13 unlicensed findings; the re-key was done **by paragraph
+  text**, which the header requires — the shift was `+23` in one region and `+85` in the other, so a
+  single delta would have mis-keyed the first entry — and pairing by text is the first thing since #430
+  that put each reason beside its prose. One entry claimed the *control* sense of `structural` (the
+  term-of-art homonym) for a paragraph reading "so they are a ***structural* residue**", which is the
+  residue sense and the exact sentence grave #427 cost eight rows for; two more claimed to quote a
+  falsified sentence while asserting it. The group heading — "the grave's own record of itself" — is
+  true of the *account*, whose annotation is 60 lines down at `spec_test.go:10804`, and false of three
+  of the four paragraphs it covers, and the **paragraph** is the sweep's unit and the map's own stated
+  standard. Each entry now names what its paragraph is (retained falsified testimony), where the
+  refutation lives, and that the ground is *not* legible in the licensed paragraph alone; the one entry
+  that is the annotation is marked as the only one of the four. No new instrument: #432 is closed on
+  Scott's ruling that this detection is unbounded — *source the premise from the tracker, not the
+  paragraph* — and that habit is what found it. Two sentences in the same map saying "until #432
+  rules" swept in the same diff, and the `foreclosingInScopeFloor` account re-based 227 → 240.
+
 - **`citecheck.sh`'s ADR-resolution arm printed FAIL and exited 0 —
   [grave #449](https://github.com/scttfrdmn/burroughs/issues/449)** (`scripts/citecheck.sh:765`). The
   `if [ -z "$found" ]` branch echoed all five lines of its diagnosis — the number, the missing file, the

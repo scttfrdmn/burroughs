@@ -689,6 +689,18 @@ fi
 # nothing in the tree except this arm could have noticed. Note which remedy applied — the work really
 # was disposed of, so the *sentence* was stale; had the disposition been wrong, reopening #432 would
 # have been the fix. The arm prints both because they are different repairs.
+#
+# **Two spellings hide a claim from this arm, and both were found the same way the true positive
+# above was — in prose written about #432, in the diff that reports them (#441).** The match is
+# local, so anything between the copula and the state word blocks it: `#432 is **closed**`, where the
+# emphasis markers are the intervening text, and `#432 is` / `closed on Scott's ruling`, where a line
+# wrap is, since the extraction is per added line and never a window over the paragraph. Both claims
+# were about this check's own subject and both read as claims to a human; the run said `0 of 0`. Not
+# repaired here, and the reason is the ruling above rather than effort: widening to skip emphasis and
+# to join wrapped lines re-opens the sentence-window direction that was 5-of-5 false, and a wrapped
+# window is exactly where aboutness stops being decidable by a copula. Written down instead, because
+# what needs to not happen is a reader taking `0 of 0` for *no claims were made* — an author who
+# wants a claim checked can put it on one line unadorned, which is what this diff did once it knew.
 state_claims=""
 if [ -n "$diffout" ]; then
 	state_claims="$(printf '%s\n' "$diffout" | awk '
