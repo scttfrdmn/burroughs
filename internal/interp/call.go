@@ -36,11 +36,35 @@ const (
 
 // callBudget is how deep this engine will nest calls before reporting exhaustion.
 //
-// **The reference's own number, and it is a *number* rather than a stack probe** — `flags.ml:9` is
-// `let budget = ref 256`, decremented per frame in `eval.ml:1080` and checked in `:1114`. So the
-// spec's own interpreter models stack overflow with a counter, and `assert_exhaustion` is written
-// against a counter's behaviour: `call.wast:337`'s `runaway` recurses without bound and must report
-// `call stack exhausted` in finite time, which a counter guarantees and a host-stack probe does not.
+// **The reference's own number, and it is a *number*** — `flags.ml:9` is `let budget = ref 256`,
+// decremented per frame in `eval.ml:1080` and checked in `:1114`. `call.wast:337`'s `runaway`
+// recurses without bound and must report `call stack exhausted` in finite time, which a counter
+// guarantees and a host-stack probe does not.
+//
+// **The counter is not the reference's only exhaustion source, and this comment used to say it was**
+// (grave #454, found while landing #440). The clause removed here read *"it is a number rather than a
+// stack probe … so the spec's own interpreter models stack overflow with a counter, and
+// `assert_exhaustion` is written against a counter's behaviour"*. `eval.ml:1167-1168` is the other
+// half: `invoke` wraps evaluation in `try … with Stack_overflow -> Exhaustion.error at "call stack
+// exhausted"`, so the reference reports the identical message from a genuine host-stack overflow.
+// Both citations were right; the universal quantifier between them was invented, and it was invented
+// in the direction that made this engine's choice look like a transcription.
+//
+// **The repair strengthens the decision rather than weakening it**, which is why the clause is
+// replaced and not just cut. Go cannot take the reference's second path at all: a goroutine stack
+// overflow is a fatal runtime error, not a recoverable panic, so there is no `recover` that turns it
+// into a trap. The counter is therefore the *only* mechanism available here, and 10000 is chosen so
+// it fires before the Go stack it runs on does — which is the same argument as before with the
+// omission removed.
+//
+// **The omission was load-bearing on exactly one occasion, and it cost a forecast.** #440's
+// pre-registration predicted `skip-stack-guard-page.wast`'s ten vectors would *fail*, reasoning that
+// a file probing a host guard page cannot be answered by a host-independent counter. That inference
+// runs directly off the deleted clause. All ten pass (see `unsupportedCeiling`'s account in
+// `internal/spec/spec_test.go`) — the vectors recurse without bound, so the counter answers them —
+// and the near-miss was escalating a design consequence to Scott on the strength of a sentence in
+// this file. *A premise sourced from a paragraph when the authority was one fetch away*, third
+// instance, and the second one inside this doc block.
 //
 // **Not 256, and the difference is a measurement rather than a preference.** The reference's 256 is
 // low enough that `fac.wast:102`'s `fac-rec 25` — 25 frames — passes with room, but it is also low
@@ -69,9 +93,28 @@ const callBudget = 10000
 // distinct outcome in the reference (`Exhaustion` is its own exception, not `Trap`) and the wast
 // grammar has its own directive for it — so a reading that made this `ErrUnsupported` would be
 // claiming an engine gap where the spec has a defined result. What makes `Trap` right rather than
-// merely convenient is that the harness matches `assert_exhaustion` by the same substring rule it
-// matches `assert_trap` by, and the reference's own `Exhaustion.error` produces a value carrying
-// exactly this string.
+// merely convenient is that the reference's own `Exhaustion.error` produces a value carrying exactly
+// this string, so the message is what an `assert_exhaustion` vector compares against.
+//
+// **The sentence that used to be here cited a consumer behaviour that did not exist**, and it is
+// repaired rather than deleted because the design choice it argued for is still the right one. It
+// read that "the harness matches `assert_exhaustion` by the same substring rule it matches
+// `assert_trap` by" — in the present tense, while `classify` had no `assert_exhaustion` arm at all, so
+// the comparison it described never happened and all 15 corpus vectors sat in the `unsupported`
+// column. A justification asserting the property its neighbour lacks makes review confirm the gap
+// (`docs/laws/errors-and-testimony.md`), and this one had the additional property of being *checkable
+// and unchecked* for as long as it stood.
+//
+// It is true now, in #440's arm, with one correction the original got wrong independently of the
+// missing arm: the reference matches by **prefix**, not substring (`assert_message`,
+// `runner.ml:498-501`, `String.sub msg 0 (String.length re) <> re`). The harness matches by
+// substring, which is looser; the two coincide on every `assert_exhaustion` vector because all 15
+// expect this string exactly — counted, not assumed. So the sentence's *conclusion* held while both
+// its premises were wrong — which is why it is worth the words rather than a quiet edit.
+//
+// The divergence is not local to this directive: it is one rule spelled at seven sites across every
+// text-matching stratum, so it is filed as #455 rather than patched here, where fixing one site would
+// leave six diverging from both the reference and each other.
 var trapExhaustion = &Trap{Reason: "call stack exhausted"}
 
 // call invokes a defined function: the `Invoke` arm of `eval.ml:1117-1129`, minus the host-function

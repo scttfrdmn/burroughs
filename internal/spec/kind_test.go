@@ -23,7 +23,14 @@ const kindsPastUnsupported = 8
 // shrink every domain in this file, and the probe above KindUnsupported closes the other end.
 // Together they are why the scans below can be described as covering the enum instead of covering
 // the part of it somebody remembered.
-const kindCount = 21 // KindModuleBinary(0) … KindUnsupported(20)
+// **21 → 22 for `KindAssertExhaustion` (#440), and the re-base is the moment the two scans below
+// get re-read rather than a number bumped.** The failure message names the two questions and both
+// were answered: the new member is not an `assert_invalid` form, so `Kind.isAssertInvalid` stays a
+// three-way equality; and `String()` renders it `assert_exhaustion`, which shares no prefix with
+// `assert_invalid` and collides with no other rendering, so the name-derived scan does not pick it
+// up by accident. Recorded because this bound's whole purpose is to force that reading — a Kind
+// added inside the block would otherwise shrink every domain in this file in silence.
+const kindCount = 22 // KindModuleBinary(0) … KindUnsupported(21)
 
 // TestAssertInvalidKindsAreExactlyTheAssertInvalidForms is the name-derived second mechanism for
 // `Kind.isAssertInvalid`, whose body is a three-way equality test written by hand.

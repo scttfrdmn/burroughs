@@ -52,6 +52,28 @@ reach is a law out of context.
   the keyword is how the payload goes missing, and reading the artifact's own comment
   count is how you find out.
 
+  **Amendment — closing is a state transition on an issue, but a queue label is a claim
+  about the world** (Scott's ruling, relayed on the #448 merge). #314 above is the *keyword*
+  path; this is the **hand** path, and the harm is identical, because in this repo the label
+  **is** the queue: `CLAUDE.md` defines the decisions-needed queue as open issues carrying
+  `decision-needed:scott`, assigned to Scott. So `gh issue comment` then `gh issue close`
+  discharges #314 in full and still leaves the second failure standing. An issue's state is a
+  fact *about the issue*, and both paths get it right. A queue label asserts something
+  *outside* the issue — that a person owes a decision — and that claim does not become false
+  when the issue closes. It moves, or it evaporates unobserved, and `CLOSED` is the
+  reassuring answer either way.
+
+  Caught one command short on #441, which carried the label while none of the three
+  successors the PR body listed under *Decisions needed from Scott* (#450, #451, #452) did.
+  The remedy is a third command in the order: **before closing, list the labels**, and for
+  each one that defines a queue or a work set, either transfer it — label *and* assignee — to
+  whatever still carries the claim and verify the count landed where you expect, or say in
+  the closing comment that the queue shrank and why. Measure the queue *after*, not before.
+  **All the risk is in the transfer direction**, because the convention is `--state open`
+  plus the label: ten closed issues carry `decision-needed:scott` today and none of them is a
+  false entry, so a stale label on a closed issue costs nothing and a dropped one costs the
+  whole ask.
+
 ### Sweep after a grave.
 
 - **Sweep after a grave.** A defined-but-never-returned error, an
