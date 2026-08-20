@@ -877,21 +877,21 @@ func (p *parser) elemIdxSink(r idxRef) (instrSink, error) {
 		panic("text: ref.func has no opcode, so an element index list cannot be expanded")
 	}
 	mnemonic := refFuncMnemonic()
-	// The save-and-restore around `p.imm` is `plaininstr`'s, copied rather than re-derived: the
+	// The save-and-restore around `p.immParts` is `plaininstr`'s, copied rather than re-derived: the
 	// immediate accumulator is a field, so a nested instruction that did not clear it would append to
 	// whatever the enclosing instruction had built. There is no enclosing instruction at a module
 	// field, which makes the saved value nil here — the same standing `retainedOffset`'s swap has, and
 	// written as a swap for the same reason, so the nil-ness stays a fact about the grammar rather
 	// than an assumption.
-	saved := p.imm
-	p.imm = nil
-	defer func() { p.imm = saved }()
+	saved := p.immParts
+	p.immParts = nil
+	defer func() { p.immParts = saved }()
 	return p.intoSink(func() error {
 		if err := p.retainIdx(mnemonic, r); err != nil {
 			return err
 		}
-		p.emit(instr{op: op, imm: p.imm, patch: p.immPatch})
-		p.immPatch = nil
+		imm, patch := p.finishImm()
+		p.emit(instr{op: op, imm: imm, patch: patch})
 		return nil
 	})
 }

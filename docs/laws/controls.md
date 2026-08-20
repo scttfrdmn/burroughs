@@ -72,6 +72,44 @@ reach is a law out of context.
     of *presence-of-status is not presence-of-content* one layer down: there a state field
     stood in for a payload, here an empty channel stands in for an empty result. (Earned on
     #248's counter, the second reading of which was quoted before it was bounded.)
+  - **Arms that share a fault agree exactly the way empty arms do, so a comparison needs a leg
+    *outside* the shared mechanism — and correlated errors preserve the delta while both levels
+    are wrong.** The empty case above is the degenerate member of a wider class: what a comparison
+    certifies is that its two arms said the same thing, which is evidence about the arms only where
+    they can fail *independently*. Feed both from one mechanism and a defect in it moves both
+    together, so the comparison agrees perfectly and reports the fault as harmony. **Third instance
+    of this organ in this project**, which is why it is a specimen under an existing law rather than
+    a key of its own (Scott's ruling, the #130 diagnosis relay — *"same organ every time"*):
+    - **The witness measurement's denominator, where a module *form* stood in for
+      encodability** (#123's fourth instrument defect, in `#122`). Counting only `KindModuleText`
+      excluded the `(module quote …)` forms, and the *agreement* figure it fed was flawless over
+      the narrowed population — a ratio whose numerator and denominator were both wrong by the same
+      exclusion. Four instrument defects across three writings of that probe, and the figures were
+      trustworthy only once the population was derived rather than described.
+    - **A floor set at the degraded reader's own output** (PR #159's specimen, in this file above,
+      where the finding is recorded and the law was named from it). The pair
+      floor was 8, which is exactly what the alternation-pattern reader yields where the positional
+      one yields 10, so the bound waved through the degradation it existed to catch. Its remedy is
+      the general one in miniature: a **discrimination check** asserting the capability that
+      separates the good instrument from its degradation, because a count cannot separate two
+      readers whose counts overlap.
+    - **A both-orders differential where both arms carried the staging defect** (#130). The premise
+      was sound — field order in the text cannot change the image, so the two encodings must be
+      byte-identical — and the comparison duly reported *identical*. The scratch staging under test
+      applied to both orders and dropped the same `memory.init` memory-index byte from each, so a
+      differential whose whole purpose was catching a wrong image agreed with itself. What caught it
+      was the **absolute** leg: `wast2json`'s 48-byte image with `fc 08 00 00`, an authority the
+      shared mechanism has no way to move.
+    The operative test is one question — **could a single defect move both arms?** If yes, the
+    agreement is uninformative no matter how tight it is, and the repair is a leg the mechanism
+    under test does not produce: a reference encoder, a second reader with a different failure
+    mode, an authority outside the tree. Two consequences worth stating because both are easy to
+    get wrong. A differential is **necessary and not sufficient** — keep it, and attach the
+    absolute leg rather than replacing one with the other, since each sees what the other cannot.
+    And the requirement binds hardest exactly where witnesses are scarcest: a category with no
+    board vector is certified by nothing *but* the control, so a blind control there is not a weak
+    check but the absence of one. (Ruling: Scott, on the #130 diagnosis relay — *"both-orders alone
+    would re-certify them the same way it certified the scratch patch."*)
 
 ### A tripwire whose subject dissolves is re-pointed, never closed.
 

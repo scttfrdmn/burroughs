@@ -76,7 +76,33 @@ Three separate mistakes are being avoided, and they were made in that order:
    a skipped job passes by asking nothing, and an aggregate over skips passes by asking
    nothing louder. A body-only `gh pr edit` creates a fresh `pull_request` run that is
    *supposed* to skip everything but the citations sweep, which is exactly why the skip has
-   to be read rather than summed away. (Directive: Scott, this PR.)
+   to be read rather than summed away. (Directive: Scott, PR #424.)
+   - **Second occurrence, and the cause turns the hazard into a prediction: `gh pr edit`
+     spawns a run that fires only the body-scoped jobs, so an empty instance is *expected
+     after every body edit*.** PR #424's own SHA carried three runs for the same reason
+     #422's did — one push plus two body edits — and the operative consequence is an
+     ordering one: **the newest run on a SHA is systematically the emptiest, and the run
+     carrying the verdict is the oldest**, because the push created it and the edits came
+     after. Resolving "the latest run for this SHA" is therefore not a neutral tie-break
+     but the reliably wrong choice on any PR whose body was edited, which is all of them
+     here — the body *is* the report, so it is edited at least once after the push it
+     describes. This is worth more than *watch out for empty runs*: a rule that says
+     **when** to expect one is recognized rather than re-diagnosed, and re-diagnosis is
+     what the second occurrence cost. (Directive: Scott, on the #424 merge — *"that makes
+     it expected after every body edit rather than an anomaly, which is a better fact."*)
+   - **And the same edit sequence leaves real reds on the SHA, so a red is disposed of on
+     two halves or not at all.** #424's middle run *failed*: one assertion, a self-citation
+     in the PR body, whose subject is the body and not the tree, and whose fix was an edit
+     rather than a commit — so no later SHA exists to supersede it and the failing run sits
+     on the merge candidate permanently. **A red whose subject is a superseded body is only
+     superseded when a later run on the corrected body ran the same check and was green.**
+     Both halves are load-bearing: the failing check identified down to its single
+     assertion, *and* a later run in which **that same job** ran and passed. The first half
+     alone is an excuse; the second alone is a green from a different question, since a run
+     that skipped the job proves nothing about it — which is this mistake's own lesson
+     turned back on the disposition. That is
+     [a re-run green doesn't refute a fail](evidence-and-instruments.md#a-re-run-green-doesnt-refute-a-fail--explaining-the-fail-does)
+     satisfied rather than waived: the cause is bounded, not called a flake.
 
 **And `sleep` is never how you wait for a signal that exists — background it and let the
 wake-up arrive.** This is mistake 1 restated because restating it was necessary: it was

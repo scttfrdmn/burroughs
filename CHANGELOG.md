@@ -1368,6 +1368,24 @@ weakly-ordered platform.
 
 ### Changed
 
+- **Correlated errors preserve deltas — the third specimen of one organ, landed under the vacuity
+  law rather than as a new key** (`docs/laws/controls.md`; Scott's ruling on the #130 diagnosis relay,
+  riding [#130](https://github.com/scttfrdmn/burroughs/issues/130)). *Arms that share a fault agree
+  exactly the way empty arms do*, so a comparison needs a leg **outside** the shared mechanism. Sited
+  as a sub-bullet of *a control that compares needs a vacuity check* because empty-vs-empty and
+  broken-vs-identically-broken are the same failure at different degeneracies — a comparison that
+  cannot disagree. Three instances, all already paid for here: #123's witness denominator, where the
+  module *form* `KindModuleText` stood in for encodability and excluded `(module quote …)`, giving a
+  flawless agreement ratio over the wrong population; PR #159's pair floor set at **8**, which is
+  exactly the degraded alternation reader's own output where the positional one yields 10, remedied by
+  a discrimination check rather than a tighter count; and #130's both-orders differential, where the
+  scratch staging dropped the same `memory.init` memory-index byte from *both* field orders and the
+  comparison reported `identical` — caught only by the absolute leg, `wast2json`'s 48-byte image with
+  `fc 08 00 00`. The operative test is one question — **could a single defect move both arms?** A
+  differential is **necessary and not sufficient**: attach the absolute leg, never swap one for the
+  other. And the consequence that prices #130's own control — *a category with no board vector is
+  certified by nothing but the control, so a blind control there is not a weak check but the absence
+  of one* — since four of the five staging categories have no corpus witness at all.
 - **A CI verdict is read from `.jobs[]`, never from a run's `conclusion`**
   (`docs/laws/operations.md`; Scott's directive, riding #77). A run's conclusion is an **aggregate**, so
   a run whose jobs were all skipped concludes `success` truthfully — on #422 one SHA had three
@@ -1380,6 +1398,18 @@ weakly-ordered platform.
   checking fixes it, while this is the *empty instance* on the right SHA, which no amount of SHA-binding
   catches. A body-only `gh pr edit` creates a run that is supposed to skip everything but the citations
   sweep, which is why the skip has to be read rather than summed away.
+  **Extended after the second occurrence, on #424's own SHA, where the cause is now known**
+  (Scott's directive on the merge, riding #130): `gh pr edit` spawns a run that fires **only** the
+  body-scoped jobs, so an empty instance is *expected after every body edit* rather than being an
+  anomaly to watch for — and since the body is the report, every PR here gets at least one after the
+  push it describes. The operative consequence is an ordering one: **the newest run on a SHA is
+  systematically the emptiest and the verdict-carrying run is the oldest**, so resolving "the latest
+  run for this SHA" is the reliably wrong tie-break rather than a neutral one. The same edit sequence
+  also strands real reds on the merge candidate — #424's middle run failed on a self-citation *in the
+  PR body*, fixed by an edit, so no later SHA supersedes it — which mints the disposition rule: a red
+  whose subject is a superseded body is superseded only when a later run on the corrected body **ran
+  the same check** and was green. Both halves, because the failing assertion alone is an excuse and a
+  run that skipped the job is a green from a different question.
 
 - **The validator has one operand-consuming primitive, so the reference's operand-mismatch sentence
   is spelled one way** (`internal/validate/stack.go`, `exception.go`, `popsite_test.go`; #394).
@@ -2197,6 +2227,60 @@ weakly-ordered platform.
     re-pointed, so the retirement is readable at the site rather than only in this entry.
 
 ### Fixed
+
+- **A deferred immediate carries a position, so a symbolic index bound after its use encodes —
+  [#130](https://github.com/scttfrdmn/burroughs/issues/130)** (`internal/text/code.go`, `instr.go`,
+  `parser.go`, `types.go`; part of #8). `module_fields` admits any field order, so `(module (func
+  (data.drop $d)) (data $d "x"))` is a valid module — the section order constrains the *image*, not the
+  text, and `module_fields1` gives the reference two passes over it (`parser.mly:1314-1355`). This
+  encoder resolved every symbolic index at the cursor, so it refused all nine index spaces in that
+  order while accepting the mirror. The staging it already had could not generalize: the accumulator
+  was `imm []byte` plus **one** patch covering the whole immediate, so a deferred component could only
+  exist as an instruction's *sole* component, which is why the deferral existed for `catFunc` alone.
+  The immediate is now a list of `immPart`s, each either bytes known at the cursor or a thunk — **the
+  thing a deferred component needed was a position**, and with one the same mechanism serves every
+  category. Eight spaces defer and one does not, and the split is derived from *reassignment* rather
+  than enumerated: `p.ctx.locals` is replaced per function, so a name looked up in stage 2 would meet
+  whichever function's space was installed last, while the other eight are module-lifetime and their
+  space pointers stay valid. Position separates components but never a component from its own bits, so
+  a memarg (whose `has_idx` flag bit is a test on the *resolved* index) and a catch clause (whose tag
+  sits between the kind byte and the label) each defer whole.
+  **Default lane: pass 60913 → 60914, fail 19 → 16, gated 4146 → 4148; encode stratum 3 → 0, the
+  pre-registered −3 to the row.** All-gates-on lane: pass 64982 → 64985. `unsupported` unmoved at 66
+  and that zero is **structural** — `classify` is untouched, so nothing the harness could not ask
+  became askable. The two lanes move **unequally, by exactly 2**, and that gap is the finding rather
+  than a discrepancy: `memory-multi.wast` went 1/4 pass, 3 fail, 2 gated to 2/2 pass, 4 gated, so of
+  the three rows that left `fail` the module became a pass and its two `assert_return`s became `gated`
+  on multi-memory — they need the *interpreter* to hold two memories. Forecast before the run, unlike
+  the two entries before it.
+  - **Three more deferral sites were live in the same shape and none was in the four the issue
+    named**: `try_table`'s catch tag, `struct.get`'s type index, and `struct.get`'s field name, found
+    by sweeping the tree rather than by working the list. #188's refusal is retired with them and its
+    bounds message reworded, the branch's population having changed from *not yet parsed* to *out of
+    range*. `global.wast:666` is retired from `TestAssertInvalidPassesFromAboveTheValidator` — 18 → 17,
+    layer split 17/1 → **17/0** — by the mechanism that entry's own comment had named in advance ("a
+    two-pass name resolver would retire this entry to the validator without any validation rule being
+    written"); the entry is kept as prose because a retirement recorded only as a smaller count reads
+    as drift.
+  - **The new control carries an absolute leg on every row, on Scott's ruling**
+    (`internal/text/deferimm_test.go`): four of the five categories have no corpus witness at all, so a
+    both-orders differential would have certified them the way it certified the scratch patch that
+    dropped `fc 08 00 00`'s last byte from *both* orders. Eight rows are **byte-identical to
+    `wat2wasm --enable-all` (wabt 1.0.41)**, whole image, the reference having read the use-first source
+    too; the three GC rows pin our own output instead, because the pinned wabt has GC types but no GC
+    instructions, and their independence is a recorded `wasmtime 47.0.3 --invoke f == 7` per row plus a
+    mutant at the byte the deferral writes, each caught. The control's domain is **derived** — an AST
+    scan of the package's own source for every function that builds a deferred immediate, pinned at 5
+    functions and 6 sites, since #130's cost was an enumeration. Ten of its eleven rows fail against
+    the unfixed tree; the eleventh is #77's deferral and is labelled as such. The substitution is
+    **taken as built on Scott's ruling, under two conditions carried at the site**: its scope is
+    stated — for those three rows the leg certifies *meaning*, not byte-identity, so what is pinned is
+    that the bytes are *a* correct encoding and never that they are the canonical one — and it is
+    **self-retiring**, `TestDeferredImmReferenceIsStillThePinnedWabt` asserting the manifest's own
+    `wabt_version`, so a toolchain bump cannot land without this file failing and naming the move to
+    the byte leg. Carved out the way [ADR 0025](docs/decisions/0025-g-1-carves-out-vectors-whose-sole-blocker-is-9s-deferred-validator.md)
+    carves out, and for its reason: a carve-out with no stated end condition becomes permanent by
+    nobody deciding anything.
 
 - **A named type's params are bound into the local index space — [#77](https://github.com/scttfrdmn/burroughs/issues/77)**
   (`internal/text/parser.go`, `code.go`; part of #8). A `(func (type $sig) …)` whose typeuse is not
