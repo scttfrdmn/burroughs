@@ -259,11 +259,12 @@ const (
 	foreclosingFileFloor      = 200
 	foreclosingParagraphFloor = 700
 	// foreclosingInScopeFloor is the deferred-reason sweep's own vacuity floor: the paragraphs it
-	// examines, not the ones it flags. **200 against a measured 226**, and the 26 of slack is the
+	// examines, not the ones it flags. **200 against a measured 227**, and the 27 of slack is the
 	// honest bound rather than the tight one, because the population is every comment anyone writes
 	// in a bound-account or non-goals position and it moves every PR — it moved by one in the very
-	// next PR (#431's repair added a paragraph), which is the demonstration rather than the
-	// hypothetical. A floor bounds the catastrophic case only — a moved walk, a broken parse, a
+	// next PR (#431's repair added a paragraph) and by one again inside that same PR (grave #434's
+	// correction added another), which is the demonstration rather than the hypothetical: two
+	// re-bases of this sentence in two commits. A floor bounds the catastrophic case only — a moved walk, a broken parse, a
 	// filter inverted — so the residual is covered the other way, by `t.Logf`ing the count beside it
 	// every run and re-basing this sentence when it moves. That is the pairing
 	// `allOnPassFloor` did not have when it sat 3380 behind its measurement: the number was never

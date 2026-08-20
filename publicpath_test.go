@@ -757,19 +757,30 @@ func TestConformanceThroughThePublicPath(t *testing.T) {
 	// be visible rather than silent.
 	//
 	// Two things this does *not* say, because both are easy to read into it. It does not say #9 is
-	// complete: **#328's 103 module-and-section vectors have no vocabulary**, so the population most
-	// likely to hold an accept-direction miss is the one no board partition can even ask about, and an
-	// admission is a different stratum from a decline. And it does not flip `Config.Strict`'s default,
-	// which its own doc comment schedules for this moment; that is a default-behaviour change and so a
-	// stamp-tier event, flagged for Scott rather than taken here.
+	// complete: **#111's nine valtype positions accept `(ref null $undefined)` and no suite vector fails
+	// on it**, so the population most likely to hold an accept-direction miss is the one no board
+	// partition can even ask about, and an admission is a different stratum from a decline. And it does
+	// not flip `Config.Strict`'s default, which its own doc comment schedules for this moment; that is a
+	// default-behaviour change and so a stamp-tier event, flagged for Scott rather than taken here.
 	//
-	// **The example this paragraph reached for first was wrong: "alignment is not checked at all
-	// (`validate/vec.go`, `decodeMemop` drops the memarg)".** It is checked — `internal/validate/align.go`
-	// — and has been since #306 landed in #313. The clause came from `vec.go`'s non-goals section, which
-	// #306 falsified and nobody re-read (grave #431), and it was written into this file by the PR whose
-	// own subject was that shape. Recorded rather than swapped out, because the failure was not picking a
-	// weak example: it was sourcing a premise from a *paragraph* when an instrument was one call away, and
-	// this file exists to prefer the instrument.
+	// **This paragraph's example has now been wrong twice, and the second was the repair of the first.**
+	// Both are kept: the pair is what the site is worth reading for.
+	//
+	// First: *"alignment is not checked at all (`validate/vec.go`, `decodeMemop` drops the memarg)"*. It is
+	// checked — `internal/validate/align.go` — and has been since #306 landed in #313. The clause came from
+	// `vec.go`'s non-goals section, which #306 falsified and nobody re-read (grave #431), written into this
+	// file by the PR whose own subject was that shape.
+	//
+	// The lesson recorded with it, at the time, was this: the failure was not picking a weak example, it
+	// was **sourcing a premise from a paragraph when an instrument was one call away, and this file exists
+	// to prefer the instrument.**
+	//
+	// Second, in the repair, one clause after that lesson: *"#328's 103 module-and-section vectors have no
+	// vocabulary"*. **#328 closed as completed the day before**, its vocabulary supplied by #403,
+	// `validateAdmitCeiling` re-based 28 → 0 (grave #434). The instrument one call away was `gh issue view
+	// 328`; **no sweep's domain includes the tracker**, which is why the recurrence was silent. So the
+	// lesson above was written, and then broken, in the same edit — because it had been applied to the
+	// *fact* and not to the *sourcing*.
 	if tally.declined != 0 {
 		t.Errorf("%d modules declined at the public path, and since #427 nothing should: the "+
 			"validator types every instruction the decoder can name under DefaultFeatures. A decline "+

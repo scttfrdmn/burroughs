@@ -11131,18 +11131,36 @@ func TestPhase1Files(t *testing.T) {
 	//
 	// **That is not #9 done, and the distance is worth stating where the figure is.** A drained stratum
 	// says no *board row* is attributed to a validator shortfall; it does not say the validator refuses
-	// everything it should. #328's 103 module-and-section vectors have no vocabulary yet, and a
-	// negative-vector corpus cannot falsify what a validator wrongly *accepts*, which is why this column
-	// reaching 0 leaves #9 open.
+	// everything it should. #111 is the cleanest witness — nine valtype positions accept
+	// `(ref null $undefined)`, one shape, and **no suite vector fails on it** — so a negative-vector corpus
+	// cannot falsify what a validator wrongly *accepts*, which is why this column reaching 0 leaves #9
+	// open. #357, #358 and #296 are the rest of the open shortfall.
 	//
-	// **This paragraph had a second leg and it was false: "alignment is not checked at all — `decodeMemop`
-	// drops the memarg".** Alignment is checked (`internal/validate/align.go`, 45 natural widths derived
-	// from `mnemonics.ml`) and has been since #306 landed in #313, two weeks before this sentence was
-	// written. The clause was copied out of `internal/validate/vec.go`'s non-goals section — a foreclosing
-	// paragraph #306 falsified and nobody re-read — in the same PR whose subject was foreclosing prose
-	// resting on premises that had moved (grave #431). The wrong leg is recorded rather than deleted
-	// because the argument is *stronger* for having one leg fewer: #328 carries it alone, and a reader who
-	// finds two reasons where one is false has no way to tell which half of the conclusion survives.
+	// **This paragraph has been wrong twice, in the same clause position, about the same thing — and the
+	// second time was the repair of the first.** Both are kept, because the pair is the finding and a
+	// reader who finds two reasons where one is false cannot tell which half of the conclusion survives.
+	//
+	// The first leg was *"alignment is not checked at all — `decodeMemop` drops the memarg"*. Alignment is
+	// checked (`internal/validate/align.go`, 45 natural widths derived from `mnemonics.ml`) and has been
+	// since #306 landed in #313, two weeks before that sentence was written. It was copied out of
+	// `internal/validate/vec.go`'s non-goals section — a foreclosing paragraph #306 falsified and nobody
+	// re-read — in the same PR whose subject was foreclosing prose resting on premises that had moved
+	// (grave #431).
+	//
+	// The second leg was that repair: *"#328's 103 module-and-section vectors have no vocabulary yet, and
+	// #328 carries it alone"*. **#328 closed as completed the day before that was written** — #403 supplied
+	// the vocabulary, drained `accepted` to 0 and re-based `validateAdmitCeiling` **28 → 0**, which is the
+	// same zero `validateAdmitCeiling`'s own entry above quotes as a *reached* bound. So the replacement
+	// leg named as the live carrier of "#9 is open" the issue whose closure is the evidence sitting two
+	// bounds up this file (grave #434).
+	//
+	// Neither failure is about alignment or about vocabulary. Both are **a premise sourced from a paragraph
+	// when the tracker was one query away** — and the second was written into the repair of the first, with
+	// the first's lesson stated in the paragraph being edited. The lesson had been applied to the *fact*
+	// and not to the *sourcing*, so the shape outlived its own grave by one commit. That is the durable
+	// part: **a stale-premise repair is itself a premise-sourcing event and inherits the whole risk it
+	// exists to discharge**, and it gets less scrutiny than the original for being the fix rather than the
+	// bug. The conclusion is unchanged and now rests on #111, which is checkable by reading #111.
 	const passFloor = 60922
 	// Slack 0 as of #387's ruling, with `allOnPassFloor` and `unsupportedCeiling` — see
 	// `boardbound_test.go`'s retirement section. Two entries in the ledger above record taking a

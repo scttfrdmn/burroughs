@@ -2306,6 +2306,23 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **#431's own repair replaced the false premise with another false premise: #328 was cited as the live
+  carrier of "#9 is open" the day after it closed —
+  [#434](https://github.com/scttfrdmn/burroughs/issues/434)** (`internal/spec/spec_test.go`,
+  `publicpath_test.go`, this file). #328 closed **completed** on 2026-08-18; #403 supplied the vocabulary,
+  drained `accepted` to 0 and re-based `validateAdmitCeiling` **28 → 0** — the same zero the corrected
+  paragraph quotes two bounds away as its *second mechanism*. The surviving leg now names **#111** (nine
+  valtype positions accept `(ref null $undefined)`, no suite vector fails on it), with #357, #358 and #296
+  as the rest of the open shortfall; #111 is the better witness anyway, being an over-acceptance the
+  corpus structurally cannot fail on, which is the argument the paragraph makes. Neither leg failed about
+  alignment or about vocabulary: both were **a premise sourced from a paragraph when the tracker was one
+  query away**, and the second was written into the repair of the first, one clause after that lesson was
+  recorded in the paragraph being edited. **A stale-premise repair is itself a premise-sourcing event and
+  inherits the whole risk it exists to discharge** — and it draws less scrutiny than the original for
+  being the fix rather than the bug. Also filed against #432 as its cheapest option: `citecheck` already
+  resolves every `#N` and already prints state and labels, so *a citation to a closed issue inside a
+  sentence asserting the thing is open* is detectable with data the sweep holds in hand. It reported
+  `#328 -> issue [phase:v0]` on PR #433 and passed.
 - **`vec.go`'s non-goals section said alignment was unchecked and uncheckable; #306 had falsified both
   clauses two weeks earlier — [#431](https://github.com/scttfrdmn/burroughs/issues/431)**
   (`internal/validate/vec.go`, `internal/spec/spec_test.go`, `publicpath_test.go`,
@@ -2350,12 +2367,15 @@ weakly-ordered platform.
   **Default lane: pass 60914 → 60922, fail 16 → 8; validate stratum 8 → 0 across all four partitions
   (`declined`, `admitted`, `over-rejected`, `wrong-message`), which is #9's instruction vocabulary
   complete over the space the decoder can name under `DefaultFeatures` — and *not* #9 done: the issue
-  stays open because #328's 103 module-and-section vectors have no vocabulary yet, so the population
-  most likely to hold an accept-direction miss is the one no board partition can ask about. A drained
-  decline stratum and a complete validator are different claims.** (This entry also claimed *"alignment
-  not being checked at all (`decodeMemop` drops the memarg)"* as a second reason. That was false — see
-  the `Fixed` entry for grave #431 below — and the clause is corrected here rather than left standing,
-  because a changelog line is read as a statement of what the release does.) All-gates-on lane: pass 64985 → 64993, fail 61 → 53.
+  stays open because [#111](https://github.com/scttfrdmn/burroughs/issues/111)'s nine valtype positions
+  accept `(ref null $undefined)` with no suite vector failing on it, so the population most likely to
+  hold an accept-direction miss is the one no board partition can ask about. A drained decline stratum
+  and a complete validator are different claims.** (This entry has carried two false reasons for that,
+  and both are recorded rather than left standing, because a changelog line is read as a statement of
+  what the release does. First: *"alignment not being checked at all (`decodeMemop` drops the memarg)"* —
+  false, see the `Fixed` entry for grave #431 below. Second, written as that correction: *"#328's 103
+  module-and-section vectors have no vocabulary yet"* — #328 had closed as completed the day before, its
+  vocabulary supplied by #403; see grave #434.) All-gates-on lane: pass 64985 → 64993, fail 61 → 53.
   `validateDeclineCeiling` and `validateFailCeiling` both 8 → 0. All six figures pre-registered before
   the run. `unsupported` unmoved at 66 and that zero is **structural** for the eleventh entry running —
   `classify` is untouched, so nothing the harness could not ask became askable; #323 remains the one
