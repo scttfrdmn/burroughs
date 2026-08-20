@@ -1495,6 +1495,24 @@ weakly-ordered platform.
 
 ### Changed
 
+- **`TestUnhandledFCSubOpcodeStaysOnTheWorkList`'s risk is re-pointed onto `0xfd`, as a sweep whose
+  domain the decoder's own table supplies
+  ([#429](https://github.com/scttfrdmn/burroughs/issues/429), declared by grave
+  [#428](https://github.com/scttfrdmn/burroughs/issues/428)).** *A tripwire names a risk, not a code
+  shape* — and the risk (an unhandled sub-opcode losing its `<prefix> NN` rendering, and with it the
+  partition the board's fail buckets and the work list are read off) had no subject left in `0xfc`,
+  whose 18 rows are all answered. It has 19 in `0xfd`. #429 named two shapes and this took the second:
+  `TestUnhandledFDSubOpcodesStayOnTheWorkList` derives its domain from `binary.PrefixedOp`, so it moves
+  as the table does, where a call per arm would inherit today's population and go stale exactly the way
+  the `fc 0b` row did — the treadmill #428 came from. `execFD`'s header has asserted this property
+  since it was written and nothing checked it, which is *the defect stated as the rule* with the sign
+  it usually has. Three guards against dying quietly, none of which sees another's mutation: a floor on
+  the unhandled population (whose failure message says **re-point, do not delete**, per #33), a floor
+  on the derived domain, and a headroom check on the scan's ceiling — a range claim of the kind a map
+  gives no way to ask, asserted the way `kindCount`'s probe-above-the-end asserts the other one.
+  Reports 275 rows, 256 answered, 19 on the work list: `fd 9a a2 a5 a6 af b0 b2 b3 b4 c2 c5 c6 cf d0
+  d2 d3 d4 e2 ee`.
+
 - **Correlated errors preserve deltas — the third specimen of one organ, landed under the vacuity
   law rather than as a new key** (`docs/laws/controls.md`; Scott's ruling on the #130 diagnosis relay,
   riding [#130](https://github.com/scttfrdmn/burroughs/issues/130)). *Arms that share a fault agree
