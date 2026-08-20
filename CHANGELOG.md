@@ -1608,9 +1608,11 @@ weakly-ordered platform.
   relay: *"just making the blind spot readable, the same way the board's are"*). `scripts/ratio.sh`
   sees neither Makefiles nor workflow files: both land in `other`, so a repair to `make check` or to a
   CI job — gate work, and some of the most load-bearing there is — moves neither column and appears
-  only in the parenthesized count. **The rule is unchanged**; #113 fixes the comparator and a non-`.go`
-  path belongs in `other`. Named because a gap on the page can be priced by whoever reads the figure,
-  and one that isn't reads as a zero.
+  only in the parenthesized count. **The rule is unchanged**; #113 fixes the comparator, a non-`.go`
+  path belongs in `other`, and [#436](https://github.com/scttfrdmn/burroughs/issues/436) already put
+  the same question for `scripts/` to Scott and was ruled the same way — *"if `other` keeps growing,
+  that's a signal to read rather than a definition to change."* This is that reading made cheap: a gap
+  on the page can be priced by whoever reads the figure, and one that isn't reads as a zero.
 
 - **"A mutant that doesn't compile tests the compiler, not the control" is minted into the controls
   family** (Scott, on the #429 report). Stated as the trichotomy's *precondition* rather than a fourth
