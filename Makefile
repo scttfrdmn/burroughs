@@ -219,9 +219,28 @@ fmt:
 #
 # The two halves are deliberately different instruments: the probe proves gofumpt
 # is reachable and opinionated, the `./...` run proves the tree agrees with it.
+#
+# The probe's stderr goes to a file rather than to `/dev/null`, and its exit status
+# is tested on its own line, because **the probe was dropping its own mechanism
+# channel** (grave #444): with the stream discarded, a formatter that never started
+# was indistinguishable from one that answered unchanged, and this recipe reported
+# the second — a visible message naming the wrong cause, while CI's `set -e` copy of
+# the same two lines aborted with no message at all. Three outcomes, three messages:
+# could not run, ran but is not opinionated, ran and the tree disagrees. The stream
+# is suppressed *for the comparison* only, because `go: downloading ...` on a cold
+# cache would otherwise be compared against the probe.
 fmt-check:
 	@probe="$$(printf 'package p\n\nfunc F() {\n\n\tx := 0\n\t_ = x\n}\n')"; \
-	got="$$(printf '%s\n' "$$probe" | $(TOOL) golangci-lint fmt --diff --stdin 2>/dev/null)"; \
+	err="$$(mktemp)"; \
+	if ! got="$$(printf '%s\n' "$$probe" | $(TOOL) golangci-lint fmt --diff --stdin 2>"$$err")"; then \
+		echo "fmt-check could not run the formatter at all: it exited non-zero before"; \
+		echo "answering the probe, so neither 'formatted' nor 'unformatted' is known."; \
+		echo "Its stderr follows (grave #444):"; \
+		cat "$$err"; \
+		rm -f "$$err"; \
+		exit 1; \
+	fi; \
+	rm -f "$$err"; \
 	if [ -z "$$got" ] || [ "$$got" = "$$probe" ]; then \
 		echo "fmt-check cannot confirm the formatter ran: a deliberately misformatted"; \
 		echo "probe came back unchanged or empty, so the tree check below would report"; \

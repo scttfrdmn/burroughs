@@ -21,6 +21,19 @@ weakly-ordered platform.
 
 ### Added
 
+- **Decision 0039, held open: a reference's payload kind crosses the two boundaries as one enumerated
+  kind** ([#270](https://github.com/scttfrdmn/burroughs/issues/270),
+  [0039](docs/decisions/0039-a-references-payload-kind-crosses-the-two-boundaries-as-one-enumerated-kind-and-the-static-type-gate-is-its-own-census.md)).
+  The record only; no implementation, and `Status:` stays **proposed** because it widens the public
+  `burroughs.Value` and 0027's one-bit precedent for that was stamped. Re-measuring the population
+  corrected two claims it was scoped on: #270 is **28** vectors and the 39 in the `assert_return`
+  sub-column includes #323's 11 global-`get` actions, so the `unsupported` column decomposes
+  28 + 11 + 15 + 3 = 57 with nothing left over; and `internal/binary` needs no widening at all, since
+  `AbstractRefType` is exported and already admits `anyref`. What grew instead is the value boundary,
+  which is two boundaries now that the public package exists. Options 3 and 4 are declined on the
+  authority — carrying a dynamic heaptype re-introduces grave #266's shape, and letting the engine
+  answer the pattern makes the harness score the engine on the engine's own answer.
+
 - **A gate decline's side effect on a *third* instance is scored as the third verdict, and the default
   lane's fail column reaches 0** ([#414](https://github.com/scttfrdmn/burroughs/issues/414), decision
   [0038](docs/decisions/0038-a-declines-side-effect-on-a-third-instance-is-registered-per-line-and-the-derivation-is-the-control-not-the-fix.md)).
@@ -2455,6 +2468,24 @@ weakly-ordered platform.
     re-pointed, so the retirement is readable at the site rather than only in this entry.
 
 ### Fixed
+
+- **The gofumpt liveness probe discarded its own mechanism channel — [grave
+  #444](https://github.com/scttfrdmn/burroughs/issues/444)** (`.github/workflows/ci.yml`, `Makefile`).
+  CI failed on a **docs-only** PR with `exit 1`, 37 seconds, and **not one output line** — both of the
+  step's `::error::` branches print, so neither was reached. A command substitution that exits non-zero
+  in an assignment aborts a `set -e` shell where it stands, and the probe had routed its stderr to
+  `/dev/null`: the instrument #322 added to give this gate a mechanism channel was throwing away its
+  own, so a formatter that never started was indistinguishable from one that answered unchanged. The
+  Makefile copy is the same two lines under a shell that is *not* `set -e`, where the same failure falls
+  into the `-z` branch and prints **"a deliberately misformatted probe came back unchanged"** — a
+  visible message naming the wrong cause, which is why `make check` could not have predicted the CI
+  fail. Both measured, not argued: the old form prints that wrong message, and under `bash -e` it never
+  reaches the `if`s at all. Repaired to three outcomes with three messages — could not run (stderr
+  printed), ran but is not opinionated, tree disagrees — and the new branch was watched fire against
+  `TOOL=…nosuchtool` before it was believed. The stream is still suppressed *for the comparison*, since
+  `go: downloading …` on a cold cache would otherwise be compared against the probe; the error was
+  having no reader for it at all. The underlying tool failure is **unbounded and stated as unbounded**,
+  not called a flake: the only evidence that could have bounded it is what the probe discarded.
 
 - **`citecheck`'s summary block: a coverage comparison that fired on a case it was not written for, and a
   terminal verdict naming a cause it could not know — [grave
