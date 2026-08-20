@@ -21,6 +21,54 @@ weakly-ordered platform.
 
 ### Added
 
+- **`citecheck` check 6 — a *stated* claim about a citation's state is compared against the tracker's
+  (`scripts/citecheck.sh`, discharging half of
+  [#432](https://github.com/scttfrdmn/burroughs/issues/432) on Scott's order to build it).** `#N is
+  open`, `#N stays closed`: the sentence asserts one of the two values of a field the payload check 2
+  already fetches, so the comparison adds **no request** — the boundary Scott named when relaxing his own
+  *"the sweep is the last instrument this phase needs"* order, *"predicates over data an existing gate
+  already fetches"*. Grave [#434](https://github.com/scttfrdmn/burroughs/issues/434) is the specimen, and
+  **no sweep's domain includes the tracker**, which is why nothing in the tree could see it. Runs in
+  `--pr` as well as the diff modes — the only network check that runs in both, because the grave's own
+  first draft was in a PR body and a state claim, unlike a closing keyword, is not banned there.
+  **The trigger is a copula, and its first draft was not.** That draft matched the tracker's two state
+  words anywhere in the citation's sentence; measured over 40 commits it produced **5 of 5 distinct flags
+  false** against a **pre-registered ceiling of 20%**, so by its own registration it did not land and
+  narrowing it was the work rather than a licence. Worse, it caught #434 **for the wrong reason** — the
+  subject of "stays open" in that sentence is *the issue* (#9), not #328 — so the demonstrated catch was
+  proximity, and *protection by coincidence is not protection*. The comparison was never the hard part;
+  **aboutness** is, and a copula settles it by grammar. Present tense only, with `was`/`were` **absent
+  from the verb list rather than filtered out of it**, since a past-tense account is correct by
+  construction. **Stated under-match: this does not catch #434's three sites**, which assert openness by
+  paraphrase — unbounded English that nothing here reaches. **Measured yield: two true positives from one
+  tracker state change, both on the prose of the PR that added the arm.** A comment said #432 stayed open;
+  the ruling that granted
+  #432's paraphrase half no instrument *closed* #432, so a sentence written minutes earlier became false
+  and `make cite` failed with the arm's own FAIL paragraph pointing at it — **the sentence did not
+  change, the world did**, and nothing else in the tree could have noticed. **The second is the better
+  witness**: after that repair, CI's `--pr` half failed on PR #437's *body*, which still said it in two
+  places — the author had applied the lesson at the site he was looking at and left a second site standing
+  in a channel he had stopped scanning, and the verdict came from a machine he was not consulting.
+  Every other failure it has printed was a mutation fired by hand, and the one historical catch belonged
+  to the broad draft, made by co-occurrence and wrong about which noun the sentence was about. Over
+  tracked files the narrow form appears in **9 places, all 9 agreeing**, counted with the arm's own
+  trigger — an earlier count of 6 was a hand search and was short by three. The arm's population is
+  *added lines*, so those 9 are ungated until a diff touches them; both catches were lines this PR added.
+  Declared
+  at the arm on Scott's order, because a tripwire with no witness is a legitimate thing to be only if it
+  says so where the code is.
+  **The paraphrase half of [#432](https://github.com/scttfrdmn/burroughs/issues/432) gets no
+  instrument, by ruling**: detecting what a sentence is *about* is unbounded, and the remedy there is
+  not code — source the premise from the tracker rather than from a paragraph.
+  **Every claim on a number is compared, not the first, and the report about the check is what found
+  that.** The first draft took `head -1`; a population can carry two contradictory claims about one
+  number, and a table reporting both directions of this check is exactly such a population — so one was
+  compared, the other silently unasked. Caught by the coverage line reading `3 of 4` on the PR body that
+  documented the check, which is *coverage is a claim* doing the one job an arm cannot do for itself. Run
+  over its own report, the check also failed that body twice more, both correctly: a citation to an ADR
+  not yet written, and a mutation table spelling its fixtures — *a ban reported in the banned form is
+  still the banned form*, since a scanner reads tokens and not quotation marks.
+
 - **A sweep over foreclosing claims about gates, on Scott's order to *"do the sweep, and widen it past
   the one word"*** (`internal/testenv/foreclose_test.go`, riding
   [#427](https://github.com/scttfrdmn/burroughs/issues/427)). A foreclosing word — *structural*,
@@ -2305,6 +2353,25 @@ weakly-ordered platform.
     re-pointed, so the retirement is readable at the site rather than only in this entry.
 
 ### Fixed
+
+- **`citecheck`'s summary block: a coverage comparison that fired on a case it was not written for, and a
+  terminal verdict naming a cause it could not know — [grave
+  #435](https://github.com/scttfrdmn/burroughs/issues/435)** (`scripts/citecheck.sh`). Found while
+  attributing an `exit=1` that **no `FAIL` line in the log accounted for** — a log asserting a failure it
+  declined to locate. (1) `closing_nums` is `sort -u`'d over *numbers*, while the resolution loop's list
+  is `sort -u`'d over *class and number*, so one number under two classes — `grave #N` plus a plain or
+  closing `#N`, **this repo's own convention for closing a grave** — was two visits to one claim, and the
+  arm reported a *drop* with its message pointing at failures that by construction do not exist for one.
+  Measured at `6 of 5` on `89388bf..a14e76f`, #395 resolving once as `grave` and once as `issue`; both
+  sides now count distinct, and the genuine-drop direction still fires at `0 of 1` with its FAIL above it.
+  (2) `fail=1` is set by five different checks and the terminal line said *"at least one citation does not
+  resolve to the artifact it names"* — false for four of them, and exactly backwards for check 6, whose
+  subject is a citation that resolves perfectly inside a sentence contradicting it. Every check added since
+  inherited that sentence without touching the line. The verdict channel is now cause-neutral: *an exit
+  code can't say why; output can't say whether*, and the `FAIL` paragraphs carry the why. **The filed
+  diagnosis of (1) was itself wrong** — "the same claim cited twice" dedupes and passes on HEAD — and the
+  mutation written to confirm it refuted it instead; both sides said `sort -u`, which is what made the real
+  mechanism invisible to reading.
 
 - **#431's own repair replaced the false premise with another false premise: #328 was cited as the live
   carrier of "#9 is open" the day after it closed —

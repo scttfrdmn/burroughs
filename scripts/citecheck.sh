@@ -30,7 +30,7 @@
 #
 # ## What is binding and what is printed
 #
-# Five checks, and they are not equally strong. Saying which is which is the point, because a
+# Six checks, and they are not equally strong. Saying which is which is the point, because a
 # tool that gates on existence while its name suggests it gates on correctness is testimony
 # about itself:
 #
@@ -130,6 +130,22 @@
 #      citation warning below records the same trap costing three dangling citations in a
 #      `CHANGELOG.md` paragraph; the fixtures used #411 and an unresolvable five-digit number.)
 #
+#      (**An issue citation is one to four digits**, and a fixture wider than that is invisible rather
+#      than unresolvable — measured while re-running C6 for grave #435: a closure claim on `#99991`
+#      extracts nothing at all, prints no FAIL, and reports `0 of 0` at exit 0. A genuinely
+#      five-*digit* fixture could therefore not have produced C6's recorded `3 of 4`, so either the
+#      number above was five *characters* — a hash and four nines, which is four digits and does fire —
+#      or that row is credited to a mutation the extractor never saw. (Spelled as a form rather than
+#      written out, because `make cite` failed this very paragraph for spelling it: a four-nines token
+#      in prose about unresolvable numbers is an unresolvable number, and this file's own warning two
+#      paragraphs up is that prose *about* the defect instantiates it. The check earned that one on its
+#      author, in the sentence documenting the trap.) Unresolved here, because the artifact that
+#      would settle it is the fixture itself and it was reverted; recorded because the constraint is
+#      what the next fixture needs, and because the trap is this bill's own — *a mutation that never
+#      landed is indistinguishable from a tolerated one at the exit code*, and the width guard is a
+#      second way for one not to land. C6 was re-confirmed on a four-digit number: `0 of 1` with the
+#      resolution FAIL above it and exit 1.)
+#
 #        C1   the plain claim, on an open issue         the verdict itself
 #        C2   the verb behind `to`                      the modal exemption (must stay a note)
 #        C3   the verb with a colon before the number   the retained colon — grave #314's spelling
@@ -157,6 +173,65 @@
 #      is scanned. Both resolve closed, so it passes — by luck of the targets' state, not by design.
 #      A future writeup quoting a claim about a still-open issue fails, and the remedy is the one
 #      that arm already implies: describe the form, or name the number outside the verb's reach.
+#   6. **A *stated* claim about a citation's state agrees with the tracker — binding, rides check 2's
+#      request, both modes.** `#N is open`, `#N stays closed`, `#N's remains open`: the sentence
+#      asserts one of the two values of a field the payload already carries, so the comparison costs
+#      nothing. Grave #434 is the specimen — a paragraph naming #328 as the live carrier of open work
+#      the day after #328 closed, written into the *repair* of a stale premise, two bounds from the
+#      zero that #328's own closure produced. **No sweep's domain includes the tracker**, so nothing
+#      in the tree could see it; check 2 reported `#328 -> issue [phase:v0]` and passed, because
+#      resolution is a property of the number and the false sentence was around it.
+#
+#      **It runs in `--pr` too, and is the only network check that runs in both modes.** Checks 4 and
+#      5 exempt each other's population because a closing keyword in a body is *banned* rather than
+#      verified; a state claim is not banned anywhere, and #434's own first draft was in PR #433's
+#      body. A false sentence is false in whichever population it is written in.
+#
+#      **The trigger is a copula, and the first draft was not — which is this check's whole content.**
+#      That draft matched the tracker's two state words anywhere in the citation's sentence, on the
+#      reasoning that `open`/`closed` are the domain of the field being compared. Measured over 40
+#      commits before landing: **5 of 5 distinct flags false**, against a pre-registered ceiling of
+#      20%, each false by a different mechanism — the state word's subject being another noun, `open`
+#      as a verb, a past-tense account, a `--state closed` inside a quoted flag. By that registration
+#      the trigger did not land, and narrowing it was the work rather than licensing it after the
+#      fact. Worse: **that draft caught #434 for the wrong reason.** The subject of "stays open" in
+#      the specimen is *the issue* — #9 — and not #328 at all. The catch was proximity, and
+#      *protection by coincidence is not protection.*
+#
+#      So the comparison was never the hard part; **aboutness** is — which noun a state word is
+#      predicated of. A copula makes the citation the subject *by grammar*, so aboutness is decided
+#      rather than guessed, and that is the only form admitted. Present tense only, with `was`/`were`
+#      **absent from the verb list rather than filtered out of it**: a past-tense account is correct
+#      by construction, and *the tense is the mechanism* (`foreclose_test.go`'s historical-account
+#      class draws the same line for the same reason). Negation needs no list either — `is not open`
+#      does not match a pattern that wants the state word beside the copula.
+#
+#      **Stated under-match, because one that is silent is the defect: this does not catch #434.**
+#      The three sites that grave lived at assert openness by paraphrase — "has no vocabulary",
+#      "waits on", "carries it alone" — which is unbounded English, and nothing here reaches it. One
+#      catch in three was the pre-registered forecast and the narrowing took it to zero of three; the
+#      historical catch on PR #433's body is what the check has — and on inspection it is not this
+#      check's at all, since the broad draft made it by co-occurrence and was wrong about which noun
+#      the sentence was about. **So the measured yield is two true positives, both from one tracker
+#      state change and both on this PR's own prose.** The ruling that disposed of #432 falsified a
+#      sentence in this file written minutes earlier (caught locally, at the line below), and then
+#      falsified a second one in PR #437's body (caught by CI, on the run for the pushed SHA, after
+#      the local repair — because I fixed the file and did not think to re-scan the body against the
+#      changed world). The second is the better witness of the two: *the author had already applied
+#      the lesson and still left a site standing.* Measured over 9 agreeing stated claims across
+#      tracked files, counted with this check's own trigger rather than by hand — an earlier count of
+#      6 was mine and was wrong, which is the same sourcing defect one remove out. Note the scope:
+#      the population is *added lines*, so those 9 are ungated until a diff touches them.
+#      The declaration lives beside the arm, on Scott's order, because a tripwire
+#      with no witness is a legitimate thing to be only if it says so where the code is. What it does
+#      gate is the stated form. **The paraphrase half gets no instrument, by ruling** — the remedy
+#      there is not code: source the premise from the tracker rather than from a paragraph.
+#
+#      **My own pricing of this check was measured with the wrong instrument.** "26 citations, 0
+#      disagreements" was produced by *reading* — a human resolving aboutness — so it forecast nothing
+#      about a predicate that cannot read. *Measure with the instrument, not by hand.* The 40-commit
+#      run had a second design error, mine and not the check's: old prose compared against today's
+#      tracker measures drift since, not the predicate's accuracy today.
 #
 # What is deliberately **not** gated: whether the resolved title matches the sentence citing it.
 # There is no general oracle for that — agreement between a citation's context and an issue's title
@@ -165,11 +240,21 @@
 # reviewer and the CI log, and the verdict channel carries only what a machine can decide. Verdict
 # channel and mechanism channel are different instruments; this script uses both and says which.
 #
-# Checks 3, 4 and 5 are the exceptions that prove the shape of the rule rather than weakening it:
-# all three are title-*shaped* questions that turn out to have non-title answers — a label, an
-# integer comparison, and a state field — so none is the judgement the printed title is there for.
-# Check 5 is the clearest case, since "does this comment's claim about #N hold" sounds like it needs
-# a reading of the sentence and needs one boolean. The pattern worth
+# **Check 6 is a carve-out of one sub-claim from that non-goal, and it is worth saying which one,
+# because "does the sentence agree with the citation" is exactly what the paragraph above declines.**
+# What it gates is not agreement in general but a sentence whose predicate *is* a field the payload
+# carries, in the one grammatical form where which noun the predicate attaches to is decided by the
+# grammar rather than by a reading. Everything the paragraph above warns about is still not gated:
+# whether the sentence's *characterisation* of the issue is apt, whether the paraphrase of a state is
+# right, whether the citation is the number the writer meant. The carve-out is the copula and the two
+# field values, and it stops there. The distinction is the same one check 5 draws — a boolean hiding
+# inside a judgement — and the discipline is to take the boolean and leave the judgement printed.
+#
+# Checks 3, 4, 5 and 6 are the exceptions that prove the shape of the rule rather than weakening it:
+# all four are title-*shaped* questions that turn out to have non-title answers — a label, an
+# integer comparison, and a state field twice over — so none is the judgement the printed title is
+# there for. Check 5 is the clearest case, since "does this comment's claim about #N hold" sounds like
+# it needs a reading of the sentence and needs one boolean. The pattern worth
 # reusing: when a printed field keeps catching the same class by eye, look for the sub-claim inside
 # it that a machine can decide, and assert that. Reading the printed title has caught or would have
 # caught four guessed numbers; the fourth is what promoted this sub-claim out of the print. (Directive:
@@ -553,14 +638,107 @@ if [ "$prmode" -eq 1 ]; then
 		awk '$1 == "issue" || $1 == "grave" { print $2 }' | sort -u)"
 fi
 
+# Check 6's population: citations that are the **grammatical subject** of a present-tense state
+# claim — `#N is open`, `#N stays closed`, `#N's remains open`. Computed as its own pass for the same
+# reason `prose_nums` is, two populations and one grammar.
+#
+# **The trigger is a copula with the citation as its subject, and the first draft of this check was
+# not, which is the whole lesson of it.** That draft matched the tracker's own two state words
+# anywhere in the citation's *sentence*, on the reasoning that `open`/`closed` are the domain of the
+# field being compared and so not an enumeration of English. It was measured over 40 commits before
+# landing, and **5 of 5 distinct flags were false positives**, each by a different mechanism:
+#
+#   - `(grave #314), so asking whether **its target** is open` — the state word's subject is another noun
+#   - `has to **open** GC for an unrelated reason (#395)` — `open` is a verb, not a state
+#   - `while #204 **was** open` — past tense, and correct as written
+#   - `` `--state closed --limit 500` … and #303 is the control `` — the word is inside a quoted flag
+#
+# Against a **pre-registered ceiling of 20%**, so by that registration the trigger did not land and
+# narrowing it was the work rather than licensing it. Worse, and this is the part worth keeping: the
+# grave that motivated the check — #434, `"the issue stays open because #328's 103 module-and-section
+# vectors have no vocabulary yet"` — was caught by that draft **for the wrong reason.** The subject of
+# `stays open` in that sentence is *the issue*, meaning #9; it is not #328. The catch was proximity,
+# and *protection by coincidence is not protection.*
+#
+# So the hard part was never the comparison — Scott's grant was right that comparing two states is a
+# comparison and not an instrument. The hard part is **aboutness**: which noun a state word is
+# predicated of. My own pricing of this check ("26 citations, 0 disagreements") measured a *human*
+# resolving aboutness by reading, so it forecast nothing about a predicate that cannot. *Measure with
+# the instrument, not by hand.*
+#
+# What survives is narrow and sound: a copula makes the citation the subject **by grammar**, so
+# aboutness is not guessed. Present tense only — `was`/`were` are absent from the verb list rather
+# than filtered out of it, because a past-tense account is correct by construction and *the tense is
+# the mechanism* (`foreclose_test.go`'s historical-account class says the same thing about the same
+# problem). Negation needs no list either: `is not open` simply does not match a pattern that wants
+# the state word next to the copula.
+#
+# **Stated cost, because an under-matching trigger fails silently: this does not catch #434.** The
+# paraphrase channel that grave travelled through — "has no vocabulary", "waits on", "carries it
+# alone" — is unbounded English, and nothing here reaches it. What this does catch is the *stated* form
+# of the same claim, which the tree uses in 7 distinct places. **The paraphrase half gets no instrument
+# at all, by ruling** (#432, closed at the #437 review): detecting what a sentence is about is
+# unbounded, and the remedy is a habit rather than code — source a premise the tracker holds from the
+# tracker, not from an adjacent paragraph.
+#
+# **This sentence used to say that #432 stayed open, and that is how the check took its first true
+# positive — on itself, live and unmutated.** The ruling that granted the paraphrase half no instrument
+# also closed #432, so a sentence written twenty minutes earlier became false, and `make cite` failed
+# with the arm's own FAIL paragraph pointing here. Recorded because it is the cheapest possible
+# demonstration of the thing the check is for: **the sentence did not change, the world did**, and
+# nothing in the tree except this arm could have noticed. Note which remedy applied — the work really
+# was disposed of, so the *sentence* was stale; had the disposition been wrong, reopening #432 would
+# have been the fix. The arm prints both because they are different repairs.
+state_claims=""
+if [ -n "$diffout" ]; then
+	state_claims="$(printf '%s\n' "$diffout" | awk '
+	/^\+\+\+/ { next }
+	/^\+/ {
+		line = tolower(substr($0, 2))
+		# The citation is the subject of the copula, so the match is local and needs no
+		# sentence window: `#N` (optionally possessive) then a present-tense copula, then an
+		# optional `still`, then the state word. Backtick-quoted flags do not match, because
+		# `--state closed` has no citation in subject position before it.
+		while (match(line, /#[0-9][0-9]*('"'"'s)?[ ]+(is|are|stays|remains|sits)[ ]+(still[ ]+)?(open|closed)/)) {
+			m = substr(line, RSTART, RLENGTH)
+			line = substr(line, RSTART + RLENGTH)
+			match(m, /[0-9][0-9]*/); num = substr(m, RSTART, RLENGTH)
+			if (length(num) < 1 || length(num) > 4) continue
+			print num "\t" (m ~ /closed$/ ? "closed" : "open")
+		}
+		next
+	}
+	' | sort -u)"
+fi
+
 fail=0
 adrs=0
 issues=0
 graves=0
 foreigns=0
 verbs=0
-nclosing=0
-nexempt=0
+# **The three coverage counters accumulate the numbers they saw and are counted distinct at print
+# time, and grave #435 is why they are not integers incremented in place.** `closing_nums` is
+# extracted with `sort -u` over **numbers**; the resolution loop iterates `cites`, which is `sort -u`'d
+# over **class and number**. So one number under two classes is two rows and two visits, the counter
+# counted visits, the extractor counted claims, and the comparison below fired on a number that was
+# never dropped — while its message named a **drop** and pointed at `FAIL` lines that by construction
+# do not exist for one.
+#
+# The two-class case is not exotic; **it is this repo's own convention for closing a grave.** A diff
+# saying `closes #N` and also writing `grave #N` — the second being what the label check exists for —
+# emits `issue N` and `grave N`, and trips the arm. Measured on `89388bf..a14e76f` as `6 of 5`: #395
+# resolved once as `grave` and once as `issue`, check 5's arm printing its `ok` on both. Reproduced
+# and fixed under mutation, which is also how the wrong first diagnosis was caught — the same claim
+# written *twice* dedupes and reports `1 of 1` on HEAD, so "cited twice" was not the mechanism, and
+# the mutation that was supposed to confirm it refuted it instead.
+#
+# Comparing two counts requires the two sides be counted the same way. That is the whole content of
+# the defect, and the wrong first guess is kept because it names the thing that made the real
+# mechanism invisible: both sides say `sort -u`, over different keys.
+closing_seen=""
+exempt_seen=""
+state_seen=""
 
 # Phase 0a: Go format verbs whose `#` flag looked like a citation (#308). Not resolved, because
 # there is nothing to resolve; printed because a silently dropped token is an exemption mechanism.
@@ -705,7 +883,8 @@ if [ "$need_gh" -gt 0 ]; then
 		# a plain issue, and whether the label is right is a different question from whether the
 		# sentence is true.
 		if printf '%s\n' "$closing_nums" | grep -qx "$n"; then
-			nclosing=$((nclosing + 1))
+			closing_seen="${closing_seen}${n}
+"
 			if [ "$state" = open ]; then
 				echo "FAIL  #$n -> the diff claims to close it, and #$n is OPEN: $title"
 				echo "      A comment saying it closes #$n asserts the code beside it dispatched #$n."
@@ -728,12 +907,88 @@ if [ "$need_gh" -gt 0 ]; then
 			fi
 		fi
 		if printf '%s\n' "$closing_exempt" | grep -qx "$n"; then
-			nexempt=$((nexempt + 1))
+			exempt_seen="${exempt_seen}${n}
+"
 			echo "note  #$n -> a conditional or negated closure claim, $state — exempt from check 5:"
 			echo "      a modal before the verb (\"would fix\", \"cannot close\") asserts nothing about"
 			echo "      state. Printed rather than dropped, because an exemption nobody sees is an"
 			echo "      exemption mechanism."
 		fi
+		# Check 6 (#432, grave #434): the sentence asserts a state and the tracker holds one. Placed
+		# beside check 5 because it is the same question in the other direction — check 5 verifies a
+		# claim that a citation *became* closed, this one a claim about what it *is* — and both read
+		# the `.state` already in hand.
+		#
+		# **Two sentences this check carries at its site, on the order that landed it (Scott, PR #437
+		# review), so that neither can be inferred away by a later reader.**
+		#
+		# **It does not catch grave #434's shape, and the reason is predication rather than proximity.**
+		# That grave asserted openness by *paraphrase* — "has no vocabulary", "waits on", "carries it
+		# alone" — and the question such a sentence turns on is which noun a state word is predicated
+		# of, which is unbounded. This arm reads only the form where a copula makes the citation the
+		# subject, so aboutness is settled by grammar and never guessed. The draft that appeared to
+		# catch #434 matched the two state words anywhere in the sentence and was wrong about the
+		# subject: in *"the issue stays open because #328's 103 vectors have no vocabulary yet"* the
+		# subject of "stays open" is the issue, meaning #9, and not #328. Co-occurrence, not the
+		# predicate. **Nobody should read this check as covering that shape.**
+		#
+		# **Measured yield to date: two true positives, one tracker state change, both on the prose of
+		# the PR that added this arm.** The paragraph above the population stream said that #432 stayed
+		# open; the same ruling that granted #432's paraphrase half no instrument *closed #432*, so a
+		# sentence written minutes earlier became false and `make cite` failed with this arm's FAIL
+		# paragraph pointing at it. **The sentence did not change, the world did** — which is the entire
+		# failure mode, and nothing else in the tree could have noticed.
+		#
+		# The second catch is the one worth keeping. After repairing this file I pushed, and CI's
+		# `--pr` half failed on **PR #437's own body**, which still said #432 stayed open in two places.
+		# So the author had already been shown the lesson, applied it at the site he was looking at, and
+		# left a second site standing in a channel he had stopped scanning: *the repair corrects the
+		# instance and leaves the sourcing running.* That one was not self-inflicted in the same way —
+		# no mutation, no hand, and the verdict arrived from a machine the author was not consulting.
+		#
+		# Before those it was **zero**: every other failure it has printed was a mutation fired by hand,
+		# and the one historical catch credited to it belonged to the broad draft, made by co-occurrence
+		# and wrong about which noun the sentence was about. Over the tracked tree the narrow form
+		# appears in **9 places and all 9 agree** with the tracker (#111 ×2, #260, #326, #9 ×2 open;
+		# #400, #53 ×2 closed), counted by running this arm's own trigger over `git ls-files` — an
+		# earlier count of 6 was a search of the author's own devising and was short by three, which is
+		# *measure with the instrument, not by hand* at one remove. Two of the nine sit inside quotation
+		# marks, in prose about an earlier grave, and this arm counts them: a scanner reads tokens, not
+		# quotation marks, and a false claim in a quotation is still on the page.
+		#
+		# Population caveat, since a yield figure invites the wrong reading: this arm sees **added
+		# lines**, so those 9 standing claims are ungated until a diff touches them. Both catches were
+		# lines this PR added.
+		#
+		# **Every claim on the number, not the first one, and this PR's own body is why.** The first
+		# draft took `head -1`. A population can carry two contradictory claims about one number — a
+		# mutation table reporting *both* directions of this check does exactly that, so the report
+		# about the check was the specimen — and `head -1` compares one, passes or fails on it, and
+		# says nothing about the other. Two opposite claims about one issue is itself a defect worth a
+		# verdict, and the arm that would hide it is the arm that looks like it is working. Caught by
+		# the coverage line below, which read `3 of 4` on this PR's body: *coverage is a claim*, and it
+		# is the one instrument that can see an arm silently declining to ask.
+		for claimed in $(printf '%s\n' "$state_claims" | awk -v n="$n" '$1 == n { print $2 }'); do
+			state_seen="${state_seen}${n} ${claimed}
+"
+			if [ "$claimed" = "$state" ]; then
+				echo "ok    #$n -> the sentence says $claimed and the tracker says $state: $title"
+			else
+				echo "FAIL  #$n -> the sentence says $claimed; the tracker says $state: $title"
+				echo "      A citation resolving is not the same fact as the sentence around it being"
+				echo "      true. This is grave #434: a paragraph named #328 as the live carrier of open"
+				echo "      work the day after #328 closed, two bounds from the zero that #328's own"
+				echo "      closure produced. Both premises came from a paragraph when the tracker was"
+				echo "      one query away, and the second was written into the repair of the first —"
+				echo "      **the lesson had been applied to the fact and not to the sourcing.**"
+				echo "      Remedies, and they are different: if the work really is outstanding, the"
+				echo "      issue is closed wrongly and reopening it is the fix; if it is done, the"
+				echo "      sentence is stale and what replaces it must be sourced from the tracker,"
+				echo "      not from another paragraph. Do not repoint the number to something open"
+				echo "      that happens to be nearby — that is the same defect with a fresh subject."
+				fail=1
+			fi
+		done
 		# Check 4, before the kind-specific arms: a self-citation resolves like any other and is
 		# wrong whatever kind it names, so the comparison belongs above the branch rather than
 		# duplicated inside both of its arms.
@@ -819,17 +1074,55 @@ else
 	# printed count would then be a claim about coverage this check does not have.
 	nclaims="$(printf '%s' "$closing_nums" | grep -c '' || true)"
 	nexempts="$(printf '%s' "$closing_exempt" | grep -c '' || true)"
+	# Distinct on both sides — `sort -u` here because the extractor uses it there (grave #435).
+	nclosing="$(printf '%s' "$closing_seen" | sort -u | grep -c '' || true)"
+	nexempt="$(printf '%s' "$exempt_seen" | sort -u | grep -c '' || true)"
 	printf 'citecheck: closure-claim check ran over %d of %d claim(s) in this diff, %d of %d exempt as conditional.\n' \
 		"$nclosing" "$nclaims" "$nexempt" "$nexempts"
 	if [ "$nclosing" -ne "$nclaims" ] || [ "$nexempt" -ne "$nexempts" ]; then
 		echo "citecheck: check 5 did not reach every closure claim the extractor found — see the" \
 			"failures above for which citation was dropped before its state could be read."
+		# The pointer at the failures above is sound *because* both drop paths print one: an
+		# unresolvable lookup and a `state` that failed the positional-field guard each emit a FAIL
+		# before their `continue`. It was unfollowable only while this arm could also fire on a
+		# repeat, which prints nothing and is not a drop (grave #435).
 		fail=1
 	fi
 fi
 
+# Check 6's own domain, on its own line and for check 4's and 5's reason. **Outside the mode branch,
+# because this is the one network check that runs in both** — the grave's own specimen is PR #433's
+# body, so a body is not a population to exempt here the way checks 4 and 5 exempt each other's. A
+# state claim is a false sentence wherever it is written, and unlike a closing keyword it is not
+# banned in a body, so there is nothing for a `--pr` run to defer to.
+#
+# Zero claims is a legitimate and frequent state: the narrow form is a copula, and most prose
+# asserting a state paraphrases instead. That is the stated under-match, printed as a count so it
+# cannot read as a pass — *a skip is not a verdict*, and neither is an empty population.
+nstateclaims="$(printf '%s' "$state_claims" | grep -c '' || true)"
+nstate="$(printf '%s' "$state_seen" | sort -u | grep -c '' || true)"
+printf 'citecheck: state-claim check compared %d of %d stated claim(s) against the tracker.\n' \
+	"$nstate" "$nstateclaims"
+if [ "$nstate" -ne "$nstateclaims" ]; then
+	echo "citecheck: check 6 did not reach every stated claim it extracted — a citation was dropped" \
+		"before its state could be read, and the failures above say which."
+	fail=1
+fi
+
 if [ "$fail" -ne 0 ]; then
-	echo "citecheck: at least one citation does not resolve to the artifact it names."
+	# **Cause-neutral, and grave #435's second leg is why it used to name one.** This line read "at
+	# least one citation does not resolve to the artifact it names" — true when there was one way to
+	# fail, and false for four of the five that exist now: a wrong `type:grave` label, a closure claim
+	# on an open issue, a coverage mismatch, a mechanism failure reading `.state`, and check 6's state
+	# disagreement. Check 6 is the sharpest counter-example, since a citation that resolves perfectly
+	# to an issue whose state contradicts the sentence around it is the *opposite* of not resolving,
+	# and is the whole reason the check exists. Every check added since inherited the sentence without
+	# touching the line, so no author read it against their own failure mode.
+	#
+	# The verdict channel does not need a cause and cannot source one from a shared flag: *an exit
+	# code can't say why; output can't say whether.* The `FAIL` paragraphs above carry the why, each
+	# with its own remedy, which is what they are for.
+	echo "citecheck: at least one check above failed — the FAIL lines say which check and why."
 	exit 1
 fi
 if [ "$ncites" -eq 0 ]; then
