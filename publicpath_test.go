@@ -118,6 +118,16 @@ func specToPublic(v spec.Val) (Value, bool) {
 		// the arm, and the arm is the better spelling: absence relying on a fallthrough is
 		// indistinguishable from an omission.
 		return Value{}, false
+	case spec.KindUnnameableRef:
+		// **Refused twice over, and neither reason is a limit of this boundary.** ADR 0040's sentinel
+		// says "the harness has no member for that reference type", so asking this API to spell one as
+		// an *argument* is asking it to spell a type whose name was the thing that went missing — there
+		// is nothing to hand `AbstractRefType`. And it cannot arrive here anyway: a vector literal
+		// never carries it (`fromInterpValue` puts it on *results*, and `refPatterns` puts it on five
+		// bare `(ref.<ht>)` patterns, which are expectations refused by the Class switch below). So the
+		// arm exists because `exhaustive` asks every member to be answered on the nose, and answering
+		// is free where the answer is this clear.
+		return Value{}, false
 	case spec.KindFuncRef, spec.KindExternRef:
 		kind := KindFuncRef
 		if v.Kind == spec.KindExternRef {
@@ -182,12 +192,21 @@ func publicToSpec(v Value) (spec.Val, bool) {
 		}
 		return spec.Val{Kind: kind, Class: spec.RefConcrete, Payload: payload}, true
 	default:
-		// KindNone and the remaining GC reference kinds. The harness's `spec.ValKind` has no member
-		// for them, so there is nothing to map *to* — a result of one is unrepresentable rather than
-		// unhandled, and it is refused here and counted at the call site rather than approximated.
-		// `KindAnyRef` left this arm with 0039; the other eleven abstract kinds and `KindTypedRef`
-		// have not, because `spec.ValKind` deliberately has one reference Kind for all of them and
-		// carries the distinction as a payload instead.
+		// KindNone and the remaining GC reference kinds — the nine other abstract kinds and
+		// `KindTypedRef` — refused here and counted at the call site rather than approximated.
+		//
+		// **This arm's reason changed under ADR 0040 and the refusal did not, which is the part worth
+		// saying.** It used to be that `spec.ValKind` had no member to map these *to*, so the refusal
+		// was forced. It now has one: `spec.KindUnnameableRef`, whose meaning is exactly "this
+		// harness cannot name that type", and the raw arm below reaches it. So a mapping is available
+		// and is **not taken**, and the reason is a measurement rather than a principle: **no result
+		// reaches this arm** in the corpus — every reference result the differential sees is nullable
+		// `funcref` or nullable `externref` — so widening it would move zero rows out of `unpassable`,
+		// and an unwitnessed widening of a converter is one whose first exercise would be by whoever
+		// changes it next. The asymmetry with the raw arm cannot manufacture a disagreement either:
+		// a refusal on *either* arm lands the row in `unpassable`, which is a counted bucket and not
+		// a pass. If GC results ever arrive through this boundary, that bucket is where they show up,
+		// and this arm is the first place to look.
 	}
 	return spec.Val{}, false
 }
@@ -273,18 +292,40 @@ func rawToSpec(v interp.Value) (spec.Val, bool) {
 	if !v.Type.IsRef() {
 		return spec.Val{}, false
 	}
-	// `KindAnyRef` is the default rather than an arm, which is this arm's independent reading of the
-	// rule the harness spells the other way round (name the type, else fall back): `spec.ValKind` has
-	// one member per *nameable* reference type and one placeholder for the rest, so every reference
-	// type that is not exactly `funcref` or `externref` — nullable `anyref`, a typed `(ref $t)`, the
-	// nine other abstract heaptypes — lands on the placeholder. Two spellings, one answer, which is
-	// what the comparison is for.
-	kind := spec.KindAnyRef
-	switch v.Type {
-	case binary.FuncRef:
-		kind = spec.KindFuncRef
-	case binary.ExternRef:
-		kind = spec.KindExternRef
+	// **Every nameable heaptype gets an arm, and the fallback says "no name".** `spec.ValKind` has
+	// one member per *nameable* reference type — `funcref`, `externref`, and `anyref` since
+	// #270/0039 — and `spec.KindUnnameableRef` for the rest: the nine other abstract heaptypes and
+	// every `(ref $t)`. This arm's independent reading of that rule used to be spelled the other way
+	// round, as `kind := spec.KindAnyRef` with two arms, so `anyref` came out right by *falling
+	// through* rather than by being named. ADR 0040 took that spelling away, because falling through
+	// now lands on a Kind whose whole meaning is "this harness cannot name the type" — which would be
+	// a false statement about a genuine `anyref`.
+	//
+	// The old form also read a **spelling where the fact is a heaptype**: `binary.FuncRef` and
+	// `binary.ExternRef` are the nullable abbreviations, so a non-null `(ref func)` matched neither
+	// arm and took the fallback, answering `anyref` for a type the public arm's `Type().Kind()` calls
+	// `funcref` on its side. `Kind()` here reads the heaptype byte, which covers both nullabilities
+	// and is the same fact the other arm reads — so the two arms now agree by naming the same three
+	// heaptypes rather than by sharing a fallback.
+	//
+	// **No corpus row reaches the fallback**, measured rather than assumed: every reference result
+	// the differential sees is exactly nullable `funcref` or nullable `externref`. So this is a
+	// change to what the arm *would* answer, and the `DISAGREED` count cannot witness it either way —
+	// which is also why the mapping is stated as far as the vocabulary allows instead of stopping at
+	// the population that happens to exist. `spec.Val.String` prints the payload for a concrete
+	// reference and `ref.null` for a null, so the Kind is read only through `RefExternIdentity`'s
+	// three spellings: the column is mostly a *statement* here, exactly as `refPatterns`' Kind column
+	// became under the same decision.
+	kind := spec.KindUnnameableRef
+	if k, ok := v.Type.Kind(); ok {
+		switch k {
+		case binary.HeapFunc:
+			kind = spec.KindFuncRef
+		case binary.HeapExtern:
+			kind = spec.KindExternRef
+		case binary.HeapAny:
+			kind = spec.KindAnyRef
+		}
 	}
 	if v.Null {
 		return spec.Val{Kind: kind, Class: spec.RefLiteralNull}, true
@@ -745,25 +786,31 @@ func TestConformanceThroughThePublicPath(t *testing.T) {
 	// argue it with: "11166 of the 25666 comparisons, 43%, run on one", over a domain of "1787 module
 	// forms (1067 ran + 720 declined)".
 	//
-	// **Measured at #419: 8 declined, and 0 comparisons run on a declining module.** Nor is that this
-	// PR's doing — main measures 8 too, so the sentence had been wrong by two orders of magnitude for
-	// some number of PRs before this one, and the correction section had rotted exactly the way the
-	// claim it corrected did. The declines drained as the interpreter learned instructions: what is
-	// left is the seven relaxed-SIMD constructs in the log line above, and the modules carrying them
-	// pass v128 arguments this API cannot spell, so their asserts land in `unpassable` and the
-	// declining population contributes no comparisons at all. The split stays printed above, and the
-	// live figures belong in that log rather than in this paragraph, which is the second-order half of
-	// the lesson: a prose figure is a measurement with no instrument watching it.
+	// **Third generation — and this time the figures are deleted rather than corrected.** #419 replaced
+	// the first set with "8 declined, and 0 comparisons run on a declining module", wrote down why the
+	// first set had rotted — *a prose figure is a measurement with no instrument watching it* — and
+	// then carried its own crop of figures in the paragraphs that followed. Most of them are wrong
+	// now, and the ones that still hold do so by luck of the draw rather than by anything watching
+	// them. The falsifier is **this same file, at the decline guard below**: #427 typed the last
+	// untyped prefix region, so the declines drained to zero and that guard inverted to catch a
+	// decline *re-appearing* — which retired, in passing, this paragraph's "seven relaxed-SIMD
+	// constructs in the log line above". The module and comparison counts moved with the engine
+	// underneath them. None of it was any one PR's doing, which is the complaint rather than an
+	// excuse: two paragraphs 120 lines apart disagreed about the same measurement and nothing in this
+	// tree could notice.
 	//
-	// The domain today is therefore **1608 module forms** — 1788 ran + 8 declined, less the 180 that
-	// import something no linking surface supplies (grave #421) — carrying 25353 comparisons.
-	//
-	// The exclusions are the other buckets, and they are already what the ruling asks for — named,
-	// with a reason each, never a tolerated count: 440 gated, 2 encoder-frontier, 26135 no-instance (a
-	// refused module or a trust break upstream), 923 unlinked, 78 unpassable argument or result
-	// shapes, 0 calls that failed identically on both paths — that last one having been 599 until
-	// #421, every one of them a call into a module whose import was missing, which is why they were
-	// failing on both paths in the first place.
+	// Correcting is what the previous two generations did, and each correction re-created the channel
+	// that had just failed. What a reader needs here is the rule, which has no number in it: the
+	// domain is every module form this driver can arm — `ran` plus `declined`, less those importing
+	// something no linking surface supplies (grave #421) — and the exclusions are the other buckets,
+	// which are already what the ruling asks for, named with a reason each and never a tolerated
+	// count: gated, encoder-frontier, no-instance (a refused module or a trust break upstream),
+	// unlinked, unpassable argument or result shapes, and calls that failed identically on both paths
+	// (a bucket that was itself large until grave #421, every one of them a call into a module whose
+	// import was missing, which is why they failed the same way twice). Every count is in the log line
+	// above, printed by the run that measured it, and the buckets are asserted to partition just above
+	// this comment — so a row lost between two arms cannot quietly shrink the denominator the floors
+	// are measured against.
 	if tally.mismatched != 0 {
 		t.Errorf("%d of %d assertions driven through the public path disagreed with their vector "+
 			"(showing %d):\n%s", tally.mismatched, tally.compared, min(len(mismatches), 20),
