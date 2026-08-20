@@ -21,6 +21,19 @@ weakly-ordered platform.
 
 ### Added
 
+- **Decision 0039, held open: a reference's payload kind crosses the two boundaries as one enumerated
+  kind** ([#270](https://github.com/scttfrdmn/burroughs/issues/270),
+  [0039](docs/decisions/0039-a-references-payload-kind-crosses-the-two-boundaries-as-one-enumerated-kind-and-the-static-type-gate-is-its-own-census.md)).
+  The record only; no implementation, and `Status:` stays **proposed** because it widens the public
+  `burroughs.Value` and 0027's one-bit precedent for that was stamped. Re-measuring the population
+  corrected two claims it was scoped on: #270 is **28** vectors and the 39 in the `assert_return`
+  sub-column includes #323's 11 global-`get` actions, so the `unsupported` column decomposes
+  28 + 11 + 15 + 3 = 57 with nothing left over; and `internal/binary` needs no widening at all, since
+  `AbstractRefType` is exported and already admits `anyref`. What grew instead is the value boundary,
+  which is two boundaries now that the public package exists. Options 3 and 4 are declined on the
+  authority — carrying a dynamic heaptype re-introduces grave #266's shape, and letting the engine
+  answer the pattern makes the harness score the engine on the engine's own answer.
+
 - **A gate decline's side effect on a *third* instance is scored as the third verdict, and the default
   lane's fail column reaches 0** ([#414](https://github.com/scttfrdmn/burroughs/issues/414), decision
   [0038](docs/decisions/0038-a-declines-side-effect-on-a-third-instance-is-registered-per-line-and-the-derivation-is-the-control-not-the-fix.md)).
