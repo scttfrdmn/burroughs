@@ -78,11 +78,15 @@ import "slices"
 // `i32.const`'s immediate is signed while a `local.get`'s is not — that knowledge lives at the one
 // site that has the token in hand and the width from the mnemonic.
 //
-// # Why patchLocal exists rather than a deferred byte slice
+// # Why patch exists rather than a deferred byte slice
 //
 // A `call $f` cannot encode its immediate at parse time, so `imm` is left empty and `patch` records
 // the resolution to run in stage 2. The alternative — deferring the whole instruction — would put
 // an instruction's *position* in a thunk, and position is the one thing this list exists to fix.
+//
+// `patch` is the **whole** immediate when it is set: `resolveFuncs` uses it in place of `imm` rather
+// than beside it. Within one immediate, position is carried by `immPart` and composed into a single
+// `patch` by `finishImm`, so this type stays two fields and one choice.
 type instr struct {
 	// op is the opcode's byte sequence, prefix included: one byte for `i32.add`, two for a
 	// prefixed opcode. Taken from the generated table, never from a literal here.
@@ -141,13 +145,110 @@ func (p *parser) emit(in instr) {
 // wherever the condition does not already hold.
 func (p *parser) retaining() bool { return p.sink != nil }
 
+// immPart is one component of the immediate under construction: bytes known at the cursor, or a
+// thunk that yields them in stage 2. Exactly one of the two fields is set.
+//
+// # The component list is grave #130's repair, and the defect was the absence of a position
+//
+// The predecessor was `imm []byte` plus one `immPatch func() ([]byte, error)` covering the *whole*
+// immediate, and that pair can hold a deferred component only when it is the instruction's **only**
+// component. Four sites therefore carried a refusal — "cannot yet encode a deferred index after
+// another immediate" and its three siblings — and the refusals were the honest part; what they
+// could not do is let `memory.init $d` defer its data index and still write the defaulted memory
+// index after it, because "after it" is not something a whole-immediate thunk can express.
+//
+// The consequence was not a refusal, it was resolution **at the cursor** for eight of the nine
+// index spaces: one pass where the reference has two (`module_fields1`'s closure). `module_fields`
+// admits any field order in the source, so `(module (func (data.drop $s)) (data $s …))` is a valid
+// module the predecessor rejected while accepting the reverse order — accept-direction, invisible
+// to every vector in the corpus, and invisible to a both-orders differential too when the staging
+// under test is what both orders share (see docs/laws/controls.md on correlated arms).
+//
+// With a position per component the deferral generalizes: any component may wait, the ones around
+// it keep their places, and the categories that must *not* defer are the ones whose **space is
+// reassigned during the parse** — the locals space, and only it. That is a fact about
+// `p.ctx.locals` rather than a list of categories, which is why `retainIdxIn` reads `space.kind`.
+type immPart struct {
+	// b is the bytes, when they were known at the cursor.
+	b []byte
+	// later computes the bytes in stage 2, when they were not.
+	later func() ([]byte, error)
+}
+
+// bytes yields the component, running its thunk if it has one.
+//
+// Called in stage 2 by `finishImm`'s composed patch and by `emitTryTable`, whose catch clauses are
+// `immPart`s for the same reason an immediate's components are: a `catch $t` names a tag the module
+// may bind later. One accessor rather than the two-field test written at each site, because the
+// invariant *exactly one field is set* is this type's own and not its readers'.
+func (part immPart) bytes() ([]byte, error) {
+	if part.later == nil {
+		return part.b, nil
+	}
+	return part.later()
+}
+
 // appendImm adds encoded immediate bytes to the instruction being built, or does nothing when not
 // retaining.
 func (p *parser) appendImm(b []byte) {
 	if p.sink == nil {
 		return
 	}
-	p.imm = append(p.imm, b...)
+	p.immParts = append(p.immParts, immPart{b: b})
+}
+
+// deferImm adds an immediate component whose bytes are stage 2's, **in the position it occupies** —
+// `appendImm`'s deferred twin, nil-tolerant for the same reason.
+//
+// Every caller's thunk must build the *whole* component it stands for: a memarg's flags byte depends
+// on the resolved memory index, so `retainMemarg` defers flags-index-offset together rather than
+// deferring the index alone. Position separates components; it does not separate a component from
+// its own bits.
+func (p *parser) deferImm(later func() ([]byte, error)) {
+	if p.sink == nil {
+		return
+	}
+	p.immParts = append(p.immParts, immPart{later: later})
+}
+
+// finishImm turns the accumulated components into one instruction's immediate: flat bytes when every
+// component was known at the cursor, or a single patch composing them in order when any component
+// defers.
+//
+// Flattening the all-known case rather than always returning a patch keeps stage 2's work
+// proportional to the deferrals rather than to the instruction count, and keeps `patch != nil`
+// meaning what `resolveFuncs` reads it as — *this instruction had something to wait for*.
+//
+// The component list is **copied** into the deferred closure. `plaininstr` restores the enclosing
+// instruction's list on the way out, and that list is a different slice header; copying makes the
+// independence a property of this function instead of a property of every caller's reset.
+func (p *parser) finishImm() (imm []byte, patch func() ([]byte, error)) {
+	deferred := false
+	for _, part := range p.immParts {
+		if part.later != nil {
+			deferred = true
+			break
+		}
+	}
+	if !deferred {
+		var w writer
+		for _, part := range p.immParts {
+			w.bytes(part.b)
+		}
+		return w.b, nil
+	}
+	parts := slices.Clone(p.immParts)
+	return nil, func() ([]byte, error) {
+		var w writer
+		for _, part := range parts {
+			b, err := part.bytes()
+			if err != nil {
+				return nil, err
+			}
+			w.bytes(b)
+		}
+		return w.b, nil
+	}
 }
 
 // intoSink runs a reader with a fresh sink installed and returns what it emitted.
@@ -286,14 +387,16 @@ func (p *parser) emitBlock(kw Token, slot *blockTypeSlot, ft funcType, arms *blo
 // **`emitBlock`'s structure exactly, with one extra immediate component.** try_table has no
 // `els` arm (`handlerClauses`' body always lands in `arms.body`, never `arms.els` — there is no
 // `else` in this family), so this omits that half of emitBlock rather than taking an unused
-// parameter. `hv` is the fully-resolved clause byte-runs `handlerClauses` built — see the
-// `handlerVec` field's comment for why each clause arrives pre-encoded rather than as a value —
-// and the vector's count is `len(hv)`, known now because every clause has already been read.
+// parameter. `hv` is the clause components `handlerClauses` built — see the `handlerVec` field's
+// comment for why a clause is an `immPart` rather than a `[]byte` — and the vector's count is
+// `len(hv)`, known now because every clause has already been read. The count is knowable at the
+// cursor even where a clause's *bytes* are not, which is what lets a deferred `catch $t` sit inside
+// a `vec` whose length is already fixed.
 //
 // **`hv` and the blocktype are one patched immediate, not two `emit` calls**, because `emit`
 // writes one opcode per call and try_table's opcode is written once: `p.blockTypeBytes`'s thunk
 // and the catch vector's bytes are concatenated inside one patch function.
-func (p *parser) emitTryTable(kw Token, slot *blockTypeSlot, ft funcType, hv [][]byte, arms *blockArms) error {
+func (p *parser) emitTryTable(kw Token, slot *blockTypeSlot, ft funcType, hv []immPart, arms *blockArms) error {
 	if !p.retaining() {
 		return nil
 	}
@@ -310,9 +413,20 @@ func (p *parser) emitTryTable(kw Token, slot *blockTypeSlot, ft funcType, hv [][
 		if err != nil {
 			return nil, err
 		}
+		// Every clause is resolved before the vector is written, because `writer.vec`'s element
+		// callback cannot fail and a clause's thunk can — the same reason `resolveFuncs` runs the
+		// instruction patches into a value rather than inside a section writer.
+		clauses := make([][]byte, len(hv))
+		for i, part := range hv {
+			b, cerr := part.bytes()
+			if cerr != nil {
+				return nil, cerr
+			}
+			clauses[i] = b
+		}
 		var w writer
 		w.bytes(bt)
-		w.vec(len(hv), func(w *writer, i int) { w.bytes(hv[i]) })
+		w.vec(len(clauses), func(w *writer, i int) { w.bytes(clauses[i]) })
 		return w.b, nil
 	}})
 	p.emitSink(&arms.body)
@@ -518,19 +632,23 @@ func (p *parser) heaptypeRetained(mnemonic Token) error {
 	if !p.retaining() {
 		return nil
 	}
-	if h.abs == "" && h.tok.Kind == VarTok {
-		// The forward-referencing arm. `retainIdxIn`'s `catFunc` shape, copied rather than
-		// re-derived — including both of its guards, which are structural here rather than
-		// reachable: `ref.null` has exactly one immediate, so neither a second patch nor a
-		// preceding immediate can exist. They are asserted anyway, because the invariant a patch
-		// *replaces* the immediates is the thing `resolveFuncs` relies on, and a shape that grew a
-		// second immediate would otherwise silently drop it.
-		if p.immPatch != nil || len(p.imm) != 0 {
-			return errf(tok, "cannot yet encode a deferred heap type beside another immediate (#8)")
-		}
-		p.immPatch = func() ([]byte, error) {
+	return p.retainHeapTypeImm(mnemonic, h, tok)
+}
+
+// retainHeapTypeImm appends one heap type as an immediate component, deferring it when the only
+// spelling that cannot resolve at the cursor is the one written.
+//
+// **The three callers were three copies of this five-line shape**, each with its own pair of guards
+// asserting that no other immediate was present — because the predecessor's whole-immediate thunk
+// had no way to sit beside one. With `immPart` carrying position those guards are gone, and what is
+// left is small enough that three copies is the drift risk `isForwardHeapRef`'s own comment names.
+// So the deferral rule for heap types lives at one site: `ref.null`'s, `ref.test`/`ref.cast`'s, and
+// **each** of `br_on_cast`'s two, which may independently be forward references.
+func (p *parser) retainHeapTypeImm(mnemonic Token, h heapRef, tok Token) error {
+	if isForwardHeapRef(h) {
+		p.deferImm(func() ([]byte, error) {
 			return p.heaptypeBytesOf(mnemonic, h, tok)
-		}
+		})
 		return nil
 	}
 	b, err := p.heaptypeBytesOf(mnemonic, h, tok)
@@ -612,24 +730,7 @@ func (p *parser) reftypeRetained(mnemonic Token) error {
 			mnemonic.Text)
 	}
 	p.opOverride = op
-	if v.heap.abs == "" && v.heap.tok.Kind == VarTok {
-		// The forward-referencing arm — see heaptypeRetained's comment for why both guards are
-		// structural here rather than reachable: `ref.test`/`ref.cast` each have exactly one
-		// immediate.
-		if p.immPatch != nil || len(p.imm) != 0 {
-			return errf(tok, "cannot yet encode a deferred reference type beside another immediate (#8)")
-		}
-		p.immPatch = func() ([]byte, error) {
-			return p.heaptypeBytesOf(mnemonic, v.heap, tok)
-		}
-		return nil
-	}
-	b, err := p.heaptypeBytesOf(mnemonic, v.heap, tok)
-	if err != nil {
-		return err
-	}
-	p.appendImm(b)
-	return nil
+	return p.retainHeapTypeImm(mnemonic, v.heap, tok)
 }
 
 // isForwardHeapRef reports whether a parsed heap type is the one shape that cannot resolve at
@@ -673,18 +774,21 @@ func isForwardHeapRef(h heapRef) bool {
 // `reftype`. So both reftypes' *heap* halves go through `heaptypeBytesOf`, ref.null's own encoder,
 // and their *nullability* halves are folded into the one flags byte instead of two per-type bits.
 //
-// **The label resolves at the cursor and never defers; either heap type may.** Labels are lexical
-// (labelIdx's own comment), so `labelIdxValue` runs immediately and its result is a plain `uint32`
-// with nothing to patch. A heap type naming a forward-referenced type index is the mutually
-// recursive types case `heaptypeRetained` defers for, and either of `br_on_cast`'s two reftypes
-// can independently be that case — `br_on_cast $l (ref $future1) (ref $future2) …` names two
-// types the grammar admits in any order relative to this instruction. So the deferral is checked
-// per heap type and the *whole* immediate (flags, the already-resolved label, and both heaptypes)
-// is rebuilt inside one patch when either needs it: `resolveFuncs` replaces `in.imm` wholesale
-// with `in.patch()`'s return, so a patch that deferred only its own heaptype and left the label
-// and flags in `p.imm` would have them silently dropped — the same hazard `retainIdxIn`'s catFunc
-// arm guards against with its "deferred index after another immediate" refusal, generalized here
-// to "build the whole immediate inside the patch when any part of it must wait".
+// **The label resolves at the cursor and never defers; either heap type may, independently.** Labels
+// are lexical (labelIdx's own comment), so `labelIdxValue` runs immediately and its result is a plain
+// `uint32` with nothing to patch. A heap type naming a forward-referenced type index is the mutually
+// recursive types case `retainHeapTypeImm` defers for, and either of `br_on_cast`'s two reftypes can
+// independently be that case — `br_on_cast $l (ref $future1) (ref $future2) …` names two types the
+// grammar admits in any order relative to this instruction.
+//
+// **So this writes four components rather than one patch**, which is what changed with grave #130's
+// repair. The predecessor rebuilt the *whole* immediate — flags, the already-resolved label, and both
+// heaptypes — inside one thunk whenever either heap type deferred, because `resolveFuncs` replaced
+// `in.imm` wholesale and a patch that deferred one heaptype would have dropped the label and flags
+// that preceded it. `immPart` carries position, so each part goes where it belongs: the flags byte and
+// the label are known here and appended, and each heap type appends or defers on its own. The eager
+// half is not incidental — an unencodable heap type beside a deferred one now reports at the cursor
+// instead of in stage 2.
 func (p *parser) brOnCastRetained(mnemonic Token) error {
 	depth, err := p.labelIdxValue()
 	if err != nil {
@@ -710,36 +814,14 @@ func (p *parser) brOnCastRetained(mnemonic Token) error {
 	if rt2.null {
 		flags |= 0x02
 	}
-	build := func() ([]byte, error) {
-		b1, buildErr := p.heaptypeBytesOf(mnemonic, rt1.heap, tok1)
-		if buildErr != nil {
-			return nil, buildErr
-		}
-		b2, buildErr := p.heaptypeBytesOf(mnemonic, rt2.heap, tok2)
-		if buildErr != nil {
-			return nil, buildErr
-		}
-		var w writer
-		w.byte1(flags)
-		w.bytes(encodeLocalIdx(depth))
-		w.bytes(b1)
-		w.bytes(b2)
-		return w.b, nil
-	}
-	if isForwardHeapRef(rt1.heap) || isForwardHeapRef(rt2.heap) {
-		if p.immPatch != nil || len(p.imm) != 0 {
-			return errf(tok1, "cannot yet encode a deferred reference type beside another "+
-				"immediate (#8)")
-		}
-		p.immPatch = build
-		return nil
-	}
-	b, err := build()
-	if err != nil {
+	var w writer
+	w.byte1(flags)
+	w.bytes(encodeLocalIdx(depth))
+	p.appendImm(w.b)
+	if err := p.retainHeapTypeImm(mnemonic, rt1.heap, tok1); err != nil {
 		return err
 	}
-	p.appendImm(b)
-	return nil
+	return p.retainHeapTypeImm(mnemonic, rt2.heap, tok2)
 }
 
 // idxRetained parses one index immediate and retains it, resolving in the category the mnemonic's
@@ -759,12 +841,14 @@ func (p *parser) idxRetained(mnemonic Token) error {
 // retainIdx encodes one already-parsed index reference as the current instruction's immediate.
 //
 // **The two resolution timings live here, and which one applies is a property of the space rather
-// than of this call.** A numeric index needs no resolution at all. A symbolic index in a space whose
-// names are all bound before use — locals, whose space `funcSignature` resets and fills per function
-// — resolves at the cursor. A symbolic index in a space that permits forward references — funcs,
-// where `call $f` may precede `(func $f)` — cannot, so it defers through `immPatch`.
+// than of this call.** A numeric index needs no resolution at all. A symbolic index in a space the
+// parse **reassigns** — locals, replaced per function — must resolve at the cursor, because a
+// deferred lookup would meet the last function's space. Every other space is filled by module fields
+// and never reassigned, so a symbolic index in one defers: `module_fields` admits any field order,
+// which makes a use-before-definition legal text in all eight of them and not just in the func space
+// where `call $f` made it unmissable (grave #130).
 //
-// Deferring *only* the categories that need it is not an optimization: `p.ctx.locals` is reset per
+// Resolving the reassigned space at the cursor is not an optimization. `p.ctx.locals` is replaced per
 // function, so a local resolution deferred to stage 2 would run against whichever function's locals
 // happened to be current at the end of the parse, which is the last one. That is an
 // accept-direction defect and would score green on every vector in the corpus.
@@ -805,64 +889,53 @@ func (p *parser) retainIdxIn(mnemonic Token, r idxRef, cat idxCategory) error {
 	// (`(type $t (func))`) binds nothing, so `$v` really was slot 0, and it was declined anyway because
 	// "does it have params" was as unanswerable at the cursor as "how many". Both costs go together,
 	// because a thunk that reports 0 needs no special case for the type that has no params.
-	if cat == catLocal && p.localsParamOffset != nil {
+	if space.kind == spaceLocal {
+		// **The one space that must resolve at the cursor, and the reason is that it is reassigned.**
+		// `funcField` replaces `p.ctx.locals` per function (parser.go's `space{kind: spaceLocal}`
+		// assignment), so a *name* looked up in stage 2 would meet whichever function's space was
+		// installed last — the last one — which is an accept-direction defect that would score green
+		// on every vector in the corpus. Read as `space.kind` rather than as `cat == catLocal` so the
+		// condition names the property it depends on: reassignment, not identity.
 		ord, err := space.resolveSpaceIdx(r)
 		if err != nil {
 			return err
 		}
-		// The patch discipline is `catFunc`'s below, for the same reason and with the same two
-		// refusals: one patch replaces the immediates entirely, so a second deferral or a preceding
-		// immediate would need a position the byte slice does not carry. Neither is reachable from a
-		// local-index mnemonic — `catLocal` is `local.get`/`local.set`/`local.tee`, each with exactly
-		// one immediate — so these are structural guards over a population of zero, kept because the
-		// alternative is a silent overwrite if that ever stops being true.
-		if p.immPatch != nil || len(p.imm) != 0 {
-			return errf(r.tok, "cannot yet encode a deferred local index beside another immediate (#77)")
+		if p.localsParamOffset == nil {
+			p.appendImm(encodeLocalIdx(ord))
+			return nil
 		}
+		// A typeuse supplies this function's params, so the space holds only the *declared* locals
+		// and the absolute index is the ordinal plus a param count that is not knowable here — the
+		// type may be defined later in the field list (#77). The name resolves now and the offset
+		// alone defers, which is what keeps the reassignment above harmless.
 		off := p.localsParamOffset
-		p.immPatch = func() ([]byte, error) {
+		p.deferImm(func() ([]byte, error) {
 			n, err := off()
 			if err != nil {
 				return nil, err
 			}
 			return encodeLocalIdx(ord + n), nil
-		}
+		})
 		return nil
 	}
-	if cat == catFunc {
-		// Forward references are legal here, so the resolution is stage 2's. One patch per
-		// instruction, which plaininstr consumes — an instruction with two symbolic indices in
-		// forward-referencing spaces would need more, and none exists in the slice this section
-		// reaches; the pair path below refuses rather than silently keeping one.
-		if p.immPatch != nil {
-			return errf(r.tok, "cannot yet encode two deferred indices on one instruction (#8)")
+	// **Every other space defers, and that is grave #130's repair.** These eight are filled by
+	// module fields and never reassigned, so `module_fields`' free field order means a name here can
+	// legitimately be bound *after* the instruction that uses it: `(module (func (data.drop $s))
+	// (data $s …))` is a valid module. Resolving at the cursor rejected it while accepting the
+	// reverse order — one pass where the reference has two (`module_fields1`'s second closure, which
+	// this now is for every category rather than for `catFunc` alone).
+	//
+	// The space *pointer* is captured, which is sound for exactly these eight and unsound for the
+	// one above: `&p.ctx.funcs` stays valid because the field is never reassigned, and `p.ctx` itself
+	// is set once at construction (`encode.go`'s `&parser{…, ctx: newContext(), …}`). The same
+	// capture over `locals` would hold a space the parse has already discarded.
+	p.deferImm(func() ([]byte, error) {
+		idx, err := space.resolveSpaceIdx(r)
+		if err != nil {
+			return nil, err
 		}
-		before := len(p.imm)
-		if before != 0 {
-			return errf(r.tok, "cannot yet encode a deferred index after another immediate (#8)")
-		}
-		p.immPatch = func() ([]byte, error) {
-			idx, err := p.ctx.funcs.resolveSpaceIdx(r)
-			if err != nil {
-				return nil, err
-			}
-			return encodeLocalIdx(idx), nil
-		}
-		return nil
-	}
-	// Every other category resolves **at the cursor**, which is one pass where the reference has
-	// two — `module_fields1`'s second closure resolves all of them, and the `catFunc` arm above is
-	// that closure built for exactly one category because forward calls made the need unmissable.
-	// The premise for the rest ("its definitions precede the code section") is a fact about the
-	// *image*: `module_fields` admits any field order in the source, so
-	// `(module (func (data.drop $s)) (data $s …))` is rejected here and accepted upstream, while the
-	// reverse order is accepted here. Grave #130 — an accept-direction defect no vector can see,
-	// which is where the both-orders control scoped to all the categories lives.
-	idx, err := space.resolveSpaceIdx(r)
-	if err != nil {
-		return err
-	}
-	p.appendImm(encodeLocalIdx(idx))
+		return encodeLocalIdx(idx), nil
+	})
 	return nil
 }
 
@@ -1008,29 +1081,55 @@ func (p *parser) idxPairRetained(mnemonic Token) error {
 // function needs the resolved *value* regardless, to hand to the field lookup, so there is nothing
 // left for the generic wrapper to add.
 //
-// **The forward-referencing sub-case refuses rather than guesses, and that is measured rather than
-// assumed to be unneeded.** `struct.get $futuretype $field` naming a struct type defined later in
-// the module is legal wat — nothing in the grammar requires a type to precede its use by a
-// non-function-typed index any more than `imports.wast:62` requires a function's type to. But the
-// suite has no vector for it: a scan of every `struct.get`/`struct.set` in the corpus (all 254
-// files) found the type-naming index always resolves to a type already fully defined earlier in
-// the same module, for the six symbolic-field vectors and for every numeric-field one. So the
-// refusal below costs nothing on the board today, and it is honest about the module it declines
-// rather than reporting a number the type table cannot yet supply.
+// **The forward-referencing sub-case defers the whole pair, and it used to refuse.** `struct.get
+// $futuretype $field` naming a struct type defined later in the module is legal wat — nothing in the
+// grammar requires a type to precede its use by a non-function-typed index any more than
+// `imports.wast:62` requires a function's type to — and both halves were rejected at the cursor:
+// `unknown type $s` for a symbolic type index, and a `#188` refusal for a symbolic field name whose
+// type index had not been parsed yet. Both measured, both in the reverse field order only. That is
+// grave #130's shape and it was tracked under a second number because the refusal read as a frontier;
+// the mechanism that fixes the index categories fixes it too, so it is fixed here.
+//
+// **The pair defers as one component**, not as two, because the second index's resolution depends on
+// the *first index's value* rather than on a category: `field x.it` looks up the field space of the
+// type `x` names, so the two cannot be separated the way `table.init`'s `{catTable, catElem}` can.
+// `retainMemarg`'s shape, for the same reason stated there.
+//
+// The suite has no vector either way — a scan of every `struct.get`/`struct.set` in the corpus (all
+// 254 files) found the type-naming index always resolving to a type already fully defined earlier in
+// the same module, for the six symbolic-field vectors and for every numeric-field one — so this moves
+// no board column and is certified by its own derived vector, with the reference encoder beside it.
 func (p *parser) structFieldPairRetained(mnemonic Token, first, second idxRef) error {
 	if !p.retaining() {
 		return nil
 	}
-	typeIdx, err := p.ctx.resolveTypeIdx(first)
+	build := func() ([]byte, error) {
+		typeIdx, err := p.ctx.resolveTypeIdx(first)
+		if err != nil {
+			return nil, err
+		}
+		fieldIdx, err := p.resolveFieldIdx(mnemonic, typeIdx, second)
+		if err != nil {
+			return nil, err
+		}
+		var w writer
+		w.bytes(encodeLocalIdx(typeIdx))
+		w.bytes(encodeLocalIdx(fieldIdx))
+		return w.b, nil
+	}
+	if first.isVar || second.isVar {
+		// Either name may be bound after this instruction, and a symbolic *field* needs its type's
+		// definition to have been parsed — both of which stage 2 has and the cursor does not. Two
+		// numeric indices need no space at all (`nat32` performs no lookup), so they keep the cursor
+		// path and their error timing with it.
+		p.deferImm(build)
+		return nil
+	}
+	b, err := build()
 	if err != nil {
 		return err
 	}
-	p.appendImm(encodeLocalIdx(typeIdx))
-	fieldIdx, err := p.resolveFieldIdx(mnemonic, typeIdx, second)
-	if err != nil {
-		return err
-	}
-	p.appendImm(encodeLocalIdx(fieldIdx))
+	p.appendImm(b)
 	return nil
 }
 
@@ -1044,9 +1143,14 @@ func (p *parser) structFieldPairRetained(mnemonic Token, first, second idxRef) e
 // The symbolic case needs `typeIdx` to already be defined: `p.ctx.typeDefs` is appended in source
 // order as each `(type …)` field is parsed (`defineType`, typetable.go), synchronously with the
 // name binding `resolveTypeIdx` just consulted — both happen inside one call to `typeDef`, so if
-// the name resolved, the definition it names has already been appended. A numeric type index can
-// still name a not-yet-parsed type, though — `nat32` performs no lookup at all — and that is the
-// one case handled by the bounds check rather than assumed away.
+// the name resolved, the definition it names has already been appended.
+//
+// **The bounds check's meaning changed when the caller started deferring, and its message with it.**
+// It used to catch a numeric type index naming a type this parse had not reached yet, which is why it
+// cited a forward reference; `structFieldPairRetained` now runs this in stage 2, where every `(type
+// …)` field has been parsed, so an index past the end is simply **out of range** — a module naming
+// type 99 where 2 exist. Same branch, different population, and the wrong word there would be a
+// refusal claiming a frontier for an ill-formed module.
 //
 // A type that resolves but is a `compFunc` or a fieldless `compArray` — the grammar never lets an
 // array bind a field name, `arraytype` having no `bindidx` arm — falls into the same "not found"
@@ -1058,8 +1162,8 @@ func (p *parser) resolveFieldIdx(mnemonic Token, typeIdx uint32, r idxRef) (uint
 	}
 	if typeIdx >= uint32(len(p.ctx.typeDefs)) {
 		return 0, errf(r.tok,
-			"cannot yet encode a symbolic field name on %s naming a forward-referenced type (#188)",
-			mnemonic.Text)
+			"%s names field %s of type %d, and this module defines %d types (#188)",
+			mnemonic.Text, r.tok.Text, typeIdx, len(p.ctx.typeDefs))
 	}
 	if i, ok := p.ctx.typeDefs[typeIdx].fieldNames[r.name]; ok {
 		return i, nil
@@ -1287,9 +1391,10 @@ func (p *parser) resolveFuncs() ([]encodedFunc, error) {
 			imm := in.imm
 			if in.patch != nil {
 				// A `call $f` whose target is now bound. The patch *replaces* the immediates rather
-				// than appending to them, which is why retainIdx refuses an instruction that would
-				// need both: one deferred index and one immediate would need a position, and a
-				// position is what the byte slice does not carry.
+				// than appending to them, and it is the whole immediate because `finishImm` composed
+				// every component into it — the positions that used to be missing here are inside
+				// that closure, which is grave #130's repair and the reason the refusals this
+				// paragraph used to cite are gone.
 				b, perr := in.patch()
 				if perr != nil {
 					return nil, perr

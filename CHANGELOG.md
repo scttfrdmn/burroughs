@@ -2228,6 +2228,52 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **A deferred immediate carries a position, so a symbolic index bound after its use encodes —
+  [#130](https://github.com/scttfrdmn/burroughs/issues/130)** (`internal/text/code.go`, `instr.go`,
+  `parser.go`, `types.go`; part of #8). `module_fields` admits any field order, so `(module (func
+  (data.drop $d)) (data $d "x"))` is a valid module — the section order constrains the *image*, not the
+  text, and `module_fields1` gives the reference two passes over it (`parser.mly:1314-1355`). This
+  encoder resolved every symbolic index at the cursor, so it refused all nine index spaces in that
+  order while accepting the mirror. The staging it already had could not generalize: the accumulator
+  was `imm []byte` plus **one** patch covering the whole immediate, so a deferred component could only
+  exist as an instruction's *sole* component, which is why the deferral existed for `catFunc` alone.
+  The immediate is now a list of `immPart`s, each either bytes known at the cursor or a thunk — **the
+  thing a deferred component needed was a position**, and with one the same mechanism serves every
+  category. Eight spaces defer and one does not, and the split is derived from *reassignment* rather
+  than enumerated: `p.ctx.locals` is replaced per function, so a name looked up in stage 2 would meet
+  whichever function's space was installed last, while the other eight are module-lifetime and their
+  space pointers stay valid. Position separates components but never a component from its own bits, so
+  a memarg (whose `has_idx` flag bit is a test on the *resolved* index) and a catch clause (whose tag
+  sits between the kind byte and the label) each defer whole.
+  **Default lane: pass 60913 → 60914, fail 19 → 16, gated 4146 → 4148; encode stratum 3 → 0, the
+  pre-registered −3 to the row.** All-gates-on lane: pass 64982 → 64985. `unsupported` unmoved at 66
+  and that zero is **structural** — `classify` is untouched, so nothing the harness could not ask
+  became askable. The two lanes move **unequally, by exactly 2**, and that gap is the finding rather
+  than a discrepancy: `memory-multi.wast` went 1/4 pass, 3 fail, 2 gated to 2/2 pass, 4 gated, so of
+  the three rows that left `fail` the module became a pass and its two `assert_return`s became `gated`
+  on multi-memory — they need the *interpreter* to hold two memories. Forecast before the run, unlike
+  the two entries before it.
+  - **Three more deferral sites were live in the same shape and none was in the four the issue
+    named**: `try_table`'s catch tag, `struct.get`'s type index, and `struct.get`'s field name, found
+    by sweeping the tree rather than by working the list. #188's refusal is retired with them and its
+    bounds message reworded, the branch's population having changed from *not yet parsed* to *out of
+    range*. `global.wast:666` is retired from `TestAssertInvalidPassesFromAboveTheValidator` — 18 → 17,
+    layer split 17/1 → **17/0** — by the mechanism that entry's own comment had named in advance ("a
+    two-pass name resolver would retire this entry to the validator without any validation rule being
+    written"); the entry is kept as prose because a retirement recorded only as a smaller count reads
+    as drift.
+  - **The new control carries an absolute leg on every row, on Scott's ruling**
+    (`internal/text/deferimm_test.go`): four of the five categories have no corpus witness at all, so a
+    both-orders differential would have certified them the way it certified the scratch patch that
+    dropped `fc 08 00 00`'s last byte from *both* orders. Eight rows are **byte-identical to
+    `wat2wasm --enable-all` (wabt 1.0.41)**, whole image, the reference having read the use-first source
+    too; the three GC rows pin our own output instead, because the pinned wabt has GC types but no GC
+    instructions, and their independence is a recorded `wasmtime 47.0.3 --invoke f == 7` per row plus a
+    mutant at the byte the deferral writes, each caught. The control's domain is **derived** — an AST
+    scan of the package's own source for every function that builds a deferred immediate, pinned at 5
+    functions and 6 sites, since #130's cost was an enumeration. Ten of its eleven rows fail against
+    the unfixed tree; the eleventh is #77's deferral and is labelled as such.
+
 - **A named type's params are bound into the local index space — [#77](https://github.com/scttfrdmn/burroughs/issues/77)**
   (`internal/text/parser.go`, `code.go`; part of #8). A `(func (type $sig) …)` whose typeuse is not
   re-stated contributes the referenced type's params as anonymous locals

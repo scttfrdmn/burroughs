@@ -60,13 +60,14 @@ type parser struct {
 	// sink is where retained instructions go, and nil means "recognize only" — see code.go's
 	// header for why this is a field rather than fourteen parameters, and why nil is silent.
 	sink *instrSink
-	// imm accumulates the current instruction's immediate bytes. Reset per instruction by
-	// plaininstr, which is the one function that knows where an instruction begins.
-	imm []byte
-	// immPatch defers the current instruction's immediate to stage 2, for the one category that
-	// can forward-reference: a `call $f` naming a function defined later. Set by the index
-	// reader, consumed and cleared by plaininstr.
-	immPatch func() ([]byte, error)
+	// immParts accumulates the current instruction's immediate **in components**, each one either
+	// bytes known at the cursor or a thunk that yields them in stage 2. Reset per instruction by
+	// plaininstr, which is the one function that knows where an instruction begins, and consumed
+	// by `finishImm`.
+	//
+	// A list rather than a byte slice plus one whole-immediate thunk, because the thing a deferred
+	// component needs is a **position** — see immPart, and grave #130 for what its absence cost.
+	immParts []immPart
 	// opOverride is the resolved opcode for a mnemonic `opBytes` cannot answer from the mnemonic
 	// alone — `ref.test`/`ref.cast`, whose byte depends on the reftype operand's nullability
 	// (`opBytes`' `ambiguousOpcodes` refusal, and `refCastOpBytes`'s comment for why the choice
@@ -99,7 +100,14 @@ type parser struct {
 	funcs []textFunc
 
 	// handlerVec is where `handlerClauses` appends a `try_table`'s retained catch-clause elements,
-	// one already-encoded `[]byte` per clause, or nil when this read is recognizing only.
+	// one `immPart` per clause, or nil when this read is recognizing only.
+	//
+	// **An `immPart` rather than a `[]byte`, because a clause names a tag and a tag may be bound
+	// later.** `(module (func (try_table (catch $t 0))) (tag $t))` is a valid module — `module_fields`
+	// admits any field order — and it was rejected with `unknown tag $t` while the reverse order
+	// encoded, which is grave #130 in this reader. A clause defers **whole** when its tag is symbolic:
+	// the tag index sits between the kind byte and the label, so the bytes on either side of it cannot
+	// be written until its width is known.
 	//
 	// **A field swapped by the caller, on `p.sink`'s exact discipline** (#199): `handlerClauses`
 	// does not know which `try_table` it belongs to any more than `instrList` knows which block it
@@ -112,7 +120,7 @@ type parser struct {
 	// every clause has been read, on `brTable`'s exact reason for buffering rather than writing
 	// eagerly (code.go). `len(*handlerVec)` at that point *is* the count, which is why this needs no
 	// separate counter the way a byte-buffer design would.
-	handlerVec *[][]byte
+	handlerVec *[]immPart
 }
 
 // ReadModule reports whether src is a well-formed wat module, to the depth this stratum
@@ -2457,7 +2465,7 @@ func (p *parser) blockinstr() (bool, error) {
 		arms blockArms
 		ft   funcType
 		slot *blockTypeSlot
-		hv   [][]byte
+		hv   []immPart
 	)
 	if t.Keyword == kwTryTable {
 		// **`handlerBlock` is `blockSignatureSlot` around `handlerClauses` rather than around
@@ -2856,7 +2864,7 @@ func (p *parser) deferBlockSignature(kind signatureKind, use idxRef, haveUse boo
 // owns the slots and the tail production fills them, so a nested `try_table` cannot be confused
 // about which one it is writing to even though only one is live at a time today (see the
 // `handlerVec` field's own comment on why the swap is defensive rather than load-bearing yet).
-func (p *parser) handlerBlock(hv *[][]byte, arms *blockArms) (funcType, *blockTypeSlot, error) {
+func (p *parser) handlerBlock(hv *[]immPart, arms *blockArms) (funcType, *blockTypeSlot, error) {
 	// The clause reader is shared with the folded arm (#64) — see handlerClauses. It was inline
 	// here while there was one caller; the folded `try_table` is the second, and two copies of a
 	// four-arm set is two places to lose an arm. It is passed *in* rather than called after, because
@@ -2881,7 +2889,7 @@ func (p *parser) handlerBlock(hv *[][]byte, arms *blockArms) (funcType, *blockTy
 // nil through a recognize-only parse and `handlerClauses` falls back to its old behaviour: a tag
 // index is read and never looked up, matching every other symbolic index the recognizer leaves
 // unresolved (idx, idxList, and retainIdxIn's own `!p.retaining()` guard).
-func (p *parser) handlerTail(hv *[][]byte, arms *blockArms) func() error {
+func (p *parser) handlerTail(hv *[]immPart, arms *blockArms) func() error {
 	return func() error {
 		outer := p.handlerVec
 		if p.retain {
@@ -2941,7 +2949,7 @@ func (p *parser) foldedBlock(leader keywordKind) error {
 	var (
 		arms blockArms
 		body func() error
-		hv   [][]byte
+		hv   []immPart
 	)
 	switch leader {
 	case kwIf:
@@ -3140,11 +3148,15 @@ func (p *parser) callIndirectInstr(place instrPlacement, tail func() error) erro
 // callIndirectImm is the immediate thunk: the type index then the table index, which is the wire
 // order and the reverse of the written one (encode.ml:275/:278).
 //
-// Both indices are resolved here rather than one at the cursor, for `callIndirectInstr`'s stated
-// reason — a patch replaces the immediates, so a pair cannot be split across the two mechanisms. The
-// table's resolution is *no later* for it: `catTable` is a space whose definitions precede the code
-// section in the image, so resolving it in stage 2 gives the same answer the cursor would, and grave
-// #130's both-orders question is unaffected.
+// Both indices are resolved here rather than one at the cursor, and the reason is the wire order:
+// `idx y; idx x` writes the *type* index first (encode.ml:275), and the type index is stage 2's
+// because a typeuse must be interned there. So the table index cannot be written at the cursor
+// whatever mechanism carries it — it follows bytes that do not exist yet.
+//
+// This was the one arm already on the right side of grave #130: the table's resolution running in
+// stage 2 is what makes `(module (func (call_indirect $t (type $s))) (table $t 1 funcref) …)` encode
+// in either field order. `retainIdxIn` now defers every non-locals space for that same reason, so
+// this is no longer the exception it was written as.
 func (p *parser) callIndirectImm(slot *blockTypeSlot, tab idxRef, kw Token) func() ([]byte, error) {
 	return func() ([]byte, error) {
 		if !slot.filled {
@@ -3329,45 +3341,70 @@ func (p *parser) handlerClauses() error {
 		}
 		p.c.next() // the LPAR
 		p.c.next() // the keyword
-		// **One `[]byte` per clause, built here and appended to `*p.handlerVec` whole** — not the
-		// current instruction's immediate (`p.imm`/`retainLabelIdx` belong to
+		// **One `immPart` per clause, built here and appended to `*p.handlerVec` whole** — not the
+		// current instruction's immediate (`p.immParts`/`retainLabelIdx` belong to
 		// `plaininstr`/`foldedBlock`'s own instruction being built, and a clause is not an
 		// instruction). The **last** index of every arm is the label; `catch`/`catch_ref`'s first is
-		// a tag, resolved at the cursor against the tag space (see the header above for the timing
-		// argument).
-		var cl writer
-		if p.handlerVec != nil {
-			cl.byte1(kindByte)
-		}
+		// a tag, resolved against the tag space.
+		var (
+			tagRef  idxRef
+			haveTag bool
+			depth   uint32
+		)
 		for i := range idxs {
 			if i == idxs-1 {
-				depth, err := p.labelIdxValue()
+				d, err := p.labelIdxValue()
 				if err != nil {
 					return err
 				}
-				if p.handlerVec != nil {
-					cl.u32(depth)
-				}
+				depth = d
 				continue
 			}
 			r, err := p.idxValue()
 			if err != nil {
 				return err
 			}
-			if p.handlerVec != nil {
-				idx, rerr := p.ctx.tags.resolveSpaceIdx(r)
-				if rerr != nil {
-					return rerr
-				}
-				cl.u32(idx)
-			}
+			tagRef, haveTag = r, true
 		}
 		if err := p.rpar(); err != nil {
 			return err
 		}
-		if p.handlerVec != nil {
-			*p.handlerVec = append(*p.handlerVec, cl.b)
+		if p.handlerVec == nil {
+			// Recognize-only: the indices were read and nothing was looked up, which is the standing
+			// every other symbolic index has on this path.
+			continue
 		}
+		// One builder for both timings, so the clause's encoding cannot differ between them —
+		// `heaptypeBytesOf`'s reason, and `retainMemarg`'s shape: the kind byte and the label sit on
+		// either side of the tag index, so a symbolic tag defers the **whole** clause rather than its
+		// own field.
+		build := func() ([]byte, error) {
+			var cl writer
+			cl.byte1(kindByte)
+			if haveTag {
+				idx := tagRef.idx
+				if tagRef.isVar {
+					resolved, err := p.ctx.tags.resolveSpaceIdx(tagRef)
+					if err != nil {
+						return nil, err
+					}
+					idx = resolved
+				}
+				cl.u32(idx)
+			}
+			cl.u32(depth)
+			return cl.b, nil
+		}
+		if haveTag && tagRef.isVar {
+			// A tag the module may bind after this instruction — grave #130's shape in this reader.
+			*p.handlerVec = append(*p.handlerVec, immPart{later: build})
+			continue
+		}
+		cl, err := build()
+		if err != nil {
+			return err
+		}
+		*p.handlerVec = append(*p.handlerVec, immPart{b: cl})
 	}
 	restoreOwn() // the body reads `c'`
 	return p.instrList()

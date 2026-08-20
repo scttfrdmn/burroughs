@@ -2398,6 +2398,13 @@ func TestGatedVectors(t *testing.T) {
 			41: "multi-memory: 2 memories at :10, so a memarg carries flags bit 6",
 		},
 		"memory-multi.wast": {
+			// The two rows grave #130's repair moved here. They were encode-column fails — the
+			// module at :5 uses `$d` before the `(data $d …)` on :19 — and once it encodes, the
+			// `assert_return`s meet the gate the file's other pairs already met: `(memory $mem1)`
+			// and `(memory $mem2)` at :6–7, so `i32.load $mem1` carries flags bit 6. The module
+			// row itself is a pass, not a decline, which is why this pair is two and not three.
+			22: "multi-memory: 2 memories at :6, so a memarg carries flags bit 6",
+			23: "multi-memory: 2 memories at :6, so a memarg carries flags bit 6",
 			41: "multi-memory: 2 memories at :26, so a memarg carries flags bit 6",
 			42: "multi-memory: 2 memories at :26, so a memarg carries flags bit 6",
 		},
@@ -6201,22 +6208,23 @@ func TestBareQuoteFormsPassUnearned(t *testing.T) {
 		"stratum boundary (#63/#64); 7 originally", seen, seenRetired)
 }
 
-// TestAssertInvalidPassesFromAboveTheValidator names the 18 `assert_invalid` passes that no
+// TestAssertInvalidPassesFromAboveTheValidator names the 17 `assert_invalid` passes that no
 // validation verdict bought.
 //
 // An `assert_invalid` reaches the validator through two steps first — `text.EncodeModule` and
 // `binary.Decoder.DecodeModule` (see validateWith) — and either may refuse. The board's arm asks
 // four questions in order (gated, declined, message match, accepted), and the message match does
 // not care *which* layer produced the error. So a module the encoder or decoder refuses with a
-// string the vector happens to expect is scored a pass, and 18 of the 1023 this PR added arrived
-// that way.
+// string the vector happens to expect is scored a pass, and 18 of the 1023 the PR that built this
+// list added arrived that way — 17 now, and the one that left is recorded on the retired entry
+// below.
 //
 // They are **not unearned in the bare-quote sense** and the distinction is the point. A bare
 // `(module quote ...)` passes because nothing above the lexer can disagree — a silence scored as
-// agreement. These 18 are real refusals with the reference's own message: the module *is* invalid
+// agreement. These 17 are real refusals with the reference's own message: the module *is* invalid
 // and the engine *did* say so. What is wrong is only the layer, which makes them evidence rather
 // than a defect (*an error from the wrong layer is evidence about where structure was lost*).
-// Specifically, 17 say the decoder is enforcing the constant-expression rule the reference
+// Specifically, all 17 say the decoder is enforcing the constant-expression rule the reference
 // enforces in validation, which is the *one concept, one trigger* question this PR does not
 // settle: when #9's slice for constant expressions lands there will be two authorities for it,
 // and one of them has to go.
@@ -6272,16 +6280,28 @@ func TestAssertInvalidPassesFromAboveTheValidator(t *testing.T) {
 			313: {"decoder", constExpr + " — (global i32 (i32.const 0) (nop))"},
 			318: {"decoder", constExpr + " — (global i32 (i32.ctz ...))"},
 			323: {"decoder", constExpr + " — (global i32 (nop))"},
-			// The weakest of the 18, and the only encoder one. `(global $g1 i32 (global.get
-			// $g2))` forward-references a global declared on the next line, and the vector
-			// expects "unknown global". The reference resolves wat names in a collecting pass,
-			// so $g2 *is* known there and the error is validation's rule that a constant
-			// expression may only read a *preceding* import; our encoder resolves in one
-			// forward pass, so it reports the same words for a different reason. Right answer,
-			// wrong reason, wrong layer — a two-pass name resolver would retire this entry to
-			// the validator without any validation rule being written.
-			666: {"encoder", "a forward reference the single-pass wat name resolver cannot " +
-				"see yet; the reference's own error is the constant-expression import rule"},
+			// # `global.wast:666` was the eighteenth and it is retired, by the mechanism its own
+			// entry named
+			//
+			// It read: "The weakest of the 18, and the only encoder one. `(global $g1 i32
+			// (global.get $g2))` forward-references a global declared on the next line, and the
+			// vector expects `unknown global`. The reference resolves wat names in a collecting
+			// pass, so $g2 *is* known there and the error is validation's rule that a constant
+			// expression may only read a *preceding* import; our encoder resolves in one forward
+			// pass, so it reports the same words for a different reason. Right answer, wrong
+			// reason, wrong layer — **a two-pass name resolver would retire this entry to the
+			// validator without any validation rule being written**."
+			//
+			// Grave #130's repair is that second pass for eight index spaces, globals among them,
+			// so the encoder no longer refuses and the vector reaches the validator, which says
+			// `global 0: unknown global 1 (0 in scope)`. Same words the vector wants, now from the
+			// layer that owns the rule, and no constant-expression rule was written — the
+			// prediction to the clause.
+			//
+			// **Kept as prose rather than deleted, because the entry is the evidence that the
+			// prediction was made before the outcome.** A retirement recorded only as a smaller
+			// count reads as drift; recorded here it is the one case in this list that closed the
+			// way the list said it would, and it is worth more than the entry was.
 		},
 	}
 
@@ -6293,8 +6313,8 @@ func TestAssertInvalidPassesFromAboveTheValidator(t *testing.T) {
 	// PR's Board section, and because a file leaving boardFiles would otherwise shrink the list
 	// and the observed count together — the two agreeing while both fall (see *a comparison
 	// against an empty set succeeds*).
-	if want != 18 {
-		t.Fatalf("the list holds %d entries, want 18; the count is quoted in passFloor's "+
+	if want != 17 {
+		t.Fatalf("the list holds %d entries, want 17; the count is quoted in passFloor's "+
 			"account, so the two must not drift", want)
 	}
 
@@ -6361,10 +6381,14 @@ func TestAssertInvalidPassesFromAboveTheValidator(t *testing.T) {
 		t.Errorf("found %d of %d listed entries; a listed vector the loop never reached means "+
 			"its file left the board and this list is watching nothing", seen, want)
 	}
-	if byLayer["decoder"] != 17 || byLayer["encoder"] != 1 {
-		t.Errorf("layer split is decoder %d / encoder %d, want 17/1; the split is the finding "+
-			"(the 17 are one validation rule living in the decoder, the 1 is a name-resolution "+
-			"accident) and it is quoted in this PR's Graves section",
+	// 17/0 since grave #130 retired the one encoder entry (see `global.wast`'s retirement note).
+	// The encoder leg is pinned at **0 rather than dropped**, because that is the direction this
+	// list now has to watch: a new encoder refusal quoting a vector's expected string is the
+	// accident that entry was, and a check that only counted decoder entries would score it green.
+	if byLayer["decoder"] != 17 || byLayer["encoder"] != 0 {
+		t.Errorf("layer split is decoder %d / encoder %d, want 17/0; the split is the finding "+
+			"(the 17 are one validation rule living in the decoder, and the encoder's 0 is grave "+
+			"#130's repair holding) and it is quoted in this PR's Graves section",
 			byLayer["decoder"], byLayer["encoder"])
 	}
 	t.Logf("%d assert_invalid passes come from above the validator: %d decoder, %d encoder",
@@ -7514,7 +7538,20 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	// falls were partly absorbed by the GC gate, so their default and all-on deltas differ by exactly the
 	// gated share. Here the emitter's output is the same wire form with one index byte corrected, so a
 	// divergence between the lanes would have meant the fix reached a feature path it has no business in.
-	const allOnPassFloor = 64982
+	// # 64982 → 64985, +3 against the default lane's +1, and the gap is the check from the entry above
+	//
+	// Grave #130's repair lets `memory-multi.wast:5` encode, and with every gate on all three of that
+	// module's rows pass: the module itself plus the two `assert_return`s. The default lane gains only
+	// the module (`passFloor` +1) because the assertions need the interpreter to hold two memories.
+	//
+	// So the lanes move **unequally, by exactly 2**, and the entry above says what that means: a
+	// divergence is the signature of a fall that a gate partly absorbs. #77's slice moved both lanes by
+	// 4 and that equality was its check; this slice's inequality is its check, and the two are the same
+	// instrument read in the two directions. What would have been the finding is a divergence that
+	// *didn't* match the gated share — +3 here against +1 there with only one gated row in the file
+	// would mean a row moved for a reason nobody named. Two gated rows, gap of 2, named above in
+	// `gatedVectors`' allow-list: accounted.
+	const allOnPassFloor = 64985
 	// **Slack 0 as of Scott's #387 ruling**, which this bound's own 89-row staleness above is what
 	// prompted: a floor with 250 of tolerance cannot detect anything smaller than 250, so it is a
 	// bound sitting inside its own tolerance. Exact from here — re-base it in the PR that moves the
@@ -9234,7 +9271,31 @@ func TestPhase1Files(t *testing.T) {
 	// −3, to zero — and a zero here is the condition this ceiling was built to make visible rather than
 	// a target, because at zero the encode stratum stops being a work list and this bound stops being
 	// able to catch anything at all (#87's shape, one column over).
-	const encodeFailCeiling = 3
+	// # 3 → 0, the pre-registered figure, and the stratum stops being a work list
+	//
+	// Grave #130 is repaired — a deferred immediate now carries a *position*, so a symbolic index
+	// bound after the instruction that uses it resolves in stage 2 for eight of the nine index
+	// spaces — and the fall is **−3, to zero**, which is what the section above committed to. The
+	// identity check is again per file: `memory-multi.wast` went 1/4 pass, 3 fail, 2 gated to
+	// **2/2 pass, 4 gated**, and no other file's line moved, so all three departures are that
+	// file's and there is no fourth row hiding a compensating gain.
+	//
+	// **The three did not all become passes, and that is the same split #419's fall had.** One
+	// became a pass (the module row, which only ever needed the encode) and two became `gated` on
+	// multi-memory (`assert_return`s, which need the *runtime* to hold two memories). So this
+	// bound's −3 is the board's +1 pass and +2 gated, and reading the ceiling's fall as a pass
+	// forecast would have over-predicted by two — see `passFloor`'s entry, which forecasts +1 for
+	// exactly this reason.
+	//
+	// **At zero this bound stops being able to expose work and becomes a regression tripwire only**,
+	// which the section above named in advance as a condition rather than a target (#87's shape, one
+	// column over). What it can still catch is exact: any new encode refusal at all, since slack is
+	// 0. What it can no longer do is rank the encoder's frontier, because the encoder no longer has
+	// one in this stratum — the remaining text-column work is elsewhere (#8's `(table …)` frontier
+	// was drained by #419, and #9's validator is a decline, not a fail). A bound at zero over a
+	// column that should stay at zero is honest; a bound at zero *described* as a work list would
+	// not be, so it is re-described here rather than retired.
+	const encodeFailCeiling = 0
 	boardBound(t, "encodeFailCeiling", encodeFail, encodeFailCeiling, 0, ceilingBound,
 		"the wat encoder lost ground: either it stopped emitting an instruction it used to "+
 			"emit, or the corpus moved. This ceiling is deliberately not shared with the text "+
@@ -10986,7 +11047,26 @@ func TestPhase1Files(t *testing.T) {
 	// `unsupported` is unmoved at 66 and the zero is **structural** for the ninth entry running:
 	// `classify` is untouched, so nothing the harness could not ask became askable. #323 remains the
 	// one open issue that moves this column.
-	const passFloor = 60913
+	// # 60913 → 60914, +1 against −3 fails, and the missing two are the gate
+	//
+	// Grave #130's repair drains `encodeFailCeiling` to zero, and the three rows that leave the fail
+	// column do **not** all arrive here: one becomes a pass and two become `gated`. `memory-multi.wast`
+	// went 1/4 pass, 3 fail, 2 gated to 2/2 pass, 4 gated — pass 60913 → 60914, fail 19 → 16, gated
+	// 4146 → 4148, and the three columns account for each other exactly.
+	//
+	// **This one *was* forecast, and the forecast is the previous entry's confession discharged.** The
+	// section above admitted that #77's +4 had been derivable from the wire form and simply not
+	// written; here the same derivation runs before the measurement. The rows are a module definition
+	// and two `assert_return`s over a two-memory module: the module needs only an encode, so it can
+	// become a pass, while the assertions need the *interpreter* to hold two memories, which is
+	// multi-memory's gate and off. So +1 with +2 to `gated` was the prediction, and the split is the
+	// same one #413 and #419 each paid — a fall in the fail column lands in two columns, and the gate
+	// is why the rest didn't become passes.
+	//
+	// `unsupported` is unmoved at 66 and the zero is **structural** for the tenth entry running:
+	// `classify` is untouched, so nothing the harness could not ask became askable. #323 remains the
+	// one open issue that moves this column.
+	const passFloor = 60914
 	// Slack 0 as of #387's ruling, with `allOnPassFloor` and `unsupportedCeiling` — see
 	// `boardbound_test.go`'s retirement section. Two entries in the ledger above record taking a
 	// re-base *although the slack stayed silent* (58659 by a margin of 20, and the 416 that was four

@@ -492,9 +492,9 @@ func (p *parser) plaininstr() (bool, error) {
 		return false, nil
 	}
 	p.c.next()
-	saved := p.imm
-	p.imm = nil
-	defer func() { p.imm = saved }()
+	saved := p.immParts
+	p.immParts = nil
+	defer func() { p.immParts = saved }()
 	if err := p.immediates(shape, t); err != nil {
 		return true, err
 	}
@@ -522,8 +522,8 @@ func (p *parser) plaininstr() (bool, error) {
 		// REF_CAST/REF_TEST: reftypeRetained already resolved the mnemonic's two-opcode ambiguity
 		// from the operand's nullability, which is a fact opBytes structurally cannot have (it is
 		// handed only the mnemonic string) — see refCastOpBytes' comment. Consumed and cleared
-		// here, the same discipline p.immPatch already follows below, so a later instruction
-		// cannot inherit a stale override.
+		// here, the same discipline `p.immParts`' save-and-restore above follows, so a later
+		// instruction cannot inherit a stale override.
 		op, ok = p.opOverride, true
 		p.opOverride = nil
 	}
@@ -535,8 +535,8 @@ func (p *parser) plaininstr() (bool, error) {
 		// the frontier message says for the fields that have no section.
 		return true, errf(t, "cannot yet encode the %s instruction (#8)", t.Text)
 	}
-	p.emit(instr{op: op, imm: p.imm, patch: p.immPatch})
-	p.immPatch = nil
+	imm, patch := p.finishImm()
+	p.emit(instr{op: op, imm: imm, patch: patch})
 	return true, nil
 }
 
@@ -802,17 +802,18 @@ type memargImm struct {
 // byte says a memory index follows, decoding the offset LEB as that index. No `assert_malformed`
 // can see it; `memory-multi.wast`'s round trip can.
 //
-// A symbolic index resolves against the memory space, which does not permit forward references
-// (memories are declared before the code section's bodies are read), so this resolves at the
-// cursor rather than deferring like `catFunc`.
+// **A symbolic memory index defers, and the whole memarg defers with it** — grave #130's repair
+// reaching this reader. An earlier version of this paragraph said resolution is at the cursor because
+// "memories are declared before the code section's bodies are read", which is a fact about the
+// *image* read as a fact about the text: `module_fields` admits any field order in the source, so
+// `(module (func (i32.load $m)) (memory $m 1))` is a valid module the cursor path rejected while
+// accepting the reverse order.
 //
-// **That parenthetical is a fact about the binary and it was read as a fact about the text.**
-// The section order does constrain the *image*; `module_fields` admits any field order in the
-// *source*, so `(module (func (data.drop $s)) (data $s …))` is a valid module this parser rejects
-// while the reverse order it accepts — resolution at the cursor is one pass where the reference has
-// two, and `catFunc`'s deferral is that second pass built for exactly one category. Every
-// non-catFunc space is affected, data segments being the only one with an encodable opcode today.
-// Grave #130, where the scope table and the both-orders control live.
+// The deferral is **one component covering flags, index and offset**, not a deferred index between
+// two known neighbours, and that is `has_idx` above: the flags byte's 0x40 bit is a test on the
+// *resolved value*, so the byte that precedes the index cannot be written until the index is known.
+// `immPart` separates components; it does not separate a component from its own bits, which is why
+// `deferImm` receives the whole `memop` and not just its middle field.
 func (p *parser) retainMemarg(mnemonic Token, m memargImm) error {
 	if !p.retaining() {
 		return nil
@@ -831,29 +832,45 @@ func (p *parser) retainMemarg(mnemonic Token, m memargImm) error {
 		align = int(nat)
 	}
 
-	idx := uint32(0)
-	if m.haveIdx {
-		resolved, err := p.ctx.memories.resolveSpaceIdx(m.idx)
-		if err != nil {
-			return err
+	// One builder for both timings, so the *encoding* cannot differ between the deferred arm and the
+	// cursor arm — `heaptypeBytesOf`'s own reason for existing, applied to the memarg.
+	build := func() ([]byte, error) {
+		idx := uint32(0)
+		if m.haveIdx {
+			resolved, err := p.ctx.memories.resolveSpaceIdx(m.idx)
+			if err != nil {
+				return nil, err
+			}
+			idx = resolved
 		}
-		idx = resolved
-	}
 
-	// The value test, not the presence test. See the doc above.
-	hasIdx := idx != 0
+		// The value test, not the presence test. See the doc above.
+		hasIdx := idx != 0
 
-	flags := uint32(align)
-	if hasIdx {
-		flags |= 0x40
+		flags := uint32(align)
+		if hasIdx {
+			flags |= 0x40
+		}
+		var w writer
+		w.u32(flags)
+		if hasIdx {
+			w.u32(idx)
+		}
+		w.u64(m.offset)
+		return w.b, nil
 	}
-	var w writer
-	w.u32(flags)
-	if hasIdx {
-		w.u32(idx)
+	if m.haveIdx && m.idx.isVar {
+		// The only spelling that cannot resolve here. A *numeric* memory index needs no space at
+		// all — `idx_opt`'s NAT arm is `nat32 $1` with no lookup — so it takes the cursor path, and
+		// the split is by arm rather than by mnemonic.
+		p.deferImm(build)
+		return nil
 	}
-	w.u64(m.offset)
-	p.appendImm(w.b)
+	b, err := build()
+	if err != nil {
+		return err
+	}
+	p.appendImm(b)
 	return nil
 }
 
