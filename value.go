@@ -36,9 +36,11 @@
 // Value and Type below are this package's own, converted at the boundary rather than hoisted out
 // of `internal/interp`. Publishing the interpreter's representation would freeze it as
 // compatibility surface while the GC work is still widening it — `binary.ValType` has taken one
-// widening for GC and `interp.Value` two more since (0024's v128 high word, 0027's host-reference
-// discriminator). The conversion is crossed once per argument and once per result, not per
-// instruction. Decision 0029 decision 2 has the ruling and the cost argument.
+// widening for GC and `interp.Value` three more since (0024's v128 high word, 0027's host-reference
+// discriminator, and 0039 replacing that discriminator with an enumerated payload kind plus an i31
+// payload). The conversion is crossed once per argument and once per result, not per instruction.
+// Decision 0029 decision 2 has the ruling and the cost argument, and convert.go's own header has why
+// the fourth widening is the sharpest specimen for it.
 package burroughs
 
 import (
@@ -135,6 +137,82 @@ func (k Kind) String() string {
 	return fmt.Sprintf("Kind(%d)", uint8(k))
 }
 
+// RefPayload names which constructor a non-null reference **value** is, as distinct from what its
+// **type** is — the public mirror of `interp.RefPayload` (decision 0039 decision 1), restated here
+// rather than aliased for the same reason every other vocabulary at this boundary is restated: the
+// engine's enum can gain a member for an internal reason, and a public one cannot.
+//
+// **Why a value needs this when it already carries a Type.** A reference's type is an upper bound on
+// what it may be, never a statement of what it is: an `anyref` result can be a host reference, an
+// i31, a struct or an array, and `Kind` says only `any`. The spec's own oracle dispatches on the
+// constructor and reads no static type at all (`script/runner.ml:464-476`), so a boundary that
+// carried only the type could not answer the question the corpus asks — and 28 vectors were declined
+// for exactly that, [#270](https://github.com/scttfrdmn/burroughs/issues/270).
+//
+// **A member added here is a minor-version fact** under decision 0004, which is why the list is the
+// authority's whole constructor set rather than the four the corpus exercises today.
+type RefPayload uint8
+
+// The payload kinds, mirroring the reference interpreter's own value constructors.
+const (
+	// PayloadNone is the zero value and means *no payload*: a numeric value, or a null reference
+	// (whose constructor is nullary), or — for a non-null reference — a payload the engine could not
+	// determine, which is an engine inconsistency rather than a kind.
+	PayloadNone RefPayload = iota
+
+	// PayloadHost is an opaque host reference, `(ref.host N)` and the thing `(ref.extern N)` wraps.
+	// Its identity is readable through Value.ExternID.
+	PayloadHost
+
+	// PayloadI31 is an i31 reference; its payload is readable through Value.I31.
+	PayloadI31
+
+	// PayloadStruct and PayloadArray are the two WasmGC aggregates. The **constructor** crosses this
+	// boundary and the contents do not: a guest-allocated aggregate is not expressible as a Value,
+	// so a host can learn that a result is an array without being handed the array. Stated as a
+	// scope boundary rather than hidden, and it is the whole boundary — nothing here narrows to
+	// element reads.
+	PayloadStruct
+	PayloadArray
+
+	// PayloadFunc is a function reference. Which function, in which instance, does not cross —
+	// `interp.Value.RefID`'s own scope statement, measured at 0 corpus vectors in either direction.
+	PayloadFunc
+
+	// PayloadExn is an exception reference, and like the aggregates only the constructor crosses.
+	PayloadExn
+
+	// payloadPastEnd is **not a payload kind**, and it is unexported because it is not part of the
+	// vocabulary — it is the domain's upper bound, declared inside this block so `iota` maintains
+	// it. A member added above this line moves it, and every control that iterates
+	// `PayloadNone`..`payloadPastEnd` sees the new member without anyone updating a count written
+	// down elsewhere: the domain comes from the type's own definition rather than from a list beside
+	// it. Every switch over this type names it, so that a future member is a build failure at each
+	// seam instead of being absorbed by a `default`.
+	payloadPastEnd
+)
+
+// payloadNames spells each member for Value.String and for error messages, and is the domain
+// `payloadKinds`' own control checks itself against — one map with every member in it, so a member
+// added without a conversion arm is a missing row rather than an unnoticed absence. Exactly
+// kindNames' shape, for exactly kindNames' reason.
+var payloadNames = map[RefPayload]string{
+	PayloadNone:   "none",
+	PayloadHost:   "host",
+	PayloadI31:    "i31",
+	PayloadStruct: "struct",
+	PayloadArray:  "array",
+	PayloadFunc:   "func",
+	PayloadExn:    "exn",
+}
+
+func (p RefPayload) String() string {
+	if n, ok := payloadNames[p]; ok {
+		return n
+	}
+	return fmt.Sprintf("RefPayload(%d)", uint8(p))
+}
+
 // Type is a wasm value type: a Kind, plus the nullability and type index a reference form needs.
 //
 // **Unexported fields, deliberately.** The representation is this package's own business and can
@@ -223,12 +301,13 @@ func (t Type) String() string {
 // value of what it names rather than reinterpreting bits — Type is how a caller knows which
 // accessor to use, and Call's results always carry it.
 type Value struct {
-	typ  Type
-	bits uint64
-	hi   uint64
-	null bool
-	host bool
-	ref  uint32
+	typ     Type
+	bits    uint64
+	hi      uint64
+	null    bool
+	refKind RefPayload
+	ref     uint32
+	i31     uint32
 }
 
 // I32 constructs an i32 value.
@@ -272,7 +351,25 @@ func NullRef(t Type) (Value, bool) {
 // `(ref.extern N)`. Zero is a legitimate identity, so a caller must never read the identity as
 // "unset": IsNull is the question that means that.
 func ExternRef(id uint32) Value {
-	return Value{typ: Type{kind: KindExternRef, null: true}, host: true, ref: id}
+	return Value{typ: Type{kind: KindExternRef, null: true}, refKind: PayloadHost, ref: id}
+}
+
+// HostRef constructs a non-null **bare** host reference at the given reference type, reporting false
+// if t is not a reference type — the corpus's `(ref.host N)`, which the reference's own script
+// parser makes a plain host reference with no `externref` wrapper around it (`parser.mly:1501`,
+// against `:1502` for `(ref.extern N)`).
+//
+// **The difference from ExternRef is the type and nothing else**, which is why the type is a
+// parameter here and fixed there: the payload is the same host identity, and what distinguishes the
+// two is whether it has been externalized. `extern.wast:42` passes one at an `anyref` parameter, and
+// a host reference's own dynamic heaptype is `any`, so `AbstractRefType(KindAnyRef, true)` is the
+// type the corpus needs — not defaulted here, so a caller crossing at a narrower type cannot get a
+// silently widened one.
+func HostRef(t Type, id uint32) (Value, bool) {
+	if !t.IsRef() {
+		return Value{}, false
+	}
+	return Value{typ: t, refKind: PayloadHost, ref: id}, true
 }
 
 // Type returns this value's type.
@@ -322,19 +419,48 @@ func (v Value) V128() (lo, hi uint64) {
 // has no meaning.
 func (v Value) IsNull() bool { return v.typ.IsRef() && v.null }
 
-// ExternID returns the host identity a non-null externref carries, reporting false when this
-// value has none — a numeric value, a null reference, a funcref, or an externref wrapping a GC
-// payload rather than a host reference.
+// RefPayload returns which constructor this reference value is, and false when the question has no
+// answer — a numeric value, or a **null** reference, whose constructor is nullary and carries no
+// payload at all.
+//
+// This is the accessor a host uses to tell an `anyref` result's four possibilities apart, since the
+// Type says only `any`. See the RefPayload type for why a type cannot answer it.
+func (v Value) RefPayload() (RefPayload, bool) {
+	if !v.typ.IsRef() || v.null {
+		return PayloadNone, false
+	}
+	return v.refKind, true
+}
+
+// ExternID returns the host identity a non-null host reference carries, reporting false when this
+// value has none — a numeric value, a null reference, a funcref, an i31, or an externref wrapping a
+// GC payload rather than a host reference.
 //
 // **The second result is not a nil check**, and conflating the two is a live defect in this
 // engine's history: `extern.convert_any` produces non-null externrefs with no identity at all,
 // and handing those out as identity 0 would name a host reference the value does not have (see
-// `interp.Value.IsHost`, decision 0027).
+// `interp.Value.RefKind`, decisions 0027 and 0039).
+//
+// The name says `extern` because `(ref.extern N)` is the spelling the corpus uses most, but the
+// question it asks is the payload's — a **bare** `(ref.host N)` at an `anyref` answers true too, and
+// must, since it is the same identity carried without the wrapper.
 func (v Value) ExternID() (uint32, bool) {
-	if !v.host {
+	if v.refKind != PayloadHost {
 		return 0, false
 	}
 	return v.ref, true
+}
+
+// I31 returns the payload of an i31 reference, reporting false for any other value.
+//
+// Unsigned, because the sign is the *reader's* choice and not the value's: `i31.get_s` and
+// `i31.get_u` are two instructions over one 31-bit representation, so a boundary that returned an
+// int32 would be picking a side the engine deliberately does not pick.
+func (v Value) I31() (uint32, bool) {
+	if v.refKind != PayloadI31 {
+		return 0, false
+	}
+	return v.i31, true
 }
 
 // String spells the value the way this package's own CLI argument syntax does — `i32:42`,
@@ -343,6 +469,16 @@ func (v Value) ExternID() (uint32, bool) {
 // One syntax with two directions, deliberately: a `run` invocation that prints `i32:7` and cannot
 // accept `i32:7` back would be two spellings of one thing, which is the two-registry shape this
 // repo polices elsewhere.
+//
+// **With one family of exceptions, and the sentence above used to omit it.** The `ref:` spelling —
+// every non-null reference that is not an `(ref.extern N)` — has no ParseValue arm and never had
+// one, because it names values a host **cannot construct** rather than values it may pass: a
+// guest-allocated aggregate, an exception, a funcref in a particular instance. Those are results, and
+// the argument syntax is closed over what the corpus and the constructors above can actually build.
+// Printing them is the honest half; accepting them would require a constructor this package declines
+// to offer (see RefPayload's own scope statements). Since 0039 the spelling carries the **payload
+// kind** as well as the type, because a type is an upper bound: `ref:(ref null any)` named four
+// different values, and now `ref:i31:(ref null any)` names one.
 func (v Value) String() string {
 	switch v.typ.kind {
 	case KindNone:
@@ -372,10 +508,32 @@ func (v Value) String() string {
 		}
 		return "null:" + v.typ.kind.String()
 	}
-	if id, ok := v.ExternID(); ok {
-		return fmt.Sprintf("extern:%d", id)
+	// `extern:N` is the one non-null reference the argument syntax reads back, and the guard is the
+	// exact shape ExternRef constructs — payload *and* type — so a **bare** `(ref.host N)` at an
+	// `anyref` is not printed as an externalized one. That distinction is the whole of the difference
+	// between `parser.mly:1501` and `:1502`, and spelling both the same way would fabricate an
+	// externalization the value does not have.
+	if v.refKind == PayloadHost && v.typ == (Type{kind: KindExternRef, null: true}) {
+		return fmt.Sprintf("extern:%d", v.ref)
 	}
-	return "ref:" + v.typ.String()
+	// Payload first, then type: the payload is what the value *is* and the type is the bound it
+	// crossed at. The payload's own detail joins it where there is one, so an identity or an i31
+	// payload is readable from the printed form rather than only through an accessor.
+	switch v.refKind {
+	case PayloadHost:
+		return fmt.Sprintf("ref:host:%d:%s", v.ref, v.typ)
+	case PayloadI31:
+		return fmt.Sprintf("ref:i31:%d:%s", v.i31, v.typ)
+	case PayloadStruct, PayloadArray, PayloadFunc, PayloadExn, PayloadNone:
+		// No payload crosses for any of these, so the constructor's name is all there is to print —
+		// including for PayloadNone, where `ref:none:` is the engine-inconsistency shape (a non-null
+		// reference naming no constructor) saying so rather than passing for an ordinary reference.
+		return "ref:" + v.refKind.String() + ":" + v.typ.String()
+	case payloadPastEnd:
+		// Not a payload kind; named so `exhaustive` sees a reading for every member, and printed
+		// distinguishably rather than falling into the arm above.
+	}
+	return "ref:" + v.refKind.String() + ":" + v.typ.String()
 }
 
 // formatFloat spells a float the way the spec's text format does, including the NaN payload —
@@ -417,7 +575,7 @@ func formatFloat(bits uint64, size int) string {
 }
 
 // ParseValue reads the spelling Value.String writes: `i32:42`, `i64:-1`, `f32:nan:0x200000`,
-// `f64:inf`, `v128:0x0:0x0`, `extern:3`, `null:func`.
+// `f64:inf`, `v128:0x0:0x0`, `extern:3`, `null:func`, `ref:host:0:(ref null any)`.
 //
 // **The inverse of String, and in the same file for that reason.** A CLI that prints a result it
 // cannot accept as an argument would be two spellings of one thing — the two-registry shape this
@@ -481,6 +639,8 @@ func ParseValue(s string) (Value, error) {
 			return Value{}, err
 		}
 		return ExternRef(uint32(n)), nil
+	case "ref":
+		return parseRefValue(rest)
 	case "null":
 		// Ranged over the name table rather than switched on, so the spellings a null reference
 		// accepts are exactly the ones String emits, from one map — the same reason byteKinds is
@@ -496,6 +656,109 @@ func ParseValue(s string) (Value, error) {
 		return Value{}, fmt.Errorf("burroughs: %q is not an abstract reference type", rest)
 	}
 	return Value{}, fmt.Errorf("burroughs: unknown value type %q in %q", kind, s)
+}
+
+// parseRefValue reads the non-null reference spellings String emits — `ref:<payload>:…` — and is the
+// half of 0039 that closes the print/parse asymmetry the payload kinds would otherwise have opened:
+// four new spellings arrived at this boundary with a printer and no reader, and
+// TestValueRoundTripsThroughItsOwnSpelling could not see them because its domain is the *Kind*
+// vocabulary and a payload is not a Kind. *A control scoped to today's cases inherits today's blind
+// spot*, so the domain of the control below is `payloadPastEnd` instead.
+//
+// **Exactly one payload reads back, and the rest are refused by name rather than by falling
+// through.** A payload this boundary can *print* is not one a host can *construct*: struct, array,
+// func and exn name a guest allocation that does not cross (0039 decision 1, and `RefID`'s measured
+// population of 0), i31 has no public constructor, and `none` on a non-null reference is the
+// engine-inconsistency shape rather than a value to read. So `HostRef` is the only constructor there
+// is to route a spelling into, inventing the others would hand out references this package does not
+// have, and the asymmetry is stated per payload where a reader hits it.
+func parseRefValue(rest string) (Value, error) {
+	name, tail, ok := strings.Cut(rest, ":")
+	if !ok {
+		return Value{}, fmt.Errorf("burroughs: %q is not a reference spelling — a non-null "+
+			"reference is `ref:<payload>:…`, e.g. `ref:host:0:(ref null any)`", "ref:"+rest)
+	}
+	for p, n := range payloadNames {
+		if n != name {
+			continue
+		}
+		switch p {
+		case PayloadHost:
+			id, typeText, found := strings.Cut(tail, ":")
+			if !found {
+				return Value{}, fmt.Errorf("burroughs: a host reference is spelled "+
+					"`ref:host:<identity>:<type>`, got %q", "ref:"+rest)
+			}
+			num, err := parseInt(id, 32)
+			if err != nil {
+				return Value{}, err
+			}
+			t, err := parseRefType(typeText)
+			if err != nil {
+				return Value{}, err
+			}
+			// The externalized combination has its own spelling and is refused here, so one value
+			// has one syntax. `parser.mly:1501` against `:1502` is the whole distinction — a bare
+			// host reference against an `externref` wrapping one — and accepting `ref:host:N:(ref
+			// null extern)` as a second name for `extern:N` would put the two registries this
+			// boundary keeps apart back into one.
+			if t == (Type{kind: KindExternRef, null: true}) {
+				return Value{}, fmt.Errorf("burroughs: an externalized host reference is spelled "+
+					"`extern:%d`; `ref:host:` is the bare form, whose type is not `externref`", num)
+			}
+			v, ok := HostRef(t, uint32(num))
+			if !ok {
+				return Value{}, fmt.Errorf("burroughs: %q is not a reference type, so it cannot "+
+					"carry a host reference", typeText)
+			}
+			return v, nil
+		case PayloadNone, PayloadI31, PayloadStruct, PayloadArray, PayloadFunc, PayloadExn, payloadPastEnd:
+			// One arm because one reason: this package has no constructor for these, so the refusal
+			// is about the payload and not about the spelling. Named individually rather than swept
+			// into a `default` because a member added to the enum must fail loudly here — Scott's
+			// condition on 0039, and the reason `payloadPastEnd` is in the list at all.
+			// The payload name is **quoted**, and that is the control's requirement rather than a
+			// style choice: `TestEveryPayloadSpellingIsReadOrRefusedByName` asks that a refusal name
+			// the payload it refused, and it asked by substring — under which the word `constructor`
+			// in this very sentence satisfied the check for `struct`. The probe that should have
+			// failed on six payloads failed on five. A quoted token cannot be a coincidence inside a
+			// longer word, which is the same reading as *aboutness is not proximity*.
+			return Value{}, fmt.Errorf("burroughs: %q is a result-only payload — this boundary "+
+				"prints such a reference and has no constructor to read one back (0039 decision 1)", n)
+		}
+	}
+	return Value{}, fmt.Errorf("burroughs: %q is not a reference payload kind", name)
+}
+
+// parseRefType reads the reference-type spelling Type.String emits, `(ref null any)` and `(ref any)`,
+// refusing the indexed form — which keeps this syntax's one unspellable Kind exactly one wide, the
+// scope statement TestTypedRefIsTheOneUnspellableKind pins.
+//
+// Ranged over kindNames for the `null:` arm's reason: the type names this reads are the ones
+// Kind.String writes, out of one map, so a Kind cannot become readable here without becoming
+// printable there.
+func parseRefType(s string) (Type, error) {
+	inner, ok := strings.CutPrefix(s, "(ref ")
+	if !ok {
+		return Type{}, fmt.Errorf("burroughs: %q is not a reference type spelling — the form is "+
+			"`(ref null any)` or `(ref any)`", s)
+	}
+	inner, ok = strings.CutSuffix(inner, ")")
+	if !ok {
+		return Type{}, fmt.Errorf("burroughs: reference type %q is missing its closing paren", s)
+	}
+	null := false
+	if after, cut := strings.CutPrefix(inner, "null "); cut {
+		null, inner = true, after
+	}
+	for k, name := range kindNames {
+		if name != inner || !k.IsRef() || k == KindTypedRef {
+			continue
+		}
+		t, _ := AbstractRefType(k, null)
+		return t, nil
+	}
+	return Type{}, fmt.Errorf("burroughs: %q does not name an abstract reference type", inner)
 }
 
 // parseInt reads an integer literal into `bits` bits, accepting the signed and the unsigned

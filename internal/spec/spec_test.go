@@ -570,9 +570,31 @@ func valType(k ValKind) (binary.ValType, bool) {
 		return binary.ExternRef, true
 	case KindV128:
 		return binary.V128, true
+	case KindAnyRef:
+		// #270/0039's widening, and the one row here that is not a named `binary` constant: `anyref`
+		// has no `binary.AnyRef` and should not acquire one, because `AbstractRefType` already admits
+		// all twelve abstract heaptypes and a thirteenth named constant beside it would be a second
+		// registry for the same fact (which `TestValTypeNamedConstantsAreNotAlias` polices).
+		return anyRefType, true
 	}
 	return binary.NoValType, false
 }
+
+// anyRefType is `anyref` as the decoder names it, resolved once because `valKind` switches on a
+// ValType value and needs a comparable one.
+//
+// **Panics at init rather than reporting, and the choice is the same one `byteKinds` makes**: a
+// harness that could not name `anyref` would decline #270's whole population and report it as
+// `unsupported` — a wrong board rather than a loud failure — and `HeapAny` is one of the twelve
+// heaptypes `AbstractRefType` is documented to admit, so a false here is the decoder having changed
+// under the harness.
+var anyRefType = func() binary.ValType {
+	t, ok := binary.AbstractRefType(binary.HeapAny, true)
+	if !ok {
+		panic("spec: binary.AbstractRefType rejected HeapAny — the harness cannot name anyref")
+	}
+	return t
+}()
 
 func valKind(t binary.ValType) (ValKind, bool) {
 	switch t {
@@ -593,11 +615,23 @@ func valKind(t binary.ValType) (ValKind, bool) {
 		// V128 among the types "the harness cannot name," and that was true until now. See
 		// toInterpValue/fromInterpValue for the Lanes<->Hi/Bits crossing this Kind enables.
 		return KindV128, true
+	case anyRefType:
+		// #270/0039. Note what this row does **not** do: it names `anyref` and nothing else, so
+		// `eqref`, `i31ref`, `structref`, `arrayref`, `exnref` and every `(ref $t)` still reach the
+		// default below. That is deliberate — a Kind per heaptype would be twelve members whose only
+		// consumer is a gate this harness wants inert, where one Kind plus a *payload* answers the
+		// question `assert_ref_pat` actually asks (see ValKind's own comment on why KindAnyRef exists).
+		return KindAnyRef, true
 	default:
-		// Every GC reference form: types the *harness* cannot name (see ValKind's own scope
+		// Every other GC reference form: types the *harness* cannot name (see ValKind's own scope
 		// comment). Reported as `false` so the caller says so rather than coercing — a silent
 		// map to KindI32 would make every such result compare as an i32 and bucket the wrong
 		// defect.
+		//
+		// **On the result side this is no longer a refusal**, since 0039: `fromInterpValue` catches
+		// the `!ok` and substitutes KindAnyRef as a *placeholder* Kind, exactly as grave #266 already
+		// did for a null. It is still a refusal on the **argument** side, where a placeholder type
+		// would be handed to the engine and checked against a real signature.
 		return 0, false
 	}
 }
@@ -713,7 +747,16 @@ func toInterpValue(a Val) (interp.Value, bool) {
 		}
 		return interp.NullRef(t), true
 	case RefExternIdentity:
-		return interp.ExternRef(a.Extern), true
+		// **Two constructors for one Class, chosen by Kind** — the argument side of the distinction
+		// `Val.String` prints and `readRefConst` reads. `(ref.extern N)` is an *externalized* host
+		// reference and `(ref.host N)` is a bare one (`parser.mly:1502` against `:1501`), and passing
+		// the bare one through `interp.ExternRef` would set `Externalized`, make `typeOfRef` report
+		// `extern`, and fail `extern.wast:42`'s `anyref` parameter on a type mismatch the corpus does
+		// not contain. That vector is why KindAnyRef exists at all.
+		if a.Kind == KindExternRef {
+			return interp.ExternRef(a.Extern), true
+		}
+		return interp.HostRef(t, a.Extern), true
 	case RefNone, RefTypePattern, RefConcrete:
 		// RefNone is unreachable given a.Kind.isRef(). RefTypePattern is the
 		// expectation-only shape this function's own doc comment excludes. RefConcrete is
@@ -732,12 +775,22 @@ func toInterpValue(a Val) (interp.Value, bool) {
 // RefTypePattern/AnyNull — a *result* is always a concrete value, never a pattern, and the
 // pattern-matching happens entirely on the expectation side, in Val.Matches.
 //
-// **A null converts even when Type does not** (grave #266, the `!ok` arm below). What is left
-// refusing is a *non-null* reference of a type the harness cannot name — a non-null `anyref` or
-// `(ref $t)` — and that refusal is honest rather than pending: such a result would need a
-// heaptype-bearing expectation shape to be compared against, and the harness deliberately has
-// none yet (ValKind's own scope comment; the widening is a flagged question on #258, not an
-// oversight to be papered over with a second placeholder Kind).
+// **A null converts even when Type does not** (grave #266, the `!ok` arm below), and **since 0039 so
+// does a non-null one.** The paragraph here used to read: *"What is left refusing is a non-null
+// reference of a type the harness cannot name — a non-null `anyref` or `(ref $t)` — and that refusal
+// is honest rather than pending: such a result would need a heaptype-bearing expectation shape to be
+// compared against, and the harness deliberately has none yet."* That was accurate and it was
+// **half** of #270's wall: the want side could not spell `(ref.array)` and this side could not build
+// a got for it either, so the population declined twice for two unrelated reasons and fixing one
+// would have moved nothing. `Val.Pat` is the expectation shape that paragraph said did not exist;
+// `Val.Payload` is what this function now carries to meet it.
+//
+// **Nothing is refused here any more, and that is a real narrowing rather than a coercion.** The
+// placeholder Kind is unobservable for the same reason #266's was: every one of these results is
+// compared by *pattern* against `got.Payload`, and the `want.Kind != got.Kind` gate is inert because
+// both sides of every such row are KindAnyRef (ValKind's own comment on that, and #441 for the gate).
+// The **argument** direction still refuses — `valType` has no type to give a placeholder Kind that
+// came from a refusal, which is where a fabricated type would reach the engine.
 func fromInterpValue(o interp.Value) (Val, bool) {
 	k, ok := valKind(o.Type)
 	if !ok {
@@ -759,7 +812,18 @@ func fromInterpValue(o interp.Value) (Val, bool) {
 			// load-bearing again are pinned by TestRefNullMatchesAcrossTwoHeaptypes.
 			return Val{Kind: KindFuncRef, Class: RefLiteralNull}, true
 		}
-		return Val{}, false
+		// A **non-null** reference of a type the harness cannot name: `structref`, `arrayref`,
+		// `exnref`, `(ref $t)` and the rest. Placeholder Kind for #266's reason one step further on —
+		// the value is expressible even though its type is not, because what the oracle reads is the
+		// constructor and Payload carries that faithfully. KindAnyRef rather than KindFuncRef, and the
+		// choice is load-bearing where #266's was arbitrary: the bare patterns these results are
+		// asserted against carry KindAnyRef too (`refPatterns`), so this is what makes the Kind gate
+		// agree instead of refusing 22 of the 28 rows on a placeholder.
+		//
+		// Note the direction of the fall-through: `o.Type` is discarded and `o.RefKind` is kept, which
+		// is the whole of 0039 in one line. The type was the thing the harness could not name; the
+		// constructor is the thing the oracle asks about.
+		return refVal(KindAnyRef, o), true
 	}
 	if !k.isRef() {
 		// Hi is meaningful only for KindV128 (Val's own doc comment) and zero for every other
@@ -771,22 +835,69 @@ func fromInterpValue(o interp.Value) (Val, bool) {
 	if o.Null {
 		return Val{Kind: k, Class: RefLiteralNull}, true
 	}
-	if k == KindExternRef && o.IsHost {
-		return Val{Kind: k, Class: RefExternIdentity, Extern: o.RefID}, true
+	return refVal(k, o), true
+}
+
+// refVal builds the Val for a **non-null** reference result at the given (possibly placeholder)
+// Kind — the one place `interp.Value`'s reference half becomes a Val's, called from both of
+// fromInterpValue's non-null paths so the nameable and unnameable types cannot drift apart.
+//
+// Split out rather than inlined twice for exactly that reason: the two paths differ only in where
+// their Kind came from, and the version of this code that predated 0039 had the identity logic on the
+// nameable path only — so an unnameable type's host identity would have been dropped had that path
+// been reachable at all.
+func refVal(k ValKind, o interp.Value) Val {
+	payload, ok := interpPayloads[o.RefKind]
+	if !ok {
+		// An engine payload kind the harness has no member for. **A Val rather than a refusal**,
+		// because the harness's job here is to report what it got: PayloadNone makes every pattern
+		// refuse (`RefPat.admits`), so the vector fails and names the value, where a refusal would
+		// score it `unsupported` and read as a vector nobody had reached. The board's own
+		// `TestInterpPayloadsCoverTheEngineVocabulary` is what makes this loud instead of quiet.
+		payload = PayloadNone
 	}
-	// A non-null funcref, or a non-null externref with no host identity: RefConcrete, per its own
-	// doc comment — "some non-null value of this Kind", which is all the harness can say when there
-	// is no identity to compare.
-	//
-	// **The externref half of that arrived with slice 3 and the `o.IsHost` guard above is what
-	// routes it here.** `externalize-i` (`extern.wast:29-31`) returns an externref wrapping an i31,
-	// a struct or an array; the wrapped payload has no identity and `interp.Value.RefID` is 0 for
-	// all three, so the unguarded arm above converted them to `(ref.extern 0)` — a host identity
-	// belonging to a *different* reference in the same file (`:37`). `:46-49` expect the bare
-	// `(ref.extern)` pattern, which `Matches` admits for any non-null externref including
-	// RefConcrete, so **both readings score green on every vector in the corpus** and only the
-	// accept-direction argument distinguishes them (§9 G-3). See interp.Value.IsHost.
-	return Val{Kind: k, Class: RefConcrete}, true
+	if payload == PayloadHost {
+		// A host identity, `(ref.extern N)` when Kind says it was externalized and `(ref.host N)`
+		// when it was not — one Class, spelled by Kind, per Val.String and readRefConst.
+		//
+		// **The guard is the payload kind and used to be `k == KindExternRef && o.IsHost`**, whose
+		// first conjunct is now redundant and was never the real question. `externalize-i`
+		// (`extern.wast:29-31`) returns an externref wrapping an i31, a struct or an array; those have
+		// no identity and `interp.Value.RefID` is 0 for all three, so an unguarded arm converted them
+		// to `(ref.extern 0)` — a host identity belonging to a *different* reference in the same file
+		// (`:37`). `:46-49` expect the bare `(ref.extern)` pattern, which admits any non-null
+		// externref, so **both readings scored green on every vector in the corpus** and only the
+		// accept-direction argument distinguished them. Since 0039 the wrapped payload's own kind
+		// survives, so those three results are RefConcrete carrying `struct`/`array`/`i31` rather than
+		// RefConcrete carrying nothing — which is what lets `extern.wast:53-55` be *asked*.
+		return Val{Kind: k, Class: RefExternIdentity, Extern: o.RefID, Payload: payload}
+	}
+	// RefConcrete: "some non-null value", which is all a Class can say — and since 0039 it is no
+	// longer all the *Val* can say, because Payload carries the constructor the oracle dispatches on.
+	return Val{Kind: k, Class: RefConcrete, Payload: payload}
+}
+
+// interpPayloads maps the engine's payload vocabulary onto the harness's.
+//
+// **A table, and in this direction only.** The harness reads results and never constructs an engine
+// payload kind — `toInterpValue` builds a reference through `interp.NullRef`/`ExternRef`/`HostRef`,
+// which set the kind themselves — so there is no reverse map to compute, and inventing one would be a
+// second registry with no consumer.
+//
+// A map rather than a switch because the two enums live in different packages and the sentinel that
+// bounds the engine's is `interp.PayloadPastEnd`: a switch would have to name it to satisfy
+// `exhaustive`, and naming a bound as a case reads as treating it as a kind. The map's coverage is
+// checked instead, against a domain derived from that same bound —
+// `TestInterpPayloadsCoverTheEngineVocabulary`, which is Scott's condition on the 0039 stamp for this
+// boundary.
+var interpPayloads = map[interp.RefPayload]RefPayload{
+	interp.PayloadNone:   PayloadNone,
+	interp.PayloadHost:   PayloadHost,
+	interp.PayloadI31:    PayloadI31,
+	interp.PayloadStruct: PayloadStruct,
+	interp.PayloadArray:  PayloadArray,
+	interp.PayloadFunc:   PayloadFunc,
+	interp.PayloadExn:    PayloadExn,
 }
 
 // engine is the board's engine description, in one place so that every board test scores
@@ -4326,6 +4437,22 @@ func TestGatedVectors(t *testing.T) {
 			100: "gc: (type $arr8 (array i8)) at :37 — the module this action runs against",
 		},
 		"array.wast": {
+			// #270's eight, and every one is a `(ref.array)`/`(ref.eq)` pair sitting *immediately
+			// above* a group already listed below — same module, same gate, and the only reason they
+			// were not here is that the harness could not read the expectation, so the command scored
+			// `unsupported` and never reached a gate at all. The pairing is the check on the
+			// attribution: 97/98 belong to the group at 99-104, 142/143 to 144-149, 202/203 to
+			// 204-217, 276/277 to 278-279. A gate decline that arrived with a *different* module
+			// citation than its neighbours would have meant #270 changed which module a vector runs
+			// against, which it has no business doing.
+			97:  "gc: (type $vec (array f32)) at :61 — the module this action runs against",
+			98:  "gc: (type $vec (array f32)) at :61 — the module this action runs against",
+			142: "gc: struct/array opcode (0xfb prefix) — the module at :106 this action runs against",
+			143: "gc: struct/array opcode (0xfb prefix) — the module at :106 this action runs against",
+			202: "gc: struct/array opcode (0xfb prefix) — the module at :151 this action runs against",
+			203: "gc: struct/array opcode (0xfb prefix) — the module at :151 this action runs against",
+			276: "gc: struct/array opcode (0xfb prefix) — the module at :219 this action runs against",
+			277: "gc: struct/array opcode (0xfb prefix) — the module at :219 this action runs against",
 			// Two unrelated modules, each declining for its own array type.
 			99:  "gc: (type $vec (array f32)) at :61 — the module this action runs against",
 			100: "gc: (type $vec (array f32)) at :61 — the module this action runs against",
@@ -4713,6 +4840,8 @@ func TestGatedVectors(t *testing.T) {
 		// value type, present from the file's first export. Two modules; the second (:61) and
 		// third (:140) repeat the shape.
 		"i31.wast": {
+			// #270's one: `(ref.i31)` at :33, the file's only bare-pattern result.
+			33:  "gc: (ref i31) result at :2 — the module this action runs against",
 			35:  "gc: (ref i31) result at :2 — the module this action runs against",
 			36:  "gc: (ref i31) result at :2 — the module this action runs against",
 			37:  "gc: (ref i31) result at :2 — the module this action runs against",
@@ -5314,6 +5443,14 @@ func TestGatedVectors(t *testing.T) {
 			178: "gc: struct/array opcode (0xfb prefix) — the module at :160 this action runs against",
 		},
 		"array_new_data.wast": {
+			// #270's four: the in-bounds `(ref.array)` results at :12-15, whose out-of-bounds
+			// `assert_trap` neighbours at :18-21 were already here. The file's own structure is the
+			// attribution — one module, its in-bounds cases expecting a reference and its out-of-bounds
+			// cases expecting a trap, and only the reference half was unreadable.
+			12:  "gc: struct/array opcode (0xfb prefix) — the module at :1 this action runs against",
+			13:  "gc: struct/array opcode (0xfb prefix) — the module at :1 this action runs against",
+			14:  "gc: struct/array opcode (0xfb prefix) — the module at :1 this action runs against",
+			15:  "gc: struct/array opcode (0xfb prefix) — the module at :1 this action runs against",
 			18:  "gc: struct/array opcode (0xfb prefix) — the module at :1 this action runs against",
 			19:  "gc: struct/array opcode (0xfb prefix) — the module at :1 this action runs against",
 			20:  "gc: struct/array opcode (0xfb prefix) — the module at :1 this action runs against",
@@ -5335,6 +5472,16 @@ func TestGatedVectors(t *testing.T) {
 			133: "gc: struct/array opcode (0xfb prefix) — the module at :120 this action runs against",
 		},
 		"array_new_elem.wast": {
+			// #270's eight, the same in-bounds/out-of-bounds shape as `array_new_data.wast` above but
+			// in both of this file's expression-style and function-style modules (:3 and :51).
+			18:  "gc: struct/array opcode (0xfb prefix) — the module at :3 this action runs against",
+			19:  "gc: struct/array opcode (0xfb prefix) — the module at :3 this action runs against",
+			20:  "gc: struct/array opcode (0xfb prefix) — the module at :3 this action runs against",
+			21:  "gc: struct/array opcode (0xfb prefix) — the module at :3 this action runs against",
+			66:  "gc: struct/array opcode (0xfb prefix) — the module at :51 this action runs against",
+			67:  "gc: struct/array opcode (0xfb prefix) — the module at :51 this action runs against",
+			68:  "gc: struct/array opcode (0xfb prefix) — the module at :51 this action runs against",
+			69:  "gc: struct/array opcode (0xfb prefix) — the module at :51 this action runs against",
 			24:  "gc: struct/array opcode (0xfb prefix) — the module at :3 this action runs against",
 			25:  "gc: struct/array opcode (0xfb prefix) — the module at :3 this action runs against",
 			26:  "gc: struct/array opcode (0xfb prefix) — the module at :3 this action runs against",
@@ -5352,6 +5499,9 @@ func TestGatedVectors(t *testing.T) {
 			// from `fail` (encode-column "cannot yet encode a symbolic index on struct.get")
 			// to askable — the module at :70 now decodes, and the GC gate (0xfb prefix, off by
 			// default) is what declines the six assert_returns that invoke against it.
+			// #270's one: `(ref.struct)` at :122, two lines above the six #188 recovered and in the
+			// same module.
+			122: "gc: struct/array opcode (0xfb prefix) — the module at :70 this action runs against",
 			124: "gc: struct/array opcode (0xfb prefix) — the module at :70 this action runs against",
 			125: "gc: struct/array opcode (0xfb prefix) — the module at :70 this action runs against",
 			126: "gc: struct/array opcode (0xfb prefix) — the module at :70 this action runs against",
@@ -5582,6 +5732,19 @@ func TestGatedVectors(t *testing.T) {
 		// below plus 6 unsupported plus the module at :1 accounts for all 18, which is the check
 		// the original list would have failed.
 		"extern.wast": {
+			// #270's six, and this file is the one where all six declining *shapes* appear together —
+			// which is why it is the file the ADR forecast a pass-direction answer for. :39 is a
+			// `(ref.host 1)` **result** and :42 a `(ref.host 2)` **argument**, the bare host identity
+			// `script.ml:80` places at the `any` heaptype rather than wrapping in an `Extern.ExternRef`;
+			// :53-56 are `(ref.i31)`, `(ref.struct)`, `(ref.array)` and a second `(ref.host 0)` against
+			// `externalize-ii`, which internalizes what it just externalized, so the payload the
+			// boundary used to drop is exactly what the expectation names.
+			39: "gc: any/i31/struct/array value types and any.convert_extern/extern.convert_any at :1 — the module this action runs against",
+			42: "gc: any/i31/struct/array value types and any.convert_extern/extern.convert_any at :1 — the module this action runs against",
+			53: "gc: any/i31/struct/array value types and any.convert_extern/extern.convert_any at :1 — the module this action runs against",
+			54: "gc: any/i31/struct/array value types and any.convert_extern/extern.convert_any at :1 — the module this action runs against",
+			55: "gc: any/i31/struct/array value types and any.convert_extern/extern.convert_any at :1 — the module this action runs against",
+			56: "gc: any/i31/struct/array value types and any.convert_extern/extern.convert_any at :1 — the module this action runs against",
 			37: "gc: any/i31/struct/array value types and any.convert_extern/extern.convert_any at :1 — the module this action runs against",
 			40: "gc: any/i31/struct/array value types and any.convert_extern/extern.convert_any at :1 — the module this action runs against",
 			43: "gc: any/i31/struct/array value types and any.convert_extern/extern.convert_any at :1 — the module this action runs against",
@@ -7674,7 +7837,31 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	// as engine failure, which is the wrong-layer attribution `unsupported`'s whole purpose is to
 	// avoid — and they were *fails* rather than `unsupported` because the miss was invisible one
 	// command downstream of where it happened.
-	const allOnPassFloor = 65014
+	//
+	// # 65014 → 65042, +28 against the default lane's 0, and the divergence is the whole of #270
+	//
+	// The harness learned `RefPat` and `RefPayload` — the pattern a `(ref.<ht>)` result expectation
+	// writes and the constructor a non-null reference *is* (`unsupportedCeiling`'s account carries the
+	// two-sidedness). Every one of the 28 sits in a GC-gated file, so the default lane's reward is
+	// structurally 0 and lands in `gated` instead: 4159 → 4187, the reclassification that entry
+	// forecasts. **This lane is where the 28 are answered**, and all 28 answer correctly —
+	// `array.wast` 8, `array_new_elem.wast` 8, `extern.wast` 6, `array_new_data.wast` 4, `i31.wast` 1,
+	// `struct.wast` 1.
+	//
+	// Read through the divergence instrument the entries above built, the reading is the *inverse* of
+	// #426's: there the lanes diverged by the count of all-on fails a slice drained, and here they
+	// diverge by the full reward because **not one of the 28 was a fail in either lane** — a command
+	// the harness cannot classify scores `unsupported`, which is a third verdict and not a red. So
+	// `allOnFailCeiling` beside this does not move, and that equality is the check: had it fallen, some
+	// of the 28 would have been vectors the engine was getting wrong while the harness declined to
+	// look, and the diagnosis "a spelling gap, not a capability gap" would have been wrong about which
+	// layer #270 was in.
+	//
+	// The forecast (ADR 0039) claimed only `extern.wast`'s 6 in this column and **declined to forecast
+	// the other 22**, on the ground that being able to ask a question predicts nothing about its
+	// answer. It was conservative by 22, which is stated in that direction rather than left to read as
+	// a 28-for-28 hit.
+	const allOnPassFloor = 65042
 	// **Slack 0 as of Scott's #387 ruling**, which this bound's own 89-row staleness above is what
 	// prompted: a floor with 250 of tolerance cannot detect anything smaller than 250, so it is a
 	// bound sitting inside its own tolerance. Exact from here — re-base it in the PR that moves the
@@ -7705,6 +7892,13 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	// one row in `func`. Slack 0 in both directions for the #387 reason the floor above carries: a
 	// ceiling with tolerance cannot see anything smaller than its tolerance, and a *fall* is the drain
 	// this lane exists to record, so it re-bases in the PR that earns it.
+	//
+	// **Unmoved by #270 at 38, and the zero is derived rather than merely observed.** The 28 vectors
+	// that PR made askable were `unsupported` in both lanes — a command the harness has no case for is
+	// a third verdict, never a red — so they cannot have been members of this column, and the 9-file
+	// split above is unchanged in every row. The floor beside this moved +28 on the same run, which is
+	// what makes the pair readable: reward in one column, no motion in the other, and a fall here would
+	// have meant the 28 included vectors the engine was answering wrongly while unmeasured.
 	const allOnFailCeiling = 38
 	boardBound(t, "allOnFailCeiling", totalFail, allOnFailCeiling, 0, ceilingBound,
 		"the all-gates-on lane is the interpreter's and validator's remaining work plan now that "+
@@ -8808,7 +9002,42 @@ func TestPhase1Files(t *testing.T) {
 	// the count: every command form the corpus writes with a `module` head is now classified, and the
 	// residue is 39 `assert_return`, 15 `assert_exhaustion`, and 3 with no head atom. So this column's
 	// work plan has exactly two named subjects left plus a lexical one. The next drain can say which.
-	const unsupportedCeiling = 57
+	//
+	// # 57 → 29: #270 takes 28 of the 39 `assert_return`, and the entry above's question is answered
+	//
+	// The 39 were **not one subject**, and the split was done at classification time before any code
+	// moved: 28 declining on a reference *result* the harness could not spell or could not build
+	// (#270), and 11 on `either`/NaN-lane shapes with an unrelated cause (#323). 28 + 11 + 15
+	// `assert_exhaustion` (#440) + 3 no-head-atom (#320) = 57, decomposing with nothing left over,
+	// which is what made the forecast below a number rather than an estimate.
+	//
+	// #270 was **two-sided**, and either half alone would have moved this column by zero. The want side
+	// could not spell six of `parser.mly:1517-1530`'s eight `RefTypePat` arms — `(ref.array)` had no
+	// representation at all, and 17 of the 28 decline on that one — while the got side could not build
+	// a non-null reference whose type `valKind` cannot name, so even a readable `(ref.array)` would
+	// have had nothing to be judged against. The repair is `RefPat` and `RefPayload`: the pattern the
+	// vector wrote and the constructor the result is, which is exactly `assert_ref_pat`'s two operands
+	// (`runner.ml:464-476`).
+	//
+	// **The 28 land in `gated`, not in `pass`** — forecast in ADR 0039 and measured at 4159 → 4187 —
+	// because every one of them is in a GC-gated file and this is a harness widening rather than an
+	// engine capability. They are now *asked*, and the all-on lane is where the answers appear:
+	// `array.wast` 8, `array_new_elem.wast` 8, `extern.wast` 6, `array_new_data.wast` 4, `i31.wast` 1,
+	// `struct.wast` 1. (The per-file split is **not** the shape census the forecast was built from —
+	// that one reads `result: ref.array` 17, `ref.eq` 4, `ref.host` 2, `ref.i31` 2, `ref.struct` 2,
+	// one `ref.host` argument. Both are 28 and neither is a re-spelling of the other: a `(ref.array)`
+	// expectation appears in three files.)
+	//
+	// **All 28 pass all-on**, against a forecast that claimed only `extern.wast`'s 6 and deliberately
+	// declined to forecast the other 22 — being able to *ask* a question is not a prediction of its
+	// answer. So `allOnPassFloor` moves +28 to 65042 and `allOnFailCeiling` does not move at all: the
+	// 22 unforecast vectors were answered correctly by an engine that already had the capability and
+	// was never being asked. That the forecast was conservative in this direction is worth stating
+	// plainly rather than reading back as a 28-for-28 hit rate.
+	//
+	// The residue is 11 `assert_return` (#323), 15 `assert_exhaustion` (#440), 3 no-head-atom (#320) —
+	// three named subjects, one issue each, and no unattributed remainder.
+	const unsupportedCeiling = 29
 	// Slack 0 as of #387's ruling, with the other two tracked board counts — see
 	// `boardbound_test.go`'s retirement section. This is the one of the three where the retired
 	// slack's stated purpose bit hardest: a ceiling drains *toward* its column, so 250 of tolerance
