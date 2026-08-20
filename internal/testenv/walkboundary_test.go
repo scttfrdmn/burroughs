@@ -48,11 +48,13 @@ func skipWalkDir(d fs.DirEntry, also ...string) bool {
 // vacuity check rather than a census: the scan below asserts a property of *every* site it finds, and
 // a scan that finds none asserts it of nothing and passes.
 //
-// Three at the time of writing — `TestEverySkipSiteIsLicensed`, `TestEveryFuzzTargetIsGated`, and
-// citation_test.go's cite walk. A floor and not an equality, because a fourth walk site is a normal
-// thing to add and the check that matters is the routing one; if this number ever needs *lowering*,
-// a walk site was deleted and that is worth noticing deliberately.
-const walkBoundaryFloor = 3
+// Four — `TestEverySkipSiteIsLicensed`, `TestEveryFuzzTargetIsGated`, citation_test.go's cite walk,
+// and `TestForeclosingClaimsAboutGatesMatchTheGateTable`'s (#427/#428). A floor and not an equality,
+// because a fourth walk site is a normal thing to add and the check that matters is the routing one;
+// if this number ever needs *lowering*, a walk site was deleted and that is worth noticing
+// deliberately. It tracks the known count for exactly that reason: left at 3 when the fourth landed,
+// the floor would have stopped noticing a deletion.
+const walkBoundaryFloor = 4
 
 // TestEveryTreeWalkStopsAtTheRepoBoundary is grave #369's control, and it guards the general shape
 // rather than the specific name.

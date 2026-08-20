@@ -21,6 +21,42 @@ weakly-ordered platform.
 
 ### Added
 
+- **A sweep over foreclosing claims about gates, on Scott's order to *"do the sweep, and widen it past
+  the one word"*** (`internal/testenv/foreclose_test.go`, riding
+  [#427](https://github.com/scttfrdmn/burroughs/issues/427)). A foreclosing word — *structural*,
+  *unreachable*, *cannot*, *never*, *impossible*, *unavailable* — is self-sealing in a way a wrong
+  number is not: a wrong number invites a re-measurement, while a wrong foreclosure tells the next
+  reader there is no work here, so nobody ever prices what it cost. The two easy designs were both
+  rejected and the rejections are the design. An unscoped token grep finds **276 occurrences over 85
+  positions**, dominated by prescriptive prose and by `structural` as a *homonym* — a term of art for a
+  derived-domain control, for the block/loop/if/select opcodes, and for GC structural type equivalence.
+  A citation-presence rule would have **passed all four known instances**: `vec.go` cited
+  `gateRelaxedSIMD` and `gatemap.go`, the ceiling account cited ADR 0025, and `bulk_test.go` cited
+  `gatemap.go:180` *correctly*. What made them wrong is that the premise was a **mutable fact** — a
+  gate's default state — and nothing re-read the sentence when the fact moved. So the teeth are the
+  gate table: `Features` and `DefaultFeatures` are parsed out of `internal/binary/sections.go` (one
+  authority, no private copy, floor of 9 fields), and a paragraph that pairs a foreclosing word with a
+  gate name must either name the mechanism or hold a licence. Scoped to the **three positions where
+  being wrong stops work** — bound accounts (a `…Ceiling`/`…Floor` ValueSpec within two lines),
+  non-goals registers (by heading shape), and decline arms (`ErrUnsupported` within six lines) — at
+  **paragraph** scope rather than line scope, because every one of the four defects put the word and
+  the gate several lines apart in the same paragraph.
+  - **The first falsification probe found the control stillborn**, and that is recorded in its header
+    rather than quietly patched, because the probe *not* failing was the load-bearing event. The token
+    list said `unreachable`; the founding specimen says "a rule with **no reachable subject**". The
+    list had been written from a recollection of the defect instead of from the defect — this file's
+    own subject, one level up. Four more probes after the fix, each watched to fail.
+  - **Two gaps are named on the page rather than closed.** Environment premises are out of reach (the
+    Docker box's "unavailable" in `operations.md` rests on a fact no Go test can read), and the
+    **fifth** instance found this session sits in a position the three do not cover — an inline note on
+    a test fixture (`cmd/burroughs/run_test.go`). Widening to unscoped prose is the 276-occurrence
+    transcription the header rules out, so the gap is stated so it can be priced.
+  - The 20 licences are classed, not blanket: past-tense historical accounts, the `structural`
+    homonym, quoted testimony from graves #427 and #428, and gate-independent truths. Three are
+    **self-licences for this file's own header, specimen list, and probe record** — licensed rather
+    than file-exempted, since an exemption would blind the sweep in the one file whose author is least
+    likely to be re-read. A licence the sweep no longer finds is an error, so they cannot rot silently.
+
 - **The table initializer, across four layers — [#419](https://github.com/scttfrdmn/burroughs/issues/419)**
   (`internal/text/parser.go`, `context.go`, `encode.go`, `typetable.go`; `internal/binary/module.go`,
   `sections.go`, `constexpr.go`; `internal/validate/module.go`, `ref.go`; `internal/interp/table.go`,
@@ -2211,6 +2247,33 @@ weakly-ordered platform.
 
 ### Removed
 
+- **Every hand-named decline fixture, the third outcome having lost its subject at the public
+  boundary** — [#427](https://github.com/scttfrdmn/burroughs/issues/427)'s downstream consequence
+  (`burroughs_test.go`'s `decliningWAT` and its subtest, `cmd/burroughs/run_test.go`'s `declining`
+  fixture and two rows, `cmd/burroughs/main_test.go`'s two argv rows). All three were
+  `i8x16.relaxed_swizzle`, chosen because the interpreter executed it and the validator had no rule for
+  it — which is precisely the population #427 typed. The intersection
+  [#326](https://github.com/scttfrdmn/burroughs/issues/326) describes ("implemented by the interpreter,
+  untyped by the validator") is now **empty at this boundary**, and empty for a reason that is
+  structural in the sense the sweep above admits — the public path is default-features-only *by design*
+  (`burroughs.go`: "there is deliberately no gate selection here"), and the validator's instruction
+  vocabulary is complete over the space the decoder can name under `DefaultFeatures`. #326 predicted
+  this state to the word — *"at the end of #9 it is empty, at which point these fixtures do not need a
+  better specimen, they need retiring."*
+  - **The lost coverage is named at each site rather than discovered later**: that a decline exits 0
+    with its result on stdout and its report on stderr; that `--strict` turns the same module into
+    `exitRefused` with empty stdout; that a decline would be `ErrDeclined` and not `ErrInvalid`, would
+    name its construct, and would still run; and — the one worth flagging — that the retired CLI rows
+    were the only rows reading a **two-line** stderr, which is the shape the #383 prefix sweep was
+    about, so that half of `TestDiagnosticNamesTheProgramExactlyOnce` is thinner than it was.
+  - **#326 stays open with a changed subject**, because *a tripwire whose subject dissolves is
+    re-pointed, never closed*: a derived specimen is now worth having in order to catch a decline
+    **re-appearing**, which is what a new prefix region or a gate flip outrunning its typing slice would
+    produce. `Config.Strict` and `ErrDeclined` are **not** removed and `Strict`'s default is **not**
+    flipped — removal is an exported-API change and the flip is a default-behaviour change, both
+    Scott's, flagged in the PR rather than taken. The flip is worth pricing as *cheap*: the population
+    it would newly refuse is empty.
+
 - **The `CLAUDE.md` index economy, in full** (Scott's directive: *"once the file is a pointer page
   there's nothing to ration"*). Gone: `claudeMDCeiling` and `TestClaudeMDStaysAnIndex` (the 38400
   byte budget), `TestClaudeMDIndexLedger` with its golden `claudemd-ledger.txt` and the
@@ -2227,6 +2290,78 @@ weakly-ordered platform.
     re-pointed, so the retirement is readable at the site rather than only in this entry.
 
 ### Fixed
+
+- **Relaxed SIMD types, and the comment that said it could not was wrong for three days before anyone
+  read it against the gate — [#427](https://github.com/scttfrdmn/burroughs/issues/427)**
+  (`internal/validate/vec.go`; part of #9). `vecSignature` opened with `if in.Op >= relaxedSIMDFirst`
+  and declined, on a stated premise: *"With that gate off the decoder refuses those opcodes before
+  validation sees them, so typing them here would be a rule with no reachable subject; with it on, a
+  flip is its own stamp-tier event and not a line in a typing PR."* **Both halves were false when
+  written.** `DefaultFeatures()` had carried `RelaxedSIMD: true` since `7315b57`
+  ([#275](https://github.com/scttfrdmn/burroughs/issues/275)/ADR 0028), so the decoder was admitting
+  `fd 0x100..0x12f`, the arm *was* reachable, and the flip it deferred to had already happened. The
+  repair is the **deletion of a guard**: `vecFamily` already carried all 20 rows — its domain being the
+  whole region rather than what its file happens to type, which is *scope controls to the space* paying
+  out — and each lands in a family whose arm was already written (`VecBinary` 7, `VecTernary` 9,
+  `VecConvert` 4). What the proposal actually defers is **nondeterminism**, not typing: every one of the
+  20 has a fully determined signature, and which of several results a lowering produces is ADR 0028
+  d1's architecture-uniformity promise, held by `TestRelaxedLoweringChoicesArePinned`. A validator that
+  declined an instruction because its *result* is implementation-chosen would be confusing a type with
+  a value.
+  **Default lane: pass 60914 → 60922, fail 16 → 8; validate stratum 8 → 0 across all four partitions
+  (`declined`, `admitted`, `over-rejected`, `wrong-message`), which is #9's instruction vocabulary
+  complete over the space the decoder can name under `DefaultFeatures` — and *not* #9 done: the issue
+  stays open because the validator still admits modules it should refuse, alignment not being checked at
+  all (`decodeMemop` drops the memarg) and #328's 103 module-and-section vectors having no vocabulary
+  yet. A drained decline stratum and a complete validator are different claims.** All-gates-on lane: pass 64985 → 64993, fail 61 → 53.
+  `validateDeclineCeiling` and `validateFailCeiling` both 8 → 0. All six figures pre-registered before
+  the run. `unsupported` unmoved at 66 and that zero is **structural** for the eleventh entry running —
+  `classify` is untouched, so nothing the harness could not ask became askable; #323 remains the one
+  open issue that moves the column.
+  - **The two lanes move by exactly 8 each, and the *equality* is this repair's own check** — the
+    mirror of #130's inequality one entry above. A validator decline reads no feature set, so a fix
+    inside one must move the lanes identically; had they diverged, the diagnosis (a typing gap wearing
+    a gate's name) would have been wrong about which layer it was in.
+  - **The remaining 8 fails are both harness attribution holes** — #414's five and #426's three. No row
+    in that column is now the interpreter computing a wrong answer, and none of the eight is engine
+    work.
+  - **The foreclosing sentence cost eight rows of unworked engine, and the word is left standing where
+    it was written.** The bound account's paragraph in `internal/spec/spec_test.go` and `vec.go`'s
+    header are annotated rather than edited, because a paragraph that made a wrong ruling is testimony
+    and a corrected transcript is a worse record than an annotated one. What replaces the *practice* is
+    the sweep in Added. Two of the three instances of this shape have now been caught by an instrument
+    rather than by a reader — including one in `internal/validate/validate.go` created by this very
+    branch, flagged by the sweep in the same PR that wrote it.
+  - **The corpus guard is inverted, not deleted.** `publicpath_test.go` asserted that some module
+    declines; it now asserts that **none** does, and names what would make it fire again — a new prefix
+    region (0xFE/threads) or a gate flip outrunning its typing slice, with #326 as the derivation that
+    would name it automatically. Inverted rather than removed because *a tripwire names a risk, not a
+    code shape*. Two readings are explicitly disclaimed at the site: this does **not** mean #9 is
+    complete — the validator still *admits* modules it should refuse, alignment not being checked at all
+    — and it does not flip `Config.Strict`'s default.
+  - **A fourth citation outlived its subject in the same shape**: `internal/validate/bulk_test.go` cited
+    relaxed SIMD as its second example of "where no module can reach an arm, the arm is exercised
+    directly". Relaxed SIMD was reachable through `validated()` from the day the gate flipped, so the
+    claim was true of **0xFE alone** — and 0xFE is the durable example for a reason worth stating: it has
+    no entry in `binary`'s table at all, which is a different fact from a gate being off, and a prefix
+    with no table cannot be reached by flipping anything. `walkBoundaryFloor` 3 → 4 for the sweep's own
+    tree walk, tracked as a known count because a floor left at 3 would have stopped noticing a deletion.
+
+- **The `0xfd` ruling in the FC work-list control was right when written and falsified four days later
+  by a commit in another package — [#428](https://github.com/scttfrdmn/burroughs/issues/428)**
+  (`internal/interp/bulk_test.go`). `TestUnhandledFCSubOpcodeStaysOnTheWorkList`'s header ruled `0xfd`
+  out as a replacement subject on a premise that held on 2026-08-07 (`1cf5668`, #171) and stopped
+  holding on 2026-08-11 (`0e41f9d`, #227/ADR 0025) when SIMD flipped default-on. Measured both
+  directions rather than argued: **275 `PrefixedOp` entries in the region, 19 still rendering
+  `interp: no arm for opcode fd NN`, and 0 board rows in that bucket** — the code population is live
+  and the board population is empty, which is not a reason to look elsewhere. `execFD`'s own header
+  contradicted the first draft of this correction: 0xfd *does* produce the same `fd NN` bucket key as
+  0xfc, which makes it a **better** replacement subject, not a worse one. The re-pointing is deferred to
+  [#429](https://github.com/scttfrdmn/burroughs/issues/429).
+  **This is the first of the five foreclosure instances that no reader was positioned to catch**, and it
+  is why the sweep's teeth are the gate table rather than a citation check: the citation here resolved
+  correctly to `gatemap.go:180`, and the sentence was still false, because what moved was the fact the
+  citation pointed at.
 
 - **A deferred immediate carries a position, so a symbolic index bound after its use encodes —
   [#130](https://github.com/scttfrdmn/burroughs/issues/130)** (`internal/text/code.go`, `instr.go`,
