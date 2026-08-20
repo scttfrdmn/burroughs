@@ -556,10 +556,14 @@ func TestBulkTableCopyTrapsWithTheTableString(t *testing.T) {
 // answer then was to move off the corpus and onto a direct call. `0xfd` supports the identical move
 // with 19 subjects instead of one.
 //
-// Left as a correction rather than as a re-pointing, because the re-pointing belongs beside
-// `execFD` and not in `execFC`'s file, and because choosing between "19 direct calls" and "one
-// derived sweep over `PrefixedOp`" is a design question this paragraph should not settle in
-// passing — **#429**. What this paragraph is for now is the shape: nobody re-read a tripwire's
+// **The re-pointing has since been made: `TestUnhandledFDSubOpcodesStayOnTheWorkList` in
+// `simd_test.go`, #429.** It took the second of the two shapes that issue named — a sweep whose
+// domain is derived from `binary.PrefixedOp` rather than 19 direct calls — so its population drains
+// with the decoder's table instead of ageing beside it: a test naming `fd 9a` would have gone stale
+// as SIMD families land, exactly the way the `fc 0b` row did, which is the staleness this very
+// paragraph is a correction *of*. The count it reports today is #429's measured population
+// unchanged, 275 rows with 19 unanswered. What follows is left in the past
+// tense it was written in, because the shape is the lesson: nobody re-read a tripwire's
 // rationale while flipping a gate, and nothing asked them to. The foreclosing-word sweep in
 // `internal/testenv` is what asked, one PR after being written for a different instance of the same
 // defect, and this is the instance that makes its case — the other three were wrong when written,

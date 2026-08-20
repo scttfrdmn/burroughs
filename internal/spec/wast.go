@@ -122,6 +122,8 @@ const (
 	KindAssertInvalid                   // (assert_invalid (module …) "text") — the module must fail validation, #9
 	KindAssertInvalidBinary             // (assert_invalid (module binary …) "text") — decodes, then must fail validation
 	KindAssertInvalidQuote              // (assert_invalid (module quote …) "text") — assembles, then must fail validation
+	KindModuleDefinition                // (module definition $M? <fields>) — validates and does *not* instantiate, #426
+	KindModuleInstance                  // (module instance $I $M) — instantiates a definition, generatively, #426
 	KindUnsupported                     // anything phase 1 cannot execute
 )
 
@@ -200,6 +202,13 @@ func (k Kind) String() string {
 		return "assert_invalid (binary)"
 	case KindAssertInvalidQuote:
 		return "assert_invalid (quote)"
+	case KindModuleDefinition:
+		// The corpus's own spelling, and unlike `module text` these two need no added word: the
+		// keyword *is* in the source, so `TestKindStringsSpeakTheSuitesVocabulary` can check both
+		// against the `.wast` files rather than taking a declaration for them.
+		return "module definition"
+	case KindModuleInstance:
+		return "module instance"
 	default:
 		// **Bracketed, because this Kind has no head atom and must not read as though it did.**
 		// It is not a suite form — it is the harness saying it recognized nothing — and the corpus
@@ -599,8 +608,72 @@ func classify(n node, src []byte) Command {
 		// filed three rungs up the ladder, where nothing in v0 would come looking. *Comments and
 		// ADRs are testimony too, and where prose and the reference's executable disagree, the
 		// executable outranks.*
-		if kw := moduleFormKeyword(n); kw == "definition" || kw == "instance" {
-			return Command{Kind: KindUnsupported, Line: n.line, Head: head}
+		//
+		// **The widening is #426, and the two arms below are it.** What the paragraphs above got
+		// right is that the wat reader must not be handed a script form; what they left unsaid is
+		// that the *difference* between the two grammars is one token wide. `script_module` is
+		// `LPAR MODULE definition_opt option(module_var) module_fields RPAR` (parser.mly:1417-1428)
+		// and `module_` is that production without `definition_opt` (:1389) — so the `module_` text
+		// this form contains is the form's own span with the one `definition` token excised, byte
+		// for byte. Nothing is reconstructed and nothing is re-lexed, which is the property the
+		// bare-body arm's comment insists on and the reason this is a widening rather than a
+		// synthesis. See definitionSource.
+		//
+		// **The domain was derived rather than read off #426's list, and the list was short**: 20
+		// sites, of which 9 are on the board and 11 sit in proposal directories the board's file
+		// selection does not reach. One of the 11 is the reason the guard below exists at all.
+		if kw := moduleFormKeyword(n); kw == "definition" {
+			// **`(module definition binary "…")` is a real form and it is not a wat body** —
+			// `proposals/custom-descriptors/exact-func-import.wast` has one. Excising `definition`
+			// there yields `(module binary "…")`, and handing *that* to the wat reader would
+			// manufacture exactly the red this arm's comment was written about, one grammar level
+			// down. So the two string sub-forms are declined by name and stay `unsupported` with
+			// their head recorded, which is the honest verdict: the harness could ask, and this
+			// change did not teach it to.
+			//
+			// Off the board today — no proposal directory is in the file selection — so this guard
+			// protects no current row. It is here because a guard that arrives with the file needing
+			// it arrives too late, and because the red it prevents would have read as an engine
+			// defect rather than as a classification error.
+			i := moduleFormKeywordIndex(n)
+			// The name is read *after* the keyword, which is the grammar's order
+			// (`definition_opt option(module_var)`) and not the order the three forms above use
+			// (`(module $M binary …)`). `name` at the top of this arm read node 1, which for a
+			// definition form is the `definition` atom itself — so it is empty here, and re-reading
+			// is the point rather than an oversight.
+			defName, named := scriptName(nodeAt(n, i+1))
+			rest := i + 1
+			if named {
+				rest++
+			}
+			if inner := nodeAt(n, rest); !inner.isList() && !inner.isS &&
+				(inner.atom == "binary" || inner.atom == "quote") {
+				return Command{Kind: KindUnsupported, Line: n.line, Head: head}
+			}
+			body, ok := definitionSource(n, src)
+			if !ok {
+				return Command{Kind: KindUnsupported, Line: n.line, Head: head}
+			}
+			return Command{
+				Kind: KindModuleDefinition, Line: n.line, Head: head,
+				Source: body, Needs: CapWatReader, Name: defName,
+			}
+		} else if kw == "instance" {
+			// `(module instance $I $M)`: no fields, no source of its own, and both names required —
+			// the form exists to instantiate something already defined. A shape this arm cannot read
+			// stays `unsupported` rather than becoming a fail, because a classifier inventing a
+			// verdict for a form it did not understand is the wrong-layer attribution the paragraphs
+			// above are about.
+			i := moduleFormKeywordIndex(n)
+			inst, okI := scriptName(nodeAt(n, i+1))
+			def, okD := scriptName(nodeAt(n, i+2))
+			if !okI || !okD || len(n.list) != i+3 {
+				return Command{Kind: KindUnsupported, Line: n.line, Head: head}
+			}
+			return Command{
+				Kind: KindModuleInstance, Line: n.line, Head: head,
+				Name: inst, Target: def, Needs: CapWatReader,
+			}
 		}
 		return Command{
 			Kind: KindModuleText, Line: n.line, Head: head,
@@ -1134,17 +1207,63 @@ func quoteModule(n node) ([]byte, bool) { return stringModule(n, "quote") }
 // than being silently reclassified. An allowlist here would be a second place that has to
 // learn every script-level keyword upstream adds.
 func moduleFormKeyword(n node) string {
-	if n.head() != "module" {
+	i := moduleFormKeywordIndex(n)
+	if i < 0 {
 		return ""
+	}
+	return n.list[i].atom
+}
+
+// moduleFormKeywordIndex is where that keyword sits in n.list, or -1 when there is none.
+//
+// Split out when #426 gave the keyword's *position* two more readers, and both of them read it
+// for something other than its spelling: a definition form's `$name` follows the keyword where
+// the binary and quote forms' precedes it, and definitionSource needs the token's byte extent.
+// Three callers each recomputing "index 1, plus 1 if there is a name" is the shape that drifts,
+// and it would drift *silently* here, because both orders are legal — for different forms.
+func moduleFormKeywordIndex(n node) int {
+	if n.head() != "module" {
+		return -1
 	}
 	i := 1
 	if i < len(n.list) && !n.list[i].isList() && !n.list[i].isS && strings.HasPrefix(n.list[i].atom, "$") {
 		i++
 	}
 	if i >= len(n.list) || n.list[i].isList() || n.list[i].isS {
-		return ""
+		return -1
 	}
-	return n.list[i].atom
+	return i
+}
+
+// definitionSource is the `module_` text inside a `(module definition …)` script form: the form's
+// own span with the single `definition` token excised.
+//
+// **The two grammars differ by one token, and this function is that fact as code.**
+// `script_module` is `LPAR MODULE definition_opt option(module_var) module_fields RPAR`
+// (parser.mly:1417-1428); `module_`, the production `text.ReadModule` implements, is the same
+// without `definition_opt` (:1389). So nothing is reconstructed and nothing is re-lexed — every
+// byte out is a byte the file had, in the file's order — which is the property `KindModuleText`'s
+// arm insists on for its own span and the reason this widening does not need a printer.
+//
+// The excision is bounded by the token's **own extent**, not by a search of the span for the
+// keyword's spelling. The node already knows where its child is, and the word is one the corpus
+// writes in prose: of 34 occurrences of `definition` across the core corpus only 6 are this
+// keyword, the other 28 being comments (`;; Auxiliary definition`, `;; adds implicit type
+// definition`). None of the 28 sits inside one of the 6 spans today, which is exactly the kind of
+// fact that holds until an upstream sync writes a comment inside a definition form.
+//
+// False for anything that is not a definition form, so a caller cannot get a silently-wrong body
+// by asking about the wrong node.
+func definitionSource(n node, src []byte) ([]byte, bool) {
+	i := moduleFormKeywordIndex(n)
+	if i < 0 || n.list[i].atom != "definition" {
+		return nil, false
+	}
+	kw := n.list[i]
+	out := make([]byte, 0, (n.end-n.start)-(kw.end-kw.start))
+	out = append(out, src[n.start:kw.start]...)
+	out = append(out, src[kw.end:n.end]...)
+	return out, true
 }
 
 // stringModule reads the (module [$name] <keyword> "..." "...") shape shared by the
@@ -1155,15 +1274,13 @@ func moduleFormKeyword(n node) string {
 // what happens to the bytes afterwards, which is why Command keeps Module and Source
 // as separate fields: the shape is common, the language is not.
 func stringModule(n node, keyword string) ([]byte, bool) {
-	if n.head() != "module" {
-		return nil, false
-	}
-	i := 1
-	// Optional $name, as in (module $M1 binary "...").
-	if i < len(n.list) && !n.list[i].isList() && !n.list[i].isS && strings.HasPrefix(n.list[i].atom, "$") {
-		i++
-	}
-	if i >= len(n.list) || n.list[i].isList() || n.list[i].isS || n.list[i].atom != keyword {
+	// The optional `$name` (as in `(module $M1 binary "...")`) is skipped by
+	// moduleFormKeywordIndex, which is the one place that knows where a keyword can sit. This arm
+	// had its own copy of that arithmetic until #426 added a form where the name comes *after* the
+	// keyword; two copies that agree today and are right for different reasons is the drift this
+	// removes.
+	i := moduleFormKeywordIndex(n)
+	if i < 0 || n.list[i].atom != keyword {
 		return nil, false
 	}
 	i++
@@ -1867,6 +1984,28 @@ type DeclinedFunc func(error) bool
 // to make wearing a type's clothes.
 type Instance any
 
+// definitionState is what a `(module definition …)` command leaves behind for the `(module
+// instance …)` commands that follow it — the third of the run loop's namespaces (#426).
+//
+// **It holds the Command and not the instance, because a definition has no instance**, and that
+// is the whole content of the form: `instance.wast`'s first comment is `;; Instantiation is
+// generative`, and two `(module instance $I1 $M)` / `(module instance $I2 $M)` lines against one
+// definition must produce two independent instances. Keeping the *source* and instantiating per
+// instance form is what makes that true by construction, rather than by a copy the harness would
+// have to write and the reference would not.
+//
+// `err`/`stratum`/`gated` are the definition's outcome, carried for the reason `curErr`,
+// `curStratum` and `curGated` exist one command downstream: an instance form whose definition was
+// declined is a question the engine was never asked, and `ok == false` alone cannot tell that from
+// a definition that was broken.
+type definitionState struct {
+	cmd     Command
+	err     error
+	stratum Stratum
+	gated   bool
+	ok      bool
+}
+
 // InstantiateFunc turns a module command into something InvokeFunc can be called on, or
 // reports why it could not.
 //
@@ -2363,6 +2502,23 @@ func (s *Script) run(opts runOpts) *Result {
 	namedErr := map[string]error{}
 	namedStratum := map[string]Stratum{}
 	namedGated := map[string]bool{}
+	// **A third namespace, and it is three because a definition and an instance are different
+	// types** (#426). `named` holds instances, keyed by script `$name`; this holds *definitions*,
+	// keyed the same way. The reference keeps both in one script environment and distinguishes them
+	// by type; this harness has no types to distinguish, so the separation is the map.
+	//
+	// Merging them would be the mistake 0017 already refused between `registry` and `named`, one
+	// namespace over: `(invoke $M …)` on a definition would find something and try to call it,
+	// where the right answer is that `$M` names a module that was never instantiated. Kept apart,
+	// that vector reports exactly that.
+	//
+	// The value is the definition's whole outcome and not just its source, because an instance form
+	// inherits its definition's fate: a definition the gate declined must make its instances
+	// *gated* rather than failed, which is the same carry `curGated` and `namedGated` do one
+	// command downstream. Nothing in the corpus instantiates a definition that failed for a
+	// non-gate reason, so that arm's verdict is reasoned rather than measured, and it is marked as
+	// such where it is written.
+	defs := map[string]definitionState{}
 	// remember stamps a module command's outcome into whichever slots it owns. Every module
 	// arm calls it exactly once, which is what keeps `cur` and `named` from disagreeing about
 	// the same command — four arms each assigning five variables is the shape that drifts.
@@ -2373,6 +2529,22 @@ func (s *Script) run(opts runOpts) *Result {
 		}
 		named[c.Name], namedStratum[c.Name] = in, st
 		namedErr[c.Name], namedGated[c.Name] = err, gated
+	}
+	// rememberDef is `remember`'s shape for the third namespace, and it exists for the same reason:
+	// the definition arm has three exits and each one has to leave `defs` in a state the instance arm
+	// can read.
+	//
+	// **The empty-name guard is not defensive coding, it is the grammar.** `(module instance $I $M)`
+	// requires both names (parser.mly:1439), so an *unnamed* definition is unreferenceable — 4 of the
+	// corpus's 6 are, `memory`/`memory64`/`table`/`table64`.wast each writing one. Without the guard
+	// all four would collide on `defs[""]`, which no command can look up: dead state that reads like
+	// live state, and the next person to add a lookup would find four entries pretending to be one
+	// module. `remember`'s own guard is the same line for the same reason one namespace over.
+	rememberDef := func(c Command, d definitionState) {
+		if c.Name == "" {
+			return
+		}
+		defs[c.Name] = d
 	}
 	for _, c := range s.Commands {
 		// The capability gap, computed before the verdict switch and ahead of every
@@ -2657,6 +2829,160 @@ func (s *Script) run(opts runOpts) *Result {
 				Line: c.Line, Expect: c.Expect, Got: got, Kind: c.Kind,
 				Stratum: StratumText,
 			})
+
+		case KindModuleDefinition:
+			// `(module definition $M? <fields>)` — **the form that asserts validity and refuses to
+			// instantiate**, which is the entire reason upstream writes it: `memory.wast:8` is
+			// `(module definition (memory 65536))` and `table.wast:9` is
+			// `(module definition (table 0xffff_ffff funcref))`, a 4 GiB memory and a 4 G-slot table
+			// that are valid and unallocatable. A harness that instantiated them would allocate 4 GiB
+			// to answer a question nobody asked, and would then report the allocation's failure as a
+			// verdict on a module the corpus says is fine.
+			//
+			// So this arm is `KindModuleText`'s two facts with the third step deleted: read (fact 1),
+			// validate (fact 2), **stop**. It shares `scoreModuleValidation` with the other two forms
+			// for the reason #353 gave that function a second caller — the fact is the same fact, and
+			// two copies of a four-outcome switch is where the outcomes drift.
+			if opts.ReadText == nil {
+				panic(fmt.Sprintf("%s:%d: CapWatReader declared but no ReadTextFunc was "+
+					"supplied; the capability registry is ahead of the engine", s.Path, c.Line))
+			}
+			// **It does not call `remember`, and that is a semantic claim rather than an omission.**
+			// A definition is not the current module: nothing was instantiated, so a following
+			// unnamed `(invoke …)` must still run against whatever instance actually exists. Writing
+			// `cur = nil` here would be the tidier-looking choice and would report "no instance" at
+			// vectors whose instance is fine — the same mistake the `assert_trap (module)` arm's
+			// comment records not making.
+			err := opts.ReadText(c.Source)
+			if isGated(err) {
+				rememberDef(c, definitionState{
+					cmd: c, err: errNoInstance(c, "gate declined the module"),
+					stratum: StratumText, gated: true,
+				})
+				r.gate(c)
+				continue
+			}
+			if err != nil {
+				rememberDef(c, definitionState{cmd: c, err: err, stratum: StratumText})
+				r.Fail++
+				// **Its own bucket key, not the bare-body form's.** These are a separate population
+				// with a separate history — 6 sites against 1119 — and merging them would make a new
+				// red here indistinguishable from a regression there. *Bucketed failures are the work
+				// plan*, and the plan needs to name which population it is about; the same argument
+				// that split `(module quote …)` from `(module <wat body>)` in the arm above.
+				key := "(module definition <wat body>) must read"
+				r.Buckets[key] = append(r.Buckets[key], Failure{
+					Line: c.Line, Expect: key, Got: err.Error(), Kind: c.Kind,
+					Stratum: StratumText,
+				})
+				continue
+			}
+			_, scored := scoreModuleValidation(c)
+			// **Instantiable even when validation refused it**, which is the arm above's rule and
+			// its reason applies unchanged: one missing subtyping rule would otherwise go red at the
+			// definition *and* at every instance form and every vector downstream of them, which is
+			// a hundred reds for one defect and the end of the bucket resolution that is the work
+			// plan. 0025's carve-out is about the other direction.
+			rememberDef(c, definitionState{cmd: c, ok: true})
+			if scored {
+				continue
+			}
+			r.Pass++
+
+		case KindModuleInstance:
+			// `(module instance $I $M)` — **instantiation as its own command, and generatively**.
+			// `instance.wast` opens with the comment `;; Instantiation is generative` and then
+			// instantiates one definition twice, asserting that the two instances have separate
+			// state. This arm gets that for free by instantiating from the definition's *source*
+			// each time rather than copying an instance the harness would have to know the shape of.
+			d, ok := defs[c.Target]
+			if !ok {
+				// No definition precedes this form. **A fail rather than a no-op**, on the register
+				// arm's measured argument: a silent miss here produces a cluster of downstream
+				// `unknown import` failures naming the wrong component, which is the wrong-layer
+				// attribution the harness exists to avoid. Charged to exec because the missing thing
+				// is an instance.
+				remember(c, nil, StratumExec, errNoInstance(c, "no definition named "+c.Target), false)
+				r.Fail++
+				key := "(module instance) must name a preceding definition"
+				r.Buckets[key] = append(r.Buckets[key], Failure{
+					Line: c.Line, Expect: key,
+					Got:  "no module definition named " + c.Target + " precedes this instance",
+					Kind: c.Kind, Stratum: StratumExec,
+				})
+				continue
+			}
+			if !d.ok {
+				// **The definition's fate is inherited, and the gated case is why this branch exists
+				// at all.** A definition the gate declined leaves an instance form the engine was
+				// never asked about, so scoring it `fail` would mark correct behaviour red one
+				// command downstream — decision 0037's shape, and the same carry `curGated` makes
+				// for an `assert_return` after a declined module.
+				//
+				// The non-gate half of this branch is **reasoned, not measured**: no corpus vector
+				// instantiates a definition that failed to read for a non-gate reason, so the fail
+				// path below has no witness in the suite. Said here rather than left for a reader to
+				// assume the row exists.
+				remember(c, nil, d.stratum, d.err, d.gated)
+				if d.gated {
+					r.gate(c)
+					continue
+				}
+				r.Fail++
+				key := "(module instance) definition did not read"
+				got := "the definition it names produced nothing"
+				if d.err != nil {
+					got = d.err.Error()
+				}
+				r.Buckets[key] = append(r.Buckets[key], Failure{
+					Line: c.Line, Expect: key, Got: got, Kind: c.Kind, Stratum: d.stratum,
+				})
+				continue
+			}
+			// The definition's Command carries the source; the *instance's* line carries the
+			// verdict. Re-stamping the line is what keeps a bucket row pointing at the command that
+			// failed rather than at the one that supplied the bytes — three instance forms in
+			// `instance.wast` share two definitions, so without this the two definition lines would
+			// answer for five commands.
+			//
+			// `mod.Name` is deliberately left as the *definition's* `$M`: it is not read by any
+			// harness slot (`remember` below takes its names from `c`, the instance), so its only
+			// audience is an engine-side diagnostic, where naming the definition whose text failed is
+			// the more useful of the two.
+			mod := d.cmd
+			mod.Line, mod.Kind = c.Line, c.Kind
+			in, st, ierr := opts.instantiate(mod, registry)
+			// **`cur` moves to this instance, and that is an unfalsified choice rather than a spec
+			// fact — pre-registered as one on #426 before the arm was written.** An instance form
+			// produces an instance exactly as a `(module …)` command does, so a following *unnamed*
+			// `(invoke …)` running against it is the reading that treats the two forms alike. **No
+			// corpus vector distinguishes it**: in `instance.wast` a plain `(module …)` follows every
+			// instance form and is the current module either way, so nothing here can go red if this
+			// is wrong. Stated as a choice, at the site, because *an unasserted distance says
+			// nothing* — and the way it becomes falsifiable is a vector that invokes unnamed straight
+			// after an instance form, which the corpus does not have today.
+			remember(c, in, st, ierr, isGated(ierr))
+			if isGated(ierr) {
+				r.gate(c)
+				continue
+			}
+			if ierr != nil {
+				// **Scored, unlike an instantiation failure under the bare-body arm**, and the
+				// difference is what the two forms assert. `(module <wat body>)` asserts its source
+				// is valid, so its verdict is read-and-validate and an instantiation error travels
+				// to the vector it actually blocks. `(module instance $I $M)` asserts *this
+				// definition instantiates* — that is the whole content of the command — so a refusal
+				// is a red on the command that made the claim, and nothing else is left to charge it
+				// to. Double counting is avoided the other way: the definition's own row scored
+				// read-and-validate and is not re-scored here.
+				r.Fail++
+				key := "(module instance) must instantiate"
+				r.Buckets[key] = append(r.Buckets[key], Failure{
+					Line: c.Line, Expect: key, Got: ierr.Error(), Kind: c.Kind, Stratum: st,
+				})
+				continue
+			}
+			r.Pass++
 
 		case KindAssertTrapModule:
 			// `(assert_trap (module …) "text")`: the module must come to life and die doing

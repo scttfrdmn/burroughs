@@ -23,7 +23,7 @@ const kindsPastUnsupported = 8
 // shrink every domain in this file, and the probe above KindUnsupported closes the other end.
 // Together they are why the scans below can be described as covering the enum instead of covering
 // the part of it somebody remembered.
-const kindCount = 19 // KindModuleBinary(0) … KindUnsupported(18)
+const kindCount = 21 // KindModuleBinary(0) … KindUnsupported(20)
 
 // TestAssertInvalidKindsAreExactlyTheAssertInvalidForms is the name-derived second mechanism for
 // `Kind.isAssertInvalid`, whose body is a three-way equality test written by hand.

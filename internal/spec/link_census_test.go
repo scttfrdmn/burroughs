@@ -37,10 +37,19 @@ import (
 // that stopped happening is a *stale pre-registration* — `TestGrave206KnownFailures`' rule, which
 // caught two stale rows in this very change.
 //
-// The residue is not empty, which is what makes the check falsifiable rather than a comparison
-// against nothing (*a comparison against an empty set succeeds*): three `instance.wast` rows are
-// genuine `unknown import` failures the harness's own registry semantics produce, not matcher
-// verdicts, and they stay listed precisely so this test has a subject when the matcher is right.
+// **The residue was three rows and is now zero, so one of the two directions has lost its subject.**
+// The paragraph above used to end "the residue is not empty, which is what makes the check
+// falsifiable rather than a comparison against nothing (*a comparison against an empty set
+// succeeds*): three `instance.wast` rows are genuine `unknown import` failures the harness's own
+// registry semantics produce, not matcher verdicts, and they stay listed precisely so this test has a
+// subject when the matcher is right." #426 removed the cause those rows named — an instance form the
+// harness could not classify — so the sentence is collected rather than deleted: the rows were right
+// about why they were red, and the fix was one layer below the matcher exactly as they said.
+//
+// The consequence is unpleasant enough to state where the claim is. The stale-pre-registration
+// direction is now empty against empty and says nothing, which leaves `attemptedFloor` as the only
+// thing standing between `0 refused` and `0 asked`. See `known`'s own comment for what the forward
+// direction gained in exchange.
 //
 // # The vacuity floor
 //
@@ -72,11 +81,29 @@ func TestModuleDefinitionLinkCensus(t *testing.T) {
 	// Those four rows are gone and must not come back: the first was the global arm's `==`
 	// refusing `match_globaltype`'s covariance, the other three the func arm comparing type
 	// indices drawn from two different type sections.
-	known := map[string]string{
-		"instance.wast:15":  "registry semantics, not the matcher: `(register \"I1\")` names a module this script never instantiated successfully, so the global genuinely is not there (`unknown import`)",
-		"instance.wast:62":  "registry semantics, not the matcher: same shape as :15",
-		"instance.wast:128": "registry semantics, not the matcher: `\"I\" \"glob1\"` is a name the registered instance does not export",
-	}
+	// **#426 emptied the other half, and the reason is the one the rows themselves gave.** All three
+	// said "registry semantics, not the matcher" — `(register "I1" $I1)` named a `(module instance …)`
+	// the harness had no case for, so the name was never bound and the import genuinely was not there.
+	// The rows as this census printed them before the widening, with the count they carried:
+	//
+	//	instance.wast:15   unknown import
+	//	instance.wast:62   unknown import
+	//	instance.wast:128  unknown import
+	//
+	// The three are gone because the cause is: an instance form now instantiates, its register binds,
+	// and all three importing modules link. Recorded rather than only performed — a table that
+	// silently shrinks cannot be told from one trimmed to make a test pass, and that argument applies
+	// hardest to the deletion that empties it (`moduleOverRejections`' own words, one file over).
+	//
+	// **What is vacuous now, and what still binds.** The reverse direction — a listed refusal that
+	// stopped happening — has no subject at 0 rows and asserts nothing; that is a real loss of an
+	// instrument and it is stated rather than left for a reader to infer from an empty literal. The
+	// forward direction is not only live but **strictly stronger**: with the table empty, *any* link
+	// refusal of a module definition in the all-on lane is now a failure, which is the assertion this
+	// census wanted from the start and could not make while three rows were legitimately red. It is
+	// held up by `attemptedFloor`, and only by that — see the vacuity paragraph above, which is what
+	// keeps `0 refused` distinguishable from `0 asked`.
+	known := map[string]string{}
 
 	// A floor, not the measured figure: this is the vacuity check, and pinning it exactly would
 	// make every added corpus file a failure of a test about linking.
@@ -103,6 +130,16 @@ func TestModuleDefinitionLinkCensus(t *testing.T) {
 				// is a scored command and the board already reports its verdict. Counting those
 				// here would mix a population the board sees with one it does not, and the whole
 				// point of this census is the second one.
+				//
+				// **#426's two Kinds belong here rather than in the list above, and for two
+				// different reasons** — worth naming because "a new module form" reads like an
+				// omission. `KindModuleDefinition` never reaches this hook at all: a definition
+				// validates and deliberately does not instantiate, which is the form's entire
+				// content. `KindModuleInstance` does reach it and is **scored** — an instance form
+				// asserts that its definition instantiates, so a link refusal there is a board
+				// `fail` with a bucket, not the invisible pass that #367 leaves on a plain
+				// `(module …)`. Admitting it would put a seen population in the census whose
+				// premise is the unseen one.
 				return in, st, ierr
 			}
 			attempted++

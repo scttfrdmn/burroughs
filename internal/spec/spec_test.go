@@ -5659,6 +5659,27 @@ func TestGatedVectors(t *testing.T) {
 		// column moved by exactly the same 68 these entries total, pass unmoved (#199's own scope
 		// statement — zero conversions, this PR is retention only).
 		"instance.wast": {
+			// # #426's six, and the step they decline at is not the one the forecast named
+			//
+			// The two script forms became askable here, and the pre-registration predicted the
+			// **definitions** would gate on their tags. They do not: `$M` (:3) and `$N` (:109) read
+			// and validate clean and both **pass**, because a definition's entire assertion is that
+			// it is valid — it deliberately never instantiates, which is why upstream writes
+			// `definition` for the 4 GiB memory in `memory.wast:8`. The EH gate is not reached until
+			// an `instance` form asks for a live instance of a module carrying a tag.
+			//
+			// So the decline is instantiation-time, one command later than forecast, and the six
+			// lines below are two generations of inheritance: three `instance` forms declined
+			// directly, three `register` forms declined because the instance they name never came to
+			// be. Written out per line rather than as a bulk count because the two generations are
+			// two different claims, and a register inheriting from an instance that inherits from a
+			// definition is exactly where a wrong-layer attribution would hide.
+			10:  "exception handling: (tag (export \"tag\")) at :7 — instantiating the definition at :3, which is what this form asks for",
+			11:  "exception handling: (tag (export \"tag\")) at :7 — instantiating the definition at :3, which is what this form asks for",
+			12:  "exception handling: (tag (export \"tag\")) at :7 — the instance at :10 this register names was declined",
+			13:  "exception handling: (tag (export \"tag\")) at :7 — the instance at :11 this register names was declined",
+			125: "exception handling: (tag $tag) at :112 — instantiating the definition at :109, which is what this form asks for",
+			126: "exception handling: (tag $tag) at :112 — the instance at :125 this register names was declined",
 			// `$M` (:3-8) carries `(tag (export "tag"))`; the importing module (:15-49) both
 			// imports two tag instances and writes a `try_table`/`throw` pair (:39-45) using them.
 			54: "exception handling: (tag (export \"tag\")) at :7, and a try_table/throw pair at :39-45 — the module this action runs against",
@@ -7563,7 +7584,36 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	// So the pair of entries is now complete in both directions: #130's inequality of 2 matched its
 	// gated share, #427's equality of 0 matches its gate-blindness, and each was pre-registered before
 	// the run. All-on `fail` 61 → 53.
-	const allOnPassFloor = 64993
+	// # 64993 → 65014, +21 against the default lane's +6, and this lane is where #426's reward is
+	//
+	// The harness learned `(module definition …)` and `(module instance …)`. Read through the
+	// instrument the three entries above built: the lanes diverge by **15**, and the 15 is not a gated
+	// share this time — it is the count of all-on **fails this slice drains**, `instance.wast` going
+	// from `3/18 pass, 15 fail, 5 unsupported` to `20/20 pass, 3 bound`. Decomposed, because a +21
+	// nobody can split is a number rather than a finding:
+	//
+	//   - **+4**, one per standalone definition — `memory`/`memory64`/`table`/`table64`.wast — each a
+	//     valid module the harness could not previously ask about. Identical in both lanes, which is
+	//     the equality check: these four forms carry no gated construct, and a divergence would have
+	//     meant the definition arm reached a feature path.
+	//   - **+17 in `instance.wast` alone**, and only 2 of those are the definitions themselves. The
+	//     other 15 are downstream: three `register` forms now name instances that exist, so the three
+	//     importing modules at :15, :62 and :128 link instead of failing on `unknown import`, and the
+	//     12 `assert_return`s that run against them become real verdicts. **Bound +3** is the same
+	//     fact in the registry's column.
+	//
+	// The default lane gains 6 of the 21 because the EH gate declines instantiating a module with a
+	// `(tag …)` field, so `instance.wast`'s three instances and three registers are honestly gated
+	// there and the 12 assertions stay gated behind them. That is the divergence accounted: 15 = the
+	// 12 assertions + the 3 registrations, every one of them a vector that needs exception handling to
+	// be answerable at all.
+	//
+	// All-on `fail` 53 → 38, and the drain's shape is worth one sentence: not one validator or
+	// interpreter rule changed. Fifteen reds were the harness reporting its own missing classification
+	// as engine failure, which is the wrong-layer attribution `unsupported`'s whole purpose is to
+	// avoid — and they were *fails* rather than `unsupported` because the miss was invisible one
+	// command downstream of where it happened.
+	const allOnPassFloor = 65014
 	// **Slack 0 as of Scott's #387 ruling**, which this bound's own 89-row staleness above is what
 	// prompted: a floor with 250 of tolerance cannot detect anything smaller than 250, so it is a
 	// bound sitting inside its own tolerance. Exact from here — re-base it in the PR that moves the
@@ -7667,7 +7717,7 @@ func TestModuleDefinitionsAskTheValidator(t *testing.T) {
 	//
 	// The table was *enumerated* and the domain is derivable, which made this an unchecked claim
 	// about its own coverage — declared and tracked as #354, and closed by the
-	// `the three rows are every Kind a module head classifies to` subtest below. The table stays a
+	// `the witness rows are every Kind a module head classifies to` subtest below. The table stays a
 	// named variable rather than an inline literal so that subtest derives its expectation from the
 	// rows themselves; a re-typed copy of the same three Kinds would agree with the table by
 	// construction and check nothing.
@@ -7697,6 +7747,22 @@ func TestModuleDefinitionsAskTheValidator(t *testing.T) {
 		// `admittedKeyPrefix`) are the instrument working: a rename should have to walk past every
 		// reader that claimed to know the string.
 		{"binary", `(module binary "\00asm\01\00\00\00")`, KindModuleBinary, "module binary must validate"},
+		// **The witness #426's widening owed, and the subtest below is what came to collect it.** Its
+		// comment used to read "when #320 lands they acquire real Kinds and this control goes red,
+		// which is the intended reading — a widening owes a witness"; the widening landed, the
+		// control went red, and this row is the payment. Recorded that way rather than as a fourth
+		// case that always existed, because a pre-registered red *arriving* is the only evidence that
+		// the sentence predicting it was load-bearing.
+		//
+		// It is a row and not a note because `KindModuleDefinition` has its own arm and its own
+		// `scoreModuleValidation` call. Deleting that call is the mutation, and it leaves the other
+		// three rows green — the binary row's argument exactly, one Kind later.
+		//
+		// The definition form is *the* form whose whole content is fact 2: it reads and validates and
+		// deliberately stops, so a lost fact-2 call here does not merely weaken the score, it leaves
+		// the command asserting nothing at all while still counting a pass. `(module definition (func))`
+		// rather than a corpus line, so the row survives a corpus that stops containing one.
+		{"definition", `(module definition (func))`, KindModuleDefinition, "module definition must validate"},
 	}
 	for _, tc := range rows {
 		t.Run("a validator that refuses every module turns a "+tc.name+" definition red", func(t *testing.T) {
@@ -7731,7 +7797,12 @@ func TestModuleDefinitionsAskTheValidator(t *testing.T) {
 		})
 	}
 
-	t.Run("the three rows are every Kind a module head classifies to", func(t *testing.T) {
+	// Named for the rows rather than for how many there are, because the count is the thing this
+	// subtest exists to move: it went red on #426 to demand a fourth row, and a name carrying `three`
+	// would have made the payment a rename of every citation to it. *A test name is a checkable
+	// citation* — so the name should cite what the rows are, not how many were there when it was
+	// written.
+	t.Run("the witness rows are every Kind a module head classifies to", func(t *testing.T) {
 		// #354, and the reason it is a separate control rather than a fourth row: it fails when the
 		// *domain* moves, where the rows above fail when a *call* is lost. Two failure causes, two
 		// controls (grave #34) — and the one thing it must not do is enumerate, since enumerating the
@@ -7746,11 +7817,38 @@ func TestModuleDefinitionsAskTheValidator(t *testing.T) {
 		// derived from it. That is one instrument's blind spot inherited by the instrument built to
 		// remove another's, and the wider walk costs nothing this test was not already paying.
 		//
-		// **`KindUnsupported` is the one excused Kind, and it is excused by name rather than by
-		// filtering.** The 9 are `(module definition …)` and `(module instance …)` (`wast.go:602`,
-		// #320's widening): module heads that reach no validator at all, so there is no fact-2 call
-		// for a witness row to falsify. When #320 lands they acquire real Kinds and this control goes
-		// red, which is the intended reading — a widening owes a witness.
+		// **One Kind is excused, by name and with the reason, rather than by filtering** —
+		// `KindModuleInstance`, the one Kind here that asks fact 2 **never**, deliberately. An
+		// instance form asserts that a definition *instantiates*; the definition already answered the
+		// validator on its own line, and re-asking would charge one module's fact 2 to four commands
+		// in `instance.wast` alone. So there is no call for a mutation to lose, which is this list's
+		// only admission criterion.
+		//
+		// # `KindUnsupported` was the excused Kind and is not a member of this walk any more
+		//
+		// It was excused for the same criterion — a module head reaching no validator has no fact-2
+		// call to falsify — and its 9 members were exactly `(module definition …)` and
+		// `(module instance …)`. #426 gave both arms, so the population is **0** and the entry had to
+		// go: this control's own other direction reported it, saying the table "is asserting something
+		// about a population that is not there, which passes and says nothing." Left in place it would
+		// have been a live-looking excuse for nothing, which is the shape *an unasserted distance*
+		// names. It comes back the moment a `module` head classifies to it again — and then this
+		// control goes red demanding either a row or a reason, which is what it is for.
+		//
+		// The paragraph is a collected prediction twice over. It used to end "when #320 lands they
+		// acquire real Kinds and this control goes red, which is the intended reading — a widening
+		// owes a witness." That is what happened: #426 gave both forms arms, this subtest went red
+		// naming `module definition`, and the debt was paid with a row rather than with an entry here.
+		// The distinction is the whole content of the excuse list — an excused Kind is one no mutation
+		// can falsify, not one nobody got round to.
+		//
+		// **What the walk still cannot see, measured rather than assumed.** `suitePaths` globs
+		// `testdata/spec/*.wast`, one level, so the 11 script-module sites under
+		// `proposals/custom-page-sizes/` and `proposals/custom-descriptors/` are outside it — including
+		// the only `(module definition binary "…")` in the corpus, the sub-form the classifier guards
+		// and keeps `unsupported` on purpose. That guard's witness is therefore synthetic and lives in
+		// `TestScriptModuleFormsAreNotWatBodies`, not here. Said in the control whose name would
+		// otherwise imply it had swept every one.
 		//
 		// **What this cannot see, stated because the issue's premise was slightly wider than the
 		// mechanism.** #354 reasoned that "a new form arrives as a new Kind in `classify`"; that holds
@@ -7760,7 +7858,7 @@ func TestModuleDefinitionsAskTheValidator(t *testing.T) {
 		// a form landing on `KindModuleText` lands on the arm the text row above already falsifies.
 		// The hole this control closes is the other one, a Kind gaining an arm without gaining a
 		// witness, which is exactly how the quote row came to be missing until #353.
-		want := map[Kind]bool{KindUnsupported: true}
+		want := map[Kind]bool{KindModuleInstance: true}
 		for _, tc := range rows {
 			want[tc.want] = true
 		}
@@ -7771,8 +7869,13 @@ func TestModuleDefinitionsAskTheValidator(t *testing.T) {
 		wantCounts := map[Kind]int{
 			KindModuleText:   2143,
 			KindModuleBinary: 88,
-			KindUnsupported:  9,
 			KindModuleQuote:  7,
+			// #426 moved these two out of `KindUnsupported`'s 9 and the sum is the check: 6 + 3 = 9,
+			// so the widening reclassified its population and did not acquire one. The 6 are
+			// `memory`/`memory64`/`table`/`table64`.wast at one each and `instance.wast` at two; the 3
+			// are `instance.wast`'s instance forms.
+			KindModuleDefinition: 6,
+			KindModuleInstance:   3,
 		}
 		got := map[Kind]int{}
 		where := map[Kind]string{}
@@ -7948,6 +8051,129 @@ func TestModuleDefinitionsAskTheValidator(t *testing.T) {
 		}
 		t.Logf("all-on lane: %d module-definition over-rejections, %d pinned",
 			len(got), len(moduleOverRejections))
+	})
+}
+
+// TestModuleInstanceFailurePathsAreWatched fires the two `KindModuleInstance` fail arms the corpus
+// cannot reach, and it exists because both of their comments say so in as many words.
+//
+// A fail path with no witness is a path nobody has watched fire, and its bucket key, stratum and
+// message are unread prose until something reads them back. The arms' own comments admit the gap —
+// "the non-gate half of this branch is reasoned, not measured" — and an admitted gap that a synthetic
+// script can close is a gap that should be closed rather than declared: *a control isn't born until
+// it's watched die.*
+//
+// **Both scripts are hand-written and neither is in the suite**, which is the point and not a
+// shortcut. `instance.wast` has no instance form naming a missing definition and no definition that
+// fails to read, so the board's 0 in these two buckets is a true zero about the corpus and says
+// nothing about the code. Synthetic input is the only oracle available for a branch upstream declines
+// to write a vector for.
+//
+// Watched dying on three mutations, one per subtest, each tripping a *different* assertion — which is
+// the result that says they are three controls and not one written three ways:
+//
+//   - dropping the `r.Fail++` in the no-definition arm: `got 0 pass, 0 fail, 0 gated`, the silent
+//     no-op this arm exists to refuse.
+//   - keying the definition's read failure as `(module <wat body>) must read`: the bucket check
+//     names both keys it found, which is the 6-into-1119 merge caught at the only place that can see
+//     it.
+//   - disabling the `d.gated` branch so an inherited decline falls through to the fail arm:
+//     `1 fail, 1 gated`, the third verdict leaking into the fail column one command downstream.
+func TestModuleInstanceFailurePathsAreWatched(t *testing.T) {
+	t.Run("an instance naming no preceding definition is a fail that names the missing definition", func(t *testing.T) {
+		// The reason this is a fail and not a no-op: without it the name is unbound, the register
+		// after it binds nothing, and every import against it reports `unknown import` — the exact
+		// wrong-layer attribution that put three rows in `execFailCeiling` until #426, where the
+		// resolver's complaint was true about itself and silent about the cause.
+		s, err := Parse("t.wast", []byte(`(module instance $I $M)`))
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		if got := s.Commands[0].Kind; got != KindModuleInstance {
+			t.Fatalf("classified %v, want KindModuleInstance — this control needs the arm it is about", got)
+		}
+		r := s.RunGated(engine())
+		if r.Pass != 0 || r.Fail != 1 || r.Gated != 0 {
+			t.Fatalf("got %d pass, %d fail, %d gated; want 0/1/0", r.Pass, r.Fail, r.Gated)
+		}
+		const key = "(module instance) must name a preceding definition"
+		b := r.Buckets[key]
+		if len(b) != 1 {
+			t.Fatalf("no failure under %q; got keys %v", key, r.BucketsBySize())
+		}
+		// **The message must name `$M`, not just complain.** A bucket row whose `Got` omits which
+		// name was missing sends the reader back to the file to work out what the harness already
+		// knew, which is the whole difference between a verdict and a work plan.
+		if !strings.Contains(b[0].Got, "$M") {
+			t.Errorf("Got = %q, want it to name the missing definition `$M`", b[0].Got)
+		}
+		if b[0].Stratum != StratumExec {
+			t.Errorf("Stratum = %v, want %v — the missing thing is an instance", b[0].Stratum, StratumExec)
+		}
+	})
+
+	t.Run("a definition that fails to read fails in its own bucket and its instance inherits", func(t *testing.T) {
+		// Two commands, two reds, two *different* keys — which is the assertion. Merging them would
+		// make one broken definition indistinguishable from a broken definition plus a broken
+		// instance arm, and the whole reason the definition form has its own read bucket is that its
+		// 6 sites must not disappear into the bare-body form's 1119.
+		s, err := Parse("t.wast", []byte("(module definition $M (memory 1))\n(module instance $I $M)"))
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		e := engine()
+		e.ReadText = func([]byte) error { return errString("refuses every wat body") }
+		r := s.RunGated(e)
+		if r.Pass != 0 || r.Fail != 2 || r.Gated != 0 {
+			t.Fatalf("got %d pass, %d fail, %d gated; want 0/2/0 — one red per command, since a "+
+				"definition that did not read and an instance of it are two separate claims",
+				r.Pass, r.Fail, r.Gated)
+		}
+		for _, key := range []string{
+			"(module definition <wat body>) must read",
+			"(module instance) definition did not read",
+		} {
+			if len(r.Buckets[key]) != 1 {
+				t.Errorf("no failure under %q; got keys %v", key, r.BucketsBySize())
+			}
+		}
+		// The inherited row must carry the *definition's* cause, not a restatement of its own
+		// existence: "the definition it names produced nothing" is the fallback and reaching it here
+		// would mean the cause was dropped between the two arms.
+		if b := r.Buckets["(module instance) definition did not read"]; len(b) == 1 {
+			if !strings.Contains(b[0].Got, "refuses every wat body") {
+				t.Errorf("the inherited row's Got = %q, want the definition's own cause", b[0].Got)
+			}
+		}
+	})
+
+	t.Run("a gate-declined definition gates its instance rather than failing it", func(t *testing.T) {
+		// This branch *does* have a corpus witness — `instance.wast`'s six gated lines, since both
+		// its definitions carry `(tag …)` — and it is pinned synthetically anyway, because the
+		// corpus witness depends on exception handling still being gated off. The day EH flips
+		// default-on, those six lines convert and this branch loses its only witness silently. A
+		// synthetic gate decline is a witness no flip can take away.
+		//
+		// Decision 0037's shape: a decline is not a defect, so a command downstream of one is a
+		// question the engine was never asked. Scoring it `fail` would mark correct behaviour red.
+		s, err := Parse("t.wast", []byte("(module definition $M (memory 1))\n(module instance $I $M)"))
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		e := engine()
+		e.ReadText = func([]byte) error {
+			return fmt.Errorf("pretend proposal: %w", binary.ErrFeatureDisabled)
+		}
+		r := s.RunGated(e)
+		if r.Pass != 0 || r.Fail != 0 || r.Gated != 2 {
+			t.Fatalf("got %d pass, %d fail, %d gated; want 0/0/2 — the definition's decline is its "+
+				"own, and the instance's is inherited; a fail on either is the third verdict leaking "+
+				"into the fail column one command downstream", r.Pass, r.Fail, r.Gated)
+		}
+		if len(r.GatedAt) != 2 {
+			t.Errorf("GatedAt = %v, want two lines — the counter and the list must agree, since "+
+				"TestGatedVectors reads the list", r.GatedAt)
+		}
 	})
 }
 
@@ -8481,7 +8707,20 @@ func TestPhase1Files(t *testing.T) {
 	// campaign, where vectors score `gated`), and that is not this case — nothing needed to be
 	// authorized here, because nothing was being substituted. (Ruling: Scott, PR #307, on the actor's
 	// flag asking whether the carve-out extended. It did not need to.)
-	const unsupportedCeiling = 66
+	//
+	// # 83 → 66 elsewhere, and 66 → 57 here: #426 takes the whole `module` sub-column
+	//
+	// The 9 the entry above listed as "9 `module`" are gone, which is the drain that entry asked for
+	// when it said "a column this small is close to being an equality, and the next drain should say
+	// so." They were `(module definition …)` ×6 and `(module instance …)` ×3, and they are now
+	// `KindModuleDefinition` and `KindModuleInstance` — 6 passes and 3 honest gate declines rather
+	// than 9 commands the harness had no case for.
+	//
+	// **The remaining 57 no longer contain a single `module` head**, which is a sharper statement than
+	// the count: every command form the corpus writes with a `module` head is now classified, and the
+	// residue is 39 `assert_return`, 15 `assert_exhaustion`, and 3 with no head atom. So this column's
+	// work plan has exactly two named subjects left plus a lexical one. The next drain can say which.
+	const unsupportedCeiling = 57
 	// Slack 0 as of #387's ruling, with the other two tracked board counts — see
 	// `boardbound_test.go`'s retirement section. This is the one of the three where the retired
 	// slack's stated purpose bit hardest: a ceiling drains *toward* its column, so 250 of tolerance
@@ -9844,7 +10083,20 @@ func TestPhase1Files(t *testing.T) {
 	// from the 66 to seven more of the 15 — leaving the residue this column now names: 5 `assert_return
 	// value mismatch` (all `load1.wast`, all #414's gate-decline collateral) and 3 `register: no module
 	// named $I/$I1/$I2`.
-	const execFailCeiling = 8
+	// **8 → 5, and the three are the `register: no module named $I/$I1/$I2` rows the entry above named
+	// as half of what was left.** They were never about the interpreter or the registry: `instance.wast`
+	// registers `$I1`, `$I2` and `$I`, which are `(module instance …)` names, and the harness had no
+	// case for that form — so the names were genuinely unbound and the resolver's complaint was true
+	// about itself and wrong about the cause. #426 gives the form an arm, and with the EH gate off the
+	// three registers are `gated` (the definitions carry `(tag …)`), which is the third verdict landing
+	// where it belongs rather than a fourth red disappearing.
+	//
+	// So this is a reclassification, in the words the 66 got: **not one of the three was the
+	// interpreter computing a wrong answer**, and the entry above had already said as much when it
+	// listed them beside the five `load1.wast` rows without claiming a defect. The residue is now
+	// exactly those five — `assert_return value mismatch`, all `load1.wast`, all #414's gate-decline
+	// collateral — which makes this column a single-subject work plan for the first time.
+	const execFailCeiling = 5
 	boardBound(t, "execFailCeiling", execFail, execFailCeiling, 0, ceilingBound,
 		"the interpreter answered fewer vectors than it did: either an opcode arm regressed or "+
 			"a value comparison started disagreeing. A *rise* caused by #8 unblocking more "+
@@ -11161,7 +11413,31 @@ func TestPhase1Files(t *testing.T) {
 	// part: **a stale-premise repair is itself a premise-sourcing event and inherits the whole risk it
 	// exists to discharge**, and it gets less scrutiny than the original for being the fix rather than the
 	// bug. The conclusion is unchanged and now rests on #111, which is checkable by reading #111.
-	const passFloor = 60922
+	// # 60922 → 60928, +6, and the six are **the whole of what the default lane can gain here**
+	//
+	// #426's two script forms. Six commands convert from `unsupported` to `pass`: the four standalone
+	// `(module definition …)` forms in `memory`/`memory64`/`table`/`table64`.wast, and `instance.wast`'s
+	// two named definitions. Every one is a module the corpus asserts is valid and the harness had no
+	// case for.
+	//
+	// The three `(module instance …)` forms and the three `register`s that name them convert to
+	// **`gated`**, not to pass, because `instance.wast`'s definitions carry `(tag …)` and the EH gate
+	// declines *instantiating* them. So the default lane's ceiling on this slice is 6, structurally,
+	// and the other 15 conversions are in the all-on lane where `allOnPassFloor` +21 records them.
+	//
+	// **The forecast said 60924 and missed by 4, in one direction and for one reason.** Pre-registered
+	// on #426: memory64's and table64's definitions predicted `gated` on their proposals, and
+	// `instance.wast`'s two definitions predicted `gated` on their tags. All four passed. The error is
+	// the same error four times — a decline near a command inferred to be a decline *of* it — where the
+	// question the arm actually asks is which step declines: an `i64` index type reads and validates
+	// fine and memory64's 50 declines are elsewhere in its file, and a `(tag …)` field reads and
+	// validates fine because the EH gate sits at instantiation, which a definition form never reaches.
+	// *Aboutness is not proximity*, applied to a forecast rather than to a sentence.
+	//
+	// The three figures the forecast got right are the ones derived rather than associated: `fail` −3
+	// and `unsupported` −9 exactly, and 12 rows conserved. Recorded because a pre-registration that
+	// half-misses is only useful if which half is said out loud.
+	const passFloor = 60928
 	// Slack 0 as of #387's ruling, with `allOnPassFloor` and `unsupportedCeiling` — see
 	// `boardbound_test.go`'s retirement section. Two entries in the ledger above record taking a
 	// re-base *although the slack stayed silent* (58659 by a margin of 20, and the 416 that was four

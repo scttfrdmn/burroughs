@@ -523,19 +523,48 @@ func TestBareModuleSourceRoundTrips(t *testing.T) {
 // Scoped to both forms *and* to the plain body, because the risk runs both ways: a predicate
 // that excluded too much would silently drop real modules back into `unsupported`, which is
 // the invisibility this whole issue exists to end.
+//
+// # The four decline rows moved, and the reason they could is one token
+//
+// #426 gave both forms Kinds. The rows are **rebased, not deleted** — the discipline the
+// `assert_trap` test below records twice: a decline row that becomes an accept row is what shows
+// the classification was decided rather than drifted into. What this function's name asserts is
+// unchanged and still true: **neither form's own text is a wat body**, and the fix is not to relax
+// that.
+//
+// It is exact, not approximate. `script_module` is `LPAR MODULE definition_opt option(module_var)
+// module_fields RPAR` (parser.mly:1417) and `module_` is the same production *without*
+// `definition_opt` (:1389) — so a definition form's wat body is its own span with the one keyword
+// excised, which is what `definitionSource` does. No reconstruction, no re-lexing, and the `$name`
+// stays where the reader expects it. `instance` still has no body at all: it names a definition,
+// so it carries no source and reaches the wat reader never.
+//
+// The one row that stays `KindUnsupported` for a *content* reason rather than a shape one is
+// `(module definition binary "…")` — `definition_opt` composes with the string forms, so excising
+// the keyword there would hand `binary "…"` to the wat reader and manufacture precisely the red
+// this test is named after. Guarded, and it is a row here because a guard whose bypass is one
+// missing `if` needs an assertion, not a comment.
 func TestScriptModuleFormsAreNotWatBodies(t *testing.T) {
 	cases := []struct {
 		src  string
 		want Kind
 	}{
-		{"(module definition (memory 65536))", KindUnsupported},
-		{"(module definition $M (global (export \"g\") (mut i32) (i32.const 0)))", KindUnsupported},
-		{"(module instance $I1 $M)", KindUnsupported},
+		// The two script forms, askable since #426. Their Kinds are the assertion; that their
+		// *source* is not the raw span is asserted by TestDefinitionSourceExcisesTheKeyword.
+		{"(module definition (memory 65536))", KindModuleDefinition},
+		{"(module definition $M (global (export \"g\") (mut i32) (i32.const 0)))", KindModuleDefinition},
+		{"(module instance $I1 $M)", KindModuleInstance},
+		// Still declines, and each for a different reason — which is why they are four rows and
+		// not one. Arity: `instance` needs both names, so a truncated form is not silently read as
+		// something. Content: the string sub-forms compose with `definition` and are not wat.
 		{"(module instance)", KindUnsupported},
+		{"(module instance $I1)", KindUnsupported},
+		{`(module definition binary "\00asm\01\00\00\00")`, KindUnsupported},
+		{`(module definition quote "(func)")`, KindUnsupported},
 		// The accept direction: an ordinary body, and one with a $name, stay scorable.
 		{"(module (memory 1))", KindModuleText},
 		{"(module $M (memory 1))", KindModuleText},
-		// A quote form is still a quote form — the new keyword check must not shadow it.
+		// A quote form is still a quote form — the keyword check must not shadow it.
 		{`(module quote "(func)")`, KindModuleQuote},
 		{`(module binary "\00asm")`, KindModuleBinary},
 	}
@@ -549,6 +578,44 @@ func TestScriptModuleFormsAreNotWatBodies(t *testing.T) {
 		}
 		if got := s.Commands[0].Kind; got != c.want {
 			t.Errorf("%s\n  classified %v, want %v", c.src, got, c.want)
+		}
+	}
+}
+
+// TestDefinitionSourceExcisesTheKeyword is the other half of the row above, and it is a separate
+// test because the two claims fail independently: a definition form can carry the right Kind and
+// the wrong bytes, and that combination is worse than a decline — it reaches the reader and the
+// reader's complaint is about text the corpus never wrote.
+//
+// **The assertion is on the payload, not on a status flag.** `classify` returning
+// `KindModuleDefinition` says the arm ran; only reading `Source` back says what it will hand over.
+// So each row states the exact bytes expected, and one row is a multi-line body with the keyword
+// on the same line as `(module` — the shape `instance.wast:3` actually has — because a span-splice
+// that got the offsets wrong would still look right on a single-line input.
+func TestDefinitionSourceExcisesTheKeyword(t *testing.T) {
+	cases := []struct {
+		src  string
+		want string
+	}{
+		{"(module definition (memory 65536))", "(module  (memory 65536))"},
+		{"(module definition $M (memory 1))", "(module  $M (memory 1))"},
+		{"(module definition\n  $M\n  (memory 1)\n)", "(module \n  $M\n  (memory 1)\n)"},
+	}
+	for _, c := range cases {
+		s, err := Parse("t.wast", []byte(c.src))
+		if err != nil {
+			t.Fatalf("Parse(%q): %v", c.src, err)
+		}
+		got := string(s.Commands[0].Source)
+		if got != c.want {
+			t.Errorf("%q\n  Source = %q\n  want     %q", c.src, got, c.want)
+		}
+		// A second mechanism against the rows above, and its subject is *me*: the `want` strings
+		// are hand-transcribed, so a splice that kept the keyword and a `want` that also kept it
+		// would agree. This one derives nothing from them. It is not the wat reader's verdict —
+		// that is the board's job, on the real corpus, and this file has no engine to ask.
+		if strings.Contains(got, "definition") {
+			t.Errorf("%q: Source still contains the keyword: %q", c.src, got)
 		}
 	}
 }
