@@ -61,15 +61,31 @@ const (
 
 	invalidWAT = `(module (func (export "f") (result i32) i64.const 42))`
 
-	// The operands are chosen so the answer is deterministic: `relaxed_swizzle` is
-	// implementation-defined only for a lane index ≥ 16, and every index here is in range, so
-	// `a[s[0]] = a[3] = 4` is the spec's answer and not this engine's preference. A fixture asserting
-	// a relaxed operator's *relaxed* case would be pinning a choice the proposal leaves open.
-	decliningWAT = `(module (func (export "swizzle") (result i32)
-		(i8x16.extract_lane_s 0
-			(i8x16.relaxed_swizzle
-				(v128.const i8x16 7 6 5 4 3 2 1 0 0 0 0 0 0 0 0 0)
-				(v128.const i8x16 3 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))))`
+	// # There is no declining fixture any more, and the sixth re-point is the retirement
+	//
+	// `decliningWAT` stood here — `i8x16.relaxed_swizzle`, chosen because the interpreter executed it
+	// and the validator had no rule for it. #427 gave the validator the rule, so the intersection
+	// #326 describes ("implemented by the interpreter, untyped by the validator") is **empty** at this
+	// boundary, and empty for a structural reason rather than a scheduling one: the public path is
+	// default-features-only by design, and the validator types every instruction the decoder can name
+	// under `DefaultFeatures`.
+	//
+	// #326 predicted this state precisely — "at the end of #9 it is empty, at which point these
+	// fixtures do not need a better specimen, they need retiring" — and it stays open, because its
+	// subject changes rather than dissolving: a derivation is now worth having to catch a decline
+	// *re-appearing*, which is what a new prefix region or a gate flip outrunning its typing slice
+	// would produce.
+	//
+	// The note this fixture carried is worth keeping as testimony, because it is the fifth instance of
+	// the foreclosing word this PR is about. It said the specimen "is a *structural* decline and so
+	// retires on a gate flip rather than on the next slice", which took the pressure off #326. The
+	// gate it was waiting on had already flipped (`7315b57`, three days before), so the fixture was
+	// living on borrowed time at the moment that sentence was written, and the pressure it claimed to
+	// relieve was never relieved. `internal/testenv`'s foreclosing-word sweep does not catch this one:
+	// it is an inline note on a fixture, not a bound account, a non-goals heading, or an
+	// `ErrUnsupported` arm. Stated rather than fixed by widening the sweep, because widening it to
+	// unscoped prose is the 276-occurrence transcription that control's header rules out — the gap is
+	// named so it can be priced.
 )
 
 // gatedWATs are well-formed modules from proposals whose gates are off in this build — grave #301's
@@ -124,44 +140,14 @@ func TestTheThreeOutcomesAreDistinguishable(t *testing.T) {
 		}
 	})
 
-	t.Run("declined runs, and says what went unchecked", func(t *testing.T) {
-		in, err := Instantiate(compile(t, decliningWAT))
-		if err != nil {
-			t.Fatalf("a declining module was refused, which is the mixture error this outcome "+
-				"exists to prevent: %v", err)
-		}
-		d := in.Decline()
-		if d == nil {
-			t.Fatal("no decline reported for a module using an instruction the validator has no " +
-				"rule for; either the vocabulary grew (retire this fixture) or the decline was lost")
-		}
-		if !errors.Is(d, ErrDeclined) {
-			t.Errorf("the decline is not ErrDeclined: %v", d)
-		}
-		if errors.Is(d, ErrInvalid) {
-			t.Errorf("the decline also matches ErrInvalid, so a caller branching on invalid "+
-				"refuses this module: %v", d)
-		}
-		// The message is the campaign's public work plan (0029), so it has to name the construct.
-		// Asserted on the mnemonic rather than the whole string, which is the validator's to word.
-		//
-		// `i8x16_relaxed_swizzle` and not `i8x16_extract_lane_s`: the validator reports the *first*
-		// instruction it cannot type, and in this module that is the operand rather than the operator.
-		// Worth stating, because a fixture asserting the outer mnemonic would be asserting an
-		// evaluation order nothing promises — and the outer one here is typed, so the assertion would
-		// fail rather than pass by luck.
-		if !strings.Contains(d.Error(), "i8x16_relaxed_swizzle") {
-			t.Errorf("the decline does not name the construct: %v", d)
-		}
-
-		res, err := in.Call("swizzle")
-		if err != nil {
-			t.Fatalf("a declined module did not run: %v", err)
-		}
-		if len(res) != 1 || res[0] != I32(4) {
-			t.Errorf("swizzle() = %v, want [i32:4] — a[s[0]] = a[3]", res)
-		}
-	})
+	// The third outcome's own subtest is gone with its fixture, and what replaces it is the assertion
+	// that runs in the *other* direction: no module this boundary accepts reports a decline. It is
+	// asserted over the whole corpus rather than over one specimen, in `publicpath_test.go` — which is
+	// where the direction flip is accounted, and which is a stronger statement than any single fixture
+	// made. What is no longer asserted anywhere, and is named here so the loss is legible rather than
+	// discovered: that a decline, *if one occurred*, would be `ErrDeclined` and not `ErrInvalid`, would
+	// name its construct, and would still run. Those are properties of code that now has no reachable
+	// input at this boundary. #326 is the vehicle if a derivation ever gives them a subject again.
 }
 
 // TestStrictRefusesDeclinesAndNothingElse pins Config.Strict's scope: it closes the carve-out and
@@ -173,14 +159,17 @@ func TestTheThreeOutcomesAreDistinguishable(t *testing.T) {
 func TestStrictRefusesDeclinesAndNothingElse(t *testing.T) {
 	strict := Config{Strict: true}
 
-	_, err := strict.Instantiate(compile(t, decliningWAT))
-	if err == nil {
-		t.Fatal("--strict ran a module the validator could not fully check")
-	}
-	if !errors.Is(err, ErrDeclined) {
-		t.Errorf("--strict refused with something other than ErrDeclined: %v", err)
-	}
-
+	// **The flag's own arm is unexercisable, and that is the finding rather than a gap in this test.**
+	// `Config.Strict`'s doc comment schedules its own death — "it stops meaning anything when the last
+	// slice does" — and #427 typing `fd 0x100..0x12f` is the moment: nothing the decoder can name under
+	// `DefaultFeatures` declines, so `Strict: true` and `Strict: false` classify every module this
+	// boundary accepts identically. The flag is a no-op today.
+	//
+	// It is not removed, and its default is not flipped. Removal is an exported-API change and the flip
+	// is a default-behaviour change; both are Scott's, flagged rather than taken, and the flip is worth
+	// noting as *cheap* — it changes no observable behaviour, since the population it would newly refuse
+	// is empty. What survives below is the half that still has subjects, and it was always the half
+	// worth asserting: that the flag changes nothing for a valid module or an invalid one.
 	in, err := strict.Instantiate(compile(t, validWAT))
 	if err != nil {
 		t.Fatalf("--strict refused a fully validated module: %v", err)

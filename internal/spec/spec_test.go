@@ -7551,7 +7551,19 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	// *didn't* match the gated share — +3 here against +1 there with only one gated row in the file
 	// would mean a row moved for a reason nobody named. Two gated rows, gap of 2, named above in
 	// `gatedVectors`' allow-list: accounted.
-	const allOnPassFloor = 64985
+	// # 64985 → 64993, +8 against the default lane's +8, and the *equality* is the check this time
+	//
+	// #427 types relaxed SIMD in the validator. Read through the instrument the two entries above set
+	// up: an equal move means the repair touched no gated path, and that is exactly the property being
+	// claimed, because the thing repaired was a **validator** decline and `internal/validate` reads no
+	// feature set. Had these lanes diverged, the fix would have reached something gate-dependent and the
+	// diagnosis in #427 — a typing gap wearing a gate's name — would have been wrong about which layer
+	// it was in.
+	//
+	// So the pair of entries is now complete in both directions: #130's inequality of 2 matched its
+	// gated share, #427's equality of 0 matches its gate-blindness, and each was pre-registered before
+	// the run. All-on `fail` 61 → 53.
+	const allOnPassFloor = 64993
 	// **Slack 0 as of Scott's #387 ruling**, which this bound's own 89-row staleness above is what
 	// prompted: a floor with 250 of tolerance cannot detect anything smaller than 250, so it is a
 	// bound sitting inside its own tolerance. Exact from here — re-base it in the PR that moves the
@@ -10115,8 +10127,34 @@ func TestPhase1Files(t *testing.T) {
 	// is the movement `validateAdmitCeiling`'s own header calls the one that makes the engine less
 	// correct. The agreement is asserted rather than assumed: the arm-flag reconciliation below fires
 	// if the two paths ever describe different populations.
-	const validateFailCeiling = 8
-	const validateDeclineCeiling = 8
+	//
+	// # 8 → 0, and the word "structural" in the paragraph above is grave #427
+	//
+	// The eight were the relaxed-SIMD operators and they are typed now (#427). Nothing about them was
+	// structural: `DefaultFeatures()` had carried `RelaxedSIMD: true` since `7315b57` (#275/ADR 0028),
+	// so the decoder was admitting `fd 0x100..0x12f` and the *validator* was declining for want of a
+	// rule — and `internal/validate/vecfamily.go` already held all 20 rows, in families whose arms were
+	// already written, because that table's domain is the whole region rather than what its file
+	// happens to type. The repair was the deletion of a guard.
+	//
+	// **The sentence above cost eight rows of unworked engine, and it cost them by foreclosing.** It
+	// did not merely record a wrong number — a wrong number invites a re-measurement. It told the next
+	// reader there was no work here, and it was written on 2026-08-17, *three days after* the flip that
+	// falsified it. Its sibling in `internal/validate/vec.go` ("unreachable while the gate is off — the
+	// decoder refuses these opcodes first") was written one day after. Neither was ever true.
+	//
+	// The word is left standing above rather than edited out, because the paragraph is testimony and a
+	// corrected transcript is a worse record than an annotated one. What replaces the *practice* is
+	// `internal/testenv`'s foreclosing-word sweep, which reads this file among others: a bound account
+	// may say a residue is structural only where it names the mechanism that makes it so, and a claim
+	// resting on a gate is checked against `DefaultFeatures()` rather than believed.
+	//
+	// Both lanes moved by exactly 8 — default 60914 → 60922, all-on 64985 → 64993 — and the *equality*
+	// is this repair's own check, in the direction grave #130's inequality was: a validator decline
+	// reads no gate, so a fix inside one must move the two lanes identically. All six figures were
+	// pre-registered before the run.
+	const validateFailCeiling = 0
+	const validateDeclineCeiling = 0
 	boardBound(t, "validateDeclineCeiling", validateDeclined, validateDeclineCeiling, 0, ceilingBound,
 		"slice 1 declined more instructions than it did — either an opcode left the signature "+
 			"table or a later slice's rule regressed into a decline")
@@ -11066,7 +11104,28 @@ func TestPhase1Files(t *testing.T) {
 	// `unsupported` is unmoved at 66 and the zero is **structural** for the tenth entry running:
 	// `classify` is untouched, so nothing the harness could not ask became askable. #323 remains the
 	// one open issue that moves this column.
-	const passFloor = 60914
+	//
+	// # 60914 → 60922 with #427, and this is the fail column's last non-harness member
+	//
+	// +8, every row a relaxed-SIMD `module text declined`: the validator had no rule for
+	// `fd 0x100..0x12f` while the *decoder* had admitted the range since the gate flipped, so the eight
+	// were a typing gap wearing a gate's name. Pre-registered exactly, in both lanes (all-on 64985 →
+	// 64993), and the equality between the lanes is the check — a validator decline reads no gate, so
+	// an unequal move would have meant the repair touched something else. `fail` 16 → 8, and the 8 that
+	// remain are both harness attribution holes, #414's five and #426's three: **no row in this column
+	// is now the interpreter computing a wrong answer, and none of the eight is engine work.**
+	//
+	// `unsupported` unmoved at 66, structural for the eleventh entry running, same reason as the tenth.
+	// The reward figure that does have a subject is this one: the validate stratum reaches 0 across all
+	// four of its partitions (`declined`, `admitted`, `over-rejected`, `wrong-message`), which is #9's
+	// instruction vocabulary complete over the space the decoder can name under `DefaultFeatures`.
+	//
+	// **That is not #9 done, and the distance is worth stating where the figure is.** A drained stratum
+	// says no *board row* is attributed to a validator shortfall; it does not say the validator refuses
+	// everything it should. Alignment is not checked at all — `decodeMemop` drops the memarg — and #328's
+	// 103 module-and-section vectors have no vocabulary yet. A negative-vector corpus cannot falsify what
+	// a validator wrongly *accepts*, which is why this column reaching 0 leaves #9 open.
+	const passFloor = 60922
 	// Slack 0 as of #387's ruling, with `allOnPassFloor` and `unsupportedCeiling` — see
 	// `boardbound_test.go`'s retirement section. Two entries in the ledger above record taking a
 	// re-base *although the slack stayed silent* (58659 by a margin of 20, and the 416 that was four

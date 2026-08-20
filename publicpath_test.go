@@ -740,10 +740,34 @@ func TestConformanceThroughThePublicPath(t *testing.T) {
 	if tally.ran+tally.declined < 1200 {
 		t.Errorf("only %d modules instantiated through the public path", tally.ran+tally.declined)
 	}
-	if tally.declined == 0 {
-		t.Error("no module declined, so the third outcome went unexercised by the corpus: either " +
-			"#9's vocabulary is complete — retire this guard and flip Config.Strict's default — or " +
-			"the decline is being lost")
+	// # The decline guard fired, its first branch was the true one, and so it is inverted here
+	//
+	// What stood here asserted `tally.declined != 0` and said: "either #9's vocabulary is complete —
+	// retire this guard and flip Config.Strict's default — or the decline is being lost". #427 made it
+	// the first, by typing `fd 0x100..0x12f`. The validator now has a rule for **every instruction the
+	// decoder can name under `DefaultFeatures`**, and this boundary is default-features-only by
+	// deliberate design (see burroughs.go's "no gate selection here"), so a decline has no reachable
+	// subject at the public path — not "none in this corpus".
+	//
+	// The direction flips rather than the guard being deleted, because *a tripwire names a risk, not a
+	// code shape* (#33) and the risk did not dissolve with its subject. A decline **re-appearing** is
+	// now the event worth catching: it means either a new prefix region the validator does not type
+	// (0xFE is threads', a v1 milestone), or a gate flip carrying opcodes past the decoder into a
+	// validator with no rule for them — which is exactly how ADR 0025's G-1 carve-out is supposed to
+	// be visible rather than silent.
+	//
+	// Two things this does *not* say, because both are easy to read into it. It does not say #9 is
+	// complete: the validator still *admits* modules it should refuse — alignment is not checked at
+	// all (`validate/vec.go`, `decodeMemop` drops the memarg) — and an admission is a different
+	// stratum from a decline. And it does not flip `Config.Strict`'s default, which its own doc comment
+	// schedules for this moment; that is a default-behaviour change and so a stamp-tier event, flagged
+	// for Scott rather than taken here.
+	if tally.declined != 0 {
+		t.Errorf("%d modules declined at the public path, and since #427 nothing should: the "+
+			"validator types every instruction the decoder can name under DefaultFeatures. A decline "+
+			"here means a construct reached validation with no rule — name it, because it is either a "+
+			"new region or a gate flip that outran its typing slice (#326 for the derivation that "+
+			"would name it automatically)", tally.declined)
 	}
 	if tally.refusedGated == 0 {
 		t.Error("no module was refused for a gate, so grave #301's control has no subject: either " +

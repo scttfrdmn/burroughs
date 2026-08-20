@@ -154,17 +154,11 @@ func TestDiagnosticNamesTheProgramExactlyOnce(t *testing.T) {
 	if err := os.WriteFile(malformed, []byte("not a wasm module"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	// `i8x16.relaxed_swizzle` is implemented by the interpreter and not typed by the validator, so
-	// this module runs *and* reports a decline — the two-line stderr the sweep was about. Kept in step
-	// with run_test.go's `declining` fixture, which carries the note on why this specimen is
-	// structural and retires on a gate flip rather than on the next slice.
-	declining := writeModule(t, "declining.wasm",
-		`(module (func (export "swizzle") (result i32)
-			(i8x16.extract_lane_s 0
-				(i8x16.relaxed_swizzle
-					(v128.const i8x16 7 6 5 4 3 2 1 0 0 0 0 0 0 0 0 0)
-					(v128.const i8x16 3 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)))))`)
-
+	// The `declining` fixture and its two rows are retired with #427 (see run_test.go). They were the
+	// only rows here that read a **two-line** stderr — a decline report plus a result-side diagnostic —
+	// which is the shape the prefix sweep was originally about, so the multi-line case is now covered
+	// only incidentally by whatever other row happens to produce it. Named because "the sweep half"
+	// this test's header claims is thinner than it was, not absent.
 	for _, argv := range [][]string{
 		{"run", malformed},
 		{"inspect", malformed},
@@ -172,8 +166,6 @@ func TestDiagnosticNamesTheProgramExactlyOnce(t *testing.T) {
 		{"inspect", writeModule(t, "gated2.wasm", `(module (memory i64 1))`)},
 		{"run", writeModule(t, "invalid.wasm",
 			`(module (func (export "f") (result i32) i64.const 42))`)},
-		{"run", declining, "swizzle"},
-		{"run", "--strict", declining, "swizzle"},
 		{"run", filepath.Join(t.TempDir(), "absent.wasm")},
 	} {
 		var out, errOut bytes.Buffer
