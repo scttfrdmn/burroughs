@@ -3934,27 +3934,43 @@ func (s *Script) run(opts runOpts) *Result {
 			head := c.Head
 			if head == "" {
 				// A command with no head atom — a list whose first element is itself a
-				// list or a string, as in annotations.wast's `((@a) module …)` forms,
-				// where an annotation precedes the head.
+				// list or a string.
 				//
-				// **Three of them, and they are on the board.** The clause that stood here
-				// said otherwise:
+				// **Its population is now zero, and the two clauses this comment carried
+				// before are kept as a pair because together they are the lesson.** The
+				// first said the branch was unexercised:
 				//
 				//	all in annotations.wast, which the derived selector does not currently
 				//	put on the board. So this branch is live-but-unexercised by today's
 				//	corpus
 				//
-				// True when written and stale since: the board prints `annotations.wast:
-				// 71/71 pass, 3 unsupported` with `3 (no head atom)`, so the selector does
-				// put it on the board and this branch scores all three. Quoted rather than
-				// deleted, because it was a coverage claim sitting in the arm whose own
-				// coverage it described — and a stale one reads as a live measurement.
-				// Counted in #320's census, drainable by teaching classify to skip
-				// annotation nodes when it looks for the head.
+				// which was true when written and went stale silently. The second corrected
+				// it to three scored vectors, `((@a) module …)` forms where an annotation
+				// precedes the head, and named the drain: *teaching classify to skip
+				// annotation nodes when it looks for the head*.
+				//
+				// **That named remedy was the wrong one, and the reference is why.**
+				// `lexer.mll:821-828` records an annotation into a side table and tail-calls
+				// `token lexbuf`, emitting no token — so annotations are transparent to the
+				// grammar wherever they appear, not something a head-finder steps over. Had
+				// classify been taught to skip them, the six *positional* reads in this file
+				// (`len(n.list) == 3` and `n.list[1]`/`n.list[2]` in the assert_malformed,
+				// register and action arms) would each have needed the same skip. The fix
+				// went into the s-expression reader instead, where it is one predicate for
+				// all of them; see sexpr.go's isAnnotation and the block below parseAll.
+				//
+				// So three separate readings of this one branch have now been wrong in
+				// sequence — unexercised, then exercised-and-drainable-here, then
+				// drainable-elsewhere — and the middle one was a coverage claim sitting in
+				// the arm whose coverage it described. Quoted rather than deleted for that
+				// reason: a stale measurement reads as a live one.
 				//
 				// The placeholder stays regardless: TestUnsupportedIsBucketedByCommand
 				// pins that no key is ever empty, which is the failure it prevents — an
 				// unlabelled entry in a work-plan column is the one nobody investigates.
+				// It is now a guard with no population rather than a bucket with three, and
+				// that is the honest description of it until some other form arrives
+				// headless.
 				head = "(no head atom)"
 			}
 			r.UnsupportedByHead[head]++

@@ -40,6 +40,17 @@
 // the whole corpus: 1953 of our 2238 module commands join, and exactly one pair exceeds a ±2
 // line window — the `comments.wast` quote form, for which wabt reports line 0.
 //
+// **The 2238 is era-marked, and only the denominator moved.** #459 taught the s-expression reader
+// to drop annotation nodes, which gave `annotations.wast:98,129,154` a `module` head for the first
+// time — the instrumented census next door reports it, `publicpath_test.go`'s module pin going
+// 2238 → 2241. The join count is *not* restated as 1956 or as 1953-of-2241, because this pair of
+// figures came from a one-off session measurement rather than from a committed instrument and
+// nothing here can re-derive it: `annotations.wast` is one of the 31 files wabt 1.0.41 cannot
+// compile (the annotation flag is outside the tracked union, below), so the three have no
+// reference side to join to and the ratio can only have got slightly worse. Saying which half is
+// re-measured and which is inferred, rather than adding three to both sides and calling it
+// arithmetic.
+//
 // # What the corpus does not cover, stated rather than floored
 //
 // wabt 1.0.41 cannot compile 31 of the 257 files — the GC type syntax (`i8`, `i16`, `rec`,
