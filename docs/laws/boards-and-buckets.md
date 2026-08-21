@@ -45,6 +45,15 @@ reach is a law out of context.
   export, not a global. So `unsupported → 0` for v0 will mean the harness can finally ask
   every question the corpus writes, and will mean nothing whatever about capability gained
   in that slice.
+  - **The general form is guidance and belongs here; the dated claim about this project does
+    not.** *"v0's remaining `unsupported` column is entirely harness debt"* is a position
+    statement about where Burroughs stands at one moment, not a rule for reading boards, and
+    a law page is the wrong home for it because reaching it requires already knowing the law
+    exists and thinking to apply it. It is stated where the closure set is defined instead —
+    the five-verdict list in [`README.md`](../../README.md#conformance), beside the column
+    it is about and beside the `unimplemented` bullet that names the other v0 closure
+    condition. (Ruling: Scott, PR #460, correcting a first attempt that filed the position
+    statement here and in the ceiling's ledger only.)
   - **The consequence for reporting is that the column's own comment carries the
     classification, not just the count.** A ledger entry that records `14 → 11` and the
     mechanism is still readable, two years on, as three capabilities landing. The reader who

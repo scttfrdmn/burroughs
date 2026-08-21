@@ -61,10 +61,18 @@ weakly-ordered platform.
   **And a finding, ordered into the repo rather than left in an issue comment**: measured against
   Scott's runtime-vs-harness test, **v0's whole remaining `unsupported` column is harness debt** —
   these 3 were a reader's lexical gap over modules the engine already answered correctly, and the 11
-  under #323 want a public read path for a global export rather than a global. Recorded at
-  `unsupportedCeiling`'s ledger entry and in
+  under #323 want a public read path for a global export rather than a global. Stated in
+  **`README.md`'s five-verdict list, beside the column it is about** and beside the `unimplemented`
+  bullet that names the other v0 closure condition, because *"nobody reading `unsupported → 0` later
+  should take it for an engine milestone."* **Scott's correction on this PR separated two objects a
+  first attempt had merged**: the general rule — *a column draining to zero is not the engine
+  reaching a milestone* — is guidance and stays in
   [boards-and-buckets](docs/laws/boards-and-buckets.md#a-column-draining-to-zero-is-not-the-engine-reaching-a-milestone),
-  because *"nobody reading `unsupported → 0` later should take it for an engine milestone."*
+  while *"v0's remaining column is entirely harness debt"* is a position statement about this project
+  at one moment and belongs **where the closure set is defined**, since reaching it on a law page
+  requires already knowing the law exists and thinking to apply it. `unsupportedCeiling`'s ledger
+  keeps its entry too — the class has to be restated wherever that bound next moves, which is the one
+  thing README cannot promise for rows added later. No figure crosses into README, per its own rule.
 
 - **`assert_exhaustion` enters the harness's command vocabulary, and the `unsupported` column falls
   29 → 14** ([#440](https://github.com/scttfrdmn/burroughs/issues/440)). One `classify` arm, one
