@@ -345,6 +345,248 @@ func TestImmutableGlobalIsNotRefusedHere(t *testing.T) {
 	}
 }
 
+// TestGlobalReadsWhatTheInterpreterHolds is `Instance.Global`'s own control (#323): every storage
+// shape read **twice** — once by `global.get` inside a body, once through the new boundary — and
+// required to agree, and required to equal a hand-written value besides.
+//
+// # Why agreement alone would be close to vacuous
+//
+// Both readings end at the same `*global`, so an engine with one storage bug answers both sides
+// wrongly and the two agree perfectly. That is the empty-versus-empty shape, and it is why each row
+// also carries a `want` written out by hand: the row asserts a *value*, and the agreement is the
+// second claim on top of it.
+//
+// What agreement genuinely covers is the **layout dispatch**, which is the one thing the two paths
+// do independently: `get` pushes onto whichever array `shape()` names, `value` builds a `Value` from
+// the same switch, and a fourth storage shape added to one and not the other is exactly grave #239
+// (a v128 global whose high half was dropped on the read-back half specifically). So `Hi` is
+// compared, which means the comparison here is `!=` on the whole struct and **not** `Value.Equal` —
+// `Equal` reads `Bits` alone for a numeric value and is blind to `Hi`, so using it would leave the
+// grave's own field unasserted.
+//
+// # Why this test rather than the board
+//
+// The 11 corpus rows #323 drained are `i32`/`i64`/`f32` globals over two files; none is a `v128`, a
+// reference, or an immutable-versus-mutable pair. So the board's +11 says the boundary answers the
+// population that exists, and the rows below are the ones that do not exist yet — the same division
+// of labour the `passFloor` ledger in `internal/spec` states from its side.
+func TestGlobalReadsWhatTheInterpreterHolds(t *testing.T) {
+	// funcTarget is the function index the funcref row's `ref.func` names — the last accessor, and
+	// **nonzero on purpose**: index 0 is what a boundary that dropped the payload would also report,
+	// so a zero target is a row whose right answer and wrong answer coincide.
+	const funcTarget = 6
+
+	rows := []struct {
+		name string
+		typ  binary.ValType
+		mut  bool
+		init []binary.Instr
+		want Value
+	}{{
+		name: "i32",
+		typ:  binary.I32,
+		init: []binary.Instr{{Op: 0x41, Imm0: 0xdeadbeef}, {Op: opEnd}},
+		want: Value{Type: binary.I32, Bits: 0xdeadbeef},
+	}, {
+		// The one mutable row. Mutability is orthogonal to reading — `value` consults `shape()` and
+		// never `Mutable` — and a row of each is here so that a future guard mistakenly keyed on
+		// mutability fails on one row rather than on none.
+		name: "i64",
+		typ:  binary.I64,
+		mut:  true,
+		init: []binary.Instr{{Op: 0x42, Imm0: 0x0123456789abcdef}, {Op: opEnd}},
+		want: Value{Type: binary.I64, Bits: 0x0123456789abcdef},
+	}, {
+		// A **signaling NaN**, not a plain float: the payload is what a numeric conversion anywhere
+		// on either path destroys while leaving every integral value intact (pushF32's own lesson).
+		name: "f32",
+		typ:  binary.F32,
+		init: []binary.Instr{{Op: 0x43, Imm0: 0x7fa00001}, {Op: opEnd}},
+		want: Value{Type: binary.F32, Bits: 0x7fa00001},
+	}, {
+		name: "f64",
+		typ:  binary.F64,
+		init: []binary.Instr{{Op: 0x44, Imm0: 0x7ff8000000000001}, {Op: opEnd}},
+		want: Value{Type: binary.F64, Bits: 0x7ff8000000000001},
+	}, {
+		// Grave #239's shape asked of the new reader: four distinct nonzero lanes, so a dropped or
+		// duplicated high half is wrong on the `Hi` field rather than agreeing by zero.
+		name: "v128",
+		typ:  binary.V128,
+		init: []binary.Instr{
+			{Prefix: 0xfd, Op: 0x0c, Imm0: 0x2222222211111111, Imm1: 0x4444444433333333},
+			{Op: opEnd},
+		},
+		want: Value{Type: binary.V128, Bits: 0x2222222211111111, Hi: 0x4444444433333333},
+	}, {
+		// The reference array's half. A null reference's payload is the absence of one, so
+		// `RefKind` stays `PayloadNone` — grave #266's fact, and the reason this row cannot be
+		// confused with the one below it.
+		name: "externref",
+		typ:  binary.ExternRef,
+		init: []binary.Instr{{Op: opRefNull}, {Op: opEnd}},
+		want: Value{Type: binary.ExternRef, Null: true},
+	}, {
+		// A **non-null** reference, which is the row that makes the pair above discriminating: the
+		// constructor crosses in `RefKind` and the function index in `Bits`, and an engine that
+		// answered `Null: true` here or dropped the kind fails on a field the null row cannot see.
+		name: "funcref",
+		typ:  binary.FuncRef,
+		init: []binary.Instr{{Op: opRefFunc, Imm0: funcTarget}, {Op: opEnd}},
+		want: Value{Type: binary.FuncRef, RefKind: PayloadFunc, Bits: funcTarget},
+	}}
+
+	// The guard keeps `funcTarget` honest: it names the last accessor by number, so a row added
+	// below moves the function it points at and the constant has to move with it.
+	if funcTarget != len(rows)-1 {
+		t.Fatalf("funcTarget is %d but the last accessor is %d: a row was added without moving the "+
+			"constant, so the funcref row now names a different function", funcTarget, len(rows)-1)
+	}
+
+	// One accessor per global — `(func (export "<name>") (result <t>) (global.get i))` — and one
+	// global export beside it, so both readings of row i are reachable by name.
+	m := &binary.Module{}
+	for i, r := range rows {
+		m.Types = append(m.Types, binary.CompType{Kind: binary.CompFunc, Func: binary.FuncType{
+			Results: []binary.ValType{r.typ},
+		}})
+		m.Funcs = append(m.Funcs, binary.Func{TypeIndex: uint32(i), Body: []binary.Instr{
+			{Op: 0x23, Imm0: uint64(i)}, {Op: opEnd},
+		}})
+		m.Globals = append(m.Globals, binary.Global{Type: r.typ, Mutable: r.mut, Init: r.init})
+		m.Exports = append(m.Exports,
+			binary.Export{Name: r.name, Kind: binary.ExternFunc, Index: uint32(i)},
+			binary.Export{Name: "g_" + r.name, Kind: binary.ExternGlobal, Index: uint32(i)})
+	}
+
+	in, trap := Instantiate(m)
+	if trap != nil {
+		t.Fatalf("trap: %v", trap)
+	}
+	// Checked rather than skipped, for TestV128GlobalRoundTripsAllFourLanes' reason: a refused
+	// initializer is *parked* rather than returned, so omitting this makes every row below report a
+	// missing global instead of the refusal that caused it.
+	if err := in.Deferred(); err != nil {
+		t.Fatalf("deferred: %v — a global initializer was refused", err)
+	}
+
+	for _, r := range rows {
+		got, err := in.Global("g_" + r.name)
+		if err != nil {
+			t.Errorf("Global(%q): %v", "g_"+r.name, err)
+			continue
+		}
+		if got != r.want {
+			t.Errorf("Global(%q) = %+v, want %+v", "g_"+r.name, got, r.want)
+		}
+		out, err := in.Invoke(r.name)
+		if err != nil {
+			t.Errorf("Invoke(%q): %v", r.name, err)
+			continue
+		}
+		if len(out) != 1 {
+			t.Errorf("Invoke(%q) returned %d results, want 1", r.name, len(out))
+			continue
+		}
+		// The differential. It fires where the two dispatches disagree — which is the failure a
+		// hand-written `want` on one side alone cannot distinguish from a wrong expectation.
+		if out[0] != got {
+			t.Errorf("%s: global.get answered %+v and Global answered %+v; the two layout "+
+				"dispatches disagree", r.name, out[0], got)
+		}
+	}
+}
+
+// TestGlobalExportKindIsNotDeclarationOrder is `exportedIndex`'s kind test, asserted rather than
+// left to the comment that calls it load-bearing. A module may export a function and a global under
+// **one name** — nothing in the spec forbids it, since the export space is not partitioned by kind —
+// so a lookup that matched on the name alone would answer whichever came first in the section.
+//
+// Both orders are built, because a single order cannot tell a kind test from a declaration-order
+// coincidence: with the function first, a name-only lookup hands `Global` a *function* index; with
+// the global first, it hands `Invoke` a global's. Each order catches the defect the other hides.
+//
+// # The two index spaces are skewed, and the first draft of this test proves why that is required
+//
+// `"dual"` is **function 1 and global 0**, so a wrong-kind index names a different object in either
+// direction. Written first with both at index 0 — the shape a reader would reach for — this test
+// passed its own falsification: with the kind test deleted, a name-only lookup returned 0, and 0 was
+// the right index for both, so only the `"callable"` row below fired. That is the fixed-point lesson
+// arriving inside the control written to state it, and the reason the decoy function and global exist
+// at all is to move the wrong answer off the right one.
+func TestGlobalExportKindIsNotDeclarationOrder(t *testing.T) {
+	// Four distinct values across two index spaces: a lookup that crossed kinds reports a number
+	// that says which space it read and at what index.
+	const wantGlobal, decoyGlobal = 7, 13
+	const wantFunc, decoyFunc = 42, 99
+
+	// (func (export "dual") (result i32) (i32.const 42)) at index **1**, beside
+	// (global (export "dual") i32 7) at index **0**, each with a decoy at the other's index, plus a
+	// function-only export to ask about a name no global carries.
+	base := func(exports []binary.Export) *binary.Module {
+		body := func(v uint64) []binary.Instr {
+			return []binary.Instr{{Op: 0x41, Imm0: v}, {Op: opEnd}}
+		}
+		return &binary.Module{
+			Types: []binary.CompType{{Kind: binary.CompFunc, Func: binary.FuncType{
+				Results: []binary.ValType{binary.I32},
+			}}},
+			Funcs: []binary.Func{
+				{TypeIndex: 0, Body: body(decoyFunc)},
+				{TypeIndex: 0, Body: body(wantFunc)},
+			},
+			Globals: []binary.Global{
+				{Type: binary.I32, Init: i32Const(wantGlobal)},
+				{Type: binary.I32, Init: i32Const(decoyGlobal)},
+			},
+			Exports: exports,
+		}
+	}
+	fn := binary.Export{Name: "dual", Kind: binary.ExternFunc, Index: 1}
+	gl := binary.Export{Name: "dual", Kind: binary.ExternGlobal, Index: 0}
+	onlyFunc := binary.Export{Name: "callable", Kind: binary.ExternFunc, Index: 1}
+
+	for _, order := range []struct {
+		what    string
+		exports []binary.Export
+	}{
+		{"function first", []binary.Export{fn, gl, onlyFunc}},
+		{"global first", []binary.Export{gl, fn, onlyFunc}},
+	} {
+		in, trap := Instantiate(base(order.exports))
+		if trap != nil {
+			t.Fatalf("%s: trap: %v", order.what, trap)
+		}
+		g, err := in.Global("dual")
+		if err != nil {
+			t.Errorf("%s: Global(\"dual\"): %v", order.what, err)
+		} else if g.Bits != wantGlobal {
+			t.Errorf("%s: Global(\"dual\") = %d, want %d", order.what, g.Bits, wantGlobal)
+		}
+		out, err := in.Invoke("dual")
+		if err != nil {
+			t.Errorf("%s: Invoke(\"dual\"): %v", order.what, err)
+		} else if len(out) != 1 || out[0].Bits != wantFunc {
+			t.Errorf("%s: Invoke(\"dual\") = %v, want a single i32 %d", order.what, out, wantFunc)
+		}
+
+		// A name only a *function* export carries is an error and not an empty value — the caller
+		// asked the wrong question and is told so, which is the half of the kind test that has no
+		// right answer to return.
+		_, err = in.Global("callable")
+		if err == nil {
+			t.Errorf("%s: Global(\"callable\") succeeded; that name is a function export", order.what)
+		} else if !strings.Contains(err.Error(), `no exported global "callable"`) {
+			t.Errorf("%s: Global(\"callable\") said %q, want it to name the missing *global*",
+				order.what, err)
+		}
+		if _, err := in.Global("absent"); err == nil {
+			t.Errorf("%s: Global(\"absent\") succeeded on a name the module does not export at all",
+				order.what)
+		}
+	}
+}
+
 // TestNeedRefReadsTheRefArray is the vacuity check on the pair of depth helpers: `needNum` and
 // `needRef` read *different* arrays, and a single helper wired to the wrong one would answer every
 // question about references by measuring numbers.

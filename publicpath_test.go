@@ -590,13 +590,13 @@ func TestConformanceThroughThePublicPath(t *testing.T) {
 					trusted = false
 					continue
 				}
-				_, perr := pub.Call(c.Invoke, args...)
-				_, rerr := raw.Invoke(c.Invoke, rawArgs(c.Args)...)
+				_, perr := pub.Call(c.Export, args...)
+				_, rerr := raw.Invoke(c.Export, rawArgs(c.Args)...)
 				if (perr == nil) != (rerr == nil) {
 					tally.disagreed++
 					disagreements = append(disagreements, fmt.Sprintf(
 						"%s:%d: action %q succeeded on one path only: public=%v raw=%v",
-						base, c.Line, c.Invoke, perr, rerr))
+						base, c.Line, c.Export, perr, rerr))
 					trusted = false
 				}
 
@@ -642,14 +642,44 @@ func TestConformanceThroughThePublicPath(t *testing.T) {
 					continue
 				}
 
-				pres, perr := pub.Call(c.Invoke, args...)
-				rres, rerr := raw.Invoke(c.Invoke, rawArgs(c.Args)...)
+				// **Both verbs, because the boundary now has both** (#323). An `assert_return`
+				// carries an action, and since the verb became a field the action can be a `get` —
+				// so this driver either dispatches on it or silently asks `Call` for a global's
+				// name, which both paths refuse identically and which would land 1 vector in
+				// `callFailed` while reporting nothing about the method that answers it. The
+				// public/raw pair is the point: `Instance.Global` arrived with `interp.Global`
+				// beneath it, and an untried public method is exactly what this differential exists
+				// to prevent.
+				//
+				// Wrapped into the same one-element slices the tail already compares, rather than
+				// given its own comparison: everything below — the error agreement, the arity
+				// check, the value comparison against the vector — is a property of *results* and
+				// not of how they were produced. A second copy of it for one verb is the drift this
+				// file's own arms are factored to avoid.
+				var pres []Value
+				var rres []interp.Value
+				var perr, rerr error
+				if c.Verb == spec.VerbGet {
+					var pv Value
+					var rv interp.Value
+					pv, perr = pub.Global(c.Export)
+					rv, rerr = raw.Global(c.Export)
+					if perr == nil {
+						pres = []Value{pv}
+					}
+					if rerr == nil {
+						rres = []interp.Value{rv}
+					}
+				} else {
+					pres, perr = pub.Call(c.Export, args...)
+					rres, rerr = raw.Invoke(c.Export, rawArgs(c.Args)...)
+				}
 
 				if (perr == nil) != (rerr == nil) {
 					tally.disagreed++
 					disagreements = append(disagreements, fmt.Sprintf(
 						"%s:%d: %s succeeded on one path only: public=%v raw=%v",
-						base, c.Line, c.Invoke, perr, rerr))
+						base, c.Line, c.Export, perr, rerr))
 					continue
 				}
 				if perr != nil {
@@ -662,7 +692,7 @@ func TestConformanceThroughThePublicPath(t *testing.T) {
 					tally.disagreed++
 					disagreements = append(disagreements, fmt.Sprintf(
 						"%s:%d: %s returned %d results publicly and %d raw",
-						base, c.Line, c.Invoke, len(pres), len(rres)))
+						base, c.Line, c.Export, len(pres), len(rres)))
 					continue
 				}
 
@@ -678,7 +708,7 @@ func TestConformanceThroughThePublicPath(t *testing.T) {
 					tally.disagreed++
 					disagreements = append(disagreements, fmt.Sprintf(
 						"%s:%d: %s answered %s publicly and %s raw",
-						base, c.Line, c.Invoke, pvals, rvals))
+						base, c.Line, c.Export, pvals, rvals))
 					continue
 				}
 
@@ -692,7 +722,7 @@ func TestConformanceThroughThePublicPath(t *testing.T) {
 					tally.mismatched++
 					mismatches = append(mismatches, fmt.Sprintf(
 						"%s:%d: %s returned %d results, the vector expects %d",
-						base, c.Line, c.Invoke, len(pres), len(c.Results)))
+						base, c.Line, c.Export, len(pres), len(c.Results)))
 					continue
 				}
 				for i, want := range c.Results {
@@ -701,7 +731,7 @@ func TestConformanceThroughThePublicPath(t *testing.T) {
 						tally.mismatched++
 						mismatches = append(mismatches, fmt.Sprintf(
 							"%s:%d: %s result %d: got %v, want %v",
-							base, c.Line, c.Invoke, i, got, want))
+							base, c.Line, c.Export, i, got, want))
 						break
 					}
 				}

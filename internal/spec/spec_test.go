@@ -541,6 +541,35 @@ func invoke(in Instance, name string, args []Val) ([]Val, error) {
 	return res, nil
 }
 
+// readGlobal is the interpreter's `get` entry point — `invoke`'s counterpart for the script
+// grammar's other action (#323).
+//
+// **The same one conversion, deliberately reused rather than re-derived.** `fromInterpValue` is
+// the whole of what crosses here, and it is the identical call `invoke` makes on its results,
+// because a global's value and a call's result are the same fact at this boundary. A second
+// mapping written for this path would be a second answer to "what is this value", which is the
+// grave `invoke`'s own comment cites (#78/#105/#106) and the reason the ValKind glue is one place.
+//
+// The unrepresentable case is reported rather than defaulted, for `invoke`'s stated reason: a
+// silent coercion would make a `v128` global compare as an `i32`, and the mismatch bucket would
+// then name the wrong defect — with the aggravation that a `(get …)` vector has *one* result, so
+// the wrong reading would be the whole of what the vector said.
+func readGlobal(in Instance, name string) (Val, error) {
+	inst, ok := in.(*interp.Instance)
+	if !ok {
+		return Val{}, fmt.Errorf("instance is %T, not *interp.Instance", in)
+	}
+	out, err := inst.Global(name)
+	if err != nil {
+		return Val{}, err
+	}
+	v, ok := fromInterpValue(out)
+	if !ok {
+		return Val{}, fmt.Errorf("global %q has type %v, which the harness cannot represent", name, out.Type)
+	}
+	return v, nil
+}
+
 // valType and valKind are the two directions of the value-type map, written as explicit
 // switches over both enums rather than as an arithmetic offset.
 //
@@ -941,7 +970,7 @@ func engine() Engine {
 		Decode: decode, ReadText: readText, Assemble: assemble, IsGated: isGated, IsTrap: isTrap,
 		IsException: isException,
 		Validate:    validateModule, IsDeclined: isDeclined,
-		Invoke: invoke, InstantiateLinked: instantiateLinked,
+		Invoke: invoke, ReadGlobal: readGlobal, InstantiateLinked: instantiateLinked,
 	}
 }
 
@@ -7920,7 +7949,21 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	// have said an annotation was reaching a gated path. Not a forecast this PR gets credit for
 	// hitting; it is a consequence of the fix being in the s-expression reader, which sits below
 	// every gate in the stack and cannot see one.
-	const allOnPassFloor = 65067
+	// # 65067 → 65078, +11, and the lanes agree exactly for the third slice running
+	//
+	// #323's `(get …)` rows. `passFloor` moved +11 too, and the equality is the same check the two
+	// entries above make: all 11 vectors live in `exports.wast` and `linking.wast`, both MVP core,
+	// so turning every gate on cannot touch them and a divergence would have said a `get` was
+	// reaching a gated path. It is not a forecast this PR gets credit for hitting — a global read is
+	// below every gate in the stack, the same structural reason #459's annotation skip gave.
+	//
+	// **`allOnFailCeiling` below does not move, and that is the load-bearing half here.** This slice
+	// is the first of the four `unsupported` drains that adds *engine* surface (`interp.Instance.Global`),
+	// so it is the one where a new red was genuinely possible: 11 vectors that had never been answered
+	// began to be answered, and a wrong answer would have landed in this lane's `fail` rather than
+	// anywhere the `unsupported` column could absorb it. 11 conversions, 11 passes, 0 new reds, in a
+	// lane that carries 31 standing fails to hide one in.
+	const allOnPassFloor = 65078
 	// **Slack 0 as of Scott's #387 ruling**, which this bound's own 89-row staleness above is what
 	// prompted: a floor with 250 of tolerance cannot detect anything smaller than 250, so it is a
 	// bound sitting inside its own tolerance. Exact from here — re-base it in the PR that moves the
@@ -9219,7 +9262,49 @@ func TestPhase1Files(t *testing.T) {
 	// figure that carries engine capability is `passFloor` and its all-on twin; this one carries
 	// vocabulary. **A reward figure is not a classification** — that separation is #458's, and this
 	// column is the clearest case of it in the file.
-	const unsupportedCeiling = 11
+	// # 11 → 0: #323 takes the 11 `(get …)` rows, and the column is empty
+	//
+	// The verb became a **field on `Command`** rather than two new Kinds (ruling: Scott, #323
+	// comment 5364724819), so all 11 arrive on the `assert_return` Kinds that already existed:
+	// `KindNamedAssertReturn` for the 10 named forms and `KindAssertReturn` for the 1 unnamed one.
+	// Zero new Kinds, against a forecast of two. The engine side is `interp.Instance.Global` and
+	// the public `burroughs.Instance.Global`, reading through `global.value` — `global.get`'s
+	// read-only twin, sharing its layout dispatch so grave #239's split (right on the write half,
+	// missing on the read-back half) cannot recur on a third consumer.
+	//
+	// Forecast −11 / +11 and measured −11 / +11: `unsupported` 11 → **0**, `pass` 60946 → **60957**,
+	// with `fail` flat at 0 and `gated` flat at 4187. `exports.wast` and `linking.wast` are the two
+	// files, and both go to a full board.
+	//
+	// **The residue is now nothing, and the decomposition closed every time it was asked to.** 57 →
+	// 29 → 14 → 11 → 0 across #270, #440, #459 and #323, with each step's remainder named by issue
+	// and no unattributed rows at any point. That is the property worth recording, more than the
+	// zero: a column drained by four PRs that each predicted their own subtraction is a different
+	// artifact from a column that happened to empty.
+	//
+	// # The class, restated because the bound moved and because the zero invites the wrong reading
+	//
+	// **This column reaching 0 is a fact about the harness's vocabulary and not an engine
+	// milestone.** Restated here rather than resting on the last statement of it, per README's own
+	// rule that the class is repeated at this account each time the bound moves — and #323 is the
+	// case that most needs it, being the one row-set whose drain *did* add engine surface
+	// (`Instance.Global`) and therefore the one a reader could most plausibly mistake for
+	// capability. It still is not: the engine already held the global and the export, `#459`'s
+	// classification of all 11 as harness debt was measured under Scott's #458 test and stands, and
+	// the new method is a *read path for the harness to ask through* rather than a computation the
+	// engine could not do. The figures that carry engine capability are `passFloor` and
+	// `allOnPassFloor`; this one carries what the harness can ask.
+	//
+	// **And a ceiling standing at 0 is now this file's weakest instrument, which is worth saying at
+	// the moment it becomes true.** A zero-fail column loses its work plan and the gradient inverts
+	// toward instruments; a zero-*unsupported* column loses more than that, because it can no longer
+	// distinguish "the corpus grew a form" from "a classifier regressed" by size — every regression
+	// is now the first one. What it still does is fire on any non-zero at all, which is the whole of
+	// what a drained ceiling can do and is why it stays rather than being retired: the population it
+	// bounds is the set of corpus forms this harness cannot ask, and that set growing silently is
+	// exactly what it exists to prevent. Rows added by a suite bump land here with no attribution,
+	// so the class above is asserted of *today's* zero and of nothing later.
+	const unsupportedCeiling = 0
 	// Slack 0 as of #387's ruling, with the other two tracked board counts — see
 	// `boardbound_test.go`'s retirement section. This is the one of the three where the retired
 	// slack's stated purpose bit hardest: a ceiling drains *toward* its column, so 250 of tolerance
@@ -11983,7 +12068,28 @@ func TestPhase1Files(t *testing.T) {
 	// form it had been dropping. `TestAnnotatedModulesInstantiate` is what makes that assertable
 	// rather than assumed: this floor cannot distinguish "the engine started answering" from "the
 	// harness started asking", and on this slice it is the second.
-	const passFloor = 60946
+	// # 60946 → 60957, +11, and here the engine *did* gain a method — which changes nothing
+	//
+	// #323's `(get …)` rows. Same one-conversion-two-sides shape as the two entries above:
+	// `unsupported` 11 → 0 and this floor +11, `gated` flat at 4187, `fail` flat at 0, with the
+	// account of the rows on `unsupportedCeiling`.
+	//
+	// The caveat this side needs is the *opposite* of #459's and lands in the same place. That slice
+	// added nothing to the engine, so the "+3 is not capability" note was easy; this one adds
+	// `interp.Instance.Global` and `burroughs.Instance.Global`, so the +11 looks like capability and
+	// is not. What the engine gained is a **read path**, not an answer: the globals were already
+	// allocated, initialized and exported correctly, and every one of these 11 vectors would have
+	// passed years ago had there been a way to ask. The distance between "the value is right" and
+	// "the harness can obtain the value" is what this floor cannot see, which is why the claim is
+	// made where it is checkable — `TestGlobalReadsWhatTheInterpreterHolds` reads the same globals
+	// through `global.get` inside a body *and* through the new boundary and requires them equal, so
+	// the new path is pinned against the old one rather than against the corpus alone.
+	//
+	// **A first pass on a new public method is the weakest evidence about that method**, since the
+	// corpus population is 11 rows over 2 files and none of them is a `v128`, a reference, or an
+	// immutable-versus-mutable distinction. The unit control above is what covers those; the board's
+	// +11 is a fact about the harness's reach.
+	const passFloor = 60957
 	// Slack 0 as of #387's ruling, with `allOnPassFloor` and `unsupportedCeiling` — see
 	// `boardbound_test.go`'s retirement section. Two entries in the ledger above record taking a
 	// re-base *although the slack stayed silent* (58659 by a margin of 20, and the 416 that was four
@@ -12859,7 +12965,7 @@ func TestAggregateTableFillersRun(t *testing.T) {
 		callKinds := []Kind{KindInvoke, KindNamedInvoke, KindAssertReturn, KindNamedAssertReturn}
 		var call *Command
 		for i, c := range s.Commands {
-			if c.Invoke != f.Export || c.Line <= f.Line || !slices.Contains(callKinds, c.Kind) {
+			if c.Export != f.Export || c.Line <= f.Line || !slices.Contains(callKinds, c.Kind) {
 				continue
 			}
 			call = &s.Commands[i]
