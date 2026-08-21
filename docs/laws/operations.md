@@ -129,7 +129,9 @@ returning dozens of progress rows as if they were the job list. Anchoring the pa
 repairs that one instance; **redirecting the two streams to two files removes the collision's
 room to exist**, which is the stronger move because the display's vocabulary is upstream's to
 change. The general form, with its other specimen, is
-[a pattern able to match the instrument's own output](evidence-and-instruments.md#a-pattern-able-to-match-the-instruments-own-output-is-satisfied-by-the-instrument).
+[a control is a pattern plus the text it is
+handed](evidence-and-instruments.md#a-control-is-a-pattern-plus-the-text-it-is-handed), whose narrow
+form this is.
 This compounds with mistake 4 rather than restating it: there, a sentinel over the wrong run
 reports an empty green; here, a sentinel over the *right* run is answered by the watch's own
 chrome, and neither SHA-binding nor reading `.jobs[]` can see it.

@@ -134,7 +134,7 @@ weakly-ordered platform.
   project whose recurring failure mode is the rule that lives only in prose.
 
 - **A pattern able to match the instrument's own output is minted as a law class**, in
-  [evidence-and-instruments](docs/laws/evidence-and-instruments.md#a-pattern-able-to-match-the-instruments-own-output-is-satisfied-by-the-instrument)
+  [evidence-and-instruments](docs/laws/evidence-and-instruments.md#a-control-is-a-pattern-plus-the-text-it-is-handed)
   (Scott's ruling on this PR: *"two instances with one remedy is a class"*). Both instances arrived
   in one session. `TestEveryPayloadSpellingIsReadOrRefusedByName` asked
   `strings.Contains(err.Error(), name)` and for `struct` the substring sat inside the word
@@ -1805,6 +1805,31 @@ weakly-ordered platform.
   alternative before either landed. The replacement itself is held for the ruling on #441.
 
 ### Changed
+
+- **The law class *a pattern able to match the instrument's own output is satisfied by the
+  instrument* is widened to *a control is a pattern plus the text it is handed*, on its third
+  specimen** ([evidence-and-instruments](docs/laws/evidence-and-instruments.md#a-control-is-a-pattern-plus-the-text-it-is-handed);
+  ordered by Scott on the [#463](https://github.com/scttfrdmn/burroughs/pull/463#issuecomment-5365343139)
+  review — *"fold it in with the wider form rather than filing a near-duplicate"*). The minted class
+  had one direction: the checker's own vocabulary is inside the population it scans. The third
+  specimen ran the other way — **the pattern was right and the text was not the control's**.
+  Auditing #456's citation drift, `citation_test.go`'s `wrapJoin` (`-\n\s*([A-Z])`) was reproduced
+  against raw `.go` bytes and found **0** in `internal/spec/spec_test.go`, where the control — which
+  feeds it `group.Text()`, markers already stripped — sees **2**; a wrapped identifier's
+  continuation line starts with `//` and `\s*` cannot match a slash. Measured on `0b7c315`: 2
+  preprocessed, 0 raw. **The claim one keystroke from publication was the larger one** — *"the
+  citation has no referent anywhere"* — and the surviving true half is that `wast.go` holds 0 either
+  way, so that half of the citation names the wrong *file*, which is the half a line-drift sweep
+  cannot see. Remedy stated as its own clause: **call the control, or reproduce its preprocessing
+  and say that you did.** A fourth data point is recorded inside the entry rather than beside it:
+  **the fold-in's own first draft cited a sibling law under a title the corpus does not contain**,
+  recalled from session vocabulary instead of read off the page, caught by grepping the corpus for
+  the title and getting back only the line being written — so the bullet also carries *the cheapest
+  check on a cross-reference is to search for it before writing it*. Two incoming citations were
+  re-pointed to the renamed heading with their text otherwise unchanged, one of them the historical
+  minting entry below and one in
+  [operations.md](docs/laws/operations.md#waiting-on-ci); **nothing in the tree sweeps markdown
+  anchors**, so that re-pointing was by `grep` and is stated here rather than instrumented.
 
 - **The classification test a PR's purpose is judged against, written down: *does the PR change what
   the runtime can do, or only what the harness can say about what it does?***
