@@ -19,7 +19,8 @@ body naming an instrument that no longer exists is a dangling reference**, so th
 tense and to the one clause that carried it, never to the lesson (Scott's ruling, PR #377's relay).
 
 `CLAUDE.md` links this family, and the two halves of that link are checked:
-`TestClaudeMDLinksResolve` (`internal/testenv`) that every pointer on the page resolves, and
+`TestMarkdownLinksResolve` (`internal/testenv`) that every pointer in every markdown file in the
+tree resolves, and
 `TestLawFamiliesAreReachable` that every family here is reachable from it — a law nobody can
 reach is a law out of context.
 

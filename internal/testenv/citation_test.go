@@ -113,11 +113,20 @@ var pastReference = regexp.MustCompile(`(?i)(it (said|was)\b|previously (cited|s
 // sentenceSplit breaks a comment block into sentences: full stops, em-dash asides, semicolons.
 var sentenceSplit = regexp.MustCompile(`(?:[.!?]\s+)|(?:\s+—\s+)|(?:;\s+)`)
 
-// wrapJoin rejoins a name split across a comment line break. The real instances in this tree
-// are in `internal/spec/spec_test.go:2031` and `internal/spec/wast.go:911`, where a board-bound
-// control's name and an unsupported-bucketing control's name each wrap mid-identifier; they are
-// cited by location rather than quoted here, because quoting a truncated identifier manufactures
-// exactly the finding this variable exists to suppress. (It did, on the first run.)
+// wrapJoin rejoins a name split across a comment line break.
+//
+// **Both real instances are in `internal/spec/spec_test.go`** — one in the comment over the
+// all-gates-on lane's pass floor, where a grave-pinning control's name wraps, and one in the
+// comment over the `totalFloor` `boardBound` call, where a board-bound control's name does. They
+// are cited by *what they stand over* rather than by line, because a `file:N` here has already
+// drifted once (#456) and quoting the truncated identifier would manufacture exactly the finding
+// this variable exists to suppress. Re-measure with the control's own preprocessing, never a raw
+// grep: fed `group.Text()` it finds **2**, and run against raw bytes it finds **0**, because a
+// continuation line begins with `//` and `\s*` cannot match a slash.
+//
+// It said `spec_test.go:2031` and `internal/spec/wast.go:911` before this repair, and the second
+// half was the instructive one: `wast.go` holds no instance either way, so that citation named the
+// wrong *file* rather than a drifted line — the half a line-drift sweep cannot see.
 //
 // The capture is the continuation's first letter, restored by the `$1` in the replacement — Go's
 // regexp is RE2 and has no lookahead, so the letter must be consumed and put back rather than

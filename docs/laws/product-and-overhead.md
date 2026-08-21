@@ -12,7 +12,8 @@ retired with the index economy when that file became a brief and a pointer page 
 directive, the four-workstream brief of 2026-08-17); the laws themselves were not touched.
 
 `CLAUDE.md` links this family, and the two halves of that link are checked:
-`TestClaudeMDLinksResolve` (`internal/testenv`) that every pointer on the page resolves, and
+`TestMarkdownLinksResolve` (`internal/testenv`) that every pointer in every markdown file in the
+tree resolves, and
 `TestLawFamiliesAreReachable` that every family here is reachable from it — a law nobody can
 reach is a law out of context.
 
@@ -265,6 +266,39 @@ reach is a law out of context.
   is product work, because the suite scores such defects green by construction and
   nothing else will find them. `optable`'s reference agreement and #88's twelve
   wrongly-rejected valtypes are the paradigm; a citation sweep is not.
+
+### An obligation charged to a rider is lost the moment its carrier lands.
+
+- **An obligation charged to a rider is lost the moment its carrier lands.** The clause
+  above says control work is *charged* to product work, and it does not say what a charge
+  is attached to. Attaching one to **another item's landing** — "the comparator rides
+  #130's slice, charged to it as its falsification bill" — makes the obligation's survival
+  depend on an event whose whole purpose is to stop existing. It is the one place a
+  charge must never go.
+  - **The specimen, measured in #464's reconciliation.** #67 half 2's accept-direction
+    comparator was charged to #130 in a scheduling comment, on the sound argument that a
+    column reaching zero needs a successor instrument *in the same slice* rather than a
+    report of the zero. #130 then landed **as #425** (`075e11c`), taking `encodeFailCeiling`
+    3 → 0 — the very zero the comparator was charged to protect — with a closing comment
+    about `immPart`, deferred-immediate positions and a derived control domain, and **no
+    mention of the comparator at all**. The bill was charged to a slice that landed without
+    paying it, and from the outside the citation still reads as *tracked*.
+  - **Why the carrier's rename is not the cause but the tell.** #130 landing under a
+    different number is what made the loss visible; it is not what made it possible. An
+    obligation attached to an event has no state of its own, so nothing anywhere goes red
+    when the event passes unpaid — the failure mode is *silent by construction*. It is the
+    amendment under [artifacts become
+    oracles](graves-and-sweeps.md#artifacts-become-oracles) arriving through a different
+    channel — *"closing is a state transition on an issue, but a queue label is a claim
+    about the world"* — because there a state transition **carried** a claim about the world
+    with it, and here a state transition **dropped** one.
+  - **So the remedy is the cheap one, and it is the one #67's own half 2 already models
+    for its subject: give the obligation its own number.** An issue has a state a query can
+    read, a label a sweep can see, and a milestone a reconciliation can count. A sentence
+    inside another issue's comment has none of the three. *Declared-and-tracked has two
+    halves*, and a rider satisfies only the first.
+  (Order: Scott, on the #465 review — *"re-charge it as its own issue, with its own number
+  … never charge an obligation to a rider again."*)
 
 ### A zero-fail board is not a green light, it is a lost instrument.
 

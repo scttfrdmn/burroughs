@@ -21,7 +21,13 @@ Ask the instrument: `go test ./internal/spec/ -run TestPhase1Files -v` prints th
 
 - **v0 — interpreter.** Decoder → internal form
   ([0002](docs/decisions/0002-interpreter-strategy.md)) → validator → interpreter, Wasm MVP core
-  suite green with 3.0-feature gates present and off. No compiler.
+  suite green with **every 3.0-feature gate present and its default a recorded decision** — off by
+  behaviour 4 below unless its own flip event, with its own stamp, says otherwise. No compiler.
+  This read *"gates present and off"* until #464/#466, when reconciling v0's closure conditions
+  found that clause falsified by two flips Scott had himself stamped (SIMD, ADR 0025; relaxed SIMD,
+  ADR 0028). **A closure condition must not retroactively unmake a stamped decision**, which is the
+  foreclosing-words shape one level up: a sentence written before a flip, left standing after it,
+  telling the next reader the tree is in a state it is not. (Ruling: Scott, on the #465 review.)
 - **v1 — threads + safepoints.** Contract §§2–5: OS-thread spawn, futex wait/notify,
   engine-native epochs/STW, the §4 boundary memory model with its litmus battery.
 - **v2 — stack switching.** Contract §7: growable continuations, morestack analog.
@@ -143,10 +149,16 @@ is dug.
   divergence](docs/laws/operations.md#after-a-squash-merge-local-main-diverges-from-originmain--verify-dont-force),
   [the PR body's own sweeps](docs/laws/operations.md#opening-a-pr-the-body-is-a-scanned-population-and-make-check-cannot-see-it).
 
-Two controls in `internal/testenv` keep this page from rotting into a page of dead pointers, and
-they are two because they fail for unrelated reasons (grave #34): `TestClaudeMDLinksResolve` that
-every link here names a file that exists and an anchor some heading slugs to, and
-`TestLawFamiliesAreReachable` that every family in the corpus is linked from here.
+Three controls in `internal/testenv` keep this page — and now the whole corpus — from rotting into
+dead pointers, and they are three because they fail for unrelated reasons (grave #34):
+`TestMarkdownLinksResolve` that every link in **every markdown file in the tree** names a file that
+exists and an anchor some heading slugs to, `TestMarkdownLinkTargetsAreNotWrapped` that no
+destination is broken across a line (which renders as literal text rather than as a link), and
+`TestLawFamiliesAreReachable` that every family in the corpus is linked from here. The first was
+`CLAUDE.md`-scoped until #466: the corpus cites itself, `CHANGELOG.md` cites the law a change
+minted, and a heading rename breaks incoming citations no control could see. **The half still
+uncovered is a citation carrying no anchor at all** — the file resolves, so nothing fires, and the
+prose can still name a law that does not exist.
 
 ## Conventions
 

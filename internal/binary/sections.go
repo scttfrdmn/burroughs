@@ -123,9 +123,17 @@ type Features struct {
 // equal to the zero value and diverges one field at a time as gates flip default-on, each such
 // flip being its own two-principal-stamped decision (contract §9 G-1) with its own PR.
 //
-// **First divergence: SIMD, #227/ADR 0025.** G-1's own suite (`simd_*.wast`) measures
-// pass=25158 fail=161 gated=0, every fail attributed to #9's own deferred validator by the
-// engine's error taxonomy — the named, self-retiring carve-out ADR 0025 added to G-1's text.
+// **First divergence: SIMD, #227/ADR 0025.** G-1's own suite (`simd_*.wast`) measured
+// pass=25158 fail=161 gated=0 **at the flip**, every fail attributed to #9's own deferred
+// validator by the engine's error taxonomy — the named, self-retiring carve-out ADR 0025 added to
+// G-1's text.
+//
+// Past tense on purpose, and re-measured because #464's reconciliation found this sentence
+// asserting the flip-time figures in the present: the same 59 files now read **pass=25989 fail=0
+// gated=0**, so **the carve-out's subject in this suite is empty**. It is *inert, not retired* —
+// its retirement condition is #9 landing, and `ErrNotValidated` still has call sites throughout
+// `internal/interp`. A flip-time measurement stated in the present tense is the foreclosing-words
+// shape aimed at a number: still true of the moment it was taken, false of the tree it describes.
 //
 // **Second divergence: RelaxedSIMD.** G-1's own suite (the seven `*relaxed*.wast` files)
 // measures pass=77 fail=0 unsupported=0 gated=0, identical on arm64/darwin and
