@@ -1245,7 +1245,17 @@ func TestReferenceRangeCitationsAreWellFormed(t *testing.T) {
 	// replaced its prose is a row with the same point citation and a true description. The +1 is
 	// therefore wholly the new range, and the deletion this slice made to that census is one only the
 	// point sweep's domain contains.
-	const wantRanges = 94
+	// **The `check_valtype` slice moves this +7, and it is the first re-pin whose delta is not the
+	// count of citations it wrote.** Nine ranges arrive — `check_comptype`, `check_subtype`,
+	// `check_subtype_sub`, `check_globaltype`'s body on the import arm, the
+	// reftype→heaptype→typeuse reduction on the element segment, `check_rectype`'s second pass,
+	// `check_rectype` itself on `instr.go`'s scoped helper, `check_local`'s body on `validate.go`, and
+	// `check_tabletype`'s header rewritten — and two leave: the old `check_tabletype` header line it
+	// replaced, and `check_subtype_sub`'s range moving off `checkTypes`'s doc comment onto the function
+	// that now bears its name. A citation *relocating* nets zero here and is still visible in the
+	// sibling pin, which counts subjects; the two figures diverging is the reconciliation, not a
+	// discrepancy.
+	const wantRanges = 101
 	if ranges != wantRanges {
 		t.Errorf("checked %d range citation(s) across %v, want %d — recount and re-pin, and if a "+
 			"file was added to citationFiles, read its point citations too",

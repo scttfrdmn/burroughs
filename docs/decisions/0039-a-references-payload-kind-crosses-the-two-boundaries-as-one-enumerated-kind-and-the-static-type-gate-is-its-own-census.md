@@ -34,6 +34,26 @@ gated rows, and by v0's own definition (MVP core suite green with 3.0-feature ga
 they are not v0's remainder. So this issue is on the critical path to v0 in a way it was not when it
 was filed.
 
+*Amended 2026-08-21 on Scott's order (the #468 report): "an ADR records a decision at a time. A
+clause falsified by a later flip gets an amendment note citing the flip that falsified it, and the
+original text stays legible — otherwise the record starts agreeing with the present, which is the one
+thing it exists not to do."*
+
+*The parenthetical above quotes v0's closure condition as it read on 2026-08-19, and that wording was
+already falsified when this ADR was written — by two flips predating it, each its own stamped event:
+**SIMD** (#227, [ADR 0025](0025-g-1-carves-out-vectors-whose-sole-blocker-is-9s-deferred-validator.md))
+and **relaxed SIMD** ([ADR 0028](0028-relaxed-simd-lowerings-are-deterministic-and-architecture-uniform-the-references-choice-taken-once.md)).
+The condition now reads **"every 3.0-feature gate present and its default a recorded decision"**
+(CLAUDE.md's phase ladder, restated on Scott's ruling of the #465 review; a closure condition must not
+retroactively unmake a stamped decision).*
+
+*The **conclusion this passage draws is unaffected**, and that is stated rather than left to be
+re-derived: under either wording, gated GC and EH proposals are not v0's remainder, because both
+conditions scope the suite green to **MVP core**. What was wrong was the premise's wording, not the
+inference from it — which is why this is an amendment note and not a retraction. This ADR is the site
+most likely to mislead, being dated **after** both flips and naming the clause as "v0's own
+definition", so a reader arriving here would have had no signal that the definition had moved.*
+
 ### The population, re-measured, because two claims about it disagreed
 
 #270 states its population as **28**. Scott's review of 2026-08-19 states **39**. The board's

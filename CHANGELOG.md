@@ -21,6 +21,54 @@ weakly-ordered platform.
 
 ### Added
 
+- **`check_valtype` runs at every module-level valtype position, and the validator's type context is
+  scoped per rec group — all-on `fail` 31 → 17**
+  ([#357](https://github.com/scttfrdmn/burroughs/issues/357),
+  [#358](https://github.com/scttfrdmn/burroughs/issues/358)). `check_rectype`
+  (`valid.ml:178-189`) extends `c.types` **one rec group at a time**, so a type reference inside
+  group *k* resolves against groups `0..k` — `(rec (type (func (param (ref 1)))))` followed by
+  `(rec (type (func)))` is invalid where the byte-identical pair inside one `rec` is valid. That
+  prefix is now `recGroupExtent`, read off the `RecStart`/`RecLen` the decoder already writes, and
+  `checkTypes` runs the reference's **two ordered passes** per group (`check_subtype` over every
+  member, then `check_subtype_sub` over every member) rather than one loop doing both — which is what
+  supplies #358's message: a supertype index past the end of the type space resolves as
+  `unknown type` in `check_subtype`, *before* `check_subtype_sub`'s `xi < x` can call it a forward
+  use.
+  **The slice was scoped at three positions and landed at six**, because a rule implemented at four of
+  five sites is not the rule: `check_comptype`'s functype params/results and struct/array field
+  storage, a declared supertype index, `check_globaltype` at **both** its sites (import and
+  definition), `check_tabletype`'s element type (before `check_limits`, the reference's order), and
+  `check_local` per `(Count, Type)` group in `funcBody`. `checkValType` is split into a
+  scope-parameterized `checkValTypeScoped`, the whole type space being right everywhere except inside
+  `checkTypes`.
+  Board: default lane **60957 pass, 0 fail, 0 unsupported, 4187 gated, 0 unimplemented** over 256
+  files — **unchanged, as forecast**, every affected vector needing the GC gate to decode; all-on lane
+  **65092 pass (+14)**, **17 fail (−14)**, 0 gated. Per-file exactly as pre-registered: `array.wast`
+  3→0, `ref.wast` 6→0 (five admissions plus one wrong-message row), `struct.wast` 2→0,
+  `type-rec.wast` 2→0, `type-equivalence.wast` 1→0. `allOnPassFloor` and `allOnFailCeiling` re-base in
+  lockstep, and **the lockstep is the check on the diagnosis** — a slice that also broke something
+  would show a smaller fall than the rise. `unsupported` delta **0, structural**: the column is at 0
+  board-wide and nothing here changes what the harness can ask.
+  **`TestRecGroupPrefixIsTheScope` is a discriminating pair, and it had to be.** No single module
+  separates "the scope is the prefix" from "the scope is the whole type space" — whichever verdict one
+  module gets is consistent with both — and the accept half is the one an over-tight prefix fails,
+  which no `assert_invalid` vector can host (contract §9 G-3). Falsified in both directions and
+  measured: scope := `len(m.Types)` re-admits all 14 rows, scope := the group's *start* refuses the
+  same-group row. Both rows go through the wat encoder and decoder, because
+  `recGroupExtent` **falls back to the flat type space** on the zero-valued extents a hand-built
+  `binary.Module` presents — so a hand-built pair would pass with the rule never firing, and
+  `requireSelfConsistentExtents` is the assertion that tells "the rule fired and agreed" from "the
+  fallback ran".
+  **#357's own premise was stale when filed** and its title still is: the retention it waits on landed
+  with #352 ([grave #469](https://github.com/scttfrdmn/burroughs/issues/469)). What the rule needed was
+  never a representation change.
+  The 17 survivors are attributed and none is new: two `constant expression required` in `array.wast`,
+  five local-initialization rows (`func.wast:659`, `local_init.wast:25,29,39,52` —
+  [#452](https://github.com/scttfrdmn/burroughs/issues/452), `decision-needed:scott`, deliberately not
+  taken), five `indirect call type mismatch` (`type-rec.wast:183,192`,
+  `type-equivalence.wast:131,156,188` — `sameFuncType`'s documented scope boundary), and
+  `type-subtyping.wast:442,488,510,523,534`.
+
 - **The script grammar's `get` action is read, a global export is readable across both boundaries,
   and the `unsupported` column falls 11 → 0**
   ([#323](https://github.com/scttfrdmn/burroughs/issues/323), ruled by Scott on the
@@ -1806,6 +1854,22 @@ weakly-ordered platform.
 
 ### Changed
 
+- **ADRs [0008](docs/decisions/0008-proposal-gate-mapping.md) and
+  [0039](docs/decisions/0039-a-references-payload-kind-crosses-the-two-boundaries-as-one-enumerated-kind-and-the-static-type-gate-is-its-own-census.md)
+  amended with dated notes, discharging the flag this file raised rather than editing the tombstones**
+  (ordered by Scott on the [#468](https://github.com/scttfrdmn/burroughs/pull/468) review — *"an ADR
+  records a decision at a time. A clause falsified by a later flip gets an amendment note citing the
+  flip that falsified it, and the original text stays legible — otherwise the record starts agreeing
+  with the present, which is the one thing it exists not to do."*). 0008's *"the zero value is still
+  v0's posture: every gate present and off"* is falsified **in its second half only** — the zero value
+  is still every gate off, and that is no longer what a caller who configures nothing gets, the two
+  having been accidentally identical when the ADR was written. 0039 quotes v0's closure condition as it
+  read on 2026-08-19, already falsified when written, by two flips predating it (SIMD, ADR 0025;
+  relaxed SIMD, ADR 0028); **its conclusion is unaffected** — both wordings scope the suite green to
+  MVP core — so the note says which half was wrong rather than retracting the inference. 0039 is the
+  site most likely to mislead, being dated *after* both flips and naming the clause as "v0's own
+  definition".
+
 - **Link resolution's domain widens from one page to the whole markdown corpus, and the destination
   a line break splits gets its own tripwire**
   ([#466](https://github.com/scttfrdmn/burroughs/issues/466); ordered by Scott on the
@@ -2896,6 +2960,34 @@ weakly-ordered platform.
     re-pointed, so the retirement is readable at the site rather than only in this entry.
 
 ### Fixed
+
+- **Two foreclosing paragraphs in the validator, plus a third in `internal/binary` whose diagnosis was
+  already written ([grave #469](https://github.com/scttfrdmn/burroughs/issues/469))**. `checkTypes`
+  said *"and `binary.Module` retains none"* — false since **#352** gave `binary.CompType`
+  `RecStart`/`RecLen` for `matchDefType`, six PRs and a tracked issue title earlier — and
+  `checkTableType` said a table's reftype is *"the decoder's to refuse"*, which is **true of the wrong
+  half of the type**: an unrecognized byte is refused a layer down, an *indexed* reftype cannot be,
+  index validity being #9's question by construction. So the closed arm was the arm the rule is
+  entirely about. The third site is `immStagedBits`' heading (*"Read and dropped … `br_table`'s label
+  vector is the one whose rule is impossible without the side array"*), every clause of it spent:
+  decision 0016 shipped the side array, all three zero-bit kinds go through it (`Func.Labels`,
+  `Func.Catches`, `Func.Casts`), and `br_table`'s rule reads the first of them at
+  `internal/validate/instr.go:440`. **That one was diagnosed on #296's own thread months ago and never
+  landed**, which is the more expensive version of the class: the tracker held the finding and the file
+  went on contradicting it.
+  All three repaired **in the past tense** rather than deleted. The reason none was caught:
+  `TestForeclosingClaimsAboutGatesMatchTheGateTable` is blind here twice — a function doc comment is
+  none of its three positions, and these premises are a sibling package's struct fields and a division
+  of labour with the decoder, not a gate. **No instrument is proposed**, which is
+  [#432](https://github.com/scttfrdmn/burroughs/issues/432)'s ruling rather than an omission. And the
+  domain is not derived: these are the paragraphs in the files this slice happened to edit, so the site
+  count is a lower bound and #469 says so.
+
+- **`spec_test.go`'s "#357, #358 and #296 are the rest of the open shortfall" annotated by the PR that
+  spent two-thirds of it.** The list sat inside the two-instance record of *sourcing a premise from
+  prose*, which makes a list of open issues the same defect one level down — the tracker is one query
+  away and nothing in that file re-queries it when an issue closes. What remains of the shortfall is
+  #296, #111's nine `(ref null $undefined)` positions with no vector failing on them, and #452.
 
 - **Three `call.go:N` citations re-pointed, one of which this PR's own diff broke**
   ([#456](https://github.com/scttfrdmn/burroughs/issues/456)). Adding 29 lines to `callBudget`'s doc

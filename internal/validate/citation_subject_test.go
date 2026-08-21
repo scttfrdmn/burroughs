@@ -375,7 +375,46 @@ func TestRangeCitationSubjectsAreReadFromTheReference(t *testing.T) {
 	// definition" reading, and the second test-file range this pin's domain holds that `wantRanges`'
 	// does not. So the excess over that pin grows by one while both totals move by one, which is the
 	// arithmetic slice 9's paragraph set up to be readable.
-	const wantKeyed, wantResidue = 87, 37
+	//
+	// **The `check_valtype` slice is keyed 97 and residue 39, and it is the first re-pin where the two
+	// columns move by more than two between them.** Nine range citations arrive in the engine files and
+	// two leave, for +7 on `wantRanges`; this pin counts *subjects* and includes the test files, so its
+	// arithmetic differs from that one twice over and the difference is the point of having both. Where
+	// they land:
+	//
+	//   - +2 keyed from `rectype_scope_test.go`, the slice's own control file: `check_subtype` and
+	//     `check_subtype_sub` cited a second time, on the two lines that explain why the group's scope
+	//     is resolved before the forward rule compares indices. Invisible to `wantRanges`, whose domain
+	//     is the engine files, and the third test-file range this pin holds that it does not. The file's
+	//     two `types.ml` ranges are invisible to *both*: this project's range trigger names one
+	//     reference file, and a citation into `types.ml` — where `subst_of` and `roll_rectype` live, the
+	//     two functions that make the prefix a prefix — is unchecked by anything. Recorded here because
+	//     a citation no sweep can see is worth naming at the place a reader would expect it counted.
+	//   - +8 keyed in the engine files. One line carries **three** — `check_reftype` is `check_heaptype`
+	//     is `check_typeuse`,
+	//     the three-step reduction the element segment's declared type goes through — which is this
+	//     pin's first row keying more than two and is why a citation's *subject count* is not its
+	//     count. Then one each for `check_rectype` (`instr.go`, on the scoped `check_valtype` helper),
+	//     `check_subtype`, `check_comptype`, and `check_valtype` (the import descriptor's global arm),
+	//     plus one net from `check_subtype_sub`: the range moved off the `checkTypes` header — where it
+	//     keyed on `require` alone — onto the function named after it, where it keys on both.
+	//   - +2 residue, both this header's third category. The `check_rectype` second-pass line cites
+	//     `Lib.List32.iteri`'s two lines with the OCaml on the line *above* the citation, and
+	//     `funcBody`'s cites `check_local`'s body on the line naming `Set`/`Unset` — constructor names
+	//     the reference builds by `if defaultable t then Set else Unset` rather than matching on, so
+	//     they are in neither map and the row keys nothing. Both point at code rather than at a string,
+	//     which makes them the third category by *mechanism* and not by kind: what keys a row is a
+	//     backticked identifier the reference *binds*, and a two-line citation whose identifier sits one
+	//     line up is unreachable to a per-line trigger. Recorded rather than repaired, because pulling
+	//     the citation up onto the OCaml line is the wrapping hazard this header names twice.
+	//
+	// This pin's total therefore moves +12 where `wantRanges` moves +7, and the excess over it goes
+	// 30 → 35. Three of the five are the subject-count effect named above — +2 from the three-subject
+	// reduction line, +1 from `check_subtype_sub`'s range landing on a line naming both it and
+	// `require` — and two are the control file's, which `wantRanges`' domain excludes. The two pins
+	// diverging by a number with a stated cause is what makes them two pins; a shared figure would have
+	// absorbed all five silently.
+	const wantKeyed, wantResidue = 97, 39
 	if keyed != wantKeyed || residue != wantResidue {
 		t.Errorf("keyed %d range citation(s) by named subject and left %d as residue, want %d and "+
 			"%d — recount and re-pin. A row moves from residue to keyed when its description starts "+

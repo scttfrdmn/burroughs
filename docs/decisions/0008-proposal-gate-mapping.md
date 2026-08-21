@@ -144,6 +144,25 @@ more fundamental "no" than a validation rule about a construct it does not imple
   the dividend of having derived the domain — and the second of those walks `2^N`
   configurations, so N going 4 → 8 costs 16 → 256 iterations of a cheap loop.
 - The zero value is still v0's posture: every gate present and off (contract §9).
+  *Amended 2026-08-21 on Scott's order (the #468 report): "an ADR records a decision at a
+  time. A clause falsified by a later flip gets an amendment note citing the flip that
+  falsified it, and the original text stays legible — otherwise the record starts agreeing
+  with the present, which is the one thing it exists not to do."*
+  *The clause above was true when written and is **falsified in its second half**. Two
+  flips have since diverged v0's policy from the struct's zero value, each its own
+  stamped event: **SIMD** (#227, [ADR 0025](0025-g-1-carves-out-vectors-whose-sole-blocker-is-9s-deferred-validator.md))
+  and **relaxed SIMD** ([ADR 0028](0028-relaxed-simd-lowerings-are-deterministic-and-architecture-uniform-the-references-choice-taken-once.md)).
+  `DefaultFeatures()` now returns `Features{SIMD: true, RelaxedSIMD: true}`. So the zero
+  value **is** still every gate off — that half stands, and `Features`'s own doc comment
+  keeps it as an invariant — but it is **no longer v0's posture**, which is what a caller
+  who configures nothing gets. The two facts were accidentally identical when this ADR was
+  written, which is why one sentence could carry both; `sections.go` now names them
+  separately for that reason.*
+  *The same divergence overtakes this list's last bullet — "Every gate remains off and
+  every mapped construct remains rejected when off". Read as the scope of **this change**
+  it is still true: gate nine landed without flipping anything. Read as a standing claim
+  about the tree it is false, and it is flagged here rather than rewritten because its
+  subject is a PR, not a posture.*
 - **The inverse control is this change's definition-of-done**: for every bool in
   `Features`, turn everything on, turn *that one* off, and require at least one mapped
   construct declined with `ErrFeatureDisabled`. A gate that declines nothing fails
