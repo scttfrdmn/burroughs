@@ -522,6 +522,27 @@ func funcBody(m *binary.Module, f *binary.Func, refs map[uint32]bool) (FuncInfo,
 		return FuncInfo{}, err
 	}
 
+	// `List.map (check_local c) ls` (valid.ml:1021), whose body is `check_valtype c t` before it
+	// decides `Set`/`Unset` (valid.ml:1007-1011) — so a body declaring `(local (ref 7))` in a module
+	// with three types is `unknown type 7` and not a type mismatch downstream.
+	//
+	// **Per group rather than per local, and that is the same predicate rather than a shortcut**:
+	// `check_local`'s only argument is the type, a `LocalGroup` is a run of one type
+	// (`(count, valtype)`, per grave #138's retention), so checking the run's type once decides every
+	// local in it. A group with `Count == 0` is a legal encoding that declares nothing, and the
+	// reference does not visit it at all — the check runs anyway, because the type byte was still read
+	// and a scope violation in it is still in the image. No vector distinguishes the two, which is why
+	// this sentence exists rather than a branch.
+	//
+	// The scope is the whole type space: `check_func_body` runs at valid.ml:1165, long after
+	// `check_module`'s type phase has folded every rec group in, which is the same reason
+	// `validator.globalScope` below is `len(m.Globals)` and not an index.
+	for i, g := range f.Locals {
+		if terr := checkValTypeScoped(len(m.Types), g.Type); terr != nil {
+			return FuncInfo{}, fmt.Errorf("local group %d: %w", i, terr)
+		}
+	}
+
 	locals, err := localTypes(ft, f)
 	if err != nil {
 		return FuncInfo{}, err

@@ -127,14 +127,37 @@ var immStagedBits = map[imm]int{
 	// because the *payload* grew, which is what this table measures.
 	immMemop: 102,
 
-	// Read and dropped, each with its reason at the arm. A vector cannot live in a
-	// fixed-width instruction, so these are #7's side-array work rather than staging.
+	// Not staged into `Instr`, and **retained beside the body instead** — one home each, none of
+	// them these two words. A vector cannot live in a fixed-width instruction, which is decision
+	// 0016's whole subject, so a zero here is where the side table starts rather than where the
+	// information stops.
 	//
-	// **A zero here is now also a validator rule that cannot be stated**, and #296 is the
-	// enumeration: with the validator landed (#9 slice 1), every discarded immediate is a
-	// typing fact the pass needs and does not have. Ten arms across four kinds; `br_table`'s
-	// label vector is the one whose rule is impossible without the side array, since its
-	// validity is a property *of the vector*.
+	// **This heading read *"Read and dropped, each with its reason at the arm … these are #7's
+	// side-array work rather than staging"*, and every clause of it is spent.** 0016 shipped the
+	// side array; all three kinds below go through it, measured at their consumers rather than read
+	// off a comment: `immVecIdx` → `Func.Labels`/`LabelVector`, typed at
+	// `internal/validate/instr.go:440`; `immCatchVec` → `Func.Catches`/`CatchVector`, consumed in
+	// `internal/interp/exec.go`; `immHeapType` → `Func.Casts`/`CastTypes` (0027 Q1 option B),
+	// consumed in `internal/interp/castop.go`. The paragraph also said **`br_table`'s label vector
+	// is the one whose rule is impossible without the side array** — that rule is written, and it
+	// is the first of the three citations above.
+	//
+	// **The diagnosis is #296's, not this PR's, and it sat undischarged in a comment thread.** #296's
+	// fourth comment found the contradiction between this heading and the three arms filed under it,
+	// withdrew "five kinds, 55 arms" for "two kinds, 46 arms", and stated the rule the correction
+	// turns on: *where prose and the executable disagree the executable outranks —
+	// `c.heaps = append(c.heaps, c.d.valType)` outranks the heading above it.* Nothing landed. So the
+	// heading kept telling readers of **this** file that four immediates were discarded while the
+	// issue that would have told them otherwise had said so for months, which is the same shape as
+	// grave #469 in a third package and with the diagnosis already written.
+	//
+	// **What a zero does and does not license, since the inference is what drifted.** It says the
+	// payload is not in `Instr` — a measured property of the reader (`TestStagedBitsAgreeWithTheReader`)
+	// over a domain nobody typed. It says nothing about whether a later layer can reach the payload,
+	// because since 0016 there is a second place to look. That gap in both directions is
+	// [#309](https://github.com/scttfrdmn/burroughs/issues/309)'s subject: retention is not width, and
+	// an injectivity control over staged words alone would flag all three of these as lossy for the
+	// identical reason this heading did.
 	//
 	// **What "complete by construction" means here, since that phrase is doing all the work.**
 	// It is not "we searched for known blockers and found four" — a registry of past findings

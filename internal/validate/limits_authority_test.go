@@ -72,7 +72,12 @@ func TestLimitsRangesMatchTheReference(t *testing.T) {
 		{
 			fn: "check_tabletype", sent: ErrTableSize,
 			i32: tabRangeI32, i64: tabRangeI64,
-			refuse: func(lim binary.Limits) error { return checkTableType(binary.TableType{Limits: lim}) },
+			// The scope is 0 and the descriptor's element type is left zero-valued, which is a
+			// numeric ValType and therefore not indexed — so `check_tabletype`'s `check_reftype`
+			// passes and this probe still scores the limits half it was written for. A `funcref`
+			// here would read identically; the zero value is used to keep this fixture from
+			// implying the element type is part of what it compares.
+			refuse: func(lim binary.Limits) error { return checkTableType(0, binary.TableType{Limits: lim}) },
 		},
 	} {
 		t.Run(tc.fn, func(t *testing.T) {

@@ -107,75 +107,214 @@ func checkMemoryType(mem binary.Memory) error {
 	return checkLimits(mem.Limits, memRangeI32, ErrMemorySize, "2^16 pages (4 GiB) for i32")
 }
 
-// checkTableType is `check_tabletype` (valid.ml:210-218), minus its `check_reftype` call.
+// checkTableType is `check_tabletype` (valid.ml:210-218), including its `check_reftype` call.
 //
-// The element type is not checked here because a table's reftype is the *decoder's* to refuse in
-// this engine: an unrecognized reftype byte never reaches a `binary.Table`. That is the same
-// division of labour ErrUnknownDataSegment's comment records, and it is a division rather than a
-// gap because the byte has no valid reading to defer.
-func checkTableType(tab binary.TableType) error {
+// **This said the reftype was "the *decoder's* to refuse ... an unrecognized reftype byte never
+// reaches a `binary.Table`", and the premise is true of the wrong half of the type.** An
+// unrecognized byte is indeed refused a layer down; an *indexed* reftype is not, and cannot be —
+// `(table 1 (ref null 7))` names a type the decoder is forbidden to have an opinion about, index
+// validity being #9's question by construction. So the arm the old comment closed was the arm the
+// rule is entirely about, which is the shape of grave #431: a division of labour asserted over a
+// domain one of the two parties never saw. Grave #469, second of its two sites.
+//
+// **The `check_reftype` runs before `check_limits`, and the order is the observable part.** A table
+// with an out-of-scope element type *and* an over-range minimum reports the element type. No vector
+// pairs those two defects — `table.wast`'s reftypes all resolve — so the order is transcribed on the
+// reference's authority, like `check_func`'s position below.
+//
+// The scope is the caller's because an imported table and a defined one reach this from different
+// phases; both see the whole type space, `check_module` having folded every rec group in at :1156.
+func checkTableType(scope int, tab binary.TableType) error {
+	if err := checkValTypeScoped(scope, tab.ElemType); err != nil {
+		return err
+	}
 	if tab.Limits.Addr64 {
 		return checkLimits(tab.Limits, tabRangeI64, ErrTableSize, "2^64-1 for i64")
 	}
 	return checkLimits(tab.Limits, tabRangeI32, ErrTableSize, "2^32-1 for i32")
 }
 
-// checkTypes is `check_type` (valid.ml:1107) reduced to what it delegates to `check_subtype_sub`
-// (valid.ml:165-176) — the three `require`s a declared supertype list must satisfy, in the
+// checkTypes is `check_type` (valid.ml:1107), which is `check_rectype` per declared group: the
+// context is extended one group at a time and each group's members are checked against it twice —
+// `check_subtype` over all of them, then `check_subtype_sub` over all of them.
+//
+// `check_subtype_sub`'s half is the three `require`s a declared supertype list must satisfy, in the
 // reference's order, because a subtype with two defects reports the first:
 //
 //	require (xi < x)                       forward use of type xi in sub type definition
 //	require (fini = NoFinal)               sub type x has final super type xi
 //	require (match_comptype c.types ct cti) sub type x does not match super type xi
 //
-// This is the reject-direction half of decision 0031's slice, and it is a **different consumer of
-// the same relation** than the operand comparisons are: all 21 of the vectors it converts are bare
+// That half is the reject-direction half of decision 0031's slice, and it is a **different consumer
+// of the same relation** than the operand comparisons are: all 21 of the vectors it converts are bare
 // type sections with no functions at all, so `matches` could not have reached one of them. That
 // is why the slice is one relation and two call sites rather than one of either.
 //
-// # What is not here, and it is the same retention `matchDefType` names
+// # The group scoping is here now, and the paragraph it replaces had been false for six PRs
 //
 // `check_rectype` (valid.ml:178-189) builds the context one rec group at a time — `c' = {c with
 // types = c.types @ dts}` — and `check_subtype c'` then resolves every type reference against
 // *that* context, so a reference to an index outside the groups declared so far is `unknown type`
-// while a reference *within the current group* is fine even when it points forward. Both halves
-// are the same fact about rec-group boundaries, and `binary.Module` retains none:
+// while a reference *within the current group* is fine even when it points forward:
 // `(rec (type (func (param (ref 1)))))` followed by `(rec (type (func)))` is invalid where the
-// byte-identical pair inside one `rec` is valid, and nothing in this representation can tell them
-// apart. Three admissions wait on it — `type-rec.wast:21,28` and `type-equivalence.wast:76`, all
-// expecting `unknown type`. **Tracked as #357**, added in #353 rather than in the PR that wrote this
-// paragraph: it declared the debt and gave it no number, and *declared-and-tracked passes while
-// silent fails* — a "waits on it" with nothing to point at reads as tracked from every direction.
+// byte-identical pair inside one `rec` is valid.
 //
-// The consequence for the rules that *are* here is one divergence, named because it is a real
-// difference and not a simplification: a supertype index pointing past the end of the type space
-// is refused by the forward-use rule (`xi < x` fails for any `xi >= len(Types)`) where the
-// reference refuses it as `unknown type`. Same verdict, different message. It has no subject in
-// the corpus — no `assert_invalid` expects `unknown type` from a supertype position — so it is
-// recorded rather than worked around, since a workaround would be a second unresolvable-index rule
-// competing with `check_typeuse`'s. **Tracked as #358**, for the reason #357 is: a zero-population
-// divergence is a legitimate never-fix, and what it is not is a debt with no number.
+// This paragraph read *"and `binary.Module` retains none"* until now, with #357 tracking the wait.
+// **The retention had already landed when the sentence was written**: #352 gave `binary.CompType`
+// `RecStart`/`RecLen` for `matchDefType`'s rolled comparison — the two fields *are* a type's
+// identity — and this file went on naming the same fact as absent. Same shape as grave #431 one
+// package over: a foreclosing paragraph that a later PR falsified and nobody re-read, telling every
+// reader after it to wait for a retention that was in the struct. What the rule actually needed was
+// the **prefix-of-context discipline**, which is `recGroupExtent` below, and #357's own body said so
+// in its second section while its title still said the representation was missing it. Grave #469,
+// which carries both sites and the two reasons the #427 sweep reaches neither of them — a doc comment
+// is not one of its three positions, and a sibling package's retention is not a gate.
+//
+// # The two passes are the reference's, and the order decides the message
+//
+// `check_rectype` runs `check_subtype` over **every** member of the group and only then
+// `check_subtype_sub` over every member. So a group holding both an unresolvable type reference and
+// a final supertype reports the reference, whichever member each defect is on — which is why this is
+// two loops over one group rather than one loop doing both.
+//
+// It also supplies the message #358 recorded as a divergence: `check_subtype`'s
+// `List.iter (fun ut -> check_typeuse c ut at) uts` resolves each declared supertype index against
+// the group's own scope *before* `check_subtype_sub`'s `xi < x` runs, so a supertype index past the
+// end is `unknown type` and not `forward use of type`. The divergence had a population of zero and
+// closes as a side effect of transcribing the phase it lived in, which is the shape a never-fix takes
+// when the rule around it lands.
 func checkTypes(m *binary.Module) error {
-	for x := range m.Types {
-		for _, xi := range m.Types[x].Supertypes {
-			// `require (xi < x)`. This subsumes the bounds check for every index at or above the
-			// type space's length, which is the divergence the header names — and it must run
-			// before the two rules below, both of which would otherwise index with xi.
-			if uint64(xi) >= uint64(x) {
-				return fmt.Errorf("%w %d in sub type definition", ErrForwardTypeUse, xi)
+	for x := 0; x < len(m.Types); {
+		n, scope := recGroupExtent(m, x)
+		// `List.iter (fun st -> check_subtype c' st at) sts` (valid.ml:186) — every member of this
+		// group, against the context this group has just been appended to.
+		for i := x; i < x+n; i++ {
+			if err := checkSubtype(m, scope, i); err != nil {
+				return err
 			}
-			super := m.Types[xi]
-			// `require (fini = NoFinal)` — a `sub final` type may not be named as a supertype.
-			// `binary.CompType.Final` is `true` for a bare comptype as well as for an explicit
-			// `sub final`, which is the grammar's own default (`SubT (Final, [], ct)`), so a plain
-			// `(type $t (func))` is a final supertype and four of the 21 vectors are exactly that.
-			if super.Final {
-				return fmt.Errorf("%w %d has final super type %d", ErrSubType, x, xi)
+		}
+		// `Lib.List32.iteri (fun i st -> check_subtype_sub c' st (Int32.add x i) at) sts`
+		// (valid.ml:187-188) — a second pass over the same members.
+		for i := x; i < x+n; i++ {
+			if err := checkSubtypeSub(m, i); err != nil {
+				return err
 			}
-			// `require (match_comptype c.types ct cti)` — the relation, in match.go.
-			if !matchCompType(tctx{gotMod: m, wantMod: m}, m.Types[x], super) {
-				return fmt.Errorf("%w %d does not match super type %d", ErrSubType, x, xi)
+		}
+		x += n
+	}
+	return nil
+}
+
+// recGroupExtent answers, for the type at index x, how many members of x's rec group remain from x
+// onward and how large `c.types` is once that group has been appended.
+//
+// **The scope is `RecStart+RecLen`, which is `Lib.List32.length c.types` after the append** — the
+// group's own members are in scope for each other (that is what makes a forward reference *inside* a
+// `rec` legal), and nothing declared later is.
+//
+// **The fallback is what a hand-built `binary.Module` gets, and it is stated rather than assumed
+// away.** `RecStart`/`RecLen` carry the invariant `RecStart <= own index < RecStart+RecLen`, which
+// the decoder establishes for every accepted type section (`labelRecGroup`) and which a zero value
+// *violates* — 0 <= 0 < 0 is false — so an inconsistent extent is detectable rather than ambiguous.
+// This package's own fixtures build modules by hand, and the ones that care set both fields
+// explicitly (`match_two_module_test.go`); the ones that do not would otherwise be judged against a
+// scope of zero and every type reference in them would become `unknown type`. So an inconsistent
+// extent degrades to a singleton group over the flat type space, which is exactly the rule this
+// function was added to tighten and no looser than what stood here before it. Two consequences worth
+// naming. The loop above cannot spin, because `n >= 1` on every path. And **the fallback means a
+// hand-built fixture cannot witness the prefix rule at all** — it would be judged against the flat
+// space and pass either way — which is why `TestRecGroupPrefixIsTheScope` drives its pair through the
+// encoder and the decoder and then asserts the extents it got back are self-consistent. That
+// assertion is what distinguishes "the rule fired and agreed" from "the fallback ran", two outcomes a
+// verdict alone cannot tell apart.
+func recGroupExtent(m *binary.Module, x int) (n, scope int) {
+	ct := m.Types[x]
+	start, length := uint64(ct.RecStart), uint64(ct.RecLen)
+	end := start + length
+	if length > 0 && start <= uint64(x) && uint64(x) < end && end <= uint64(len(m.Types)) {
+		return int(end - uint64(x)), int(end)
+	}
+	return 1, len(m.Types)
+}
+
+// checkSubtype is `check_subtype` (valid.ml:160-163): every declared supertype index resolves, and
+// then the comptype's own type references do.
+//
+// Both halves are `check_typeuse`'s one rule reached through different productions — a supertype list
+// holds typeuses directly, and a comptype reaches them through valtypes and storage types — so both
+// go through `checkValTypeScoped`'s message rather than inventing a second `unknown type`.
+func checkSubtype(m *binary.Module, scope, x int) error {
+	ct := m.Types[x]
+	// `List.iter (fun ut -> check_typeuse c ut at) uts`. A supertype index is a bare type index
+	// rather than a valtype, so the bound is applied directly and the message is spelled the same
+	// way `checkValTypeScoped` spells it.
+	for _, xi := range ct.Supertypes {
+		if uint64(xi) >= uint64(scope) {
+			return fmt.Errorf("%w %d (%d in scope)", ErrUnknownType, xi, scope)
+		}
+	}
+	// `check_comptype c ct at`.
+	return checkCompType(scope, ct)
+}
+
+// checkCompType is `check_comptype` (valid.ml:150-159) — its three arms, each reducing to
+// `check_valtype` over the type references the form carries.
+//
+// A struct's fields and an array's single field both go through `check_fieldtype` →
+// `check_storagetype`, whose `PackStorageT` arm is `()`: a packed i8/i16 width names no type, so it is
+// skipped here rather than being routed through a valtype it has no representation as (`StorageType`
+// keeps the wire's own storage-versus-value boundary, per 0021).
+func checkCompType(scope int, ct binary.CompType) error {
+	switch ct.Kind {
+	case binary.CompFunc:
+		// `check_resulttype` over both halves, params first — the reference's order, and it is
+		// observable on a functype whose params and results are both unresolvable.
+		for _, t := range ct.Func.Params {
+			if err := checkValTypeScoped(scope, t); err != nil {
+				return err
 			}
+		}
+		for _, t := range ct.Func.Results {
+			if err := checkValTypeScoped(scope, t); err != nil {
+				return err
+			}
+		}
+	case binary.CompStruct, binary.CompArray:
+		for _, f := range ct.Fields {
+			if f.Storage.Packed {
+				continue
+			}
+			if err := checkValTypeScoped(scope, f.Storage.Val); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// checkSubtypeSub is `check_subtype_sub` (valid.ml:165-176) — the three `require`s a declared
+// supertype list must satisfy, in the reference's order, because a subtype with two defects reports
+// the first.
+//
+// Every index it reads has already resolved: `checkSubtype` ran over this whole group first, which is
+// what licenses the bare `m.Types[xi]` below.
+func checkSubtypeSub(m *binary.Module, x int) error {
+	for _, xi := range m.Types[x].Supertypes {
+		// `require (xi < x)`.
+		if uint64(xi) >= uint64(x) {
+			return fmt.Errorf("%w %d in sub type definition", ErrForwardTypeUse, xi)
+		}
+		super := m.Types[xi]
+		// `require (fini = NoFinal)` — a `sub final` type may not be named as a supertype.
+		// `binary.CompType.Final` is `true` for a bare comptype as well as for an explicit
+		// `sub final`, which is the grammar's own default (`SubT (Final, [], ct)`), so a plain
+		// `(type $t (func))` is a final supertype and four of the 21 vectors are exactly that.
+		if super.Final {
+			return fmt.Errorf("%w %d has final super type %d", ErrSubType, x, xi)
+		}
+		// `require (match_comptype c.types ct cti)` — the relation, in match.go.
+		if !matchCompType(tctx{gotMod: m, wantMod: m}, m.Types[x], super) {
+			return fmt.Errorf("%w %d does not match super type %d", ErrSubType, x, xi)
 		}
 	}
 	return nil
@@ -201,25 +340,30 @@ func checkTypes(m *binary.Module) error {
 //
 // Reference phases, and this slice's coverage:
 //
-//	check_type      types                    — checkTypes, below: check_subtype_sub's three rules.
-//	                                            `check_rectype`'s context *scoping* is not here —
-//	                                            see checkTypes on the retention it needs
-//	check_import    imports                  — memory/table limits, `check_tagtype` on a tag import
-//	                                            (slice 10), and `check_externtype`'s `ExternFuncT`
-//	                                            arm (#328's Rule B). The global arm — `check_valtype`
-//	                                            over an imported global's declared type — is not this
-//	                                            slice: an indexed reference has to resolve its index,
-//	                                            which is the `unknown type` stratum
+//	check_type      types                    — checkTypes, below: `check_rectype` whole, its context
+//	                                            scoped per rec group, `check_subtype`'s typeuse and
+//	                                            comptype walk, and `check_subtype_sub`'s three rules
+//	check_import    imports                  — `check_externtype` whole: memory/table limits, a table's
+//	                                            element type, `check_globaltype`, `check_tagtype` on a
+//	                                            tag import (slice 10), and the `ExternFuncT` arm
+//	                                            (#328's Rule B)
 //	check_tag       tags                     — slice 10, `checkTagType` below
-//	check_func      function declarations     — not this slice
+//	check_func      function declarations     — `funcType` over each declared index, below. This row
+//	                                            read "not this slice" for four slices after the loop
+//	                                            landed. `check_local`'s `check_valtype` belongs to
+//	                                            `check_func_body` (valid.ml:1021) rather than to this
+//	                                            phase and is in funcBody
 //	check_memory    defined memories          — this slice
-//	check_table     defined tables            — this slice
-//	check_global    globals                   — this slice, `check_const` whole: `is_const`'s
-//	                                            GlobalGet arm (#342) and `check_block`'s type check
-//	                                            on the initializer (#328's Rule A)
+//	check_table     defined tables            — this slice, `check_tabletype` whole: the element type
+//	                                            and then the limits, in that order
+//	check_global    globals                   — this slice, `check_globaltype` and `check_const`
+//	                                            whole: `is_const`'s GlobalGet arm (#342) and
+//	                                            `check_block`'s type check on the initializer (#328's
+//	                                            Rule A)
 //	check_data      data segments             — memory index, and `check_const` whole on the offset,
 //	                                            typed against the memory's address type
-//	check_elem      element segments          — table index, the reftype match (#328's Rule C), and
+//	check_elem      element segments          — `check_reftype` on the declared element type, the
+//	                                            table index, the reftype match (#328's Rule C), and
 //	                                            `check_const` whole on the offset and on every
 //	                                            expression-form element
 //	check_func_body every body                — pre-existing, in Module between the two halves
@@ -297,7 +441,7 @@ func modulePre(m *binary.Module, refs map[uint32]bool) error {
 				return fmt.Errorf("import %d: %w", i, err)
 			}
 		case binary.ExternTable:
-			if err := checkTableType(imp.Table); err != nil {
+			if err := checkTableType(len(m.Types), imp.Table); err != nil {
 				return fmt.Errorf("import %d: %w", i, err)
 			}
 		case binary.ExternTag:
@@ -324,14 +468,21 @@ func modulePre(m *binary.Module, refs map[uint32]bool) error {
 				return fmt.Errorf("import %d: %w", i, err)
 			}
 		case binary.ExternGlobal:
-			// `check_externtype`'s last arm, `check_globaltype`, which is `check_valtype` over the
-			// declared type. Enumerated rather than folded into a default because a silent default
-			// here would absorb a *sixth* extern kind — a future proposal's — as "checked", which is
-			// the under-matching predicate that fails by construction. An imported global's declared
-			// valtype is a real rule and is not this slice's — `check_valtype` over an indexed
-			// reference has to resolve the index, which is the `unknown type` stratum the all-on
-			// lane's census shows and the default lane never asks, since a `(ref $t)` global needs
-			// the GC gate to decode at all.
+			// The last arm of `check_externtype`, which reaches `check_globaltype` — the whole of it
+			// being `check_valtype` over the declared type (valid.ml:197-199). Enumerated rather than folded
+			// into a default because a silent default here would absorb a *sixth* extern kind — a
+			// future proposal's — as "checked", which is the under-matching predicate that fails by
+			// construction.
+			//
+			// This arm was a stated admission waiting on "the `unknown type` stratum", which is this
+			// slice, so it lands with it. Its own witness is thin: an imported `(ref $t)` global needs
+			// the GC gate to decode, and the all-on lane has no row expecting `unknown type` from an
+			// import descriptor. It is written because the rule is one line of the same rule three
+			// other positions in this function now run, and *a rule implemented at four of five sites
+			// is not a rule*.
+			if err := checkValTypeScoped(len(m.Types), imp.GlobalType); err != nil {
+				return fmt.Errorf("import %d: %w", i, err)
+			}
 		}
 	}
 	// check_tag (valid.ml:1049-1052, folded at :1157) → check_tagtype, in the reference's position:
@@ -400,7 +551,7 @@ func modulePre(m *binary.Module, refs map[uint32]bool) error {
 	// measurements beside it.
 	for i := range m.Tables {
 		t := &m.Tables[i]
-		if err := checkTableType(t.Type()); err != nil {
+		if err := checkTableType(len(m.Types), t.Type()); err != nil {
 			return fmt.Errorf("table %d: %w", i, err)
 		}
 		// `RefT rt` is the tabletype's own reftype, which `binary.Table` holds as `ElemType` — so
@@ -425,6 +576,13 @@ func modulePre(m *binary.Module, refs map[uint32]bool) error {
 	// vectors is an `assert_invalid` the board would notice.
 	for i := range m.Globals {
 		g := &m.Globals[i]
+		// `check_globaltype c gt glob.at` at :1057, ahead of the initializer's `check_const` — so
+		// `(global (ref null 7) (ref.null 7))` in a module with three types reports `unknown type 7`
+		// from the descriptor and not from the expression, which would otherwise reach the same
+		// verdict through `checkConst`'s own walk and name the instruction.
+		if err := checkValTypeScoped(len(m.Types), g.Type); err != nil {
+			return fmt.Errorf("global %d: %w", i, err)
+		}
 		if err := checkConst(m, refs, g.Init, g.InitCasts, g.Type, i); err != nil {
 			return fmt.Errorf("global %d: %w", i, err)
 		}
@@ -484,6 +642,18 @@ func modulePre(m *binary.Module, refs map[uint32]bool) error {
 	// a declarative element segment is legal where a declarative data segment cannot be built at all.
 	for i := range m.Elems {
 		e := &m.Elems[i]
+		// `check_reftype c rt elem.at` (valid.ml:1099) — the segment's **declared** element type
+		// resolves before anything else in the segment is looked at, which is why this line is above
+		// the expression loop and not folded into the match below: a segment whose declared type names
+		// a missing type *and* whose expressions are ill-typed reports the type.
+		//
+		// `check_reftype` is `check_heaptype` is `check_typeuse` (valid.ml:113-129), so the rule is the
+		// same one `checkValTypeScoped` spells and the message is the same; `ElemType` is a `ValType`
+		// holding a reftype here, which is the representation this package has used for the reftype
+		// positions since the elem match landed.
+		if err := checkValTypeScoped(len(m.Types), e.ElemType); err != nil {
+			return fmt.Errorf("element segment %d: %w", i, err)
+		}
 		// The element expressions are checked in **every** mode (`check_elem` at :1100 runs
 		// `check_const` over the segment's elements at :1100, before `check_elemmode` at :1101 decides
 		// anything about a table), so this half is outside the Active guard below. A passive segment's

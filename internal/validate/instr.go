@@ -627,11 +627,26 @@ func (v *validator) selectAnnotated(i int) error {
 // corpus vectors and its own board delta, and folding it in would have put a second reward under the
 // first one's forecast.
 func (v *validator) checkValType(t binary.ValType) error {
+	return checkValTypeScoped(len(v.mod.Types), t)
+}
+
+// checkValTypeScoped is `check_valtype` against a stated size of `c.types` rather than against the
+// whole module's.
+//
+// **The scope is a parameter because `check_rectype` moves it** (valid.ml:178-189): the context is
+// built one rec group at a time, `c' = {c with types = c.types @ dts}`, so a type reference inside
+// group *k* resolves against groups `0..k` and not against the flat type space. Every site that runs
+// *after* the type section — a local, an element segment's reftype, a block's result type — sees the
+// whole space and passes `len(m.Types)`, which is what `checkValType` above does; only `checkTypes`
+// passes a prefix. One function rather than two so that the message is the same `unknown type N`
+// wherever the rule fires, which is the reason `checkValType` had for going through the same lookup
+// every other index-space check uses.
+func checkValTypeScoped(scope int, t binary.ValType) error {
 	if !t.IsIndexed() {
 		return nil
 	}
-	if idx := t.Index(); idx >= uint32(len(v.mod.Types)) {
-		return fmt.Errorf("%w %d (%d in scope)", ErrUnknownType, idx, len(v.mod.Types))
+	if idx := t.Index(); uint64(idx) >= uint64(scope) {
+		return fmt.Errorf("%w %d (%d in scope)", ErrUnknownType, idx, scope)
 	}
 	return nil
 }

@@ -7963,7 +7963,28 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	// began to be answered, and a wrong answer would have landed in this lane's `fail` rather than
 	// anywhere the `unsupported` column could absorb it. 11 conversions, 11 passes, 0 new reds, in a
 	// lane that carries 31 standing fails to hide one in.
-	const allOnPassFloor = 65078
+	// # 65078 → 65092, +14, and the two lanes diverging by the whole reward is the reading
+	//
+	// The `check_valtype` slice: `check_rectype`'s context scoped per rec group, `check_subtype`'s
+	// typeuse-and-comptype walk, `check_globaltype` at both of its sites, `check_tabletype`'s element
+	// type, `check_local`, and `check_elem`'s declared reftype. Fourteen rows, forecast as fourteen
+	// before the rule was written — `array.wast:27,48,52`, `ref.wast:27,31,46,51,55,59`,
+	// `struct.wast:36,40`, `type-rec.wast:21,28`, `type-equivalence.wast:76` — of which thirteen were
+	// admitted and one (`ref.wast:55`) was a wrong-message row reporting a type mismatch downstream of
+	// the reference it should have refused.
+	//
+	// **`passFloor` does not move at all, and unlike the last three entries that divergence is the
+	// forecast rather than a surprise.** Every one of the fourteen needs the GC gate to *decode* — an
+	// indexed reference type, a struct field, an array element, or a `sub` wrapper — so all fourteen are
+	// `gated` in the default lane and this is the only lane in which the slice is observable. The three
+	// entries above are the mirror case, MVP-core slices whose lanes had to agree; the instrument reads
+	// the same way in both directions, which is what the divergence entries were built to do.
+	//
+	// `allOnFailCeiling` below falls by exactly 14 on the same run, 31 → 17. The two figures moving in
+	// lockstep is the check on the diagnosis: a slice that also *broke* something would show a smaller
+	// fall than the rise, and one that moved rows between fail buckets rather than out of them would
+	// show a fall with no rise.
+	const allOnPassFloor = 65092
 	// **Slack 0 as of Scott's #387 ruling**, which this bound's own 89-row staleness above is what
 	// prompted: a floor with 250 of tolerance cannot detect anything smaller than 250, so it is a
 	// bound sitting inside its own tolerance. Exact from here — re-base it in the PR that moves the
@@ -8012,7 +8033,7 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	// `type-rec` 4, `struct` 2, `func` 1. `try_table` leaves the list entirely (3 → 0) and
 	// `local_init` halves (8 → 4); every other row is unchanged, which is the check that the fork
 	// touched only what it was measured to touch.
-	const allOnFailCeiling = 31
+	const allOnFailCeiling = 17
 	boardBound(t, "allOnFailCeiling", totalFail, allOnFailCeiling, 0, ceilingBound,
 		"the all-gates-on lane is the interpreter's and validator's remaining work plan now that "+
 			"the default lane's exec column is empty: a rise here is a regression no gated-lane "+
@@ -12016,6 +12037,17 @@ func TestPhase1Files(t *testing.T) {
 	// part: **a stale-premise repair is itself a premise-sourcing event and inherits the whole risk it
 	// exists to discharge**, and it gets less scrutiny than the original for being the fix rather than the
 	// bug. The conclusion is unchanged and now rests on #111, which is checkable by reading #111.
+	//
+	// **Third leg, annotated by the PR that falsified it rather than by a later reader.** The list above —
+	// *"#357, #358 and #296 are the rest of the open shortfall"* — was accurate when written and is
+	// **two-thirds spent as of the `check_valtype` slice**: #357's rec-group scoping and #358's supertype
+	// message both land there, and #357's premise was itself stale when filed (grave #469). What remains of
+	// the shortfall named here is **#296** plus the two the same slice measured and did not take: **#111**'s
+	// nine `(ref null $undefined)` positions, still with no suite vector failing on them, and **#452**'s
+	// local-initialization rule, which is `decision-needed:scott` and deliberately untaken. This
+	// annotation exists because the paragraph it sits under is a two-instance record of sourcing a premise
+	// from prose, and a list of open issues inside it is the same premise class one level down: the tracker
+	// is one query away and *nothing in this file re-queries it when an issue closes*.
 	// # 60922 → 60928, +6, and the six are **the whole of what the default lane can gain here**
 	//
 	// #426's two script forms. Six commands convert from `unsupported` to `pass`: the four standalone
