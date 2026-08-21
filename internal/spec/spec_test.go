@@ -12041,13 +12041,26 @@ func TestPhase1Files(t *testing.T) {
 	// **Third leg, annotated by the PR that falsified it rather than by a later reader.** The list above —
 	// *"#357, #358 and #296 are the rest of the open shortfall"* — was accurate when written and is
 	// **two-thirds spent as of the `check_valtype` slice**: #357's rec-group scoping and #358's supertype
-	// message both land there, and #357's premise was itself stale when filed (grave #469). What remains of
-	// the shortfall named here is **#296** plus the two the same slice measured and did not take: **#111**'s
-	// nine `(ref null $undefined)` positions, still with no suite vector failing on them, and **#452**'s
-	// local-initialization rule, which is `decision-needed:scott` and deliberately untaken. This
-	// annotation exists because the paragraph it sits under is a two-instance record of sourcing a premise
-	// from prose, and a list of open issues inside it is the same premise class one level down: the tracker
-	// is one query away and *nothing in this file re-queries it when an issue closes*.
+	// message both land there, and #357's premise was itself stale when filed (grave #469). This annotation
+	// exists because the paragraph it sits under is a two-instance record of sourcing a premise from prose,
+	// and a list of open issues inside it is the same premise class one level down: the tracker is one query
+	// away and *nothing in this file re-queries it when an issue closes*.
+	//
+	// **The annotation then instantiated its own finding within a day, which is why there is no list here
+	// now.** It replaced the spent list with a fresh one — "#296 plus #111 and #452" — and #296 was retired
+	// the next day on Scott's order, his approval of it as product having rested on a premise its own
+	// measurement falsified. That is the fourth wrong claim in this clause position, and the second of the
+	// four written as the repair of its predecessor — legs 1→2 and 3→4, the pattern this paragraph already
+	// names and then re-ran. A fifth list would be the same bet at the same odds, so the repair is
+	// to stop making the claim: **what remains of the shortfall is whatever the tracker returns**, and the
+	// query is the artifact rather than its transcription —
+	//
+	//	gh issue list --state open --label phase:v0 --search 'validate in:title'
+	//
+	// The conclusion this paragraph exists to support does not need the list and never did: the column
+	// reaching 0 leaves #9 open because a negative-vector corpus cannot falsify what a validator wrongly
+	// accepts, which is #111's shape and is checkable by reading #111. Every enumeration added after that
+	// sentence was decoration that could go stale, and did, four times.
 	// # 60922 → 60928, +6, and the six are **the whole of what the default lane can gain here**
 	//
 	// #426's two script forms. Six commands convert from `unsupported` to `pass`: the four standalone

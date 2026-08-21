@@ -356,6 +356,21 @@ var deferredReasonLicensed = map[string]string{}
 // normalized: the mismatch is now recorded and the working locator is named, which is what the next
 // re-key needs.
 //
+// **Seventh re-key, and it is the first in a file other than `spec_test.go` — which is exactly how it
+// was missed.** Two entries, `internal/validate/validate.go:175` → **`:185`**, a ten-line insertion at
+// `:124` citing #471 from the constant-expressions census. Both checks run: `git diff -U0` predicted
+// one region at `+125,10`, and the paragraph at `:185` is byte-identical to the one at `:175`.
+//
+// The finding is not the re-key, which was mechanical. It is that the same PR ran a line-citation
+// sweep, printed its result, and **derived the population from the wrong file**: `spec_test.go` also
+// gained an insertion, so every `spec_test.go:<line>` citation in the tree was checked (highest `:11628`
+// against an insertion at `:12044` — nothing owed) and the check was written up as done. `validate.go`
+// was edited in the same commit and its citations were never asked about. The sweep was scoped to the
+// file that prompted it rather than to the set of files the commit touched, so a green over one channel
+// read as a green over the change. **`make check` caught it**, which is the system working; what the
+// reader should take is the domain rule: after any insertion, the population is *every file this commit
+// modified*, and it is derived from `git diff --name-only`, never from the file you were thinking about.
+//
 // The fragility is the reason the scheme stays, and **the requirement is two-sided**: a key must be
 // insertion-immune *and* rewrite-fragile. A key that survived a rewrite of the paragraph it licenses
 // would carry the reason over prose that no longer says it — the defect this whole file is about, one
@@ -502,11 +517,11 @@ var foreclosingLicensed = map[string]string{
 		"class's standard, and stayed it after #432 ruled. The quote is inline rather than block-indented for a " +
 		"mechanical reason recorded at the site: `foreclosingParagraphs` splits on blank comment " +
 		"lines, so an indented quotation becomes its own paragraph and reads as a live assertion",
-	"internal/validate/validate.go:175 non-goals register never SIMD": "the surviving `never` is " +
+	"internal/validate/validate.go:185 non-goals register never SIMD": "the surviving `never` is " +
 		"past-tense (\"the default lane never asked\") about slice 10's gated remainder; the " +
 		"gate-dependent sentence that used to end this paragraph is quoted as falsified, which is " +
 		"what the sweep found in #427's own PR",
-	"internal/validate/validate.go:175 non-goals register never RelaxedSIMD": "as above — the " +
+	"internal/validate/validate.go:185 non-goals register never RelaxedSIMD": "as above — the " +
 		"paragraph now records its own stale sentence rather than asserting it",
 }
 

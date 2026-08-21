@@ -122,6 +122,16 @@
 // the GC gate is off; they are the whole of the constant-expressions entry that is still owed, and a
 // register entry reading "constant expressions (24)" priced them at twelve times their size.
 //
+// **Those two rows are #471 as of 2026-08-21, and until then they were named here and tracked
+// nowhere** — a debt stated in prose is declared, not tracked, and the half that decides whether
+// anyone works on it is the tracked half. Filing them also promoted them from two rows to a
+// diagnosis: `is_const`'s non-`GlobalGet` arms are answered by the decoder's const-expression reader,
+// whose legality test is keyed on the *leading byte* and is called only from the single-byte dispatch
+// arm, so the whole prefixed opcode space is const-legal by omission. The two visible rows are a
+// lower bound on that population and the population is unmeasured. Recorded here because this
+// paragraph is where the next reader will look for what "still owed" costs, and the answer is not two
+// rows.
+//
 // # What replaces the register
 //
 // **No `assert_invalid` vector on the board is declined.** That is the property this
