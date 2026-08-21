@@ -4,9 +4,11 @@
 package testenv_test
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -68,8 +70,26 @@ const (
 )
 
 var (
-	// mdLinkRE matches an inline markdown link. Only the target matters here.
-	mdLinkRE = regexp.MustCompile(`\[[^\]]*\]\(([^)\s]+)\)`)
+	// mdLinkRE matches an inline markdown link, over the **whole file** rather than a line.
+	//
+	// Two deliberate differences from the line-oriented form this replaces, and the first one is
+	// why the replacement exists. `(?s)` lets the link *text* span a line break, which prose in
+	// this repo does constantly — and the old `\[[^\]]*\]\(([^)\s]+)\)` run per line could not see
+	// those links at all. Measured on the tree at the widening: **6 of 70** relative links were
+	// invisible to it, **3 of them on `CLAUDE.md` itself**, which is the page its own control
+	// existed to check. A reader silently skipping 3 of 26 links on its only file is *a control is
+	// a pattern plus the text it is handed* aimed at this file.
+	//
+	// The target is captured as `[^()]*`, which **admits whitespace on purpose**. A destination
+	// containing unescaped whitespace is not a link at all under CommonMark — it renders as
+	// literal text — so those are captured in order to be *reported*, by the wrapped-target
+	// control below, rather than skipped by a pattern that declines to ask.
+	mdLinkRE = regexp.MustCompile(`(?s)\[[^\]]*\]\(([^()]*)\)`)
+
+	// fenceRE matches a fenced-code delimiter. A link inside a fence is a literal being shown to
+	// the reader, not a citation being made, so it is excluded from the population — and counted,
+	// because a silent exclusion is indistinguishable from having found nothing.
+	fenceRE = regexp.MustCompile("^\\s*(```|~~~)")
 
 	// headingRE matches any heading `##` and deeper. Deliberately not `### ` only: the law
 	// families use `###` for a law and `operations.md` uses `##` for a recipe, and an anchor
@@ -92,37 +112,134 @@ func anchorFor(heading string) string {
 	return b.String()
 }
 
-// link is one relative link on the page, with the line it was written on.
+// link is one relative link, with the file and line it was written on.
 type link struct {
-	target string // the whole target, `path` or `path#anchor`
-	path   string // the path half, repo-relative
-	anchor string // the anchor half, empty if the link has none
-	line   int    // 1-indexed line in CLAUDE.md, for the failure message
+	src      string // repo-relative markdown file the link was written in
+	target   string // the whole target as written, `path` or `path#anchor`
+	path     string // the path half, as written — relative to `src`'s directory
+	resolved string // the path half made repo-relative, which is what gets opened
+	anchor   string // the anchor half, empty if the link has none
+	line     int    // 1-indexed line in `src`, for the failure message
 }
 
-// readLinks returns every relative link in `CLAUDE.md`.
+// mdSources returns every markdown file in the tree, repo-relative and sorted.
 //
-// Absolute links (`https:`, `mailto:`) are skipped: their oracle is the network, and *split
-// issues at the oracle seam* — this half's oracle is the filesystem, so this half is what runs in
-// `go test`.
-func readLinks(tb testing.TB) []link {
+// **Derived, not enumerated.** The population is "markdown in this repo", so a new law family, a
+// new ADR, or a new top-level page is in the domain the moment it is written — *a control scoped to
+// today's cases inherits today's blind spot*. The walk routes through `skipWalkDir` for grave
+// #369's reason: `.claude/worktrees/` has held full copies of this repo, and a control that walks
+// "the repo" is asserting it knows where the repo ends.
+func mdSources(tb testing.TB) []string {
 	tb.Helper()
 
-	src, err := os.ReadFile(claudeMD)
-	if err != nil {
-		tb.Fatalf("reading %s: %v", claudeMD, err)
-	}
-	var links []link
-	for i, l := range strings.Split(string(src), "\n") {
-		for _, m := range mdLinkRE.FindAllStringSubmatch(l, -1) {
-			t := m[1]
-			if strings.Contains(t, ":") || strings.HasPrefix(t, "#") {
-				continue
-			}
-			path, anchor, _ := strings.Cut(t, "#")
-			links = append(links, link{target: t, path: path, anchor: anchor, line: i + 1})
+	var out []string
+	err := filepath.WalkDir(repoRoot, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
 		}
+		if d.IsDir() {
+			// `third_party` is this walk's own documented addition, passed at the call site
+			// rather than added to the shared set, which is the idiom citation_test.go's cite
+			// walk uses for the same directory and the same reason: the fetched spec material is
+			// **upstream's markdown**, its 100-odd files cite each other in conventions this repo
+			// does not set, and four of its links were reported as this tree's violations on the
+			// first run of this control. A rule about our citations has no jurisdiction there.
+			if skipWalkDir(d, "third_party") {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".md") {
+			return nil
+		}
+		rel, err := filepath.Rel(repoRoot, path)
+		if err != nil {
+			return err
+		}
+		out = append(out, filepath.ToSlash(rel))
+		return nil
+	})
+	if err != nil {
+		tb.Fatalf("walking for markdown sources: %v", err)
 	}
+	slices.Sort(out)
+	return out
+}
+
+// readLinksIn returns every relative link in one markdown file, plus the ones whose destination is
+// broken across a line (which are not links at all) and the count excluded as fenced literals.
+//
+// Absolute links (`https:`, `mailto:`) are skipped: their oracle is the network, and *split issues
+// at the oracle seam* — this half's oracle is the filesystem, so this half is what runs in
+// `go test`.
+//
+// A link's path is relative to **its own file's directory**, not to the repo root. Stated in code
+// because the corpus has already paid for the other reading: a repo-root-relative path written
+// inside `docs/laws/` resolves to nothing.
+func readLinksIn(tb testing.TB, src string) (links, wrapped []link, fenced int) {
+	tb.Helper()
+
+	blob, err := os.ReadFile(filepath.Join(repoRoot, src))
+	if err != nil {
+		tb.Fatalf("reading %s: %v", src, err)
+	}
+	content := string(blob)
+	inFence := fencedOffsets(content)
+	dir := filepath.Dir(src)
+
+	for _, m := range mdLinkRE.FindAllStringSubmatchIndex(content, -1) {
+		if inFence[m[0]] {
+			fenced++
+			continue
+		}
+		raw := content[m[2]:m[3]]
+		l := link{src: src, line: 1 + strings.Count(content[:m[0]], "\n")}
+
+		// A destination with whitespace in it renders as literal text rather than as a link, so
+		// it is reported by its own control rather than repaired here by rejoining — rejoining
+		// would certify a citation the reader can never follow.
+		if strings.ContainsAny(raw, " \t\n\r") {
+			l.target = strings.Join(strings.Fields(raw), " ")
+			wrapped = append(wrapped, l)
+			continue
+		}
+		if strings.Contains(raw, ":") || strings.HasPrefix(raw, "#") || raw == "" {
+			continue
+		}
+		l.target = raw
+		l.path, l.anchor, _ = strings.Cut(raw, "#")
+		l.resolved = filepath.ToSlash(filepath.Join(dir, l.path))
+		links = append(links, l)
+	}
+	return links, wrapped, fenced
+}
+
+// fencedOffsets marks every byte offset that sits inside a fenced code block.
+func fencedOffsets(content string) map[int]bool {
+	in := map[int]bool{}
+	off, open := 0, false
+	for _, line := range strings.Split(content, "\n") {
+		if fenceRE.MatchString(line) {
+			open = !open
+			// The delimiter line itself is inside either way.
+			for i := off; i <= off+len(line); i++ {
+				in[i] = true
+			}
+		} else if open {
+			for i := off; i <= off+len(line); i++ {
+				in[i] = true
+			}
+		}
+		off += len(line) + 1
+	}
+	return in
+}
+
+// readLinks returns every relative link in `CLAUDE.md`. Kept as a named reader because the
+// reachability check below is a claim about *that page* specifically, not about markdown at large.
+func readLinks(tb testing.TB) []link {
+	tb.Helper()
+	links, _, _ := readLinksIn(tb, "CLAUDE.md")
 	return links
 }
 
@@ -174,53 +291,145 @@ func headingsIn(tb testing.TB, path string) map[string]bool {
 	return out
 }
 
-// TestClaudeMDLinksResolve is the dangling-pointer half. Every relative link on the page names a
-// file that exists, and every anchor names a heading that slugs to it.
+// TestMarkdownLinksResolve is the dangling-pointer half. Every relative link in every markdown file
+// in the tree names a file that exists, and every anchor names a heading that slugs to it.
 //
 // A separate test from the reachability check below, because the two fail for unrelated reasons
 // and *one test asserting two properties that fail with one message is the partition defect*
 // (grave #34): this one says a pointer leads nowhere, that one says a law cannot be reached.
-func TestClaudeMDLinksResolve(t *testing.T) {
-	links := readLinks(t)
-
-	// Vacuity, derived: the page's whole job is pointing at the corpus, so at minimum it links
-	// every family. A reader that silently stopped matching links reports zero here and one
-	// failure per family below — it cannot produce a green.
-	if len(links) == 0 {
-		t.Fatalf("found no relative links in %s. Every assertion below is a loop over matches, so "+
-			"an empty set satisfies all of them; either the page stopped linking the corpus, which "+
-			"is the whole finding, or this reader stopped being able to see links", claudeMD)
+//
+// # Why the domain is the tree and not `CLAUDE.md` (#466, Scott's ruling on PR #465)
+//
+// It was `CLAUDE.md`'s control for as long as `CLAUDE.md` was the only page made of pointers. It is
+// not: the law corpus cross-references itself, `CHANGELOG.md` cites the law a change minted, and
+// the ADRs cite both. **Measured at the widening: 23 anchor-bearing links, 9 on `CLAUDE.md` and 14
+// in no control's domain** — and the two that were stale were stale for half an hour inside PR #465
+// itself, created by renaming a heading whose incoming citations nothing checked.
+//
+// # The half this does not cover, stated because coverage is a claim
+//
+// **A citation carrying no anchor at all still passes.** PR #465's own near-published defect was a
+// law cited under a title the corpus does not contain, written as `[…](boards-and-buckets.md)` with
+// no fragment: the file exists, so this control is satisfied, and the sentence is still false. What
+// is checked here is that a pointer leads *somewhere*; that it leads to the law the prose names is
+// not checked by anything, and #466 says so rather than letting a widened control be read later as
+// covering the class it belongs to.
+func TestMarkdownLinksResolve(t *testing.T) {
+	sources := mdSources(t)
+	if len(sources) == 0 {
+		t.Fatalf("found no markdown files under %s — every assertion below is a loop over matches, "+
+			"so an empty domain satisfies all of them vacuously", repoRoot)
 	}
 
-	for _, l := range links {
-		info, err := os.Stat(filepath.Join(repoRoot, l.path))
-		if err != nil {
-			t.Errorf(`%s:%d: the link %q names a path that does not exist.
+	// Derived vacuity, taken from the space rather than from a maintained number: the corpus is
+	// the one part of the domain that is known to exist by another reader in this file, so a walk
+	// that lost it is caught without pinning a count that every new page would have to update.
+	scanned := map[string]bool{}
+	for _, s := range sources {
+		scanned[s] = true
+	}
+	for family := range readCorpus(t) {
+		if want := "docs/laws/" + family + ".md"; !scanned[want] {
+			t.Errorf("%s is in the corpus and was not among the %d markdown files this control "+
+				"walked. The domain is derived from a tree walk, so a family missing from it means "+
+				"the walk's boundary moved, not that the family is gone", want, len(sources))
+		}
+	}
 
-This page is made of pointers, so a pointer that resolves to nothing is its characteristic
-failure — a reader following it finds a tombstone with no inscription, and nothing else on the
-page is wrong. Either fix the path, or delete the claim it was supporting.`, claudeMD, l.line, l.target)
-			continue
-		}
-		if info.IsDir() || l.anchor == "" {
-			continue
-		}
-		headings := headingsIn(t, l.path)
-		found := false
-		for h := range headings {
-			if anchorFor(h) == l.anchor {
-				found = true
-				break
+	var links, anchored, fenced int
+	for _, s := range sources {
+		found, _, fencedHere := readLinksIn(t, s)
+		links += len(found)
+		fenced += fencedHere
+
+		for _, l := range found {
+			info, err := os.Stat(filepath.Join(repoRoot, l.resolved))
+			if err != nil {
+				t.Errorf(`%s:%d: the link %q names a path that does not exist (resolved: %s).
+
+A page made of pointers fails by having a pointer that resolves to nothing — a reader following it
+finds a tombstone with no inscription, and nothing else on the page is wrong. Either fix the path,
+or delete the claim it was supporting.`, l.src, l.line, l.target, l.resolved)
+				continue
 			}
-		}
-		if !found {
-			t.Errorf(`%s:%d: the link %q names an anchor no heading in %s slugs to.
+			if info.IsDir() || l.anchor == "" {
+				continue
+			}
+			anchored++
+			found := false
+			for h := range headingsIn(t, l.resolved) {
+				if anchorFor(h) == l.anchor {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Errorf(`%s:%d: the link %q names an anchor no heading in %s slugs to.
 
 The anchor is derived from the heading text, so this fires when the heading was reworded and the
 link was not — the citation still looks resolvable and lands the reader at the top of the file
 instead of at the law. Re-derive it from the heading, or point at the file without an anchor.`,
-				claudeMD, l.line, l.target, l.path)
+					l.src, l.line, l.target, l.resolved)
+			}
 		}
+	}
+
+	if links == 0 {
+		t.Fatalf("found no relative links across %d markdown files. Either the tree stopped citing "+
+			"itself, which is the whole finding, or this reader stopped being able to see links",
+			len(sources))
+	}
+	// The anchor half is the half that rots, so a reader that stopped seeing anchors would pass
+	// every loop above by asking nothing. Asserted separately from the link count for that reason.
+	if anchored == 0 {
+		t.Fatalf("found %d relative links across %d markdown files and not one anchor among them. "+
+			"The heading-slug comparison below is the point of this control, and it just ran over "+
+			"an empty set", links, len(sources))
+	}
+	if !t.Failed() {
+		t.Logf("%d markdown files, %d relative links, %d of them anchor-bearing, %d link(s) "+
+			"excluded as fenced literals", len(sources), links, anchored, fenced)
+	}
+}
+
+// TestMarkdownLinkTargetsAreNotWrapped is the third failure mode, and it is its own test because it
+// fails for a different reason than the two above: not a citation that leads nowhere, but **a
+// citation that is not a link at all**.
+//
+// A CommonMark destination may not contain unescaped whitespace, so a target broken across a line
+// renders as literal square-bracketed text. The reader cannot follow it and no anchor check ever
+// runs on it — it is a citation that fails *silently in the rendered page*, which is worse than a
+// dangling one because the failure is invisible to `grep` for a `#anchor` too.
+//
+// **This starts green over an empty population, so it is a tripwire and was watched die before
+// being believed** (`a control isn't born until it's watched die`): a hand-inserted wrapped target
+// in a scratch copy is reported with its file and line. The population is zero at the widening
+// because the tree has never had one, not because nothing is being asked.
+func TestMarkdownLinkTargetsAreNotWrapped(t *testing.T) {
+	sources := mdSources(t)
+	if len(sources) == 0 {
+		t.Fatalf("found no markdown files under %s, so this control asserted nothing", repoRoot)
+	}
+
+	total := 0
+	for _, s := range sources {
+		links, wrapped, _ := readLinksIn(t, s)
+		total += len(links) + len(wrapped)
+		for _, l := range wrapped {
+			t.Errorf(`%s:%d: the link destination %q is broken across a line, so this is not a link.
+
+CommonMark forbids unescaped whitespace in a destination: the rendered page shows the bracketed
+text literally and the reader has nothing to follow. Put the whole destination on one line — the
+link *text* may wrap freely, and wrapping it is how the line stays inside the margin.`,
+				l.src, l.line, l.target)
+		}
+	}
+	if total == 0 {
+		t.Fatalf("found no markdown links at all across %d files, so the wrapped-destination check "+
+			"ran over an empty set", len(sources))
+	}
+	if !t.Failed() {
+		t.Logf("%d markdown link(s) across %d files, 0 with a wrapped destination", total, len(sources))
 	}
 }
 

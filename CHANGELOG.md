@@ -1806,6 +1806,84 @@ weakly-ordered platform.
 
 ### Changed
 
+- **Link resolution's domain widens from one page to the whole markdown corpus, and the destination
+  a line break splits gets its own tripwire**
+  ([#466](https://github.com/scttfrdmn/burroughs/issues/466); ordered by Scott on the
+  [#465](https://github.com/scttfrdmn/burroughs/pull/465) review — *"it's a domain widening on a live
+  control, not a new instrument, and it closes a real half cheaply"*). `TestClaudeMDLinksResolve`
+  becomes **`TestMarkdownLinksResolve`**, its domain derived by a tree walk rather than named as a
+  path, so the population asserted is the one that actually makes the citations: the law corpus
+  cross-referencing itself, this file citing the law a change minted, the ADRs citing both. Measured
+  **at the widening**: 57 markdown files, **71 relative links, 24 anchor-bearing** — of which **9**
+  anchors were in the old control's domain and **15 were in nobody's**. Past tense on purpose: this
+  entry's own five links took the population to **76 and 25** before it was committed, which is a
+  derived domain behaving as one, and the reason the figure is dated rather than asserted of the tree.
+  Two of those five were **invented ADR filenames written from session vocabulary**, and the widened
+  control's first live catch was the entry announcing it. Two things came out of building it, both
+  measured. The old per-line reader was **blind to 3 of the 26 links on its own only file** and 6 of
+  70 tree-wide, because prose here wraps link *text* constantly and `[^)\s]+` cannot span a newline —
+  three of the six being `CLAUDE.md`'s own `operations.md` recipe links, so the page the law is
+  written on had a control skipping 11.5% of it. And **a destination broken across a line is not a
+  link at all** (CommonMark forbids unescaped whitespace in one: the brackets render literally and no
+  anchor check ever runs), which is why the reader **reports** those rather than rejoining them —
+  rejoining measures a link the reader will never have — and why they get
+  **`TestMarkdownLinkTargetsAreNotWrapped`**, a separate test on grave #34's partition rule. Its
+  population is **0**, so it was **watched die** on a hand-inserted specimen first. The widening was
+  falsified three ways before its green was believed, and case (c) is the one that proves both
+  halves: a heading renamed in `citations.md` caught through an incoming citation in
+  `evidence-and-instruments.md` — a file the old control could not see, through a wrapped-text link
+  the old reader could not parse. **The larger half stays uncovered and #466 exists to say so: a
+  citation carrying no anchor at all still passes**, and both of the specimens that motivated this
+  are of exactly that shape. *Coverage is a claim*, which was the condition the order came with.
+
+- **v0's closure condition no longer says the gates are off, because two of them are not, by Scott's
+  own stamps** (`CLAUDE.md`'s phase ladder; ruled by Scott on the
+  [#465](https://github.com/scttfrdmn/burroughs/pull/465) review — *"a closure condition must not
+  retroactively unmake a decision I stamped"*). The line read *"Wasm MVP core suite green with
+  3.0-feature gates present and off"* and now reads **"every 3.0-feature gate present and its default
+  a recorded decision"**, off unless its own stamped flip event says otherwise. `Features` has **9
+  gate fields**; `DefaultFeatures()` returns `SIMD` and `RelaxedSIMD` on, each with its own flip
+  decision
+  ([0025](docs/decisions/0025-g-1-carves-out-vectors-whose-sole-blocker-is-9s-deferred-validator.md),
+  [0028](docs/decisions/0028-relaxed-simd-lowerings-are-deterministic-and-architecture-uniform-the-references-choice-taken-once.md)),
+  and 7 off — so the old clause was
+  unsatisfiable by construction while the new one is a condition the tree can meet. **The ruling
+  named one site and grepping the phrase found four**: *a FAIL names a site, not the population*.
+  `CLAUDE.md`'s is repaired here; `CHANGELOG.md`'s is left as the past-tense record of the release it
+  describes; **ADRs [0008](docs/decisions/0008-proposal-gate-mapping.md) and 0039 are flagged to
+  Scott, not edited**, an ADR being a tombstone whose amendment form is a dated stamp note. The
+  reason no instrument caught any of it: `foreclosingSites`, the sweep whose entire subject is claims
+  about gates written before a flip, filters to `.go`, and all four sites are markdown. In the same
+  shape, `internal/binary/sections.go`'s `DefaultFeatures` doc comment asserted SIMD's **flip-time**
+  suite figures in the present tense; now past tense with the re-measured values beside them
+  (`pass=25989 fail=0 gated=0`, so ADR 0025's carve-out is **inert, not retired** — its retirement
+  condition is #9 landing, not its subject emptying).
+
+- **New law: *an obligation charged to a rider is lost the moment its carrier lands***
+  ([product-and-overhead](docs/laws/product-and-overhead.md); ordered by Scott on the
+  [#465](https://github.com/scttfrdmn/burroughs/pull/465) review — *"never charge an obligation to a
+  rider again"*). The specimen is #67's half 2, the accept-direction comparator, charged to #130's
+  slice as its falsification bill. **#130 landed as #425** (`075e11c`), taking `encodeFailCeiling`
+  3 → 0 — the very zero the comparator was charged to protect — and paid nothing: its closing comment
+  is about `immPart` and deferred-immediate positions. An obligation attached to an event has no state
+  of its own, so nothing went red, and from outside the citation still read as *tracked*. The
+  carrier's rename is the **tell, not the cause** — *artifacts become oracles*
+  ([graves-and-sweeps](docs/laws/graves-and-sweeps.md#artifacts-become-oracles)). Remedy: give the
+  obligation its own number. Discharged as **[#467](https://github.com/scttfrdmn/burroughs/issues/467)**,
+  which carries the comparator with its vacuity floor pre-registered (692 of 1954 corpus images are
+  gate-declined, so the comparable population is ≤ 1262) and with the two byte-comparisons a reader
+  will find instead named as not being it.
+
+- **`wrapJoin`'s doc comment cited two files for its real instances and was wrong about both**
+  (`internal/testenv/citation_test.go`). It named `internal/spec/spec_test.go:2031` and
+  `internal/spec/wast.go:911`; the real comment groups are at `spec_test.go:6818`
+  (`TestGrave206-\nKnownFailures`) and `12552` (`TestEveryBoardBound-\nIsChecked`), and **`wast.go`
+  holds no instance either way** — the half a line-drift sweep cannot see, since re-pointing by delta
+  fixes an offset and never notices the wrong file. Re-pointed **by what the comments stand over**
+  (the all-gates-on lane's pass floor; the `totalFloor` `boardBound` call) rather than by line, with
+  the past-tense record of what it used to claim kept in place. *Adding lines breaks every line
+  citation below* is the mechanism; the file-level miss is why the repair is by content.
+
 - **The law class *a pattern able to match the instrument's own output is satisfied by the
   instrument* is widened to *a control is a pattern plus the text it is handed*, on its third
   specimen** ([evidence-and-instruments](docs/laws/evidence-and-instruments.md#a-control-is-a-pattern-plus-the-text-it-is-handed);
@@ -1828,8 +1906,13 @@ weakly-ordered platform.
   check on a cross-reference is to search for it before writing it*. Two incoming citations were
   re-pointed to the renamed heading with their text otherwise unchanged, one of them the historical
   minting entry below and one in
-  [operations.md](docs/laws/operations.md#waiting-on-ci); **nothing in the tree sweeps markdown
-  anchors**, so that re-pointing was by `grep` and is stated here rather than instrumented.
+  [operations.md](docs/laws/operations.md#waiting-on-ci); at the time of writing **nothing in the
+  tree swept markdown anchors**, so that re-pointing was by `grep` and was stated here rather than
+  instrumented. Amended in place, because the very next slice falsified it: the link-resolution
+  control's domain widened from one page to every markdown file in the repo (entry above,
+  [#466](https://github.com/scttfrdmn/burroughs/issues/466)), and the re-pointing this clause
+  describes is now machine-checked. A sentence about what no instrument does is a forecast about the
+  tree, and this one had a shelf life of one PR.
 
 - **The classification test a PR's purpose is judged against, written down: *does the PR change what
   the runtime can do, or only what the harness can say about what it does?***
