@@ -573,3 +573,32 @@ reach is a law out of context.
   that a measured quantity in prose schedules its own next increment; the tally is generated or
   it is deleted, and this one is deleted. (Lesson: Scott, on the PR #247 relay; recurrences
   relayed by chat-Claude; count struck on his ruling, PR #317.)
+
+### A pattern able to match the instrument's own output is satisfied by the instrument.
+
+- **A pattern able to match the instrument's own output is satisfied by the instrument.** A
+  matcher asks whether a token appears *somewhere* in a payload, the payload happens to contain
+  the checker's own vocabulary, and the condition is met by the words describing the check rather
+  than by the thing checked. It reads as a pass and it asserted nothing. Filed as a **class and
+  not an anecdote** because it arrived twice in one session with one remedy both times.
+  - `TestEveryPayloadSpellingIsReadOrRefusedByName` asked `strings.Contains(err.Error(), name)`
+    for each payload spelling. For `name == "struct"` the substring sat inside the word
+    **constructor** in the refusal's own sentence, so a refusal that never named its payload
+    satisfied the check anyway (`value_test.go:198`, with the reason written at the refusal it
+    corrupted, `value.go:722`). The falsification probe that should have failed on six payloads
+    failed on five, and *the shape of what survives named the bug*.
+  - Reading a CI verdict out of a captured `gh run watch`, `grep -E '^JOB'` for the sentinel's
+    `JOB <name> <conclusion>` lines matched the watch's own **`JOBS`** section headers — the
+    progress display returned dozens of rows as if they were the verdict, and a green-looking
+    harvest came out of a file whose sentinel had not been written.
+  The remedy is mechanical and identical: **anchor the match, or quote the token** —
+  `strconv.Quote(name)` rather than `name`, `^JOB ` rather than `^JOB`. A delimited token cannot
+  be a coincidence inside a longer word, which is *aboutness is not proximity* applied to a
+  matcher instead of to a sentence. Sited in this family because it is the domain error
+  [Coverage is a claim](#coverage-is-a-claim-an-instruments-domain-is-an-assertion-it-cannot-check-about-itself)
+  names, contaminated from the one direction an instrument cannot see: the checker's vocabulary is
+  *inside* the population it scans. Adjacent to *a ban reported in the banned form is still the
+  banned form* in [operations.md](operations.md) — there the scanner reads its own report, here it
+  reads its own words — and the tell is the same in both, a needle that is a short common word in
+  a haystack of prose the checker or its subject wrote.
+  (Class: Scott, PR #460 — *"two instances with one remedy is a class."*)

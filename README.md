@@ -179,7 +179,11 @@ compiles — `TestREADMEGoBlocksAreRealCode` checks it.
 
 The upstream WebAssembly spec test suite is the oracle, and **this file quotes no
 figure from it on purpose**: a count typed into prose is a count that rots, and
-the instrument is one command away.
+the instrument is one command away. That rule is currently kept by hand — the
+controls over this file check its code blocks, its transcript and its exit-code
+coverage, and none of them looks at a figure in prose — so it is declared and
+tracked rather than enforced:
+[#461](https://github.com/scttfrdmn/burroughs/issues/461).
 
 ```console
 $ make spec-tests                                    # vendor the suite (gitignored)

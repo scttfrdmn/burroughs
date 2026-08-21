@@ -73,6 +73,28 @@ weakly-ordered platform.
   requires already knowing the law exists and thinking to apply it. `unsupportedCeiling`'s ledger
   keeps its entry too — the class has to be restated wherever that bound next moves, which is the one
   thing README cannot promise for rows added later. No figure crosses into README, per its own rule.
+  **That rule turned out to be enforced by hand, and now says so**: the four controls over the file
+  check its `go` blocks, its CLI transcript and its exit-code coverage, and not one of them looks at
+  a figure in prose. The sentence is amended to *declared and tracked* with the tracking number
+  ([#461](https://github.com/scttfrdmn/burroughs/issues/461), filed unmilestoned on Scott's order —
+  a digit-pattern scan over prose with a content-keyed allow-list), because the no-figure rule sat in
+  exactly the position that kept the ledger entry above: stated in a file, kept by a human, in a
+  project whose recurring failure mode is the rule that lives only in prose.
+
+- **A pattern able to match the instrument's own output is minted as a law class**, in
+  [evidence-and-instruments](docs/laws/evidence-and-instruments.md#a-pattern-able-to-match-the-instruments-own-output-is-satisfied-by-the-instrument)
+  (Scott's ruling on this PR: *"two instances with one remedy is a class"*). Both instances arrived
+  in one session. `TestEveryPayloadSpellingIsReadOrRefusedByName` asked
+  `strings.Contains(err.Error(), name)` and for `struct` the substring sat inside the word
+  **constructor** in the refusal's own sentence, so the falsification probe that should have failed
+  on six payloads failed on five (`value_test.go:198`, `value.go:722`). Then, reading a CI verdict
+  out of a captured `gh run watch`, `grep -E '^JOB'` for the sentinel's `JOB <name> <conclusion>`
+  rows matched the watch's own **`JOBS`** section headers, harvesting the progress display as the
+  verdict. The remedy is identical and mechanical — **anchor the match or quote the token**,
+  `strconv.Quote(name)` rather than `name`, `^JOB ` rather than `^JOB` — and the tell is a needle
+  that is a short common word in a haystack of prose the checker or its subject wrote. Recorded as a
+  class rather than as two anecdotes because the second instance was diagnosed from scratch while
+  the first one's repair was still on the same branch.
 
 - **`assert_exhaustion` enters the harness's command vocabulary, and the `unsupported` column falls
   29 → 14** ([#440](https://github.com/scttfrdmn/burroughs/issues/440)). One `classify` arm, one
