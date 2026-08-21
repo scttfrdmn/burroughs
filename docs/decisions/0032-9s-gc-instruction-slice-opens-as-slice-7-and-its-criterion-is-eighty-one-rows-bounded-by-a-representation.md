@@ -40,12 +40,23 @@ expressions (24), limits (16) and exception handling is a claim about which slic
 
 **It is slice 7 and not slice 6, and the reason is a collision worth recording rather than
 papering over.** The ordinal 5 is claimed **twice**: `bulk.go`'s header opens *"Slice 5 of #9's
-validator: the instructions whose type reads a module index space"*, and `validate.go:70` opens
+validator: the instructions whose type reads a module index space"*, and `validate.go:153` opens
 *"# Slice 5: the subtype relation"*. Slice 6 is the reference-type slice (#359/#363) — named as 6 in
 `bulk_test.go:28`, `validate_test.go:528` and ADR 0027, though never in `ref.go`'s own header. So 6
 is taken by a slice that does not claim its own number, 5 is taken by two slices that both do, and
 **7 is the first ordinal no slice claims.** The collision is left as-is: renumbering a landed slice
 would falsify every citation pointing at it, which is the same trade 0031's specimens settled.
+
+*(Swept 2026-08-21. `validate.go:70` is re-pointed above — it had drifted 83 lines. Two other claims
+in that sentence decayed differently and are left standing with their corrections here, because the
+two failure modes are the point. **`validate_test.go:528` is dangling, not drifted**: no line in that
+file names slice 6 at all, and the reason is recorded in the file itself — the paragraph that did was
+**deleted rather than re-pointed** when slice 10 drained its population. A pointer whose subject was
+deliberately removed reads exactly like one that merely moved. **And "never in `ref.go`'s own header"
+is now false**: `ref.go:13` names slice 6, and `ref.go:19` says so on purpose — *"This header also
+answers a gap gc.go's names"*. That correction is the harder one, because a negative claim is a
+citation with no target, so no pointer sweep can ever check it — the code that falsified it announced
+itself in a comment and nothing carried the news back here.)*
 
 **Not decided here, deliberately:** the design of the arms. Porting `valid.ml:492-855` is normative
 reference behaviour, and where the field/element accessors resolve their `deftype`, whether the
@@ -76,10 +87,14 @@ files=16`.
 | `immutable field` | 1 |
 
 Four of those five strings are **not in this package's declared error set** — only `type mismatch`
-is (`ErrTypeMismatch`). `immutable field` appears in `match.go:584` as prose in a comment about
-field-mutability invariance, which is not a sentinel and is worth naming precisely because it reads
-like one. The nearest existing neighbour is `ErrGlobalImmutable` (`immutable global`,
-`valid.ml:607`), whose own text was wrong until a probe caught it — the grave at `validate.go:222`.
+is (`ErrTypeMismatch`). `immutable field` appears in `match.go:610` as prose in a comment about
+field-mutability invariance — *"an immutable field never matches a mutable one"* — which is not a
+sentinel and is worth naming precisely because it reads like one. (Re-pointed 2026-08-21 from
+`match.go:584`, a drift of 26 lines onto a bare `return false`.) The nearest existing neighbour is `ErrGlobalImmutable` (`immutable global`,
+`valid.ml:607`), whose own text was wrong until a probe caught it — the grave at `validate.go:320`,
+the `Its text was global is immutable until the probe caught it` note. (Re-pointed 2026-08-21: this
+read `validate.go:222` and had drifted ~98 lines, landing on a `# The authority` heading. The pointer
+carries its target's text now, so the next drift is re-findable rather than merely wrong.)
 A relation that refuses all 27 with
 `ErrTypeMismatch` moves 10 of them from `declined` into the **wrong-message** bucket, which is a
 lateral move scored as an improvement — Scott's objection on the 0031 relay, and it applies to ten

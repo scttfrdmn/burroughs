@@ -12,11 +12,17 @@ Date: 2026-08-17 · Status: **accepted** — stamped by Scott on the PR #347 rel
 `internal/validate` is built in numbered slices of #9, and the subtype relation is **declared out
 of scope in two places** — which is why moving it is a decision and not a rule to implement:
 
-- `stack.go:129`, `matches`'s doc comment: *"Everything else is identity, and that is slice 1's
+- `stack.go:206`, `matches`'s doc comment: *"Everything else is identity, and that is slice 1's
   declared limit rather than an oversight: proper subtyping — the whole `match.ml` relation — is
   the GC slice's, and its vectors expect `sub type` rather than `type mismatch`."*
-- `validate.go:63`, the out-of-scope register: *"each with its own expected string in the suite and
+- `validate.go:75-77`, the out-of-scope register: *"each with its own expected string in the suite and
   so its own measurable slice: **GC subtyping (21)**, constant expressions (24), limits (16) …"*
+
+*(Both pointers re-pointed 2026-08-21 by the text they quote — `stack.go:129` had drifted 77 lines
+onto a `return n`, and `validate.go:63` 12 lines onto a slice-4 tense correction. The register's
+heading now reads "**The out-of-scope register, and it is empty**": every entry has since departed,
+so the quoted list is the register as it stood here and is not findable at the target any more. See
+the sweep note at the foot of this record.)*
 
 Both were accurate. What changed is a measurement taken while costing #343's remaining causes: the
 21 vectors are not *declined* for want of the relation, they are **admitted**. All 21 read
@@ -59,7 +65,7 @@ as a count.
 ## Consequences
 
 - **The two declared boundaries retire, and the retirement is recorded rather than absorbed** —
-  same species as 0025's carve-out. `matches`'s doc comment and `validate.go:63`'s register are
+  same species as 0025's carve-out. `matches`'s doc comment and `validate.go:75`'s register are
   amended in the implementing PR, with the prior text quoted where it stood.
 - **`GC subtyping (21)` leaves the out-of-scope register**, which drops from six entries to five.
   The register's remaining figures are unaffected: the populations are disjoint by construction,
@@ -135,3 +141,28 @@ The lesson is one the corpus keeps re-teaching in new clothing: **a search for w
 enumerates files enumerates the strata you already thought of.** The falsifier — neuter the line, read
 the board — is what finds the ones you did not, and it is cheaper than the argument for why none
 exist.
+
+## Sweep note, 2026-08-21 — six of ten `file:line` pointers in this record and 0032 were wrong, and all six named lines that exist
+
+Written here because 0031's opening pair is where the sweep started and both members failed. It began
+as the narrow obligation a line-shifting insertion creates — ten lines added to `validate.go` above a
+licensed paragraph, so every citation below it is owed a re-point — and the narrow obligation was one
+item. The rest is what the same query found once it was pointed at the whole file rather than at the
+insertion's neighbourhood.
+
+Ten distinct `file:line` pointers across this record and 0032, checked by reading the target and
+comparing it to the sentence that cites it. **Four resolved. Six did not**, at drifts of 12, 26, 77,
+83 and 98 lines, plus one dangling. Their subjects had not changed; the code around them had grown.
+
+**Every one of the six named a line that exists**, so the check a reader would reach for first —
+does the file have that many lines — catches none of them. Line-existence is not the property; being
+*the line that says the quoted thing* is. And **five of the six carry a quote of their target**, which
+is what makes them mechanically recoverable: grep the quoted fragment, take the line it lands on. The
+sixth, `validate_test.go:528`, carries no quote and is the one that could not be recovered — its
+subject was **deleted**, not moved, so there is nothing to search for and no way to tell the two
+apart from the citing end. That asymmetry is the actionable half: a `file:line` citation that quotes
+its target degrades into a findable pointer, and one that does not degrades into a false one.
+
+Filed as #473. Recorded as a decision-record appendix rather than only as an issue because the
+pointers being corrected are *in this file*, and a reader who follows one needs to know it was
+re-pointed by content and when.

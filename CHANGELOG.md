@@ -2961,6 +2961,44 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **Six `file:line` citations in ADRs 0031 and 0032 pointed at the wrong line, and all six named a
+  line that exists** ([#473](https://github.com/scttfrdmn/burroughs/issues/473)). The sweep began as
+  the narrow debt a ten-line insertion into `validate.go` creates and widened when the same query was
+  aimed at the whole file: `stack.go:129` had drifted 77 lines onto a `return n`, `validate.go:63` 12
+  onto a slice-4 tense correction, `validate.go:222` 98 onto a `# The authority` heading,
+  `validate.go:70` 83 lines, `match.go:584` 26 onto a bare `return false`. All are re-pointed **by the
+  text they quote**, each with a dated parenthetical carrying its target's words, so the next drift is
+  re-findable rather than merely wrong. Two claims in one 0032 sentence decayed differently and are
+  corrected in place rather than re-pointed: `validate_test.go:528` is **dangling, not drifted** — its
+  subject was deliberately deleted when slice 10 drained the row's population, and from the citing end
+  a deleted subject is indistinguishable from a moved one — and *"never in `ref.go`'s own header"* is
+  now false, `ref.go:19` having announced closing that gap in a comment nothing carried back. The
+  filing records the mechanizable half (five of the six quote their target, so the quote locates the
+  true line) and its own instance of the defect: the first draft cited 0032 at the lines the repair
+  then shifted.
+- **The stale-list clause in `TestPhase1Files`' bound account is de-enumerated rather than re-listed
+  for a fifth time.** The annotation landed one PR earlier replaced a spent list of open issues with a
+  fresh one — *"#296 plus #111 and #452"* — and #296 was retired the next day, on Scott's withdrawal of
+  the order that had approved it as product. That is the fourth wrong claim in the same clause position
+  and the second written as the repair of its predecessor, in a paragraph whose own subject is sourcing
+  a premise from prose. The list is replaced by the `gh issue list` query that produces it, and by the
+  observation that the paragraph's conclusion — the column reaching 0 leaves
+  [#9](https://github.com/scttfrdmn/burroughs/issues/9) open because a negative-vector corpus cannot
+  falsify what a validator wrongly *accepts* — rests on
+  [#111](https://github.com/scttfrdmn/burroughs/issues/111) alone and never needed an enumeration.
+  Also stated: every `spec_test.go:<line>` citation in the tree points above the insertion (highest is
+  `:11628` against an insertion at `:12044`), so no re-key was owed — checked rather than assumed,
+  since a 13-line insertion is exactly what broke twelve keys two PRs ago.
+- **`validate.go`'s constant-expressions note now cites a tracking issue, and filing it produced a
+  diagnosis** ([#471](https://github.com/scttfrdmn/burroughs/issues/471)). `array.wast:302,315` were
+  named in that census as "the whole of the constant-expressions entry that is still owed" and tracked
+  nowhere; a debt stated in prose is declared, not tracked. Measuring them for the issue body found the
+  cause: `is_const`'s non-`GlobalGet` arms are answered by the decoder's const-expression reader, whose
+  legality test `constLegal` is keyed on the **leading byte** and is called only from the single-byte
+  dispatch arm — `case info.escape: return c.prefixed(...)` returns first, and `prefixed` has no const
+  check — so the whole of the 0xfb/0xfc/0xfd/0xfe space is const-legal by omission. This is
+  [#48](https://github.com/scttfrdmn/burroughs/issues/48)'s shape four lines below #48's fix:
+  `gateCheck` is called from both dispatch paths and its comment says why, in the same words.
 - **Two foreclosing paragraphs in the validator, plus a third in `internal/binary` whose diagnosis was
   already written ([grave #469](https://github.com/scttfrdmn/burroughs/issues/469))**. `checkTypes`
   said *"and `binary.Module` retains none"* — false since **#352** gave `binary.CompType`
