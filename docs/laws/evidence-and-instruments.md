@@ -574,13 +574,19 @@ reach is a law out of context.
   it is deleted, and this one is deleted. (Lesson: Scott, on the PR #247 relay; recurrences
   relayed by chat-Claude; count struck on his ruling, PR #317.)
 
-### A pattern able to match the instrument's own output is satisfied by the instrument.
+### A control is a pattern plus the text it is handed.
 
-- **A pattern able to match the instrument's own output is satisfied by the instrument.** A
-  matcher asks whether a token appears *somewhere* in a payload, the payload happens to contain
-  the checker's own vocabulary, and the condition is met by the words describing the check rather
-  than by the thing checked. It reads as a pass and it asserted nothing. Filed as a **class and
-  not an anecdote** because it arrived twice in one session with one remedy both times.
+- **A control is a pattern plus the text it is handed.** A regex has no population of its own; the
+  population is whatever the control feeds it, and two errors follow from forgetting that. The
+  narrow one is that **a pattern able to match the instrument's own output is satisfied by the
+  instrument** — a matcher asks whether a token appears *somewhere* in a payload, the payload
+  happens to contain the checker's own vocabulary, and the condition is met by the words describing
+  the check rather than by the thing checked. It reads as a pass and it asserted nothing. The wide
+  one is that **a pattern reproduced without its control's preprocessing measures a different thing
+  entirely** — same regex, different text, and therefore a different question, answered
+  confidently. Filed as a **class and not an anecdote** because it arrived twice in one session with
+  one remedy both times, and widened when the third specimen turned out to be the same mistake made
+  from the other end.
   - `TestEveryPayloadSpellingIsReadOrRefusedByName` asked `strings.Contains(err.Error(), name)`
     for each payload spelling. For `name == "struct"` the substring sat inside the word
     **constructor** in the refusal's own sentence, so a refusal that never named its payload
@@ -591,14 +597,57 @@ reach is a law out of context.
     `JOB <name> <conclusion>` lines matched the watch's own **`JOBS`** section headers — the
     progress display returned dozens of rows as if they were the verdict, and a green-looking
     harvest came out of a file whose sentinel had not been written.
-  The remedy is mechanical and identical: **anchor the match, or quote the token** —
+  For those two the remedy is mechanical and identical: **anchor the match, or quote the token** —
   `strconv.Quote(name)` rather than `name`, `^JOB ` rather than `^JOB`. A delimited token cannot
   be a coincidence inside a longer word, which is *aboutness is not proximity* applied to a
-  matcher instead of to a sentence. Sited in this family because it is the domain error
+  matcher instead of to a sentence.
+
+  - **The third specimen arrives from the other end: the pattern was right and the text was not
+    the control's.** Auditing #456's citation drift, `citation_test.go`'s `wrapJoin`
+    (`-\n\s*([A-Z])`, which rejoins an identifier wrapped across a comment line break) was run
+    against the raw `.go` files to find out where its two cited instances had moved to. It found
+    **zero** in `internal/spec/spec_test.go` — because a wrapped identifier's continuation line
+    begins with `//`, and `\s*` does not match a slash. The control never sees raw bytes: it feeds
+    the pattern `group.Text()`, go/ast's comment text with the markers already stripped, where the
+    same file holds **two**. Re-measured on `0b7c315`: 2 preprocessed, 0 raw.
+
+    The claim one keystroke from being published was *"the citation has no referent anywhere"* —
+    much stronger than the true finding, wholly false, and **larger**, which is the direction this
+    error runs in. The true finding is one half of the same audit and survived: `wast.go` holds 0
+    instances either way, so that half of the citation names the wrong *file* rather than a drifted
+    line, which is the half a line-drift sweep cannot see. One number was worth publishing and the
+    other would have been a fabrication about the tree, and the pattern was identical in both.
+
+    Same family as the census clause *measure with the harness (`run(s).Buckets`), never a grep over
+    the board log* under [bucket size estimates the reward, not the
+    job](boards-and-buckets.md#bucket-size-estimates-the-reward-not-the-job), where bucket keys hold
+    embedded newlines and a line-oriented sum therefore answered a different question three times in
+    one session. There the regex stands in for the code path, here it stands in for the control, and
+    the remedy is the same shape: **call the control, or reproduce its preprocessing and say that you
+    did.** A copied regex is half an instrument, and the missing half is invisible because it lives
+    at the call site rather than in the pattern.
+
+    **This bullet's own first draft cited that law under a title the corpus does not contain**, in a
+    file that does not hold it, recalled from a session's working vocabulary rather than read off the
+    page — caught by grepping the corpus for the title, which returned only the line being written.
+    Recorded here rather than filed apart because it is the same error one layer up — a citation
+    reproduced without the text it names — and because [a `file:N` resolves to a line, not to the
+    thing it names](citations.md#a-filen-resolves-to-a-line-not-to-the-thing-it-names--and-the-miss-is-systematic-not-careless)
+    already owns the family: there the pointer resolves and names the wrong thing, here it names a
+    title the corpus never had, so no line-drift sweep could have found it. The remedy generalizes
+    past regexps: **the cheapest check on a cross-reference is to search for it before writing it,
+    and a search that returns only your own new line is a finding.**
+
+  Sited in this family because it is the domain error
   [Coverage is a claim](#coverage-is-a-claim-an-instruments-domain-is-an-assertion-it-cannot-check-about-itself)
   names, contaminated from the one direction an instrument cannot see: the checker's vocabulary is
   *inside* the population it scans. Adjacent to *a ban reported in the banned form is still the
   banned form* in [operations.md](operations.md) — there the scanner reads its own report, here it
   reads its own words — and the tell is the same in both, a needle that is a short common word in
   a haystack of prose the checker or its subject wrote.
-  (Class: Scott, PR #460 — *"two instances with one remedy is a class."*)
+  (Class: Scott, PR #460 — *"two instances with one remedy is a class."* Widened to the text-side
+  form on his ruling on the [#463
+  review](https://github.com/scttfrdmn/burroughs/pull/463#issuecomment-5365343139) — *"the class was
+  'a pattern that can match the instrument's own output'; this adds that a pattern reproduced without
+  its control's preprocessing measures a different thing entirely"* — with the heading renamed to the
+  wider statement and the fold-in ordered in place of a near-duplicate entry.)
