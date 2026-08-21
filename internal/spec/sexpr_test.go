@@ -327,8 +327,8 @@ func TestClassifyAndRun(t *testing.T) {
 	}
 	// The action, read at classification time rather than at run time — which is what lets
 	// Needs be *derived* from the command (guard 1) and keeps the run loop free of grammar.
-	if got := s.Commands[4].Invoke; got != "f" {
-		t.Errorf("assert_return Invoke = %q, want %q", got, "f")
+	if got := s.Commands[4].Export; got != "f" {
+		t.Errorf("assert_return Export = %q, want %q", got, "f")
 	}
 	if got := s.Commands[4].Results; len(got) != 1 || got[0].Kind != KindI32 || got[0].Bits != 1 {
 		t.Errorf("assert_return Results = %v, want [i32 1]", got)
@@ -706,8 +706,8 @@ func TestAssertTrapSplitsByWrappedForm(t *testing.T) {
 		if got.Expect != c.expect {
 			t.Errorf("%s\n  Expect = %q, want %q", c.src, got.Expect, c.expect)
 		}
-		if got.Invoke != c.invoke {
-			t.Errorf("%s\n  Invoke = %q, want %q", c.src, got.Invoke, c.invoke)
+		if got.Export != c.invoke {
+			t.Errorf("%s\n  Export = %q, want %q", c.src, got.Export, c.invoke)
 		}
 		// **Target is asserted, not just Kind, because Kind alone cannot fail on it.** A
 		// reader that stamped KindNamedAssertTrap and dropped the `$M` would produce the
@@ -902,8 +902,8 @@ func TestAssertExceptionClassification(t *testing.T) {
 			t.Errorf("%s\n  classified %v, want %v", c.src, got.Kind, c.want)
 			continue
 		}
-		if got.Invoke != c.invoke {
-			t.Errorf("%s\n  Invoke = %q, want %q", c.src, got.Invoke, c.invoke)
+		if got.Export != c.invoke {
+			t.Errorf("%s\n  Export = %q, want %q", c.src, got.Export, c.invoke)
 		}
 		wantNeeds := CapInterpreter
 		if c.want == KindUnsupported {

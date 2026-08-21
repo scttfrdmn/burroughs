@@ -189,8 +189,18 @@ func (in *Instance) Deferred() error {
 // Exports names the module's exported functions, in declaration order.
 //
 // Functions only, and that is a scope statement rather than an oversight: this surface calls
-// exports, and a memory or a global export has no operation here yet to be worth naming. It is
-// what makes `run` able to tell a user which names exist instead of demanding they already know.
+// exports, so the list is the set of names `Call` will accept. It is what makes `run` able to
+// tell a user which names exist instead of demanding they already know.
+//
+// **The reason used to be wider than that and is no longer true.** It read "a memory or a global
+// export has no operation here yet to be worth naming", and `Global` (#323) is an operation on a
+// global export — so the sentence would now assert the absence of the method below it, which is
+// *the defect stated as the rule* in the direction that reads as deliberate. What survives the
+// narrowing is a real gap, stated rather than papered over: **a caller can read an exported global
+// only by knowing its name**, because nothing here enumerates the global exports the way this
+// enumerates the functions. Left that way on the same test the old sentence was passing under —
+// `run` has no operation that takes a global name, so a discovery list would have no consumer —
+// and it becomes wrong to leave the moment one does.
 func (in *Instance) Exports() []string {
 	var out []string
 	for _, e := range in.in.Module().Exports {
@@ -231,6 +241,27 @@ func (in *Instance) Call(name string, args ...Value) ([]Value, error) {
 		out[i] = v
 	}
 	return out, nil
+}
+
+// Global reads an exported global's current value.
+//
+// `Call`'s counterpart for the script grammar's other action (#323): `invoke` runs a function,
+// `get` reads a global. A name that no *global* export carries is an error even when a function
+// of that name exists, which is the kind check in `exportedIndex` surfacing here — reading
+// `"add"` as a global is a caller's mistake and not an empty answer.
+//
+// No mutability question in either direction: this reads, and there is no public write. An
+// immutable global is as readable as a mutable one.
+func (in *Instance) Global(name string) (Value, error) {
+	iv, err := in.in.Global(name)
+	if err != nil {
+		return Value{}, publicError(err)
+	}
+	v, cerr := valueFromInternal(iv)
+	if cerr != nil {
+		return Value{}, cerr
+	}
+	return v, nil
 }
 
 // publicError re-channels an engine error onto this package's sentinels.

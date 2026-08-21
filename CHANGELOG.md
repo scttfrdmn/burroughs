@@ -21,6 +21,58 @@ weakly-ordered platform.
 
 ### Added
 
+- **The script grammar's `get` action is read, a global export is readable across both boundaries,
+  and the `unsupported` column falls 11 → 0**
+  ([#323](https://github.com/scttfrdmn/burroughs/issues/323), ruled by Scott on the
+  [#460](https://github.com/scttfrdmn/burroughs/pull/460) merge relay,
+  [decision 0041](docs/decisions/0041-the-script-actions-verb-is-a-field-on-command-and-the-classification-is-directive-by-verb.md)).
+  `Command` gains `Verb ActionVerb` and its `Invoke` field is renamed `Export`; `Kind` gains
+  **nothing**, against a forecast of two new Kinds that the tree carried in Scott's own words from
+  PR #364. **The ruling is a citation to grave #445 rather than a preference** — *a spelling's
+  authority is the grammar, not the enum in scope* — and `script.ml`'s `action'` type is the
+  authority: the verb is the variant, the module selector is a `var option` field on *both*
+  variants, so directive and verb are two axes and `Target` was already the selector-as-field.
+  **The ruling carried a condition, and it was measured rather than assumed**: over **57940**
+  action-bearing commands `Kind ∈ Named*` and `Target != ""` agree with **0** disagreements, so the
+  selector axis in the enum is redundant with the field and not a third axis; the clean zero was
+  **watched die** (admitting `KindRegister`, which sets `Target` without a `Named*` Kind, yields
+  **24** disagreements, named). The 11 rows split 10 named / 1 unnamed and each lands on the
+  `assert_return` Kind its selector already chose — the mirror image of
+  [#440](https://github.com/scttfrdmn/burroughs/issues/440), where all 15 vectors were unnamed and
+  the named Kind was deliberately not created for want of a witness. Engine end:
+  `interp.Instance.Global` and `burroughs.Instance.Global` reaching a new `global.value`, `get`'s
+  read-only twin sharing its layout dispatch through a new `globalShape` enum (single-sited on
+  arrival of the second consumer, because graves #78/#105/#106 are that shape and grave #239 is the
+  read-back half of this exact dispatch being missing while the write half was right).
+  `exportedFunc` is parameterized as `exportedIndex`, whose `e.Kind` test is load-bearing: a module
+  may export a function and a global under one name.
+  **`VerbNone` is the zero value and an error rather than a default** — `VerbInvoke` as zero would
+  have cost nothing at the call sites and made *forgetting the verb* indistinguishable from setting
+  it, on the axis whose purpose is to say which action a command is — and `Engine.ReadGlobal` is
+  nil-checked **at the verb**, not beside `Invoke`, because a caller that can call and not read is a
+  real intermediate state that every test in this repo was in until now.
+  Board: default lane **60957 pass (+11)**, **0 unsupported (−11)**, 0 fail, 4187 gated, 0
+  unimplemented over 256 files; all-on lane **65078 pass (+11)** with **`allOnFailCeiling` flat at
+  31, which is the load-bearing half** — this is the first of the four column drains to add engine
+  surface, so a wrong answer would have landed in that lane's `fail`. `passFloor`, `allOnPassFloor`
+  and `unsupportedCeiling` re-base with the lane, the last to **0**. `unsupported` delta **−11**,
+  the whole of the column, and **v0's `unsupported` column is now drained**.
+  **The +11 looks like capability and is not** — those globals were already allocated, initialized
+  and exported; what the engine gained is a read path — so the claim is made where it is checkable:
+  `TestGlobalReadsWhatTheInterpreterHolds` reads 7 types (two NaN payloads, a v128, a non-null
+  `ref.func`) through both layout dispatches and compares whole structs with `!=` rather than
+  `Value.Equal`, which compares `Bits` only for numerics and is **blind to `Hi`**. Its sibling
+  `TestGlobalExportKindIsNotDeclarationOrder` was **stillborn on its first draft** — both indices
+  sat at 0, so a wrong-kind lookup was right by coincidence and deleting the kind test left the leg
+  green; the index spaces are skewed and both halves now fire. A first pass on a new public method
+  is the weakest evidence about it: the 11 corpus rows span 2 files, carry no v128, exercise no
+  reference and draw no mutability distinction.
+  One decision **flagged and not taken**: the three `KindNamed*` Kinds carry no information beyond
+  `Target != ""` and the reference puts the selector in a field on both variants, so the
+  grammar-faithful shape collapses them — 26 sites in 4 files, reversing 0017 part 2's encoding, so
+  it wants its own ADR and a stamp rather than riding a self-merge
+  ([#462](https://github.com/scttfrdmn/burroughs/issues/462), unmilestoned).
+
 - **Custom annotations are transparent to the s-expression reader, and the `unsupported` column
   falls 14 → 11** ([#320](https://github.com/scttfrdmn/burroughs/issues/320), stamped by Scott on
   the [#459](https://github.com/scttfrdmn/burroughs/issues/459) measurement). The three rows are

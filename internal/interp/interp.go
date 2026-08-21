@@ -507,6 +507,38 @@ func (in *Instance) Invoke(name string, args ...Value) ([]Value, error) {
 	return in.invokeIndex(idx, name, args)
 }
 
+// Global reads an exported global's current value. `Invoke`'s sibling for the other action the
+// script grammar has (#323): in wast an *action* is `invoke | get`, and this is `get`'s engine end.
+//
+// **No delegation for a re-exported import, where `invokeIndex` needs one, and the asymmetry is a
+// property of what the two things *are*.** A function export resolves to an index whose body lives
+// in the supplying instance, so the call has to travel there; a global export resolves to storage,
+// and `link` assigns the supplier's own `*global` into `in.globals[slot]` (link.go's
+// `ExternGlobal` arm), so the pointer this reaches through already *is* the supplier's object. A
+// re-export chain therefore needs no hop — reading through it and reading at the definition are
+// the same read of the same slot, which is also why `global.mod` sits on the allocation rather
+// than on the Extern (#368).
+//
+// Results come back as one Value built by `global.value`, sharing `global.get`'s layout dispatch
+// so that a fourth storage shape cannot be right for the interpreter and wrong here — grave #239
+// was that split with `v128`, on the read-back half specifically.
+func (in *Instance) Global(name string) (Value, error) {
+	idx, ok := in.exportedGlobal(name)
+	if !ok {
+		return Value{}, fmt.Errorf("interp: no exported global %q", name)
+	}
+	// globalFor rather than an inline index, for its own comment's reason: its two failure modes
+	// — an import nothing supplied (§3, ErrUnsupported) and a declared global whose initializer
+	// deferred (ErrNotValidated) — are both reachable from here, and this is precisely the caller
+	// that would half-remember them. `what` names the holder of the index the way the other
+	// callers do: "the export" sends a reader to their export section rather than to a body.
+	g, err := in.globalFor(fmt.Sprintf("the export %q", name), uint64(idx))
+	if err != nil {
+		return Value{}, err
+	}
+	return g.value(), nil
+}
+
 // invokeIndex is Invoke past the name lookup: the boundary call to a function *index*.
 //
 // **Split out because an exported import makes the name and the index belong to different
@@ -684,14 +716,31 @@ func (in *Instance) invokeIndex(idx uint32, name string, args []Value) ([]Value,
 }
 
 // exportedFunc resolves an export name to a function index.
+func (in *Instance) exportedFunc(name string) (uint32, bool) {
+	return in.exportedIndex(binary.ExternFunc, name)
+}
+
+// exportedGlobal resolves an export name to a global index, for Global (#323).
+func (in *Instance) exportedGlobal(name string) (uint32, bool) {
+	return in.exportedIndex(binary.ExternGlobal, name)
+}
+
+// exportedIndex resolves an export name to an index within one extern kind's index space.
 //
 // Linear over the export section, and deliberately not indexed: a map built per instance would
 // be paid by every module and read by the handful the harness invokes. If a Go guest's export
 // table ever becomes the hot path, the index belongs in Instance and is built once — which is
 // the shape this comment exists to record rather than the thing to build now.
-func (in *Instance) exportedFunc(name string) (uint32, bool) {
+//
+// **Parameterized on the kind rather than written twice**, which is graves #78/#105/#106's rule
+// (`globalFor`, `memoryFor`) applied one layer out: `exportedGlobal` arrived as a copy of
+// `exportedFunc` differing in one constant, and two functions that know how to turn a name into
+// an index is exactly the pair those graves are about. The `e.Kind` test is not incidental —
+// a module may export a function and a global under the *same* name, so dropping it would make
+// the caller's kind depend on declaration order.
+func (in *Instance) exportedIndex(kind binary.ExternKind, name string) (uint32, bool) {
 	for _, e := range in.mod.Exports {
-		if e.Kind == binary.ExternFunc && e.Name == name {
+		if e.Kind == kind && e.Name == name {
 			return e.Index, true
 		}
 	}

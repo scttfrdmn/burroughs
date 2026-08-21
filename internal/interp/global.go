@@ -116,10 +116,42 @@ func (in *Instance) globalFor(what string, idx uint64) (*global, error) {
 	return in.globals[idx], nil
 }
 
-// get pushes the global's value onto the matching half of the stack.
+// globalShape is which of a global's three storage layouts its declared type selects.
 //
-// The three shapes are dispatched on the *declared type*, not on the slots' contents, for the
-// reason `global`'s comment gives: a null ref and an integer zero are indistinguishable bits.
+// **One authority for the dispatch, because there are now two consumers of it.** `get` pushes
+// onto the stack and `value` crosses the public boundary, and both answer the identical
+// question — reference, v128, or one numeric slot — off the identical fact. Written as an enum
+// the moment the second consumer arrived (#323's `(get …)` read path) rather than as a second
+// `switch`: two places that know how to turn a declared type into a layout is graves
+// #78/#105/#106's shape, the one `globalFor` and `memoryFor` are already single-sited against.
+// The `v128` arm in particular is grave #239, whose whole lesson was that the read-back half
+// can be missing while the write half is right — so a *third* consumer arriving must not be
+// able to get the arm count wrong.
+type globalShape int
+
+const (
+	shapeNum  globalShape = iota // one numeric slot — every type but v128 and the refs
+	shapeV128                    // two numeric slots, hi and lo (decision 0024)
+	shapeRef                     // the reference slot
+)
+
+// shape reports which layout this global's storage uses.
+//
+// Dispatched on the *declared type*, not on the slots' contents, for the reason `global`'s own
+// comment gives: a null ref and an integer zero are indistinguishable bits, and only the type
+// tells them apart.
+func (g *global) shape() globalShape {
+	switch {
+	case g.typ.IsRef():
+		return shapeRef
+	case g.typ == binary.V128:
+		return shapeV128
+	default:
+		return shapeNum
+	}
+}
+
+// get pushes the global's value onto the matching half of the stack.
 //
 // The `v128` arm is grave #239's read-back half. Its absence is what makes an
 // instantiation-only fix insufficient: with the evaluator widened and this arm still missing, a
@@ -127,13 +159,36 @@ func (in *Instance) globalFor(what string, idx uint64) (*global, error) {
 // single slot — leaving the *next* pop to read whatever sat beneath it. So the vector that closes the
 // grave has to read all four lanes back, not merely instantiate.
 func (g *global) get(st *stack) {
-	switch {
-	case g.typ.IsRef():
+	switch g.shape() {
+	case shapeRef:
 		st.pushRef(g.ref)
-	case g.typ == binary.V128:
+	case shapeV128:
 		st.pushV128(g.numHi, g.num)
 	default:
 		st.pushNum(g.num)
+	}
+}
+
+// value reads the global out as a boundary Value, for the script `(get …)` action (#323).
+//
+// **The read-only twin of `get`, sharing its dispatch and not its destination.** Where `get`
+// pushes onto the interpreter's two-array stack, this hands back the one-struct form the public
+// boundary carries, built exactly the way `invokeIndex` builds a result of the same type — same
+// `fromRef`, same hi/lo assignment for a v128, same bare `Bits` otherwise. Written as a sibling
+// rather than as a call through `get` and a pop, because routing a reference through a stack to
+// read it back would convert `ref → Value → ref` for no reason and put a second `toRef`/`fromRef`
+// round trip in a path whose whole job is one read.
+//
+// No mutability question here, deliberately: reading an immutable global is legal, and the
+// unenforced `mutable` field's story is at `globalFor`.
+func (g *global) value() Value {
+	switch g.shape() {
+	case shapeRef:
+		return fromRef(g.ref, g.typ)
+	case shapeV128:
+		return Value{Type: g.typ, Bits: g.num, Hi: g.numHi}
+	default:
+		return Value{Type: g.typ, Bits: g.num}
 	}
 }
 

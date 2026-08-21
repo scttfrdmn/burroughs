@@ -53,25 +53,62 @@ type Command struct {
 	// "alignment must be a power of two" without special casing.
 	Expect string
 
-	// Invoke names the exported function an `assert_return` calls, with Args as its
-	// arguments and Results as the expected return values.
+	// Verb is which script action this command carries — `invoke` or `get` — and Export names
+	// the export that action names, with Args as an invoke's arguments and Results as the
+	// expected values.
 	//
-	// Three fields rather than one action struct, because the harness reads exactly one
-	// action shape — `(invoke "name" arg*)` — and a struct would be a place for the other
-	// script actions (`get`, `invoke $M`) to be half-modelled. When one of those becomes
-	// askable it arrives as its own Kind, which is where the classification decision is
-	// visible.
+	// # Two axes, because the grammar has two (#323, ruling: Scott)
 	//
-	// **That promise was redeemed rather than reinterpreted**, and the shape is Scott's
-	// ruling on it: `(invoke $M …)` is KindNamedAction, read by its own function, and
-	// `invokeAction` was not widened. The unnamed form's three arms are untouched, which is
-	// what the ruling means by confining the blast radius. `(get …)` is still half-modelled
-	// and therefore still absent — see the `get` arm in classify for its count and what it
-	// waits on.
+	// The reference's script type is where the shape comes from, and it is not the enum's:
 	//
-	// Empty for every other Kind. Args is nil for a nullary call, which is the common
-	// shape: 6560 of the answerable population take no arguments.
-	Invoke  string
+	//	and action' =
+	//	  | Invoke of var option * Ast.name * literal list
+	//	  | Get of var option * Ast.name
+	//
+	// — the **verb is the variant**, the module selector is a `var option` *field on both
+	// variants*, and the export name is the same `Ast.name` in both (`run.ml` resolves it
+	// through `lookup_export` either way). So a command's directive and its action's verb are
+	// independent, and the verb is a field here for the reason `Target` is a field: encoding
+	// the product of two axes into one enum duplicates every action-bearing Kind.
+	//
+	// **The condition on the ruling was checked before it was applied, and it did not fire.**
+	// Scott's ruling held only if the verb would be a factoring of two axes rather than a
+	// third: over **57940** action-bearing commands, `Kind ∈ {KindNamedAssertReturn,
+	// KindNamedAssertTrap, KindNamedInvoke}` and `Target != ""` agree with **0**
+	// disagreements — the selector axis the enum carries is redundant with the field, not a
+	// third axis. Falsified before being trusted, per *a suspiciously clean result is a tell*:
+	// admitting `KindRegister`, which sets `Target` without being a `Named*` Kind, produces
+	// **24** disagreements. So the space is directive × verb and this field factors it.
+	//
+	// # This field was named `Invoke`, and the rename is the same defect as the enum's
+	//
+	// It held the export name for the one verb that existed, so a `get` reaching it would put
+	// one verb's operand in a field named for the other. `Export` is the grammar's own answer:
+	// both variants carry an export name and neither owns the word.
+	//
+	// # Two rulings, dated, rather than one edited to look like it always said this
+	//
+	// The comment this replaces forecast the opposite shape and cited Scott for it. Both
+	// rulings stand as what they were:
+	//
+	//   - **PR #364-era (0017 part 2):** "a struct would be a place for the other script
+	//     actions (`get`, `invoke $M`) to be half-modelled. When one of those becomes askable
+	//     it arrives as its own Kind, which is where the classification decision is visible."
+	//     Redeemed for `(invoke $M …)`, which is `KindNamedInvoke` and its two siblings.
+	//   - **#460-era (#323):** the verb is a field, not two more Kinds, "because a spelling's
+	//     authority is the grammar, not the enum in scope" (grave #445). `(get …)` therefore
+	//     arrives on the *existing* `assert_return` Kinds and costs zero new ones.
+	//
+	// Quoted rather than deleted because the first ruling was the reason the shape was right
+	// for two years of this file's life, and prose that reads as though the new answer was
+	// always the answer makes the reversal invisible. What it must not do is stay in the
+	// present tense.
+	//
+	// Empty/zero for every Kind that carries no action, the way `Args` already is. `Args` is
+	// nil for a nullary call, which is the common shape: 6560 of the answerable population
+	// take no arguments, and a `get` never has any.
+	Verb    ActionVerb
+	Export  string
 	Args    []Val
 	Results []Val
 
@@ -100,9 +137,54 @@ type Command struct {
 	Register string
 }
 
+// ActionVerb is which script action an action-bearing command carries: the second axis of the
+// classification, `Kind` being the first (#323, ruling: Scott — see Command.Verb for the grammar
+// this mirrors and for the condition that was measured before the ruling was applied).
+//
+// **`VerbNone` is the zero value, and it is an error rather than a default.** Making `VerbInvoke`
+// zero would have cost nothing at the call sites — every command that existed before this field
+// carries `invoke` — and would have made *forgetting to set the verb* indistinguishable from
+// setting it correctly, on the axis whose whole purpose is to say which action a command is. So a
+// reader that admits an action states its verb, and the run loop's dispatch panics on `VerbNone`
+// rather than assuming the majority case. That is *an analytic zero is not a measurement* pointed
+// at a struct field: a default that could not have come out otherwise answers nothing.
+type ActionVerb int
+
+const (
+	VerbNone   ActionVerb = iota // not an action-bearing command, or a reader that failed to say
+	VerbInvoke                   // (invoke $M? "name" arg*) — calls an exported function
+	VerbGet                      // (get $M? "name") — reads an exported global
+)
+
+// String names the verb in the suite's own words, which is `Kind.String()`'s rule (ruling: Scott,
+// PR #364) one axis over: these are the atoms the `.wast` files write.
+//
+// `VerbNone` renders bracketed for `KindUnsupported`'s reason — it is not a suite atom and must
+// not read as though it were one, and no `.wast` file can produce a `<…` spelling.
+func (v ActionVerb) String() string {
+	switch v {
+	case VerbInvoke:
+		return "invoke"
+	case VerbGet:
+		return "get"
+	default:
+		return "<none>"
+	}
+}
+
 // Kind classifies a directive. Phase 1 recognizes the module and malformed
 // forms and records everything else as KindUnsupported rather than dropping it
 // — an unrun test must be visible on the board.
+//
+// **Kind is the directive axis only, and `Kind.String()` is therefore not a complete label for an
+// action-bearing command.** `KindAssertReturn.String()` is `assert_return (invoke)`, which names
+// the verb — correct for every row that existed before #323 and wrong for a `(get …)` row. It is
+// left alone rather than widened because it is the destination ledger's bucket-key prefix and no
+// display path renders it for an action row: the action arm's failure keys are the engine's own
+// error text, the two `assert_return` literals (which #323 gave verb-aware twins) and
+// `no instance:`. A *third* consumer wanting a label for an action row must build it from
+// (Kind, Verb) and not from Kind — stated here because `TestKindStringsSpeakTheSuitesVocabulary`
+// checks this enum against the corpus and cannot see a row whose verb the enum does not carry.
 type Kind int
 
 const (
@@ -1115,7 +1197,7 @@ func namedInvokeAction(act node) (Command, bool) {
 	if !ok || !act.list[2].isS {
 		return Command{}, false
 	}
-	c := Command{Target: name, Invoke: string(act.list[2].str), Needs: CapInterpreter}
+	c := Command{Verb: VerbInvoke, Target: name, Export: string(act.list[2].str), Needs: CapInterpreter}
 	for _, a := range act.list[3:] {
 		v, ok := readConst(a)
 		if !ok || !v.isPassable() {
@@ -1208,12 +1290,18 @@ func assertReturn(n node) (Command, bool) {
 	if len(n.list) < 2 || !n.list[1].isList() {
 		return no, false
 	}
-	c, ok := invokeAction(n.list[1])
-	kind := KindAssertReturn
+	c, ok := action(n.list[1])
 	if !ok {
-		if c, ok = namedInvokeAction(n.list[1]); !ok {
-			return no, false
-		}
+		return no, false
+	}
+	// **The Kind comes from the selector and the verb does not touch it** (#323). Two Kinds, not
+	// four: the module-selecting axis 0017 part 2 put in the enum is unchanged, and `(get …)`
+	// arrives on whichever of the pair its selector already chose. Read off `Target` rather than
+	// returned by the reader because `Target != ""` *is* the selector — measured at 0
+	// disagreements with the `Named*` Kinds over 57940 action-bearing commands, which is the
+	// premise Scott's ruling was conditional on (Command.Verb records the falsification).
+	kind := KindAssertReturn
+	if c.Target != "" {
 		kind = KindNamedAssertReturn
 	}
 	c.Kind, c.Line, c.Head = kind, n.line, n.head()
@@ -1247,7 +1335,7 @@ func invokeAction(act node) (Command, bool) {
 	if len(act.list) < 2 || !act.list[1].isS {
 		return Command{}, false
 	}
-	c := Command{Invoke: string(act.list[1].str), Needs: CapInterpreter}
+	c := Command{Verb: VerbInvoke, Export: string(act.list[1].str), Needs: CapInterpreter}
 	for _, a := range act.list[2:] {
 		v, ok := readConst(a)
 		if !ok || !v.isPassable() {
@@ -1261,6 +1349,96 @@ func invokeAction(act node) (Command, bool) {
 		c.Args = append(c.Args, v)
 	}
 	return c, true
+}
+
+// action reads any of the script grammar's four action productions — `invoke`/`get` × selected/not
+// — leaving Kind, Line and Head to the caller (#323).
+//
+// **The one place the two axes are enumerated together, which is what keeps the product out of
+// everywhere else.** Four readers exist because the grammar has four productions; a caller wants
+// one question answered — is this an action, and which — so it asks here and reads `Verb` and
+// `Target` off the result. `assertReturn` used to enumerate the two invoke productions itself and
+// would have enumerated four; the callers that stay open-coded are the ones that admit *only*
+// `invoke`, for `namedGetAction`'s stated no-witness reason.
+//
+// Dispatched on the head atom first, so a node that is neither verb costs one comparison rather
+// than four failed readers, and so that adding a third verb is a case here rather than a fifth
+// line in a chain of `if !ok`.
+func action(act node) (Command, bool) {
+	switch act.head() {
+	case "invoke":
+		if c, ok := invokeAction(act); ok {
+			return c, true
+		}
+		return namedInvokeAction(act)
+	case "get":
+		if c, ok := getAction(act); ok {
+			return c, true
+		}
+		return namedGetAction(act)
+	}
+	return Command{}, false
+}
+
+// getAction reads a `(get "name")` action into the Verb/Export fields, leaving Kind, Line and
+// Head to the caller — `invokeAction`'s twin for the grammar's other verb (#323).
+//
+// **A separate reader from `invokeAction` rather than a widening of it, and separate from
+// `namedGetAction`, which is 0017 part 2's ruling still in force**: two functions, one per
+// selector form, because a widened reader answers two questions at once (does this action name a
+// module, and is it askable) and only one of those is a classification. What #323 adds is a
+// second *verb*, so the count goes from two readers to four — which is the product the ruling
+// declined to put in the *enum* and is unavoidable in the readers, because a reader is a
+// grammar production and the grammar has four.
+//
+// **Exact arity, where `invokeAction` takes a lower bound.** `Get of var option * Ast.name`
+// carries no literal list, so `(get "g" (i32.const 1))` is not a longer `get` — it is not a
+// `get`, and `len(act.list) != 2` says so. A `< 2` here would admit it and silently drop the
+// trailing element, which is the accept-direction hazard `scriptName`'s comment names: a decline
+// may be broad, an admission must be narrow.
+//
+// **What it shares with `invokeAction` is nothing, and that is the measurement rather than a
+// choice.** The join between the invoke readers is `readConst` under the NaN-class rule, because
+// which values are *passable* is one decision; a `get` passes no values, so there is no shared
+// fact for a helper to hold and a helper here would exist to make the four readers look
+// symmetric. The expected *results* are still read by `assertReturn`'s one loop, which is where
+// the two verbs do share a fact.
+func getAction(act node) (Command, bool) {
+	if act.head() != "get" || len(act.list) != 2 || !act.list[1].isS {
+		return Command{}, false
+	}
+	return Command{Verb: VerbGet, Export: string(act.list[1].str), Needs: CapInterpreter}, true
+}
+
+// namedGetAction reads `(get $M "name")` into Target/Verb/Export — `namedInvokeAction`'s twin.
+//
+// The `$M` is read by `scriptName`, positively, for its own stated reason: this is the reader
+// that says *yes*, so its test is the strict one.
+//
+// Population, measured through these two functions rather than by grep: **11** `(get …)` forms in
+// the corpus, all under `assert_return`, splitting **10 named / 1 unnamed** — 10 through here
+// (`exports.wast:94,97`; `linking.wast:67,68,69,74,75,80,81,376`) and 1 through `getAction`
+// (`exports.wast:93`). All 11 classify; none declines on a result the harness cannot read.
+//
+// **The named form being the majority is the mirror image of #440**, where all 15
+// `assert_exhaustion` vectors were unnamed and `KindNamedAssertExhaustion` was deliberately not
+// created for want of a witness. Here the witness is on the other side, and under #323's ruling
+// neither form needs a Kind at all.
+//
+// **Neither verb is admitted where the corpus has no witness.** There are 0 top-level `(get …)`
+// commands and 0 `(assert_trap (get …))` vectors, so `classify`'s top-level `invoke` arm and its
+// `assert_trap` arm are untouched: an admitted shape with no vector behind it is an unexercised
+// admission, which is how a reader gets to be confidently wrong with nothing to notice. When one
+// appears it is these two readers plus a case in that arm, and the Kinds are already there.
+func namedGetAction(act node) (Command, bool) {
+	if act.head() != "get" || len(act.list) != 3 {
+		return Command{}, false
+	}
+	name, ok := scriptName(act.list[1])
+	if !ok || !act.list[2].isS {
+		return Command{}, false
+	}
+	return Command{Verb: VerbGet, Target: name, Export: string(act.list[2].str), Needs: CapInterpreter}, true
 }
 
 // binaryModule extracts the image from (module [$name] binary "..." "..."),
@@ -2313,6 +2491,16 @@ func coversSideEffect(path string, line int, declined map[int]bool) bool {
 // not. The caller converts, being the one place that legitimately knows both.
 type InvokeFunc func(in Instance, name string, args []Val) ([]Val, error)
 
+// ReadGlobalFunc reads an exported global and returns its value — InvokeFunc's counterpart for the
+// script grammar's other action (#323).
+//
+// One Val rather than `[]Val`, because `Get` has one result by construction: the grammar reads a
+// global, and a global holds one value. Returning a slice to match InvokeFunc's shape would make
+// the run loop check an arity that cannot vary and would let an engine return two.
+//
+// Values cross as Val for InvokeFunc's reason, and the same caller converts.
+type ReadGlobalFunc func(in Instance, name string) (Val, error)
+
 // Engine is the set of entry points the run loop calls, and the capabilities the caller
 // declares on the engine's behalf.
 //
@@ -2372,6 +2560,14 @@ type Engine struct {
 	// required by CapInterpreter and the run loop checks both.
 	Instantiate InstantiateFunc
 	Invoke      InvokeFunc
+
+	// ReadGlobal is the `get` verb's half of CapInterpreter, and it is **checked at the verb
+	// rather than beside Invoke** — IsTrap's discipline, one axis over. A caller that can call a
+	// function and not read a global is a real intermediate state, and every caller in this
+	// repo's tests was that state until #323; requiring it here would panic on scripts with no
+	// `get` in them. So the run loop nil-checks it when a `VerbGet` command arrives, which is the
+	// only point at which its absence is a defect rather than a fact.
+	ReadGlobal ReadGlobalFunc
 
 	// InstantiateLinked is Instantiate with the registry, required by the `register` and
 	// `assert_unlinkable` arms and by every module command in a script that has a registry.
@@ -3636,6 +3832,18 @@ func (s *Script) run(opts runOpts) *Result {
 					"an assert_exception action cannot be judged without one, and judging it anyway "+
 					"would score any error as the exception", s.Path, c.Line))
 			}
+			// The fourth component, required by a **verb** rather than by a Kind, which is the
+			// only structural difference between this tripwire and the three above it (#323).
+			// Keyed on `c.Verb` for the reason the others are keyed on `c.Kind`: it fires for the
+			// caller that declared the interpreter and supplied the half of it this command needs
+			// no part of. Its consequence is the third verdict going missing rather than a wrong
+			// one arriving — a nil deref here would take the whole board down with a stack trace
+			// naming `wast.go`, where this names the vector and the component.
+			if c.Verb == VerbGet && opts.ReadGlobal == nil {
+				panic(fmt.Sprintf("%s:%d: CapInterpreter declared but no ReadGlobalFunc was supplied; "+
+					"a `get` action reads an exported global and Invoke cannot answer it, so the "+
+					"capability registry is ahead of the engine", s.Path, c.Line))
+			}
 			// **Which instance the action selects, which is the one thing the named Kinds
 			// changed here.** An unnamed action runs against the most recent module command's
 			// instance; a named one looks up its `$M`. The three state facts travel together
@@ -3711,7 +3919,14 @@ func (s *Script) run(opts runOpts) *Result {
 				r.gate(c)
 				continue
 			}
-			out, err := opts.Invoke(target, c.Invoke, c.Args)
+			// **The verb axis's one dispatch, and its position is the whole of what #323 cost
+			// this arm.** Everything above is the same for both verbs — the instance lookup, the
+			// no-instance accounting, the gate handling, the side-effect registry — and
+			// everything below judges a `[]Val` against an expectation without caring how it was
+			// produced. So the two verbs part company at exactly one line, which is the claim
+			// Scott's ruling made about the enum being the wrong place to put the axis: eight
+			// Kinds share this arm, and the verb adds a call rather than an arm.
+			out, err := opts.action(target, c)
 			if isGated(err) {
 				r.gate(c)
 				continue
@@ -3844,7 +4059,7 @@ func (s *Script) run(opts runOpts) *Result {
 				// exec.go's header promises.
 				key := err.Error()
 				r.Buckets[key] = append(r.Buckets[key], Failure{
-					Line: c.Line, Expect: fmt.Sprintf("%s(%s) = %s", c.Invoke, joinVals(c.Args), joinVals(c.Results)),
+					Line: c.Line, Expect: c.asked() + " = " + joinVals(c.Results),
 					Got: key, Kind: c.Kind, Stratum: StratumExec,
 				})
 				continue
@@ -3865,7 +4080,24 @@ func (s *Script) run(opts runOpts) *Result {
 			// two values.
 			if len(out) != len(c.Results) {
 				r.Fail++
-				const key = "assert_return result arity"
+				// **A verb-aware twin rather than one shared key, and twins rather than a
+				// derivation.** A bucket key is a work-plan line, so a `get` failing here filed
+				// under `assert_return result arity` would name a call the vector does not make —
+				// `assert_exhaustion`'s own argument for its own key prefix, one axis over. And
+				// they stay *literals* for that arm's other reason: deriving both from
+				// `Kind.String()` would silently re-key every existing row from `assert_return
+				// result arity` to `assert_return (invoke) result arity`, which is a board change
+				// with no finding behind it.
+				//
+				// The `get` arm is unreachable today and written anyway: `ReadGlobalFunc` returns
+				// one value by construction and all 11 corpus vectors expect one, so it fires only
+				// if the corpus grows a multi-result `get`. Named rather than left to fall into the
+				// invoke's bucket, because the wrong bucket is paid for by whoever reads the board
+				// on the day it happens, and this arm is where they would look.
+				key := "assert_return result arity"
+				if c.Verb == VerbGet {
+					key = "assert_return (get) result arity"
+				}
 				r.Buckets[key] = append(r.Buckets[key], Failure{
 					Line:    c.Line,
 					Expect:  fmt.Sprintf("%d results (%s)", len(c.Results), joinVals(c.Results)),
@@ -3881,10 +4113,17 @@ func (s *Script) run(opts runOpts) *Result {
 				// The prefix census, kept rather than discarded: this is the only population
 				// in which the Kind gate can be observed refusing anything. See the field.
 				r.KindGateFailPrefix = append(r.KindGateFailPrefix, census.reaches...)
-				const key = "assert_return value mismatch"
+				// The arity arm's twin, for its stated reason. Unlike that one this arm *is*
+				// reachable: a wrong global value is exactly the defect a `(get …)` vector exists
+				// to catch, and filing it under the invoke's key would make the interpreter's
+				// call path name a bug in its global storage.
+				key := "assert_return value mismatch"
+				if c.Verb == VerbGet {
+					key = "assert_return (get) value mismatch"
+				}
 				r.Buckets[key] = append(r.Buckets[key], Failure{
 					Line:    c.Line,
-					Expect:  fmt.Sprintf("result %d of %s: %s", bad, c.Invoke, c.Results[bad]),
+					Expect:  fmt.Sprintf("result %d of %s: %s", bad, c.Export, c.Results[bad]),
 					Got:     out[bad].String(),
 					Kind:    c.Kind,
 					Stratum: StratumExec,
@@ -3977,6 +4216,57 @@ func (s *Script) run(opts runOpts) *Result {
 		}
 	}
 	return r
+}
+
+// asked renders the action this command performed, for the `Expect` side of a Failure — what the
+// harness asked, as against the value it wanted back.
+//
+// Verb-aware because the two verbs read differently in a board row: a call is `add(i32 2, i32 40)`
+// and a read is `get g`, and rendering the second in the first's shape would print `g()` for
+// something that is not a call. **Byte-identical to the format string it replaced for every
+// `invoke` row**, which is what keeps this a widening rather than a re-render of 57940 existing
+// Failure lines.
+func (c Command) asked() string {
+	if c.Verb == VerbGet {
+		return "get " + c.Export
+	}
+	return c.Export + "(" + joinVals(c.Args) + ")"
+}
+
+// action performs an action-bearing command's action against an instance and returns its results
+// as the run loop's uniform `[]Val` — the verb axis's one dispatch (#323).
+//
+// **The `get` arm wraps its one value in a one-element slice, and that is the join rather than a
+// convenience.** Everything downstream of this call in the shared arm — the arity bucket, the
+// value comparison, the `either` choice census, the trap and exception branches — is written
+// against `[]Val` and is identical for both verbs, because *what a result is* does not depend on
+// how it was produced. Widening `ReadGlobalFunc` to return a slice instead would move the
+// wrapping one layer out and let an engine claim a global has two values; wrapping here keeps the
+// grammar's "one global, one value" a property of the type.
+//
+// **`VerbNone` panics rather than defaulting to `invoke`.** A command reaching here with no verb
+// is a reader that admitted an action and did not say which — a harness defect, not an engine one
+// — and the majority-case default would run it as a call against whatever export name happened to
+// be in the field. See ActionVerb on why the zero value is an error.
+//
+// The nil-component check is *not* here: it needs the script path and line to say which vector
+// exposed it, so it lives in the arm beside the `wantsTrap`/`wantsException` tripwires it is a
+// sibling of.
+func (o runOpts) action(in Instance, c Command) ([]Val, error) {
+	switch c.Verb {
+	case VerbInvoke:
+		return o.Invoke(in, c.Export, c.Args)
+	case VerbGet:
+		v, err := o.ReadGlobal(in, c.Export)
+		if err != nil {
+			return nil, err
+		}
+		return []Val{v}, nil
+	default:
+		panic(fmt.Sprintf("action-bearing command at line %d carries %v: a reader admitted an "+
+			"action without stating its verb, which would otherwise run as an invoke of %q",
+			c.Line, c.Verb, c.Export))
+	}
 }
 
 // instantiate calls the caller's instantiation entry point, or reports that there is none.
