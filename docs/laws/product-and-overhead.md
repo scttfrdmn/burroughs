@@ -214,6 +214,34 @@ reach is a law out of context.
         the actor states the case and a principal rules. Scott holds the veto line on this
         refinement as on every governance edit. (Ruling: Scott, PR #159, on the agent's own flag;
         #159 is product and the counter resets.)
+    - **The test the classification is made against: does the PR change what the runtime *can
+      do*, or only what the harness can *say* about what it does?** The rule above says the
+      counter counts purpose and that the purpose is named and challengeable; it did not say how
+      to decide, and #457 is where that cost something. Scott's ruling, verbatim: *"does the PR
+      change what the runtime can do, or only what the harness can say about what it does?
+      `callBudget` and `trapExhaustion` already existed, so #457 is the latter."* The arm made 15
+      `assert_exhaustion` vectors askable and the engine's answers were already correct and
+      already there, so the column moved 15 on a PR that added no capability.
+      - **And "it clears a v0 board column" is explicitly not sufficient** — *"nearly any
+        instrument work can be described that way, and a counter that accepts that argument stops
+        counting."* This is the sharp edge, because the brief *requires* every PR to quote its
+        `unsupported` delta, which makes the column the most available justification in the
+        project. A reward figure is not a classification: a PR can honestly report a non-zero
+        `unsupported` delta **and** be instrument, which is exactly what #457 did. Where the
+        column drains without capability changing, see
+        [boards-and-buckets](boards-and-buckets.md#a-column-draining-to-zero-is-not-the-engine-reaching-a-milestone)
+        — v0's whole remaining residue measured that way.
+      - **Two scope corrections that arrived with the test.** First, **the stop condition governs
+        what comes next, not whether a finished PR lands**: *"holding a bound green was never part
+        of the stop condition anyway."* The actor's instinct on #457 was to hold a green PR pending
+        the ruling, and the hold was aimed at the wrong object — ask the question and let the work
+        land. Second, the counter has a **third state** besides *blocked* and *argue your way out*,
+        and it matters near the end of a phase: *"Near v0 close the remaining legitimate work may
+        simply be harness. The counter stands, but if the classification comes back and the next
+        required work is also instrument, bring it to me for a stamp — not blocked, and not
+        self-exempted."* That is the exemption rule below, not a hole in it: the token still comes
+        from outside, and what is new is only that a phase's tail is a *recognized* reason to ask
+        for one. (Ruling: Scott, on #458, disposing of PR #457/#440.)
     - **Exemptions are spent only by a principal's explicit order or stamp, never by
       self-classification.** "This PR wasn't elective" is a defence *every* drifting PR
       can plead, and every PR in the 1:1.8 → 1:5.1 drift could have pleaded it — so it

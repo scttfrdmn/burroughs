@@ -29,6 +29,50 @@ reach is a law out of context.
   all-on lane, and stays failed until its feature actually works. That makes a
   deferral something that cannot become a disappearance. (Ruling: Scott, PR #27.)
 
+### A column draining to zero is not the engine reaching a milestone.
+
+- **A column draining to zero is not the engine reaching a milestone — say which of the two
+  it is at the point the zero will be read.** A board column measures what the harness
+  *asked*, and a row can sit in `unsupported` for either of two unrelated reasons: the engine
+  cannot answer, or the harness cannot pose the question. Those look identical in the column
+  and identical in the delta, and the second is the one that flatters. The specimen is v0's
+  own residue, measured on #459 under
+  [the runtime-vs-harness test](product-and-overhead.md#the-phases-product-is-the-work-instruments-are-overhead-on-it)
+  (`internal/spec/spec_test.go`'s `unsupportedCeiling` ledger carries the full account):
+  **all 14 remaining rows were harness debt.** Three were a lexical transparency
+  the s-expression reader lacked, over modules the engine had been decoding, validating and
+  instantiating correctly the whole time; eleven wanted a public read path for a global
+  export, not a global. So `unsupported → 0` for v0 will mean the harness can finally ask
+  every question the corpus writes, and will mean nothing whatever about capability gained
+  in that slice.
+  - **The general form is guidance and belongs here; the dated claim about this project does
+    not.** *"v0's remaining `unsupported` column is entirely harness debt"* is a position
+    statement about where Burroughs stands at one moment, not a rule for reading boards, and
+    a law page is the wrong home for it because reaching it requires already knowing the law
+    exists and thinking to apply it. It is stated where the closure set is defined instead —
+    the five-verdict list in [`README.md`](../../README.md#conformance), beside the column
+    it is about and beside the `unimplemented` bullet that names the other v0 closure
+    condition. (Ruling: Scott, PR #460, correcting a first attempt that filed the position
+    statement here and in the ceiling's ledger only.)
+  - **The consequence for reporting is that the column's own comment carries the
+    classification, not just the count.** A ledger entry that records `14 → 11` and the
+    mechanism is still readable, two years on, as three capabilities landing. The reader who
+    needs the distinction is the one arriving at the zero, which is why it is written where
+    the zero lives rather than in the PR that produced it — *a report is read once and a
+    bound is read every time it moves*.
+  - **And it cuts the other way for the pass floor.** `passFloor` rising cannot distinguish
+    "the engine started answering" from "the harness started asking", so a slice that moves
+    it by widening vocabulary says so in the floor's entry too. On #459 the +3 was
+    entirely the latter, and what made that assertable rather than assumed was a probe
+    (`TestAnnotatedModulesInstantiate`) — because the board *structurally cannot* see an
+    instantiation decline on a module with no dependent commands (#124's pass-on-decline
+    ruling), so the rows would have read `pass` with instantiation wholly broken. *A row
+    that passes without asking is the same shape as a skip*, one section down.
+  (Order: Scott, on the #459 measurement — *"record the measurement as a finding in the repo,
+  not only as an issue comment. 'v0's remaining unsupported column is entirely harness debt'
+  changes what closing that column means. Nobody reading `unsupported → 0` later should take
+  it for an engine milestone."*)
+
 ### A skip is not a verdict.
 
 - **A skip is not a verdict.** `requireSuite` skips when the corpus is absent, so
@@ -102,7 +146,26 @@ reach is a law out of context.
       a measurement is worth more than one that begins with a schedule. Scott's classification on
       the #395 relay: the third instance, after #194's title and `check_elem`'s file-as-rule-owner
       proxy, where *a vector's file is not its stratum* had the same shape one layer down. (A fourth
-      followed on PR #409 — the next sub-bullet.)
+      followed on PR #409 — the *mis-attributed bucket built out of true sentences* bullet below,
+      named rather than pointed at positionally, since a fifth instance has since been filed between
+      this sentence and it.)
+      - **And a fifth on #459, where the plan named the wrong *layer* rather than the wrong
+        ordering — and the authority is what said so.** #320's three no-head-atom rows came with a
+        remedy in the body: *teaching classify to skip annotation nodes when it looks for the head*.
+        That is where the symptom is visible — `head()` returns `""`, so `classify` falls through —
+        and it is not where the mechanism is. The reference's lexer records an annotation into a side
+        table and tail-calls `token lexbuf` (`lexer.mll:821-828`), emitting **no token**, three rules
+        above the `;;` and `(;` cases that do the same: an annotation is transparent to the grammar
+        *wherever a token may appear*. So the plan would have bought one head-finder a skip and left
+        the same package's **six positional reads** — `len(n.list) == 3` and `n.list[1]`/`n.list[2]`
+        in the `assert_malformed`, `register` and action arms — each needing their own, which is six
+        chances to miss one against zero. The fix went into the s-expression reader as one predicate.
+        What caught it was **reading the authority before the plan**, which is this family's census
+        rule pointed at a grammar instead of at a population: the harness's oracle is the reference,
+        so a question about where a lexical rule belongs has an answer that can be looked up rather
+        than designed. Worth its own instance because the previous four were all wrong about *scope*
+        — which rows, which stratum, which ordering — and this one was wrong about *layer*, and the
+        remedy that finds it is different.
     - **A mis-attributed bucket can be built entirely out of true sentences, and that is what makes
       it invisible.** The registry defect (#366, ADR 0037) put 66 rows in the exec stratum — the one
       column whose fails are supposed to mean *the interpreter answered wrongly* — where the actual

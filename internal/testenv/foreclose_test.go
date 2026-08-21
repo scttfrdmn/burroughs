@@ -308,6 +308,18 @@ var deferredReasonLicensed = map[string]string{}
 // The distinction #447 turns on is now measured across three instances: the *keys* are re-keyed by a
 // control that fires, the *reasons' pointers* are re-keyed by whoever happens to grep.
 //
+// **Fourth re-key, #459, and it is the same three insertion points as #440 into the same ledger** —
+// which is now enough repetition to say what the shape actually is: *the bound ledger is the file's
+// hottest region and every slice that drains a column edits it*, so this map's `spec_test.go` keys
+// shift on a schedule and the only question is by how much. Two regions again, **+8** for the `8996`
+// pair and **+56** for the other ten, and the two deltas differ for the same reason as every previous
+// time (an insertion between them). Paired by paragraph text; the six licensed paragraphs came back
+// byte-identical for the second consecutive re-key, so again no reason was re-adjudicated. The four
+// in-reason pointers moved `:10838` → **`:10894`**, found by `grep -n 'grave #427'` rather than by
+// adding 56 to the old number — which is the point of [#456](https://github.com/scttfrdmn/burroughs/issues/456)'s
+// lesson and is worth naming because the arithmetic would have been *right* here and is right by
+// luck: the pointer and its keys sit in one region only until they don't.
+//
 // The fragility is the reason the scheme stays, and **the requirement is two-sided**: a key must be
 // insertion-immune *and* rewrite-fragile. A key that survived a rewrite of the paragraph it licenses
 // would carry the reason over prose that no longer says it — the defect this whole file is about, one
@@ -325,17 +337,17 @@ var foreclosingLicensed = map[string]string{
 	"internal/spec/spec_test.go:7141 bound account unreachable SIMD": "past-tense account of #328's " +
 		"session; `unreachable` describes ErrNotValidated's call sites after #9 lands, a conditional " +
 		"about a tracked issue rather than a claim resting on the SIMD gate",
-	"internal/spec/spec_test.go:8996 bound account never SIMD": "past-tense account of #196's board; " +
+	"internal/spec/spec_test.go:9011 bound account never SIMD": "past-tense account of #196's board; " +
 		"`never` is what the default lane and the harness did at that measurement (\"never asked\", " +
 		"\"a setup `invoke` never wrote\"), and the paragraph exists to record a delta rather than to " +
 		"forecast one",
-	"internal/spec/spec_test.go:8996 bound account never RelaxedSIMD": "as above — the paragraph names " +
+	"internal/spec/spec_test.go:9011 bound account never RelaxedSIMD": "as above — the paragraph names " +
 		"both gates while describing one past board",
-	"internal/spec/spec_test.go:11459 bound account structural SIMD": "the control sense of the word: " +
+	"internal/spec/spec_test.go:11522 bound account structural SIMD": "the control sense of the word: " +
 		"\"verified against the structural control, the all-on lane reports 0\", this codebase's term " +
 		"of art for a derived-domain control as opposed to a per-vector allowlist. The homonym, and the " +
 		"reason a token sweep over unscoped prose would be noise",
-	"internal/spec/spec_test.go:11459 bound account structural RelaxedSIMD": "as above",
+	"internal/spec/spec_test.go:11522 bound account structural RelaxedSIMD": "as above",
 
 	// The retained-testimony paragraphs of the `validateFailCeiling` account. The word stays on the
 	// page — a corrected transcript is a worse record than an annotated one — so the sweep finds it
@@ -354,7 +366,7 @@ var foreclosingLicensed = map[string]string{
 	//
 	// True of the account, false of the paragraph — and the paragraph is the sweep's unit and this
 	// map's own stated standard. So each entry now names where its refutation actually lives, which
-	// is `spec_test.go:10838`, under a heading in this same bound account: *"the word `structural` in
+	// is `spec_test.go:10901`, under a heading in this same bound account: *"the word `structural` in
 	// the paragraph above is grave #427"*. That the ground is not legible in the licensed paragraph
 	// alone is said rather than papered over.
 	//
@@ -369,23 +381,23 @@ var foreclosingLicensed = map[string]string{
 	// about an issue's state, and `gh issue view 432` — one call, the ruling's own remedy — said
 	// closed. Recorded because a stale-premise repair drawing less scrutiny than the original is
 	// #432's corollary 1, and this paragraph is a stale-premise repair.
-	"internal/spec/spec_test.go:10778 bound account structural SIMD": "retained falsified testimony: " +
+	"internal/spec/spec_test.go:10841 bound account structural SIMD": "retained falsified testimony: " +
 		"this paragraph asserts the eight relaxed-SIMD operators are a *structural* residue \"whose " +
 		"gate is its own event\", which is the claim #427 refuted. Its annotation is not in this " +
-		"paragraph — it is at spec_test.go:10838 in this same account",
-	"internal/spec/spec_test.go:10778 bound account structural RelaxedSIMD": "as above",
-	"internal/spec/spec_test.go:10809 bound account structural SIMD": "retained falsified testimony, " +
+		"paragraph — it is at spec_test.go:10901 in this same account",
+	"internal/spec/spec_test.go:10841 bound account structural RelaxedSIMD": "as above",
+	"internal/spec/spec_test.go:10872 bound account structural SIMD": "retained falsified testimony, " +
 		"the `validateDeclineCeiling`-is-unmoved-at-8 paragraph, resting on the same refuted premise " +
-		"and annotated at the same place (spec_test.go:10838)",
-	"internal/spec/spec_test.go:10809 bound account structural RelaxedSIMD": "as above",
-	"internal/spec/spec_test.go:10827 bound account structural SIMD": "retained falsified testimony, " +
+		"and annotated at the same place (spec_test.go:10901)",
+	"internal/spec/spec_test.go:10872 bound account structural RelaxedSIMD": "as above",
+	"internal/spec/spec_test.go:10890 bound account structural SIMD": "retained falsified testimony, " +
 		"the paragraph on the two bounds becoming the same number: \"one counts a structural residue\". " +
-		"Annotated at spec_test.go:10838",
-	"internal/spec/spec_test.go:10827 bound account structural RelaxedSIMD": "as above",
-	"internal/spec/spec_test.go:10840 bound account structural SIMD": "grave #427's annotation itself, " +
+		"Annotated at spec_test.go:10901",
+	"internal/spec/spec_test.go:10890 bound account structural RelaxedSIMD": "as above",
+	"internal/spec/spec_test.go:10903 bound account structural SIMD": "grave #427's annotation itself, " +
 		"and the only one of these four whose ground *is* legible in the licensed paragraph: it reads " +
 		"\"Nothing about them was structural\" and gives the gate's flip commit",
-	"internal/spec/spec_test.go:10840 bound account structural RelaxedSIMD": "as above",
+	"internal/spec/spec_test.go:10903 bound account structural RelaxedSIMD": "as above",
 
 	// Grave #427's record at the fix site. This is the paragraph the falsification probe restored to
 	// confirm the sweep can see the original defect, so it is licensed at the *repaired* version and

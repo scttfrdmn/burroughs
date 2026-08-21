@@ -21,6 +21,88 @@ weakly-ordered platform.
 
 ### Added
 
+- **Custom annotations are transparent to the s-expression reader, and the `unsupported` column
+  falls 14 → 11** ([#320](https://github.com/scttfrdmn/burroughs/issues/320), stamped by Scott on
+  the [#459](https://github.com/scttfrdmn/burroughs/issues/459) measurement). The three rows are
+  `annotations.wast:98,129,154`, `((@a) module …)` forms where an annotation precedes the head, so
+  `head()` returned `""` and `classify` fell to its `(no head atom)` placeholder. **#320 named the
+  wrong layer for the fix and the reference is what said so**: `lexer.mll:821-828` records an
+  annotation into a side table and tail-calls `token lexbuf`, emitting *no token*, three rules above
+  the `;;` and `(;` cases that do the same — so an annotation is transparent to the grammar
+  **wherever a token may appear**, not merely in first position. Teaching `classify` to step over
+  annotations while looking for a head would have left `internal/spec/wast.go`'s six *positional*
+  reads (`len(n.list) == 3` and `n.list[1]`/`n.list[2]` in the `assert_malformed`, `register` and
+  action arms) each needing their own skip. One predicate in the reader instead — `isAnnotation`,
+  applied in both of `sexpr.go`'s node-assembly loops — and node extents are untouched, so a module
+  command's `Source` span still carries the annotations the engine's own text front end already
+  reads. Dropping *after* the parse rather than scanning past the bytes in `skipSpace` reuses the one
+  grammar reader, which annotations require: they nest, and contain string literals with unbalanced
+  parens and block comments (`annotations.wast:15,17`).
+  Board: default lane **60946 pass (+3)**, 0 fail, **11 unsupported (−3)**, 4187 gated over 256
+  files; all-on lane **65067 pass (+3)**, 31 fail unchanged; `annotations.wast` 71/71 pass, 3
+  unsupported → **74/74 pass**. `passFloor`, `allOnPassFloor` and `unsupportedCeiling` re-base with
+  the lane. `unsupported` delta **−3**, the whole of the column's movement, and the residue is 11
+  `assert_return` ([#323](https://github.com/scttfrdmn/burroughs/issues/323)) with no unattributed
+  remainder for the fourth census running. The `(no head atom)` placeholder branch **stays with a
+  population of zero** — `TestUnsupportedIsBucketedByCommand` pins that no bucket key is ever empty
+  — and the two stale readings its comment carried before are quoted rather than deleted, because
+  each was a coverage claim sitting in the arm whose coverage it described.
+  **The stamp carried one condition: probe the instantiation in this PR rather than carrying
+  `imports.wast` 166/166 forward as the witness.** Discharged by
+  `TestAnnotatedModulesInstantiate`, and it turned out to be a necessity rather than hygiene — a
+  `KindModuleText` row keeps its pass when *instantiation* declines (the decline is remembered and
+  carried to dependent vectors, [#124](https://github.com/scttfrdmn/burroughs/issues/124)'s ruling),
+  and these three modules have **no dependent commands anywhere in the file**, so all three would
+  read `pass` with instantiation wholly broken and the board would say 74/74. The probe recomposes
+  each module from its own parsed byte span, appends an `assert_return (invoke …)`, and requires
+  6/6 pass on the harness's own engine; `$m2` carries an active `elem`, an active `data` and a
+  `start` (`annotations.wast:193-203`), all executing during instantiation. *A row that passes
+  without asking is the same shape as a skip.*
+  **And a finding, ordered into the repo rather than left in an issue comment**: measured against
+  Scott's runtime-vs-harness test, **v0's whole remaining `unsupported` column is harness debt** —
+  these 3 were a reader's lexical gap over modules the engine already answered correctly, and the 11
+  under #323 want a public read path for a global export rather than a global. Stated in
+  **`README.md`'s five-verdict list, beside the column it is about** and beside the `unimplemented`
+  bullet that names the other v0 closure condition, because *"nobody reading `unsupported → 0` later
+  should take it for an engine milestone."* **Scott's correction on this PR separated two objects a
+  first attempt had merged**: the general rule — *a column draining to zero is not the engine
+  reaching a milestone* — is guidance and stays in
+  [boards-and-buckets](docs/laws/boards-and-buckets.md#a-column-draining-to-zero-is-not-the-engine-reaching-a-milestone),
+  while *"v0's remaining column is entirely harness debt"* is a position statement about this project
+  at one moment and belongs **where the closure set is defined**, since reaching it on a law page
+  requires already knowing the law exists and thinking to apply it. `unsupportedCeiling`'s ledger
+  keeps its entry too — the class has to be restated wherever that bound next moves, which is the one
+  thing README cannot promise for rows added later. No figure crosses into README, per its own rule.
+  **That rule turned out to be enforced by hand, and now says so**: the four controls over the file
+  check its `go` blocks, its CLI transcript and its exit-code coverage, and not one of them looks at
+  a figure in prose. The sentence is amended to *declared and tracked* with the tracking number
+  ([#461](https://github.com/scttfrdmn/burroughs/issues/461), filed unmilestoned on Scott's order —
+  a digit-pattern scan over prose with a content-keyed allow-list), because the no-figure rule sat in
+  exactly the position that kept the ledger entry above: stated in a file, kept by a human, in a
+  project whose recurring failure mode is the rule that lives only in prose.
+
+- **A pattern able to match the instrument's own output is minted as a law class**, in
+  [evidence-and-instruments](docs/laws/evidence-and-instruments.md#a-pattern-able-to-match-the-instruments-own-output-is-satisfied-by-the-instrument)
+  (Scott's ruling on this PR: *"two instances with one remedy is a class"*). Both instances arrived
+  in one session. `TestEveryPayloadSpellingIsReadOrRefusedByName` asked
+  `strings.Contains(err.Error(), name)` and for `struct` the substring sat inside the word
+  **constructor** in the refusal's own sentence, so the falsification probe that should have failed
+  on six payloads failed on five (`value_test.go:198`, `value.go:722`). Then, reading a CI verdict
+  out of a captured `gh run watch`, `grep -E '^JOB'` for the sentinel's `JOB <name> <conclusion>`
+  rows matched the watch's own **`JOBS`** section headers, harvesting the progress display as the
+  verdict. The remedy is identical and mechanical — **anchor the match or quote the token**,
+  `strconv.Quote(name)` rather than `name`, `^JOB ` rather than `^JOB` — and the tell is a needle
+  that is a short common word in a haystack of prose the checker or its subject wrote. Recorded as a
+  class rather than as two anecdotes because the second instance was diagnosed from scratch while
+  the first one's repair was still on the same branch. The CI-watch instance also lands in
+  [operations.md's waiting-on-CI recipe](docs/laws/operations.md#waiting-on-ci), where the reader who
+  needs it actually arrives, with the **stronger** remedy the recipe can carry: write the sentinel
+  block to a *different file* from the refresh stream, so the collision has no room to exist rather
+  than being anchored around. It compounds with that section's mistake 4 rather than restating it —
+  there a sentinel reads the wrong run and reports an empty green, here a sentinel reads the right
+  run and is answered by the watch's own chrome, and neither SHA-binding nor reading `.jobs[]` can
+  see it.
+
 - **`assert_exhaustion` enters the harness's command vocabulary, and the `unsupported` column falls
   29 → 14** ([#440](https://github.com/scttfrdmn/burroughs/issues/440)). One `classify` arm, one
   `Kind`, one `wantsTrap()` member, and **no engine change at all**: `callBudget` and
@@ -1671,6 +1753,37 @@ weakly-ordered platform.
   alternative before either landed. The replacement itself is held for the ruling on #441.
 
 ### Changed
+
+- **The classification test a PR's purpose is judged against, written down: *does the PR change what
+  the runtime can do, or only what the harness can say about what it does?***
+  (`docs/laws/product-and-overhead.md`; Scott's ruling on
+  [#458](https://github.com/scttfrdmn/burroughs/issues/458), disposing of PR #457/#440). The stop
+  condition already counted PRs by *purpose* and required the classification be named and
+  challengeable; it did not say how to decide, and #457 is what that cost. `callBudget` and
+  `trapExhaustion` already existed, so an arm that made 15 vectors askable moved the column by 15
+  and added no capability. **"It clears a v0 board column" is explicitly not sufficient** — *"nearly
+  any instrument work can be described that way, and a counter that accepts that argument stops
+  counting"* — which is the sharp edge, since the brief *requires* every PR to quote its
+  `unsupported` delta and thereby makes the column the most available justification in the project.
+  A reward figure is not a classification. Two scope corrections landed with it: **the stop governs
+  what comes next, not whether a finished PR lands** (*"holding a bound green was never part of the
+  stop condition"* — the instinct to hold #457 pending the ruling was aimed at the wrong object),
+  and the counter has a **third state** besides blocked and argued-past, for a phase's tail where the
+  remaining legitimate work may simply be harness: *"bring it to me for a stamp — not blocked, and
+  not self-exempted."* Carried as overhead on
+  [#320](https://github.com/scttfrdmn/burroughs/issues/320)'s product work, since a docs-only PR
+  would have been instrument 3 arriving to explain why instrument 3 needs a stamp.
+
+- **A fifth instance of *an issue's stated plan sends the work to the wrong layer*, and this one was
+  wrong about layer rather than scope** (`docs/laws/boards-and-buckets.md`). #320's body named its own
+  remedy — *teaching `classify` to skip annotation nodes when it looks for the head* — from where the
+  symptom is visible. The reference says annotations are lexically transparent **wherever a token may
+  appear** (`lexer.mll:821-828`: side-table record, then a tail-call to `token`, emitting no token,
+  three rules above `;;` and `(;`), so that plan would have bought one head-finder a skip and left the
+  same package's six *positional* reads each needing their own. The previous four instances were all
+  wrong about scope — which rows, which stratum, which ordering — and the remedy that catches this one
+  is different: **read the authority before the plan**, which is this family's census rule pointed at a
+  grammar rather than at a population.
 
 - **Closing is a state transition on an issue, but a queue label is a claim about the world**
   (`docs/laws/graves-and-sweeps.md`; Scott's ruling, relayed on the #448 merge). Amends grave

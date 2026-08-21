@@ -860,8 +860,16 @@ func TestConformanceThroughThePublicPath(t *testing.T) {
 	if tally.files != 257 {
 		t.Errorf("walked %d scripts, want 257 at this suite pin", tally.files)
 	}
-	if tally.modules != 2238 {
-		t.Errorf("offered %d module forms to the public path, want 2238 at this pin; the corpus or "+
+	// 2238 → 2241 on #459, and the +3 is a **second, independent witness** of the thing that PR was
+	// stamped on a condition of proving. `annotations.wast:98,129,154` are `((@a) module …)` forms whose
+	// head was `""` until the s-expression reader learned to drop annotation nodes, so this driver — which
+	// selects on the harness's `Kind` — never offered them here at all. They now arrive, and they arrive
+	// through `burroughs.Load`/`Instantiate` rather than through `internal/spec`'s run path, with
+	// `refusedInvalid` and `DISAGREED` both still 0. `TestAnnotatedModulesInstantiate` asks the same
+	// question of the harness's own engine; this pin says the *public* boundary instantiates them too,
+	// and it says so as a side effect of a count, which is why the count is pinned exactly.
+	if tally.modules != 2241 {
+		t.Errorf("offered %d module forms to the public path, want 2241 at this pin; the corpus or "+
 			"this driver's command vocabulary moved", tally.modules)
 	}
 	// A floor rather than a pin, with the slack stated: this number moves *up* on engine work — a

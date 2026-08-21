@@ -179,7 +179,11 @@ compiles — `TestREADMEGoBlocksAreRealCode` checks it.
 
 The upstream WebAssembly spec test suite is the oracle, and **this file quotes no
 figure from it on purpose**: a count typed into prose is a count that rots, and
-the instrument is one command away.
+the instrument is one command away. That rule is currently kept by hand — the
+controls over this file check its code blocks, its transcript and its exit-code
+coverage, and none of them looks at a figure in prose — so it is declared and
+tracked rather than enforced:
+[#461](https://github.com/scttfrdmn/burroughs/issues/461).
 
 ```console
 $ make spec-tests                                    # vendor the suite (gitignored)
@@ -198,7 +202,17 @@ Five verdicts, and the distinction between them is the point (decision 0010):
 - **unimplemented** — the harness asked and the engine has no component to
   answer with. Absence by construction, and it must be zero before `v0.1.0`.
 - **unsupported** — the harness cannot ask: no `Kind` recognizes the command
-  form, so there is no question yet.
+  form, so there is no question yet. **Every row now in this column is harness
+  debt, and that was measured rather than assumed**: #459 classified the whole
+  residue by the test *does the work change what the runtime can do, or only what
+  the harness can say about what it does?*, and found no row whose answer the
+  engine cannot already compute. So this column reaching zero is a fact about the
+  harness's vocabulary and **not** an engine milestone — which is the reading a
+  drained column otherwise invites. Nothing holds that true of rows added later,
+  so the class is restated in the account beside `unsupportedCeiling` in
+  `internal/spec/spec_test.go` each time that bound moves, rather than resting
+  here; the general form is in
+  [`docs/laws/boards-and-buckets.md`](docs/laws/boards-and-buckets.md).
 
 `make conformance` runs both lanes — the default gate set, and an all-gates-on
 lane where the `gated` count must be zero — and refuses to run without the

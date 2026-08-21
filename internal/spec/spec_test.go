@@ -7912,7 +7912,15 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	//
 	// `allOnFailCeiling` below does not move either: 15 conversions, 15 passes, 0 new reds. The
 	// forecast's 10 predicted fails were predicted for both lanes and appeared in neither.
-	const allOnPassFloor = 65064
+	// # 65064 → 65067, +3, and the lanes agree exactly for the second slice running
+	//
+	// #459's annotation skip. `passFloor` also moved +3, and as in the entry above the equality is
+	// the check on the diagnosis: `annotations.wast` is MVP core, nothing in the three modules needs
+	// a proposal, so turning every gate on must leave the slice untouched — and a divergence would
+	// have said an annotation was reaching a gated path. Not a forecast this PR gets credit for
+	// hitting; it is a consequence of the fix being in the s-expression reader, which sits below
+	// every gate in the stack and cannot see one.
+	const allOnPassFloor = 65067
 	// **Slack 0 as of Scott's #387 ruling**, which this bound's own 89-row staleness above is what
 	// prompted: a floor with 250 of tolerance cannot detect anything smaller than 250, so it is a
 	// bound sitting inside its own tolerance. Exact from here — re-base it in the PR that moves the
@@ -8018,7 +8026,9 @@ var moduleOverRejections = map[string]string{}
 //
 // A module definition in a script asserts the module *is valid*, and until #341 the harness scored it
 // on the reader's answer alone — so `internal/validate/global_test.go`'s M11 row could refuse **every**
-// module from inside the validator and leave all 2143 `KindModuleText` commands green. Sixty thousand
+// module from inside the validator and leave all 2143 `KindModuleText` commands green — the count as it
+// stood at #341, era-marked because the census below now reads 2146 and this sentence is about that
+// board rather than this one. Sixty thousand
 // passes were carrying a claim they could not bear: an over-rejection produces no error for anyone to
 // bucket, so the one defect class this direction can have was invisible by construction.
 //
@@ -8211,7 +8221,12 @@ func TestModuleDefinitionsAskTheValidator(t *testing.T) {
 		// interesting loss here is a classifier arm that stops firing for most of its inputs while
 		// still firing for one. Re-base in the PR that moves the corpus or an arm.
 		wantCounts := map[Kind]int{
-			KindModuleText:   2143,
+			// 2143 → 2146 on #459: `annotations.wast:98,129,154` are `((@a) module …)`, so their
+			// `Head` was `""` and this walk's `c.Head != "module"` filter skipped them entirely.
+			// Dropping annotation nodes in the s-expression reader gives all three a `module` head,
+			// which puts them in this census for the first time — the count moving is the *only*
+			// signal here that the change reached the classifier, since the set of Kinds is unchanged.
+			KindModuleText:   2146,
 			KindModuleBinary: 88,
 			KindModuleQuote:  7,
 			// #426 moved these two out of `KindUnsupported`'s 9 and the sum is the check: 6 + 3 = 9,
@@ -9156,7 +9171,55 @@ func TestPhase1Files(t *testing.T) {
 	//
 	// The residue is 11 `assert_return` (#323) + 3 no-head-atom (#320) = 14, still with no
 	// unattributed remainder.
-	const unsupportedCeiling = 14
+	//
+	// # 14 → 11: #459 takes the 3 no-head-atom, and the fix is not where the issue said it was
+	//
+	// The three are `annotations.wast:98,129,154`, `((@a) module …)` forms where a custom annotation
+	// precedes the head, so `head()` returns `""` and `classify` falls to its `(no head atom)`
+	// placeholder. #320 named the drain as *teaching classify to skip annotation nodes when it looks
+	// for the head*, and the reference says that is the wrong layer: `lexer.mll:821-828` records an
+	// annotation into a side table and tail-calls `token lexbuf`, emitting no token, three rules
+	// above the `;;` and `(;` cases that do the same. An annotation is transparent to the grammar
+	// **wherever a token may appear**, not merely in first position — so the skip belongs in the
+	// s-expression reader (`sexpr.go`'s `isAnnotation`, dropped in both node-assembly loops), and
+	// `wast.go`'s six *positional* reads are covered by the same predicate instead of needing six of
+	// their own. Forecast −3 / +3 and measured −3 / +3, with `gated` flat at 4187 and `fail` flat at
+	// 0: one column into another, `annotations.wast` 71/71 pass, 3 unsupported → 74/74 pass.
+	//
+	// **The placeholder branch stays and its population is now zero** —
+	// `TestUnsupportedIsBucketedByCommand` pins that no bucket key is ever empty, and an unlabelled
+	// row in a work-plan column is the one nobody investigates. That makes it a guard with no
+	// witnesses rather than a bucket with three, which is stated here because the branch's *previous*
+	// comment claimed the opposite for two commits running (see `wast.go`'s quoted pair).
+	//
+	// # What the residue is made of, which is a finding and not a scheduling note
+	//
+	// **The whole of what remains in this column is harness debt.** Ordered recorded in the repo by
+	// Scott on #459 rather than left in an issue comment, because *"nobody reading `unsupported → 0`
+	// later should take it for an engine milestone"* — and this is where a reader of that zero comes
+	// looking. The measurement ran Scott's #458 test — *does it change what the runtime can do, or
+	// only what the harness can say about what it does?* — over all 14:
+	//
+	//   - the 3 above: a lexical transparency the reader lacked. The engine decoded, validated and
+	//     instantiated all three modules already, which #459's probe asserts directly rather than by
+	//     witness (`annot_test.go`, and the reason a probe was needed is that a `KindModuleText` row
+	//     keeps its pass on an instantiation decline, so the board *cannot* see this).
+	//   - the 11 `(get …)` rows under #323: the engine holds the global and the export; what is
+	//     missing is a public read path (`Instance.Global`) for the harness to ask through. #323's
+	//     own premises were verified true and its *conclusion* — that this requires engine work —
+	//     does not follow from them: `spectestBuiltin` already synthesizes wat and instantiates it
+	//     through the ordinary front end, so a synthesized reader module drains all 11 with zero
+	//     engine change. Scott ruled for the direct read anyway, on fidelity: a proxy answer that
+	//     agrees is a weaker claim than a direct read, and the column would otherwise hold two
+	//     grades of pass with nothing marking which is which.
+	//
+	// So `unsupported` reaching 0 will mean the harness can finally *ask* every question the corpus
+	// writes. It will not mean the engine gained anything, and on this slice's evidence the engine
+	// had already answered — 3 of the 3 correctly, unasked, for as long as the rows sat here. The
+	// figure that carries engine capability is `passFloor` and its all-on twin; this one carries
+	// vocabulary. **A reward figure is not a classification** — that separation is #458's, and this
+	// column is the clearest case of it in the file.
+	const unsupportedCeiling = 11
 	// Slack 0 as of #387's ruling, with the other two tracked board counts — see
 	// `boardbound_test.go`'s retirement section. This is the one of the three where the retired
 	// slack's stated purpose bit hardest: a ceiling drains *toward* its column, so 250 of tolerance
@@ -11908,7 +11971,19 @@ func TestPhase1Files(t *testing.T) {
 	// the engine over-delivered. The +15 is banked because the engine answered 15 questions right,
 	// which is checkable; the forecast is recorded as a miss because its reasoning was wrong, which
 	// is a separate fact about the forecaster.
-	const passFloor = 60943
+	// # 60943 → 60946, +3, and this floor is the wrong figure to read the slice's value off
+	//
+	// #459's annotation skip. Same shape as the entry above — `unsupported` 14 → 11 and this floor
+	// +3 are one conversion counted from both sides, `gated` flat at 4187, `fail` flat at 0 — so the
+	// account of what the three are lives on `unsupportedCeiling`, where the drain happened.
+	//
+	// What belongs here is the caveat, because a floor that moves reads as an engine that gained.
+	// **These three modules were being decoded, validated and instantiated correctly before this
+	// PR**; nothing in the engine changed, and the +3 measures the harness learning to classify a
+	// form it had been dropping. `TestAnnotatedModulesInstantiate` is what makes that assertable
+	// rather than assumed: this floor cannot distinguish "the engine started answering" from "the
+	// harness started asking", and on this slice it is the second.
+	const passFloor = 60946
 	// Slack 0 as of #387's ruling, with `allOnPassFloor` and `unsupportedCeiling` — see
 	// `boardbound_test.go`'s retirement section. Two entries in the ledger above record taking a
 	// re-base *although the slack stayed silent* (58659 by a margin of 20, and the 416 that was four
@@ -12289,7 +12364,7 @@ func TestNoCapabilityOutlivesItsComponent(t *testing.T) {
 //
 // So the three assertions are:
 //
-//  1. **A corpus total floor** — 2000 against 2143 measured. Bounds a wholesale loss.
+//  1. **A corpus total floor** — 2000 against 2146 measured. Bounds a wholesale loss.
 //  2. **A file-count floor** — 230 against 242 files holding at least one. This is the one a
 //     total cannot give: it bounds the *distribution*. Not asserted but measured — dropping
 //     the 13 smallest files trips this floor at 229 while the total sits at **2130**, still
@@ -12325,7 +12400,7 @@ func TestBareModuleSpansAreNonEmptyAndPlausible(t *testing.T) {
 	requireSuite(t)
 
 	const (
-		totalFloor = 2000 // measured 2143
+		totalFloor = 2000 // measured 2146 (2143 before #459 gave the three annotated modules a head)
 		// measured 242 of 256 board files. The denominator moved with #9's arm (254 → 256:
 		// `memory_size3.wast` and `unreached-invalid.wast` are wholly `assert_invalid`, so they
 		// were not board files at all before it) and the numerator did **not**, which is correct
@@ -12369,7 +12444,7 @@ func TestBareModuleSpansAreNonEmptyAndPlausible(t *testing.T) {
 	}
 
 	// vacuityBound, not floorBound: these two are *plausibility* bounds and their looseness
-	// is the design (2000 against 2143, 230 against 242). Slack-checking them would fire on
+	// is the design (2000 against 2146, 230 against 242). Slack-checking them would fire on
 	// a control working exactly as intended, and a gate that fires for reasons which are not
 	// findings trains the reflex of scrolling past it. Routed through boardBound anyway, so
 	// the exemption is named at one place rather than being an absence — TestEveryBoardBound-

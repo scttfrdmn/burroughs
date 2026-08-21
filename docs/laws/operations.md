@@ -121,6 +121,19 @@ time and to identity: ask the right channel, and ask it about the right run. The
 same pair applied to *extent* — the right channel, the right run, and a question narrow enough
 that the answer cannot be true of an empty set.
 
+**And write the sentinel block to a different file from the refresh stream.** `gh run watch`
+redraws a live display of hundreds of lines; if the `WATCH_EXIT` / `FINAL` / `JOB` sentinel is
+appended to that same capture, the grep that harvests the verdict is scanning a haystack the
+watch wrote — and on PR #460 `grep -E '^JOB'` matched the watch's own **`JOBS`** section headers,
+returning dozens of progress rows as if they were the job list. Anchoring the pattern (`^JOB `)
+repairs that one instance; **redirecting the two streams to two files removes the collision's
+room to exist**, which is the stronger move because the display's vocabulary is upstream's to
+change. The general form, with its other specimen, is
+[a pattern able to match the instrument's own output](evidence-and-instruments.md#a-pattern-able-to-match-the-instruments-own-output-is-satisfied-by-the-instrument).
+This compounds with mistake 4 rather than restating it: there, a sentinel over the wrong run
+reports an empty green; here, a sentinel over the *right* run is answered by the watch's own
+chrome, and neither SHA-binding nor reading `.jobs[]` can see it.
+
 ## Local cross-architecture verification
 
 The dev box is arm64 — the weakly-ordered side, contract §9's own reason both CI
