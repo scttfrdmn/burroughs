@@ -1854,6 +1854,43 @@ weakly-ordered platform.
 
 ### Changed
 
+- **[Decision 0042](docs/decisions/0042-the-interpreters-second-comparator-is-deleted-rather-than-tuned-and-the-criterion-is-five-rows-in-both-directions.md)
+  proposes deleting `internal/interp`'s second subtype comparator rather than tuning it, and the
+  criterion is five all-on rows in both directions** ([#475](https://github.com/scttfrdmn/burroughs/issues/475);
+  ordered by Scott on the [#474](https://github.com/scttfrdmn/burroughs/pull/474) review — *"`sameFuncType`
+  is unblocked: file the issue, write the ADR. Diverging in both directions is a stronger finding than
+  the one-group report it replaced, and it's a design question now, not a tuning one."*). `sameFuncType`
+  / `matchDeftype` is a hand-reduced `match_deftype`; `internal/validate` ports the same relation from
+  `match.ml` and **exports it** as `MatchDefType`. The duplicate is **too strict on 3 rows**
+  (`type-equivalence.wast:131,156,188` — one module, two indices naming byte-identical types, and the
+  bucket key prints the defect as `expected func [(ref 1)] … but got func [(ref 2)]`) and **too lax on
+  2** (`type-rec.wast:183,192` — rec-group member position and group size dropped, against a
+  discriminating triple the corpus supplies at `:167-192`). One cause seen twice, so no tolerance fixes
+  both: the reference canonicalizes. **Status held at `proposed`** — the order authorizes an ADR, not a
+  choice between its two options, and a Status field is a citation to an approval.
+  **The deferral's stated reason had expired**: `call.go:765-768` declined unification as *"a wider
+  change than the grave that exposed it"*, and `internal/interp` already imports `internal/validate`
+  (`link.go:7`, `tag.go:7`), `MatchDefType` is already exported signature-compatibly, and its documented
+  argument order already matches `call.go:590`'s call — the surface was built for `match_externtype` in
+  the meantime. The forecast rests on two already-measured facts rather than on the five rows:
+  validating `type-equivalence.wast:107-130` **requires** the over-strict judgement and passes, and the
+  same discriminating triple's static twin at `type-rec.wast:137-162` goes through the linker on
+  `MatchDefType` since grave #368 and is green. `unsupported` delta **0, structural** — an ADR changes
+  no board column; the reward figure is the pre-registered all-on `fail` **17 → 12**, unbanked until the
+  implementation, which queues behind #367 by Scott's ordering.
+  **Reading the code to write the criterion falsified five of its own claims**, recorded in the ADR
+  because each will read as current after the change: the rec-group-boundary denial at `call.go:742-743`
+  (already corrected fifteen lines below it), the *"no corpus vector reaches the M10/M11 shape"*
+  sentence at `:760-761`, `spec_test.go:10548`'s description of `Instance.link` as a `sameFuncType`
+  caller (grave #368 moved it), `call.go:739`'s pointer to **`matchesDeclaredSupertype`** — a function
+  that exists nowhere in the tree, folded into the walk by grave #261's refactor — and `:760`'s naming
+  of `call_ref` as a consumer, which `resolveCallRef` refutes by comparing nothing at all. The fourth is
+  the citation form recommended over a line number, failing *better*: a dangling symbol is one grep
+  returning exactly its own citation, where a drifted line returns a plausible neighbour — and it is
+  mechanically checkable, noted on [#473](https://github.com/scttfrdmn/burroughs/issues/473). The
+  M10/M11 sentence is the one **no instrument can ever check**, being a claim of absence with nothing to
+  resolve.
+
 - **ADRs [0008](docs/decisions/0008-proposal-gate-mapping.md) and
   [0039](docs/decisions/0039-a-references-payload-kind-crosses-the-two-boundaries-as-one-enumerated-kind-and-the-static-type-gate-is-its-own-census.md)
   amended with dated notes, discharging the flag this file raised rather than editing the tombstones**
