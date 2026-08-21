@@ -94,7 +94,14 @@ weakly-ordered platform.
   `strconv.Quote(name)` rather than `name`, `^JOB ` rather than `^JOB` — and the tell is a needle
   that is a short common word in a haystack of prose the checker or its subject wrote. Recorded as a
   class rather than as two anecdotes because the second instance was diagnosed from scratch while
-  the first one's repair was still on the same branch.
+  the first one's repair was still on the same branch. The CI-watch instance also lands in
+  [operations.md's waiting-on-CI recipe](docs/laws/operations.md#waiting-on-ci), where the reader who
+  needs it actually arrives, with the **stronger** remedy the recipe can carry: write the sentinel
+  block to a *different file* from the refresh stream, so the collision has no room to exist rather
+  than being anchored around. It compounds with that section's mistake 4 rather than restating it —
+  there a sentinel reads the wrong run and reports an empty green, here a sentinel reads the right
+  run and is answered by the watch's own chrome, and neither SHA-binding nor reading `.jobs[]` can
+  see it.
 
 - **`assert_exhaustion` enters the harness's command vocabulary, and the `unsupported` column falls
   29 → 14** ([#440](https://github.com/scttfrdmn/burroughs/issues/440)). One `classify` arm, one
