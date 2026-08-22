@@ -21,6 +21,89 @@ weakly-ordered platform.
 
 ### Added
 
+- **A contract-clause resolver: every clause token in the tree names a clause the contract defines**
+  ([#442](https://github.com/scttfrdmn/burroughs/issues/442),
+  [ADR 0046](docs/decisions/0046-the-accept-direction-blind-spot-is-ratified-as-a-rider-on-g-3-the-clause-243-citations-already-mean.md)).
+  `internal/testenv/clause_test.go` — `TestEveryContractClauseCitationResolves`,
+  `TestClauseScanClassifiesItsFixtures`, `TestTheNewClauseExemptionIsNarrow`. **The
+  clause-citation channel had no instrument for the project's whole life**, and not by exemption:
+  every existing citation control is keyed to a shape a clause token does not have — `citecheck.sh`
+  reads `#N` / `PR #N` / ADR numbers, `TestMarkdownLinksResolve` reads bracketed link destinations,
+  `TestEveryCitedTestNameResolves` reads Go identifiers in backticks. 337 citations is what an
+  unchecked channel accumulates in one project's lifetime.
+  - **Vocabulary and domain are both derived, never enumerated.** The clause→section map is read from
+    the contract's own `## §N.` and `- **X-N.**` lines; the token families come from that map, sorted
+    longest-first because Go's regexp alternation is leftmost-first and `G` ahead of `B-MM` reads
+    `B-MM-1` as a §9 clause; the file domain is a tree walk with text decided by **content** (valid
+    UTF-8, no NUL) rather than by extension, which makes it the widest domain any control in this
+    package walks — hence the sixth walk site, and `walkBoundaryFloor` 5 → 6.
+  - **It goes in `internal/testenv`, not in `citecheck.sh` as the issue proposed, and the home moved on
+    a measurement.** The population is 337 standing citations across 95 `.go` files, 16 markdown files,
+    `scripts/`, and the CI workflow — every one written before the check existed. A diff-scoped
+    resolver would have declared the channel checked while all 337 stayed outside its domain. Same
+    widening #466 performed on `TestMarkdownLinksResolve`, for the same reason.
+  - **Raw text rather than the AST comment map, also measured.** 51 clause tokens live in Go string
+    literals and ~37 of those are genuine citations in test failure messages, so
+    `citation_test.go`'s *"a name inside a string literal is not a citation"* ground does not transfer.
+  - **The left word boundary is load-bearing, and that is a finding rather than a caution.** The first
+    census run reported a §5 clause the contract does not define: `GH-7` in
+    `internal/testenv/closebody_test.go:103`, three characters shaped like a clause reference at the
+    tail of another project's issue convention. It is kept as a permanent negative fixture. Separately,
+    `git grep -E` silently does not support `\b`, which returned one false zero during the measurement.
+  - **The first run found 12 references in 2 files, all in prose about the control** — six in the ADR
+    and six in the control itself, each an illustration of a dangling reference written by writing one.
+    `citation_test.go`'s ruling governs: *when a control fires on its own explanation, fix the
+    explanation*. Ten were repaired in prose. The one exemption is keyed to **grammar**, not to
+    sentence or file — a determiner and *new* immediately before the token, matched across a line wrap —
+    because a decision record's rejected-alternative clause cannot be discussed without being named;
+    it excuses the *dangling* verdict only, never the section check, and every excusal prints with its
+    site.
+  - **Both verdicts were watched die on real mutations of the contract**, per *a control isn't born
+    until it's watched die*: renumbering G-3 produced 289 findings across 60+ files, and moving G-4
+    from §9 to §8 produced exactly 2 correctly-named section mismatches. Contract restored from backup
+    and verified.
+  - **Disclosure, not exclusion: the census reports its own footprint.** Landing the instrument moved
+    the distribution the instrument exists to reveal — the control's own file is a double-digit
+    percentage of every citation counted from outside the contract, and landing it took three clauses
+    from cited-nowhere to cited. So the census prints a per-clause `self` column, that percentage, and a
+    count of clauses cited only by the control. Dropping the control's file from its own sample would be
+    an exemption written by the party it flatters, and the verdict half has no exemption for it at all.
+    - **The ADR paragraph about that footprint was falsified by this changelog entry.** Its first draft
+      said *a quarter* (a whole slice's delta charged to one file), its second said 14% and *"all three
+      cited nowhere but there"* — and then the sentence written here to describe the footprint cited
+      `B-MM-1` while describing it, which moved the row — the percentage fell and one of the three
+      became cited outside the control. No figure is quoted here either, for the same reason and by the
+      same demonstration: **this bullet cites the clause too**, so any number it printed would be stale
+      on arrival. Both are gone from the ADR, which points at the census instead, per **no measured
+      figure lives in prose**. The shape is what the argument rests on, and the shape did not move.
+  - **It would not have caught #442's defect, and says so.** G-3 exists; all 378 clause tokens resolve
+    before the amendment and after it. The resolver catches a typo, a renumbering, or a section
+    coordinate written beside a clause that lives elsewhere — and nothing about *aboutness*, because
+    whether a clause supports a proposition is not mechanizable from the clause's text. The census is
+    the tell for a *misdirected* citation; the resolver is the verdict for a dangling one.
+- **`docs/laws/citations.md`: a stale citation is a cheap tell for an expired claim, so a repaired
+  pointer gets its sentence read** (grave [#491](https://github.com/scttfrdmn/burroughs/issues/491)'s
+  law). Landing here rather than in #492: that PR's body said the lesson was *"recorded at the site and
+  in the citations family"* while `docs/laws/citations.md` **was not in its diff** — the false claim the
+  entry below is about. The rule is procedural: when a citation repair moves a pointer, read the
+  sentence at the new target, because repairing 48 pointers and reading none of them passes every gate
+  in this repo. A line sweep is a **router**, not a claim-checker, and its gap is stated — the tell
+  fires only when the referent's line moves, so a cross-file claim whose target stays put is invisible
+  to everything in this tree.
+- **`docs/laws/evidence-and-instruments.md`: a claim about your own diff is sourced from the diff — an
+  edit made after an amend is not in the amend** (Ruling: Scott, on the #492 review). Two false
+  sentences shipped in #492, both about the author's own tree, with `git diff --name-only` one command
+  away. The sharp sub-form is the amend: it leaves the SHA looking freshly authored while the working
+  tree keeps accepting edits nothing has captured.
+  - **A recurrence in a new channel, not a novelty** — #434's lesson was a premise sourced from a
+    paragraph when the tracker was one query away, and only the subject changed, from someone else's
+    record to your own edits. The first correction was then wrong the same way, attributing the second
+    error to the PR body when the claim lived only in a chat report.
+  - **The control it argues for is narrower than the obvious one, and the narrowing was measured**: the
+    naive form — every path named in a body must be in the diff — fires twice on #492, is wrong both
+    times, and misses both real errors. The trigger has to be the **claim shape**, a discharge verb
+    paired with a resolvable location, not the path
+    ([#493](https://github.com/scttfrdmn/burroughs/issues/493), riding #471 as charged overhead).
 - **`docs/laws/errors-and-testimony.md`: *a message is not its rendering, and a term about the
   rendering cannot be discharged by the message's author*** (minted by Scott on the #490 review). ADR
   0044's fifth approval term was about an error's **rendered** text, and the sentinel's own file could
@@ -2096,6 +2179,45 @@ weakly-ordered platform.
     reporting one, and `TestSubstringOnlyProbeSeesEveryArm` inverts with it: an *award* under a
     padded-message fixture is now the failure. A pre-registered control names a risk, not a code shape.
 
+- **Contract §9 G-3: the accept-direction blind spot is ratified as a dated rider — the clause 243
+  citations already meant** ([#442](https://github.com/scttfrdmn/burroughs/issues/442),
+  [ADR 0046](docs/decisions/0046-the-accept-direction-blind-spot-is-ratified-as-a-rider-on-g-3-the-clause-243-citations-already-mean.md),
+  [the stamp](https://github.com/scttfrdmn/burroughs/issues/442#issuecomment-5381768900)). G-3 said
+  *"the neutrality guarantee is G-1"* and nothing else, from genesis. What 243 sites cited it for was a
+  different proposition — *the suite is a corpus of rejections, so an accept-direction defect scores
+  green by construction* — which §9 stated nowhere, in G-1, G-2 or G-4. The rider states it, and states
+  that it held from genesis: this is a property of a negative-vector corpus, so every verdict this
+  project has recorded was already bounded by it, and writing the clause as *new* would tell the next
+  reader those verdicts were unbounded. Scott's two terms on the text — **it is dated**, and **it says
+  it ratifies rather than introduces**. G-3's existing sentences are untouched and remain normative.
+  Third contract amendment, on the recorded §§0–9 sign-off.
+  - **The mechanism was chosen by a measurement, not by an argument.** Every `G-3` occurrence in the
+    tree at `30377aa`, classified by the proposition its surrounding lines assert: 233 the blind spot,
+    5 the blind spot with neutrality vocabulary also in the window, 3 unclassified by the window and
+    blind-spot on reading the line, 2 a bare `Contract refs:` header asserting nothing, 1 the
+    contract's own statement — and **0 for neutrality, partisanship, or "no guest may be broken to make
+    Go faster"**. The clause's entire citation traffic is the reading the rider ratifies. Over the whole
+    clause namespace, G-3 is 243 of the 337 citations from outside the contract, §9 is 329 of them, and
+    **27 of the 33 defined clauses are cited nowhere outside it**.
+  - **A rider on G-3 costs zero site edits; a new clause costs 243.** That is the whole mechanism
+    difference, and the three alternatives are recorded with why they lose — a new clause (243 edits
+    buying nothing, plus an interval where 243 sites cite a clause that exists and is about something
+    else), a rider on G-1 (logically tightest, but zero sites cite G-1 for it and G-1 already carries
+    two long riders about #9's carve-out that a third would be read as part of), and a rider on G-4
+    (which defines the battery's *composition*; the blind spot is a limit on what any component can
+    report).
+  - **The count was re-measured rather than carried, and it moved in both dimensions.** #442's body
+    said 237, at an earlier revision and counting only the `§9 G-3` spelling; it is 244 occurrences /
+    243 citations, and 21 further sites write bare `G-3`. A mechanism priced against 237 would have
+    missed 6 sites by revision and 21 by spelling — *a count told to a principal comes back as a
+    premise in their order*.
+  - **The by-clause share is 72%, and the narrower spelling would have said 92%.** Counting only
+    `§9 G-M` gives 222 against 11 / 8 / 1, because the bare form is not distributed like the prefixed
+    one — G-1 is written bare 51 times against G-3's 22. Both figures are true of their populations and
+    the wide one supports the sentence, which is *a valid citation does not certify its sentence*
+    applied to a quantifier: the citation was the measurement, and it resolved while the percentage
+    over it came from a sample.
+
 - **Contract §9 G-1: the `#9`-scoped carve-out retires on a state of the code, not on the validator
   umbrella's closure** ([#483](https://github.com/scttfrdmn/burroughs/issues/483),
   [ADR 0043](docs/decisions/0043-g-1s-carve-out-retires-on-zero-call-sites-not-on-the-validator-umbrellas-closure.md),
@@ -3349,6 +3471,15 @@ weakly-ordered platform.
     re-pointed, so the retirement is readable at the site rather than only in this entry.
 
 ### Fixed
+
+- **ADR 0045's term-4 paragraph described its own pre-registration's subject in a tense the repair had
+  already removed.** It said term 4 *"was designed to fail loudly and did not"* and named
+  `internal/validate/module.go:749` as *"the one site where it is neither first nor last"* — present
+  tense, about a state that stopped being true when that site was repaired. It now names the site as
+  the one of 28 where the sentinel sat **mid-string**, quotes the before form, gives the after
+  (`%w: … (element segment %d)`), and says the past tense is deliberate: the pre-registration above it
+  asserts the present tense, which was true when written and is what the repair removed. *A tripwire
+  whose subject dissolves is re-pointed, not silently left reading as live.*
 
 - **`internal/interp/value.go` asserted that `table.go` "already writes `ref{Null: true}` into every
   fresh table slot" — #419 had falsified both the value and the quantifier**
