@@ -8333,6 +8333,51 @@ func TestModuleDefinitionsAskTheValidator(t *testing.T) {
 					"and says nothing", k)
 			}
 		}
+		// **Fact 3's table, checked against the same domain and for the same reason** (#367). The
+		// walk above is the expensive half and it is already done; asking a second question of it is
+		// a predicate over data this subtest has fetched, not a second instrument.
+		//
+		// It is here rather than in a subtest of its own because the failure *cause* is the one this
+		// subtest already owns — a `module` head classifying to a Kind no witness table covers — and
+		// grave #34's rule is one control per cause, not one per table. Losing a fact-3 *call* is a
+		// different cause and is falsified over there, row by row.
+		//
+		// **The excuse list differs from fact 2's in exactly one member, and the two lists are near
+		// mirror images**, which is worth the four lines it costs to say: `KindModuleInstance` is
+		// excused from fact 2 because a definition already answered the validator on its own line,
+		// and is a fact-3 *row* because asserting instantiation is the whole content of the command.
+		// `KindModuleDefinition` is the reverse — a fact-2 row, and excused here because it
+		// deliberately does not instantiate. That is not a harness preference: the reference's own
+		// `cmd` production takes the `isdef` branch and stops at `[Module]`, where every other module
+		// form desugars to `[Module; Instance]` (`parser.mly:1478-1483`). So there is no
+		// instantiation call for a mutation to lose, which is this list's only admission criterion.
+		fact3Excused := map[Kind]string{
+			KindModuleDefinition: "asserts validity and deliberately does not instantiate — the " +
+				"reference's `isdef` branch stops at `[Module]` (parser.mly:1480-1481)",
+		}
+		fact3Want := map[Kind]bool{}
+		for k := range fact3Excused {
+			fact3Want[k] = true
+		}
+		for _, tc := range moduleFact3Witnesses {
+			fact3Want[tc.want] = true
+		}
+		for k, n := range got {
+			if !fact3Want[k] {
+				t.Errorf("a `module` head classifies to %v (%d commands, first %s) and no row in "+
+					"moduleFact3Witnesses witnesses it — add a row, or, if the Kind instantiates "+
+					"nothing, excuse it in fact3Excused by name with the reason. A form that "+
+					"reaches instantiation with nothing falsifying that it is *scored* keeps the "+
+					"pass #367 closed.", k, n, where[k])
+			}
+		}
+		for k := range fact3Want {
+			if got[k] == 0 {
+				t.Errorf("moduleFact3Witnesses or fact3Excused names %v but no `module` head in the "+
+					"corpus classifies to it — the entry is asserting something about a population "+
+					"that is not there, which passes and says nothing", k)
+			}
+		}
 		if len(got) != len(wantCounts) {
 			t.Errorf("module-head Kinds: %d distinct, want %d — %v", len(got), len(wantCounts), got)
 		}
