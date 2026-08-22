@@ -1515,13 +1515,34 @@ func TestRegisterBindsUnderItsStringNameNotItsScriptName(t *testing.T) {
 // import cluster that follows. *An error from the wrong layer is evidence about where structure
 // was lost* — a silent register produces a cluster of `unknown import`s naming the linker.
 //
+// **The total is 2 since #367, and this control is a subject of that change rather than a check on
+// it.** It read `want 1 — the failing register, charged to itself`, and that count was correct only
+// while the definition asserted nothing about instantiating: the module scored a pass on a failure
+// that had already happened, and the register was the only command carrying the cost. Now the
+// definition is charged fact 3 as well, so one root cause produces two reds — the definition's,
+// naming the cause (`module text must instantiate`), and the register's, naming its own inability
+// to bind. The count moved and **the argument above did not**: it is about which command a failure
+// is *keyed to*, not about how many exist, and both keys are still asserted below.
+//
+// That +1 is the whole of the amplification, and it is bounded by construction rather than by
+// hope. The dependents of a module that produced no instance were already red — there is no
+// instance for them to run against, whatever the definition scored — so fact 3 adds exactly one
+// row per broken module, and it is the only row in the cluster that can name the cause. Contrast
+// the fact-2 cascade, which is zero: a validation refusal does not withhold the instance
+// (`wast.go`'s "Instantiation happens either way"), so the register there still binds and still
+// passes. Measured, not reasoned: with `Validate` refusing this same module and instantiation left
+// alone, the script scores `1 pass, 1 fail, 1 bound` and the only bucket is
+// `module text must validate`.
+//
 // Falsified two ways:
 //
 //   - making the arm bind unconditionally (`registry[c.Register] = in` ahead of the `ok` check):
 //     the registry holds `broken` and this reports it, where `Bound` alone stays 0 and says
 //     nothing, since the failing path does not increment it either way.
-//   - dropping the `r.Fail++` and its bucket: `Fail = 0, want 1` plus the missing key, and
+//   - dropping the `r.Fail++` and its bucket: `Fail = 1, want 2` plus the missing key, and
 //     TestVerdictsPartitionCommands fails alongside — the register would be accounted nowhere.
+//     The count alone no longer distinguishes that from a dropped fact 3, which is why the key
+//     assertion is the load-bearing half and stays even though the count is checked first.
 func TestRegisterWhoseModuleFailedBindsNothing(t *testing.T) {
 	const bad = `(module $B (memory 1))`
 	src := bad + "\n" + `(register "broken" $B)` + "\n" +
@@ -1535,8 +1556,9 @@ func TestRegisterWhoseModuleFailedBindsNothing(t *testing.T) {
 	if r.Bound != 0 {
 		t.Errorf("Bound = %d, want 0: a register whose module failed counted as a binding", r.Bound)
 	}
-	if r.Fail != 1 {
-		t.Errorf("Fail = %d, want 1 — the failing register, charged to itself\n%s", r.Fail, r.Board())
+	if r.Fail != 2 {
+		t.Errorf("Fail = %d, want 2 — the definition naming the cause (fact 3, #367) and the "+
+			"failing register naming itself\n%s", r.Fail, r.Board())
 	}
 	// Keyed by the register rather than by the import cluster it causes.
 	const key = "register: this module was refused"
@@ -1544,6 +1566,13 @@ func TestRegisterWhoseModuleFailedBindsNothing(t *testing.T) {
 		t.Errorf("no failure under %q; got keys %v — the register failed without naming itself, "+
 			"so the cost lands on whichever import resolves against the missing name next",
 			key, r.BucketsBySize())
+	}
+	// The other half of the 2, asserted here rather than left to the count: a total that is right
+	// for the wrong reasons — two register rows, or two definition rows — reads identically.
+	if got := len(r.Buckets["module text must instantiate"]); got != 1 {
+		t.Errorf("%d rows under %q, want 1; keys %v — the definition passed on an instantiation "+
+			"failure that had already happened, which is #367's hole",
+			got, "module text must instantiate", r.BucketsBySize())
 	}
 	last := p.lastCall(t)
 	if slices.Contains(last.keys, "broken") {

@@ -2862,6 +2862,88 @@ func (s *Script) run(opts runOpts) *Result {
 		}
 		return vst, false
 	}
+	// scoreModuleInstantiation is **fact 3 of a module definition**, the last of the three to be
+	// scored (#367): the module the corpus just defined must *come to life*.
+	//
+	// **It is the reference's own `Instance` command, and that is why this is a fact and not a
+	// harness preference.** `parser.mly:1478-1483` desugars a top-level `(module …)` — text, binary
+	// or quote — into **two** commands, `[Module; Instance]`, and takes the `else` branch to do it;
+	// only `(module definition …)` (`isdef`) stops at `Module`. The `Instance` arm then calls
+	// `run_instantiation` (`runner.ml:611-618`, `:395-400`), whose `Error` case is
+	// `Link.error` — a script error, not a value. So a definition that decodes and validates and
+	// then cannot be instantiated is a red in the reference, and the harness scoring it green was a
+	// third missing fact rather than a stricter reading of a second.
+	//
+	// That desugaring also settles two things the harness had already decided on other grounds, and
+	// finding them agreeing with the authority is worth recording:
+	// `KindModuleDefinition`'s arm deliberately does not instantiate (the `isdef` branch), and
+	// `KindModuleInstance` scores instantiation as the whole content of its command — which is the
+	// *same* `Instance` command this closure is scoring, arriving under its own Kind because the
+	// corpus spelled it out instead of using the sugar.
+	//
+	// **A gate decline keeps its pass and is the one outcome this does not score**, which is #124's
+	// ruling in the position where it has the most to do. Two shapes reach here gated: a proposal's
+	// own construct declined by the instantiation path's decoder, and — since #366/0037 — a module
+	// importing from a name whose `(register …)` was declined, which arrives as
+	// `import "test" "func" names module "test", whose registration was declined`. Both are gate
+	// consequences wearing a link failure, and scoring them would push the third verdict into the
+	// fail column one command downstream. **#367 was blocked on that distinction existing**: before
+	// 0037 the registry carried no gated state, so those 13 rows were indistinguishable from a real
+	// `unknown import` and this branch could not have been written honestly.
+	//
+	// **It runs after the two-decode-paths check, not before**, because that check is a strictly
+	// more specific diagnosis of the same `ierr`: a refusal from instantiation in a *pre-interpreter*
+	// stratum means the harness's two decoders disagree, which is a defect in the harness rather
+	// than a verdict on the module, and it must not be reported as the module failing to instantiate.
+	//
+	// **The population is measured at zero in both lanes, so this arm's green is worth nothing on
+	// its own.** Probed in the run loop before the branch existed and reverted: 2233 module
+	// definitions reach this position in the default lane (1787 with no instantiation error, 446
+	// gated, **0 non-gated**) and 2241 in the all-on lane (all 2241 clean, 0 gated, 0 non-gated).
+	// The issue's 13 default-lane false greens are exactly the registry-gated rows above, now
+	// exempt for the right reason, and its 4 all-on rows were grave #368's import matcher. So the
+	// assertion is **prospective**, as #353's binary-arm fact 2 was for the same reason: an
+	// instantiation failure produces no error for any bucket to catch, and a population that is
+	// clean today does not make asking it idle.
+	// `TestModuleDefinitionsAskWhetherTheModuleInstantiates` carries the witness that it fires.
+	//
+	// **The key is derived from the Kind, and the fourth member of its family is not.**
+	// `module text/binary/quote must instantiate` come out of `c.Kind.String()`, on the reason the
+	// bucket-key comment above gives for deriving rather than copying; `KindModuleInstance`'s arm
+	// spells `(module instance) must instantiate` by hand. The near-miss is left alone rather than
+	// harmonized — renaming a landed key falsifies every citation to it — and named here because
+	// four keys reading as one family with one hand-written member is exactly the shape a rename
+	// walks into (#364).
+	//
+	// **A run with no interpreter is not asked fact 3 at all, and this is the exemption the first
+	// draft did not have.** `runOpts.instantiate` states the policy it implements — *"Nil is
+	// legitimate and common: every caller that scores only module and malformed forms supplies no
+	// interpreter, and the module commands in those runs must still score"* — and manufactures
+	// `errNoInstance(c, "this run supplied no InstantiateFunc")` at `StratumExec` to say so. That
+	// error is the *run's* absence, not the module's defect, and scoring it charges a module for a
+	// component the caller never supplied: an error from the wrong layer, reported as a verdict.
+	// **Found by a control rather than by reading**: `TestParseAnnotationTokenSoup` runs a
+	// reader-only engine and went red at `got 0 pass, 0 unsupported; want 1/0`, which is why the
+	// guard is written against the *mechanism* that fabricates the error — both entry points nil —
+	// rather than against the declared `CapInterpreter`. A declaration is a claim about the caller;
+	// the nil field is what produces the message.
+	//
+	// It is an exemption and not an `Unsupported`, deliberately: the command still scores facts 1
+	// and 2, exactly as it did before this closure existed, so **the `unsupported` column cannot
+	// move** — the structural zero this slice reports is a property of this line rather than an
+	// assertion about the board.
+	noInterpreter := opts.Instantiate == nil && opts.InstantiateLinked == nil
+	scoreModuleInstantiation := func(c Command, st Stratum, ierr error) bool {
+		if ierr == nil || noInterpreter || isGated(ierr) {
+			return false
+		}
+		r.Fail++
+		key := c.Kind.String() + " must instantiate"
+		r.Buckets[key] = append(r.Buckets[key], Failure{
+			Line: c.Line, Expect: key, Got: ierr.Error(), Kind: c.Kind, Stratum: st,
+		})
+		return true
+	}
 	// cur is the instance the *most recent* module command produced, which is what an
 	// unnamed `assert_return` runs against.
 	//
@@ -3118,6 +3200,12 @@ func (s *Script) run(opts runOpts) *Result {
 				})
 				continue
 			}
+			// **Fact 3: the module instantiates** — see scoreModuleInstantiation, which both this
+			// arm and the text/quote arm below call, for the same reason fact 2 is shared: the
+			// forms differ in fact 1 and must not differ in what a definition *asserts*.
+			if scoreModuleInstantiation(c, st, ierr) {
+				continue
+			}
 			r.Pass++
 
 		case KindModuleQuote, KindModuleText, KindAssertMalformedText:
@@ -3232,6 +3320,14 @@ func (s *Script) run(opts runOpts) *Result {
 						Line: c.Line, Expect: key, Got: ierr.Error(), Kind: c.Kind,
 						Stratum: st,
 					})
+					continue
+				}
+				// **Fact 3: the module instantiates** — see scoreModuleInstantiation. All 446 of
+				// this arm's gated arrivals go through the exemption there rather than through a
+				// condition written here, which is the point of sharing it: the binary arm's gate
+				// declines are consumed by its `Decode` check and never reach fact 3, so a
+				// per-arm copy of the exemption would be exercised on one arm only.
+				if scoreModuleInstantiation(c, st, ierr) {
 					continue
 				}
 				r.Pass++

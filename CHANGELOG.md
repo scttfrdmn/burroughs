@@ -21,6 +21,50 @@ weakly-ordered platform.
 
 ### Added
 
+- **A module definition's third fact is scored: it instantiates**
+  ([#367](https://github.com/scttfrdmn/burroughs/issues/367)). A module definition asserts three
+  things — it decodes, it validates, it instantiates. #341 landed fact 2 for the text and quote forms
+  and #353 for the byte-image form; **fact 3 was scored for none of them**. All four arms already
+  computed the instantiation error and `remember`ed it for a later command to consume, then fell
+  through to `r.Pass++`, so a module that failed to instantiate at `StratumExec` produced no error for
+  any bucket to catch and scored a pass. One `scoreModuleInstantiation` closure, shared by the arms for
+  fact 2's reason: the forms differ in fact 1 and must not differ in what a definition *asserts*.
+  - **The reference settles which forms assert it, and `runner.ml` alone would have supported the
+    opposite conclusion.** Its `Module` arm (`script/runner.ml:595-609`) validates and binds and does
+    **not** instantiate; only `Instance` (`:611-618`) calls `run_instantiation` (`:395-400`), whose
+    `Error` case is a `Link.error` script failure. What makes fact 3 an assertion of the three sugar
+    forms is the desugaring: `text/parser.mly:1475-1484`'s `cmd` production expands a top-level
+    `(module …)` into **`[Module; Instance]`**, where `(module definition …)` takes the `isdef` branch
+    and stops at `[Module]`. So `KindModuleDefinition` is excused from fact 3 by the reference rather
+    than by convenience, and `KindModuleInstance` is scoring *that same `Instance` command*, arriving
+    under its own Kind only because the corpus spelled the desugaring out.
+  - **A gate decline still keeps its pass (#124), and that exemption is worth 446 rows.** Measured by
+    removing it: the default board goes 60957/0 → **60511 pass, 446 fail**, one bucket
+    `module text must instantiate` at 446. The figure independently matches the arrival probe's gated
+    count, which is two mechanisms agreeing rather than one asserting. This is also what #367 was
+    blocked on — before [0037](docs/decisions/0037-the-registry-carries-its-gated-names-and-a-downstream-import-fails-as-gated-not-as-missing.md)
+    gave the registry a gated state, 13 of those rows were indistinguishable from a real
+    `unknown import` and a fact-3 branch written then would have pushed them into the fail column.
+  - **The population is zero in both lanes, and the zero is a measurement rather than a clean-looking
+    result.** #367's own text required its figures re-derived, and the re-derivation overturned them:
+    the 13 default-lane false greens it named are exactly the 0037-gated registry rows and are
+    correctly exempt, and the 4 all-on rows were [grave #368](https://github.com/scttfrdmn/burroughs/issues/368).
+    Rather than accept 0, the condition was neutered into a classified census of everything reaching the
+    site: default **2233** arrivals — 1787 with no instantiation error, 446 gated, **0 non-gated** —
+    and all-on **2241**, all clean. Both boards are byte-identical to baseline term for term (default
+    60957 pass / 0 fail / 0 unsupported / 4187 gated / 0 unimplemented over 256 files; all-on 65092
+    pass / 17 fail / 0 gated). `unsupported` delta **0, structural**: no capability declaration and no
+    Kind classification moves, so what the harness *can ask* is unchanged — only what it scores among
+    questions it already asked.
+  - **So the arms land their own witness**, which is #353's binary-arm precedent for a prospectively
+    scored fact. `TestModuleDefinitionsAskWhetherTheModuleInstantiates` carries one row per Kind with
+    its own instantiation call, each watched die under its own mutation, plus the gated/ungated
+    discriminating pair over a single source — asserting only the gated half would pass on an arm that
+    never scores fact 3 at all. Coverage against the corpus-measured Kind census is checked inside
+    `TestModuleDefinitionsAskTheValidator`, sharing fact 2's already-computed census because grave #34's
+    rule is one control per *cause*; fact 3's excuse list is fact 2's near mirror image, differing in
+    exactly one member.
+
 - **`check_valtype` runs at every module-level valtype position, and the validator's type context is
   scoped per rec group — all-on `fail` 31 → 17**
   ([#357](https://github.com/scttfrdmn/burroughs/issues/357),
@@ -1881,7 +1925,7 @@ weakly-ordered platform.
   **Reading the code to write the criterion falsified five of its own claims**, recorded in the ADR
   because each will read as current after the change: the rec-group-boundary denial at `call.go:742-743`
   (already corrected fifteen lines below it), the *"no corpus vector reaches the M10/M11 shape"*
-  sentence at `:760-761`, `spec_test.go:10548`'s description of `Instance.link` as a `sameFuncType`
+  sentence at `:760-761`, `spec_test.go:10593`'s description of `Instance.link` as a `sameFuncType`
   caller (grave #368 moved it), `call.go:739`'s pointer to **`matchesDeclaredSupertype`** — a function
   that exists nowhere in the tree, folded into the walk by grave #261's refactor — and `:760`'s naming
   of `call_ref` as a consumer, which `resolveCallRef` refutes by comparing nothing at all. The fourth is
@@ -1890,6 +1934,15 @@ weakly-ordered platform.
   mechanically checkable, noted on [#473](https://github.com/scttfrdmn/burroughs/issues/473). The
   M10/M11 sentence is the one **no instrument can ever check**, being a claim of absence with nothing to
   resolve.
+  **Stamped for deletion on the [#476](https://github.com/scttfrdmn/burroughs/pull/476) review, and
+  the implementation is queued behind [#367](https://github.com/scttfrdmn/burroughs/issues/367) — this
+  paragraph is that gap declared rather than left latent**, at Scott's order: *"the changelog must say
+  the implementation is queued behind #367 with the issue number, so the gap is declared rather than
+  latent. If #367 grows past one slice, 0042's implementation comes back to me instead of sliding
+  further."* So the ADR carries an accepted choice and **zero lines implemented**, which is a reason to
+  write code rather than another ADR; #367 landed as one slice, and the two conditions the stamp
+  attached travel with the implementation — measure the pre-registered all-on `fail` **17 → 12** against
+  the actual, and **name any residue rather than absorbing it**.
 
 - **ADRs [0008](docs/decisions/0008-proposal-gate-mapping.md) and
   [0039](docs/decisions/0039-a-references-payload-kind-crosses-the-two-boundaries-as-one-enumerated-kind-and-the-static-type-gate-is-its-own-census.md)
@@ -3182,7 +3235,8 @@ weakly-ordered platform.
   term-of-art homonym) for a paragraph reading "so they are a ***structural* residue**", which is the
   residue sense and the exact sentence grave #427 cost eight rows for; two more claimed to quote a
   falsified sentence while asserting it. The group heading — "the grave's own record of itself" — is
-  true of the *account*, whose annotation is 60 lines down at `spec_test.go:10804`, and false of three
+  true of the *account*, whose annotation is 60 lines below the first paragraph it covers, at
+  `spec_test.go:11052`, and false of three
   of the four paragraphs it covers, and the **paragraph** is the sweep's unit and the map's own stated
   standard. Each entry now names what its paragraph is (retained falsified testimony), where the
   refutation lives, and that the ground is *not* legible in the licensed paragraph alone; the one entry
