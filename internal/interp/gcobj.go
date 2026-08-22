@@ -66,8 +66,9 @@ type gcObj struct {
 	// index. Here it cannot be forgotten, because copying the `*gcObj` copies it.
 	//
 	// **Was a bare `*binary.CompType`, and rung 5 is what made the index the load-bearing half.**
-	// `matchDeftype` walks declared supertypes, which are *indices*, so a resolved pointer cannot
-	// be the retained form: the walk would have nothing to walk from. Both facts sit here rather
+	// `validate.MatchDefType` walks declared supertypes, which are *indices*, so a resolved
+	// pointer cannot be the retained form: the walk would have nothing to walk from. Both facts
+	// sit here rather
 	// than beside a cached pointer for this file's own stated reason (see gcField on `packed`) —
 	// two places knowing one thing is the drift shape #78/#105/#106 were filed for — and
 	// `comptype` derives the pointer on demand.
@@ -212,8 +213,9 @@ func (in *Instance) structType(what string, idx uint64) (*binary.CompType, error
 // **The arity check is not decoration and it is not the retired agreement check.** `Fields` is a Go
 // slice, so `Fields[0]` on a zero-length one panics, and a panic is categorically worse than a named
 // error (`fieldStorage`'s own rule). The decoder builds exactly one entry for a `CompArray`
-// (sections.go:570), so this is a guard against *this package* being wrong about the decoder rather
-// than against a module — which is why it reports #9's debt and says which arity it found.
+// (`decodeCompType`'s array branch appends one `FieldType`, `sections.go:645`), so this is a guard
+// against *this package* being wrong about the decoder rather than against a module — which is why
+// it reports #9's debt and says which arity it found.
 func (in *Instance) arrayType(what string, idx uint64) (binary.FieldType, error) {
 	if idx >= uint64(len(in.mod.Types)) {
 		return binary.FieldType{}, fmt.Errorf("%w: %s names type %d of %d",

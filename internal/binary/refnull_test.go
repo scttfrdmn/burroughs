@@ -128,7 +128,8 @@ func TestRefNullRetainsTheSpelledHeapType(t *testing.T) {
 		{"array", HeapArray, "(ref null array)"},
 		{"exn", HeapExn, "(ref null exn)"},
 		// The indexed form: `0x00` is sleb 0, non-negative, so it is type index 0 and not an
-		// abstract byte (sections.go:914-926). Type 0 exists in the image.
+		// abstract byte (`decodeHeapType`'s type-index branch, sections.go:973-987). Type 0
+		// exists in the image.
 		{"typeidx 0", 0x00, "(ref null 0)"},
 	} {
 		m, err := d.DecodeModule(oneFuncImage(0xD0, tc.ht))

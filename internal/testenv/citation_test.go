@@ -99,8 +99,16 @@ var declSpan = regexp.MustCompile("`[^`]*\\bfunc\\s+(?:Test|Fuzz|Benchmark)[A-Z]
 // exists now.
 //
 // #91 predicted this exemption would be needed ("the historical-reference case needs an
-// exemption") and the measurement says it is needed for exactly five names today, all of them
-// records of the #88 sweep's own repairs.
+// exemption") and the measurement said it was needed for exactly five names, all of them records
+// of the #88 sweep's own repairs.
+//
+// **That figure was a snapshot and it has tripled: 17 names over 24 sites**, 3 of the sites
+// naming the one test 0042 deleted. Re-measured with the instrument rather than re-read — a
+// `t.Logf` in the exemption branch below, printing every name it excused — because the number is
+// the only thing here that says how much prose this exemption is carrying, and a figure that
+// grows silently is the one a reader trusts most. The exemption is a class, not a list: nothing
+// enumerates the names and nothing should, so what this paragraph owes is the *size*, restated
+// when the file is touched.
 //
 // **Every phrase here asserts the name is not current.** That is the licensing rule, and it is
 // what keeps the exemption from becoming the laundering channel the derived-provenance
@@ -151,8 +159,23 @@ var wrapJoin = regexp.MustCompile(`-\n\s*([A-Z])`)
 // scoped more widely than the claim it excuses will excuse claims it never examined**, which
 // is *a precondition that excuses a gate is licensed at one place* applied to the granularity
 // of the license rather than to its location.
+//
+// # The marker is matched over collapsed whitespace, because a line wrap defeated it (grave #480)
+//
+// A sentence carries the newlines of the comment it came from, and every phrase in
+// `pastReference` is two or three words — so a marker that straddles a wrap ("no\n// longer
+// exists") does not match and a correctly-phrased historical citation is flagged. Found by
+// writing one: `foreclose_test.go`'s ninth re-key entry records a deleted test's name, phrased
+// exactly as the failure message prescribes, and was reported anyway until the wrap moved.
+//
+// **This is the trigger side's own wrap problem on the exemption side, where nothing looked for
+// it.** `wrapJoin` above exists because a cited *identifier* can break across lines; the
+// exemption was written as if its markers could not, and the two are the same fact about the
+// medium. The cost of leaving it is a false positive that teaches the writer to phrase around
+// the instrument, which is worse than the flag — *an instrument that shapes the prose it reads
+// stops measuring it.*
 func exemptedBy(sentence string) bool {
-	return pastReference.MatchString(sentence)
+	return pastReference.MatchString(strings.Join(strings.Fields(sentence), " "))
 }
 
 // citation is one occurrence of a cited name.

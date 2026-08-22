@@ -378,7 +378,9 @@ func (d *Decoder) decodePayload(sid SectionID, size uint32, r *reader) (bool, er
 // kept current rather than describing the moment it was written: an explicit memory index
 // (0015), `br_table`'s label vector (0016), an element segment's table index and element vector
 // (0016), a subtype's declared supertype list (0019's own named gap — `decodeSubType` retains it
-// for `sameFuncType`'s declared-supertype walk), and `try_table`'s catch-clause indices (#199).
+// for the declared-supertype walk, which as of 0042 is `internal/validate`'s
+// `matchDeclaredSupertypes` and was `interp`'s deleted `sameFuncType`), and `try_table`'s
+// catch-clause indices (#199).
 // Each replacement reads the same `r.u32()` and appends the value instead of dropping it, so
 // accept and reject behaviour is unchanged *by construction* — same reader, same width, same
 // errors — which is what makes each retention invisible to the rejection vectors.

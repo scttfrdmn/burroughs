@@ -482,11 +482,13 @@ func (k CompKind) String() string {
 // already established (0016) — the wire's `fieldtype` production carries no identifier, so
 // there is nothing here to keep.
 //
-// **Supertypes and Final are retained as of 0019's own named gap** (the `sameFuncType` widening
-// its ADR text calls out by name): a subtype's declared supertype list — `vec(typeuse u32)`
-// (decode.ml:262-271) — as plain type indices, following `Func.TypeIndex`'s convention for a
-// retained-but-unresolved index (index *validity* is #9's question, not this struct's, so the
-// slot holds what the module said rather than what it resolves to), and its finality bit.
+// **Supertypes and Final are retained as of 0019's own named gap** (the `sameFuncType` widening its
+// ADR text calls out by name — that function is deleted as of 0042 and its consumer is now
+// `validate.MatchDefType`, which reads both of these fields): a subtype's declared supertype list
+// — `vec(typeuse u32)` (decode.ml:262-271) — as plain type indices, following `Func.TypeIndex`'s
+// convention for a retained-but-unresolved index (index *validity* is #9's question, not this
+// struct's, so the slot holds what the module said rather than what it resolves to), and its
+// finality bit.
 //
 // **`Final` turned out to be load-bearing, reversing this field's first draft.** The draft
 // argued it away on the grounds that `check_subtype_sub`'s finality check (valid.ml:163-174,
