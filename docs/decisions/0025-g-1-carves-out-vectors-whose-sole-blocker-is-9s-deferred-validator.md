@@ -1,6 +1,13 @@
 # 0025 — G-1 carves out vectors whose sole blocker is #9's deferred validator
 
-Date: 2026-08-11 · Status: **accepted** — stamped by Scott on #230
+Date: 2026-08-11 · Status: **accepted** — stamped by Scott on #230 · **retirement condition
+superseded in part by [0043](0043-g-1s-carve-out-retires-on-zero-call-sites-not-on-the-validator-umbrellas-closure.md)**
+
+> The clause below saying the carve-out *"retires itself when #9 lands"* names a tracker event that
+> `ErrNotValidated`'s call sites survive. G-1 now names the code state instead. **The wording here is
+> not rewritten** — a superseded clause read through a pointer is a record, and a rewritten one is a
+> record with the evidence removed. Nothing else in this ADR is affected: the excepted population,
+> the attribution rule, and the zero-defect requirement on the residue all stand as written.
 
 > Held `proposed` from 2026-08-11 until the stamp existed, per 0016's own ruling: *a status field
 > is a citation to an approval, and approvals are artifacts with provenance.* Scott recommended

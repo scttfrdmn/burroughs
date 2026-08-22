@@ -1912,6 +1912,43 @@ weakly-ordered platform.
 
 ### Changed
 
+- **Contract §9 G-1: the `#9`-scoped carve-out retires on a state of the code, not on the validator
+  umbrella's closure** ([#483](https://github.com/scttfrdmn/burroughs/issues/483),
+  [ADR 0043](docs/decisions/0043-g-1s-carve-out-retires-on-zero-call-sites-not-on-the-validator-umbrellas-closure.md),
+  [the stamp](https://github.com/scttfrdmn/burroughs/issues/483#issuecomment-5377714094)). ADR 0025's
+  clause said the carve-out *"retires itself when #9 lands"*. That is a bookkeeping event: closing an
+  umbrella issue whose work landed in slices is correct the day its residue is re-pointed, and on that
+  day `ErrNotValidated` had **68 call sites across 16 non-test files**, every one still able to produce
+  the population the carve-out excepts. G-1 now reads **"retires when `ErrNotValidated` has no
+  reachable call site in the engine"** — checkable by grep, by `deadcode`, and by the compiler once the
+  declaration goes. The excepted population, the attribution rule, and the zero-defect requirement on
+  the residue are untouched; only the sentence saying when the clause stops was replaced. Second
+  amendment to G-1, on Scott's explicit §§0–9 sign-off.
+  - **The rejected alternative was the sharper-looking one.** "Retires when no vector is attributed to
+    the sentinel" is observable on the board, and its zero has two causes — the population emptying, or
+    the classifier losing the ability to attribute. The amendment names that case as **inert, not
+    retired**, the distinction `sections.go` was already drawing in prose.
+  - **New law: *a retirement condition that names an issue rather than a state of the code retires on a
+    bookkeeping event*,** minted in
+    [`docs/laws/decisions-and-thesis.md`](docs/laws/decisions-and-thesis.md) beside *a status field is
+    a citation to an approval* — the same defect pointed forwards down the timeline: a `Status:` cites
+    an approval and fails on a stamp nobody gave, a retirement condition cites a future state and fails
+    when an artifact stands in for it.
+  - **Thirteen hits swept, eleven addressed, two left standing and said to be left.** Six re-pointed in
+    place (`interp.go`'s `ErrNotValidated` doc comment — the authority G-1's own clause cited — and its
+    `deferred` field; `global_test.go`'s immutable-global tripwire, whose documented failure condition
+    was the tracker event and so would have stayed green on the day its subject changed;
+    `foreclose_test.go`'s licence reason, which named "a conditional about a tracked issue" as the
+    *benign* category; `sections.go`'s `DefaultFeatures` account); five mentions across ADRs 0025 and
+    0023 handled by a header pointer, since a superseded clause read through a pointer is a record and a
+    rewritten one is a record with the evidence removed. Left: this file's own dated account of the old
+    condition, and `maxFrameLocals`'s *"when #9 lands this stays"*, which asserts survival and retires
+    nothing.
+  - **`sections.go` had the whole diagnosis for a PR cycle and nothing acted on it** — *"inert, not
+    retired — its retirement condition is #9 landing, and `ErrNotValidated` still has call sites
+    throughout `internal/interp`"*. Prose that names a defect and files nothing leaves the defect
+    standing with a witness beside it.
+
 - **ADR 0042's `Status:` is `accepted`, stamped by an artifact rather than by an in-session order —
   and the law its falsified Consequence minted is *an unmeasured complement is not an empty one***
   ([#475](https://github.com/scttfrdmn/burroughs/issues/475),

@@ -321,8 +321,11 @@ func TestGlobalOutOfRangeIsTheLayeringDebt(t *testing.T) {
 // `global is immutable` (`global.wast:249` onward), which makes it #9's verdict; an engine
 // enforcing it here would put the validator's answer somewhere the validator cannot be tested from.
 //
-// So this test *wants* the write to succeed, and it will start failing the day #9 lands — which is
-// the point: it is the tripwire that says the check moved rather than vanished.
+// So this test *wants* the write to succeed, and it will start failing the day a validator refuses
+// a write to an immutable global — which is the point: it is the tripwire that says the check moved
+// rather than vanished. Its condition is that code state and not #9's closure, because the
+// umbrella can close with this rule unimplemented and a tripwire silent on the day its subject
+// changes is worth nothing (ADR 0043).
 func TestImmutableGlobalIsNotRefusedHere(t *testing.T) {
 	in, trap := Instantiate(&binary.Module{
 		Globals: []binary.Global{{Type: binary.I32, Mutable: false, Init: i32Const(1)}},

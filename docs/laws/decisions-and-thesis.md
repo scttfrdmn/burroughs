@@ -99,3 +99,49 @@ reach is a law out of context.
     attention on a decision the record can already answer, and it buries the questions that do need
     ruling among ones that do not. Flag what needs ruling; decide what needs deciding.
     (Standing correction: Scott, PR #331.)
+
+### A retirement condition that names an issue rather than a state of the code retires on a bookkeeping event.
+
+- **A retirement condition that names an issue rather than a state of the code retires on a
+  bookkeeping event.** The sibling of the law above, pointed the other way down the timeline. A
+  `Status:` is a citation *backwards* to an approval, and its failure is a stamp nobody gave. A
+  retirement condition — a carve-out that self-retires, a debt discharged by a tripwire, a deferral
+  with an end — is a citation *forwards* to a state, and its failure is quieter: the condition is
+  satisfied on schedule by an artifact that stood in for the state and was never the state. Nobody
+  forged anything. Someone closed an issue.
+  - **The specimen is G-1's own carve-out.** ADR 0025's clause read *"retires itself when #9 lands
+    — no second amendment repeals it, because `ErrNotValidated`'s call sites become unreachable."*
+    Both halves are in that sentence: a claim about the code (*call sites become unreachable*) and a
+    tracker event standing in for it (*when #9 lands*). #9 is an umbrella whose work landed in
+    slices, so closing it is correct bookkeeping the day its residue is re-pointed — and on that day
+    the sentinel had **68 call sites across 16 files**, every one of them able to produce exactly
+    the population the carve-out excepts. The contract would have read retired with its subject
+    untouched. Amended by Scott's stamp on the #482 review to name the code state (ADR
+    [0043](../decisions/0043-g-1s-carve-out-retires-on-zero-call-sites-not-on-the-validator-umbrellas-closure.md)).
+  - **The tell is grammatical: the condition's subject is an artifact rather than the tree.** "When
+    #N lands", "once the port is done", "after the migration", "when the harness supports it" — all
+    name events in a schedule. A state of the code is a predicate someone can evaluate on a checkout
+    with no tracker access: *this identifier has no call sites*, *this field is gone*, *this arm
+    returns a verdict*. Prefer the condition three mechanisms can check (grep, `deadcode`, the
+    compiler) over the one that needs a person to have kept a promise.
+  - **A condition an instrument can satisfy by breaking is the same defect one level in.** The
+    rejected alternative in 0043 was "retires when no vector is attributed to the sentinel", which
+    is observable on the board and reads sharper than a grep. Its zero has two causes: the
+    population emptying, or the classifier losing the ability to attribute. A board going quiet must
+    never discharge anything, which is why the amendment names the emptied-subject case explicitly
+    as **inert, not retired** — inert is a fact about a measurement's moment, retirement a fact
+    about the tree.
+  - **A diagnosis in a doc comment is not an action.** `sections.go` had recorded the whole finding
+    — *"inert, not retired — its retirement condition is #9 landing, and `ErrNotValidated` still has
+    call sites throughout `internal/interp`"* — for a full PR cycle before anything moved. Prose that
+    names a defect and files nothing leaves the defect standing with a witness beside it. Where the
+    condition is normative text the remedy is an amendment and a stamp; where it is a tripwire the
+    remedy is re-pointing the tripwire, because a test whose documented failure condition is a
+    tracker event stays green on the day its subject changes and reads as a confirmation.
+  (Ruling and minting: Scott, on the #482 review — *"closing [the validator umbrella] would satisfy
+  G-1 by the letter while `ErrNotValidated` still has call sites throughout `internal/interp`. Mint
+  the law; it will recur."* The bracket is an editorial substitution for the issue's number:
+  `citecheck.sh`'s closure-claim check reads the pairing as this diff asserting it closed the issue,
+  and a modal *after* the verb does not reach the conditional exemption. Third time a principal's
+  verbatim words have collided with a guard aimed at the actor's — the alteration is bracketed
+  rather than silent every time.)
