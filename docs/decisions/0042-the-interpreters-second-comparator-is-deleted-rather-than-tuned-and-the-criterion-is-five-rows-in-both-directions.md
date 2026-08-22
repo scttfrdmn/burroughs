@@ -1,17 +1,22 @@
 # 0042 — The interpreter's second comparator is deleted rather than tuned, and the criterion is five rows in both directions
 
-Date: 2026-08-21 · Status: **proposed** — authorized to be authored, not yet stamped on its choice by
-any artifact this document can cite. **Its implementation has landed regardless**; see
-[Implementation](#implementation-landed-under-a-proposed-status-and-the-field-is-the-open-item).
+Date: 2026-08-21 · Status: **accepted** — stamped by Scott on the #481 review, relayed to
+[a durable comment](https://github.com/scttfrdmn/burroughs/issues/475#issuecomment-5377578628). Its
+implementation landed first, under a `proposed` status; see
+[Implementation](#implementation-landed-under-a-proposed-status-and-the-field-was-flipped-afterwards).
 
-> The authorization is Scott's order on the #474 review, relayed to
-> [a durable comment](https://github.com/scttfrdmn/burroughs/pull/474#issuecomment-5376316026):
+> **Held at `proposed` until 2026-08-22, and the reason it was held is kept rather than overwritten.**
+> The authorization to *write* this document was Scott's order on the #474 review, relayed to
+> [its own comment](https://github.com/scttfrdmn/burroughs/pull/474#issuecomment-5376316026):
 > *"`sameFuncType` is unblocked: file the issue, write the ADR. Diverging in both directions is a
 > stronger finding than the one-group report it replaced, and it's a design question now, not a tuning
 > one."* That sentence authorizes **an ADR**; it does not choose between the two directions the issue
-> left open. So the `Status:` stays open, per the law that a Status field is a citation to an approval —
-> there is an artifact for *write this*, and none yet for *this option*. Held at `proposed` on 0019's
-> own precedent, which was held for the same reason and for the same relation.
+> left open. So the field stayed open through its own implementation, per the law that a Status field is
+> a citation to an approval — there was an artifact for *write this* and none for *this option* — on
+> 0019's precedent, which was held for the same reason and for the same relation. The stamp cited above
+> is that missing artifact, and the order that produced it names the relay as the remedy: *"a `Status:`
+> is a citation to an approval and my in-session stamp holds no artifact — relaying it durably is the
+> established remedy."*
 
 > **Line citations below describe the pre-change tree and are left in that tense.** Most of them name
 > lines inside the five functions this ADR deletes, so there is nothing to re-point them at: the
@@ -228,10 +233,17 @@ the all-on lane at an older revision. Stated as unmeasured rather than assumed e
   ADR earns one implementation, and this one is outstanding until then; flagged rather than resolved,
   because the ordering is his.
 
-## Implementation: landed under a `proposed` status, and the field is the open item
+## Implementation: landed under a `proposed` status, and the field was flipped afterwards
 
 Appended after the fact. Everything above is left as it was written, including the two claims below
 that it got wrong — the point of a pre-registration is that it can be scored.
+
+**This heading's second clause used to read *"and the field is the open item"*, which the stamp on
+2026-08-22 made false.** It is re-pointed rather than left standing, because a sentence written before
+a flip and kept after it tells the next reader the tree is in a state it is not — the same
+foreclosing-words shape the v0 ladder's *"gates present and off"* was in, and one this document is a
+poor place to repeat, since it exists to score claims that turned out wrong. The one incoming citation,
+in the header above, moved with it.
 
 **The board moved 17 → 7. The forecast was 17 → 12.** Ten rows, not five: `65092 → 65102 pass`,
 `17 → 7 fail`, `0 gated`, and the ten are exactly ten named rows, so the criterion's third line —

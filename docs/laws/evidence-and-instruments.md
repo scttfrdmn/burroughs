@@ -544,6 +544,34 @@ reach is a law out of context.
   vacuity guard catches one that emptied. (Ruling: Scott, PR #285 relay; minted
   from #264, whose closing comment is the first specimen's own wording.)
 
+### An unmeasured complement is not an empty one.
+
+- **An unmeasured complement is not an empty one.** Take a population with a known
+  size, attribute the members you can name to one cause, and the remainder is not
+  *nothing* — it is **unmeasured**, and the difference is invisible because both
+  read as a number you did not have to go and get. The sentence that carries the
+  defect always sounds like a measurement: *"the other cause has no rows."* What it
+  actually says is *"I looked at the rows I could name, and they were all the first
+  cause's."* Attribution names where someone looked; it does not partition. The
+  remedy is mechanical and cheap: **route one call site at a time and print the
+  per-site delta**, so each cause's rows are read off a board rather than off a
+  subtraction.
+
+  **The specimen is [0042](../decisions/0042-the-interpreters-second-comparator-is-deleted-rather-than-tuned-and-the-criterion-is-five-rows-in-both-directions.md)'s
+  own fourth Consequence**, which said the cast family's arm 9 had no corpus row —
+  built by attributing the known members of an all-on fail set of 17 to
+  `call_indirect` and reading the complement as empty. Measured afterwards by
+  routing each call site alone: `call_indirect` clears 5, **arm 9 clears 5**, both
+  clear 10. The forecast said 17 → 12 and the board went 17 → 7, so the miss was in
+  the project's favour — which is the reason to state the law in this direction. **A
+  forecast beaten is a forecast falsified**, and the ten-instead-of-five is the
+  cheap half of that finding; the valuable half is *why* the five were missing, and
+  a favourable miss banked as a win never gets asked. The sibling of *an attributed
+  partition is not a partition* one level up: that one is about a fail set's members,
+  this one is about the arithmetic that takes the rest for nothing. (Ruling and
+  minting: Scott, on the #481 review — *"attributing the known members and taking the
+  remainder for nothing is a shape that will recur."*)
+
 ### A criterion measured against a question set the project controls is jointly a claim about the answerer and the asker.
 
 - **A criterion measured against a question set the project itself controls is jointly a claim
