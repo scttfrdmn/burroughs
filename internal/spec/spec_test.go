@@ -7994,7 +7994,30 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	// the cast family's arm 9 alone takes 17 → 12 (`type-subtyping`'s 5 rows, which the ADR had
 	// asserted had no corpus witness at all), and `call_indirect` alone owns the other 5
 	// (`type-equivalence` 3, `type-rec` 2).
-	const allOnPassFloor = 65102
+	// # 65102 → 65107, +5, every term of a pre-registration that was posted before the diff existed
+	//
+	// #452's local-initialization rule: `local.get` now requires `init = Set`, and the five vectors that
+	// assert `uninitialized local` corpus-wide all turn — `local_init.wast` 6/10 → **10/10** and
+	// `func.wast` 174/175 → **175/175**. Four were admissions and the fifth (`local_init.wast:39`) was a
+	// wrong-message row refused by an arity check before any init check could run, so the delta splits
+	// 4 + 1 rather than 5 + 0.
+	//
+	// `allOnFailCeiling` below falls by exactly 5 on the same run, which is the lockstep the two
+	// entries above read as *conversions and nothing else*.
+	//
+	// **`passFloor` does not move, and the immobility is a leak detector rather than a null result.** All
+	// five vectors need function-references to decode a non-nullable reference local, so all five are
+	// honestly `gated` in the default lane (`local_init.wast: 2/2 pass, 8 gated`) and the rule cannot be
+	// observed there. A default-lane movement would have meant the rule had escaped its gate — which is
+	// the one outcome this slice's forecast said would falsify it.
+	//
+	// The over-refusal direction was forecast too, and separately: a rule *stricter* than the
+	// reference's turns green rows red, and the exposed population is the 14 non-nullable-reference
+	// local declarations in the corpus — 8 in `local_init.wast`, 5 in `array_copy`/`array_new_data`/
+	// `array_new_elem`, 1 in `func.wast:662`. The three `array_*` files were fully green before this
+	// slice and are fully green after (35/35, 28/28, 24/24), which is the term that says the discard at
+	// frame exit undoes only what the frame itself initialized.
+	const allOnPassFloor = 65107
 	// **Slack 0 as of Scott's #387 ruling**, which this bound's own 89-row staleness above is what
 	// prompted: a floor with 250 of tolerance cannot detect anything smaller than 250, so it is a
 	// bound sitting inside its own tolerance. Exact from here — re-base it in the PR that moves the
@@ -8054,7 +8077,24 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	// The three emptied files are the reason this ceiling reads as the work plan: what is left in it
 	// after 0042 is a single subject. Every remaining row is the same missing instrument, so the next
 	// fall here is #9's or it is a regression.
-	const allOnFailCeiling = 7
+	//
+	// **7 → 2 with #452's local-initialization rule, and the sentence above is the prediction it pays
+	// out**: the fall is the validator's, exactly as forecast, and the two entries left are #471's.
+	// `local_init` 4 → 0 and `func` 1 → 0 empty the list to `array` 2, so the remaining rows are one
+	// file and one subject — the const-expression legality check being single-byte only, which makes
+	// the whole prefixed opcode space const-legal by omission.
+	//
+	// The same reading the 0042 entry above asks for: this is a **drain**, not a re-base. Four of the
+	// five rows were modules this validator reported valid and the corpus asserts invalid, so what left
+	// the column is engine error rather than harness error. The fifth (`local_init.wast:39`) was refused
+	// with the wrong message, which is engine error of the quieter kind — the verdict was right and the
+	// testimony named an arity mismatch the vector was not about.
+	//
+	// **A ceiling at 2 is close enough to zero to say what happens at zero**, since the entry above
+	// makes this column the all-on work plan: when #471 lands, this bound stops being a work plan and
+	// becomes a regression detector with no subject, which is the state the default lane's exec column
+	// is already in (*a zero-fail board is a lost instrument*). Named here rather than discovered then.
+	const allOnFailCeiling = 2
 	boardBound(t, "allOnFailCeiling", totalFail, allOnFailCeiling, 0, ceilingBound,
 		"the all-gates-on lane is the interpreter's and validator's remaining work plan now that "+
 			"the default lane's exec column is empty: a rise here is a regression no gated-lane "+
@@ -8292,7 +8332,10 @@ func TestModuleDefinitionsAskTheValidator(t *testing.T) {
 		// **What this cannot see, stated because the issue's premise was slightly wider than the
 		// mechanism.** #354 reasoned that "a new form arrives as a new Kind in `classify`"; that holds
 		// for a form someone gives an arm, and not for a bare new keyword. `moduleFormKeyword` is
-		// deliberately not an allowlist (`wast.go:1136`), so `(module newthing …)` falls through to
+		// deliberately not an allowlist (`wast.go:1462`, *"Deliberately **not** a keyword allowlist: it
+		// reports whatever atom is there"* — re-pointed by that sentence per #485, the old number
+		// having resolved to `classify`'s `namedInvokeAction` dispatch), so `(module newthing …)` falls
+		// through to
 		// the wat reader as `KindModuleText`. The Kind census cannot report it — and does not need to:
 		// a form landing on `KindModuleText` lands on the arm the text row above already falsifies.
 		// The hole this control closes is the other one, a Kind gaining an arm without gaining a

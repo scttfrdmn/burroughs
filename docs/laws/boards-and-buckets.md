@@ -300,3 +300,40 @@ reach is a law out of context.
         and a forecast is reconciled against measurement, never against recollection of the
         forecast. (Found by Scott asking the census to reconcile against its own pre-registration,
         PR #263.)
+
+### A magnitude is not a cost estimate.
+
+- **A magnitude is not a cost estimate.** A population's *size* does not price the work over it; its
+  **shape** does. A sentence of the form "N is large, therefore this is expensive" has not been
+  measured — it has been felt, and the missing step is the decomposition that turns rows into
+  mechanisms. This is the sibling of the rule above rather than a restatement: that one says a
+  bucket's size mis-estimates its *job* because the key cuts across mechanism, and this one says the
+  undecomposed figure is not evidence **in either direction**.
+  - **The asymmetry is the reason it needs its own paragraph.** "Large, therefore expensive" argues
+    for doing nothing, so no bill ever arrives to falsify it, and an estimate that cannot be wrong
+    is not an estimate. Its inverse — **"cheap" is a grammar claim, as falsifiable as any claim
+    about the spec** — is at least pre-registerable: say the number the cheap step will cost and the
+    measurement either lands or does not. So the two errors are not symmetric in *discoverability*,
+    which is why the expensive direction is the one that gets the law.
+  - **Specimen: #455's substring-award census** (Scott's ruling on the #486 review — *"the shape of
+    a population decides the work, not its size"*). The issue posed a three-way choice whose
+    selector was a magnitude, in its own words: near zero makes option 1 cheap; large makes option 1
+    an engine-wide rewrite priced against nothing and option 3 the honest record. The probe returned
+    **6542** substring-only awards, unambiguously large — and the inference still failed. Collapsing
+    index digits to `N` and parenthesized opcode names to `(op)` showed the 6542 rows arriving from
+    **three rendering sites** covering 98.5% of them. Large *and* cheap, so the two halves of
+    "large ⇒ rewrite" came apart, and a **fourth** option the three-way question could not contain
+    became visible in the same table. Scott took it.
+  - **The excuse for skipping the decomposition is what the specimen removes.** Neither the estimate
+    nor its refutation needed the engine touched: one regex pair over data the census had *already
+    collected* repriced the repair from roughly two hundred string edits to three sites. A
+    decomposition that costs one pass over a table already in hand is not expensive relative to the
+    estimate it corrects, so "we would have to measure it" is not available as a reason.
+  - **The count-side statement, carried here rather than cited, because no file in this corpus held
+    it.** A count is not a price: **decompose by mechanism** before quoting a figure as work. 6542
+    rows across three renderings is the same measurement read forwards, and an issue's "if large
+    then expensive" premise can fail at *both* ends — the population large, the repair small. Both
+    this and the grammar-claim clause above lived only in the agent's session memory, which no
+    instrument in this tree can reach (`CLAUDE.md`'s stated limitation), so a `docs/laws/` reader
+    following a pointer to either found nothing. Written out here for that reason: a law cited from
+    a place the reader cannot follow is a citation with no target.

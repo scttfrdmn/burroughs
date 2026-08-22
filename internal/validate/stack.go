@@ -15,6 +15,20 @@ type validator struct {
 	mod    *binary.Module
 	locals []binary.ValType
 
+	// localInit is the init half of the reference's `LocalT (init, t)` (`valid.ml:1011`), parallel to
+	// `locals`: true where the local may be read. Parameters start true and a declared local starts
+	// `defaultable(t)`, which is why the axis is only ever interesting for a non-nullable reference.
+	//
+	// **A separate slice rather than a field on a local-type struct**, because `locals` is handed
+	// around as `[]binary.ValType` and is the *type* axis every other rule reads; pairing them in one
+	// struct would make every existing site carry an init bit it has no opinion about. The two are
+	// built together in localInitStates and are the same length by construction — `localOp`'s existing
+	// bounds check on `locals` therefore guards both, and that is the only reason no second check
+	// exists here.
+	//
+	// Empty for a constant expression, whose walk declares no locals at all (typeConstExpr).
+	localInit []bool
+
 	// curFunc is the body being checked, for the side tables 0016 puts beside it — br_table's
 	// label vector is the one slice 1 reads.
 	//
@@ -83,6 +97,32 @@ type frame struct {
 
 	// elseSeen guards `if`'s two-arm shape: `else` may appear once, and only inside an `if`.
 	elseSeen bool
+
+	// initedHere is the locals this frame initialized that were `Unset` when it opened — the undo
+	// list that gives the reference's block discipline a home in an explicit control stack.
+	//
+	// # Why the discard needs code here when the reference gets it for free
+	//
+	// `check_instr` returns the list of locals an instruction initializes as a *second component*
+	// beside its type — `LocalSet` and `LocalTee` each return `[x]` (`valid.ml:593-599`) — and
+	// `check_instrs` folds it into the context for the rest of the sequence (`valid.ml:957-964`).
+	// The block arms then call `check_block` (`valid.ml:966-968`), which walks the body with the
+	// **enclosing** context and throws the body's list away, propagating instead the
+	// `xs` of the block's declared instruction type — empty for anything the text format can spell.
+	// So in the reference the discard is the *absence* of a propagation, and it costs nothing to
+	// write. Here the context is one mutable `validator` walked in lockstep with a flat instruction
+	// sequence (instrs' comment), so "the enclosing context is unchanged" has to be performed, and
+	// this list is what performs it: endBlock and elseArm undo exactly these indices.
+	//
+	// Recording only the previously-`Unset` ones is what keeps the undo from un-initializing
+	// something an *enclosing* scope had already set — the reference gets that from `init_locals`
+	// being idempotent over a context the inner walk never returns.
+	//
+	// Nil for every frame containing no `local.set`, which is the reason this is a per-frame list
+	// rather than a snapshot of the whole init vector at pushFrame: the snapshot costs O(locals) on
+	// every block of every function, and this costs nothing until a local is actually initialized
+	// inside a block.
+	initedHere []uint32
 }
 
 // opFuncBody is a pseudo-opcode for the function-body frame, which no instruction opens.
@@ -102,6 +142,38 @@ func (v *validator) pushFrame(kind uint32, labelTypes, endTypes []binary.ValType
 }
 
 func (v *validator) top() *frame { return &v.frames[len(v.frames)-1] }
+
+// initLocal records that `local.set`/`local.tee` has initialized local `idx`, filing the undo on the
+// current frame when the local was not already initialized.
+//
+// **Deliberately not conditioned on the frame's `unreachable` state.** `check_instrs` folds
+// `init_locals` forward whether or not the stack is at bottom (`valid.ml:964` sits outside every
+// bottom test), so a `local.set` after a `br` initializes in the reference too. No corpus vector
+// distinguishes the two readings — the shape wants a `(block (br 0) (local.set $x)) (local.get $x)`
+// that nothing in the suite writes — so this is a mirror of the authority rather than a measured
+// choice, and it is stated because the opposite reading is the one a reader would assume.
+func (v *validator) initLocal(idx uint64) {
+	if idx >= uint64(len(v.localInit)) || v.localInit[idx] {
+		return
+	}
+	v.localInit[idx] = true
+	f := v.top()
+	f.initedHere = append(f.initedHere, uint32(idx))
+}
+
+// undoFrameInits returns f's own initializations to `Unset`. See frame.initedHere.
+//
+// Called from both frame exits, and `elseArm` is the one that is easy to miss: the then-arm's
+// initializations must not reach the else-arm (`local_init.wast:39`), and the else-arm's must not
+// reach past the `end` (`local_init.wast:52`, which sets in *both* arms and is still invalid, so an
+// implementation that joins the arms passes `local_init.wast:39` and admits it). A reader who sees
+// only endBlock's call has an implementation that merges the arms.
+func (v *validator) undoFrameInits(f *frame) {
+	for _, idx := range f.initedHere {
+		v.localInit[idx] = false
+	}
+	f.initedHere = f.initedHere[:0]
+}
 
 // push records one operand type.
 func (v *validator) push(t binary.ValType) {

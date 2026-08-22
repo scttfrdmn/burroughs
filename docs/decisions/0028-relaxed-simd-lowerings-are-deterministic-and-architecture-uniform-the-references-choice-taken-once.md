@@ -47,7 +47,7 @@ loud in two ways that #275 measured:
   all in `relaxed_dot_product.wast` (`:18`, `:24`, `:41`, `:49`), on 2 of the 16 opcodes that have
   vectors at all.
 - **The value content is 32 `(either …)` vectors the harness cannot read** — 32 occurrences
-  corpus-wide, matching the `unsupported` count one for one per file. `internal/spec/wast.go:813`
+  corpus-wide, matching the `unsupported` count one for one per file. `internal/spec/wast.go:1253`
   records the form as **0** answerable.
 
 Contract §0 is *correctness-neutral*, which says **conform**; here conforming leaves a choice, so
@@ -484,3 +484,26 @@ question in passing — in the confident direction, days later, on the strength 
 is drift with a citation's authority. That is what #280 records, and it is the case *for* filing
 questions with tripwires rather than paragraphs: the tripwire outranked the prose that contradicted
 its premise.
+
+## Pointer amendment, appended 2026-08-22 — one `wast.go` line citation re-pointed by content
+
+The Question section's `(either …)` bullet cited `internal/spec/wast.go:813` for the harness recording
+that form as **0** answerable. That line holds a comment about a shadowed variable in the
+`assert_malformed` quote arm and has for some time; the sentence's true target is the `(either …)`
+bullet in `classifyAssertReturn`'s declined-shape list, now `internal/spec/wast.go:1253`. Re-pointed
+there and nothing else changed.
+
+**The claim was never in question and the historical reading is left exactly as written.** What the
+true target holds is *this ADR's own wrong sentence*, quoted and marked as quoted-not-current — the
+harness's declined-shape list records that the "0 answerable" count came from a scan of the answerable
+population and was wrong in two ways. So the bullet above is a record of what the tree said when this
+decision was taken, the pointer now resolves to where the tree keeps that record, and neither is
+edited into agreement with the other. Re-pointing a citation is not revising a decision; the
+precedent for repairing a drifted pointer in place is ADR 0042's Implementation clause.
+
+Found by the sweep on #455's probe PR and filed as
+[#485](https://github.com/scttfrdmn/burroughs/issues/485), which measured three such pointers, none of
+them caused by the insertion that found them. Ruled by Scott on the #486 review: the two ADR pointers
+take dated amendment notes. `make cite` was green over all three throughout — a `<file>:<line>`
+pointer is not in `citecheck`'s domain, which is [#456](https://github.com/scttfrdmn/burroughs/issues/456)'s
+population and the reason this was found by a hand sweep rather than by a gate.

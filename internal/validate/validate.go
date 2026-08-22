@@ -315,6 +315,30 @@ var (
 	// dropped the vector whose length is the entire question.
 	ErrInvalidResultArity = errors.New("invalid result arity other than 1 is not (yet) allowed")
 
+	// ErrUninitializedLocal is `local.get` of a local whose init state is still `Unset` —
+	// `require (init = Set) x.at "uninitialized local"` (`valid.ml:589-590`), reached only for a
+	// **non-defaultable** local, since every defaultable one starts at `Set` — the reference's init
+	// rule, which localInitStates implements and cites at the line that states it.
+	//
+	// **The citation to that rule lives there and not here**, because a doc block documenting a
+	// sentinel is checked range-by-range against the message's own site: a second range cited for the
+	// *shape* of a neighbouring rule reads to
+	// TestReferenceRangeCitationsContainTheirSubjectsSite as a range that has retargeted. That check
+	// is block-scoped where this block's claim was per-clause, which is a real limit of it — and the
+	// repair that survives it is also the better prose, since the rule now has one home and the home
+	// is the code implementing it.
+	//
+	// So the sentinel's whole population is the function-references non-nullable reference local, and
+	// its absence was an *admission*: five corpus vectors asserting `uninitialized local` were red on
+	// the all-on lane, four of them modules this package reported valid (#452).
+	//
+	// **The detail after it names the local and not the rule**, per ErrTypeMismatch's prescription for
+	// a family the suite cannot discriminate inside — except that here the family has one member, so
+	// the wrap is for a human rather than for a witness. `local %d` repeats `ErrUnknownLocal`'s
+	// category-space-index shape deliberately: the two sentinels are the two ways a `local.get` can
+	// fail, and a reader comparing them should not have to notice a formatting difference too.
+	ErrUninitializedLocal = errors.New("uninitialized local")
+
 	// ErrGlobalImmutable is `global.set` on a non-mutable global.
 	//
 	// **Its text was `global is immutable` until the probe caught it, and that is a grave in
@@ -559,11 +583,12 @@ func funcBody(m *binary.Module, f *binary.Func, refs map[uint32]bool) (FuncInfo,
 	}
 
 	v := &validator{
-		mod:     m,
-		curFunc: f,
-		locals:  locals,
-		blocks:  map[int]Arity{},
-		refs:    refs,
+		mod:       m,
+		curFunc:   f,
+		locals:    locals,
+		localInit: localInitStates(len(ft.Params), locals),
+		blocks:    map[int]Arity{},
+		refs:      refs,
 		// The body's own cast-family side table. Nil for a body that has none, which is
 		// indistinguishable from an absent row and is exactly what castVector's second result
 		// is for.
@@ -651,6 +676,26 @@ func localTypes(ft binary.FuncType, f *binary.Func) ([]binary.ValType, error) {
 		}
 	}
 	return locals, nil
+}
+
+// localInitStates is `check_local` reduced to its init half: `let init = if defaultable t then Set
+// else Unset` (`valid.ml:1010-1011`), over the flat slice localTypes built, with the first
+// `numParams` entries `Set` because an argument arrives with a value.
+//
+// **The parameter count is passed rather than recomputed**, since the flattened slice cannot say
+// where the parameters stop — `localTypes` is the only place that boundary exists, and handing the
+// number over is cheaper than a second traversal that would have to agree with it.
+//
+// The reference has no separate parameter rule: `check_func` builds the context as `ts1 @ List.map
+// (check_local c) ls` where `ts1` are the parameters, already `LocalT (Set, t)` by construction
+// (`valid.ml:1021-1024`). So "parameters start initialized" is a property of how the context is
+// assembled there and a loop bound here, which is the same fact and worth saying once.
+func localInitStates(numParams int, locals []binary.ValType) []bool {
+	init := make([]bool, len(locals))
+	for i, t := range locals {
+		init[i] = i < numParams || defaultable(t)
+	}
+	return init
 }
 
 // maxMaterializedLocals bounds what localTypes will allocate.

@@ -1255,7 +1255,26 @@ func TestReferenceRangeCitationsAreWellFormed(t *testing.T) {
 	// that now bears its name. A citation *relocating* nets zero here and is still visible in the
 	// sibling pin, which counts subjects; the two figures diverging is the reconciliation, not a
 	// discrepancy.
-	const wantRanges = 101
+	// **#452's local-initialization slice moves this +9 across three files, and it is the first re-pin
+	// where a range was written, found wrong by the sibling pin, and *deleted* rather than repointed.**
+	// Ten ranges arrived and one left. The nine that stay are the two `local.get`/`local.tee` arms in
+	// `instr.go`'s `localOp`, `endBlock`'s call to the undo list, the three in `frame.initedHere`'s doc
+	// block that walk the reference's second-component fold from the arm to the block wall, the
+	// sentinel's own rule, and `localInitStates`' two — the init half and the parameter half.
+	//
+	// The one that left is the reconciliation, and it belongs here rather than only in the sibling's
+	// account. `ErrUninitializedLocal`'s doc block cited two rules: the one producing its message and
+	// the neighbouring one that makes the sentinel's population narrow.
+	// TestReferenceRangeCitationsContainTheirSubjectsSite reads a block's ranges *against the block's
+	// message*, so the second citation read to it as a range that had retargeted — a false positive of
+	// a block-scoped check on a per-clause claim, and the same limit that test's own header records
+	// when it says a per-clause parse is what a pairing check would need. **The repair was not an
+	// exemption and not a demotion to a point citation**, either of which would have moved the sentence
+	// out of every sweep's reach to satisfy one; the neighbouring rule is cited at
+	// `localInitStates`, which implements it, and the sentinel's block now points a reader there. So
+	// the fact keeps its citation, the citation keeps its checker, and the count moves by nine rather
+	// than ten for a stated reason.
+	const wantRanges = 110
 	if ranges != wantRanges {
 		t.Errorf("checked %d range citation(s) across %v, want %d — recount and re-pin, and if a "+
 			"file was added to citationFiles, read its point citations too",
@@ -1492,7 +1511,29 @@ func TestReferenceRangeCitationsContainTheirSubjectsSite(t *testing.T) {
 	// this slice wrote a four-line rule whose message the reference states and keyed both its blocks.
 	// The column tracks message provenance, and two adjacent slices now demonstrate it in opposite
 	// directions.
-	const wantKeyed, wantResidue = 18, 32
+	// **#452 moves keyed by one and residue by nothing, and the row is `ErrUninitializedLocal`'s block
+	// — but the figure worth reading is the one that did *not* arrive.** The reference states this rule's
+	// message verbatim in a `require`, so the sentinel spells the reference's own sentence and the range
+	// is checkable for content, which is #413's shape a second time.
+	//
+	// **The block first cited two rules and this check failed it, correctly by its own lights and
+	// wrongly about the prose.** The second range was the neighbouring rule that starts every
+	// defaultable local initialized — cited for its *shape*, which is the category three paragraphs of
+	// this header already excuse — and it sat in a block whose subject produces a locatable message, so
+	// the loop above demanded that range contain that message too. This check is block-scoped where the
+	// block's claim was per-clause: the same limit the sibling subject pin's header states when it
+	// declines a pairing parse, arriving from the other direction, and the first time in this file it has
+	// produced a **false positive** rather than an unkeyable row.
+	//
+	// Recorded rather than widened, and the disposition is the part to read. Two repairs would have
+	// silenced it and both are worse than the finding: exempting the block, or demoting the second
+	// citation to a point, which no check in this file reads unless a message-keyed caller names its
+	// string — a citation moved out of every sweep's reach to satisfy one. What was done instead is that
+	// the neighbouring rule is now cited once, at the function implementing it, where this check skips
+	// the block for having no message and the well-formedness and subject pins both still read it. A
+	// per-clause parse remains the only thing that would let one block carry both, and it is still not
+	// worth its false-negative surface.
+	const wantKeyed, wantResidue = 19, 32
 	if keyed != wantKeyed || residue != wantResidue {
 		t.Errorf("checked %d keyed range citation(s) and excused %d as constructed-message residue "+
 			"across %v, want %d and %d — recount and re-pin. A range becomes keyable when its "+

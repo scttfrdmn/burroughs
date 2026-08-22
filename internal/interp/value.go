@@ -358,6 +358,18 @@ func newFrame(total uint64, paramTypes []binary.ValType, eachLocal func(func(idx
 		// (`value.ml:150-152`); a non-nullable reference local is non-defaultable and validation
 		// rejects the function, so every reference local that can exist defaults to null.
 		//
+		// **That last clause holds from 2026-08-22 and was false when this comment was written.**
+		// The validator had no local-initialization rule until #452, so a non-defaultable local
+		// reached this loop and was zeroed to `{Null: false, Addr: 0}` — the funcref-to-function-0
+		// bits this comment is about — and the clause asserting such a local could not exist was a
+		// premise about a check nobody had implemented. What it cost is worth recording as a bound
+		// rather than as a scare: a `local.get` of one trapped as a null dereference at every site
+		// that reads a reference, so the reachable failure was a *spurious trap* in a module the
+		// spec says is invalid, never a wrong value flowing on. The clause is true now because
+		// `validate.ErrUninitializedLocal` refuses the module, which is what it always claimed.
+		// Dated because a comment asserting the property its own package lacks is the shape that
+		// makes review confirm the bug.
+		//
 		// **The type was right and the allocation site did not honour it** — `table.go:134`
 		// already writes `ref{Null: true}` into every fresh table slot for this exact reason, so
 		// the sibling had the arm and this site re-derived the allocation without it (graves

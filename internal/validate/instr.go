@@ -340,9 +340,12 @@ func (v *validator) elseArm() error {
 		return err
 	}
 	// Reset to the arm's entry state: the else-arm starts where the then-arm did, reachable
-	// again even if the then-arm ended in `br`.
+	// again even if the then-arm ended in `br`, and with the then-arm's local initializations
+	// discarded — the else-arm is its own `check_block`, so it starts from the context the `if` was
+	// entered with (`local_init.wast:39` is the vector, and see frame.initedHere).
 	f.elseSeen = true
 	f.unreachable = false
+	v.undoFrameInits(f)
 	v.stack = v.stack[:f.height]
 	v.pushAll(f.params)
 	return nil
@@ -376,6 +379,10 @@ func (v *validator) endBlock() error {
 	if err := v.expectEmptyFrame(); err != nil {
 		return err
 	}
+
+	// Nothing this frame initialized escapes it — `check_block` discards the body's list
+	// (`valid.ml:966-968`). Before the pop, because the undo list lives on the frame.
+	v.undoFrameInits(f)
 
 	end := f.endTypes
 	v.frames = v.frames[:len(v.frames)-1]
@@ -672,13 +679,27 @@ func (v *validator) localOp(in binary.Instr) error {
 	t := v.locals[idx]
 	switch in.Op {
 	case opLocalGet:
+		// `let LocalT (init, t) = local c x in require (init = Set) …` (`valid.ml:589-590`) — before
+		// the push, because a local that may not be read has no type to contribute and the
+		// alternative is one error reported as another downstream.
+		if !v.localInit[idx] {
+			return fmt.Errorf("%w: local %d", ErrUninitializedLocal, idx)
+		}
 		v.push(t)
 	case opLocalSet:
-		return v.popExpect(t)
+		if err := v.popExpect(t); err != nil {
+			return err
+		}
+		v.initLocal(idx)
 	case opLocalTee:
 		if err := v.popExpect(t); err != nil {
 			return err
 		}
+		// `LocalTee` returns `[x]` exactly as `LocalSet` does (`valid.ml:593-599`), so the push below
+		// is reading a local this instruction has just initialized and needs no `Set` check of its
+		// own. `local_init.wast`'s `get-after-tee` and `tee-init` are the two vectors that fail if
+		// this arm is written as a set followed by the get arm above.
+		v.initLocal(idx)
 		v.push(t)
 	}
 	return nil
