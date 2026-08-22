@@ -35,7 +35,7 @@ only *when it gets designed and from whose requirements*.
 ## Why C was ruled out, and the general form of the reason
 
 `binary.Module` is `{Version, Sections}` with payloads aliasing the input image
-(`binary.go:288`, `binary.go:293-295`). Wat has neither sections nor an image to alias.
+(`binary.go:291`, `binary.go:296-298`). Wat has neither sections nor an image to alias.
 Forcing the type would mean synthesizing section bytes — an encoder wearing a struct's
 clothes — or widening the type for a producer that does not fit it.
 

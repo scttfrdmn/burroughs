@@ -268,7 +268,7 @@ func TestEverySentinelIsTheReferencesOrIsDeclared(t *testing.T) {
 		// Structural, and the reference's own text — but reached via `require`/short forms
 		// the regexp above does catch, so these are here only where the wording differs.
 		"unexpected end": "the preamble-level short form; three custom.wast vectors expect " +
-			"exactly it, and ErrPayloadEnd's longer text contains it as a substring (see binary.go)",
+			"exactly it, and ErrPayloadEnd's longer text begins with it (see binary.go)",
 
 		// This engine's own vocabulary, by design.
 		"feature gate disabled": "the gates doctrine's whole point: a construct the spec " +

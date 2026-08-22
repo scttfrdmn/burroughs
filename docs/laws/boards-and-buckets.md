@@ -73,6 +73,32 @@ reach is a law out of context.
   not only as an issue comment. 'v0's remaining unsupported column is entirely harness debt'
   changes what closing that column means. Nobody reading `unsupported → 0` later should take
   it for an engine milestone."*)
+  - **Second specimen, pre-registered before its zero arrives: the all-gates-on lane's `fail`
+    column.** The lane stands at `65107 pass, 2 fail, 0 gated`, and both survivors are one
+    issue's — #471, the const-expression legality check being single-byte only, at
+    `array.wast:302` and `:315`. So the lane's `fail → 0` is scheduled and its cause is known
+    in advance, which is the only condition under which this law can be applied *before* the
+    number moves rather than in the archaeology afterwards. **Written here now, while the
+    column still has a subject**, because the law's own specimen above was recorded after the
+    fact and the reader who needs it is the one arriving at the zero.
+    The caution is Scott's, on the #490 review, and it is a sharper statement of the law than
+    the heading: *"a column reaching zero is a fact about what the corpus asks, on the date it
+    asked it."* Three things that zero will **not** mean. It will not mean the engine is
+    conformant — the corpus is pinned (`scripts/fetch-spec-ref.sh`, one revision, one date), so
+    the column closes against the questions that existed on the pin, and a pin bump can reopen
+    it without anything in the engine changing. It will not mean the gates are ready to flip:
+    acceptance is **the proposal's own suite green** (contract §9, brief item 4), which is a
+    per-proposal claim that an aggregate over every gate at once cannot make in either
+    direction. And it will not mean the harness asked everything — the lane's `fail` counts
+    rows the harness *scored*, so every limit on what it can pose lands in a different column
+    or in no column at all, which is this law's whole subject one lane over.
+    The reporting consequence is the same as above and one degree stronger, because at that
+    point **both lanes' `fail` columns are zero simultaneously**: the work plan has no bucket
+    left in either, and *[a zero-fail board is not a green light, it is a lost
+    instrument](product-and-overhead.md#a-zero-fail-board-is-not-a-green-light-it-is-a-lost-instrument)*
+    applies to the pair of them at once — the slice that closes it names where the next plan
+    comes from, in that PR, or the gradient inverts toward instruments with nothing pulling
+    back.
 
 ### A skip is not a verdict.
 

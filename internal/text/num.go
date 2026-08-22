@@ -514,7 +514,7 @@ func offsetEqValue(text string) string { return strings.TrimPrefix(text, "offset
 //	46 vectors in align.wast expect the bare string "alignment"
 //	22 vectors in simd_align.wast expect "alignment must be a power of two"
 //
-// The suite matches by substring (decision 0003), and the reference's message *contains* the
+// The suite matches by prefix (0003 as amended by ADR 0045), and the reference's message *begins with* the
 // shorter one, so one check answers both. That is not luck: the shorter expectation is a prefix
 // the suite chose deliberately, and decision 0003 records prefix-matching as the reason not to
 // special-case it.

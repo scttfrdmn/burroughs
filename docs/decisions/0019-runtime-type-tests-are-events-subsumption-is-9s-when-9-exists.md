@@ -58,7 +58,7 @@ interpreter uses it to answer "is this particular value, right now, an instance 
 different questions sharing one comparison function.
 
 This project already has the vocabulary for the boundary this crosses. `#9`'s arity question
-(`call.go:204`), `#9`'s verdict (`table.go`'s inverted-limits case, `newTable`), `#9`'s judgement
+(`call.go:205`), `#9`'s verdict (`table.go`'s inverted-limits case, `newTable`), `#9`'s judgement
 (`declaredFuncType`) — every place this codebase reports something a validator would normally
 have ruled out, it says so by citing #9 and reports the fact as a layering debt rather than
 inventing a verdict of its own. `sameFuncType`'s own doc comment already does this for structural

@@ -236,7 +236,7 @@ func (v *validator) tryTable(i int, in binary.Instr) error {
 	clauses, _ := v.curFunc.CatchVector(i)
 	for k := range clauses {
 		if err := v.checkCatch(clauses[k]); err != nil {
-			return fmt.Errorf("catch %d: %w", k, err)
+			return fmt.Errorf("%w (catch %d)", err, k)
 		}
 	}
 	return v.enterBlock(i, in.Op, params, results)

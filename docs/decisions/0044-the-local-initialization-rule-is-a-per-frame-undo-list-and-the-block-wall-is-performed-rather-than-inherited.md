@@ -108,6 +108,13 @@ makes it evidence rather than an absence of evidence.
   wraps every instruction error as `instr %d (%s): %w` (`internal/validate/instr.go:51`). The wrapper
   is one of the three rendering sites #455's option 4 moves; this sentinel is already in the form that
   will satisfy the term when it does.
+  - **Discharged** 2026-08-22 by [0045](0045-the-location-context-is-rendered-after-the-spec-phrase-and-the-harness-takes-the-references-prefix-rule.md)
+    (#455, option 4). The wrapper now renders `%w (instr %d: %s)` — spec phrase first, engine location
+    after — at `internal/validate/instr.go:57`, and the harness matches expected text by **prefix**
+    rather than by substring, which is what makes the order a verdict rather than testimony. The
+    sentence above is left standing as the state it recorded, with its own pointer left at `:51`
+    deliberately: that line no longer holds the wrapper, and re-pointing a superseded claim to the
+    line that superseded it is how a retired premise reads as a live one.
 - **The `unreachable` reading is an open question with no oracle.** If the suite ever grows a vector of
   the shape above, one of the two readings becomes wrong and this rule's code is where to look. Not
   filed as an issue, because there is nothing to do until the vector exists — it is recorded at the

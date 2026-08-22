@@ -560,7 +560,7 @@ func TestModuleRejectDirection(t *testing.T) {
 		// citing the very line that refutes it: `bind_abs:174` renders `"duplicate " ^ category`,
 		// and the category `bind_func` passes is `"function"` (parser.mly:192), not `func`.
 		// `func.wast:966` wants the string `"duplicate func"` and gets it — as a *prefix*, under
-		// the harness's substring match — which is why three suite vectors could not tell the two
+		// the harness's prefix match — which is why three suite vectors could not tell the two
 		// spellings apart. `data`/`elem` had no vector at all.
 		{`(module (func $foo)(func $foo))`, "duplicate function $foo", "func.wast:966, bind_func:192"},
 		{

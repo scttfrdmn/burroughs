@@ -202,7 +202,7 @@ func TestBulkRejectsWithTheRuleThatRefused(t *testing.T) {
 		{
 			name: "table.size on a table that does not exist",
 			why: "the lookup, and the row that pins slice 5 onto slice 1's index space rather " +
-				"than a second copy of it — 12 corpus vectors match this message as a substring",
+				"than a second copy of it — 12 corpus vectors match this message as a prefix",
 			wat:    `(module (func (result i32) (table.size)))`,
 			is:     ErrUnknownTable,
 			detail: "unknown table 0 (0 in scope)",

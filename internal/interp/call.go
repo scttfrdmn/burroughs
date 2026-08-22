@@ -107,14 +107,15 @@ const callBudget = 10000
 //
 // It is true now, in #440's arm, with one correction the original got wrong independently of the
 // missing arm: the reference matches by **prefix**, not substring (`assert_message`,
-// `runner.ml:498-501`, `String.sub msg 0 (String.length re) <> re`). The harness matches by
-// substring, which is looser; the two coincide on every `assert_exhaustion` vector because all 15
+// `runner.ml:498-501`, `String.sub msg 0 (String.length re) <> re`). The harness matched by
+// substring, which is looser; the two coincided on every `assert_exhaustion` vector because all 15
 // expect this string exactly — counted, not assumed. So the sentence's *conclusion* held while both
 // its premises were wrong — which is why it is worth the words rather than a quiet edit.
 //
-// The divergence is not local to this directive: it is one rule spelled at seven sites across every
-// text-matching stratum, so it is filed as #455 rather than patched here, where fixing one site would
-// leave six diverging from both the reference and each other.
+// The divergence was not local to this directive — one rule spelled at seven sites across every
+// text-matching stratum — so it was filed as #455 rather than patched here, and #455 closed it by
+// moving the harness to the reference's prefix rule (ADR 0045). Both rules now say the same thing
+// about this string, for the reason above: the sentinel is the whole expectation.
 var trapExhaustion = &Trap{Reason: "call stack exhausted"}
 
 // call invokes a defined function: the `Invoke` arm of `eval.ml:1117-1129`, minus the host-function
@@ -436,7 +437,7 @@ func funcRefTarget(r ref, site string) (*Instance, *binary.Func, error) {
 	// `call_indirect` names a *type index* and must compare it against the callee's actual type at
 	// run time. So the import is turned into a `(instance, defined function)` pair and then falls
 	// into the same comparison the defined case uses — one trap message, one
-	// `validate.MatchDefType` call, because two copies of a check the suite reads by substring are
+	// `validate.MatchDefType` call, because two copies of a check the suite reads by prefix are
 	// two places to spell it differently. `call_ref` performs no such comparison at all; see its arm for the reference's
 	// reason (`CallRef _x` — the type immediate is unused).
 	//
@@ -610,7 +611,7 @@ func (in *Instance) resolveCallIndirect(ins binary.Instr, st *stack) (*Instance,
 	if !validate.MatchDefType(target.mod, fn.TypeIndex, in.mod, uint32(typeIdx)) {
 		// **The trap names both types because the reference's does** — `eval.ml:278-280` is
 		// `"indirect call type mismatch, expected " ^ string_of_deftype … ^ " but got " ^ …` —
-		// and *not* because a vector asks for it: the harness matches by substring and every
+		// and *not* because a vector asks for it: the harness matches by prefix (ADR 0045) and every
 		// one of the 25 vectors stops at the sentinel (counted, see funcTypeString). So the tail
 		// is ours alone to keep honest, which is why it is rendered from the functypes actually
 		// compared rather than from the indices — the fabricated-evidence rule (grave #36): a

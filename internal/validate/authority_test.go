@@ -423,8 +423,8 @@ func TestUnknownCategoriesMatchTheReference(t *testing.T) {
 // TestUnknownIndexMessagesAreCategorySpaceIndex is the *format* half, and it is an AST control
 // because the hazard is a call site rather than a sentinel.
 //
-// The corpus expects both `unknown local` and `unknown local 2`, matched as substrings (decision
-// 0003). So `fmt.Errorf("%w: local %d", ErrUnknownLocal, i)` satisfies the first vector and fails
+// The corpus expects both `unknown local` and `unknown local 2`, matched as prefixes (0003 as
+// amended by ADR 0045). So `fmt.Errorf("%w: local %d", ErrUnknownLocal, i)` satisfies the first vector and fails
 // the second while being entirely right about the module — a wrong verdict on a right analysis,
 // and invisible to any test that only checks the sentinel. The rule is that the index follows the
 // category immediately, and any detail this validator wants to add goes *after* it.

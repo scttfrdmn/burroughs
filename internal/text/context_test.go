@@ -64,8 +64,9 @@ func TestCursorNextAdvances(t *testing.T) {
 // TestCursorReportsLexErrorsUnwrapped pins that a malformed lexeme surfaces as the lexer's
 // own error, not wrapped in parser prose.
 //
-// The suite matches by substring so wrapping would not change a verdict — which is exactly
-// why it needs a test rather than trust. *An error from the wrong layer is evidence about
+// The suite matched by substring when this was written, so wrapping would not have changed a
+// verdict — which is exactly why it needed a test rather than trust. Under prefix matching (ADR
+// 0045) wrapping *is* a verdict change, so the row this pins is now oracle-backed as well. *An error from the wrong layer is evidence about
 // where structure was lost*, and an error wearing the wrong layer's prose is that evidence
 // falsified.
 func TestCursorReportsLexErrorsUnwrapped(t *testing.T) {
@@ -226,7 +227,7 @@ func imp() step             { return step{isImport: true} }
 //
 // The parenthetical contains its own refutation: `bind_func` *is* `bind_abs "function"`, so the
 // reference says `duplicate function $foo` and there is one vocabulary. What the suite wants is
-// the string `"duplicate func"`, which the harness matches by **substring** (decision 0003) — so
+// the string `"duplicate func"`, which the harness matches by **prefix** (ADR 0045) — so
 // it is satisfied by `duplicate function $foo` as a prefix, and both words scored green. The
 // duplicate half of the assertion moved to TestSpaceKindWordsMatchTheReference, which checks all
 // eleven spaces against the authority instead of one space against a suite string that cannot
@@ -279,7 +280,7 @@ func TestSpaceKindWordsMatchTheReference(t *testing.T) {
 	} {
 		if got := tc.kind.String(); got != tc.want {
 			t.Errorf("spaceKind(%d) = %q, want %q (%s)\n\tthe suite cannot see this: "+
-				"expected strings are matched by substring, so a short word is a passing "+
+				"expected strings are matched by prefix, so a short word is a passing "+
 				"prefix of the reference's real one", int(tc.kind), got, tc.want, tc.cite)
 		}
 	}
@@ -438,7 +439,7 @@ func TestExportResolvesInEverySpace(t *testing.T) {
 		} else if want := "unknown " + s.word + " $x"; !strings.Contains(err.Error(), want) {
 			t.Errorf("ReadModule(%q) = %q, want it to contain %q — the category word is the "+
 				"space's own (grave #120), and the suite cannot tell a short word from the "+
-				"reference's because it matches by substring", src, err.Error(), want)
+				"reference's because it matches by prefix", src, err.Error(), want)
 		}
 
 		// Half two: $x is defined, but in each of the other four spaces.

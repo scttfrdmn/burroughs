@@ -61,7 +61,7 @@ import (
 // initialization, which fills a new table with nulls and evaluates `ref.func`/`ref.null` out of a
 // segment's expressions without any of them ever reaching the stack. So the *type* found its
 // consumer one layer below the one named. That is the intended ending either way (#6's ruling, and
-// the `reader.u64` precedent at binary.go:678): a deferral retired by a production caller, never by
+// the `reader.u64` precedent at binary.go:681): a deferral retired by a production caller, never by
 // a suppression outliving its reason.
 //
 // That last sentence read *"`stack.refs` is still unpushed, which is #7's half"* — true when written
@@ -370,12 +370,23 @@ func newFrame(total uint64, paramTypes []binary.ValType, eachLocal func(func(idx
 		// Dated because a comment asserting the property its own package lacks is the shape that
 		// makes review confirm the bug.
 		//
-		// **The type was right and the allocation site did not honour it** — `table.go:134`
-		// already writes `ref{Null: true}` into every fresh table slot for this exact reason, so
-		// the sibling had the arm and this site re-derived the allocation without it (graves
-		// #105/#243). One rung up, the lesson generalizes past references: *where a domain's
-		// default differs from Go's zero value, every allocation site must say so, because the
-		// type cannot.*
+		// **The type was right and the allocation site did not honour it** — `table.go:156-171`
+		// writes the initializer's reference into every fresh table slot *explicitly*, rather than
+		// letting `make` decide, for this exact reason, so the sibling had the arm and this site
+		// re-derived the allocation without it (graves #105/#243). One rung up, the lesson
+		// generalizes past references: *where a domain's default differs from Go's zero value,
+		// every allocation site must say so, because the type cannot.*
+		//
+		// **This paragraph said `table.go:134` "already writes `ref{Null: true}` into every fresh
+		// table slot" until 2026-08-22 (grave #491).** Both halves had expired: #419 made that fill
+		// read the *retained* initializer, so the value written is `v.ref` and a fresh table's slots
+		// hold whatever the initializer said — the all-null case is now only the plain wire form,
+		// whose initializer is the `ref.null ht` the decoder synthesizes. The refutation was written
+		// at the referent, in words, directly above the loop, and this sentence went on asserting
+		// the refuted version anyway. What let it: the only thing pointing here was a line number,
+		// and a cross-file claim about a sibling's *behaviour* is in no sweep's domain. It surfaced
+		// from a **line-shift** sweep — the pointer moved, and repairing the number is what made a
+		// reader visit the referent. *A stale citation is a cheap tell for an expired claim.*
 		//
 		// Params are overwritten by the caller's arguments a moment later, so filling them is
 		// redundant rather than wrong; the loop covers the whole array rather than only the

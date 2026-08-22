@@ -87,7 +87,7 @@ func TestLimitsRangesMatchTheReference(t *testing.T) {
 			// composes head-then-range-text with a space between, and the sentinel holds the head
 			// with that trailing space trimmed — checked rather than assumed, since the space is
 			// what makes the concatenation read as a sentence and losing it is invisible to a
-			// substring match on the head alone.
+			// prefix match on the head alone.
 			msgRe := regexp.MustCompile(`check_limits\s+lim\s+sz\s+at\s+\("([^"]*)"\s*\^\s*s\)`)
 			m := msgRe.FindStringSubmatch(body)
 			if m == nil {
@@ -97,7 +97,7 @@ func TestLimitsRangesMatchTheReference(t *testing.T) {
 			}
 			if want, got := strings.TrimSuffix(m[1], " "), tc.sent.Error(); want != got {
 				t.Errorf("%s message head is %q in %s, sentinel says %q — the corpus matches this "+
-					"as a substring, so a drift here changes which vectors this rule can satisfy",
+					"as a prefix, so a drift here changes which vectors this rule can satisfy",
 					tc.fn, want, testenv.RefValidML, got)
 			}
 
@@ -244,7 +244,7 @@ func TestCheckLimitsOrderIsTheReferences(t *testing.T) {
 }
 
 // errorIs is errors.Is, named locally only to keep the switch above readable. Identity and not a
-// substring match on the text: checkLimits wraps with `%w` at every return, so the sentinel is
+// text match: checkLimits wraps with `%w` at every return, so the sentinel is
 // recoverable, and comparing rendered strings here would make this test pass on a message that
 // merely *contains* the right words while wrapping the wrong sentinel.
 func errorIs(err, target error) bool { return errors.Is(err, target) }

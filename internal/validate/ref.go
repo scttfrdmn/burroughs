@@ -212,7 +212,7 @@ func (v *validator) refNull(i int) error {
 // comment records the same reference division for `br_table`.
 //
 // The message is the reference's verbatim (0003), including its slightly odd "but stack has"
-// followed by a single type rather than a list — the corpus matches by substring, and the vectors
+// followed by a single type rather than a list — the corpus matches by prefix, and the vectors
 // in `ref_is_null.wast`, `ref_as_non_null.wast` and `unreached-invalid.wast` that reach here expect
 // the `type mismatch` prefix.
 func (v *validator) peekRef() (binary.ValType, error) {

@@ -100,7 +100,7 @@ import (
 //
 // Two of those rows are the whole argument for this file existing beside the board. **The
 // parenthetical mutation leaves the suite entirely green** — every vector matches `unknown table` or
-// `unknown table 0` by substring, so the text after the index is unconstrained by the corpus and the
+// `unknown table 0` by prefix, so the text after the index is unconstrained by the corpus and the
 // agreement test below is the only instrument that reads it. And **the implicit-index mutation fails
 // no row here at all**: it is board-only, which is why its seven is quoted in the blind-spot header
 // rather than asserted as a unit row. The two failure modes are disjoint, and neither instrument
@@ -123,7 +123,7 @@ func TestElemSegmentTableIndexResolves(t *testing.T) {
 		name   string
 		mod    binary.Module
 		want   error  // nil for the accept direction
-		detail string // substring of the message, where the corpus matches on one
+		detail string // substring of the message; the corpus matches its own expectation by prefix
 	}{
 		{
 			// R1: the seven movers' shape. Implicit table index 0 still resolves through the lookup —
@@ -210,7 +210,7 @@ func TestElemSegmentTableIndexResolves(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), tc.detail) {
 				t.Errorf("modulePre = %q, want it to contain %q — the corpus matches this message by "+
-					"substring (0003), so the index and its category are load-bearing text",
+					"prefix (ADR 0045), so the index and its category are load-bearing text",
 					err, tc.detail)
 			}
 		})
@@ -239,7 +239,7 @@ func TestElemSegmentTableIndexResolves(t *testing.T) {
 // Scott, PR #339 review — a mutation with one reader needs the reader to say so.)
 //
 // Asserted as text rather than by sentinel identity, because `errors.Is` passes on both while the
-// parenthetical is what the substring match consumes.
+// parenthetical is what the text comparison reads.
 func TestElemPhaseAndExportPhaseAgreeOnUnknownTable(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -442,7 +442,7 @@ func TestElemSegmentFunctionIndicesResolve(t *testing.T) {
 			case !c.valid && !errors.Is(err, ErrUnknownFunc):
 				t.Errorf("refused with the wrong sentinel: want %v, got %v", ErrUnknownFunc, err)
 			case !c.valid && !strings.Contains(err.Error(), c.msg):
-				t.Errorf("refused, but not with %q: %v\nThe corpus matches by substring (0003), so the "+
+				t.Errorf("refused, but not with %q: %v\nThe corpus matches by prefix (ADR 0045), so the "+
 					"category and the index are load-bearing text.", c.msg, err)
 			}
 		})

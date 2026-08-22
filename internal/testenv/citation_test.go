@@ -150,7 +150,7 @@ var wrapJoin = regexp.MustCompile(`-\n\s*([A-Z])`)
 // **Per-sentence, and the block-scoped version is why.** The first draft matched the marker
 // anywhere in the enclosing comment block, which passes flawlessly on current `main` and, run
 // against `e4bfd62^`, **excused two of the five real defects** — `sexpr_test.go:145`'s "is
-// asserted directly in …" and `spec_test.go:1040`'s "allowlisted in …", both live present-tense
+// asserted directly in …" and `spec_test.go:1042`'s "allowlisted in …", both live present-tense
 // claims about tests that did not exist, both sitting in long comments that happened to contain
 // a past-tense word somewhere else. The names are elided and the sites given instead, for
 // wrapJoin's reason: naming them here would re-create the finding.

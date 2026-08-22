@@ -335,7 +335,7 @@ func tableTypeAt(m *binary.Module, idx uint32) (binary.TableType, error) {
 		return m.Tables[defined].Type(), nil
 	}
 	// The message is `requireTable`'s verbatim, including its parenthetical, because the corpus
-	// matches it by substring (0003): 12 vectors expect the bare `unknown table` and a further 4
+	// matches it by prefix (0003 as amended by ADR 0045): 12 vectors expect the bare `unknown table` and a further 4
 	// expect `unknown table 0`, so any text between the category and the index breaks the second set
 	// while leaving the first green. The count is stated as the two keys it is rather than as one
 	// number — the sentence here read "12 corpus vectors match `unknown table` and `unknown table 0`",

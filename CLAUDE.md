@@ -48,7 +48,12 @@ backlog becomes 32 standing violations of a rule nothing was gaining from (#324,
 An unmilestoned issue is a filed issue, which is the state most of them should be in. Labels stay
 small: `phase:v0`…`phase:v3`, `gate:<proposal>`, `type:decision`, `type:grave`,
 `type:harness`, `type:contract`, and **`decision-needed:scott`** — that last one, assigned to
-Scott, *is* the decisions-needed queue, now queryable. Graves are closed issues labeled
+Scott, *is* the decisions-needed queue, now queryable. **Queryable by the issues API, and never by
+`gh issue list --label`**, which answers from a search index that lags the label mutation: a queue you
+have just drained reads as full, in a report to the principal whose queue it is. Recipe, and the
+two ways the API arm still under-reports: [reading the tracker's
+state](docs/laws/operations.md#reading-the-trackers-state-the-queue-comes-from-the-issues-api-never-from-a-cached-listing).
+Graves are closed issues labeled
 `type:grave`, lesson in the closing comment, with a comment at the fix site citing the number.
 
 Do not reintroduce `PROGRESS.md`, `docs/reports/`, or any status file.
@@ -147,7 +152,9 @@ is dug.
   CI](docs/laws/operations.md#waiting-on-ci), [local cross-architecture
   verification](docs/laws/operations.md#local-cross-architecture-verification), [post-squash
   divergence](docs/laws/operations.md#after-a-squash-merge-local-main-diverges-from-originmain--verify-dont-force),
-  [the PR body's own sweeps](docs/laws/operations.md#opening-a-pr-the-body-is-a-scanned-population-and-make-check-cannot-see-it).
+  [the PR body's own sweeps](docs/laws/operations.md#opening-a-pr-the-body-is-a-scanned-population-and-make-check-cannot-see-it),
+  [sourcing a claim about the
+  queue](docs/laws/operations.md#reading-the-trackers-state-the-queue-comes-from-the-issues-api-never-from-a-cached-listing).
 
 Three controls in `internal/testenv` keep this page — and now the whole corpus — from rotting into
 dead pointers, and they are three because they fail for unrelated reasons (grave #34):

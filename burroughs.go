@@ -77,6 +77,16 @@ type Trap struct {
 	Reason string
 }
 
+// Error keeps Go's context-prefix idiom, and `interp.Trap.Error` deliberately does not (ADR 0045).
+//
+// The two renderings of one Reason differ on purpose. The conformance suite matches an expected trap
+// text by **prefix**, so the engine's rendering has to put the spec's phrase at position 0 and says
+// `integer divide by zero (trap)`; the reference's domain is the engine, because the harness builds
+// its Engine over `internal/interp` and never sees this package. What this boundary owes is that the
+// **Reason** is the engine's — the sentence above, and the reason a paraphrase would be a defect — and
+// Reason is passed through unchanged. Text-identity with the engine's rendering was never the
+// invariant, and buying it here would reposition a public error string for consistency rather than for
+// a measurement.
 func (t *Trap) Error() string { return "trap: " + t.Reason }
 
 // Config is how a module is loaded. The zero value is the default policy.

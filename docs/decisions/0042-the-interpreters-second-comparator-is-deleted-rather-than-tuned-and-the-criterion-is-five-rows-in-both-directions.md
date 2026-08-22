@@ -29,7 +29,7 @@ principle and deferred it on a condition that has since been met.
 
 ## Context
 
-`internal/interp` computes the subtype relation twice. `sameFuncType` (`internal/interp/call.go:775`)
+`internal/interp` computes the subtype relation twice. `sameFuncType` (`internal/interp/call.go:776`)
 delegates to `matchDeftype` (`:799`), a hand-reduced `match_deftype` with its own disjunct 2
 (`sameDeftype`, `:903`), its own innermost equality (`compTypeEqual`, `:959`, and
 `structFuncTypeEqual`, `:982`), and disjunct 3 inlined into the walk at `:865`. `internal/validate`
@@ -68,31 +68,31 @@ They are not it.
   admits the three admits the two; any tightening that traps the two traps the three. The reference has
   **one** mechanism that gets both right and it is not a tolerance — it is canonicalization.
 
-**And the deferral's stated reason has expired.** `call.go:765-768` flags the question and declines it
+**And the deferral's stated reason has expired.** `call.go:766-769` flags the question and declines it
 because *"unifying it is a wider change than the grave that exposed it."* Both halves of that wider
 change landed for other reasons: `internal/interp` already imports `internal/validate` (`link.go:7`,
 `tag.go:7`, no cycle), `MatchDefType` is already exported with a signature-compatible shape, and its
 documented argument order — *"the supplier's type first, the importer's declared type second"* — is
-already the order `call.go:590` passes. The surface was built for `match_externtype` in the meantime.
+already the order `call.go:591` passes. The surface was built for `match_externtype` in the meantime.
 
 ## Decision
 
 **Route both call sites through `validate.MatchDefType` and delete the duplicate relation** —
 `sameFuncType`, `matchDeftype`, `sameDeftype`, `compTypeEqual`, `structFuncTypeEqual`: five functions
-spanning `call.go:703-990`, of which 202 of 288 lines are comment — rather than teaching the duplicate
+spanning `call.go:704-991`, of which 202 of 288 lines are comment — rather than teaching the duplicate
 to canonicalize.
 
 **Two call sites, and the count is measured rather than taken from the code's own description.**
-`call_indirect` (`call.go:590`, through `sameFuncType`) and the cast family's arm 9 (`castop.go:251`,
+`call_indirect` (`call.go:591`, through `sameFuncType`) and the cast family's arm 9 (`castop.go:251`,
 calling `matchDeftype` directly), which serves `ref.test`, `ref.cast` and
-`br_on_cast`/`br_on_cast_fail`. The doc comment at `call.go:760` names *three* consumers —
+`br_on_cast`/`br_on_cast_fail`. The doc comment at `call.go:761` names *three* consumers —
 *"`call_indirect`, `call_ref` and `ref.cast`"* — and `call_ref` is not one: `resolveCallRef`
-(`call.go:657`) resolves the callee from the operand's own `r.Inst` and takes that function's type
+(`call.go:658`) resolves the callee from the operand's own `r.Inst` and takes that function's type
 directly, comparing nothing. That is correct behaviour, not a missing check (the reference compares
 nothing there either; the validator owns it), which is precisely why the claim went unchallenged.
 
 `compTypeAt` (`:943`) is **not** in the deletion set — `castop.go:308`, `gcobj.go:382` and
-`value.go:1083` call it, and `internal/validate` has its own copy (`match.go:681`). Two bounds-checked
+`value.go:1094` call it, and `internal/validate` has its own copy (`match.go:681`). Two bounds-checked
 accessors are a duplicated three-line lookup, not a duplicated *judgement*, and collapsing them is not
 what the one-authority law is about.
 
@@ -144,7 +144,7 @@ The bound is stated as term-for-term identity of the remaining buckets, not as a
   the linker has run on `validate.MatchDefType` since grave #368. Those rows are not among the 17, so
   the relation already decides rec-group position and group size correctly. Independently,
   `internal/validate`'s group-length condition has a falsification probe on the record: replaced with
-  `if false`, *"`type-rec.wast` goes 22/26 back to 19/26"* (`internal/spec/spec_test.go:7756`).
+  `if false`, *"`type-rec.wast` goes 22/26 back to 19/26"* (`internal/spec/spec_test.go:7762`).
 
 So the two halves of the forecast rest on two separate already-measured facts, neither derived from the
 other — and **neither is a measurement of the five rows themselves**, which is the honest statement of
@@ -178,28 +178,28 @@ a place a duplicate could survive:
 
 Recorded here because each is a sentence a reader will meet *after* the change and read as current.
 
-1. `call.go:742-743` — *"the decoder retains no rec-group boundary at all (no `RecGroup`/group-relative
+1. `call.go:743-744` — *"the decoder retains no rec-group boundary at all (no `RecGroup`/group-relative
    index anywhere in `binary.Module`)"*. Already false: `binary.CompType.RecStart`/`RecLen` are
    retained, and `:757-758` says so, fifteen lines below — the claim and its correction are in one
    comment block, in that order.
-2. `call.go:760-761` — *"no corpus vector reaches the M10/M11 shape through any of them."* The five rows
+2. `call.go:761-762` — *"no corpus vector reaches the M10/M11 shape through any of them."* The five rows
    do not literally falsify this, because M10/M11 is a **cross-module** relabelling and all five vectors
    are single-module. What they falsify is the reading the sentence invites: that the disjunct-2 gap is
    unwitnessed. It is witnessed, in both polarities, through `call_indirect`.
-3. `internal/spec/spec_test.go:10656` describes `Instance.link` as comparing with `sameFuncType`. Grave
+3. `internal/spec/spec_test.go:10662` describes `Instance.link` as comparing with `sameFuncType`. Grave
    #368 moved the linker off it; `sameFuncType` has exactly one non-test caller and it is not the
    linker. (The number is the *current* location of that sentence, re-pointed twice since this list was
    written — it was `:10548`, then `:10593`, then `:10616` — because a pointer that asserts where a live sentence is
    gets repaired while a pointer recording where something used to be does not. The sentence itself now
    carries a tense correction rather than a deletion, per the implementation below.)
-4. `call.go:739` cites **`matchesDeclaredSupertype` "below"** as disjunct 3. No such function exists
+4. `call.go:740` cites **`matchesDeclaredSupertype` "below"** as disjunct 3. No such function exists
    anywhere in the tree — grave #261's refactor folded the walk into `matchDeftype` (`:865`) and left
    the pointer. **This is the failure mode of the citation form I would recommend over a line number,
    and it failed better**: a dangling *symbol* is found by one grep returning exactly one hit — its own
    citation — where a drifted *line* returns a plausible neighbour. Detectable, and detectable
    mechanically: a backticked identifier in a Go comment that matches no declaration in its package is
    a checkable predicate over data a build already has. Noted on #473, which owns that question.
-5. `call.go:760` names `call_ref` as a consumer of this reduction. It is not one, per the Decision
+5. `call.go:761` names `call_ref` as a consumer of this reduction. It is not one, per the Decision
    above.
 
 **And the one no instrument can check: claim 2 is a negative claim, so it has no target.** No citation
@@ -245,9 +245,11 @@ foreclosing-words shape the v0 ladder's *"gates present and off"* was in, and on
 poor place to repeat, since it exists to score claims that turned out wrong. The one incoming citation,
 in the header above, moved with it.
 
-*(One pointer re-pointed 2026-08-22 by the text it names, not by a delta: `compTypeAt`'s caller list
-read `value.go:1071` and reads `value.go:1083`, the line holding `ct, ok := compTypeAt(r.Obj.mod,
-r.Obj.typeIdx)`. #452's twelve-line dating note above it moved the call, not the claim.)*
+*(One pointer re-pointed twice on 2026-08-22 by the text it names, never by a delta: `compTypeAt`'s
+caller list read `value.go:1071`, then `:1083`, and reads `value.go:1094` — the line holding
+`ct, ok := compTypeAt(r.Obj.mod, r.Obj.typeIdx)`. #452's twelve-line dating note moved the call and
+grave #491's repair moved it eleven more; both moved the call, neither moved the claim, and the two
+deltas differ, which is why the text and not the arithmetic is what located it.)*
 
 **The board moved 17 → 7. The forecast was 17 → 12.** Ten rows, not five: `65092 → 65102 pass`,
 `17 → 7 fail`, `0 gated`, and the ten are exactly ten named rows, so the criterion's third line —

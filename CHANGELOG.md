@@ -21,6 +21,28 @@ weakly-ordered platform.
 
 ### Added
 
+- **`docs/laws/errors-and-testimony.md`: *a message is not its rendering, and a term about the
+  rendering cannot be discharged by the message's author*** (minted by Scott on the #490 review). ADR
+  0044's fifth approval term was about an error's **rendered** text, and the sentinel's own file could
+  not satisfy it: `instrs` owned the order the reader sees. The term was therefore satisfiable only at a
+  rendering site in another slice's file, which the ADR's author could not reach — so it was carried
+  rather than met, and the record said "born spec-phrase-first" while the reader saw a prefix.
+  - **Its sibling in [`decisions-and-thesis.md`](docs/laws/decisions-and-thesis.md): *a stamp is only
+    as good as the description it was given on*.** The defect sits upstream of the approval, in the
+    description — Scott's words on noticing it: *"since I gave the term on your description, I carry
+    it."* The check before asking for a stamp is not only "is this a principal's question" but *"is the
+    term I am asking to be held to satisfiable by the slice I am asking about."*
+- **`docs/laws/operations.md`: the queue's state is read from the issues API, never from a cached
+  listing** (Scott's standing order, filed where the queue is documented). `gh issue list --label`
+  reads a search index that lagged eight label removals, so a "the decisions-needed queue is empty"
+  claim sourced from it is a claim about the index. The procedure names `--paginate` over the issues
+  endpoint with `select(.pull_request == null)`, or a per-issue read.
+- **`docs/laws/boards-and-buckets.md`: a column reaching zero is a fact about what the corpus asks, on
+  the date it asked it** (Scott's caution, pre-registered against the all-on lane's fail column, which
+  [#471](https://github.com/scttfrdmn/burroughs/issues/471) takes to 0 — the second board column to
+  close). Registered *before* the event rather than written after it, so the reading cannot be
+  retrofitted to whatever the number turns out to be.
+
 - **The local-initialization rule: `local.get` of an uninitialized non-defaultable local is refused,
   and the block wall is performed rather than inherited**
   ([#452](https://github.com/scttfrdmn/burroughs/issues/452),
@@ -60,6 +82,13 @@ weakly-ordered platform.
     sentinel is the suite's phrase with detail after it per decision 0003, but `instrs` wraps every
     instruction error as `instr %d (%s): %w` (`internal/validate/instr.go:51`) — one of the three
     rendering sites #455's option 4 moves.
+    - **Discharged below in this same `[Unreleased]` block** by #455's option 4: the wrapper now
+      renders `%w (instr %d: %s)` at `internal/validate/instr.go:57`. The sentence above keeps its
+      `:51`, which is the line it was exact at and no longer holds the wrapper — a superseded claim
+      re-pointed at the line that superseded it reads as a live one. The note is here and not only in
+      [0044](docs/decisions/0044-the-local-initialization-rule-is-a-per-frame-undo-list-and-the-block-wall-is-performed-rather-than-inherited.md)
+      because *a FAIL names a site, not the population*: repairing the ADR and stopping leaves the
+      identical stale claim standing in the channel that was no longer being scanned.
 
 - **`docs/laws/boards-and-buckets.md`: *a magnitude is not a cost estimate*** — the shape of a
   population prices the work, not its size
@@ -361,7 +390,7 @@ weakly-ordered platform.
   in one session. `TestEveryPayloadSpellingIsReadOrRefusedByName` asked
   `strings.Contains(err.Error(), name)` and for `struct` the substring sat inside the word
   **constructor** in the refusal's own sentence, so the falsification probe that should have failed
-  on six payloads failed on five (`value_test.go:198`, `value.go:734`). Then, reading a CI verdict
+  on six payloads failed on five (`value_test.go:198`, `value.go:745`). Then, reading a CI verdict
   out of a captured `gh run watch`, `grep -E '^JOB'` for the sentinel's `JOB <name> <conclusion>`
   rows matched the watch's own **`JOBS`** section headers, harvesting the progress display as the
   verdict. The remedy is identical and mechanical — **anchor the match or quote the token**,
@@ -2028,6 +2057,45 @@ weakly-ordered platform.
 
 ### Changed
 
+- **The location context is rendered *after* the spec phrase, and the harness matches expected error
+  text by prefix rather than by substring** ([#455](https://github.com/scttfrdmn/burroughs/issues/455),
+  [ADR 0045](docs/decisions/0045-the-location-context-is-rendered-after-the-spec-phrase-and-the-harness-takes-the-references-prefix-rule.md),
+  [the approval](https://github.com/scttfrdmn/burroughs/issues/455#issuecomment-5381971036)). The
+  reference matches by prefix — `assert_message` (`script/runner.ml:498-501`) is `HasPrefix` with a
+  parameter named as if it were a regex — and all nine of the suite's text-matching call sites go
+  through it. This harness matched by **substring**, which is strictly looser: an **accept-direction**
+  divergence no negative-direction vector can witness, since the rows it affects are rows the suite
+  expects to pass and we did pass, for a reason the reference would not have accepted. Also discharges
+  ADR 0044's fifth approval term — *the message is born spec-phrase-first*.
+  - **A count is not a price.** The census came back at **6542** divergent rows in the default lane and
+    **7831** all-on, and #455's own pre-registration read that as the case for keeping substring. The
+    `prefixFamily` grouping — digits to `N`, parenthesized opcodes to `(op)` — resolved the whole
+    population into **two mechanisms with no remainder** (`trap: `/`interp: link failed: ` wrappers, and
+    `internal/validate`'s location wrappers), and the repair is **28 line edits** at 28 sites.
+  - **Option 4: the location context is kept and moved, not dropped.** `instrs` renders
+    `%w (instr %d: %s)` (`internal/validate/instr.go:57`), `Trap.Error()` renders `Reason + " (trap)"`,
+    and the three `ErrLinkFailed` wraps put the sentinel first. Nothing a reader needs is lost; every
+    sentinel's phrase becomes contiguous at position 0.
+  - **Every term of the pre-registration was measured and one is falsified.** Terms 1–5 and 7–8 met
+    exactly: stage-1 census 92/136, final census **0/0**, `matched` denominator unmoved at 8519/9844,
+    default board unmoved at `60957/0/0/4187/0`, all-on unmoved at `65107 pass / 2 fail`, README
+    transcript green and unedited, `unsupported` structurally 0. **Term 6 is falsified: four test
+    expectations pinned a rendered message, not one** — the predicted row's sibling eight lines above it
+    (the same wrapper's other call-site prefix), a `strings.Contains(err.Error(), "(select)")` that
+    pins the rendering while quoting no phrase at all, and a fixture *inside the harness package* that
+    builds an engine-shaped message by hand. The enumeration was over prefixes and packages it had
+    thought of; *the domain of "asserts this rendering" is not the domain of "quotes this phrase"*.
+  - **Prefix matching makes prepending a verdict change, where substring made it merely bad
+    testimony.** Several comments asserting the old rule inverted with it, and the sweep for them was
+    derived over `git ls-files '*.go'` rather than enumerated per family — which is how the live claim
+    at `internal/interp/bulk_test.go:487` was found after a per-family pass had missed three files.
+    **160 lines across 46 files** carried the word; **76 lines across 32 files** were live claims about
+    the rule and were repaired.
+  - **`TestSubstringOnlyMatchCensus` becomes an analytic zero and is re-pointed rather than retired.**
+    Its 0 after the flip could not have come out otherwise, so it now fails on any divergence instead of
+    reporting one, and `TestSubstringOnlyProbeSeesEveryArm` inverts with it: an *award* under a
+    padded-message fixture is now the failure. A pre-registered control names a risk, not a code shape.
+
 - **Contract §9 G-1: the `#9`-scoped carve-out retires on a state of the code, not on the validator
   umbrella's closure** ([#483](https://github.com/scttfrdmn/burroughs/issues/483),
   [ADR 0043](docs/decisions/0043-g-1s-carve-out-retires-on-zero-call-sites-not-on-the-validator-umbrellas-closure.md),
@@ -2144,7 +2212,7 @@ weakly-ordered platform.
   **The deferral's stated reason had expired**: `call.go:765-768` declined unification as *"a wider
   change than the grave that exposed it"*, and `internal/interp` already imports `internal/validate`
   (`link.go:7`, `tag.go:7`), `MatchDefType` is already exported signature-compatibly, and its documented
-  argument order already matches `call.go:590`'s call — the surface was built for `match_externtype` in
+  argument order already matches `call.go:591`'s call — the surface was built for `match_externtype` in
   the meantime. The forecast rests on two already-measured facts rather than on the five rows:
   validating `type-equivalence.wast:107-130` **requires** the over-strict judgement and passes, and the
   same discriminating triple's static twin at `type-rec.wast:137-162` goes through the linker on
@@ -2152,10 +2220,10 @@ weakly-ordered platform.
   no board column; the reward figure is the pre-registered all-on `fail` **17 → 12**, unbanked until the
   implementation, which queues behind #367 by Scott's ordering.
   **Reading the code to write the criterion falsified five of its own claims**, recorded in the ADR
-  because each will read as current after the change: the rec-group-boundary denial at `call.go:742-743`
+  because each will read as current after the change: the rec-group-boundary denial at `call.go:743-744`
   (already corrected fifteen lines below it), the *"no corpus vector reaches the M10/M11 shape"*
-  sentence at `:760-761`, `spec_test.go:10656`'s description of `Instance.link` as a `sameFuncType`
-  caller (grave #368 moved it), `call.go:739`'s pointer to **`matchesDeclaredSupertype`** — a function
+  sentence at `:760-761`, `spec_test.go:10662`'s description of `Instance.link` as a `sameFuncType`
+  caller (grave #368 moved it), `call.go:740`'s pointer to **`matchesDeclaredSupertype`** — a function
   that exists nowhere in the tree, folded into the walk by grave #261's refactor — and `:760`'s naming
   of `call_ref` as a consumer, which `resolveCallRef` refutes by comparing nothing at all. The fourth is
   the citation form recommended over a line number, failing *better*: a dangling symbol is one grep
@@ -2259,7 +2327,7 @@ weakly-ordered platform.
 
 - **`wrapJoin`'s doc comment cited two files for its real instances and was wrong about both**
   (`internal/testenv/citation_test.go`). It named `internal/spec/spec_test.go:2031` and
-  `internal/spec/wast.go:911`; the real comment groups are at `spec_test.go:6818`
+  `internal/spec/wast.go:911`; the real comment groups are at `spec_test.go:6824`
   (`TestGrave206-\nKnownFailures`) and `12552` (`TestEveryBoardBound-\nIsChecked`), and **`wast.go`
   holds no instance either way** — the half a line-drift sweep cannot see, since re-pointing by delta
   fixes an offset and never notices the wrong file. Re-pointed **by what the comments stand over**
@@ -3282,6 +3350,27 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **`internal/interp/value.go` asserted that `table.go` "already writes `ref{Null: true}` into every
+  fresh table slot" — #419 had falsified both the value and the quantifier**
+  ([grave #491](https://github.com/scttfrdmn/burroughs/issues/491)). `table.go` writes
+  `slots[i] = v.ref` from the table's **retained** initializer, so the all-null case is now only the
+  plain wire form, whose initializer is the `ref.null ht` the decoder synthesizes; `ref{Null: true}`
+  appears nowhere in `internal/interp/table.go`. The refutation was written **at the referent** —
+  *"This paragraph said 'every slot null' … which was true of what the decoder retained rather than of
+  the rule"* — and the citing comment went on asserting the refuted version, with the line number stale
+  on top of it. Repaired in the past tense and dated, per the sibling entry below; the *argument* it
+  supports (an allocation site must state a domain default the type cannot carry) survives intact.
+  - **It surfaced from a line-shift sweep, which is the finding.** Nothing in this tree can see a
+    cross-file claim about a sibling's *behaviour*: `citecheck.sh` resolves pointers, not predicates.
+    What found it was the pointer *moving* — repairing a coordinate is what makes a reader visit the
+    referent, and the referent was holding its own refutation. **A stale citation is a cheap tell for
+    an expired claim**, which is an argument for a drift-detecting instrument reported to
+    [#456](https://github.com/scttfrdmn/burroughs/issues/456) rather than only a dangling-detecting one.
+  - **The paragraph directly above it in the same comment is a dated correction of exactly this kind**
+    (grave #246, the entry below). One paragraph of a comment being dated is not evidence about the
+    next one, and reading the first as coverage for the second is how this survived a review that had
+    the file open.
+
 - **A comment in `internal/interp/value.go` asserted the property its own package lacked — now dated
   from the day it became true** ([grave #246](https://github.com/scttfrdmn/burroughs/issues/246);
   Scott's addition to #452's approval on the #486 review). The clause read that a non-nullable
@@ -3350,7 +3439,7 @@ weakly-ordered platform.
   repair, which is why pre-existing drift surfaced at all: `gcobj.go`'s `sections.go:570` → `:645`,
   `table_test.go`'s and `refnull_test.go`'s `sections.go:914-926` → `:973-987`, `module_test.go`'s
   `:921 and :987` → `decodeImport` at `:1275` and `decodeExport` at `:1383`, and `encode_test.go`'s two
-  `module.go:560` pointers at a field declared in `binary.go:416` — `internal/binary/module.go` is 1587
+  `module.go:560` pointers at a field declared in `binary.go:419` — `internal/binary/module.go` is 1587
   lines, so that number resolves and lands on unrelated prose. All six are re-pointed **by the symbol
   beside the number**, and the two file-level errors say in-line what they used to claim. **All six
   pass #456's cheaper option** (file exists, has ≥ N lines), which is now measured on two independently
@@ -3410,7 +3499,7 @@ weakly-ordered platform.
   vector is the one whose rule is impossible without the side array"*), every clause of it spent:
   decision 0016 shipped the side array, all three zero-bit kinds go through it (`Func.Labels`,
   `Func.Catches`, `Func.Casts`), and `br_table`'s rule reads the first of them at
-  `internal/validate/instr.go:440`. **That one was diagnosed on #296's own thread months ago and never
+  `internal/validate/instr.go:446`. **That one was diagnosed on #296's own thread months ago and never
   landed**, which is the more expensive version of the class: the tracker held the finding and the file
   went on contradicting it.
   All three repaired **in the past tense** rather than deleted. The reason none was caught:
@@ -3546,7 +3635,7 @@ weakly-ordered platform.
   residue sense and the exact sentence grave #427 cost eight rows for; two more claimed to quote a
   falsified sentence while asserting it. The group heading — "the grave's own record of itself" — is
   true of the *account*, whose annotation is 60 lines below the first paragraph it covers, at
-  `spec_test.go:11123`, and false of three
+  `spec_test.go:11134`, and false of three
   of the four paragraphs it covers, and the **paragraph** is the sweep's unit and the map's own stated
   standard. Each entry now names what its paragraph is (retained falsified testimony), where the
   refutation lives, and that the ground is *not* legible in the licensed paragraph alone; the one entry
@@ -8711,7 +8800,7 @@ weakly-ordered platform.
   Go comment against its issue state, after the board reached 0 fail and the next work had to be
   read off deferrals rather than off buckets. `checkCounts` still said the
   `ErrDataCountRequired` half was "tracked in #22 rather than guessed at", which #39's code-section
-  grammar had made false — the check is reachable at `binary.go:775` and both vectors
+  grammar had made false — the check is reachable at `binary.go:778` and both vectors
   (`binary.wast:302`, `:325`) pass inside 127/127. And the tag section's missing payload grammar was
   deferred to **#8**, the wat-harness issue, which owns none of it: no EH-gate issue existed at all,
   so a declared deferral was in substance *untracked*. Now #95, with the gate-census row

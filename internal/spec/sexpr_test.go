@@ -415,16 +415,17 @@ func TestBucketsAreAPriorityQueue(t *testing.T) {
 	}
 }
 
-// TestSubstringMatching pins decision 0003's matching rule, including the
-// "alignment" prefix case that motivated it.
-func TestSubstringMatching(t *testing.T) {
+// TestExpectedTextMatchesByPrefix pins 0003's matching rule as ADR 0045 amended it, including the
+// "alignment" prefix case that motivated it — the case that reads the same under either rule, which
+// is why the test's name was the only thing the flip changed here.
+func TestExpectedTextMatchesByPrefix(t *testing.T) {
 	s, err := Parse("t.wast", []byte(`(assert_malformed (module binary "\01") "alignment")`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	r := s.Run(func([]byte) error { return errString("alignment must be a power of two") })
 	if r.Pass != 1 {
-		t.Errorf("substring match failed: %d pass, %d fail", r.Pass, r.Fail)
+		t.Errorf("prefix match failed: %d pass, %d fail", r.Pass, r.Fail)
 	}
 	// An engine that accepts a module the suite calls malformed must fail, not pass.
 	r = s.Run(func([]byte) error { return nil })
@@ -758,7 +759,15 @@ func TestAssertTrapActionScoring(t *testing.T) {
 		key  string
 	}{
 		{"a real trap with the expected text", trap, nil, true, ""},
-		{"a real trap wrapping the expected text", trapErr{errString("trap: " + text + " at 4")}, nil, true, ""},
+		// The extra-context row, and **the context is trailing since ADR 0045.** It read
+		// `"trap: " + text + " at 4"` — context on both sides — and passed on the substring
+		// rule the harness has now dropped for the reference's prefix rule
+		// (`script/runner.ml:498-501`). The row's job is unchanged and is still worth a row:
+		// an award must survive detail the engine appends. What changed is *where* the engine
+		// is allowed to put it, so the fixture now spells the engine's own post-0045
+		// rendering — `interp.Trap.Error` is `Reason + " (trap)"` — rather than the `trap: `
+		// prefix it used to carry.
+		{"a real trap with trailing context", trapErr{errString(text + " (trap) at 4")}, nil, true, ""},
 		{
 			// The accept-direction row. Same text, not a trap.
 			"a plausible imposter: the right text, the wrong kind of error",

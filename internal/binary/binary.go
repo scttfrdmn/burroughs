@@ -22,8 +22,8 @@ const Version uint32 = 1
 
 // Error text tracks the upstream suite's assert_malformed strings verbatim
 // (decision 0003): the suite's strings are the decoder's error contract, and
-// the harness matches on substring. Do not reword these without changing the
-// tests that pin them to spec vectors.
+// the harness matches on **prefix** (0003 as amended by ADR 0045). Do not
+// reword these without changing the tests that pin them to spec vectors.
 var (
 	ErrBadMagic   = errors.New("magic header not detected")
 	ErrBadVersion = errors.New("unknown binary version")
@@ -67,8 +67,8 @@ var (
 	// ErrPayloadEnd is the payload grammar wanting a byte the image does not
 	// have. It is face 2 of the size mechanism (see sections.go).
 	//
-	// Note the relationship to ErrTruncated: "unexpected end" is a *substring* of
-	// this text, and the harness matches by substring, so this error satisfies
+	// Note the relationship to ErrTruncated: "unexpected end" is a *prefix* of
+	// this text, and the harness matches by prefix (ADR 0045), so this error satisfies
 	// both the vectors expecting the long form and the three custom.wast vectors
 	// expecting the short one. That containment is the suite's, not a convenience
 	// — it is why a payload-level truncation must never be reported as the bare
@@ -280,7 +280,10 @@ var (
 	// and this error is unreachable. TestEveryReasonRowIsABlockDelimiter is the
 	// tripwire: a third reason arm upstream turns the build red here rather than
 	// producing a quietly wrong verdict. The reference's text is carried verbatim
-	// after the colon, so the harness's substring match would find it.
+	// after the colon, which the harness's old substring match would have found and
+	// its prefix match (ADR 0045) would not. Moot while the arm is unreachable, and
+	// the repair the day it is not: the reason moves to position 0, where every
+	// other message in this package already begins.
 	ErrMisplacedOpcode = errors.New("misplaced opcode")
 )
 

@@ -477,7 +477,7 @@ func TestTagTypesAreCheckedAtBothCallSites(t *testing.T) {
 		{
 			name:  "a defined tag that returns something — tag.wast:18",
 			wat:   `(module (type $ft (func (result i32))) (tag (type $ft)))`,
-			msg:   "tag 0: non-empty tag result type: type 0 returns [i32]",
+			msg:   "non-empty tag result type: type 0 returns [i32] (tag 0)",
 			valid: false,
 		},
 		{
@@ -485,7 +485,7 @@ func TestTagTypesAreCheckedAtBothCallSites(t *testing.T) {
 			// in this file green.
 			name:  "an imported tag that returns something — tag.wast:22",
 			wat:   `(module (type $ft (func (result i32))) (import "m" "t" (tag (type $ft))))`,
-			msg:   "import 0: non-empty tag result type: type 0 returns [i32]",
+			msg:   "non-empty tag result type: type 0 returns [i32] (import 0)",
 			valid: false,
 		},
 	} {
@@ -500,9 +500,9 @@ func TestTagTypesAreCheckedAtBothCallSites(t *testing.T) {
 			case !c.valid && !errors.Is(err, ErrNonEmptyTagResult):
 				t.Errorf("refused with the wrong sentinel: want %v, got %v", ErrNonEmptyTagResult, err)
 			case !c.valid && !strings.Contains(err.Error(), c.msg):
-				t.Errorf("refused, but not with %q: %v\nThe prefix is the assertion: both vectors "+
-					"expect the same string, so only the position in the message says which call "+
-					"site fired.", c.msg, err)
+				t.Errorf("refused, but not with %q: %v\nThe trailing site clause is the assertion: "+
+					"both vectors expect the same phrase, so only the location context says which "+
+					"call site fired — rendered after the phrase since ADR 0045.", c.msg, err)
 			}
 		})
 	}

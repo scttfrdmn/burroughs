@@ -339,7 +339,7 @@ is neither, and the third case is ratified with a refinement about what kind of 
 
 **Provenance: derived.** Two premises:
 
-- `internal/spec/wast.go:4352` — `r.Unsupported++` sits in the **`default:` arm** of the harness's command
+- `internal/spec/wast.go:4372` — `r.Unsupported++` sits in the **`default:` arm** of the harness's command
   dispatch, and the bucket key is the command's *head atom* rather than its kind, "because every
   unsupported command has `KindUnsupported`". The column therefore counts commands `internal/spec` has no
   case for: it is a measure of that package's command vocabulary.
@@ -411,7 +411,7 @@ thing.
 
 **The pointer.** The first premise cited `internal/spec/wast.go:2672` for `r.Unsupported++` sitting in
 the command dispatch's `default:` arm. That line holds the `isGated` closure in `run`'s preamble; the
-`default:` arm's increment is now `internal/spec/wast.go:4352`. Re-pointed by that statement's own
+`default:` arm's increment is now `internal/spec/wast.go:4372`. Re-pointed by that statement's own
 text. The premise itself is unchanged and still true — the arm is keyed on the command's head atom, so
 the column measures `internal/spec`'s command vocabulary — which is exactly the half of a citation a
 reader does not need and the half they do coming apart.

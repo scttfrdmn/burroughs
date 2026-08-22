@@ -491,7 +491,7 @@ var encodableModules = []struct {
 	// `immHeapType`'s arm validates the heaptype and stages no word (`instr.go:831` ends
 	// `return c.d.decodeHeapType(r)`), so `ref.null func` and `ref.null extern` decode to the *same two
 	// instructions* and the pair below differs only in its `Type`. That is filed under 0016 and was
-	// already stated at `constexpr_test.go:296`, where the want was first written as `uint64(FuncRef)` by
+	// already stated at `constexpr_test.go:298`, where the want was first written as `uint64(FuncRef)` by
 	// reasoning from the immediate's name and the print said otherwise — so this row is the second site
 	// to make the same wrong guess, and copying the sibling's *assertion* rather than re-deriving it is
 	// what the shape-indexed-lessons rule asks for. Consequence worth naming: these two rows cannot tell

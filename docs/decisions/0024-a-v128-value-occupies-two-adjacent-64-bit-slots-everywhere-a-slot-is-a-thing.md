@@ -191,7 +191,7 @@ f32/f64 (one value, one slot) and **wrong for v128** (one value, two slots) the 
 is used as a slot count — which is everywhere it is used: `branch`'s `src := len(st.num) -
 l.arity` and `copy(st.num[l.height:], st.num[src:])` (`control.go:291-308`), `returnFrom`'s
 identical shape (`:344-364`), and `call.go`'s `invoke` comparing `len(st.num)-numBase` against
-`wantNum` (`call.go:232-239`). Every one of these reads/writes `st.num` at an offset computed from
+`wantNum` (`call.go:233-240`). Every one of these reads/writes `st.num` at an offset computed from
 a *value* count under the assumption that one value costs one slot — an assumption `needNum`
 (`exec.go:1141`) makes too, checking `len(s.num) < n` where `n` is a value count from the calling
 arm.

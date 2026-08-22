@@ -297,3 +297,43 @@ with regression tests drawn from the vectors above.
 the taxonomy's prescribed test order is superseded by the reference
 interpreter's, and the authority for order-of-tests questions is `decode.ml`,
 not a derivation from vectors that do not distinguish the orderings.
+
+**Amended** 2026-08-22 — **substring matching is superseded by prefix matching**
+([0045](0045-the-location-context-is-rendered-after-the-spec-phrase-and-the-harness-takes-the-references-prefix-rule.md),
+#455). The decision stands in every other part; what is superseded is decision 3
+of the Decision list above, quoted where it stands:
+
+> Error matching follows the upstream convention: the assertion passes if the
+> engine's message *contains* the expected string (upstream runners match on
+> prefix/substring, and some strings like `alignment` are deliberate prefixes of
+> `alignment must be a power of two`). We record substring matching so the two
+> `alignment` variants don't need special casing.
+
+Two things are wrong with it, and the second is the interesting one.
+
+**"Upstream runners match on prefix/substring" is false in one direction.** The
+reference matches on prefix *only* — `assert_message`, `script/runner.ml:498-501`,
+is `String.sub msg 0 (String.length re) <> re` negated, and all nine text-matching
+call sites in the suite go through that one function. "Prefix/substring" reads as a
+disjunction the authority offers; it does not.
+
+**The stated reason for substring is an argument for prefix.** `alignment` being a
+deliberate prefix of `alignment must be a power of two` is a fact about the
+*expected* string being shorter than the engine's message, which is exactly what
+`HasPrefix(got, expect)` handles and has nothing to do with position. The example
+was load-bearing and correct; the rule derived from it was wider than the example
+needed. Neither `alignment` variant needs special casing under prefix matching
+either — verified by the census, which shows `assert_malformed` awarding 1229 quote
+and 709 binary matches with zero rows relying on the extra looseness.
+
+So the looseness bought nothing that prefix matching does not buy, and it cost an
+accept-direction hole: a message with the right phrase in the wrong place passed.
+6542 default-lane rows were passing that way when the census first ran. The hole
+was closed by moving the engine's location context behind the spec phrase at 28
+sites (0045), not by loosening or normalizing anything further.
+
+**"The suite's strings are hereby the decoder's error contract" is unchanged and is
+now stronger**: the contract gains a position. Every message in
+`internal/binary`, `internal/text`, `internal/validate` and `internal/interp` must
+*begin* with its sentinel. Two of those four packages already did, which is why
+this amendment cost 28 lines rather than an audit of every string in the engine.
