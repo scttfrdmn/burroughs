@@ -21,6 +21,73 @@ weakly-ordered platform.
 
 ### Added
 
+- **The substring-vs-prefix census: 6542 of 8519 expected-text awards would be refused by the
+  reference's rule, across three renderings**
+  ([#455](https://github.com/scttfrdmn/burroughs/issues/455),
+  [the order](https://github.com/scttfrdmn/burroughs/issues/483#issuecomment-5377714094)). The
+  reference matches an expected error text by **prefix** — `assert_message`
+  (`script/runner.ml:498-501`) is `HasPrefix`, negated, and all nine of its text-matching call sites
+  go through it — while this harness matches by **substring** at the six
+  `strings.Contains(got, c.Expect)` sites in `internal/spec`'s run loop plus one in a control. That
+  is strictly looser, so it is an **accept-direction** divergence and no negative vector can witness
+  it: the rows that would are rows the suite expects to pass and we do pass, for a reason the
+  reference would not have accepted. #455 asked for the size of that population before any of its
+  three options could be priced, and this is the census, not the repair — which rule the project
+  takes is Scott's, and nothing here forecasts it.
+  - **The number, both lanes.** Default: **8519** awards made by an expected-text match, **6542**
+    of them substring-only (exec 4338, validate 2204). All-on: **9839** and **7826** (exec 5192,
+    validate 2634). The widest is **+50** — `"unknown function 0"` inside
+    `"element segment 0, element 0: instr 0 (ref_func): unknown function 0 (0 in scope)"`.
+  - **Three renderings, not six thousand — and that is what reprices the repair.** Collapsing index
+    digits to `N` and the parenthesized opcode name to `(op)`, the default lane's 6542 rows fall into
+    **15** prefix families, of which `trap: ` (4262), `func N: instr N (op): ` (2108) and
+    `interp: link failed: ` (76) are **6446 — 98.5%**; the all-on lane's 7826 fall into 19, the same
+    three accounting for 7686 (98.2%). The tail is the same validator location-context convention
+    over other index spaces (data/element segment, global, memory, table, import, export, tag). The
+    collapse ships with the census rather than living in a session's scratch analysis, because the
+    count alone cannot tell N rows across three renderings from N rows across N strings.
+  - **This falsifies #455's own conditional.** The issue reasoned that a large count would mean
+    option 1 (conform the engine's texts) is an engine-wide message rewrite priced against nothing.
+    The count is large *and* the mechanism count is three, so the two halves of that inference come
+    apart: conforming means moving location context at a few rendering sites. Reported as a
+    measurement with the premise failure named, and a fourth option is now visible — keep the
+    context but render it *after* the spec phrase — which the three-way question did not contain.
+  - **Two arms are a zero that is a cell rather than an absence.** `assert_malformed` records
+    **0** divergent rows in either lane against 1938 matched awards: the decoder's and the wat
+    reader's messages already begin with the spec phrase. So does the encode-stratum control site —
+    `TestAssertInvalidPassesFromAboveTheValidator`'s own predicate, counted separately and never
+    summed with the six, measured through `validateModule`, the entry point the control itself
+    uses: 17 matched, 0 divergent.
+    The numerator is keyed by `Kind` and printed beside the denominator, because *an
+    analytic zero is not a measurement* and "this arm's texts conform" and "this arm was never
+    instrumented" contribute the same nothing.
+  - **Recorded by the run loop, not re-derived by a control** (`AltChoices`/`GatedAt`/`KindGate*`
+    precedent). A control that re-ran the match decision would ask a second oracle the same
+    question, and the two can be pointed at different sets without either looking wrong. Every site
+    already holds `got` and `c.Expect` where it decides, and `strings.Index(got, c.Expect) > 0` is
+    exactly `Contains && !HasPrefix` — an absent text gives −1 and an empty `Expect` gives 0, so
+    neither is ever awarded a row — with the offset arriving free and answering "how wide".
+  - **The wiring is what the birth certificate is for.** A census wired into five of six arms
+    reports a number that reads as a measurement of the corpus and is partly a measurement of the
+    wiring, so `TestSubstringOnlyProbeSeesEveryArm` drives all six sites through a stub engine in
+    **both** directions: `pad + want + …` must record exactly one row at `Offset == len(pad)` with
+    the arm's own `Kind` and `Stratum`, and `want + …` must record nothing, since a message
+    *beginning* with the expected text is one the reference accepts too and counting it inflates the
+    figure #455 turns on. The population of match sites was derived by grep rather than copied from
+    #455's line numbers, which had drifted. The census asserts only a vacuity floor on the
+    denominator: a lane reporting few matches has stopped walking, and that reading is
+    indistinguishable from "found nothing" in the divergent count alone.
+  - **A separate file, for `kindgate_test.go`'s reason**
+    ([#447](https://github.com/scttfrdmn/burroughs/issues/447)): `foreclosingLicensed` keys its
+    entries on `<file>:<line>`, so an insertion into `spec_test.go` re-keys every entry below it. A
+    new file inserts nothing above anything. The reciprocal sweep — *adding lines breaks every line
+    citation below* — was run before the insertion and found **two stale `wast.go` pointers that
+    predate it**, repaired here by content: this file's own `:2134` for the substring sites (it
+    resolved to a render function) and `internal/text/context.go`'s `:802` for the same claim (an
+    unrelated parse arm). Three more, in unrelated lanes, are
+    [#485](https://github.com/scttfrdmn/burroughs/issues/485) rather than ridden along — two of them
+    in accepted ADRs, one inside a premise offered as *"mechanically checkable"*.
+
 - **A module definition's third fact is scored: it instantiates**
   ([#367](https://github.com/scttfrdmn/burroughs/issues/367)). A module definition asserts three
   things — it decodes, it validates, it instantiates. #341 landed fact 2 for the text and quote forms
@@ -2338,8 +2405,10 @@ weakly-ordered platform.
     (`docs/laws/evidence-and-instruments.md`, tenth specimen).
   - **Both lanes measured identical to the pre-registered baseline** — default 60840 pass / 185 fail /
     66 unsupported / 4053 gated, all-on 64862 / 184 / 0 — because the harness matches expectations with
-    `strings.Contains` — `internal/spec/wast.go:2134` and five more sites, every expectation match
-    the harness has — so lengthening a message can only break a row whose expectation the longer
+    `strings.Contains` — the six `strings.Contains(got, c.Expect)` sites in `internal/spec`'s run
+    loop, every expectation match the harness has (this cited `internal/spec/wast.go:2134`, which
+    resolved to a render function; re-pointed by content in the entry below) — so lengthening a
+    message can only break a row whose expectation the longer
     sentence stops containing, and no board row expects
     the retired phrasing. The `unsupported` delta is **zero and structural**: this PR does not change
     what the harness can ask. What moved is 11 in-package witness rows, updated to the reference's
