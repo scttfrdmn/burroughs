@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/scttfrdmn/burroughs/internal/binary"
+	"github.com/scttfrdmn/burroughs/internal/validate"
 )
 
 // The 0xfb region's four cast sub-opcodes (decode.ml:636-641).
@@ -248,7 +249,20 @@ func matchHeapType(a, b heapType) bool {
 			return false // arm 12, `t1 = t2`, and a concrete type is not bottom
 		}
 		if b.mod != nil {
-			return matchDeftype(a.mod, a.idx, b.mod, b.idx, nil) // arm 9
+			// Arm 9, through the one comparator in the tree as of 0042. This called
+			// `call.go`'s `matchDeftype`, the second implementation; the relation is
+			// `internal/validate`'s now, so a cast verdict and a validation verdict cannot
+			// disagree about the same two types.
+			//
+			// **No corpus row witnesses this site's change and that is stated rather than
+			// discovered.** All five rows the deletion was measured on arrive through
+			// `call_indirect`; arm 9 has none, so the only instrument that can say whether
+			// this line moved a verdict is the criterion's term-for-term bound on every
+			// other bucket. What changes here in principle is that the relation now reads
+			// `RecStart`/`RecLen`, so two structurally identical types in differently
+			// shaped rec groups stop being interchangeable for `ref.cast` as they already
+			// stopped being interchangeable for the linker (grave #368).
+			return validate.MatchDefType(a.mod, a.idx, b.mod, b.idx) // arm 9
 		}
 		return matchConcreteAbstract(a, b.kind) // arm 10
 	}
@@ -380,8 +394,8 @@ func typeOfRef(r ref, site string) (refType, error) {
 	case r.Obj != nil:
 		// The concrete aggregate type the object was allocated with, read off the provenance
 		// pair rather than a cached comptype pointer — 0027 decision 5, and the index is the
-		// load-bearing half here: `matchDeftype` walks supertype *indices*, so a pointer to
-		// the comptype could not answer a cast at all.
+		// load-bearing half here: `validate.MatchDefType` walks supertype *indices*, so a
+		// pointer to the comptype could not answer a cast at all.
 		return refType{heap: heapType{idx: r.Obj.typeIdx, mod: r.Obj.mod}}, nil
 
 	case r.Exc != nil:
@@ -451,7 +465,8 @@ func castTypeAt(fn *binary.Func, pc int, site string) (binary.ValType, error) {
 // written so far, all of which trap on null, and it is why this file shares nothing with
 // `trapNullStruct` and friends.
 //
-// `subst_reftype` is the substitution this engine does not have (see `matchDeftype`'s scope note);
+// `subst_reftype` is the substitution this engine does not have (the scope note is `sameRef`'s doc
+// comment, `internal/validate/match.go:428-441`, as of 0042 — it used to be `matchDeftype`'s);
 // what stands in for it is that both sides carry their own module, so a rec-group-relative index
 // never needs canonicalizing to be resolved — only to be compared *across* rec groups, which is the
 // documented boundary.

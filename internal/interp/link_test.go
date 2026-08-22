@@ -568,7 +568,7 @@ func TestCallIndirectThroughAnImportedFunctionTypeChecks(t *testing.T) {
 // nothing else, so 42 assert_unlinkable vectors (table/memory limits, global type or
 // mutability, a func's own signature) were passing as though matching kind were matching type.
 // One table row per kind, each changing exactly the field the reference's match_limits /
-// match_globaltype / sameFuncType would reject on — a mismatch in one field with the others
+// match_globaltype / match_functype would reject on — a mismatch in one field with the others
 // held equal, which is what makes a passing row *and* a failing row both informative: an
 // over-broad comparison (checking min but not max, say) would still catch some rows here and
 // only a full-coverage read of the table would show which.

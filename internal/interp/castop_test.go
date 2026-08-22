@@ -374,13 +374,42 @@ func TestConcreteSubtypingIsDeclaredNotStructural(t *testing.T) {
 	}
 }
 
-// TestCyclicSupertypeChainTerminatesWithTheReferenceVerdict witnesses the two cycle guards in
-// `matchDeftype`/`sameDeftype`, which nothing else does.
+// TestCyclicSupertypeChainTerminatesWithTheReferenceVerdict witnesses the termination guards a
+// cyclic declared-supertype chain reaches, which nothing else does.
+//
+// # Re-pointed by 0042, and the mechanism under it changed
+//
+// It used to name `matchDeftype`/`sameDeftype`'s two cycle guards. Those functions are deleted and
+// the rows now run through `internal/validate`, whose guards are **not the same mechanism**: a
+// `depth` bound against the two type spaces' combined size (`match.go:370` in `sameDefType`,
+// `match.go:556` in `matchDeclaredSupertypes`) rather than repeat detection. The verdicts are
+// unchanged, which is the only reason this reads as a re-pointing at all.
+//
+// **Which disjunct each row reaches was re-measured with a probe, not re-derived by reading**, and
+// all three moved — the `guard` column below is that measurement:
+//
+//   - row 1 reaches disjunct **1**, same-module index identity (`match.go:305`). The cycle is never
+//     entered: source and target are the same index in the same module, so the short-circuit
+//     answers before any walk starts. It witnesses no guard at all now, and says so.
+//   - row 2 reaches `sameDefType`'s **depth bound** (which returns *false*, so disjunct 2 no longer
+//     answers this row) and then disjunct **3**'s `c.same() && sup == want` (`match.go:564`), which
+//     is what returns true.
+//   - row 3 reaches `matchDeclaredSupertypes`'s **depth bound** and returns false.
+//
+// Row 2 carries a fact about `internal/validate` worth stating here because this is where it was
+// found: the rolled-form story — *"the cycles have become ordinals"* (`match.go:323`) — covers
+// **intra-group** cycles only. Two separately-declared singleton types whose supertypes point at
+// each other are cross-group references at every rung, so `sameDefType` recurses and it is the
+// `depth` bound, not the rolling, that stops it. And **that bound's only witness in the tree is
+// this row**: probing every disjunct across `internal/validate`'s own suite, `internal/interp`, and
+// the all-gates-on corpus lane, `sameDefType`'s bound is reached exactly once and it is here.
 //
 // # Provenance: synthetic, and the corpus cannot supply these
 //
 // Every row here is hand-built, and the reason is measurable rather than asserted: instrumenting
-// both guards with a `println` and running the **entire all-gates-on lane** produces **zero** hits.
+// the guards with a `println` and running the **entire all-gates-on lane** produces **zero** hits —
+// re-measured against the new guards for 0042 rather than carried over, since a provenance claim
+// about a mechanism that was replaced is a claim about nothing.
 // That is not an accident of coverage — a cyclic declared-supertype chain is exactly what
 // `check_subtype_sub`'s forward-reference and finality rules (`valid.ml:169-174`) reject, so the only
 // vectors that would exercise it are `assert_invalid` ones, and with no validator (#9) those score
@@ -388,7 +417,9 @@ func TestConcreteSubtypingIsDeclaredNotStructural(t *testing.T) {
 // incapable of asking about, which is the definition of a control that has to be written by hand.
 //
 // The modules are accepted here because the decoder has no validator behind it — the same layering
-// debt `matchDeftype`'s doc comment cites, reached from the direction that demonstrates it.
+// debt `internal/validate`'s own scope notes cite (`match.go:542-551` — the bound is there because
+// the property that makes the walk finite is established by a check this build may not have run
+// yet), reached from the direction that demonstrates it.
 //
 // # What is falsifiable and what is not
 //
@@ -419,28 +450,34 @@ func TestCyclicSupertypeChainTerminatesWithTheReferenceVerdict(t *testing.T) {
 	}{
 		{
 			name:  "self-referential type, equal comptypes",
-			guard: "sameDeftype (disjunct 2)",
+			guard: "disjunct 1, same-module index identity (match.go:305) — measured",
 			src: `(module (type $t (sub $t (struct)))
   (func (export "c") (result i32) (ref.test (ref $t) (struct.new_default $t))))`,
 			want: 1,
-			why:  "a type matches itself; the repeat is disjunct 2's identity short-circuit, so it agrees",
+			why: "a type matches itself, and it never reaches the cycle: source and target " +
+				"are one index in one module, so disjunct 1 answers first",
 		},
 		{
-			name:  "two-cycle, equal comptypes",
-			guard: "sameDeftype (disjunct 2)",
+			name: "two-cycle, equal comptypes",
+			guard: "disjunct 3's sup == want (match.go:564), after sameDefType's depth bound " +
+				"returns false (match.go:370) — measured",
 			src: `(module (type $a (sub $b (struct))) (type $b (sub $a (struct)))
   (func (export "c") (result i32) (ref.test (ref $b) (struct.new_default $a))))`,
 			want: 1,
-			why:  "the cycle makes the two indistinguishable as shapes, and disjunct 2 is a shape equality",
+			why: "shape equality gives up at its depth bound here — the cross-group " +
+				"references recurse rather than roll — and the upward walk then finds that " +
+				"$a's declared supertype is $b outright",
 		},
 		{
 			name:  "two-cycle with unequal comptypes, unrelated target",
-			guard: "matchDeftype (disjunct 3)",
+			guard: "matchDeclaredSupertypes's depth bound (match.go:556) — measured",
 			src: `(module (type $a (sub $b (struct (field i32)))) (type $b (sub $a (struct)))
   (type $c (sub (struct (field f64))))
   (func (export "c") (result i32) (ref.test (ref $c) (struct.new_default $a))))`,
 			want: 0,
-			why:  "disjunct 2 fails at every pair, so only the upward walk is left; $a has no declared path to $c and the cycle must not invent one",
+			why: "disjunct 2 fails at every pair, so only the upward walk is left; $a has no " +
+				"declared path to $c, the cycle must not invent one, and the depth bound is " +
+				"what ends the climb",
 		},
 	} {
 		t.Run(c.name, func(t *testing.T) {

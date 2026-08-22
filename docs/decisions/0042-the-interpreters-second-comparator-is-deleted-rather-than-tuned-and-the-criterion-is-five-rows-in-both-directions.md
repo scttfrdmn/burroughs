@@ -1,6 +1,8 @@
 # 0042 — The interpreter's second comparator is deleted rather than tuned, and the criterion is five rows in both directions
 
-Date: 2026-08-21 · Status: **proposed** — authorized to be authored, not yet stamped on its choice
+Date: 2026-08-21 · Status: **proposed** — authorized to be authored, not yet stamped on its choice by
+any artifact this document can cite. **Its implementation has landed regardless**; see
+[Implementation](#implementation-landed-under-a-proposed-status-and-the-field-is-the-open-item).
 
 > The authorization is Scott's order on the #474 review, relayed to
 > [a durable comment](https://github.com/scttfrdmn/burroughs/pull/474#issuecomment-5376316026):
@@ -10,6 +12,12 @@ Date: 2026-08-21 · Status: **proposed** — authorized to be authored, not yet 
 > left open. So the `Status:` stays open, per the law that a Status field is a citation to an approval —
 > there is an artifact for *write this*, and none yet for *this option*. Held at `proposed` on 0019's
 > own precedent, which was held for the same reason and for the same relation.
+
+> **Line citations below describe the pre-change tree and are left in that tense.** Most of them name
+> lines inside the five functions this ADR deletes, so there is nothing to re-point them at: the
+> Context and Decision sections are a description of the code as it stood on 2026-08-21, which is what
+> an ADR is. #456's open question — whether a line number inside a tombstone is a historical address —
+> is answered here only for this document, and only because the deletion forces it.
 
 Filed against **#475** and downstream of **0019** (accepted), whose stamp decided this question in
 principle and deferred it on a condition that has since been met.
@@ -173,9 +181,12 @@ Recorded here because each is a sentence a reader will meet *after* the change a
    do not literally falsify this, because M10/M11 is a **cross-module** relabelling and all five vectors
    are single-module. What they falsify is the reading the sentence invites: that the disjunct-2 gap is
    unwitnessed. It is witnessed, in both polarities, through `call_indirect`.
-3. `internal/spec/spec_test.go:10593` describes `Instance.link` as comparing with `sameFuncType`. Grave
+3. `internal/spec/spec_test.go:10616` describes `Instance.link` as comparing with `sameFuncType`. Grave
    #368 moved the linker off it; `sameFuncType` has exactly one non-test caller and it is not the
-   linker.
+   linker. (The number is the *current* location of that sentence, re-pointed twice since this list was
+   written — it was `:10548`, then `:10593` — because a pointer that asserts where a live sentence is
+   gets repaired while a pointer recording where something used to be does not. The sentence itself now
+   carries a tense correction rather than a deletion, per the implementation below.)
 4. `call.go:739` cites **`matchesDeclaredSupertype` "below"** as disjunct 3. No such function exists
    anywhere in the tree — grave #261's refactor folded the walk into `matchDeftype` (`:865`) and left
    the pointer. **This is the failure mode of the citation form I would recommend over a line number,
@@ -216,3 +227,84 @@ the all-on lane at an older revision. Stated as unmeasured rather than assumed e
 - **This ADR's implementation queues behind #367**, which Scott approved as next in the same review. One
   ADR earns one implementation, and this one is outstanding until then; flagged rather than resolved,
   because the ordering is his.
+
+## Implementation: landed under a `proposed` status, and the field is the open item
+
+Appended after the fact. Everything above is left as it was written, including the two claims below
+that it got wrong — the point of a pre-registration is that it can be scored.
+
+**The board moved 17 → 7. The forecast was 17 → 12.** Ten rows, not five: `65092 → 65102 pass`,
+`17 → 7 fail`, `0 gated`, and the ten are exactly ten named rows, so the criterion's third line —
+every other bucket unmoved, term for term — held. The bounds are re-based with a ledger entry each.
+
+**The extra five are `type-subtyping.wast`'s — the site Scott ordered named in advance, and the
+pre-registration is scored against the prediction it carried.** It was registered as where residue
+would sit if the change fell short; instead all five *cleared* (`type-subtyping.wast: 119/119 pass,
+11 bound`). Naming the site still did the work it was ordered to do: a doubled yield arrived already
+attributed to a file someone had committed to watching, rather than as a surplus to be explained
+after the fact by whoever wanted it to be good news.
+
+**Attribution, measured by routing one call site at a time rather than inferred from the total:**
+
+| routed | rows that clear | which |
+|---|---|---|
+| `call_indirect` alone | 5 | `type-equivalence.wast:131,156,188` + `type-rec.wast:183,192` — the forecast's five |
+| arm 9 alone | 5 | `type-subtyping.wast:442,488,510,523,534` |
+| both | 10 | 17 → 7 |
+
+The ten are checkable against a *prior, independent* attribution: #357/#358's changelog entry
+enumerated all seventeen survivors by row, and the ten that cleared here are exactly its
+`indirect call type mismatch` five plus its `type-subtyping.wast` five, leaving its `array.wast` two
+and its five local-initialization rows. Two ledgers written for different reasons agreeing member for
+member is worth more than either total.
+
+**Which falsifies this ADR's own fourth Consequence**: *"arm 9 has none"* — no corpus row witnessing
+the cast family's verdict change. Arm 9 alone owns five, and they are five that were failing. The
+claim was built by attributing the seventeen fails' *known* members to `call_indirect` and reading
+the complement as empty, and **an attributed partition is not a partition**: attribution names where
+you looked, and the rows nobody had attributed were sitting in a third file. The consequence of
+getting it wrong was almost entirely benign here — it under-promised — but the same reasoning in the
+other direction is a silent behaviour change with a bound that says nothing, which is exactly what
+that bullet was written to prevent.
+
+**The residue is 7 and none of it is this ADR's**, named rather than absorbed, per the order:
+`array.wast` 2 (`constant expression required`) and the five local-initialization rows
+(`func.wast:659`, `local_init.wast:25,29,39,52`), which are
+[#452](https://github.com/scttfrdmn/burroughs/issues/452) — `decision-needed:scott`, deliberately not
+taken. Neither group touches the subtype relation, so this change had no path to them.
+
+**And the two-test list was incomplete — the finding is how it was built.** The Criterion names two
+controls that must move with the deletion. **Seven** test functions actually did, derived from
+`git diff -U0`'s hunk headers rather than from memory: four in `internal/interp/call_test.go`, two in
+`castop_test.go`, one in `link_test.go`. The two named are exactly the two whose *names* begin
+`TestSameFuncType`, which is the tell. Widening one step to the identifier — `grep sameFuncType` over
+the pre-change test files — would have found five of the seven (`call_test.go`'s four, plus
+`link_test.go:571`'s comment); it would still have missed `castop_test.go`'s two, which reach the
+relation through arm 9 and **do not spell it once** — `grep -c sameFuncType` over that file at `HEAD`
+returns 0. So neither a name nor an identifier bounds the set. **A deletion's control domain
+is its call graph**, and the derivation that gets it right is the one that reads the callers of the
+call site, not the mentions of the callee. `TestFuncTypeStringIsTheReferenceSpelling` is the case that
+proves it: nothing in this document anticipated it, and it changed.
+
+**The two named controls' successors**, so the pre-change names above resolve to something for a
+later reader:
+
+| named here | now |
+|---|---|
+| `TestSameFuncTypeDeclaredSupertypeWalk` | `TestCallIndirectComparisonDeclaredSupertypeWalk` (`call_test.go:417`), with `…Falsification` (`:512`) |
+| `TestSameFuncTypeCorpusScope` | `TestCallIndirectComparisonRecGroupBoundary` (`:597`) — same shape, and the false positive it documented is now a refusal, so it asserts the right answer instead of the wrong one |
+
+**What the implementation added that the ADR did not ask for**, both because a principal ordered it:
+the birth requirement is discharged by asserting structural identity directly against
+`MatchDefType`'s disagreement, and the mutation that *failed* to fire is kept as a measurement rather
+than dropped — `internal/validate`'s ordinal-and-group-length condition, neutered, leaves
+`internal/interp` green, because both fixture groups are length 2 with both ordinals 0 and that
+condition never decides them. The discriminator is the cross-group refusal. *The condition a doc
+comment finds easiest to name is not the condition the fixture turns on.*
+
+**The `Status:` field is the one thing this PR could not do.** The stamp on the option exists as a
+spoken review order; nothing durable holds it, and a self-authored relay of an approval is the
+forged-provenance failure the Status law is written against — worse than a wrong option, because it
+is a false statement about the project's own governance. So the field stays at `proposed` with its
+implementation landed, which is an honest inconsistency rather than a hidden one, and the flip is an
+ask in the implementation PR's **Decisions needed from Scott**.

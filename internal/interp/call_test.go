@@ -2,9 +2,11 @@ package interp
 
 import (
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/scttfrdmn/burroughs/internal/binary"
+	"github.com/scttfrdmn/burroughs/internal/validate"
 )
 
 // TestCallStackExhaustionIsReportedNotCrashed is the control `callBudget` cites, and its subject is
@@ -380,9 +382,26 @@ func TestFuncTypeStringIsTheReferenceSpelling(t *testing.T) {
 	}
 }
 
-// TestSameFuncTypeDeclaredSupertypeWalk pins 0019's own named widening — `sameFuncType` climbing
-// a declared supertype chain rather than only comparing structure — against the cases the task
-// that landed it names explicitly.
+// TestCallIndirectComparisonDeclaredSupertypeWalk pins the properties `call_indirect`'s type check
+// depends on, asserted of the relation it actually calls — `validate.MatchDefType` as of 0042,
+// `sameFuncType` before it. The rows are 0019's: that ADR named the declared-supertype walk as its
+// widening and listed the cases the walk had to get right. They outlive their subject's deletion
+// because they were always properties of the *relation*, never of the function, and **a tripwire
+// whose subject dissolves is re-pointed rather than quietly dropped** — 0042's own bound on itself.
+//
+// One row is not merely preserved but newly *correct*, and it is separated out rather than folded
+// in: see TestCallIndirectComparisonRecGroupBoundary, which asserted a known-wrong verdict and has
+// flipped.
+//
+// **`RecStart`/`RecLen` are set on every fixture, and a fixture that omitted them would not be a
+// weaker test but a vacuous one.** A deftype is a whole rec group plus the member's ordinal
+// (`binary.CompType`'s own note on why those two fields are the type's identity), so
+// `MatchDefType`'s equality disjunct compares group length and ordinal *before* it compares
+// anything structural (`internal/validate/match.go:379`). Leaving both fields zero gives every type
+// a group of length zero, the member loop never runs, and the disjunct degenerates to `got ==
+// want` — the fixtures would then agree with these assertions for a reason having nothing to do
+// with what they assert. A bare declaration is a singleton group (`RecStart` = own index, `RecLen`
+// = 1, `decode.ml:276`'s `RecT [st]`), which is what `labelRecGroup` stamps and what these set.
 //
 // **The "two structurally identical, nominally unrelated types" case needs care about what
 // "unrelated" actually means, and getting it wrong was the first draft's own mistake.** Two
@@ -395,16 +414,18 @@ func TestFuncTypeStringIsTheReferenceSpelling(t *testing.T) {
 // two declarations that agree on the comptype and the (empty) supertype list but disagree on
 // `Final`: `$t1 (sub (func))` (non-final) versus `$t2 (sub final (func))` (final), the exact M2
 // shape. That pair must compare unequal, and did not before `Final` was retained.
-func TestSameFuncTypeDeclaredSupertypeWalk(t *testing.T) {
+func TestCallIndirectComparisonDeclaredSupertypeWalk(t *testing.T) {
 	// type-subtyping.wast:596-599/602-608's own shape: $t1 non-final, $t2 final, both `(func)`.
 	finalityDiffers := &binary.Module{
 		Types: []binary.CompType{
-			{Kind: binary.CompFunc, Final: false}, // idx 0: $t1 = (sub (func))
-			{Kind: binary.CompFunc, Final: true},  // idx 1: $t2 = (sub final (func))
+			// idx 0: $t1 = (sub (func)), its own singleton rec group
+			{Kind: binary.CompFunc, Final: false, RecStart: 0, RecLen: 1},
+			// idx 1: $t2 = (sub final (func)), its own singleton rec group
+			{Kind: binary.CompFunc, Final: true, RecStart: 1, RecLen: 1},
 		},
 	}
-	if sameFuncType(finalityDiffers, 0, finalityDiffers, 1) {
-		t.Error("sameFuncType($t1, $t2) = true, want false: identical comptype and supertype " +
+	if validate.MatchDefType(finalityDiffers, 0, finalityDiffers, 1) {
+		t.Error("MatchDefType($t1, $t2) = true, want false: identical comptype and supertype " +
 			"list but opposite finality must not match — the defect #164 left open " +
 			"(type-subtyping.wast:602,610)")
 	}
@@ -413,132 +434,195 @@ func TestSameFuncTypeDeclaredSupertypeWalk(t *testing.T) {
 	// not mistaken for a general nominal-identity requirement.
 	finalityAgrees := &binary.Module{
 		Types: []binary.CompType{
-			{Kind: binary.CompFunc, Final: true},
-			{Kind: binary.CompFunc, Final: true},
+			{Kind: binary.CompFunc, Final: true, RecStart: 0, RecLen: 1},
+			{Kind: binary.CompFunc, Final: true, RecStart: 1, RecLen: 1},
 		},
 	}
-	if !sameFuncType(finalityAgrees, 0, finalityAgrees, 1) {
-		t.Error("sameFuncType(finalityAgrees 0, 1) = false, want true: two declarations " +
+	if !validate.MatchDefType(finalityAgrees, 0, finalityAgrees, 1) {
+		t.Error("MatchDefType(finalityAgrees 0, 1) = false, want true: two declarations " +
 			"agreeing on finality, comptype, and (empty) supertypes canonicalize to the same " +
 			"type under the reference's own structural-equivalence semantics")
 	}
 
-	// A type declared as its own supertype's subtype: idx 1 is `(sub 0 (func))`, so 0's own
+	// A type declared as its own supertype's subtype: idx 1 is `(sub 0 (func))`, so 1's own
 	// declared-supertype walk (disjunct 3) should find that 1 matches 0 — the sub-is-a direction,
 	// `call_indirect`'s own use (the callee's *actual* type walks its own supertypes looking for
 	// the *declared* type at the call site).
 	subOf := &binary.Module{
 		Types: []binary.CompType{
-			{Kind: binary.CompFunc, Final: true},                          // idx 0: (func), the supertype
-			{Kind: binary.CompFunc, Final: true, Supertypes: []uint32{0}}, // idx 1: (sub 0 (func))
+			// idx 0: (func), the supertype
+			{Kind: binary.CompFunc, Final: true, RecStart: 0, RecLen: 1},
+			// idx 1: (sub 0 (func)) — a cross-group supertype reference, which stays an
+			// absolute index under rolling and so is compared as a definition rather than
+			// as an ordinal.
+			{Kind: binary.CompFunc, Final: true, Supertypes: []uint32{0}, RecStart: 1, RecLen: 1},
 		},
 	}
-	if !sameFuncType(subOf, 1, subOf, 0) {
-		t.Error("sameFuncType(subOf 1, subOf 0) = false, want true: idx 1 declares idx 0 as its " +
+	if !validate.MatchDefType(subOf, 1, subOf, 0) {
+		t.Error("MatchDefType(subOf 1, subOf 0) = false, want true: idx 1 declares idx 0 as its " +
 			"supertype, so a call site declaring idx 0 must accept a callee actually typed idx 1")
 	}
 	// And the reverse direction must NOT hold: declaring a supertype does not make the supertype
 	// itself walk down to its subtypes (subtyping is not symmetric).
-	if sameFuncType(subOf, 0, subOf, 1) {
-		t.Error("sameFuncType(subOf 0, subOf 1) = true, want false: a supertype does not match " +
+	if validate.MatchDefType(subOf, 0, subOf, 1) {
+		t.Error("MatchDefType(subOf 0, subOf 1) = true, want false: a supertype does not match " +
 			"by declaring itself as its own subtype's subtype — subtyping is directional")
 	}
 
 	// The pre-existing MVP case: two functypes with the same params/results and no `sub` at all
 	// (Final's zero-ish default true, no declared supertypes) — must still compare equal, unchanged
-	// by this widening.
+	// by 0019's widening and unchanged by 0042's replacement of the whole reduction.
 	plain := &binary.Module{
 		Types: []binary.CompType{
-			{Kind: binary.CompFunc, Final: true, Func: binary.FuncType{Params: []binary.ValType{binary.I32}}},
-			{Kind: binary.CompFunc, Final: true, Func: binary.FuncType{Params: []binary.ValType{binary.I32}}},
+			{
+				Kind: binary.CompFunc, Final: true, RecStart: 0, RecLen: 1,
+				Func: binary.FuncType{Params: []binary.ValType{binary.I32}},
+			},
+			{
+				Kind: binary.CompFunc, Final: true, RecStart: 1, RecLen: 1,
+				Func: binary.FuncType{Params: []binary.ValType{binary.I32}},
+			},
 		},
 	}
-	if !sameFuncType(plain, 0, plain, 1) {
-		t.Error("sameFuncType(plain 0, plain 1) = false, want true: two identical declared " +
+	if !validate.MatchDefType(plain, 0, plain, 1) {
+		t.Error("MatchDefType(plain 0, plain 1) = false, want true: two identical declared " +
 			"types with no sub involved must keep comparing equal — the pre-0019 MVP case, " +
-			"which this widening must not regress")
+			"which neither the widening nor the deletion may regress")
 	}
 }
 
-// TestSameFuncTypeDeclaredSupertypeWalkFalsification is the birth requirement (CLAUDE.md — "a
-// control isn't born until it has been watched die") for the unrelated-types row above, run as an
-// actual test rather than a comment claiming the result: it calls `structFuncTypeEqual` directly,
-// which is exactly what `sameFuncType` reduced to before 0019's widening, and confirms the
-// defect's own shape — two nominally-unrelated, structurally-identical types comparing *equal*
-// under the old reduction, which is the wrong verdict #164 left open and the reason this task
-// exists.
-func TestSameFuncTypeDeclaredSupertypeWalkFalsification(t *testing.T) {
-	a := &binary.FuncType{}
-	b := &binary.FuncType{}
-	if !structFuncTypeEqual(a, b) {
-		t.Fatal("structFuncTypeEqual(a, b) = false; the falsification premise requires the old " +
-			"reduction to agree on structure alone, which it does by construction here")
+// TestCallIndirectComparisonDeclaredSupertypeWalkFalsification is the birth requirement (CLAUDE.md
+// — "a control isn't born until it has been watched die") for the finality row above, and it is
+// **re-pointed rather than retired**, which is the harder half of what 0042 asked of itself.
+//
+// It used to call `structFuncTypeEqual` — the pre-0019 reduction, deleted with the rest of the
+// second comparator — and show that reduction *agreeing* on the finality-differing pair, which is
+// what made the row above assert something. Deleting the function removed the probe's callee, and
+// **a falsification retired because the thing it falsifies moved is how a guard dies quietly**
+// (Scott, on the #478 review). So the premise is asserted directly instead: every field pure
+// structural equality could see is compared here, in this test, and shown identical — and then
+// `MatchDefType` is shown to disagree anyway.
+//
+// That is a stronger probe than the deleted call rather than a substitute for it, because it no
+// longer needs a second implementation to exist in order to say what the surviving one adds. The
+// list of fields is the whole of what the deleted `compTypeEqual`/`structFuncTypeEqual` pair
+// compared — kind, both functype sides, the field list, the declared supertype list — so if a
+// future reader wants to know what "structure alone" meant, it is this expression and not a
+// citation to a function that is gone.
+func TestCallIndirectComparisonDeclaredSupertypeWalkFalsification(t *testing.T) {
+	mod := &binary.Module{
+		Types: []binary.CompType{
+			{Kind: binary.CompFunc, Final: false, RecStart: 0, RecLen: 1},
+			{Kind: binary.CompFunc, Final: true, RecStart: 1, RecLen: 1},
+		},
 	}
-	// The point: structFuncTypeEqual alone (the pre-widening reduction) cannot distinguish this
-	// from the genuinely-equal case, which is exactly why sameFuncType had to widen past it.
+	a, b := &mod.Types[0], &mod.Types[1]
+
+	if a.Kind != b.Kind ||
+		!slices.Equal(a.Func.Params, b.Func.Params) ||
+		!slices.Equal(a.Func.Results, b.Func.Results) ||
+		!slices.Equal(a.Fields, b.Fields) ||
+		!slices.Equal(a.Supertypes, b.Supertypes) {
+		t.Fatal("the falsification premise requires the two comptypes to be identical in " +
+			"everything structural equality can see (kind, params, results, fields, declared " +
+			"supertypes); they are not, so this test is no longer probing what it claims")
+	}
+	// Identical by that measure, and still not the same type — `Final` differs, which the deleted
+	// reduction's innermost comparison did not look at and which `MatchDefType` compares as part
+	// of the rolled subtype.
+	if validate.MatchDefType(mod, 0, mod, 1) {
+		t.Error("MatchDefType(mod, 0, 1) = true, want false: the pair is structurally identical " +
+			"by the pre-0019 measure asserted just above, so a relation that reduced to " +
+			"structural equality would say true here — the row above would then be asserting " +
+			"nothing")
+	}
 }
 
-// TestSameFuncTypeCorpusScope pins the measured scope boundary `sameFuncType`'s own doc comment
-// states: this reduction resolves #164's four vectors down to two, and the other two
-// (`type-subtyping.wast:752,767`, the M10/M11 pair) stay unresolved — not silently, but as a
-// documented, tested false positive within the stated scope.
+// TestCallIndirectComparisonRecGroupBoundary asserts the verdict the reference gives on
+// `type-subtyping.wast`'s M10/M11 pair, and **the flip is this test's whole content.**
+//
+// Its predecessor (`TestSameFuncTypeCorpusScope`, which no longer exists — 0042 deleted the
+// function it was named for and this test is its replacement) asserted the *wrong* answer
+// deliberately, as a
+// documented false positive: `matchDeftype` compared the exporter's `$f21` and the importer's
+// `$f11` as isolated CompTypes, found them identical, and reported a match the reference refuses
+// (`assert_unlinkable`, "incompatible import type"). Its error message named its own successor
+// condition — *"if this assertion starts failing, a rec-group fix landed … and this test should
+// flip to the correct 'false'"* — and 0042 is that landing, by replacement rather than by repair.
 //
 // **The mechanism is subtler than "different absolute index, same shape", and getting that wrong
-// was this test's own first draft.** The reference's deftype identity is over the *whole rec
-// group*, not over one member's own declared-supertype list in isolation: `roll_rectype`
-// (types.ml:255-261) converts an *intra-group* supertype reference to a group-relative `Rec i`,
-// while a *cross-group* reference stays an absolute `Idx`. M10's exporter declares `$f21`/`$f22`
-// as their own two-member rec group, where `$f22`'s supertype `$f11` is defined in an *earlier*
-// group — a cross-group reference, staying `Idx`. The importer's `$f11`/`$f12` are one rec group
-// where `$f12`'s supertype `$f11` is its *own* group's first member — an intra-group reference,
-// becoming `Rec 0`. So the two groups' canonical shapes genuinely differ (one member's supertype
-// is `Idx`, the other's is `Rec`), even though the *specific member being compared* (`$f21`,
-// bare, no supertypes) is byte-for-byte identical to the importer's `$f11` in isolation.
+// was the predecessor's own first draft.** Deftype identity is over the *whole rec group*, not over
+// one member's declared-supertype list in isolation: `roll_rectype` (types.ml:255-261) converts an
+// *intra-group* supertype reference to a group-relative `Rec i`, while a *cross-group* reference
+// stays an absolute `Idx`. M10's exporter declares `$f21`/`$f22` as their own two-member group,
+// where `$f22`'s supertype `$f11` is defined in an *earlier* group — cross-group, staying `Idx`.
+// The importer's `$f11`/`$f12` are one group where `$f12`'s supertype `$f11` is its own group's
+// first member — intra-group, becoming `Rec 0`. So the two groups' canonical shapes genuinely
+// differ, even though the *specific member being compared* (`$f21`, bare, no supertypes) is
+// byte-for-byte identical to the importer's `$f11` in isolation.
 //
-// This decoder retains no rec-group boundary at all, so `matchDeftype` cannot see the
-// difference — it compares `$f21` and `$f11` as isolated CompTypes, finds them identical (both
-// non-final, no supertypes, empty functype), and reports a match the reference refuses. That is
-// the measured false positive, asserted here as what currently happens — not as what should
-// happen — so a future rec-group-tracking fix has a red test turning green as its own evidence,
-// rather than this gap silently persisting under a green board.
+// That is exactly what `RecStart`/`RecLen` on these fixtures buy, and it is the reason the
+// assertion could flip without anyone touching the comparison at this call site: `MatchDefType`
+// walks both groups member by member (`match.go:384`) and `sameRef` asks, of each supertype
+// reference, whether it points inside its own group — one in, one out is a mismatch
+// (`match.go:443-449`). The old reduction had nothing to ask that question with.
 //
-// **The board coupling this test used to assert is struck, and the assertion is not (#368).** The
-// original error message promised that `type-subtyping.wast:752` and this assertion would flip
-// together. `:752` flipped and this did not, because the grave routed the *linker* through
-// `internal/validate`'s rolled relation — which retains `RecStart`/`RecLen` — while `matchDeftype`
-// kept serving `call_indirect`/`call_ref`/`ref.cast` unchanged. Two claims were bundled in one
-// sentence: "the gap is still here" (true, and still asserted below) and "the corpus will tell you
-// when it goes" (false as of #368, because the corpus row moved for an unrelated reason). *A
-// tripwire whose subject dissolves is re-pointed, never closed* — the risk is live and now has no
-// corpus witness at all, which makes this direct assertion the only instrument left on it.
-func TestSameFuncTypeCorpusScope(t *testing.T) {
+// # Birth requirement, and the mutation that did not fire
+//
+// Two mutations were run, each over the whole `internal/interp` package and over the all-on corpus
+// lane, and **the first one was the wrong line**:
+//
+//   - `sameDefType`'s ordinal-and-group-length condition (`match.go:379-381`) replaced by `if
+//     false`: `internal/interp` stays green — this test does **not** fire. It cannot: M10/M11's two
+//     groups are both length 2 and the two compared members are both ordinal 0, so that condition
+//     is satisfied either way and never decides this fixture. The corpus does see it (all-on
+//     7 → 11 fails), so the condition is covered — just not here.
+//   - the cross-group refusal (`match.go:445-447`, with the intra-group arm's guard widened so the
+//     variable stays live) removed, letting a mismatched-membership pair fall through to structural
+//     comparison: this test fails with the message below, and it is the **only** failure in
+//     `internal/interp`. The corpus goes 7 → 18.
+//
+// So the birth requirement is discharged against `sameRef`, and the record of the mutation that
+// failed to fire is kept rather than dropped — **a mutation that does not kill is a measurement**,
+// and here it measures that the condition a doc comment finds easiest to name is not the condition
+// the fixture turns on. `RecStart`/`RecLen` are still load-bearing on these fixtures: they are what
+// `recScope` is built from, and it is the scopes, not the length check, that make `sameRef`'s
+// question answerable at all.
+//
+// **The risk this test was left standing for is discharged, not retired.** #368 had already moved
+// the *linker* onto this relation, which is why `type-subtyping.wast:752` passed while the gap
+// remained; the gap's remaining consumers were `call_indirect` and the cast arms, and they now use
+// the same relation. So the direct assertion stays — as the instrument that says the consumers
+// really did move, since no corpus row reaches this shape through them.
+func TestCallIndirectComparisonRecGroupBoundary(t *testing.T) {
 	exporter := &binary.Module{
 		Types: []binary.CompType{
-			{Kind: binary.CompFunc, Final: false},                          // idx 0: $f11 = (sub (func))
-			{Kind: binary.CompFunc, Final: false, Supertypes: []uint32{0}}, // idx 1: $f12 = (sub $f11 (func)), same rec group as $f11
-			{Kind: binary.CompFunc, Final: false},                          // idx 2: $f21 = (sub (func)), its own rec group with $f22
-			{Kind: binary.CompFunc, Final: false, Supertypes: []uint32{0}}, // idx 3: $f22 = (sub $f11 (func)) — supertype is idx 0, a CROSS-group reference (type-subtyping.wast:748)
+			// idx 0/1: $f11, $f12 — one rec group, $f12's supertype intra-group.
+			{Kind: binary.CompFunc, Final: false, RecStart: 0, RecLen: 2},
+			{Kind: binary.CompFunc, Final: false, Supertypes: []uint32{0}, RecStart: 0, RecLen: 2},
+			// idx 2/3: $f21, $f22 — their own rec group; $f22's supertype is idx 0, a
+			// CROSS-group reference (type-subtyping.wast:748).
+			{Kind: binary.CompFunc, Final: false, RecStart: 2, RecLen: 2},
+			{Kind: binary.CompFunc, Final: false, Supertypes: []uint32{0}, RecStart: 2, RecLen: 2},
 		},
 	}
 	importer := &binary.Module{
 		Types: []binary.CompType{
-			{Kind: binary.CompFunc, Final: false},                          // idx 0: $f11 = (sub (func))
-			{Kind: binary.CompFunc, Final: false, Supertypes: []uint32{0}}, // idx 1: $f12 = (sub $f11 (func)), same rec group
+			// idx 0/1: $f11, $f12 — one rec group, $f12's supertype intra-group.
+			{Kind: binary.CompFunc, Final: false, RecStart: 0, RecLen: 2},
+			{Kind: binary.CompFunc, Final: false, Supertypes: []uint32{0}, RecStart: 0, RecLen: 2},
 		},
 	}
 	// The corpus's actual question (type-subtyping.wast:752-757): does the exporter's export
 	// (typed $f21, idx 2) match the importer's declared type ($f11, idx 0)? The reference says
-	// no (`assert_unlinkable`, "incompatible import type") because the two rec groups' shapes
-	// differ per the mechanism above.
-	if !sameFuncType(exporter, 2, importer, 0) {
-		t.Error("sameFuncType(exporter $f21, importer $f11) = false, want true (the KNOWN false " +
-			"positive): this reduction has no rec-group boundary to distinguish $f21's group " +
-			"(whose sibling $f22 cross-references an earlier group) from $f11's group (whose " +
-			"sibling $f12 self-references within the group) — if this assertion starts failing, " +
-			"a rec-group fix landed in matchDeftype itself and this test should flip to the " +
-			"correct 'false'. It no longer predicts a board row: #368 moved the linker onto " +
-			"internal/validate's rolled relation, so type-subtyping.wast:752 already passes " +
-			"while this gap remains, and call_indirect/call_ref/ref.cast are the live consumers " +
-			"with no corpus vector of this shape reaching them")
+	// no, because the two rec groups' rolled shapes differ per the mechanism above.
+	if validate.MatchDefType(exporter, 2, importer, 0) {
+		t.Error("MatchDefType(exporter $f21, importer $f11) = true, want false: $f21's group " +
+			"has a sibling whose supertype is a cross-group reference while $f11's group has a " +
+			"sibling whose supertype is intra-group, so the two rolled forms differ and the " +
+			"reference refuses the import (type-subtyping.wast:752, assert_unlinkable). A true " +
+			"here means the rec-group facts stopped reaching this comparison — which is what the " +
+			"predecessor of this test asserted, deliberately, for as long as call_indirect and " +
+			"the cast arms had their own comparator")
 	}
 }
