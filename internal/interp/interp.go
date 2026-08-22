@@ -121,8 +121,10 @@ type Instance struct {
 	// **Retained rather than dropped, and read at the point of use** (memoryFor): a nil
 	// memory slot with no reason attached would make an access report "memory 0 of 1" when
 	// the truth is "this memory declared min above max", which is the engine being vague
-	// about its own input. Every one of these becomes unreachable when #9 lands, which is
-	// the same declared-and-tracked shape as ErrNotValidated itself.
+	// about its own input. Every one of these becomes unreachable once a validator rejects
+	// such a module ahead of instantiation — the same declared-and-tracked shape as
+	// ErrNotValidated itself, and the same condition, which is a state of the code rather
+	// than #9's closure (ADR 0043).
 	deferred error
 }
 
@@ -458,7 +460,10 @@ var ErrUnsupportedOp = errors.New("interp: no arm for opcode")
 // validator does not exist, so a body reaching this package can index a local that is not there
 // or pop a stack that is empty — and the choice is between panicking, checking, and being wrong.
 // This is the check: it returns rather than panics, it says which invariant failed, and it says
-// in this comment that every one of its call sites becomes unreachable when #9 lands. A fuzz
+// in this comment that every one of its call sites becomes unreachable **when a validator refuses
+// these modules before they reach this package** — a state of the code, not #9's closure, which is
+// a bookkeeping event this sentinel survives (ADR 0043 amended G-1's retirement condition for
+// exactly that reason, and this comment is the authority G-1's own clause used to cite). A fuzz
 // target over decoded-but-invalid modules is the reason it exists at all, because such a module
 // is exactly what the decoder accepts and the validator would not.
 //

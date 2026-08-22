@@ -201,13 +201,28 @@ commits to that reading.*
   containing a vector whose module reaches the interpreter unvalidated
   trips the same wall, and that contradicts the phase ladder the same
   contract establishes. The carve-out is named to #9 specifically, not to
-  a category of validator gaps, and retires itself when #9 lands — no
-  second amendment repeals it, because `ErrNotValidated`'s call sites
-  become unreachable by its own doc comment's own claim and the carve-out
-  has nothing left to except. It does not excuse missing arms or wrong
+  a category of validator gaps. **It retires when `ErrNotValidated` has no
+  reachable call site in the engine** — a state of the code, checkable by
+  grep, by `deadcode`, and by the compiler once the sentinel's declaration
+  goes. No second amendment repeals it: at that state the carve-out has
+  nothing left to except. It does not excuse missing arms or wrong
   answers: it excuses only the one named, structurally deferred question
   #9 has not yet been asked. Precedent: G-2's own #109 amendment, which
   named the true criterion rather than leaving a silent or ad hoc reading.*
+  *Retirement condition amended by Scott's stamp on the #482 review (ADR
+  0043, deliberation #483). It previously read "retires itself when #9
+  lands", which is a tracker event: closing the validator umbrella is a
+  state transition a person performs, and it is the correct bookkeeping
+  once that issue's residue is re-pointed at the slices still holding
+  work, while `ErrNotValidated`'s call sites survive it untouched. So the
+  clause was satisfiable by an act that changed no code. Two corollaries,
+  stated because a later reader would otherwise re-supply them wrongly:
+  the carve-out's subject going empty in a gate's suite makes it **inert
+  in that suite** and not retired — that zero has a second cause, a
+  harness that has lost the ability to attribute — and #9's issue state is
+  evidence about the condition at best, never the condition. What this
+  amendment leaves untouched is the excepted population: same vectors,
+  same attribution rule, same zero-defect requirement on the residue.*
 - **G-2.** Tracked set at v0.1: **all of Wasm 3.0 core**; threads;
   stack switching (pre-phase-4, tracked); component model + WASI 0.3.
   Wasm 3.0 core is the ten features the spec's own release appendix lists

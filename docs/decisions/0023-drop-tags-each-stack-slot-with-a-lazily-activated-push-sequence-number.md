@@ -5,6 +5,12 @@ delivered: the gated-u8 quadrant (measured, with its variance stated honestly ra
 smoothed over — see the measurement table's own caveat) and a deferral pointer for #9 (see "What
 this decision is *for*, and what retires it").
 
+> **That deferral pointer's condition inherits the shape [0043](0043-g-1s-carve-out-retires-on-zero-call-sites-not-on-the-validator-umbrellas-closure.md)
+> names.** "When #9 lands, this ADR's own mechanism is the thing to delete" is a tracker event;
+> what actually retires `stack.tracking` is `drop`'s arm being able to read a validated operand
+> type. The wording below is left as written — the pointer is the remedy, since rewriting it would
+> amend an accepted record about a subject 0043 did not deliberate.
+
 Filed against **grave #206** (found during #201's rung 2c falsification, PR #207), on Scott's own
 ruling: a decision that "amends 0002's core value model and has genuinely competing shapes,
 decided the way 0002 itself was decided — `make bench` numbers as the ADR's evidence, hot-path

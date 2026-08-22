@@ -467,8 +467,8 @@ var foreclosingLicensed = map[string]string{
 	// measurements, so a foreclosing word inside a dated PR narrative is a claim about the board as
 	// it stood then, not a statement that there is no work now. The tense is the mechanism.
 	"internal/spec/spec_test.go:7171 bound account unreachable SIMD": "past-tense account of #328's " +
-		"session; `unreachable` describes ErrNotValidated's call sites after #9 lands, a conditional " +
-		"about a tracked issue rather than a claim resting on the SIMD gate",
+		"session; `unreachable` describes ErrNotValidated's call sites once a validator refuses those " +
+		"modules first — a state of the engine, not a tracker event (ADR 0043), and not the SIMD gate",
 	"internal/spec/spec_test.go:9143 bound account never SIMD": "past-tense account of #196's board; " +
 		"`never` is what the default lane and the harness did at that measurement (\"never asked\", " +
 		"\"a setup `invoke` never wrote\"), and the paragraph exists to record a delta rather than to " +

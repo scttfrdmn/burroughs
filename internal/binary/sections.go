@@ -130,10 +130,10 @@ type Features struct {
 //
 // Past tense on purpose, and re-measured because #464's reconciliation found this sentence
 // asserting the flip-time figures in the present: the same 59 files now read **pass=25989 fail=0
-// gated=0**, so **the carve-out's subject in this suite is empty**. It is *inert, not retired* —
-// its retirement condition is #9 landing, and `ErrNotValidated` still has call sites throughout
-// `internal/interp`. A flip-time measurement stated in the present tense is the foreclosing-words
-// shape aimed at a number: still true of the moment it was taken, false of the tree it describes.
+// gated=0**, so **the carve-out's subject in this suite is empty**: *inert, not retired*, since the
+// condition is `ErrNotValidated` having no reachable call site and `internal/interp` is full of them.
+// (ADR 0043: it read "when #9 lands", a bookkeeping event those call sites outlive.) A flip-time
+// figure in the present tense is the foreclosing-words shape: true of its moment, false of the tree.
 //
 // **Second divergence: RelaxedSIMD.** G-1's own suite (the seven `*relaxed*.wast` files)
 // measures pass=77 fail=0 unsupported=0 gated=0, identical on arm64/darwin and
