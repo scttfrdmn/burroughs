@@ -942,8 +942,11 @@ func (c *context) noteDefined(k importKind) { c.defCount[k]++ }
 // (:157) — **one word per space**, written twice adjacently, and the only pair that differs
 // is `label`/`label ` by the reference's own trailing-space quirk. What made the false claim
 // survive is that `func.wast:966` writes `"duplicate func"` and the harness matches expected
-// strings by *substring* (internal/spec/wast.go:802), so `duplicate function $foo` satisfies
-// it as a prefix. A truncated expected string read as evidence about the reference's
+// strings by *substring* — the six `strings.Contains(got, c.Expect)` sites in `internal/spec`'s
+// run loop — so `duplicate function $foo` satisfies it as a prefix. (The line number this cited
+// had drifted onto an unrelated parse arm; re-pointed by what the sites hold, since a count of
+// them is checkable and an offset is not. How far that looseness reaches is #455's census.)
+// A truncated expected string read as evidence about the reference's
 // vocabulary — the oracle reading exactly as far as its expected string does, mistaken for
 // the oracle reading everything.
 //

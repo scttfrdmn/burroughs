@@ -1714,6 +1714,49 @@ type Result struct {
 	// command. It is not summed with KindGateReaches for that reason.
 	KindGateFailPrefix []kindGateReach
 
+	// SubstringOnly is #455's probe: every row that passed under this harness's substring rule and
+	// would have failed under the reference's prefix rule.
+	//
+	// The reference matches an expected error text by **prefix** — `assert_message`
+	// (`script/runner.ml:498-501`) compares `String.sub msg 0 (String.length re)` against `re`,
+	// which is `HasPrefix` with a parameter name that suggests a regex the function does not have,
+	// and every text-matching assertion in the suite goes through it. `strings.Contains` is
+	// strictly looser: everything the reference accepts we accept, plus every message carrying the
+	// expected text anywhere after position 0. So the divergence is **accept-direction**, and the
+	// rows that witness it are rows the suite expects to pass and we do pass — for a reason the
+	// reference would not have accepted. A negative-vector corpus cannot falsify that, which is
+	// why the evidence has to be a census of the passing population.
+	//
+	// **Recorded by the run loop rather than re-derived by a control**, for AltChoices' and
+	// GatedAt's reason: a control that re-runs the decision to find out which rows diverged is
+	// asking a second oracle the same question, and the two can be pointed at different sets
+	// without either looking wrong. Every site already holds `got` and `c.Expect` at the moment it
+	// decides, so this is a predicate over data the lane computes anyway.
+	//
+	// **It scores nothing.** A row here is a pass, counted in Pass, and this field is a note about
+	// how it was reached. Which of #455's three options the harness takes — the reference's prefix
+	// rule with the engine's texts made to conform, a normalized prefix, or substring recorded as
+	// a bounded looseness — is undecided, and the size of this population is the whole input to
+	// that choice.
+	SubstringOnly []substringOnlyMatch
+
+	// ExpectMatched is the denominator, keyed by command kind: every award this run made by
+	// matching an expected error text, divergent or not.
+	//
+	// **It is here for vacuity, which is the failure mode a census is most likely to have.** A
+	// census reporting no divergent rows has either found none or stopped walking, and the two are
+	// indistinguishable from the divergent count alone — `KindGateNumericEqual`'s reason exactly,
+	// one census over. A lane that reports thousands of matches and zero divergences has measured
+	// something; a lane that reports zero of each has measured nothing and must not read as the
+	// former.
+	//
+	// **Keyed rather than totalled, because a per-arm zero is the reading most easily faked.** An
+	// arm whose rows all conform to the reference's rule and an arm the probe forgot to instrument
+	// both contribute nothing to SubstringOnly; the difference is visible only if the arm's
+	// denominator is visible beside it. Summing this map gives the total, so the key costs nothing
+	// and buys the cell where the interesting zeros live.
+	ExpectMatched map[Kind]int
+
 	// Bound counts `(register "name" $M?)` commands that successfully bound a name.
 	//
 	// **A sixth term because a register asks no question, and "not scored" must not be
@@ -1969,6 +2012,22 @@ type AltChoice struct {
 	Alt    int    // the matching alternative's index in the corpus's list
 	Of     int    // how many alternatives the expectation offered
 	Text   string // the matching alternative's printed form — the pinned quantity
+}
+
+// substringOnlyMatch is one row this harness passed under `strings.Contains` that the reference
+// interpreter's rule would have refused (#455).
+//
+// `Offset` is where the expected text starts in the engine's message, and it is the field the
+// probe reports on: 0 is what the reference requires, and the largest offsets are the rows whose
+// message says the most before it gets to the phrase the vector asked for. `Got` is carried whole
+// because a distance without the string it is a distance into cannot be read.
+type substringOnlyMatch struct {
+	Line    int
+	Kind    Kind
+	Stratum Stratum
+	Offset  int
+	Expect  string
+	Got     string
 }
 
 // Total is the number of assertions actually executed — the denominator of the
@@ -2667,6 +2726,7 @@ func (s *Script) run(opts runOpts) *Result {
 		Path: s.Path, Buckets: map[string][]Failure{},
 		UnsupportedByHead:         map[string]int{},
 		UnimplementedByCapability: map[Capability]int{},
+		ExpectMatched:             map[Kind]int{},
 	}
 	isGated := func(err error) bool {
 		return err != nil && opts.IsGated != nil && opts.IsGated(err)
@@ -2690,6 +2750,28 @@ func (s *Script) run(opts runOpts) *Result {
 	// callers, where it is never reached.
 	isDeclined := func(err error) bool {
 		return err != nil && opts.IsDeclined != nil && opts.IsDeclined(err)
+	}
+	// noteSubstringOnly records a pass this harness awarded that the reference's prefix rule would
+	// have refused — #455's probe, described on Result.SubstringOnly. Called from every arm that
+	// matches an expected error text, immediately beside the award, with the same `got` and the
+	// same stratum the arm's fail path uses.
+	//
+	// `Index > 0` **is** `Contains && !HasPrefix`, and the two edges are why it is spelled this
+	// way: an empty `Expect` gives 0, which is not a divergence because `HasPrefix(got, "")` holds;
+	// a `got` that does not contain the phrase gives -1 and never reached an award in the first
+	// place. The offset comes free, and it is what makes "the widest offenders" a question with an
+	// answer rather than a list of every row.
+	//
+	// One closure and not six copies of two lines, for the reason `scoreValidation` is factored:
+	// six copies of a predicate drift, and each copy's drift is invisible because each is
+	// exercised by its own arm's vectors only.
+	noteSubstringOnly := func(c Command, st Stratum, got string) {
+		r.ExpectMatched[c.Kind]++
+		if i := strings.Index(got, c.Expect); i > 0 {
+			r.SubstringOnly = append(r.SubstringOnly, substringOnlyMatch{
+				Line: c.Line, Kind: c.Kind, Stratum: st, Offset: i, Expect: c.Expect, Got: got,
+			})
+		}
 	}
 	// scoreValidation is the `assert_invalid` verdict — the four outcomes in their fixed order —
 	// shared by all three module forms.
@@ -2742,6 +2824,7 @@ func (s *Script) run(opts runOpts) *Result {
 				Declined: true,
 			})
 		case err != nil && strings.Contains(got, c.Expect):
+			noteSubstringOnly(c, st, got)
 			r.Pass++
 		case err != nil:
 			r.Fail++
@@ -3111,6 +3194,7 @@ func (s *Script) run(opts runOpts) *Result {
 			}
 			// Substring matching, per decision 0003.
 			if err != nil && strings.Contains(got, c.Expect) {
+				noteSubstringOnly(c, StratumBinary, got)
 				r.Pass++
 				continue
 			}
@@ -3342,6 +3426,7 @@ func (s *Script) run(opts runOpts) *Result {
 			// the *lexeme* back out of the message (`unknown operator i32.wrap/i64`), so
 			// for those the rendering is oracle-covered rather than ours alone (#38).
 			if err != nil && strings.Contains(got, c.Expect) {
+				noteSubstringOnly(c, StratumText, got)
 				r.Pass++
 				continue
 			}
@@ -3539,6 +3624,7 @@ func (s *Script) run(opts runOpts) *Result {
 			// access`), which `Trap.Error` renders verbatim for exactly this reason: a second
 			// spelling would be the engine's testimony disagreeing with itself.
 			if err != nil && strings.Contains(got, c.Expect) {
+				noteSubstringOnly(c, StratumExec, got)
 				r.Pass++
 				continue
 			}
@@ -3837,6 +3923,7 @@ func (s *Script) run(opts runOpts) *Result {
 			// Stated because the next reader will notice the missing predicate: if a vector ever
 			// expects a string the engine can also produce elsewhere, this arm needs one.
 			if err != nil && strings.Contains(got, c.Expect) {
+				noteSubstringOnly(c, StratumExec, got)
 				r.Pass++
 				continue
 			}
@@ -4046,6 +4133,7 @@ func (s *Script) run(opts runOpts) *Result {
 					got = err.Error()
 				}
 				if err != nil && isTrap(err) && strings.Contains(got, c.Expect) {
+					noteSubstringOnly(c, StratumExec, got)
 					r.Pass++
 					continue
 				}
