@@ -1912,6 +1912,26 @@ weakly-ordered platform.
 
 ### Changed
 
+- **ADR 0042's `Status:` is `accepted`, stamped by an artifact rather than by an in-session order —
+  and the law its falsified Consequence minted is *an unmeasured complement is not an empty one***
+  ([#475](https://github.com/scttfrdmn/burroughs/issues/475),
+  [the stamp](https://github.com/scttfrdmn/burroughs/issues/475#issuecomment-5377578628)). The field
+  was held at `proposed` through its own implementation because no artifact held the approval of its
+  *choice*, only of its authoring; Scott's order on the #481 review was relayed to a durable comment
+  and the field now cites it. The reason it was held is kept in the header rather than overwritten.
+  - **The Implementation heading's second clause was re-pointed, not left standing.** It read *"and
+    the field is the open item"*, which the stamp made false — a sentence written before a flip and
+    kept after it tells the next reader the tree is in a state it is not, the same foreclosing-words
+    shape as the v0 ladder's *"gates present and off"*. Its one incoming citation, in the ADR's own
+    header, moved with it.
+  - **The law is minted in [`docs/laws/evidence-and-instruments.md`](docs/laws/evidence-and-instruments.md),**
+    beside *coverage is a claim*. Attributing a population's known members to one cause leaves the
+    remainder **unmeasured**, not empty, and the sentence that carries the defect reads like a
+    measurement: 0042's fourth Consequence said arm 9 had no corpus row, and arm 9 alone owns five.
+    The remedy is to route one call site at a time and print the per-site delta. Stated in the
+    favourable direction on purpose — the forecast was **beaten** 17 → 7 against 17 → 12, and *a
+    forecast beaten is a forecast falsified*: a miss banked as a win never gets asked why it missed.
+
 - **`internal/interp`'s second subtype comparator is deleted and both call sites route onto
   `internal/validate.MatchDefType` — all-on `fail` 17 → 7, against a pre-registered 17 → 12**
   ([#475](https://github.com/scttfrdmn/burroughs/issues/475),
