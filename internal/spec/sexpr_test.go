@@ -1515,34 +1515,40 @@ func TestRegisterBindsUnderItsStringNameNotItsScriptName(t *testing.T) {
 // import cluster that follows. *An error from the wrong layer is evidence about where structure
 // was lost* — a silent register produces a cluster of `unknown import`s naming the linker.
 //
-// **The total is 2 since #367, and this control is a subject of that change rather than a check on
-// it.** It read `want 1 — the failing register, charged to itself`, and that count was correct only
-// while the definition asserted nothing about instantiating: the module scored a pass on a failure
-// that had already happened, and the register was the only command carrying the cost. Now the
-// definition is charged fact 3 as well, so one root cause produces two reds — the definition's,
-// naming the cause (`module text must instantiate`), and the register's, naming its own inability
-// to bind. The count moved and **the argument above did not**: it is about which command a failure
-// is *keyed to*, not about how many exist, and both keys are still asserted below.
+// **The account has two members since #367, and this control is a subject of that change rather
+// than a check on it.** It read `want 1 — the failing register, charged to itself`, and that count
+// was correct only while the definition asserted nothing about instantiating: the module scored a
+// pass on a failure that had already happened, and the register was the only command carrying the
+// cost. Now the definition is charged fact 3 as well. The account moved and **the argument above did
+// not**: it is about which command a failure is *keyed to*, not about how many exist.
 //
-// That +1 is the whole of the amplification, and it is bounded by construction rather than by
-// hope. The dependents of a module that produced no instance were already red — there is no
-// instance for them to run against, whatever the definition scored — so fact 3 adds exactly one
-// row per broken module, and it is the only row in the cluster that can name the cause. Contrast
-// the fact-2 cascade, which is zero: a validation refusal does not withhold the instance
-// (`wast.go`'s "Instantiation happens either way"), so the register there still binds and still
-// passes. Measured, not reasoned: with `Validate` refusing this same module and instantiation left
-// alone, the script scores `1 pass, 1 fail, 1 bound` and the only bucket is
-// `module text must validate`.
+// **The account is enumerated rather than totalled, which is Scott's condition for ratifying the
+// move** (the #478 review): *"A total is not a ledger — where the items are enumerable, assert per
+// item, and then the next change to that account is visible rather than a constant quietly moving
+// again."* So `failLedger` below names each member with its own count, `Fail` is checked against the
+// ledger's *sum* rather than against a literal, and the buckets are asserted in both directions. The
+// literal `2` is exactly the thing that was wrong with the literal `1`: a constant that moves
+// silently under a change to what the harness asserts, where a named member forces the next slice to
+// say which row it added.
 //
-// Falsified two ways:
+// Falsified four ways, each one run and read rather than argued:
 //
-//   - making the arm bind unconditionally (`registry[c.Register] = in` ahead of the `ok` check):
-//     the registry holds `broken` and this reports it, where `Bound` alone stays 0 and says
+//   - **binding unconditionally** — `registry.bind` hoisted ahead of the `ok` check: reported as
+//     `the registry holds "broken" after its module failed`, where `Bound` alone stays 0 and says
 //     nothing, since the failing path does not increment it either way.
-//   - dropping the `r.Fail++` and its bucket: `Fail = 1, want 2` plus the missing key, and
-//     TestVerdictsPartitionCommands fails alongside — the register would be accounted nowhere.
-//     The count alone no longer distinguishes that from a dropped fact 3, which is why the key
-//     assertion is the load-bearing half and stays even though the count is checked first.
+//   - **dropping the register's `r.Fail++` and its bucket**: reported as a *missing member* by
+//     name, `register: this module was refused` at 0 rows. **And this control is the only witness**
+//     — that mutation turns exactly one test in the package red. `TestVerdictsPartitionCommands`
+//     is the instrument that would catch a command accounted nowhere, but its domain is the
+//     corpus, where every registered module instantiates, so the branch it would need is never
+//     reached. The general arithmetic control cannot cover a path only a hand-built script takes.
+//   - **dropping the fact-3 call from the text arm**: reported as the other member missing, by its
+//     own name. Neither of the two hides behind the total.
+//   - **renaming the register's bucket key** — and this is the one the literal `2` could never have
+//     caught. The count is still 2, so `Fail` agrees and the sum assertion stays green; only the
+//     ledger fires, naming the member that left and the unaccounted member that arrived. A total
+//     that is right for the wrong reasons is the failure mode the enumeration exists for, and it
+//     is not hypothetical: this mutation is one edit to a key string.
 func TestRegisterWhoseModuleFailedBindsNothing(t *testing.T) {
 	const bad = `(module $B (memory 1))`
 	src := bad + "\n" + `(register "broken" $B)` + "\n" +
@@ -1556,23 +1562,50 @@ func TestRegisterWhoseModuleFailedBindsNothing(t *testing.T) {
 	if r.Bound != 0 {
 		t.Errorf("Bound = %d, want 0: a register whose module failed counted as a binding", r.Bound)
 	}
-	if r.Fail != 2 {
-		t.Errorf("Fail = %d, want 2 — the definition naming the cause (fact 3, #367) and the "+
-			"failing register naming itself\n%s", r.Fail, r.Board())
+	// failLedger is the account, one entry per member, each with the reason it is a member.
+	failLedger := map[string]int{
+		// **The register, keyed to itself rather than to the import cluster it causes.** The
+		// original member, and the one the doc comment's layer argument is about.
+		"register: this module was refused": 1,
+		// **The definition, naming the cause** — fact 3 (#367). The module produced no instance,
+		// and this is the only row in the cluster that can say *why*: every other row a broken
+		// module produces reports a missing instance, which is the consequence.
+		//
+		// **One row, and the bound is structural rather than hopeful — which is what makes this
+		// member credible instead of assumed.** The dependents of a module that produced no
+		// instance were already red, there being nothing for them to run against whatever the
+		// definition scored, so fact 3 adds exactly one row per broken module and never a cluster.
+		// Contrast the fact-2 cascade, which is **zero**: a validation refusal does not withhold
+		// the instance (`wast.go`'s "Instantiation happens either way"), so the register there
+		// still binds and still passes. Measured rather than reasoned — with `Validate` refusing
+		// this same module and instantiation left alone, the script scores `1 pass, 1 fail,
+		// 1 bound` and the only bucket is `module text must validate`.
+		"module text must instantiate": 1,
 	}
-	// Keyed by the register rather than by the import cluster it causes.
-	const key = "register: this module was refused"
-	if len(r.Buckets[key]) != 1 {
-		t.Errorf("no failure under %q; got keys %v — the register failed without naming itself, "+
-			"so the cost lands on whichever import resolves against the missing name next",
-			key, r.BucketsBySize())
+	wantFail := 0
+	for _, n := range failLedger {
+		wantFail += n
 	}
-	// The other half of the 2, asserted here rather than left to the count: a total that is right
-	// for the wrong reasons — two register rows, or two definition rows — reads identically.
-	if got := len(r.Buckets["module text must instantiate"]); got != 1 {
-		t.Errorf("%d rows under %q, want 1; keys %v — the definition passed on an instantiation "+
-			"failure that had already happened, which is #367's hole",
-			got, "module text must instantiate", r.BucketsBySize())
+	if r.Fail != wantFail {
+		t.Errorf("Fail = %d, want %d — the sum of the ledger below, not a literal\n%s",
+			r.Fail, wantFail, r.Board())
+	}
+	// Both directions. Missing members are named, and so is an arriving third one: a total that is
+	// right for the wrong reasons — two register rows, two definition rows, one of each replaced by
+	// something new — reads identically at the count.
+	for key, want := range failLedger {
+		if got := len(r.Buckets[key]); got != want {
+			t.Errorf("%d rows under %q, want %d; keys %v — a member of this account moved, and the "+
+				"ledger names it so the next slice states which row it changed rather than "+
+				"re-pointing a constant", got, key, want, r.BucketsBySize())
+		}
+	}
+	for key, rows := range r.Buckets {
+		if _, ok := failLedger[key]; !ok {
+			t.Errorf("unaccounted member %q (%d rows): one root cause here has exactly two named "+
+				"consequences, so a third is either a new charge that belongs in the ledger with "+
+				"its reason or a cascade that should not exist", key, len(rows))
+		}
 	}
 	last := p.lastCall(t)
 	if slices.Contains(last.keys, "broken") {
