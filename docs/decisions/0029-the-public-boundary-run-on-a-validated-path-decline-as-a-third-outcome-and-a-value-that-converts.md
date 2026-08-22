@@ -337,9 +337,9 @@ is neither, and the third case is ratified with a refinement about what kind of 
 > worktree at main checks the derivation rather than confirming a prediction. Record it as a D row. Same
 > distinction as the flip."* (Ruling: chat-Claude, PR #302.)
 
-**Provenance: derived.** Premises, both mechanically checkable:
+**Provenance: derived.** Two premises:
 
-- `internal/spec/wast.go:2672` — `r.Unsupported++` sits in the **`default:` arm** of the harness's command
+- `internal/spec/wast.go:4352` — `r.Unsupported++` sits in the **`default:` arm** of the harness's command
   dispatch, and the bucket key is the command's *head atom* rather than its kind, "because every
   unsupported command has `KindUnsupported`". The column therefore counts commands `internal/spec` has no
   case for: it is a measure of that package's command vocabulary.
@@ -403,3 +403,33 @@ own census, 2238 module forms and 25666 compared assertions through the publishe
   gets `binary.DefaultFeatures`, the gates §9 has flipped on their own stamped decisions. The all-gates-on
   lane is a *measurement instrument* whose defining property is that its suites are not green, and
   publishing it would ship that configuration as an option.
+
+## Pointer amendment, appended 2026-08-22 — one re-pointed premise, and one word the drift showed was never true
+
+Two edits to the D-row section above, both in the Provenance clause, and they are different kinds of
+thing.
+
+**The pointer.** The first premise cited `internal/spec/wast.go:2672` for `r.Unsupported++` sitting in
+the command dispatch's `default:` arm. That line holds the `isGated` closure in `run`'s preamble; the
+`default:` arm's increment is now `internal/spec/wast.go:4352`. Re-pointed by that statement's own
+text. The premise itself is unchanged and still true — the arm is keyed on the command's head atom, so
+the column measures `internal/spec`'s command vocabulary — which is exactly the half of a citation a
+reader does not need and the half they do coming apart.
+
+**The word.** The clause read *"Premises, both mechanically checkable"* and now reads *"Two
+premises"*. This is not a consequence of the drift, it is a finding the drift exposed: **nothing in
+this tree can mechanically check either premise**, and nothing ever could. The second is a `git diff
+--stat` invocation, which is checkable by running it and is not a standing check; the first was a line
+pointer, whose target `make cite` does not resolve — `citecheck` reads issue, grave and ADR tokens, and
+a `<file>:<line>` is outside its domain
+([#456](https://github.com/scttfrdmn/burroughs/issues/456)). So a premise offered as machine-verifiable
+sat wrong for an unknown interval with every gate green over it, which is the strongest available
+demonstration that the word was decorative when written.
+
+The word is dropped rather than repaired, and no checker is built for it. Scott's ruling on the #486
+review: *"the premise loses the word, because the drift didn't make it false — it revealed the word was
+never true of that premise. Declining to build the checker is correct."* A claim of mechanical
+checkability is itself a claim about an instrument, so it is subject to the same rule as any other: name
+the instrument or do not make the claim. Filed as
+[#485](https://github.com/scttfrdmn/burroughs/issues/485), which found this pointer alongside two others
+in a sweep prompted by an unrelated insertion; the sibling ADR note is in 0028.

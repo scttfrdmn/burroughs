@@ -414,7 +414,36 @@ func TestRangeCitationSubjectsAreReadFromTheReference(t *testing.T) {
 	// `require` — and two are the control file's, which `wantRanges`' domain excludes. The two pins
 	// diverging by a number with a stated cause is what makes them two pins; a shared figure would have
 	// absorbed all five silently.
-	const wantKeyed, wantResidue = 97, 39
+	//
+	// **#452's local-initialization slice is keyed 103 and residue 44, against nine new engine ranges,
+	// and the excess over `wantRanges` goes 35 → 37 for a cause that is one shape counted twice.** Six
+	// keyed and five excused sum to eleven where nine ranges arrived, and the +2 is that shape:
+	// the reference's set and tee arms return the *same* second component, so a true description of
+	// either one names both, and the two lines that say so each key twice. That is the slice-7
+	// observation from the other side again — the excess grows when a rule's statement needs two of the
+	// reference's names, not when one name is reused — and this time both extra subjects come from one
+	// pair of arms rather than from a lookup.
+	//
+	// The five excused rows are worth splitting, because four are one mechanism this header has already
+	// diagnosed and the fourth spelling of it is the sharpest yet:
+	//
+	//   - **Two cite a rule by quoting the reference's OCaml**, and a quoted expression keys nothing:
+	//     `=`, `,` and `"` are outside the extractor's character class, so a backticked span carrying
+	//     the rule *verbatim* matches nothing at all. The three spellings above are an unbackticked
+	//     name, a dotted call form and a comma inside a payload; this is the same class boundary met by
+	//     a description so faithful it transcribes the statement. **The repair and the description are
+	//     in tension here** — dropping the quotation to name the arm would key the row and would delete
+	//     the one form a reader can check against the reference without opening it — so both are
+	//     recorded rather than repaired, which is what the residue column is for.
+	//   - **One is a continuation line**, the init half's citation sitting a line below the identifier
+	//     it describes: the "range and the name must share a line" category, and left alone because
+	//     pulling the range up is the wrapping hazard this header names three times.
+	//   - **Two carry no reference identifier because their subject is not one** — a sentence about
+	//     *where in this engine* the undo is performed, and one about how the parameter half of the
+	//     context is assembled here. A citation whose claim is about this side of the port names the
+	//     reference to say what it does differently, which is the `check_elem` note at the top working
+	//     as described for a fifth slice.
+	const wantKeyed, wantResidue = 103, 44
 	if keyed != wantKeyed || residue != wantResidue {
 		t.Errorf("keyed %d range citation(s) by named subject and left %d as residue, want %d and "+
 			"%d — recount and re-pin. A row moves from residue to keyed when its description starts "+

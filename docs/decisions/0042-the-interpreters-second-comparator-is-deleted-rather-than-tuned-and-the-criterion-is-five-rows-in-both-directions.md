@@ -92,7 +92,7 @@ directly, comparing nothing. That is correct behaviour, not a missing check (the
 nothing there either; the validator owns it), which is precisely why the claim went unchallenged.
 
 `compTypeAt` (`:943`) is **not** in the deletion set — `castop.go:308`, `gcobj.go:382` and
-`value.go:1071` call it, and `internal/validate` has its own copy (`match.go:681`). Two bounds-checked
+`value.go:1083` call it, and `internal/validate` has its own copy (`match.go:681`). Two bounds-checked
 accessors are a duplicated three-line lookup, not a duplicated *judgement*, and collapsing them is not
 what the one-authority law is about.
 
@@ -186,10 +186,10 @@ Recorded here because each is a sentence a reader will meet *after* the change a
    do not literally falsify this, because M10/M11 is a **cross-module** relabelling and all five vectors
    are single-module. What they falsify is the reading the sentence invites: that the disjunct-2 gap is
    unwitnessed. It is witnessed, in both polarities, through `call_indirect`.
-3. `internal/spec/spec_test.go:10616` describes `Instance.link` as comparing with `sameFuncType`. Grave
+3. `internal/spec/spec_test.go:10656` describes `Instance.link` as comparing with `sameFuncType`. Grave
    #368 moved the linker off it; `sameFuncType` has exactly one non-test caller and it is not the
    linker. (The number is the *current* location of that sentence, re-pointed twice since this list was
-   written — it was `:10548`, then `:10593` — because a pointer that asserts where a live sentence is
+   written — it was `:10548`, then `:10593`, then `:10616` — because a pointer that asserts where a live sentence is
    gets repaired while a pointer recording where something used to be does not. The sentence itself now
    carries a tense correction rather than a deletion, per the implementation below.)
 4. `call.go:739` cites **`matchesDeclaredSupertype` "below"** as disjunct 3. No such function exists
@@ -244,6 +244,10 @@ a flip and kept after it tells the next reader the tree is in a state it is not 
 foreclosing-words shape the v0 ladder's *"gates present and off"* was in, and one this document is a
 poor place to repeat, since it exists to score claims that turned out wrong. The one incoming citation,
 in the header above, moved with it.
+
+*(One pointer re-pointed 2026-08-22 by the text it names, not by a delta: `compTypeAt`'s caller list
+read `value.go:1071` and reads `value.go:1083`, the line holding `ct, ok := compTypeAt(r.Obj.mod,
+r.Obj.typeIdx)`. #452's twelve-line dating note above it moved the call, not the claim.)*
 
 **The board moved 17 → 7. The forecast was 17 → 12.** Ten rows, not five: `65092 → 65102 pass`,
 `17 → 7 fail`, `0 gated`, and the ten are exactly ten named rows, so the criterion's third line —

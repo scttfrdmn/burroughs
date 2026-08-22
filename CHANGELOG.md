@@ -21,6 +21,55 @@ weakly-ordered platform.
 
 ### Added
 
+- **The local-initialization rule: `local.get` of an uninitialized non-defaultable local is refused,
+  and the block wall is performed rather than inherited**
+  ([#452](https://github.com/scttfrdmn/burroughs/issues/452),
+  [ADR 0044](docs/decisions/0044-the-local-initialization-rule-is-a-per-frame-undo-list-and-the-block-wall-is-performed-rather-than-inherited.md),
+  [the approval](https://github.com/scttfrdmn/burroughs/issues/452#issuecomment-5381724774)).
+  `check_local` starts a local at `Set` when its type is defaultable and at `Unset` when it is not
+  (`valid.ml:1010-1011`), parameters arrive `Set` (`:1021-1024`), and `local.get` requires
+  `init = Set` (`:589-590`). This package had no such state, so **4 modules the suite expects invalid
+  were reported valid and 1 was refused for the wrong reason**. Now `validator.localInit` carries the
+  state, seeded by `localInitStates`, and `validate.ErrUninitializedLocal` is the refusal.
+  - **A per-frame undo list, not a snapshot and not a join.** `frame.initedHere` records only the
+    indices that were `Unset` when the frame set them, and `undoFrameInits` returns exactly those at
+    `endBlock` and at `elseArm`. Recording *every* `local.set` would un-initialize a local an enclosing
+    scope had already set. The reference gets the block discipline for free — `check_instr` returns the
+    initialized locals as a **second component** (`LocalSet` and `LocalTee` each return `[x]`,
+    `valid.ml:593-599`), `check_instrs` folds it (`:957-964`), and `check_block` walks the body with the
+    enclosing context and throws the body's list away (`:966-968`) — so here the absence of a
+    propagation has to be *performed*.
+  - **`local_init.wast:52` is the row that catches the natural wrong reading.** It sets the same local
+    in **both** arms of an `if` and is still invalid, so a dataflow implementation that merges the arms
+    at the `end` passes `local_init.wast:39` (then-arm only) and admits `:52`. Named in the code at
+    `undoFrameInits`, because one vector separates the two mechanisms.
+  - **Board, all five terms pre-registered before the implementation.** All-on
+    `65102 pass, 7 fail` → **`65107 pass, 2 fail`**; `local_init.wast` 6/10 → **10/10**; `func.wast`
+    174/175 → **175/175**; the 2 survivors are #471's. The three `array_*` files that declare
+    non-defaultable locals stay at 35/35, 28/28, 24/24, so the refusal did not over-fire.
+  - **The default lane is unmoved in all five columns — `60957/0/0/4187/0` — and the zero is the
+    detector, not a null result.** Every numeric type is defaultable and every nullable reference type
+    defaults to null, so the rule's whole population is the function-references non-nullable reference
+    local and the default lane cannot spell one. A move there would mean the refusal had escaped its
+    population, which is the failure mode a new refusal has.
+  - **`initLocal` is deliberately not conditioned on `unreachable`**, mirroring `valid.ml:964` sitting
+    outside every bottom test. **No corpus vector distinguishes the two readings** — the shape wants a
+    `(block (br 0) (local.set $x)) (local.get $x)` nothing in the suite writes — so it is stated at the
+    site as a mirror of the authority rather than as a measured choice.
+  - **The rendered message is not yet spec-phrase-first, and that term is #455's to discharge.** The
+    sentinel is the suite's phrase with detail after it per decision 0003, but `instrs` wraps every
+    instruction error as `instr %d (%s): %w` (`internal/validate/instr.go:51`) — one of the three
+    rendering sites #455's option 4 moves.
+
+- **`docs/laws/boards-and-buckets.md`: *a magnitude is not a cost estimate*** — the shape of a
+  population prices the work, not its size
+  ([#487](https://github.com/scttfrdmn/burroughs/issues/487),
+  [the law](docs/laws/boards-and-buckets.md#a-magnitude-is-not-a-cost-estimate)). Minted from #455's
+  census, whose 6542 divergent rows collapsed to **three renderings covering 98.5%**, falsifying the
+  issue's own "large therefore expensive" conditional. The asymmetry is the part worth writing down:
+  *expensive* argues for doing nothing, so no bill ever arrives to check it. Both memory-only siblings
+  are written out in the section, since neither had a corpus file to link.
+
 - **The substring-vs-prefix census: 6542 of 8519 expected-text awards would be refused by the
   reference's rule, across three renderings**
   ([#455](https://github.com/scttfrdmn/burroughs/issues/455),
@@ -312,7 +361,7 @@ weakly-ordered platform.
   in one session. `TestEveryPayloadSpellingIsReadOrRefusedByName` asked
   `strings.Contains(err.Error(), name)` and for `struct` the substring sat inside the word
   **constructor** in the refusal's own sentence, so the falsification probe that should have failed
-  on six payloads failed on five (`value_test.go:198`, `value.go:722`). Then, reading a CI verdict
+  on six payloads failed on five (`value_test.go:198`, `value.go:734`). Then, reading a CI verdict
   out of a captured `gh run watch`, `grep -E '^JOB'` for the sentinel's `JOB <name> <conclusion>`
   rows matched the watch's own **`JOBS`** section headers, harvesting the progress display as the
   verdict. The remedy is identical and mechanical — **anchor the match or quote the token**,
@@ -2105,7 +2154,7 @@ weakly-ordered platform.
   **Reading the code to write the criterion falsified five of its own claims**, recorded in the ADR
   because each will read as current after the change: the rec-group-boundary denial at `call.go:742-743`
   (already corrected fifteen lines below it), the *"no corpus vector reaches the M10/M11 shape"*
-  sentence at `:760-761`, `spec_test.go:10616`'s description of `Instance.link` as a `sameFuncType`
+  sentence at `:760-761`, `spec_test.go:10656`'s description of `Instance.link` as a `sameFuncType`
   caller (grave #368 moved it), `call.go:739`'s pointer to **`matchesDeclaredSupertype`** — a function
   that exists nowhere in the tree, folded into the walk by grave #261's refactor — and `:760`'s naming
   of `call_ref` as a consumer, which `resolveCallRef` refutes by comparing nothing at all. The fourth is
@@ -3233,6 +3282,51 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **A comment in `internal/interp/value.go` asserted the property its own package lacked — now dated
+  from the day it became true** ([grave #246](https://github.com/scttfrdmn/burroughs/issues/246);
+  Scott's addition to #452's approval on the #486 review). The clause read that a non-nullable
+  reference local *"is non-defaultable and validation rejects the function, so every reference local
+  that can exist defaults to null"* — a premise about a check nobody had implemented. It now says the
+  clause **holds from 2026-08-22 and was false when the comment was written**, and bounds the interval
+  rather than dramatizing it: a `local.get` of such a local trapped as a null dereference at every
+  site that reads a reference, so the reachable failure was a **spurious trap in a module the spec
+  says is invalid**, never a wrong value flowing on. Dated because *a comment asserting the property
+  its package lacks is the shape that makes review confirm the bug*, and an undated repair leaves the
+  next reader unable to tell a premise that was always true from one that was retrofitted.
+
+- **The insertion re-key runs after the last *charged* edit, not after the last product edit** —
+  twelve `foreclose_test.go` keys were re-derived twice in one slice
+  ([#452](https://github.com/scttfrdmn/burroughs/issues/452)). Generation 1 re-pointed six
+  `spec_test.go` keys and five in-reason pointers at +40 for the local-initialization pins; #485's
+  three-line comment repair then landed in the same file and staled all of them, so generation 2 ran
+  at +43. Both generations were verified **by content** — each subject's line read at HEAD and in the
+  tree and compared, never trusted to arithmetic.
+  - **The finding the tenth entry records is an ambiguity in the rule's own wording.** *"Re-point every
+    file this commit modified"* reads either as the scan-set or as the cited-set, and only the
+    cited-set reading typechecks: two modified files owed re-points with **different deltas**, +40 and
+    +12, so there is no single delta to apply. Recorded in the header rather than only in the entry,
+    because the rule is what the next slice reads.
+
+- **Three `wast.go` line citations resolved to the wrong lines — the claims held, the pointers did
+  not, and one of them was carrying a word that was never true**
+  ([#485](https://github.com/scttfrdmn/burroughs/issues/485), Scott's ruling on the #486 review). All
+  three re-pointed **by the sentence each one quotes**, never by a delta: ADR 0028's `wast.go:813` →
+  `:1253`, ADR 0029's `wast.go:2672` → `:4352`, and `internal/spec/spec_test.go:8295`'s
+  *"deliberately not a keyword allowlist"* → `wast.go:1462`, the old number having drifted onto
+  `classify`'s `namedInvokeAction` dispatch.
+  - **The two ADR pointers take dated amendment notes; the test comment takes a plain repair.** An ADR
+    is a tombstone, so silently correcting one leaves no record that the pointer moved — but a comment
+    in a test file is not a record of a decision, and appending an amendment note to one would be
+    ceremony over a line nobody cites.
+  - **ADR 0029's *"Premises, both mechanically checkable:"* loses the word**, becoming *"Two
+    premises:"*. The drift did not make the claim false; it revealed that the *checkable* half was
+    never true of that premise — nothing in the tree could have caught the pointer moving, which is
+    precisely what "mechanically checkable" asserts. A separate finding on top of the repair, and the
+    reason it is here rather than filed: the fix is the deletion.
+  - **Declining to build a checker for this is the disposition, not a deferral.** A line-number sweep
+    over prose would have to re-derive every pointer's subject to say anything, which is the work the
+    re-key discipline already does at the moment of insertion.
+
 - **A historical-citation exemption was defeated by a line wrap — the trigger side's own `wrapJoin`
   problem, on the exemption side, where nothing looked for it**
   ([grave #480](https://github.com/scttfrdmn/burroughs/issues/480)).
@@ -3452,7 +3546,7 @@ weakly-ordered platform.
   residue sense and the exact sentence grave #427 cost eight rows for; two more claimed to quote a
   falsified sentence while asserting it. The group heading — "the grave's own record of itself" — is
   true of the *account*, whose annotation is 60 lines below the first paragraph it covers, at
-  `spec_test.go:11083`, and false of three
+  `spec_test.go:11123`, and false of three
   of the four paragraphs it covers, and the **paragraph** is the sweep's unit and the map's own stated
   standard. Each entry now names what its paragraph is (retained falsified testimony), where the
   refutation lives, and that the ground is *not* legible in the licensed paragraph alone; the one entry
