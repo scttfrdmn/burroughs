@@ -544,6 +544,45 @@ reach is a law out of context.
   vacuity guard catches one that emptied. (Ruling: Scott, PR #285 relay; minted
   from #264, whose closing comment is the first specimen's own wording.)
 
+### A criterion measured against a question set the project controls is jointly a claim about the answerer and the asker.
+
+- **A criterion measured against a question set the project itself controls is jointly a claim
+  about the answerer and the asker.** The coverage law above is about an instrument's domain
+  being unfalsifiable from the inside. This is the same hazard one level up, aimed at a
+  **closure criterion**: when the questions are asked by machinery this project also owns, a
+  criterion of the form *nothing is declined* is satisfied by the validator improving **and** by
+  the harness asking less. Both readings produce the identical green, and no control in the tree
+  can tell them apart, because the thing that moved is not in either instrument's domain — it is
+  the boundary between them.
+
+  So the discipline is **temporal, not structural**: a criterion of this shape is *decidable at
+  any moment* and **a discharge is dated, not permanent.** Closure can be un-achieved later by a
+  widening with no regression whatsoever in the answerer. State the date beside the claim, and
+  make a widening of the question set a **tracked event that reissues that date**.
+
+  **The specimen is #9's own closure criterion**, and it is why that criterion is phrased *"no
+  `assert_invalid` vector is declined against the corpus **as the harness may currently ask
+  it**"* rather than as a bare zero. `validateDeclineCeiling` rose **31 → 55 at #341** with **no
+  change to the validator at all**: what changed was that module definitions began being scored
+  on the validator's answer rather than on the reader's, so a population that had never been
+  asked started asking. The number went the wrong way while the engine stood still.
+
+  **A widening is not a population-size change, which is why nothing notices it.** #341 scored
+  the same module-definition commands it always had; what moved was *which oracles each command
+  kind is consulted against*. Counts cannot see that, a pass/fail delta cannot distinguish it
+  from a regression, and a re-based bound absorbs it in one edit — three instruments, all
+  reporting normally.
+  [#477](https://github.com/scttfrdmn/burroughs/issues/477) is the ordered
+  remedy: a declared per-command-kind predicate table whose digest is pinned beside the claim and
+  its date, so a widening fails a control that names the reissue instead of passing quietly.
+
+  Corollary, since the shape is not specific to #9: **a criterion whose subject includes your own
+  question set names the date it was measured, or it is a claim about a moment while reading as a
+  claim about a state.** (Ruling: Scott, on the PR #476 review — *"a criterion measured against a
+  question set the project itself controls is jointly a claim about the answerer and the asker.
+  Decidable at any moment; a discharge is dated, not permanent … Closure can be un-achieved by a
+  later widening with no regression in the validator, and nothing currently notices that."*)
+
 ### A completion state can be true while its payload vanished — verify the artifact, not the flag.
 
 - **A completion state can be true while its payload vanished — verify the artifact, not the
