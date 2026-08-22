@@ -216,7 +216,7 @@ func readText(src []byte) error { return text.ReadModule(src) }
 func assemble(src []byte) ([]byte, error) { return text.EncodeModule(src) }
 
 // isGated asks the engine, rather than reading its error text. The taxonomy is
-// the engine's to define; a substring test here would be the harness guessing at
+// the engine's to define; a text test here would be the harness guessing at
 // the thing it exists to check.
 func isGated(err error) bool { return errors.Is(err, binary.ErrFeatureDisabled) }
 
@@ -227,8 +227,10 @@ func isGated(err error) bool { return errors.Is(err, binary.ErrFeatureDisabled) 
 //
 // **A wrapped trap still answers yes**, which is deliberate and is what `errors.As` buys over
 // a type assertion: an arm that annotates a trap on the way out — as the bulk arms' callers
-// may — must not thereby turn a pass into a fail. The Reason text is what the substring match
-// reads, and a wrapper adds to it rather than replacing it.
+// may — must not thereby turn a pass into a fail. The Reason text is what the prefix match reads
+// (ADR 0045), so a wrapper may add *after* the Reason and must not add in front of it — which is
+// why the engine's own location context renders as a suffix, and what `SubstringOnly` names when a
+// new wrapper puts it back in front.
 func isTrap(err error) bool {
 	var t *interp.Trap
 	return errors.As(err, &t)
@@ -301,7 +303,7 @@ func imports(reg Registry) interp.Imports {
 // **It also converted five passes into gates, and those five are grave #408.** `imports.wast`
 // :136/:295/:440/:538 and `linking3.wast`:14 assert that a module *lacks one export* and expect
 // `unknown import`; they passed because the whole target module was unbound, which produces the same
-// string about a different fact. A substring match cannot tell the two apart, so the reject-direction
+// string about a different fact. A text match cannot tell the two apart, so the reject-direction
 // instruments were all satisfied — the only thing that saw it was 0037 pre-registering a `pass`
 // column it expected not to move.
 //
@@ -6633,7 +6635,11 @@ func TestAssertInvalidPassesFromAboveTheValidator(t *testing.T) {
 				continue // scored `gated`, never reaching the message match at all
 			}
 			entry, isListed := listed[f][c.Line]
-			fromAbove := err != nil && st == StratumEncode && strings.Contains(err.Error(), c.Expect)
+			// `HasPrefix` and not `Contains`, because this predicate has to be the *board's* rule
+			// or it classifies a population the board does not have. ADR 0045 made that rule the
+			// reference's; this is the seventh of #455's seven sites and the only one outside the
+			// run loop, which is exactly why it needs saying here.
+			fromAbove := err != nil && st == StratumEncode && strings.HasPrefix(err.Error(), c.Expect)
 			switch {
 			case fromAbove && !isListed:
 				t.Errorf("%s:%d is an assert_invalid the engine refuses *above* the validator "+
@@ -8332,7 +8338,7 @@ func TestModuleDefinitionsAskTheValidator(t *testing.T) {
 		// **What this cannot see, stated because the issue's premise was slightly wider than the
 		// mechanism.** #354 reasoned that "a new form arrives as a new Kind in `classify`"; that holds
 		// for a form someone gives an arm, and not for a bare new keyword. `moduleFormKeyword` is
-		// deliberately not an allowlist (`wast.go:1462`, *"Deliberately **not** a keyword allowlist: it
+		// deliberately not an allowlist (`wast.go:1463`, *"Deliberately **not** a keyword allowlist: it
 		// reports whatever atom is there"* — re-pointed by that sentence per #485, the old number
 		// having resolved to `classify`'s `namedInvokeAction` dispatch), so `(module newthing …)` falls
 		// through to
@@ -11690,7 +11696,7 @@ func TestPhase1Files(t *testing.T) {
 	// **Zero of the 2893 passed by text coincidence, and that is now a property of the harness
 	// rather than of today's engine.** A non-trap error whose message happened to contain the
 	// expected phrase would score green invisibly — contract §9 G-3, the accept direction the suite
-	// cannot falsify — so the run loop asks `Engine.IsTrap` *before* the substring match. The
+	// cannot falsify — so the run loop asks `Engine.IsTrap` *before* the prefix match. The
 	// recon measured the coincidence count at zero against this engine; injecting the predicate is
 	// what makes it zero against every future one.
 	//
@@ -11784,7 +11790,7 @@ func TestPhase1Files(t *testing.T) {
 	//
 	// **18 of the 1023 are answered above the validator, and they are named rather than
 	// absorbed.** An `assert_invalid` whose module the encoder or the decoder refuses still
-	// reaches the substring match, and 18 such refusals quote the string the vector expected: 17
+	// reaches the prefix match, and 18 such refusals quote the string the vector expected: 17
 	// `constant expression required` from the decoder's own init-expression check, and one
 	// `unknown global` from the wat encoder's symbol table. The verdicts are right and the
 	// messages are the reference's, so these are passes on the merits — but they come from a layer
@@ -11977,7 +11983,7 @@ func TestPhase1Files(t *testing.T) {
 	// identical assertion against `"spectest" "unknown"` (:140, :299, :444, :542) — same expected
 	// text, same shape, a module name that is never declined. Those four still score verdicts,
 	// unchanged. The discriminator is therefore the *module name*, not the expectation, which is
-	// exactly the fact a substring match cannot see. No new control is owed for it either:
+	// exactly the fact a text match cannot see. No new control is owed for it either:
 	// `gatedDeclinedRegistration["imports.wast"]` is pinned at slack 0, so a gate that widened to
 	// the twins would fail that bound rather than pass quietly.
 	//

@@ -48,7 +48,13 @@ const (
 func (v *validator) instrs(body []binary.Instr) error {
 	for i, in := range body {
 		if err := v.instr(i, in); err != nil {
-			return fmt.Errorf("instr %d (%s): %w", i, mnemonic(in), err)
+			// **The location context renders after the phrase** (ADR 0045). `assert_invalid`
+			// matches its expected text by prefix (`runner.ml:498-501`), so `instr 5 (local.get): `
+			// in front of `uninitialized local` was the largest single divergence in the corpus —
+			// 2108 default-lane rows, composed with `func %d: ` from validate.go. Suffixes
+			// accumulate outward-last, so a reader gets the phrase, then the instruction, then the
+			// function: `uninitialized local: local 2 (instr 5: local.get) (func 3)`.
+			return fmt.Errorf("%w (instr %d: %s)", err, i, mnemonic(in))
 		}
 	}
 	return nil
@@ -579,7 +585,7 @@ func (v *validator) selectAnnotated(i int) error {
 	}
 	if len(ts) != 1 {
 		// The reference's text verbatim per 0003, with the count after it — the corpus expects
-		// the substring `invalid result arity`, and both vectors that reach here are about the
+		// the prefix `invalid result arity`, and both vectors that reach here are about the
 		// count, so naming it is what tells arity 0 from arity 2 in a bucket key.
 		return fmt.Errorf("%w (%d annotated)", ErrInvalidResultArity, len(ts))
 	}
@@ -754,7 +760,7 @@ func (v *validator) funcTypeIndexAt(idx uint32) (uint32, error) {
 //
 // The interleaving is the module's, not a convention: an imported function occupies function
 // index 0 before any defined function does. `internal/interp` resolves it the same way
-// (`call.go:185`, `resolveCall`'s `idx < uint32(in.mod.ImportedFuncs())` — the symbol is named
+// (`call.go:186`, `resolveCall`'s `idx < uint32(in.mod.ImportedFuncs())` — the symbol is named
 // because this citation was valid and #440 broke it by adding lines above it, which is #456),
 // and getting it backwards would type-check every call in a module without
 // imports and misresolve every call in a module with them.

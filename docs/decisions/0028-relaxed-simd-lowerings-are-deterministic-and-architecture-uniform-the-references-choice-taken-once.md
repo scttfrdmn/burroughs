@@ -47,7 +47,7 @@ loud in two ways that #275 measured:
   all in `relaxed_dot_product.wast` (`:18`, `:24`, `:41`, `:49`), on 2 of the 16 opcodes that have
   vectors at all.
 - **The value content is 32 `(either …)` vectors the harness cannot read** — 32 occurrences
-  corpus-wide, matching the `unsupported` count one for one per file. `internal/spec/wast.go:1253`
+  corpus-wide, matching the `unsupported` count one for one per file. `internal/spec/wast.go:1254`
   records the form as **0** answerable.
 
 Contract §0 is *correctness-neutral*, which says **conform**; here conforming leaves a choice, so
@@ -358,7 +358,7 @@ reason the opcode is relaxed.
 - **A `vecTernaryFloat` helper, because `vecBinaryFloat` is binary and madd takes three operands.** It
   follows its sibling's widen-apply-narrow shape at width 4 for the reasons above, which is also what
   makes the f32 tripwire a test of *one* helper rather than of four arms.
-- **`internal/spec/wast.go:813` says the `(either …)` form's vectors are "all of them in bulk and
+- **`internal/spec/wast.go:814` says the `(either …)` form's vectors are "all of them in bulk and
   relaxed-SIMD files", and the bulk half is wrong** — measured 32 occurrences corpus-wide, every one in
   the six relaxed files and **zero** in bulk. A one-line attribution fix, and it rides the implementing
   PR rather than this one: the comment sits in the code the widening changes, so correcting it here
@@ -490,7 +490,7 @@ its premise.
 The Question section's `(either …)` bullet cited `internal/spec/wast.go:813` for the harness recording
 that form as **0** answerable. That line holds a comment about a shadowed variable in the
 `assert_malformed` quote arm and has for some time; the sentence's true target is the `(either …)`
-bullet in `classifyAssertReturn`'s declined-shape list, now `internal/spec/wast.go:1253`. Re-pointed
+bullet in `classifyAssertReturn`'s declined-shape list, now `internal/spec/wast.go:1254`. Re-pointed
 there and nothing else changed.
 
 **The claim was never in question and the historical reading is left exactly as written.** What the

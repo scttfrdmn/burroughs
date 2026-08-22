@@ -484,7 +484,7 @@ func TestBulkTrapsOnAnExtentPastTheEnd(t *testing.T) {
 //
 // `table.copy`'s out-of-bounds trap is `out of bounds table access` (`eval.ml:24`'s
 // `table_error`), a different string from memory's, and the harness matches `assert_trap`
-// expectations by substring — so returning `trapOOB` here gives the right verdict with the wrong
+// expectations by prefix (ADR 0045) — so returning `trapOOB` here gives the right verdict with the wrong
 // testimony and fails every `table_copy.wast` trap vector while passing every memory one. Cheap
 // to get backwards, since the two traps are one identifier apart at the call site.
 func TestBulkTableCopyTrapsWithTheTableString(t *testing.T) {

@@ -310,13 +310,15 @@ func TestAlignmentCheckIsTheParsersAndNaturalIsTheValidators(t *testing.T) {
 	if !strings.Contains(parser, `"alignment must be a power of two"`) {
 		t.Error(`parser.mly no longer errors "alignment must be a power of two"; parseAlign's ` +
 			`doc comment claims this check is the parser's and that its message contains the ` +
-			`bare "alignment" the 46 align.wast vectors match by substring`)
+			`bare "alignment" the 46 align.wast vectors match by prefix`)
 	}
-	// The substring relation the two buckets depend on. Not luck and not an accident of
-	// wording: decision 0003 records prefix matching as the reason one check answers both
-	// buckets, so if the messages stopped nesting, 46 vectors would need their own answer.
-	if !strings.Contains("alignment must be a power of two", "alignment") {
-		t.Error("the shorter expectation is no longer a substring of the longer message")
+	// The prefix relation the two buckets depend on. Not luck and not an accident of wording:
+	// 0003 as amended by ADR 0045 records prefix matching as the reason one check answers both
+	// buckets, so if the messages stopped nesting, 46 vectors would need their own answer. The
+	// assertion is `HasPrefix` and not `Contains` because the harness's rule is the reference's:
+	// a shorter expectation found *after* position 0 no longer awards anything.
+	if !strings.HasPrefix("alignment must be a power of two", "alignment") {
+		t.Error("the shorter expectation is no longer a prefix of the longer message")
 	}
 	// And the negative half: the natural-width check is *not* in the parser. This is the
 	// assertion that makes #63's deferral of the 54 a layer fact rather than a convenience.

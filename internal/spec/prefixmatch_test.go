@@ -17,20 +17,28 @@ import (
 // (`script/runner.ml:498-501`) is `String.length msg < String.length re || String.sub msg 0
 // (String.length re) <> re`, negated — `HasPrefix`, with a parameter name (`re`) that suggests a
 // regex the function does not contain — and all nine text-matching call sites in the reference go
-// through it. This harness matches by **substring**, at six sites in the run loop plus one in a
-// control, which is strictly looser: everything the reference accepts we accept, plus every message
-// carrying the expected text anywhere after position 0.
+// through it. This harness matched by **substring** until #455, at six sites in the run loop plus one
+// in a control, which was strictly looser: everything the reference accepted we accepted, plus every
+// message carrying the expected text anywhere after position 0.
 //
-// That is an **accept-direction** divergence, so no negative-direction vector can witness it: the
-// rows that would are rows the suite expects to pass and we do pass, for a reason the reference
-// would not have accepted. The evidence has to be a census of the passing population, and #455 asks
-// for exactly one number before any of its three options can be priced — how many rows pass under
+// That was an **accept-direction** divergence, so no negative-direction vector could witness it: the
+// rows that would were rows the suite expects to pass and we did pass, for a reason the reference
+// would not have accepted. The evidence had to be a census of the passing population, and #455 asked
+// for exactly one number before any of its options could be priced — how many rows pass under
 // `Contains` and would fail under `HasPrefix`.
 //
-// **This file is the probe and not the repair.** Which option the project takes (the reference's
-// rule with the engine's texts made to conform; a normalized prefix; substring recorded as a
-// bounded looseness) is Scott's, and #455 pre-registers nothing about which way the number will
-// come out — the issue says so in its own words, and this file adds no forecast of its own.
+// **The number was 6542 default-lane rows, and the repair landed — so this file's job changed.** ADR
+// 0045 took option 4: the engine's *location context* renders after the spec phrase, at 28 sites, and
+// the harness then takes the reference's prefix rule. `Contains` no longer appears in the run loop.
+// The census that priced the options is now the **tripwire** that catches the divergence coming back,
+// and its 0 is a measurement rather than an artifact only because `expectMatches` records before it
+// decides — see that closure, which carries the argument.
+//
+// The count was large and the price was small, which is the reading #455's own decision rule did not
+// have a branch for: it read "large" as the case for keeping substring. The rows resolved into two
+// mechanisms with no remainder — `internal/interp`'s two error prefixes and `internal/validate`'s
+// location wrappers — so the bill was 28 line edits over 6542 rows. *A count is not a price;
+// decompose by mechanism.*
 //
 // **A separate file, for `kindgate_test.go`'s reason** (#447): `foreclosingLicensed` in
 // `internal/testenv/foreclose_test.go` keys its entries on `<file>:<line>`, so an insertion into
@@ -43,11 +51,23 @@ import (
 // number nobody has read. `go test ./internal/spec/ -run TestSubstringOnlyMatchCensus -v` is the
 // instrument.
 //
-// What is asserted here is **not** the size of the divergent population — that is the quantity
-// under deliberation, and pinning it now would be this PR forecasting the answer to the question it
-// was ordered to ask. What is asserted is that the census walked: `ExpectMatched` has a floor,
-// because a lane reporting `0 divergent` out of `0 matched` has stopped walking rather than found
-// nothing, and those two readings are indistinguishable from the divergent count alone.
+// **The divergent population is now pinned at 0, and it was deliberately unpinned before.** While
+// #455 was open the size was the quantity under deliberation and a bound on it would have been this
+// harness forecasting the answer to the question it was ordered to ask. ADR 0045 decided it, so the
+// figure is a ceiling like any other — and a tight one rather than a floor, because the honest bound
+// for a population the repair drove to zero is zero.
+//
+// **Two channels, and the second is why this assertion is not redundant with the board.** A
+// reintroduced prefix wrapper fails its vectors, so the board says *that* something is wrong; only
+// this census says *which prefix*, with the offset and the whole message. Watched die rather than
+// argued: putting `func %d: ` back in front of one wrapper takes the default board to 58849 pass /
+// 2108 fail and this census to 2108, the two figures being equal by construction — `Index > 0` is
+// `Contains && !HasPrefix`, so a row's verdict changes under the rule exactly when the census records
+// it.
+//
+// `ExpectMatched` keeps its floor underneath both, because a lane reporting `0 divergent` out of `0
+// matched` has stopped walking rather than found nothing, and those two readings are indistinguishable
+// from the divergent count alone.
 func TestSubstringOnlyMatchCensus(t *testing.T) {
 	requireSuite(t)
 
@@ -114,15 +134,17 @@ func TestSubstringOnlyMatchCensus(t *testing.T) {
 					continue
 				}
 				got := err.Error()
-				if !strings.Contains(got, c.Expect) {
-					continue
-				}
-				encodeMatched++
+				// Divergence recorded before the verdict, mirroring `expectMatches`: after the flip
+				// a `Contains`-guarded census could only ever report 0 here.
 				if i := strings.Index(got, c.Expect); i > 0 {
 					encodeDivergent++
 					encodeRows = append(encodeRows,
 						fmt.Sprintf("%s:%d +%d expected %q, got %q", f, c.Line, i, c.Expect, got))
 				}
+				if !strings.HasPrefix(got, c.Expect) {
+					continue
+				}
+				encodeMatched++
 			}
 		}
 
@@ -130,7 +152,8 @@ func TestSubstringOnlyMatchCensus(t *testing.T) {
 		sort.Strings(rows)
 
 		t.Logf("substring-vs-prefix census, %s lane: %d awards made by an expected-text match, "+
-			"%d of them substring-only — rows the reference's prefix rule would have refused",
+			"and %d rows refused for carrying the expected text only after position 0 — this "+
+			"harness's rule is the reference's since ADR 0045, so a row here is a failure",
 			lane.name, matched, divergent)
 		t.Logf("  by stratum: %s", censusCounts(byStratum))
 		// Numerator and denominator on adjacent lines, so an arm with matches and no divergences is
@@ -142,10 +165,15 @@ func TestSubstringOnlyMatchCensus(t *testing.T) {
 		t.Logf("  by command kind, matched:   %s", censusCounts(matchedByKind))
 		// **The line that turns the count into a price**, and the reason it is here rather than in
 		// a session's scratch analysis: a divergent row is not a defective message, it is a message
-		// carrying something *before* the phrase, and what matters to #455's choice is how many
+		// carrying something *before* the phrase, and what mattered to #455's choice was how many
 		// distinct renderings put it there. N rows across three renderings is a different bill from
 		// N rows across N distinct strings, and the count alone cannot tell them apart —
 		// *measure with the instrument, not a regex*, so the grouping ships with the census.
+		//
+		// **This line is what decided #455**, and it is the reason the grouping is not scaffolding to
+		// delete now the population is 0: 6542 rows resolved into two mechanisms with no remainder,
+		// which turned "an engine-wide message rewrite" into 28 line edits. The next reintroduced
+		// prefix gets priced the same way.
 		t.Logf("  by prefix family (digits → N, parenthesized opcode → (op)), %d distinct: %s",
 			len(byFamily), censusCounts(byFamily))
 		t.Logf("  by file: %s", censusCounts(byFile))
@@ -173,12 +201,22 @@ func TestSubstringOnlyMatchCensus(t *testing.T) {
 		// through a matched expected text, so a lane that walked cannot report a small number here.
 		// The floor is deliberately far below the observed figure and above zero-plus-noise: it
 		// catches a census pointed at an empty file list, a lane that stopped scoring, or a
-		// `noteSubstringOnly` call deleted from every arm at once — and nothing else, which is what
+		// `expectMatches` call deleted from every arm at once — and nothing else, which is what
 		// a floor is for (*floors bound the catastrophic case only*).
 		if matched < 1000 {
 			t.Errorf("%s lane: only %d expected-text matches; the census has stopped walking, "+
 				"and a divergent count of %d read against it would be a zero that could not have "+
 				"come out otherwise", lane.name, matched, divergent)
+		}
+		// The ceiling, pinned at exactly the population ADR 0045 drove this to. Read *with* the floor
+		// above and not instead of it: a lane that walked and found nothing satisfies both, and a lane
+		// that stopped walking satisfies this one alone.
+		if divergent != 0 {
+			t.Errorf("%s lane: %d rows carry the expected text only after position 0, want 0. "+
+				"Each is a vector this harness now fails and the reference fails too, so the "+
+				"engine has a message with location context in front of the spec's phrase again "+
+				"(ADR 0045). The `by prefix family` line above names the rendering; the repair is "+
+				"at the wrapper, not at the vector.", lane.name, divergent)
 		}
 	}
 }
@@ -235,11 +273,17 @@ func censusCounts(m map[string]int) string {
 // measurement of the corpus and is partly a measurement of the wiring.
 //
 // **Two directions, per arm.** A message carrying the expected text at a non-zero offset must be
-// recorded; a message that *begins* with it must not, because that row is one the reference accepts
-// too and a probe that counts it inflates the very figure #455 turns on. Every arm gets both,
-// because *a control can test the helper rather than the path*: `noteSubstringOnly` is one closure,
-// and asserting it in isolation would prove the closure works while an arm that never calls it
-// stays invisible.
+// recorded **and refused**; a message that *begins* with it must be awarded and not recorded. Every
+// arm gets both, because *a control can test the helper rather than the path*: `expectMatches` is one
+// closure, and asserting it in isolation would prove the closure works while an arm that never calls
+// it stays invisible.
+//
+// **The divergent direction inverted with ADR 0045**, and the inversion is the property to hold onto.
+// While the rule was `Contains`, a divergent row was an award-and-record and this test asserted a
+// pass; the flip to the reference's prefix rule makes it a refuse-and-record. The census therefore
+// observes a population the *award* arm can no longer reach, which is the only reason its 0 is a
+// measurement — the alternative is a figure that reads "no divergences" and means "divergences are
+// invisible from here".
 //
 // **A synthetic engine, not the real one.** The subject is the six call sites, and each row needs a
 // message the arm's own component produces with the phrase at a chosen offset — which is a thing
@@ -383,21 +427,24 @@ func TestSubstringOnlyProbeSeesEveryArm(t *testing.T) {
 				t.Fatalf("parse: %v", err)
 			}
 
-			// The divergent direction: the phrase is present, at `len(pad)`, and the row must be
-			// awarded *and* recorded.
+			// The divergent direction: the phrase is present, at `len(pad)`, so the row must be
+			// **refused** and recorded.
 			r := s.RunWith(arm.eng(pad + want + " and then some"))
-			if r.Fail != 0 || r.Pass == 0 {
-				t.Fatalf("the fixture did not reach the match site: %d pass / %d fail / "+
-					"%d unsupported / %d unimplemented\n%s",
-					r.Pass, r.Fail, r.Unsupported, r.Unimplemented, r.Board())
+			if r.Fail == 0 {
+				t.Fatalf("a message carrying the expected text only at offset %d was not scored "+
+					"a failure: %d pass / %d fail / %d unsupported / %d unimplemented\n%s",
+					len(pad), r.Pass, r.Fail, r.Unsupported, r.Unimplemented, r.Board())
 			}
-			// Asserted on this arm's own key rather than on the map's size: a fixture whose
-			// award came from some *other* command in the same script would satisfy a bare
-			// non-empty check while leaving the arm under test uninstrumented.
-			if r.ExpectMatched[arm.kind] == 0 {
-				t.Fatalf("no award under %v passed through noteSubstringOnly, so this arm is "+
-					"outside the census's reach entirely (matched: %v)\n%s",
-					arm.kind, r.ExpectMatched, r.Board())
+			// Asserted on this arm's own key rather than on the map's size, for the reason the
+			// prefix direction below asserts the same key non-zero: a fixture whose award came from
+			// some *other* command in the same script would satisfy a bare emptiness check while
+			// leaving the arm under test unjudged. `assert_trap (invoke)`'s fixture carries a module
+			// command that scores a pass of its own, which is exactly that hazard with a witness.
+			if r.ExpectMatched[arm.kind] != 0 {
+				t.Errorf("under %v the harness awarded a row whose message carries the expected "+
+					"text only at offset %d; the reference refuses that (ADR 0045), and an award "+
+					"here means this arm is still on the substring rule (matched: %v)\n%s",
+					arm.kind, len(pad), r.ExpectMatched, r.Board())
 			}
 			if len(r.SubstringOnly) != 1 {
 				t.Fatalf("recorded %d substring-only rows, want 1 — this arm's call site is "+

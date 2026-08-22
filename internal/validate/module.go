@@ -19,7 +19,7 @@ var (
 	//	check_limits lim sz at ("memory size must be at most " ^ s)   (valid.ml:208)
 	//	check_limits lim sz at ("table size must be at most " ^ s)    (valid.ml:218)
 	//
-	// The corpus matches `memory size` and `table size` as substrings, so a shared sentinel
+	// The corpus matches `memory size` and `table size` as prefixes, so a shared sentinel
 	// reading "size must be at most …" would satisfy neither. The suffix `s` is the reference's
 	// own per-address-type text and is reproduced at the call sites, where the range it names is
 	// chosen — a message and the bound it describes are one fact, and splitting them is how they
@@ -438,11 +438,11 @@ func modulePre(m *binary.Module, refs map[uint32]bool) error {
 		switch imp.Kind {
 		case binary.ExternMemory:
 			if err := checkMemoryType(imp.Memory); err != nil {
-				return fmt.Errorf("import %d: %w", i, err)
+				return fmt.Errorf("%w (import %d)", err, i)
 			}
 		case binary.ExternTable:
 			if err := checkTableType(len(m.Types), imp.Table); err != nil {
-				return fmt.Errorf("import %d: %w", i, err)
+				return fmt.Errorf("%w (import %d)", err, i)
 			}
 		case binary.ExternTag:
 			// `check_externtype`'s `ExternTagT` arm (valid.ml:222-223), which is `check_tagtype` over
@@ -451,7 +451,7 @@ func modulePre(m *binary.Module, refs map[uint32]bool) error {
 			// rule at the `check_tag` site alone: an import arm named as "not this slice" in the table
 			// above was a live admission, exactly as that table's own note says.
 			if err := checkTagType(m, imp.Index); err != nil {
-				return fmt.Errorf("import %d: %w", i, err)
+				return fmt.Errorf("%w (import %d)", err, i)
 			}
 		case binary.ExternFunc:
 			// `check_externtype`'s `ExternFuncT` arm (valid.ml:230-231):
@@ -465,7 +465,7 @@ func modulePre(m *binary.Module, refs map[uint32]bool) error {
 			// `(func (type 1))`, so the index is in range of nothing and off by exactly one. A
 			// bounds check written against `len(m.Types)+1`, or against the import count, passes it.
 			if _, err := funcType(m, imp.Index); err != nil {
-				return fmt.Errorf("import %d: %w", i, err)
+				return fmt.Errorf("%w (import %d)", err, i)
 			}
 		case binary.ExternGlobal:
 			// The last arm of `check_externtype`, which reaches `check_globaltype` — the whole of it
@@ -481,7 +481,7 @@ func modulePre(m *binary.Module, refs map[uint32]bool) error {
 			// other positions in this function now run, and *a rule implemented at four of five sites
 			// is not a rule*.
 			if err := checkValTypeScoped(len(m.Types), imp.GlobalType); err != nil {
-				return fmt.Errorf("import %d: %w", i, err)
+				return fmt.Errorf("%w (import %d)", err, i)
 			}
 		}
 	}
@@ -494,7 +494,7 @@ func modulePre(m *binary.Module, refs map[uint32]bool) error {
 	// above) are all-on-lane rows and ADR 0036 forecasts no default-lane movement from them.
 	for i := range m.Tags {
 		if err := checkTagType(m, m.Tags[i].TypeIndex); err != nil {
-			return fmt.Errorf("tag %d: %w", i, err)
+			return fmt.Errorf("%w (tag %d)", err, i)
 		}
 	}
 	// `check_func` (valid.ml:1013-1016), which is `func_type c x` over each *declaration* — the type
@@ -510,12 +510,12 @@ func modulePre(m *binary.Module, refs map[uint32]bool) error {
 	// instrument can score is a rule whose PR must say so rather than claim a fix.
 	for i := range m.Funcs {
 		if _, err := funcType(m, m.Funcs[i].TypeIndex); err != nil {
-			return fmt.Errorf("func %d: %w", i, err)
+			return fmt.Errorf("%w (func %d)", err, i)
 		}
 	}
 	for i := range m.Memories {
 		if err := checkMemoryType(m.Memories[i]); err != nil {
-			return fmt.Errorf("memory %d: %w", i, err)
+			return fmt.Errorf("%w (memory %d)", err, i)
 		}
 	}
 	// check_table (valid.ml:1066-1071), both halves, in the reference's position: after the defined
@@ -552,14 +552,14 @@ func modulePre(m *binary.Module, refs map[uint32]bool) error {
 	for i := range m.Tables {
 		t := &m.Tables[i]
 		if err := checkTableType(len(m.Types), t.Type()); err != nil {
-			return fmt.Errorf("table %d: %w", i, err)
+			return fmt.Errorf("%w (table %d)", err, i)
 		}
 		// `RefT rt` is the tabletype's own reftype, which `binary.Table` holds as `ElemType` — so
 		// the expected type is read off the descriptor exactly as the two offset sites read theirs,
 		// and a table whose text spelled no initializer is typed against the `ref.null ht` the
 		// decoder synthesized for it (`Table.Init`'s comment on why that field is never absent).
 		if err := checkConst(m, refs, t.Init, t.InitCasts, t.ElemType, 0); err != nil {
-			return fmt.Errorf("table %d: %w", i, err)
+			return fmt.Errorf("%w (table %d)", err, i)
 		}
 	}
 	// check_global (valid.ml:1054-1059), in the reference's position: after check_table, before
@@ -581,10 +581,10 @@ func modulePre(m *binary.Module, refs map[uint32]bool) error {
 		// from the descriptor and not from the expression, which would otherwise reach the same
 		// verdict through `checkConst`'s own walk and name the instruction.
 		if err := checkValTypeScoped(len(m.Types), g.Type); err != nil {
-			return fmt.Errorf("global %d: %w", i, err)
+			return fmt.Errorf("%w (global %d)", err, i)
 		}
 		if err := checkConst(m, refs, g.Init, g.InitCasts, g.Type, i); err != nil {
-			return fmt.Errorf("global %d: %w", i, err)
+			return fmt.Errorf("%w (global %d)", err, i)
 		}
 	}
 	// check_data → check_datamode (valid.ml:1073-1084). The active arm resolves `memory c x`
@@ -610,7 +610,7 @@ func modulePre(m *binary.Module, refs map[uint32]bool) error {
 		// keeps its other caller in `exportExists`.
 		at, err := addrTypeAt(m, d.MemIndex)
 		if err != nil {
-			return fmt.Errorf("data segment %d: %w", i, err)
+			return fmt.Errorf("%w (data segment %d)", err, i)
 		}
 		// `check_const c offset (NumT (numtype_of_addrtype at))` at :1076, after the memory resolves —
 		// the sequence the loop's own comment above relies on. Every defined global is in scope here,
@@ -618,7 +618,7 @@ func modulePre(m *binary.Module, refs map[uint32]bool) error {
 		// time it reaches the data segments (:1161 before :1163), which is why this passes the full
 		// count where the loop above passes `i`.
 		if err := checkConst(m, refs, d.Offset, d.OffsetCasts, at, len(m.Globals)); err != nil {
-			return fmt.Errorf("data segment %d: %w", i, err)
+			return fmt.Errorf("%w (data segment %d)", err, i)
 		}
 	}
 	// `check_elem` → `check_elemmode` (valid.ml:1086-1102), and the same argument the data loop above
@@ -652,7 +652,7 @@ func modulePre(m *binary.Module, refs map[uint32]bool) error {
 		// holding a reftype here, which is the representation this package has used for the reftype
 		// positions since the elem match landed.
 		if err := checkValTypeScoped(len(m.Types), e.ElemType); err != nil {
-			return fmt.Errorf("element segment %d: %w", i, err)
+			return fmt.Errorf("%w (element segment %d)", err, i)
 		}
 		// The element expressions are checked in **every** mode (`check_elem` at :1100 runs
 		// `check_const` over the segment's elements at :1100, before `check_elemmode` at :1101 decides
@@ -693,7 +693,7 @@ func modulePre(m *binary.Module, refs map[uint32]bool) error {
 					ec = e.ExprCasts[j]
 				}
 				if err := checkConst(m, refs, e.Exprs[j], ec, e.ElemType, len(m.Globals)); err != nil {
-					return fmt.Errorf("element segment %d, element %d: %w", i, j, err)
+					return fmt.Errorf("%w (element segment %d, element %d)", err, i, j)
 				}
 			}
 		} else if err := elemFuncsInScope(m, e.Funcs); err != nil {
@@ -711,14 +711,14 @@ func modulePre(m *binary.Module, refs map[uint32]bool) error {
 			// because it reads as coverage, so what stands here is the lookup and a note of why its
 			// sibling would say nothing. The nullability the reference distinguishes at *encode* time
 			// is unrepresentable in this ValType, which ElemSegment's own comment records.
-			return fmt.Errorf("element segment %d: %w", i, err)
+			return fmt.Errorf("%w (element segment %d)", err, i)
 		}
 		if e.Mode != binary.ElemActive {
 			continue
 		}
 		tab, err := tableTypeAt(m, e.TableIndex)
 		if err != nil {
-			return fmt.Errorf("element segment %d: %w", i, err)
+			return fmt.Errorf("%w (element segment %d)", err, i)
 		}
 		// `require (match_reftype c.types t rt)` at :1091-1093 — the segment's element type against the
 		// table's, the deferred half `tableTypeAt` was resolving a whole descriptor for. **It sits
@@ -746,15 +746,15 @@ func modulePre(m *binary.Module, refs map[uint32]bool) error {
 		// The message is the reference's own sentence (valid.ml:1092-1093), which names both types
 		// because a mismatch between two descriptors is unreadable without them.
 		if !matchRefType(tctx{gotMod: m, wantMod: m}, e.ElemType, tab.ElemType) {
-			return fmt.Errorf("element segment %d: %w: element segment's type %s does not match "+
-				"table's element type %s", i, ErrTypeMismatch, e.ElemType, tab.ElemType)
+			return fmt.Errorf("%w: element segment's type %s does not match "+
+				"table's element type %s (element segment %d)", ErrTypeMismatch, e.ElemType, tab.ElemType, i)
 		}
 		// `check_const c offset (NumT (numtype_of_addrtype at))` at :1094, after `table c x` and after
 		// the reftype match above. The offset's type comes off the table's address type, so a table64
 		// takes an i64 offset — `tableAddrType` is the accessor the bulk operands already read it
 		// through, reused rather than re-derived for `tableOp`'s stated reason.
 		if err := checkConst(m, refs, e.Offset, e.OffsetCasts, tableAddrType(tab), len(m.Globals)); err != nil {
-			return fmt.Errorf("element segment %d: %w", i, err)
+			return fmt.Errorf("%w (element segment %d)", err, i)
 		}
 	}
 	return nil
@@ -990,7 +990,7 @@ func globalTypeAt(m *binary.Module, idx uint32, definedInScope int) (binary.ValT
 		g := m.Globals[defined]
 		return g.Type, g.Mutable, nil
 	}
-	// `(%d in scope)` verbatim from indexInScope, because the corpus matches by substring (0003) and
+	// `(%d in scope)` verbatim from indexInScope, because the corpus matches by prefix (ADR 0045) and
 	// three bucket keys ride on this one format: the bare `unknown global`, `unknown global 0`, and
 	// `unknown global 1`. Any text between the category and the index breaks the latter two.
 	return binary.ValType{}, false, fmt.Errorf("%w %d (%d in scope)",
@@ -1036,7 +1036,7 @@ func moduleExports(m *binary.Module) error {
 	for i := range m.Exports {
 		ex := &m.Exports[i]
 		if err := exportExists(m, ex.Kind, ex.Index); err != nil {
-			return fmt.Errorf("export %d (%q): %w", i, ex.Name, err)
+			return fmt.Errorf("%w (export %d %q)", err, i, ex.Name)
 		}
 	}
 	seen := make(map[string]struct{}, len(m.Exports))

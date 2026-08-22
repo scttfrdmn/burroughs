@@ -398,7 +398,17 @@ type Trap struct {
 	Reason string
 }
 
-func (t *Trap) Error() string { return "trap: " + t.Reason }
+// Error renders the reason first and the word "trap" after it, which is the reverse of Go's
+// context-prefix convention and is ADR 0045's decision: `assert_trap` matches its expected text by
+// **prefix** (`runner.ml:498-501`), so a leading `"trap: "` made 4262 default-lane vectors pass under
+// the harness's then-looser substring rule for a reason the reference would have refused. The Reason is
+// the spec's own phrase, so putting it at position 0 is what makes the two rules agree.
+//
+// **The public `burroughs.Trap` deliberately renders the other way** — `"trap: " + Reason`, the Go
+// idiom — because the reference's domain is this package and the root package's invariant is that the
+// *Reason* is the engine's, not that its rendering is. See burroughs.go's Error, which says the same
+// thing from the other side.
+func (t *Trap) Error() string { return t.Reason + " (trap)" }
 
 // The trap reasons the numeric core can produce, spelled as the spec spells them.
 //

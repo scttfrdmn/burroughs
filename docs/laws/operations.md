@@ -216,3 +216,46 @@ general.
 local mirror of CI, so a surprise in CI is a bug in the Makefile) meeting the one check whose subject
 does not exist yet when the Makefile runs. The mirror is incomplete **by construction** here, which is
 why the sequence above is written down instead of a Makefile target being fixed.
+
+## Reading the tracker's state: the queue comes from the issues API, never from a cached listing
+
+`decision-needed:scott` **is** the decisions-needed queue (`CLAUDE.md`, `## Where the work is
+tracked`), so "the queue is empty" and "three items are waiting on you" are state claims about the
+tracker made in a report to a principal. **No sweep in this repo can check them** — `citecheck.sh`
+resolves pointers in the tree, and the tracker is outside every instrument's domain. The only defence
+is the sourcing.
+
+```bash
+# The queue, by label. Excludes PRs: the issues endpoint returns both.
+gh api --paginate 'repos/scttfrdmn/burroughs/issues?state=open&labels=decision-needed:scott&per_page=100' \
+  --jq '.[] | select(.pull_request == null) | "\(.number) \(.title)"'
+
+# One issue's labels, when the claim is about a specific issue rather than a population.
+gh issue view <n> -R scttfrdmn/burroughs --json labels -q '.labels[].name'
+```
+
+**Not `gh issue list --label`.** It answers from a search index that lags the label mutation, so a
+label removed a moment ago is still returned — the specimen is eight `decision-needed:scott` removals
+still listed after every one had been applied, which would have gone into a report as *"eight items
+await your ruling"* on the same turn they were discharged. The failure direction is the dangerous one:
+the stale answer is the *pre-mutation* state, so a queue you have just drained reads as full, and a
+queue you have just filled reads as empty.
+
+The two channels agreed exactly when this entry was written — `type:decision` open: 14 by both,
+all-open issues: 79 by both, `decision-needed:scott`: 0 by both. **That agreement is not the
+measurement and does not license the listing**: agreement is what the index looks like when nothing
+has changed recently, which is most of the time and never the moment a claim is being made. The
+discriminating measurement is the one above, taken seconds after a mutation.
+
+Two properties of the API arm worth stating, because both are ways to under-report a queue:
+
+- **`per_page=100` is not "all"** — without `--paginate` the 101st item is silently absent, which is
+  *a first-match pick declines to ask* in a paginated dress.
+- **The issues endpoint returns pull requests**, which over-reports in the other direction; the
+  `select(.pull_request == null)` filter is what makes the count a count of issues. Today the label
+  populations happen to carry no PRs, so dropping the filter changes nothing — a
+  passing-population coincidence, not a property.
+
+(Ruling: Scott, PR #490 review — *"any state claim about the queue is read from the issues API, never
+from a cached CLI listing. Put the procedure wherever the queue is documented."* Hence both this entry
+and the pointer beside the label's definition in `CLAUDE.md`.)

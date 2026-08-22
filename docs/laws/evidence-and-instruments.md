@@ -659,8 +659,10 @@ reach is a law out of context.
     for each payload spelling. For `name == "struct"` the substring sat inside the word
     **constructor** in the refusal's own sentence, so a refusal that never named its payload
     satisfied the check anyway (`value_test.go:198`, with the reason written at the refusal it
-    corrupted, `value.go:734` — the comment line ending *"which is the fact `fromRef` used to drop"*,
-    re-pointed 2026-08-22 by that text after #452's dating note moved it twelve lines). The
+    corrupted, `value.go:745` — the comment line ending *"which is the fact `fromRef` used to drop"*,
+    re-pointed **twice** on 2026-08-22 by that text, first after #452's dating note moved it twelve
+    lines and again after grave #491's repair moved it eleven more; the text located it both times and
+    neither delta was reusable). The
     falsification probe that should have failed on six payloads
     failed on five, and *the shape of what survives named the bug*.
   - Reading a CI verdict out of a captured `gh run watch`, `grep -E '^JOB'` for the sentinel's

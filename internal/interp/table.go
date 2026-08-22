@@ -53,8 +53,9 @@ var trapOOBTable = &Trap{Reason: "out of bounds table access"}
 // **The index is part of the string, and one vector proves it belongs there.** Of the 3597
 // expectations in the corpus, 3596 stop at the sentinel — but `bulk.wast:222` wants
 // `"uninitialized element 2"`, so for that one the rendering is *oracle-covered* (#38's
-// refinement: some expected strings carry data). Since the harness matches by substring,
-// appending the index passes all 3597 and omitting it fails exactly that one. The suite settles
+// refinement: some expected strings carry data). Since the harness matches by prefix (ADR 0045)
+// and the sentinel is at position 0, appending the index passes all 3597 and omitting it fails
+// exactly that one. The suite settles
 // it; measuring the population rather than reading one line is what turned a stylistic question
 // into a decided one.
 //

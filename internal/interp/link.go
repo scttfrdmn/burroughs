@@ -268,7 +268,12 @@ func (in *Instance) link(imp Imports) error {
 			// that instantiates it anyway and only complains if the import is *touched* accepts a
 			// module the spec refuses. Measured rather than argued: the change converts 15
 			// `assert_unlinkable` vectors from fail to pass and moves zero vectors out of pass.
-			return fmt.Errorf("%w: unknown import: %q %q", ErrLinkFailed, im.Module, im.Name)
+			//
+			// **The sentinel is rendered last** (ADR 0045). `unknown import` is the phrase
+			// `assert_unlinkable` matches, the reference matches it by prefix, and `interp: link
+			// failed: ` in front of it was 76 default-lane rows passing under a looser rule. `%w`
+			// binds `errors.Is` from any position, so only the testimony moved.
+			return fmt.Errorf("unknown import: %q %q (%w)", im.Module, im.Name, ErrLinkFailed)
 		}
 		if ext.Kind != im.Kind {
 			// `incompatible import type` — `eval.ml`'s other `Link.error`, for a name that resolves
@@ -280,8 +285,12 @@ func (in *Instance) link(imp Imports) error {
 			// which is grave #36's fabricated evidence with the aggravating feature that this arm is
 			// *oracle-covered*: `assert_unlinkable`'s expected text is the whole sentinel, so 29
 			// vectors were failing on the wording alone. #38's refinement in the one place it bites.
-			return fmt.Errorf("%w: incompatible import type: %q %q is a %s but the supplier offers a %s",
-				ErrLinkFailed, im.Module, im.Name, im.Kind, ext.Kind)
+			//
+			// The spec's phrase leads and the sentinel trails, per ADR 0045 — which is what the
+			// sentence above always meant by "in that order" and could not spell while the
+			// sentinel occupied position 0.
+			return fmt.Errorf("incompatible import type: %q %q is a %s but the supplier offers a %s (%w)",
+				im.Module, im.Name, im.Kind, ext.Kind, ErrLinkFailed)
 		}
 		if detail := in.importTypeMismatch(im, ext); detail != "" {
 			// `incompatible import type` again, for a name that resolves to the *right kind*
@@ -290,8 +299,8 @@ func (in *Instance) link(imp Imports) error {
 			// already enough to pass every vector above, so 124 modules the spec refuses
 			// were being accepted (§9 G-3's accept-direction blind spot, closed rather than
 			// left for the corpus to never ask about).
-			return fmt.Errorf("%w: incompatible import type: %q %q %s",
-				ErrLinkFailed, im.Module, im.Name, detail)
+			return fmt.Errorf("incompatible import type: %q %q %s (%w)",
+				im.Module, im.Name, detail, ErrLinkFailed)
 		}
 		switch im.Kind {
 		case binary.ExternMemory:

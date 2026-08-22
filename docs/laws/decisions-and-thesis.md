@@ -100,6 +100,17 @@ reach is a law out of context.
     ruling among ones that do not. Flag what needs ruling; decide what needs deciding.
     (Standing correction: Scott, PR #331.)
 
+  - **A stamp is only as good as the description it was given on**, which is this law read from
+    the requester's end. When a principal approves a term the actor could not have delivered, the
+    defect is upstream of the approval and sits in the description — and a principal who notices
+    it says so in those words: *"since I gave the term on your description, I carry it."* So the
+    check before asking for a stamp is not only "is this a principal's question" but "is the term
+    I am asking to be held to satisfiable by the slice I am asking about." Full body and its
+    specimen — a pre-registered term about an error's *rendered* text, owned by a wrapper in
+    another slice's file — at
+    [a message is not its rendering](errors-and-testimony.md#a-message-is-not-its-rendering-and-a-term-about-the-rendering-cannot-be-discharged-by-the-messages-author).
+    (Ruling: Scott, PR #490 review.)
+
 ### A retirement condition that names an issue rather than a state of the code retires on a bookkeeping event.
 
 - **A retirement condition that names an issue rather than a state of the code retires on a

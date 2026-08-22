@@ -15,7 +15,7 @@ Date: 2026-08-17 · Status: **accepted** — stamped by Scott, relayed on
 `internal/validate` types the single-byte space, 0xFD (slice 2), and 0xFC (slice 5). **The 0xFB
 region is declared declined in two places**, which is why opening it is a decision:
 
-- `instr.go:65-68`, the region dispatch: *"The prefixed regions are 0xFB (GC), 0xFC (bulk
+- `instr.go:71-74`, the region dispatch: *"The prefixed regions are 0xFB (GC), 0xFC (bulk
   memory/table), 0xFD (SIMD), 0xFE (threads). Slice 2 (#305) types 0xFD and slice 5 types 0xFC;
   **0xFB and 0xFE stay declined** — which is what keeps an unchecked module from being reported
   valid, and keeps the decline census a work plan for the slices that own them rather than a

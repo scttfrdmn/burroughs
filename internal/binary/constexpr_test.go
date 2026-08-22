@@ -119,7 +119,9 @@ func TestConstExprSeparatesMalformedFromInvalid(t *testing.T) {
 			t.Errorf("%s: got %v, want %v", tc.name, err, tc.want)
 			continue
 		}
-		// Substring, because that is how the harness matches.
+		// Substring, and deliberately stronger than the harness's own rule (prefix,
+		// ADR 0045): the claim is that the other half's text appears *nowhere*, which
+		// a prefix test cannot make.
 		if contains(err.Error(), tc.deny) {
 			t.Errorf("%s: error %q contains %q — the other half of the partition, so the "+
 				"table's existence verdict was not consulted", tc.name, err, tc.deny)

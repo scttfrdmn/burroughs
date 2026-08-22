@@ -269,8 +269,8 @@ var (
 	// (`lookup`, `valid/valid.ml:41-42`, with the ten categories at `:44-53`.) So the message is
 	// `unknown local 2` — category, space, index, and nothing else before it. That format is
 	// not cosmetic: the corpus expects *both* `unknown local` and `unknown local 2`, matched as
-	// a substring per 0003, so a message reading `unknown local: local 2` satisfies the first
-	// and fails the second while being right about the module. Any detail this validator wants
+	// a prefix per 0003 as amended by ADR 0045, so a message reading `unknown local: local 2`
+	// satisfies the first and fails the second while being right about the module. Any detail this validator wants
 	// to add goes *after* the index, never between the category and it.
 	//
 	// TestUnknownCategoriesMatchTheReference derives the category set by parsing those
@@ -306,7 +306,7 @@ var (
 	// **"not (yet) allowed" is part of the message and is kept**, because the hedge is the
 	// reference's own statement about the rule's status: multi-value `select` is a shape the spec
 	// has reserved rather than forbidden, and paraphrasing it to "invalid result arity" would make
-	// this engine assert a stability the authority declines to. The corpus matches the substring
+	// this engine assert a stability the authority declines to. The corpus matches the prefix
 	// (`select.wast:369,379` expect `invalid result arity`), so keeping the tail costs nothing and
 	// the day the parenthetical disappears upstream is a day this string should move with it.
 	//
@@ -406,7 +406,7 @@ var (
 	// ErrSubType is `check_subtype_sub`'s two `require`s about a declared supertype relationship
 	// — `valid.ml:170-174`, the finality rule and the relation itself.
 	//
-	// **The sentinel is the corpus's own substring and the index sits inside the message**, which
+	// **The sentinel is the corpus's own prefix and the index sits inside the message**, which
 	// is the one place this family's format differs from the `unknown ` categories above. The
 	// reference's strings are `"sub type " ^ x ^ " has final super type " ^ xi` and `"sub type " ^
 	// x ^ " does not match super type " ^ xi`, so the discriminating words come *after* an index
@@ -426,10 +426,15 @@ var (
 	//
 	// A separate sentinel from ErrSubType, and the reason is the reference's own word order rather
 	// than a judgement about how related the rules are: this message does not begin with `sub
-	// type`, so `%w`-wrapping ErrSubType could not produce it. It still *contains* the substring
-	// the corpus matches, which is why the vectors expecting `sub type` are satisfied either way —
-	// a coincidence of phrasing that is worth naming, because it means this sentinel's own reward
-	// figure is zero and its justification is completing the function.
+	// type`, so `%w`-wrapping ErrSubType could not produce it. It does *contain* the words the
+	// corpus matches, which under the harness's old substring rule satisfied the vectors expecting
+	// `sub type` either way — a coincidence of phrasing worth naming, because it means this
+	// sentinel's own reward figure is zero and its justification is completing the function.
+	//
+	// **ADR 0045 removed the coincidence and neither board moved**, which is the measurement saying
+	// none of the 21 was taking this path. It could not have been: the reference renders this rule
+	// with this word order and matches by prefix too, so a vector expecting `sub type` that arrived
+	// here would fail against the reference itself. The slack was the harness's alone.
 	//
 	// **It is also the property that makes the supertype walk terminate**, and that is not a
 	// coincidence: `xi < x` is what makes every declared chain strictly decreasing. See
@@ -441,7 +446,7 @@ var (
 	// result (`valid.ml:1113-1114`, the reference's text verbatim per 0003).
 	//
 	// **The corpus expects `start function`, which is a prefix of this and not a paraphrase of it**,
-	// so the substring match of 0003 is satisfied by keeping the whole sentence — the same
+	// so the prefix match of 0003 as amended by ADR 0045 is satisfied by keeping the whole sentence — the same
 	// arrangement ErrAlignmentTooLarge has, and for the same reason: the reference's words say
 	// *which* rule refused where the vector's three cannot.
 	//
@@ -532,7 +537,7 @@ func Module(m *binary.Module) (*Info, error) {
 	for i := range m.Funcs {
 		fi, err := funcBody(m, &m.Funcs[i], refs)
 		if err != nil {
-			return nil, fmt.Errorf("func %d: %w", i, err)
+			return nil, fmt.Errorf("%w (func %d)", err, i)
 		}
 		info.Funcs[i] = fi
 	}
@@ -573,7 +578,7 @@ func funcBody(m *binary.Module, f *binary.Func, refs map[uint32]bool) (FuncInfo,
 	// `validator.globalScope` below is `len(m.Globals)` and not an index.
 	for i, g := range f.Locals {
 		if terr := checkValTypeScoped(len(m.Types), g.Type); terr != nil {
-			return FuncInfo{}, fmt.Errorf("local group %d: %w", i, terr)
+			return FuncInfo{}, fmt.Errorf("%w (local group %d)", terr, i)
 		}
 	}
 

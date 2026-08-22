@@ -393,7 +393,7 @@ func TestRejectsPerRuleWithItsOwnTestimony(t *testing.T) {
 //
 // That control checks the format *directive* over every site, which is a proxy: it cannot see what
 // `%d` prints. These rows read the rendered string, which is what the corpus matches — the suite
-// expects both `unknown local` and `unknown local 2`, as substrings per decision 0003, so the
+// expects both `unknown local` and `unknown local 2`, as prefixes per ADR 0045, so the
 // index has to be there and has to follow the category immediately.
 func TestUnknownIndexMessagesRender(t *testing.T) {
 	for _, c := range []struct{ name, wat, want string }{
@@ -411,7 +411,7 @@ func TestUnknownIndexMessagesRender(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), c.want) {
 				t.Errorf("rendered message does not contain %q: %v.\nThe corpus matches this as a "+
-					"substring, so a message that separates the category from its index — "+
+					"prefix, so a message that separates the category from its index — "+
 					"`unknown local: local 5` — satisfies the bare vector and fails the indexed "+
 					"one while being right about the module", c.want, err)
 			}
@@ -465,13 +465,13 @@ func TestSelectAnnotatedTypesAgainstItsAnnotation(t *testing.T) {
 	// from the operands anyway — because with `(result i32)` declared, the *frame's* end-of-body check
 	// objected to the i64 left on the stack, and the row could not tell which rule had spoken. Making
 	// the function agree with its operands leaves the select arm as the only thing with a complaint,
-	// which is why the detail is asserted too: `instr 3 (select)` is this rule refusing, and a
+	// which is why the detail is asserted too: `instr 3: select` is this rule refusing, and a
 	// mismatch reported anywhere else is the coincidence coming back.
 	const mismatch = `(module (func (result i64) (i64.const 1) (i64.const 2) (i32.const 0) (select (result i32))))`
 	_, err := validated(t, mismatch, nil)
 	if !errors.Is(err, ErrTypeMismatch) {
 		t.Errorf("an i32 annotation over i64 operands must be a type mismatch, not an accept: %v", err)
-	} else if !strings.Contains(err.Error(), "(select)") {
+	} else if !strings.Contains(err.Error(), "(instr 3: select)") {
 		t.Errorf("the mismatch is reported by some rule other than `select`: %v", err)
 	}
 }
@@ -501,7 +501,7 @@ func TestSelectAnnotationArityIsTheValidatorsRule(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), "not (yet) allowed") {
 				t.Errorf("the message drops the reference's parenthetical: %v. The corpus matches "+
-					"a substring, so a paraphrase asserts a stability valid.ml declines to", err)
+					"a prefix, so a paraphrase asserts a stability valid.ml declines to", err)
 			}
 		})
 	}

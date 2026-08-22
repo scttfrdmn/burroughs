@@ -62,7 +62,7 @@ func decodedName(t Token) (string, error) {
 //
 // Both report `malformed UTF-8 encoding`, the reference's message at both sites. The board
 // carries a separate 1-vector `malformed UTF-8` bucket, and that is the *vector's expected
-// string* (`id.wast:31`), matched by substring — not a second message. Two vectors want the
+// string* (`id.wast:31`), matched by prefix — not a second message. Two vectors want the
 // short string and they sit at different layers: `annotations.wast:79` is already answered
 // by the lexer, and `id.wast:31` is this one.
 //
@@ -96,8 +96,8 @@ func decodedVar(t Token) (string, error) {
 // `externidx` would have doubled the sites and re-run the same risk, so the word moved to
 // where it can only be written once.
 //
-// Why the divergence was invisible: the harness matches expected strings by substring
-// (decision 0003), and `func.wast:966`'s expected `"duplicate func"` is a *prefix* of the
+// Why the divergence was invisible: the harness matches expected strings by prefix
+// (0003 as amended by ADR 0045), and `func.wast:966`'s expected `"duplicate func"` is a *prefix* of the
 // reference's actual `duplicate function $foo`. So the three suite vectors that touch this
 // message score pass under either word, and no vector exists at all for `duplicate data` or
 // `duplicate elem` — the accept-shaped blind spot of contract §9 G-3, in the half of a
@@ -942,8 +942,8 @@ func (c *context) noteDefined(k importKind) { c.defCount[k]++ }
 // (:157) — **one word per space**, written twice adjacently, and the only pair that differs
 // is `label`/`label ` by the reference's own trailing-space quirk. What made the false claim
 // survive is that `func.wast:966` writes `"duplicate func"` and the harness matches expected
-// strings by *substring* — the six `strings.Contains(got, c.Expect)` sites in `internal/spec`'s
-// run loop — so `duplicate function $foo` satisfies it as a prefix. (The line number this cited
+// strings by *prefix* — `expectMatches` in `internal/spec`'s run loop, six `strings.Contains`
+// sites until ADR 0045 — so `duplicate function $foo` satisfies it as a prefix. (The line number this cited
 // had drifted onto an unrelated parse arm; re-pointed by what the sites hold, since a count of
 // them is checkable and an offset is not. How far that looseness reaches is #455's census.)
 // A truncated expected string read as evidence about the reference's

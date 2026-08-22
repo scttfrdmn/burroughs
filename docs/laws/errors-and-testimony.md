@@ -226,3 +226,51 @@ reach is a law out of context.
   about where work does not belong and wrong about what it would cost, and only one of
   those two halves was ever checkable from the file it sits in. Deleting it destroys the
   record of which half failed. (Ruling: Scott, PR #424.)
+
+### A message is not its rendering, and a term about the rendering cannot be discharged by the message's author.
+
+- **A message is not its rendering, and a term about the rendering cannot be discharged by
+  the message's author.** An error in this engine is built at a leaf and *rendered* somewhere
+  else — a wrapper up the call chain composes the text a reader, or a suite's expected string,
+  actually sees. Those are two different artifacts with two different owners, and a
+  pre-registered term stated over one of them is satisfiable only by the site that owns it.
+
+  Specimen: #452's fifth approval term, *"the message born spec-phrase-first."* The sentinel
+  was born that way — `ErrUninitializedLocal` is `errors.New("uninitialized local")` with its
+  detail appended after — and the term was still unsatisfiable in that slice, because
+  `internal/validate`'s `instrs` wrapped every instruction error as `instr %d (%s): %w`
+  (`instr.go`, the wrapper now reading `%w (instr %d: %s)`). The rendered text was
+  `instr 3 (local.get): uninitialized local: local 2`. **No leaf in the package could be born
+  spec-phrase-first while that wrapper stood**, so the term named work in a different slice's
+  file and nothing the approved slice did could move it. It was reported as owed rather than
+  quietly reinterpreted, and it was discharged here, at the wrapper — `local_init.wast` awards
+  `10/10` in the all-on lane under prefix matching, which is only possible if the rendering
+  begins with the phrase.
+
+  **The approval inherits the error, and the ruling says who carries it.** Scott gave the term
+  on my description of the tree, and his ruling on the #490 review is the reason this is a law
+  rather than a note: *"the approval conflated the two, and since I gave the term on your
+  description, I carry it."* That is the same organ as
+  [a status field is a citation to an approval](decisions-and-thesis.md#a-status-field-is-a-citation-to-an-approval-and-approvals-are-artifacts-with-provenance)
+  read from the other end — a stamp is only as good as the description it was given on, so a
+  term the describer could not have delivered is a defect in the description, upstream of the
+  approval.
+
+  **How to apply.** Before pre-registering a term about an error's *text*, name the site that
+  composes the text and check it is in the slice. Grep the wrappers on the path (`%w` with
+  anything before it is a rendering site) rather than reading the constructor and inferring.
+  When the owning site is outside the slice, say so in the pre-registration and route the term
+  to the slice that owns it — the term is not declined, it is **owed**, and an owed term with a
+  named site is trackable where a reinterpreted one is not. The general form runs past error
+  strings: any property of a *composed* artifact — a rendered message, a printed board line, a
+  formatted citation — belongs to the composer, and a term placed on a contributor is a term
+  nobody can meet. (Ruling: Scott, PR #490 review; discharged in ADR
+  [0045](../decisions/0045-the-location-context-is-rendered-after-the-spec-phrase-and-the-harness-takes-the-references-prefix-rule.md),
+  #455.)
+
+  One consequence for this file: the *match what the suite's expected string contains* wording
+  in the second law above is superseded — the reference matches by **prefix** only
+  (`script/runner.ml:498-501`), and 0003's substring rule was amended on 2026-08-22. The
+  wording stands where it is by this family's own convention of amending rather than
+  rewriting, and it is exactly the kind of claim this law is about: it was true of the message
+  and false of the rendering.

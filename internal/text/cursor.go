@@ -31,9 +31,9 @@ type cursor struct {
 //
 // A lex error is returned as-is, unwrapped: the suite's expected strings for malformed
 // lexemes are the lexer's messages (`malformed UTF-8 encoding`, `unknown operator`), and
-// wrapping would put parser prose in front of a string the oracle matches by substring —
-// harmless for `Contains`, but it makes the error testify to a layer that did not produce
-// it. *An error from the wrong layer is evidence about where structure was lost*, and
+// wrapping would put parser prose in front of a string the oracle matches by prefix — which
+// since ADR 0045 loses the verdict outright, and was already the wrong testimony when
+// `Contains` made it harmless: the error would name a layer that did not produce it. *An error from the wrong layer is evidence about where structure was lost*, and
 // there is no structure lost here: the lexer's verdict is final and correct.
 func newCursor(src []byte) (*cursor, error) {
 	toks, err := lexToEOF(src)
@@ -108,8 +108,9 @@ func (c *cursor) atKeyword(k keywordKind) bool {
 
 // errAt builds a parse error at an explicit token.
 //
-// Reusing text.Error rather than a parser-specific type: the suite matches by substring
-// and does not care which layer spoke, but a reader of the code does — and the layer is
+// Reusing text.Error rather than a parser-specific type: the suite matches by prefix (ADR
+// 0045) and does not care which layer spoke so long as the phrase stays at position 0, but a
+// reader of the code does — and the layer is
 // already recoverable from the message, which is the reference's verbatim text. A second
 // error type would buy a type switch nobody needs and a second place for the Msg
 // convention to drift.

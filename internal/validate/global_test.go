@@ -68,7 +68,7 @@ import (
 //
 // M8's −4 is worth one more line, because it is a partial catch that reads like a full one. The
 // corpus pins the index for **0 and 1 only** — the bucket keys are `unknown global`, `unknown global
-// 0` and `unknown global 1`, and harness matching is substring (0003) — so the four rows it moves
+// 0` and `unknown global 1`, and harness matching is prefix (ADR 0045) — so the four rows it moves
 // are the two 0s and the two 1s, while the three bare-key rows keep passing on a message with the
 // index anywhere in it. TestUnknownGlobalMessagePinsTheIndexAndTheScope holds the rest of the
 // format.
@@ -377,7 +377,7 @@ func TestElementExpressionsAreCheckedInEveryMode(t *testing.T) {
 // `Instr.Op` is the *sub*-opcode for a prefixed instruction, so `0xfd 0x23` and `global.get` share a
 // value in that field and are told apart only by `Prefix`. The validator's instruction loop never
 // has to care: it reaches `globalOp` through a switch that has already split the prefixed regions
-// (`instr.go:64-80`), so `Op == opGlobalGet` is unambiguous by the time it is asked. Scanning a raw
+// (`instr.go:70-86`), so `Op == opGlobalGet` is unambiguous by the time it is asked. Scanning a raw
 // expression, that precondition is gone — **a helper reused outside the dispatch that supplied its
 // invariant does not inherit the invariant** — and matching on `Op` alone would resolve a SIMD
 // instruction's first immediate as a global index.
@@ -401,7 +401,7 @@ func TestConstExprIgnoresAPrefixedOpcodeSharingGlobalGetsByte(t *testing.T) {
 
 // TestUnknownGlobalMessagePinsTheIndexAndTheScope holds the part of the message the corpus does not.
 //
-// Harness matching is substring (0003) and the three bucket keys are `unknown global`, `unknown
+// Harness matching is prefix (ADR 0045) and the three bucket keys are `unknown global`, `unknown
 // global 0` and `unknown global 1`, so the corpus constrains the index for **two values** and says
 // nothing about any other, nor about the `(N in scope)` tail. M8 moving only 4 of the 7 rows is that
 // gap measured: three vectors keep passing on a message with the index anywhere in it.

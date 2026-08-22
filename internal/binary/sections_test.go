@@ -118,8 +118,8 @@ func TestSectionSizeBothSigns(t *testing.T) {
 // TestPayloadEndVsTruncated pins the boundary between the two end-of-input
 // strings, which is where a plausible-looking simplification goes wrong.
 //
-// "unexpected end" is a *substring* of "unexpected end of section or function",
-// and the harness matches by substring. So the long form satisfies both families
+// "unexpected end" is a *prefix* of "unexpected end of section or function",
+// and the harness matches by prefix (ADR 0045). So the long form satisfies both families
 // of vector and the short form satisfies only one. That asymmetry means the cheap
 // mistake — reporting the preamble's ErrTruncated everywhere — passes the three
 // custom.wast vectors while failing ten others, and the expensive mistake —
@@ -156,12 +156,14 @@ func TestPayloadEndVsTruncated(t *testing.T) {
 	}
 
 	// The containment that makes the above work, asserted rather than assumed. If
-	// upstream ever reworded either string so that one stopped containing the
-	// other, the substring harness would silently stop scoring one of the two
-	// families and this is what would say so.
+	// upstream ever reworded either string so that one stopped *beginning* the
+	// other, the harness would silently stop scoring one of the two families and
+	// this is what would say so. The assertion below was written as a prefix test
+	// while the harness matched by substring, so ADR 0045 changed the rule this
+	// check states and not the check.
 	short, long := ErrTruncated.Error(), ErrPayloadEnd.Error()
 	if len(long) <= len(short) || long[:len(short)] != short {
-		t.Errorf("ErrPayloadEnd (%q) must begin with ErrTruncated's text (%q): the harness matches by substring, and ten vectors depend on the longer form satisfying the shorter", long, short)
+		t.Errorf("ErrPayloadEnd (%q) must begin with ErrTruncated's text (%q): the harness matches by prefix (ADR 0045), and ten vectors depend on the longer form satisfying the shorter", long, short)
 	}
 }
 

@@ -108,7 +108,7 @@ type Token struct {
 }
 
 // Error is a lex error. Msg is the reference's message text verbatim, because the suite
-// matches by substring and eleven vectors read the *lexeme* back out of it — for those,
+// matches by prefix and eleven vectors read the *lexeme* back out of it — for those,
 // message rendering is oracle-covered (#38's refinement), which is rare and worth
 // naming at the site that produces it.
 type Error struct {

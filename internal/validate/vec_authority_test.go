@@ -1393,7 +1393,7 @@ func TestReferenceRangeCitationsContainTheirSubjectsSite(t *testing.T) {
 	// asserting anything — and pinned *separately* so a message the reference stops writing verbatim
 	// moves a range from the checked column into the excused one loudly.
 	// Five keyed and eight residue once the domain became the whole package. The keyed ones are
-	// align.go:148 (`offset out of range` inside :390-393), instr.go:454 (select's arity message inside
+	// align.go:148 (`offset out of range` inside :390-393), instr.go:561 (select's arity message inside
 	// :442-446), vec.go:316 (`invalid lane index` inside :373-378), and module.go's two — both blocks
 	// naming `size minimum must not be greater than maximum`, which the reference does write verbatim
 	// at :104-105.

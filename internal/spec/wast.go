@@ -48,9 +48,10 @@ type Command struct {
 	Needs Capability
 
 	// Expect is the expected failure text for an assertion, e.g.
-	// "integer too large". Matched by substring (decision 0003) — upstream
-	// runners do the same, and it lets "alignment" work as a prefix of
-	// "alignment must be a power of two" without special casing.
+	// "integer too large". Matched by **prefix** (ADR 0045; 0003 recorded
+	// substring and carries a dated amendment) — the reference's own rule
+	// (`script/runner.ml:498-501`), and it lets "alignment" work as a prefix
+	// of "alignment must be a power of two" without special casing.
 	Expect string
 
 	// Verb is which script action this command carries — `invoke` or `get` — and Export names
@@ -375,21 +376,21 @@ func (k Kind) selectsModule() bool {
 // message instead**, and this predicate is sound only because of that.
 //
 // What makes it sound rather than merely convenient is measured, not assumed: `call stack exhausted`
-// has exactly **one** production site in the engine, `trapExhaustion` at `call.go:118`, so no other
+// has exactly **one** production site in the engine, `trapExhaustion` at `call.go:119`, so no other
 // trap's text can satisfy an `assert_exhaustion` expectation. That is a fact about today's engine, in
 // precisely the sense the trap arm's own `isTrap` comment means it — a second producer of that phrase
 // would make this predicate accept a trap the reference refuses, and the phrase is short enough that
 // the hazard is real rather than theoretical. It is why the string lives in one `var` and not in a
 // literal at each site.
 //
-// **The two rules also differ, and the difference does not show here.** `assert_message`
+// **The two rules used to differ, and the difference did not show here.** `assert_message`
 // (`runner.ml:498-501`) is a **prefix** match — `String.sub msg 0 (String.length re) <> re`, despite
-// the parameter being named `re` — while every expected-text arm in this file matches by *substring*
-// (decision 0003). Substring is strictly the looser of the two, so the harness can accept where the
-// reference refuses; on these 15 vectors it cannot, because all 15 expect exactly `call stack
-// exhausted` and the engine produces exactly that, where prefix, substring and equality coincide. The
-// general divergence is filed rather than repaired here, since it is seven call sites and one board
-// measurement of its own.
+// the parameter being named `re` — while every expected-text arm in this file matched by *substring*
+// (decision 0003) until #455. Substring was strictly the looser of the two, so the harness could
+// accept where the reference refuses; on these 15 vectors it could not, because all 15 expect exactly
+// `call stack exhausted` and the engine produces exactly that, where prefix, substring and equality
+// coincide. ADR 0045 closed the general divergence in one place — `expectMatches`, on the
+// reference's rule — so what survives here is the reason the gap was invisible at this arm.
 func (k Kind) wantsTrap() bool {
 	return k == KindAssertTrapAction || k == KindNamedAssertTrap || k == KindAssertExhaustion
 }
@@ -1714,18 +1715,18 @@ type Result struct {
 	// command. It is not summed with KindGateReaches for that reason.
 	KindGateFailPrefix []kindGateReach
 
-	// SubstringOnly is #455's probe: every row that passed under this harness's substring rule and
-	// would have failed under the reference's prefix rule.
+	// SubstringOnly is #455's probe: every row whose engine message carries the expected text only
+	// *after* position 0 — accepted by `strings.Contains`, refused by the reference's prefix rule.
 	//
 	// The reference matches an expected error text by **prefix** — `assert_message`
 	// (`script/runner.ml:498-501`) compares `String.sub msg 0 (String.length re)` against `re`,
 	// which is `HasPrefix` with a parameter name that suggests a regex the function does not have,
 	// and every text-matching assertion in the suite goes through it. `strings.Contains` is
 	// strictly looser: everything the reference accepts we accept, plus every message carrying the
-	// expected text anywhere after position 0. So the divergence is **accept-direction**, and the
-	// rows that witness it are rows the suite expects to pass and we do pass — for a reason the
+	// expected text anywhere after position 0. So the divergence was **accept-direction**, and the
+	// rows that witnessed it were rows the suite expects to pass and we did pass — for a reason the
 	// reference would not have accepted. A negative-vector corpus cannot falsify that, which is
-	// why the evidence has to be a census of the passing population.
+	// why the evidence had to be a census of the passing population.
 	//
 	// **Recorded by the run loop rather than re-derived by a control**, for AltChoices' and
 	// GatedAt's reason: a control that re-runs the decision to find out which rows diverged is
@@ -1733,15 +1734,17 @@ type Result struct {
 	// without either looking wrong. Every site already holds `got` and `c.Expect` at the moment it
 	// decides, so this is a predicate over data the lane computes anyway.
 	//
-	// **It scores nothing.** A row here is a pass, counted in Pass, and this field is a note about
-	// how it was reached. Which of #455's three options the harness takes — the reference's prefix
-	// rule with the engine's texts made to conform, a normalized prefix, or substring recorded as
-	// a bounded looseness — is undecided, and the size of this population is the whole input to
-	// that choice.
+	// **It scored nothing while the rule was substring, and now it scores the fail.** ADR 0045 took
+	// option 4 — the location context renders after the spec phrase, at 28 engine sites — which
+	// drove this population from 6542 default-lane rows to 0 and made the reference's rule
+	// board-neutral to adopt. So a row here is now a **failure** rather than a note about how a pass
+	// was reached, and the field's job changed with it: from pricing #455's options to being the
+	// tripwire that names the prefix when a new wrapper reintroduces one. `expectMatches` records
+	// before it decides for exactly that reason.
 	SubstringOnly []substringOnlyMatch
 
 	// ExpectMatched is the denominator, keyed by command kind: every award this run made by
-	// matching an expected error text, divergent or not.
+	// matching an expected error text.
 	//
 	// **It is here for vacuity, which is the failure mode a census is most likely to have.** A
 	// census reporting no divergent rows has either found none or stopped walking, and the two are
@@ -2251,7 +2254,7 @@ type AssembleFunc func(src []byte) ([]byte, error)
 
 // GatedFunc reports whether an engine error means "a feature gate is off"
 // rather than a verdict on the module. The harness must not sniff error text for
-// this — the engine names its own gate errors, and a substring test here would be
+// this — the engine names its own gate errors, and a text test here would be
 // the harness guessing at the taxonomy it is supposed to be checking.
 type GatedFunc func(error) bool
 
@@ -2260,7 +2263,7 @@ type GatedFunc func(error) bool
 // does not have yet.
 //
 // **Injected for GatedFunc's reason, and it is the same hazard one Kind over.** An
-// `assert_trap` supplies the trap text it wants and the arm matches it as a substring, so a
+// `assert_trap` supplies the trap text it wants and the arm matches it as a prefix, so a
 // *non-trap* error quoting that phrase would score a pass the engine never earned. The
 // malformed arms make that collision impossible by asking `isGated` before matching rather
 // than by hoping feature names never collide with spec strings; this is the same move, and
@@ -2307,7 +2310,7 @@ type ValidateFunc func(c Command) (Stratum, error)
 // GatedFunc's argument, one component over and with a different subject: a gate decline says a
 // *feature* is off by configuration, and a decline here says a *rule* is unwritten in the slice
 // that is shipping. Both are the third verdict rather than the first two, and both must be asked
-// **before** the substring match — because a decline whose text happens to contain the vector's
+// **before** the prefix match — because a decline whose text happens to begin with the vector's
 // expected string would otherwise score a pass the validator never earned, which is the exact
 // collision the malformed arms ask `isGated` first to prevent (contract §9 G-3).
 //
@@ -2606,7 +2609,7 @@ type Engine struct {
 	// **A nil IsDeclined alongside a non-nil Validate is the dangerous pairing, and it is the
 	// one the loop panics on** — not because a missing predicate scores nothing, but because it
 	// scores the wrong thing in the accept direction: every one of the 1059 declines would fall
-	// through to the substring match, and the ones whose decline text quotes the vector's
+	// through to the prefix match, and the ones whose decline text quotes the vector's
 	// expected phrase would land as passes. IsTrap's default (never award) is not available
 	// here, because a decline is not the outcome being awarded — it is a third verdict that has
 	// to be *removed* from the population before matching begins.
@@ -2744,34 +2747,52 @@ func (s *Script) run(opts runOpts) *Result {
 		return err != nil && opts.IsException != nil && opts.IsException(err)
 	}
 	// isDeclined's defaulting is isGated's, not isTrap's, and the difference matters here.
-	// A nil predicate answering "no" makes a decline fall through to the substring match — the
+	// A nil predicate answering "no" makes a decline fall through to the prefix match — the
 	// accept-direction hole Engine.IsDeclined describes — so this is *not* the safe default and
 	// the arm panics on the pairing rather than relying on it. The func exists for the nil-Validate
 	// callers, where it is never reached.
 	isDeclined := func(err error) bool {
 		return err != nil && opts.IsDeclined != nil && opts.IsDeclined(err)
 	}
-	// noteSubstringOnly records a pass this harness awarded that the reference's prefix rule would
-	// have refused — #455's probe, described on Result.SubstringOnly. Called from every arm that
-	// matches an expected error text, immediately beside the award, with the same `got` and the
-	// same stratum the arm's fail path uses.
+	// expectMatches is the harness's expected-error-text rule — the reference's rule since ADR 0045
+	// — and the census of the rule it replaced, in one closure because they are one decision.
 	//
-	// `Index > 0` **is** `Contains && !HasPrefix`, and the two edges are why it is spelled this
-	// way: an empty `Expect` gives 0, which is not a divergence because `HasPrefix(got, "")` holds;
-	// a `got` that does not contain the phrase gives -1 and never reached an award in the first
-	// place. The offset comes free, and it is what makes "the widest offenders" a question with an
-	// answer rather than a list of every row.
+	// `assert_message` (`script/runner.ml:498-501`) compares `String.sub msg 0 (String.length re)`
+	// against `re`, which is `HasPrefix`, and all nine text-matching call sites in the suite go
+	// through it. This harness matched by `strings.Contains` until #455, which is strictly looser:
+	// everything the reference accepts we accept, plus every message carrying the phrase anywhere
+	// after position 0. That was an accept-direction divergence over 6542 default-lane rows, closed
+	// by moving the engine's location context behind the phrase at 28 sites rather than by
+	// loosening the rule.
 	//
-	// One closure and not six copies of two lines, for the reason `scoreValidation` is factored:
+	// **The census records at the decision and not at the award, which is the whole reason this is
+	// one function rather than a guard plus a note.** `Index > 0` is `Contains && !HasPrefix`, so
+	// after the flip a divergent row is refused — and a probe that recorded inside the award arm
+	// would report 0 in a world where it could not have reported anything else. *An analytic zero is
+	// not a measurement*, and it is the worst kind here: the figure stays where a reader expects a
+	// measurement while meaning "unobservable". Recorded before the verdict, the 0 is a fact about
+	// the corpus, and a regression that puts context back in front of a phrase shows up as a board
+	// failure *with the census row that names the prefix*.
+	//
+	// The two edges are why the divergence test is spelled `Index > 0`: an empty `Expect` gives 0,
+	// which is not a divergence because `HasPrefix(got, "")` holds; a `got` that does not contain
+	// the phrase gives -1 and is an ordinary mismatch. The offset comes free, and it is what makes
+	// "the widest offenders" a question with an answer rather than a list of every row.
+	//
+	// One closure and not six copies of four lines, for the reason `scoreValidation` is factored:
 	// six copies of a predicate drift, and each copy's drift is invisible because each is
 	// exercised by its own arm's vectors only.
-	noteSubstringOnly := func(c Command, st Stratum, got string) {
-		r.ExpectMatched[c.Kind]++
+	expectMatches := func(c Command, st Stratum, got string) bool {
 		if i := strings.Index(got, c.Expect); i > 0 {
 			r.SubstringOnly = append(r.SubstringOnly, substringOnlyMatch{
 				Line: c.Line, Kind: c.Kind, Stratum: st, Offset: i, Expect: c.Expect, Got: got,
 			})
 		}
+		if !strings.HasPrefix(got, c.Expect) {
+			return false
+		}
+		r.ExpectMatched[c.Kind]++
+		return true
 	}
 	// scoreValidation is the `assert_invalid` verdict — the four outcomes in their fixed order —
 	// shared by all three module forms.
@@ -2823,8 +2844,7 @@ func (s *Script) run(opts runOpts) *Result {
 				Line: c.Line, Expect: c.Expect, Got: got, Kind: c.Kind, Stratum: st,
 				Declined: true,
 			})
-		case err != nil && strings.Contains(got, c.Expect):
-			noteSubstringOnly(c, st, got)
+		case err != nil && expectMatches(c, st, got):
 			r.Pass++
 		case err != nil:
 			r.Fail++
@@ -2849,7 +2869,7 @@ func (s *Script) run(opts runOpts) *Result {
 	// requireValidator is the two-component tripwire the three assert_invalid arms share, in the
 	// words the original single arm used. `Validate` because a declared CapValidator with nothing
 	// behind it is the registry ahead of the engine; `IsDeclined` because its absence is not a
-	// refusal to award but a refusal to *notice* — every slice decline would enter the substring
+	// refusal to award but a refusal to *notice* — every slice decline would enter the prefix
 	// match, and any whose text quoted the expected phrase would score a pass the validator never
 	// earned. That is the one asymmetry with IsTrap, and it is why this pairing is checked rather
 	// than defaulted.
@@ -3183,7 +3203,7 @@ func (s *Script) run(opts runOpts) *Result {
 			if err != nil {
 				got = err.Error()
 			}
-			// A gate decline is checked before the substring match, deliberately.
+			// A gate decline is checked before the prefix match, deliberately.
 			// A gate error that happened to contain the expected text would
 			// otherwise score a pass the engine did not earn — and since gate
 			// errors are feature-named and spec strings are not, that collision is
@@ -3192,9 +3212,11 @@ func (s *Script) run(opts runOpts) *Result {
 				r.gate(c)
 				continue
 			}
-			// Substring matching, per decision 0003.
-			if err != nil && strings.Contains(got, c.Expect) {
-				noteSubstringOnly(c, StratumBinary, got)
+			// Prefix matching, per ADR 0045 — the reference's own rule. Decision 0003 recorded
+			// substring matching on the premise that "upstream runners match on prefix/substring",
+			// which #455 found false in one direction: upstream matches on prefix only. 0003 carries
+			// a dated amendment saying so.
+			if err != nil && expectMatches(c, StratumBinary, got) {
 				r.Pass++
 				continue
 			}
@@ -3421,12 +3443,11 @@ func (s *Script) run(opts runOpts) *Result {
 			if err != nil {
 				got = err.Error()
 			}
-			// Substring matching, per decision 0003 — the same rule the binary side uses,
+			// Prefix matching, per ADR 0045 — the same rule the binary side uses,
 			// and here it is load-bearing in a way it is not there: eleven vectors read
 			// the *lexeme* back out of the message (`unknown operator i32.wrap/i64`), so
 			// for those the rendering is oracle-covered rather than ours alone (#38).
-			if err != nil && strings.Contains(got, c.Expect) {
-				noteSubstringOnly(c, StratumText, got)
+			if err != nil && expectMatches(c, StratumText, got) {
 				r.Pass++
 				continue
 			}
@@ -3619,12 +3640,13 @@ func (s *Script) run(opts runOpts) *Result {
 			if err != nil {
 				got = err.Error()
 			}
-			// Substring matching, per decision 0003 — the same rule both malformed arms use.
+			// Prefix matching, per ADR 0045 — the same rule both malformed arms use.
 			// The expected string here is the spec's trap text (`out of bounds memory
-			// access`), which `Trap.Error` renders verbatim for exactly this reason: a second
-			// spelling would be the engine's testimony disagreeing with itself.
-			if err != nil && strings.Contains(got, c.Expect) {
-				noteSubstringOnly(c, StratumExec, got)
+			// access`), which `Trap.Error` renders verbatim and now at **position 0** for exactly
+			// this reason: a second spelling would be the engine's testimony disagreeing with
+			// itself, and a `"trap: "` in front of it was 4262 rows passing under the looser rule
+			// (ADR 0045).
+			if err != nil && expectMatches(c, StratumExec, got) {
 				r.Pass++
 				continue
 			}
@@ -3731,7 +3753,7 @@ func (s *Script) run(opts runOpts) *Result {
 			// classifiable population the board had left.
 			//
 			// **Four outcomes in a fixed order, and the order is the whole arm.** A gate decline,
-			// then a slice decline, then the substring match, then acceptance — each earlier test
+			// then a slice decline, then the prefix match, then acceptance — each earlier test
 			// removing a population the later ones would otherwise misread:
 			//
 			//   1. `isGated` — 463 vectors, the decoder refusing a disabled proposal before the
@@ -3745,7 +3767,7 @@ func (s *Script) run(opts runOpts) *Result {
 			//      <mnemonic>` is a *sentence about an opcode*, and the corpus's expected strings
 			//      are phrases about types — a collision is not hypothetical, it is one
 			//      unluckily-named future sentinel away, and the check costs one branch.
-			//   3. the substring match, per decision 0003.
+			//   3. the prefix match, per ADR 0045.
 			//   4. acceptance — **the admission stratum**, 142 vectors this validator declared
 			//      valid and the suite says are not. They are fails with a named cause rather than
 			//      passes, which is the accept-direction defect no board can otherwise see
@@ -3892,7 +3914,7 @@ func (s *Script) run(opts runOpts) *Result {
 			// no linker degrades honestly: it reports the §3 sentinel and its dependents fail in
 			// a named bucket. This arm cannot degrade, because instantiating an unlinkable module
 			// *without* its imports fails for a different reason and would satisfy nothing —
-			// worse, a substring match against the engine's §3 text could coincide with the
+			// worse, a text match against the engine's §3 text could coincide with the
 			// expected string and award a pass the linker never earned. So the component is
 			// required, in the same words the other three tripwires use.
 			if opts.InstantiateLinked == nil {
@@ -3912,18 +3934,17 @@ func (s *Script) run(opts runOpts) *Result {
 			if err != nil {
 				got = err.Error()
 			}
-			// Substring matching per decision 0003, the same rule every expected-text arm uses.
+			// Prefix matching per ADR 0045, the same rule every expected-text arm uses.
 			//
 			// **Deliberately not asking whether the error is a link failure specifically**, which
 			// is the opposite of what the assert_trap arm does with `isTrap` — and the asymmetry
 			// is the corpus rather than an oversight. A trap and a non-trap error are both
-			// *runtime* outcomes that a substring match cannot tell apart, so that arm needs a
+			// *runtime* outcomes that a text match cannot tell apart, so that arm needs a
 			// predicate. Here the two expected strings (`incompatible import type`, `unknown
 			// import`) are phrases only the linker produces, so the text *is* the discriminator.
 			// Stated because the next reader will notice the missing predicate: if a vector ever
 			// expects a string the engine can also produce elsewhere, this arm needs one.
-			if err != nil && strings.Contains(got, c.Expect) {
-				noteSubstringOnly(c, StratumExec, got)
+			if err != nil && expectMatches(c, StratumExec, got) {
 				r.Pass++
 				continue
 			}
@@ -3974,7 +3995,7 @@ func (s *Script) run(opts runOpts) *Result {
 			// They part company at exactly two places — which instance the call runs against,
 			// and whether a non-nil error from Invoke is the answer or the failure — and both
 			// branches are ahead of the accounting they affect, for the same reason the gate
-			// check precedes the substring match on the malformed arms: order is what makes the
+			// check precedes the prefix match on the malformed arms: order is what makes the
 			// readings impossible to confuse rather than merely unlikely to be.
 			//
 			// Reachable only when a caller declares CapInterpreter, and the same
@@ -4059,7 +4080,7 @@ func (s *Script) run(opts runOpts) *Result {
 				// question was never asked — the same reason the module arms above
 				// count a decline rather than a failure, one command downstream.
 				// Checked *before* the fail branch for the reason a gate decline is
-				// checked before the substring match on the malformed arms: order is
+				// checked before the prefix match on the malformed arms: order is
 				// what makes the collision impossible rather than merely unlikely.
 				r.gate(c)
 				continue
@@ -4117,11 +4138,11 @@ func (s *Script) run(opts runOpts) *Result {
 			if c.Kind.wantsTrap() {
 				// The trap *is* the expected result: an error is required, it must be a real
 				// trap, and its text must contain the spec's expected string — matched as a
-				// substring per decision 0003, the same rule every other expected-text arm
+				// prefix per ADR 0045, the same rule every other expected-text arm
 				// uses, against a string `Trap.Error` renders verbatim for exactly this
 				// reason.
 				//
-				// **`isTrap` before the substring match**, which is the malformed arms' gate
+				// **`isTrap` before the prefix match**, which is the malformed arms' gate
 				// ordering pointed at a different collision and is the whole reason TrapFunc
 				// is injected. A non-trap error quoting the expected phrase would otherwise
 				// score a pass the engine never earned, and no expected string in the corpus
@@ -4132,8 +4153,7 @@ func (s *Script) run(opts runOpts) *Result {
 				if err != nil {
 					got = err.Error()
 				}
-				if err != nil && isTrap(err) && strings.Contains(got, c.Expect) {
-					noteSubstringOnly(c, StratumExec, got)
+				if err != nil && isTrap(err) && expectMatches(c, StratumExec, got) {
 					r.Pass++
 					continue
 				}
@@ -4187,7 +4207,7 @@ func (s *Script) run(opts runOpts) *Result {
 				// unlike assert_trap there is no expected text to match, because the grammar
 				// carries none (classify's own doc comment cites `parser.mly:1468-1469` and
 				// `runner.ml:571-575` for exactly this: `AssertException`'s handler discards the
-				// exception's own message). So the substring step wantsTrap's arm needs simply
+				// exception's own message). So the prefix step wantsTrap's arm needs simply
 				// does not exist here — this is not that arm missing a check, it is one fewer
 				// fact for the corpus to supply.
 				//

@@ -1044,7 +1044,7 @@ func (p *parser) bindidx() (string, error) {
 // It is a bug (grave #120). The reference has one word per space: `bind_abs "function" c.funcs`
 // (parser.mly:192) *and* `lookup "function" c.funcs` (:157). There is no second vocabulary — the
 // `func`/`function` pair the old comment described is `duplicate func` being a **prefix** of the
-// reference's `duplicate function $foo` under the harness's substring match, so the three
+// reference's `duplicate function $foo` under the harness's prefix match, so the three
 // `func.wast` vectors passed either way. `data`/`elem` were wrong the same way with no vector at
 // all. The word now lives on the space (spaceKind), written once in newContext.
 func (p *parser) bindidxOpt(s *space) (uint32, error) {

@@ -28,9 +28,9 @@ four mechanisms, residual **0**:
 
 | mechanism | fails | site |
 | --- | --- | --- |
-| `call_indirect` reaching a table slot naming an imported function | 540 | `call.go:250` |
+| `call_indirect` reaching a table slot naming an imported function | 540 | `call.go:251` |
 | an imported memory | 44 | `memory.go:300` |
-| an imported table | 11 | `table.go:204` |
+| an imported table | 11 | `table.go:205` |
 | an imported global | 7 | `global.go:87` |
 | `call` naming an imported function directly | 3 | `call.go:99` |
 
@@ -254,9 +254,9 @@ the product.
 
 | mechanism | key-visible (as published) | key-hidden | **corrected** | site |
 | --- | --- | --- | --- | --- |
-| `call_indirect` reaching a table slot naming an imported function | 540 | 0 | **540** | `call.go:250` |
+| `call_indirect` reaching a table slot naming an imported function | 540 | 0 | **540** | `call.go:251` |
 | an imported memory | 44 | 11 | **55** | `memory.go:300` |
-| an imported table | 11 | 6 | **17** | `table.go:204` |
+| an imported table | 11 | 6 | **17** | `table.go:205` |
 | an imported global | 7 | 2 | **9** | `global.go:87` |
 | `call` naming an imported function directly | 3 | 0 | **3** | `call.go:99` |
 | **total** | **605** | **19** | **624** | |
