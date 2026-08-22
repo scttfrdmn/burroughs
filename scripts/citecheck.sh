@@ -14,8 +14,8 @@
 #   scripts/citecheck.sh --worktree [base]  # base (default `main`) against the working tree
 #   scripts/citecheck.sh --pr <number>      # the PR's title and body, which need the network
 #
-# `--pr` scans prose instead of a diff and is the only form that runs check 4 — closecheck.sh takes
-# its PR the same way and for the same reason, both tools asking a question about the body GitHub
+# `--pr` scans prose instead of a diff and is the only form that runs checks 4 and 7 — closecheck.sh
+# takes its PR the same way and for the same reason, both tools asking a question about the body GitHub
 # will act on. The two forms are separate invocations rather than one flag, because a diff and a
 # body are different populations and folding them would hide which one a verdict came from.
 #
@@ -30,7 +30,7 @@
 #
 # ## What is binding and what is printed
 #
-# Six checks, and they are not equally strong. Saying which is which is the point, because a
+# Seven checks, and they are not equally strong. Saying which is which is the point, because a
 # tool that gates on existence while its name suggests it gates on correctness is testimony
 # about itself:
 #
@@ -232,6 +232,107 @@
 #      about a predicate that cannot read. *Measure with the instrument, not by hand.* The 40-commit
 #      run had a second design error, mine and not the check's: old prose compared against today's
 #      tracker measures drift since, not the predicate's accuracy today.
+#   7. **A *discharge* claim in a PR body names a file that PR changes — binding, needs the network,
+#      `--pr` only.** *"Recorded at the site and in the citations family"* asserts that work landed
+#      somewhere; the somewhere is a file, and the PR's own changed-file list is the oracle. #492
+#      shipped that sentence with only the first half true — `docs/laws/citations.md` was not in the
+#      diff — and the same session told Scott an ADR tense repair had been amended into the commit
+#      when the edit was made *after* the amend. One cause, and it is grave #434's in a new channel:
+#      **a claim about the tree sourced from memory of having typed it**, whose sharp sub-form is
+#      Scott's — *an edit made after an amend is not in the amend.* The available instrument was one
+#      command.
+#
+#      **The ordered form was measured against its own specimen and caught neither error, which is the
+#      whole reason this one is narrower.** The order (Scott, #492 review, filed as #493) was *"a file
+#      path named in a PR body as changed must appear in `git diff --name-only` for that PR"*. Over
+#      #492: 12 paths named in the body against 58 in the diff, **two flagged and both correct
+#      sentences** — `docs/laws/citations.md` named in a *proposal* (*"Mint it in …"*) and in a
+#      *negative* (*"nowhere a reader of … does"*), `internal/binary/instr.go` named in a statement
+#      that five stale pointers into it are carried into #456, which is true of a file that PR
+#      deliberately did not touch. Meanwhile the false sentence **names no path at all**: it names a
+#      law *family*. A control whose first two firings must both be argued down is an exemption
+#      surface being built by hand, and the narrowing was the work rather than a licence taken after
+#      the fact — the same disposition check 6's 5-of-5 measurement forced.
+#
+#      **So the trigger is the claim shape, and the location is the verb's complement rather than its
+#      neighbour.** A past-participle discharge verb — `recorded`, `added`, `minted`, `filed`,
+#      `landed`, `repaired`, `stated`, the order's own set — then a locational preposition, then a
+#      location, in that order, before the sentence ends. "In the same sentence" would be proximity,
+#      and **the span rule is measurable on the same body**: #492's Decisions-needed bullet 1 is
+#      *"Mint it in `docs/laws/citations.md`, and make … a stated term on #456's resolver"* — one
+#      sentence carrying a listed verb and a resolvable path, silent here because what follows
+#      `stated` is `on #456's resolver` and what precedes the path is an imperative. *Aboutness is
+#      not proximity*; the verb decides attachment, exactly as the copula does in check 6.
+#
+#      **The location vocabulary is derived, never enumerated**, which is the law the rest of this
+#      file is written under. Three offline sources: tracked paths (`git ls-files`), the basename of a
+#      tracked path when it is *unique* in the tree, and the law-family names read off `docs/laws/*.md`
+#      so that *"the citations family"* resolves to `docs/laws/citations.md`. ADR numbers join through
+#      `docs/decisions/NNNN-*.md`, which check 1 already resolves.
+#
+#      **Five stated under-matches, because a trigger that fails silently is the defect this check is
+#      for.** (a) An unresolvable location is **counted and printed**, never checked: *"at the site"*,
+#      *"in the changelog"*, *"at both sites"* name no artifact, and #492's false sentence carries one
+#      of each — only its second half is catchable. (b) A single extensionless word is not a
+#      vocabulary token, so `LICENSE`, `NOTICE` and `Makefile` are unreachable by name: the token is
+#      indistinguishable from ordinary English (*"in the notice above"*), and a false FAIL teaches its
+#      author to phrase around the tool, which is the worse direction for a gate. (c) A basename
+#      naming more than one file does not resolve — `instr.go` names three, as #492's own body says.
+#      (d) An adjective between the determiner and the location blocks the match: what resolves is the
+#      *head* of the prepositional phrase. (e) A paraphrased discharge is outside the population —
+#      *"done, in `docs/laws/operations.md`"* and *"pre-registered in
+#      `docs/laws/boards-and-buckets.md`"* are both in #492's body, both true, and neither carries a
+#      listed verb. The verb set is the order's and is not widened by guesswork.
+#
+#      **`was`/`were` before the verb is exempt and printed**, on check 6's precedent and for check 6's
+#      reason: a past-tense account records a transition, and *the tense is the mechanism*. A modal or
+#      a negation immediately before the verb is exempt the same way, as in check 5, and both are
+#      printed rather than dropped because whatever an exclusion arm exempts stops being checked.
+#
+#      **Measured against a pre-registration of exactly one FAIL on #492's body** (#493): 1 FAIL — the
+#      false sentence, on `docs/laws/citations.md` — 1 `ok` on *"Recorded in
+#      `internal/testenv/foreclose_test.go`'s header"*, which that PR does change, 3 claims whose
+#      location did not resolve, and **silence on all three correct mentions**.
+#
+#      **The falsification bill. Two of the five narrowings are witnessed by the specimen and three
+#      are not, and that split is the finding rather than a gap to paper over** — *identical boards are
+#      the finding*, so the three got hand-built discriminating shapes instead of an argument. Every
+#      row was applied, **confirmed applied by diffing the file against a saved copy**, run, and
+#      reverted; two rows had silently failed to apply before that step was added, and *a mutation that
+#      never landed is indistinguishable from a tolerated one at the exit code*:
+#
+#        M1  the membership test forced true       #492's body passes at exit 0 and both claims report
+#                                                 `ok` — the FAIL comes from the comparison
+#        M2  the span rule removed (location       **two** FAILs on `docs/laws/citations.md` and 6
+#            anywhere in the sentence)             unresolvable notes: the second is the *"Mint it in
+#                                                  … a stated term"* sentence, so this reproduces the
+#                                                  ordered form's false positive exactly
+#        M3  the heading break removed             no change on #492 — witnessed on a shim-driven body
+#        M4  the list-marker break removed         no change on #492 — witnessed on a shim-driven body
+#        M5  the `was`/`were` exemption removed    no change on #492 — witnessed on a shim-driven body
+#
+#      The three shim rows use the mechanism `internal/testenv/prfetch_test.go` already uses — a `gh`
+#      on PATH that answers both calls — over one synthetic body carrying all three shapes: a `##
+#      Landed` heading followed by a line opening *"in `docs/laws/gates.md` …"*, two adjacent bullets
+#      where the first ends on the verb and the second opens on the location, and *"The rule was
+#      recorded in `docs/laws/gates.md`"*, against a one-file diff that does not contain it. Baseline:
+#      exit 0, 0 claims, 1 exempt note. Each mutation: exit 1 and exactly one FAIL. The `was` row is
+#      also the vacuity check on its own exemption — the sentence reaches the resolver, so the note is
+#      not silence dressed as an exclusion.
+#
+#      **The whole bill was re-run after the `dready` restructure below, and two rows failed to apply
+#      for a third reason: the driver loop was written for `sh` word-splitting and run under `zsh`.**
+#      `set -- $m` over `"M3 948 heading-break"` left `$2` empty there, so `sed -i '' "${ln}d"` became
+#      `sed d` — which deletes **every** line, and an empty script exits 0. Both rows printed *mutation
+#      survived*, which is the wrong direction of wrong: a narrowing that is load-bearing reported as
+#      dead weight. Two tells, and neither was the exit code — the `what` field printed as `()`, and
+#      the confirmation diff named line 1 of a file whose line 948 was the target. So the confirmation
+#      is now a **line count**, `before - 1`, asserted before the run: *a mutation is confirmed by the
+#      shape of the change, not by the fact that a command ran.*
+#
+#      **`--pr` only, which is check 4's boundary and check 4's argument.** A code comment saying
+#      *"recorded in X"* is a claim about the tree at large, not about the diff it happens to sit in;
+#      the body is where "this PR did it" is asserted, and it is the channel a principal reads.
 #
 # What is deliberately **not** gated: whether the resolved title matches the sentence citing it.
 # There is no general oracle for that — agreement between a citation's context and an issue's title
@@ -259,6 +360,14 @@
 # it that a machine can decide, and assert that. Reading the printed title has caught or would have
 # caught four guessed numbers; the fourth is what promoted this sub-claim out of the print. (Directive:
 # Scott, PR #339 review.)
+#
+# **Check 7 is not in that family, and the enumeration above must not be read as covering it.** Its
+# subject is not the citation's target: it compares a sentence's claim about *this PR's own diff*
+# against that diff, so what it resolves is a path rather than a number and the printed title has
+# nothing to do with it. It rides this script because the data is already here — the body is fetched
+# for check 4 and ADR numbers already resolve for check 1 — and a sibling scanner over one grammar
+# would drift from this one, which is the argument the header makes for keeping the classification in
+# a single awk program.
 #
 # ## The domain is printed, always
 #
@@ -315,6 +424,17 @@
 #   here where `closecheck.sh`'s line-at-a-time scan states an under-match on it.
 # * Deleted lines are not scanned. A diff is responsible for the citations it *adds*; the ones it
 #   removes are the previous author's, and re-litigating them turns every edit into a sweep.
+# * **A discharge claim triggers on a listed verb followed by a locational preposition and then a
+#   resolvable location**, in that order and before the sentence ends. Its population is the body's
+#   prose — fenced blocks excluded, as in check 4, so a *quotation* of a claim is not a claim, which is
+#   also the only way prose about this defect can name the specimen sentence without instantiating it.
+#   Wrapped lines are joined, since a hard-wrapped body puts the verb and the location on different
+#   lines about as often as not; the join breaks at a blank line, at a **heading**, and at each list
+#   marker. The heading break is not tidiness: one of the seven mandatory section names *is* a listed
+#   verb, so `## Landed` would otherwise be a claim with no location. The list-marker break is the
+#   paragraph join's mirror — two adjacent bullets are two claims, and welding them pairs one bullet's
+#   verb with the next one's path. A sentence ends at `.`, `;`, `!` or `?` **followed by a space or the
+#   end of the paragraph**, which is why `citations.md` does not end one.
 #
 # The per-diff domain is the reason a *one-time* repo-wide sweep was run at authorship rather than
 # assumed away: this check can only ever see what a diff adds, so everything already committed is
@@ -723,7 +843,206 @@ if [ -n "$diffout" ]; then
 	' | sort -u)"
 fi
 
+# Check 7's population: discharge claims in the body, each resolved to a tracked path. `--pr` only, and
+# unlike checks 4, 5 and 6 it needs a *second* thing about the PR — the list of files it changes. See
+# the header for why the trigger is the claim shape rather than the path, and for the five under-matches.
+#
+# **`gh api …/pulls/N/files --paginate` rather than `gh pr view --json files`, and the direction of the
+# error is the reason.** A truncated file list turns a *true* claim into a FAIL — the direction that
+# teaches an author to phrase around the gate — and `--json files` is a GraphQL connection whose page
+# this script does not control, where `--paginate` over the REST resource is the same idiom check 2
+# already uses and exhausts the pages by construction. Assigned with no pipe, per grave #365: a
+# pipeline's exit status belongs to whatever ran last, and `--jq` here is `gh`'s own flag rather than a
+# second process. An empty list is treated as a mechanism failure below rather than as "this PR changes
+# nothing", because the second reading makes every claim in the body fail at once.
+#
+# **The field is `.filename` and the first draft wrote `.path`, which is the vacuity guard below earning
+# itself on the run that added it.** REST's pull-files element has no `path`, so `--jq '.[].path'`
+# printed one *empty line per changed file* and exited 0 — and the line count was **58 on a PR with 58
+# changed files**, which is how it survived a check: I counted lines and inferred content, so the
+# instrument agreed with the issue's own figure while carrying nothing. *A suspiciously clean result is
+# a tell*, and a count is not a reading. What caught it is the zero-length guard, which is check 5's
+# `.state` validation one field over: a name read out of a payload is trusted by nobody here.
+#
+# **Check 7's own mechanism failure does not `exit`, and an existing control is what taught it that.**
+# The first draft exited 1 on each of the three arms below, and `TestCitationLookupFailureIsNotAVerdict`
+# went red on both of its shims: they fail *every* `gh api` call, so check 7's fetch died before the
+# per-citation resolver ran, and the log carried check 7's mechanism FAIL where #410's two distinct
+# wordings belong — the same one-wording-covers-two-causes shape that grave being about. It also took
+# the summary line with it, so grave #416's identity assertion had nothing to read and reported *a skip
+# is not a verdict* instead. The general form: **a late check's broken oracle must not silence an
+# earlier check's verdict.** The body fetch above may exit, because nothing can run without a body;
+# check 7's cannot, because checks 1–6 can all still ask their questions. So each arm records `dfail=1`,
+# leaves `dready` at 0, and the run continues to a non-zero exit through the shared flag.
+discharge_rows=""
+prfiles=""
+nprfiles=0
+dready=0
+dfail=0
+if [ "$prmode" -eq 1 ] && ! prfiles="$(gh api "repos/{owner}/{repo}/pulls/$selfpr/files" --paginate --jq '.[].filename')"; then
+	echo "FAIL  PR #$selfpr's changed-file list could not be fetched, so no discharge claim in"
+	echo "      its body was checked. This is not a pass: a check that could not ask its question"
+	echo "      does not get to report green. The other checks below still ran — read their lines"
+	echo "      for their own verdicts, which this failure says nothing about."
+	dfail=1
+fi
+if [ "$prmode" -eq 1 ] && [ "$dfail" -eq 0 ]; then
+	nprfiles="$(printf '%s' "$prfiles" | grep -c '' || true)"
+	if [ "$nprfiles" -eq 0 ]; then
+		echo "FAIL  PR #$selfpr reports zero changed files, which is a mechanism failure and not a"
+		echo "      verdict: a PR with an empty diff cannot exist, and reading the empty answer as"
+		echo "      one would fail every discharge claim in the body at once. Re-run once the"
+		echo "      transport is working."
+		dfail=1
+	fi
+fi
+if [ "$prmode" -eq 1 ] && [ "$dfail" -eq 0 ]; then
+	# The location vocabulary, derived and never enumerated. Lowercased on the left because prose
+	# capitalizes and `CHANGELOG.md` does not; the real path is carried on the right, so the verdict
+	# names the artifact rather than the token that found it.
+	dvocab="$(mktemp)"
+	dprose="$(mktemp)"
+	{
+		# Tracked paths. **A token with neither `/` nor `.` is dropped**, which costs `LICENSE`,
+		# `NOTICE` and `Makefile`: a bare extensionless word is indistinguishable from ordinary
+		# English ("in the notice above"), and the false FAIL is the direction that trains an author
+		# to phrase around the tool. Stated in the header as under-match (b).
+		git ls-files | awk '{ t = tolower($0); if (t ~ /[\/.]/) print t "\t" $0 }'
+		# A basename, but only where it is **unique** in the tree — `instr.go` names three files, so
+		# it resolves to none of them. Under-match (c), and #492's own body says the number.
+		git ls-files | awk -F/ '
+			{ b = tolower($NF); n[b]++; p[b] = $0 }
+			END { for (k in n) if (n[k] == 1 && k ~ /[.]/) print k "\t" p[k] }'
+		# The law families, read off the directory rather than listed: "the citations family" is how
+		# this repo names `docs/laws/citations.md`, and #492's false sentence used exactly that form.
+		for f in docs/laws/*.md; do
+			b="${f##*/}"
+			printf '%s family\t%s\n' "$(printf '%s' "${b%.md}" | tr 'A-Z' 'a-z')" "$f"
+		done
+		# ADR numbers, in the spellings check 1 already accepts.
+		for f in docs/decisions/*.md; do
+			b="${f##*/}"
+			n="${b%%-*}"
+			printf 'adr %s\t%s\nadrs %s\t%s\ndecision %s\t%s\ndecisions %s\t%s\n' \
+				"$n" "$f" "$n" "$f" "$n" "$f" "$n" "$f"
+		done
+	} >"$dvocab"
+	printf '%s\n' "$prose_only" >"$dprose"
+	if [ ! -s "$dvocab" ]; then
+		echo "FAIL  check 7's location vocabulary came out empty, so no discharge claim could resolve"
+		echo "      and the check would report a green it never computed. It is derived from"
+		echo "      \`git ls-files\`, \`docs/laws/*.md\` and \`docs/decisions/*.md\`; one of those"
+		echo "      answered nothing. A vacuous population is not a pass."
+		rm -f "$dvocab" "$dprose"
+		dfail=1
+	fi
+fi
+if [ "$prmode" -eq 1 ] && [ "$dfail" -eq 0 ]; then
+	# Two files rather than a pipe into a one-file program, because the vocabulary has to be read
+	# before the prose and `NR == FNR` is how awk says that. The rows are `kind`, `path`, `sentence`,
+	# and the placeholder `-` sits in the path column of the two note kinds: with a tab in `IFS` the
+	# shell collapses a run of them, so an empty middle field would silently shift the sentence left.
+	discharge_rows="$(awk '
+	NR == FNR {
+		i = index($0, "\t")
+		if (i > 1) { k = substr($0, 1, i - 1); nk++; keys[nk] = k; kpath[k] = substr($0, i + 1) }
+		next
+	}
+	/^\+\+\+/ { flush(); next }
+	/^\+/ {
+		s = substr($0, 2)
+		# The three paragraph breaks. A blank line is a paragraph; a heading is a section label and
+		# one of the seven section names is itself a listed verb; a list marker starts a new claim,
+		# and welding two bullets would pair one verbs sentence with the next ones path.
+		if (s ~ /^[ \t]*$/) { flush(); next }
+		if (s ~ /^[ \t]*#+[ ]/) { flush(); next }
+		if (s ~ /^[ \t]*([-*+][ ]|[0-9]+[.)][ ])/) flush()
+		buf = (buf == "" ? s : buf " " s)
+		next
+	}
+	{ flush() }
+	END { flush() }
+	function flush() { if (buf != "") scan(buf); buf = "" }
+	function trunc(s) { return (length(s) > 180) ? substr(s, 1, 177) "..." : s }
+	function scan(p,   plain, sent) {
+		# Emphasis and code markers come out first: they are what stands between a copula-style
+		# local match and its target, which is the spelling that hid two claims from check 6.
+		plain = p
+		gsub(/`/, "", plain)
+		gsub(/[*]/, "", plain)
+		# A run of blanks collapses, because the join keeps a wrapped lines own indentation and the
+		# sentence is quoted back to a reader in a FAIL. The patterns below all read `[ ]+`, so this
+		# is legibility rather than matching.
+		gsub(/[ \t]+/, " ", plain)
+		while (length(plain) > 0) {
+			# A sentence ends at a terminator **followed by a space**, so a path does not end one.
+			if (match(plain, /[.;!?] /)) {
+				sent = substr(plain, 1, RSTART)
+				plain = substr(plain, RSTART + RLENGTH)
+			} else {
+				sent = plain
+				plain = ""
+			}
+			claim(sent)
+		}
+	}
+	function claim(s,   low, t, pre, span, before, after, key) {
+		low = tolower(s)
+		t = low
+		while (match(t, /(recorded|added|minted|filed|landed|repaired|stated)/)) {
+			pre = substr(t, 1, RSTART - 1)
+			before = (RSTART > 1) ? substr(t, RSTART - 1, 1) : " "
+			after = substr(t, RSTART + RLENGTH, 1)
+			span = substr(t, RSTART + RLENGTH)
+			# Advance first, so every arm below can leave the loop by continuing and no verb is
+			# scanned twice. The span is verb-to-sentence-end, which is the whole narrowing.
+			t = span
+			# Word boundaries by hand, because awk has none: `restated` is not `stated`.
+			if (before ~ /[a-z0-9]/ || after ~ /[a-z0-9]/) continue
+			# Exempt and printed: a modal or a negation asserts nothing about what landed, and a
+			# past-tense copula records a transition rather than claiming a present state.
+			if (pre ~ /(be|been|being|to|would|could|should|shall|will|may|might|must|not|never|nor|if|when|once|unless|was|were)[ ]+$/) {
+				print "exempt\t-\t" trunc(s)
+				continue
+			}
+			sawprep = 0
+			key = locate(span)
+			if (key != "") print "claim\t" kpath[key] "\t" trunc(s)
+			else if (sawprep) print "unres\t-\t" trunc(s)
+		}
+	}
+	# The location is the **head** of a locational prepositional phrase after the verb. Determiners
+	# are stepped over; an adjective is not, which is under-match (d). `on` is deliberately absent:
+	# "landed on 92/136" is a result and not a location, and it was measured on #492s body.
+	function locate(u,   rest, i, best, bestlen) {
+		while (match(u, /(^|[^a-z])(in|into|at|to|under|beside|inside|within)[ ]+((the|its|this|a|an)[ ]+)*/)) {
+			rest = substr(u, RSTART + RLENGTH)
+			u = rest
+			sawprep = 1
+			best = ""
+			bestlen = 0
+			# Longest match wins, so a path is never shadowed by a basename that prefixes it.
+			for (i = 1; i <= nk; i++)
+				if (index(rest, keys[i]) == 1 && length(keys[i]) > bestlen) {
+					best = keys[i]
+					bestlen = length(keys[i])
+				}
+			if (best != "") return best
+		}
+		return ""
+	}
+	' "$dvocab" "$dprose" | sort -u)"
+	rm -f "$dvocab" "$dprose"
+	dready=1
+fi
+
 fail=0
+# Folded in here rather than set above, because `fail` is initialized below check 7's setup and a flag
+# assigned before its initializer is a flag reset to 0. The FAIL paragraph is already printed; this is
+# the verdict channel catching up to it.
+if [ "$dfail" -eq 1 ]; then
+	fail=1
+fi
 adrs=0
 issues=0
 graves=0
@@ -1062,6 +1381,59 @@ if [ "$need_gh" -gt 0 ]; then
 	done
 fi
 
+# Check 7, in its own loop: it needs no per-citation request, so it is not welded into the resolution
+# loop above, and a body that cites nothing can still make a false claim about its own diff.
+#
+# **The loop reads from a here-document rather than from a pipe, and grave #365's sibling is why.** A
+# `while read` on the right of a `|` runs in a subshell, so `fail=1` and the three counters would die
+# with it — the script would print its FAIL paragraph and exit 0, which is the shape this file has
+# already paid for twice (the C1 note in the header, and grave #449 in phase 1). `closecheck.sh:246` is
+# the legitimate version of that absence, and it is legitimate only because its verdict keys on a count
+# that survives.
+ndclaims=0
+ndunres=0
+ndexempt=0
+if [ "$prmode" -eq 1 ]; then
+	dtab="$(printf '\t')"
+	while IFS="$dtab" read -r dkind dpath dsent; do
+		[ -n "$dkind" ] || continue
+		case "$dkind" in
+		claim)
+			ndclaims=$((ndclaims + 1))
+			if printf '%s\n' "$prfiles" | grep -qxF "$dpath"; then
+				echo "ok    $dpath -> a discharge claim names it and PR #$selfpr changes it: \"$dsent\""
+			else
+				echo "FAIL  $dpath -> a discharge claim in the body says the work landed here, and PR #$selfpr does not change it."
+				echo "      The sentence: \"$dsent\""
+				echo "      This is #493: two false claims shipped in #492, both about the author's own"
+				echo "      diff, and one cause — a claim about the tree sourced from memory of having"
+				echo "      typed it. Its sharp form is Scott's: an edit made after an amend is not in"
+				echo "      the amend. Three remedies, and they are different: if the work belongs in"
+				echo "      that file, do it and amend; if it landed somewhere else, name the file the"
+				echo "      diff actually carries; if it is planned rather than done, say so in a tense"
+				echo "      that claims it — \"to be recorded in X\" is exempt here and is honest."
+				fail=1
+			fi
+			;;
+		unres)
+			ndunres=$((ndunres + 1))
+			echo "note  a discharge claim whose location this check cannot resolve, so it is NOT checked:"
+			echo "      \"$dsent\""
+			echo "      The vocabulary is tracked paths, unique basenames, law families and ADR numbers;"
+			echo "      \"at the site\" and \"in the changelog\" name no artifact. Printed rather than"
+			echo "      dropped, because an under-match nobody sees is an under-match nobody prices."
+			;;
+		exempt)
+			ndexempt=$((ndexempt + 1))
+			echo "note  a discharge verb behind a modal, a negation or a past-tense copula — exempt, so"
+			echo "      NOT checked: \"$dsent\""
+			;;
+		esac
+	done <<DISCHARGE
+$discharge_rows
+DISCHARGE
+fi
+
 # The domain, printed whether or not anything failed. A checker that says OK without saying over
 # what has made a silent claim about its own coverage.
 if [ "$prmode" -eq 1 ]; then
@@ -1134,6 +1506,28 @@ if [ "$nstate" -ne "$nstateclaims" ]; then
 	echo "citecheck: check 6 did not reach every stated claim it extracted — a citation was dropped" \
 		"before its state could be read, and the failures above say which."
 	fail=1
+fi
+
+# Check 7's own domain, on its own line and for check 4's reason. The two note counts are printed
+# **beside** the compared count rather than folded into it, because they are the check's stated
+# under-match and a single total would hide it: 3 unresolvable locations and 0 compared claims is a
+# green over a body that made three discharge claims, and that fact has to be legible from the log.
+#
+# **`dready` is why this is three sentences and not one.** A check whose oracle never answered prints
+# *unavailable*, never `compared 0 claim(s)`: the second wording is the shape of a green computed over
+# nothing, and the arm reaching it has already printed a FAIL saying which of the three mechanisms
+# broke. The count of files is omitted there for the same reason — there is no such count.
+if [ "$prmode" -eq 1 ] && [ "$dready" -eq 0 ]; then
+	echo "citecheck: discharge-claim check UNAVAILABLE — its oracle (PR #$selfpr's changed-file list," \
+		"or the derived location vocabulary) did not answer, so it compared nothing and asserts" \
+		"nothing. The FAIL above says which. Not a pass, and not a claim about the body either."
+elif [ "$prmode" -eq 1 ]; then
+	printf 'citecheck: discharge-claim check compared %d claim(s) against PR #%s'"'"'s %d changed file(s); %d claim(s) named a location it could not resolve, %d exempt as conditional or past-tense.\n' \
+		"$ndclaims" "$selfpr" "$nprfiles" "$ndunres" "$ndexempt"
+else
+	echo "citecheck: discharge-claim check not applicable to a diff — a comment saying \"recorded in" \
+		"X\" is a claim about the tree, not about the diff it sits in, so check 7's population is" \
+		"the body alone. Run \`citecheck.sh --pr <n>\` for it; CI does, on the pull_request event."
 fi
 
 if [ "$fail" -ne 0 ]; then

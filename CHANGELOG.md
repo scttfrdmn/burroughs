@@ -21,6 +21,56 @@ weakly-ordered platform.
 
 ### Added
 
+- **`citecheck.sh` check 7 — a *discharge* claim in a PR body names a file that PR changes**
+  ([#493](https://github.com/scttfrdmn/burroughs/issues/493), riding #471 as charged overhead on
+  Scott's order). *"Recorded at the site and in the citations family"* asserts that work landed
+  somewhere, and the somewhere is a file; the PR's changed-file list is the oracle. Binding, `--pr`
+  only, on check 4's population boundary and check 4's argument — a code comment saying *"recorded in
+  X"* is a claim about the tree, not about the diff it sits in.
+  - **The ordered form was measured against its own specimen and caught neither error, so the landed
+    trigger is the claim shape rather than the path.** Over #492: 12 paths named against 58 in the
+    diff, two flagged and **both correct sentences**, while the false one names no path at all — it
+    names a law *family*. A past-participle discharge verb (the order's seven) whose **complement** is
+    a location: preposition then location, after the verb, before the sentence ends. Not "in the same
+    sentence", which is proximity — *aboutness is not proximity*, and the span rule is what takes the
+    ordered form's two false positives to zero.
+  - **The location vocabulary is derived**: tracked paths, a tracked basename where it is unique in the
+    tree, the law-family names read off `docs/laws/*.md` so *"the citations family"* resolves, and ADR
+    numbers through the glob check 1 already uses.
+  - **Five stated under-matches**, because a trigger that fails silently is the defect being checked:
+    an unresolvable location is counted and printed rather than checked (*"at the site"*, *"in the
+    changelog"*); a single extensionless word is not a token, so `LICENSE`, `NOTICE` and `Makefile` are
+    unreachable by name; a basename naming more than one file does not resolve (`instr.go` names
+    three); an adjective between determiner and location blocks the match; and a paraphrased discharge
+    with no listed verb is outside the population. `was`/`were`, a modal, or a negation before the verb
+    is exempt **and printed**, on check 6's precedent — *the tense is the mechanism*.
+  - **Two of the five narrowings are witnessed by the specimen and three are not, and that split is
+    the finding** — *identical boards are the finding*, so the heading break, the list-marker break and
+    the `was`/`were` exemption got hand-built discriminating shapes on a `gh`-shim body rather than an
+    argument. Every mutation was confirmed applied by diffing the file against a saved copy; two had
+    silently failed to apply before that step existed.
+  - **A late check's broken oracle must not silence an earlier check's verdict**, and an existing
+    control is what taught this one that. The first draft `exit`ed on each of check 7's three mechanism
+    arms, so under `TestCitationLookupFailureIsNotAVerdict`'s shims — which fail *every* `gh api` call
+    — check 7 died before the per-citation resolver ran, and the log carried check 7's FAIL where
+    [#410](https://github.com/scttfrdmn/burroughs/issues/410)'s two distinct wordings belong: the same
+    one-wording-covers-two-causes shape that grave is about. It took the summary line with it, so grave
+    [#416](https://github.com/scttfrdmn/burroughs/issues/416)'s identity assertion reported *a skip is
+    not a verdict* instead. Each arm now records the shared flag and the run continues; a check whose
+    oracle never answered prints **UNAVAILABLE**, never `compared 0 claim(s)`, which is the shape of a
+    green computed over nothing. The body fetch may still exit, because nothing runs without a body.
+  - **The bill was re-run after that restructure, and two rows failed to apply for a third reason.**
+    The driver was written for `sh` word-splitting and run under `zsh`, so `sed -i '' "${ln}d"` became
+    `sed d` — every line deleted, an empty script, exit 0, and both rows reported *mutation survived*:
+    a load-bearing narrowing reported as dead weight. Neither tell was the exit code. The confirmation
+    is now an asserted line count, `before - 1`, because *a mutation is confirmed by the shape of the
+    change, not by the fact that a command ran.*
+  - **The vacuity guard earned itself on the run that added it.** The changed-file fetch first read
+    `.[].path`, which REST's pull-files element does not have, so it printed one empty line per file —
+    **58 lines for a 58-file PR**, agreeing exactly with the figure in the issue while carrying
+    nothing. A count is not a reading, and what caught it is the zero-length guard, which is check 5's
+    `.state` validation one field over.
+
 - **A contract-clause resolver: every clause token in the tree names a clause the contract defines**
   ([#442](https://github.com/scttfrdmn/burroughs/issues/442),
   [ADR 0046](docs/decisions/0046-the-accept-direction-blind-spot-is-ratified-as-a-rider-on-g-3-the-clause-243-citations-already-mean.md)).
