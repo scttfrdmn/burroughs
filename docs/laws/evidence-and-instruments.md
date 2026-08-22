@@ -301,6 +301,41 @@ reach is a law out of context.
   didn't happen*, pointed at environmental measurement: n=1 cannot separate a
   property from an accident of one scheduling. (#28.)
 
+### A claim about your own diff is sourced from the diff — an edit made after an amend is not in the amend.
+
+- **A claim about your own diff is sourced from the diff, not from memory of having typed
+  it.** Two false sentences shipped in #492, both about the author's own tree. The body said a
+  grave's lesson was *"Recorded at the site and in the citations family"* when
+  `docs/laws/citations.md` was not in the diff at all; a report to the principal said an ADR
+  repair had been amended into the commit when the edit was made **after** the amend and never
+  shipped. The available instrument was `git diff --name-only`, one command away.
+
+  **The sharp sub-form is the one worth carrying: an edit made after an amend is not in the
+  amend**, and the tree at the moment you speak is not the tree you remember editing. An amend
+  is the specific trap because it leaves the SHA looking freshly authored while the working tree
+  keeps accepting edits that nothing has captured. (Ruling: Scott, on the #492 review.)
+
+  **This is a recurrence in a new channel, not a novelty.** #434's lesson was a premise sourced
+  from a paragraph when the tracker was one query away; the sourcing failure is identical and only
+  the subject changed, from someone else's record to your own edits. *Apply the lesson to the
+  sourcing, not the fact* — repairing the two sentences and leaving the method running is how this
+  family's graves recur inside their own fixes.
+
+  **And the fix's first draft was wrong the same way.** The correction comment posted on #492
+  attributed the second error to the PR body's Landed section; the body says nothing of the kind,
+  and the claim lived only in a chat report. So the correction was itself a claim about a text,
+  written from memory of that text, and it needed a second correction — which is *second-order
+  honesty* arriving as a bill rather than as a principle. Read the channel you are describing
+  before describing it.
+
+  **The control this argues for is narrower than the obvious one**, and the narrowing was measured
+  rather than reasoned: the naive form — every file path named in a body must be in the diff —
+  fires **twice on #492 and is wrong both times**, while missing both real errors, because the
+  false sentence names no path and correct sentences name files on purpose (a proposal about a file,
+  work carried into another issue). The trigger has to be the **claim shape** — a discharge verb
+  paired with a resolvable location — not the path.
+  [#493](https://github.com/scttfrdmn/burroughs/issues/493).
+
 ### Coverage is a claim: an instrument's domain is an assertion it cannot check about itself.
 
 - **Coverage is a claim: an instrument's domain is an assertion it cannot check

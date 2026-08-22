@@ -210,7 +210,12 @@ Term 1 landing on 92/136 rather than 96/140 is the derivation's own check: the s
 would have been wrong by exactly the `func N: ` family's 4 rows, and either number was available to a
 reader who had not decided which. Term 4 was the term designed to fail loudly and did not: every
 sentinel's phrase stayed contiguous through the repair, including `internal/validate/module.go:749`,
-the one site where it is neither first nor last.
+the one site of the 28 where the sentinel sat **mid-string** — `element segment %d: %w: element
+segment's type %s …` — and where the repair therefore had to move context out from *between* two
+halves of one sentence rather than off its front. It now reads `%w: … (element segment %d)`, so the
+term's named risk is retired at its named site. Written in the past tense on purpose: the
+pre-registration above says the sentinel *is* neither first nor last, which was true when it was
+written and is the state this repair removed.
 
 ### Term 6's falsification: an enumeration by phrase cannot see an expectation that omits the phrase
 

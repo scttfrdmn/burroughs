@@ -242,6 +242,29 @@ commits to that reading.*
 - **G-3.** **The neutrality guarantee is G-1.** Partisanship lives only in
   §§2–8's API surface and in optimization priorities — never in
   conformance. No guest may be broken to make Go faster.
+  **The guarantee has a ceiling, and it is part of the guarantee.** The
+  upstream suites are a corpus of *rejections*: a vector asserts that a
+  named module is refused, and is satisfied by a refusal for any reason.
+  So no vector can witness a defect in the **accept direction** — a rule
+  that admits an invalid module, or refuses a valid one, or answers
+  correctly for a wrong reason, scores green by construction. A green
+  bounds what has been refuted; it does not certify what is correct.
+  Accept-direction correctness is therefore established by controls
+  against the reference, never by the board, and a claim resting on a
+  green states which direction it is in.
+  *Ratified, not introduced, by Scott's stamp on the #486 review (ADR
+  0046, deliberation #442), dated 2026-08-22. This is a property of a
+  negative-vector corpus, so it held from genesis and every verdict this
+  project has ever recorded was already bounded by it; the clause is
+  written down because 243 sites in the tree cited **G-3** for it while
+  §9 stated it nowhere, and a citation whose referent does not exist
+  leaves a reader unable to tell whether the code or the contract moved.
+  It lands on G-3 rather than as a new clause because G-3 is what names
+  the neutrality guarantee, and this is that guarantee's limit — the
+  same subject from the other side. Zero of those 243 sites cited G-3
+  for its first two sentences, so the reading being ratified is the only
+  reading the tree has ever used. The existing sentences are untouched
+  and remain normative.*
 - **G-4.** The Burroughs conformance battery = upstream suites + the §4
   litmus battery + a Go-runtime torture set (STW under load, checkdead
   soundness both directions, sleeper-deadlock inverse control) promoted

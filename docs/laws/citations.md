@@ -59,6 +59,35 @@ reach is a law out of context.
   searching for its existing instrument is this family's own defect one level
   up**, and the correction is on the issue rather than folded silently into it.
 
+### A stale citation is a cheap tell for an expired claim, so a repaired pointer gets its sentence read.
+
+- **A stale citation is a cheap tell for an expired claim.** `internal/interp/value.go` said
+  `table.go:134` *"already writes `ref{Null: true}` into every fresh table slot."* #419 had
+  falsified **both halves** at the referent — `table.go` writes the *initializer's* reference,
+  `slots[i] = v.ref`, not a null one — and the record of that change sits directly above the
+  write, in the file the sentence was citing. The refutation was written at the target and the
+  claim went on standing at the source. Grave
+  [#491](https://github.com/scttfrdmn/burroughs/issues/491).
+
+  **It surfaced from a line-shift sweep, not from anyone reviewing the claim.** `:134` was no
+  longer the write, and repairing the *number* is what made a reader open the referent and read
+  the sentence against it. So the rule is procedural rather than aspirational: **when a citation
+  repair moves a pointer, read the sentence at the new target.** Repairing 48 pointers and
+  reading none of them passes every gate in this repo — the numbers would all resolve — and the
+  read is where the value is.
+
+  **The load-bearing kind is the cross-package citation.** Within a file, a wrong claim about
+  nearby code is likely to be noticed by whoever edits it; across a package boundary nobody
+  edits both ends, so a claim and its refutation coexist indefinitely, as these did. And no
+  instrument here can see it: `citecheck.sh` resolves issue and ADR tokens, the markdown
+  controls resolve links, and nothing reads one file's prose against another file's *code*. A
+  line sweep is not a claim-checker; it is a **router**, and the human at the far end is the
+  oracle.
+
+  The gap this leaves is stated rather than papered over: the tell only fires when the
+  referent's line **moves**. A cross-file claim whose target stays put is invisible to
+  everything in this tree.
+
 ### A doc comment's identifier is a citation, and it gets a resolving check.
 
 - **A doc comment's identifier is a citation, and it gets a resolving check.** The
