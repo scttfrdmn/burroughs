@@ -119,7 +119,7 @@ func TestFuncBodyExtentIsPerBody(t *testing.T) {
 // two. The suite has no lane vector to cite, which is the accept-direction blind spot
 // 0007 exists for.
 func TestLaneIdxIsALEBInTheProductionReader(t *testing.T) {
-	c := &instrCtx{d: &Decoder{}, nonConst: -1}
+	c := &instrCtx{d: &Decoder{}}
 
 	// `81 00` is 1 encoded in two bytes: legal for uN 8, and the discriminator between
 	// a LEB reader and a raw byte read.

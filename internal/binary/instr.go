@@ -129,6 +129,57 @@ var extendedConstOps = map[byte]bool{
 	0x7e: true, // i64.mul
 }
 
+// constPrefixedOps is `is_const`'s prefixed arms (valid.ml:1030-1039), keyed {prefix, sub}
+// like `dataRefOps`.
+//
+// # Grave #495: 296 arms admitted in a constant position, and the control that was meant to see it
+//
+// This map's absence made **every prefixed instruction const-legal by omission** — 305 dispatchable
+// arms across 0xFB/0xFC/0xFD, of which the reference admits these nine. `constLegal` is keyed on a
+// *byte* and is reached from `instr` only, four lines below a `gateCheck` whose own comment explains
+// why it is called from **both** dispatch paths: *"A check on one path only would leave 0xfb and
+// 0xfd, which is 306 of the 337 gated arms, accepted with their gates off."* One concept, one trigger
+// (#82) was applied to gates and not to const-legality, in the same function, with the first reader's
+// lesson four lines up. #471.
+//
+// **The board saw 2 of the 296** (`array.wast:302,315`, all-gates-on lane) because the corpus's other
+// const-expression `assert_invalid` vectors use single-byte opcodes. A count of visible rows is not a
+// population: what is measured here is that the check could not see the space, and 0006's property 1
+// had named that space in advance.
+//
+// # Why the arms are nine and not eight or ten
+//
+// The reference's AST collapses pairs of opcodes into one constructor, so a count taken from
+// `is_const`'s text under-counts the opcodes it admits. `StructNew of typeidx * initop` covers
+// `struct.new` **and** `struct.new_default` (`mnemonics.ml:181-182` — `Explicit` and `Implicit`),
+// `ArrayNew` likewise (:187-188), and `ExternConvert of externop` covers both directions
+// (:202-203, `Internalize` and `Externalize`). Read from the constructors rather than from the arm
+// count, because *a pattern carries conditions a predicate drops* — here a pattern carries a
+// *variant* an opcode list has to expand.
+//
+// Their near-misses are the reason each line is cited rather than grouped: `array.new_data` (0x09)
+// and `array.new_elem` (0x0a) sit immediately after `array.new_fixed` (0x08) and are **not** const —
+// they are separate constructors (`ArrayNewData`, `ArrayNewElem`, ast.ml:233-234) — and they are the
+// two opcodes `array.wast:302,315` actually use. An off-by-one here admits precisely the vectors this
+// map exists to refuse.
+//
+// **Gates are not read here, unlike `extendedConstOps`.** Every one of these nine is a `gateFor` row,
+// so `prefixed` declines it by name through `gateCheck` on the path above; extended-const needed the
+// gate read inside `constLegal` only because its gate is *not* an opcode-mapped one (see
+// `gatedNonOpcodes`). So this map is unconditional legality and the ordering doctrine (0008) is
+// unchanged: malformed, then the feature decline, then the const verdict.
+var constPrefixedOps = map[[2]uint32]bool{
+	{0xFB, 0x00}: true, // struct.new         — StructNew (x, Explicit),   mnemonics.ml:181
+	{0xFB, 0x01}: true, // struct.new_default — StructNew (x, Implicit),   mnemonics.ml:182
+	{0xFB, 0x06}: true, // array.new          — ArrayNew (x, Explicit),    mnemonics.ml:187
+	{0xFB, 0x07}: true, // array.new_default  — ArrayNew (x, Implicit),    mnemonics.ml:188
+	{0xFB, 0x08}: true, // array.new_fixed    — ArrayNewFixed,             ast.ml:232
+	{0xFB, 0x1A}: true, // any.convert_extern — ExternConvert Internalize, mnemonics.ml:202
+	{0xFB, 0x1B}: true, // extern.convert_any — ExternConvert Externalize, mnemonics.ml:203
+	{0xFB, 0x1C}: true, // ref.i31            — RefI31,                    ast.ml:226
+	{0xFD, 0x0C}: true, // v128.const         — VecConst,                  ast.ml:249
+}
+
 // prefixRegions is every region of the generated table, keyed by prefix byte with 0x00
 // meaning "no prefix".
 //
@@ -166,6 +217,37 @@ const (
 	opElse = 0x05
 )
 
+// opID names one dispatchable opcode across both spaces: a prefix and a sub-opcode, with prefix
+// 0x00 meaning the single-byte space.
+//
+// The 0x00-means-single-byte convention is not invented here — `gateCheck`, `castTypes`, and `emit`
+// all already take `(0x00, uint32(b))` from `instr`, and `prefixRegion` refuses 0x00 for exactly
+// this reason. Reusing it is what lets the two call sites in `instr` and `prefixed` read alike.
+//
+// `set` is a field rather than a sentinel because the pair has no spare value, and the packing
+// alternative (`prefix<<16 | sub` in an int) is both unreadable at the use sites and a hazard on a
+// 32-bit `int` for the 0xFD region's three-digit sub-opcodes.
+type opID struct {
+	prefix byte
+	sub    uint32
+	set    bool
+}
+
+// String renders an opcode the way this file's const-expression error has always rendered a
+// single-byte one, and appends the sub-opcode when there is a prefix.
+//
+// **The single-byte form is byte-identical to the `%#02x` it replaces**, deliberately: 24 suite
+// vectors assert `constant expression required` and the harness matches by prefix (0045), so no
+// expected string moves. The prefixed form is ours to choose because the reference prints *no*
+// opcode at all there (`check_const`, valid.ml:1041) — unlike the illegal-opcode renderings, where
+// `illegal` and `illegal2` are the authority and `twoFieldIllegal` exists to follow it.
+func (o opID) String() string {
+	if o.prefix == 0x00 {
+		return fmt.Sprintf("%#02x", o.sub)
+	}
+	return fmt.Sprintf("%#02x %#02x", o.prefix, o.sub)
+}
+
 // instrCtx carries the state one instruction-sequence read needs beyond the cursor.
 //
 // constOnly is a *reporting* mode, not a grammar mode: the grammar is identical either
@@ -173,9 +255,14 @@ const (
 type instrCtx struct {
 	d         *Decoder
 	constOnly bool
-	// nonConst is the first non-const instruction seen, or -1. Recorded rather than
-	// returned, so a malformed verdict from further along still wins.
-	nonConst int
+	// nonConst is the first non-const instruction seen, unset if there was none. Recorded
+	// rather than returned, so a malformed verdict from further along still wins.
+	//
+	// An `opID` rather than the byte-and--1-sentinel it was until #471, because the check
+	// now runs on the prefixed path too and a prefixed opcode is two fields. There is no
+	// widening that keeps a sentinel: prefix 0x00 sub 0x00 is `unreachable`, a real
+	// non-const opcode, so the presence bit is explicit.
+	nonConst opID
 	// declined is the first gated construct met with its gate off, or nil.
 	//
 	// Deferred for the same reason nonConst is, and binary.wast:112 is the vector that
@@ -481,6 +568,16 @@ func (c *instrCtx) release() error { return c.declined }
 // constLegal reports whether one opcode may appear in a constant expression, and it is where
 // extended-const's gate is read (#109).
 //
+// **It takes `gateCheck`'s signature, and that is the repair for #471 rather than a tidy-up.** This
+// was `constLegal(b byte)`, callable only from the single-byte path, four lines above a `gateCheck`
+// whose doc explains why *it* is called from both. The two lines in `instr` now read alike, so a
+// third dispatch path cannot pick up one and miss the other: *one concept, one trigger* (#82), which
+// is the lesson this function had beside it and outside its own type.
+//
+// Prefix 0x00 is the single-byte space (see `opID`). The prefixed arms are unconditional — they read
+// no gate here — for the reason `constPrefixedOps` states: their gates are opcode-mapped, so
+// `prefixed` has already declined them by name.
+//
 // **The gate is checked here rather than through `gateCheck` because this is the only place that
 // knows the position.** `gateCheck` sees an opcode and nothing else, so it cannot distinguish
 // `i32.add` in a function body (MVP, ungated) from `i32.add` in a global's initializer (this
@@ -515,7 +612,18 @@ func (c *instrCtx) release() error { return c.declined }
 // The lesson is *the defect stated as the rule*: review verifies code against its claims, and here
 // the claim **was** the bug, so every reader who checked the two against each other found agreement.
 // Print what the code returns; do not read what it says it returns.
-func (c *instrCtx) constLegal(b byte) bool {
+func (c *instrCtx) constLegal(prefix byte, sub uint32) bool {
+	if prefix != 0x00 {
+		return constPrefixedOps[[2]uint32{uint32(prefix), sub}]
+	}
+	if sub > 0xFF {
+		// Unreachable: `instr` reads the single-byte space with `r.byte()`. Named rather
+		// than truncated with `byte(sub)`, which would answer for a *different* opcode —
+		// the silent-wrong-answer half of the same shape `prefixRegion`'s 0x00 guard
+		// refuses on the other path.
+		return false
+	}
+	b := byte(sub)
 	if constOps[b] {
 		return true
 	}
@@ -583,7 +691,7 @@ func (c *instrCtx) gateCheck(prefix byte, sub uint32) {
 // instead of reached through a holder, because the five callers store it in a different field and
 // only one of them (`Exprs`) stores a slice of them.
 func (d *Decoder) decodeConstExpr(r *reader) ([]Instr, map[int][]ValType, error) {
-	c := &instrCtx{d: d, constOnly: true, nonConst: -1}
+	c := &instrCtx{d: d, constOnly: true}
 	var out []Instr
 	var casts map[int][]ValType
 	c.out = &out
@@ -612,8 +720,8 @@ func (c *instrCtx) constExprBody(r *reader) error {
 	// `constant expression required` is an *invalid* string and the suite asserts it 24
 	// times, always as assert_invalid — so this is a declared layering debt that moves
 	// to #9's validator, not a malformed claim.
-	if c.nonConst >= 0 {
-		return fmt.Errorf("%w: %#02x", ErrConstExprRequired, c.nonConst)
+	if c.nonConst.set {
+		return fmt.Errorf("%w: %s", ErrConstExprRequired, c.nonConst)
 	}
 	return nil
 }
@@ -666,8 +774,8 @@ func (c *instrCtx) instr(r *reader) error {
 	c.gateCheck(0x00, uint32(b))
 	// Deferred, not returned: see decodeConstExpr. The *first* one is kept, because
 	// that is the one a validator reading left to right would report.
-	if c.constOnly && !c.constLegal(b) && c.nonConst < 0 {
-		c.nonConst = int(b)
+	if c.constOnly && !c.constLegal(0x00, uint32(b)) && !c.nonConst.set {
+		c.nonConst = opID{sub: uint32(b), set: true}
 	}
 	if err := c.imms(r, b, info.imms); err != nil {
 		return err
@@ -716,6 +824,12 @@ func (c *instrCtx) prefixed(r *reader, prefix byte) error {
 	// The region gates — 306 of the 337 mapped arms are here, so a gate check on the
 	// single-byte path alone would have covered 31 of them.
 	c.gateCheck(prefix, sub)
+	// And the const verdict, in the same order and by the same call the single-byte path
+	// makes: gate first, then legality. Absent until #471, which made every prefixed arm
+	// const-legal by omission — see constPrefixedOps.
+	if c.constOnly && !c.constLegal(prefix, sub) && !c.nonConst.set {
+		c.nonConst = opID{prefix: prefix, sub: sub, set: true}
+	}
 	// No prefixed row is structural — the four recursing arms are all single-byte — and
 	// that is asserted rather than assumed: TestStructuralArmsAreExactlyTheBlockRows walks
 	// every region, so a structural row appearing under a prefix upstream fails the build
@@ -1790,7 +1904,7 @@ func (d *Decoder) decodeFuncBody(r *reader) error {
 	var casts map[int][]ValType
 	var selects map[int][]ValType
 	c := &instrCtx{
-		d: d, nonConst: -1, out: &body,
+		d: d, out: &body,
 		labelsOut: &labels, catchesOut: &catches, castsOut: &casts, selectsOut: &selects,
 	}
 	if err := c.block(r); err != nil {

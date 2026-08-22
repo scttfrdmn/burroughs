@@ -186,7 +186,7 @@ Recorded here because each is a sentence a reader will meet *after* the change a
    do not literally falsify this, because M10/M11 is a **cross-module** relabelling and all five vectors
    are single-module. What they falsify is the reading the sentence invites: that the disjunct-2 gap is
    unwitnessed. It is witnessed, in both polarities, through `call_indirect`.
-3. `internal/spec/spec_test.go:10662` describes `Instance.link` as comparing with `sameFuncType`. Grave
+3. `internal/spec/spec_test.go:10703` describes `Instance.link` as comparing with `sameFuncType`. Grave
    #368 moved the linker off it; `sameFuncType` has exactly one non-test caller and it is not the
    linker. (The number is the *current* location of that sentence, re-pointed twice since this list was
    written — it was `:10548`, then `:10593`, then `:10616` — because a pointer that asserts where a live sentence is

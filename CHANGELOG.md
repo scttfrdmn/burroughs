@@ -21,6 +21,56 @@ weakly-ordered platform.
 
 ### Added
 
+- **`citecheck.sh` check 7 — a *discharge* claim in a PR body names a file that PR changes**
+  ([#493](https://github.com/scttfrdmn/burroughs/issues/493), riding #471 as charged overhead on
+  Scott's order). *"Recorded at the site and in the citations family"* asserts that work landed
+  somewhere, and the somewhere is a file; the PR's changed-file list is the oracle. Binding, `--pr`
+  only, on check 4's population boundary and check 4's argument — a code comment saying *"recorded in
+  X"* is a claim about the tree, not about the diff it sits in.
+  - **The ordered form was measured against its own specimen and caught neither error, so the landed
+    trigger is the claim shape rather than the path.** Over #492: 12 paths named against 58 in the
+    diff, two flagged and **both correct sentences**, while the false one names no path at all — it
+    names a law *family*. A past-participle discharge verb (the order's seven) whose **complement** is
+    a location: preposition then location, after the verb, before the sentence ends. Not "in the same
+    sentence", which is proximity — *aboutness is not proximity*, and the span rule is what takes the
+    ordered form's two false positives to zero.
+  - **The location vocabulary is derived**: tracked paths, a tracked basename where it is unique in the
+    tree, the law-family names read off `docs/laws/*.md` so *"the citations family"* resolves, and ADR
+    numbers through the glob check 1 already uses.
+  - **Five stated under-matches**, because a trigger that fails silently is the defect being checked:
+    an unresolvable location is counted and printed rather than checked (*"at the site"*, *"in the
+    changelog"*); a single extensionless word is not a token, so `LICENSE`, `NOTICE` and `Makefile` are
+    unreachable by name; a basename naming more than one file does not resolve (`instr.go` names
+    three); an adjective between determiner and location blocks the match; and a paraphrased discharge
+    with no listed verb is outside the population. `was`/`were`, a modal, or a negation before the verb
+    is exempt **and printed**, on check 6's precedent — *the tense is the mechanism*.
+  - **Two of the five narrowings are witnessed by the specimen and three are not, and that split is
+    the finding** — *identical boards are the finding*, so the heading break, the list-marker break and
+    the `was`/`were` exemption got hand-built discriminating shapes on a `gh`-shim body rather than an
+    argument. Every mutation was confirmed applied by diffing the file against a saved copy; two had
+    silently failed to apply before that step existed.
+  - **A late check's broken oracle must not silence an earlier check's verdict**, and an existing
+    control is what taught this one that. The first draft `exit`ed on each of check 7's three mechanism
+    arms, so under `TestCitationLookupFailureIsNotAVerdict`'s shims — which fail *every* `gh api` call
+    — check 7 died before the per-citation resolver ran, and the log carried check 7's FAIL where
+    [#410](https://github.com/scttfrdmn/burroughs/issues/410)'s two distinct wordings belong: the same
+    one-wording-covers-two-causes shape that grave is about. It took the summary line with it, so grave
+    [#416](https://github.com/scttfrdmn/burroughs/issues/416)'s identity assertion reported *a skip is
+    not a verdict* instead. Each arm now records the shared flag and the run continues; a check whose
+    oracle never answered prints **UNAVAILABLE**, never `compared 0 claim(s)`, which is the shape of a
+    green computed over nothing. The body fetch may still exit, because nothing runs without a body.
+  - **The bill was re-run after that restructure, and two rows failed to apply for a third reason.**
+    The driver was written for `sh` word-splitting and run under `zsh`, so `sed -i '' "${ln}d"` became
+    `sed d` — every line deleted, an empty script, exit 0, and both rows reported *mutation survived*:
+    a load-bearing narrowing reported as dead weight. Neither tell was the exit code. The confirmation
+    is now an asserted line count, `before - 1`, because *a mutation is confirmed by the shape of the
+    change, not by the fact that a command ran.*
+  - **The vacuity guard earned itself on the run that added it.** The changed-file fetch first read
+    `.[].path`, which REST's pull-files element does not have, so it printed one empty line per file —
+    **58 lines for a 58-file PR**, agreeing exactly with the figure in the issue while carrying
+    nothing. A count is not a reading, and what caught it is the zero-length guard, which is check 5's
+    `.state` validation one field over.
+
 - **A contract-clause resolver: every clause token in the tree names a clause the contract defines**
   ([#442](https://github.com/scttfrdmn/burroughs/issues/442),
   [ADR 0046](docs/decisions/0046-the-accept-direction-blind-spot-is-ratified-as-a-rider-on-g-3-the-clause-243-citations-already-mean.md)).
@@ -1187,7 +1237,7 @@ weakly-ordered platform.
   **disjoint** corpus populations (5 non-const, 7 unresolved), so each is witnessed alone rather than
   jointly. The other half of `check_const` — `check_block`'s typing of the initializer — stays deferred,
   and the *opcode* half of the same question is already answered one layer down by the decoder's
-  const-expression table (`internal/binary/instr.go:588`), a declared layering debt sharing
+  const-expression table (`internal/binary/instr.go:693`), a declared layering debt sharing
   `binary.ErrConstExprRequired`.
   - **The scope argument is the rule.** `check_global` folds one global into the context at a time
     (`valid.ml:1059`), so a global's initializer sees the imports plus the globals declared *before it*
@@ -2344,7 +2394,7 @@ weakly-ordered platform.
   **Reading the code to write the criterion falsified five of its own claims**, recorded in the ADR
   because each will read as current after the change: the rec-group-boundary denial at `call.go:743-744`
   (already corrected fifteen lines below it), the *"no corpus vector reaches the M10/M11 shape"*
-  sentence at `:760-761`, `spec_test.go:10662`'s description of `Instance.link` as a `sameFuncType`
+  sentence at `:760-761`, `spec_test.go:10703`'s description of `Instance.link` as a `sameFuncType`
   caller (grave #368 moved it), `call.go:740`'s pointer to **`matchesDeclaredSupertype`** — a function
   that exists nowhere in the tree, folded into the walk by grave #261's refactor — and `:760`'s naming
   of `call_ref` as a consumer, which `resolveCallRef` refutes by comparing nothing at all. The fourth is
@@ -3472,6 +3522,72 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **The const-expression legality check ran on the single-byte dispatch path only, so all 305
+  prefixed arms were const-legal by omission — 296 of them wrongly**
+  ([#471](https://github.com/scttfrdmn/burroughs/issues/471)). `struct.get`, `array.set`,
+  every SIMD arithmetic op: admitted in a global initializer, an element expression, a data offset.
+  The repair is `constLegal(prefix byte, sub uint32)` — **`gateCheck`'s signature, deliberately**, so
+  the call in `instr` and the call in `prefixed` read alike and a third dispatch path cannot pick up
+  one and miss the other. A parallel `constLegalPrefixed` would have been the same defect with a
+  second name. `constPrefixedOps` holds the nine arms `is_const` admits, and `instrCtx.nonConst`
+  becomes an `opID` because a `byte` field cannot record which prefixed arm was seen.
+  - **The board saw 2 of the 296**, both in `array.wast` (`:302`, `:315`), both using
+    `array.new_data`/`array.new_elem` — the two near-misses of `array.new`, and only in the
+    all-gates-on lane. `allOnFailCeiling` 2 → 0 and `allOnPassFloor` 65107 → 65109: two figures moving
+    by exactly 2 in opposite directions at slack 0, which is what makes the attribution exact.
+  - **The nine are nine, not six.** `is_const` has six prefixed-relevant arms and the reference's AST
+    collapses opcode pairs into one constructor each — `StructNew (x, Explicit|Implicit)`,
+    `ArrayNew`, `ExternConvert Internalize|Externalize` — so counting arms under-counts opcodes by
+    three. `array.new_data` and `array.new_elem` are separate constructors and are *not* const.
+  - **`allOnFailCeiling` is at 0, and the pre-registered caution pays out.** Both rows drained as
+    engine fixes, so every fail column on both boards is now 0, `unsupported` and `unimplemented` with
+    them; the only non-pass column with a population is the default lane's `gated` (4187 configuration
+    declines, not work). The bound's own ledger records that it was added because `execFailCeiling`
+    emptied — 38 → 31 → 17 → 7 → 2 → 0 across five re-bases — so `boardbound_test.go` now holds no
+    fail ceiling with a live population, and v0's remaining work is #9's validator, which no board
+    column can ask for.
+
+- **The control that closed #33 could not represent a prefixed opcode, so 0006's property 1 was
+  checked over 256 of 561 opcode identities while its header claimed the whole space**
+  ([grave #495](https://github.com/scttfrdmn/burroughs/issues/495)). `constLegalBytes(tb)
+  map[byte]bool` — the domain was not merely unchecked but **unrepresentable in the return type**, and
+  no entry could be missing from a list because there was no list. Re-keyed to `constLegalOps`
+  returning `map[[2]uint32]bool`; the four walks now run over the whole dispatchable space, and
+  `TestConstLegalSpaceIsTheWholeDispatchableSpace` pins it at 192 single-byte + 305 prefixed arms in
+  the direction the type used to bound.
+  - **Its second half was the accept direction, ruled out against the wrong authority.** The header
+    said const-legality is *"a validation-layer fact the reference does not encode either (its
+    `const s` is the full instruction grammar, decode.ml:983)"*. True of `decode.ml`, which is the
+    parser; `valid.ml:1029-1038` encodes it as `is_const` and always did. The citation resolves and
+    says what it is quoted as saying — *a valid citation does not certify its sentence* — and what the
+    wrong authority bought was a reason not to look, for as long as it took a board row to contradict
+    it. `internal/binary/constlegal_test.go` asserts **both** directions against `is_const`, joined
+    through `mnemonics.ml`'s bindings because the reference matches on constructors and the generated
+    table speaks mnemonics: 497 dispatchable arms, all 497 joined, 22 const-legal on both sides.
+  - **The fourth control exists because the first three passed on the unfixed engine.** Reverting
+    `prefixed`'s const call site — #471 itself — left every table-reading control green and was named
+    by `TestPrefixedNonConstOpsGetTheConstVerdict` alone, at 296 arms. *A control can test the helper
+    while nothing calls the path*: the table was never the bug.
+  - Both false sentences are repaired **in place and dated** rather than deleted, with the scoping
+    argument they belonged to kept — a claim about coverage that a type silently narrows is worth more
+    as a specimen than as a corrected line.
+
+- **Four `internal/binary/instr.go` line citations that this PR's own insertions broke**, re-pointed
+  by content and not by delta: `instr.go:148` → `:199` (`prefixRegion`, in
+  `internal/interp/bulk_test.go`), `:588` → `:693` (`decodeConstExpr`, in `internal/validate/module.go`,
+  `internal/validate/global_test.go`, and one entry above), `:1456` → `:1570` (the `MultiMemory`
+  decline, in [ADR 0038](docs/decisions/0038-a-declines-side-effect-on-a-third-instance-is-registered-per-line-and-the-derivation-is-the-control-not-the-fix.md)).
+  Fifteen `spec_test.go` pointers moved the same way, including the twelve keys of
+  `foreclosingLicensed` — paired against the new findings **by paragraph text**, which is #432's
+  remedy applied where its shift was uniform at +41 and arithmetic would have looked right.
+  The sweep also measured a standing population it did not fix: **thirteen citations to
+  `binary/instr.go` were already stale before this PR** — `:71-74`, `:70-86`, `:561`, `:686-690`,
+  `:1030-1054`, `:788-798` at six sites and `:831` at two — every one naming a line that exists, and
+  each checked against the target's text at `d79c5f9` rather than assumed. (Counted with a counter:
+  the first reading of the same list said eleven.)
+  They are [#456](https://github.com/scttfrdmn/burroughs/issues/456)'s, which owns the
+  symbol-based resolver.
+
 - **ADR 0045's term-4 paragraph described its own pre-registration's subject in a tense the repair had
   already removed.** It said term 4 *"was designed to fail loudly and did not"* and named
   `internal/validate/module.go:749` as *"the one site where it is neither first nor last"* — present
@@ -3531,7 +3647,7 @@ weakly-ordered platform.
   not, and one of them was carrying a word that was never true**
   ([#485](https://github.com/scttfrdmn/burroughs/issues/485), Scott's ruling on the #486 review). All
   three re-pointed **by the sentence each one quotes**, never by a delta: ADR 0028's `wast.go:813` →
-  `:1253`, ADR 0029's `wast.go:2672` → `:4352`, and `internal/spec/spec_test.go:8295`'s
+  `:1253`, ADR 0029's `wast.go:2672` → `:4352`, and `internal/spec/spec_test.go:8336`'s
   *"deliberately not a keyword allowlist"* → `wast.go:1462`, the old number having drifted onto
   `classify`'s `namedInvokeAction` dispatch.
   - **The two ADR pointers take dated amendment notes; the test comment takes a plain repair.** An ADR
@@ -3766,7 +3882,7 @@ weakly-ordered platform.
   residue sense and the exact sentence grave #427 cost eight rows for; two more claimed to quote a
   falsified sentence while asserting it. The group heading — "the grave's own record of itself" — is
   true of the *account*, whose annotation is 60 lines below the first paragraph it covers, at
-  `spec_test.go:11134`, and false of three
+  `spec_test.go:11175`, and false of three
   of the four paragraphs it covers, and the **paragraph** is the sweep's unit and the map's own stated
   standard. Each entry now names what its paragraph is (retained falsified testimony), where the
   refutation lives, and that the ground is *not* legible in the licensed paragraph alone; the one entry

@@ -8023,7 +8023,26 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	// `array_new_elem`, 1 in `func.wast:662`. The three `array_*` files were fully green before this
 	// slice and are fully green after (35/35, 28/28, 24/24), which is the term that says the discard at
 	// frame exit undoes only what the frame itself initialized.
-	const allOnPassFloor = 65107
+	// # 65107 → 65109, +2, and it is the last two rows this column had left to take
+	//
+	// #471's const-expression legality check on the prefixed path. `array.wast` 52/54 → **54/54** and no
+	// other file moves, which is the whole delta: `allOnFailCeiling` below falls by exactly 2 on the same
+	// run, so both are conversions in the lockstep the four entries above read for.
+	//
+	// **`passFloor` does not move, and here the immobility is not a leak detector — it is a fact about
+	// which lane can ask.** Both vectors are `assert_invalid` on `array.new_data`/`array.new_elem` in a
+	// global initializer, so both need the GC gate to decode at all and both are honestly `gated` in the
+	// default lane. The rule the fix installs *is* live in the default lane for SIMD's region (0xFD is
+	// default-on since 0025), and nothing there moved: no default-lane vector puts a prefixed non-const
+	// opcode in a constant position.
+	//
+	// **The over-refusal direction is where this fix's risk lives, and no fail column can see it.** A
+	// const-legality rule that is too *narrow* rejects valid modules, and contract §9 G-3's rider says
+	// what that scores: green, by construction, in both lanes. So the term that carries the risk is
+	// `internal/gen/xcorpus`' accept-direction walk over must-succeed images, plus the nine-arm join in
+	// `TestConstPrefixedOpsAreIsConstsPrefixedArms` — the same pairing that caught #109, which was this
+	// defect's mirror image (a const set too narrow by six single-byte opcodes).
+	const allOnPassFloor = 65109
 	// **Slack 0 as of Scott's #387 ruling**, which this bound's own 89-row staleness above is what
 	// prompted: a floor with 250 of tolerance cannot detect anything smaller than 250, so it is a
 	// bound sitting inside its own tolerance. Exact from here — re-base it in the PR that moves the
@@ -8100,7 +8119,29 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	// makes this column the all-on work plan: when #471 lands, this bound stops being a work plan and
 	// becomes a regression detector with no subject, which is the state the default lane's exec column
 	// is already in (*a zero-fail board is a lost instrument*). Named here rather than discovered then.
-	const allOnFailCeiling = 2
+	//
+	// # 2 → 0 with #471, and the paragraph above is the pre-registration paying out
+	//
+	// `array.wast:302,315` were the last two: `array.new_data` and `array.new_elem` in a global
+	// initializer, admitted because the const-legality check ran on the single-byte path only. Both are
+	// **drains** by the test the 0042 entry above sets — modules this engine reported valid that the
+	// corpus asserts invalid — so what left is engine error, and this ceiling's kind changes with it:
+	// from *exact re-base* to *at terminal*. `boardbound_test.go`'s table is updated in the same PR.
+	//
+	// **Every fail column on both boards is now 0, and that is a statement about the corpus on
+	// 2026-08-22 rather than about the engine.** `docs/laws/boards-and-buckets.md` carries the caution
+	// pre-registered for this event, before the number arrived: a column at zero is a fact about what
+	// the corpus *asks*, and this suite asks almost entirely in the reject direction, so a drained fail
+	// column measures the absence of questions as much as the presence of answers. `unsupported` and
+	// `unimplemented` are 0 as well, so the only non-pass column left with a population on either board
+	// is the default lane's `gated` — and *that* one counts vectors declined by configuration, which is
+	// not work. The work v0 has left is a validator (#9) that no column on this board can ask for.
+	//
+	// The consequence for this bound: it can only rise from here, and a rise is the only thing it now
+	// reports. That makes it identical in kind to `binaryFailCeiling` and `textFailCeiling`, and the
+	// reason it is not deleted is the reason those are not: a tripwire whose subject dissolves is
+	// re-pointed, never retired — the *risk* is a gated feature regressing, which nothing prevents.
+	const allOnFailCeiling = 0
 	boardBound(t, "allOnFailCeiling", totalFail, allOnFailCeiling, 0, ceilingBound,
 		"the all-gates-on lane is the interpreter's and validator's remaining work plan now that "+
 			"the default lane's exec column is empty: a rise here is a regression no gated-lane "+

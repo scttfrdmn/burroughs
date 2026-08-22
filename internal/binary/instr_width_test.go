@@ -424,7 +424,7 @@ func TestStagedBitsAgreeWithTheReader(t *testing.T) {
 		read := false
 		var errs []error
 		for _, input := range inputs {
-			c := &instrCtx{d: &Decoder{Features: featuresAllOn(t)}, nonConst: -1}
+			c := &instrCtx{d: &Decoder{Features: featuresAllOn(t)}}
 			r := &reader{b: input, eof: ErrPayloadEnd}
 			if err := c.imm(r, im); err != nil {
 				errs = append(errs, err)
@@ -466,7 +466,7 @@ func TestStagedBitsAgreeWithTheReader(t *testing.T) {
 	// So the input is a real memarg followed by a real lane index, read by instrCtx.imm
 	// through the immediates the eight `v128.loadN_lane` rows actually declare.
 	for _, row := range laneMemopRows(t) {
-		c := &instrCtx{d: &Decoder{Features: featuresAllOn(t)}, nonConst: -1}
+		c := &instrCtx{d: &Decoder{Features: featuresAllOn(t)}}
 		// flags 0x40 (explicit memory index), memidx 7, offset 0x5E, laneidx 0x0B. Every
 		// field is a *complete* one-byte LEB: 0x5E rather than 0xDE, because 0xDE's high
 		// bit is a continuation and the read would run off the end — which is how this

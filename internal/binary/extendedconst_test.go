@@ -212,8 +212,8 @@ func TestExtendedConstGateIsPositional(t *testing.T) {
 	// be compared, and the whole claim is that the *position* decides.
 	instrs := []byte{0x41, 0x02, 0x41, 0x03, 0x6c}
 
-	space := constLegalBytes(t) // vacuity: both const sets non-empty and disjoint
-	if !space[0x6c] {
+	space := constLegalOps(t) // vacuity: the const sets are non-empty and disjoint
+	if !space[opKey(0x00, 0x6c)] {
 		t.Fatalf("0x6c (i32.mul) is not in the const-legal space this probe assumes; the probe " +
 			"would then be measuring an ordinary non-const verdict and agree with a gate that " +
 			"does nothing")
@@ -245,7 +245,7 @@ func TestExtendedConstGateIsPositional(t *testing.T) {
 			f.ExtendedConst = tc.on
 
 			d := &Decoder{Features: f}
-			c := &instrCtx{d: d, constOnly: tc.constOnly, nonConst: -1}
+			c := &instrCtx{d: d, constOnly: tc.constOnly}
 			r := &reader{b: append(append([]byte{}, instrs...), opEnd), eof: ErrPayloadEnd}
 
 			// The grammar must complete in all four cells: extended-const changes what is
@@ -267,8 +267,8 @@ func TestExtendedConstGateIsPositional(t *testing.T) {
 				// A clean release is not enough for the const cells: the *const* verdict is
 				// recorded separately and released after, so a reader that accepted the gate
 				// and then reported `constant expression required` passes the line above.
-				if tc.constOnly && c.nonConst >= 0 {
-					t.Errorf("% x released clean but recorded a non-const verdict at %#02x: with "+
+				if tc.constOnly && c.nonConst.set {
+					t.Errorf("% x released clean but recorded a non-const verdict at %s: with "+
 						"the gate on these six are const-legal, and reporting them as non-const "+
 						"rejects a valid module in the direction no vector can see",
 						instrs, c.nonConst)
@@ -292,8 +292,8 @@ func TestExtendedConstGateIsPositional(t *testing.T) {
 			// And the const verdict must not have been armed in parallel. `constant expression
 			// required` is a spec *invalid* string; the module here is valid, and the engine's
 			// configuration is the only reason it is refused.
-			if c.nonConst >= 0 {
-				t.Errorf("the gate declined *and* recorded a non-const verdict at %#02x: the "+
+			if c.nonConst.set {
+				t.Errorf("the gate declined *and* recorded a non-const verdict at %s: the "+
 					"byte must be const-legal for reporting purposes either way, so that "+
 					"turning the gate on cannot leave a second refusal behind", c.nonConst)
 			}
@@ -317,7 +317,7 @@ func TestExtendedConstDeclineYieldsToMalformed(t *testing.T) {
 
 	// `i32.const 2` `i32.const 3` `i32.mul` with **no END**: the gate is declined during the
 	// read, then the grammar runs off the end. Malformed must win.
-	c := &instrCtx{d: d, constOnly: true, nonConst: -1}
+	c := &instrCtx{d: d, constOnly: true}
 	r := &reader{b: []byte{0x41, 0x02, 0x41, 0x03, 0x6c}, eof: ErrPayloadEnd}
 	if err := c.block(r); err != nil {
 		t.Fatalf("block failed with %v; the truncation must be reported by the terminator, not "+
