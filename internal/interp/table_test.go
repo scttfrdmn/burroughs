@@ -120,7 +120,8 @@ func TestElemExprOpcodesAgreeWithTheDecoder(t *testing.T) {
 		// `0x00` is **type index 0**, not `nofunc` — this sentence said `nofunc` and was a false
 		// premise under a true conclusion, the shape #360's second finding is about. `sleb(33)`
 		// reads 0x00 as 0, non-negative, so it is the *indexed* heaptype form
-		// (`sections.go:914-926`); `nofunc` is `-0x0D`, wire byte 0x73. The gate is the same
+		// (`decodeHeapType`'s type-index branch, `sections.go:973-987`); `nofunc` is `-0x0D`, wire
+		// byte 0x73. The gate is the same
 		// either way, which is exactly why the error nobody checked kept the wrong name alive.
 		t.Errorf("opRefNull with heaptype 0x00 was refused as %v, and 0x00 is type index 0 — the "+
 			"indexed heaptype form, gc-gated: the expected refusal is that gate, so this byte is "+

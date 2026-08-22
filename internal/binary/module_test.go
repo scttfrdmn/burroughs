@@ -138,9 +138,10 @@ func TestValTypeStringsAreDistinctAndNamed(t *testing.T) {
 		}
 		kseen[got] = true
 	}
-	// The kind byte is read straight out of the image (`ExternKind(kind)` at sections.go:921
-	// and :987), so an out-of-range value is reachable — from an *export*, whose kind byte
-	// the decoder does not range-check. It must say so rather than name a kind.
+	// The kind byte is read straight out of the image (`ExternKind(kind)` in `decodeImport` at
+	// sections.go:1275 and in `decodeExport` at :1383), so an out-of-range value is reachable —
+	// from an *export*, whose kind byte the decoder does not range-check. It must say so rather
+	// than name a kind.
 	if s := ExternKind(0x7F).String(); s != "unknown" {
 		t.Errorf("ExternKind(0x7f).String() = %q, want %q: the export path converts the "+
 			"image's byte without a range check, so an undefined kind is reachable and "+

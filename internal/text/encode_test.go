@@ -230,12 +230,13 @@ var encodableModules = []struct {
 	//
 	// Bytes for `wantDataSec`'s reason, and section 9's case is the stronger one. **This comment used
 	// to say `decodeElemSection` "retains nothing into" `ElemSegment`, which was already false when it
-	// was written** (`module.go:560`, retained under 0016) — see the `withElem` floor below for the
-	// measurement that replaced it. What survives the correction is the operative half: the retained
-	// struct normalizes flags 0/2 and 4/6 to identical values, so an encoder that wrote the
-	// explicit-table form where the implicit one belongs, or an elemkind byte where a reftype belongs,
-	// decodes clean and every other column here agrees. These rows are the only instrument over the
-	// flag byte, which is why they get their own floor below.
+	// was written** (`binary.Module.Elems`, `binary.go:416`, retained under 0016 — this cited
+	// `module.go:560`, a line in a file that field does not live in) — see the `withElem` floor
+	// below for the measurement that replaced it. What survives the correction is the operative
+	// half: the retained struct normalizes flags 0/2 and 4/6 to identical values, so an encoder
+	// that wrote the explicit-table form where the implicit one belongs, or an elemkind byte where
+	// a reftype belongs, decodes clean and every other column here agrees. These rows are the only
+	// instrument over the flag byte, which is why they get their own floor below.
 	wantElemSec []byte
 	// wantDataSec is section 11's payload: the segment count, then each segment. nil means no
 	// section 11.
@@ -2736,7 +2737,8 @@ func TestEncodeRoundTripsThroughTheDecoder(t *testing.T) {
 	// Section 9 needs it because **the retained struct does not determine the flag byte**, which is a
 	// narrower claim than the one this comment used to make and is the true one. It said "nothing
 	// retains element segments either"; `binary.Module.Elems` has existed since 165e77e
-	// (`module.go:560`), so that sentence was false at the moment it was written and the floor's
+	// (`binary.go:416`, and this cited `module.go:560` — the field is not in that file at all),
+	// so that sentence was false at the moment it was written and the floor's
 	// stated reason was fiction while the floor itself was sound. What is actually unrecoverable was
 	// measured by decoding one segment under each of the eight legal flags and printing the struct:
 	//

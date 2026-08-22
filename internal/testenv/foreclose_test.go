@@ -164,7 +164,7 @@ func TestForeclosingClaimsAboutGatesMatchTheGateTable(t *testing.T) {
 //
 // It fired on a residue table in `internal/spec/spec_test.go` whose `unknown label` row ended "Name
 // resolution, same stratum as" — and pointed at the row above it. That row is now "Name resolution
-// rather than grammar", which is shorter and says the thing, and it is at `spec_test.go:9750`.
+// rather than grammar", which is shorter and says the thing, and it is at `spec_test.go:9773`.
 //
 // The fire site's own line number used to stand in that first sentence and is gone rather than
 // repaired: it had drifted roughly nine hundred lines under insertions nobody paired, and where a
@@ -408,34 +408,78 @@ var deferredReasonLicensed = map[string]string{}
 // a historical fact and no longer recoverable, so the sentence now names the row it found and gives
 // that row's live line instead.
 //
-// The fragility is the reason the scheme stays, and **the requirement is two-sided**: a key must be
-// insertion-immune *and* rewrite-fragile. A key that survived a rewrite of the paragraph it licenses
-// would carry the reason over prose that no longer says it — the defect this whole file is about, one
-// level up — so the obvious replacement (a digest of the key, a stable id) buys immunity by
-// discarding the half that is fragile on purpose. #447 carries that requirement, the take-pairs-from-
-// output remedy above, and the finding that the stable key already exists twenty lines away in the
-// walk this file shares with `TestEverySkipSiteIsLicensed`: `foreclosingSite` carries `para`, and the
-// position classifier already resolves the enclosing `const`. **"Same idiom as X" inherits the
-// properties you can see** — the allow-map with per-entry justifications is right there in a literal,
-// and the stable key lives three functions away where copying the pattern never looked.
+// **Ninth re-key, 0042's implementation, and it happened twice inside one working tree.** The first
+// generation is the largest population yet and the first with *three* distinct deltas: five
+// insertion points in `spec_test.go` — `git diff -U0`'s `@@ -7053 +7053,2`, `-7987 +7988,10`,
+// `-8036 +8046,12`, `-10595 +10616,4`, `-10604 +10628,6` — put the thirteen entries in three regions
+// and moved them **+1**, **+21** and **+29**. Both checks run, thirteen stale entries against
+// thirteen findings over seven paragraphs, all seven byte-identical, sixth consecutive re-key with no
+// reason re-adjudicated. The four in-reason pointers moved `:11052` → `:11081`, by
+// `grep 'grave #427'`.
+//
+// **Then it re-keyed again, and the second insertion was a repair another control demanded.**
+// `TestEveryCitedTestNameResolves` named two citations of `TestSameFuncTypeCorpusScope`, which no
+// longer exists;
+// phrasing one of them as history added two lines at `spec_test.go:8690`, above twelve of the
+// thirteen keys, and those twelve went stale a second time in the same working tree — uniform **+2**,
+// paired by paragraph text anyway, pointers `:11081` → `:11083`. The rule this yields is about
+// *when* rather than *how*: **a citation repair is an insertion**, so the derivation is not run until
+// the last edit to the cited file is made. All insertions, then one derivation — and the file has to
+// be declared final *before* the pairing, since a rule that says "after the last edit" is only
+// checkable if something says which edit was the last one.
+//
+// **And twice in this slice a number one role vacated was immediately occupied by another.**
+// Generation 1 moved a *key* onto `:11052`, the value the four in-reason *pointers* had held since
+// the eighth re-key; generation 2 moved the *pointers* onto `:11083`, which was a *key* until that
+// same generation moved it to `:11085`. Either coincidence makes a stale number look corroborated —
+// the value is still in this map, the line still exists, and the paragraph there still reads
+// plausibly. That is [#479](https://github.com/scttfrdmn/burroughs/issues/479)'s channel, a
+// `file.go:N` inside a Go string literal that no instrument's domain includes, with the worst
+// available witness, produced by the same PR that filed #479.
+//
+// The seventh entry's domain rule earned its keep again, and what it found is not this map's: of the
+// citations into the eleven files this commit modified, **six live ones were already adrift before
+// this slice touched them** — `sections.go:570` by 75 lines, `:914-926` by 59 in two places,
+// `:921`/`:987` by 354 and 396, and two copies of `module.go:560` naming a line in a file
+// `binary.Module.Elems` has never lived in (it is `binary.go:416`). All six are
+// [#456](https://github.com/scttfrdmn/burroughs/issues/456)'s population measured on a second target
+// file, and all six pass that issue's cheaper option — a sweep checking the file has at least N
+// lines. Measured here, reported there, nothing new filed.
+//
+// The fragility is the reason the scheme stays — and **that reason was overstated, by Scott's ruling
+// on the #478 review.** The requirement is not two-sided. The key is
+// `<file>:<line> <position> <word> <gate>` and none of the four fields is the prose, so no
+// rewrite-fragility is being conserved: *"Restate the requirement: rewrite-fragility is a **new**
+// property to argue for on its merits, not a floor"*
+// ([#447 comment](https://github.com/scttfrdmn/burroughs/issues/447#issuecomment-5376902318)).
+// Insertion-immunity is the mandatory half and is nearly free: the stable anchor already exists
+// twenty lines away in the walk this file shares with `TestEverySkipSiteIsLicensed` —
+// `foreclosingSite` carries `para`, and the position classifier already resolves the enclosing
+// `const`. What rewrite-fragility has behind it is re-key 2's yield, three reasons eleven PRs wrong
+// under a green board; that argument stands on its own and does not need the false premise that the
+// current key supplies the property by accident. **"Same idiom as X" inherits the properties you can
+// see** — the allow-map with per-entry justifications is right there in a literal, the stable key
+// lives three functions away where copying the pattern never looked, and this paragraph's own first
+// draft inherited a constraint from #447's body without asking whether the key had the property the
+// constraint was protecting.
 var foreclosingLicensed = map[string]string{
 	// The historical-account class. `spec_test.go`'s bound comments are a changelog of past
 	// measurements, so a foreclosing word inside a dated PR narrative is a claim about the board as
 	// it stood then, not a statement that there is no work now. The tense is the mechanism.
-	"internal/spec/spec_test.go:7170 bound account unreachable SIMD": "past-tense account of #328's " +
+	"internal/spec/spec_test.go:7171 bound account unreachable SIMD": "past-tense account of #328's " +
 		"session; `unreachable` describes ErrNotValidated's call sites after #9 lands, a conditional " +
 		"about a tracked issue rather than a claim resting on the SIMD gate",
-	"internal/spec/spec_test.go:9120 bound account never SIMD": "past-tense account of #196's board; " +
+	"internal/spec/spec_test.go:9143 bound account never SIMD": "past-tense account of #196's board; " +
 		"`never` is what the default lane and the harness did at that measurement (\"never asked\", " +
 		"\"a setup `invoke` never wrote\"), and the paragraph exists to record a delta rather than to " +
 		"forecast one",
-	"internal/spec/spec_test.go:9120 bound account never RelaxedSIMD": "as above — the paragraph names " +
+	"internal/spec/spec_test.go:9143 bound account never RelaxedSIMD": "as above — the paragraph names " +
 		"both gates while describing one past board",
-	"internal/spec/spec_test.go:11673 bound account structural SIMD": "the control sense of the word: " +
+	"internal/spec/spec_test.go:11704 bound account structural SIMD": "the control sense of the word: " +
 		"\"verified against the structural control, the all-on lane reports 0\", this codebase's term " +
 		"of art for a derived-domain control as opposed to a per-vector allowlist. The homonym, and the " +
 		"reason a token sweep over unscoped prose would be noise",
-	"internal/spec/spec_test.go:11673 bound account structural RelaxedSIMD": "as above",
+	"internal/spec/spec_test.go:11704 bound account structural RelaxedSIMD": "as above",
 
 	// The retained-testimony paragraphs of the `validateFailCeiling` account. The word stays on the
 	// page — a corrected transcript is a worse record than an annotated one — so the sweep finds it
@@ -454,7 +498,7 @@ var foreclosingLicensed = map[string]string{
 	//
 	// True of the account, false of the paragraph — and the paragraph is the sweep's unit and this
 	// map's own stated standard. So each entry now names where its refutation actually lives, which
-	// is `spec_test.go:11052`, under a heading in this same bound account: *"the word `structural` in
+	// is `spec_test.go:11083`, under a heading in this same bound account: *"the word `structural` in
 	// the paragraph above is grave #427"*. That the ground is not legible in the licensed paragraph
 	// alone is said rather than papered over.
 	//
@@ -469,23 +513,23 @@ var foreclosingLicensed = map[string]string{
 	// about an issue's state, and `gh issue view 432` — one call, the ruling's own remedy — said
 	// closed. Recorded because a stale-premise repair drawing less scrutiny than the original is
 	// #432's corollary 1, and this paragraph is a stale-premise repair.
-	"internal/spec/spec_test.go:10992 bound account structural SIMD": "retained falsified testimony: " +
+	"internal/spec/spec_test.go:11023 bound account structural SIMD": "retained falsified testimony: " +
 		"this paragraph asserts the eight relaxed-SIMD operators are a *structural* residue \"whose " +
 		"gate is its own event\", which is the claim #427 refuted. Its annotation is not in this " +
-		"paragraph — it is at spec_test.go:11052 in this same account",
-	"internal/spec/spec_test.go:10992 bound account structural RelaxedSIMD": "as above",
-	"internal/spec/spec_test.go:11023 bound account structural SIMD": "retained falsified testimony, " +
-		"the `validateDeclineCeiling`-is-unmoved-at-8 paragraph, resting on the same refuted premise " +
-		"and annotated at the same place (spec_test.go:11052)",
+		"paragraph — it is at spec_test.go:11083 in this same account",
 	"internal/spec/spec_test.go:11023 bound account structural RelaxedSIMD": "as above",
-	"internal/spec/spec_test.go:11041 bound account structural SIMD": "retained falsified testimony, " +
+	"internal/spec/spec_test.go:11054 bound account structural SIMD": "retained falsified testimony, " +
+		"the `validateDeclineCeiling`-is-unmoved-at-8 paragraph, resting on the same refuted premise " +
+		"and annotated at the same place (spec_test.go:11083)",
+	"internal/spec/spec_test.go:11054 bound account structural RelaxedSIMD": "as above",
+	"internal/spec/spec_test.go:11072 bound account structural SIMD": "retained falsified testimony, " +
 		"the paragraph on the two bounds becoming the same number: \"one counts a structural residue\". " +
-		"Annotated at spec_test.go:11052",
-	"internal/spec/spec_test.go:11041 bound account structural RelaxedSIMD": "as above",
-	"internal/spec/spec_test.go:11054 bound account structural SIMD": "grave #427's annotation itself, " +
+		"Annotated at spec_test.go:11083",
+	"internal/spec/spec_test.go:11072 bound account structural RelaxedSIMD": "as above",
+	"internal/spec/spec_test.go:11085 bound account structural SIMD": "grave #427's annotation itself, " +
 		"and the only one of these four whose ground *is* legible in the licensed paragraph: it reads " +
 		"\"Nothing about them was structural\" and gives the gate's flip commit",
-	"internal/spec/spec_test.go:11054 bound account structural RelaxedSIMD": "as above",
+	"internal/spec/spec_test.go:11085 bound account structural RelaxedSIMD": "as above",
 
 	// Grave #427's record at the fix site. This is the paragraph the falsification probe restored to
 	// confirm the sweep can see the original defect, so it is licensed at the *repaired* version and

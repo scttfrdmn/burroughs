@@ -2,10 +2,10 @@ package interp
 
 import (
 	"fmt"
-	"slices"
 	"strings"
 
 	"github.com/scttfrdmn/burroughs/internal/binary"
+	"github.com/scttfrdmn/burroughs/internal/validate"
 )
 
 // The six call opcodes, named for control.go's reason: a bare 0x10 in a switch arm is a byte and
@@ -435,9 +435,9 @@ func funcRefTarget(r ref, site string) (*Instance, *binary.Func, error) {
 	// `call` names a function statically and the validator has agreed its signature;
 	// `call_indirect` names a *type index* and must compare it against the callee's actual type at
 	// run time. So the import is turned into a `(instance, defined function)` pair and then falls
-	// into the same comparison the defined case uses — one trap message, one `sameFuncType` call,
-	// because two copies of a check the suite reads by substring are two places to spell it
-	// differently. `call_ref` performs no such comparison at all; see its arm for the reference's
+	// into the same comparison the defined case uses — one trap message, one
+	// `validate.MatchDefType` call, because two copies of a check the suite reads by substring are
+	// two places to spell it differently. `call_ref` performs no such comparison at all; see its arm for the reference's
 	// reason (`CallRef _x` — the type immediate is unused).
 	//
 	// **`target.importedFunc`, not the caller's** — the import slot being resolved is the *naming*
@@ -580,14 +580,34 @@ func (in *Instance) resolveCallIndirect(ins binary.Instr, st *stack) (*Instance,
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	// **`sameFuncType`'s own module and type index, not just its bare functype, as of 0019's
-	// own named gap** — the declared-supertype walk climbs `target.mod.Types` starting from
-	// the callee's own declared type (`fn.TypeIndex`), so it needs the *module* that index is
-	// relative to, not only the functype `funcType` already resolved out of it. Argument order
-	// matches the reference's own call (`Match.match_deftype [] (Func.type_of f) (type_
-	// c.frame.inst y)`, eval.ml:274): the callee's actual type first, the call site's declared
-	// type second — load-bearing, since only the first argument's supertype chain is walked.
-	if !sameFuncType(target.mod, fn.TypeIndex, in.mod, uint32(typeIdx)) {
+	// **`validate.MatchDefType` is `match_deftype`, and it is the only one in the tree as of
+	// 0042** — this line called `sameFuncType`, a second implementation of the same judgement
+	// that diverged from the reference in both directions at once (three over-strict rows in
+	// `type-equivalence.wast`, two under-strict in `type-rec.wast`). It is deleted rather than
+	// canonicalized, per 0019's stamp: one comparator with two callers, execution and
+	// validation, so a runtime verdict and a validation verdict cannot disagree.
+	//
+	// **Modules and type indices, not bare functypes, and that requirement is unchanged.** The
+	// declared-supertype walk climbs `target.mod.Types` from the callee's own declared type
+	// (`fn.TypeIndex`), and the equality disjunct reads `RecStart`/`RecLen` off both sides, so
+	// both halves need the *module* an index is relative to rather than the functype
+	// `funcType` already resolved out of it. Argument order matches the reference's own call
+	// (`Match.match_deftype [] (Func.type_of f) (type_ c.frame.inst y)`, eval.ml:274) and
+	// `MatchDefType`'s own documented order: the callee's actual type first, the call site's
+	// declared type second — load-bearing, since only the first argument's supertype chain is
+	// walked.
+	//
+	// **Two rulings from the deleted reduction's graves, kept here because the surviving
+	// relation's comments do not carry the reductions they ruled out.** Grave #261: the
+	// equality disjunct is *equality, not subtyping*, and its recursion must stay inside
+	// equality — recursing back through the subtyping relation made two structurally identical
+	// structs with different-but-related declared supertypes compare equal, two false
+	// positives on `br_on_cast.wast`. Grave 0003's direction: an index naming nothing is
+	// `false` rather than a panic, because every call site here has already resolved both
+	// sides. Both properties hold of `validate`'s relation (`match.go:305`'s disjunct split,
+	// `match.go:373-378`'s resolution arm); they are restated rather than re-derived, so the
+	// graves are not re-dug by a future reader who finds no record of them.
+	if !validate.MatchDefType(target.mod, fn.TypeIndex, in.mod, uint32(typeIdx)) {
 		// **The trap names both types because the reference's does** — `eval.ml:278-280` is
 		// `"indirect call type mismatch, expected " ^ string_of_deftype … ^ " but got " ^ …` —
 		// and *not* because a vector asks for it: the harness matches by substring and every
@@ -623,8 +643,9 @@ func (in *Instance) resolveCallIndirect(ins binary.Instr, st *stack) (*Instance,
 // and all. Unlike `call_indirect`, whose table slot's type is unknown until run time, `call_ref`'s
 // operand is *statically* typed `(ref null $x)`, so the validator has already established the match
 // and there is nothing left to compare. So this arm reads no type at all — and the fabricated-check
-// alternative would be worse than useless: it would spend a `sameFuncType` walk to answer a question
-// #9 owns, and get its trap text from nowhere, the reference having no such trap to quote.
+// alternative would be worse than useless: it would spend a `validate.MatchDefType` walk to answer
+// a question #9 owns, and get its trap text from nowhere, the reference having no such trap to
+// quote.
 //
 // **Measured, because the first version of this paragraph claimed something false.** I wrote that no
 // vector in the two files asserts any mismatch text; there are 19 such strings. What is actually
@@ -700,235 +721,6 @@ func (in *Instance) declaredFuncType(idx uint64) (*binary.FuncType, error) {
 	return &ct.Func, nil
 }
 
-// sameFuncType is `match_deftype` (match.ml:151-155), MVP-reduced over function types alone —
-// 0019's own named widening of what used to be pure structural equality.
-//
-// **The reference's three-way disjunct, verified line-for-line against match.ml:151-155:**
-//
-//	dt1 == dt2 ||                                                (* optimisation *)
-//	let s = subst_of c in subst_deftype s dt1 = subst_deftype s dt2 ||
-//	let SubT (_fin, uts1, _st) = unroll_deftype dt1 in
-//	List.exists (fun ut1 -> match_heaptype c (UseHT ut1) (UseHT (Def dt2))) uts1
-//
-// Read right to left against what this engine can compute:
-//
-//   - **Disjunct 1** (`dt1 == dt2`, pointer identity) has no analogue here — this codebase has no
-//     interned deftype identity, and it is an optimisation only, never load-bearing for a verdict
-//     `subst_deftype` disagrees with. Dropped rather than approximated.
-//   - **Disjunct 2** (`subst_deftype s dt1 = subst_deftype s dt2`) is *not* pure structural
-//     equality on the comptype alone, and this is the widening's whole content: `subst_deftype`
-//     canonicalizes a rec-group-relative index (`Rec i`) before comparing, so two types in
-//     *different* rec groups whose supertype chains are shaped identically (same relative
-//     position, same finality, same comptypes at every level) compare equal even though their
-//     absolute type indices differ — `type-subtyping.wast`'s M3 pattern (`$f1`/`$g1` in one
-//     script, `$f2`/`$g2` in another, each its own `rec` group, importing across them must
-//     link). A comparison keyed on *this module's absolute indices* — which is what `Final` plus
-//     `Supertypes`-as-plain-indices retains — cannot see that two absolute chains are the *same
-//     relative shape*, only whether they are the *same chain object*. So what this function
-//     actually computes for disjunct 2 is `Final` agreement plus **recursive** same-module-object
-//     comparison of `Supertypes` chains: sound whenever the two sides are being asked about types
-//     declared in the same rec-group shape reachable by walking supertypes with matching finality
-//     and matching comptypes, and it is *silent* — reports unequal rather than a wrong equal —
-//     when the two absolute chains diverge only in cross-module rec-group relabelling. Measured
-//     against the corpus rather than assumed: `type-subtyping.wast`'s M10/M11 pair
-//     (:746-758, :760-772) is exactly that divergence — `$f11`/`$f12` (M10) and `$f01`/`$f02` in
-//     the presence of an *unrelated* sibling `$f11`/`$f12` naming the same shape (M11) — and
-//     `TestSameFuncTypeCorpusScope` pins the finding that this reduction correctly does **not**
-//     resolve that pair, rather than silently mis-resolving it.
-//   - **Disjunct 3** (the declared-supertype walk, `List.exists … uts1`) is exactly what this
-//     function widens into: `matchesDeclaredSupertype` below, walking `a`'s own `Supertypes`
-//     chain and asking whether any entry names `b`'s type by disjunct-2 agreement.
-//
-// **`subst_deftype`'s full rec-group canonicalization (disjunct 2's general case) is out of
-// scope, measured rather than assumed**: the decoder retains no rec-group boundary at all (no
-// `RecGroup`/group-relative index anywhere in `binary.Module`), so implementing the general case
-// would need a new retained fact this ADR's own scope (`sameFuncType`'s widening alone) does not
-// license adding. What this function computes without it is disjunct 2 restricted to *identical
-// absolute-index chains* (which subsumes plain structural equality when both sides declare no
-// supertypes at all — the pre-existing MVP case, unchanged) plus disjunct 3 in full. Two of
-// #164's four vectors (`type-subtyping.wast:602,610`, the `Final`-differing M2 pair) resolve
-// under that scope; the other two (:752,:767, M10/M11) do not, and stay in the same bucket for
-// the reason stated above — a genuine, cited, and tested scope boundary rather than a silent gap.
-//
-// # The scope boundary lost its corpus witness, and that is a re-pointing, not a repair (#368)
-//
-// `:752` and `:767` pass now, and **nothing in this function changed**. Grave #368 moved the
-// *linker* off this reduction and onto `internal/validate`'s rolled relation, which does retain the
-// rec-group boundary the paragraph above says the decoder does not — `binary.CompType.RecStart`/
-// `RecLen`, retained for #9 and never wired back to here. So those two verdicts now come from a
-// different comparator, and the boundary described above is unchanged, unrepaired, and
-// **unwitnessed**: its remaining consumers are `call_indirect`, `call_ref` and `ref.cast`, and no
-// corpus vector reaches the M10/M11 shape through any of them.
-//
-// A tripwire whose subject dissolves is re-pointed rather than closed, and this one's subject did
-// not dissolve — only its witness did. `TestSameFuncTypeCorpusScope` therefore keeps asserting the
-// false positive directly, with its board-row coupling struck. **Whether this reduction should be
-// replaced by `internal/validate`'s relation at the remaining call sites is a design question
-// flagged for Scott, not answered here**: it is a second comparator for the same judgement, which
-// 0019 declined in principle, and unifying it is a wider change than the grave that exposed it.
-//
-// **Still named for functypes after `matchDeftype` generalized past them (0027), and deliberately
-// so.** Every call site here has *already* resolved both sides through `funcType`/`declaredFuncType`
-// and would have reported #9's layering debt before arriving, so the name records what the callers
-// know rather than what the relation can do. The generalization changed no verdict any of them can
-// reach: a non-functype index on either side is unreachable from all four.
-func sameFuncType(modA *binary.Module, idxA uint32, modB *binary.Module, idxB uint32) bool {
-	return matchDeftype(modA, idxA, modB, idxB, nil)
-}
-
-// matchDeftype is match_deftype's disjuncts 2 and 3, over function types, with a visited set
-// guarding the walk disjunct 3 performs — needed because #9 (the validator) does not exist yet,
-// so nothing has checked `check_subtype_sub`'s forward-reference and finality rules
-// (valid.ml:169-174) that would otherwise make a cyclic or self-referential declared-supertype
-// chain invalid before this ever runs. A module the decoder accepts but the validator would not
-// is exactly `binary.CompType`'s own documented layering debt (`declaredFuncType`'s two #9
-// failures, above) — this is the same debt reached from a different direction, and the guard
-// keeps a malformed cycle from looping this function forever rather than reporting a mismatch.
-//
-// # It is over all three comptype kinds, not just functypes (0027)
-//
-// `ref.cast (ref $t)` asks this same relation about a *struct* or *array* type, so the two
-// resolution steps go through `compTypeAt` and the innermost comparison through `compTypeEqual`,
-// which dispatches on `Kind` and requires the two kinds to agree. Nothing else about the three
-// disjuncts changes, and that is a finding rather than a convenience: **`match_deftype` never calls
-// `match_comptype`** (match.ml:151-155 — `subst_deftype` equality, then the supertype walk), so
-// struct width and depth subtyping reaches a cast *only* through a declared supertype chain, which
-// disjunct 3 already walks. An implementation that reached for a structural width check here would
-// be inventing a relation the reference does not have, and would accept `(struct i32 i32) <:
-// (struct i32)` between two types that never declared each other.
-func matchDeftype(modA *binary.Module, idxA uint32, modB *binary.Module, idxB uint32, visited map[[2]uint32]bool) bool {
-	ctA, okA := compTypeAt(modA, idxA)
-	// B is resolved for the check and not otherwise read here — disjunct 2 resolves it again inside
-	// `sameDeftype`, and disjunct 3 only walks A's supertypes. Kept rather than dropped because the
-	// early return is the *documented* answer for an unresolvable index; letting it reach disjunct 3
-	// and come back false by exhausting the walk would give the same verdict for a reason nothing
-	// states.
-	_, okB := compTypeAt(modB, idxB)
-	if !okA || !okB {
-		// #9's layering debt: an index naming nothing at all. Not this function's verdict to
-		// invent — every functype call site already resolved both sides through
-		// `funcType`/`declaredFuncType`, whose own errors report this, and the cast arms resolve
-		// through `castTypeAt`. False rather than a panic, per grave 0003: a property of a sibling
-		// function, and a future call site could falsify it silently.
-		return false
-	}
-
-	// Disjunct 2, and it is **equality, not subtyping** — grave #261. The reference reads
-	// `let s = subst_of c in subst_deftype s dt1 = subst_deftype s dt2` (match.ml:152), an
-	// OCaml `=` over the whole substituted `SubT`: finality, the declared supertype list, and
-	// the comptype, all compared for agreement. So it is `sameDeftype`, whose recursion stays
-	// inside equality and never re-enters this function.
-	//
-	// It recursed through `matchDeftype` until #261, which is the subtyping relation and
-	// therefore true for strictly more pairs than agreement. The cost was two false positives on
-	// `br_on_cast.wast`'s concrete-types module: `$t2 -> $t3` and `$t4 -> $t3`, structurally
-	// identical structs whose *different* declared supertypes happen to stand in a subtype
-	// relation (`$t1 <: $t0`, `$t0' <: $t0`), so "same shape so far" was decided by a relation
-	// that walks upward. The comment here described the property correctly — *agree* pairwise,
-	// *the same* rec-group-relative shape — while the code below it asked a different question,
-	// which is why review kept finding concurrence.
-	if sameDeftype(modA, idxA, modB, idxB, nil) {
-		return true
-	}
-
-	// Disjunct 3's cycle guard, which **used to live inside disjunct 2 and was reachable only
-	// through it** — the pairwise supertype loop was the one place `visited` was ever written, so
-	// collapsing disjunct 2 into `sameDeftype` would have left this walk with a map nothing
-	// populates and no termination argument at all. Guarding here instead is where it belonged:
-	// the walk that can revisit a pair is this one.
-	//
-	// `false` rather than `true` on a repeat, and the direction matters. Disjunct 2's guard
-	// reports agreeing-so-far because it stands in for the reference's `dt1 == dt2`
-	// pointer-identity short-circuit on a question this engine cannot answer by object identity.
-	// This guard is answering a *search*: "have A's supertypes any path to B" is already being
-	// asked further up the stack, so re-answering it yes would let a cyclic chain manufacture a
-	// subtype relation out of its own cycle. A search that has come back to where it started has
-	// found nothing on this path.
-	key := [2]uint32{idxA, idxB}
-	if visited[key] {
-		return false
-	}
-	if visited == nil {
-		visited = map[[2]uint32]bool{}
-	}
-	visited[key] = true
-
-	// Disjunct 3: does any of A's own declared supertypes match B by this same relation?
-	// `match_heaptype`'s `UseHT (Def dt), UseHT (Def dt2) -> match_deftype c dt dt2` reduces to
-	// exactly this recursive call, for all three comptype kinds as of 0027 — the parenthetical
-	// here used to read "the only heaptype form this MVP reduction handles — struct/array
-	// subtyping is 0020's territory, untouched here", which the generalization above falsified in
-	// the same PR that wrote it. `castop.go`'s `matchHeapType` is the arm that now reaches here
-	// with a struct or an array on both sides, and it is the *whole* mechanism by which struct
-	// subtyping reaches a cast, since `match_deftype` never consults `match_comptype`.
-	for _, sup := range ctA.Supertypes {
-		if matchDeftype(modA, sup, modB, idxB, visited) {
-			return true
-		}
-	}
-	return false
-}
-
-// sameDeftype is `match_deftype`'s disjunct 2 alone: `subst_deftype s dt1 = subst_deftype s dt2`
-// (match.ml:152), the OCaml `=` over two substituted `SubT` values. That structure is
-// `SubT (fin, uts, st)`, so agreement is finality **and** the declared supertype list **and** the
-// comptype — three conjuncts, and this function is those three conjuncts.
-//
-// # Why it is a separate function from matchDeftype (grave #261)
-//
-// Equality is not subtyping, and the recursion has to stay inside equality or the relation loosens
-// transitively. Two struct types with identical fields and *different* declared supertypes are
-// unequal deftypes even when one supertype is a subtype of the other — which is exactly the pair
-// #261 was filed on, and exactly what a recursion back through `matchDeftype` cannot express. The
-// widening is silent because it only fires when both sides have non-empty supertype lists, a shape
-// no functype in the MVP corpus has: the loop was unreachable until 0027 generalized the relation
-// to struct and array types.
-//
-// # Substitution
-//
-// `subst_of c` is the rec-group substitution this engine does not have — see `matchDeftype`'s scope
-// note and #9. Comparing resolved indices pairwise is the same relation for every module the
-// decoder currently accepts, because a supertype index here is already absolute; what it cannot yet
-// see is two rec-groups whose members are equal only *after* substitution, which needs the
-// rec-group boundary the decoder retains nothing of (`call_test.go`'s note on that gap).
-//
-// # The cycle guard is its own, deliberately not matchDeftype's
-//
-// A `visited` entry means "this pair is already being decided by this relation", and the two
-// relations give it opposite answers on a repeat: equality reports **true**, standing in for the
-// reference's `dt1 == dt2` pointer-identity short-circuit, while the upward search reports
-// **false**, a path that returned to its start having found nothing. Sharing one map would let an
-// in-progress equality question answer a subtyping question with equality's optimistic default, so
-// the map is a parameter of each relation rather than of the pair of them.
-func sameDeftype(modA *binary.Module, idxA uint32, modB *binary.Module, idxB uint32, seen map[[2]uint32]bool) bool {
-	ctA, okA := compTypeAt(modA, idxA)
-	ctB, okB := compTypeAt(modB, idxB)
-	if !okA || !okB {
-		return false // #9's layering debt, reported the same way matchDeftype reports it
-	}
-	if ctA.Final != ctB.Final || !compTypeEqual(ctA, ctB) {
-		return false
-	}
-	if len(ctA.Supertypes) != len(ctB.Supertypes) {
-		return false
-	}
-	// Both empty is the original MVP case and is trivially equal — the loop below does not run.
-	key := [2]uint32{idxA, idxB}
-	if seen[key] {
-		return true // see the doc comment for why this direction is true and disjunct 3's is false
-	}
-	if seen == nil {
-		seen = map[[2]uint32]bool{}
-	}
-	seen[key] = true
-	for i := range ctA.Supertypes {
-		if !sameDeftype(modA, ctA.Supertypes[i], modB, ctB.Supertypes[i], seen) {
-			return false
-		}
-	}
-	return true
-}
-
 // compTypeAt resolves a type index to its CompType, reporting false when the index is out of range
 // — the condition `declaredFuncType`/`funcType` already check at their own call sites, restated
 // here because this function's callers are internal to the walk and have no Instance to report
@@ -938,62 +730,14 @@ func sameDeftype(modA *binary.Module, idxA uint32, modB *binary.Module, idxB uin
 // for a struct or array index, which was right while the only relation was over functypes and is
 // wrong now that `ref.cast` asks about the other two: a filter here would make every struct cast
 // answer *no* for a reason that reads as an out-of-range index. The kinds are compared where they
-// are actually a comparison — `compTypeEqual` — so a functype and a structtype are unequal rather
-// than unresolvable, and #9's layering debt keeps exactly one meaning at this seam.
+// are actually a comparison — `validate.sameCompType`'s first line (`match.go:467`), which as of
+// 0042 is where the deleted `compTypeEqual` used to do it — so a functype and a structtype are
+// unequal rather than unresolvable, and #9's layering debt keeps exactly one meaning at this seam.
 func compTypeAt(mod *binary.Module, idx uint32) (*binary.CompType, bool) {
 	if int(idx) >= len(mod.Types) {
 		return nil, false
 	}
 	return &mod.Types[idx], true
-}
-
-// compTypeEqual is structural equality over comptypes, dispatching on kind — the innermost
-// comparison of `matchDeftype`'s disjunct 2, generalized from `structFuncTypeEqual` (0027).
-//
-// Differing kinds are unequal, which is the arm that does the work a kind filter used to do at
-// resolution time. Struct and array fields compare with `==` through `slices.Equal`, which is exact:
-// `FieldType` is storage plus one mutability bit and `StorageType` is a `ValType` plus a packed
-// width, so every field of every field is compared — the mutability bit included, which
-// `match_fieldtype` requires (an immutable field is not the same fieldtype as a mutable one) and
-// which a comparison written over storage alone would silently drop.
-func compTypeEqual(a, b *binary.CompType) bool {
-	if a.Kind != b.Kind {
-		return false
-	}
-	if a.Kind == binary.CompFunc {
-		return structFuncTypeEqual(&a.Func, &b.Func)
-	}
-	// Struct and array: the field list, which for an array is exactly one entry by arraytype's own
-	// arity (CompType.Fields' comment). One comparison serves both because the *shape* difference
-	// between them is already carried by Kind.
-	return slices.Equal(a.Fields, b.Fields)
-}
-
-// structFuncTypeEqual is pure structural equality over functypes — the pre-0019 MVP reduction,
-// kept as the innermost comparison `sameFuncType`'s widening is built on rather than being
-// replaced by it.
-//
-// Written out rather than `slices.Equal` twice for a reason that is about the *comparison* rather
-// than the code: `binary.ValType`'s `==` compares its three fields (kind, null, idx), so two
-// reference types differing only in a heap-type index correctly compare unequal as of 0018's
-// widening. Before it, `ValType` was a byte with nowhere to put an index, so this comparison
-// could only ever see the sentinel and every GC reference type collapsed to one indistinguishable
-// value.
-func structFuncTypeEqual(a, b *binary.FuncType) bool {
-	if len(a.Params) != len(b.Params) || len(a.Results) != len(b.Results) {
-		return false
-	}
-	for i := range a.Params {
-		if a.Params[i] != b.Params[i] {
-			return false
-		}
-	}
-	for i := range a.Results {
-		if a.Results[i] != b.Results[i] {
-			return false
-		}
-	}
-	return true
 }
 
 // funcTypeString renders a functype for the mismatch trap, in the reference's own spelling:

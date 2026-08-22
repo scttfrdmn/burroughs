@@ -1912,6 +1912,48 @@ weakly-ordered platform.
 
 ### Changed
 
+- **`internal/interp`'s second subtype comparator is deleted and both call sites route onto
+  `internal/validate.MatchDefType` — all-on `fail` 17 → 7, against a pre-registered 17 → 12**
+  ([#475](https://github.com/scttfrdmn/burroughs/issues/475),
+  [ADR 0042](docs/decisions/0042-the-interpreters-second-comparator-is-deleted-rather-than-tuned-and-the-criterion-is-five-rows-in-both-directions.md)'s
+  implementation). `sameFuncType`, `matchDeftype`, `sameDeftype`, `compTypeEqual` and
+  `structFuncTypeEqual` are gone; `call_indirect` (`call.go`) and the cast family's arm 9 call the
+  ported relation. Board: **65102 pass (+10)**, **7 fail (−10)**, 0 gated; default lane unmoved.
+  `unsupported` delta **0, structural** — every affected row is a `gate:gc` row and no capability
+  declaration changes, so what the harness *can ask* is unchanged; the reward figure is the all-on
+  `fail` delta.
+  **Ten rows, not the forecast five, and the extra five are the site Scott ordered pre-registered.**
+  Attribution measured by routing one call site at a time rather than inferred from the total:
+  `call_indirect` alone clears `type-equivalence.wast:131,156,188` + `type-rec.wast:183,192` (the
+  forecast's five); arm 9 alone clears `type-subtyping.wast:442,488,510,523,534`. **Which falsifies the
+  ADR's own fourth Consequence** — *"arm 9 has none"*, no corpus row witnessing the cast family's
+  verdict change. That claim was built by attributing the seventeen fails' known members to
+  `call_indirect` and reading the complement as empty, and **an attributed partition is not a
+  partition**: attribution names where someone looked. It under-promised here, which is the benign
+  direction; the same reasoning inverted is a silent behaviour change under a bound that says nothing.
+  The ten are checkable against a prior, independent ledger: #357/#358's entry below enumerated all
+  seventeen survivors by row, and the ten that cleared are exactly its five `indirect call type
+  mismatch` rows plus its five `type-subtyping.wast` rows.
+  **The residue is 7 and none of it is this change's**, named rather than absorbed: `array.wast` 2
+  (`constant expression required`) and the five local-initialization rows (`func.wast:659`,
+  `local_init.wast:25,29,39,52`), which are [#452](https://github.com/scttfrdmn/burroughs/issues/452),
+  `decision-needed:scott`, deliberately not taken. Neither group touches the subtype relation.
+  **The ADR's two-test list was incomplete, and the finding is how it was built.** Seven test functions
+  moved with the deletion — four in `call_test.go`, two in `castop_test.go`, one in `link_test.go` —
+  derived from `git diff -U0`'s hunk headers. The two the ADR named are exactly the two whose *names*
+  begin `TestSameFuncType`; widening to the identifier would have found five of seven and still missed
+  `castop_test.go`'s two, which reach the relation through arm 9 and never spell it. **A deletion's
+  control domain is its call graph**, not the mentions of the callee.
+  **The birth requirement is discharged against `MatchDefType`'s disagreement directly**, at Scott's
+  order, and the mutation that *failed* to fire is kept as a measurement: neutering
+  `internal/validate`'s ordinal-and-group-length condition leaves `internal/interp` green, because both
+  fixture groups are length 2 with both ordinals 0 and that condition never decides them. The
+  discriminator is the cross-group refusal (corpus 7 → 18 under it).
+  **ADR 0042's `Status:` stays `proposed` with its implementation landed** — the stamp on the option
+  exists as a spoken review order and nothing durable holds it, and a self-authored relay of an
+  approval is the forged-provenance failure that field exists to prevent. Declared inconsistent rather
+  than quietly resolved; the flip is an ask.
+
 - **[Decision 0042](docs/decisions/0042-the-interpreters-second-comparator-is-deleted-rather-than-tuned-and-the-criterion-is-five-rows-in-both-directions.md)
   proposes deleting `internal/interp`'s second subtype comparator rather than tuning it, and the
   criterion is five all-on rows in both directions** ([#475](https://github.com/scttfrdmn/burroughs/issues/475);
@@ -1939,7 +1981,7 @@ weakly-ordered platform.
   **Reading the code to write the criterion falsified five of its own claims**, recorded in the ADR
   because each will read as current after the change: the rec-group-boundary denial at `call.go:742-743`
   (already corrected fifteen lines below it), the *"no corpus vector reaches the M10/M11 shape"*
-  sentence at `:760-761`, `spec_test.go:10593`'s description of `Instance.link` as a `sameFuncType`
+  sentence at `:760-761`, `spec_test.go:10616`'s description of `Instance.link` as a `sameFuncType`
   caller (grave #368 moved it), `call.go:739`'s pointer to **`matchesDeclaredSupertype`** — a function
   that exists nowhere in the tree, folded into the walk by grave #261's refactor — and `:760`'s naming
   of `call_ref` as a consumer, which `resolveCallRef` refutes by comparing nothing at all. The fourth is
@@ -3065,6 +3107,40 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **A historical-citation exemption was defeated by a line wrap — the trigger side's own `wrapJoin`
+  problem, on the exemption side, where nothing looked for it**
+  ([grave #480](https://github.com/scttfrdmn/burroughs/issues/480)).
+  `TestEveryCitedTestNameResolves` excuses a citation whose sentence marks it as historical, matching
+  `pastReference`'s two- and three-word phrases against text that still carries the comment's newlines.
+  So `"which no\n// longer exists"` never matched, and a citation phrased exactly as the control's own
+  failure message prescribes was reported as dangling. Found by writing one: `foreclose_test.go`'s
+  ninth re-key entry records a deleted test's name and was flagged until the wrap moved.
+  `exemptedBy` now collapses whitespace before matching, falsified by reverting it (exactly the one
+  site fires, and no other). **The direction is what makes it worth a grave**: a false positive in an
+  exemption teaches the writer to phrase around the instrument, and *an instrument that shapes the
+  prose it reads stops measuring it.* The same read corrected `pastReference`'s own doc comment, which
+  asserted "exactly five names today" where the instrument measures **17 names over 24 sites** —
+  re-measured with a `t.Logf` in the exemption branch rather than by grep, after confirming
+  `defined[c.name]` is tested first so every logged site is genuinely dangling.
+
+- **Six citation sites in the files ADR 0042's implementation touched were already adrift, by 59 to 396
+  lines, and two named a file the symbol has never lived in**
+  ([#456](https://github.com/scttfrdmn/burroughs/issues/456), measured onto the issue rather than
+  filed again). The domain came from `git diff --name-only` rather than from the file that prompted the
+  repair, which is why pre-existing drift surfaced at all: `gcobj.go`'s `sections.go:570` → `:645`,
+  `table_test.go`'s and `refnull_test.go`'s `sections.go:914-926` → `:973-987`, `module_test.go`'s
+  `:921 and :987` → `decodeImport` at `:1275` and `decodeExport` at `:1383`, and `encode_test.go`'s two
+  `module.go:560` pointers at a field declared in `binary.go:416` — `internal/binary/module.go` is 1587
+  lines, so that number resolves and lands on unrelated prose. All six are re-pointed **by the symbol
+  beside the number**, and the two file-level errors say in-line what they used to claim. **All six
+  pass #456's cheaper option** (file exists, has ≥ N lines), which is now measured on two independently
+  chosen target files. Two method notes came out of it: a repair must pair by *content*, since a
+  delta-based repair would have carried every one of the six forward still wrong; and **a citation
+  repair is itself an insertion** — repairing a dangling test name added two lines to
+  `internal/spec/spec_test.go` and re-keyed `foreclosingLicensed` a second time inside one working
+  tree, so all insertions land first, then **one** derivation, with the file declared final before the
+  pairing.
+
 - **Six `file:line` citations in ADRs 0031 and 0032 pointed at the wrong line, and all six named a
   line that exists** ([#473](https://github.com/scttfrdmn/burroughs/issues/473)). The sweep began as
   the narrow debt a ten-line insertion into `validate.go` creates and widened when the same query was
@@ -3250,7 +3326,7 @@ weakly-ordered platform.
   residue sense and the exact sentence grave #427 cost eight rows for; two more claimed to quote a
   falsified sentence while asserting it. The group heading — "the grave's own record of itself" — is
   true of the *account*, whose annotation is 60 lines below the first paragraph it covers, at
-  `spec_test.go:11052`, and false of three
+  `spec_test.go:11083`, and false of three
   of the four paragraphs it covers, and the **paragraph** is the sweep's unit and the map's own stated
   standard. Each entry now names what its paragraph is (retained falsified testimony), where the
   refutation lives, and that the ground is *not* legible in the licensed paragraph alone; the one entry

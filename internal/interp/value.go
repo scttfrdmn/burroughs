@@ -1150,9 +1150,22 @@ func fromRef(r ref, t binary.ValType) Value {
 // two zero values and call every pair of distinct non-null funcrefs equal.
 //
 // **Declared and tracked: this method has no caller anywhere in the module (#271).** Measured, not
-// assumed — 32 occurrences of the token `Equal` across the tree, of which the only three that are not
-// `slices.Equal`/`bytes.Equal`/`reflect.DeepEqual`/`structFuncTypeEqual`/`compTypeEqual` are this
-// declaration, this comment, and a prose cross-reference at `exec.go:1071`. The harness compares in
+// assumed — and re-measured as of 0042 against the *conclusion* rather than against a token count:
+// `grep -rn '\.Equal(' --include='*.go'` minus the standard-library families (`slices`, `bytes`,
+// `reflect`, `maps`) returns exactly one line in the whole tree, and it is **this sentence**. No call
+// site invokes this method. Its one cross-reference in prose is `exec.go:1090`.
+//
+// The first version of this paragraph counted tokens instead — "32 occurrences of the token `Equal`,
+// of which the only three that are not `slices.Equal`/`bytes.Equal`/`reflect.DeepEqual`/
+// `structFuncTypeEqual`/`compTypeEqual` are …" — and every part of it had rotted, by two mechanisms
+// with nothing to do with each other: two of the five exclusions were engine functions that 0042
+// deleted, and the count is now **82** because `internal/spec` and `internal/validate` grew
+// `Equal`-named identifiers of their own. *A census measures a moment; a call-site query measures the
+// claim* — and the census was the more impressive-looking of the two, which is how it survived.
+// **The decisive objection is that 13 of those 82 are in this file**, most of them in this paragraph:
+// a comment that counts a token it contains is measuring itself, so revising it moves the figure it
+// asserts. The call-site query has no such property, which is the whole reason to prefer it.
+// The harness compares in
 // `spec.Val.Matches` instead, across the `fromInterpValue` seam, so this is a second comparator for
 // the same fact with nothing on the other end of it.
 //

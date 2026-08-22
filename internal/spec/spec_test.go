@@ -7050,7 +7050,8 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	// (`catch_ref`/`catch_all_ref` immediately followed by `drop`, grave #206 — a pre-existing,
 	// EH-unrelated stack-array-confusion bug in `drop` itself, not a gap in that rung's own
 	// mechanism) and the two already-tracked rec-group scope-boundary vectors `sameFuncType`'s
-	// own doc comment names, reached here for the first time via tag-import linking.
+	// own doc comment named at the time, reached here for the first time via tag-import linking
+	// (that function is deleted as of 0042; the two vectors were already gone by grave #368).
 	//
 	// **Moved 37218 → 37233 in #206's own fix (decision 0023, +15).** `drop` now consults a
 	// lazily-tracked push sequence number (`stack.numSeq`/`refSeq`, value.go) instead of always
@@ -7984,7 +7985,16 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	// lockstep is the check on the diagnosis: a slice that also *broke* something would show a smaller
 	// fall than the rise, and one that moved rows between fail buckets rather than out of them would
 	// show a fall with no rise.
-	const allOnPassFloor = 65092
+	//
+	// **+10 to 65102 with 0042: `internal/interp`'s second subtype comparator is deleted and its two
+	// consumers moved onto `internal/validate`'s relation.** Same lockstep as the entry above —
+	// `allOnFailCeiling` falls by exactly 10 on the same run, so all ten are conversions and nothing
+	// moved between fail buckets. The ADR forecast 5 and the yield is 10; the *attribution* is a
+	// measurement rather than an inference, taken by applying the two call-site changes separately:
+	// the cast family's arm 9 alone takes 17 → 12 (`type-subtyping`'s 5 rows, which the ADR had
+	// asserted had no corpus witness at all), and `call_indirect` alone owns the other 5
+	// (`type-equivalence` 3, `type-rec` 2).
+	const allOnPassFloor = 65102
 	// **Slack 0 as of Scott's #387 ruling**, which this bound's own 89-row staleness above is what
 	// prompted: a floor with 250 of tolerance cannot detect anything smaller than 250, so it is a
 	// bound sitting inside its own tolerance. Exact from here — re-base it in the PR that moves the
@@ -8033,7 +8043,18 @@ func TestAllGatesOnLeavesNothingGated(t *testing.T) {
 	// `type-rec` 4, `struct` 2, `func` 1. `try_table` leaves the list entirely (3 → 0) and
 	// `local_init` halves (8 → 4); every other row is unchanged, which is the check that the fork
 	// touched only what it was measured to touch.
-	const allOnFailCeiling = 17
+	//
+	// **17 → 7 with 0042, and this is a drain rather than a re-base**: the rows leaving are vectors
+	// the engine was answering wrongly, because it was answering them with a second, weaker subtype
+	// relation than the one its own validator computes. Three files empty out completely —
+	// `type-equivalence` 3 → 0, `type-rec` 2 → 0, `type-subtyping` 5 → 0 — and the surviving 7 are
+	// `local_init` 4, `array` 2, `func` 1, every one of them an `assert_invalid` row that wants #9's
+	// validator and none of them touched by this change.
+	//
+	// The three emptied files are the reason this ceiling reads as the work plan: what is left in it
+	// after 0042 is a single subject. Every remaining row is the same missing instrument, so the next
+	// fall here is #9's or it is a regression.
+	const allOnFailCeiling = 7
 	boardBound(t, "allOnFailCeiling", totalFail, allOnFailCeiling, 0, ceilingBound,
 		"the all-gates-on lane is the interpreter's and validator's remaining work plan now that "+
 			"the default lane's exec column is empty: a rise here is a regression no gated-lane "+
@@ -8666,7 +8687,9 @@ func TestModuleInstanceFailurePathsAreWatched(t *testing.T) {
 // diagnosis.
 //
 // **2 lines were the already-tracked rec-group scope boundary** `sameFuncType`'s own doc comment
-// named (`TestSameFuncTypeCorpusScope`'s M10/M11 shape) — `tag.wast`'s cross-module tag-import
+// named (it was `TestSameFuncTypeCorpusScope`'s M10/M11 shape; 0042 deleted both the function and
+// that test, and the shape's live assertion is `TestCallIndirectComparisonRecGroupBoundary`) —
+// `tag.wast`'s cross-module tag-import
 // vectors reached the identical gap `sameTagType` inherited from `structFuncTypeEqual`. Not #206,
 // and they are **gone**: grave #368 routed the linker's tag arm through `match_tagtype` over rolled
 // deftypes, which is the relation those two vectors were always about, so `:48` and `:59` pass and
@@ -10592,7 +10615,10 @@ func TestPhase1Files(t *testing.T) {
 	// (`binary.Import`'s Table/Memory/GlobalType/GlobalMutable fields) instead of reading and
 	// dropping them, and `Instance.link` compares them — `sameFuncType` for a func import's own
 	// signature, `matchLimits` (the reference's `match_limits`, min/max in opposite directions) for
-	// table and memory, byte equality for a global's type and mutability.
+	// table and memory, byte equality for a global's type and mutability. **The func arm has moved
+	// twice since**: grave #368 routed the linker through `validate.MatchDefType` over rolled
+	// deftypes, and 0042 deleted `sameFuncType` outright. Kept in its own tense because this
+	// paragraph is #164's account, not a description of the tree.
 	//
 	// **The 124 has a full account, measured by joining the pre- and post-fix bucket dumps rather
 	// than read off either board alone** (a bare diff of totals cannot distinguish a conversion
@@ -10601,7 +10627,12 @@ func TestPhase1Files(t *testing.T) {
 	// rows, where a func import's declared type is a *nominal subtype* rather than a plain
 	// signature, and `sameFuncType`'s structural-equality reduction cannot see that (its own doc
 	// comment already declares the gap; GC's gate gates the construct that would exercise it more
-	// than this one file does). The remaining **82** were never reachable by this fix: **35** are
+	// than this one file does). **These four are gone and 0042 is not what closed them**, which is
+	// worth the distinction because the file's name invites the wrong attribution: at 0042's
+	// baseline `type-subtyping.wast`'s remaining 5 failures were all `assert_return value
+	// mismatch`, with no `assert_unlinkable` bucket left in the file at all — so the import-linking
+	// rows had already converted, by grave #368's move of the linker onto the rolled relation.
+	// 0042's own five are the cast-and-`call_indirect` direction. The remaining **82** were never reachable by this fix: **35** are
 	// blocked by an EH-gated register target (`imports.wast`'s `test` module exports a `(tag …)`,
 	// so it never decodes with the gate off and every import from it reads `unknown import` rather
 	// than `incompatible import type`), **14** by a GC-gated register target (`Mref_ex`/
