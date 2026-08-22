@@ -119,7 +119,7 @@ func TestDelimitersAreRetained(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var got []Instr
 			d := &Decoder{}
-			c := &instrCtx{d: d, nonConst: -1, out: &got}
+			c := &instrCtx{d: d, out: &got}
 			r := &reader{b: tc.in, eof: ErrPayloadEnd}
 			if err := c.block(r); err != nil {
 				t.Fatalf("block: %v (%s)", err, tc.why)
@@ -186,7 +186,7 @@ func TestDelimiterRetentionIsOnTheAcceptingPathOnly(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var got []Instr
-			c := &instrCtx{d: &Decoder{}, nonConst: -1, out: &got}
+			c := &instrCtx{d: &Decoder{}, out: &got}
 			r := &reader{b: tc.in, eof: ErrPayloadEnd}
 			if err := c.block(r); err != nil {
 				t.Fatalf("block: %v", err)

@@ -383,7 +383,8 @@ func TestElementExpressionsAreCheckedInEveryMode(t *testing.T) {
 // instruction's first immediate as a global index.
 //
 // The corpus cannot witness this because the decoder's own const-expression table refuses a
-// non-const opcode before a `Module` exists (`internal/binary/instr.go:588`), so no board vector can
+// non-const opcode before a `Module` exists (`internal/binary/instr.go:693`, `decodeConstExpr`), so no
+// board vector can
 // deliver the input. That refusal is a declared layering debt, though, and *a debt is not an
 // invariant*: it is one gate flip or one new const instruction away from not holding. This test
 // builds the module directly, which is the only level the question can be asked at.

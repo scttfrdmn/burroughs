@@ -89,7 +89,7 @@ import (
 //	unimplementedCeiling     0        at terminal   —       0, and 0004 fixes it there
 //	encodeFailCeiling        46       exact re-base  0      drains as the encoder learns forms
 //	execFailCeiling          81       exact re-base  0      drains as the interpreter lands rules
-//	allOnFailCeiling         38       exact re-base  0      the work plan, now that execFail is 0
+//	allOnFailCeiling         0        at terminal   —       drained by #471; was the work plan
 //	validateFailCeiling      492      exact re-base  0      the whole validator stratum
 //	validateDeclineCeiling   389      exact re-base  0      its declines, named per opcode
 //	validateAdmitCeiling     103      exact re-base  0      its admissions — the accept direction
@@ -177,6 +177,17 @@ import (
 // **At terminal**: a bound already at the value it is draining toward cannot go stale,
 // because the distance between "at most 0" and "0" is not a quantity that can grow. A slack
 // term there is a mechanism with no risk to catch, which is the very thing #87 is about.
+//
+// **`allOnFailCeiling` moved into that kind with #471, and it is worth a paragraph because of why the
+// row exists at all.** It was added (#414, 0038) *because* `execFailCeiling` emptied: the default
+// lane's fail column had become a tripwire with no subject, and the all-on lane's 38 was the work plan
+// nothing bounded. Five re-bases later the same thing has happened to it — 38 → 31 → 17 → 7 → 2 → 0,
+// each move ledgered at the constant — so this table now holds no fail ceiling with a live population. Both readings are true and
+// only one is flattering: the engine did land the rules, *and* a suite of `assert_malformed` /
+// `assert_invalid` vectors runs out of questions long before a runtime runs out of work (§9 G-3's
+// rider, and `docs/laws/boards-and-buckets.md`'s pre-registered caution for a column reaching zero).
+// The consequence for this table is concrete: the next bound to arrive here will not come from a fail
+// column emptying, because there is no longer one to empty.
 //
 // **Vacuity floors are exempt on purpose, and this is the distinction that matters most.**
 // `totalFloor`/`filesFloor` in TestBareModuleSpansAreNonEmptyAndPlausible are *plausibility*

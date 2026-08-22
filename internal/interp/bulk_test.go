@@ -573,7 +573,7 @@ func TestBulkTableCopyTrapsWithTheTableString(t *testing.T) {
 //
 // **So the row moves off the corpus and onto a direct call**, which is the only way left to
 // present `execFC` with a sub-opcode it does not have: the decoder itself rejects anything
-// outside `opTableFC`'s 18 entries as malformed (`prefixRegion`, `instr.go:148`), so no module
+// outside `opTableFC`'s 18 entries as malformed (`prefixRegion`, `instr.go:199`), so no module
 // this engine accepts can carry one. `0x12` is one past the table's last entry and is
 // unreachable from any accepted module — the same "cannot happen through the front door, still
 // worth asserting at the back door" shape `TestElemExprIndexReachesTheRef` uses for the

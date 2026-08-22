@@ -458,7 +458,7 @@ func TestEveryGateOffDeclinesSomething(t *testing.T) {
 		}
 
 		d := &Decoder{Features: f}
-		c := &instrCtx{d: d, constOnly: p.constOnly, nonConst: -1}
+		c := &instrCtx{d: d, constOnly: p.constOnly}
 		r := &reader{b: append(append([]byte{}, p.instrs...), 0x0B), eof: ErrPayloadEnd}
 		if err := c.block(r); err != nil {
 			t.Errorf("Features.%s off: reading %s (% x) failed with %v; the probe must reach "+
@@ -471,8 +471,8 @@ func TestEveryGateOffDeclinesSomething(t *testing.T) {
 		// be true of a reader that also reports `constant expression required` for a valid
 		// module. The two verdicts are ordered (0008) precisely so they can be told apart,
 		// and this asserts the ordering is not being leaned on to hide a second answer.
-		if p.constOnly && c.nonConst >= 0 {
-			t.Errorf("Features.%s off: %s (% x) also recorded a non-const verdict at %#02x; "+
+		if p.constOnly && c.nonConst.set {
+			t.Errorf("Features.%s off: %s (% x) also recorded a non-const verdict at %s; "+
 				"the gate must decline by *name*, not fall through to `constant expression "+
 				"required` — that string is a spec invalid string and the module is valid (#5)",
 				g, p.what, p.instrs, c.nonConst)
@@ -493,15 +493,15 @@ func TestEveryGateOffDeclinesSomething(t *testing.T) {
 		// The same construct must be accepted with the gate on, or the decline above is
 		// indistinguishable from the decoder simply not supporting it.
 		on := &Decoder{Features: featuresAllOn(t)}
-		onCtx := &instrCtx{d: on, constOnly: p.constOnly, nonConst: -1}
+		onCtx := &instrCtx{d: on, constOnly: p.constOnly}
 		onR := &reader{b: append(append([]byte{}, p.instrs...), 0x0B), eof: ErrPayloadEnd}
 		if err := onCtx.block(onR); err != nil {
 			t.Errorf("Features.%s on: %s (% x) failed with %v; a construct that fails either way "+
 				"proves nothing about the gate", g, p.what, p.instrs, err)
 		} else if err := onCtx.release(); err != nil {
 			t.Errorf("Features.%s on: %s (% x) still declined with %v", g, p.what, p.instrs, err)
-		} else if p.constOnly && onCtx.nonConst >= 0 {
-			t.Errorf("Features.%s on: %s (% x) recorded a non-const verdict at %#02x with the "+
+		} else if p.constOnly && onCtx.nonConst.set {
+			t.Errorf("Features.%s on: %s (% x) recorded a non-const verdict at %s with the "+
 				"gate *on*: the construct the gate admits must be const-legal, or the gate admits "+
 				"nothing and the decline above was measuring the const check", g, p.what, p.instrs,
 				onCtx.nonConst)

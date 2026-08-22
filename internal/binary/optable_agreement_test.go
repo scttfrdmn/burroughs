@@ -36,6 +36,19 @@ import (
 // the immediate vocabulary is covered by a totality assertion rather than by a list of
 // the ones today's const set happens to use.
 //
+// **That sentence was false from #33 until #471 — grave #495.** The walks were keyed on
+// `constLegalBytes(tb) map[byte]bool`, so the second half of the claim was not merely
+// unchecked but *unrepresentable*: a `byte` cannot name `0xFB 0x1C`, and no entry could
+// have been missing from a list because there was no list. It reads as a scoping decision
+// and is a type. The domain was 305 prefixed arms short of what the sentence says, and the
+// cost was 296 opcodes const-legal by omission in the engine (#471) against two board rows.
+// Re-keyed to `constLegalOps` here; the space itself is now pinned, in the direction the
+// type used to bound, by `TestConstLegalSpaceIsTheWholeDispatchableSpace`.
+//
+// Kept rather than rewritten into the present tense, because the sentence is what the
+// scoping *argument* was and the argument was right — a claim about coverage that a type
+// silently narrows is worth more as a specimen than as a corrected line.
+//
 // # What is assertable now, and what is not
 //
 // #33 names three properties. Two are fully assertable against the generated table;
@@ -53,6 +66,19 @@ import (
 //     table and must not be one the authority marks `illegal`. A const reader
 //     accepting a byte the reference rejects outright is a bug no assert_malformed
 //     vector can see.
+//
+//     **"The reference does not encode it either" is false, and it is the second half of
+//     grave #495.** It is true of `decode.ml`, which is the parser — const-legality is a
+//     *validation* fact, so its absence there is the file minding its own business, not the
+//     reference declining to record it. `valid.ml:1029-1038` records it, as a ten-arm match
+//     called `is_const`, and it has been there the whole time. The citation resolves and says
+//     what it is quoted as saying; the sentence generalizes from one file to the reference,
+//     which no citation sweep can check (*a valid citation does not certify its sentence*).
+//     What the wrong authority bought was a *reason not to look*: property 1's missing half
+//     was recorded as unassertable-in-principle for as long as it took a board row to
+//     contradict it. Both directions are now walked against `is_const` in
+//     `constlegal_test.go`, so the one-directional claim below is this file's scope and no
+//     longer the project's.
 //   - **Same immediate extent** (property 2) — fully assertable, and it is the whole
 //     point. Both sides are run over identical input and their consumed byte counts
 //     compared. This is the fact that goes wrong quietly when duplicated.
@@ -447,8 +473,37 @@ func TestEveryImmediateInTheTableHasABytesVerdict(t *testing.T) {
 	}
 }
 
-// constLegalBytes is the whole const-legal space: the unconditional set plus the set
-// extended-const admits under its gate.
+// opKey is the {prefix, sub} pair the engine keys prefixed facts on (`dataRefOps`,
+// `constPrefixedOps`), with prefix 0x00 meaning the single-byte space — `instrCtx.opID`'s
+// convention, reused here so a test key and a production key are the same shape.
+func opKey(prefix byte, sub uint32) [2]uint32 { return [2]uint32{uint32(prefix), sub} }
+
+// infoFor resolves one key against the generated table, through whichever of the two dispatch
+// structures owns it.
+func infoFor(k [2]uint32) (opInfo, bool) {
+	if k[0] == 0x00 {
+		info, ok := opTable[k[1]]
+		return info, ok
+	}
+	region, ok := prefixRegion(byte(k[0]))
+	if !ok {
+		return opInfo{}, false
+	}
+	info, ok := region[k[1]]
+	return info, ok
+}
+
+// renderKey names a key the way the engine's errors do, for a failure message.
+func renderKey(k [2]uint32) string {
+	name := "unknown to the table"
+	if info, ok := infoFor(k); ok {
+		name = info.mnemonic
+	}
+	return opID{prefix: byte(k[0]), sub: k[1]}.String() + " (" + name + ")"
+}
+
+// constLegalOps is the whole const-legal space: the unconditional set, the set extended-const
+// admits under its gate, and the prefixed arms — keyed by `opKey` across both spaces.
 //
 // It exists because three controls in this file were keyed on `constOps` alone, and once
 // extended-const's six became const-legal-under-a-gate that key stopped naming the space and
@@ -457,33 +512,57 @@ func TestEveryImmediateInTheTableHasABytesVerdict(t *testing.T) {
 // derived here once so a tenth const-legal opcode, whatever gate admits it, is covered by every
 // walk below on arrival instead of by whichever ones remembered to mention it.
 //
-// The floor is not decoration. If either map were emptied — or if a future refactor moved
+// # Grave #495: the widening's own type was the blind spot
+//
+// This returned `map[byte]bool` until #471, and the paragraph above is the reason that is worth a
+// grave rather than a rename. 0006's **property 1** pre-registered coverage of *"every one of the
+// 256 single-byte opcodes and every tracked multi-byte prefix"*, and this file's header claimed
+// exactly that of every walk in it. The three walks keyed here covered 256 of 561 dispatchable
+// arms, because a prefixed opcode was **unrepresentable in the return type** — so the missing 305
+// were not omitted from a list a reader could audit, they were outside what the helper could say.
+//
+// A byte-keyed map cannot fail to mention a prefixed opcode in the way an enumeration can: there
+// is nothing to leave out. *Scope controls to the space* is usually a rule about a domain that was
+// enumerated too narrowly; here the domain was fixed by a type, which is the same defect with no
+// site to point at and no diff that would have shown it. What is checkable, and what
+// `TestConstLegalSpaceIsTheWholeDispatchableSpace` now checks, is the *count of arms the walks
+// reach* against the count the table dispatches.
+//
+// The floor is not decoration. If any of the maps were emptied — or if a future refactor moved
 // membership somewhere this function does not read — the walks it feeds would each pass by
 // comparing nothing, which is the vacuity class and is invisible on a board by construction.
-func constLegalBytes(tb testing.TB) map[byte]bool {
+func constLegalOps(tb testing.TB) map[[2]uint32]bool {
 	tb.Helper()
 
-	all := make(map[byte]bool, len(constOps)+len(extendedConstOps))
+	want := len(constOps) + len(extendedConstOps) + len(constPrefixedOps)
+	all := make(map[[2]uint32]bool, want)
+	add := func(k [2]uint32, from string) {
+		if all[k] {
+			tb.Errorf("%s is in two const sets (%s is the second): an opcode that is both "+
+				"unconditionally const-legal and gated makes the gate unobservable, because the "+
+				"unconditional arm answers first (constLegal checks constOps before the gate)",
+				renderKey(k), from)
+		}
+		all[k] = true
+	}
 	for b := range constOps {
-		all[b] = true
+		add(opKey(0x00, uint32(b)), "constOps")
 	}
 	for b := range extendedConstOps {
-		if all[b] {
-			tb.Errorf("%#02x is in both constOps and extendedConstOps: a byte that is both "+
-				"unconditionally const-legal and gated makes the gate unobservable, because the "+
-				"unconditional arm answers first (constLegal checks constOps before the gate)", b)
-		}
-		all[b] = true
+		add(opKey(0x00, uint32(b)), "extendedConstOps")
 	}
-	if len(all) != len(constOps)+len(extendedConstOps) {
-		tb.Fatalf("union of the const sets has %d members, want %d: the overlap above is the "+
-			"only way this happens and it must not be reached silently",
-			len(all), len(constOps)+len(extendedConstOps))
+	for k := range constPrefixedOps {
+		add(k, "constPrefixedOps")
 	}
-	if len(all) < 13 {
+	if len(all) != want {
+		tb.Fatalf("union of the const sets has %d members, want %d: an overlap above is the "+
+			"only way this happens and it must not be reached silently", len(all), want)
+	}
+	if len(all) < 22 {
 		tb.Fatalf("the const-legal space has %d members; it had 13 when #109 landed (seven "+
-			"unconditional, six extended-const), and a domain smaller than that means a set this "+
-			"helper reads has been emptied — every walk keyed on it would then agree vacuously", len(all))
+			"unconditional, six extended-const) and 22 when #471 added the nine prefixed arms, "+
+			"and a domain smaller than that means a set this helper reads has been emptied — "+
+			"every walk keyed on it would then agree vacuously", len(all))
 	}
 	return all
 }
@@ -497,16 +576,16 @@ func constLegalBytes(tb testing.TB) map[byte]bool {
 // opcode and stay green. That is the failure this test exists to convert into a red:
 // the *reason* the extent check is total is recorded as its own assertion.
 func TestConstSetUsesNoStructuralImmediate(t *testing.T) {
-	for b := range constLegalBytes(t) {
-		info, ok := opTable[uint32(b)]
+	for k := range constLegalOps(t) {
+		info, ok := infoFor(k)
 		if !ok {
 			continue // membership's problem, asserted separately
 		}
 		for _, im := range info.imms {
 			if bytesFor(im) == nil {
-				t.Errorf("const-legal %#02x (%s) has structural immediate %q: the extent "+
+				t.Errorf("const-legal %s has structural immediate %q: the extent "+
 					"comparison cannot cover it, so it must not silently be excluded from one",
-					b, info.mnemonic, im)
+					renderKey(k), im)
 			}
 		}
 	}
@@ -516,9 +595,12 @@ func TestConstSetUsesNoStructuralImmediate(t *testing.T) {
 // generated table can answer.
 //
 // The reverse direction — every const-legal opcode in the authority appears here — is
-// not assertable, because the authority does not record const-legality (decode.ml
-// checks it nowhere; it is a validation fact). Saying so is the point: this control
-// covers one direction and names the other rather than implying both.
+// not assertable *from this table*, because a decode table records existence and immediate
+// shape and const-legality is a validation fact. Naming the direction was the point, and it
+// still is; what was wrong for as long as this comment stood alone was the word choice one
+// step out, "the authority": `decode.ml` is not the authority for a validation fact, and
+// `valid.ml`'s `is_const` is (grave #495, and the header). The reverse direction is
+// asserted, against that file, by `TestConstLegalSpaceMatchesIsConst`.
 //
 // END dropped out of the set the dissolution shrank: it was in `constExprOps` because
 // that map carried immediate shapes and the terminator needed one, and it needed a
@@ -528,26 +610,26 @@ func TestConstSetUsesNoStructuralImmediate(t *testing.T) {
 // `expectEnd` — so the exception is gone rather than suppressed. The fact it stood on
 // is still checked, by TestEveryReasonRowIsABlockDelimiter.
 func TestConstSetIsASubsetOfTheAuthority(t *testing.T) {
-	for b := range constLegalBytes(t) {
-		info, ok := opTable[uint32(b)]
+	for k := range constLegalOps(t) {
+		info, ok := infoFor(k)
 		if !ok {
-			t.Errorf("const-legal %#02x does not exist in the reference's table "+
-				"(decode.ml has no arm for it): the decoder accepts a byte the authority does "+
-				"not define, which no assert_malformed vector can catch", b)
+			t.Errorf("const-legal %s does not exist in the reference's table "+
+				"(decode.ml has no arm for it): the decoder accepts an opcode the authority does "+
+				"not define, which no assert_malformed vector can catch", renderKey(k))
 			continue
 		}
 		if info.illegal {
-			t.Errorf("const-legal %#02x (%s) is marked illegal by the authority "+
+			t.Errorf("const-legal %s is marked illegal by the authority "+
 				"(decode.ml:%d): the decoder accepts what the reference rejects outright",
-				b, info.mnemonic, info.refLine)
+				renderKey(k), info.refLine)
 		}
 		if info.reason != "" {
-			t.Errorf("const-legal %#02x (%s) is a reason arm in the authority (decode.ml:%d): "+
-				"the reference defines it only to reject", b, info.mnemonic, info.refLine)
+			t.Errorf("const-legal %s is a reason arm in the authority (decode.ml:%d): "+
+				"the reference defines it only to reject", renderKey(k), info.refLine)
 		}
 		if info.escape {
-			t.Errorf("const-legal %#02x is a prefix escape (decode.ml:%d), not an instruction",
-				b, info.refLine)
+			t.Errorf("const-legal %s is a prefix escape (decode.ml:%d), not an instruction",
+				renderKey(k), info.refLine)
 		}
 	}
 }
@@ -575,19 +657,19 @@ func TestConstSetIsASubsetOfTheAuthority(t *testing.T) {
 func TestConstExprExtentMatchesTheAuthority(t *testing.T) {
 	const input = "\x70\x70\x70\x70\x70\x70\x70\x70\x70\x70\x70\x70\x70\x70\x70\x70"
 
-	space := constLegalBytes(t)
+	space := constLegalOps(t)
 	d := &Decoder{}
-	c := &instrCtx{d: d, nonConst: -1}
+	c := &instrCtx{d: d}
 	checked := 0
-	for b := range space {
-		info, ok := opTable[uint32(b)]
+	for k := range space {
+		info, ok := infoFor(k)
 		if !ok {
 			continue // membership's problem
 		}
 
 		mine := &reader{b: []byte(input)}
-		if err := c.imms(mine, b, info.imms); err != nil {
-			t.Errorf("%#02x (%s): the production reader failed on the shared input: %v", b, info.mnemonic, err)
+		if err := c.imms(mine, immsOpArg(k), info.imms); err != nil {
+			t.Errorf("%s: the production reader failed on the shared input: %v", renderKey(k), err)
 			continue
 		}
 
@@ -595,22 +677,22 @@ func TestConstExprExtentMatchesTheAuthority(t *testing.T) {
 		for _, im := range info.imms {
 			read := bytesFor(im)
 			if read == nil {
-				t.Fatalf("%#02x (%s): structural immediate %q reached the extent comparison; "+
-					"TestConstSetUsesNoStructuralImmediate should have caught this first", b, info.mnemonic, im)
+				t.Fatalf("%s: structural immediate %q reached the extent comparison; "+
+					"TestConstSetUsesNoStructuralImmediate should have caught this first", renderKey(k), im)
 			}
 			if err := read(d, theirs); err != nil {
-				t.Errorf("%#02x (%s): the enrolled witness's shape %v failed on the shared input at %q: %v",
-					b, info.mnemonic, info.imms, im, err)
+				t.Errorf("%s: the enrolled witness's shape %v failed on the shared input at %q: %v",
+					renderKey(k), info.imms, im, err)
 				break
 			}
 		}
 
 		if mine.off != theirs.off {
-			t.Errorf("%#02x (%s): extent disagreement — the production reader consumed %d bytes, "+
+			t.Errorf("%s: extent disagreement — the production reader consumed %d bytes, "+
 				"the enrolled witness for %v (decode.ml:%d) consumed %d\n\t"+
 				"a wrong extent does not fail loudly: it shifts every subsequent byte, and the "+
 				"error surfaces somewhere else entirely (#33, property 2)",
-				b, info.mnemonic, mine.off, info.imms, info.refLine, theirs.off)
+				renderKey(k), mine.off, info.imms, info.refLine, theirs.off)
 		}
 		checked++
 	}
@@ -619,6 +701,20 @@ func TestConstExprExtentMatchesTheAuthority(t *testing.T) {
 			"is a coverage claim it cannot support", checked, len(space))
 	}
 	t.Logf("%d const-legal opcodes agree on immediate extent", checked)
+}
+
+// immsOpArg is the opcode argument `imms` takes, mirroring the two production call sites: the byte
+// itself on the single-byte path, and 0x00 from `prefixed`.
+//
+// The argument only reaches `structural`, and no const-legal opcode is structural — which is
+// TestConstSetUsesNoStructuralImmediate's assertion, not this helper's assumption. Mirrored anyway,
+// because a walk that computes its own argument for a production function is comparing the table
+// against a call the engine does not make.
+func immsOpArg(k [2]uint32) byte {
+	if k[0] == 0x00 {
+		return byte(k[1])
+	}
+	return 0x00
 }
 
 // TestEveryImmediateHasAProductionReader is the totality control on the new place the
@@ -662,7 +758,7 @@ func TestEveryImmediateHasAProductionReader(t *testing.T) {
 			"domain is total over nothing (the vacuity class, #29)")
 	}
 
-	c := &instrCtx{d: &Decoder{}, nonConst: -1}
+	c := &instrCtx{d: &Decoder{}}
 	checked := 0
 	for im := range vocab {
 		if im == immBlock {
@@ -868,7 +964,7 @@ func TestEveryNonConstByteGetsTheRightVerdict(t *testing.T) {
 	// six must be declined by name and must not report `constant expression required` — is
 	// TestExtendedConstGateIsPositional's, because a walk with all gates on cannot ask it.
 	d := constVerdictDecoder(t)
-	c := &instrCtx{d: d, nonConst: -1}
+	c := &instrCtx{d: d}
 	var absent, escape, illegal, present, delimiter, released int
 	for b := range 256 {
 		if constOps[byte(b)] || extendedConstOps[byte(b)] {
@@ -1298,7 +1394,7 @@ func TestAgreementHoldsUnderEveryFeatureConfiguration(t *testing.T) {
 	const input = "\x70\x70\x70\x70\x70\x70\x70\x70\x70\x70\x70\x70\x70\x70\x70\x70"
 
 	gates := featureGateIDs(t)
-	space := constLegalBytes(t)
+	space := constLegalOps(t)
 	want := 1 << len(gates)
 
 	configs := 0
@@ -1314,15 +1410,15 @@ func TestAgreementHoldsUnderEveryFeatureConfiguration(t *testing.T) {
 			fld.SetBool(mask&(1<<i) != 0)
 		}
 		d := &Decoder{Features: f}
-		c := &instrCtx{d: d, nonConst: -1}
-		for b := range space {
-			info, ok := opTable[uint32(b)]
+		c := &instrCtx{d: d}
+		for k := range space {
+			info, ok := infoFor(k)
 			if !ok {
 				continue
 			}
 			mine := &reader{b: []byte(input)}
-			if err := c.imms(mine, b, info.imms); err != nil {
-				t.Errorf("%+v: %#02x (%s) failed: %v", f, b, info.mnemonic, err)
+			if err := c.imms(mine, immsOpArg(k), info.imms); err != nil {
+				t.Errorf("%+v: %s failed: %v", f, renderKey(k), err)
 				continue
 			}
 			theirs := &reader{b: []byte(input)}
@@ -1336,8 +1432,8 @@ func TestAgreementHoldsUnderEveryFeatureConfiguration(t *testing.T) {
 				}
 			}
 			if !bad && mine.off != theirs.off {
-				t.Errorf("%+v: %#02x (%s) extent disagreement: %d vs %d",
-					f, b, info.mnemonic, mine.off, theirs.off)
+				t.Errorf("%+v: %s extent disagreement: %d vs %d",
+					f, renderKey(k), mine.off, theirs.off)
 			}
 		}
 		configs++

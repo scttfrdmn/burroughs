@@ -922,7 +922,7 @@ func typeConstExpr(m *binary.Module, refs map[uint32]bool, expr []binary.Instr,
 // #328's**, retired rather than deleted because which half was owed and for how long is the durable
 // part: the type check was owed from #342 until #328, and 23 vectors were accepted in the interval.
 // `is_const`'s other arms are answered one layer down, by the decoder's own const-expr table
-// (`internal/binary/instr.go:588`), which refuses a non-const *opcode* with this same
+// (`internal/binary/instr.go:693`, `decodeConstExpr`), which refuses a non-const *opcode* with this same
 // `ErrConstExprRequired` identity before a Module exists. That split is the declared layering debt
 // the sentinel's comment records, and reusing the identity rather than minting a second one is the
 // `ErrUnknownTable` precedent: one rule, one error, whichever layer happens to be the one that can

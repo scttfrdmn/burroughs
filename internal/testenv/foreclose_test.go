@@ -164,7 +164,7 @@ func TestForeclosingClaimsAboutGatesMatchTheGateTable(t *testing.T) {
 //
 // It fired on a residue table in `internal/spec/spec_test.go` whose `unknown label` row ended "Name
 // resolution, same stratum as" — and pointed at the row above it. That row is now "Name resolution
-// rather than grammar", which is shorter and says the thing, and it is at `spec_test.go:9819`.
+// rather than grammar", which is shorter and says the thing, and it is at `spec_test.go:9860`.
 //
 // The fire site's own line number used to stand in that first sentence and is gone rather than
 // repaired: it had drifted roughly nine hundred lines under insertions nobody paired, and where a
@@ -306,7 +306,7 @@ var deferredReasonLicensed = map[string]string{}
 // `8984` pair and **+34** for the other ten, so the single-delta mistake was available for the third
 // time. Paired by paragraph text as the paragraph above requires, and the six licensed paragraphs came
 // back **byte-identical** — which is why no reason needed re-adjudicating this time, and why that is
-// stated rather than assumed. The four in-reason pointers at `spec_test.go:10804` moved with them, to
+// stated rather than assumed. The four in-reason pointers at `spec_test.go:10845` moved with them, to
 // `:10838`, and they are *inside string literals* where nothing but this sentence connects them to the
 // keys. That is the same class as [#456](https://github.com/scttfrdmn/burroughs/issues/456) — a line
 // number into a file we own, unchecked by any sweep — arriving here in an allow map's justifications.
@@ -389,7 +389,7 @@ var deferredReasonLicensed = map[string]string{}
 // citation domain from `git diff --name-only`, never from the file you were thinking about — was
 // applied literally, printing every `spec_test.go:<line>` in the tree rather than only this map's.
 // Twenty-one sites, of which nine are this map's keys and pointers and **twelve are not** — and the
-// twelve are where the two findings are. Two copies of `spec_test.go:10548` (`CHANGELOG.md` and ADR
+// twelve are where the two findings are. Two copies of `spec_test.go:10589` (`CHANGELOG.md` and ADR
 // 0042, both live present-tense claims about `Instance.link`) were correct before this slice and
 // broken by it, which is the ordinary cost of an insertion and is stated because it is the cost the
 // previous seven re-keys were paying **without seeing**: nothing in those channels fires. And one
@@ -403,7 +403,7 @@ var deferredReasonLicensed = map[string]string{}
 // paragraphs above cite `:10804` and `:10838` too, and they stay: they are a record of what the
 // third re-key *moved*, and re-pointing a transition would falsify the narrative. What gets
 // repaired is a pointer that asserts a current location. By that rule one number here is beyond
-// repair rather than exempt — the *"It fired on `internal/spec/spec_test.go:8854`"* above, whose
+// repair rather than exempt — the *"It fired on `internal/spec/spec_test.go:8895`"* above, whose
 // referent had drifted roughly nine hundred lines under insertions nobody paired: the fire site is
 // a historical fact and no longer recoverable, so the sentence now names the row it found and gives
 // that row's live line instead.
@@ -420,7 +420,7 @@ var deferredReasonLicensed = map[string]string{}
 // **Then it re-keyed again, and the second insertion was a repair another control demanded.**
 // `TestEveryCitedTestNameResolves` named two citations of `TestSameFuncTypeCorpusScope`, which no
 // longer exists;
-// phrasing one of them as history added two lines at `spec_test.go:8690`, above twelve of the
+// phrasing one of them as history added two lines at `spec_test.go:8731`, above twelve of the
 // thirteen keys, and those twelve went stale a second time in the same working tree — uniform **+2**,
 // paired by paragraph text anyway, pointers `:11081` → `:11083`. The rule this yields is about
 // *when* rather than *how*: **a citation repair is an insertion**, so the derivation is not run until
@@ -464,7 +464,7 @@ var deferredReasonLicensed = map[string]string{}
 // `spec_test.go` and `internal/interp/value.go`; every live pointer it broke outside this map is in
 // `CHANGELOG.md`, `docs/laws/evidence-and-instruments.md` and ADR 0042 — **three files the commit
 // never touched**, so the scan-set reading returns none of them. Five were repaired by their
-// referents' text: this file's own `:9773`, `spec_test.go:10616`'s live `Instance.link` claim in two
+// referents' text: this file's own `:9773`, `spec_test.go:10657`'s live `Instance.link` claim in two
 // channels, `:11083`'s annotation in a third, and `value.go:722`/`:1071` in two more after a
 // twelve-line dating note moved them. The eighth entry used the cited-set reading without saying so —
 // it printed *"every `spec_test.go:<line>` in the tree"* — so the practice was already right and the
@@ -568,17 +568,17 @@ var foreclosingLicensed = map[string]string{
 	"internal/spec/spec_test.go:7177 bound account unreachable SIMD": "past-tense account of #328's " +
 		"session; `unreachable` describes ErrNotValidated's call sites once a validator refuses those " +
 		"modules first — a state of the engine, not a tracker event (ADR 0043), and not the SIMD gate",
-	"internal/spec/spec_test.go:9192 bound account never SIMD": "past-tense account of #196's board; " +
+	"internal/spec/spec_test.go:9233 bound account never SIMD": "past-tense account of #196's board; " +
 		"`never` is what the default lane and the harness did at that measurement (\"never asked\", " +
 		"\"a setup `invoke` never wrote\"), and the paragraph exists to record a delta rather than to " +
 		"forecast one",
-	"internal/spec/spec_test.go:9192 bound account never RelaxedSIMD": "as above — the paragraph names " +
+	"internal/spec/spec_test.go:9233 bound account never RelaxedSIMD": "as above — the paragraph names " +
 		"both gates while describing one past board",
-	"internal/spec/spec_test.go:11753 bound account structural SIMD": "the control sense of the word: " +
+	"internal/spec/spec_test.go:11794 bound account structural SIMD": "the control sense of the word: " +
 		"\"verified against the structural control, the all-on lane reports 0\", this codebase's term " +
 		"of art for a derived-domain control as opposed to a per-vector allowlist. The homonym, and the " +
 		"reason a token sweep over unscoped prose would be noise",
-	"internal/spec/spec_test.go:11753 bound account structural RelaxedSIMD": "as above",
+	"internal/spec/spec_test.go:11794 bound account structural RelaxedSIMD": "as above",
 
 	// The retained-testimony paragraphs of the `validateFailCeiling` account. The word stays on the
 	// page — a corrected transcript is a worse record than an annotated one — so the sweep finds it
@@ -597,7 +597,7 @@ var foreclosingLicensed = map[string]string{
 	//
 	// True of the account, false of the paragraph — and the paragraph is the sweep's unit and this
 	// map's own stated standard. So each entry now names where its refutation actually lives, which
-	// is `spec_test.go:11132`, under a heading in this same bound account: *"the word `structural` in
+	// is `spec_test.go:11173`, under a heading in this same bound account: *"the word `structural` in
 	// the paragraph above is grave #427"*. That the ground is not legible in the licensed paragraph
 	// alone is said rather than papered over.
 	//
@@ -612,23 +612,23 @@ var foreclosingLicensed = map[string]string{
 	// about an issue's state, and `gh issue view 432` — one call, the ruling's own remedy — said
 	// closed. Recorded because a stale-premise repair drawing less scrutiny than the original is
 	// #432's corollary 1, and this paragraph is a stale-premise repair.
-	"internal/spec/spec_test.go:11072 bound account structural SIMD": "retained falsified testimony: " +
+	"internal/spec/spec_test.go:11113 bound account structural SIMD": "retained falsified testimony: " +
 		"this paragraph asserts the eight relaxed-SIMD operators are a *structural* residue \"whose " +
 		"gate is its own event\", which is the claim #427 refuted. Its annotation is not in this " +
-		"paragraph — it is at spec_test.go:11132 in this same account",
-	"internal/spec/spec_test.go:11072 bound account structural RelaxedSIMD": "as above",
-	"internal/spec/spec_test.go:11103 bound account structural SIMD": "retained falsified testimony, " +
+		"paragraph — it is at spec_test.go:11173 in this same account",
+	"internal/spec/spec_test.go:11113 bound account structural RelaxedSIMD": "as above",
+	"internal/spec/spec_test.go:11144 bound account structural SIMD": "retained falsified testimony, " +
 		"the `validateDeclineCeiling`-is-unmoved-at-8 paragraph, resting on the same refuted premise " +
-		"and annotated at the same place (spec_test.go:11132)",
-	"internal/spec/spec_test.go:11103 bound account structural RelaxedSIMD": "as above",
-	"internal/spec/spec_test.go:11121 bound account structural SIMD": "retained falsified testimony, " +
+		"and annotated at the same place (spec_test.go:11173)",
+	"internal/spec/spec_test.go:11144 bound account structural RelaxedSIMD": "as above",
+	"internal/spec/spec_test.go:11162 bound account structural SIMD": "retained falsified testimony, " +
 		"the paragraph on the two bounds becoming the same number: \"one counts a structural residue\". " +
-		"Annotated at spec_test.go:11132",
-	"internal/spec/spec_test.go:11121 bound account structural RelaxedSIMD": "as above",
-	"internal/spec/spec_test.go:11134 bound account structural SIMD": "grave #427's annotation itself, " +
+		"Annotated at spec_test.go:11173",
+	"internal/spec/spec_test.go:11162 bound account structural RelaxedSIMD": "as above",
+	"internal/spec/spec_test.go:11175 bound account structural SIMD": "grave #427's annotation itself, " +
 		"and the only one of these four whose ground *is* legible in the licensed paragraph: it reads " +
 		"\"Nothing about them was structural\" and gives the gate's flip commit",
-	"internal/spec/spec_test.go:11134 bound account structural RelaxedSIMD": "as above",
+	"internal/spec/spec_test.go:11175 bound account structural RelaxedSIMD": "as above",
 
 	// Grave #427's record at the fix site. This is the paragraph the falsification probe restored to
 	// confirm the sweep can see the original defect, so it is licensed at the *repaired* version and

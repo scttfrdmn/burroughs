@@ -39,7 +39,7 @@ one step further out.
 
 The natural rule — read the declined module's import list, see which allocation its data segments
 write — is not available. `MultiMemory` declines at **memarg flags bit 6 in `decodeMemop`**
-(`internal/binary/instr.go:1456`), in the *decoder*. `load1.wast:10` never produces a
+(`internal/binary/instr.go:1570`), in the *decoder*. `load1.wast:10` never produces a
 `*binary.Module`, so there is no `Imports` slice to walk, the way `declinedImport` walks one for
 0037. Any import-list analysis requires decoding the declined image a second time under a different
 feature set — the default lane consulting the all-on lane to compute a default-lane verdict.
