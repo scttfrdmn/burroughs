@@ -64,6 +64,20 @@ weakly-ordered platform.
     `TestModuleDefinitionsAskTheValidator`, sharing fact 2's already-computed census because grave #34's
     rule is one control per *cause*; fact 3's excuse list is fact 2's near mirror image, differing in
     exactly one member.
+  - **And a pre-existing control's fail account is now a named ledger rather than a total**, on
+    Scott's condition for ratifying its `1` → `2`: *"A total is not a ledger — where the items are
+    enumerable, assert per item."* `TestRegisterWhoseModuleFailedBindsNothing` moved from 1 fail to 2
+    because a broken module is now charged fact 3 as well as its register, and the fact-2 cascade was
+    **measured at zero** to establish the second member is exactly one row (a validation refusal does
+    not withhold the instance, so the register there still binds and passes). `failLedger` names each
+    member with its reason, `Fail` is checked against the ledger's sum, and the buckets are asserted
+    in both directions — a missing member by name, an arriving third by name. The fourth mutation is
+    the one the literal could never have caught: renaming the register's bucket key leaves the count
+    at 2, so the sum stays green and only the ledger fires. The same slice **corrected an unverified
+    conjunct** in that comment: dropping the register's charge does *not* fail
+    `TestVerdictsPartitionCommands` alongside — measured, exactly one test in the package turns red,
+    because the partition control's domain is the corpus where every registered module instantiates,
+    so the branch is never reached.
 
 - **`check_valtype` runs at every module-level valtype position, and the validator's type context is
   scoped per rec group — all-on `fail` 31 → 17**
