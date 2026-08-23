@@ -182,6 +182,15 @@ jobs:
           fi
 
       - run: go build ./...
+
+      # #136's probe (`internal/interp/ends_table.go`) is the tree's only build tag, and this step
+      # is here because `make build` gaining the same line did **not** put it in CI: this job runs
+      # `go build ./...` directly and never invokes `make build`. The claim that adding it to
+      # `CHECK_GATES` covered CI was false when written — *text mirrors are not failure-behaviour
+      # mirrors*, and "make check is the local mirror of CI" is a statement of intent, not a
+      # mechanism that makes one step run the other. Deleted with the probe.
+      - run: go build -tags burroughs_endtable ./...
+
       - run: go vet ./...
 
       - name: vendor the spec suite

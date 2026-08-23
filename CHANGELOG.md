@@ -2322,7 +2322,12 @@ weakly-ordered platform.
     a branch in the lane that is meant to be unmodified and the attribution control would then be
     pricing the branch. These are the tree's **first** custom build tags — every other gate is a
     `Features` field — so `make build` now compiles the tagged arm as well: *an arm the gate never builds
-    rots without a signal*. `vet`, `lint`, `test` and `deadcode` still see the untagged lane only;
+    rots without a signal*. **CI needed its own line for the same reason and the first claim that it did
+    not was false**: the `build` job runs `go build ./...` directly and never invokes `make build`, so
+    adding the line to `CHECK_GATES` covered the local gate and nothing else. *Text mirrors are not
+    failure-behaviour mirrors*, and *"`make check` is the local mirror of CI"* is a statement of intent
+    rather than a mechanism by which one step runs the other.
+    `vet`, `lint`, `test` and `deadcode` still see the untagged lane only;
     `go test -tags burroughs_endtable ./...` is green by hand (19 packages, 0 FAIL) and is reported as a
     measurement taken once rather than as coverage.
 

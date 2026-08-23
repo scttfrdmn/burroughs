@@ -68,7 +68,10 @@ import (
 //     number can never do.
 //   - **`TestPositionalCitationCensusIsPinned`** — binding, and the ratchet. Every positional
 //     citation, bucketed twice, pinned to an exact count. The population grew 91 → 263 → 303 while
-//     #456 sat open, at a rate the issue measured; an exact pin is what stops it, because a new
+//     #456 sat open, at a rate the issue measured, and **302 is its first decrease**: #502 converted
+//     ADR 0035's one citation into `exec.go`, which had been *correct* until that PR's own six-line
+//     insertion falsified it — drift the author caused is the author's to repair, whatever #497 decides
+//     about the dated records nobody broke. An exact pin is what stops the growth, because a new
 //     positional citation cannot land without someone editing a number in this file and reading why.
 //     Exact and not a floor in both directions: *a floor bounds the catastrophic case only*, and
 //     here the interesting motion is +1.
@@ -476,10 +479,11 @@ func TestSymbolCitationsResolveToADeclaration(t *testing.T) {
 // # Why an exact pin
 //
 // The population is what #456 is about, and it **grew while the issue was open** — 91 in the title,
-// 263 at `6afbd9c`, 303 here — because *adding lines breaks every line citation below* and every slice
-// that lands adds prose. Scott's order to do this next named that rate as the reason. A floor would
-// have watched it grow; the exact pin is what makes +1 a red, and the red lands on the author of the
-// +1 rather than on whoever eventually takes #497.
+// 263 at `6afbd9c`, 303 at `496598e` — because *adding lines breaks every line citation below* and
+// every slice that lands adds prose. Scott's order to do this next named that rate as the reason. A
+// floor would have watched it grow; the exact pin is what makes +1 a red, and the red lands on the
+// author of the +1 rather than on whoever eventually takes #497. It is **302 here**, the first
+// decrease, and the pin moved down in the PR that earned it rather than in a later sweep.
 //
 // The 303 is not the 301 the relay comment on #456 reported, and the difference is the instrument
 // rather than the tree: that figure came from a shell one-liner whose file-part pattern rejected a
@@ -499,9 +503,15 @@ func TestSymbolCitationsResolveToADeclaration(t *testing.T) {
 //     *by construction*. A conversion cannot remove these: the scan they belong to reports lines, so
 //     a line is what its data is keyed on. This is why the residue is non-empty as a matter of form
 //     rather than of unfinished work, and it is what discharges the probe.
-//   - **181 are markdown**, of which the great majority are `CHANGELOG.md` and `docs/decisions/` —
+//   - **180 are markdown**, of which the great majority are `CHANGELOG.md` and `docs/decisions/` —
 //     dated records, where re-pointing a number rewrites the record rather than repairing it. That
 //     question is #497's and Scott's, not this control's; they are counted here, not judged.
+//     **One carve-out, and it is not a licence:** a citation that was correct until the *citing* PR's
+//     own insertion falsified it is that PR's drift, not a dated record, and #502 converted the one
+//     instance it created (181 → 180). Measured rather than assumed — ADR 0024's four citations into
+//     `internal/interp` are wrong today by +43, +86 and +335 lines, with the fourth arguable, so this
+//     population's drift is already unbounded and holding a file's line count constant rescues none of
+//     it. A stale `+335` still names a line that exists, which is why nothing here fires on it.
 //   - **57 name no file**, because their basename is ambiguous. Those are broken now, and no drift
 //     was needed to break them.
 //   - **No bucket for a positional citation naming a file that does not exist**, because there are
@@ -513,11 +523,11 @@ var (
 		chanComment:  92,
 		chanDataKey:  23,
 		chanLitValue: 7,
-		chanMarkdown: 181,
+		chanMarkdown: 180,
 	}
 	positionalByResolution = map[string]int{
 		resPathQualified: 90,
-		resBasenameUniq:  156,
+		resBasenameUniq:  155,
 		resBasenameAmbig: 57,
 	}
 )
@@ -526,7 +536,7 @@ var (
 //
 // It prints the whole census — both margins, the per-file breakdown, and every ambiguous basename
 // with the files it could mean — because the print is what the next reader works from, and a control
-// that only asserts a number tells them nothing about which of 303 citations to convert first.
+// that only asserts a number tells them nothing about which of 302 citations to convert first.
 func TestPositionalCitationCensusIsPinned(t *testing.T) {
 	cites := gatherLocationCitations(t)
 
