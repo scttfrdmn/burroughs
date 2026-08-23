@@ -653,3 +653,53 @@ reach is a law out of context.
   rest of the body into the excluded region and reintroduce this law's own silent under-match, and
   the prose line count printed beside the verdict, so a population that collapsed to zero cannot
   report a pass. (Both boundaries measured on PR #339's own body; the second on its CI red.)
+
+### A control specified by its mechanism rather than by the defect it must catch will catch a different population.
+
+- **A control specified by its mechanism rather than by the defect it must catch will
+  catch a different population.** Scott's mint, on the #493 relay, and the occasion was
+  his own specification being falsified by measurement:
+
+  > **Take the narrowing.** My control form is falsified by measurement — it fires twice
+  > on #492, is wrong both times, and misses the false sentence entirely, which names no
+  > path at all. M2 puts the number on it by reproducing my false positive exactly when
+  > the span rule is removed. That's the right way to settle it, and worth minting: **a
+  > control specified by its mechanism rather than by the defect it must catch will catch
+  > a different population.** I specified a mechanism; you measured it against the real
+  > case instead of arguing with it.
+
+  This is **upstream of the four failure modes this family already carries.** Stillbirth,
+  vacuity, scope and attribution all describe a control built wrong. This one describes a
+  control built exactly to spec, passing its own falsification bill, where the spec named
+  a *mechanism* — scan for this token, demand that shape — and the defect was a different
+  population. Nothing downstream can see it: the bill breaks the assertion the control
+  makes, never the one it should have been making.
+
+  **The specimen, with the number that settled it.** The ordered form for `citecheck.sh`'s
+  check 7 was "a state claim about an issue must name a path". Measured against the real
+  case: 12 sentences named a path against 58 paths in the diff, the check fired twice, both
+  firings were on *correct* prose, and the one genuinely false sentence in the PR named a law
+  family and no path at all — so the mechanism's population and the defect's population
+  intersected in nothing. The shipped narrowing keys on a **copula** instead, because
+  *aboutness is not proximity* and grammar is what attaches a state word to an issue number.
+  M2 is what made it arguable rather than assertable: remove the span rule and the false
+  positive returns exactly, which prices the mechanism instead of debating it.
+
+  **How to specify one, and it is one question asked first**: name the reader-visible harm,
+  then derive the population that can suffer it, and only then pick a trigger — and state the
+  gap between the trigger's population and the harm's, because that gap is the control's real
+  domain and it is *never* announced by the trigger. The trigger under-matching is the sibling
+  law above; this law is the case where the trigger matches its own population perfectly and
+  the population was the wrong one.
+
+  **Second specimen, in the slice that minted this one** (#456/[ADR 0047](../decisions/0047-a-location-citation-is-path-qualified-and-names-a-symbol-and-the-positional-population-is-pinned-rather-than-banned.md)).
+  The mechanism reading of that issue is "line-numbered citations drift, so scan for them and
+  demand a symbol". The defect reading is "a reader cannot follow this citation", and the two
+  populations differ in both directions: **57 citations were already unfollowable with no drift
+  at all**, because a bare basename names two files — and a further 103-to-152 carry no file part
+  whatsoever, which the mechanism reading cannot see because there is no token to anchor on. Had
+  the control been specified as the mechanism, it would have shipped green over the larger half of
+  its own subject. What the defect reading buys is the *shape* of the instrument, not just its
+  regex: the binding assertion is scoped to the form the ADR mandates, and the populations that
+  are wrong-but-not-convertible are counted and printed rather than asserted against, because a
+  defect nobody can fix today is still a defect somebody should be able to read.

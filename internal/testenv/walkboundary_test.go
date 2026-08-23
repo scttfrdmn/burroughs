@@ -57,11 +57,17 @@ func skipWalkDir(d fs.DirEntry, also ...string) bool {
 // in the tree, decided by content rather than by extension, which makes it the widest domain any
 // control here walks and the one with the most to gain from the boundary holding.
 //
+// **Seven** since #456: citeform_test.go's `treeFiles` walk, whose domain is every file in the tree
+// regardless of extension, because it builds the *vocabulary* a citation is resolved against rather
+// than a set of files to scan. That makes it the first site where a walk that overran the boundary
+// would not report a false violation but a **false pass** — a citation naming a file that exists only
+// inside a nested copy of the repo would resolve, and the control would call it good.
+//
 // A floor and not an equality, because another walk site is a normal thing to add and the check that
 // matters is the routing one; if this number ever needs *lowering*, a walk site was deleted and that
 // is worth noticing deliberately. It tracks the known count for exactly that reason — left behind
 // when a new site lands, the floor stops being able to notice a deletion.
-const walkBoundaryFloor = 6
+const walkBoundaryFloor = 7
 
 // TestEveryTreeWalkStopsAtTheRepoBoundary is grave #369's control, and it guards the general shape
 // rather than the specific name.
