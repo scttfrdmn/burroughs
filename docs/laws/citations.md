@@ -218,10 +218,23 @@ reach is a law out of context.
   absence](evidence-and-instruments.md#a-truncated-search-proves-nothing-about-absence-because-a-display-limit-is-not-a-result-set)*
   is instance three — and each was minted as a fact about *its own* wrong object: the amend,
   the pipe. Four objects later the shape is the constant and the object is the variable, which
-  is why this one is stated over the claim rather than over the tool. What it adds is the
-  population: **discharge claims**,
-  every one of which is addressed to a principal, and none of which any sweep in this tree can
-  check — there is no artifact named to resolve. (Mint: Scott, on the #499 reconciliation.)
+  is why this one is stated over the claim rather than over the tool.
+
+  **What it adds is the population — and the population is partly instrumented, which the first
+  draft of this entry denied.** That draft said no sweep in this tree could check a discharge
+  claim, since there is no artifact named to resolve. `citecheck.sh`'s check 7 resolves a
+  discharge claim in a **PR body** against that PR's own changed-file list, and it fired on the
+  draft in the sharpest way available: the sentence asserting that nothing here checks such a
+  claim was itself resolved `ok` by the check, against this file. A false negative claim about
+  the instruments, inside a law about verifying the wrong object, on its first run — and it erred
+  in the flattering direction, which is the direction to look in. Two limits survive, and they
+  are what the rule carries. Check 7 is `--pr` only, so the channel all four instances actually
+  used — a tracker comment, a report to a principal — is outside every sweep's domain. And what
+  it verifies is that the **file** is in the diff, which is weaker than the obligation being
+  paid: a PR can change `README.md` and still not repair the sentence in it. So a citation is
+  what makes the claim checkable by a machine where one reaches and by a reader where none does,
+  and a description is checkable by neither. (Mint: Scott, on the #499 reconciliation. The
+  draft's own falsification is recorded here rather than repaired silently, on the same rule.)
 
 ### The word "grave" is a citation to a label, so the label lands before the body that cites it.
 
