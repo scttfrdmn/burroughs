@@ -233,8 +233,25 @@ reach is a law out of context.
   it verifies is that the **file** is in the diff, which is weaker than the obligation being
   paid: a PR can change `README.md` and still not repair the sentence in it. So a citation is
   what makes the claim checkable by a machine where one reaches and by a reader where none does,
-  and a description is checkable by neither. (Mint: Scott, on the #499 reconciliation. The
-  draft's own falsification is recorded here rather than repaired silently, on the same rule.)
+  and a description is checkable by neither.
+
+  **The live specimen for the uncovered channel, and it is a small population with the break in
+  the worst place.** #136's body carried `[0002]: …/docs/decisions/0002-internal-form.md` from the
+  moment it was filed, 2026-08-05. That file has never existed — the ADR is
+  `0002-interpreter-strategy.md` — and the link is the one every reader follows to check whether
+  0002 says what the issue claims it says, since the issue's whole case is 0002's letter. Eighteen
+  days, in an **issue** body: check 7 is `--pr` only, and `internal/testenv`'s three
+  markdown-link controls have every file in the tree in their domain and no tracker body in
+  anyone's. Measured across 500 issue and PR bodies, both citation channels resolved against
+  `git ls-files`: 657 unique citations, of which 599 are exact tracked paths, 36 resolve by unique
+  suffix, 19 name an external or fetched tree, and **1 dangles** — that one. *The channel nothing
+  watches is nearly clean, and the single break in it is the load-bearing citation of an open
+  issue*, which is the argument for the reader-side half of this rule rather than against it.
+  **Two wrong counts came first, and the middle one flattered**: one channel only gave 1-of-13,
+  understating the population by 644; counting every unresolved path as dangling gave 51, which
+  makes the specimen look systemic. Only the decomposition by mechanism gives 1 of 657. (Mint:
+  Scott, on the #499 reconciliation; specimen ordered recorded on the same review. The draft's own
+  falsification, above, is recorded rather than repaired silently, on the same rule.)
 
 ### The word "grave" is a citation to a label, so the label lands before the body that cites it.
 

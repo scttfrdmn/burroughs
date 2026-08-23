@@ -48,6 +48,17 @@ weakly-ordered platform.
   found only the commit that added it. If the citation cannot be produced the claim is **"not verified"**,
   not "paid". Retracted by posting; the wrong object was a plausible neighbour, the same class restated
   beside `unsupportedCeiling`.
+  - **The draft denied that any sweep here could check a discharge claim, and `citecheck.sh`'s check 7
+    resolved that very sentence `ok` against this file on the first run.** Recorded in the law rather
+    than repaired silently. The two surviving limits are what it now carries: check 7 is `--pr` only, so
+    the channel all four instances used — a tracker comment, a report to a principal — is in no sweep's
+    domain, and it verifies the **file** is in the diff rather than that the obligation is paid.
+  - **The live specimen is [#136](https://github.com/scttfrdmn/burroughs/issues/136)'s `[0002]` link**,
+    pointing at a `docs/decisions/` file that never existed, from the day it was filed — the citation
+    carrying that issue's entire thesis, in the channel nothing watches. Measured over 500 tracker
+    bodies: 657 unique repo-path citations, 599 exact, 36 unique-suffix, 19 external or fetched, **1
+    dangling**. Two earlier counts were wrong first, and the middle one flattered — 1-of-13 from reading
+    one channel, then 51 from calling every unresolved path dangling.
 - **A location citation in this tree is path-qualified and names a symbol — the form is now checked, and
   the line-numbered population is pinned** ([#456](https://github.com/scttfrdmn/burroughs/issues/456)
   slice 1, [ADR 0047](docs/decisions/0047-a-location-citation-is-path-qualified-and-names-a-symbol-and-the-positional-population-is-pinned-rather-than-banned.md);
