@@ -21,7 +21,8 @@ consequence list named the split:
 
 This slice is that pair. **The validator is the sole blocker for both**, which is worth stating
 because it is not the usual case: `internal/interp` already executes them as real tail calls
-(`exec.go:502`, ADR 0026 / #253), the decoder reads them under `gateTailCall`, and the wat encoder
+(`internal/interp/exec.go:runFrame`, ADR 0026 / #253), the decoder reads them under `gateTailCall`,
+and the wat encoder
 emits them. Nothing is missing but the two typing rules — the exact shape ADR 0025's G-1 carve-out
 names, arriving in the direction that retires the carve-out rather than widening it.
 

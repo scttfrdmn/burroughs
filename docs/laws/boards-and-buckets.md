@@ -363,3 +363,37 @@ reach is a law out of context.
     instrument in this tree can reach (`CLAUDE.md`'s stated limitation), so a `docs/laws/` reader
     following a pointer to either found nothing. Written out here for that reason: a law cited from
     a place the reader cannot follow is a citation with no target.
+
+### An unmeasured stability claim is not a protection.
+
+- **An unmeasured stability claim is not a protection.** *"It was a hope with a number attached."*
+  The sibling of the law above, in the direction nobody checks: a magnitude asserted as a **cost** at
+  least invites a bill, while a magnitude asserted as **stability** — "this file has not changed",
+  "this number is safe", "the invariant holds here" — describes a *non-event*, and a non-event
+  produces no artifact to falsify. So the claim sits there being true-sounding for as long as nobody
+  measures the thing it says is stable, and *"stable, therefore protected"* is the expensive
+  direction's mirror: it argues for doing nothing, so no bill arrives.
+  - **The two halves come apart the same way "large ⇒ expensive" does.** Stability is a claim about
+    the *rate* of change; protection is a claim about the *current state*. A quantity can be perfectly
+    stable and already wrong — frozen at a wrong value is still frozen — so holding it constant
+    preserves the error rather than preventing one. Verifying the rate says nothing about the level,
+    which is *correlated errors preserve deltas* pointed at a single number.
+  - **Specimen: PR #502's line-count invariant.** Two repairs to `internal/interp/control.go` were
+    reflowed to keep the file at exactly 611 lines, on the reasoning that ADR 0024 carries three
+    positional citations below the edit and an insertion would stale them. The stability half was
+    real and was measured: 611 lines since `83cbecf`, 81 commits. **The protection half was never
+    measured and is false.** All four of ADR 0024's citations were already wrong — the ones naming
+    `countByArray`, `branch`'s stack surgery, `returnFrom` and `needNum` — by offsets of roughly +24,
+    +43, +86 and +334. (Coordinates deliberately not repeated here; the amendment linked below is the
+    record, and quoting them a second time would add four rows to the very population this specimen is
+    about. That is not a carve-out but the ordinary rule: *a citation a sentence does not need is the
+    population.*) **Holding the file constant rescued none of them**; the
+    constraint's real yield was narrower — it added no *new* broken pointer to a population the same
+    PR was reporting on — and that is worth stating because it is a genuine but much smaller thing
+    than what was claimed.
+  - **What made it seductive is that the invariant was cheap and the check was cheap too.** One
+    `awk` over the cited files would have priced the protection before the reflow was worth doing.
+    The order of operations is the lesson: **measure what you are protecting before paying to protect
+    it**, because the payment is what makes the claim feel earned. (Ruling: Scott, on the #502
+    review — the amendment note it ordered is on
+    [ADR 0024](../decisions/0024-a-v128-value-occupies-two-adjacent-64-bit-slots-everywhere-a-slot-is-a-thing.md).)

@@ -111,6 +111,28 @@ reach is a law out of context.
     [a message is not its rendering](errors-and-testimony.md#a-message-is-not-its-rendering-and-a-term-about-the-rendering-cannot-be-discharged-by-the-messages-author).
     (Ruling: Scott, PR #490 review.)
 
+  - **Durability is not independence.** *"A durable record of an order, written by the party acting on
+    it, is durable but not independent provenance no matter how good the channel."* So an order that
+    arrived in session does not become citable by being written down: transcribing it into an issue
+    comment produces a permanent, timestamped, public artifact, and the artifact's author is still the
+    actor. Pointing a `Ratio-Class: ordered` at it cites yourself. The classification is therefore
+    **`carried`**, with the order quoted in prose where a reader takes it as testimony rather than
+    counting it as a citation — and the reason to state the rule this way is that it is **decidable
+    from who wrote the record**, not case-by-case from how good the channel was. A better channel is
+    the tempting wrong answer here: it improves durability, which was never the missing property.
+    - **This does not conflict with relaying a stamp into an ADR's `Status:`**, and the difference is
+      the sentence above's own test rather than an exception. A relay is *reviewed afterward* — the
+      principal reads the report that carries it and can say the stamp was never given — and **that
+      review is what supplies the independence** a self-written record lacks. So the two rules have
+      one shape: provenance is independent when someone other than the actor can falsify it. A relay
+      is falsifiable by its reader; a transcript cited as its own authority is not.
+    - **Specimen: PR #502's ratio trailer.** The probe was genuinely ordered (Scott, on the #499
+      reconciliation — *"take (c) first, as a measurement"*), and the nearest artifact was
+      [#499's rulings comment](https://github.com/scttfrdmn/burroughs/issues/499#issuecomment-5384079699),
+      written by the actor to record Scott's words. Classed `carried`. Sibling of *an in-session order
+      has no citation*, which said what not to do; this one says why, and generalizes past the
+      one-off. (Ruling: Scott, on the #502 review.)
+
 ### A retirement condition that names an issue rather than a state of the code retires on a bookkeeping event.
 
 - **A retirement condition that names an issue rather than a state of the code retires on a

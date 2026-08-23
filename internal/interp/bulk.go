@@ -307,8 +307,8 @@ func (in *Instance) execDataDrop(ins binary.Instr) error {
 // deleted at the same time. It is described rather than cited because it no longer exists, and a
 // citation to a deleted test is the class TestEveryCitedTestNameResolves catches (#116). Calling the arm directly with a raw `0xffffffffffffffff` slot panics as expected;
 // through the real front end the value never arrives, because `i32.const -1` stages `Imm0` as
-// `0xffffffffffffffff` and `exec.go:457` pushes it through `pushI32`, which narrows it. The test
-// is gone; this paragraph is what replaced it.
+// `0xffffffffffffffff` and `exec.go:1057` pushes it through `pushI32`, which narrows it (:457, wrong
+// before #136 touched this file, named `if r.Null {`). The test is gone; this paragraph replaced it.
 //
 // It is kept, for two reasons that are not "defensiveness". First, `memory.addr` one file over is
 // the same identity for the same reason and is equally load-bearing the moment memory64 lands:

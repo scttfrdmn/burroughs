@@ -269,3 +269,25 @@ reach is a law out of context.
   one, and the closing comment is what waits. The general form is that a body's citations are
   checked against the world as it stands when the body is written, and *a plan to make a
   citation true later is a citation that is false now*.
+
+### A control catching its own author at the moment of authorship is the strongest evidence it aims right.
+
+- **A control catching its own author at the moment of authorship is the strongest evidence it aims
+  right.** Recorded because the opposite result is the one that looks like success: an instrument that
+  only ever fires on someone else's work is indistinguishable from an instrument tuned to its author's
+  habits, and it will keep reporting green while the author writes around it without noticing. Three
+  firings in this family, two of them in consecutive turns:
+  - **The law falsified its own draft.** The paragraph in this file establishing the resolving form was
+    written with a citation in the very form it was banning.
+  - **The census pin fired on the changelog entry about re-pointing markdown line citations** — the
+    entry had added three positional citations in order to describe the three it removed.
+  - **The census pin fired again on ADR 0024's amendment**, whose subject is four drifted citations and
+    which therefore has to write all four down.
+  The third is the instructive one, because it was the first firing that was **not** a mistake: those
+  citations belonged there. An exact pin refusing a change its author believed was exempt is how the
+  *positional by construction* class was found on the markdown side at all — the alternative path,
+  where the author quietly decides their own case is different, produces an exemption instead of a
+  measurement, and *an exemption inherits none of the trigger's lessons*. So the habit is to treat a
+  self-firing as a result to publish rather than an inconvenience to route around, and to say which of
+  the two kinds it was. (Ruling: Scott, on the #502 review — *"that's the strongest evidence available
+  that they're aimed correctly, and it's worth a sentence in their own documentation."*)

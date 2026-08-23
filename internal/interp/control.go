@@ -29,8 +29,8 @@ import (
 // declined: it wants the pairing to live beside the body, which is a retention question in
 // `binary` (a parallel array keyed by instruction index) that `br_table`'s label vector also
 // needs and that neither has yet. Filed as **#136**, whose definition of done is a *benchmark*
-// rather than a vector — both readings are correct, so the suite cannot see the difference and
-// only a measurement can. The debt is a failing test rather than an intention.
+// rather than a vector — both readings are correct, so the suite cannot see the difference and only
+// a measurement can: `internal/interp/scanbench`. This header claimed a failing test — **grave #501**.
 //
 // # Why the pairing is exact rather than approximate
 //

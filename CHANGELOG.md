@@ -2277,6 +2277,92 @@ weakly-ordered platform.
   question. Nothing in `testdata/spec` asserts such a pair — vectors are written by people who know the
   types — which is why this control had to be written by hand and was watched disagreeing with the
   alternative before either landed. The replacement itself is held for the ruling on #441.
+- **`internal/interp/scanbench` prices the cost [#136](https://github.com/scttfrdmn/burroughs/issues/136)
+  proposes to remove, and it runs on Scott's order that the premise be measured before the port**
+  (the #499 reconciliation, decision 1: *"take (c) first, as a measurement … #136 may falsify the premise
+  rather than discharge the obligation"*). ADR 0002's Option B says build-time branch resolution makes
+  the work *"free"*; its benchmark compared three representations on a hot loop and **never measured the
+  entry-time scan**, so the magnitude the rejection turned on was asserted. Three shapes go through
+  `burroughs.Instantiate` and `Instance.Call` — the public entry point, real decoder, real dispatch loop
+  — rather than a replica on `dropbench`'s precedent, because *this subject is a ratio and not a cost*
+  and a replica whose executed work is cheaper than real dispatch inflates the scan's share in the
+  flattering direction. Scanned distance moves by padding placed **after** the loop's back-edge `br_if`:
+  every re-entry scans it, one trailing fall-through executes it.
+  - **Existence and scaling established, materiality on real code explicitly not.** Δ over four
+    distances is 2.90 / 42.81 / 293.96 / 2208.81 µs and the table lane is **flat** in distance (50.70 /
+    51.10 / 52.26 / 60.27 µs), which is a signature the scan lane cannot produce. Scott narrowed the
+    probe to existence-and-scaling with no `wasip1` guest, so no claim is made about real workloads, and
+    **the percentage is non-transferable**: the padding is unexecuted, so at d=64 the shape scans 6.4
+    words per executed instruction where a real loop body scans 1. Reading the largest Δ as a forecast
+    for real code would be a forecast beaten and banked as a win.
+  - **The pre-registered A/A veto fired, on the identical binary.** Sequential halves reported
+    significance on **seven of eight rows**, the largest on the row materiality is defined on at 5%, so
+    under §4 no A/B could be read and the comparison did not run. Every row had moved the same direction
+    on a loaded box, which named the confound — *a lane and a time window were the same variable*.
+    Interleaved run-by-run, the same binary against itself is `~` on eight of eight. An instrument
+    repair and not a re-roll: the veto stood until an A/A passed, and more samples would have made the
+    sequential form worse rather than better. The floor is recorded **with its limit**: per-row variance
+    to ±9%, worst on the row the 5% threshold is defined on, so a passing A/A is a statement about false
+    positives and not about resolution.
+  - **Condition 3 was unsatisfiable by construction, and that is the pre-registration's error.** Shape
+    (i) was registered as *"dynamic entries: 1"*; the module built has 1001, because **a loop's back-edge
+    re-executes the `opLoop` arm** and therefore re-scans per iteration. Its Δ contains the per-entry
+    scan and could never have been inside the floor whatever the table lane did — the mirror of *an
+    analytic zero is not a measurement*. Diagnosed rather than reinterpreted into a pass: the registered
+    verdict stands at **"mechanism not established"**, and a corrected control with **no structural
+    instruction of any kind** was posted to the tracker with its prediction *before it ran*, its post-hoc
+    provenance recorded in the result. It came back `~` (p=0.143), so the table lane wins nothing that is
+    not the scan.
+  - **A correctness precondition the registration lacked, added before any Δ was read and flagged as an
+    addition.** The full board under `-tags burroughs_endtable` must be identical, and is — the two dumps
+    `diff` empty. *A faster wrong answer is not a measurement*, and a lane nothing in the gate compiled
+    could only be checked this way. The build tag itself was vacuity-checked with `cmp` on the two
+    compiled binaries, since a tag matching nothing yields a clean A/B of a binary against itself.
+  - **The seam is build tags rather than a runtime knob**, because a flag read at every block entry puts
+    a branch in the lane that is meant to be unmodified and the attribution control would then be
+    pricing the branch. These are the tree's **first** custom build tags — every other gate is a
+    `Features` field — so `make build` now compiles the tagged arm as well: *an arm the gate never builds
+    rots without a signal*. **CI needed its own line for the same reason and the first claim that it did
+    not was false**: the `build` job runs `go build ./...` directly and never invokes `make build`, so
+    adding the line to `CHECK_GATES` covered the local gate and nothing else. *Text mirrors are not
+    failure-behaviour mirrors*, and *"`make check` is the local mirror of CI"* is a statement of intent
+    rather than a mechanism by which one step runs the other.
+    `vet`, `lint`, `test` and `deadcode` still see the untagged lane only;
+    `go test -tags burroughs_endtable ./...` is green by hand (19 packages, 0 FAIL) and is reported as a
+    measurement taken once rather than as coverage. The repaired claim is paid by the run's own step
+    list — `✓ Run go build -tags burroughs_endtable ./...` inside the `build` job — rather than by the
+    YAML, which is the reading that exposed the hole in the first place.
+
+- **Two laws minted on the #502 review, both about a claim that produces no artifact to check.**
+  - **Durability is not independence**
+    ([`docs/laws/decisions-and-thesis.md`](docs/laws/decisions-and-thesis.md)). *"A durable record of an
+    order, written by the party acting on it, is durable but not independent provenance no matter how
+    good the channel."* So transcribing an in-session order into an issue comment yields a permanent,
+    timestamped, public artifact whose author is still the actor, and a `Ratio-Class: ordered` pointed at
+    it cites the actor. Stated this way it is **decidable from who wrote the record** instead of
+    case-by-case from channel quality, and it does not conflict with relaying a stamp into an ADR's
+    `Status:`: a relay is reviewed afterwards, and that review is what supplies the independence. One
+    shape underneath — provenance is independent when someone other than the actor can falsify it. The
+    tempting wrong answer is a better channel, which improves the property that was never missing.
+  - **An unmeasured stability claim is not a protection**
+    ([`docs/laws/boards-and-buckets.md`](docs/laws/boards-and-buckets.md)), filed beside *a magnitude is
+    not a cost estimate* as its mirror in the direction nobody checks: a cost claim invites a bill, while
+    a claim that something is *held stable* describes a non-event and produces nothing to falsify.
+    Stability is a claim about the **rate** of change and protection a claim about the **current state**,
+    so a quantity frozen at a wrong value is still frozen — holding it constant preserves the error
+    rather than preventing it. Specimen and falsification below.
+- **ADR 0024 gets a dated amendment: its four location citations have drifted, and the drift is
+  measured** (ordered by Scott on the #502 review). A table of *cited as* against *actually at* —
+  roughly +24, +43, +86 and +335 lines — with the note that the third resolves as a `control.go`
+  reference only through its antecedent one line above, and that a `+335` stale number still names a
+  line that exists, which is why nothing in the tree fires on it.
+  - **Two premise corrections, both against the author's interest.** *All four* are wrong, not three:
+    the +24 one was called *arguable* on the grounds that its range contains call sites, but the ADR
+    quotes the **definition** immediately below it, so the range is wrong too — an earlier correction
+    comment had turned a true claim into a false one. And **ADR 0024 makes no protection claim at all**
+    (`grep -c -i "stable\|durable\|protect\|line count"` over it returns 0): the line-count-invariance
+    claim was the author's, in #502's body. So the amendment records drift and the retraction lands on
+    the report, not on the ADR — *a ruling's premises get checked, not only its conclusion*.
 
 ### Changed
 
@@ -3612,6 +3698,54 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **`control.go`'s header claimed an instrument that does not exist.** It read *"The debt is a failing
+  test rather than an intention"* — the design-debt law's own discharge form — and no failing test for
+  [#136](https://github.com/scttfrdmn/burroughs/issues/136) existed anywhere in the tree: `grep -rn '136'
+  --include='*.go' .` returns 21 lines, of which exactly two concern that issue and both are prose in
+  that same header. A benchmark cannot fail either, so the sentence's two halves named different
+  instruments. This is the standing remedy's own shape — *a claim that an obligation was paid, citing
+  nothing* — and **nothing in this tree could catch it**: `citecheck` resolves `#136` because the issue
+  exists, and a citation sweep checks pointers, never what is predicated of them.
+- **Three positional citations into `exec.go` re-pointed by content after a six-line insertion** — in
+  `internal/validate/tailcall.go`, `internal/interp/value.go` and `internal/interp/bulk.go`, each now
+  naming the symbol beside the number and, where the old number was wrong before this branch, saying
+  so. (Cited by path and not by line here, because `TestPositionalCitationCensusIsPinned` fired on the
+  first draft of this entry: three new markdown line citations, in the changelog entry about
+  re-pointing markdown line citations. The control's exemption side has no licence and wants none.)
+  *Adding lines
+  breaks every line citation below*, so the sweep ran over `exec.go:` tree-wide rather than over the
+  files touched; the two repairs that changed line counts were compressed back to the original count so
+  no second-order shift propagated — a precaution later **measured and found to have protected
+  nothing**, since the citations it was guarding were already wrong by up to +335. Four markdown
+  citations were found wrong **before** this branch existed and are reported rather than repaired, on
+  the pin's own written instruction that the dated-record question is
+  [#497](https://github.com/scttfrdmn/burroughs/issues/497)'s and Scott's; they are ADR 0024's, and
+  Scott's order on the #502 review was to give that ADR a dated amendment, above.
+  - **The census pin moved in both directions and both components are reported.** −1 for the one
+    citation this branch itself falsified and therefore owned; **+3** for the amendment's *cited as*
+    column, which has to write the four drifted coordinates down. Net 302 → **305**. Netting the two
+    into one figure would hide two different rates — conversions and specimens — behind one number.
+  - **Four specimens, three pins' worth, and the shortfall is the pair of censuses working.** The
+    fourth citation has no file part at all, so `posCiteRe` cannot see it and
+    `TestBareContinuationCitationsAreBounded` counts it instead (`go` 103 → 104). Three sibling
+    occurrences were kept out of `docs/laws/` by describing the citations rather than re-quoting them —
+    the law's sentence needed the offsets, not the coordinates — which is why the continuation pin moved
+    by one and not by four. A specimen set that splits across two populations is the argument for
+    pinning both: a reader who checks one number and infers the other accounts for three of four.
+  - **A third self-firing, and the first that was not a mistake.** The pin refused the amendment, and
+    the refusal is what found a class nobody had predicted: **positional by construction on the
+    markdown side**, where the coordinate *is* the datum and converting it would rewrite the record of
+    what the ADR said. Same class as the 23 composite-literal keys, reached from the prose direction.
+    Counted rather than exempted, because *an exemption inherits none of the trigger's lessons* and is
+    written by whoever tripped the instrument. The datum for #497 is that its convertible population is
+    smaller than its total by however many specimens the conversion work itself writes down.
+- **The controls' own documentation now records that a control catching its author at the moment of
+  authorship is the strongest evidence it aims right** ([`docs/laws/citations.md`](docs/laws/citations.md)
+  and the census's block comment; ordered by Scott on the #502 review). Three firings, two in
+  consecutive turns: the citations law falsified its own draft, the pin fired on the changelog entry
+  about re-pointing markdown citations, and the pin fired on ADR 0024's amendment. The reason to write
+  it down is that the **opposite** result is the one that looks like success — an instrument that only
+  ever fires on someone else's work is indistinguishable from one tuned to its author's habits.
 - **README's `unsupported` bullet no longer quantifies over an empty column.** *"Every row now in this
   column is harness debt"* was true of the population [#459](https://github.com/scttfrdmn/burroughs/issues/459)
   measured and became vacuous when the column reached zero — a universal over nothing, in the very

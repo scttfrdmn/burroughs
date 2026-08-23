@@ -68,10 +68,20 @@ import (
 //     number can never do.
 //   - **`TestPositionalCitationCensusIsPinned`** — binding, and the ratchet. Every positional
 //     citation, bucketed twice, pinned to an exact count. The population grew 91 → 263 → 303 while
-//     #456 sat open, at a rate the issue measured; an exact pin is what stops it, because a new
-//     positional citation cannot land without someone editing a number in this file and reading why.
-//     Exact and not a floor in both directions: *a floor bounds the catastrophic case only*, and
-//     here the interesting motion is +1.
+//     #456 sat open, at a rate the issue measured, and #502 moved it **in both directions**: −1 for
+//     ADR 0035's one citation into `exec.go`, which had been *correct* until that PR's own six-line
+//     insertion falsified it — drift the author caused is the author's to repair, whatever #497 decides
+//     about the dated records nobody broke — and **+3** for ADR 0024's amendment, which quotes the
+//     ADR's four drifted citations as its subject matter and so is positional by construction (below).
+//     Net **305**. The decrease is reported as a decrease rather than netted away, because a population
+//     that grows by specimens and shrinks by conversions is two rates and one number hides both.
+//     **Four specimens, +3 here**, and the missing one is the pair of censuses working: the fourth has
+//     no file part, so `posCiteRe` cannot see it and `TestBareContinuationCitationsAreBounded` counts
+//     it instead (`go` 103 → 104). A specimen set splitting across the two populations is the reason
+//     both are pinned — a reader who checks one number and infers the other gets three of four.
+//     An exact pin is what stops the growth, because a new positional citation cannot land without
+//     someone editing a number in this file and reading why. Exact and not a floor in both
+//     directions: *a floor bounds the catastrophic case only*, and here the interesting motion is +1.
 //
 // # The rule that excludes the data keys, stated rather than applied by hand
 //
@@ -476,10 +486,32 @@ func TestSymbolCitationsResolveToADeclaration(t *testing.T) {
 // # Why an exact pin
 //
 // The population is what #456 is about, and it **grew while the issue was open** — 91 in the title,
-// 263 at `6afbd9c`, 303 here — because *adding lines breaks every line citation below* and every slice
-// that lands adds prose. Scott's order to do this next named that rate as the reason. A floor would
-// have watched it grow; the exact pin is what makes +1 a red, and the red lands on the author of the
-// +1 rather than on whoever eventually takes #497.
+// 263 at `6afbd9c`, 303 at `496598e` — because *adding lines breaks every line citation below* and
+// every slice that lands adds prose. Scott's order to do this next named that rate as the reason. A
+// floor would have watched it grow; the exact pin is what makes +1 a red, and the red lands on the
+// author of the +1 rather than on whoever eventually takes #497. It is **305 here**, and both
+// components of that moved in the PR that earned them rather than in a later sweep: the one
+// conversion down, the four quoted specimens up.
+//
+// # The pin has now landed on its own author three times, which is the evidence that it aims right
+//
+// Twice while #502 was being written, and once the turn before. A control that only ever fires on
+// someone else's work is indistinguishable from a control tuned to the author's habits, so the
+// sequence is worth recording where the next person to edit these numbers will read it:
+//
+//   - The citations law in `docs/laws/citations.md` falsified **its own draft** — the paragraph
+//     asserting the form was written with a citation in the form it was banning.
+//   - This pin fired on the `CHANGELOG.md` entry *about re-pointing markdown line citations*, which
+//     had added three of them to describe the three it removed.
+//   - This pin fired again on ADR 0024's amendment, whose whole subject is four drifted citations and
+//     which necessarily writes all four down.
+//
+// The third is the one that changed the control's documentation rather than the diff, because it is
+// the first firing that was **not** a mistake: the citations were supposed to be there. That is how a
+// by-construction class gets found — not by predicting it, but by an exact pin refusing a change its
+// author believed was exempt. (Scott, on the #502 review: *"two turns running, a control has caught
+// its own author at the moment of authorship … that's the strongest evidence available that they're
+// aimed correctly, and it's worth a sentence in their own documentation."*)
 //
 // The 303 is not the 301 the relay comment on #456 reported, and the difference is the instrument
 // rather than the tree: that figure came from a shell one-liner whose file-part pattern rejected a
@@ -499,9 +531,29 @@ func TestSymbolCitationsResolveToADeclaration(t *testing.T) {
 //     *by construction*. A conversion cannot remove these: the scan they belong to reports lines, so
 //     a line is what its data is keyed on. This is why the residue is non-empty as a matter of form
 //     rather than of unfinished work, and it is what discharges the probe.
-//   - **181 are markdown**, of which the great majority are `CHANGELOG.md` and `docs/decisions/` —
+//   - **183 are markdown**, of which the great majority are `CHANGELOG.md` and `docs/decisions/` —
 //     dated records, where re-pointing a number rewrites the record rather than repairing it. That
 //     question is #497's and Scott's, not this control's; they are counted here, not judged.
+//     **One carve-out, and it is not a licence:** a citation that was correct until the *citing* PR's
+//     own insertion falsified it is that PR's drift, not a dated record, and #502 converted the one
+//     instance it created (181 → 180). Measured rather than assumed — **all four** of ADR 0024's
+//     citations into `internal/interp` are wrong today, by roughly +24, +43, +86 and +335 lines, so
+//     this population's drift is already unbounded and holding a file's line count constant rescues
+//     none of it. A stale `+335` still names a line that exists, which is why nothing here fires on it.
+//     (An earlier reading called the +24 one *arguable* on the grounds that its range contains call
+//     sites; the ADR quotes the *definition* immediately below it, so the range is wrong too. The
+//     correction ran against the reader's own interest, which is the only direction worth recording.)
+//   - **Three of those 183 are positional by construction, and they are the first markdown rows that
+//     are.** ADR 0024's amendment tabulates the four citations above in a *"cited as"* column, so the
+//     drifted coordinate is the datum: converting one of those ranges to a symbol would destroy the
+//     record of what the ADR said. (Named without quoting one, which would put another specimen in
+//     this comment's own channel — the sentence does not need the coordinate, and a citation a
+//     sentence does not need is the population.) Same class as the 23 data keys, from the other
+//     direction — prose whose subject happens to be a coordinate. **Counted, not exempted**, because
+//     an exemption is written by whoever tripped the instrument and *inherits none of the trigger's
+//     lessons*; the pin rose by three and this paragraph is the receipt. The datum #497 should carry is
+//     that its convertible population is smaller than its total by however many specimens the
+//     conversion work itself writes down.
 //   - **57 name no file**, because their basename is ambiguous. Those are broken now, and no drift
 //     was needed to break them.
 //   - **No bucket for a positional citation naming a file that does not exist**, because there are
@@ -513,11 +565,11 @@ var (
 		chanComment:  92,
 		chanDataKey:  23,
 		chanLitValue: 7,
-		chanMarkdown: 181,
+		chanMarkdown: 183,
 	}
 	positionalByResolution = map[string]int{
 		resPathQualified: 90,
-		resBasenameUniq:  156,
+		resBasenameUniq:  158,
 		resBasenameAmbig: 57,
 	}
 )
@@ -526,7 +578,7 @@ var (
 //
 // It prints the whole census — both margins, the per-file breakdown, and every ambiguous basename
 // with the files it could mean — because the print is what the next reader works from, and a control
-// that only asserts a number tells them nothing about which of 303 citations to convert first.
+// that only asserts a number tells them nothing about which of 305 citations to convert first.
 func TestPositionalCitationCensusIsPinned(t *testing.T) {
 	cites := gatherLocationCitations(t)
 
@@ -680,8 +732,16 @@ const bareContWindow = 12
 const bareContReferenceFloor = 450
 
 // bareContByAntecedent pins the two buckets that bound the in-scope population.
+//
+// **The `go` bucket rose to 104 in #502, and the +1 is positional by construction.** ADR 0024's
+// amendment tabulates the ADR's four drifted citations, one of which has no file part; the table's
+// *"cited as"* column has to reproduce it verbatim, so the specimen of the bare form is itself a bare
+// occurrence. Three sibling occurrences were kept out of `docs/laws/` in the same PR by describing the
+// citations instead of re-quoting them — the law's sentence needed the offsets, not the coordinates —
+// which is the ordinary rule rather than an exemption: a citation a sentence does not need is the
+// population. What is left is the one the sentence cannot do without.
 var bareContByAntecedent = map[string]int{
-	"go":             103,
+	"go":             104,
 	"(unattributed)": 49,
 }
 

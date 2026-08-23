@@ -418,3 +418,48 @@ for the hot loop, not every struct that grows a field.
   push/pop's atomicity with respect to `drop`'s sequence-number comparison, watched fail under a
   mutation that separates the two halves' sequence numbers before being trusted — grave #206's
   shape, caught at design time rather than found in production a second time.
+
+## Amendment, 2026-08-22 — this ADR's four location citations have drifted, and the drift is measured
+
+Appended rather than rewritten, per *a ruling is discharged by appending to the ADR, body preserved*.
+The body above is unchanged, including the four citations, because re-pointing a number in a dated
+record rewrites the record rather than repairing it — the conversion question is
+[#497](https://github.com/scttfrdmn/burroughs/issues/497)'s and Scott's. What this note adds is the
+**measurement**, so a reader following one of them knows it is a snapshot and by roughly how much it
+has slipped.
+
+| cited as | what the body says it is | declared at | drift |
+|---|---|---|---|
+| `control.go:154-163` | `countByArray`, whose definition the body quotes inline | 178 | ≈ +24 |
+| `control.go:291-308` | `branch`'s `src :=` / `copy(st.num[l.height:], st.num[src:])` | 334–342 | ≈ +43 |
+| `:344-364` | `returnFrom`'s identical shape | 430 | ≈ +86 |
+| `exec.go:1141` | `needNum`, checking `len(s.num) < n` | 1475 | ≈ +334 |
+
+**All four, not three.** An earlier report on [#502](https://github.com/scttfrdmn/burroughs/pull/502)
+called the first one *arguable* on the ground that lines 154–163 contain calls to `countByArray`. That
+reading does not survive the body: the citation is immediately followed by a fenced quotation of the
+function's **definition**, so the definition is what it points at. The correction runs against my own
+interest, which is why it is recorded here — *a favourable reading banked without being asked why* is
+how a self-correction turns a true statement into a false one.
+
+The third row is a **bare continuation citation** — no file part at all — resolvable as a `control.go`
+reference only through its antecedent in the row above. It is counted and checked here on that basis.
+(Described rather than quoted a second time: the table already carries the coordinate, and a repetition
+would put another row in the population this note is measuring for no gain in what the sentence says.)
+
+### What this note does **not** do
+
+It does not retract a stability claim, because **this ADR never made one**. The claim that holding
+`internal/interp/control.go` at 611 lines protected these citations was made in #502's report, not
+here, and the amendment is filed against this file only because this file is where the drifted
+citations live. Scott's ruling on the #502 review named the general form — *an unmeasured stability
+claim is not a protection; it was a hope with a number attached* — and it is recorded in
+[boards-and-buckets.md](../laws/boards-and-buckets.md#an-unmeasured-stability-claim-is-not-a-protection)
+with #502's line-count invariant as its specimen. Attributing it to this ADR would be the drifted
+citation defect one level up: a correction filed against the wrong author.
+
+Of the drift above, **+6 is #502's** — its six-line insertion into `internal/interp/exec.go` moved
+`needNum` from 1469 to 1475. The rest predates that branch. That distinction matters and is the reason
+the amendment states offsets rather than a verdict: *a citation you broke this hour is not evidence
+about the class the issue was filed for*, so #497's population should not be credited with drift its
+own authors did not cause.
