@@ -21,6 +21,44 @@ weakly-ordered platform.
 
 ### Added
 
+- **`DefaultFeatures()` is pinned gate by gate, and each on-gate's row names the ADR that stamped the
+  flip** (ordered by Scott on the [#499](https://github.com/scttfrdmn/burroughs/issues/499) reconciliation,
+  decision 2). `defaultGatePolicy` in `internal/binary/sections_test.go` carries one row per `Features`
+  field with its default and, for an on-gate, a resolvable path under `docs/decisions/`;
+  `TestDefaultGatePolicyIsPinnedGateByGateWithItsStamp` derives its domain from the struct by reflection,
+  so a tenth gate is in scope without an edit and the failure it gets is *"add a row"* rather than silence.
+  - **The gap was measured, not argued.** #466's amendment to v0's closure conditions — every gate's
+    default *"a recorded decision"* rather than *"off"* — moved the condition from a state of the code
+    into a claim about provenance, and nothing in the tree read provenance. What held it was two
+    membership assertions. Substituting a flip into `DefaultFeatures` one field at a time and running the
+    whole suite against each: six of seven off-gates fail only tests whose subject is elsewhere, and
+    **`Threads: true` passes everything with the board byte-identical**, its vectors living outside the
+    256 files the board walks. *A closure condition satisfiable by accident is not a condition.*
+  - **Watched failing eleven ways**, against a forecast registered on #499 before the mutations ran:
+    nine field flips, all nine fired; a tenth field with no row, and a row naming no field, one arm each.
+    The four scalar assertions in `TestDefaultFeaturesAndZeroValueAreDistinctFacts` moved here — two
+    authorities for one fact is a state where the weaker one is what a later reader trusts — and that
+    test keeps the half this one cannot make: the policy reaching the package-level entry point.
+- **A claim that an obligation was paid cites the artifact that pays it, never a description**
+  ([`docs/laws/citations.md`](docs/laws/citations.md), Scott's standing remedy on #499). Four
+  self-retractions in four reports were one shape — verification of the wrong object reported as
+  verification of the right one — and the specimen is a discharge claim about a discharge law: #464's
+  closing comment reported a README repair as paid, *"checked before this transition rather than
+  assumed"*, when the sentence was intact, `git log --since` over the file was empty, and `git log -S`
+  found only the commit that added it. If the citation cannot be produced the claim is **"not verified"**,
+  not "paid". Retracted by posting; the wrong object was a plausible neighbour, the same class restated
+  beside `unsupportedCeiling`.
+  - **The draft denied that any sweep here could check a discharge claim, and `citecheck.sh`'s check 7
+    resolved that very sentence `ok` against this file on the first run.** Recorded in the law rather
+    than repaired silently. The two surviving limits are what it now carries: check 7 is `--pr` only, so
+    the channel all four instances used — a tracker comment, a report to a principal — is in no sweep's
+    domain, and it verifies the **file** is in the diff rather than that the obligation is paid.
+  - **The live specimen is [#136](https://github.com/scttfrdmn/burroughs/issues/136)'s `[0002]` link**,
+    pointing at a `docs/decisions/` file that never existed, from the day it was filed — the citation
+    carrying that issue's entire thesis, in the channel nothing watches. Measured over 500 tracker
+    bodies: 657 unique repo-path citations, 599 exact, 36 unique-suffix, 19 external or fetched, **1
+    dangling**. Two earlier counts were wrong first, and the middle one flattered — 1-of-13 from reading
+    one channel, then 51 from calling every unresolved path dangling.
 - **A location citation in this tree is path-qualified and names a symbol — the form is now checked, and
   the line-numbered population is pinned** ([#456](https://github.com/scttfrdmn/burroughs/issues/456)
   slice 1, [ADR 0047](docs/decisions/0047-a-location-citation-is-path-qualified-and-names-a-symbol-and-the-positional-population-is-pinned-rather-than-banned.md);
@@ -3574,6 +3612,14 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **README's `unsupported` bullet no longer quantifies over an empty column.** *"Every row now in this
+  column is harness debt"* was true of the population [#459](https://github.com/scttfrdmn/burroughs/issues/459)
+  measured and became vacuous when the column reached zero — a universal over nothing, in the very
+  paragraph that warns against misreading a drained column. The claim is now stated over the population
+  that was measured, and the reading it protects is unchanged. Twice deferred as a rider and the subject
+  of a false "paid" claim to Scott ([#464](https://github.com/scttfrdmn/burroughs/issues/464#issuecomment-5383999052));
+  it lands here as charged overhead rather than on a third rider, which
+  [#465](https://github.com/scttfrdmn/burroughs/issues/465) banned.
 - **The const-expression legality check ran on the single-byte dispatch path only, so all 305
   prefixed arms were const-legal by omission — 296 of them wrongly**
   ([#471](https://github.com/scttfrdmn/burroughs/issues/471)). `struct.get`, `array.set`,

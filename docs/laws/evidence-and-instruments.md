@@ -758,3 +758,57 @@ reach is a law out of context.
   'a pattern that can match the instrument's own output'; this adds that a pattern reproduced without
   its control's preprocessing measures a different thing entirely"* — with the heading renamed to the
   wider statement and the fold-in ordered in place of a near-duplicate entry.)
+
+### A truncated search proves nothing about absence, because a display limit is not a result set.
+
+- **A truncated search proves nothing about absence, because a display limit is not
+  a result set.** Scott's mint, on the #498 relay, and the words are his:
+
+  > Retracting your own sharpest argument by posting is the right handling, and the
+  > cause deserves minting: **a truncated search proves nothing about absence.** `|
+  > head` is a display limit, not a result set — the declaration was eleventh.
+  > Absence is only claimable over a complete enumeration.
+
+  **The specimen is the sharpest argument #456 had, and it was false.** A symbol was
+  reported to a principal as *"defined nowhere in the tree"*, with five present-tense
+  sentences named as citations to a thing that did not exist and the finding called the
+  issue's strongest evidence. The search behind it ended in `| head`. It returned ten
+  lines because ten is what `head` returns; the declaration was the eleventh match.
+  Retracted by posting rather than editing
+  ([#456](https://github.com/scttfrdmn/burroughs/issues/456#issuecomment-5383301564)),
+  since a silent edit leaves the record showing a claim that was never made.
+
+  **This is not a sharper `--limit` and no limit discipline reaches it**, which is why
+  it is a key rather than a tenth specimen under
+  [coverage is a claim](#coverage-is-a-claim-an-instruments-domain-is-an-assertion-it-cannot-check-about-itself).
+  A truncation *distorts* a count — that family's subject, remedied by a limit above the
+  plausible population and by reading an exactly-on-the-limit result as a truncation. It
+  **inverts** a negative claim: from *at least ten exist* to *none exist*, which is not an
+  error of magnitude but of sign, and the direction it errs in is always the flattering
+  one, because a search that finds nothing is the shape of a finding. The asymmetry is
+  what makes the rule mechanical rather than a caution: a positive claim is licensed by
+  **one** row, so a truncated read can support it; a negative claim is licensed only by a
+  **complete enumeration**, so no truncated read can ever support it. `head`, `--limit`,
+  a pager, an IDE's match cap, a subagent's summarized excerpt, the first screen of
+  output — all of them serve a positive claim and none of them serve this one.
+
+  **Nothing downstream catches it, and that is the second half.** A negative claim is a
+  citation with no target: *"defined nowhere"*, *"no vector reaches this"*, *"never in X"*
+  name no artifact, so `citecheck.sh` has nothing to resolve, no line-drift sweep applies,
+  and review confirms it by reading a plausible sentence. Every other citation in this repo
+  is checkable *because* it points at something. So the guard is at the moment of writing,
+  and it is one question: **would a complete enumeration have been cheap?** It nearly always
+  is — `grep -c`, `wc -l`, the same query without the pipe — and a negative claim stated
+  without one is stated without evidence. Its sibling on the sourcing side is *count with a
+  counter, not by eye*; the difference is that eye-counting produces a wrong number while
+  this produces a confident nothing. (Mint: Scott, on the #498 relay. Specimen and retraction:
+  [#456](https://github.com/scttfrdmn/burroughs/issues/456#issuecomment-5383301564).)
+
+  **The other half of the same relay: name which grounds are load-bearing after a retraction.**
+  Removing a false argument changes what the conclusion rests on, and a record that only deletes
+  the argument leaves the next reader to assume the case is unchanged. Scott's term — *"the record
+  should say which grounds are load-bearing now"* — so
+  [ADR 0047](../decisions/0047-a-location-citation-is-path-qualified-and-names-a-symbol-and-the-positional-population-is-pinned-rather-than-banned.md)
+  states it in the ADR itself: the case for symbol citations *"rests on the two measured defects above
+  and not on a rename that broke prose."* A retraction that does not re-state the load-bearing grounds
+  is half a retraction, and the surviving half is the part that gets cited later.

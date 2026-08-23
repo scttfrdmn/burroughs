@@ -170,6 +170,89 @@ reach is a law out of context.
   everything the decision contradicts has been found. Grep for the old answer, not
   just for the place you expect it. (Ruling: Scott, #28.)
 
+### A claim that an obligation was paid cites the artifact that pays it, never a description of it.
+
+- **A claim that an obligation was paid cites the artifact that pays it — a diff hunk, a
+  commit, a file and line — never a description.** Scott's standing remedy, on the #499
+  reconciliation, and the words are his:
+
+  > That's the fourth self-retraction in four reports, and all four are one shape:
+  > verification of the wrong object reported as verification of the right one — the edit
+  > made after the amend, the file list written from intent, `grep | head` stopping before
+  > the declaration, and now the neighbour restatement read as the README repair. From here:
+  > **any claim that an obligation was paid must cite the artifact that pays it** — diff
+  > hunk, commit, file and line — never a description. If the citation can't be produced,
+  > the claim is "not verified," not "paid."
+
+  **The specimen is a discharge claim about a discharge law.** #464's closing comment told
+  Scott that finding 6 was paid — that README's *"Every row now in this column is harness
+  debt"*, a universal quantifying over an empty column, was *"gone from the file"* — and said
+  in the same sentence that this was **"checked before this transition rather than assumed,
+  because a rider is exactly what a closing issue drops silently."** Every clause was false.
+  The sentence was intact and present-tense; `git log --since` over README was empty;
+  `git log -S` on the phrase returned exactly one commit, the one that added it. So the
+  paragraph explaining why riders get dropped silently dropped one, while asserting it had
+  checked — which is worse than the unpaid obligation, because it converts an open item into a
+  discharged one **on the record**. Retracted by posting
+  ([#464](https://github.com/scttfrdmn/burroughs/issues/464#issuecomment-5383999052)).
+
+  **The mechanism is the whole lesson: the wrong object was a plausible neighbour of the right
+  one.** The class *is* restated beside `unsupportedCeiling` in `internal/spec/spec_test.go`,
+  which the same closing comment cited in its next clause. Reading that and concluding README
+  had been repaired is *a check of the wrong file reported as a check of the right one* — and
+  the four instances Scott names differ only in which neighbour stood in: the version before
+  an amend, the intent behind a file list, the tenth line of a truncated match, the
+  restatement next door. Recollection dressed as verification passes review every time,
+  because the sentence describing the check is as fluent as the check would have been.
+
+  **Why a citation is the remedy and care is not.** A citation names an object, so producing
+  one forces the object to be opened; a description names a belief about an object, and can be
+  produced without touching it. That is the asymmetry the rule runs on, and it is mechanical:
+  **if the citation cannot be produced, the claim is "not verified", not "paid"** — the third
+  outcome, not the flattering one. For a code location the form is
+  [ADR 0047](../decisions/0047-a-location-citation-is-path-qualified-and-names-a-symbol-and-the-positional-population-is-pinned-rather-than-banned.md)'s:
+  path-qualified and naming a symbol. Two of Scott's four instances are already laws of their
+  own — *[a claim about your own diff is sourced from the
+  diff](evidence-and-instruments.md#a-claim-about-your-own-diff-is-sourced-from-the-diff--an-edit-made-after-an-amend-is-not-in-the-amend)*
+  is instance one, and *[a truncated search proves nothing about
+  absence](evidence-and-instruments.md#a-truncated-search-proves-nothing-about-absence-because-a-display-limit-is-not-a-result-set)*
+  is instance three — and each was minted as a fact about *its own* wrong object: the amend,
+  the pipe. Four objects later the shape is the constant and the object is the variable, which
+  is why this one is stated over the claim rather than over the tool.
+
+  **What it adds is the population — and the population is partly instrumented, which the first
+  draft of this entry denied.** That draft said no sweep in this tree could check a discharge
+  claim, since there is no artifact named to resolve. `citecheck.sh`'s check 7 resolves a
+  discharge claim in a **PR body** against that PR's own changed-file list, and it fired on the
+  draft in the sharpest way available: the sentence asserting that nothing here checks such a
+  claim was itself resolved `ok` by the check, against this file. A false negative claim about
+  the instruments, inside a law about verifying the wrong object, on its first run — and it erred
+  in the flattering direction, which is the direction to look in. Two limits survive, and they
+  are what the rule carries. Check 7 is `--pr` only, so the channel all four instances actually
+  used — a tracker comment, a report to a principal — is outside every sweep's domain. And what
+  it verifies is that the **file** is in the diff, which is weaker than the obligation being
+  paid: a PR can change `README.md` and still not repair the sentence in it. So a citation is
+  what makes the claim checkable by a machine where one reaches and by a reader where none does,
+  and a description is checkable by neither.
+
+  **The live specimen for the uncovered channel, and it is a small population with the break in
+  the worst place.** #136's body carried `[0002]: …/docs/decisions/0002-internal-form.md` from the
+  moment it was filed, 2026-08-05. That file has never existed — the ADR is
+  `0002-interpreter-strategy.md` — and the link is the one every reader follows to check whether
+  0002 says what the issue claims it says, since the issue's whole case is 0002's letter. Eighteen
+  days, in an **issue** body: check 7 is `--pr` only, and `internal/testenv`'s three
+  markdown-link controls have every file in the tree in their domain and no tracker body in
+  anyone's. Measured across 500 issue and PR bodies, both citation channels resolved against
+  `git ls-files`: 657 unique citations, of which 599 are exact tracked paths, 36 resolve by unique
+  suffix, 19 name an external or fetched tree, and **1 dangles** — that one. *The channel nothing
+  watches is nearly clean, and the single break in it is the load-bearing citation of an open
+  issue*, which is the argument for the reader-side half of this rule rather than against it.
+  **Two wrong counts came first, and the middle one flattered**: one channel only gave 1-of-13,
+  understating the population by 644; counting every unresolved path as dangling gave 51, which
+  makes the specimen look systemic. Only the decomposition by mechanism gives 1 of 657. (Mint:
+  Scott, on the #499 reconciliation; specimen ordered recorded on the same review. The draft's own
+  falsification, above, is recorded rather than repaired silently, on the same rule.)
+
 ### The word "grave" is a citation to a label, so the label lands before the body that cites it.
 
 - **The word "grave" is a citation to a label, so the label lands before the body that
