@@ -21,6 +21,58 @@ weakly-ordered platform.
 
 ### Added
 
+- **A location citation in this tree is path-qualified and names a symbol — the form is now checked, and
+  the line-numbered population is pinned** ([#456](https://github.com/scttfrdmn/burroughs/issues/456)
+  slice 1, [ADR 0047](docs/decisions/0047-a-location-citation-is-path-qualified-and-names-a-symbol-and-the-positional-population-is-pinned-rather-than-banned.md);
+  option chosen by Scott on the #486 review). A line number in the **pinned reference** is a permanent
+  address, and the habit was learned there; applied to files this repo edits it is a snapshot with
+  nothing behind it. `internal/testenv/citeform_test.go` carries three assertions and
+  `TestEveryTreeWalkStopsAtTheRepoBoundary`'s floor moves 6 → 7.
+  - **Two defects, and the second needs no drift to be one.** Drift is the known half — #440 added 29
+    lines to one doc block and silently invalidated an exact citation. The half the issue had not named
+    is **ambiguity: 57 citations whose bare basename names no file at all**, because two tracked files
+    share it — a matcher basename cited 22 times against two matching implementations, a module basename
+    11 against two, an instruction basename 10 against three. Those are wrong today, before any edit.
+  - **The population is pinned exactly on two margins, not banned.** 303 positional citations: by
+    channel (markdown, Go comment, composite-literal key, string value) and by resolution
+    (path-qualified, bare-but-unique, ambiguous). Two margins because neutering the data-key rule leaves
+    the **total unchanged** while moving 23 citations between buckets — a single-number pin could not
+    have seen it. Exact rather than a floor because *a floor bounds the catastrophic case only* and the
+    motion that matters here is +1. It grew 91 → 263 → 303 while the issue sat open, which is what
+    Scott's order to take it next named as the reason.
+  - **Scott's term — "exclude the 39 map keys by a stated rule, not by hand" — is honoured by the AST's
+    own rule**, and the rule's population is **23, not 39**: a positional citation in a
+    composite-literal key is a coordinate in a control's data, not prose a reader follows. The file
+    holds 43 such citations; 23 are keys, 3 sit in a reason string, 17 in comments. A rule stated as
+    "the map keys in that file" would have swept 20 pieces of live prose in with the data.
+  - **A third population, the one Scott's ruling folded in: 651 citations with no file part at all**, a
+    bare colon-and-number in a code span continuing an earlier citation. Nothing in the tree could see
+    them. Bucketed by the extension of the nearest antecedent within twelve lines, because what kind of
+    citation it is depends on what it continues — a spec-suite or reference antecedent is durable by
+    construction (490 of them), a Go antecedent is #456's defect with the file part deleted. The Go
+    bucket and the `(unattributed)` bucket are both pinned, which makes the in-scope population a closed
+    interval of **103..152** rather than a count; pinning only the Go bucket would let it grow inside
+    the bucket that admits it has not looked. Two independent mechanisms agree on all six buckets.
+  - **Three of the ruling's premises about this population are false as stated and its proposition is
+    exactly right**: the package it names holds no occurrence of the spelling it names, and the tree-wide
+    figure is not 14. *An issue's list is a registry, not an inventory*, applied to a principal's
+    estimate — the control acts on the proposition and reports the measurement.
+  - **The binding assertion is deliberately the small half**, floor 4, on `inventory_test.go`'s
+    skip-licence keys — the tree's own machine-consumed precedent for the form, so the ADR invents no
+    spelling. A floor and not an equality because the conversion ([#497](https://github.com/scttfrdmn/burroughs/issues/497))
+    moves it upward and an equality would obstruct it.
+  - **The control's own footprint in its own sample is disclosed and carries no exemption.** Two
+    illustrations are written in live citation shapes; neither is positional, and what keeps them out of
+    the binding domain is the **resolution** axis rather than a licence. That is also the file's
+    tripwire: written at a real path, the assertion would demand a declaration for a placeholder.
+  - **Nine mutations, each an asserted single substitution restored by digest.** The bill's first draft
+    restored with a command that cannot restore an untracked file, so four rows silently reported the
+    first row's failure — *a repair is confirmed by the authority*, and a restore is confirmed by the
+    digest coming back.
+  - **The seventh walk site is the first where overrunning the repo boundary produces a false pass.** Its
+    domain is every file regardless of extension, because it builds the vocabulary a citation resolves
+    *against*; a nested copy of the repo would make a citation resolve to a file that exists only there.
+
 - **`citecheck.sh` check 7 — a *discharge* claim in a PR body names a file that PR changes**
   ([#493](https://github.com/scttfrdmn/burroughs/issues/493), riding #471 as charged overhead on
   Scott's order). *"Recorded at the site and in the citations family"* asserts that work landed
