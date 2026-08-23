@@ -3,6 +3,9 @@ package binary
 import (
 	"errors"
 	"maps"
+	"os"
+	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -540,25 +543,14 @@ func TestGatesRejectWithFeatureNames(t *testing.T) {
 // test is what keeps a future flip from silently reintroducing the same collapse (a field
 // whose zero value carries the default, which cannot flip default-on without either breaking
 // every other caller's all-off assumption or inverting the field's own name into a lie).
+//
+// Its four scalar assertions moved to [TestDefaultGatePolicyIsPinnedGateByGateWithItsStamp],
+// which makes the same statement over **every** field by reflection rather than over the two
+// that had flipped when this test was written. What stays here is the half that test cannot
+// make: the policy actually reaching the package-level entry point. Two memberships asserted
+// in two places would be two authorities for one fact, and the weaker one is the one a later
+// reader trusts.
 func TestDefaultFeaturesAndZeroValueAreDistinctFacts(t *testing.T) {
-	if got := (Features{}); got.SIMD {
-		t.Errorf("the zero value's own SIMD field is %v, want false — the zero value must stay "+
-			"every gate off unconditionally, per Features's own doc comment", got.SIMD)
-	}
-	if got := DefaultFeatures(); !got.SIMD {
-		t.Errorf("DefaultFeatures().SIMD = %v, want true — #227/ADR 0025's own flip", got.SIMD)
-	}
-	// The second divergence, pinned at the ledger for the same reason the first is: the flip
-	// is a policy fact about this function, and without an assertion here the only thing
-	// holding it is a board count that a corpus change could also move.
-	if got := DefaultFeatures(); !got.RelaxedSIMD {
-		t.Errorf("DefaultFeatures().RelaxedSIMD = %v, want true — the relaxed-SIMD flip", got.RelaxedSIMD)
-	}
-	if got := (Features{}); got.RelaxedSIMD {
-		t.Errorf("the zero value's own RelaxedSIMD field is %v, want false — a second flip must "+
-			"not erode the zero value any more than the first did", got.RelaxedSIMD)
-	}
-
 	// v128 in a type section (the identical synthetic image TestGatesRejectWithFeatureNames
 	// uses for its own "simd" case): DecodeModule now accepts it directly, with no Decoder
 	// constructed by the caller — this is DefaultFeatures actually reaching the package-level
@@ -576,6 +568,178 @@ func TestDefaultFeaturesAndZeroValueAreDistinctFacts(t *testing.T) {
 		t.Errorf("&Decoder{}.DecodeModule(v128 type): got %v, want ErrFeatureDisabled — the zero "+
 			"value must still mean every gate off", err)
 	}
+}
+
+// defaultGatePolicy is v0's whole default gate policy written down one gate at a time, and
+// it is the line a flip has to edit before it can land.
+//
+// The two on-rows name the ADR that stamped them and the test resolves the file, because
+// behaviour 4's rule is that a flip is a stamp-tier event: the mechanism self-merges, the
+// *default* holds for a principal. So an on-row with no resolvable stamp is the one state
+// this table exists to make impossible.
+//
+// The off-rows carry no citation on purpose. There is nothing to cite — the default is
+// behaviour 4's, which is what a gate gets by *not* having a flip event, so a citation
+// there would be a pointer to an absence. What they carry instead is why the gate is off
+// today, since that is the sentence a future flip has to argue with.
+var defaultGatePolicy = map[string]struct {
+	on    bool
+	stamp string // an on-row's flip ADR, resolved as a path by the test; empty for an off-row
+	why   string
+}{
+	"ExceptionHandling": {why: "behaviour 4's default: no flip event. #95 owes the tag section's payload grammar first"},
+	"SIMD":              {on: true, stamp: "0025-g-1-carves-out-vectors-whose-sole-blocker-is-9s-deferred-validator.md", why: "#227, the project's first default-behaviour change"},
+	"Threads":           {why: "behaviour 4's default, and the feature is v1's phase (contract §§2–5) — its vectors are outside the board's file set, so no board could see this row move"},
+	"Memory64":          {why: "behaviour 4's default: no flip event"},
+	"GC":                {why: "behaviour 4's default. #172 is scheduled to `v0.2.0 GC gate`, a milestone after v0.1.0"},
+	"TailCall":          {why: "behaviour 4's default: no flip event"},
+	"RelaxedSIMD":       {on: true, stamp: "0028-relaxed-simd-lowerings-are-deterministic-and-architecture-uniform-the-references-choice-taken-once.md", why: "#275, and it satisfies G-1's literal reading without ADR 0025's carve-out"},
+	"MultiMemory":       {why: "behaviour 4's default: no flip event"},
+	"ExtendedConst":     {why: "behaviour 4's default. #109 is why this field exists at all — the gate the file forgot"},
+}
+
+// TestDefaultGatePolicyIsPinnedGateByGateWithItsStamp is the whole of `DefaultFeatures`
+// held by one assertion per gate, ordered by Scott on the #499 reconciliation.
+//
+// # The gap it was built for, which was measured rather than argued
+//
+// `CLAUDE.md`'s ladder used to close v0 on "every 3.0-feature gate present **and off**".
+// #464/#466 found that clause falsified by two flips Scott had himself stamped, and the
+// amendment reads "*and its default a recorded decision*" — which moved the condition from
+// a state of the code into a claim about **provenance**, and provenance is the one kind of
+// claim nothing in this tree reads.
+//
+// What held the amended condition before this test was
+// [TestDefaultFeaturesAndZeroValueAreDistinctFacts] asserting **two memberships** — SIMD on,
+// RelaxedSIMD on — and nothing asserting the *set*. The measurement, by substituting a flip
+// into `DefaultFeatures` one field at a time and running the whole suite against each:
+// six of the seven off-gates fail something, every one of them a test whose subject is
+// elsewhere and which happens to name the gate in passing (chiefly the gate table in
+// `internal/testenv`'s foreclosure sweep, whose subject is *prose*). **`Threads: true`
+// passes the entire suite with the board byte-identical**, because the threads vectors live
+// under `testdata/spec/proposals/threads`, outside the 256 files the board walks. A
+// closure condition satisfiable by accident is not a condition, and one of the nine was
+// not even that.
+//
+// # Watched failing, eleven ways
+//
+// A control is not born until it is watched die (grave #34's family). Nine mutations, one
+// per field, each flipping that field's default to the opposite of its row and restoring
+// after: **9 of 9 fired**, which is the pre-registered forecast on #499 met exactly, against
+// 6-of-7-by-accident and 0-of-1 for `Threads` before it. Two more for the structure — a
+// tenth field added to `Features` with no row here fires the coverage arm, and a row naming
+// a field that does not exist fires the other direction. The forecast was registered before
+// the mutations ran, because a number read off a control you already built is not a forecast.
+//
+// # Why the domain is reflected and not typed out
+//
+// A tenth gate is in this control's scope without anyone editing it, and the failure it
+// gets is *"add a row"* rather than silence. Enumerating the field names here would inherit
+// exactly today's blind spot — the shape that made `Threads` invisible in the first place,
+// one level up.
+func TestDefaultGatePolicyIsPinnedGateByGateWithItsStamp(t *testing.T) {
+	ty := reflect.TypeOf(Features{})
+	def := reflect.ValueOf(DefaultFeatures())
+	zero := reflect.ValueOf(Features{})
+
+	if ty.NumField() < 4 {
+		t.Fatalf("reflection derived %d fields from Features; the struct had 9 when this test was "+
+			"written, and a domain this small means the parse found nothing to walk", ty.NumField())
+	}
+
+	// Both directions of coverage, and they are separate arms because they fail for
+	// unrelated reasons: a gate added to the struct and forgotten here, versus a row that
+	// outlived its field and now licenses nothing while reading as coverage.
+	fields := map[string]bool{}
+	for i := range ty.NumField() {
+		fields[ty.Field(i).Name] = true
+	}
+	for name := range fields {
+		if _, ok := defaultGatePolicy[name]; !ok {
+			t.Errorf("Features.%s has no row in defaultGatePolicy: a gate whose default nothing "+
+				"states can flip on without editing a line that names the stamp it needs, which "+
+				"is the #464 gap this table was built to close", name)
+		}
+	}
+	for name := range defaultGatePolicy {
+		if !fields[name] {
+			t.Errorf("defaultGatePolicy names %q, which is not a field of Features: the row is "+
+				"stale and pins nothing while counting as coverage", name)
+		}
+	}
+
+	var on, off int
+	for i := range ty.NumField() {
+		name := ty.Field(i).Name
+		row, ok := defaultGatePolicy[name]
+		if !ok {
+			continue // already reported above
+		}
+		if ty.Field(i).Type.Kind() != reflect.Bool {
+			t.Errorf("Features.%s is %s, not a bool: this table cannot state a default for it",
+				name, ty.Field(i).Type.Kind())
+			continue
+		}
+
+		// The default, gate by gate. This is the arm the nine mutations fire.
+		if got := def.Field(i).Bool(); got != row.on {
+			t.Errorf("DefaultFeatures().%s = %v, want %v.\n\nThe table says: %s\n\nA default gate "+
+				"state is a recorded decision (CLAUDE.md's ladder, as amended by #466), so this is "+
+				"either a flip that needs a principal's stamp and an ADR cited in the row above — "+
+				"behaviour 4, and the flip is never in the mechanism's PR — or a regression in a "+
+				"policy someone already stamped.", name, got, row.on, row.why)
+		}
+
+		// The zero value stays every gate off, for every field rather than for the two that
+		// have flipped. `Features`' own doc comment makes this a load-bearing distinction:
+		// a field whose zero value carried the default could not flip without breaking every
+		// caller's all-off assumption.
+		if zero.Field(i).Bool() {
+			t.Errorf("Features{}.%s is true: the zero value must stay every gate off "+
+				"unconditionally, per Features's own doc comment — a default belongs to "+
+				"DefaultFeatures and nowhere else", name)
+		}
+
+		if row.why == "" {
+			t.Errorf("defaultGatePolicy[%q] states no reason; the sentence a future flip has to "+
+				"argue with is the point of the row", name)
+		}
+		if row.on {
+			on++
+			if row.stamp == "" {
+				t.Errorf("Features.%s is on by default with no ADR cited: a flip is a stamp-tier "+
+					"event (behaviour 4) and an uncited one is exactly the provenance claim nothing "+
+					"in this tree reads", name)
+				continue
+			}
+			// The stamp resolves, or it is a description of an approval rather than a
+			// citation to one. `docs/decisions/` is committed, so there is no skip door
+			// here: an absent file is a failure, never a licensed absence.
+			path := filepath.Join("..", "..", "docs", "decisions", row.stamp)
+			if _, err := os.Stat(path); err != nil {
+				t.Errorf("Features.%s cites %s, which does not resolve (%v): a Status field is a "+
+					"citation to an approval, and so is this", name, row.stamp, err)
+			}
+		} else {
+			off++
+			if row.stamp != "" {
+				t.Errorf("Features.%s is off by default but cites %q: an off default is behaviour "+
+					"4's, so there is no flip event to point at and the citation names an absence",
+					name, row.stamp)
+			}
+		}
+		t.Logf("%-18s default=%-5v stamp=%s", name, def.Field(i).Bool(), row.stamp)
+	}
+
+	// Both halves need a subject. With no on-gate the stamp arm never runs and with no
+	// off-gate the no-stamp arm never runs, and either way this test would pass by asking
+	// half its questions.
+	if on == 0 || off == 0 {
+		t.Errorf("derived %d on-gates and %d off-gates from a %d-field struct: one side of this "+
+			"control has no population, so it agrees by not being asked", on, off, ty.NumField())
+	}
+	t.Logf("pinned %d gates: %d on with a resolved stamp, %d off on behaviour 4's default",
+		on+off, on, off)
 }
 
 // TestTagSectionIsWellFormedButGated is the ruling on id 13 made executable.

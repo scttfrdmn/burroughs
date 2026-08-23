@@ -170,6 +170,59 @@ reach is a law out of context.
   everything the decision contradicts has been found. Grep for the old answer, not
   just for the place you expect it. (Ruling: Scott, #28.)
 
+### A claim that an obligation was paid cites the artifact that pays it, never a description of it.
+
+- **A claim that an obligation was paid cites the artifact that pays it — a diff hunk, a
+  commit, a file and line — never a description.** Scott's standing remedy, on the #499
+  reconciliation, and the words are his:
+
+  > That's the fourth self-retraction in four reports, and all four are one shape:
+  > verification of the wrong object reported as verification of the right one — the edit
+  > made after the amend, the file list written from intent, `grep | head` stopping before
+  > the declaration, and now the neighbour restatement read as the README repair. From here:
+  > **any claim that an obligation was paid must cite the artifact that pays it** — diff
+  > hunk, commit, file and line — never a description. If the citation can't be produced,
+  > the claim is "not verified," not "paid."
+
+  **The specimen is a discharge claim about a discharge law.** #464's closing comment told
+  Scott that finding 6 was paid — that README's *"Every row now in this column is harness
+  debt"*, a universal quantifying over an empty column, was *"gone from the file"* — and said
+  in the same sentence that this was **"checked before this transition rather than assumed,
+  because a rider is exactly what a closing issue drops silently."** Every clause was false.
+  The sentence was intact and present-tense; `git log --since` over README was empty;
+  `git log -S` on the phrase returned exactly one commit, the one that added it. So the
+  paragraph explaining why riders get dropped silently dropped one, while asserting it had
+  checked — which is worse than the unpaid obligation, because it converts an open item into a
+  discharged one **on the record**. Retracted by posting
+  ([#464](https://github.com/scttfrdmn/burroughs/issues/464#issuecomment-5383999052)).
+
+  **The mechanism is the whole lesson: the wrong object was a plausible neighbour of the right
+  one.** The class *is* restated beside `unsupportedCeiling` in `internal/spec/spec_test.go`,
+  which the same closing comment cited in its next clause. Reading that and concluding README
+  had been repaired is *a check of the wrong file reported as a check of the right one* — and
+  the four instances Scott names differ only in which neighbour stood in: the version before
+  an amend, the intent behind a file list, the tenth line of a truncated match, the
+  restatement next door. Recollection dressed as verification passes review every time,
+  because the sentence describing the check is as fluent as the check would have been.
+
+  **Why a citation is the remedy and care is not.** A citation names an object, so producing
+  one forces the object to be opened; a description names a belief about an object, and can be
+  produced without touching it. That is the asymmetry the rule runs on, and it is mechanical:
+  **if the citation cannot be produced, the claim is "not verified", not "paid"** — the third
+  outcome, not the flattering one. For a code location the form is
+  [ADR 0047](../decisions/0047-a-location-citation-is-path-qualified-and-names-a-symbol-and-the-positional-population-is-pinned-rather-than-banned.md)'s:
+  path-qualified and naming a symbol. Two of Scott's four instances are already laws of their
+  own — *[a claim about your own diff is sourced from the
+  diff](evidence-and-instruments.md#a-claim-about-your-own-diff-is-sourced-from-the-diff--an-edit-made-after-an-amend-is-not-in-the-amend)*
+  is instance one, and *[a truncated search proves nothing about
+  absence](evidence-and-instruments.md#a-truncated-search-proves-nothing-about-absence-because-a-display-limit-is-not-a-result-set)*
+  is instance three — and each was minted as a fact about *its own* wrong object: the amend,
+  the pipe. Four objects later the shape is the constant and the object is the variable, which
+  is why this one is stated over the claim rather than over the tool. What it adds is the
+  population: **discharge claims**,
+  every one of which is addressed to a principal, and none of which any sweep in this tree can
+  check — there is no artifact named to resolve. (Mint: Scott, on the #499 reconciliation.)
+
 ### The word "grave" is a citation to a label, so the label lands before the body that cites it.
 
 - **The word "grave" is a citation to a label, so the label lands before the body that
