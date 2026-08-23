@@ -2329,7 +2329,40 @@ weakly-ordered platform.
     rather than a mechanism by which one step runs the other.
     `vet`, `lint`, `test` and `deadcode` still see the untagged lane only;
     `go test -tags burroughs_endtable ./...` is green by hand (19 packages, 0 FAIL) and is reported as a
-    measurement taken once rather than as coverage.
+    measurement taken once rather than as coverage. The repaired claim is paid by the run's own step
+    list — `✓ Run go build -tags burroughs_endtable ./...` inside the `build` job — rather than by the
+    YAML, which is the reading that exposed the hole in the first place.
+
+- **Two laws minted on the #502 review, both about a claim that produces no artifact to check.**
+  - **Durability is not independence**
+    ([`docs/laws/decisions-and-thesis.md`](docs/laws/decisions-and-thesis.md)). *"A durable record of an
+    order, written by the party acting on it, is durable but not independent provenance no matter how
+    good the channel."* So transcribing an in-session order into an issue comment yields a permanent,
+    timestamped, public artifact whose author is still the actor, and a `Ratio-Class: ordered` pointed at
+    it cites the actor. Stated this way it is **decidable from who wrote the record** instead of
+    case-by-case from channel quality, and it does not conflict with relaying a stamp into an ADR's
+    `Status:`: a relay is reviewed afterwards, and that review is what supplies the independence. One
+    shape underneath — provenance is independent when someone other than the actor can falsify it. The
+    tempting wrong answer is a better channel, which improves the property that was never missing.
+  - **An unmeasured stability claim is not a protection**
+    ([`docs/laws/boards-and-buckets.md`](docs/laws/boards-and-buckets.md)), filed beside *a magnitude is
+    not a cost estimate* as its mirror in the direction nobody checks: a cost claim invites a bill, while
+    a claim that something is *held stable* describes a non-event and produces nothing to falsify.
+    Stability is a claim about the **rate** of change and protection a claim about the **current state**,
+    so a quantity frozen at a wrong value is still frozen — holding it constant preserves the error
+    rather than preventing it. Specimen and falsification below.
+- **ADR 0024 gets a dated amendment: its four location citations have drifted, and the drift is
+  measured** (ordered by Scott on the #502 review). A table of *cited as* against *actually at* —
+  roughly +24, +43, +86 and +335 lines — with the note that the third resolves as a `control.go`
+  reference only through its antecedent one line above, and that a `+335` stale number still names a
+  line that exists, which is why nothing in the tree fires on it.
+  - **Two premise corrections, both against the author's interest.** *All four* are wrong, not three:
+    the +24 one was called *arguable* on the grounds that its range contains call sites, but the ADR
+    quotes the **definition** immediately below it, so the range is wrong too — an earlier correction
+    comment had turned a true claim into a false one. And **ADR 0024 makes no protection claim at all**
+    (`grep -c -i "stable\|durable\|protect\|line count"` over it returns 0): the line-count-invariance
+    claim was the author's, in #502's body. So the amendment records drift and the retraction lands on
+    the report, not on the ADR — *a ruling's premises get checked, not only its conclusion*.
 
 ### Changed
 
@@ -3682,9 +3715,37 @@ weakly-ordered platform.
   *Adding lines
   breaks every line citation below*, so the sweep ran over `exec.go:` tree-wide rather than over the
   files touched; the two repairs that changed line counts were compressed back to the original count so
-  no second-order shift propagated. Four markdown citations were found wrong **before** this branch
-  existed and are reported rather than repaired, on the pin's own written instruction that the dated-record
-  question is [#497](https://github.com/scttfrdmn/burroughs/issues/497)'s and Scott's.
+  no second-order shift propagated — a precaution later **measured and found to have protected
+  nothing**, since the citations it was guarding were already wrong by up to +335. Four markdown
+  citations were found wrong **before** this branch existed and are reported rather than repaired, on
+  the pin's own written instruction that the dated-record question is
+  [#497](https://github.com/scttfrdmn/burroughs/issues/497)'s and Scott's; they are ADR 0024's, and
+  Scott's order on the #502 review was to give that ADR a dated amendment, above.
+  - **The census pin moved in both directions and both components are reported.** −1 for the one
+    citation this branch itself falsified and therefore owned; **+3** for the amendment's *cited as*
+    column, which has to write the four drifted coordinates down. Net 302 → **305**. Netting the two
+    into one figure would hide two different rates — conversions and specimens — behind one number.
+  - **Four specimens, three pins' worth, and the shortfall is the pair of censuses working.** The
+    fourth citation has no file part at all, so `posCiteRe` cannot see it and
+    `TestBareContinuationCitationsAreBounded` counts it instead (`go` 103 → 104). Three sibling
+    occurrences were kept out of `docs/laws/` by describing the citations rather than re-quoting them —
+    the law's sentence needed the offsets, not the coordinates — which is why the continuation pin moved
+    by one and not by four. A specimen set that splits across two populations is the argument for
+    pinning both: a reader who checks one number and infers the other accounts for three of four.
+  - **A third self-firing, and the first that was not a mistake.** The pin refused the amendment, and
+    the refusal is what found a class nobody had predicted: **positional by construction on the
+    markdown side**, where the coordinate *is* the datum and converting it would rewrite the record of
+    what the ADR said. Same class as the 23 composite-literal keys, reached from the prose direction.
+    Counted rather than exempted, because *an exemption inherits none of the trigger's lessons* and is
+    written by whoever tripped the instrument. The datum for #497 is that its convertible population is
+    smaller than its total by however many specimens the conversion work itself writes down.
+- **The controls' own documentation now records that a control catching its author at the moment of
+  authorship is the strongest evidence it aims right** ([`docs/laws/citations.md`](docs/laws/citations.md)
+  and the census's block comment; ordered by Scott on the #502 review). Three firings, two in
+  consecutive turns: the citations law falsified its own draft, the pin fired on the changelog entry
+  about re-pointing markdown citations, and the pin fired on ADR 0024's amendment. The reason to write
+  it down is that the **opposite** result is the one that looks like success — an instrument that only
+  ever fires on someone else's work is indistinguishable from one tuned to its author's habits.
 - **README's `unsupported` bullet no longer quantifies over an empty column.** *"Every row now in this
   column is harness debt"* was true of the population [#459](https://github.com/scttfrdmn/burroughs/issues/459)
   measured and became vacuous when the column reached zero — a universal over nothing, in the very
