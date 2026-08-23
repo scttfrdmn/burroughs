@@ -17,7 +17,8 @@ import (
 // stated because the reverse arrangement is the one a reader expects.
 //
 // **The validator was the sole blocker for both**, which is unusual enough in this campaign to be the
-// reason the slice is small: `internal/interp` executes them as real tail calls (`exec.go:502`, ADR
+// reason the slice is small: `internal/interp` executes them as real tail calls (`exec.go:508`, the
+// `case opReturnCall` arm — re-pointed from :502 by #136's probe, which inserted six lines above it, ADR
 // 0026 / #253), the decoder reads them under `gateTailCall`, and the wat encoder emits them. This is
 // the shape ADR 0025's G-1 carve-out names — a vector whose only obstacle is the deferred validator —
 // arriving from the direction that retires the carve-out rather than widening it.

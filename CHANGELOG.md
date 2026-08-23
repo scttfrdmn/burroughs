@@ -2277,6 +2277,54 @@ weakly-ordered platform.
   question. Nothing in `testdata/spec` asserts such a pair — vectors are written by people who know the
   types — which is why this control had to be written by hand and was watched disagreeing with the
   alternative before either landed. The replacement itself is held for the ruling on #441.
+- **`internal/interp/scanbench` prices the cost [#136](https://github.com/scttfrdmn/burroughs/issues/136)
+  proposes to remove, and it runs on Scott's order that the premise be measured before the port**
+  (the #499 reconciliation, decision 1: *"take (c) first, as a measurement … #136 may falsify the premise
+  rather than discharge the obligation"*). ADR 0002's Option B says build-time branch resolution makes
+  the work *"free"*; its benchmark compared three representations on a hot loop and **never measured the
+  entry-time scan**, so the magnitude the rejection turned on was asserted. Three shapes go through
+  `burroughs.Instantiate` and `Instance.Call` — the public entry point, real decoder, real dispatch loop
+  — rather than a replica on `dropbench`'s precedent, because *this subject is a ratio and not a cost*
+  and a replica whose executed work is cheaper than real dispatch inflates the scan's share in the
+  flattering direction. Scanned distance moves by padding placed **after** the loop's back-edge `br_if`:
+  every re-entry scans it, one trailing fall-through executes it.
+  - **Existence and scaling established, materiality on real code explicitly not.** Δ over four
+    distances is 2.90 / 42.81 / 293.96 / 2208.81 µs and the table lane is **flat** in distance (50.70 /
+    51.10 / 52.26 / 60.27 µs), which is a signature the scan lane cannot produce. Scott narrowed the
+    probe to existence-and-scaling with no `wasip1` guest, so no claim is made about real workloads, and
+    **the percentage is non-transferable**: the padding is unexecuted, so at d=64 the shape scans 6.4
+    words per executed instruction where a real loop body scans 1. Reading the largest Δ as a forecast
+    for real code would be a forecast beaten and banked as a win.
+  - **The pre-registered A/A veto fired, on the identical binary.** Sequential halves reported
+    significance on **seven of eight rows**, the largest on the row materiality is defined on at 5%, so
+    under §4 no A/B could be read and the comparison did not run. Every row had moved the same direction
+    on a loaded box, which named the confound — *a lane and a time window were the same variable*.
+    Interleaved run-by-run, the same binary against itself is `~` on eight of eight. An instrument
+    repair and not a re-roll: the veto stood until an A/A passed, and more samples would have made the
+    sequential form worse rather than better. The floor is recorded **with its limit**: per-row variance
+    to ±9%, worst on the row the 5% threshold is defined on, so a passing A/A is a statement about false
+    positives and not about resolution.
+  - **Condition 3 was unsatisfiable by construction, and that is the pre-registration's error.** Shape
+    (i) was registered as *"dynamic entries: 1"*; the module built has 1001, because **a loop's back-edge
+    re-executes the `opLoop` arm** and therefore re-scans per iteration. Its Δ contains the per-entry
+    scan and could never have been inside the floor whatever the table lane did — the mirror of *an
+    analytic zero is not a measurement*. Diagnosed rather than reinterpreted into a pass: the registered
+    verdict stands at **"mechanism not established"**, and a corrected control with **no structural
+    instruction of any kind** was posted to the tracker with its prediction *before it ran*, its post-hoc
+    provenance recorded in the result. It came back `~` (p=0.143), so the table lane wins nothing that is
+    not the scan.
+  - **A correctness precondition the registration lacked, added before any Δ was read and flagged as an
+    addition.** The full board under `-tags burroughs_endtable` must be identical, and is — the two dumps
+    `diff` empty. *A faster wrong answer is not a measurement*, and a lane nothing in the gate compiled
+    could only be checked this way. The build tag itself was vacuity-checked with `cmp` on the two
+    compiled binaries, since a tag matching nothing yields a clean A/B of a binary against itself.
+  - **The seam is build tags rather than a runtime knob**, because a flag read at every block entry puts
+    a branch in the lane that is meant to be unmodified and the attribution control would then be
+    pricing the branch. These are the tree's **first** custom build tags — every other gate is a
+    `Features` field — so `make build` now compiles the tagged arm as well: *an arm the gate never builds
+    rots without a signal*. `vet`, `lint`, `test` and `deadcode` still see the untagged lane only;
+    `go test -tags burroughs_endtable ./...` is green by hand (19 packages, 0 FAIL) and is reported as a
+    measurement taken once rather than as coverage.
 
 ### Changed
 
@@ -3612,6 +3660,26 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **`control.go`'s header claimed an instrument that does not exist.** It read *"The debt is a failing
+  test rather than an intention"* — the design-debt law's own discharge form — and no failing test for
+  [#136](https://github.com/scttfrdmn/burroughs/issues/136) existed anywhere in the tree: `grep -rn '136'
+  --include='*.go' .` returns 21 lines, of which exactly two concern that issue and both are prose in
+  that same header. A benchmark cannot fail either, so the sentence's two halves named different
+  instruments. This is the standing remedy's own shape — *a claim that an obligation was paid, citing
+  nothing* — and **nothing in this tree could catch it**: `citecheck` resolves `#136` because the issue
+  exists, and a citation sweep checks pointers, never what is predicated of them.
+- **Three positional citations into `exec.go` re-pointed by content after a six-line insertion** — in
+  `internal/validate/tailcall.go`, `internal/interp/value.go` and `internal/interp/bulk.go`, each now
+  naming the symbol beside the number and, where the old number was wrong before this branch, saying
+  so. (Cited by path and not by line here, because `TestPositionalCitationCensusIsPinned` fired on the
+  first draft of this entry: three new markdown line citations, in the changelog entry about
+  re-pointing markdown line citations. The control's exemption side has no licence and wants none.)
+  *Adding lines
+  breaks every line citation below*, so the sweep ran over `exec.go:` tree-wide rather than over the
+  files touched; the two repairs that changed line counts were compressed back to the original count so
+  no second-order shift propagated. Four markdown citations were found wrong **before** this branch
+  existed and are reported rather than repaired, on the pin's own written instruction that the dated-record
+  question is [#497](https://github.com/scttfrdmn/burroughs/issues/497)'s and Scott's.
 - **README's `unsupported` bullet no longer quantifies over an empty column.** *"Every row now in this
   column is harness debt"* was true of the population [#459](https://github.com/scttfrdmn/burroughs/issues/459)
   measured and became vacuous when the column reached zero — a universal over nothing, in the very

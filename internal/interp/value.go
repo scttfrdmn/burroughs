@@ -1176,7 +1176,7 @@ func fromRef(r ref, t binary.ValType) Value {
 // assumed — and re-measured as of 0042 against the *conclusion* rather than against a token count:
 // `grep -rn '\.Equal(' --include='*.go'` minus the standard-library families (`slices`, `bytes`,
 // `reflect`, `maps`) returns exactly one line in the whole tree, and it is **this sentence**. No call
-// site invokes this method. Its one cross-reference in prose is `exec.go:1090`.
+// site invokes this method. Its one cross-reference in prose is `exec.go:1096` (:1090 before #136).
 //
 // The first version of this paragraph counted tokens instead — "32 occurrences of the token `Equal`,
 // of which the only three that are not `slices.Equal`/`bytes.Equal`/`reflect.DeepEqual`/

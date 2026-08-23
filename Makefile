@@ -183,6 +183,11 @@ strict:
 
 build:
 	$(GO) build -o bin/burroughs ./cmd/burroughs
+# #136's probe (`internal/interp/ends_table.go`) is the tree's only build tag — every other gate is a
+# `Features` field, so nothing here compiled a tagged arm before. A tagged arm the gate never builds
+# rots without a signal, which is the *unbuilt arm* shape rather than a new instrument: this is the
+# same build over the same tree, one flag different, not a second oracle.
+	$(GO) build -tags burroughs_endtable ./...
 
 # -shuffle=on so test order is never load-bearing.
 test:

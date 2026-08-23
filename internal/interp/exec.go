@@ -90,6 +90,12 @@ func (in *Instance) runFrame(fn *binary.Func, locals *frame, st *stack, results,
 	// base is to push onto the stack before reading it, which no code path between the two lines can.
 	base := frameBase{num: len(st.num), ref: len(st.refs)}
 	body := fn.Body
+	// ends is #136's probe seam, and it is nil in the lane this engine ships (`ends_scan.go`):
+	// `endOf` below is `matchEnd` verbatim there, and a build-time pairing table under
+	// `-tags burroughs_endtable` there. Hoisted out of the loop because the whole point of the
+	// build-time form is that the table is per *body* — resolving it per block entry would be the
+	// cost the probe exists to remove, paid in the lane meant not to pay it.
+	ends := frameEnds(fn, body)
 	// **Not `for pc := range len(body)`**, because a branch writes to `pc`: the arms below set it
 	// to a target and let the `pc++` carry it forward, which is why this walk indexes the slice
 	// instead of consuming it.
@@ -178,7 +184,7 @@ func (in *Instance) runFrame(fn *binary.Func, locals *frame, st *stack, results,
 		// and why target resolution happens at block entry rather than at build time.
 
 		case opBlock, opLoop:
-			end, err := matchEnd(body, pc)
+			end, err := endOf(body, ends, pc)
 			if err != nil {
 				return err
 			}
@@ -222,7 +228,7 @@ func (in *Instance) runFrame(fn *binary.Func, locals *frame, st *stack, results,
 			// results, same as `opBlock`'s non-loop case. What is new is that this label can
 			// also be *matched by a thrown exception* — see tryCatch, which scans `ctrl` for
 			// exactly the label this arm pushes.
-			end, err := matchEnd(body, pc)
+			end, err := endOf(body, ends, pc)
 			if err != nil {
 				return err
 			}
@@ -252,7 +258,7 @@ func (in *Instance) runFrame(fn *binary.Func, locals *frame, st *stack, results,
 			})
 
 		case opIf:
-			end, err := matchEnd(body, pc)
+			end, err := endOf(body, ends, pc)
 			if err != nil {
 				return err
 			}
