@@ -21,6 +21,49 @@ weakly-ordered platform.
 
 ### Added
 
+- **The spec suite's opener-to-`end` distance distribution is measured, and it retires two of the four
+  distances #502's scan probe swept** (ordered by Scott on the #502 review: *"the materiality datum is
+  wanted, and it goes first … measure it before the A/B, because it tells you which distances are
+  real"*). `TestSuiteScanDistanceDistributionIsMeasured` in `internal/interp/scandist_test.go` decodes
+  every module the suite's commands carry — both arms, wire images and `text.EncodeModule`'d source —
+  and calls `matchEnd` on every structural opener in every function body, so the unit is the one the
+  scan pays: decoded `[]binary.Instr` slots walked.
+  - **The numbers.** 4216 modules decoded, 9393 function bodies, **2020 openers** (block 1304, `if`
+    436, loop 280, `try_table` 0). Distance min 1 · **p50 5** · p90 13 · p99 67 · p99.9 171 · **max
+    276** · mean 7.9. Cumulative tail: 20.8% of openers are ≥8 slots from their `end`, 3.6% ≥32, 1.2%
+    ≥64, 0.2% ≥128, one opener ≥256, and **zero at ≥512**. The probe's 512 and 4096 rows therefore
+    measured distances that occur **nowhere in the corpus**, and its 64 row describes 1.2% of openers.
+    The `≥5%-at-the-largest-distance` criterion for #136 has to be re-registered against a distance
+    that occurs; the widest span in the corpus is 276 slots, in `align.wast`.
+  - **The zero is checked by a second mechanism, because an exact zero on the rows just benchmarked is
+    the shape of an instrument reporting its own blindness.** The innocent explanation is arithmetic —
+    bodies too short to hold the span — so the census tracks the longest body it decodes and asserts no
+    span exceeds it. The longest body is **6338** slots (`skip-stack-guard-page.wast`), 23× the widest
+    span: the room was there and openers do not use it. The six widest spans are printed with file and
+    function index, so the tail has witnesses rather than counts.
+  - **No pin on the shape, deliberately.** The suite is revision-pinned so a histogram would be
+    reproducible, and freezing one would be *an unmeasured stability claim* wearing a control's
+    clothes — a second oracle for the fact this test exists to report, in a file whose point is that
+    nobody yet knows which part of the distribution is load-bearing. What is asserted is vacuity:
+    ≥500 modules, ≥2000 distances, and zero `matchEnd` not-found returns on decoded bodies.
+  - **The limitation is stated above the numbers, not below them.** This is a static census of openers
+    in code, not a dynamic census of block entries, and `matchEnd` runs once per *executed* entry. An
+    **absent** distance is a real negative and retires a swept row; a **common** one transfers nothing
+    to run time. The dynamic half needs a counter in `runFrame` and is not built.
+- **`internal/interp/ends_table.go` stays behind `burroughs_endtable`** — disposition (a), ruled by
+  Scott on the #502 review — with the general form recorded in
+  [`docs/laws/evidence-and-instruments.md`](docs/laws/evidence-and-instruments.md): *a probe's
+  apparatus stays behind its tag until the measurement justifies promoting it; promoting first is the
+  instrument-on-speculation pattern.* The distance census above is the first bill on that rule.
+- **A retirement condition is stated over the *convertible* population, not the total**
+  ([`docs/laws/decisions-and-thesis.md`](docs/laws/decisions-and-thesis.md), ruled by Scott on the #502
+  review as a second condition on [#497](https://github.com/scttfrdmn/burroughs/issues/497)). A
+  condition can name a state of the code and still be unachievable, because part of the population
+  cannot reach the state: a citation whose coordinate **is** the datum — an ADR's *"cited as"* column —
+  is positional by construction, so *"retires when the positional count reaches zero"* is arithmetic
+  nonsense that would sit in the tree forever reading as live. The class was found by the census pin
+  refusing a *correct* action, the third firing on its own author and the first that was not a mistake.
+
 - **`DefaultFeatures()` is pinned gate by gate, and each on-gate's row names the ADR that stamped the
   flip** (ordered by Scott on the [#499](https://github.com/scttfrdmn/burroughs/issues/499) reconciliation,
   decision 2). `defaultGatePolicy` in `internal/binary/sections_test.go` carries one row per `Features`
@@ -3395,7 +3438,7 @@ weakly-ordered platform.
     comment lands *before* the close, and a declared list would have been an exemption surface for
     the actor to plead against. The remedy costs one word — "Landed in #N", "Filed, deferred: #N".
   - Falsified against the artifact that caused it: the check fails on `5df86cf`, the squash commit
-    that closed #310, and passes on the safe phrasings including `Fixed in #N` and a `### Fixed`
+    that closed #310, and passes on the safe phrasings including `Fixed in #N` and a `### Fixed
     changelog heading. It drains the *cause* of the zero-comment tombstones #303 watches for as a
     symptom; both stay, since #303 also catches a hand close whose comment failed to post.
 
@@ -3697,6 +3740,15 @@ weakly-ordered platform.
     re-pointed, so the retirement is readable at the site rather than only in this entry.
 
 ### Fixed
+
+- **A correction is an edit, and carries the same error rate as the edit that needed correcting** —
+  minted in [`docs/laws/evidence-and-instruments.md`](docs/laws/evidence-and-instruments.md) on Scott's
+  ruling on the #502 review (*"the arguable-range fix turned a true body claim false, which is #434's
+  shape again"*). Two specimens in two channels: #492's correction comment needed a second correction,
+  and a repair narrowing a claim about ADR 0024's four drifted citations to *"three, and the fourth is
+  arguable"* replaced a true sentence with a false one — the ADR quotes the definition immediately below
+  the coordinate it cites, so all four were wrong. The narrowing correction is the dangerous kind: it
+  reads as a retreat toward safety while asserting a new boundary that nobody measured.
 
 - **`control.go`'s header claimed an instrument that does not exist.** It read *"The debt is a failing
   test rather than an intention"* — the design-debt law's own discharge form — and no failing test for

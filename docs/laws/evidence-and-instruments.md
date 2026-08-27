@@ -336,6 +336,68 @@ reach is a law out of context.
   paired with a resolvable location — not the path.
   [#493](https://github.com/scttfrdmn/burroughs/issues/493).
 
+### A correction is an edit, and carries the same error rate as the edit that needed correcting.
+
+- **A correction is an edit, and carries the same error rate as the edit that needed
+  correcting.** The section above closes with a fix whose first draft was wrong in the same way as
+  the thing it fixed, and that was read at the time as a fact about one comment. It is not. A
+  correction is written under the same conditions as the original — from memory of a text, in a
+  hurry, by someone who has just been told they were wrong and is therefore *less* inclined to go
+  re-read the channel — so the base rate does not drop when the word "correction" appears at the
+  top of the paragraph. It may rise, because a correction is published with the authority of having
+  already been checked once.
+  - **Two specimens, two channels.** The correction posted on #492 attributed an error to the PR
+    body's Landed section, which said nothing of the kind, and needed a second correction. And a
+    repair to the citation-form census's doc comment — narrowing a claim about how many of ADR 0024's
+    four drifted citations were genuinely wrong, on the grounds that one of them was *arguable* —
+    replaced a true sentence with a false one: the ADR quotes the definition immediately below the
+    coordinate it cites, so all four were wrong. Both are #434's shape, *apply the lesson to the
+    sourcing, not the fact*, recurring inside the fix rather than in the original.
+  - **The narrowing correction is the dangerous kind**, which is the non-obvious half. Narrowing
+    feels conservative — it looks like retreating toward safety, so it attracts less scrutiny than
+    the claim it replaces — while in fact it asserts a *new* boundary, and a boundary is a
+    measurement. "Three of four, and the fourth is arguable" is a stronger claim than "four of
+    four", not a weaker one, because it says something about the fourth.
+  - **So a correction is verified against the artifact it describes before it is published**, to the
+    same standard as the claim it replaces and not a lower one. Where the artifact is a text, that
+    means reading the text; where it is a tree, `git diff`.
+  (Ruling: Scott, on the #502 review — *"a correction is an edit and carries the same error rate.
+  The arguable-range fix turned a true body claim false, which is #434's shape again."*)
+
+### A probe's apparatus stays behind its tag until the measurement justifies promoting it.
+
+- **A probe's apparatus stays behind its tag until the measurement justifies promoting it.**
+  `internal/interp/ends_table.go` precomputes opener→`end` so a probe can measure what `matchEnd`'s
+  linear scan costs ([#136](https://github.com/scttfrdmn/burroughs/issues/136)). It stays behind
+  `burroughs_endtable` with the scan lane beside it, and the tempting next step — promote the table
+  into the default build, since it is written and green and the scan is obviously O(n) — is the
+  instrument-on-speculation pattern with the direction reversed: paying the engine's permanent
+  complexity for a win nobody has yet shown is a win. Untagged apparatus is engine code, and engine
+  code is judged on whether the runtime needs it. (Disposition (a), ruled by Scott on the #502
+  review: *"a probe's apparatus stays behind its tag until the measurement justifies promoting it.
+  Promoting first is the instrument-on-speculation pattern."*)
+  - **The first thing the measurement said was that the probe's distances were fantasy.** The sweep
+    used 0 / 64 / 512 / 4096 slots, chosen for convenience, and could not say whether any of them
+    occur in code. A static census of every structural opener the spec suite's modules decode to
+    (`TestSuiteScanDistanceDistributionIsMeasured`) puts the corpus **maximum** more than an order of
+    magnitude below the largest swept row, with the median at a handful of slots: two of the four
+    rows described distances that occur **zero** times. Promote on the strength of that sweep and the
+    justification is a measurement of a distance no module contains. This is why the materiality
+    input goes *before* the A/B rather than after it — it decides which distances are worth sweeping.
+  - **The zero survived a second mechanism, which is the only reason it is reportable.** An exact
+    zero on rows one has just benchmarked is the shape of an instrument reporting its own blindness,
+    and the innocent explanation is arithmetic: bodies too short to hold the span. So the census also
+    tracks the longest function body it decodes and asserts no span exceeds it — and the corpus's
+    longest body is more than an order of magnitude longer than its longest span. The room is there;
+    openers do not use it. *A suspiciously clean result is a tell*, and what clears it is a mechanism
+    that cannot fail the way the first one can, never a re-run of the first one.
+  - **The half a static census cannot buy is stated where its numbers are printed.** It counts
+    openers in code; `matchEnd` is called once per *executed* entry. So an **absent** distance is a
+    real negative and retires a swept row, while a **common** one transfers nothing: a cold
+    4000-slot arm contributes one opener and zero entries, and a two-slot loop body inside a hot loop
+    contributes one opener and millions. The dynamic half needs a counter in `runFrame` and is not
+    built.
+
 ### Coverage is a claim: an instrument's domain is an assertion it cannot check about itself.
 
 - **Coverage is a claim: an instrument's domain is an assertion it cannot check
