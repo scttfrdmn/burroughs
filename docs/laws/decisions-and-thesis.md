@@ -171,6 +171,25 @@ reach is a law out of context.
     condition is normative text the remedy is an amendment and a stamp; where it is a tripwire the
     remedy is re-pointing the tripwire, because a test whose documented failure condition is a
     tracker event stays green on the day its subject changes and reads as a confirmation.
+  - **And it is stated over the *convertible* population, not the total.** A condition can name a
+    state of the code and still be unachievable, because part of the population cannot reach the
+    state at all. [#497](https://github.com/scttfrdmn/burroughs/issues/497) asks whether the
+    citation-form census's pins are permanent; any option leaving one owes a retirement condition,
+    and the obvious phrasing — *retires when the positional-citation count reaches zero* — is
+    arithmetic nonsense the moment a subset is **positional by construction**. An ADR's *"cited as"*
+    column is the specimen: there the coordinate **is** the datum, a record of what the ADR said,
+    and converting it to a symbol destroys the thing being recorded. A zero over the total is
+    therefore not a state the tree can be put into, so the condition would sit in the tree forever
+    reading as live. State it over the convertible remainder and write the by-construction floor
+    down, because a floor nobody has recorded is indistinguishable from a debt nobody has paid.
+    (Ruling: Scott, on the #502 review — *"any option leaving a permanent pin must name a retirement
+    condition that names a state of the code — and because of the by-construction class, that
+    condition has to be stated over the convertible population, not the total. A criterion defined
+    over the total is unachievable by construction, which is exactly what you found."* The class was
+    found by the census refusing a correct action, which is the third time that pin has fired on its
+    own author and the first time the firing was not a mistake — *[a control catching its own author
+    at the moment of authorship is the strongest evidence it aims
+    right](citations.md#a-control-catching-its-own-author-at-the-moment-of-authorship-is-the-strongest-evidence-it-aims-right)*.)
   (Ruling and minting: Scott, on the #482 review — *"closing [the validator umbrella] would satisfy
   G-1 by the letter while `ErrNotValidated` still has call sites throughout `internal/interp`. Mint
   the law; it will recur."* The bracket is an editorial substitution for the issue's number:
