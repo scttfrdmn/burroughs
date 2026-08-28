@@ -586,6 +586,7 @@ func TestPositionalCitationCensusIsPinned(t *testing.T) {
 	byCiter := map[string]int{}
 	ambiguous := map[string]map[string]bool{}
 	other := map[string]int{}
+	joint := map[string]int{}
 	for _, c := range cites {
 		if c.kind != kindLine {
 			other[c.kind]++
@@ -594,6 +595,7 @@ func TestPositionalCitationCensusIsPinned(t *testing.T) {
 		byChannel[c.channel]++
 		byResolution[c.resolution]++
 		byCiter[c.citer]++
+		joint[c.channel+" / "+c.resolution]++
 		if c.resolution == resBasenameAmbig {
 			if ambiguous[c.filePart] == nil {
 				ambiguous[c.filePart] = map[string]bool{}
@@ -633,6 +635,25 @@ func TestPositionalCitationCensusIsPinned(t *testing.T) {
 	t.Logf("positional location citations: %d\n  by channel:    %s\n  by resolution: %s\n"+
 		"  other locations: %s", total, censusString(byChannel), censusString(byResolution),
 		censusString(other))
+
+	// The joint distribution, printed and **not** pinned. The two margins above are pinned exactly,
+	// and a margin constrains a total without constraining the cell: "57 are ambiguous" and "92 are Go
+	// comments" together say nothing about how many ambiguous ones are Go comments, which is precisely
+	// the number #497's second option has to state its retirement condition over. So it is computed
+	// here — one map increment over citations this control already gathered, no new scan — rather than
+	// asserted, because *which* cell must reach zero is the thing Scott has not yet ruled: option (a)
+	// drives the whole ambiguous column to zero, option (b) only its Go rows, and pinning the joint
+	// distribution now would freeze a shape before the decision that gives it a target.
+	jointKeys := make([]string, 0, len(joint))
+	for k := range joint {
+		jointKeys = append(jointKeys, k)
+	}
+	sort.Strings(jointKeys)
+	var jb strings.Builder
+	for _, k := range jointKeys {
+		fmt.Fprintf(&jb, "\n  %4d  %s", joint[k], k)
+	}
+	t.Logf("channel × resolution, which is the cross-tab #497's options are priced in:%s", jb.String())
 
 	var citers []string
 	for f := range byCiter {

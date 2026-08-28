@@ -232,11 +232,32 @@ reach is a law out of context.
         column drains without capability changing, see
         [boards-and-buckets](boards-and-buckets.md#a-column-draining-to-zero-is-not-the-engine-reaching-a-milestone)
         — v0's whole remaining residue measured that way.
+      - **Class is by purpose, not by location: engine code can be an instrument.** The
+        runtime-vs-harness test asks what the PR changes, and "it edits `internal/interp/`" is not an
+        answer to it. The specimen is #136's proposed execution counter: weighting the opener
+        distribution by *dynamic* block entries requires a counter in `runFrame`, which is engine
+        code by every file-path measure and **instrument by purpose** — it changes what can be said
+        about the runtime and nothing about what the runtime can do. The tell is that the location
+        argument arrives exactly when the actor wants the work reclassified: *"engine code, which is
+        where the next slice has to go anyway"* was the phrasing, and it would have bought a fourth
+        consecutive instrument PR under a product label. Note this runs **opposite** to the ratio
+        comparator, which is uniform and location-based on purpose (`engine = code in the module
+        path`, no per-file pleading) — the two questions are deliberately different, so the same
+        counter counts as engine for drift and as instrument for selection. Neither reading is
+        available to the actor as a choice. (Ruling: Scott, on the #503 review — *"a counter in
+        `runFrame` is instrument by purpose, regardless of living in engine code. The counter
+        measures purpose, not directory."*)
       - **Two scope corrections that arrived with the test.** First, **the stop condition governs
         what comes next, not whether a finished PR lands**: *"holding a bound green was never part
         of the stop condition anyway."* The actor's instinct on #457 was to hold a green PR pending
         the ruling, and the hold was aimed at the wrong object — ask the question and let the work
-        land. Second, the counter has a **third state** besides *blocked* and *argue your way out*,
+        land. **Recurred on #503, and the corpus already contained the answer**: a third consecutive
+        instrument-class PR was held unmerged pending a stop-condition discharge, on the reasoning
+        that self-merging would be the actor discharging its own condition. The reasoning is sound
+        and the object was still wrong — this clause says so in as many words — and it cost a
+        principal a decision cycle on a question the tree could have answered. *Lessons are indexed
+        by shape, not by file*: the shape was "may a bound green be held", the family was this one,
+        and it was not read before the flag was raised. Second, the counter has a **third state** besides *blocked* and *argue your way out*,
         and it matters near the end of a phase: *"Near v0 close the remaining legitimate work may
         simply be harness. The counter stands, but if the classification comes back and the next
         required work is also instrument, bring it to me for a stamp — not blocked, and not

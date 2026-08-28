@@ -669,6 +669,26 @@ reach is a law out of context.
   minting: Scott, on the #481 review — *"attributing the known members and taking the
   remainder for nothing is a shape that will recur."*)
 
+  **The second specimen is a cost, not a count, and it shows the complement is not always
+  small.** #136's end-table A/B measured the scan at **0.602 ns per slot** off the decoupled rows,
+  then assumed removing the scan delivers that. On the cheap-instruction arm it does — 93% to 120% of
+  the available saving lands. On the realistic arithmetic arm it delivers **88%, 64%, 53%** as the span
+  grows, and the shortfall per slot rises **0.072 → 0.218 → 0.284 ns** with the padding's cache
+  footprint. The complement was never zero: the scan was *subsidising* the execution that followed it,
+  pulling the same instruction slots into cache a few nanoseconds before the interpreter walked them.
+  Delete the scan and the execution pays the misses itself. So *"the scan costs 0.602 ns/slot"* and
+  *"a table saves 0.602 ns/slot"* are different claims, and the first was measured while the second was
+  assumed. **The delivered figure is the one a decision is denominated in** — what you get, not what
+  the removed thing cost.
+  - **A forecast whose terms share a source is one estimate, not two.** The same measurement's
+    pre-registered prediction — *4.2%, below the 5% bar, materiality refuted* — was built from a scan
+    cost and an execution cost **both** read off the prior probe's rows, and both erred toward the same
+    verdict: the scan slope was low by **2.08×** because the prior sweep anchored it on a
+    zero-distance row, and that one flaw propagated into both terms. Two numbers multiplied into a
+    forecast look like two independent checks and are not, when one dataset produced both. State the
+    provenance of each term, and where they share one, say that the forecast has a single point of
+    failure rather than a bracket.
+
 ### A criterion measured against a question set the project controls is jointly a claim about the answerer and the asker.
 
 - **A criterion measured against a question set the project itself controls is jointly a claim

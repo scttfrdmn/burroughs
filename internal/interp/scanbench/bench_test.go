@@ -53,6 +53,7 @@ import (
 	"testing"
 
 	"github.com/scttfrdmn/burroughs"
+	"github.com/scttfrdmn/burroughs/internal/binary"
 	"github.com/scttfrdmn/burroughs/internal/text"
 )
 
@@ -62,10 +63,124 @@ import (
 // unable to discriminate on its own, so it is held fixed and `distance` is what moves.
 const iters = 1000
 
-// distances are the scanned-distance points. Three or more is condition 2's requirement (a
-// monotone slope in distance, not a single-point win); 0 is shape (ii) and doubles as the
-// same-work baseline the other rows are read against.
+// distances are the scanned-distance points of the **original** sweep, kept as they were run. Three
+// or more is condition 2's requirement (a monotone slope in distance, not a single-point win); 0 is
+// shape (ii) and doubles as the same-work baseline the other rows are read against.
+//
+// **512 and 4096 are retired distances and are left here deliberately.** The suite's own opener
+// distribution (`TestSuiteScanDistanceDistributionIsMeasured`) has max 276 slots and **zero**
+// openers at ≥512, so those two rows priced distances no module in the corpus contains. They stay
+// because they are the rows #502 published and conditions 1 and 2 were read on them — deleting the
+// shapes would leave an issue's tables citing code that no longer exists — and they are not re-run.
+// The relocated sweep is `spans` below.
 var distances = []int{0, 64, 512, 4096}
+
+// spans are the relocated distances, and the unit changes with them: a **span** is the whole loop
+// body's length in decoded slots, which is what `matchEnd` walks, where `distances` above counts
+// only the padding added to a 10-instruction body. The four are the census's percentiles — p50 5,
+// p90 13, p99 67 — plus the corpus maximum 276.
+//
+// **276 is outside condition 1 by registration.** It is one opener out of 2020; a materiality
+// threshold read on a single corpus member would be its own materiality failure. Condition 1 is read
+// at **67**, the largest distance Scott named, and 276 is the corpus ceiling reported as such.
+var spans = []int{5, 13, 67, 276}
+
+// coreSlots is the length of `loopCore` below. The two relocated shapes are built by adding
+// `span - coreSlots` slots of padding, so a span of exactly 5 — the corpus median — has to be
+// expressible with no padding at all, and that is why this core exists rather than reusing
+// `loopBody`: ten instructions cannot express a five-slot body.
+const coreSlots = 5
+
+// loopCore is a counting loop in exactly five slots, using `local.tee` to decrement, store and test
+// in one instruction. Placed **after** any padding in the coupled shape and **before** it in the
+// decoupled one, which is the entire difference between them.
+const loopCore = `
+    local.get 0
+    i32.const 1
+    i32.sub
+    local.tee 0
+    br_if 0`
+
+// arithUnit is one stack-neutral unit of executed padding: read the accumulator, add one, store it.
+// Four slots, so a span whose padding is not a multiple of four is filled out with `nop`s and the
+// exact composition is reported rather than rounded.
+const arithUnitSlots = 4
+
+// padCoupled emits n slots of padding that every iteration **executes** as well as scans.
+//
+// The mix is the free parameter that sets the answer, which is why there are two and why the
+// registration says so: `nop` is the cheapest arm the interpreter has, so it minimises the executed
+// term in the denominator and **maximises** Δ% — that row is a ceiling, not an estimate. The
+// arithmetic unit is the mix `shapeStraight` already uses, as the realistic figure. Padding with
+// `nop` and reporting it as the real-code number would be a flattering choice wearing a neutral one.
+func padCoupled(n int, mix string) string {
+	if n <= 0 {
+		return ""
+	}
+	if mix == "nop" {
+		return pad(n)
+	}
+	units, rem := n/arithUnitSlots, n%arithUnitSlots
+	var b strings.Builder
+	for range units {
+		b.WriteString("\n    local.get 1\n    i32.const 1\n    i32.add\n    local.set 1")
+	}
+	b.WriteString(pad(rem))
+	return b.String()
+}
+
+// coupledWant is the accumulator's value after the run: one increment per arithmetic unit per
+// iteration, and zero for the `nop` mix, which accumulates nothing.
+//
+// **What this check can and cannot catch.** For the arithmetic mix it is a real work check: the
+// padding must have executed `iters` times over. For `nop` the expected value is 0, which a loop
+// that never ran would also produce for the accumulator — but not for the counter, since the
+// function returns after `local 0` has been driven to zero and a loop that did not run leaves it at
+// `iters`. So the weaker check still separates "ran to completion" from "did not run", which is the
+// failure a timing harness cannot detect afterwards, and it is stated rather than implied.
+func coupledWant(span int, mix string) int32 {
+	if mix == "nop" {
+		return 0
+	}
+	return int32(iters * ((span - coreSlots) / arithUnitSlots))
+}
+
+// shapeCoupled is the relocated A/B's subject: scanned distance **equals** executed length, which is
+// what a real block body does and what the original sweep deliberately did not do.
+//
+// #502's shapes pad after the back-edge, so the padding is scanned every iteration and executed
+// once — at d=64 that is 64 slots scanned against ~10 executed, **6.4:1**, where a real 64-slot loop
+// body scans 64 and executes 64, **1:1**. Its own closing comment recorded the consequence: the
+// mechanism and the slope transfer, the percentage does not. So relocating the distances without
+// recoupling would have moved the x-axis and left the y-axis measuring the wrong workload.
+func shapeCoupled(span int, mix string) string {
+	return fmt.Sprintf(`(module
+  (func (export "run") (param i32) (result i32)
+    (local i32)
+    loop%s%s
+    end
+    local.get 1))
+`, padCoupled(span-coreSlots, mix), loopCore)
+}
+
+// shapeDecoupled is `shapeCoupled`'s pair at the same span, with the padding moved **after** the
+// back-edge so it is scanned every iteration and executed once. Same span, same scan, same core, and
+// the executed work held at five instructions per iteration.
+//
+// It is here so the pair differs in exactly one variable. Δ on this shape divided by the span is the
+// scan's **marginal cost per slot** at a distance real code has — the quantity #502 could only
+// measure at 74 slots and above, where its long-row slope (0.537 ns/slot) is twice what its single
+// short row implies (0.290 ns/slot at 10 slots). Which of those two holds at 5–276 slots is the
+// registered second question, and this shape is what answers it.
+func shapeDecoupled(span int) string {
+	return fmt.Sprintf(`(module
+  (func (export "run") (param i32) (result i32)
+    (local i32)
+    loop%s%s
+    end
+    local.get 1))
+`, loopCore, pad(span-coreSlots))
+}
 
 // loopBody is the interpreted work per iteration, and it is the same text at every distance:
 // accumulate, decrement, test. Ten instructions, all of them cheap, so the measurement is not
@@ -215,6 +330,138 @@ func TestShapesRunAndAgree(t *testing.T) {
 				call(t, instantiate(t, src))
 			})
 		}
+	}
+}
+
+// mixes are the two padding compositions, in a fixed order so two runs' rows line up for benchstat.
+var mixes = []string{"nop", "arith"}
+
+// TestRelocatedSpansAreTheLengthsClaimed is the vacuity check the benchmarks cannot perform on
+// themselves, and it checks the **claim in the unit the whole measurement is denominated in**: that a
+// shape built for span N has a decoded body of exactly N slots.
+//
+// A span that is off by a few slots would move every per-slot figure silently, and *measure with the
+// instrument, not a regex* — so this decodes each shape through the real pipeline and counts the
+// loop's body from its `loop` slot to the matching `end`, using `matchEnd`'s own arithmetic rather
+// than counting instructions in the generated text.
+func TestRelocatedSpansAreTheLengthsClaimed(t *testing.T) {
+	if len(spans) < 3 {
+		t.Fatalf("condition 2 needs at least three distances, have %d", len(spans))
+	}
+	for _, span := range spans {
+		for _, mix := range mixes {
+			t.Run(fmt.Sprintf("coupled/span=%d/%s", span, mix), func(t *testing.T) {
+				assertSpan(t, shapeCoupled(span, mix), span)
+			})
+		}
+		t.Run(fmt.Sprintf("decoupled/span=%d", span), func(t *testing.T) {
+			assertSpan(t, shapeDecoupled(span), span)
+		})
+	}
+}
+
+// assertSpan decodes one shape and checks its loop body's length against the span it was built for.
+func assertSpan(t *testing.T, src string, span int) {
+	t.Helper()
+	wasm, err := text.EncodeModule([]byte(src))
+	if err != nil {
+		t.Fatalf("assembling: %v\n%s", err, src)
+	}
+	m, err := binary.DecodeModule(wasm)
+	if err != nil {
+		t.Fatalf("decoding: %v", err)
+	}
+	if len(m.Funcs) != 1 {
+		t.Fatalf("shape has %d functions, want 1", len(m.Funcs))
+	}
+	body := m.Funcs[0].Body
+	opener := -1
+	for i, ins := range body {
+		if ins.Prefix == 0x00 && ins.Op == 0x03 { // loop
+			opener = i
+			break
+		}
+	}
+	if opener < 0 {
+		t.Fatalf("no loop opener in the decoded body of %d slots", len(body))
+	}
+	// The body is the slots strictly between the opener and its END, which is `end - opener - 1`.
+	end := -1
+	depth := 0
+	for i := opener; i < len(body); i++ {
+		if body[i].Prefix != 0x00 {
+			continue
+		}
+		switch body[i].Op {
+		case 0x02, 0x03, 0x04, 0x1f: // block, loop, if, try_table
+			depth++
+		case 0x0b: // end
+			depth--
+			if depth == 0 {
+				end = i
+			}
+		}
+		if end >= 0 {
+			break
+		}
+	}
+	if end < 0 {
+		t.Fatalf("loop at %d has no matching end in %d slots", opener, len(body))
+	}
+	if got := end - opener - 1; got != span {
+		t.Errorf("loop body is %d slots, want span %d — every per-slot figure is denominated in this "+
+			"number, so an off-by-n here is an off-by-n in the result", got, span)
+	}
+}
+
+// TestRelocatedShapesRunAndAgree checks that every relocated shape computes its registered answer.
+// The coupled arithmetic rows carry a real work check — the padding must have executed `iters` times
+// over — and the `nop` rows the weaker one `coupledWant` documents.
+func TestRelocatedShapesRunAndAgree(t *testing.T) {
+	for _, span := range spans {
+		for _, mix := range mixes {
+			t.Run(fmt.Sprintf("coupled/span=%d/%s", span, mix), func(t *testing.T) {
+				callWant(t, instantiate(t, shapeCoupled(span, mix)), coupledWant(span, mix))
+			})
+		}
+		t.Run(fmt.Sprintf("decoupled/span=%d", span), func(t *testing.T) {
+			callWant(t, instantiate(t, shapeDecoupled(span)), 0)
+		})
+	}
+	// At the median span the two mixes are the same module by construction — there is no padding to
+	// compose — so they must be byte-identical. A built-in consistency check on the generator: if
+	// these ever differ, `padCoupled` is emitting something at n<=0.
+	if a, b := shapeCoupled(coreSlots, "nop"), shapeCoupled(coreSlots, "arith"); a != b {
+		t.Errorf("at span=%d the two mixes must be the same module, got:\n%s\nand\n%s", coreSlots, a, b)
+	}
+}
+
+// BenchmarkCoupled is the relocated A/B: scanned distance equals executed length, at the spans the
+// suite actually contains. Condition 1 is read on the `arith` row at span 67.
+func BenchmarkCoupled(b *testing.B) {
+	for _, span := range spans {
+		for _, mix := range mixes {
+			in := instantiate(b, shapeCoupled(span, mix))
+			want := coupledWant(span, mix)
+			b.Run(fmt.Sprintf("span=%d/%s", span, mix), func(b *testing.B) {
+				for b.Loop() {
+					callWant(b, in, want)
+				}
+			})
+		}
+	}
+}
+
+// BenchmarkDecoupled is the pair that isolates the scan at the same spans: Δ divided by the span is
+// the marginal cost per scanned slot, which is the registered second question.
+func BenchmarkDecoupled(b *testing.B) {
+	for _, span := range spans {
+		in := instantiate(b, shapeDecoupled(span))
+		b.Run(fmt.Sprintf("span=%d", span), func(b *testing.B) {
+			for b.Loop() {
+				callWant(b, in, 0)
+			}
+		})
 	}
 }
 

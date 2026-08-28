@@ -174,6 +174,32 @@ reach is a law out of context.
     matched lookup is a parenthesised expression), because a count cannot separate two readers
     whose counts overlap. (Ruling: Scott, PR #159, naming the law from the finding.)
 
+### A null measured inside one binary does not bound a comparison made across two.
+
+- **A null measured inside one binary does not bound a comparison made across two.** The A/A floor is
+  the right instinct and it answers a narrower question than the one being asked: running the *same
+  binary* twice measures **run-to-run** variance — scheduler, thermals, page placement — and an A/B
+  built as two build-tag lanes spans a **build** boundary as well, where code layout, inlining, and
+  branch-target alignment differ for reasons that have nothing to do with the change. The A/A is
+  structurally blind to that term, because the only way to see it is to compile twice. So a clean A/A
+  licenses reading the A/B, and it does **not** license reading the A/B's effect sizes at face value.
+  - **The specimen.** #136's end-table A/B floored clean — thirteen rows `~`, lowest `p=0.143`, geomean
+    `+0.22%` — and then reported `BenchmarkStraight` at **-1.43%, `p=0.001`**, on a shape with no
+    structural openers at all. On that shape lane B does strictly *more* work than lane A: it loads
+    from a `sync.Map` and builds a dense table of `-1` sentinels that nothing ever reads. It cannot be
+    faster, so the figure is not a saving; it is the build-level bias, measured by the one row designed
+    to have no effect in it. Every effect size in that report is quoted gross **and** net of it, and
+    the verdict is taken on the net.
+  - **This is why the no-effect row is not optional garnish.** A sweep of rows that all move gives you
+    no way to separate "the change works" from "this binary is 1.4% faster"; the row that *must* read
+    zero is the only place the bias is observable. Same structure as a vacuity check, one level out —
+    a control needs a cell whose correct value is known in advance.
+  - **The cheap fix, for the next one.** Build the *unchanged* lane twice under two different tags that
+    both compile to the same semantics, and floor on that instead: it is an A/A across a build
+    boundary, which is the actual null. Not done here — the bias was caught by the no-effect row after
+    the fact rather than bounded in advance, and saying so is the difference between a calibration and
+    a lucky read.
+
 ### Reconcile an extent, never floor it.
 
 - **Reconcile an extent, never floor it.** A one-sided bound is silent in the direction it does not
