@@ -377,6 +377,27 @@ type Section struct {
 // both are retained now, so this sentence names what is left rather than what it once did. Nothing reads a field that is never written,
 // which is the property `deadcode` is checking.
 type Module struct {
+	// moduleEnds carries the block-pairing arena, and it is embedded — rather than
+	// declared here as a field — because it is the one part of the pairing table that a
+	// build tag has to be able to remove. A `[]int32` is 24 bytes of slice header per
+	// module whether or not it is populated, and 0048 charged that at 101184 B over the
+	// corpus's 4216 modules: the largest term the *default* build would have paid for a
+	// feature it does not use. So `moduleEnds` is `struct{}` unless `burroughs_endtable`
+	// is set, which makes the default build byte-identical and leaves the whole measured
+	// bill on the flip's side of the ledger where #136's pre-registration put it.
+	//
+	// First field, not last: a zero-sized field at the end of a struct is padded so that
+	// a pointer to it cannot run past the allocation, and that padding would have made
+	// "costs nothing" false in exactly the build meant to pay nothing.
+	//
+	// Read only under `burroughs_endtable`, and the linter runs the default build, where this is
+	// deliberately `struct{}` with no reader. That is the gate working rather than dead code: the
+	// suppression is the price of the arm being removable, and `make test-endtable` exercises the
+	// arm that does read it.
+	//
+	//nolint:unused // no reader in this build by design; see the four lines above.
+	moduleEnds
+
 	Version  uint32
 	Sections []Section
 
@@ -970,6 +991,10 @@ func (d *Decoder) DecodeModule(b []byte) (*Module, error) {
 	// Placed after every verdict above for decodeFuncBody's reason: a module rejected by
 	// checkCounts must not leave a zipped form behind.
 	d.finishFuncs()
+	// After finishFuncs for its own reason one level up: this is the point past which no
+	// verdict is left to return, so it is the first point at which sizing the arena to what
+	// the module actually kept is sizing it to something final.
+	d.trimEnds()
 	return m, nil
 }
 

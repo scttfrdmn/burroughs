@@ -21,7 +21,10 @@ import "github.com/scttfrdmn/burroughs/internal/binary"
 // `runFrame` serve both lanes; the call is one nil return per *function call*, against a body that
 // then interprets the whole function, and it is named here rather than left for the reader to
 // discover because it is a real if tiny cost this lane pays and today's `main` does not.
-func frameEnds(*binary.Func, []binary.Instr) []int32 { return nil }
+//
+// A method with an unused receiver, for the same one-`runFrame` reason: lane B reads the table off
+// the instance's module (0048's arena), so the signature has to admit a receiver in both lanes.
+func (*Instance) frameEnds(*binary.Func) []int32 { return nil }
 
 // endOf pairs the structural header at `pc` with its END. In this lane it is `matchEnd` verbatim:
 // the table argument is ignored because no table was built.
