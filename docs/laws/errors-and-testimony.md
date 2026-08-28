@@ -274,3 +274,47 @@ reach is a law out of context.
   wording stands where it is by this family's own convention of amending rather than
   rewriting, and it is exactly the kind of claim this law is about: it was true of the message
   and false of the rendering.
+
+### A correction travels attached to the quote, so a figure published into a record is retracted by posting to it.
+
+- **A correction travels attached to the quote, so a figure published into a record is
+  retracted by posting to it, never by editing it.** Two specimens, one remedy, which is
+  this repo's own threshold for a class (Scott, PR #460).
+
+  **First: a retraction of the sharpest argument an issue had.** A symbol was reported to a
+  principal as *"defined nowhere in the tree"* on the strength of a search that ended in
+  `| head`. Retracted by a new comment on
+  [#456](https://github.com/scttfrdmn/burroughs/issues/456#issuecomment-5383301564) rather
+  than by editing the claim away, and Scott's words on the #498 relay were *"retracting your
+  own sharpest argument by posting is the right handling"* — the truncation half of that
+  event is its own law in
+  [evidence-and-instruments.md](evidence-and-instruments.md#a-truncated-search-proves-nothing-about-absence-because-a-display-limit-is-not-a-result-set);
+  the handling half is here.
+
+  **Second, and it is why this is a heading rather than an aside: the wrong figure sat inside
+  a record whose purpose was to hold someone else's words.** #136's durable comment records
+  Scott's conditional order on the memory bill verbatim — *"if span-scoping saves
+  substantially it's worth its one extra concept; if not, take the full dense array and say so
+  with the number attached"* — and then reports the measurement that resolved it at **12.1%**,
+  read as not-substantial by the agent. The figure was wrong; the corrected bill makes
+  span-scoping a **+42.2% penalty** in the chosen placement, so the conditional resolves on
+  its own terms and no agent ever needed to read the word *substantially*
+  ([0048](../decisions/0048-the-pairing-table-lives-in-a-per-module-arena-reached-by-one-int32-on-func-because-the-per-function-field-dominates-a-measured-bill.md)).
+  **Editing that comment would have changed what the principal appears to have been answered
+  with**, in the one artifact that exists so his order has an address. The order and the two
+  readings of it stay legible together, in the order they happened.
+
+  **How to apply.** Post to the thread the figure was published in, quote the sentence being
+  retracted so a reader who arrives at the old comment first has somewhere to be sent, and
+  correct **what the figure decided**, not only the figure: a number inside a conditional is
+  load-bearing through the arm it selected, so a retraction that leaves the reading standing
+  has corrected the evidence and kept the verdict. Then check whether the flag the old reading
+  raised is still live — here a **Decisions needed** item asking Scott to confirm a
+  judgement call became moot, because the corrected measurement decides the arm without one,
+  and a stale ask spends a principal's attention on a question that no longer has two answers.
+  The sibling on the *inside* of a file is
+  [a deferral's stated cost](#a-deferrals-stated-cost-is-part-of-the-records-content-and-it-is-the-one-class-of-claim-nothing-ever-audits)'s
+  closing rule — append the correction with the body intact — and the sibling on the error-rate
+  side is [a correction is an
+  edit](evidence-and-instruments.md#a-correction-is-an-edit-and-carries-the-same-error-rate-as-the-edit-that-needed-correcting).
+  (Class: two specimens, #456 and #136. Handling ruled right by Scott on the #498 relay.)

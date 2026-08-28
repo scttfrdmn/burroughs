@@ -894,3 +894,52 @@ reach is a law out of context.
   states it in the ADR itself: the case for symbol citations *"rests on the two measured defects above
   and not on a rename that broke prose."* A retraction that does not re-state the load-bearing grounds
   is half a retraction, and the surviving half is the part that gets cited later.
+
+### An instrument whose subject is changed by its own conclusion stops reproducing it.
+
+- **An instrument whose subject is changed by its own conclusion stops reproducing it.**
+  A measurement that decides something, and whose decision then edits the thing measured,
+  reports a different number the next time it runs. Both numbers are correct about
+  different subjects, which is worse than one of them being wrong: the record and the
+  instrument now contradict each other and neither is lying.
+
+  **Specimen: ADR 0048's memory bill.** The instrument priced ten representations for
+  #136's pairing table and chose one on a single term — `binary.Func` opens `TypeIndex
+  uint32` before a slice header, so it has one 4-byte interior hole, and an `int32` placed
+  there costs **zero** against 8 B appended (75144 B over the corpus, the largest term in
+  the comparison). The mechanism that implemented the decision added `Func.EndsOff`, which
+  **fills that hole**. From that commit the live `Func` had none left, so the next run
+  charged a *second* `int32` at full width, moved the chosen row 154520 B → 229664 B, and
+  re-ordered its own table — under a printed sentence reading *"the only interior hole in
+  `binary.Func` is 0 B wide, and the arena's offset is what fits in it … which is why the
+  arena leads the dense rows"*, on a board where the arena was fifth. Every figure in that
+  sentence was a real measurement of the post-landing struct.
+
+  **The repair is a counterfactual base, not a provenance note.** "Measured at the parent
+  commit" is honest and strictly worse: a table nobody can re-derive drifts silently the
+  next time its subject moves, and the reader who re-runs the instrument gets a
+  contradiction with no way to tell which side is stale. `endSizeUncommittedFunc` charges
+  every row against `Func` **less** the field the decision added, so the ADR's table
+  re-derives at HEAD *and* each row keeps the question it was answering — *what would this
+  representation cost, added to a struct that does not already have it* — which is also the
+  only base all ten rows share. The absorption itself is then asserted separately, by
+  `TestEndsOffsetIsFreeInTheLayout` in `internal/binary`, so a `Func` that starts paying
+  for the field fails there rather than quietly changing what every figure means.
+
+  **How to see it coming: ask whether the conclusion is an edit to the measured object.**
+  Most measurements are safe — a benchmark of a scan does not change the scan. The unsafe
+  shape is narrow and recognizable: a measurement over a *layout*, a *count of sites*, a
+  *set of remaining cases*, or a *census of some population*, whose conclusion is "so add
+  one / fix these / occupy that". Every closure condition of that form is an oracle that
+  will disagree with its own record. Two mechanical outs: charge against the state *before*
+  the conclusion (this specimen), or make the instrument assert the post-conclusion state
+  directly, so the number it prints is the one the tree can still produce.
+
+  **This is the artifact-becoming-an-oracle shape with the artifact and the oracle one
+  commit apart** — see
+  [graves-and-sweeps.md](graves-and-sweeps.md). The
+  difference is the interval: the usual specimen is a stale file answering searches months
+  later, and this one is a live, passing, correct test refuting the ADR it was written for,
+  in the same PR. Reproducibility of a cited figure is therefore not a documentation
+  property but a property of the instrument, and it has to be designed in at the point where
+  the instrument's subject and the decision's subject are the same object.

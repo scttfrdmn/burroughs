@@ -15,7 +15,9 @@ already discharged by [0016](0016-unbounded-immediates-live-beside-the-body.md).
 **Retracts a figure this project has already published.** An earlier draft of this ADR declined span-scoping
 "at 12.1%", and that figure was carried into the durable comment cited above. It was wrong, the instrument that
 produced it was wrong in two ways described below, and the correction is delivered by posting to the same
-thread rather than by editing it — *a correction travels attached to the quote*.
+thread rather than by editing it — [*a correction travels attached to the
+quote*](../laws/errors-and-testimony.md#a-correction-travels-attached-to-the-quote-so-a-figure-published-into-a-record-is-retracted-by-posting-to-it),
+minted on this specimen and #456's.
 
 ## Context
 

@@ -729,3 +729,47 @@ reach is a law out of context.
   regex: the binding assertion is scoped to the form the ADR mandates, and the populations that
   are wrong-but-not-convertible are counted and printed rather than asserted against, because a
   defect nobody can fix today is still a defect somebody should be able to read.
+
+### A bound written in the wrong direction fires on the finding rather than on the defect.
+
+- **A bound written in the wrong direction fires on the finding rather than on the
+  defect.** An assertion encodes which way its subject may move. Get the direction wrong
+  and the control is not merely useless — it is *hostile*, because the case it rejects is
+  the discovery, and the fix that makes it pass is a retreat to what the author already
+  believed.
+
+  **Specimen: the memory bill for #136's pairing table** ([ADR
+  0048](../decisions/0048-the-pairing-table-lives-in-a-per-module-arena-reached-by-one-int32-on-func-because-the-per-function-field-dominates-a-measured-bill.md)).
+  The instrument charged each candidate representation for the field that reaches its
+  structures, and carried the assertion `fieldWidth > 0` under the comment *"a field that
+  costs nothing is a field that is not there"*. That reads as a vacuity guard and is a
+  plausible one. It is also the exact negation of the result: `binary.Func` opens
+  `TypeIndex uint32` before a slice header, so it has one 4-byte interior hole, and the
+  chosen representation's `int32` offset costs **zero bytes** there — 75144 B over the
+  corpus against the appended position, the largest single term in the comparison. Had the
+  assertion run before the position sweep existed, the only way to green would have been
+  to charge the field by appending, which is the worst position by construction, and the
+  ADR would have chosen a different representation for a reason that was an artifact of its
+  own control.
+
+  **What replaced it is the same guard aimed at the thing that can actually be absent.**
+  Not the field's *width* — which is the measurement — but its *payload*: `fieldData > 0`
+  asserts the representation carries real data, and `fieldWidth <= fieldAppended` asserts
+  the swept minimum never exceeds a position every sweep contains. Both hold at zero width.
+  The discriminator is general: **a bound belongs on the input the measurement is taken
+  over, never on the measurement.** A floor on "did the instrument have a subject" is
+  always safe; a floor on "did the subject come out non-trivial" is a prediction wearing a
+  control's clothes.
+
+  **The tell is that the comment argues for the bound.** *"A field that costs nothing is a
+  field that is not there"* is a syllogism, and a control whose justification is an argument
+  rather than a failure mode is a control that has assumed its own answer — the same reading
+  as *the defect stated as the rule* ([errors-and-testimony.md](errors-and-testimony.md#comments-and-adrs-are-testimony-too-and-where-prose-and-the-references-executable-disagree-the-executable-outranks)), one layer up: there the
+  comment asserts the property the code lacks, here it asserts the property the *result* may
+  not have. Both make review confirm the author's prior.
+
+  **Sibling shapes, all failing on the same axis:** *an unasserted distance is the vacuum*
+  (above, under [a comparison against an empty set](#a-comparison-against-an-empty-set-succeeds-so-a-control-that-compares-needs-a-vacuity-check))
+  is a bound too far from its subject to fire at all,
+  and this is a bound near enough to fire on the wrong side. A ceiling and a floor are not
+  interchangeable and neither is a substitute for asking which way the finding could go.
