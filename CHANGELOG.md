@@ -21,6 +21,45 @@ weakly-ordered platform.
 
 ### Added
 
+- **The end-table A/B, run at the distances the corpus actually contains, and `matchEnd`'s cost is
+  material at the median** (#136). The prior probe swept 0/64/512/4096 slots; the census in #503 showed
+  nothing in the corpus reaches 512. This is the re-run at **p50 5 / p90 13 / p99 67 / max 276**, in
+  `internal/interp/scanbench`, over two new shapes that differ in exactly one variable — `shapeCoupled`
+  puts the padding *before* the loop core, so it is scanned **and** executed at 1:1 like real code, and
+  `shapeDecoupled` puts it after the back-edge, so it is scanned only. `TestRelocatedSpansAreTheLengthsClaimed`
+  decodes each shape and asserts the span is the length claimed, watched to fail under a one-slot
+  mutation. Ten interleaved cycles per lane in one time window. **The pre-registered criterion — ≥5%
+  on the realistic arm at a distance that occurs — is met on all four spans**: net of the build-level
+  bias below, `-5.19%` at the median span of 5 and `-6.59%` at p99 (`p=0.002`). The registered forecast
+  of `+4.2%`, *below* the bar, is falsified.
+- **`BenchmarkStraight` priced the build-level bias that the A/A floor cannot see.** The A/A was clean
+  on all thirteen rows (lowest `p=0.143`), and the no-opener control still read `-1.43%` (`p=0.001`) on
+  a shape where the table lane does strictly more work and cannot be faster. Every figure above is
+  quoted net of it. New law in [`docs/laws/controls.md`](docs/laws/controls.md): *a null measured inside
+  one binary does not bound a comparison made across two.*
+- **The scan is 0.602 ns/slot and a table does not deliver all of it.** Lane B's decoupled rows are flat
+  across a 55× span range — 28.94/28.93/29.30/29.72 µs — which is the positive control that the
+  precomputed table removes span-dependence entirely. But the saving delivered on the realistic arm
+  falls to 88%/64%/53% of the scan's measured cost as the span grows, the shortfall rising
+  0.072→0.218→0.284 ns/slot: the scan was warming cache for the execution behind it. The registered
+  cache-pollution hypothesis is **refuted in the form it was registered** — the slope is flat
+  (0.520/0.646/0.593 ns/slot), not rising — and the same physics turns up with its sign reversed.
+  Recorded under *an unmeasured complement is not an empty one* in
+  [`docs/laws/evidence-and-instruments.md`](docs/laws/evidence-and-instruments.md).
+- **Class is by purpose, not by location** ([`docs/laws/product-and-overhead.md`](docs/laws/product-and-overhead.md)).
+  Scott's ruling on the #503 review: a counter in `runFrame` is instrument work despite living in engine
+  code, because the runtime-vs-harness test asks what the PR changes and a file path is not an answer to
+  it. Recorded with the opposite-facing note that the ratio comparator *is* location-based, so the same
+  counter counts as engine for drift and as instrument for selection — and neither reading is the
+  actor's to pick.
+- **The positional-citation census prints a channel × resolution cross-tab** (#497). One map increment
+  over citations the control already gathered; the two pinned margins cannot answer it, because a margin
+  constrains a total without constraining a cell. It shows **20 of the 57 ambiguous citations are
+  markdown** — records that name no file today, before any drift — and that all 23 by-construction data
+  keys are path-qualified. Both facts undercut the option this repo had been recommending on #497, and a
+  third option is stated there. Printed, not pinned: which cell must reach zero is what Scott has not
+  yet ruled.
+
 - **The spec suite's opener-to-`end` distance distribution is measured, and it retires two of the four
   distances #502's scan probe swept** (ordered by Scott on the #502 review: *"the materiality datum is
   wanted, and it goes first … measure it before the A/B, because it tells you which distances are
