@@ -21,6 +21,20 @@ weakly-ordered platform.
 
 ### Added
 
+- **`BenchmarkInstantiate` prices the half of `gate:endtable`'s trade that no figure in the campaign
+  covered: what the pairing pass costs at *decode*** (#136). Every number in `scanbench` and in the
+  flip's pre-registration is an execution-side number, taken on a module decoded once and called a
+  million times; the table's cost is paid per decoded *function*, whether or not it is ever entered,
+  and there was no instantiate benchmark anywhere among the tree's 26. Three shapes — the corpus's own
+  (`funcs=1/openers=1`), a 200-function magnifier so the per-function term can be measured rather than
+  inferred, and `openers=0` as the decode-side floor — with
+  `TestDecodeShapesHaveTheFunctionsAndOpenersClaimed` counting functions and openers off the *decoded*
+  form, because a builder that silently emitted no `loop` would make both lanes agree and the agreement
+  would read as "the pairing pass is free". The measured answer is that the tagged lane decodes a
+  corpus-shaped module **+11.82% (p=0.000)** slower, which is the largest single term in the flip's
+  ledger and reverses the sign of the decision for any module that is instantiated and called a
+  handful of times.
+
 - **`gate:endtable` — the pairing table moved from an interpreter-side probe to the decoder, in a
   per-module arena reached by one `int32` on `Func`** (#136, [ADR
   0048](docs/decisions/0048-the-pairing-table-lives-in-a-per-module-arena-reached-by-one-int32-on-func-because-the-per-function-field-dominates-a-measured-bill.md)).
@@ -3810,6 +3824,25 @@ weakly-ordered platform.
     re-pointed, so the retirement is readable at the site rather than only in this entry.
 
 ### Fixed
+
+- **A build-tag A/B was comparing an untagged binary to a tagged one, and the tag string is itself in
+  the binary** (#136, retracting the **-1.43% (p=0.001)** `BenchmarkStraight` figure #504 published as
+  build-level bias). `runtime.modinfo.str` records `-tags`, so adding any tag grows it and shifts every
+  data and bss address downstream — `go tool nm -size` differs on **2474 of 5824 lines** between
+  untagged and inert-tagged builds (1434 data, 1016 bss, 24 read-only, **zero text**), so not one
+  instruction moved and 2474 addresses did. That is why a shape with *no structural openers*, where the
+  table lane does strictly more work and cannot be faster, read a significant speedup. **The fix is
+  removal, not subtraction:** the pre-registration prescribed flooring — net the bias out of every row —
+  which assumes the perturbation is a constant with a sign, and across twelve rows the same tag swap
+  ran from **-3.05% to +0.65%**, both directions at p<0.01.
+  Give both lanes an equal-length tag and the layout is provably identical (0 differing nm lines of
+  5824, identical byte size) and the row reads **~ (p=0.369)**. The residual floor, with layout
+  identical and n=20, is still up to **-0.97% at p=0.000**, so ~1% is the level below which no A/B in
+  this tree means anything. Mints *[an A/B across a build tag gives both lanes a tag of equal
+  length](docs/laws/evidence-and-instruments.md#an-ab-across-a-build-tag-gives-both-lanes-a-tag-of-equal-length-because-the-tag-string-is-itself-in-the-binary)*,
+  whose last clause is paid for separately: the first attempt at the corrected measurement was **void**
+  because a new `_test.go` landed in the measured package 21 seconds before the second lane compiled, so
+  multi-lane runs now hash their own sources before and after and refuse to report if they moved.
 
 - **`internal/binary` told every reader that 0002's branch resolution was implemented, in the two places
   a consumer of `Func` reads first** ([grave #505](https://github.com/scttfrdmn/burroughs/issues/505)).

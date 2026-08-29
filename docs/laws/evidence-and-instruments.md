@@ -943,3 +943,42 @@ reach is a law out of context.
   in the same PR. Reproducibility of a cited figure is therefore not a documentation
   property but a property of the instrument, and it has to be designed in at the point where
   the instrument's subject and the decision's subject are the same object.
+
+### An A/B across a build tag gives both lanes a tag of equal length, because the tag string is itself in the binary.
+
+- **An A/B across a build tag gives both lanes a tag of equal length, because the tag string is
+  itself in the binary.** #136's flip measurement compared an untagged build to `-tags
+  burroughs_endtable`, and `BenchmarkStraight` — a shape with **no structural openers**, where the
+  table lane does strictly more work and cannot be faster — read **-1.43% (p=0.001)** in #504 and
+  **-1.25% (p=0.000)** on re-measurement. An impossible speedup at p=0.000 is not noise; it is a
+  confound with a mechanism, and the mechanism is that `runtime.modinfo.str` records `-tags`. Adding
+  any tag grows it, which shifts every data and bss address downstream: `go tool nm -size`, sorted,
+  differs on **2474 of 5824 lines** between untagged and inert-tagged — **1434 data, 1016 bss, 24
+  read-only, and zero text** — so not one instruction moved and 2474 addresses did. Give both lanes an
+  equal-length tag and the same row reads **~ (p=0.369)**.
+  - **The fix is removal, not subtraction, and that distinction is the whole entry.** #504's
+    pre-registration diagnosed the bias correctly and prescribed *flooring* — measure the bias, then
+    net it out of every row. That silently assumes the perturbation is a constant with a sign, and it
+    is not: across twelve rows the same tag swap ran from **-3.05% to +0.65%**, both directions at
+    p<0.01, because a layout shift helps some access patterns and hurts others. A single floor
+    subtracted from every row is a mean standing in for a spread. Two lanes with equal-length tags
+    have **provably identical layout** — 0 differing nm lines of 5824, identical byte size — so there
+    is nothing to net out.
+  - **Equal-length is the requirement; equal *content* is not, and byte equality is the wrong
+    check.** Go's build ID hashes the tag list, so two inert tags of the same length produce binaries
+    that differ in bytes and agree in layout. `cmp` says "different" and proves nothing. The claim a
+    timing difference could actually come from is *layout*, and `go tool nm -size` is what answers it.
+  - **The residual noise floor is worth knowing once you can see it.** With layout provably identical,
+    n=20, this harness still produced **up to -0.97% at p=0.000** on four of twelve rows. So ~1% is
+    the floor below which no A/B in this tree means anything, and a pre-registered threshold set at
+    5% is 5× the floor rather than the comfortable margin it reads as.
+  - **A tagged-vs-tagged A/B estimates the code's effect, not any shipped binary's.** The default
+    build carries no tag, so the figure a user experiences cannot be isolated from layout at all;
+    what the equal-length comparison buys is attribution — the delta is the files that compiled, not
+    the string that named them. Say which of the two a number is.
+  - **And the tree is an input to a benchmark that is already running.** The first attempt at this
+    measurement was void: a new `_test.go` landed in the measured package 21 seconds before the second
+    lane compiled, so the two binaries differed by the tag *and* by a file, and the mtimes were the
+    only surviving evidence. Any multi-lane run therefore hashes its own sources before and after and
+    refuses to report if they moved — the same discipline as *a skip is not a verdict*, applied to the
+    inputs rather than the outputs.
