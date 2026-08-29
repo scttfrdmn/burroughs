@@ -76,6 +76,15 @@ type Arm struct {
 	// Line is the 1-indexed line in lexer.mll this arm was read from, so a generated
 	// row can be audited against the authority without a search.
 	Line int
+	// From is the short tag of the authority Line indexes into, empty for a table with
+	// one source.
+	//
+	// It exists because the table stopped having one source. Every row used to cite
+	// `lexer.mll:N` and that was unambiguous; with two pins licensing a file of that
+	// name, `atomic.fence` cites line 266 of the *threads* lexer and the core lexer's
+	// line 266 is an unrelated arm. A citation that resolves to the wrong file is worse
+	// than one that does not resolve, because it resolves.
+	From string
 }
 
 // errUnrecognized is the load-bearing error: it is what makes this extraction different

@@ -640,7 +640,21 @@ func (p *parser) tabletype() (tabType, error) {
 	return tabType{addr64: addr64, lim: lim, elem: elem}, nil
 }
 
-// memorytype parses a memory type (parser.mly:463-464): `addrtype limits`, and returns it.
+// memorytype parses a memory type: `addrtype limits` (parser.mly:463-464) with the threads
+// proposal's optional `shared` (`spec-threads/text/parser.mly:307-309`), and returns it.
+//
+// **Two authorities, one production, and neither pin has both halves.** The core pin's arm is
+// `addrtype limits` with no SHARED token anywhere in its lexer; the threads pin's arm is
+// `limits SHARED` with no addrtype at all, because its baseline predates memory64. So the
+// production accepted here is the *union* — which is what contract §9 G-2 means by the grammar
+// being the tracked set's union, and it is why consultation has to be clause-scoped: reading
+// either pin wholesale would drop the other's field.
+//
+// The `shared` read is unconditional because **this package is gate-blind by ruling** (Scott,
+// #124 — see code.go's note on the encoder reading no `Features`). A shared memory is written
+// and then honestly declined by the decoder, which is the sole module authority and already
+// answers with a feature-named error when the gate is off (`sections.go` decodeLimits →
+// `featureErr("threads")`). A gate check here would be a second authority for one truth.
 //
 // Value-returning for the reason `tabletype` above records at length: its one caller is an inline
 // import, and an imported memory's type is now written by the import section (#8). Nothing here is
@@ -655,7 +669,22 @@ func (p *parser) memorytype() (memType, error) {
 	if err != nil {
 		return memType{}, err
 	}
-	return memType{addr64: addr64, lim: lim}, nil
+	return memType{addr64: addr64, lim: lim, shared: p.sharedOpt()}, nil
+}
+
+// sharedOpt consumes a trailing `shared` if the cursor is at one, and reports whether it did.
+//
+// Separate from `limits` on purpose, and the separation is the whole content of the function:
+// `limits` is shared with `tabletype`, whose upstream production is `limits ref_type` with no
+// shared arm, so folding this in would admit `(table 1 1 shared funcref)` — a module no pin
+// defines and one the binary layer explicitly refuses (`ErrSharedTable`). Two productions
+// sharing a helper is fine; sharing a *field* that only one of them has is the leak.
+func (p *parser) sharedOpt() bool {
+	if !p.c.atKeyword(kwShared) {
+		return false
+	}
+	p.c.next()
+	return true
 }
 
 // typeuse parses `(type idx)` (parser.mly:470-471) and returns the reference, unresolved.

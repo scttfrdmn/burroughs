@@ -294,9 +294,13 @@ type limits struct {
 // as **one flag bit** (encode.ml:187) and the text grammar admits exactly two spellings — `addrtype`
 // already rejected everything else as `malformed address type`. A keyword field would be a wider
 // domain than either grammar has, inviting a third case that cannot occur.
+// `shared` is the threads proposal's second `memory_type` arm, and it is a field on *this* type
+// rather than on `limits` because that is where the grammar puts it — see kwShared, and note
+// that `tabType` below shares the `limits` helper and must not acquire it.
 type memType struct {
 	addr64 bool
 	lim    limits
+	shared bool
 }
 
 // tabType is a `tabletype` (parser.mly:460-461), element type **unresolved**.

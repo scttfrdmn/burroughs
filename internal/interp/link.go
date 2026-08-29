@@ -431,16 +431,45 @@ func (in *Instance) importTypeMismatch(im *binary.Import, ext Extern) string {
 	return ""
 }
 
-// matchMemoryType is `match_memorytype` (match.ml:167-168): the address type by equality, then the
-// limits.
+// matchMemoryType is `match_memorytype` (match.ml:167-168): the address type by equality, the
+// shared flag by equality, then the limits.
 //
 // **The address type is the check that was missing**, and it was missing invisibly: `matchLimits`
 // alone accepts an i64-addressed memory where an i32 one was declared, so eight
 // `memory64-imports.wast` `assert_unlinkable` vectors were admissions on the all-gates-on board —
 // "the module linked and instantiated successfully" where the spec says `incompatible import
 // type`. A defect distinct from #368's, sharing only the site.
+//
+// # The shared term is the corpus's, and **both pinned interpreters say otherwise**
+//
+// The `Shared` comparison has no reference-code authority in this tree, and that is a fact about
+// the pins rather than a gap in the derivation. The core pin has no shared memories at all — its
+// `MemoryT (at, lim)` carries no such component — and the threads pin's own matcher *binds the
+// flag and drops it*:
+//
+//	let match_memory_type (MemoryType (lim1, sh1)) (MemoryType (lim2, sh2)) =
+//	  match_limits lim1 lim2                     (* spec-threads/syntax/types.ml:101-102 *)
+//
+// The authority is the suite, which is the oracle where an interpreter pin and a vector disagree
+// (engine.md). `proposals/threads/imports.wast` witnesses **both directions** at suite pin
+// de54fd2 — `:502` imports spectest's shared memory as unshared, `:505` imports its unshared one
+// as shared, and both expect `incompatible import type` — so the relation the corpus asks for is
+// equality, not a subtyping direction. The threads pin is `cc535ad`, older than the vectors, and
+// its `Why` in `internal/testenv` already says so; consulting it clause by clause is exactly what
+// keeps this readable as a disagreement rather than as a copy.
+//
+// **Only `:505` is witnessed on our board today**, because the harness's `spectest` fixture has no
+// `shared_memory` export, so `:502` is answered upstream by `unknown import` — a pass whose
+// mechanism is not this term. The unwitnessed direction has a unit witness instead
+// (TestSharedMemoryImportsMatchOnTheSharedFlag), which is where an accept-direction half belongs
+// when the corpus cannot ask it.
+//
+// Grave [#522](https://github.com/scttfrdmn/burroughs/issues/522): `Shared` was added to
+// `binary.Limits` by #518 and this comparison was not widened with it, which no board could see —
+// every module in the pre-existing population has the field at its zero value, so both sides
+// agreed. *Adding a field to a type adds a term to every comparison over it.*
 func matchMemoryType(got, want binary.Limits) bool {
-	return got.Addr64 == want.Addr64 && matchLimits(got, want)
+	return got.Addr64 == want.Addr64 && got.Shared == want.Shared && matchLimits(got, want)
 }
 
 // matchTableType is `match_tabletype` (match.ml:170-172).

@@ -21,6 +21,36 @@ weakly-ordered platform.
 
 ### Added
 
+- **The wat keyword table is generated from the union of the tracked pins, so `shared` and the 67
+  atomic mnemonics lex** ([#511](https://github.com/scttfrdmn/burroughs/issues/511),
+  `gate:threads`). The grammar is **the union of the tracked set** — contract §9 G-2, and
+  `docs/laws/gates.md`'s ruling that a gate partitions *acceptance* and never redraws the grammar —
+  so a keyword table read from the core pin alone is not a narrower grammar, it is a wrong one: it
+  answers `unknown operator shared` on a module the spec calls well-formed, which is a lexical
+  refusal upstream of every feature check. `keywordgen` now takes a base and overlays
+  (`Compose`, base-wins), the second authority being the threads pin at `cc535ad`, and the
+  composition is spelled as a **difference** rather than a union with a precedence flag because the
+  *skip* is the load-bearing step: 102 keywords are in core and not in threads (that baseline
+  predates GC and memory64), and 11 literals are in both with **different kinds** — `f32` is
+  NUMTYPE in core and NUM_TYPE in threads, the six vector shapes VECSHAPE versus VEC_SHAPE — so an
+  overlay-wins union would rewrite 11 rows into a vocabulary `plaininstrShapes` does not dispatch
+  on. Every arm carries which pin it came from, and an overlay contributing 0 keywords is an error
+  rather than a green: a composition that is just the base drift-checks clean against a file
+  generated the same wrong way. Threads lane: **269 → 279 pass, 348 → 338 fail**.
+  - **This retracts the inertness claim in the entry below.** #513 asserted, and pinned, that *"the
+    `Threads` gate is inert over this population"*. It is not, as of this slice: `imports.wast` and
+    `memory.wast` now score differently with the gate off, and the assertion that said so has been
+    re-pointed rather than deleted — a per-file `GateSensitive` bit, pinned in **both** directions,
+    so both "no longer moves" and "now moves" are failures with a message saying which.
+  - **The 246-row bucket did not move, and that is the more expensive lesson.** #513 read
+    `atomic.wast`'s 246 fails as *"one cause seen 246 times … the pre-registerable subject for the
+    wat `shared` keyword"*. The slice removed that stated cause and moved **none** of them: the
+    bucket text changed from `unknown operator shared` to `unexpected token` and the count did not
+    move, because the 67 atomic mnemonics now lex and have no shape to dispatch to
+    ([#524](https://github.com/scttfrdmn/burroughs/issues/524)). *An unmeasured complement is not an
+    empty one* — attributing a fail set's known members to one cause leaves the remainder
+    unmeasured, not absent.
+
 - **The threads proposal's own suite has a board — `TestThreadsProposalLane` over the four vector
   files under `testdata/spec/proposals/threads/`** ([#513](https://github.com/scttfrdmn/burroughs/issues/513)).
   `suitePaths` globs one level, so those four files have sat in the vendored corpus and in no board's
@@ -137,6 +167,26 @@ weakly-ordered platform.
   domain.
 
 ### Fixed
+
+- **A shared memory imported where an unshared one was declared linked, and the refusal it should
+  have printed named two identical types**
+  ([grave #522](https://github.com/scttfrdmn/burroughs/issues/522)). `binary.Limits` grew a `Shared`
+  field in #518 and neither of the two places that *use* a `Limits` was widened with it: the
+  linker's `match_memorytype` port compared `Addr64` and the limits and not the flag, so
+  `proposals/threads/imports.wast:505` was an admission — the module linked where the spec says
+  `incompatible import type` — and `externMemory` omitted the flag, so had the comparison been
+  right, the message would have read `expected memory i32 1 2, got memory i32 1 2`, *the defect
+  stated as its own alibi*. **No board could have seen it**: every module in the pre-existing
+  population has the field at its zero value, so both sides agree and nothing moves. The comparison
+  term is the corpus's and not a pin's — the core pin has no shared component at all and the threads
+  pin's own matcher **binds the flag and drops it**
+  (`spec-threads/interpreter/syntax/types.ml:101-102`), while the corpus at `de54fd2` witnesses both
+  directions and therefore asks for equality; the suite is the oracle where a pin and a vector
+  disagree. Only the reject direction is witnessed on our board, because spectest exports no
+  `shared_memory` ([#523](https://github.com/scttfrdmn/burroughs/issues/523)), so the accept
+  direction has a unit witness instead. *Adding a field to a type adds a term to every comparison
+  over it and every rendering of it, and it is untested until the gate's own suite can construct
+  one.*
 
 - **Six live line-citations into `internal/spec/spec_test.go` were adrift before this slice touched
   them, and the worst of them had no anchor for any sweep to key on.** The thirteenth re-key of

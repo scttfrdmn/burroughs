@@ -1391,6 +1391,11 @@ func (p *parser) memoryField() error {
 	if err != nil {
 		return err
 	}
+	// The threads pin's second `memory_type` arm. Read here rather than by calling `memorytype`
+	// because this arm interleaves the productions itself — the `(data …)` sugar branches between
+	// `addrtype` and `limits` — so the two spellings of the production have to stay in step by
+	// hand. That is the standing hazard in this function, and `shared` is now part of it.
+	shared := p.sharedOpt()
 	p.ctx.markDefined(importMemory)
 	if err := p.rpar(); err != nil {
 		return err
@@ -1398,7 +1403,7 @@ func (p *parser) memoryField() error {
 	// After the closing paren, so a malformed field never records content. The order matters for the
 	// retention check: a field that errors out mid-way must leave no trace, or the counts disagree
 	// with the sections on a module that never finished parsing.
-	p.ctx.defineMemory(memType{addr64: addr64, lim: lim})
+	p.ctx.defineMemory(memType{addr64: addr64, lim: lim, shared: shared})
 	p.ctx.noteDefined(importMemory)
 	p.ctx.clearNonTypeField(kw)
 	return nil

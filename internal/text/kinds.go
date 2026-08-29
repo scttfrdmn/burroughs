@@ -56,6 +56,22 @@ const (
 	// another class, six lexemes, and the shape is what decides the lane count.
 	kwVecshape keywordKind = "VECSHAPE"
 
+	// kwShared is the threads proposal's `memory_type` marker, and it is the first keyword in
+	// this file whose authority is **not** the core pin: the core interpreter's lexer has no
+	// SHARED token at all, and its `limits` production has no shared arm. The clause is
+	// `spec-threads/interpreter/text/parser.mly:307-309`:
+	//
+	//	memory_type :
+	//	  | limits { MemoryType ($1, Unshared) }
+	//	  | limits SHARED { MemoryType ($1, Shared) }
+	//
+	// **It belongs to `memory_type`, not to `limits`.** The same pin's `table_type` is
+	// `limits ref_type` (:304-305), so a shared arm inside the shared `limits` helper would admit
+	// `(table 1 1 shared funcref)` — a module no tracked grammar defines. The two productions
+	// share a helper in our parser as they do upstream, and this is the field where that
+	// sharing would have leaked.
+	kwShared keywordKind = "SHARED"
+
 	// Type structure (parser.mly:400-458).
 	kwNull   keywordKind = "NULL"
 	kwRef    keywordKind = "REF"
@@ -149,6 +165,7 @@ var parserKinds = []keywordKind{
 	kwAnyref, kwNullref, kwEqref, kwI31ref, kwStructref, kwArrayref, kwFuncref,
 	kwNullfuncref, kwExnref, kwNullexnref, kwExternref, kwNullexternref,
 	kwNumtype, kwVectype, kwPacktype, kwVecshape,
+	kwShared,
 	kwNull, kwRef, kwMut, kwField, kwParam, kwResult, kwSub, kwFinal, kwRec, kwType,
 	kwModule, kwImport, kwExport, kwGlobal, kwMemory, kwTable, kwElem, kwData, kwStart,
 	kwTag, kwLocal, kwOffset, kwItem, kwDeclare,

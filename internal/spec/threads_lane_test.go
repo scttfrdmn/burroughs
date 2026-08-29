@@ -91,15 +91,40 @@ type threadsLaneRow struct {
 	// rejects wrongly separates them.
 	InvalidReached int
 	// InvalidFailed is every failure on an `assert_invalid` command, at any stratum, and it is here
-	// so the criterion's population is accounted for rather than assumed: 96 asked, **63 failed
-	// somewhere and 33 pass**. *An unmeasured complement is not an empty one* — without this column
+	// so the criterion's population is accounted for rather than assumed: 96 asked, **62 failed
+	// somewhere and 34 pass**. *An unmeasured complement is not an empty one* — without this column
 	// the 82 vectors outside `InvalidReached` would be describable as "presumably passing", and two
 	// thirds of them are not.
 	//
-	// It is also what locates the 33: `exports.wast` holds 22 `assert_invalid` and fails none of
+	// It is also what locates the 34: `exports.wast` holds 22 `assert_invalid` and fails none of
 	// them, so a fifth of the criterion's population in this lane is already answered correctly by
 	// *some* layer — which layer, a failure-shaped instrument cannot say.
 	InvalidFailed int
+
+	// GateSensitive is whether this file's ten verdict columns move when `Threads` is turned off,
+	// and it is **the column that replaced an assertion of board-wide identity**.
+	//
+	// The original arm asserted the whole lane scored the same gate-on and gate-off, because it
+	// did: the four files are wat text and the reader refused `shared` upstream of any feature
+	// check, so the lane's stated premise — "what the suite says with the threads gate on" — was a
+	// premise about a code path no vector reached. That arm was written to fire when the premise
+	// became real, and the wat `shared` keyword is the slice that made it fire, for `imports.wast`
+	// and `memory.wast`.
+	//
+	// **A pinned predicate rather than a second ten-column table.** What the off-board is for is
+	// answering *is the gate load-bearing here*, and that is one bit per file; pinning the off
+	// figures exactly would pin a board that is nobody's subject and would have to be re-read on
+	// every slice that moves the on-board. What this cannot see is an off-board that changes while
+	// staying different, and that is the deliberate bound: the off run exists to qualify the gate,
+	// not to be a second lane.
+	//
+	// Pinned in both directions, which is the half that matters now. `true` going false is a gate
+	// gone inert again — the state this lane spent its first two revisions in, undetectably. `false`
+	// going true is a file whose vectors have newly reached the gate, which is progress and still a
+	// reviewed diff. `atomic.wast` and `exports.wast` are the two `false`s: `atomic.wast`'s modules
+	// are refused for their atomic mnemonics before any memory type is read, and `exports.wast`
+	// declares no shared memory at all.
+	GateSensitive bool
 }
 
 // threadsLane is the pinned board for testdata/spec/proposals/threads at suite pin de54fd2.
@@ -126,21 +151,25 @@ var threadsLane = map[string]threadsLaneRow{
 		Heads: map[string]int{"assert_invalid": 48, "assert_return": 142, "assert_trap": 45, "invoke": 59, "module": 3},
 		Pass:  0, Fail: 297, Unsupported: 0, Gated: 0, Unimplemented: 0, Bound: 0,
 		Declined: 0, ValidateReached: 0, InvalidReached: 0, InvalidFailed: 48,
+		GateSensitive: false,
 	},
 	"exports.wast": {
 		Heads: map[string]int{"assert_invalid": 22, "assert_return": 6, "module": 60},
-		Pass:  82, Fail: 6, Unsupported: 0, Gated: 0, Unimplemented: 0, Bound: 0,
+		Pass:  88, Fail: 0, Unsupported: 0, Gated: 0, Unimplemented: 0, Bound: 0,
 		Declined: 0, ValidateReached: 0, InvalidReached: 0, InvalidFailed: 0,
+		GateSensitive: false,
 	},
 	"imports.wast": {
 		Heads: map[string]int{"assert_invalid": 7, "assert_malformed": 16, "assert_return": 21, "assert_trap": 8, "assert_unlinkable": 59, "module": 39, "register": 2},
-		Pass:  119, Fail: 31, Unsupported: 0, Gated: 0, Unimplemented: 0, Bound: 2,
+		Pass:  120, Fail: 30, Unsupported: 0, Gated: 0, Unimplemented: 0, Bound: 2,
 		Declined: 0, ValidateReached: 6, InvalidReached: 6, InvalidFailed: 6,
+		GateSensitive: true,
 	},
 	"memory.wast": {
 		Heads: map[string]int{"assert_invalid": 19, "assert_malformed": 6, "assert_return": 45, "module": 12},
-		Pass:  68, Fail: 14, Unsupported: 0, Gated: 0, Unimplemented: 0, Bound: 0,
-		Declined: 0, ValidateReached: 8, InvalidReached: 8, InvalidFailed: 9,
+		Pass:  71, Fail: 11, Unsupported: 0, Gated: 0, Unimplemented: 0, Bound: 0,
+		Declined: 0, ValidateReached: 8, InvalidReached: 8, InvalidFailed: 8,
+		GateSensitive: true,
 	},
 }
 
@@ -186,31 +215,36 @@ var threadsLane = map[string]threadsLaneRow{
 // arrangement is `gateLane`'s — three decoding entry points, all carrying the gates — because
 // assembling a second lane by hand is how a lane comes to score gates it does not have.
 //
-// **And the gate is inert today, which is measured and asserted rather than assumed.** The board
-// is identical with `Threads` off — see the arm in the body. A stated gate that changes no column
-// is the *analytic zero* shape: it reads as configuration and configures nothing.
+// **And the gate is load-bearing for half the lane, which is measured per file rather than
+// assumed.** It was inert for the whole lane on the first two revisions — the board was identical
+// with `Threads` off, a stated gate that changed no column, which is the *analytic zero* shape:
+// configuration that configures nothing. The wat `shared` keyword ended that for `imports.wast` and
+// `memory.wast`. See `GateSensitive` for the pin and for what it deliberately does not cover.
 //
-// # What the first board says, and the column that was forecast wrong
+// # What the boards said, and the forecast each one falsified
 //
-// `269 pass, 348 fail, 0 unsupported, 0 gated, 2 bound` over 619 commands. The forecast going
-// in — stated on the #519 review — was that **`unsupported` would move up first**, since all
-// four files need the wat `shared` keyword and a form the harness cannot read is a question it
-// cannot ask. The measurement says otherwise and the mechanism is worth stating, because the
-// forecast was wrong for a reason that generalises: `unsupported` is a property of the
-// **Kind**, and these are ordinary `assert_return`/`module` directives. The harness asks every
-// one of them; the *engine* is what refuses. So the honest direction is `fail` up, and the
-// buckets carry the diagnosis instead of the column:
+// The first board was `269 pass, 348 fail, 0 unsupported, 0 gated, 2 bound` over 619 commands. The
+// forecast going in — stated on the #519 review — was that **`unsupported` would move up first**,
+// since all four files need the wat `shared` keyword and a form the harness cannot read is a
+// question it cannot ask. The measurement said otherwise for a reason that generalises:
+// `unsupported` is a property of the **Kind**, and these are ordinary `assert_return`/`module`
+// directives. The harness asks every one of them; the *engine* is what refuses. So the honest
+// direction was `fail` up, with the buckets carrying the diagnosis instead of the column:
 //
 //	246  no instance: unknown operator shared     (atomic.wast — the downstream of 3 modules)
 //	 48  assert_invalid (module) expected: unknown memory
 //	 16  (module <wat body>) must read
 //
-// 246 of `atomic.wast`'s 297 are one cause seen 246 times: three modules fail to read on
-// `shared`, and every assertion against them fails for want of an instance. That is a
-// pre-registerable subject for the wat `shared` keyword slice rather than a figure to be
-// pleased about — *a favourable miss banked as a win never gets asked why it missed*, and this
-// one is unfavourable in the same way: a wrong forecast about which column moves is a wrong
-// model of where the frontier is.
+// **The second board falsified the reading of that first bucket, and this is the more expensive
+// lesson of the two.** 246 of `atomic.wast`'s 297 were one *bucket* seen 246 times, and the slice
+// that removed its stated cause moved none of them: the keyword landed, `(memory 1 1 shared)` now
+// reads, and all three of `atomic.wast`'s modules still fail — on `i32.atomic.load` and its 66
+// siblings, which lex from the same union'd table and have no `plaininstrShapes` entry. The bucket
+// text changed from `unknown operator shared` to `unexpected token` and the count did not move.
+// *An unmeasured complement is not an empty one*: attributing a fail set to the one cause its
+// message names leaves every cause behind it unmeasured, and a necessary condition reads exactly
+// like a sufficient one until it is removed. The board now reads `279 pass, 338 fail` — the +10 is
+// `exports.wast` (+6), `memory.wast` (+3) and `imports.wast` (+1), and none of it is `atomic.wast`.
 //
 // # The lane reissues #9's closure criterion, and the reissue is measured rather than asserted
 //
@@ -220,7 +254,7 @@ var threadsLane = map[string]threadsLaneRow{
 // which is the tracked event #477 exists for — its first real occasion — so the claim gets a fresh
 // date and, being a claim about a population, a fresh measurement over that population.
 //
-// Measured: **96 asked, 63 failing at some layer, 14 decided by the validator, 0 declined.** The
+// Measured: **96 asked, 62 failing at some layer, 14 decided by the validator, 0 declined.** The
 // criterion holds over the widened set. It is not vacuous — 14 vectors reach the type checker — and
 // the 14 is a lower bound on arrivals, because the validator's correct answers leave no bucket to
 // count. See threadsLaneRow's ValidateReached for the asymmetry and for the two wrong readings that
@@ -231,8 +265,8 @@ var threadsLane = map[string]threadsLaneRow{
 //
 // Landing red is the arrangement, not a concession: the board reports and the buckets are the
 // work plan (TestAllGatesOnLeavesNothingGated is deliberately red-ish for the same reason).
-// The pins are what make it a control — every column exact in both directions, so the 348
-// cannot quietly become 349 and cannot quietly become 340 either.
+// The pins are what make it a control — every column exact in both directions, so the 338
+// cannot quietly become 339 and cannot quietly become 330 either.
 func TestThreadsProposalLane(t *testing.T) {
 	paths := testenv.RequireProposal(t, suiteDir, threadsProposal, threadsLaneFiles)
 
@@ -241,6 +275,58 @@ func TestThreadsProposalLane(t *testing.T) {
 
 	rows, tot := scoreThreadsLane(t, paths, f, true)
 
+	// **The gate is load-bearing for two of the four files, and which two is pinned.**
+	//
+	// This was an assertion of board-wide *identity* — the whole lane scored the same with `Threads`
+	// off, because nothing reached the decoder's shared-limits path — written to fire on the day a
+	// vector got there. It fired on the wat `shared` keyword: `imports.wast` and `memory.wast` now
+	// differ, `atomic.wast` and `exports.wast` still do not. The claim was inverted rather than
+	// deleted, which is what a tripwire whose subject moves gets: the *risk* was never "the boards
+	// are equal", it was "the lane's stated gate configures nothing", and that risk is live in both
+	// directions now that part of the lane depends on the gate.
+	//
+	// It is worth recording how the original was arrived at, since the successor inherits the
+	// method: by neutering the gate line and reading the board. A gate set that changes nothing is
+	// indistinguishable from one that works — every column agreeing is exactly what a working one
+	// looks like — so *identical boards are the finding*, and the only way to have the finding is to
+	// break the line on purpose.
+	//
+	// The comparison feeds `GateSensitive`, and the pin is checked by the same per-column loop as
+	// every other figure, so the two directions are one assertion rather than a bespoke arm.
+	offRows, offTot := scoreThreadsLane(t, paths, binary.DefaultFeatures(), false)
+	sensitive := 0
+	for name, on := range rows {
+		off, ok := offRows[name]
+		if !ok {
+			// A file the off pass did not score at all, which `scoreThreadsLane` only produces by
+			// failing to parse — already an error there. Left unmarked rather than defaulted to
+			// either bit: a missing measurement is not evidence of insensitivity.
+			continue
+		}
+		on.GateSensitive = !sameVerdicts(on, off)
+		rows[name] = on
+		if on.GateSensitive {
+			sensitive++
+			t.Logf("%s is gate-sensitive: Threads on (%d/%d/%d/%d/%d/%d/%d/%d/%d/%d), off "+
+				"(%d/%d/%d/%d/%d/%d/%d/%d/%d/%d), as pass/fail/unsupported/gated/unimplemented/"+
+				"bound/declined/validate-reached/invalid-reached/invalid-failed",
+				name,
+				on.Pass, on.Fail, on.Unsupported, on.Gated, on.Unimplemented, on.Bound,
+				on.Declined, on.ValidateReached, on.InvalidReached, on.InvalidFailed,
+				off.Pass, off.Fail, off.Unsupported, off.Gated, off.Unimplemented, off.Bound,
+				off.Declined, off.ValidateReached, off.InvalidReached, off.InvalidFailed)
+		}
+	}
+	t.Logf("gate check: Threads off scores %d pass, %d fail, %d bound, %d declined over %d "+
+		"validate-stratum failures; %d of %d files score differently with it on, so the gate is "+
+		"load-bearing over part of this population and inert over the rest",
+		offTot.Pass, offTot.Fail, offTot.Bound, offTot.Declined, offTot.ValidateReached,
+		sensitive, len(rows))
+
+	// The pins are checked *after* the gate pass, because `GateSensitive` is one of the pinned
+	// columns and is only known once both boards exist. Checking before would compare a row with
+	// that field still at its zero value against a pin that says `true`, which is a false failure
+	// whose message would name the right column for the wrong reason.
 	for name, got := range rows {
 		want, ok := threadsLane[name]
 		if !ok {
@@ -250,51 +336,6 @@ func TestThreadsProposalLane(t *testing.T) {
 		}
 		checkThreadsRow(t, name, want, got)
 	}
-
-	// **The gate line is inert at this frontier, and that is measured rather than assumed.**
-	//
-	// The board is byte-identical with `Threads` off. Nothing on it reaches the decoder's
-	// shared-limits gate, because the four files are wat *text* and the reader refuses `shared`
-	// upstream of any feature check — so the lane's stated premise ("what the suite says with
-	// the threads gate on") is, today, a premise about a code path no vector arrives at.
-	//
-	// Found by neutering the line and reading the board, which is the only way this class is
-	// ever found: a gate set that changes nothing is indistinguishable from a gate set that
-	// works, and every column agreeing is exactly what a working one looks like. *Identical
-	// boards are the finding.*
-	//
-	// So the equality is asserted rather than the inertness papered over, and **this arm firing
-	// is progress**: it means a vector now reaches the gate, the premise has become real, and
-	// the threads-on figures need re-pinning against a board that finally differs. Deleting the
-	// gate line instead would leave the lane silently ungated for exactly as long as it takes
-	// the wat keyword to land, which is the interval in which nothing would notice.
-	offRows, offTot := scoreThreadsLane(t, paths, binary.DefaultFeatures(), false)
-	for name, on := range rows {
-		off, ok := offRows[name]
-		if !ok {
-			continue
-		}
-		if on.Pass != off.Pass || on.Fail != off.Fail || on.Unsupported != off.Unsupported ||
-			on.Gated != off.Gated || on.Unimplemented != off.Unimplemented || on.Bound != off.Bound ||
-			on.Declined != off.Declined || on.ValidateReached != off.ValidateReached ||
-			on.InvalidReached != off.InvalidReached || on.InvalidFailed != off.InvalidFailed {
-			t.Errorf("%s scores differently with Threads on (%d/%d/%d/%d/%d/%d/%d/%d/%d/%d) than off "+
-				"(%d/%d/%d/%d/%d/%d/%d/%d/%d/%d), as pass/fail/unsupported/gated/unimplemented/bound/"+
-				"declined/validate-reached/invalid-reached/invalid-failed.\n\t"+
-				"**This failure is progress**: the gate has stopped being inert, so a vector "+
-				"now reaches the decoder's shared-limits path. Re-pin the threads-on figures "+
-				"and retire this arm with a note saying which slice made the gate load-bearing.",
-				name,
-				on.Pass, on.Fail, on.Unsupported, on.Gated, on.Unimplemented, on.Bound,
-				on.Declined, on.ValidateReached, on.InvalidReached, on.InvalidFailed,
-				off.Pass, off.Fail, off.Unsupported, off.Gated, off.Unimplemented, off.Bound,
-				off.Declined, off.ValidateReached, off.InvalidReached, off.InvalidFailed)
-		}
-	}
-	t.Logf("gate check: Threads off scores %d pass, %d fail, %d bound, %d declined over %d "+
-		"validate-stratum failures — identical to on, so the gate is not yet load-bearing over "+
-		"this population",
-		offTot.Pass, offTot.Fail, offTot.Bound, offTot.Declined, offTot.ValidateReached)
 
 	for name := range threadsLane {
 		if !containsBase(paths, name) {
@@ -499,6 +540,20 @@ func declinedInLane(buckets map[string][]Failure) (total, onAssertInvalid, reach
 	return total, onAssertInvalid, reached, invalidReached, invalidFailed
 }
 
+// sameVerdicts reports whether two boards for the same file agree on every verdict column.
+//
+// `Heads` is excluded because it is a claim about the corpus and cannot move with a gate; so is
+// `GateSensitive`, which is this function's own output and would make the comparison circular. The
+// ten columns are listed rather than compared by struct equality for that reason — adding a
+// verdict column must be a decision about whether the gate can move it, and `==` would answer that
+// silently in whichever direction the field's zero value happened to give.
+func sameVerdicts(a, b threadsLaneRow) bool {
+	return a.Pass == b.Pass && a.Fail == b.Fail && a.Unsupported == b.Unsupported &&
+		a.Gated == b.Gated && a.Unimplemented == b.Unimplemented && a.Bound == b.Bound &&
+		a.Declined == b.Declined && a.ValidateReached == b.ValidateReached &&
+		a.InvalidReached == b.InvalidReached && a.InvalidFailed == b.InvalidFailed
+}
+
 // checkThreadsRow compares one file's measurement against its pin, one column at a time.
 //
 // Column by column rather than by struct equality, because "the row differs" is not an
@@ -527,6 +582,22 @@ func checkThreadsRow(t *testing.T, name string, want, got threadsLaneRow) {
 				"directions: a movement is either the work this PR is for — re-pin from the "+
 				"printed literal and state the direction — or a regression in a population "+
 				"nothing else walks.", name, col.what, col.got, col.want)
+		}
+	}
+
+	// The gate bit, out of the integer loop because its two failure directions are two different
+	// findings and a "= false, pinned true" line would report them as one. See GateSensitive.
+	if want.GateSensitive != got.GateSensitive {
+		if want.GateSensitive {
+			t.Errorf("%s: the Threads gate no longer moves this file's board, and it did when the "+
+				"row was pinned.\n\tThe lane's premise is that its figures are what the suite says "+
+				"*with the gate on*; a gate that has gone inert again makes that premise describe "+
+				"a code path no vector reaches, which is the state this file spent two revisions "+
+				"in without anything noticing.", name)
+		} else {
+			t.Errorf("%s: the Threads gate now moves this file's board, and it did not when the "+
+				"row was pinned.\n\tThis is progress and still a reviewed diff: re-pin from the "+
+				"printed literal and say in the PR which slice made the gate reachable here.", name)
 		}
 	}
 
@@ -616,9 +687,9 @@ func threadsLaneLiteral(m map[string]threadsLaneRow) string {
 			}
 			fmt.Fprintf(&b, "%q: %d", h, r.Heads[h])
 		}
-		fmt.Fprintf(&b, "},\n\t\tPass: %d, Fail: %d, Unsupported: %d, Gated: %d, Unimplemented: %d, Bound: %d,\n\t\tDeclined: %d, ValidateReached: %d, InvalidReached: %d, InvalidFailed: %d,\n\t},\n",
+		fmt.Fprintf(&b, "},\n\t\tPass: %d, Fail: %d, Unsupported: %d, Gated: %d, Unimplemented: %d, Bound: %d,\n\t\tDeclined: %d, ValidateReached: %d, InvalidReached: %d, InvalidFailed: %d,\n\t\tGateSensitive: %t,\n\t},\n",
 			r.Pass, r.Fail, r.Unsupported, r.Gated, r.Unimplemented, r.Bound,
-			r.Declined, r.ValidateReached, r.InvalidReached, r.InvalidFailed)
+			r.Declined, r.ValidateReached, r.InvalidReached, r.InvalidFailed, r.GateSensitive)
 	}
 	b.WriteString("}\n")
 	return b.String()
