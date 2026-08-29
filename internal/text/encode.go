@@ -815,9 +815,9 @@ func (p *parser) encodeImports(w *writer) {
 		case importTable:
 			t := im.desc.table
 			w.valType(t.elem)
-			w.limits(t.addr64, t.lim)
+			w.limits(t.addr64, t.lim, false) // a table is not shareable — encode.ml:125
 		case importMemory:
-			w.limits(im.desc.mem.addr64, im.desc.mem.lim)
+			w.limits(im.desc.mem.addr64, im.desc.mem.lim, im.desc.mem.shared)
 		case importGlobal:
 			g := im.desc.global
 			w.valType(g.val)
@@ -970,13 +970,13 @@ func (p *parser) encodeTables(w *writer) {
 		t := p.ctx.tabDefs[i]
 		if bytes.Equal(t.init, plainTableInit(t.typ.elem)) {
 			w.valType(t.typ.elem)
-			w.limits(t.typ.addr64, t.typ.lim)
+			w.limits(t.typ.addr64, t.typ.lim, false) // a table is not shareable — encode.ml:125
 			return
 		}
 		w.byte1(tableInitPrefix)
 		w.byte1(0x00)
 		w.valType(t.typ.elem)
-		w.limits(t.typ.addr64, t.typ.lim)
+		w.limits(t.typ.addr64, t.typ.lim, false) // a table is not shareable — encode.ml:125
 		w.bytes(t.init)
 	})
 }
@@ -1028,7 +1028,7 @@ func (p *parser) encodeGlobals(w *writer) {
 func (p *parser) encodeMemories(w *writer) {
 	w.vec(len(p.ctx.memDefs), func(w *writer, i int) {
 		m := p.ctx.memDefs[i]
-		w.limits(m.addr64, m.lim)
+		w.limits(m.addr64, m.lim, m.shared)
 	})
 }
 
@@ -1207,19 +1207,34 @@ func (p *parser) encodeDataCount(w *writer) {
 // limits writes a limits: the flags byte, the minimum, and the maximum when present.
 //
 // The flags are `flag (max <> None) 0 + flag (at = I64AT) 2` (encode.ml:187) — bit 0 for a maximum,
-// bit 2 for a 64-bit address type. **Bit 1 is the shared flag and this never sets it**, which is not
-// an omission: the text grammar's `limits` has no `shared` arm (parser.mly:466-468), so no wat source
-// can denote a shared memory and an encoder that could emit one would be encoding something no input
-// says. The decoder reads 0x02/0x03 behind the Threads gate, and a threads-era text grammar will add
-// the arm; until then the bit has no source.
+// bit 2 for a 64-bit address type — plus **bit 1, the shared flag**, whose authority is the threads
+// pin rather than the core one: `flags = int_of_bool shared lsl 1 lor int_of_bool (max <> None)`
+// (spec-threads/interpreter/binary/encode.ml:119-121).
+//
+// **This comment used to say the bit had no source, and that sentence was the thing to delete.** It
+// read: *bit 1 is the shared flag and this never sets it, which is not an omission — the text
+// grammar's `limits` has no `shared` arm, so no wat source can denote a shared memory.* Every clause
+// was true of the authority it was checked against, and the conclusion was false, because the
+// grammar is the union of the tracked set (contract §9 G-2) and the threads pin has had the arm all
+// along. A negative claim is a citation with no target: no sweep can check "no wat source can
+// denote X", and this one survived until a board column made 246 failures ask for it.
+//
+// `shared` is a parameter rather than a field read off the type because upstream makes the same
+// choice, and the reason is legible at the call sites: `TableType (lim, t) -> limits u32 lim false`
+// (:125) passes it *explicitly* false while `MemoryType (lim, shared)` (:128) passes the memory's
+// own. A table is not shareable in any tracked grammar, and an explicit `false` at that call is
+// upstream saying so in the place where a shared helper would otherwise leak the field.
 //
 // It is a method on `writer` rather than a function in encode.go because it is the byte layer's kind
 // of fact — a flags byte and two LEBs — and because the *reader* it inverts is `decodeLimits`. Its
 // falsification is the round trip, per writer.go's header.
-func (w *writer) limits(addr64 bool, lim limits) {
+func (w *writer) limits(addr64 bool, lim limits, shared bool) {
 	var flags byte
 	if lim.hasMax {
 		flags |= 0x01
+	}
+	if shared {
+		flags |= 0x02
 	}
 	if addr64 {
 		flags |= 0x04

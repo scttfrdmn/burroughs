@@ -23,6 +23,25 @@ func refSource(tb testing.TB) string {
 	return testenv.RequireSpecRef(tb, refPath)
 }
 
+// requireRef asserts every authority the composition reads is present, derived from the pin
+// set rather than named.
+//
+// Requiring only the *core* lexer would let the drift check run against a composition that
+// silently lost its overlay — and the comparison would then be a correctly-composed committed
+// file against a 70-keyword-short rebuild, reported as drift in the committed file. The pin
+// set is the domain here for the same reason it is BuildFromPins': a pin added there is
+// covered on arrival.
+func requireRef(tb testing.TB) {
+	tb.Helper()
+	for _, pin := range testenv.RefPins() {
+		path, ok := LexerFor(pin)
+		if !ok {
+			continue
+		}
+		testenv.RequireSpecRef(tb, path)
+	}
+}
+
 // TestExtractMatchesMeasuredShape pins the counts, and the numbers are the point.
 //
 // Not a floor — the floor is ErrVacuous's business, and a floor cannot tell 589 from 590.
@@ -418,7 +437,10 @@ func TestEmitIsDeterministic(t *testing.T) {
 // TestEmitRejectsAKeywordWithNoKind proves the coupling fails loudly rather than emitting
 // a row that reads as "this keyword lexes to nothing".
 func TestEmitRejectsAKeywordWithNoKind(t *testing.T) {
-	tab := &Table{SourceSHA: "test", Arms: []Arm{{Keyword: "nop", Line: 1}}}
+	tab := &Table{
+		Sources: []Source{{Path: CoreAuthority, SHA: "test"}},
+		Arms:    []Arm{{Keyword: "nop", Line: 1}},
+	}
 	if _, err := tab.Emit(); err == nil {
 		t.Fatal("Emit accepted a keyword with no token kind; the emitted row would read as a " +
 			"keyword that is not a token, which is the reject-direction contract inverted")
@@ -433,16 +455,23 @@ func TestEmitRejectsAKeywordWithNoKind(t *testing.T) {
 // fresh clone with nothing vendored; it runs in `make keyword-drift` and in CI, and it
 // refuses to run without the reference rather than skipping, because a drift check that
 // skips reports agreement with an authority it never read.
+// **It builds through BuildFromPins rather than extracting one authority**, and the reason is
+// a failure this control produced on itself: composed against two pins by the generator and
+// one by the check, it reported drift in a table that was correct. A drift check that composes
+// differently from the generator is measuring the distance between two copies of the
+// composition, and the committed artifact is the innocent party.
 func TestCommittedTableMatchesTheReference(t *testing.T) {
-	src := refSource(t)
-	sha, err := gen.PinnedRefRev()
+	requireRef(t)
+	tab, err := BuildFromPins()
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("BuildFromPins: %v", err)
 	}
-	tab, err := Extract(src, sha)
-	if err != nil {
-		t.Fatalf("Extract: %v", err)
+	if len(tab.Sources) < 2 {
+		t.Fatalf("composed from %d authorities, want >=2; the pin set is the derived domain and "+
+			"a single-source table would agree with a committed file that is 70 keywords short",
+			len(tab.Sources))
 	}
+	sha := tab.Sources[0].SHA
 	want, err := tab.Emit()
 	if err != nil {
 		t.Fatalf("Emit: %v", err)

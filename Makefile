@@ -465,7 +465,7 @@ gate-census:
 # two authorities (decode.ml, lexer.mll), two extractors, two committed tables, and a
 # single target would make "regenerate the binary table" and "regenerate the text table"
 # indistinguishable in a log and in a diff.
-keywords: spec-ref
+keywords: spec-ref threads-ref
 	$(GO) run ./internal/gen/keywordgen/cmd/keywordgen -o internal/text/keywords.go
 	@echo "regenerated internal/text/keywords.go"
 
@@ -488,6 +488,9 @@ keywords: spec-ref
 keyword-drift:
 	@if [ ! -f third_party/spec/interpreter/text/lexer.mll ]; then \
 		echo "reference not vendored; run: make spec-ref"; exit 1; \
+	fi
+	@if [ ! -f third_party/spec-threads/interpreter/text/lexer.mll ]; then \
+		echo "threads reference not vendored; run: make threads-ref"; exit 1; \
 	fi
 	@if [ ! -f testdata/spec/obsolete-keywords.wast ]; then \
 		echo "spec suite not vendored; run: make spec-tests"; exit 1; \

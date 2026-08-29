@@ -8,12 +8,39 @@ import (
 	"github.com/scttfrdmn/burroughs/internal/gen/mllex"
 )
 
+// Source is one authority a table's arms were read from, in composition order.
+//
+// A slice rather than the single `SourceSHA` this type began with, because the wat grammar
+// is the **union of the tracked set** (§9 G-2, and gates.md's ruling that gates partition
+// acceptance rather than redraw the grammar) and the tracked set has more than one
+// interpreter. A table read from the core pin alone omits `shared` and 67 atomic
+// mnemonics, and this file's own header already predicted what that omission looks like
+// downstream: `unknown operator` on a module the spec calls well-formed.
+type Source struct {
+	// Path is the repo-relative lexer.mll these arms were read from. Two pins both
+	// license `interpreter/text/lexer.mll`, so the path — not the filename — is what
+	// tells a reader which authority a row came from.
+	Path string
+	// SHA is the pinned revision, recorded verbatim from the pin's own fetch script.
+	SHA string
+	// Scope is why this authority is consulted, in one clause — carried from the pin's
+	// `Why`. Present because *consultation is clause-scoped, never wholesale*: the
+	// threads pin's baseline predates GC and memory64, so a wholesale read of it would
+	// delete 102 core keywords rather than add 70.
+	Scope string
+	// Contributed is how many arms this source put into the composed table, which is not
+	// the number it *extracted*: an overlay contributes only the keywords the base lacks.
+	// Printed in the generated header so a reader can see the composition's shape without
+	// re-running it, and so a source that silently contributed nothing is visible as a 0.
+	Contributed int
+}
+
 // Table is one extraction's result: the keywords, plus the provenance needed to audit it.
 type Table struct {
-	// SourceSHA is the reference revision the arms were read from. Stamped, not
-	// deduced: a generated artifact whose provenance needs git archaeology has hearsay
-	// for authority (0007, condition 3).
-	SourceSHA string
+	// Sources is every authority this table was composed from, in application order:
+	// the base first, then each overlay. Stamped, not deduced — a generated artifact
+	// whose provenance needs git archaeology has hearsay for authority (0007, condition 3).
+	Sources []Source
 	// Arms, sorted by keyword so the generated output is stable and a diff means a real
 	// change rather than a map iteration order.
 	Arms []Arm
@@ -86,7 +113,11 @@ func Extract(src, sha string) (*Table, error) {
 		arms = append(arms, Arm{Keyword: a.Keyword, Kind: Kind(km[1]), Line: a.Line})
 	}
 
-	t := &Table{SourceSHA: sha, Arms: arms, fallthroughLine: block.Fallthrough}
+	t := &Table{
+		Sources:         []Source{{Path: CoreAuthority, SHA: sha, Contributed: len(arms)}},
+		Arms:            arms,
+		fallthroughLine: block.Fallthrough,
+	}
 	slices.SortFunc(t.Arms, func(a, b Arm) int { return strings.Compare(a.Keyword, b.Keyword) })
 	if err := t.checkFloor(); err != nil {
 		return nil, err
@@ -119,6 +150,131 @@ func (t *Table) checkDuplicates() error {
 		seen[a.Keyword] = a.Line
 	}
 	return nil
+}
+
+// CoreAuthority is the path Extract records when no pin metadata is supplied — the core
+// interpreter's lexer, which is the base of every composition.
+const CoreAuthority = "third_party/spec/interpreter/text/lexer.mll"
+
+// WithSource restamps a freshly-extracted table's provenance with its pin's own, preserving
+// the arm count Extract measured.
+//
+// Extract takes a bare SHA because its falsification tests build tables from string literals
+// with no pin behind them; a caller that *does* have a pin knows the path and the clause scope,
+// and those belong in the emitted header. The count is not taken from the caller: it is what
+// was extracted, so a Source cannot claim a contribution it did not make.
+func (t *Table) WithSource(s Source) *Table {
+	s.Contributed = len(t.Arms)
+	t.Sources = []Source{s}
+	tag := SourceTag(s.Path)
+	for i := range t.Arms {
+		t.Arms[i].From = tag
+	}
+	return t
+}
+
+// SourceTag shortens an authority path to what a row's citation carries: `spec/lexer.mll`,
+// `spec-threads/lexer.mll`. The distinguishing components only — both pins license a file
+// named lexer.mll under an identical `interpreter/text/` subpath, so the filename alone
+// cannot say which, and the full path repeated on 659 rows says it 659 times.
+func SourceTag(path string) string {
+	trimmed := strings.TrimPrefix(path, "third_party/")
+	i := strings.LastIndex(trimmed, "/")
+	if i < 0 {
+		// A bare filename, which is what the falsification tests pass. Returned as it came:
+		// a tag is a shortening, and there is nothing to shorten.
+		return trimmed
+	}
+	dir, file := trimmed[:i], trimmed[i+1:]
+	// The pin's own directory, not the file's — `interpreter/text` is common to both.
+	if i := strings.Index(dir, "/"); i >= 0 {
+		dir = dir[:i]
+	}
+	return dir + "/" + file
+}
+
+// Compose widens base with every keyword overlay has and base lacks, and returns the union.
+//
+// # Why a difference and not a union with a precedence rule
+//
+// They produce the same table here, and the difference is what happens when they stop
+// agreeing. Measured across the two pins at bdd7164 and cc535ad:
+//
+//   - 70 keywords are in the threads pin and not in core — 67 atomic mnemonics plus
+//     `shared`, `thread`, `wait`. These are the ones this function takes.
+//   - 102 are in core and not in threads, because the threads baseline predates GC and
+//     memory64. So the composition cannot be symmetric: reading the threads pin as an
+//     equal would *delete* those 102, which is exactly the wholesale read the threads
+//     pin's own `Why` warns against.
+//   - 11 literals are in both with *different kinds* — `f32`/`f64`/`i32`/`i64` are
+//     NUMTYPE in core and NUM_TYPE in threads, the six vector shapes are VECSHAPE versus
+//     VEC_SHAPE, and `v128` is VECTYPE versus VEC_TYPE. Pure upstream renames, but a
+//     union that let the overlay win on a collision would rewrite those 11 rows into a
+//     vocabulary the rest of the table does not speak, and `plaininstrShapes` dispatches
+//     on those names.
+//
+// A base-wins union and an overlay-difference are the same function; this one is spelled as
+// the difference because the *skip* is the load-bearing step and a precedence flag would let
+// a future caller invert it. The overlay's 10 kind names collide with none of core's 173,
+// falsified by running the same comparison over the intersection instead, where 99 of 102
+// collide — so the zero is a measurement and not an analytic one.
+// Composition accumulates: the result carries every source the base carried plus the overlay,
+// so a third pin appends rather than displacing the second. Written that way on the first
+// draft's own bug — a two-source signature made the middle authority's provenance vanish the
+// moment a third pin existed, and with exactly two pins nothing would have shown it.
+func Compose(base, overlay *Table, overlayMeta Source) (*Table, error) {
+	if base == nil || overlay == nil {
+		return nil, fmt.Errorf("%w: compose needs two tables", ErrVacuous)
+	}
+	if len(base.Sources) == 0 {
+		return nil, fmt.Errorf("%w: base table carries no provenance to compose onto", ErrVacuous)
+	}
+	have := make(map[string]bool, len(base.Arms))
+	for _, a := range base.Arms {
+		have[a.Keyword] = true
+	}
+
+	arms := slices.Clone(base.Arms)
+	tag := SourceTag(overlayMeta.Path)
+	added := 0
+	for _, a := range overlay.Arms {
+		if have[a.Keyword] {
+			continue
+		}
+		a.From = tag
+		arms = append(arms, a)
+		added++
+	}
+
+	overlayMeta.Contributed = added
+	t := &Table{
+		Sources:         append(slices.Clone(base.Sources), overlayMeta),
+		Arms:            arms,
+		fallthroughLine: base.fallthroughLine,
+	}
+	slices.SortFunc(t.Arms, func(a, b Arm) int { return strings.Compare(a.Keyword, b.Keyword) })
+
+	// An overlay that contributes nothing is the failure this cannot otherwise see: a
+	// mis-pointed path, a pin fetched at the wrong revision, or an upstream merge that
+	// made the overlay a subset all produce a composed table identical to the base, which
+	// drift-checks clean against a committed file generated the same wrong way. The
+	// specimen is this package's own Floor doc — an extractor recognizing nothing agrees
+	// perfectly with an empty commit.
+	if added == 0 {
+		return nil, fmt.Errorf("%w: overlay %s at %s contributed 0 of its %d keywords; every one "+
+			"is already in the base, so the composition is the base and the second authority is "+
+			"asserting nothing", ErrVacuous, overlayMeta.Path, overlayMeta.SHA, len(overlay.Arms))
+	}
+	if err := t.checkFloor(); err != nil {
+		return nil, err
+	}
+	if err := t.checkDuplicates(); err != nil {
+		return nil, err
+	}
+	if err := t.checkShape(); err != nil {
+		return nil, err
+	}
+	return t, nil
 }
 
 // checkFloor is the vacuity control. Read the doc on Floor for why it is not a sanity

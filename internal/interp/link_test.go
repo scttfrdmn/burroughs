@@ -654,6 +654,108 @@ func TestImportTypeMatchLinksPerKind(t *testing.T) {
 	}
 }
 
+// threadsGate is the shared-memory gate, in the per-feature shape this package's other gated
+// tests use (ehGate, tailGate, gcGate): a shared memorytype is refused by the decoder under
+// DefaultFeatures, so a lane that wants one states the gate.
+var threadsGate = binary.Features{Threads: true}
+
+// link1Threads is link1 with the threads gate on the decode, since `(memory 1 2 shared)` does not
+// get past `binary.DecodeModule`'s default gate set.
+//
+// A second helper rather than a features parameter on link1: link1 has 40-odd call sites whose
+// whole point is that they run on the default board, and threading a gate set through all of them
+// to serve two rows would make every one of them assert something about gates it does not care
+// about. `text.EncodeModule` is unchanged and correct here — the text package is gate-blind by
+// ruling (#124, `internal/text/code.go`), so the flag is written whenever the source says
+// `shared` and the *decoder* is the sole authority on whether that is allowed.
+func link1Threads(t *testing.T, src string, imp Imports) (*Instance, *Trap, error) {
+	t.Helper()
+	img, err := text.EncodeModule([]byte(src))
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	m, err := (&binary.Decoder{Features: threadsGate}).DecodeModule(img)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	return InstantiateLinked(m, imp)
+}
+
+// TestSharedMemoryImportsMatchOnTheSharedFlag pins the shared term in matchMemoryType, in both
+// directions, and it exists because **the board can only witness one of them**.
+//
+// `proposals/threads/imports.wast` asks both — `:502` imports a shared memory as unshared, `:505`
+// imports an unshared one as shared, both expecting `incompatible import type` — but the harness's
+// `spectest` fixture exports no `shared_memory`, so `:502` is answered by `unknown import` before
+// the matcher is reached and only `:505` scores this code. The shared-supplier direction is
+// therefore an accept-direction blind spot of exactly the §9 G-3 kind, and it gets a unit witness
+// rather than a note saying the corpus covers it.
+//
+// The third row is the accept direction proper: shared against shared must *link*, or the term
+// would be an unconditional refusal that both rejection rows score green.
+//
+// The mismatch message is asserted too, not just the refusal: with the flag absent from
+// `externMemory`'s rendering, the refusal reads `expected memory i32 1 2, got memory i32 1 2` —
+// right verdict, testimony that names no difference. That was the state of the address-type field
+// before the memory64 rows found it, at this same call site.
+func TestSharedMemoryImportsMatchOnTheSharedFlag(t *testing.T) {
+	// `supplier` would do here for the unshared side and cannot for the shared one — it decodes
+	// under DefaultFeatures — and using two different builders for the two suppliers is how the
+	// pair comes to differ in something other than the flag. Both go through the gated one.
+	supplierThreads := func(src string) *Instance {
+		t.Helper()
+		in, trap, err := link1Threads(t, src, nil)
+		if err != nil {
+			t.Fatalf("supplier %s: %v", src, err)
+		}
+		if trap != nil {
+			t.Fatalf("supplier %s trapped: %v", src, trap)
+		}
+		if err := in.Deferred(); err != nil {
+			t.Fatalf("supplier %s fell short: %v", src, err)
+		}
+		return in
+	}
+	shared := supplierThreads(`(module (memory (export "mem") 1 2 shared))`)
+	plain := supplierThreads(`(module (memory (export "mem") 1 2))`)
+
+	t.Run("shared supplier, unshared declaration", func(t *testing.T) {
+		_, _, err := link1Threads(t, `(module (memory (import "s" "mem") 1 2))`, exportsOf(shared))
+		if err == nil {
+			t.Fatal("link accepted a shared memory where an unshared one was declared")
+		}
+		if !strings.Contains(err.Error(), "incompatible import type") {
+			t.Errorf("%v, want incompatible import type", err)
+		}
+		if !strings.Contains(err.Error(), "got memory i32 1 2 shared") {
+			t.Errorf("%v: the message does not name the flag it refused on", err)
+		}
+	})
+
+	t.Run("unshared supplier, shared declaration", func(t *testing.T) {
+		_, _, err := link1Threads(t, `(module (memory (import "s" "mem") 1 2 shared))`, exportsOf(plain))
+		if err == nil {
+			t.Fatal("link accepted an unshared memory where a shared one was declared")
+		}
+		if !strings.Contains(err.Error(), "incompatible import type") {
+			t.Errorf("%v, want incompatible import type", err)
+		}
+		if !strings.Contains(err.Error(), "expected memory i32 1 2 shared") {
+			t.Errorf("%v: the message does not name the flag it refused on", err)
+		}
+	})
+
+	t.Run("shared supplier, shared declaration", func(t *testing.T) {
+		_, trap, err := link1Threads(t, `(module (memory (import "s" "mem") 1 2 shared))`, exportsOf(shared))
+		if err != nil {
+			t.Fatalf("link: %v, want a shared import to link against a shared supplier", err)
+		}
+		if trap != nil {
+			t.Fatalf("instantiate trapped: %v", trap)
+		}
+	})
+}
+
 // TestGrownMemoryReexportsItsCurrentSize pins imports4.wast:19-37 directly, in its own words:
 // "imported memory limits should match, because external memory size is 2 now." A memory's
 // declared minimum is fixed at decode time (`binary.Memory.Limits`) and its runtime `limits`

@@ -86,8 +86,23 @@ func (s speller) externGlobal(mutable bool, t binary.ValType) string {
 // `at1 = at2 && match_limits c lim1 lim2` — and it was in neither. A message that omitted it
 // could not have reported the eight `memory64-imports.wast` rows the check was missing even if the
 // check had been there.
+//
+// The shared flag is here for that same reason and no other: matchMemoryType compares it, so a
+// rendering that dropped it would report a refusal as `expected memory i32 1 2, got memory i32 1
+// 2` — the defect stated as its own alibi, since the two sides differ in the one field the
+// message does not carry. The trailing-word form is the reference's, at the pin whose grammar has
+// the flag: `MemoryType (lim, Shared) -> string_of_limits lim ^ " shared"`
+// (`spec-threads/interpreter/syntax/types.ml:149-151`).
+//
+// Grave [#522](https://github.com/scttfrdmn/burroughs/issues/522) is the comparison's half of the
+// same omission; *a field added to a type is a term in every rendering of it too*, and this side
+// fails silently in the worse way — the message reads as a mismatch between identical types.
 func (s speller) externMemory(lim binary.Limits) string {
-	return "memory " + addrtype(lim) + " " + limitsString(lim)
+	share := ""
+	if lim.Shared {
+		share = " shared"
+	}
+	return "memory " + addrtype(lim) + " " + limitsString(lim) + share
 }
 
 // externTable is `"table " ^ string_of_tabletype`: address type, limits, element reftype.

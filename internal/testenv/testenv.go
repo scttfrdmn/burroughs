@@ -597,7 +597,8 @@ var refPins = []RefPin{{
 	Target: "threads-ref",
 	Floors: threadsRefFloors,
 	Why: "the threads proposal at cc535ad, and *only* its threads clauses — its baseline " +
-		"predates GC and memory64, so a wholesale read of its decode.ml would delete both",
+		"predates GC and memory64, so a wholesale read of any of its files deletes both: " +
+		"102 of lexer.mll's keywords are core-only, against the 70 it adds",
 }}
 
 // RefPins returns every licensed authority pin.
