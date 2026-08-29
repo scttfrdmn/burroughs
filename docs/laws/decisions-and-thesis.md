@@ -111,9 +111,16 @@ reach is a law out of context.
     [a message is not its rendering](errors-and-testimony.md#a-message-is-not-its-rendering-and-a-term-about-the-rendering-cannot-be-discharged-by-the-messages-author).
     (Ruling: Scott, PR #490 review.)
 
-  - **Durability is not independence.** *"A durable record of an order, written by the party acting on
-    it, is durable but not independent provenance no matter how good the channel."* So an order that
-    arrived in session does not become citable by being written down: transcribing it into an issue
+  - **Durability is not independence, and the mechanism is reviewability.** *"A durable record of an
+    order, written by the party acting on it, is durable but not independent provenance no matter how
+    good the channel."* **Independence comes from the record being reviewable by someone other than
+    its author, not from the record being permanent** — stated in the headline rather than left to the
+    exception below it, because the original phrasing left the mechanism implicit and a reader who
+    stopped at *durable but not independent* could only conclude that no self-written record is ever
+    citable, which is false and would forbid relaying a stamp at all. Permanence is a property of the
+    channel; falsifiability is a property of who reads it next. (Sharpening: chat-Claude, on the #519
+    review — *"that's the actual mechanism, and my original phrasing left it implicit."*) So an order
+    that arrived in session does not become citable by being written down: transcribing it into an issue
     comment produces a permanent, timestamped, public artifact, and the artifact's author is still the
     actor. Pointing a `Ratio-Class: ordered` at it cites yourself. The classification is therefore
     **`carried`**, with the order quoted in prose where a reader takes it as testimony rather than
@@ -153,14 +160,17 @@ reach is a law out of context.
     out false and the amendment says so. Nothing an actor does changes. Same for a premise correction,
     a citation re-point, a scored forecast, and a pointer to a superseding ADR.
 
-  **The test needs its second filter, or it over-triggers.** *Would an actor do something different*
-  is satisfied by any changed mechanism, including one that was the actor's to change — 0010's
-  `fail`-column partition (`binaryFail`/`textFail` ceilings) changes what an actor does and owes no
-  stamp, because the shape of a harness-internal ceiling is a signature and not a capability. So the
-  pair of questions is: **did the commitment change, and was that commitment a principal's to make?**
-  Both, or no stamp is owed. The second question is *the stamp's subject is the capability and the
-  constraint, never the signature*, read at amendment time — and routing a self-decided mechanism
-  change upward for a stamp is that law's other failure, not this one's compliance.
+  **The test is two-part, because the first part alone over-triggers.** *Would an actor do something
+  different* is satisfied by any changed mechanism, including one that was never a principal's to
+  change — 0010's `fail`-column partition (`binaryFail` ceiling 1 / `textFail` ceiling 600) changes
+  what an actor does and owes no stamp, because the shape of a harness-internal ceiling is a signature
+  and not a capability. So both questions must answer yes: **did the commitment change, and was that
+  commitment a principal's to make?** The second is *the stamp's subject is the capability and the
+  constraint, never the signature* read at amendment time, and routing a self-decided mechanism change
+  upward for a stamp is that law's other failure rather than this one's compliance. (Filter proposed by
+  the actor on PR #519 and accepted: *"my rule as stated would have demanded stamps on amendments
+  changing mechanical facts no principal ever stamped — 0010's fail-column partition is the right
+  counterexample."* chat-Claude, on the #519 review.)
 
   Two mechanics follow, and both are about where the reader looks:
 

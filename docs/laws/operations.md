@@ -207,6 +207,17 @@ scanner reads tokens, not quotation marks. Hence the phrasing above, which keeps
 reference apart, and hence the rule that the report about a sweep is inside that sweep's population —
 re-run `closecheck.sh` **after** writing the commit that describes a closecheck failure.
 
+**And it recurred in a second instrument on #519, which is what makes it a shape rather than a
+closecheck quirk.** `citecheck.sh --pr`'s discharge-claim check FAILed a body sentence that paired the
+words *recorded in* with an ADR number — read as "this PR changed that ADR" when the claim was about the
+tree's past. citecheck's own diff-mode note draws exactly that distinction out loud, and body mode cannot
+draw it, because a body has no past tense a scanner can see. Then the bullet **reporting** that FAIL
+failed identically, by quoting the sentence. So the generalization is not about closing keywords: **any
+two-token co-occurrence check has this property, and the report about the check is inside its
+population.** Remedy that worked: name the words and the number in separate sentences. The remedy that
+does *not* work is an exemption — an exemption inherits none of the trigger's lessons, and here the
+checker's reading of the words was fair each time.
+
 Both halves' `--pr` arm fetches the body **live** rather than from the webhook payload, so a body
 edited after the failure is scanned by `gh run rerun --failed` without a new push. That is a property
 of the scripts, checked by `TestPRFetchFailureIsNeverAPass`, and not something to assume of a job in
