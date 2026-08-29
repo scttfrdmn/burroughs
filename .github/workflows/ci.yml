@@ -234,7 +234,8 @@ jobs:
         run: make threads-ref
 
       - name: every corpus is vendored
-        # Guard the guard, for both. A skip is impossible under NO_SKIP, but a
+        # Guard the guard, for all three — the suite and both authority pins. A skip is
+        # impossible under NO_SKIP, but a
         # *truncated* fetch is a different failure: it satisfies os.Stat, passes the
         # Go-level door, and then yields a board or an extraction computed over
         # whatever happened to arrive. Assert the inputs before trusting anything
@@ -273,6 +274,11 @@ jobs:
           # report a vendored tree on a fetch that produced half of it — and the two files
           # have the same basename, which is precisely how a citation to them went to the
           # wrong pin (grave #517).
+          # `fail` accumulates rather than exiting at the first miss: *a FAIL names a site,
+          # not the population*, and a guard that stops at the first broken pin reports one
+          # fetch to fix when two are broken. The bare `[ ... ]` at the end is silent by
+          # design — every diagnosis has already been printed by then, which is the one
+          # condition under which `-e` aborting mutely is acceptable at this site.
           fail=0
           for spec in \
             "third_party/spec/interpreter/binary/decode.ml:20000" \
