@@ -963,7 +963,12 @@ reach is a law out of context.
     p<0.01, because a layout shift helps some access patterns and hurts others. A single floor
     subtracted from every row is a mean standing in for a spread. Two lanes with equal-length tags
     have **provably identical layout** — 0 differing nm lines of 5824, identical byte size — so there
-    is nothing to net out.
+    is nothing to net out. **Ruling, Scott on the #508 review, correcting his own earlier framing:**
+    *"I called the build-boundary floor 'the load-bearing' constraint. It was wrong. The artifact was
+    untagged-versus-tagged, not a boundary tax, and flooring would have propagated the error rather
+    than removed it."* Recorded with its author because a principal's order is what a floor would have
+    been built against, and the correction reaches every future A/B in this tree — the failure mode is
+    that *naming* a confound convincingly makes the prescription for it feel measured too.
   - **Equal-length is the requirement; equal *content* is not, and byte equality is the wrong
     check.** Go's build ID hashes the tag list, so two inert tags of the same length produce binaries
     that differ in bytes and agree in layout. `cmp` says "different" and proves nothing. The claim a

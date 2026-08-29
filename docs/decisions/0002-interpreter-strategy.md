@@ -1,7 +1,43 @@
 # 0002 — Interpreter strategy
 
-Date: 2026-07-30 · Status: **accepted** (Scott, 2026-07-30) · Resolves contract §10.1
+Date: 2026-07-30 · Status: **accepted** (Scott, 2026-07-30) · Resolves contract §10.1 · **one
+option-B cost claim falsified by measurement, 2026-08-28** (Scott, on the #508 review)
 Contract refs: §10.1 (open question), §0 (posture), §9 (gates)
+
+> **Amendment, 2026-08-28 — "becomes free" is false, and the number is +11.82% at decode.**
+> Option B's second `+` below reads: *"Branch resolution, which in-place needs regardless, becomes
+> free — it is just an index fixup at build time (the benchmark does exactly this)."* The build-time
+> fixup was built (#507, `gate:endtable`, arena placement per [0048](0048-the-pairing-table-lives-in-a-per-module-arena-reached-by-one-int32-on-func-because-the-per-function-field-dominates-a-measured-bill.md))
+> and then measured at decode for the first time (#136/#508). It is not free. A corpus-shaped module
+> decodes **+11.82% (p=0.000)** slower with the fixup than without it, against an execution saving of
+> **3.4–4.8%** on hot code, and the break-even is **≈126 dynamic block entries per instantiation**.
+> The flip was declined on that ledger, so the shipped default resolves branch targets by *scanning
+> at run time* (`matchEnd`) and the index fixup lives behind its tag.
+>
+> **The wording below is not rewritten** — a falsified clause read through a pointer is a record, and
+> a rewritten one is a record with the evidence removed. What is falsified is precise and worth
+> keeping precise:
+>
+> - The **absolute** claim ("free") is refuted. The parenthetical is the tell: *the benchmark does
+>   exactly this* cites a toy that built one module and timed only its hot loop, so the fixup's cost
+>   had no way to appear in the evidence 0002 was reading. The cost is paid **per decoded function,
+>   whether or not it is ever entered** — ≈55 ns/func attributable to filing one opener, ≈4.4 ns/func
+>   unconditional.
+> - The **comparative** claim ("which in-place needs regardless") is *not* refuted here and is not
+>   claimed to be. Option A's separate bullet is about byte offsets, where a scan is dearer than over
+>   indices; nothing in #508 measured that.
+>
+> Everything else in this ADR stands as written: the internal form, giant-switch dispatch, the bare
+> `uint64` slots with a parallel reference array, and the pinned reference-slot consequence. Q1's
+> choice is not reopened — option B won on measured execution speed and width-immunity, and it still
+> holds both. One of its advertised *costs* was wrong, in the direction that matters for modules that
+> run briefly.
+>
+> This is branch **(c)** of #499's decision 1, registered as a live option before any result was
+> known: *"0002's cost claim is a thesis to be tested, not a condition to be met, in which case #136
+> is a measurement slice whose outcome could falsify 0002 rather than discharge it."* The thesis was
+> tested and failed, so **v0 closure condition C2 is discharged on the falsification** rather than by
+> building the mechanism the measurement declined (Scott, on the #508 review).
 
 ## Decision
 
@@ -126,6 +162,8 @@ Decode once into `[]ins` with pre-decoded immediates and resolved targets.
 - **+** Measured fastest, and width-immune.
 - **+** Branch resolution, which in-place needs regardless, becomes free —
   it is just an index fixup at build time (the benchmark does exactly this).
+  **["free" is falsified — +11.82% at decode; see the 2026-08-28 amendment at
+  the top. Wording kept as written.]**
 - **−** A second representation to extend for every proposal. The
   maintenance cost §10.1 is worried about is real.
 - **−** Two places for a bug to hide: decoder-to-internal-form lowering is

@@ -2493,6 +2493,33 @@ weakly-ordered platform.
 
 ### Changed
 
+- **`gate:endtable` is declined permanently, and ADR 0002 gets a dated amendment because the
+  measurement falsified one of its cost claims** ([#136](https://github.com/scttfrdmn/burroughs/issues/136),
+  ruled by Scott on the #508 review). 0002's option B advertised that *"branch resolution … becomes
+  free — it is just an index fixup at build time"*. The fixup was built and then measured at decode
+  for the first time: a corpus-shaped module decodes **+11.82% (p=0.000)** slower with it, against an
+  execution saving of **3.4–4.8%** on hot code, break-even at **≈126 dynamic block entries per
+  instantiation**. So the flip is declined on two independent grounds — the pre-registered criterion
+  (≥5% on `Coupled/*/arith`) fails at all four spans (**−4.47 / −3.41 / −4.83 / −3.59%**, p≤0.001,
+  n=20, against registered −5.19 / −5.14 / −6.59 / −5.90%), and a cost the registration never
+  contemplated is larger than the benefit. The threshold was **not** amended after seeing −4.47%,
+  which is the entire reason the registration existed: *a failed pre-registration narrows, it does not
+  license.* The mechanism stays behind `-tags burroughs_endtable` per the #502 ruling; the default
+  build resolves branch targets by scanning at run time and is unchanged.
+  - **The amendment does not rewrite the falsified clause**, per 0025's precedent — a falsified clause
+    read through a pointer is a record, and a rewritten one is a record with the evidence removed. It
+    also separates what was refuted from what was not: the **absolute** claim ("free") is dead, the
+    **comparative** one ("which in-place needs regardless") was never measured here and is not claimed
+    to be. Q1's choice is not reopened — option B won on execution speed and width-immunity and still
+    holds both; one advertised *cost* was wrong, in the direction that matters for short-lived modules.
+  - **This is the finding nobody registered.** Every figure in the campaign for weeks was
+    execution-side, on a module decoded once and called a million times, and the cost is paid per
+    decoded function whether it is ever entered or not. The general shape: *a trade measured only on
+    the side someone thought to instrument has an unpriced side, and the unpriced side can carry the
+    larger term.*
+  - **v0 closure condition C2 is discharged on the falsification**, which is branch **(c)** of #499's
+    decision 1 — registered as a live option before any result was known — rather than by building the
+    slice the measurement just declined.
 - **The location context is rendered *after* the spec phrase, and the harness matches expected error
   text by prefix rather than by substring** ([#455](https://github.com/scttfrdmn/burroughs/issues/455),
   [ADR 0045](docs/decisions/0045-the-location-context-is-rendered-after-the-spec-phrase-and-the-harness-takes-the-references-prefix-rule.md),
