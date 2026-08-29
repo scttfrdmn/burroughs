@@ -79,7 +79,7 @@ fi
 # empty set succeeds*) says a checkout producing one .wast file passes any `> 0` test while
 # making every board count meaningless. The floor is `testenv.MinSuiteFiles`, duplicated here
 # because a shell script cannot read a Go constant — and `TestSuitePinIsAssertedByTheFetchScript`
-# is what keeps the two agreeing, the same arrangement as `TestFetchScriptAssertsEveryAuthority`.
+# is what keeps the two agreeing, the same arrangement as `TestEveryPinsFetchScriptAssertsItsAuthorities`.
 min=250
 n=$(scripts/suite-count.sh "$dest")
 if [ "$n" -lt "$min" ]; then

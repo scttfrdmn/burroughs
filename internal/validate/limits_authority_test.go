@@ -81,7 +81,7 @@ func TestLimitsRangesMatchTheReference(t *testing.T) {
 		},
 	} {
 		t.Run(tc.fn, func(t *testing.T) {
-			body := refFuncBody(t, src, tc.fn)
+			body := refFuncBody(t, testenv.RefValidML, src, tc.fn)
 
 			// The message head, from the `check_limits … at ("… " ^ s)` call. The reference
 			// composes head-then-range-text with a space between, and the sentinel holds the head
@@ -249,18 +249,105 @@ func TestCheckLimitsOrderIsTheReferences(t *testing.T) {
 // merely *contains* the right words while wrapping the wrong sentinel.
 func errorIs(err, target error) bool { return errors.Is(err, target) }
 
+// TestSharedMemoryRuleIsTheThreadsReferences pins `check_memorytype`'s shared clause — the half of
+// the rule that comes from the *second* pin (ADR 0007's 2026-08-28 amendment).
+//
+// Unlike its neighbours above, this rule **does** have a corpus witness:
+// `testdata/spec/proposals/threads/memory.wast:12` asserts `(memory 1 shared)` invalid with this
+// message. What it does not have is a *lane* — the threads corpus is not on the board until #513 —
+// so until then this test is the rule's only instrument, and after then it is still the only thing
+// pinning the message to the pin rather than to a vector's expectation string.
+//
+// Three claims, and the third is a negative made positive:
+//
+//  1. the message, verbatim, from the `require` that emits it;
+//  2. the rule's direction through the real path, both answers, plus its order against
+//     `check_limits` — which the reference fixes and no vector can see, exactly as the min/max
+//     ordering above;
+//  3. **that `check_tabletype` has no shared clause at all.** `checkTableType` carries none, and
+//     "the reference does not have one" is a claim with nothing to resolve — the shape *a negative
+//     claim is a citation with no target* names. Asserting the absence over the function's own body
+//     turns it into a check that fails when the proposal lifts its "(yet)".
+func TestSharedMemoryRuleIsTheThreadsReferences(t *testing.T) {
+	src := testenv.RequireSpecRef(t, filepath.Join("..", "..", testenv.ThreadsRefValidML))
+	body := refFuncBody(t, testenv.ThreadsRefValidML, src, "check_memory_type")
+
+	// The message and the predicate that guards it, together: the literal alone could be anywhere
+	// in the file, and what makes it *this rule's* message is the `require` it sits on.
+	if !strings.Contains(body, `"`+ErrSharedMemoryNoMax.Error()+`"`) {
+		t.Errorf("%s's check_memory_type does not contain the literal %q that ErrSharedMemoryNoMax "+
+			"copies — the vector matches this string, so a drift here changes which vectors this "+
+			"rule can satisfy", testenv.ThreadsRefValidML, ErrSharedMemoryNoMax.Error())
+	}
+	if !strings.Contains(strings.Join(strings.Fields(body), " "), "require (shared = Unshared || lim.max <> None)") {
+		t.Errorf("%s's check_memory_type no longer requires shared-implies-a-maximum; the rule "+
+			"checkMemoryType enforces is not this pin's", testenv.ThreadsRefValidML)
+	}
+
+	// Both answers, through the real path. The accepting rows are not filler: a rule written as
+	// `if Shared` without the `!HasMax` half would reject every shared memory, which is an
+	// over-rejection no `assert_invalid` vector can catch.
+	for _, tc := range []struct {
+		name string
+		lim  binary.Limits
+		want error
+	}{
+		{"shared with maximum", binary.Limits{Min: 1, Max: 1, HasMax: true, Shared: true}, nil},
+		{"shared without maximum", binary.Limits{Min: 1, Shared: true}, ErrSharedMemoryNoMax},
+		{"unshared without maximum", binary.Limits{Min: 1}, nil},
+		{"unshared with maximum", binary.Limits{Min: 1, Max: 1, HasMax: true}, nil},
+		// The order, which the reference fixes by putting `check_limits` first and which no vector
+		// pairs: both predicates fail here and the range one must speak.
+		{
+			"shared, no maximum, min over range",
+			binary.Limits{Min: memRangeI32 + 1, Shared: true},
+			ErrMemorySize,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := checkMemoryType(binary.Memory{Limits: tc.lim})
+			switch {
+			case tc.want == nil && err != nil:
+				t.Errorf("checkMemoryType(%+v) = %v, want accept", tc.lim, err)
+			case tc.want != nil && err == nil:
+				t.Errorf("checkMemoryType(%+v) accepted, want %v", tc.lim, tc.want)
+			case tc.want != nil && !errorIs(err, tc.want):
+				t.Errorf("checkMemoryType(%+v) = %v, want %v", tc.lim, err, tc.want)
+			}
+		})
+	}
+
+	// Claim 3. `check_table_type` in this pin reads its limits and drops the shared flag on the
+	// floor (`let lim, _ = limits u32 s` in its own `table_type`), because the decoder already
+	// refused it — so a `shared` anywhere in this function's body means the validator gained a
+	// rule and `checkTableType` is missing it.
+	tab := refFuncBody(t, testenv.ThreadsRefValidML, src, "check_table_type")
+	if strings.Contains(tab, "shared") {
+		t.Errorf("%s's check_table_type now mentions `shared`, and checkTableType has no such "+
+			"clause.\n\tThe table refusal lives in the decoder (ErrSharedTable) on the strength of "+
+			"this function *not* having a rule; if the proposal lifted its \"(yet)\", the layering "+
+			"moves and the malformed verdict becomes the wrong one.", testenv.ThreadsRefValidML)
+	}
+}
+
 // refFuncBody returns the text of one `let <name> …` definition in an OCaml source, up to the next
 // top-level `let`.
 //
 // Scoped to the function rather than run over the whole file because both range tables use the
 // identical `| I32AT -> …` shape, so a file-wide regex would match four rows and have no way to say
 // which rule each belongs to — the two would agree with each other's numbers.
-func refFuncBody(tb testing.TB, src, name string) string {
+//
+// **`file` is a parameter and was the hardcoded `testenv.RefValidML`**, which became false
+// testimony the moment a second pin arrived: reading the threads `valid.ml` and failing would have
+// reported the *core* file as the one missing the function, sending the reader to a file that never
+// had it. An error message is testimony, and a helper's message is testimony about whatever it was
+// handed.
+func refFuncBody(tb testing.TB, file, src, name string) string {
 	tb.Helper()
 	start := strings.Index(src, "let "+name)
 	if start < 0 {
 		tb.Fatalf("%s does not define %s — the citation every constant in this test carries points "+
-			"at a function that is gone", testenv.RefValidML, name)
+			"at a function that is gone", file, name)
 		return ""
 	}
 	rest := src[start+len("let "+name):]

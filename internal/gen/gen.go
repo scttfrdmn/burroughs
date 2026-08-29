@@ -116,6 +116,15 @@ func PinnedRefRev() (string, error) {
 	return PinnedRev(script)
 }
 
+// **There is deliberately no `PinnedThreadsRefRev` beside these, and the absence is the
+// entry worth reading.** One was written with the second pin (ADR 0007's 2026-08-28
+// amendment) and deleted the same hour, by `deadcode`: nothing generates a table from the
+// threads pin yet, so it was a provenance reader with no artifact to stamp — and its
+// companion constant restated a path `refPins` already holds, which is the second-place
+// problem the pin set exists to abolish. A generator that needs the threads revision reads
+// its pin's own `Script` and passes it to PinnedRev, which is why that function keeps a
+// path parameter. *A helper earns a caller*; this one had none.
+
 // SuitePinScript is where the *suite* revision is declared, relative to the repo root.
 //
 // A second pin, not a second reader: `rePin` matches both scripts because `fetch-spec-tests.sh`

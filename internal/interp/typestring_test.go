@@ -12,7 +12,7 @@ import (
 // than derived from the reference at run time.
 //
 // `internal/testenv` licenses reference files as authorities — a path constant plus a size floor,
-// policed by `TestFetchScriptAssertsEveryAuthority` — and `syntax/types.ml` is deliberately **not**
+// policed by `TestEveryPinsFetchScriptAssertsItsAuthorities` — and `syntax/types.ml` is deliberately **not**
 // among them. The precedent is `internal/validate/align_authority_test.go:41`, which transcribes
 // nine numbers out of `pack.ml`/`types.ml` and says why: the derive-don't-transcribe rule is about
 // errors that are *accept-direction and invisible*, and a wrong transcription here cannot be one.

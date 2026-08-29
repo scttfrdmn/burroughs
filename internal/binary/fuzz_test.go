@@ -49,6 +49,11 @@ var declaredErrors = []error{
 	ErrMalformedVecType,
 	ErrMalformedRefType,
 	ErrMalformedLimits,
+	// A shared table (`spec-threads/binary/decode.ml:190-194`). Enrolled rather than excluded because it
+	// is a verdict about the module and not a bug in this package: the flags byte is
+	// attacker-supplied, so `0x02` on a tabletype is a reachable input and the fuzzer will
+	// find it the first time it sets that bit.
+	ErrSharedTable,
 	ErrMalformedMutability,
 	ErrMalformedImportKind,
 	ErrMalformedExportKind,

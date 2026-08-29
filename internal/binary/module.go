@@ -1326,6 +1326,27 @@ type Limits struct {
 	// It cannot be recovered later: the flags are gone, and `Min > 1<<32` is the wrong
 	// question because a memory64 of one page is still 64-bit addressed.
 	Addr64 bool
+
+	// Shared is set when the flags byte selected the threads proposal's shared form (the
+	// 0x02-0x03 range), making this memory shareable across agents — `MemoryType (lim,
+	// Shared)` in the threads reference's `spec-threads/binary/decode.ml:196-198`.
+	//
+	// **This field's absence was grave #511, and Addr64's warning above is the whole
+	// diagnosis one field over.** `decodeLimits` read the 0x02/0x03 flags, checked the
+	// threads gate, took `HasMax` from bit 0 — and dropped bit 1 on the floor. So with the
+	// gate on, `(memory 1 1 shared)` decoded **identically** to `(memory 1 1)`: same struct,
+	// same bytes consumed, no error, and nothing downstream able to tell them apart. Every
+	// consequence of sharing — the §4 boundary memory model, the atomic ops' requirement, the
+	// validator's shared-needs-a-maximum rule — is a consequence of a bit the decoder threw
+	// away, and *it cannot be recovered later: the flags are gone*, which the field one
+	// position up had already said in those words.
+	//
+	// On Limits rather than on Memory for Addr64's reason: it is read from the limits flags,
+	// the same byte HasMax comes from. Unlike Addr64 it is meaningful on **memories only** —
+	// the threads reference's `table_type` requires `not shared` outright
+	// (`spec-threads/binary/decode.ml:190-194`, "tables cannot be shared (yet)"), so a shared table is malformed
+	// rather than a table with this field set, and `decodeTableType` is where that is said.
+	Shared bool
 }
 
 // TableType is a `tabletype` (decode.ml:301-304): an element type and limits, and nothing else.

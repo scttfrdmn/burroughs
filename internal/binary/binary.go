@@ -118,9 +118,29 @@ var (
 	ErrMalformedNumType = errors.New("malformed number type")
 	ErrMalformedVecType = errors.New("malformed vector type")
 
-	ErrMalformedRefType    = errors.New("malformed reference type")
-	ErrMalformedHeapType   = errors.New("malformed heap type")
-	ErrMalformedLimits     = errors.New("malformed limits flags")
+	ErrMalformedRefType  = errors.New("malformed reference type")
+	ErrMalformedHeapType = errors.New("malformed heap type")
+	ErrMalformedLimits   = errors.New("malformed limits flags")
+
+	// ErrSharedTable is a tabletype whose limits flags set the shared bit — `require (not
+	// shared) s (pos s - 1) "tables cannot be shared (yet)"` (`spec-threads/binary/decode.ml:190-194`).
+	// The threads reference's message text verbatim, parenthetical included: the "(yet)" is
+	// the proposal's own word for a restriction it expects to lift, and inventing a tidier
+	// spelling would report a production no reference has.
+	//
+	// **This is the second pin's first consumer, and it is an accept-direction fact with no
+	// corpus witness** (ADR 0007's 2026-08-28 amendment). The threads corpus has a vector for
+	// the *memory* rule — `memory.wast:12`'s `(assert_invalid (module (memory 1 shared))
+	// "shared memory must have maximum")` — and none anywhere for a shared table, in any
+	// direction. So a decoder that accepted `(table 1 1 shared)` would be green on every
+	// vector that exists, which is contract §9 G-3's hole exactly: the board cannot see a
+	// wrongly-accepted form no vector uses, and the reference is the only oracle that can.
+	//
+	// Malformed rather than invalid, which is a layering claim and the reference's: the
+	// refusal is in `decode.ml`'s `table_type`, before validation, so it is a fact about the
+	// wire form and not about a module's types. A validator-side check would score the wrong
+	// string if a vector ever arrives.
+	ErrSharedTable         = errors.New("tables cannot be shared (yet)")
 	ErrMalformedMutability = errors.New("malformed mutability")
 	ErrMalformedImportKind = errors.New("malformed import kind")
 	ErrMalformedExportKind = errors.New("malformed export kind")

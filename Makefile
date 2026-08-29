@@ -40,7 +40,7 @@ SHELL := /bin/bash -o pipefail
 # anything globally.
 TOOL = $(GO) tool -modfile=tools/go.mod
 
-.PHONY: all build test race vet test-endtable fmt fmt-check lint check vuln deadcode fuzz bench ratio cite close spec-tests spec-ref tidy conformance strict pipefail-check opcodes opcode-drift keywords keyword-drift opcodes-text opcodes-text-drift memarg memarg-drift gate-census xcorpus
+.PHONY: all build test race vet test-endtable fmt fmt-check lint check vuln deadcode fuzz bench ratio cite close spec-tests spec-ref threads-ref tidy conformance strict pipefail-check opcodes opcode-drift keywords keyword-drift opcodes-text opcodes-text-drift memarg memarg-drift gate-census xcorpus
 
 # The default gate. `check` is what must be green before a report — it is the
 # local mirror of CI, so a surprise in CI means a bug in this line, not a bug in
@@ -390,6 +390,17 @@ spec-tests:
 # generate and drift-check the opcode table.
 spec-ref:
 	./scripts/fetch-spec-ref.sh
+
+# The threads proposal's reference interpreter — the *second* authority pin (ADR 0007's
+# 2026-08-28 amendment). Separate from spec-ref rather than folded into it: the pins are
+# independently dated so drift in one is never silently absorbed by the other, and a
+# single target running both fetches would make one `make` invocation move two pins.
+#
+# The threads proposal was never merged into the core spec, so at bdd7164 all nine files
+# spec-ref licenses contain zero occurrences of `atomic` and zero of `shared`. Everything
+# contract §§2-5 needs is behind this target and nowhere else.
+threads-ref:
+	./scripts/fetch-threads-ref.sh
 
 # Regenerate the opcode table from the vendored reference (decision 0007). The output
 # is committed, so this is run when the pin moves, not on every build.

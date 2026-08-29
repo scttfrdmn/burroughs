@@ -218,9 +218,30 @@ func TestCompTypeFormIsASignedLEB(t *testing.T) {
 // Every engine error is then in one of two states, both explicit: it is a string the
 // reference raises, or it is declared here as ours with a justification. Silence is not
 // available. (#86.)
+// # The authority is every pin's decoder, and it was the core pin's alone
+//
+// A sentinel is the reference's message or it is ours, and *which* reference stopped being a
+// single file when the pin set went plural (ADR 0007's 2026-08-28 amendment). `ErrSharedTable`
+// is `tables cannot be shared (yet)` verbatim from the threads pin's `table_type`, and against
+// the core decoder alone it presented exactly as a fabricated sentinel does: absent from the
+// authority, no vector asserting it. The two available answers were both wrong — flag it, and
+// the test fabricates a finding about a correctly transcribed message; write it into `ours`
+// with a plausible reason, and a *reference* message is recorded as this engine's invention,
+// which is the laundering channel the `ours` map exists to make expensive.
+//
+// So the domain is the union of the pins' decoders, derived rather than listed
+// (`refDecodersML`). The `ours` map keeps its meaning intact: absent from **every** reference
+// this project pins.
 func TestEverySentinelIsTheReferencesOrIsDeclared(t *testing.T) {
-	src := testenv.RequireSpecRef(t, refDecodeML)
-
+	decoders := refDecodersML()
+	// Vacuity on the domain itself: a pin set that yielded one decoder would silently restore
+	// the single-authority reading this test was just widened out of, and a set that yielded
+	// none would call every sentinel invented.
+	if len(decoders) < 2 {
+		t.Fatalf("found %d pinned decoders, want >=2 — with one authority a message from the "+
+			"other pin reads as fabricated, which is the false finding this widening fixed",
+			len(decoders))
+	}
 	// **Every string literal in the file**, not the ones attached to a recognised raise
 	// call. Getting here took two under-matching triggers, and both are #82's class:
 	//
@@ -244,21 +265,42 @@ func TestEverySentinelIsTheReferencesOrIsDeclared(t *testing.T) {
 	// loudly.** (#82; grave #78.)
 	litRE := regexp.MustCompile(`"([^"\n]*)"`)
 	emitted := map[string]bool{}
-	for _, m := range litRE.FindAllStringSubmatch(src, -1) {
-		emitted[m[1]] = true
+	// Vacuity floor, per *a comparison against an empty set succeeds*, and it is now **two**
+	// floors because the domain is a union. Measured at the pinned revisions: 44 distinct
+	// literals in the core decoder, 38 in the threads decoder, 47 in the union. Floored at 30
+	// per pin and 40 on the union, leaving upstream room.
+	//
+	// The per-pin floor is the load-bearing half. A union floor alone is satisfied by the core
+	// pin's 44 on its own, so a threads fetch that produced an empty or truncated decoder would
+	// clear it while contributing nothing — the whole widening silently undone, and
+	// `ErrSharedTable` back to reading as fabricated. *An unmeasured complement is not an empty
+	// one*: the union figure cannot see which pin paid for it.
+	//
+	// The earlier draft of this floor was 40 chosen by feel, and the paragraph explaining it
+	// claimed 89, also by feel, in the same breath as the sentence about measuring —
+	// *second-order honesty* costing its usual amount. Every number above came out of a counter.
+	perPin := map[string]map[string]bool{}
+	for _, d := range decoders {
+		mine := map[string]bool{}
+		for _, m := range litRE.FindAllStringSubmatch(testenv.RequireSpecRef(t, d), -1) {
+			mine[m[1]] = true
+			emitted[m[1]] = true
+		}
+		if len(mine) < 30 {
+			t.Fatalf("%s yielded only %d distinct string literals, want >=30 — a pin "+
+				"contributing nothing restores the single-authority reading without failing "+
+				"anything", d, len(mine))
+		}
+		perPin[d] = mine
 	}
 
-	// Vacuity floor, per *a comparison against an empty set succeeds*: **44** distinct
-	// literals at the pinned revision, measured rather than guessed. The first draft of this
-	// test carried a floor of 40 chosen by feel and this paragraph then claimed 89, also by
-	// feel, in the same breath as the sentence about measuring — *second-order honesty*
-	// costing its usual amount. Floored at 35 to leave upstream room. An empty map would
-	// mark every sentinel below "absent from the reference", which fails loudly; the floor is
-	// what proves the *reader* worked rather than that the assertions happened to hold.
-	if len(emitted) < 35 {
-		t.Fatalf("extracted only %d string literals from decode.ml, want >=35 (44 at the "+
-			"pinned revision) — the reader has drifted, so this comparison is asserting far "+
-			"less than it claims", len(emitted))
+	// An empty map would mark every sentinel below "absent from the reference", which fails
+	// loudly; the floor is what proves the *reader* worked rather than that the assertions
+	// happened to hold.
+	if len(emitted) < 40 {
+		t.Fatalf("extracted only %d distinct string literals across %d pinned decoders, want "+
+			">=40 (47 at the pinned revisions) — the reader has drifted, so this comparison is "+
+			"asserting far less than it claims", len(emitted), len(decoders))
 	}
 
 	// Sentinels this engine raises that the reference does not, each with the reason it is
@@ -322,8 +364,40 @@ func TestEverySentinelIsTheReferencesOrIsDeclared(t *testing.T) {
 			"vacuous", len(decls))
 	}
 
+	// # Retired spellings: what a union domain gives back, and what it takes away
+	//
+	// Widening the authority from one decoder to the pin set widens the *excusing* direction too,
+	// and the first thing it excused was a defect #86 had already paid for. The threads pin
+	// branched before upstream renamed `malformed function type` to `malformed definition type`
+	// (`spec/binary/decode.ml:259` vs `spec-threads/binary/decode.ml:179`), so under the union an engine sentinel
+	// carrying the old spelling is "the reference's message" and the loop below waves it through
+	// — green, on the exact string whose removal was #86's definition of done.
+	//
+	// A pin set is a set of authorities *at different dates*, so the union answers "is this some
+	// reference's message?" and cannot answer "is this the message at the site this engine reads?"
+	// The clause-scoped rule the two limits masks taught, arriving at a control: consult the pin
+	// that owns the clause, never the union, when the question is about a site.
+	//
+	// So retired spellings are named and refused ahead of the excuse. The value is the pin that
+	// owns the site, and the assertion below runs against *that* pin's literals rather than the
+	// union.
+	retired := map[string]struct{ owner, why string }{
+		"malformed function type": {
+			owner: refDecodeML,
+			why: "renamed to `malformed definition type` at comptype's fallthrough (#86); the " +
+				"threads pin branched before the rename, so the union excuses the old spelling " +
+				"and re-adopting it would be green",
+		},
+	}
+
 	for _, d := range decls {
 		name, msg := d[1], d[2]
+		if r, dead := retired[msg]; dead {
+			t.Errorf("%s = %q is a retired spelling: %s.\n\tIt is present in another pin, so "+
+				"the union would have excused it — the authority for a site is the pin that "+
+				"owns the site (%s)", name, msg, r.why, r.owner)
+			continue
+		}
 		if emitted[msg] {
 			continue
 		}
@@ -337,21 +411,37 @@ func TestEverySentinelIsTheReferencesOrIsDeclared(t *testing.T) {
 			continue
 		}
 		if _, declared := ours[msg]; !declared {
-			t.Errorf("%s = %q is absent from decode.ml's raise sites and undeclared here — "+
+			t.Errorf("%s = %q is absent from every pinned decoder (%v) and undeclared here — "+
 				"either it is the reference's message spelled wrong (which is what "+
 				"`malformed function type` was, green on every board because no vector "+
 				"asserts it) or it is legitimately ours, and either way it says so out loud "+
-				"in this test's `ours` map (#86)", name, msg)
+				"in this test's `ours` map (#86).\n\tThe decoder list is derived from the pin "+
+				"set, so a message from a proposal this project has not pinned reads exactly "+
+				"like a fabricated one — pin the authority rather than writing the message off "+
+				"as ours", name, msg, decoders)
 		}
 	}
 
-	// The retired one, asserted as absent, so the fix cannot silently un-fix itself: if
-	// upstream ever adds this string the engine should adopt it where upstream uses it,
-	// rather than resurrecting it where #86 removed it.
-	if emitted["malformed function type"] {
-		t.Error("the reference now emits `malformed function type`; it did not when #86 " +
-			"replaced that sentinel with `malformed definition type` at comptype's " +
-			"fallthrough, so re-derive where it belongs rather than reverting")
+	// Each retired spelling asserted absent **from the pin that owns its site**, so the fix
+	// cannot silently un-fix itself: if that pin ever re-adopts the string, the engine should
+	// adopt it where that pin uses it, rather than resurrecting it where #86 removed it.
+	//
+	// Reading the union here is what the widening broke — the threads pin has the string, so
+	// this fired on a rename the core pin performed and the assertion pointed at the wrong
+	// event entirely ("the reference now emits" it, when the reference that matters never
+	// stopped). *A citation's authority is the clause it cites, not the corpus it sits in.*
+	for msg, r := range retired {
+		lits, ok := perPin[r.owner]
+		if !ok {
+			t.Errorf("retired spelling %q names owner %q, which is not a pinned decoder (%v) — "+
+				"an absence asserted against a file nobody reads is asserted against nothing",
+				msg, r.owner, decoders)
+			continue
+		}
+		if lits[msg] {
+			t.Errorf("%s now emits %q again; it did not when the engine dropped that spelling "+
+				"(%s), so re-derive where it belongs rather than reverting", r.owner, msg, r.why)
+		}
 	}
 }
 

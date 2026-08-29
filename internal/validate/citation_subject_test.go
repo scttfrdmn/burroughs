@@ -3,14 +3,43 @@
 package validate
 
 import (
+	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/scttfrdmn/burroughs/internal/testenv"
 )
+
+// refParse is one pinned validator's subject vocabulary: its lines, its top-level bindings with
+// their spans, and its constructor arms.
+//
+// It exists because the vocabulary is per pin and a citation names its pin (see `citedRange`). The
+// three fields were three locals when there was one authority to parse.
+type refParse struct {
+	lines []string
+	defs  map[string][2]int
+	arms  map[string]bool
+}
+
+// wantRefSubjects pins each cited validator's vocabulary size: bindings, then constructor arms.
+//
+// Keyed by path so a pin with no entry is a hard failure rather than an unmeasured parse — the
+// domain of this trigger is exactly these bindings, and a collapse in one pin's parse would make
+// every citation into it silently unkeyable. 88/170 for the core pin at bdd7164, 63/116 for the
+// threads pin at cc535ad — both printed by this parse rather than reasoned about, and the second
+// pair was 71/128 in this file's first draft, in the same comment that claimed the numbers were
+// measured. The failure below is what corrected it, which is the argument for pinning exactly: the
+// smaller figures are what an older baseline looks like, and that is a fact a reader can only read
+// off a number nobody chose.
+var wantRefSubjects = map[string][2]int{
+	testenv.RefValidML:        {88, 170},
+	testenv.ThreadsRefValidML: {63, 116},
+}
 
 // The description-from-source tripwire, and it exists because inference was measured against the
 // reference and lost.
@@ -91,22 +120,42 @@ import (
 // findable by machine, and leaves a *right* one indistinguishable from a reading. (Ruling: Scott, PR
 // #337 relay.)
 func TestRangeCitationSubjectsAreReadFromTheReference(t *testing.T) {
-	ref := testenv.RequireSpecRef(t, testenv.RefValidML)
-	lines := strings.Split(ref, "\n")
-	defs, arms := refSubjects(lines)
-
-	// Vacuity, and pinned exactly rather than floored — the same argument `wantCategories` makes a
-	// file over: the reference is fetched at a pin, so upstream growing its vocabulary is a fact for
-	// a reader to record rather than churn to absorb. A floor here would also be the wrong shape,
-	// since the failure this guards is a regex that stopped matching and that failure is a *collapse*,
-	// which any floor catches while hiding the interesting case of a few bindings going missing.
-	const wantDefs, wantArms = 88, 170
-	if len(defs) != wantDefs || len(arms) != wantArms {
-		t.Fatalf("parsed %d top-level binding(s) and %d constructor arm(s) from %s, want %d and %d — "+
-			"the candidate set is this trigger's domain, so a shrunken one makes citations unkeyable "+
-			"and an empty one makes this test agree with everything",
-			len(defs), len(arms), testenv.RefValidML, wantDefs, wantArms)
+	// Parsed per pin, and a citation's subject is looked up in the bindings of the file *it* names.
+	// The two validators do not even spell the rule's name the same way — the core pin's
+	// `check_memorytype` is `check_memory_type` in the threads pin — so a subject checked against
+	// the wrong pin is unkeyable at best and keyed against an unrelated definition at worst.
+	parses := map[string]refParse{}
+	parseOf := func(pin string) refParse {
+		if p, ok := parses[pin]; ok {
+			return p
+		}
+		lines := strings.Split(testenv.RequireSpecRef(t, pin), "\n")
+		defs, arms := refSubjects(lines)
+		want, pinned := wantRefSubjects[pin]
+		if !pinned {
+			// A third pin arrives here rather than in a passing count: its vocabulary is this
+			// trigger's domain, so an unpinned parse is a domain nobody has read.
+			t.Fatalf("%s is cited by line but has no entry in wantRefSubjects — measure its "+
+				"bindings and arms and pin them, because a parse nobody pinned can collapse to "+
+				"nothing and make every citation into it unkeyable", pin)
+		}
+		// Vacuity, and pinned exactly rather than floored — the same argument `wantCategories` makes
+		// a file over: the reference is fetched at a pin, so upstream growing its vocabulary is a
+		// fact for a reader to record rather than churn to absorb. A floor here would also be the
+		// wrong shape, since the failure this guards is a regex that stopped matching and that
+		// failure is a *collapse*, which any floor catches while hiding the interesting case of a
+		// few bindings going missing.
+		if len(defs) != want[0] || len(arms) != want[1] {
+			t.Fatalf("parsed %d top-level binding(s) and %d constructor arm(s) from %s, want %d "+
+				"and %d — the candidate set is this trigger's domain, so a shrunken one makes "+
+				"citations unkeyable and an empty one makes this test agree with everything",
+				len(defs), len(arms), pin, want[0], want[1])
+		}
+		p := refParse{lines: lines, defs: defs, arms: arms}
+		parses[pin] = p
+		return p
 	}
+	parseOf(testenv.RefValidML) // the default pin's parse, and its count pin, before any citation
 
 	tickRe := regexp.MustCompile("`([A-Za-z_][A-Za-z0-9_' ()]*)`")
 	keyed, residue := 0, 0
@@ -119,39 +168,45 @@ func TestRangeCitationSubjectsAreReadFromTheReference(t *testing.T) {
 			if !strings.HasPrefix(strings.TrimSpace(line), "//") {
 				continue
 			}
-			var ranges [][2]int
+			// Grouped by the pin each range names, because the subject vocabulary is that pin's.
+			// A line citing two pins is two claims and is scored as two.
+			byPin := map[string][][2]int{}
 			for _, m := range rangeRe.FindAllStringSubmatch(line, -1) {
-				lo, hi := atoiOrZero(m[1]), atoiOrZero(m[2])
-				ranges = append(ranges, [2]int{lo, hi})
+				pin := resolveCitedPin(t, fmt.Sprintf("%s:%d", file, i+1), m[1])
+				byPin[pin] = append(byPin[pin], [2]int{atoiOrZero(m[2]), atoiOrZero(m[3])})
 			}
-			if len(ranges) == 0 {
+			if len(byPin) == 0 {
 				continue
 			}
-			var subjects []string
-			for _, m := range tickRe.FindAllStringSubmatch(line, -1) {
-				// `Select (Some ts)` names an arm and its payload; the arm is the subject.
-				name := strings.Fields(m[1])
-				if len(name) == 0 {
+			for _, pin := range slices.Sorted(maps.Keys(byPin)) {
+				ranges := byPin[pin]
+				p := parseOf(pin)
+				var subjects []string
+				for _, m := range tickRe.FindAllStringSubmatch(line, -1) {
+					// `Select (Some ts)` names an arm and its payload; the arm is the subject.
+					name := strings.Fields(m[1])
+					if len(name) == 0 {
+						continue
+					}
+					if _, ok := p.defs[name[0]]; ok || p.arms[name[0]] {
+						subjects = append(subjects, name[0])
+					}
+				}
+				if len(subjects) == 0 {
+					residue++
 					continue
 				}
-				if _, ok := defs[name[0]]; ok || arms[name[0]] {
-					subjects = append(subjects, name[0])
+				for _, name := range subjects {
+					keyed++
+					if subjectAnswers(p.lines, p.defs, name, ranges) {
+						continue
+					}
+					t.Errorf("%s:%d describes %s as %q and no reading of that citation holds: %q is "+
+						"neither written inside %v nor is any of those ranges inside its own definition "+
+						"at %v. The description was written from the code around the citation rather "+
+						"than from the cited lines",
+						file, i+1, pin, name, name, ranges, p.defs[name])
 				}
-			}
-			if len(subjects) == 0 {
-				residue++
-				continue
-			}
-			for _, name := range subjects {
-				keyed++
-				if subjectAnswers(lines, defs, name, ranges) {
-					continue
-				}
-				t.Errorf("%s:%d describes %s as %q and no reading of that citation holds: %q is "+
-					"neither written inside %v nor is any of those ranges inside its own definition "+
-					"at %v. The description was written from the code around the citation rather "+
-					"than from the cited lines",
-					file, i+1, testenv.RefValidML, name, name, ranges, defs[name])
 			}
 		}
 	}
@@ -443,7 +498,13 @@ func TestRangeCitationSubjectsAreReadFromTheReference(t *testing.T) {
 	//     context is assembled here. A citation whose claim is about this side of the port names the
 	//     reference to say what it does differently, which is the `check_elem` note at the top working
 	//     as described for a fifth slice.
-	const wantKeyed, wantResidue = 103, 44
+	// **#511's shared-bit slice moves keyed +1 and residue +1**, both in `module.go` and both citing
+	// the threads pin. The keyed one is `checkMemoryType`'s doc block, whose description names
+	// `require` — written inside the cited range in that pin, and *not* in the core pin's lines of the
+	// same number, which is how the wrong-file citation was caught in the first place. The residue one
+	// is `ErrSharedMemoryNoMax`'s block, whose citation line carries no backticked reference
+	// identifier: region-shaped by the one-line window, and counted rather than excused.
+	const wantKeyed, wantResidue = 104, 45
 	if keyed != wantKeyed || residue != wantResidue {
 		t.Errorf("keyed %d range citation(s) by named subject and left %d as residue, want %d and "+
 			"%d — recount and re-pin. A row moves from residue to keyed when its description starts "+
