@@ -144,7 +144,7 @@ The bound is stated as term-for-term identity of the remaining buckets, not as a
   the linker has run on `validate.MatchDefType` since grave #368. Those rows are not among the 17, so
   the relation already decides rec-group position and group size correctly. Independently,
   `internal/validate`'s group-length condition has a falsification probe on the record: replaced with
-  `if false`, *"`type-rec.wast` goes 22/26 back to 19/26"* (`internal/spec/spec_test.go:7762`).
+  `if false`, *"`type-rec.wast` goes 22/26 back to 19/26"* (`internal/spec/spec_test.go:7779`).
 
 So the two halves of the forecast rest on two separate already-measured facts, neither derived from the
 other — and **neither is a measurement of the five rows themselves**, which is the honest statement of
@@ -186,7 +186,7 @@ Recorded here because each is a sentence a reader will meet *after* the change a
    do not literally falsify this, because M10/M11 is a **cross-module** relabelling and all five vectors
    are single-module. What they falsify is the reading the sentence invites: that the disjunct-2 gap is
    unwitnessed. It is witnessed, in both polarities, through `call_indirect`.
-3. `internal/spec/spec_test.go:10703` describes `Instance.link` as comparing with `sameFuncType`. Grave
+3. `internal/spec/spec_test.go:10722` describes `Instance.link` as comparing with `sameFuncType`. Grave
    #368 moved the linker off it; `sameFuncType` has exactly one non-test caller and it is not the
    linker. (The number is the *current* location of that sentence, re-pointed twice since this list was
    written — it was `:10548`, then `:10593`, then `:10616` — because a pointer that asserts where a live sentence is

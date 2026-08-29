@@ -75,14 +75,50 @@ const NoSkipEnv = "BURROUGHS_NO_SKIP"
 //
 // A prefix match rather than a `.`-prefix match: `._` is AppleDouble's own marker, and excluding
 // every dotfile would silently widen this to a class nobody measured.
-func SuitePaths(suiteDir string) ([]string, error) {
-	paths, err := filepath.Glob(filepath.Join(suiteDir, "*.wast"))
+func SuitePaths(suiteDir string) ([]string, error) { return vectorsIn(suiteDir) }
+
+// vectorsIn is "which files in this directory are vectors", in one place.
+//
+// Factored out when the threads lane needed the same question asked of
+// `testdata/spec/proposals/threads` (#513). The exclusion above is the whole content of
+// #340, and spelling it a second time in a second selector is how the two come to
+// disagree about a sidecar — the *one definition* argument SuitePaths' own comment makes,
+// applied to SuitePaths itself the moment it stopped being the only caller.
+func vectorsIn(dir string) ([]string, error) {
+	paths, err := filepath.Glob(filepath.Join(dir, "*.wast"))
 	if err != nil {
 		return nil, err
 	}
 	return slices.DeleteFunc(paths, func(p string) bool {
 		return strings.HasPrefix(filepath.Base(p), "._")
 	}), nil
+}
+
+// ProposalDir is where one tracked proposal's vectors live under a vendored suite.
+//
+// The upstream testsuite ships `proposals/<name>/` beside the core vectors, and
+// `SuitePaths`' glob is **one level**: those directories have never been in any board's
+// population, which is the gap #513 exists to close for `threads`.
+func ProposalDir(suiteDir, proposal string) string {
+	return filepath.Join(suiteDir, "proposals", proposal)
+}
+
+// ProposalPaths is the population selector for one proposal's vectors.
+//
+// Through the same definition as the core suite's, so a sidecar is excluded here for the
+// reason it is excluded there and not because someone remembered to.
+//
+// **A separate population rather than a widening of SuitePaths**, and the reason is that
+// SuitePaths is load-bearing for facts that have nothing to do with any proposal: the fetch
+// script reconciles it against `files="257"` exactly, `MinSuiteFiles` floors it,
+// `unsupportedCeiling` is a monotonic bound whose subject is *that* corpus, and
+// `TestPhase1Files`' `256 files` is published in `CHANGELOG.md` as a conformance claim.
+// Folding four files in would move all of those at once and make a released board
+// unreproducible — and it would put fails into the all-gates-on lane, whose entire guarantee
+// is that nothing hides. (Endorsed by chat-Claude on the #519 review, and prescribed by #513
+// itself for three named reasons.)
+func ProposalPaths(suiteDir, proposal string) ([]string, error) {
+	return vectorsIn(ProposalDir(suiteDir, proposal))
 }
 
 // MinSuiteFiles is the floor for a vendored suite to count as present.
@@ -144,6 +180,59 @@ func RequireSuite(tb testing.TB, suiteDir string) {
 	} else {
 		tb.Skip(reason)
 	}
+}
+
+// RequireProposal is the gate a proposal lane calls, and it reconciles an **exact** count.
+//
+// # Why exact, where the core suite gets a floor
+//
+// A floor is a class bound: 250 survives a pin bump and catches a fetch that lost most of
+// its corpus. Over a four-file directory a floor is nearly vacuous — *reconcile an extent,
+// never floor it* (#340) — because the interesting losses are all small ones, and no floor
+// can see an *addition* at any size. So this asserts the population for this pin and says
+// which pin it is asserting for at the call site.
+//
+// # Why a wrong count is never a skip
+//
+// It calls RequireSuite first, which is not belt-and-braces: `proposals/<name>/` comes out of
+// the same checkout as the core vectors, so a suite present at its pinned count means this
+// directory is present too. That makes the two failures separable — *the corpus is not
+// vendored* is RequireSuite's answer and carries its skip license, and *the corpus is
+// vendored and this directory disagrees* is a hard error in both modes. A single door with
+// one skip branch would have let a partial checkout excuse itself from a lane whose whole
+// point is that this population is no longer excused (#513, *a skip is not a verdict*).
+func RequireProposal(tb testing.TB, suiteDir, proposal string, want int) []string {
+	tb.Helper()
+
+	// The corpus question is delegated, and then this **returns** rather than relying on
+	// RequireSuite not returning. With a real *testing.T its Fatalf calls runtime.Goexit; with
+	// a testing.TB stand-in — which is how this package's own doors are watched failing — it
+	// records the call and execution continues, and the extent check below would then fire a
+	// second Fatalf about a directory that is missing because nothing was ever fetched. Two
+	// diagnoses for one cause, the later one overwriting the actionable one. That is grave #32,
+	// whose lesson RequireSuite's own if/else records, one caller up.
+	if n, err := countSuiteFiles(suiteDir); err != nil || n < MinSuiteFiles {
+		RequireSuite(tb, suiteDir)
+		return nil
+	}
+
+	dir := ProposalDir(suiteDir, proposal)
+	paths, err := ProposalPaths(suiteDir, proposal)
+	if err != nil {
+		tb.Fatalf("selecting %s's vectors in %s: %v", proposal, dir, err)
+		return nil
+	}
+	if len(paths) != want {
+		tb.Fatalf("%s holds %d .wast files, but this lane is pinned to %d.\n\t"+
+			"The suite is vendored at its pinned count, so this is not a missing fetch: either "+
+			"the pin moved the proposal's population and the lane's per-file counts below are "+
+			"now about a corpus nobody measured, or a file arrived from somewhere else. A board "+
+			"over it would name a corpus it did not measure.",
+			dir, len(paths), want)
+		return nil
+	}
+	sort.Strings(paths)
+	return paths
 }
 
 // SuiteFiles returns the vendored .wast paths, or nil when the corpus is absent.

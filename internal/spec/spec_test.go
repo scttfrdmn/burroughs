@@ -6754,18 +6754,34 @@ func allOnLane(t *testing.T) (binary.Features, func([]byte) error, func() Engine
 	t.Helper()
 
 	allOn := allFeaturesOn(t)
-	d := &binary.Decoder{Features: allOn}
-	decodeAllOn := func(image []byte) error {
+	decodeAllOn, engineFor := gateLane(allOn)
+	return allOn, decodeAllOn, engineFor
+}
+
+// gateLane builds a lane under a stated gate set: a decode func carrying those gates, and an
+// Engine factory whose three decoding entry points all carry them.
+//
+// **Three overrides, and the comments inside are the record of what each one's absence cost.**
+// Extracted from allOnLane for #513's threads lane, which needs the identical arrangement under
+// one gate rather than all of them. A second hand-assembled lane would have had to re-derive
+// which fields matter, and the answer is not guessable from the field names — `Instantiate`
+// compiles, reads as though it set the gates, and is called by nothing. So the lane is assembled
+// once and parameterised, which is the same argument that extracted allOnLane itself when its
+// second reader appeared, one level of generality down.
+func gateLane(f binary.Features) (func([]byte) error, func() Engine) {
+	d := &binary.Decoder{Features: f}
+	decodeWith := func(image []byte) error {
 		_, err := d.DecodeModule(image)
 		return err
 	}
-	return allOn, decodeAllOn, func() Engine {
-		// Still RunGated at the call sites, deliberately: the point is to *measure* Gated
-		// and require it to be zero. Using Run would fold declines into Fail and the
-		// requirement would be unfalsifiable — the counter it asserts on could not be
-		// nonzero.
+	return decodeWith, func() Engine {
+		// Still RunGated at the call sites, deliberately: a lane whose gates are stated must
+		// *measure* Gated rather than absorb it. Using Run would fold declines into Fail, and
+		// then the all-on lane's "Gated must be 0" would be unfalsifiable — the counter it
+		// asserts on could not be nonzero — while the threads lane's declines would be
+		// indistinguishable from wrong answers.
 		e := engine()
-		e.Decode = decodeAllOn
+		e.Decode = decodeWith
 		// The instantiation path takes the lane's gates too — see instantiateWith for
 		// why this line exists and what its absence cost.
 		//
@@ -6776,7 +6792,7 @@ func allOnLane(t *testing.T) (binary.Features, func([]byte) error, func() Engine
 		// spelling the engine actually uses, and the way to know which that is is to read
 		// `engine()` rather than to assume the plain name is the live one.
 		e.InstantiateLinked = func(c Command, reg Registry) (Instance, Stratum, error) {
-			return instantiateWith(allOn, c, reg)
+			return instantiateWith(f, c, reg)
 		}
 		// **The validator's path is a third entry point that decodes**, and it takes the lane's
 		// gates for the same reason the second one does. `validateModule` calls
@@ -6784,7 +6800,7 @@ func allOnLane(t *testing.T) (binary.Features, func([]byte) error, func() Engine
 		// decline every gated proposal's `assert_invalid` vectors inside the lane whose whole
 		// claim is that nothing is declined. This is the third time this override has been
 		// needed and the second time it was nearly forgotten; see validateWith.
-		e.Validate = func(c Command) (Stratum, error) { return validateWith(allOn, c) }
+		e.Validate = func(c Command) (Stratum, error) { return validateWith(f, c) }
 		return e
 	}
 }

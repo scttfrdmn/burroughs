@@ -1,6 +1,11 @@
 # 0003 — Spec harness strategy and the decoder error contract
 
-Date: 2026-07-30 · Status: **accepted** (Scott, 2026-07-30)
+Date: 2026-07-30 · Status: **accepted** (Scott, 2026-07-30) — phase 1 implementation may proceed ·
+amended 2026-07-31 (the LEB taxonomy's prescribed test order is superseded by the reference
+interpreter's; #36 — see the Correction and the amendment below) · **amended 2026-08-22 — substring
+matching is superseded by prefix matching**, on
+[0045](0045-the-location-context-is-rendered-after-the-spec-phrase-and-the-harness-takes-the-references-prefix-rule.md)'s
+own stamp rather than a second stamp here (#455)
 Contract refs: §9 (G-1, G-3, G-4)
 
 ## Decision
@@ -287,20 +292,22 @@ bidirectional control: identical bytes `80 80 80 80 10` are *integer too large*
 as a data-segment memory index and legal as a limits minimum. The ADR's
 architecture survived; its prescribed test order did not.
 
-## Status
+## Amendment, 2026-07-31 — the taxonomy's prescribed test order is superseded (#36)
 
-**Accepted** 2026-07-30. Phase 1 implementation may proceed. The two graves
-were fixed in the same session as bugs against the decoder's existing scope,
-with regression tests drawn from the vectors above.
+See the Correction above. The decision stands; the taxonomy's prescribed test
+order is superseded by the reference interpreter's, and the authority for
+order-of-tests questions is `decode.ml`, not a derivation from vectors that do
+not distinguish the orderings.
 
-**Amended** 2026-07-31 — see the Correction above (#36). The decision stands;
-the taxonomy's prescribed test order is superseded by the reference
-interpreter's, and the authority for order-of-tests questions is `decode.ml`,
-not a derivation from vectors that do not distinguish the orderings.
+The two graves this investigation pre-dug were fixed in the same session as bugs
+against the decoder's existing scope, with regression tests drawn from the
+vectors above.
 
-**Amended** 2026-08-22 — **substring matching is superseded by prefix matching**
-([0045](0045-the-location-context-is-rendered-after-the-spec-phrase-and-the-harness-takes-the-references-prefix-rule.md),
-#455). The decision stands in every other part; what is superseded is decision 3
+## Amendment, 2026-08-22 — substring matching is superseded by prefix matching (#455)
+
+On
+[0045](0045-the-location-context-is-rendered-after-the-spec-phrase-and-the-harness-takes-the-references-prefix-rule.md).
+The decision stands in every other part; what is superseded is decision 3
 of the Decision list above, quoted where it stands:
 
 > Error matching follows the upstream convention: the assertion passes if the
@@ -337,3 +344,17 @@ now stronger**: the contract gains a position. Every message in
 `internal/binary`, `internal/text`, `internal/validate` and `internal/interp` must
 *begin* with its sentinel. Two of those four packages already did, which is why
 this amendment cost 28 lines rather than an audit of every string in the engine.
+
+---
+
+*This document carried a trailing `## Status` section until 2026-08-29. Its three status statements
+— the acceptance and the two amendment dates — were merged into the header `Status:` line above and
+the section removed ([#520](https://github.com/scttfrdmn/burroughs/issues/520)). **This is the one of
+the three where the repair deviated from the order**, which said to merge the content up and leave
+the amendment sections untouched: here the amendments' prose was *inside* the Status section, fifty
+lines of it, and a header line cannot hold that. So the status statements went up and the prose was
+re-filed under the two `## Amendment, <date> — …` headings above, which is 0004's and 0002's
+convention. No normative sentence changed and nothing was dropped; what moved is where each
+sentence lives. The 2026-08-22 amendment's header clause cites 0045's stamp rather than claiming one
+here, per the law that an amendment changing what a stamped decision commits to carries its own dated
+stamp — 0045 is that stamp, and a second one would be a forged provenance for the same approval.*
