@@ -19,6 +19,32 @@ weakly-ordered platform.
 ## [Unreleased]
 *Implements contract v0.1.*
 
+## [0.4.0] - 2026-08-28
+*Implements contract v0.1.*
+
+**This is the release [ADR 0004](docs/decisions/0004-versioning-and-contract-independence.md)'s table
+numbers `v0.1.0`: the MVP core suite goes green.** The digit does not say so, and the meaning is
+written here rather than left to the number. `v0.1.0` and `v0.2.0` were never cut — the SIMD gate
+flipped before the GC gate did and `v0.3.0` shipped straight from `v0.0.1` — and SemVer does not go
+backwards, so the mark arrives under a number that does not name it. What is being claimed, in the
+terms 0004 requires of a version:
+
+- **v0's closure set is complete**, all twelve conditions discharged (#464, #499). The `v0
+  interpreter` milestone closes at **99 issues**.
+- **The board over 256 files: 60957 pass, 0 fail, 0 unsupported, 4187 gated, 0 unimplemented**, at
+  suite pin `de54fd27ecf3e68dfd16b6199c548df77b6a2cc1`, identical under `-tags burroughs_endtable`.
+  The zero in `unimplemented` is what ADR 0004's guard 4 makes a hard condition on cutting a minor,
+  and it is measured rather than asserted: `go test ./internal/spec/ -run TestPhase1Files -v` prints
+  it.
+- **Default-on gates are `gate:simd` and `gate:relaxed-simd`** (`binary.DefaultFeatures()`, ADRs 0025
+  and 0028). Every other proposal remains gated per behaviour 4 — nothing defaults on without its own
+  suite green — and `gate:endtable` is gated *and permanently declined*, which is a different state
+  and is recorded as one.
+- **What this release is not:** it is not v1. The §§2–5 boundary work — OS-thread spawn, futex
+  wait/notify, engine-native epochs and STW, the §4 memory model with its litmus battery — is
+  untouched, and the `v1 threads + safepoints` milestone has 3 open issues. v0 closing means v0's
+  conditions are discharged, not that the next phase has begun.
+
 ### Added
 
 - **`BenchmarkInstantiate` prices the half of `gate:endtable`'s trade that no figure in the campaign
