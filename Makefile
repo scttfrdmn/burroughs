@@ -45,6 +45,14 @@ TOOL = $(GO) tool -modfile=tools/go.mod
 # The default gate. `check` is what must be green before a report — it is the
 # local mirror of CI, so a surprise in CI means a bug in this line, not a bug in
 # the habit.
+#
+# **The exception, stated where the maxim is: fetched-artifact presence is machine
+# state, not repo state.** A gitignored corpus (the suite, either reference pin) is
+# either on this box or not, and a gate running where it is already present cannot
+# test the case where it is missing — so a CI red on an unfetched corpus is not a bug
+# in this line. See docs/laws/operations.md, "The maxim's stated exception". The
+# checkable half is the join, not the absence: TestEveryPinnedCorpusIsFetchedByEveryUnitTestJob
+# asserts every pinned corpus is fetched by every job that runs unit tests.
 all: check
 
 # The gate list, named once so the recipe below cannot drift from it.

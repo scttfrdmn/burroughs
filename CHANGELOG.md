@@ -37,6 +37,30 @@ weakly-ordered platform.
   0xfc` with `shared` from bit 1, each banning the other's bit — and neither pin authorizes flags
   `0x06`/`0x07`, which is why that pair requires **both** gates rather than either.
 
+### Changed
+
+- **An amendment that changes what a stamped decision commits to now carries its own dated stamp**
+  ([law](docs/laws/decisions-and-thesis.md#an-amendment-that-changes-what-a-stamped-decision-commits-to-carries-its-own-dated-stamp),
+  ruling: Scott on the #518 review, [relayed at
+  #512](https://github.com/scttfrdmn/burroughs/issues/512#issuecomment-5460728673)). An amendment that
+  records a falsification or repairs a citation does not. The test is two questions, because the first
+  alone over-triggers on mechanism the actor already owns: **did the commitment change, and was that
+  commitment a principal's to make?** ADR 0007's `Status:` is the first application — it cites both the
+  2026-07-31 principle stamp and the amendment's own, and **names the amendment's scope** (the number
+  of pinned authorities and the consultation rule over them) so a reader learns which half of the
+  document each stamp covers. The audit of all 30 dated post-stamp sections across 16 ADRs is reported
+  in #518's successor PR rather than acted on: check-and-report was the order.
+- **The Makefile maxim gains a stated exception, recorded at the maxim rather than as a new law**
+  ([the exception](docs/laws/operations.md#the-maxims-stated-exception-fetched-artifact-presence-is-machine-state-not-repo-state),
+  ruling: Scott on the #518 review). *A surprise in CI is a bug in the Makefile* does not reach
+  **fetched-artifact presence, which is machine state and not repo state**: a local gate running on a
+  box that already holds a gitignored corpus cannot test the case where the corpus is absent. Stated
+  at `Makefile`'s `check` target and in `CLAUDE.md`'s conventions as well as in the law, because the
+  reader who needs it is the one invoking the maxim. The checkable half is the join and not the
+  absence — `TestEveryPinnedCorpusIsFetchedByEveryUnitTestJob` — and the pair of exceptions names the
+  boundary: the mirror is incomplete by construction wherever the subject is not in the Makefile's
+  domain.
+
 ### Fixed
 
 - **[Grave #511](https://github.com/scttfrdmn/burroughs/issues/511) — with `gate:threads` on,
