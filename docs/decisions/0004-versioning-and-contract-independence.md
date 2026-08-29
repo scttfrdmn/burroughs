@@ -106,8 +106,21 @@ at this section to cut a release should know the count they are checking is also
 defended at the other end, and not conclude that the version gate is the only thing
 standing between the column and permanence.
 
+## Amendment, 2026-08-28 — the table's numbering was overtaken by events, and the table is a map a reader will follow
+
+**`v0.1.0` and `v0.2.0` were never cut.** The SIMD gate flipped before the GC gate did, so the project
+released `v0.3.0` straight from `v0.0.1`, and the mark this table calls `v0.1.0` — *the MVP core suite
+goes green* — shipped on 2026-08-28 as **`v0.4.0`**, because SemVer does not go backwards. The table
+above is kept as written: it records what the scheme intended, and the intent is still the right one.
+What it can no longer be used as is a lookup from a number to a meaning, which is what a reader arriving
+here would use it for — so the meaning now travels in the changelog entry, and each release states its
+own conformance claim in the terms this doc requires. Two milestones, `v0.1 wat parser` and `v0.2.0 GC
+gate`, are still named for versions that were never released; they are renamed when their work is next
+touched rather than by tracker surgery on release day (Scott, on the v0.4.0 release).
+
 ## Status
 
-Accepted 2026-07-30; amended 2026-08-01 (decision 0010, guard 4; addendum for guard 6).
+Accepted 2026-07-30; amended 2026-08-01 (decision 0010, guard 4; addendum for guard 6); amended
+2026-08-28 (the table's numbering overtaken by events).
 Contract §10.7 is resolved by this doc; §10 open
 questions remaining: 1 (resolved by 0002), 2, 3, 4, 5, 6.
