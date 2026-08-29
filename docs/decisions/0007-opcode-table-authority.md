@@ -449,3 +449,93 @@ which branch's error survives — load-bearing for exactly one reason, that a ga
 branch's decline must be last or the alternation overwrites it with a spec
 malformed-string. Recorded in `TestBlockTypeAlternationIsTheAuthority`, whose doc keeps
 the wrong reason alongside the right one.
+
+## Amendment (2026-08-28, #511/#512): the pin set is plural, and the pins are independently dated
+
+Appended rather than edited in place, per the 0003 precedent. The **decision** is
+unaffected and is in fact extended: 0007's principle — *machine-derived from, or
+machine-checked against, the reference interpreter; hand-trusted is not on the menu* —
+is what forces this amendment rather than what it revises. What changes is the number of
+authorities the principle points at, and that number was **one** in every sentence above.
+
+**The ruling (Scott, on the v1 scoping report).** *Take the second pinned authority*, with
+both revisions named and **independently dated**: *"drift in one must never be silently
+absorbed by the other."* So:
+
+| pin | revision | dated | fetched by |
+|---|---|---|---|
+| core spec | `bdd7164` | 2026-07-28 | `scripts/fetch-spec-ref.sh` (`make spec-ref`) |
+| threads proposal | `cc535ad` | 2026-07-30 | `scripts/fetch-threads-ref.sh` (`make threads-ref`) |
+
+One `rev=` per script and never two in one file, which is the ruling read as a mechanism:
+a single script holding two revisions is one edit away from a bump that moves a table
+generated from the other pin, and the diff would name neither.
+
+### Why a second authority rather than a wider read of the first
+
+Contract §§2–5 has no authority in the tree at all under a single pin, and the
+measurement is not a judgement call: at `bdd7164`, across **all nine** files
+`fetch-spec-ref.sh` licenses, `grep -ic atomic` and `grep -ic shared` both return 0, and
+`third_party/spec/proposals/` holds 17 proposal directories and no `threads`. The threads
+proposal was never merged. A hand-written 0xfe region, or a hand-read shared bit, reopens
+exactly the hole this ADR exists to close — §9 G-3 again, since every suite vector bearing
+on the limits flags is `assert_malformed` and a wrongly *accepted* form no vector uses is
+invisible on the board.
+
+### Consultation is clause-scoped, and a wholesale read of the second pin deletes features
+
+The second pin is **not a mirror of the first at a later date**; it is a branch from an
+older baseline, so its coverage is narrower in ways that are silent if read wholesale:
+
+- its decoder has **no 0xfb region at all** — a wholesale read deletes GC;
+- its `limits` mask is `flags land 0xfc` with `shared` taken from bit 1, so the core pin's
+  `at` bit makes a **memory64** flags byte malformed under it.
+
+The two masks therefore disagree *by design*: core is `flags land 0xfa` with `at` from bit
+2 and bans bit 1; threads is `flags land 0xfc` with `shared` from bit 1 and bans bit 2.
+Neither pin authorizes flags `0x06`/`0x07`, which is why that pair requires **both** gates
+rather than either. So every citation into the second pin names its clause, and the pin
+carries a `Why` field saying what it is the authority *for* — a reader finding two
+`decode.ml` entries needs to know which clauses each answers.
+
+### The union widens the excusing direction too, which is the half the mechanism missed
+
+`TestEverySentinelIsTheReferencesOrIsDeclared` asks whether an engine error message is a
+string the reference emits. Widening its authority from one decoder to the pin set widened
+what it will **excuse**: the threads pin branched before upstream renamed `malformed
+function type` to `malformed definition type`, so the union restores a spelling #86
+deliberately removed, and re-adopting it would have been green. Retired spellings are now
+refused *ahead of* the excuse, and a sentinel's absence is asserted against **the pin that
+owns the site** rather than against the union. *An exemption inherits none of the
+trigger's lessons* — the excusing direction is written later and is where a plural
+authority pays.
+
+### Grave #517: a citation stopped naming one file the hour the set went plural
+
+Both pins license `interpreter/binary/decode.ml` and `interpreter/valid/valid.ml`, so a
+citation carrying only a basename — the form this ADR's own body uses throughout, correctly,
+for as long as there was one pin — now names two files. It does not dangle: the two
+authorities are the same program at different revisions, so a number valid in one resolves
+to a real rule in the other. A validator citation written as the pin's nickname beside a
+bare basename resolved against **core**, where the range holds an unrelated rule about
+immutable globals, and the control that checks a citation describes its subject read the
+wrong file and found nothing wrong. Repaired in two halves: four controls in
+`internal/validate` now route a citation to the pin its qualifier names and refuse an
+unrecognised qualifier rather than defaulting it, and
+`TestReferenceCitationsNameTheirPinInThePath` (`internal/testenv`) is the tree-wide
+tripwire, deriving each pin's nickname from `RefPins()` so a third pin arrives covered.
+
+### Consequences
+
+- `RefPin` in `internal/testenv` is the derived pin set every control over the authorities
+  walks: script, destination, licensed floors, `Why`, and the `make` target its skip
+  reason quotes. A pin added there is covered on arrival; a pin added anywhere else is not
+  covered at all, which is the shape the type exists to make impossible.
+- The bullet above reading "`third_party/spec` becomes a **pinned** fetch" is now one of
+  two, and `LicensedRefPaths()` returns the union across pins — the right domain for
+  *is every authority checked somewhere* and the wrong one for *does this script check its
+  own*. Both readings agreed while there was one pin, which is what made the widening a
+  thing a caller could be silently wrong about.
+- Unqualified citations continue to mean the core pin, by every resolver in this tree, and
+  that default is asserted rather than assumed: a pin set that stopped licensing the core
+  validator would be routing citations at a file with no floor and no fetch behind it.

@@ -289,7 +289,7 @@ const MinRefValidBytes = 20000
 //
 // Licensed in the same motion as valid.ml. A validator campaign that licensed its type rules and
 // not its subtyping rules would have narrowed its own authority by exactly the mechanism
-// TestFetchScriptAssertsEveryAuthority was written to police — *not a wrong assertion, a
+// TestEveryPinsFetchScriptAssertsItsAuthorities was written to police — *not a wrong assertion, a
 // shrinking one*.
 const RefMatchML = "third_party/spec/interpreter/valid/match.ml"
 
@@ -337,7 +337,94 @@ const RefV128ML = "third_party/spec/interpreter/exec/v128.ml"
 // MinRefV128Bytes is the floor for v128.ml, which is 16679 bytes at bdd7164.
 const MinRefV128Bytes = 10000
 
-// refFloors is the size floor per reference file, keyed by the path constants above.
+// The **threads proposal's** reference interpreter, pinned separately at cc535ad — the
+// second authority of ADR 0007's 2026-08-28 amendment.
+//
+// # Why these are separate constants rather than a `Dest`-swapped reuse
+//
+// Because they are different files with different contents at a different revision, and
+// the one thing a reader must never do is cite "decode.ml" without saying which. The core
+// pin's decode.ml knows 0xfb and memory64's limits flags; this one knows 0xfe and `shared`
+// and neither of the first two. A citation naming only the basename resolves to a file that
+// exists and answers a different question — the *ambiguous positional citation* class
+// (#497), arriving here structurally rather than by drift.
+//
+// # What this pin is licensed for, and what it is not
+//
+// **Licensed:** the threads clauses. Concretely, at this revision: `limits`' shared bit
+// (decode.ml:181-188), `table_type`'s refusal of a shared table (:190-194), `memory_type`'s
+// shared memtype (:196-198), `check_memorytype`'s shared-needs-a-maximum rule
+// (valid.ml:601-605), and — when the 0xfe region lands — the atomic opcode table and its
+// text mnemonics.
+//
+// **Not licensed:** anything else in those files. Two measured reasons, either sufficient:
+// its decode.ml has no 0xfb region at all, and its `limits` requires `flags land 0xfc = 0`,
+// which makes memory64's 0x04-0x07 malformed. Both are shipped proposals here. A wholesale
+// read of this authority is not a stricter engine, it is two features deleted — so every
+// citation to this pin names the clause, and `RefPin.Why` says so at the pin.
+const (
+	// ThreadsRefDecodeML is the threads proposal's decoder: the limits flags' shared bit,
+	// the shared-table refusal, and the 0xfe region.
+	ThreadsRefDecodeML = "third_party/spec-threads/interpreter/binary/decode.ml"
+	// ThreadsRefValidML is its validator: `check_memorytype`'s "shared memory must have
+	// maximum". The rule the core pin's valid.ml cannot state, having no shared bit to
+	// state it about.
+	ThreadsRefValidML = "third_party/spec-threads/interpreter/valid/valid.ml"
+	// ThreadsRefLexerMLL is its text lexer: the `shared` keyword and the `*.atomic.*`
+	// mnemonic tokens. Licensed before its first citation rather than after it, which is
+	// the lesson fetch-spec-ref.sh's own comment records paying for encode.ml twenty-eight
+	// citations late.
+	ThreadsRefLexerMLL = "third_party/spec-threads/interpreter/text/lexer.mll"
+	// ThreadsRefParserMLY is its text parser: `memtype`'s shared arm, which is where
+	// `internal/text/encode.go`'s standing note — *"the text grammar's `limits` has no
+	// `shared` arm … so no wat source can denote a shared memory"* — stops being true.
+	ThreadsRefParserMLY = "third_party/spec-threads/interpreter/text/parser.mly"
+	// ThreadsRefEncodeML is its encoder: the wire form for a shared memtype and for the
+	// atomic instructions, which is the bridge half 0011 established for the core pin.
+	ThreadsRefEncodeML = "third_party/spec-threads/interpreter/binary/encode.ml"
+)
+
+// Floors for the threads pin, each stating the file's size at cc535ad beside it.
+//
+// Their own constants rather than reuse of the core pin's, even where a number would
+// coincide, for the reason MinRefLexerBytes already gives one pin over: a floor is a fact
+// about a file, and two files sharing a literal is a coincidence that reads as a
+// relationship. These describe a *different revision of a different repository*, so sharing
+// one would be the stronger version of the same error.
+const (
+	// MinThreadsRefDecodeBytes is the floor for the threads decode.ml, 34324 bytes at
+	// cc535ad — and note it is *smaller* than the core pin's 38042, the baseline being
+	// older. A floor copied from the core pin would therefore have rejected the correct
+	// file.
+	MinThreadsRefDecodeBytes = 20000
+	// MinThreadsRefValidBytes is the floor for valid.ml, 23157 bytes at cc535ad.
+	MinThreadsRefValidBytes = 14000
+	// MinThreadsRefLexerBytes is the floor for lexer.mll, 37579 bytes at cc535ad.
+	MinThreadsRefLexerBytes = 22000
+	// MinThreadsRefParserBytes is the floor for parser.mly, 38622 bytes at cc535ad.
+	MinThreadsRefParserBytes = 22000
+	// MinThreadsRefEncodeBytes is the floor for encode.ml, 46030 bytes at cc535ad.
+	MinThreadsRefEncodeBytes = 28000
+)
+
+// threadsRefFloors is the size floor per file of the threads pin.
+//
+// Five entries against the core pin's nine, and the gap is a fact about upstream rather
+// than an omission here: `interpreter/valid/match.ml` and `interpreter/syntax/mnemonics.ml`
+// **do not exist at cc535ad**, the proposal being forked from a core baseline older than
+// either file. The remaining two the core pin licenses — free.ml and exec/v128.ml — exist
+// but hold no threads clause (`grep -ic atomic` returns 0 in v128.ml at this revision), so
+// licensing them would claim an authority this pin does not have.
+var threadsRefFloors = map[string]int{
+	ThreadsRefDecodeML:  MinThreadsRefDecodeBytes,
+	ThreadsRefValidML:   MinThreadsRefValidBytes,
+	ThreadsRefLexerMLL:  MinThreadsRefLexerBytes,
+	ThreadsRefParserMLY: MinThreadsRefParserBytes,
+	ThreadsRefEncodeML:  MinThreadsRefEncodeBytes,
+}
+
+// coreRefFloors is the size floor per file of the **core** pin, keyed by the path
+// constants above.
 //
 // A map rather than a parameter on RequireSpecRef, deliberately: a floor passed at the
 // call site is a fact about a file, typed somewhere other than where the file is named,
@@ -346,7 +433,13 @@ const MinRefV128Bytes = 10000
 // number typed at a second site is a claim that can drift from the thing it describes*.
 // An unknown path is a hard failure below, never a default floor, because a default is
 // how a third reference file would arrive with no floor at all.
-var refFloors = map[string]int{
+//
+// It was named `refFloors` while there was one pin. Renamed when the pin set went plural
+// (ADR 0007's 2026-08-28 amendment) rather than left to mean "the floors" — a name that
+// says *the* when there are two is how the second one comes to be forgotten, which is the
+// narrowing TestEveryPinsFetchScriptAssertsItsAuthorities' own doc comment describes
+// happening to that control.
+var coreRefFloors = map[string]int{
 	RefDecodeML:  MinRefDecodeBytes,
 	RefLexerMLL:  MinRefLexerBytes,
 	RefParserMLY: MinRefParserBytes,
@@ -359,11 +452,116 @@ var refFloors = map[string]int{
 	RefV128ML:      MinRefV128Bytes,
 }
 
-// LicensedRefPaths returns every reference file this package licenses as an authority.
+// RefPin is one vendored reference authority: the script that pins it, the directory it
+// lands in, and the files this package licenses *from that pin*.
 //
-// Exported so the drift check between refFloors and scripts/fetch-spec-ref.sh can *derive*
-// the set rather than restate it. A test that listed the three paths itself would be a
-// third place knowing the fact, and the two-places problem is the thing being solved.
+// The type exists because the pin set is plural as of ADR 0007's 2026-08-28 amendment, and
+// because the three fields vary together. The alternative — a second flat map beside
+// `coreRefFloors` plus a second script constant plus a second `Licensed…Paths` — is three
+// duplications of one fact, and the control over them would have to enumerate the pins it
+// knew about. Enumeration is what left the *first* fetch-script control checking a third of
+// its subject for two authorities' worth of time.
+type RefPin struct {
+	// Script is the fetch script holding this pin's `rev=`, relative to the repo root.
+	// One `rev=` per file, never two in one file: the pins are independently dated so
+	// that drift in one cannot be silently absorbed by the other (Scott, on the v1
+	// scoping report).
+	Script string
+	// Dest is where the pin's checkout lands, with a trailing slash, and it is the prefix
+	// every one of Paths' entries begins with. Carried as a field rather than derived by
+	// trimming, because the fetch scripts' presence loops are written *relative* to it and
+	// the control has to reproduce that trim exactly.
+	Dest string
+	// Floors is the size floor per licensed file, keyed by full repo-root-relative path.
+	Floors map[string]int
+	// Why names what this pin is the authority *for*, in one clause. Present because the
+	// threads pin is not a mirror of the core one and a reader finding two decode.ml
+	// entries needs to know which clauses each answers — see ThreadsRefDecodeML.
+	Why string
+	// Target is the `make` target that runs Script, and it exists because RequireSpecRef
+	// prints it to a human as an instruction. It was the literal `make spec-ref` in two
+	// skip reasons, which is a *correct* remedy for nine files and a wrong one for five:
+	// a threads authority missing would have told the reader to re-run the fetch that
+	// cannot produce it. An error message is testimony, and this file's own truncation
+	// comment records paying for the weaker version of the same error.
+	//
+	// Carried rather than derived from Script by stripping `scripts/fetch-` and `.sh`.
+	// That derivation would work today and produce a plausible target name forever after
+	// — including for a pin whose Makefile entry is named something else or absent, where
+	// the instruction resolves to nothing. TestEveryPinsFetchScriptAssertsItsAuthorities
+	// checks each one against the Makefile instead.
+	Target string
+}
+
+// refPins is every reference authority, and the *derived* domain every control over them
+// walks. A pin added here is covered on arrival; a pin added anywhere else is not covered
+// at all, which is the shape this list exists to make impossible.
+var refPins = []RefPin{{
+	Script: "scripts/fetch-spec-ref.sh",
+	Dest:   "third_party/spec/",
+	Target: "spec-ref",
+	Floors: coreRefFloors,
+	Why:    "the core spec at bdd7164: every clause of the MVP and of the nine shipped proposals",
+}, {
+	Script: "scripts/fetch-threads-ref.sh",
+	Dest:   "third_party/spec-threads/",
+	Target: "threads-ref",
+	Floors: threadsRefFloors,
+	Why: "the threads proposal at cc535ad, and *only* its threads clauses — its baseline " +
+		"predates GC and memory64, so a wholesale read of its decode.ml would delete both",
+}}
+
+// RefPins returns every licensed authority pin.
+//
+// Exported so a control can derive the pin set rather than restate it, which is the same
+// argument LicensedRefPaths already made one level down: a test that listed the pins itself
+// would be a third place knowing the fact, and the two-places problem is what is being
+// solved. Returned as a fresh slice so a caller cannot reorder the package's own list.
+func RefPins() []RefPin {
+	out := make([]RefPin, len(refPins))
+	copy(out, refPins)
+	return out
+}
+
+// refFloors is every licensed file across every pin, which is what RequireSpecRef looks a
+// caller's path up in.
+//
+// Derived from refPins rather than written out, and the duplicate check is not decoration:
+// both pins license `interpreter/binary/decode.ml`, so the *only* thing keeping their
+// entries apart is the `Dest` prefix. A pin declared with the wrong prefix — or with none
+// — would silently overwrite the other's floor and point every citation at one file.
+var refFloors = func() map[string]int {
+	all := make(map[string]int)
+	for _, pin := range refPins {
+		for p, f := range pin.Floors {
+			if !strings.HasPrefix(p, pin.Dest) {
+				panic("testenv: licensed path " + p + " is not under pin dest " + pin.Dest +
+					" — the fetch script's presence loop is written relative to Dest and " +
+					"cannot check it")
+			}
+			if _, dup := all[p]; dup {
+				panic("testenv: two pins license " + p + " — the paths carry their pin's " +
+					"Dest precisely so the two decode.ml authorities cannot collide")
+			}
+			all[p] = f
+		}
+	}
+	return all
+}()
+
+// LicensedRefPaths returns every reference file this package licenses as an authority,
+// across every pin.
+//
+// Exported so the drift check between the floors and the fetch scripts can *derive* the
+// set rather than restate it. A test that listed the paths itself would be a third place
+// knowing the fact, and the two-places problem is the thing being solved.
+//
+// **Across every pin, which is a widening a caller can be wrong about.** It answered "the
+// files under third_party/spec/" while there was one pin, and the two readings agreed for
+// as long as that was true. A caller wanting one pin's files reads `RefPins()` and takes
+// the `Floors` it wants; this returns the union, which is the right domain for a control
+// asking "is every authority checked somewhere" and the wrong one for a control asking
+// "does *this* script check its own".
 func LicensedRefPaths() []string {
 	paths := make([]string, 0, len(refFloors))
 	for p := range refFloors {
@@ -380,11 +578,14 @@ func LicensedRefPaths() []string {
 // the authority is absent reports agreement with a file it never read. That is worse than
 // no check, being a green that has never once looked (#29).
 //
-// One door for both reference files rather than a fourth door beside it, because the
-// inventory's unit is the *corpus*: decode.ml and lexer.mll arrive from one `make
-// spec-ref`, at one pin, and a reader sent to that target is sent to the right place
-// whichever file is missing. The size floor is what differs per file, and it is looked up
-// rather than passed.
+// One door for every reference file rather than one per pin, because the size floor is what
+// differs per file and it is looked up rather than passed. **The remedy is not shared,
+// though, and that is the part the plural pin set changed**: this printed the literal `make
+// spec-ref` in both skip reasons, which is the right instruction for the core pin's nine
+// files and the wrong one for the threads pin's five — a reader whose threads authority was
+// missing would have been sent to re-run the fetch that cannot produce it. So the pin owning
+// the path is resolved first and its own `Target` is quoted. *An error message is testimony*,
+// and the truncation comment below records paying for the weaker version of this same error.
 //
 // Returns the source so a caller cannot obtain the path without passing the gate.
 func RequireSpecRef(tb testing.TB, path string) string {
@@ -394,17 +595,28 @@ func RequireSpecRef(tb testing.TB, path string) string {
 	// through filepath.Join with `..` prefixes, so match on the suffix. An unrecognized
 	// path fails rather than skipping: a door that licenses a path it does not know is a
 	// door with no floor, which is this function's entire subject.
-	floor, known, canon := 0, false, ""
-	for p, f := range refFloors {
-		if strings.HasSuffix(filepath.ToSlash(path), p) {
-			floor, known, canon = f, true, p
+	//
+	// **Suffix-matched against the full `Dest`-prefixed path, which is what keeps the two
+	// decode.ml authorities apart.** `third_party/spec-threads/…/decode.ml` does not end
+	// with `third_party/spec/…/decode.ml`, so the match is unambiguous — but only because
+	// both constants carry their prefix. `refFloors`' construction panics on a licensed path
+	// that does not, rather than leaving this loop to pick whichever entry it met first.
+	floor, known, canon, target := 0, false, "", ""
+	for _, pin := range refPins {
+		for p, f := range pin.Floors {
+			if strings.HasSuffix(filepath.ToSlash(path), p) {
+				floor, known, canon, target = f, true, p, pin.Target
+				break
+			}
+		}
+		if known {
 			break
 		}
 	}
 	if !known {
-		tb.Fatalf("RequireSpecRef: no size floor registered for %q — add it to refFloors "+
-			"beside its path constant; a reference file with no floor is a presence check "+
-			"that cannot tell a truncated fetch from a complete one", path)
+		tb.Fatalf("RequireSpecRef: no size floor registered for %q — add it to the Floors map "+
+			"of its pin in refPins, beside its path constant; a reference file with no floor "+
+			"is a presence check that cannot tell a truncated fetch from a complete one", path)
 		return ""
 	}
 
@@ -442,9 +654,9 @@ func RequireSpecRef(tb testing.TB, path string) string {
 	// testimony*). Found by truncating valid.ml to falsify the floor sweep and reading the
 	// message it produced, which is the same print-don't-trust move the law asks for.
 	reason := fmt.Sprintf("reference interpreter is vendored but truncated: %s is %d bytes, want >=%d "+
-		"(an incomplete fetch, not a missing one — re-run: make spec-ref)", path, len(b), floor)
+		"(an incomplete fetch, not a missing one — re-run: make %s)", path, len(b), floor, target)
 	if err != nil {
-		reason = fmt.Sprintf("reference interpreter not vendored: %v (run: make spec-ref)", err)
+		reason = fmt.Sprintf("reference interpreter not vendored: %v (run: make %s)", err, target)
 	}
 
 	if NoSkip() {

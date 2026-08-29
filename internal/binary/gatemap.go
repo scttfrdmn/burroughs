@@ -206,8 +206,13 @@ var gatedOpcodes = []gatedOpcode{
 // A gate appearing in *neither* map is the defect this whole change is about, and
 // TestEveryGateMapsAtLeastOneConstruct treats the two maps as one domain.
 var gatedNonOpcodes = map[gateID]string{
-	gateThreads:           "shared limits flags (2, 3) — sections.go decodeLimits",
-	gateMemory64:          "64-bit limits flags (4..7) — sections.go decodeLimits",
+	// The two limits-flags gates are described by **bit** and not by value, and the values are
+	// why: `0x06`/`0x07` set both bits, so listing threads as "(2, 3)" and memory64 as "(4..7)"
+	// partitioned a byte the two proposals *overlap* on, and 0x06 was accepted with threads off
+	// (grave #511). A description is testimony too — the enumeration said the gates were
+	// disjoint, which is exactly the mistake the code made one file over.
+	gateThreads:           "the limits flags' shared bit (0x02) — sections.go decodeLimits",
+	gateMemory64:          "the limits flags' i64 address bit (0x04) — sections.go decodeLimits",
 	gateMultiMemory:       "memarg flags bit 6, an explicit memory index — decodeMemop",
 	gateExceptionHandling: "tag section (id 13), import/export kind 4 — sections.go",
 	gateSIMD:              "the v128 value type, including as a blocktype — decodeValType",

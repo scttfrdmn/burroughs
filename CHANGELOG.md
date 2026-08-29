@@ -19,6 +19,75 @@ weakly-ordered platform.
 ## [Unreleased]
 *Implements contract v0.1.*
 
+### Added
+
+- **A second pinned reference authority — the threads proposal at `cc535ad`, fetched by
+  `scripts/fetch-threads-ref.sh` (`make threads-ref`)** (#512, [ADR 0007's 2026-08-28
+  amendment](docs/decisions/0007-opcode-table-authority.md#amendment-2026-08-28-511512-the-pin-set-is-plural-and-the-pins-are-independently-dated)).
+  Contract §§2–5 had no authority in the tree at all, and the measurement is not a judgement call: at
+  `bdd7164`, across all nine files the core script licenses, `grep -ic atomic` and `grep -ic shared`
+  both return **0**, and `third_party/spec/proposals/` holds 17 proposal directories and no `threads`.
+  Scott's constraint on the v1 scoping report is what shapes the mechanism — *the two pins are
+  independently dated, drift in one must never be silently absorbed by the other* — so it is a second
+  script with **one `rev=` in it** rather than a second revision in the first, and `RefPin`/`RefPins()`
+  in `internal/testenv` are the derived pin set every control over the authorities now walks.
+  **Consultation is clause-scoped, never wholesale**: the second pin branches from an older baseline,
+  so it has no `0xfb` region at all and its `limits` mask makes a memory64 flags byte malformed. The
+  two masks disagree by design — core is `flags land 0xfa` with `at` from bit 2, threads is `flags land
+  0xfc` with `shared` from bit 1, each banning the other's bit — and neither pin authorizes flags
+  `0x06`/`0x07`, which is why that pair requires **both** gates rather than either.
+
+### Fixed
+
+- **[Grave #511](https://github.com/scttfrdmn/burroughs/issues/511) — with `gate:threads` on,
+  `(memory 1 1 shared)` decoded *identically* to `(memory 1 1)`.** `decodeLimits` read the `0x02`/`0x03`
+  flags, checked the gate, took `HasMax` from bit 0 and dropped bit 1 on the floor: same struct, same
+  bytes consumed, no error, and nothing downstream able to tell a shared memory from an unshared one.
+  Every consequence of sharing — the §4 boundary memory model, the atomic ops' requirement, the
+  validator's shared-needs-a-maximum rule — is a consequence of a bit the decoder threw away, and it
+  cannot be recovered later because the flags are gone. `Limits.Shared` now carries it, `decodeLimits`
+  gates **per bit** rather than per byte, `decodeTableType` returns the new `ErrSharedTable` for the
+  production the reference bans outright, and `ErrSharedMemoryNoMax` is the validator's half. The
+  board is unmoved and the zero is **structural**: every vector bearing on the limits flags is
+  `assert_malformed` (§9 G-3) and the shared forms live in the threads proposal's own suite, which is
+  not vendored — so the fix is witnessed by 128 hand-built flag subtests plus the `0x08`..`0xff` sweep,
+  and by the authority, not by the board.
+- **The plural pin set widened what a control would *excuse*, which is the half its widening missed.**
+  `TestEverySentinelIsTheReferencesOrIsDeclared` asks whether an engine error message is a string the
+  reference emits; taking the union of both decoders restored `malformed function type`, a spelling
+  #86 removed when upstream renamed it, because the threads pin branched before the rename — so
+  re-adopting the retired message would have been green. Retired spellings are now refused *ahead of*
+  the excuse, and a sentinel's absence is asserted against the pin that **owns** the site rather than
+  against the union.
+- **[Grave #517](https://github.com/scttfrdmn/burroughs/issues/517) — a reference citation stopped
+  naming one file the hour the pin set went plural, and resolved successfully to the wrong rule.** Both
+  pins license `interpreter/binary/decode.ml` and `interpreter/valid/valid.ml`; the two authorities are
+  the same program at different revisions, so a bare basename citation does not dangle — it lands on a
+  real rule in the other pin's file. A validator citation written as the pin's nickname beside a bare
+  basename resolved against **core**, where the cited range holds an unrelated rule about immutable
+  globals, and the control that checks a citation describes its subject read the wrong file and found
+  nothing wrong. It failed only because the word that comment used happens not to appear in core's
+  range. Four controls in `internal/validate` now route a citation to the pin its qualifier names and
+  **refuse** an unrecognised qualifier rather than defaulting it, and
+  `TestReferenceCitationsNameTheirPinInThePath` (`internal/testenv`) is the tree-wide half those
+  controls cannot reach — a citation in a sibling package, a law, an ADR or this file is in no
+  package's domain. Its nickname vocabulary is derived from `RefPins()`, so a third pin arrives
+  covered.
+- **The second pin was complete everywhere except CI, and `make check` could not have said so.** The
+  script, the Makefile target, the floors, the licensed paths and the controls all landed together; no
+  job fetched the corpus. `BURROUGHS_NO_SKIP: '1'` is workflow-wide, so an absent authority is a
+  **fail** rather than a skip, and the `build` and `conformance` jobs went red on an otherwise finished
+  pin. The local gate leaves `NO_SKIP` unset and a box that has run `make threads-ref` once has the
+  corpus forever, so the mirror was green on a machine where the third fetch had already happened —
+  *text mirrors are not failure-behaviour mirrors*, at a seam where the two shells differ by
+  construction rather than by drift. Both jobs now fetch it and both corpus guards assert its byte
+  floor per file. `TestEveryPinnedCorpusIsFetchedByEveryUnitTestJob` (`internal/testenv`) is the half
+  that generalises: every corpus declaring a revision pin under `scripts/` must be fetched by every
+  job that runs `go test` without `-fuzz`, with the corpus vocabulary derived by content and its
+  Makefile target derived from the recipe that invokes it, so a fourth pin arrives covered. It fails on
+  `main`'s own workflow, which is the one falsification of the five whose subject was a committed
+  state.
+
 ## [0.4.0] - 2026-08-28
 *Implements contract v0.1.*
 

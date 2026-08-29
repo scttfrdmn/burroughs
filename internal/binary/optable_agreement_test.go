@@ -4,6 +4,7 @@ import (
 	"errors"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -266,7 +267,32 @@ type reader3 struct {
 func bytesFor(im imm) func(*Decoder, *reader) error { return immBytes[im].read }
 
 // refDecodeML is the vendored authority, reached through the licensed door.
+//
+// **The core pin's, specifically, and every caller here wants exactly that**: the opcode
+// tables are generated from this file and the threads pin's decoder does not know prefix
+// 0xfb. Where a sentinel's *authority* is the question rather than the table's, the domain is
+// every pin's decoder — see refDecodersML.
 var refDecodeML = filepath.Join("..", "..", testenv.RefDecodeML)
+
+// refDecodersML is every pin's `binary/decode.ml`, derived from the pin set so that a third
+// pin is in scope on arrival (ADR 0007's 2026-08-28 amendment).
+//
+// Selected by path suffix rather than listed, because listing is what left the fetch-script
+// control checking a third of its subject for two authorities' worth of time. The paths come
+// from each pin's own `Floors`, so a pin that does not license a decoder contributes nothing
+// and no citation is manufactured for it.
+func refDecodersML() []string {
+	var out []string
+	for _, pin := range testenv.RefPins() {
+		for p := range pin.Floors {
+			if strings.HasSuffix(p, "interpreter/binary/decode.ml") {
+				out = append(out, filepath.Join("..", "..", p))
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}
 
 // TestImmBytesCitationsResolve is what makes immBytes an enrolled witness rather than a
 // third hand-written opinion (ruling: Scott, PR #43).

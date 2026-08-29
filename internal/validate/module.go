@@ -32,6 +32,23 @@ var (
 	// sentinel where the range messages are two.
 	ErrLimitsMinMax = errors.New("size minimum must not be greater than maximum")
 
+	// ErrSharedMemoryNoMax is `check_memorytype`'s second `require` in the threads reference —
+	// `require (shared = Unshared || lim.max <> None) at "shared memory must have maximum"`
+	// (`spec-threads/valid/valid.ml:601-605`).
+	//
+	// **The rule's whole content is that a shared memory's size cannot move**, which is why it
+	// is a validity rule and not a decoding one: `memory.grow` on a memory other agents hold a
+	// view of has no answer, so the proposal requires the maximum that makes growth bounded.
+	// The corpus witness is `testdata/spec/proposals/threads/memory.wast:12` —
+	// `(assert_invalid (module (memory 1 shared)) "shared memory must have maximum")` — which
+	// is an `assert_invalid`, so unlike this fix's decoder half the direction is checkable by a
+	// vector once the threads lane exists (#513).
+	//
+	// After `check_limits` and not before, on the reference's order: `(memory 0x1_0000_0001
+	// shared)` fails both predicates and reports the range one. No vector pairs them, so this
+	// is transcribed rather than scored, like `check_tabletype`'s reftype-before-limits order.
+	ErrSharedMemoryNoMax = errors.New("shared memory must have maximum")
+
 	// ErrDuplicateExport is `check_names`' only failure (valid.ml:1142-1149), and the reference
 	// puts the offending name in quotes — `duplicate export name "a"`. The corpus matches the
 	// head, so the quoting is reproduced because the reference does it and not because a vector
@@ -99,12 +116,26 @@ func checkLimits(lim binary.Limits, limRange uint64, rangeErr error, rangeText s
 	return nil
 }
 
-// checkMemoryType is `check_memorytype` (valid.ml:200-208).
+// checkMemoryType is `check_memorytype` (valid.ml:200-208), plus the threads pin's second
+// `require` (`spec-threads/valid/valid.ml:601-605`) — the two authorities' clauses in the two
+// authorities' order.
+//
+// The shared rule is here and has no table counterpart on purpose: the threads reference's
+// `check_tabletype` has no shared arm at all, because its `table_type` already refused the bit
+// in the decoder (`ErrSharedTable`). Two productions read one bit and each answers for it
+// once.
 func checkMemoryType(mem binary.Memory) error {
 	if mem.Limits.Addr64 {
-		return checkLimits(mem.Limits, memRangeI64, ErrMemorySize, "2^48 pages (256 TiB) for i64")
+		if err := checkLimits(mem.Limits, memRangeI64, ErrMemorySize, "2^48 pages (256 TiB) for i64"); err != nil {
+			return err
+		}
+	} else if err := checkLimits(mem.Limits, memRangeI32, ErrMemorySize, "2^16 pages (4 GiB) for i32"); err != nil {
+		return err
 	}
-	return checkLimits(mem.Limits, memRangeI32, ErrMemorySize, "2^16 pages (4 GiB) for i32")
+	if mem.Limits.Shared && !mem.Limits.HasMax {
+		return ErrSharedMemoryNoMax
+	}
+	return nil
 }
 
 // checkTableType is `check_tabletype` (valid.ml:210-218), including its `check_reftype` call.

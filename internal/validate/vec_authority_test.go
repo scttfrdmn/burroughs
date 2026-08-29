@@ -3,6 +3,7 @@
 package validate
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -912,13 +913,26 @@ func messageKeyedPointCitations(tb testing.TB, message string, wantSites, wantPo
 			if !slices.Contains(b.messages, message) {
 				continue
 			}
-			for _, n := range b.points {
+			for _, p := range b.points {
+				// The legal site set above is derived from the core validator, so a point citation
+				// resolving to another pin cannot be scored here — and scoring it against this
+				// file is the wrong-file agreement `citedRange` describes. Per-pin site sets are
+				// the widening it needs; until one exists, the first such citation arrives as this
+				// failure rather than as a green comparison against a file it does not cite.
+				if p.pin != testenv.RefValidML {
+					tb.Errorf("%s:%d documents %q and cites %s:%d as a point, and this check "+
+						"derives its legal sites from %s alone — widen it to per-pin site sets "+
+						"before citing another pin by line", file, b.start, message, p.pin, p.line,
+						testenv.RefValidML)
+					continue
+				}
 				points++
-				if !sites[n] {
+				if !sites[p.line] {
 					tb.Errorf("%s:%d documents %q and cites %s:%d, and that line is %q — the "+
 						"message is not produced there, so the citation points a reader at the "+
 						"wrong statement while reading as checked",
-						file, b.start, message, testenv.RefValidML, n, strings.TrimSpace(lines[n-1]))
+						file, b.start, message, testenv.RefValidML, p.line,
+						strings.TrimSpace(lines[p.line-1]))
 				}
 			}
 		}
@@ -960,21 +974,144 @@ var citationFiles = func() []string {
 	return files
 }()
 
+// citedRange and citedPoint are a citation's line numbers **plus the pinned file they belong to**.
+//
+// # Why a citation needs a file now, and why the failure is silent without one
+//
+// A citation naming `valid.ml` and a line number named one file until the pin set went plural (ADR
+// 0007's 2026-08-28 amendment) and names two afterwards. The failure mode is not a dangling citation, which any bounds check catches:
+// **both pinned validators have a line 601**, so an unqualified citation meant for the threads pin
+// resolves, passes the well-formedness pass, and points a reader at an unrelated rule — the core
+// pin's `GlobalSet` arm where the threads pin has `check_memory_type`'s shared-memory require.
+//
+// `ThreadsRefValidML`'s own doc comment predicted this, in these words: *a citation naming only the
+// basename resolves to a file that exists and answers a different question*. The next citation
+// written after that sentence was written in exactly that form, one package over, and what caught it
+// was `TestRangeCitationSubjectsAreReadFromTheReference` firing for an unrelated reason — the
+// description happened not to name a core-pin subject. A description that had named one would have
+// been green on the wrong file (grave #517).
+//
+// So the qualifier is part of the citation and the routing is derived from the pin set: see
+// `resolveCitedPin`, which refuses an unrecognised qualifier rather than defaulting it to core.
+type citedRange struct {
+	pin    string
+	lo, hi int
+}
+
+// citedPoint is one line citation and its pin.
+type citedPoint struct {
+	pin  string
+	line int
+}
+
 // docBlock is one leading-`//` comment run, its point citations, and the reference messages its
 // subject declaration produces.
 type docBlock struct {
 	start    int
-	points   []int
-	ranges   [][2]int
+	points   []citedPoint
+	ranges   []citedRange
 	messages []string
 }
 
 var (
-	pointRe    = regexp.MustCompile(`valid\.ml:(\d+(?:,\d+)*)(?:\b|$)`)
-	rangeRe    = regexp.MustCompile(`valid\.ml:(\d+)-(\d+)`)
+	// Group 1 of each is the optional path qualifier: a qualified `spec-threads/valid/valid.ml:NNN`
+	// and a bare `valid.ml:NNN` are both citation-shaped, and the difference between them is which
+	// file the numbers index. Written with placeholders rather than the specimen's real numbers,
+	// because a live citation inside the comment explaining the mechanism is a citation in the
+	// corpus this file scans — *a ban written in the banned form is still the banned form*, and the
+	// residue count is where the first draft's two specimens showed up. Written as a run of path segments rather than as an alternation over
+	// the pins' names so that a *wrong* qualifier is captured and refused rather than not matching
+	// and falling through to the default, which is the same silent-core-default the field above
+	// describes.
+	pointRe    = regexp.MustCompile(`((?:[\w.-]+/)*)valid\.ml:(\d+(?:,\d+)*)(?:\b|$)`)
+	rangeRe    = regexp.MustCompile(`((?:[\w.-]+/)*)valid\.ml:(\d+)-(\d+)`)
 	sentinelRe = regexp.MustCompile(`^\s*(?:var\s+)?([Ee]rr\w*)\s*=\s*errors\.New\("([^"]*)"\)`)
 	errIdentRe = regexp.MustCompile(`\b([Ee]rr[A-Z]\w*)\b`)
 )
+
+// citedValidators derives the routing table: each pin's directory name to the validator that pin
+// licenses, plus every path segment any licensed path uses.
+//
+// Both halves come from `RefPins()` rather than from a list here, so a third pin routes on arrival.
+// The segment set is the strictness half: a qualifier segment outside it is a typo or a pin nobody
+// fetched, and *the default for an unrecognised qualifier is the core file*, which is the outcome
+// worth failing on rather than accepting.
+func citedValidators(tb testing.TB) (byDir map[string]string, segments map[string]bool) {
+	tb.Helper()
+	byDir, segments = map[string]string{}, map[string]bool{}
+	coreLicensed := false
+	for _, pin := range testenv.RefPins() {
+		dir := filepath.Base(strings.TrimSuffix(pin.Dest, "/"))
+		for p := range pin.Floors {
+			for _, seg := range strings.Split(p, "/") {
+				segments[seg] = true
+			}
+			if p == testenv.RefValidML {
+				coreLicensed = true
+			}
+			if !strings.HasSuffix(p, "valid/valid.ml") {
+				continue
+			}
+			if prev, dup := byDir[dir]; dup {
+				tb.Fatalf("pin directory %q licenses two validators (%s and %s): the qualifier is "+
+					"the directory name, so two would make the routing ambiguous in the direction "+
+					"that picks one silently", dir, prev, p)
+			}
+			byDir[dir] = p
+		}
+	}
+	// Vacuity on the routing table itself. One entry means every citation resolves to the same file
+	// however it is qualified, which is the pre-amendment behaviour with a mechanism bolted on —
+	// green, and asserting nothing about the thing the mechanism exists for.
+	if len(byDir) < 2 {
+		tb.Fatalf("the pin set licenses %d validator(s) (%v), want >=2: with one, a qualifier "+
+			"cannot route anywhere and this whole mechanism is decoration", len(byDir), byDir)
+	}
+	if !coreLicensed {
+		tb.Fatalf("no pin licenses %s, which is this package's default for an unqualified "+
+			"citation — a default nobody licenses is a citation to a file with no floor and no "+
+			"fetch behind it", testenv.RefValidML)
+	}
+	return byDir, segments
+}
+
+// resolveCitedPin maps one citation's path qualifier to the file its line numbers index.
+//
+// An empty qualifier is the core validator, because that is what every citation written before the
+// amendment means and re-qualifying a hundred of them would be churn with no reader. Anything else
+// must name a pin: a segment the pins' paths never use is refused here rather than silently
+// inheriting the default, since the default resolves and answers a different question.
+func resolveCitedPin(tb testing.TB, where, qualifier string) string {
+	tb.Helper()
+	byDir, segments := citedValidators(tb)
+	pin := ""
+	for _, seg := range strings.Split(qualifier, "/") {
+		if seg == "" {
+			continue
+		}
+		if !segments[seg] {
+			tb.Errorf("%s: the citation qualifier %q names the path segment %q, which no pin's "+
+				"licensed paths use. An unrecognised qualifier routes to %s, and that file has a "+
+				"line at the cited number too — so the citation resolves to the wrong rule rather "+
+				"than dangling, which is what makes this a failure and not a style note",
+				where, qualifier, seg, testenv.RefValidML)
+			continue
+		}
+		p := byDir[seg]
+		if p == "" {
+			continue // a benign segment: `valid/`, `interpreter/`, the basename itself
+		}
+		if pin != "" && pin != p {
+			tb.Errorf("%s: the citation qualifier %q names two pins (%s and %s); one citation "+
+				"indexes one file", where, qualifier, pin, p)
+		}
+		pin = p
+	}
+	if pin == "" {
+		return testenv.RefValidML
+	}
+	return pin
+}
 
 // docBlocks parses one file's comment blocks: where each is, which reference lines it cites as
 // points, and which messages its subject produces.
@@ -1001,26 +1138,28 @@ func docBlocks(tb testing.TB, file string) []docBlock {
 		// Ranges are stripped before points are read, so a range's leading number is never taken
 		// for a point. They are *collected* first, because since #310 a range whose subject produces
 		// a message is checkable for content and not only for well-formedness.
+		where := fmt.Sprintf("%s:%d", file, b.start)
 		for _, m := range rangeRe.FindAllStringSubmatch(joined, -1) {
-			lo, loErr := strconv.Atoi(m[1])
-			hi, hiErr := strconv.Atoi(m[2])
+			lo, loErr := strconv.Atoi(m[2])
+			hi, hiErr := strconv.Atoi(m[3])
 			if loErr != nil || hiErr != nil {
 				tb.Errorf("%s:%d cites %q as a valid.ml range", file, b.start, m[0])
 				continue
 			}
-			b.ranges = append(b.ranges, [2]int{lo, hi})
+			b.ranges = append(b.ranges, citedRange{pin: resolveCitedPin(tb, where, m[1]), lo: lo, hi: hi})
 		}
 		block := rangeRe.ReplaceAllString(joined, "")
 		i = j - 1
 
 		for _, m := range pointRe.FindAllStringSubmatch(block, -1) {
-			for _, s := range strings.Split(m[1], ",") {
+			pin := resolveCitedPin(tb, where, m[1])
+			for _, s := range strings.Split(m[2], ",") {
 				n, convErr := strconv.Atoi(s)
 				if convErr != nil {
 					tb.Errorf("%s:%d cites %q as a valid.ml line: %v", file, b.start, s, convErr)
 					continue
 				}
-				b.points = append(b.points, n)
+				b.points = append(b.points, citedPoint{pin: pin, line: n})
 			}
 		}
 		if len(b.points) > 0 || len(b.ranges) > 0 {
@@ -1105,8 +1244,19 @@ func packageSentinels(_ []string) map[string]string {
 // becoming the branch that never runs — and the pin is what makes a new file in `citationFiles`
 // arrive loudly rather than be swept in.
 func TestReferenceRangeCitationsAreWellFormed(t *testing.T) {
-	ref := testenv.RequireSpecRef(t, testenv.RefValidML)
-	n := len(strings.Split(ref, "\n"))
+	// One length per pin, read on demand. The bound is a fact about *the file the citation names*,
+	// and checking every range against the core validator's length is how a threads citation with a
+	// plausible number passes a bounds check performed on the wrong file — the two validators are
+	// different lengths, so the core bound is not even a conservative substitute.
+	lengths := map[string]int{}
+	lengthOf := func(pin string) int {
+		if n, ok := lengths[pin]; ok {
+			return n
+		}
+		n := len(strings.Split(testenv.RequireSpecRef(t, pin), "\n"))
+		lengths[pin] = n
+		return n
+	}
 
 	ranges := 0
 	for _, file := range citationFiles {
@@ -1116,12 +1266,13 @@ func TestReferenceRangeCitationsAreWellFormed(t *testing.T) {
 		}
 		for i, line := range strings.Split(string(src), "\n") {
 			for _, m := range rangeRe.FindAllStringSubmatch(line, -1) {
-				lo, _ := strconv.Atoi(m[1])
-				hi, _ := strconv.Atoi(m[2])
+				pin := resolveCitedPin(t, fmt.Sprintf("%s:%d", file, i+1), m[1])
+				lo, _ := strconv.Atoi(m[2])
+				hi, _ := strconv.Atoi(m[3])
 				ranges++
-				if lo < 1 || hi <= lo || hi > n {
+				if n := lengthOf(pin); lo < 1 || hi <= lo || hi > n {
 					t.Errorf("%s:%d cites the range %s:%d-%d, which is not a range inside a "+
-						"%d-line file", file, i+1, testenv.RefValidML, lo, hi, n)
+						"%d-line file", file, i+1, pin, lo, hi, n)
 				}
 			}
 		}
@@ -1274,7 +1425,12 @@ func TestReferenceRangeCitationsAreWellFormed(t *testing.T) {
 	// `localInitStates`, which implements it, and the sentinel's block now points a reader there. So
 	// the fact keeps its citation, the citation keeps its checker, and the count moves by nine rather
 	// than ten for a stated reason.
-	const wantRanges = 110
+	// **#511's shared-bit slice moves this +2, and both are the first citations in this package to a
+	// pin other than the core validator.** `ErrSharedMemoryNoMax`'s sentinel block and
+	// `checkMemoryType`'s doc block each cite `check_memory_type`'s second `require` in the threads
+	// pin, and the bound they are checked against is *that* file's length — which is what routing the
+	// citation by its qualifier buys here, the two validators being different lengths.
+	const wantRanges = 112
 	if ranges != wantRanges {
 		t.Errorf("checked %d range citation(s) across %v, want %d — recount and re-pin, and if a "+
 			"file was added to citationFiles, read its point citations too",
@@ -1336,12 +1492,18 @@ func TestOffsetCitationsResolveToTheReferencesSites(t *testing.T) {
 // and the test says which way. Skipping silently would have been the accept-direction version of
 // this fix, and it is the one that reads identically to working.
 func TestReferenceRangeCitationsContainTheirSubjectsSite(t *testing.T) {
-	ref := testenv.RequireSpecRef(t, testenv.RefValidML)
-	lines := strings.Split(ref, "\n")
-
-	// sites returns the reference's own line numbers for a message, empty when the reference builds
-	// the string rather than writing it.
-	sites := func(msg string) []int {
+	// Per pin, because a message's sites are a fact about the file the range names. The threads
+	// pin's `shared memory must have maximum` is written in *its* validator and nowhere in the core
+	// one, so a core-only site set would put that range in the excused column — the range would be
+	// checkable and recorded as unkeyable, which is a silent loss of an assertion rather than a
+	// failure.
+	linesOf := map[string][]string{}
+	sites := func(pin, msg string) []int {
+		lines, ok := linesOf[pin]
+		if !ok {
+			lines = strings.Split(testenv.RequireSpecRef(t, pin), "\n")
+			linesOf[pin] = lines
+		}
 		var at []int
 		for i, l := range lines {
 			if strings.Contains(l, `"`+msg+`"`) {
@@ -1357,23 +1519,25 @@ func TestReferenceRangeCitationsContainTheirSubjectsSite(t *testing.T) {
 			if len(b.ranges) == 0 || len(b.messages) == 0 {
 				continue
 			}
-			// Only the messages the reference writes verbatim can locate anything. The rest are
-			// residue: counted below, never silently dropped.
-			var located []int
-			for _, msg := range b.messages {
-				located = append(located, sites(msg)...)
-			}
-			if len(located) == 0 {
-				residue += len(b.ranges)
-				continue
-			}
 			for _, r := range b.ranges {
+				// Only the messages the reference writes verbatim can locate anything. The rest are
+				// residue: counted below, never silently dropped. Resolved per range rather than
+				// per block, since a block may cite two pins and a message one of them writes is
+				// not a message the other does.
+				var located []int
+				for _, msg := range b.messages {
+					located = append(located, sites(r.pin, msg)...)
+				}
+				if len(located) == 0 {
+					residue++
+					continue
+				}
 				// A range is answerable if any one of the subject's sites is inside it. Any rather
 				// than all: a subject naming several sentinels is not claiming that one arm's range
 				// contains the others.
 				ok := false
 				for _, n := range located {
-					if n >= r[0] && n <= r[1] {
+					if n >= r.lo && n <= r.hi {
 						ok = true
 					}
 				}
@@ -1383,7 +1547,7 @@ func TestReferenceRangeCitationsContainTheirSubjectsSite(t *testing.T) {
 						"carries any of those messages (they are at %v) — the range has retargeted "+
 						"or the subject changed, and either way the citation reads as checked while "+
 						"pointing elsewhere",
-						file, b.start, b.messages, testenv.RefValidML, r[0], r[1], located)
+						file, b.start, b.messages, r.pin, r.lo, r.hi, located)
 				}
 			}
 		}
@@ -1533,7 +1697,12 @@ func TestReferenceRangeCitationsContainTheirSubjectsSite(t *testing.T) {
 	// the block for having no message and the well-formedness and subject pins both still read it. A
 	// per-clause parse remains the only thing that would let one block carry both, and it is still not
 	// worth its false-negative surface.
-	const wantKeyed, wantResidue = 19, 32
+	// **#511's slice moves keyed +2 and residue not at all**, which is the direction that says the
+	// routing works: the threads pin writes `shared memory must have maximum` verbatim, so both new
+	// ranges locate their subject's site *in the file they cite*. Scored against the core validator
+	// they would have been residue instead — a checkable range recorded as unkeyable, which is the
+	// silent-loss direction this whole per-pin change is about.
+	const wantKeyed, wantResidue = 21, 32
 	if keyed != wantKeyed || residue != wantResidue {
 		t.Errorf("checked %d keyed range citation(s) and excused %d as constructed-message residue "+
 			"across %v, want %d and %d — recount and re-pin. A range becomes keyable when its "+

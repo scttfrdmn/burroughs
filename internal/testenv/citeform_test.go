@@ -10,12 +10,15 @@ import (
 	"io/fs"
 	"maps"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/scttfrdmn/burroughs/internal/testenv"
 )
 
 // # Citations to a location in this tree — #456, ADR 0047
@@ -864,6 +867,235 @@ func TestBareContinuationCitationsAreBounded(t *testing.T) {
 	}
 	t.Logf("continuation citations by citing file, top %d of %d:%s",
 		min(15, len(citers)), len(citers), b.String())
+}
+
+// # A citation into the reference names its pin in the path — grave #517
+//
+// The pin set went plural with ADR 0007's 2026-08-28 amendment, and a citation form that had been
+// **exact** became ambiguous the same hour: both pins license `interpreter/binary/decode.ml` and both
+// license `interpreter/valid/valid.ml`, so a citation carrying only a basename names two files. That is
+// #456's ambiguity defect (see the head of this file) with a worse resolution profile, because the two
+// authorities are the *same program at different revisions*: the line numbers are close, both files are
+// long, and a number valid in one resolves to a real rule in the other.
+//
+// Grave #517 is that happening. A validator citation written as the pin's nickname beside a bare
+// basename resolved against the **core** validator, where the cited range holds an unrelated rule about
+// immutable globals, and the control checking that citations describe their subjects agreed with it —
+// it read the wrong file and found nothing wrong. It failed only because the word the comment used
+// happens not to appear in core's range: *a description that had named one would have been green on the
+// wrong file.* The repair made four citation controls in `internal/validate` resolve per pin; this is
+// the half those controls cannot do, because a citation in `internal/binary` — or in a law, an ADR, a
+// changelog entry — is in no package's domain.
+//
+// # The banned form is a nickname claiming a non-default pin, and it is derived rather than listed
+//
+// A bare basename is *not* itself the defect here and is not counted: unqualified resolves to the core
+// pin by every resolver in this tree, so a bare citation to a core clause says what it means and #497's
+// conversion is a separate population (2591 occurrences at this writing, printed below). What this asserts is
+// narrower and is the shape the grave had: prose that **names one pin in words** and then cites a
+// basename the path does not qualify. The citation then resolves — successfully, silently — to the
+// other pin's file.
+//
+// The nickname vocabulary is derived from `RefPins()` and not spelled: each pin's directory segment is
+// split on hyphens, and a token claimed by exactly one pin is that pin's nickname. Today that yields
+// the threads pin's two spellings and *nothing* for the core pin, whose shared token is claimed twice
+// — which is correct rather than a gap: the core pin has no nickname that could mislead, because
+// unqualified already means core. A third pin added to the list arrives with its own nickname on the
+// same rule, and this is why the derivation is not a list: a list would have been written for the pin
+// set that existed when the grave was dug.
+//
+// # Adjacency, and what the window deliberately does not count
+//
+// The nickname must sit within `refNickWindow` words of the citation, reading the previous line and the
+// same line's prefix so a wrapped comment does not hide it. Tight on purpose: *aboutness is not
+// proximity*, and a paragraph that discusses one pin at length may cite the other's clause legitimately
+// a few sentences later. The window catches the case where the nickname grammatically governs the
+// citation, which is the case the grave was. The residue is stated rather than hidden — a nickname
+// further away is not counted, and no instrument in this tree reads it.
+//
+// # Why a zero is a measurement here
+//
+// The pinned expectation is zero, and *an analytic zero is not a measurement* — so the two ways this
+// could report zero without looking are asserted separately. `refQualifiedFloor` says the qualified
+// form is actually present in the tree, which is what dies if the pattern stops matching; the basename
+// total is printed and floored, which is what dies if the pin vocabulary comes back empty. And the zero
+// is observable: this control was falsified by restoring one of the nickname citations it was written
+// for, which is a two-word edit any author can make by writing the form that reads most naturally.
+const refNickWindow = 8
+
+// refQualifiedFloor guards the pinned zero against vacuity: it is the number of *correctly* qualified
+// reference citations the scan must still find. **Thirteen at the pin's writing, and the number is the
+// instrument's rather than a prototype's**: a hand-built pattern over the five basenames the grave
+// touched said ten, and the derived vocabulary is every licensed basename across both pins, so three
+// qualified citations lived outside the set the author had in mind. *Measure with the instrument, not a
+// regex.* A floor of ten tolerates one being reworded away while firing on a pattern that has gone
+// dead. Not a ratchet: this population is meant to grow with every conversion #497 makes.
+const refQualifiedFloor = 10
+
+// refBasenameFloor is the other vacuity guard, on the unqualified population — 2591 at the pin's
+// writing, and it is the number that goes to zero if the derived basename vocabulary comes back empty.
+// A floor well below it because #497's conversions will draw it down deliberately, and because *a
+// floor bounds the catastrophic case only*: what it catches is the vocabulary emptying, not a drift.
+const refBasenameFloor = 1500
+
+// TestReferenceCitationsNameTheirPinInThePath is grave #517's tripwire, tree-wide.
+//
+// The grave's residual half is what this covers: the repair taught four controls in `internal/validate`
+// to route a citation to the pin its qualifier names, and left every other channel — the sibling
+// engine packages, `docs/laws/`, the ADRs, the changelog — able to write the form that resolved to the
+// wrong file. A control living in the package that owns the citation could never have seen it, which is
+// why this one lives beside the other citation censuses and derives its domain from the tree walk.
+func TestReferenceCitationsNameTheirPinInThePath(t *testing.T) {
+	pins := testenv.RefPins()
+	if len(pins) < 2 {
+		t.Fatalf("RefPins returned %d pins, want >=2 — with one authority a bare basename is "+
+			"unambiguous and this control has no subject, so it must fail rather than pass (%s)",
+			len(pins), citeFormDoc)
+	}
+
+	segs := map[string]string{}            // directory segment naming a pin → its Dest
+	claims := map[string]map[string]bool{} // candidate nickname → the pins claiming it
+	bases := map[string]bool{}             // licensed basenames, across every pin
+	// form is the remedy the failure message prints, keyed by pin and basename, and it is built from
+	// the licensed path rather than by joining the pin segment to the basename. *An error message is
+	// testimony*: the join produces a legal-looking qualifier for a path that does not exist, and the
+	// first draft of this control printed exactly that — a pin directory with the middle of the
+	// authority's path deleted, offered to the author as the form to write.
+	form := map[string]string{}
+	for _, p := range pins {
+		seg := path.Base(strings.TrimSuffix(p.Dest, "/"))
+		segs[seg] = p.Dest
+		for _, tok := range append([]string{seg}, strings.Split(seg, "-")...) {
+			if claims[tok] == nil {
+				claims[tok] = map[string]bool{}
+			}
+			claims[tok][p.Dest] = true
+		}
+		for f := range p.Floors {
+			base := path.Base(f)
+			bases[base] = true
+			form[p.Dest+base] = seg + "/" + path.Base(path.Dir(f)) + "/" + base
+		}
+	}
+	nick := map[string]string{}
+	for tok, owners := range claims {
+		if len(owners) != 1 {
+			continue
+		}
+		for d := range owners {
+			nick[tok] = d
+		}
+	}
+	if len(nick) == 0 {
+		t.Fatalf("no pin has a distinguishing nickname among %v — every token is claimed by two "+
+			"pins, so the scan below can recognise nothing and its zero means nothing (%s)",
+			slices.Sorted(maps.Keys(claims)), citeFormDoc)
+	}
+	if len(bases) < 3 {
+		t.Fatalf("the licensed basenames derived from the pins are %v, too few to be the reference "+
+			"vocabulary — a citation to any authority outside this set is invisible here (%s)",
+			slices.Sorted(maps.Keys(bases)), citeFormDoc)
+	}
+
+	quoted := make([]string, 0, len(bases))
+	for _, b := range slices.Sorted(maps.Keys(bases)) {
+		quoted = append(quoted, regexp.QuoteMeta(b))
+	}
+	// The prefix group is what decides qualification, so it is captured rather than skipped: a
+	// citation is qualified when some pin's own directory segment appears in the path it carries.
+	refCiteRe := regexp.MustCompile(`((?:[A-Za-z0-9_.-]+/)*)(` + strings.Join(quoted, "|") + `):([0-9][0-9,-]*)`)
+	nickRe := regexp.MustCompile(`(?i)(^|[^A-Za-z0-9_-])(` +
+		strings.Join(slices.Sorted(maps.Keys(nick)), "|") + `)([^A-Za-z0-9_-]|$)`)
+
+	files := treeFiles(t)
+	if len(files) < 200 {
+		t.Fatalf("the tree walk found %d files, which is too few to be this repo", len(files))
+	}
+
+	qualified, unqualified := 0, 0
+	byCiter := map[string]int{}
+	var offenders []string
+	for _, rel := range files {
+		if !strings.HasSuffix(rel, ".go") && !strings.HasSuffix(rel, ".md") {
+			continue
+		}
+		blob, err := os.ReadFile(filepath.Join(repoRoot, rel))
+		if err != nil {
+			t.Fatalf("reading %s: %v", rel, err)
+		}
+		// Read as text, on TestBareContinuationCitationsAreBounded's reasoning: what makes this a
+		// defect is the *distance* between a word and a citation, and the AST hands back one comment
+		// group at a time. A citation in a law file has no AST at all.
+		lines := strings.Split(string(blob), "\n")
+		for n, ln := range lines {
+			for _, m := range refCiteRe.FindAllStringSubmatchIndex(ln, -1) {
+				prefix, token := ln[m[2]:m[3]], ln[m[0]:m[1]]
+				isQualified := false
+				for seg := range segs {
+					if strings.Contains(prefix, seg+"/") {
+						isQualified = true
+					}
+				}
+				if isQualified {
+					qualified++
+					continue
+				}
+				unqualified++
+				byCiter[rel]++
+
+				window := ln[:m[0]]
+				if n > 0 {
+					window = lines[n-1] + " " + window
+				}
+				if w := strings.Fields(window); len(w) > refNickWindow {
+					window = strings.Join(w[len(w)-refNickWindow:], " ")
+				}
+				if hit := nickRe.FindStringSubmatch(window); hit != nil {
+					want := form[nick[strings.ToLower(hit[2])]+ln[m[4]:m[5]]]
+					offenders = append(offenders, fmt.Sprintf("%s:%d: %q names %q in words and "+
+						"cites %q, which resolves to the other pin — write `%s:%s`",
+						rel, n+1, strings.TrimSpace(window), hit[2], token, want, ln[m[6]:m[7]]))
+				}
+			}
+		}
+	}
+
+	if len(offenders) > 0 {
+		t.Errorf("%d citation(s) name a pin in prose and leave the path unqualified, which is the "+
+			"form that resolved to the wrong authority in grave #517:\n  %s\n%s",
+			len(offenders), strings.Join(offenders, "\n  "), citeFormDoc)
+	}
+	if qualified < refQualifiedFloor {
+		t.Errorf("the scan found %d path-qualified reference citations, below the floor of %d — the "+
+			"assertion above reports zero offenders when this pattern stops matching, so this is what "+
+			"fails instead (%s)", qualified, refQualifiedFloor, citeFormDoc)
+	}
+	if unqualified < refBasenameFloor {
+		t.Errorf("the scan found %d unqualified reference citations, below the floor of %d — the "+
+			"derived basename vocabulary is %v and a vocabulary that stops matching takes the pinned "+
+			"zero with it (%s)", unqualified, refBasenameFloor,
+			slices.Sorted(maps.Keys(bases)), citeFormDoc)
+	}
+
+	t.Logf("reference citations: %d qualified, %d unqualified (#497's population), nicknames %v",
+		qualified, unqualified, slices.Sorted(maps.Keys(nick)))
+
+	var citers []string
+	for f := range byCiter {
+		citers = append(citers, f)
+	}
+	sort.Slice(citers, func(i, j int) bool {
+		if byCiter[citers[i]] != byCiter[citers[j]] {
+			return byCiter[citers[i]] > byCiter[citers[j]]
+		}
+		return citers[i] < citers[j]
+	})
+	var b strings.Builder
+	for _, f := range citers[:min(10, len(citers))] {
+		fmt.Fprintf(&b, "\n  %4d  %s", byCiter[f], f)
+	}
+	t.Logf("unqualified reference citations by citing file, top %d of %d:%s",
+		min(10, len(citers)), len(citers), b.String())
 }
 
 // censusString renders a bucket map in a stable order, because a failure message that reorders its

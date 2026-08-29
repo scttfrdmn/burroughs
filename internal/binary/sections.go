@@ -1020,6 +1020,20 @@ func (d *Decoder) decodeHeapType(r *reader) error {
 	)
 }
 
+// The limits flags byte's bits, each named where it is defined so that decodeLimits reads
+// them rather than enumerating the values they combine into.
+//
+// `flagsAll` is derived from the three rather than written as `0x07`: the malformed set is
+// *everything else*, and a literal there is a fourth place to update when a proposal claims
+// bit 3 — the shape that leaves a new bit silently accepted as one of the old ones.
+const (
+	flagsHasMax = 0x01 // a maximum follows the minimum (both pins, bit 0)
+	flagsShared = 0x02 // shared memory (`spec-threads/binary/decode.ml:181-188`, bit 1)
+	flagsAddr64 = 0x04 // i64 address type (core decode.ml:279-286, bit 2)
+
+	flagsAll = flagsHasMax | flagsShared | flagsAddr64
+)
+
 // decodeLimits reads a limits flags byte and its min, plus max when present.
 //
 // The flags field is a single byte, not a LEB — which is the whole content of
@@ -1040,6 +1054,29 @@ func (d *Decoder) decodeHeapType(r *reader) error {
 // correct layering. Reading the field narrowly to catch it here would be the decoder
 // borrowing the validator's job and getting the malformed string wrong to do it.
 //
+// # The flags byte is read bit by bit, and it was read as an enumeration of whole values
+//
+// It was a `switch flags` over `0x00`, `0x01`, `0x02, 0x03`, `0x04..0x07`, and the shape is
+// what hid grave #511: an arm that matches *two* flag values has to take each bit apart in
+// its body, and the threads arm took `HasMax` and dropped `Shared`. Reading each bit where
+// it is defined is the fix for the class rather than for the instance, and the instance had
+// a second half nothing had reported — see below.
+//
+// Both pins are the authority and they agree bit for bit, which is what makes the union
+// legible: `limits` in the core reference masks `flags land 0xfa` and derives `at` from bit
+// 2 (`decode.ml:279-286`), while the threads reference masks `flags land 0xfc` and derives
+// `shared` from bit 1 (`spec-threads/binary/decode.ml:181-188`). Each pin bans the other's bit because
+// each predates the other's proposal; neither bans a bit this engine gates.
+//
+// **The second half, measured rather than reasoned: flags `0x06`/`0x07` were accepted with
+// the threads gate off.** They set bit 1, so the old `0x04..0x07` arm consulted only
+// `Memory64`, admitted the shared bit ungated, and then discarded it — a memory declared
+// shared decoding as an ordinary memory64, which is the gate leak and #511's dropped bit at
+// once. Per bit, each one declines with its own feature name, so the combination needs both
+// gates and neither can be reached through the other. Bit order decides which decline
+// speaks when two are missing (threads before memory64); that is derivable and stable, where
+// "whichever arm the value happened to land in" was an artifact of arms that no longer exist.
+//
 // This is reader.u64's first production caller, closing #19's declared-and-tracked
 // deferral by making it reachable rather than by allowlisting it.
 // It returns the Limits it read rather than writing them to a Decoder field, and the
@@ -1054,26 +1091,24 @@ func (d *Decoder) decodeLimits(r *reader) (Limits, error) {
 	if err != nil {
 		return lim, err
 	}
-	switch flags {
-	case 0x00:
-	case 0x01:
-		lim.HasMax = true
-	case 0x02, 0x03:
+	if flags&^flagsAll != 0 {
+		return lim, fmt.Errorf("%w: %#02x", ErrMalformedLimits, flags)
+	}
+	lim.HasMax = flags&flagsHasMax != 0
+	if flags&flagsShared != 0 {
 		if !d.Features.Threads {
 			return lim, featureErr("threads")
 		}
-		lim.HasMax = flags == 0x03
-	case 0x04, 0x05, 0x06, 0x07:
+		lim.Shared = true
+	}
+	if flags&flagsAddr64 != 0 {
 		if !d.Features.Memory64 {
 			return lim, featureErr("memory64")
 		}
-		lim.HasMax = flags&0x01 != 0
 		// Retained as of 0015: the address width is only knowable from this byte, and the
 		// interpreter's bounds check needs it. Set here rather than derived at use time
 		// because by then the flags are gone.
 		lim.Addr64 = true
-	default:
-		return lim, fmt.Errorf("%w: %#02x", ErrMalformedLimits, flags)
 	}
 	if lim.Min, err = r.u64(); err != nil {
 		return lim, err
@@ -1227,8 +1262,19 @@ func (d *Decoder) decodeTableType(r *reader) (TableType, error) {
 	}
 	tbl.ElemType = d.valType
 	var err error
-	tbl.Limits, err = d.decodeLimits(r)
-	return tbl, err
+	if tbl.Limits, err = d.decodeLimits(r); err != nil {
+		return tbl, err
+	}
+	// A shared table is malformed, and this is the reference clause rather than a policy of
+	// ours: `table_type` reads the limits and then `require (not shared)`
+	// (`spec-threads/binary/decode.ml:190-194`). Here rather than in `decodeLimits` because that is where the
+	// reference puts it — `memory_type` takes the same `shared` and *keeps* it — so the bit's
+	// legality is a fact about which production is reading it. See ErrSharedTable for why this
+	// is the one clause in the fix with no corpus witness in either direction.
+	if tbl.Limits.Shared {
+		return tbl, ErrSharedTable
+	}
+	return tbl, nil
 }
 
 func (d *Decoder) decodeMemory(r *reader) error {

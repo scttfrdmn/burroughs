@@ -71,7 +71,7 @@ fi
 # come from. An oracle reachable only through a join is no more robust than the join's weakest
 # link, which is what licensing them together says.
 # The list is here rather than derived because a shell script cannot read Go constants;
-# TestFetchScriptAssertsEveryAuthority is what keeps the two agreeing.
+# TestEveryPinsFetchScriptAssertsItsAuthorities is what keeps the two agreeing.
 for f in interpreter/binary/decode.ml interpreter/text/lexer.mll interpreter/text/parser.mly \
          interpreter/binary/encode.ml interpreter/syntax/free.ml \
          interpreter/valid/valid.ml interpreter/valid/match.ml \

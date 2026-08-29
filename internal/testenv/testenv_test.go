@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -347,55 +348,150 @@ func TestNoSkipIsExactlyOne(t *testing.T) {
 	}
 }
 
-// TestFetchScriptAssertsEveryAuthority pins the fetch script's presence loop to the set of
-// files testenv licenses, because they are two places that know one fact.
+// TestEveryPinsFetchScriptAssertsItsAuthorities pins each fetch script's presence loop to the
+// files testenv licenses *from that pin*, because they are two places that know one fact.
 //
-// The fact is "these are the reference files the project treats as authorities". `refFloors`
-// holds it in Go; `fetch-spec-ref.sh` holds it in a shell `for` list, and cannot read the
-// Go one. When decode.ml was the only authority the two agreed trivially; lexer.mll's
+// The fact is "these are the reference files the project treats as authorities". `refPins`
+// holds it in Go; each `fetch-*-ref.sh` holds its own share in a shell `for` list, and cannot
+// read the Go one. When decode.ml was the only authority the two agreed trivially; lexer.mll's
 // arrival (0009) made the script's check cover a third of its subject with nothing saying
 // so, and it stayed that way until parser.mly was the third. That is the narrowing an
 // unpoliced duplicate produces — not a wrong assertion, a shrinking one.
 //
-// So the control is the drift check 0006 calls for, and its direction matters: the *script*
-// must cover everything Go licenses. A file the script checks and Go does not is harmless
-// (an extra assertion); a file Go licenses and the script does not is a fetch that reports
-// success with an authority missing, which is precisely the early-return defect the script's
-// own comment records.
-func TestFetchScriptAssertsEveryAuthority(t *testing.T) {
-	const script = "../../scripts/fetch-spec-ref.sh"
-	b, err := os.ReadFile(script)
+// So the control is the drift check 0006 calls for, and its direction matters: each *script*
+// must cover everything Go licenses from its pin. A file the script checks and Go does not is
+// harmless (an extra assertion); a file Go licenses and the script does not is a fetch that
+// reports success with an authority missing, which is precisely the early-return defect the
+// scripts' own comments record.
+//
+// # It was `TestEveryPinsFetchScriptAssertsItsAuthorities`, and the old name's grammar was the defect
+//
+// One script, every authority: singular subject, universal object. That sentence was true
+// while there was one pin and it is *false in the direction that produces green* now there
+// are two — the core script cannot assert the threads pin's five files (they are not in its
+// checkout) and must not be asked to. A control keyed on "the fetch script" would either
+// demand the impossible or, written the way the old body was, quietly check the union of both
+// pins' files against one script's loop and report the threads authorities as the core
+// script's omission. So the loop is per pin: subject and object move together.
+//
+// The rename is not cosmetic for a second reason. `LicensedRefPaths()` returns the **union**
+// across pins, which is the right domain for "is every authority checked somewhere" and the
+// wrong one for this test's question, "does *this* script check its own". The old body called
+// it; this one walks `RefPins()` and takes each pin's `Floors`. That distinction is written
+// out on `LicensedRefPaths` itself, because it is the sort of widening a caller is wrong about
+// silently.
+//
+// # The Makefile arm, which is not this control's original subject and is here for one reason
+//
+// `RefPin.Target` is quoted to a human by `RequireSpecRef` as `make <target>`, so it is a
+// citation into the Makefile with no resolver — *a negative claim is a citation with no
+// target* was avoidable here by making the claim positive. A pin whose target is misspelled,
+// or whose Makefile entry was never added, yields a skip reason instructing the reader to run
+// a fetch that does not exist. Checked as a rule (`^target:`) and as a `.PHONY` member,
+// because a directory named `threads-ref` would shadow the rule and make it a silent no-op.
+func TestEveryPinsFetchScriptAssertsItsAuthorities(t *testing.T) {
+	mk, err := os.ReadFile("../../Makefile")
 	if err != nil {
-		t.Fatalf("read %s: %v", script, err)
+		t.Fatalf("read Makefile: %v", err)
 	}
-	src := string(b)
+	phony := regexp.MustCompile(`(?m)^\.PHONY:(.*)$`).FindAllStringSubmatch(string(mk), -1)
 
-	licensed := testenv.LicensedRefPaths()
+	pins := testenv.RefPins()
 
-	// Vacuity floor. An empty licensed set makes every containment check below pass by
-	// asking nothing, which is the comparison-against-an-empty-set defect: mechanism
-	// intact, asserting nothing, green. Three is the count at this revision and a floor
-	// rather than an equality, so adding a fourth authority does not fail here — it
-	// fails in the loop, which is the assertion that should catch it.
-	if len(licensed) < 3 {
-		t.Fatalf("LicensedRefPaths returned %d paths, want >=3 (decode.ml, lexer.mll, "+
-			"parser.mly) — a containment check over an empty set agrees with anything",
-			len(licensed))
+	// Vacuity floor over the *pins*, which is the level this control's own subject moved to.
+	// A `refPins` drained to empty runs every loop below zero times and reports green — the
+	// empty-set agreement, one level up from where the old body checked for it. Two is the
+	// count at this revision (ADR 0007's 2026-08-28 amendment) and a floor rather than an
+	// equality, so a third pin fails inside the loop where the real assertions are.
+	if len(pins) < 2 {
+		t.Fatalf("RefPins returned %d pins, want >=2 (the core spec and the threads proposal) "+
+			"— a sweep over an empty pin set asserts nothing about any script", len(pins))
 	}
 
-	for _, p := range licensed {
-		// The script's paths are relative to `$dest`, testenv's include it.
-		rel := strings.TrimPrefix(p, "third_party/spec/")
-		if rel == p {
-			t.Errorf("licensed path %q does not start with third_party/spec/ — the script's "+
-				"loop is written relative to $dest and cannot check it", p)
-			continue
-		}
-		if !strings.Contains(src, rel) {
-			t.Errorf("%s does not assert the presence of %q, which testenv licenses as an "+
-				"authority.\n\tA fetch that reports success with an authority missing is the "+
-				"precondition excusing the check that polices it — add it to the loop.", script, rel)
-		}
+	for _, pin := range pins {
+		t.Run(pin.Target, func(t *testing.T) {
+			b, err := os.ReadFile(filepath.Join("../..", pin.Script))
+			if err != nil {
+				t.Fatalf("read %s: %v\n\tPin %q names a script that cannot be read; every "+
+					"authority it licenses is then unasserted at the fetch layer.",
+					pin.Script, err, pin.Target)
+			}
+			src := string(b)
+
+			// Per-pin vacuity. The pin-set floor above cannot see a pin that licenses nothing,
+			// and a pin with an empty `Floors` is exactly what a half-finished addition looks
+			// like: it appears in the list, it has a script, and it asserts nothing.
+			if len(pin.Floors) == 0 {
+				t.Fatalf("pin %q licenses no files — a containment check over an empty set "+
+					"agrees with any script, including one with no presence loop at all",
+					pin.Target)
+			}
+
+			for p := range pin.Floors {
+				// The script's paths are relative to `$dest`, testenv's include it. `Dest` is
+				// the pin's own, never a literal: trimming `third_party/spec/` off a threads
+				// path leaves it unchanged, and the old body would have reported the failure
+				// against the wrong script.
+				rel := strings.TrimPrefix(p, pin.Dest)
+				if rel == p {
+					t.Errorf("licensed path %q does not start with %q — the script's loop is "+
+						"written relative to $dest and cannot check it", p, pin.Dest)
+					continue
+				}
+				if !strings.Contains(src, rel) {
+					t.Errorf("%s does not assert the presence of %q, which testenv licenses as "+
+						"an authority of this pin.\n\tA fetch that reports success with an "+
+						"authority missing is the precondition excusing the check that polices "+
+						"it — add it to the loop.", pin.Script, rel)
+				}
+			}
+
+			// The pin's revision, read by the *same* reader the generators use. A pin whose
+			// `rev=` cannot be found still fetches something; what it stops doing is stamping
+			// provenance, and 0007 condition 3's failure mode is a header that looks stamped.
+			rev, err := gen.PinnedRev(filepath.Join("../..", pin.Script))
+			if err != nil {
+				t.Errorf("gen.PinnedRev(%s): %v\n\tEvery pin is written as `rev=\"<40 hex>\"` so "+
+					"one reader serves all of them; a renamed field leaves the fetch working and "+
+					"the provenance blank.", pin.Script, err)
+			} else if len(rev) != 40 {
+				t.Errorf("%s pin %q is %d chars, want 40", pin.Script, rev, len(rev))
+			}
+
+			// One `rev=` per script, which is the amendment's structural half rather than a
+			// style rule: `gen.PinnedRev` returns the **first** match, so a second pin in the
+			// same file is a revision nothing can read beside one that answers for it. That is
+			// how drift in one pin gets silently absorbed by the other, and it is the reason
+			// these are two files (Scott, on the v1 scoping report).
+			if n := len(regexp.MustCompile(`(?m)^rev="[0-9a-f]{40}"`).FindAllString(src, -1)); n != 1 {
+				t.Errorf("%s declares %d `rev=` pins, want exactly 1.\n\tPinnedRev reads the "+
+					"first; a second is unreadable and the pins stop being independently "+
+					"dated.", pin.Script, n)
+			}
+
+			// The Makefile arm. Two assertions because the instruction can fail two ways: no
+			// rule at all, or a rule shadowed by a same-named file or directory.
+			if !regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(pin.Target) + `:`).Match(mk) {
+				t.Errorf("RequireSpecRef tells a reader to run `make %s` and the Makefile has no "+
+					"such rule.\n\tThe skip reason is then an instruction that resolves to "+
+					"nothing, which is the weaker error this field exists to replace.", pin.Target)
+			}
+			declared := false
+			for _, m := range phony {
+				if slices.Contains(strings.Fields(m[1]), pin.Target) {
+					declared = true
+				}
+			}
+			if !declared {
+				t.Errorf("`%s` is not in any .PHONY list.\n\tIt names no output file, so a "+
+					"directory of that name would make make consider it up to date and the "+
+					"fetch silently a no-op.", pin.Target)
+			}
+			if !strings.Contains(string(mk), pin.Script) {
+				t.Errorf("the Makefile never invokes %s, so `make %s` cannot be the remedy "+
+					"RequireSpecRef quotes for this pin.", pin.Script, pin.Target)
+			}
+		})
 	}
 }
 
@@ -416,7 +512,7 @@ func TestFetchScriptAssertsEveryAuthority(t *testing.T) {
 //     the field, `PinnedRev` would stop finding it — and per *one concept, one trigger* (#82)
 //     the failure would be silent in exactly the way a duplicated regexp is.
 //
-// Direction, as in TestFetchScriptAssertsEveryAuthority above: the *script's* floor must be at
+// Direction, as in TestEveryPinsFetchScriptAssertsItsAuthorities above: the *script's* floor must be at
 // least Go's. A script floor higher than Go's is harmless (a stricter fetch); lower is a
 // corpus the fetch blesses and the tests disown.
 func TestSuitePinIsAssertedByTheFetchScript(t *testing.T) {
@@ -521,7 +617,7 @@ func TestSuitePinIsAssertedByTheFetchScript(t *testing.T) {
 // loop, with nothing in Go ever opening them, so a truncated vendor would have satisfied every
 // existing test. **Scoped to the space and not to the sample** — it iterates
 // `LicensedRefPaths()`, so authority number eight is covered by arriving rather than by someone
-// remembering to add a line here. That is the same derivation `TestFetchScriptAssertsEveryAuthority`
+// remembering to add a line here. That is the same derivation `TestEveryPinsFetchScriptAssertsItsAuthorities`
 // uses one layer out, pointed at enforcement instead of at presence.
 //
 // It is deliberately *not* an assertion about sizes at a revision: `RequireSpecRef` already
@@ -530,7 +626,7 @@ func TestSuitePinIsAssertedByTheFetchScript(t *testing.T) {
 func TestEveryLicensedAuthorityIsReadableAndAboveItsFloor(t *testing.T) {
 	licensed := testenv.LicensedRefPaths()
 
-	// Vacuity floor, as in TestFetchScriptAssertsEveryAuthority: a loop over an empty set
+	// Vacuity floor, as in TestEveryPinsFetchScriptAssertsItsAuthorities: a loop over an empty set
 	// enforces nothing and reports green. Five is the count before #291 added the sixth and
 	// seventh, and a floor rather than an equality so the next authority fails in the loop.
 	if len(licensed) < 5 {
