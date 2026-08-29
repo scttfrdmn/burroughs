@@ -764,8 +764,20 @@ const bareContReferenceFloor = 450
 // citations instead of re-quoting them — the law's sentence needed the offsets, not the coordinates —
 // which is the ordinary rule rather than an exemption: a citation a sentence does not need is the
 // population. What is left is the one the sentence cannot do without.
+//
+// **It rose to 106 in #513, and the +2 is the same rule applied to `foreclosingLicensed`'s
+// thirteenth re-key.** That header records each generation's transition for the four in-reason
+// pointers inside the allow map's reasons — the old value and the new one, in that file, not quoted
+// again here — and the pair of numbers *is* the datum: the ninth generation's finding is that a number
+// one role vacates can be occupied by
+// another, which is only visible because every generation wrote both values down. The same PR's
+// re-key note had five further coordinates in its first draft, in a list of six drifted pointers, and
+// those were converted to their referents (*"the `Name resolution rather than grammar` residue row,
+// by 3"*) — the sentence needed the drift and the subject, never the address. So the ratchet moved by
+// the two the record cannot do without, and the receipt is that the other five went the other way in
+// the same paragraph.
 var bareContByAntecedent = map[string]int{
-	"go":             104,
+	"go":             106,
 	"(unattributed)": 49,
 }
 

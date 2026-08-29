@@ -135,6 +135,128 @@ func TestPartialFetchIsNotPresent(t *testing.T) {
 	}
 }
 
+// proposalTree builds a present corpus with a proposal directory holding n vectors, plus any
+// extra file names written into that directory verbatim.
+//
+// Built rather than pointed at the real corpus, for the reason the doors take a directory
+// parameter at all: the falsification arms need a population they can make wrong, and the
+// vendored suite is the one population no test may edit.
+func proposalTree(t *testing.T, proposal string, n int, extra ...string) string {
+	t.Helper()
+	root := present(t)
+	dir := testenv.ProposalDir(root, proposal)
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	for i := range n {
+		if err := os.WriteFile(filepath.Join(dir, "v"+itoa(i)+".wast"), []byte("(module)"), 0o600); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+	}
+	for _, name := range extra {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("(module)"), 0o600); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+	}
+	return root
+}
+
+// TestRequireProposal watches the proposal door fail in each of the ways it can, and pass in
+// the one way it must.
+//
+// The two failures it keeps separable are the whole design: *the corpus is not vendored* is
+// RequireSuite's answer and carries a skip license, and *the corpus is vendored and this
+// directory disagrees* is a hard error under both env values. A single door with one skip
+// branch would let a partial checkout excuse itself from the lane whose entire point is that
+// this population is no longer excused (#513).
+func TestRequireProposal(t *testing.T) {
+	const proposal = "threads"
+
+	t.Run("absent corpus is RequireSuite's answer, not an extent failure", func(t *testing.T) {
+		empty := t.TempDir()
+
+		t.Setenv(testenv.NoSkipEnv, "")
+		r := &recorder{TB: t}
+		if got := testenv.RequireProposal(r, empty, proposal, 4); got != nil {
+			t.Errorf("paths=%v over an absent corpus; a caller that ranges over this would "+
+				"score a board of nothing", got)
+		}
+		if !r.skipped || r.failed {
+			t.Fatalf("absent corpus with license intact: skipped=%v failed=%v", r.skipped, r.failed)
+		}
+		// The *actionable* message, which is the half a second Fatalf would have overwritten.
+		if !strings.Contains(r.msg, "make spec-tests") {
+			t.Errorf("message %q does not name the fetch: a partial-corpus diagnosis here would "+
+				"send the reader to look for a file the fetch never wrote", r.msg)
+		}
+
+		t.Setenv(testenv.NoSkipEnv, "1")
+		r = &recorder{TB: t}
+		testenv.RequireProposal(r, empty, proposal, 4)
+		if !r.failed || r.skipped {
+			t.Fatalf("absent corpus with %s=1: skipped=%v failed=%v", testenv.NoSkipEnv, r.skipped, r.failed)
+		}
+	})
+
+	t.Run("the extent is exact and is never a skip", func(t *testing.T) {
+		for _, tc := range []struct{ have, want int }{{3, 4}, {5, 4}} {
+			root := proposalTree(t, proposal, tc.have)
+			for _, v := range []string{"", "1"} {
+				t.Setenv(testenv.NoSkipEnv, v)
+				r := &recorder{TB: t}
+				if got := testenv.RequireProposal(r, root, proposal, tc.want); got != nil {
+					t.Errorf("%d files against a pin of %d returned %v", tc.have, tc.want, got)
+				}
+				if !r.failed || r.skipped {
+					t.Fatalf("%d files against a pin of %d with %s=%q: skipped=%v failed=%v, "+
+						"want a hard failure — a corpus that is present and disagrees is not a "+
+						"question that could not be asked",
+						tc.have, tc.want, testenv.NoSkipEnv, v, r.skipped, r.failed)
+				}
+			}
+		}
+	})
+
+	t.Run("a missing proposal directory under a present corpus is a failure", func(t *testing.T) {
+		// The arm that says why RequireSuite alone is not the door: the suite's own count is
+		// satisfied and the lane's population is gone.
+		t.Setenv(testenv.NoSkipEnv, "")
+		r := &recorder{TB: t}
+		testenv.RequireProposal(r, present(t), proposal, 4)
+		if !r.failed || r.skipped {
+			t.Fatalf("present corpus with no proposals/%s: skipped=%v failed=%v", proposal, r.skipped, r.failed)
+		}
+	})
+
+	t.Run("the exact extent passes, and a sidecar does not count", func(t *testing.T) {
+		// Both directions of #340's exclusion in one arm: four vectors plus an AppleDouble
+		// sidecar is four, where the arm above proves a *fifth vector* is not. Without the
+		// second half this would pass over a door that ignored every extra file.
+		root := proposalTree(t, proposal, 4, "._v0.wast")
+		for _, v := range []string{"", "1"} {
+			t.Setenv(testenv.NoSkipEnv, v)
+			r := &recorder{TB: t}
+			paths := testenv.RequireProposal(r, root, proposal, 4)
+			if r.failed || r.skipped {
+				t.Fatalf("four vectors and a sidecar with %s=%q: skipped=%v failed=%v (%s)",
+					testenv.NoSkipEnv, v, r.skipped, r.failed, r.msg)
+			}
+			if len(paths) != 4 {
+				t.Fatalf("returned %d paths, want 4: %v", len(paths), paths)
+			}
+			if !slices.IsSorted(paths) {
+				t.Errorf("paths %v are not sorted: a lane's board would then be ordered by the "+
+					"filesystem, and a per-file log read against a pinned table is read in order", paths)
+			}
+			for _, p := range paths {
+				if strings.HasPrefix(filepath.Base(p), "._") {
+					t.Errorf("sidecar %s returned as a vector", p)
+				}
+			}
+		}
+	})
+}
+
 func TestSuiteFiles(t *testing.T) {
 	empty := t.TempDir()
 

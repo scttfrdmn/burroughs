@@ -1,7 +1,9 @@
 # 0002 — Interpreter strategy
 
 Date: 2026-07-30 · Status: **accepted** (Scott, 2026-07-30) · Resolves contract §10.1 · **one
-option-B cost claim falsified by measurement, 2026-08-28** (Scott, on the #508 review)
+option-B cost claim falsified by measurement, 2026-08-28** (Scott, on the #508 review) ·
+interpreter code may proceed on these three choices, and acceptance evidence remains 0003 phase 2
+(`assert_return`), per "the suite is the oracle"
 Contract refs: §10.1 (open question), §0 (posture), §9 (gates)
 
 > **Amendment, 2026-08-28 — "becomes free" is false, and the number is +11.82% at decode.**
@@ -273,8 +275,9 @@ adds `ref.null`.
    Recommended; agrees with chat-Claude, with the reference-array
    consequence made explicit. → **Accepted**, consequence pinned above.
 
-## Status
+---
 
-**Accepted** 2026-07-30. Interpreter code may proceed on these three
-choices; acceptance evidence remains 0003 phase 2 (`assert_return`), per
-"the suite is the oracle".
+*This document carried a trailing `## Status` section until 2026-08-29. Its content — the
+acceptance, its date, and the acceptance-evidence clause — was merged into the header `Status:` line
+above and the section removed, so that the line every sweep reads and every reader checks first is
+the complete one ([#520](https://github.com/scttfrdmn/burroughs/issues/520)). Nothing was dropped.*

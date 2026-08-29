@@ -21,6 +21,31 @@ weakly-ordered platform.
 
 ### Added
 
+- **The threads proposal's own suite has a board — `TestThreadsProposalLane` over the four vector
+  files under `testdata/spec/proposals/threads/`** ([#513](https://github.com/scttfrdmn/burroughs/issues/513)).
+  `suitePaths` globs one level, so those four files have sat in the vendored corpus and in no board's
+  population since the corpus was pinned: **619 commands, 444 of them assertions, asked by nothing**,
+  and contract §§2–5 with no oracle of any kind. It is a **separate population, not a widening of
+  `suitePaths`** — folding them in would move the fetch script's exact reconciliation, `MinSuiteFiles`,
+  the monotonic `unsupported` ceiling and the published `256 files` total, and would put fails into
+  `TestAllGatesOnLeavesNothingGated`, *"the control whose entire guarantee is that nothing hides"*
+  (chat-Claude, on the #519 review). `testenv.RequireProposal` reconciles the extent **exactly** at
+  four rather than flooring it, since a four-file directory is small enough that every movement should
+  be a reviewed diff. First board, `DefaultFeatures` plus `Threads`: **269 pass, 348 fail, 0
+  unsupported, 0 gated, 2 bound**, pinned per file and column by column in both directions, with each
+  file's directive counts by head atom pinned separately — a pin bump moves the corpus, a slice of work
+  moves the engine, and one blob of numbers would report either as the other. Three things it measured
+  that were not forecast: `unsupported` did **not** move up, because that column is a property of the
+  command `Kind` and these are ordinary `assert_return`/`module` directives — the harness asks every
+  one and the *engine* refuses; the issue's assertion table is wrong by 2, since `exports.wast` holds
+  22 `assert_invalid` and not 24 (two are commented out upstream, which a grep counts and a parser does
+  not); and **the `Threads` gate is inert over this population**, the board being identical with it
+  off, because the wat reader refuses `shared` upstream of any feature check. That equality is now
+  asserted rather than papered over, and its failure message says what the failure means: the gate has
+  become load-bearing, which is progress. 246 of `atomic.wast`'s 297 fails are one cause seen 246
+  times — three modules that do not read, and every assertion against them failing for want of an
+  instance — which is the pre-registerable subject for the wat `shared` keyword rather than a figure to
+  be pleased about.
 - **A second pinned reference authority — the threads proposal at `cc535ad`, fetched by
   `scripts/fetch-threads-ref.sh` (`make threads-ref`)** (#512, [ADR 0007's 2026-08-28
   amendment](docs/decisions/0007-opcode-table-authority.md#amendment-2026-08-28-511512-the-pin-set-is-plural-and-the-pins-are-independently-dated)).
@@ -39,6 +64,40 @@ weakly-ordered platform.
 
 ### Changed
 
+- **[#9](https://github.com/scttfrdmn/burroughs/issues/9)'s closure criterion is reissued as of
+  2026-08-29, re-measured over the question set the threads lane widens — and it holds**
+  ([#477](https://github.com/scttfrdmn/burroughs/issues/477), firing on its first real occasion).
+  The criterion Scott stamped is *"no `assert_invalid` vector is declined against the corpus **as the
+  harness may currently ask it**"*, satisfied 2026-08-19 at `f33a5c9`; that last clause is why the
+  claim carries a date, because it can be un-achieved by the harness learning to ask more with no
+  regression whatsoever in `internal/validate`, and a widening is not a population-size change so no
+  count sees it. #513 adds 96 `assert_invalid` vectors to what the harness may ask, which is exactly
+  the tracked event. Re-measured over them: **96 asked, 63 failing at some layer, 14 decided by the
+  validator, 0 declined.** The criterion holds, and it is **not vacuously held** — the first reading
+  predicted a vacuum (all four files need the wat `shared` keyword, so the reader should refuse every
+  module upstream of the type checker) and 14 vectors reach the validator anyway, in `imports.wast`
+  and `memory.wast`. The 14 is a **lower bound on arrivals**, stated because a bucket is a failure and
+  the validator's correct answers leave no row to count: enough to refute vacuity, not enough for any
+  claim of the form "checked over N vectors". Both figures are pinned columns on the lane's table
+  (`Declined`, `ValidateReached`, `InvalidReached`, `InvalidFailed`), so the next widening cannot
+  happen quietly. #477 **stays open**: its remedy is a per-command-kind predicate table pinned by
+  digest, and this is a dated line in the record rather than that mechanism.
+- **Three ADRs carried two `Status:` statements, and the incomplete one was the header; now there is
+  one, and it is the header** ([#520](https://github.com/scttfrdmn/burroughs/issues/520), ordered by
+  chat-Claude on the #519 review, charged overhead on #513). ADRs 0002, 0003 and 0004 — three of 48, a
+  stranded early convention rather than a pattern anyone was following — each carried a trailing
+  `## Status` section saying more than the line every sweep reads and every reader checks first. The
+  specimen is 0004, whose 2026-08-01 amendment adds a release gate (*no minor version is cut while its
+  milestone's `unimplemented` count is nonzero*): the stamp was never missing, but the gate was
+  checkable only by reading the foot of the document. Each section's content is merged into its header
+  line and the section removed, with a dated note at each foot so a reader arriving by an old citation
+  is not left wondering — and no anchor anywhere in the tree pointed at one, checked before removing
+  rather than after. **0003 deviates from the order and says so at its foot**: fifty lines of amendment
+  prose lived *inside* its Status section, so the status statements went up and the prose was re-filed
+  under two `## Amendment, <date> — …` headings, which is 0002's and 0004's convention; its 2026-08-22
+  clause cites 0045's stamp rather than claiming one of its own. 0004's `§10 open questions remaining`
+  list is carried **as recorded** rather than brought up to date, because today's list is a measurement
+  and not this repair's business.
 - **An amendment that changes what a stamped decision commits to now carries its own dated stamp**
   ([law](docs/laws/decisions-and-thesis.md#an-amendment-that-changes-what-a-stamped-decision-commits-to-carries-its-own-dated-stamp),
   ruling: Scott on the #518 review, [relayed at
@@ -79,6 +138,26 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **Six live line-citations into `internal/spec/spec_test.go` were adrift before this slice touched
+  them, and the worst of them had no anchor for any sweep to key on.** The thirteenth re-key of
+  `foreclosingLicensed` — one region, uniform **+16**, thirteen stale entries against thirteen
+  findings, all seven paragraphs byte-identical — ran the seventh generation's domain rule over every
+  citation into the files this commit modified, and of the eight live in-prose pointers **six named the
+  wrong line**: by 3, by 3 in two channels, by 1, by 46 (under an insertion made eight generations ago
+  and never repaired) and by 211. All repaired by locating their referents, never by arithmetic. Two
+  are new in kind. The 211 is a backticked number with **no colon and no file part**, invisible to
+  `posCiteRe` and `bareContRe` alike — the form below the one already counted as uncountable is also
+  the most drifted, and those are one fact. Its sibling is identical in form and was exact, which is
+  what shows that **a grep for the quoted token is not the referent test when a pointer names a comment
+  group**: the sibling quotes an identifier living 230 lines from the group the pointer correctly
+  names, so it read as adrift by 230 and was provisionally scored that way. `bareContByAntecedent`'s
+  `go` bucket rises 104 → 106 for the two coordinates the re-key record cannot do without; five others
+  in the same paragraph were converted to their referents instead, which is the ordinary rule and not
+  an exemption. The re-key's own finding is upstream of all of it: the control's output was first read
+  as thirteen findings with **zero** stale entries, a shape this header has recorded as impossible
+  twelve times over, and an hour went to whether the key had stopped carrying the line before the
+  re-run said thirteen and thirteen — *an anomaly is a claim about the tree and needs the same sourcing
+  as a finding*.
 - **[Grave #511](https://github.com/scttfrdmn/burroughs/issues/511) — with `gate:threads` on,
   `(memory 1 1 shared)` decoded *identically* to `(memory 1 1)`.** `decodeLimits` read the `0x02`/`0x03`
   flags, checked the gate, took `HasMax` from bit 0 and dropped bit 1 on the floor: same struct, same
@@ -2859,7 +2938,7 @@ terms 0004 requires of a version:
   **Reading the code to write the criterion falsified five of its own claims**, recorded in the ADR
   because each will read as current after the change: the rec-group-boundary denial at `call.go:743-744`
   (already corrected fifteen lines below it), the *"no corpus vector reaches the M10/M11 shape"*
-  sentence at `:760-761`, `spec_test.go:10703`'s description of `Instance.link` as a `sameFuncType`
+  sentence at `:760-761`, `spec_test.go:10722`'s description of `Instance.link` as a `sameFuncType`
   caller (grave #368 moved it), `call.go:740`'s pointer to **`matchesDeclaredSupertype`** — a function
   that exists nowhere in the tree, folded into the walk by grave #261's refactor — and `:760`'s naming
   of `call_ref` as a consumer, which `resolveCallRef` refutes by comparing nothing at all. The fourth is
@@ -2964,8 +3043,8 @@ terms 0004 requires of a version:
 
 - **`wrapJoin`'s doc comment cited two files for its real instances and was wrong about both**
   (`internal/testenv/citation_test.go`). It named `internal/spec/spec_test.go:2031` and
-  `internal/spec/wast.go:911`; the real comment groups are at `spec_test.go:6824`
-  (`TestGrave206-\nKnownFailures`) and `12552` (`TestEveryBoardBound-\nIsChecked`), and **`wast.go`
+  `internal/spec/wast.go:911`; the real comment groups are at `spec_test.go:6840`
+  (`TestGrave206-\nKnownFailures`) and `12779` (`TestEveryBoardBound-\nIsChecked`), and **`wast.go`
   holds no instance either way** — the half a line-drift sweep cannot see, since re-pointing by delta
   fixes an offset and never notices the wrong file. Re-pointed **by what the comments stand over**
   (the all-gates-on lane's pass floor; the `totalFloor` `boardBound` call) rather than by line, with
@@ -4237,7 +4316,7 @@ terms 0004 requires of a version:
   not, and one of them was carrying a word that was never true**
   ([#485](https://github.com/scttfrdmn/burroughs/issues/485), Scott's ruling on the #486 review). All
   three re-pointed **by the sentence each one quotes**, never by a delta: ADR 0028's `wast.go:813` →
-  `:1253`, ADR 0029's `wast.go:2672` → `:4352`, and `internal/spec/spec_test.go:8336`'s
+  `:1253`, ADR 0029's `wast.go:2672` → `:4352`, and `internal/spec/spec_test.go:8398`'s
   *"deliberately not a keyword allowlist"* → `wast.go:1462`, the old number having drifted onto
   `classify`'s `namedInvokeAction` dispatch.
   - **The two ADR pointers take dated amendment notes; the test comment takes a plain repair.** An ADR
@@ -4472,7 +4551,7 @@ terms 0004 requires of a version:
   residue sense and the exact sentence grave #427 cost eight rows for; two more claimed to quote a
   falsified sentence while asserting it. The group heading — "the grave's own record of itself" — is
   true of the *account*, whose annotation is 60 lines below the first paragraph it covers, at
-  `spec_test.go:11175`, and false of three
+  `spec_test.go:11191`, and false of three
   of the four paragraphs it covers, and the **paragraph** is the sweep's unit and the map's own stated
   standard. Each entry now names what its paragraph is (retained falsified testimony), where the
   refutation lives, and that the ground is *not* legible in the licensed paragraph alone; the one entry

@@ -1,6 +1,9 @@
 # 0004 — Engine versioning, and the contract's independent version
 
-Date: 2026-07-30 · Status: **accepted** (Scott, 2026-07-30) · Resolves contract §10.7
+Date: 2026-07-30 · Status: **accepted** (Scott, 2026-07-30) · Resolves contract §10.7 · **amended
+2026-08-01 — guard 4 is a release gate** (decision 0010, guard 4; addendum for guard 6) · amended
+2026-08-28 (the table's numbering overtaken by events) · §10 open questions remaining **as recorded
+2026-07-30**: 1 (resolved by 0002), 2, 3, 4, 5, 6
 Contract refs: §10.7 (open question), §9 (gates, conformance)
 
 ## Decision
@@ -118,9 +121,13 @@ own conformance claim in the terms this doc requires. Two milestones, `v0.1 wat 
 gate`, are still named for versions that were never released; they are renamed when their work is next
 touched rather than by tracker surgery on release day (Scott, on the v0.4.0 release).
 
-## Status
+---
 
-Accepted 2026-07-30; amended 2026-08-01 (decision 0010, guard 4; addendum for guard 6); amended
-2026-08-28 (the table's numbering overtaken by events).
-Contract §10.7 is resolved by this doc; §10 open
-questions remaining: 1 (resolved by 0002), 2, 3, 4, 5, 6.
+*This document carried a trailing `## Status` section until 2026-08-29. Its content — the
+acceptance, both amendment dates, and the §10 open-questions list — was merged into the header
+`Status:` line above and the section removed
+([#520](https://github.com/scttfrdmn/burroughs/issues/520)). That issue's specimen is this document:
+guard 4 is a release gate, and its statement lived where no sweep and no first reader looks. The
+open-questions list is carried **as it was recorded** rather than brought up to date, because
+correcting it is a measurement of §10's current state and not this repair's business — a reader who
+needs today's list should count it, not read it here.*
