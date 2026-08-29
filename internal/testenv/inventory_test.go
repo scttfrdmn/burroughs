@@ -7,6 +7,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -317,4 +319,246 @@ func readFile(t *testing.T, path string) string {
 		t.Fatalf("read %s: %v — the control's own input is missing", path, err)
 	}
 	return string(b)
+}
+
+// rePinnedRev is the shape a *pinned corpus* declares itself in: a fetch script with a
+// 40-hex revision on its own line. The same shape `internal/gen.rePin` reads, and named
+// here rather than imported because this control's subject is the script's existence
+// rather than its value.
+var rePinnedRev = regexp.MustCompile(`(?m)^rev="[0-9a-f]{40}"`)
+
+// reMakeTarget matches a Makefile target line. Recipe lines are excluded by the caller
+// (they begin with a tab), so `^name:` at column zero is a target and nothing else in
+// this file is: variable assignments are upper-case, `.PHONY` begins with a dot.
+var reMakeTarget = regexp.MustCompile(`^([a-z][a-z0-9-]*):`)
+
+// reWorkflowJob matches a job header inside a workflow's `jobs:` block. Applied only to
+// the slice after the `jobs:` line, because `on:`'s `push:`/`pull_request:` and
+// `defaults:`' `run:` have the same indentation and would otherwise read as jobs.
+var reWorkflowJob = regexp.MustCompile(`^  ([A-Za-z][A-Za-z0-9_-]*):[[:space:]]*$`)
+
+// TestEveryPinnedCorpusIsFetchedByEveryUnitTestJob requires every pinned corpus in the
+// tree to be fetched by every CI job that runs unit tests.
+//
+// # The defect it was written for
+//
+// The threads reference pin (ADR 0007's 2026-08-28 amendment) landed with its script, its
+// Makefile target, its floors, its licensed paths, and no CI step. `BURROUGHS_NO_SKIP: '1'`
+// is workflow-wide, so an absent authority is a *fail* rather than a skip: the `build` and
+// `conformance` jobs went red on a pin that was otherwise complete. **`make check` could
+// not have seen it** — the local gate deliberately leaves NO_SKIP unset, and a box that has
+// run `make threads-ref` once has the corpus forever, so the local mirror was green on a
+// machine where the third fetch had already happened. *Text mirrors are not
+// failure-behaviour mirrors*: "make check is the local mirror of CI" is intent, and this is
+// one of the seams where the two shells differ by construction.
+//
+// # Why this is the fuzz-inventory shape rather than a new one
+//
+// `TestEveryFuzzTargetIsGated` above requires each defined fuzz target to appear at each
+// of its run sites, in both directions, because a target in one site and not another is
+// the surprise the Makefile exists to prevent (decision 0005). A pinned corpus is the same
+// object one layer down: defined in one place, required at several, with nothing but a
+// reader's memory joining them. So this control shares that one's inputs — the Makefile
+// and every workflow, already read here — which is why it is a predicate over data a gate
+// already fetches rather than another instrument.
+//
+// # Every vocabulary is derived
+//
+// The corpora come from `scripts/*.sh` filtered by the revision pin, not from a list of
+// three names and not from a `fetch-*` filename convention: a fourth pin arrives covered,
+// and a pin whose script is renamed stays covered. Its Makefile target comes from the
+// recipe that invokes the script, so the target is never typed twice. The jobs come from
+// each workflow's `jobs:` block. Nothing here enumerates what it could derive — *derive the
+// domain, never enumerate it* (0006/#33).
+//
+// # What "unit-test job" means, and the exemption's own risk
+//
+// A job runs unit tests if it invokes `go test` without `-fuzz`. The fuzzing jobs pair
+// `-fuzz` with `-run XXX`, which matches no test function, so they execute a grammar and no
+// corpus-gated test — `fuzz-smoke` and nightly's `fuzz` are the two members of that class
+// today, and they vendor only what their seeds need.
+//
+// **The exemption is where this control can be phrased around**, and an exemption inherits
+// none of the trigger's lessons, so it is stated: adding `-fuzz` to a job that also runs
+// unit tests would silence this check for that job. The guard is the floor below — at least
+// two jobs must classify as unit-test jobs — which fails loudly if the classifier's
+// including arm ever drains to one.
+//
+// # Watched die, five ways
+//
+// Each neuter was applied, run, and reverted. (1) `main`'s own `ci.yml` — the defect, with
+// no `make threads-ref` anywhere: two failures, naming `build` and `conformance` and the
+// script whose corpus is missing. (2) `make spec-tests` removed from `conformance` only: one
+// failure, the *other* job still green, so the report is per job rather than per tree.
+// (3) The pin filter changed to `revision="…"`: the plurality floor, at 0 found. (4) `-fuzz`
+// added to the `build` job's `go test` lines — the phrase-around-it move: the classifier
+// floor, at 1. (5) The threads fetch recipe removed from the Makefile: the left-hand-side
+// Fatal, quoting the pin it found with no target. *A control isn't born until it's watched
+// die*, and arm (1) is the only one of the five whose subject was a real committed state.
+//
+// # The policy this encodes, which is broader than today's need
+//
+// It requires *every* pinned corpus of *every* unit-test job, not the corpora that job's
+// packages happen to need. That is the workflow's own stated policy: which package needs
+// which corpus is not a fact a workflow file can track, and `go test ./...` inherits every
+// corpus requirement in the tree. A job that genuinely needs one corpus and not another
+// therefore fails this control, and the remedy is to state the exception here — not to
+// narrow the job's package list until the check stops noticing.
+func TestEveryPinnedCorpusIsFetchedByEveryUnitTestJob(t *testing.T) {
+	root := "../.."
+
+	// The pinned corpora, derived by content: a shell script that declares a revision.
+	shs, err := filepath.Glob(filepath.Join(root, "scripts", "*.sh"))
+	if err != nil {
+		t.Fatalf("glob scripts: %v", err)
+	}
+	pinned := map[string]string{} // "scripts/x.sh" -> the pin line, for the message
+	for _, sh := range shs {
+		b, rerr := os.ReadFile(sh)
+		if rerr != nil {
+			t.Fatalf("read %s: %v — the control's own input is missing", sh, rerr)
+		}
+		if m := rePinnedRev.Find(b); m != nil {
+			pinned[filepath.ToSlash(filepath.Join("scripts", filepath.Base(sh)))] = string(m)
+		}
+	}
+	// The vacuity floor, and it is a *plurality* floor on purpose: this control is about
+	// the join between a pin set and its run sites, and with one pin found it would agree
+	// with any workflow that fetched that one. Three at the pin's writing — suite,
+	// reference, threads reference.
+	if len(pinned) < 3 {
+		t.Fatalf("found only %d pinned corpora under scripts/ (want >=3); the content filter is not "+
+			"matching the pin declarations, so every assertion below is about a nearly-empty set", len(pinned))
+	}
+
+	// Each corpus's Makefile targets — all of them, not the first. *A first-match pick
+	// declines to ask*: two targets fetching one corpus is legitimate, and a job invoking
+	// either one has vendored it, so the check below accepts any member.
+	targets := map[string][]string{}
+	cur := ""
+	for _, ln := range strings.Split(readFile(t, filepath.Join(root, "Makefile")), "\n") {
+		if !strings.HasPrefix(ln, "\t") {
+			if m := reMakeTarget.FindStringSubmatch(ln); m != nil {
+				cur = m[1]
+			}
+			continue
+		}
+		for script := range pinned {
+			if cur != "" && strings.Contains(ln, script) {
+				if !slices.Contains(targets[script], cur) {
+					targets[script] = append(targets[script], cur)
+				}
+			}
+		}
+	}
+	for script, pin := range pinned {
+		if len(targets[script]) == 0 {
+			t.Fatalf("%s declares a pin (%s) and no Makefile recipe invokes it\n\t"+
+				"a corpus with no target cannot be fetched by CI at all, so the join this control "+
+				"checks has no left-hand side. Give it a target, per decision 0005: tooling is "+
+				"reached through the Makefile, never spelled into a workflow.", script, pin)
+		}
+	}
+
+	// The jobs, per workflow.
+	wfs, err := filepath.Glob(filepath.Join(root, ".github/workflows/*.yml"))
+	if err != nil {
+		t.Fatalf("glob workflows: %v", err)
+	}
+	if len(wfs) < 2 {
+		t.Fatalf("found %d workflow files (want >=2: ci and nightly); the glob is not finding them", len(wfs))
+	}
+	type job struct{ wf, name, body string }
+	var jobs []job
+	for _, wf := range wfs {
+		lines := strings.Split(readFile(t, wf), "\n")
+		start := -1
+		for i, ln := range lines {
+			if ln == "jobs:" {
+				start = i + 1
+				break
+			}
+		}
+		if start < 0 {
+			t.Fatalf("%s has no top-level `jobs:` line; the workflow's shape has changed and this "+
+				"control is reading it wrong", wf)
+		}
+		name, body := "", []string{}
+		flush := func() {
+			if name != "" {
+				jobs = append(jobs, job{filepath.Base(wf), name, strings.Join(body, "\n")})
+			}
+		}
+		for _, ln := range lines[start:] {
+			if m := reWorkflowJob.FindStringSubmatch(ln); m != nil {
+				flush()
+				name, body = m[1], nil
+				continue
+			}
+			body = append(body, ln)
+		}
+		flush()
+	}
+
+	var unit, fuzzOnly []job
+	for _, j := range jobs {
+		runsUnit, runsAny := false, false
+		for _, ln := range strings.Split(j.body, "\n") {
+			if !strings.Contains(ln, "go test") {
+				continue
+			}
+			runsAny = true
+			if !strings.Contains(ln, "-fuzz") {
+				runsUnit = true
+			}
+		}
+		switch {
+		case runsUnit:
+			unit = append(unit, j)
+		case runsAny:
+			fuzzOnly = append(fuzzOnly, j)
+		}
+	}
+	// The classifier's floor, which is also the exemption's guard: `build` and
+	// `conformance` at the pin's writing. If this ever reads 1, the including arm has
+	// drained and the control would pass by asking one job about its corpora.
+	if len(unit) < 2 {
+		t.Fatalf("classified only %d of the tree's jobs as a unit-test job across %d workflows "+
+			"(want >=2); every `go test` line looks like a fuzz invocation, so this control has "+
+			"stopped asking", len(unit), len(wfs))
+	}
+
+	for _, j := range unit {
+		for script, ts := range targets {
+			ok := false
+			for _, target := range ts {
+				if strings.Contains(j.body, "make "+target) {
+					ok = true
+					break
+				}
+			}
+			if !ok {
+				want := make([]string, len(ts))
+				for i, target := range ts {
+					want[i] = "make " + target
+				}
+				t.Errorf("%s job %q runs unit tests and never fetches the corpus pinned by %s\n\t"+
+					"add one of: %s\n\t"+
+					"BURROUGHS_NO_SKIP=1 is workflow-wide, so an absent corpus is a *fail* and not a "+
+					"skip: this job goes red on a pin that is otherwise complete. `make check` cannot "+
+					"see it — the local gate leaves NO_SKIP unset, and a box that fetched the corpus "+
+					"once has it forever.",
+					j.wf, j.name, script, strings.Join(want, ", "))
+			}
+		}
+	}
+
+	if !t.Failed() {
+		names := make([]string, len(unit))
+		for i, j := range unit {
+			names[i] = j.wf + ":" + j.name
+		}
+		t.Logf("%d pinned corpora fetched by all %d unit-test jobs (%s); %d fuzz-only jobs exempt",
+			len(pinned), len(unit), strings.Join(names, " "), len(fuzzOnly))
+	}
 }

@@ -218,7 +218,22 @@ jobs:
         # the job was thinking about.
         run: make spec-ref
 
-      - name: both corpora are vendored
+      - name: vendor the threads reference
+        # The **second authority pin** (ADR 0007's 2026-08-28 amendment): its own script
+        # with its own `rev=`, because the two pins are independently dated. Needed here
+        # for exactly the general shape the step above states — `internal/binary`,
+        # `internal/validate` and `internal/testenv` now call testenv.RequireSpecRef on
+        # threads files, and under BURROUGHS_NO_SKIP=1 an absent authority is a *fail*.
+        #
+        # **`make check` could not have caught this omission, and that is worth stating
+        # rather than logging.** The local gate deliberately does not set NO_SKIP, and a
+        # dev box that ran `make threads-ref` once has the corpus forever — so the local
+        # mirror was green on a machine where the third fetch had already happened, and
+        # the surprise arrived in CI as the policy working. A new pin's CI step is part
+        # of the pin, not a follow-up to it.
+        run: make threads-ref
+
+      - name: every corpus is vendored
         # Guard the guard, for both. A skip is impossible under NO_SKIP, but a
         # *truncated* fetch is a different failure: it satisfies os.Stat, passes the
         # Go-level door, and then yields a board or an extraction computed over
@@ -248,17 +263,30 @@ jobs:
         # to is now the same *set* `testenv.SuitePaths` measures, not merely the same number.
         run: |
           n="$(scripts/suite-count.sh testdata/spec)"
-          d=third_party/spec/interpreter/binary/decode.ml
-          b="$(wc -c <"$d" 2>/dev/null | tr -d ' ' || echo 0)"
-          echo "vendored $n .wast files; reference decode.ml $b bytes"
+          echo "vendored $n .wast files"
           if [ "$n" -lt 250 ]; then
             echo "::error::expected ≥250 .wast files, found $n — the suite fetch is broken"
             exit 1
           fi
-          if [ "${b:-0}" -lt 20000 ]; then
-            echo "::error::decode.ml is $b bytes (want ≥20000) — the reference fetch is broken"
-            exit 1
-          fi
+          # Both authority pins, each named with its own floor rather than sharing one.
+          # The pins are independently dated, so a guard that checked one of them would
+          # report a vendored tree on a fetch that produced half of it — and the two files
+          # have the same basename, which is precisely how a citation to them went to the
+          # wrong pin (grave #517).
+          fail=0
+          for spec in \
+            "third_party/spec/interpreter/binary/decode.ml:20000" \
+            "third_party/spec-threads/interpreter/binary/decode.ml:20000" \
+          ; do
+            d="${spec%:*}"; floor="${spec##*:}"
+            b="$(wc -c <"$d" 2>/dev/null | tr -d ' ' || echo 0)"
+            echo "reference $d: ${b:-0} bytes (floor $floor)"
+            if [ "${b:-0}" -lt "$floor" ]; then
+              echo "::error::$d is ${b:-0} bytes (want ≥$floor) — that reference fetch is broken"
+              fail=1
+            fi
+          done
+          [ "$fail" -eq 0 ]
 
       - name: test
         # -shuffle=on so test order is never load-bearing.
@@ -532,7 +560,15 @@ jobs:
         # workflow file can track.
         run: make spec-ref
 
-      - name: the reference is vendored
+      - name: vendor the threads reference
+        # The second authority pin, on the same precondition reasoning as the step above:
+        # a job's corpora are satisfied before the first step that runs tests, because
+        # which package needs which corpus is not a fact a workflow file can track. This
+        # job runs the board and the drift checks, and the board's package now reaches
+        # controls that read the threads pin.
+        run: make threads-ref
+
+      - name: every reference is vendored
         # Guard the guard, same as the suite step above and for the same reason: the
         # drift check's Go-level door skips when the authority is absent, so a broken
         # fetch would make a later step pass by asking nothing. Assert the input
@@ -550,6 +586,8 @@ jobs:
           for spec in \
             "third_party/spec/interpreter/binary/decode.ml:20000" \
             "third_party/spec/interpreter/text/lexer.mll:20000" \
+            "third_party/spec-threads/interpreter/binary/decode.ml:20000" \
+            "third_party/spec-threads/interpreter/valid/valid.ml:14000" \
           ; do
             d="${spec%:*}"; floor="${spec##*:}"
             n="$(wc -c <"$d" 2>/dev/null | tr -d ' ' || echo 0)"

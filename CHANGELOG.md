@@ -73,6 +73,20 @@ weakly-ordered platform.
   controls cannot reach — a citation in a sibling package, a law, an ADR or this file is in no
   package's domain. Its nickname vocabulary is derived from `RefPins()`, so a third pin arrives
   covered.
+- **The second pin was complete everywhere except CI, and `make check` could not have said so.** The
+  script, the Makefile target, the floors, the licensed paths and the controls all landed together; no
+  job fetched the corpus. `BURROUGHS_NO_SKIP: '1'` is workflow-wide, so an absent authority is a
+  **fail** rather than a skip, and the `build` and `conformance` jobs went red on an otherwise finished
+  pin. The local gate leaves `NO_SKIP` unset and a box that has run `make threads-ref` once has the
+  corpus forever, so the mirror was green on a machine where the third fetch had already happened —
+  *text mirrors are not failure-behaviour mirrors*, at a seam where the two shells differ by
+  construction rather than by drift. Both jobs now fetch it and both corpus guards assert its byte
+  floor per file. `TestEveryPinnedCorpusIsFetchedByEveryUnitTestJob` (`internal/testenv`) is the half
+  that generalises: every corpus declaring a revision pin under `scripts/` must be fetched by every
+  job that runs `go test` without `-fuzz`, with the corpus vocabulary derived by content and its
+  Makefile target derived from the recipe that invokes it, so a fourth pin arrives covered. It fails on
+  `main`'s own workflow, which is the one falsification of the five whose subject was a committed
+  state.
 
 ## [0.4.0] - 2026-08-28
 *Implements contract v0.1.*
