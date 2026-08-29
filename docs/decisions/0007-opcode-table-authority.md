@@ -1,7 +1,14 @@
 # 0007 — The opcode table's authority, and how agreement with it is checked
 
 Date: 2026-07-31 · Status: **accepted** (Scott, 2026-07-31 — principle stamped on #38,
-mechanism **B** stamped with chat-Claude's four conditions)
+mechanism **B** stamped with chat-Claude's four conditions) · **amended 2026-08-28, stamped
+separately** (Scott, on the #518 review — *"#512: yes, it needs its own stamp"*, relayed by the
+agent at [#512, comment
+5460728673](https://github.com/scttfrdmn/burroughs/issues/512#issuecomment-5460728673)). The
+amendment's scope is **the number of pinned authorities and the consultation rule over them**: the
+pin set is plural and independently dated, and consultation is clause-scoped rather than global. The
+2026-07-31 stamp covers the principle and mechanism B; it does not cover that, which is why the
+amendment carries a stamp of its own.
 
 ## Decision
 

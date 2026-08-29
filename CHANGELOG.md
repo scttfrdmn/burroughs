@@ -37,6 +37,46 @@ weakly-ordered platform.
   0xfc` with `shared` from bit 1, each banning the other's bit — and neither pin authorizes flags
   `0x06`/`0x07`, which is why that pair requires **both** gates rather than either.
 
+### Changed
+
+- **An amendment that changes what a stamped decision commits to now carries its own dated stamp**
+  ([law](docs/laws/decisions-and-thesis.md#an-amendment-that-changes-what-a-stamped-decision-commits-to-carries-its-own-dated-stamp),
+  ruling: Scott on the #518 review, [relayed at
+  #512](https://github.com/scttfrdmn/burroughs/issues/512#issuecomment-5460728673)). An amendment that
+  records a falsification or repairs a citation does not. The test is two questions, because the first
+  alone over-triggers on mechanism the actor already owns: **did the commitment change, and was that
+  commitment a principal's to make?** The second part was proposed by the actor and accepted on the #519
+  review (chat-Claude) — the one-part rule would have demanded stamps on amendments changing mechanical
+  facts no principal ever stamped, ADR 0010's `fail`-column partition being the counterexample. ADR
+  0007's `Status:` is the first application — it cites both the
+  2026-07-31 principle stamp and the amendment's own, and **names the amendment's scope** (the number
+  of pinned authorities and the consultation rule over them) so a reader learns which half of the
+  document each stamp covers. The audit of all 30 dated post-stamp sections across 16 ADRs is reported
+  in #518's successor PR rather than acted on: check-and-report was the order.
+- **`durability is not independence` states its mechanism in the headline: independence comes from the
+  record being reviewable by someone other than its author, not from the record being permanent**
+  ([law](docs/laws/decisions-and-thesis.md#a-status-field-is-a-citation-to-an-approval-and-approvals-are-artifacts-with-provenance),
+  sharpening: chat-Claude on the #519 review). The mechanism was previously stated only in the
+  relay-into-a-`Status:` exception below it, so a reader who stopped at *durable but not independent*
+  could conclude no self-written record is ever citable — which would forbid relaying a stamp at all.
+  Permanence is a property of the channel; falsifiability is a property of who reads it next.
+- **The banned-form recurrence is recorded in a second instrument**
+  ([recipe](docs/laws/operations.md#opening-a-pr-the-body-is-a-scanned-population-and-make-check-cannot-see-it)):
+  `citecheck.sh --pr`'s discharge-claim check FAILed a body sentence pairing two tokens, and then the
+  bullet reporting that FAIL failed identically by quoting it. The generalization is not about closing
+  keywords — **any two-token co-occurrence check has this property, and the report about the check is
+  inside its population.**
+- **The Makefile maxim gains a stated exception, recorded at the maxim rather than as a new law**
+  ([the exception](docs/laws/operations.md#the-maxims-stated-exception-fetched-artifact-presence-is-machine-state-not-repo-state),
+  ruling: Scott on the #518 review). *A surprise in CI is a bug in the Makefile* does not reach
+  **fetched-artifact presence, which is machine state and not repo state**: a local gate running on a
+  box that already holds a gitignored corpus cannot test the case where the corpus is absent. Stated
+  at `Makefile`'s `check` target and in `CLAUDE.md`'s conventions as well as in the law, because the
+  reader who needs it is the one invoking the maxim. The checkable half is the join and not the
+  absence — `TestEveryPinnedCorpusIsFetchedByEveryUnitTestJob` — and the pair of exceptions names the
+  boundary: the mirror is incomplete by construction wherever the subject is not in the Makefile's
+  domain.
+
 ### Fixed
 
 - **[Grave #511](https://github.com/scttfrdmn/burroughs/issues/511) — with `gate:threads` on,

@@ -111,9 +111,16 @@ reach is a law out of context.
     [a message is not its rendering](errors-and-testimony.md#a-message-is-not-its-rendering-and-a-term-about-the-rendering-cannot-be-discharged-by-the-messages-author).
     (Ruling: Scott, PR #490 review.)
 
-  - **Durability is not independence.** *"A durable record of an order, written by the party acting on
-    it, is durable but not independent provenance no matter how good the channel."* So an order that
-    arrived in session does not become citable by being written down: transcribing it into an issue
+  - **Durability is not independence, and the mechanism is reviewability.** *"A durable record of an
+    order, written by the party acting on it, is durable but not independent provenance no matter how
+    good the channel."* **Independence comes from the record being reviewable by someone other than
+    its author, not from the record being permanent** — stated in the headline rather than left to the
+    exception below it, because the original phrasing left the mechanism implicit and a reader who
+    stopped at *durable but not independent* could only conclude that no self-written record is ever
+    citable, which is false and would forbid relaying a stamp at all. Permanence is a property of the
+    channel; falsifiability is a property of who reads it next. (Sharpening: chat-Claude, on the #519
+    review — *"that's the actual mechanism, and my original phrasing left it implicit."*) So an order
+    that arrived in session does not become citable by being written down: transcribing it into an issue
     comment produces a permanent, timestamped, public artifact, and the artifact's author is still the
     actor. Pointing a `Ratio-Class: ordered` at it cites yourself. The classification is therefore
     **`carried`**, with the order quoted in prose where a reader takes it as testimony rather than
@@ -132,6 +139,62 @@ reach is a law out of context.
       written by the actor to record Scott's words. Classed `carried`. Sibling of *an in-session order
       has no citation*, which said what not to do; this one says why, and generalizes past the
       one-off. (Ruling: Scott, on the #502 review.)
+
+### An amendment that changes what a stamped decision commits to carries its own dated stamp.
+
+- **An amendment that changes what a stamped decision commits to carries its own dated stamp; an
+  amendment that records a falsification or repairs a citation does not.** The corollary of the law
+  above, pointed at the *second* thing written into an ADR. An accepted ADR is a citation to an
+  approval, and appending to it silently widens what that one approval is claimed to cover — so the
+  question is not "is this an edit or an append" (0003's precedent settles that: append) but **is the
+  approval still about this**. The test, and it is a single sentence because it has to be applied by
+  whoever is holding the pen: **would someone acting on the ADR now do something different?**
+  (Ruling: Scott, on the #518 review — *"#512: yes, it needs its own stamp."*)
+
+  - **Qualifies — needs its own stamp.** ADR 0007's 2026-08-28 amendment: the pin set goes plural.
+    *"Plural pins means maintaining two and drift-checking two revisions — that qualifies."* An
+    implementer reading it now maintains two fetch scripts, drift-checks two revisions, and consults
+    the authorities **clause-scoped** rather than globally. The 2026-07-31 stamp was given on a
+    one-authority world and cannot be stretched over that.
+  - **Does not — no second stamp.** ADR 0002's falsification amendment: a prediction the ADR made came
+    out false and the amendment says so. Nothing an actor does changes. Same for a premise correction,
+    a citation re-point, a scored forecast, and a pointer to a superseding ADR.
+
+  **The test is two-part, because the first part alone over-triggers.** *Would an actor do something
+  different* is satisfied by any changed mechanism, including one that was never a principal's to
+  change — 0010's `fail`-column partition (`binaryFail` ceiling 1 / `textFail` ceiling 600) changes
+  what an actor does and owes no stamp, because the shape of a harness-internal ceiling is a signature
+  and not a capability. So both questions must answer yes: **did the commitment change, and was that
+  commitment a principal's to make?** The second is *the stamp's subject is the capability and the
+  constraint, never the signature* read at amendment time, and routing a self-decided mechanism change
+  upward for a stamp is that law's other failure rather than this one's compliance. (Filter proposed by
+  the actor on PR #519 and accepted: *"my rule as stated would have demanded stamps on amendments
+  changing mechanical facts no principal ever stamped — 0010's fail-column partition is the right
+  counterexample."* chat-Claude, on the #519 review.)
+
+  Two mechanics follow, and both are about where the reader looks:
+
+  - **The stamp goes in the `Status:` line with its scope named, not only in the amendment section.**
+    A reader who checks `Status:`, sees **accepted**, and stops has been told the whole ADR is covered
+    by one stamp. So `Status:` carries both stamps and says which half of the document each one is
+    about — 0007's now names *the number of pinned authorities and the consultation rule over them* as
+    the amendment's scope, and states in those words that the earlier stamp does not cover it. This is
+    the *foreclosing-words* shape from `CLAUDE.md`'s phase ladder: a sentence written before a change,
+    left standing after it, telling the next reader the tree is in a state it is not.
+  - **The best shape is not an amendment at all: it is a new ADR with its own stamp, and a pointer.**
+    ADR 0025's G-1 retirement condition changed, and what carries the change is **0043**, stamped by
+    Scott on the #482 review, with 0025's `Status:` pointing at it (*superseded in part*). That needs
+    no amendment stamp because the amendment is not where the commitment lives. When a changed
+    commitment is large enough to argue about, it wants an ADR; when it is a clarification an actor
+    would act on, it wants a stamped amendment; when it is a fact about the past, it wants neither.
+
+  **What this test cannot see, stated because the audit that applied it hit the limit.** The
+  population of amendments is derived by heading shape — a `## ` heading carrying a date or an
+  amendment word — so **an appended section whose heading carries neither is invisible to the sweep**,
+  and it is exactly the section most likely to have skipped the question. *Derive the domain, never
+  enumerate it* buys nothing when the domain is derived from a convention the writer can decline to
+  follow; the residual risk is named here rather than converted into a control that would read as
+  coverage.
 
 ### A retirement condition that names an issue rather than a state of the code retires on a bookkeeping event.
 

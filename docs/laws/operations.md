@@ -207,6 +207,17 @@ scanner reads tokens, not quotation marks. Hence the phrasing above, which keeps
 reference apart, and hence the rule that the report about a sweep is inside that sweep's population —
 re-run `closecheck.sh` **after** writing the commit that describes a closecheck failure.
 
+**And it recurred in a second instrument on #519, which is what makes it a shape rather than a
+closecheck quirk.** `citecheck.sh --pr`'s discharge-claim check FAILed a body sentence that paired the
+words *recorded in* with an ADR number — read as "this PR changed that ADR" when the claim was about the
+tree's past. citecheck's own diff-mode note draws exactly that distinction out loud, and body mode cannot
+draw it, because a body has no past tense a scanner can see. Then the bullet **reporting** that FAIL
+failed identically, by quoting the sentence. So the generalization is not about closing keywords: **any
+two-token co-occurrence check has this property, and the report about the check is inside its
+population.** Remedy that worked: name the words and the number in separate sentences. The remedy that
+does *not* work is an exemption — an exemption inherits none of the trigger's lessons, and here the
+checker's reading of the words was fair each time.
+
 Both halves' `--pr` arm fetches the body **live** rather than from the webhook payload, so a body
 edited after the failure is scanned by `gh run rerun --failed` without a new push. That is a property
 of the scripts, checked by `TestPRFetchFailureIsNeverAPass`, and not something to assume of a job in
@@ -216,6 +227,42 @@ general.
 local mirror of CI, so a surprise in CI is a bug in the Makefile) meeting the one check whose subject
 does not exist yet when the Makefile runs. The mirror is incomplete **by construction** here, which is
 why the sequence above is written down instead of a Makefile target being fixed.
+
+## The maxim's stated exception: fetched-artifact presence is machine state, not repo state
+
+*A surprise in CI is a bug in the Makefile* holds for everything the Makefile can observe, and there
+is a class it cannot: **whether a fetched artifact is present on the machine.** A gitignored corpus —
+the spec suite, either reference pin — is machine state, and a local gate running on a box that
+already holds the artifact cannot test the case where it is missing. The absence is not in the
+Makefile's domain, so no `make check` can be written that would have caught it. (Ruling: Scott, on the
+#518 review — *"record it with the maxim, where someone invoking the maxim will see it."*)
+
+The specimen. The threads reference pin (ADR 0007's 2026-08-28 amendment) landed with its fetch
+script, its `make threads-ref` target, its per-file floors, its licensed paths and eight controls that
+read it — and no CI step fetching it. `BURROUGHS_NO_SKIP: '1'` is workflow-wide, so an absent
+authority is a **fail** and not a skip, and two jobs went red on an otherwise complete pin. `make
+check` was green, truthfully: the local gate deliberately leaves `NO_SKIP` unset, and this box had run
+`make threads-ref` an hour earlier, so the mirror was green *on a machine where the fetch had already
+happened*. Nothing in the Makefile was wrong. What the invocation of the maxim would have produced is
+a search for a Makefile bug that does not exist.
+
+Two consequences, and the second is the one that generalizes:
+
+- **A new corpus's CI step is part of the corpus, not a follow-up to it.** Script, target, floors,
+  licensed paths, controls, *and* a fetch step in every job that runs its tests — one PR, because the
+  local gate cannot report the missing member.
+- **The join is checkable even though the absence is not.** `TestEveryPinnedCorpusIsFetchedByEveryUnitTestJob`
+  (`internal/testenv`) asserts that every corpus declaring a revision pin under `scripts/` is fetched
+  by every job that runs `go test` without `-fuzz` — a predicate over the Makefile and the workflows,
+  both of which the tree *does* hold. The machine's state is unobservable; the *claim* the workflow
+  makes about it is a text, and a text is in a control's domain. When a maxim has an exception, look
+  for the artifact the exception is a statement about.
+
+This is the maxim's second stated exception, and the pair names the boundary: the mirror is incomplete
+**by construction** wherever the subject is not in the Makefile's domain — [a PR body that does not
+exist until the PR does](#opening-a-pr-the-body-is-a-scanned-population-and-make-check-cannot-see-it),
+and a fetched artifact whose presence is a fact about the machine. *Text mirrors are not
+failure-behaviour mirrors*; so are absence mirrors.
 
 ## Reading the tracker's state: the queue comes from the issues API, never from a cached listing
 
