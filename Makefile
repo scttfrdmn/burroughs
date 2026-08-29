@@ -40,7 +40,7 @@ SHELL := /bin/bash -o pipefail
 # anything globally.
 TOOL = $(GO) tool -modfile=tools/go.mod
 
-.PHONY: all build test race vet fmt fmt-check lint check vuln deadcode fuzz bench ratio cite close spec-tests spec-ref tidy conformance strict pipefail-check opcodes opcode-drift keywords keyword-drift opcodes-text opcodes-text-drift memarg memarg-drift gate-census xcorpus
+.PHONY: all build test race vet test-endtable fmt fmt-check lint check vuln deadcode fuzz bench ratio cite close spec-tests spec-ref tidy conformance strict pipefail-check opcodes opcode-drift keywords keyword-drift opcodes-text opcodes-text-drift memarg memarg-drift gate-census xcorpus
 
 # The default gate. `check` is what must be green before a report — it is the
 # local mirror of CI, so a surprise in CI means a bug in this line, not a bug in
@@ -48,7 +48,7 @@ TOOL = $(GO) tool -modfile=tools/go.mod
 all: check
 
 # The gate list, named once so the recipe below cannot drift from it.
-CHECK_GATES = pipefail-check fmt-check build vet lint test deadcode
+CHECK_GATES = pipefail-check fmt-check build vet lint test test-endtable deadcode
 
 # **An unreached gate is not a passed gate, and the abort must say which is which.**
 #
@@ -183,15 +183,28 @@ strict:
 
 build:
 	$(GO) build -o bin/burroughs ./cmd/burroughs
-# #136's probe (`internal/interp/ends_table.go`) is the tree's only build tag — every other gate is a
-# `Features` field, so nothing here compiled a tagged arm before. A tagged arm the gate never builds
-# rots without a signal, which is the *unbuilt arm* shape rather than a new instrument: this is the
-# same build over the same tree, one flag different, not a second oracle.
+# `burroughs_endtable` (#136, 0048) is the tree's only build tag — every other gate is a `Features`
+# field, so nothing here compiled a tagged arm before. A tagged arm the gate never builds rots
+# without a signal, which is the *unbuilt arm* shape rather than a new instrument: this is the same
+# build over the same tree, one flag different, not a second oracle.
 	$(GO) build -tags burroughs_endtable ./...
 
 # -shuffle=on so test order is never load-bearing.
 test:
 	$(GO) test -shuffle=on ./...
+
+# **A built arm is not a tested arm**, and for two milestones this gate only built it. That was
+# defensible while the tagged arm was a probe whose whole body was one file the board never ran; it
+# stopped being defensible when 0048 moved the mechanism into `internal/binary`, where the tag now
+# changes the *decoder* — `Module`'s layout, `structural`'s recursion, what `DecodeModule` retains.
+# A compile error was the only defect the old line could see, and none of the three bugs the port's
+# own oracle test catches (a stale scratch buffer, a shifted arena base, an off-by-one on `end`)
+# compiles wrong.
+#
+# `./...` and not the two packages that differ today, because the tag's domain is the module: any
+# package may grow a tagged file, and a control scoped to today's cases inherits today's blind spot.
+test-endtable:
+	$(GO) test -shuffle=on -tags burroughs_endtable ./...
 
 race:
 	$(GO) test -race -shuffle=on ./...

@@ -588,6 +588,34 @@ type FieldType struct {
 type Func struct {
 	TypeIndex uint32
 
+	// EndsOff locates this body's block-pairing table in its module's arena, biased by one:
+	// the table is `len(Body)` slots wide starting at `EndsOff-1`, and slot `i` holds the
+	// index of the `END` that closes the header at `Body[i]`, or −1 where no header opens
+	// there. **Zero means there is no table** — either the body opens no block, or the
+	// build did not populate one. Biased rather than −1-sentinelled so the zero value is
+	// the absent case and no construction site has to know this field exists.
+	//
+	// Read it through `Module.FuncEnds`, which is the only thing that knows the bias and
+	// the extent, and which is a no-op returning nil in the default build.
+	//
+	// # This field is declared in every build and costs nothing in any of them (0048)
+	//
+	// `TypeIndex` is a `uint32` followed by a slice header, so `Func` carries exactly one
+	// 4-byte interior hole and this field sits in it: `Func`'s size is the same with the
+	// field and without it, asserted by `TestEndsOffsetIsFreeInTheLayout` rather than
+	// argued. That is why the pairing table can be gated — populated only under
+	// `burroughs_endtable`, where `Module.Ends` exists at all — while the *field* is
+	// unconditional. A tag-split field would have bought nothing and cost `Func` a second
+	// declaration to keep in sync.
+	//
+	// The corpus measurement behind that arrangement is 0048's: charged over 9393 corpus
+	// functions the same `int32` costs 0 B here and 75144 B appended, which was the
+	// largest single term in the comparison and is what chose the arena over the two
+	// alternatives. The hole holds one `int32` and no more, so this field spends it — a
+	// second one would cost the full 8 B per function, which is the standing reason
+	// 0048 declines to also store an extent or an origin here.
+	EndsOff int32
+
 	// Locals is the declared local **groups**, one entry per `(count, valtype)` run in the
 	// image — *not* one entry per local.
 	//
@@ -625,8 +653,31 @@ type Func struct {
 	// consumers that want one — both without materializing anything.
 	Locals []LocalGroup
 
-	// Body is the internal form: `[]Instr` with immediates pre-decoded and branch
-	// targets resolved to indices in this slice (0002, Q1 option B).
+	// Body is the internal form: `[]Instr` with immediates pre-decoded. Branch targets are
+	// **not** resolved to indices in this slice unless the build asked for it, which is the
+	// half of 0002's Q1 option B that arrived later than the form did — see `EndsOff`.
+	//
+	// # This doc claimed the resolution for two milestones before one existed (grave #505)
+	//
+	// It read *"immediates pre-decoded and branch targets resolved to indices in this
+	// slice (0002, Q1 option B)"*, and nothing in this package paired a header with its
+	// `END`. A consumer of `Func` reads this field's doc first, so the false half was in
+	// the load-bearing spot: someone writing a second consumer — a compiler, the v1 work —
+	// would have believed target resolution was already paid for, and `endTerminator`'s
+	// comment then told them the alternative had been considered and rejected. *A comment
+	// asserting the property the code lacks makes review confirm the bug.* This is grave
+	// #501 one package over, which is the finding: #501 was `control.go` claiming #136's
+	// debt was a failing test when no such test existed, and its closing said to sweep the
+	// shape rather than the file. The sweep stopped at the package boundary, and the same
+	// claim was sitting in the field doc of the structure #136 is about.
+	//
+	// What is true, in both builds: `END` is retained, and retained *because* a reader
+	// scans for it. In the default build that reader is the interpreter, at every dynamic
+	// block entry (`internal/interp/control.go:matchEnd`). Under `burroughs_endtable` it is
+	// the decoder's own pairing pass, once per body, and the scan it replaces is the cost
+	// #136 measured. Either way dropping the terminator would leave a block's extent
+	// underivable from its header, so the retention decision was right and its stated
+	// reason was the inverse of the real one.
 	Body []Instr
 
 	// Labels holds the unbounded immediates that do not fit `Instr`'s two words, keyed by the

@@ -159,6 +159,12 @@ func DefaultFeatures() Features {
 // every section that will ever be added, so the gate set is a property of the
 // decoder, not an argument to one function.
 type Decoder struct {
+	// decoderEnds is the block-pairing scratch, embedded so a build tag can remove it —
+	// same arrangement and same reason as `Module.moduleEnds`. Empty in the default build.
+	//
+	//nolint:unused // no reader in this build by design; see `Module.moduleEnds` for the full note.
+	decoderEnds
+
 	Features Features
 
 	// sawDataRef records that a decoded function body used an opcode whose free

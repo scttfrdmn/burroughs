@@ -1155,6 +1155,10 @@ func (c *instrCtx) structural(r *reader, op byte, ims []imm) error {
 	// stated as the rule: a reviewer checking the code against that claim finds a `block`
 	// call and an `expectEnd` call sitting exactly where the sentence says they are, so
 	// review confirms it. What found it was an assertion over the accept population.
+	// The header's own index, taken before it is emitted — `emit`'s discipline, for
+	// `pairEnd`'s benefit at the bottom of this function. −1 on the const-expression path,
+	// where nothing is retained and the pairing has nothing to be an index into.
+	opener := c.openerAt()
 	c.emit(0x00, uint32(op))
 	if err := c.block(r); err != nil {
 		return err
@@ -1178,7 +1182,16 @@ func (c *instrCtx) structural(r *reader, op byte, ims []imm) error {
 			}
 		}
 	}
-	return c.endTerminator(r)
+	if err := c.endTerminator(r); err != nil {
+		return err
+	}
+	// This recursion is where the pairing comes from, and it comes free: the decoder
+	// already knows both indices here, which is the whole argument of 0002's Q1 option B
+	// and the reason #136's mechanism is a decode-time pass rather than a second walk.
+	// Recorded only on success — a header whose END never arrived is not a pairing, and
+	// the module is about to be rejected anyway.
+	c.pairEnd(opener)
+	return nil
 }
 
 // imm reads one immediate.
@@ -1855,12 +1868,33 @@ func expectEnd(r *reader) error {
 // retained from a module the layer is about to reject.
 //
 // Why END is retained at all, since the reader treats it as a delimiter rather than an
-// instruction: 0002's form resolves branch targets to indices in this slice, and a block's
-// *extent* is not derivable from the header alone — the header records the blocktype, not
-// the length. Dropping the terminator leaves the interpreter to recompute extents by
-// re-walking the sequence, which is a second opinion about the program's structure and so
-// the drift risk 0006 says to prefer away from. The same argument covers ELSE, whose
+// instruction: a block's *extent* is not derivable from the header alone — the header
+// records the blocktype, not the length — so dropping the terminator would leave every
+// consumer to reconstruct extents from nothing. Something has to read it, and in both
+// builds something does: the interpreter, re-walking the sequence at each dynamic block
+// entry (`internal/interp/control.go:matchEnd`), and under `burroughs_endtable` the pairing
+// pass in `structural` below, once per body at decode. The same argument covers ELSE, whose
 // absence would make an `if`'s two arms indistinguishable.
+//
+// # This paragraph named the engine's actual behaviour as the counterfactual (grave #505)
+//
+// It read: *"0002's form resolves branch targets to indices in this slice … Dropping the
+// terminator leaves the interpreter to recompute extents by re-walking the sequence, which
+// is a second opinion about the program's structure and so the drift risk 0006 says to
+// prefer away from."* Both halves were false in the same direction. Nothing in this package
+// resolved branch targets to indices — that is the half of Q1 option B #136 tracked and
+// this file's pairing pass has only now supplied — and the re-walk described as what
+// retention *avoids* was, and in the default build still is, exactly what the interpreter
+// does. So the comment cited a resolution that did not exist as the reason for a decision
+// that was nonetheless right, and named the shipped behaviour as the rejected alternative.
+//
+// Two things make it worth a grave rather than an edit. It is **grave #99 in the same
+// function's doc**, one paragraph down: same shape, a comment describing the intended state
+// while the code held the other one, and #99's own vector — an assertion over the accept
+// population — could not reach a claim about *why*. And it is **grave #501 one package
+// over**, whose closing said to sweep the shape rather than the file; the sweep did not
+// cross into `binary`, where the same claim sat in `Func.Body`'s field doc (site 1, and the
+// load-bearing one, since a consumer reads it first).
 func (c *instrCtx) endTerminator(r *reader) error {
 	if err := expectEnd(r); err != nil {
 		return err
@@ -1883,6 +1917,11 @@ func (c *instrCtx) endTerminator(r *reader) error {
 // lets the over-read happen at all. See sections.go on why that is required rather than
 // merely tolerated.
 func (d *Decoder) decodeFuncBody(r *reader) error {
+	// Before the grammar, not after it: the pairing scratch is reused across bodies, and a
+	// body that fails mid-grammar leaves its pairs behind for the next one to file as its
+	// own. Clearing on entry is the stateful-instrument rule (#28) — state that survives a
+	// measurement reports history — applied to a buffer instead of a verdict.
+	d.beginFuncEnds()
 	// `sized` reads its length with len32, so an extent exceeding the image is
 	// `length out of bounds` before any grammar runs — face 1 of the size mechanism,
 	// one level down from a section.
@@ -1935,6 +1974,10 @@ func (d *Decoder) decodeFuncBody(r *reader) error {
 	// Decoder.funcTypeIdx.
 	d.mod().Funcs = append(d.mod().Funcs,
 		Func{Locals: locals, Body: body, Labels: labels, Catches: catches, Casts: casts, Selects: selects})
+	// Immediately below the append, and not one line higher: fileFuncEnds reads the body's
+	// length off the Func it is filing for, so filing first would file against the previous
+	// function. Its precondition says so; this is where the precondition is met.
+	d.fileFuncEnds()
 	return nil
 }
 

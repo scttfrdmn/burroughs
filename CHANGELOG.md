@@ -21,6 +21,37 @@ weakly-ordered platform.
 
 ### Added
 
+- **`gate:endtable` — the pairing table moved from an interpreter-side probe to the decoder, in a
+  per-module arena reached by one `int32` on `Func`** (#136, [ADR
+  0048](docs/decisions/0048-the-pairing-table-lives-in-a-per-module-arena-reached-by-one-int32-on-func-because-the-per-function-field-dominates-a-measured-bill.md)).
+  This is 0002's Q1 option B for branch resolution, built during `structural`'s own grammar recursion —
+  which already knows a header's index and its `END`'s — so the table costs one pass at decode instead
+  of a scan per dynamic block entry. `internal/interp/ends_table.go`'s process-lifetime `sync.Map` and
+  its leak are gone; `Instance.frameEnds` is now a subslice of something the module already owns.
+  Populated only under `-tags burroughs_endtable`; the default build is unchanged.
+- **The representation was chosen by a measured bill, not by argument, and the deciding term was 4 bytes
+  of padding.** `TestEndTablePairingRepresentationsArePriced` prices a 3×3 cross of shapes
+  (dense-whole-body · span-scoped · sorted pairs) against placements (inline · one pointer · per-module
+  arena) plus 0016's map, over the 4216-module corpus — ten rows, each weighed by one code path and each
+  verified against `matchEnd` on all 2020 openers. **A representation's bill has two halves: the
+  structures, and the field that finds them** — and the field is charged on all 9393 functions, not the
+  13.5% that hold an opener. `binary.Func` opens `TypeIndex uint32` before a slice header, so it carries
+  exactly one 4-byte interior hole; an `int32` costs **0 B** there against 8 B appended, which is
+  **75144 B** over the corpus and the largest single term in the comparison. The arena wins at 154520 B
+  (+13.2% on what the bodies already cost) against 160240 B for one pointer and 280120 B inline, with
+  0016's map last at 324280 B.
+- **Span-scoping is declined at +42.2%, with the number attached, as Scott's order required.** Indexing
+  `[first opener, last matching end]` saves 9288 B of payload — but its origin is a *second* `int32`, the
+  hole holds one, and in the chosen placement that origin costs 75144 B to save 10296 B. Its best
+  showing anywhere in the cross is −3.7%, in the placement worth the least.
+- **`make test-endtable` and a CI step: the tagged arm is now tested, not merely built.** A built arm is
+  not a tested arm, and for two milestones the gate only built it — defensible while the arm was one
+  interpreter file, not once 0048 moved the mechanism into the decoder. None of the three bugs the new
+  oracle test catches (a stale scratch buffer, a shifted arena base, an off-by-one on `end`) fails to
+  compile. `TestDecodedPairingTableAgreesWithTheScan` checks every corpus function's table against
+  `matchEnd`, openers **and** the 10465 `-1` slots; two of the three injected bugs are caught by the
+  `-1` half alone, which the first draft of its own comment had backwards.
+
 - **The end-table A/B, run at the distances the corpus actually contains, and `matchEnd`'s cost is
   material at the median** (#136). The prior probe swept 0/64/512/4096 slots; the census in #503 showed
   nothing in the corpus reaches 512. This is the re-run at **p50 5 / p90 13 / p99 67 / max 276**, in
@@ -3780,6 +3811,47 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **`internal/binary` told every reader that 0002's branch resolution was implemented, in the two places
+  a consumer of `Func` reads first** ([grave #505](https://github.com/scttfrdmn/burroughs/issues/505)).
+  `Func.Body`'s field doc said *"immediates pre-decoded and branch targets resolved to indices in this
+  slice (0002, Q1 option B)"* and nothing in the package paired a header with its `END`;
+  `endTerminator`'s doc then justified retaining `END` by saying that dropping it *"leaves the interpreter
+  to recompute extents by re-walking the sequence"* — which is what the interpreter does, so the shipped
+  behaviour was named as the rejected alternative. The retention decision was right and its stated reason
+  was the inverse of the real one: `END` is retained *because* a reader scans for it. Both sites now say
+  what is true in each build, and #136's mechanism is what makes the resolution claim true at all. This
+  is **grave #99 one paragraph down in the same function's doc** and **grave #501 one package over**,
+  whose closing said to sweep the shape rather than the file — the sweep stopped at the package boundary,
+  and the same claim was sitting in the field doc of the structure #136 is about.
+- **A hand-derived sentence under a machine-derived table, recurring inside the measurement that had
+  already fixed it once.** Implementing 0048 spent the 4-byte hole the decision was chosen on, so the
+  pricing test at HEAD charged a *second* `int32` at 8 B, re-ordered its own table, and printed *"the
+  only interior hole in `binary.Func` is 0 B wide, and the arena's offset is what fits in it … which is
+  why the arena leads the dense rows"* on a board where the arena was fifth. Every number in it was real.
+  `endSizeUncommittedFunc` now charges every row against `Func` less `EndsOff`, so the table re-derives
+  at HEAD; `TestEndsOffsetIsFreeInTheLayout` asserts the field is genuinely absorbed. New shape for
+  [`docs/laws/evidence-and-instruments.md`](docs/laws/evidence-and-instruments.md): **an instrument whose
+  subject is changed by its own conclusion stops reproducing it.**
+
+- **A vacuity guard in the memory bill was the exact negation of its own result.** The pricing
+  instrument asserted `fieldWidth > 0` under the comment *"a field that costs nothing is a field that
+  is not there"* — and the finding is that the chosen representation's `int32` costs **0 B**, in
+  `binary.Func`'s one 4-byte hole. Had it run before the position sweep existed, the only way to green
+  would have been to charge the field appended, the worst position by construction, and 0048 would have
+  chosen a different representation on an artifact of its own control. Replaced by `fieldData > 0` and
+  `fieldWidth <= fieldAppended`, which bound the input rather than the measurement. New shape for
+  [`docs/laws/controls.md`](docs/laws/controls.md): **a bound written in the wrong direction fires on
+  the finding rather than on the defect** — and the tell is that its comment *argues* for the bound.
+- **A figure this project had already published to a principal, retracted by posting.** #136's durable
+  comment holds Scott's conditional order on the memory bill verbatim and then reported the measurement
+  that resolved it at 12.1%, read as not-substantial by the agent rather than by Scott. The figure was
+  wrong in two ways (structures priced without the field that reaches them; a `[]any` harness boxing a
+  24-B slice header onto exactly the variants whose real field is 24 B). Corrected span-scoping is a
+  **+42.2%** penalty in the chosen placement, so the conditional resolves on its own terms and the
+  **Decisions needed** ask that the old reading raised is moot. New shape for
+  [`docs/laws/errors-and-testimony.md`](docs/laws/errors-and-testimony.md): **a correction travels
+  attached to the quote** — editing that comment would have changed what the principal appears to have
+  been answered with, in the one artifact that exists so his order has an address.
 - **A correction is an edit, and carries the same error rate as the edit that needed correcting** —
   minted in [`docs/laws/evidence-and-instruments.md`](docs/laws/evidence-and-instruments.md) on Scott's
   ruling on the #502 review (*"the arguable-range fix turned a true body claim false, which is #434's

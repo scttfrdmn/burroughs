@@ -183,12 +183,16 @@ jobs:
 
       - run: go build ./...
 
-      # #136's probe (`internal/interp/ends_table.go`) is the tree's only build tag, and this step
-      # is here because `make build` gaining the same line did **not** put it in CI: this job runs
+      # `burroughs_endtable` (#136, 0048) is the tree's only build tag, and this step is here
+      # because `make build` gaining the same line did **not** put it in CI: this job runs
       # `go build ./...` directly and never invokes `make build`. The claim that adding it to
       # `CHECK_GATES` covered CI was false when written — *text mirrors are not failure-behaviour
       # mirrors*, and "make check is the local mirror of CI" is a statement of intent, not a
-      # mechanism that makes one step run the other. Deleted with the probe.
+      # mechanism that makes one step run the other.
+      #
+      # The build stays, ahead of the corpus fetch, because a compile error should go red in
+      # seconds rather than after two clones. The *tests* for this arm cannot run here — they need
+      # the suite — so they are a separate step below, next to the vendoring they depend on.
       - run: go build -tags burroughs_endtable ./...
 
       - run: go vet ./...
@@ -259,6 +263,23 @@ jobs:
       - name: test
         # -shuffle=on so test order is never load-bearing.
         run: go test -shuffle=on ./...
+
+      - name: test (burroughs_endtable)
+        # **A built arm is not a tested arm.** For two milestones this workflow only *built* the
+        # tagged arm, which was defensible while it was a probe living in one interpreter file the
+        # board never ran. 0048 moved the mechanism into `internal/binary`, so the tag now changes
+        # the decoder — `Module`'s layout, `structural`'s recursion, what `DecodeModule` retains —
+        # and a compile error is no longer the interesting failure. None of the three bugs the
+        # port's oracle test catches (a stale scratch buffer, a shifted arena base, an off-by-one on
+        # `end`) fails to compile.
+        #
+        # Here rather than beside the build step because the oracle test is corpus-driven and
+        # BURROUGHS_NO_SKIP=1 is workflow-wide: run before the vendoring above and it would *fail*,
+        # which is the policy working. `./...` and not the two packages that differ today, because
+        # the tag's domain is the module and a control scoped to today's cases inherits today's
+        # blind spot. Mirrors `make test-endtable`, which is the gate this step exists to not be a
+        # text mirror of.
+        run: go test -shuffle=on -tags burroughs_endtable ./...
 
       - name: race
         run: go test -race -shuffle=on ./...
