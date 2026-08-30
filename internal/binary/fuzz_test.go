@@ -56,9 +56,16 @@ var declaredErrors = []error{
 	ErrSharedTable,
 	// `atomic.fence`'s flag byte (`spec-threads/binary/decode.ml:786`). Enrolled for
 	// ErrSharedTable's reason and with the same standing: the byte is attacker-supplied, so a
-	// non-zero value is a reachable input rather than a bug here. It is reachable only with the
-	// Threads gate on, which is what makes it a *declared* verdict and not a fuzz find — the
-	// fuzzer's default-gate corpus cannot produce it at all.
+	// non-zero value is a reachable input rather than a bug here.
+	//
+	// **And it is reachable with the Threads gate off**, which the sentence standing here
+	// until grave #531 denied — it claimed "the fuzzer's default-gate corpus cannot produce
+	// it at all", and the fuzzer produced it from `fe 03 30` at the zero-value Decoder inside
+	// one CI run. A gate decline is *recorded*, not returned (`gateCheck` → `c.decline`), and
+	// malformed outranks a deferred decline in 0008's order, so every gated arm's
+	// malformed-immediate verdict is reachable at any gate setting.
+	// TestAtomicFenceRejectsANonZeroFlagWithTheGateOff holds that fact now, because a comment
+	// asserting reachability is a claim about a code path and belongs where it can fail.
 	ErrZeroFlagExpected,
 	ErrMalformedMutability,
 	ErrMalformedImportKind,
@@ -154,6 +161,49 @@ var declaredErrors = []error{
 	// module with no data count section. It was declared here while unreachable, which
 	// is what kept its arrival from looking like a fuzz find.
 	ErrDataCountRequired,
+}
+
+// constExprErrors is every error the *instruction grammar* is allowed to produce, which is
+// the narrower and stronger claim: `declaredErrors` covers the whole module grammar, this
+// covers what can come back out of `constExprErr`. The reasons are worth the space:
+//
+//	reader errors          truncation and the two LEB budget failures
+//	ErrIllegalOpcode       no arm in the authority, or one that only rejects
+//	ErrConstExprRequired   a real instruction that is not constant (invalid)
+//	ErrEndExpected         `end_ s` found a byte that is not END
+//	ErrMisplacedOpcode     unreachable; listed so its arrival is not a fuzz find
+//	numtype/vectype        valtype's first two `either` branches
+//	reftype                valtype's last branch, so the message a byte that is no
+//	                       valtype at all receives — including at a blocktype
+//	heaptype               ref.null / ref.test / ref.cast's immediate (#88)
+//	ErrMalformedTypeIndex  blocktype's and heaptype's negative-s33 branches
+//	ErrMalformedCatch      try_table's handler kind byte
+//	ErrMalformedMemopFlags a memarg whose flags field is >= 0x80
+//	br_on_cast flags       `fb 18`/`fb 19`'s flags byte with a reserved bit set
+//	ErrZeroFlagExpected    `atomic.fence`'s flag byte, at any gate setting
+//
+// GRAVE #264, second registry: this list and `declaredErrors` are two registries over one
+// sentinel space, and the space is therefore (sentinel × registry), not sentinel.
+// `ErrMalformedBrOnCastFlags` was enrolled above and not here, so `FuzzDecodeModule` went
+// green and `FuzzConstExprProgress` stayed red — the third instance of the class, and the one
+// that indicts the repair rather than the original omission. Keeping the two lists separate
+// is deliberate and not the defect: this one is the narrower claim, so deriving it from
+// `declaredErrors` would weaken it into a tautology.
+//
+// **Grave #531 is the fourth instance, and it is why this list has a name.** It was an inline
+// literal inside the fuzz body until then — unaddressable, so #264's own tripwire
+// (errdecl_test.go) could read `declaredErrors` by name and could not read this at all, which
+// left the control covering half the space its header says it covers. `ErrZeroFlagExpected`
+// was enrolled above, omitted here, and found by the fuzzer for the second time in the class.
+// Hoisting it to a package-level var is the whole mechanism of the fix;
+// TestEveryInstrGrammarSentinelIsInTheConstExprRegistry is what it bought.
+var constExprErrors = []error{
+	ErrTruncated, ErrPayloadEnd, ErrLEBTooLong, ErrLEBOverflow,
+	ErrIllegalOpcode, ErrConstExprRequired, ErrEndExpected, ErrMisplacedOpcode,
+	ErrMalformedNumType, ErrMalformedVecType, ErrMalformedRefType,
+	ErrMalformedHeapType, ErrMalformedTypeIndex,
+	ErrMalformedCatch, ErrMalformedMemopFlags, ErrFeatureDisabled,
+	ErrMalformedBrOnCastFlags, ErrZeroFlagExpected,
 }
 
 func FuzzDecodeModule(f *testing.F) {
@@ -350,42 +400,7 @@ func FuzzConstExprProgress(f *testing.F) {
 			return
 		}
 
-		// Every error the instruction grammar is allowed to produce. The list grew
-		// fivefold with the dissolution, and the reasons are worth the space:
-		//
-		//	reader errors          truncation and the two LEB budget failures
-		//	ErrIllegalOpcode       no arm in the authority, or one that only rejects
-		//	ErrConstExprRequired   a real instruction that is not constant (invalid)
-		//	ErrEndExpected         `end_ s` found a byte that is not END
-		//	ErrMisplacedOpcode     unreachable; listed so its arrival is not a fuzz find
-		//	numtype/vectype        valtype's first two `either` branches
-		//	reftype                valtype's last branch, so the message a byte that is no
-		//	                       valtype at all receives — including at a blocktype
-		//	heaptype               ref.null / ref.test / ref.cast's immediate (#88)
-		//	ErrMalformedTypeIndex  blocktype's and heaptype's negative-s33 branches
-		//	ErrMalformedCatch      try_table's handler kind byte
-		//	ErrMalformedMemopFlags a memarg whose flags field is >= 0x80
-		//	br_on_cast flags       `fb 18`/`fb 19`'s flags byte with a reserved bit set
-		//
-		// GRAVE #264, second registry: this list and the package-level
-		// `declaredErrors` are two registries over one sentinel space, and the space is
-		// therefore (sentinel × registry), not sentinel. `ErrMalformedBrOnCastFlags` was
-		// enrolled above and not here, so `FuzzDecodeModule` went green and
-		// `FuzzConstExprProgress` stayed red — the third instance of the class, and the
-		// one that indicts the repair rather than the original omission. Keeping the two
-		// lists separate is deliberate and not the defect: this one is the *narrower,
-		// stronger* claim (only these may come out of the instruction grammar), so
-		// deriving it from `declaredErrors` would weaken it into a tautology. What the
-		// separation costs is a sweep obligation, and a sweep run over the registry that
-		// failed is not a sweep over the space.
-		for _, want := range []error{
-			ErrTruncated, ErrPayloadEnd, ErrLEBTooLong, ErrLEBOverflow,
-			ErrIllegalOpcode, ErrConstExprRequired, ErrEndExpected, ErrMisplacedOpcode,
-			ErrMalformedNumType, ErrMalformedVecType, ErrMalformedRefType,
-			ErrMalformedHeapType, ErrMalformedTypeIndex,
-			ErrMalformedCatch, ErrMalformedMemopFlags, ErrFeatureDisabled,
-			ErrMalformedBrOnCastFlags,
-		} {
+		for _, want := range constExprErrors {
 			if !errors.Is(err, want) {
 				continue
 			}

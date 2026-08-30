@@ -214,6 +214,42 @@ weakly-ordered platform.
 
 ### Fixed
 
+- **`ErrZeroFlagExpected` was enrolled in one of two registries over one sentinel space, and the
+  comment licensing the omission was falsified by the fuzz find that exposed it**
+  ([grave #531](https://github.com/scttfrdmn/burroughs/issues/531), `gate:threads`). Fourth instance
+  of [#264](https://github.com/scttfrdmn/burroughs/issues/264)'s class — *(sentinel × registry), not
+  sentinel* — and the second found by the fuzzer rather than a control: `make check` was green (it
+  runs no fuzz target) and `fuzz-smoke` reported `undeclared constexpr error "zero flag expected"
+  for fe 03 30` on the first push. Three defects, one arriving out of the last:
+  - **#264's own tripwire could not see the second registry.** It parses `fuzz_test.go` for a var
+    named `declaredErrors`; the narrower constexpr list was an anonymous composite literal inside
+    the fuzz body, so the half of the space it holds was uncovered by construction. Hoisting it to
+    a package-level `constExprErrors` is the whole mechanism of the fix — *a registry a control
+    cannot name by AST is a registry it cannot check* — and
+    `TestEveryInstrGrammarSentinelIsInTheConstExprRegistry` is what it bought: #264's relation over
+    the second registry, domain derived by AST from instr.go's 15 mentioned sentinels, three
+    exclusions carrying the reader that raises them, plus the `constExprErrors ⊆ declaredErrors`
+    subset relation that nothing asserted before. Watched dying four ways.
+  - **The exclusion was reasoned from a false reachability claim.** The enrollment comment said the
+    verdict "is reachable only with the Threads gate on" and that "the fuzzer's default-gate corpus
+    cannot produce it at all"; the fuzzer produced it from `fe 03 30` at a zero-value `Decoder`. A
+    gate decline is *recorded, not returned*, and malformed outranks a deferred decline (0008's
+    order), so **every gated arm's malformed-immediate sentinel is reachable with its gate off**.
+    `TestAtomicFenceRejectsANonZeroFlagWithTheGateOff` holds the fact now, one byte from its
+    sibling: `fe 03 00` gate-off is the feature decline, `fe 03 30` gate-off is malformed.
+  - **`TestAtomicRegionIsGatedOnThreads` was stillborn, and its own repair note was the tell.** It
+    passed with the 0xfe gate-map range shrunk to exclude both opcodes it decodes, and passed again
+    with `prefixed`'s entire `gateCheck` call commented out: `atomicImage` declared a **shared**
+    memory, itself threads-gated, so a gate-off decode failed in the memory section and every
+    assertion was about `decodeLimits`. Its message check had been "corrected" from `"atomics"` to
+    `"threads"` under a comment reading *"the test was wrong, not the message"* — and the region
+    decline renders `the 0xfe region (atomics): feature gate disabled`, so the original assertion
+    was right and the correction was confirmed by the wrong section's decline. The memory is
+    unshared now, the message assertion reads `what` out of the row it keys with a negative arm
+    against every other region's, and the crasher `035b8b0994e9c30a` is committed.
+  - **Process:** `make fuzz` is a named local gate and it was not run before pushing — the rule
+    `ErrMalformedBrOnCastFlags`' enrollment comment states in those words, written for this class.
+
 - **The generated table's one cross-region row cited a line from one reference pin and was resolved
   against the other** ([grave #529](https://github.com/scttfrdmn/burroughs/issues/529)). Every row
   carries a `refLine` and every citation control resolved it against `regionAuthority[prefix]` — the

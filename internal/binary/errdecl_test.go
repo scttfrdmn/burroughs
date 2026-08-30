@@ -175,6 +175,18 @@ func initializerShape(v ast.Expr) string {
 // that identity is the only thing keeping a blind walk from reading as a clean green.
 func enrolledSentinelNames(t *testing.T) map[string]bool {
 	t.Helper()
+	return registryNames(t, "declaredErrors")
+}
+
+// registryNames reads the identifiers out of one named registry's composite literal.
+//
+// Parameterized on the variable name because there are **two** registries and the space is
+// (sentinel × registry), which this file's header has said since #264 while its reader could
+// only see one of them. `constExprErrors` was an anonymous literal inside the fuzz body until
+// grave #531 — unaddressable by name, so the half of the space it holds was uncovered by
+// construction, and the fourth instance of the class arrived there.
+func registryNames(t *testing.T, varName string) map[string]bool {
+	t.Helper()
 
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, "fuzz_test.go", nil, parser.SkipObjectResolution)
@@ -189,7 +201,7 @@ func enrolledSentinelNames(t *testing.T) map[string]bool {
 		}
 		for _, spec := range gd.Specs {
 			vs, ok := spec.(*ast.ValueSpec)
-			if !ok || len(vs.Names) != 1 || vs.Names[0].Name != "declaredErrors" {
+			if !ok || len(vs.Names) != 1 || vs.Names[0].Name != varName {
 				continue
 			}
 			for _, val := range vs.Values {
@@ -369,4 +381,181 @@ func TestTheASTGrepGapHasAWitness(t *testing.T) {
 	}
 	t.Logf("%d Err* names in the source text, %d declared, %d text-only: %v",
 		len(inText), len(domain), len(textOnly), textOnly)
+}
+
+// excludedFromConstExprErrors holds the sentinels instr.go raises that are deliberately **not**
+// in `constExprErrors`, each with the reason it is out.
+//
+// All three are raised by the function-body layer that *wraps* the instruction grammar rather
+// than by the grammar itself. They live in instr.go because that is where the code section's
+// body reader lives, and `constExprErr` never enters it — a constant expression is read from a
+// global, element or data segment, none of which has a body size or a locals vector. So the
+// narrower registry rightly omits them, and all three are enrolled in `declaredErrors`, where
+// the wider claim does cover them.
+//
+// The discriminator is *which reader raises it*, not reachability, for the reason
+// `excludedFromDeclaredErrors` states one registry over. An entry without a reason is a
+// suppression wearing a disguise.
+var excludedFromConstExprErrors = map[string]string{
+	"ErrSectionOverrun":      "decodeFuncBody's `sized` extent check — face 1 of the size mechanism at the body level, below a section and above the grammar",
+	"ErrSectionSizeMismatch": "decodeFuncBody's reconciliation of declared body size against bytes the grammar consumed, which has no analogue inside a constant expression",
+	"ErrTooManyLocals":       "decodeLocals' 2^32 aggregate — a locals vector is part of a function body's preamble and no constant expression has one",
+}
+
+// grammarSentinels reads every error sentinel mentioned inside a function body in instr.go,
+// keyed by name and carrying its sites so a failure names the raise rather than the set.
+//
+// **Why instr.go and not a derived call graph.** The narrower registry's claim is "only these may
+// come out of the instruction grammar", and instr.go is the file the instruction grammar is: the
+// opcode dispatch, the immediate vocabulary, and the productions those two reach. A new immediate
+// reader goes there, which is what makes the file a *structural* domain rather than a list of
+// today's cases. Two other candidate domains were measured and rejected:
+//
+//   - **Receiver `*instrCtx`** — 6 sentinels, five of them already enrolled. It is the tightest
+//     honest scope and it would have caught #531, but it drops `ErrIllegalOpcode`,
+//     `ErrEndExpected`, `ErrMalformedTypeIndex` and `ErrMalformedCatch`, which the grammar raises
+//     from free functions and plain methods. A domain that excludes four enrolled members is not
+//     measuring the claim.
+//   - **Adding constexpr.go** — three more sentinels (`ErrMalformedElemSegKind`,
+//     `ErrMalformedElemKind`, `ErrMalformedDataSegKind`), all raised by the segment readers that
+//     *call* the grammar, so it would cost three more exclusions and catch nothing.
+//
+// Mentions rather than raises, deliberately: a body-wide walk also picks up an `errors.Is`
+// comparison (`either`'s `ErrFeatureDisabled`), which over-covers. Over-covering costs an
+// exclusion entry with a reason; under-covering costs a grave.
+func grammarSentinels(t *testing.T) map[string][]string {
+	t.Helper()
+
+	const grammarFile = "instr.go"
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, grammarFile, nil, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatalf("parsing %s: %v", grammarFile, err)
+	}
+	found := map[string][]string{}
+	funcs := map[string]bool{}
+	for _, decl := range f.Decls {
+		fd, ok := decl.(*ast.FuncDecl)
+		if !ok || fd.Body == nil {
+			continue
+		}
+		funcs[fd.Name.Name] = true
+		ast.Inspect(fd.Body, func(n ast.Node) bool {
+			id, ok := n.(*ast.Ident)
+			if !ok || !errSentinelName.MatchString(id.Name) {
+				return true
+			}
+			found[id.Name] = append(found[id.Name],
+				fmt.Sprintf("%s:%d/%s", grammarFile, fset.Position(id.Pos()).Line, fd.Name.Name))
+			return true
+		})
+	}
+	// Liveness on the domain rather than on its size alone. A file rename, a package split, or
+	// the grammar moving out of instr.go all produce a walk that reads a real file and finds
+	// nothing this registry is about — and an empty domain agrees with any registry (#29). These
+	// three names are the dispatch, the immediate vocabulary, and the deferred-decline recorder:
+	// the grammar is not in this file if they are not.
+	for _, want := range []string{"instr", "imm", "decline"} {
+		if !funcs[want] {
+			t.Fatalf("%s declares no %s: the instruction grammar has moved, so this control's "+
+				"domain is a file that no longer holds its subject — re-point grammarFile rather "+
+				"than reading its silence as a pass", grammarFile, want)
+		}
+	}
+	if len(found) < 10 {
+		t.Fatalf("found %d sentinels mentioned in %s, want ≥10: the grammar raises more than "+
+			"that, so a domain this small is the walk failing rather than the file shrinking",
+			len(found), grammarFile)
+	}
+	return found
+}
+
+// TestEveryInstrGrammarSentinelIsInTheConstExprRegistry is grave #531's tripwire: #264's
+// relation, pointed at the *second* registry.
+//
+// #264's control asserts that every sentinel in the package is in `declaredErrors` or excluded
+// with a reason. That is one registry, and the grave's own header says the space is (sentinel ×
+// registry). `ErrZeroFlagExpected` was enrolled in `declaredErrors` — so that control was
+// green — omitted from `constExprErrors`, and found by `FuzzConstExprProgress` on `fe 03 30`
+// while `make check` passed. Fourth instance of the class, second one found by the fuzzer.
+//
+// Three relations, and they fail for unrelated reasons:
+//
+//   - **Forwards.** Every sentinel the grammar mentions is in `constExprErrors` or excluded with
+//     a reason. This is the arm that fires on #531's omission.
+//   - **Backwards.** Every name in `constExprErrors` is a sentinel the package declares — a
+//     stale entry is a claim about nobody.
+//   - **Subset.** `constExprErrors ⊆ declaredErrors`, because the narrower claim is a claim
+//     about a subset of the module grammar's errors: an entry here and not there would mean the
+//     instruction grammar may return something the decoder may not. Stated as a subset and not
+//     an equality on purpose — an equality would make one list derivable from the other, which
+//     is the tautology `constExprErrors`' own comment declines.
+func TestEveryInstrGrammarSentinelIsInTheConstExprRegistry(t *testing.T) {
+	domain := packageSentinels(t)
+	grammar := grammarSentinels(t)
+	narrow := registryNames(t, "constExprErrors")
+	wide := registryNames(t, "declaredErrors")
+
+	// Vacuity, per side. The relation notices an added or retired sentinel; these notice a
+	// registry that collapsed to nothing, which reads as agreement.
+	if len(narrow) < 10 {
+		t.Fatalf("read %d identifiers out of constExprErrors, want ≥10: an empty registry "+
+			"agrees with any domain, which is the vacuity this floor exists for", len(narrow))
+	}
+	if len(narrow) != len(constExprErrors) {
+		t.Errorf("read %d identifiers out of constExprErrors' literal but the slice holds %d "+
+			"values: the AST and the value must describe the same set, so either an entry is "+
+			"not a bare identifier (this reader skips those) or a name is listed twice",
+			len(narrow), len(constExprErrors))
+	}
+	if len(excludedFromConstExprErrors) < 3 {
+		t.Fatalf("the exclusion set holds %d entries, want ≥3: the three function-body-layer "+
+			"sentinels are all deliberately out, so a shorter set means one was dropped and its "+
+			"sentinel now reads as an unenrolled grammar error", len(excludedFromConstExprErrors))
+	}
+
+	for name, sites := range grammar {
+		switch {
+		case narrow[name] && excludedFromConstExprErrors[name] != "":
+			t.Errorf("%s (%s) is both in constExprErrors and in that registry's exclusion set: "+
+				"the two answer one question and must not disagree", name, sites[0])
+		case narrow[name], excludedFromConstExprErrors[name] != "":
+			// Enrolled or excluded with a reason: either is an answer.
+		case excludedFromDeclaredErrors[name] != "":
+			// Undeclared for the whole module grammar, so a fortiori not an instruction-grammar
+			// verdict. errNoImmReader and errNotEmptyBlockType reach here, and routing them
+			// through the wider exclusion set rather than copying their reasons is deliberate:
+			// two copies of one reason are two authorities that can drift.
+		default:
+			t.Errorf("%s (%s) is in neither constExprErrors nor either exclusion set — grave "+
+				"#531. Add it to constExprErrors if the instruction grammar may return it, or "+
+				"to excludedFromConstExprErrors with the reader that raises it if it cannot. "+
+				"Left in neither, FuzzConstExprProgress reports it as an undeclared error with "+
+				"no defect behind it — which is how #531 arrived", name, strings.Join(sites, " "))
+		}
+	}
+
+	for name := range narrow {
+		if _, ok := domain[name]; !ok {
+			t.Errorf("constExprErrors names %s, which is not a package-level error sentinel in "+
+				"the non-test sources: either it was retired (drop the entry) or this control's "+
+				"recognizer no longer matches its declaration", name)
+		}
+		if !wide[name] {
+			t.Errorf("constExprErrors names %s and declaredErrors does not: the instruction "+
+				"grammar cannot be allowed to return an error the decoder is not allowed to "+
+				"return, so the narrower registry must be a subset of the wider one", name)
+		}
+	}
+	for name, reason := range excludedFromConstExprErrors {
+		if _, ok := grammar[name]; !ok {
+			t.Errorf("the exclusion set names %s (%q), which no function body in instr.go "+
+				"mentions: a stale exclusion is a suppression with no subject, and this one "+
+				"would hide the sentinel's return if the raise came back", name, reason)
+		}
+	}
+
+	t.Logf("%d sentinels mentioned in the grammar, %d enrolled in constExprErrors, %d excluded "+
+		"here, %d excluded from declaredErrors", len(grammar), len(narrow),
+		len(excludedFromConstExprErrors), len(excludedFromDeclaredErrors))
 }
