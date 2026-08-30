@@ -33,9 +33,23 @@ Ask the instrument: `go test ./internal/spec/ -run TestPhase1Files -v` prints th
 - **v2 — stack switching.** Contract §7: growable continuations, morestack analog.
 - **v3 — component model + WASI 0.3.** Contract §6.
 
-Current phase: **v0**. Do not reach ahead of the phase without a decision doc approving it. The
+Current phase: **v1**, since the signed `v0.4.0` tag of 2026-08-28 — *"v0's closure set is
+complete"*, all twelve conditions discharged (#464, #499), the `v0 interpreter` milestone closed at 99
+issues. Do not reach ahead of the phase without a decision doc approving it. The
 ladder is a sequence of *artifacts*, not of instruments: the harness, the controls, and the
 generated tables are how those artifacts are known to be right; they are never the deliverable.
+
+**v1's own artifacts are untouched, and the line names the phase rather than the progress.** The
+§§2–5 boundary work — OS-thread spawn, futex wait/notify, engine-native epochs and STW, the §4 memory
+model with its litmus battery — has not started; what is in flight is gated front-end work for the
+threads proposal (`gate:threads`: the `shared` flag, the keyword table, the 67 atomic mnemonics). This
+is stated because `v0.4.0`'s own release note says *"it is not v1 … v0 closing means v0's conditions
+are discharged, not that the next phase has begun"*, and **that sentence is true about the artifacts
+and was written before the work that followed it** — so a reader who finds it must not read this line
+as claiming §§2–5 exist. What advanced is which phase is current, on the only evidence that can settle
+it: v0's conditions are discharged and its milestone is closed, so *no* phase-line value naming v0 is
+true. (Ruling: Scott, on the #534 review — dissolve #527 rather than adjudicate it, since both of its
+readings turn on which phase is current.)
 
 ## Where the work is tracked
 

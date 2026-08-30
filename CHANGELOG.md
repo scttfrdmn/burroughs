@@ -180,6 +180,22 @@ weakly-ordered platform.
 
 ### Changed
 
+- **`CLAUDE.md`'s phase line advances to `v1`, dissolving
+  [#527](https://github.com/scttfrdmn/burroughs/issues/527) rather than adjudicating it.** `Current
+  phase: **v0**` described a state that ended at the signed `v0.4.0` tag of 2026-08-28 — *"v0's
+  closure set is complete"*, twelve conditions discharged
+  ([#464](https://github.com/scttfrdmn/burroughs/issues/464),
+  [#499](https://github.com/scttfrdmn/burroughs/issues/499)), the `v0 interpreter` milestone closed
+  at 99 issues — so **no phase-line value naming v0 was true**, and #527's two readings both turned
+  on which phase is current. No decision doc: nothing is being chosen, a stale claim is being
+  corrected. The line now also states that **v1's own §§2–5 artifacts are untouched**, because
+  `v0.4.0`'s release note says *"it is not v1 … not that the next phase has begun"* — true about the
+  artifacts, written before the work that followed it, and left standing it would make this page's
+  new line read as a claim that OS-thread spawn and the §4 litmus battery exist. *A sentence written
+  before a change, left standing after it, tells the next reader the tree is in a state it is not* —
+  which is the shape #527 was filed about, so the repair does not get to recreate it one line down.
+  (Ruling: Scott, on the #534 review.)
+
 - **[#9](https://github.com/scttfrdmn/burroughs/issues/9)'s closure criterion is now *un-achieved*
   over the threads lane, which retracts the "and it holds" in the entry below — landed in the same
   `[Unreleased]`, one slice later** ([#524](https://github.com/scttfrdmn/burroughs/issues/524),
