@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/scttfrdmn/burroughs/internal/gen"
 	"github.com/scttfrdmn/burroughs/internal/gen/mllex"
 )
 
@@ -166,31 +167,11 @@ const CoreAuthority = "third_party/spec/interpreter/text/lexer.mll"
 func (t *Table) WithSource(s Source) *Table {
 	s.Contributed = len(t.Arms)
 	t.Sources = []Source{s}
-	tag := SourceTag(s.Path)
+	tag := gen.SourceTag(s.Path)
 	for i := range t.Arms {
 		t.Arms[i].From = tag
 	}
 	return t
-}
-
-// SourceTag shortens an authority path to what a row's citation carries: `spec/lexer.mll`,
-// `spec-threads/lexer.mll`. The distinguishing components only — both pins license a file
-// named lexer.mll under an identical `interpreter/text/` subpath, so the filename alone
-// cannot say which, and the full path repeated on 659 rows says it 659 times.
-func SourceTag(path string) string {
-	trimmed := strings.TrimPrefix(path, "third_party/")
-	i := strings.LastIndex(trimmed, "/")
-	if i < 0 {
-		// A bare filename, which is what the falsification tests pass. Returned as it came:
-		// a tag is a shortening, and there is nothing to shorten.
-		return trimmed
-	}
-	dir, file := trimmed[:i], trimmed[i+1:]
-	// The pin's own directory, not the file's — `interpreter/text` is common to both.
-	if i := strings.Index(dir, "/"); i >= 0 {
-		dir = dir[:i]
-	}
-	return dir + "/" + file
 }
 
 // Compose widens base with every keyword overlay has and base lacks, and returns the union.
@@ -235,7 +216,7 @@ func Compose(base, overlay *Table, overlayMeta Source) (*Table, error) {
 	}
 
 	arms := slices.Clone(base.Arms)
-	tag := SourceTag(overlayMeta.Path)
+	tag := gen.SourceTag(overlayMeta.Path)
 	added := 0
 	for _, a := range overlay.Arms {
 		if have[a.Keyword] {

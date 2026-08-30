@@ -517,7 +517,7 @@ keyword-drift:
 # Named `opcodes-text` rather than `optable` or `opcodes-wat` because the pair it belongs to
 # is (`opcodes`, `opcodes-text`): same fact, two directions — one says what a byte decodes
 # to, the other what a mnemonic encodes to.
-opcodes-text: spec-ref
+opcodes-text: spec-ref threads-ref
 	$(GO) run ./internal/gen/opgen/cmd/opgen -o internal/text/opcodes.go
 	@echo "regenerated internal/text/opcodes.go"
 
@@ -527,9 +527,15 @@ opcodes-text: spec-ref
 # green while a regexp silently lost 25 wrapped lexer arms (411 of 436) — see the package's
 # TestWrappedArmsAreRead.
 #
-# Only the reference is guarded, not the suite: unlike keyword-drift this package's tests read
-# no suite vector. Each recipe states its own preconditions, which is the whole reason that
-# rule exists — an inherited guard would send a reader to fix an absence that is not there.
+# Six files across two pins, and the second pin's three are as load-bearing as the first's: the
+# join is composed now (#524), so a tree holding only the core pin fails on a `refPins` walk whose
+# message is about vacuity and sends the reader to re-run the target they already ran — opcode-drift's
+# finding, restated because the same absence reaches this package through three readers rather than
+# one. Which pin a recipe needs is not a fact the recipe can infer; it is stated, per pin.
+#
+# No suite vector is guarded, unlike keyword-drift: this package's tests read none. Each recipe
+# states its own preconditions, which is the whole reason that rule exists — an inherited guard
+# would send a reader to fix an absence that is not there.
 #
 # Whole package, -count=1, $(STRICT): see opcode-drift for each.
 opcodes-text-drift:
@@ -537,6 +543,11 @@ opcodes-text-drift:
 	    [ ! -f third_party/spec/interpreter/text/parser.mly ] || \
 	    [ ! -f third_party/spec/interpreter/text/lexer.mll ]; then \
 		echo "reference not vendored; run: make spec-ref"; exit 1; \
+	fi
+	@if [ ! -f third_party/spec-threads/interpreter/binary/decode.ml ] || \
+	    [ ! -f third_party/spec-threads/interpreter/text/parser.mly ] || \
+	    [ ! -f third_party/spec-threads/interpreter/text/lexer.mll ]; then \
+		echo "threads reference not vendored; run: make threads-ref"; exit 1; \
 	fi
 	$(STRICT) $(GO) test -v -shuffle=on -count=1 ./internal/gen/opgen/
 
@@ -548,8 +559,12 @@ opcodes-text-drift:
 # the text, the flags byte it defaults into is a legal alignment, and validation rejects only
 # *over*-alignment. So a mistyped default yields an image that decodes clean and differs from
 # its source in a byte no assert_malformed inspects. That is contract §9 G-3, and it is the whole
-# argument for machine-reading these 45 numbers rather than typing them.
-memarg: spec-ref
+# argument for machine-reading these 111 numbers rather than typing them.
+#
+# **Both pins, and the atomic rows are where the argument is strongest** (#524). For every one of the
+# threads pin's 66 mnemonics the natural alignment is also the *only legal* one, an atomic access
+# having to be naturally aligned, so a wrong row there is not a slow module but a rejected one.
+memarg: spec-ref threads-ref
 	$(GO) run ./internal/gen/memarggen/cmd/memarggen -o internal/text/memarg.go
 	@echo "regenerated internal/text/memarg.go"
 
@@ -563,12 +578,19 @@ memarg: spec-ref
 # nothing in either package's own tests would name the cause. A shared reader's drift check
 # belongs to whichever target is closest to it, and this is that target.
 #
-# Only the reference is guarded — no suite vector is read, and there is no vector that could be.
+# Only the references are guarded — no suite vector is read, and there is no vector that could be.
+#
+# Two lexers across two pins, stated per pin: the table is composed now (#524), so a tree holding
+# only the core pin fails on a `refPins` walk whose message is about vacuity and sends the reader to
+# re-run the target they already ran. Which pin a recipe needs is not a fact the recipe can infer.
 #
 # Whole packages, -count=1, $(STRICT): see opcode-drift for each.
 memarg-drift:
 	@if [ ! -f third_party/spec/interpreter/text/lexer.mll ]; then \
 		echo "reference not vendored; run: make spec-ref"; exit 1; \
+	fi
+	@if [ ! -f third_party/spec-threads/interpreter/text/lexer.mll ]; then \
+		echo "threads reference not vendored; run: make threads-ref"; exit 1; \
 	fi
 	$(STRICT) $(GO) test -v -shuffle=on -count=1 ./internal/gen/mllex/ ./internal/gen/memarggen/
 

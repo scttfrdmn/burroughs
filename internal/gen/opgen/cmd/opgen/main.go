@@ -8,10 +8,16 @@
 // or, normally, 'make opcodes-text'. The output is committed, so a fresh clone builds with no
 // fetch; 'make opcodes-text-drift' asserts the committed file still agrees with the reference.
 //
-// Three sources, one revision: decode.ml, parser.mly, lexer.mll are all read at the SHA the
-// fetch script pins, and the join is only meaningful if they are the same revision. The SHA is
-// read from that script rather than passed in, for the reason keywordgen's cmd states — a SHA
+// Three sources per pin, one revision *per pin*: decode.ml, parser.mly and lexer.mll are read at
+// the SHA that pin's own fetch script names, and the join of one pin's three files is only
+// meaningful if they are the same revision. Across pins they are not, and must not be — the core
+// pin is at bdd7164 and the threads pin at cc535ad, so provenance is per authority and the
+// composition is base-wins. No SHA is spelled here, for the reason keywordgen's cmd states: a SHA
 // typed at a second site is a citation that can drift from the pin it claims to describe.
+//
+// The whole build is opgen.BuildFromPins, not a loop here, because the drift control has to build
+// the table the same way this command does or it compares the committed file against a
+// differently-composed one.
 package main
 
 import (
@@ -21,7 +27,6 @@ import (
 
 	"github.com/scttfrdmn/burroughs/internal/gen"
 	"github.com/scttfrdmn/burroughs/internal/gen/opgen"
-	"github.com/scttfrdmn/burroughs/internal/testenv"
 )
 
 func main() {
@@ -35,21 +40,7 @@ func main() {
 }
 
 func run(out string) error {
-	sha, err := gen.PinnedRefRev()
-	if err != nil {
-		return err
-	}
-
-	srcs := map[string]string{}
-	for _, p := range []string{testenv.RefDecodeML, testenv.RefParserMLY, testenv.RefLexerMLL} {
-		b, rerr := os.ReadFile(p)
-		if rerr != nil {
-			return fmt.Errorf("%w (run: make spec-ref)", rerr)
-		}
-		srcs[p] = string(b)
-	}
-
-	tab, err := opgen.Join(srcs[testenv.RefDecodeML], srcs[testenv.RefParserMLY], srcs[testenv.RefLexerMLL], sha)
+	tab, err := opgen.BuildFromPins()
 	if err != nil {
 		return err
 	}

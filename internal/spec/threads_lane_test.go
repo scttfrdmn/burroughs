@@ -71,24 +71,36 @@ type threadsLaneRow struct {
 	// caveat: a bucket is a failure.** A vector the validator answered *correctly* leaves no row, so
 	// this column counts the arrivals the validator got wrong and is a **lower bound** on arrivals
 	// overall. That is enough for the vacuity question and not enough for a coverage claim, so it is
-	// only ever used for the first. The measured values are 6 (imports.wast) and 8 (memory.wast),
-	// which is what makes the lane's 0 declines a real 0 rather than an analytic one: at least 14
-	// vectors got as far as the type checker and none was refused.
+	// only ever used for the first. The measured values are 6 (imports.wast), 8 (memory.wast) and —
+	// since #524's text half — **51 (atomic.wast)**, which is the column doing the job it was pinned
+	// for. Before that slice the lane's 0 declines were a real 0 rather than an analytic one because
+	// 14 vectors got as far as the type checker and none was refused; now 51 more arrive and 51 are
+	// refused.
 	//
-	// Pinned rather than logged so the transition is a reviewed diff in either direction. It will
-	// move when the wat `shared` keyword lands — in a PR whose author would otherwise have no reason
-	// to know that landing it puts a stamped closure claim back in play.
+	// Pinned rather than logged so the transition is a reviewed diff in either direction. The
+	// paragraph above used to end *"it will move when the wat `shared` keyword lands — in a PR whose
+	// author would otherwise have no reason to know that landing it puts a stamped closure claim back
+	// in play."* It moved, and **not on that slice**: `shared` landed and `atomic.wast` stayed at 0,
+	// because the modules still died on their atomic mnemonics. The reader for those mnemonics is what
+	// moved it. The prediction named the right mechanism class and the wrong member of it, which is
+	// the reason this column is pinned rather than forecast.
 	ValidateReached int
 	// InvalidReached narrows ValidateReached to the criterion's own population: validate-stratum
 	// failures on `assert_invalid` commands. Separate because the aggregate is not evidence about
 	// the criterion — a validate-stratum failure on an `assert_return`'s module is the accept
 	// direction, and #9's criterion quantifies over the reject direction only.
 	//
-	// **Measured 14 against ValidateReached's 14, so the narrowing is a no-op today**, and the
-	// column stays anyway. Not on the grounds that it might diverge later: reading the criterion off
-	// the aggregate would be reading it off a figure that *happens* to coincide, and protection by
-	// coincidence stops protecting without notice. The first `assert_return` module this lane
-	// rejects wrongly separates them.
+	// It was **14 against ValidateReached's 14 — a no-op narrowing** — and the column was kept anyway,
+	// on the argument that reading the criterion off the aggregate would be reading it off a figure
+	// that *happens* to coincide, and protection by coincidence stops protecting without notice.
+	//
+	// **They have now separated: 48 against 51.** The three are `atomic.wast`'s bare `module`
+	// definitions, declined for the same opcodes as the 48 and scored on the validator's answer since
+	// #341. So the divergence arrived from the accept direction, which is what the column was for; the
+	// sentence predicting it named an `assert_return` module and the member was a `module` directive,
+	// the same class of near-miss as ValidateReached's own prediction above. Had the aggregate been the
+	// criterion's figure, this slice would have reported 51 declines against a population of 96
+	// `assert_invalid` vectors — three of them not `assert_invalid` at all.
 	InvalidReached int
 	// InvalidFailed is every failure on an `assert_invalid` command, at any stratum, and it is here
 	// so the criterion's population is accounted for rather than assumed: 96 asked, **62 failed
@@ -121,9 +133,15 @@ type threadsLaneRow struct {
 	// Pinned in both directions, which is the half that matters now. `true` going false is a gate
 	// gone inert again — the state this lane spent its first two revisions in, undetectably. `false`
 	// going true is a file whose vectors have newly reached the gate, which is progress and still a
-	// reviewed diff. `atomic.wast` and `exports.wast` are the two `false`s: `atomic.wast`'s modules
-	// are refused for their atomic mnemonics before any memory type is read, and `exports.wast`
-	// declares no shared memory at all.
+	// reviewed diff. **`exports.wast` is the only `false` left**, declaring no shared memory at all.
+	//
+	// `atomic.wast` was the other one, and its stated reason was exact: *"its modules are refused for
+	// their atomic mnemonics before any memory type is read."* #524's text half removed precisely that
+	// blocker, so the modules now reach the memory type and the gate becomes load-bearing over the
+	// file — `false` going `true`, the direction this column's doc calls progress-and-still-a-reviewed-
+	// diff. Worth keeping the old reason in view rather than deleting it: a `GateSensitive: false` whose
+	// justification names a specific upstream blocker is a prediction that the flag flips when that
+	// blocker clears, and this one paid out.
 	GateSensitive bool
 }
 
@@ -149,9 +167,13 @@ type threadsLaneRow struct {
 var threadsLane = map[string]threadsLaneRow{
 	"atomic.wast": {
 		Heads: map[string]int{"assert_invalid": 48, "assert_return": 142, "assert_trap": 45, "invoke": 59, "module": 3},
-		Pass:  0, Fail: 297, Unsupported: 0, Gated: 0, Unimplemented: 0, Bound: 0,
-		Declined: 0, ValidateReached: 0, InvalidReached: 0, InvalidFailed: 48,
-		GateSensitive: false,
+		// Re-pinned **upward** by #524's text half, from `Pass: 0, Fail: 297, Declined: 0,
+		// ValidateReached: 0, InvalidReached: 0` and `GateSensitive: false`. The direction and the
+		// mechanism of every moved column are in atomicWastPartition below, which asserts the
+		// partition rather than leaving these five numbers to be read as a win.
+		Pass: 59, Fail: 238, Unsupported: 0, Gated: 0, Unimplemented: 0, Bound: 0,
+		Declined: 51, ValidateReached: 51, InvalidReached: 48, InvalidFailed: 48,
+		GateSensitive: true,
 	},
 	"exports.wast": {
 		Heads: map[string]int{"assert_invalid": 22, "assert_return": 6, "module": 60},
@@ -243,8 +265,17 @@ var threadsLane = map[string]threadsLaneRow{
 // text changed from `unknown operator shared` to `unexpected token` and the count did not move.
 // *An unmeasured complement is not an empty one*: attributing a fail set to the one cause its
 // message names leaves every cause behind it unmeasured, and a necessary condition reads exactly
-// like a sufficient one until it is removed. The board now reads `279 pass, 338 fail` — the +10 is
-// `exports.wast` (+6), `memory.wast` (+3) and `imports.wast` (+1), and none of it is `atomic.wast`.
+// like a sufficient one until it is removed. That board read `279 pass, 338 fail` — the +10 was
+// `exports.wast` (+6), `memory.wast` (+3) and `imports.wast` (+1), and none of it was `atomic.wast`.
+//
+// **The third board is where that complement got measured, and the two clauses above are now spent.**
+// #524's text half gave the atomic mnemonics their `plaininstrShapes` entries, which was the last
+// stated blocker, and `atomic.wast`'s 246 execution rows finally moved — but into *two* buckets, not
+// one, and only 59 of them to `pass`. The remaining 187 reach the interpreter and find no arm. So the
+// 246 were never one mechanism seen 246 times either: the necessary-condition chain was `shared`
+// keyword → mnemonic shapes → interpreter arms, three deep, and each layer's removal exposed the next
+// while the count sat still or moved by a fraction nobody forecast. See atomicWastPartition, which
+// asserts the whole partition so a fourth layer cannot be discovered by reading a delta.
 //
 // # The lane reissues #9's closure criterion, and the reissue is measured rather than asserted
 //
@@ -254,19 +285,47 @@ var threadsLane = map[string]threadsLaneRow{
 // which is the tracked event #477 exists for — its first real occasion — so the claim gets a fresh
 // date and, being a claim about a population, a fresh measurement over that population.
 //
-// Measured: **96 asked, 62 failing at some layer, 14 decided by the validator, 0 declined.** The
-// criterion holds over the widened set. It is not vacuous — 14 vectors reach the type checker — and
-// the 14 is a lower bound on arrivals, because the validator's correct answers leave no bucket to
-// count. See threadsLaneRow's ValidateReached for the asymmetry and for the two wrong readings that
-// preceded the number.
+// Measured at the reader's arrival (#524's text half): **96 asked, 62 failing at some layer, 62
+// decided by the validator, 51 declined — 48 of them on `assert_invalid`.** The figures before it
+// were 62 failing, 14 decided, **0 declined**, and that pair is the point of this section.
 //
-// The columns are pinned so the next widening cannot happen quietly: this is the only place in the
-// tree where the criterion's population and its decline count sit beside each other as data.
+// **So the criterion is now un-achieved over this population, and no validator regression did it.**
+// `internal/validate` is untouched by the slice that moved these numbers; the reader is. Modules that
+// previously died at `unexpected token` now parse, reach the type checker, and are declined there —
+// `validator: instruction not in this slice: prefixed opcode 0xfe 0x10 (i32_atomic_load)` — so the
+// same validator answers fewer of the questions now put to it. That is Scott's #476 sentence
+// happening: *"closure can be un-achieved by a later widening with no regression in the validator,
+// and nothing currently notices that."* It is flagged for Scott rather than re-dated here, because a
+// closure criterion's discharge is a governance record and *the actor never chooses the instrument
+// that judges the actor*.
+//
+// **#477's specified mechanism would not have fired on this, and that is a finding about #477.**
+// That issue scopes its instrument to a per-command-kind predicate table — "which properties the
+// harness asserts" per `wast` kind — pinned by digest, on the #341 specimen where scoring began
+// consulting a different oracle. This slice edits no such table: every kind is asked exactly as
+// before, and what widened is the set of modules the *reader* can hand onward. Same harm, second
+// mechanism, and the detector as written is blind to it — `a capability requirement can be a
+// mechanism choice`, one level up. A widening is not only "the harness asks differently"; it is also
+// "the front end delivers more of the corpus to a layer that declines it".
+//
+// What *did* notice is this table. The columns are pinned exactly in both directions, so
+// `Declined: 0` became a failing assertion naming its own column the moment the reader landed — the
+// crude instrument caught what the designed one was scoped past. That is the argument for pinning
+// the criterion's population beside its decline count as data, which this is still the only place in
+// the tree to do.
+//
+// Not vacuous, and the vacuity term is the one that qualifies the rest: 62 vectors reach the type
+// checker, and 62 is a *lower bound* on arrivals because the validator's correct answers leave no
+// bucket to count. See threadsLaneRow's ValidateReached for the asymmetry and for the two wrong
+// readings that preceded the number.
 //
 // Landing red is the arrangement, not a concession: the board reports and the buckets are the
 // work plan (TestAllGatesOnLeavesNothingGated is deliberately red-ish for the same reason).
-// The pins are what make it a control — every column exact in both directions, so the 338
-// cannot quietly become 339 and cannot quietly become 330 either.
+// The pins are what make it a control — every column exact in both directions, so the lane's
+// **338 pass / 279 fail** cannot quietly become 339 and cannot quietly become 330 either. Quoted
+// with both terms and in that order deliberately: the pre-reader board was `279 pass / 338 fail`,
+// the +59 makes the two an exact mirror, and a bare "the 338" now names whichever figure the reader
+// already believed.
 func TestThreadsProposalLane(t *testing.T) {
 	paths := testenv.RequireProposal(t, suiteDir, threadsProposal, threadsLaneFiles)
 
@@ -425,6 +484,13 @@ func scoreThreadsLane(t *testing.T, paths []string, f binary.Features, log bool)
 			t.Log("\n" + r.Board())
 		}
 
+		// Gated on `log` so it runs once, on the gate-on board, rather than also on the gate-off
+		// board where the atomic modules never parse and every figure it asserts is a different
+		// population's.
+		if log && name == "atomic.wast" {
+			atomicWastPartition(t, r, heads)
+		}
+
 		declined, declinedInvalid, reached, invalidReached, invalidFailed := declinedInLane(r.Buckets)
 		rows[name] = threadsLaneRow{
 			Heads: heads, Pass: r.Pass, Fail: r.Fail, Unsupported: r.Unsupported,
@@ -471,6 +537,90 @@ func scoreThreadsLane(t *testing.T, paths []string, f binary.Features, log bool)
 		tot.InvalidFailed += invalidFailed
 	}
 	return rows, tot
+}
+
+// atomicWastPartition asserts *by which mechanism* each of `atomic.wast`'s 297 verdicts landed, and
+// it exists because this slice's pass count came in 59 above a registered forecast of zero.
+//
+// # The forecast, and why a favourable miss is a finding here
+//
+// #524 pre-registered, before any code: *"the parser half alone should move the pass count by 0 …
+// stated as a number so the next slice cannot bank a favourable miss: if pass moves above 0 from a
+// parser-only change, something else was wrong and it needs an explanation, not a win."* It moved to
+// **59**. So the explanation, measured: all 59 are the file's `(invoke "init" …)` directives, and
+// `init` is `(func (export "init") (param $value i64) (i64.store (i32.const 0) (local.get $value)))`
+// — a **plain** `i64.store`, carrying no `0xfe` opcode. They were failing only because the enclosing
+// module did not parse, so every directive in it failed with it; the reader made a non-atomic export
+// invokable and nothing atomic executed.
+//
+// **The forecast's error was a partition error, and it was checkable before measuring.** It split 297
+// into 48 `assert_invalid` + 3 `module` + "the 246 execution rows" and then reasoned about the 246 as
+// one mechanism. They are two: 187 rows do touch an atomic opcode, and 59 invoke a setup function
+// that never did. *A count is not a price — decompose by mechanism*, applied to a forecast instead of
+// to a cost.
+//
+// # What the partition pins
+//
+//	 59  invoke            → pass       (no 0xfe opcode in `init`)
+//	187  assert_return+trap → fail      StratumExec, `interp: no arm for opcode fe NN`
+//	 51  assert_invalid+module → fail   StratumValidate, Declined
+//
+// 66 distinct `fe NN` codes appear in that middle row, against the **67** `0xfe` arms
+// `TestReservedByteWireFormsAreTheReferences` finds in the grammar. The missing one is
+// `atomic.fence`, and it is missing because no fetched-corpus vector mentions it — see
+// `reservedByteWireForms` in internal/text/code.go, where citing the wrong same-named file for that
+// fact cost a wrong claim.
+//
+// The point of asserting the partition rather than only the five re-pinned columns: those columns can
+// be edited into agreement with any story. This says the fail side has **no residue** — every failing
+// row is one of exactly two mechanisms — so the first atomic instruction that actually executes and
+// returns a wrong value creates a third bucket and lands here as an unmodelled remainder, rather than
+// arriving as a pass-count movement someone reads as progress. Keyed on `Stratum`/`Declined` rather
+// than on bucket text, per *measure with the instrument, not a regex*.
+//
+// Not a new instrument by the stated exemption: a predicate over the buckets the lane's own run
+// already produced.
+func atomicWastPartition(t *testing.T, r *Result, heads map[string]int) {
+	t.Helper()
+
+	exec, execCodes, declined, residue := 0, map[string]bool{}, 0, map[string]int{}
+	for key, fs := range r.Buckets {
+		for _, f := range fs {
+			switch {
+			case f.Stratum == StratumValidate && f.Declined:
+				declined++
+			case f.Stratum == StratumExec && strings.Contains(f.Got, "no arm for opcode fe "):
+				exec++
+				execCodes[strings.TrimPrefix(f.Got, "interp: no arm for opcode ")] = true
+			default:
+				residue[key]++
+			}
+		}
+	}
+
+	t.Logf("atomic.wast partition: %d pass (invoke=%d), %d exec-no-arm over %d distinct fe codes, "+
+		"%d validate-declined, %d unmodelled", r.Pass, heads["invoke"], exec, len(execCodes),
+		declined, len(residue))
+
+	if len(residue) > 0 {
+		t.Errorf("atomic.wast has %d failure bucket(s) outside both known mechanisms: %v — a third "+
+			"mechanism here is the interesting case (an atomic op that executed and answered "+
+			"wrongly), not a pin to update", len(residue), residue)
+	}
+	if r.Pass != heads["invoke"] {
+		t.Errorf("atomic.wast passes %d but has %d invoke directives: the registered explanation for "+
+			"the +59 is that the passing set is exactly the non-atomic `init` invocations, and that "+
+			"is now false", r.Pass, heads["invoke"])
+	}
+	if want := heads["assert_return"] + heads["assert_trap"]; exec != want {
+		t.Errorf("atomic.wast charges %d failures to the interpreter, want %d (assert_return+"+
+			"assert_trap): the execution rows are the ones #524 deferred, and a change here means "+
+			"one of them stopped reaching the interpreter or started passing", exec, want)
+	}
+	if want := heads["assert_invalid"] + heads["module"]; declined != want {
+		t.Errorf("atomic.wast has %d validate-stratum declines, want %d (assert_invalid+module): "+
+			"this is the population #9's closure criterion quantifies over", declined, want)
+	}
 }
 
 // declinedInLane counts a result's validate-stratum declines, the `assert_invalid` subset of them,

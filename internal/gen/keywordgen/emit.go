@@ -3,6 +3,8 @@ package keywordgen
 import (
 	"fmt"
 	"strings"
+
+	"github.com/scttfrdmn/burroughs/internal/gen"
 )
 
 // Version is the extractor's version, stamped into the generated table's header.
@@ -99,7 +101,7 @@ type keywordKind string
 var keywords = map[string]keywordKind{
 `, auth.String(), Version, len(t.Arms), len(kinds),
 		fmt.Sprintf("`| _ -> unknown lexbuf` (%s:%d)",
-			SourceTag(t.Sources[0].Path), t.fallthroughLine))
+			gen.SourceTag(t.Sources[0].Path), t.fallthroughLine))
 
 	for _, a := range t.Arms {
 		where := "lexer.mll"

@@ -25,11 +25,11 @@ package text
 type immShape uint8
 
 const (
-	immNone        immShape = iota // 24 arms: UNREACHABLE, NOP, DROP, BINARY, …
+	immNone        immShape = iota // 25 arms: UNREACHABLE, NOP, DROP, BINARY, ATOMIC_FENCE, …
 	immIdx                         // 23 arms: BR, CALL, LOCAL_GET, …
 	immIdxIdx                      // 9 arms:  STRUCT_GET, ARRAY_COPY, …
 	immIdxOpt                      // 8 arms:  MEMORY_SIZE, TABLE_GET, …
-	immMemarg                      // 4 arms:  LOAD, STORE, VEC_LOAD, VEC_STORE
+	immMemarg                      // 10 arms: LOAD, STORE, VEC_LOAD, VEC_STORE, the six atomic kinds
 	immIdxIdxOpt                   // 2 arms:  MEMORY_COPY, TABLE_COPY
 	immLaneImms                    // 2 arms:  VEC_LOAD_LANE, VEC_STORE_LANE
 	immLaneIdx                     // 2 arms:  VEC_EXTRACT, VEC_REPLACE
@@ -82,6 +82,38 @@ var plaininstrShapes = map[keywordKind]immShape{
 
 	// idx_opt offset_opt align_opt — the memarg shape, and #63's largest bucket
 	"LOAD": immMemarg, "STORE": immMemarg, "VEC_LOAD": immMemarg, "VEC_STORE": immMemarg,
+
+	// **The threads pin's six memarg kinds, and their arms are written *narrower* than this row
+	// gives them** — `offset_opt align_opt`, with no `idx_opt` (spec-threads/parser.mly:453-459).
+	//
+	// The narrowness is a property of the *revision*, not of the instruction, and the overlay says
+	// so in its own file: its `LOAD` arm is `LOAD offset_opt align_opt` (:419), written identically
+	// to its `ATOMIC_LOAD` arm, while the core pin's `LOAD` arm is `idx_opt offset_opt align_opt`
+	// (spec/parser.mly:596). The threads baseline predates multi-memory, so *every* memarg arm in it
+	// lacks the memory index — reading that absence as a clause about atomics would be reading a
+	// stale-snapshot artifact as a spec statement. `TestAtomicMemargNarrownessIsTheRevisions` pins
+	// exactly that: the overlay's two arms agree with each other and disagree with the base's.
+	//
+	// So the shape is the *standard's*, per Scott's #524 ruling that the standard outranks the
+	// snapshot — the same ruling `internal/binary` already applies one grammar over, where #530
+	// decodes the 0xfe region's memargs with the **core** `memop` and therefore accepts the 0x40
+	// memory-index bit. A narrower reader here would reject `(i32.atomic.load 1 offset=0)`, a module
+	// the decoder accepts, which is the accept direction and is worse than the widening in the same
+	// way §9 G-3 says a wrong alignment is: it has no vector.
+	//
+	// It is a widening past the *union* of the tracked set's grammars, which is §9 G-2's subject, and
+	// it is flagged for Scott rather than settled here.
+	//
+	// ATOMIC_FENCE is `immNone` below, not here: its arm has an empty right-hand side.
+	"ATOMIC_LOAD": immMemarg, "ATOMIC_STORE": immMemarg, "ATOMIC_RMW": immMemarg,
+	"ATOMIC_RMW_CMPXCHG": immMemarg,
+	"MEMORY_ATOMIC_WAIT": immMemarg, "MEMORY_ATOMIC_NOTIFY": immMemarg,
+
+	// `atomic.fence` (spec-threads/parser.mly:455), whose arm takes no immediates at all. Its *wire*
+	// form does — `op 0xfe; op 0x03; op 0x00` (spec-threads/encode.ml:305) — and that trailing byte
+	// is not an immediate the text writes, so the encode is refused rather than truncated: see
+	// reservedByteWireForms (#532).
+	"ATOMIC_FENCE": immNone,
 
 	// the singletons and small groups
 	"MEMORY_COPY": immIdxIdxOpt, "TABLE_COPY": immIdxIdxOpt,
@@ -516,6 +548,14 @@ func (p *parser) plaininstr() (bool, error) {
 		// this is an encode refusal, and it is checked before `opBytes` so the message names the
 		// reason rather than the mnemonic's absence from a table it is in fact present in.
 		return true, p.refuseUnencodable(t, "the "+t.Text+" instruction's immediates")
+	}
+	if reservedByteWireForms[t.Text] {
+		// A shape that *is* encodable, on a mnemonic whose wire form holds a byte the shape does not
+		// express. After the shape check so a mnemonic ever failing both is reported by shape, which
+		// is the reason that covers the whole class rather than the one member — see
+		// reservedByteWireForms for the byte and #532 for the two ways to write it.
+		return true, errf(t, "cannot yet encode %s: its wire form ends in a reserved byte no "+
+			"immediate shape writes (#532)", t.Text)
 	}
 	op, ok := opBytes(t.Text)
 	if p.opOverride != nil {

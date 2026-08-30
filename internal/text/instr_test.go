@@ -4,9 +4,11 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/scttfrdmn/burroughs/internal/gen/opgen"
 	"github.com/scttfrdmn/burroughs/internal/testenv"
 )
 
@@ -92,52 +94,350 @@ func productionArms(t *testing.T, src, nonterminal string) []string {
 	return arms
 }
 
+// plaininstrAuthority is one pin's text parser: the path it is cited by, its contents, and the name
+// *that revision* gives the flat-instruction production.
+type plaininstrAuthority struct {
+	path       string
+	src        string
+	production string
+}
+
+// plaininstrSpellings are the names upstream has given the flat-instruction production, and the
+// second one is a finding rather than defensive breadth: the core pin writes `plaininstr` (:557) and
+// the threads pin writes `plain_instr` (:386). Upstream renamed it after cc535ad.
+//
+// **A nonterminal name is part of a citation, and this is grave #529 one grammar over.** That grave
+// was a row citing a bare `lexer.mll:266`, which resolves against whichever of two same-named files
+// the reader opens; this is the same ambiguity inside a file — a control asking for `plaininstr`
+// against the threads parser asks for a production that does not exist there, and every arm-derived
+// assertion is then made against an empty set. It was caught by `productionBody`'s own fatal, which
+// is that fatal earning its place: the alternative to a hard failure on a missing production is
+// exactly the *comparison against nothing* every floor in this file is written against.
+var plaininstrSpellings = []string{"plaininstr", "plain_instr"}
+
+// plaininstrProduction resolves which spelling one authority uses, and fails on zero or two.
+//
+// Exactly one, both directions. Zero means the reader has lost the production — the empty-set case
+// above. **Two** means the revision defines both, at which point picking either is a first-match
+// guess: *a first-match pick declines to ask*, and the two would be different grammars for one
+// question. Neither branch has a corpus witness, so both are asserted.
+func plaininstrProduction(t *testing.T, path, src string) string {
+	t.Helper()
+	var found []string
+	for _, name := range plaininstrSpellings {
+		if regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(name) + ` :`).MatchString(src) {
+			found = append(found, name)
+		}
+	}
+	if len(found) != 1 {
+		t.Fatalf("%s defines %d of the flat-instruction production's known spellings %v (found %v); "+
+			"a nonterminal name is part of a citation, and reading arms from the wrong one — or from "+
+			"none — makes every assertion below a comparison against an incomplete grammar",
+			path, len(found), plaininstrSpellings, found)
+	}
+	return found[0]
+}
+
+// plaininstrAuthorities returns each pin's licensed text parser, base first.
+//
+// The path comes from `opgen.ParserFor` rather than from a suffix spelled here — one suffix, one
+// owner, which is the rule `keywordgen.LexerFor` states and the generators already follow. A pin
+// licensing no text parser contributes no grammar and is skipped, which is how a future pin whose
+// authority is a decoder stays out of this composition without naming itself.
+//
+// The floor is on the *pin set*, and it is the one the per-kind assertions below cannot reach: a
+// `refPins` whose threads entry lost its parser licence would compose one authority, find the seven
+// atomic kinds missing from the reference, and report drift against a `plaininstrShapes` that is
+// right. That failure names the wrong subject, so it is caught here where the subject is the fetch.
+func plaininstrAuthorities(t *testing.T) []plaininstrAuthority {
+	t.Helper()
+	var out []plaininstrAuthority
+	for _, pin := range testenv.RefPins() {
+		path, ok := opgen.ParserFor(pin)
+		if !ok {
+			continue
+		}
+		src := testenv.RequireSpecRef(t, path)
+		out = append(out, plaininstrAuthority{
+			path: path, src: src, production: plaininstrProduction(t, path, src),
+		})
+	}
+	if len(out) < 2 {
+		t.Fatalf("only %d pin licenses a text parser, want >=2 (core and threads); a grammar read "+
+			"from one authority omits a tracked proposal's arms and reads as complete", len(out))
+	}
+	return out
+}
+
 // plaininstrArms re-extracts `plaininstr`'s arms from the reference: kind → the immediate
 // sequences written after it.
 //
 // This is the *authority* half of the drift control, and it shares no code with
 // `plaininstrShapes` — an extractor derived from the thing it checks agrees by construction,
 // which is a control comparing a value to itself.
+//
+// # More than one authority, composed base-wins
+//
+// The grammar is the union of the tracked set (§9 G-2), so the arms are composed over the pin set —
+// and composed **base-wins**, for the reason keywordgen measured and this file can witness directly:
+// the threads pin's baseline predates multi-memory, so its `LOAD` arm is `LOAD offset_opt align_opt`
+// (spec-threads/parser.mly:419) against the core pin's `idx_opt offset_opt align_opt`
+// (spec/parser.mly:596). A wholesale read of the overlay does not *add* the atomic arms, it rewrites
+// four memarg arms to a three-proposals-stale form and deletes every GC and memory64 arm — so the
+// base's arms for a kind win, and the overlay contributes only kinds the base has no arm for.
+//
+// TestAtomicMemargNarrownessIsTheRevisions pins that `LOAD` disagreement as the *reason* the
+// atomic arms' missing `idx_opt` is not a claim about atomics.
 func plaininstrArms(t *testing.T) map[keywordKind][]string {
 	t.Helper()
-	src := testenv.RequireSpecRef(t, testenv.RefParserMLY)
+	arms, _ := plaininstrArmsByPin(t)
+	return arms
+}
 
+// plaininstrArmsOf extracts one authority's `plaininstr` arms, uncomposed.
+//
+// Split out so a control can hold the *two* authorities apart — the composed table cannot witness
+// that the overlay's `LOAD` arm disagrees with the base's, because base-wins is precisely what
+// discards it. TestAtomicMemargNarrownessIsTheRevisions is that control, and this is the reader it
+// needs.
+func plaininstrArmsOf(t *testing.T, auth plaininstrAuthority) map[keywordKind][]string {
+	t.Helper()
 	arms := map[keywordKind][]string{}
-	total := 0
-	for _, arm := range productionArms(t, src, "plaininstr") {
+	for _, arm := range productionArms(t, auth.src, auth.production) {
 		fields := strings.Fields(arm)
 		kind := keywordKind(fields[0])
 		if kind != keywordKind(strings.ToUpper(string(kind))) {
 			// A lowercase leader is a nonterminal, not a token: not a mnemonic arm. None exist
 			// in `plaininstr` at bdd7164; the branch is here so one appearing upstream is
-			// skipped rather than recorded as a bogus kind, and the arm floor below still
-			// notices if many of them appear.
+			// skipped rather than recorded as a bogus kind, and the arm floors below still
+			// notice if many of them appear.
 			continue
 		}
 		arms[kind] = append(arms[kind], strings.Join(fields[1:], " "))
-		total++
-	}
-
-	// Vacuity, on both counts: 83 arms over 81 kinds at bdd7164, the two-arm kinds being why
-	// those numbers differ. Floors rather than equalities, because upstream adding an
-	// instruction must not fail this test — but *a comparison against an empty set succeeds*,
-	// so without a plausible-size floor a reader that silently stopped working would make
-	// every assertion below pass by asking nothing.
-	//
-	// Both figures are the extractor's own printed output, not a hand count. The first draft
-	// of this comment said 82 kinds and the two `checked` floors below said 80 and 82; all
-	// three were read off a hand tally and all three were wrong, in the direction that makes
-	// a floor harder to satisfy rather than easier. Printed: 81, 79, 81.
-	if total < 70 || len(arms) < 70 {
-		t.Fatalf("extracted %d plaininstr arms over %d kinds, want >=70 of each (83/81 at "+
-			"bdd7164); the extractor is not reading the production and the drift checks below "+
-			"would agree with nothing", total, len(arms))
 	}
 	return arms
 }
 
+// plaininstrArmsByPin returns the composed arms and, beside them, the kinds each authority actually
+// *contributed*.
+//
+// The second return value is not the same fact as "how many arms the authority holds", and the
+// distinction is one memarggen paid for: the threads parser has 83 `plaininstr` arms and contributes
+// 7, because base-wins keeps only the kinds the base has no arm for. A control asserting the overlay
+// was *read* would pass over a composition that kept nothing from it.
+func plaininstrArmsByPin(t *testing.T) (map[keywordKind][]string, map[string][]keywordKind) {
+	t.Helper()
+
+	arms := map[keywordKind][]string{}
+	contributed := map[string][]keywordKind{}
+	total := 0
+	for _, auth := range plaininstrAuthorities(t) {
+		for kind, seqs := range plaininstrArmsOf(t, auth) {
+			if _, claimed := arms[kind]; claimed {
+				// Base-wins: an overlay arm for a kind the base already gave one is *dropped*, not
+				// appended. Appending would make every memarg kind a two-arm kind and send it into
+				// the initSugarKinds branch below, which is a failure naming the wrong fact.
+				continue
+			}
+			arms[kind] = seqs
+			contributed[auth.path] = append(contributed[auth.path], kind)
+			total += len(seqs)
+		}
+	}
+	for path := range contributed {
+		slices.Sort(contributed[path])
+	}
+	t.Logf("plaininstr arms composed: %d arms over %d kinds", total, len(arms))
+	for _, auth := range plaininstrAuthorities(t) {
+		t.Logf("  %s contributed %d kinds", auth.path, len(contributed[auth.path]))
+	}
+
+	// Every authority contributes, which is the check `total` cannot make: an overlay whose every
+	// kind the base already holds reads its whole file and keeps nothing, and the composition is
+	// then exactly the base with a second read charged to it.
+	for _, auth := range plaininstrAuthorities(t) {
+		if len(contributed[auth.path]) == 0 {
+			t.Errorf("%s contributed no plaininstr kind to the composition; the pin is read and "+
+				"discarded, so the table is the base pin's alone while reading as composed",
+				auth.path)
+		}
+	}
+
+	// Vacuity, on both counts: 90 arms over 88 kinds composed (83/81 core + 7/7 threads), the
+	// two-arm kinds being why the first pair differs. Floors rather than equalities, because
+	// upstream adding an instruction must not fail this test — but *a comparison against an empty
+	// set succeeds*, so without a plausible-size floor a reader that silently stopped working would
+	// make every assertion below pass by asking nothing.
+	//
+	// **Set above the base pin's own 83/81, which is what makes them bound the composition rather
+	// than the read.** A floor of 70 was satisfied by the core pin alone, so a threads authority
+	// that stopped being read would have passed it — *floors bound the catastrophic case only*, and
+	// the catastrophe here is not an empty map but a table that is 8% short and looks whole. The
+	// narrow population is pinned beside the aggregate by
+	// TestThreadsPinContributesItsAtomicArms, which names the seven kinds; this pair is the
+	// aggregate.
+	//
+	// Every figure is the extractor's own printed output, not a hand count. The first draft of this
+	// comment said 82 kinds and the two `checked` floors below said 80 and 82; all three were read
+	// off a hand tally and all three were wrong, in the direction that makes a floor harder to
+	// satisfy rather than easier. Printed: 81, 79, 81 then; 90/88 composed now.
+	if total < 86 || len(arms) < 84 {
+		t.Fatalf("extracted %d plaininstr arms over %d kinds, want >=86/84 (90/88 composed: 83/81 "+
+			"at bdd7164 plus 7 at cc535ad); the extractor is not reading every production and the "+
+			"drift checks below would agree with an incomplete grammar", total, len(arms))
+	}
+	return arms, contributed
+}
+
+// TestThreadsPinContributesItsAtomicArms is the narrow population beside plaininstrArms' aggregate
+// floor: the seven kinds the overlay is composed *for*, named.
+//
+// The floor says the composed table is big enough; this says it holds the right seven arms. They are
+// different claims and they fail differently — an upstream core parser.mly that grew, say, four arms
+// would satisfy the floor with the threads pin dropped entirely. *Pin the narrow population beside
+// the aggregate even when they agree.*
+//
+// Named rather than derived, and legitimately: the reference enumerates them. These are seven arm
+// heads written literally at spec-threads/parser.mly:453-459, and what makes the transcription
+// trustworthy is that the composition below re-reads the same file — a renamed token or a deleted arm
+// arrives here rather than in a green.
+func TestThreadsPinContributesItsAtomicArms(t *testing.T) {
+	want := []keywordKind{
+		"ATOMIC_FENCE",         // :455
+		"ATOMIC_LOAD",          // :456
+		"ATOMIC_RMW",           // :458
+		"ATOMIC_RMW_CMPXCHG",   // :459
+		"ATOMIC_STORE",         // :457
+		"MEMORY_ATOMIC_NOTIFY", // :454
+		"MEMORY_ATOMIC_WAIT",   // :453
+	}
+
+	_, contributed := plaininstrArmsByPin(t)
+	got, ok := contributed[testenv.ThreadsRefParserMLY]
+	if !ok {
+		t.Fatalf("the composition kept no arm from %s; every kind below would then have come from "+
+			"the core pin, which has no 0xfe region at all", testenv.ThreadsRefParserMLY)
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("the threads pin contributed %v, want exactly %v.\n\tAn extra kind is the overlay "+
+			"winning an arm the base owns — its parser predates multi-memory, so that is a memarg "+
+			"losing its `idx_opt`. A missing one is an atomic instruction with no grammar, which "+
+			"`plaininstr` then declines to start and the text layer reports as an unexpected token.",
+			got, want)
+	}
+}
+
+// TestAtomicMemargNarrownessIsTheRevisions measures the premise `plaininstrShapes` widens on: that
+// the atomic arms' missing `idx_opt` is a fact about **cc535ad**, not about atomic instructions.
+//
+// The argument the widening rests on is not "the standard outranks the snapshot" alone — that is the
+// ruling, and a ruling's premises are checked rather than copied. The premise is that the threads
+// pin's *whole* memarg family lacks the memory index, its own `LOAD` arm included, because its
+// baseline predates multi-memory. If that were false — if the overlay wrote `LOAD idx_opt offset_opt
+// align_opt` beside `ATOMIC_LOAD offset_opt align_opt` — then the narrowness *would* be a statement
+// about atomics, and giving them `immMemarg` would accept a form the reference rejects with no
+// authority for it at all.
+//
+// So the three assertions are the premise, not a restatement of the conclusion: the overlay's two
+// arms agree with each other, the base's `LOAD` arm disagrees with both, and the base gives
+// `ATOMIC_LOAD` no arm (so the disagreement is between revisions and not between two live grammars).
+//
+// It reads the authorities *uncomposed*, which is the half plaininstrArms structurally cannot show:
+// base-wins exists to discard the overlay's `LOAD` arm, so the composed table has no trace of the
+// fact being measured here.
+func TestAtomicMemargNarrownessIsTheRevisions(t *testing.T) {
+	auths := plaininstrAuthorities(t)
+	var base, overlay map[keywordKind][]string
+	for _, auth := range auths {
+		switch auth.path {
+		case testenv.RefParserMLY:
+			base = plaininstrArmsOf(t, auth)
+		case testenv.ThreadsRefParserMLY:
+			overlay = plaininstrArmsOf(t, auth)
+		}
+	}
+	if base == nil || overlay == nil {
+		t.Fatalf("did not find both text parsers among the %d licensed authorities; this control "+
+			"compares two revisions and cannot run against one", len(auths))
+	}
+
+	one := func(arms map[keywordKind][]string, kind keywordKind) (string, bool) {
+		seqs, ok := arms[kind]
+		if !ok || len(seqs) != 1 {
+			return "", false
+		}
+		return seqs[0], true
+	}
+
+	overlayLoad, ok := one(overlay, "LOAD")
+	if !ok {
+		t.Fatalf("the threads parser gives LOAD no single plaininstr arm (%q); the premise being "+
+			"measured is about that arm", overlay["LOAD"])
+	}
+	overlayAtomicLoad, ok := one(overlay, "ATOMIC_LOAD")
+	if !ok {
+		t.Fatalf("the threads parser gives ATOMIC_LOAD no single plaininstr arm (%q)",
+			overlay["ATOMIC_LOAD"])
+	}
+	baseLoad, ok := one(base, "LOAD")
+	if !ok {
+		t.Fatalf("the core parser gives LOAD no single plaininstr arm (%q)", base["LOAD"])
+	}
+	t.Logf("LOAD: core %q, threads %q; threads ATOMIC_LOAD %q", baseLoad, overlayLoad,
+		overlayAtomicLoad)
+
+	if overlayLoad != overlayAtomicLoad {
+		t.Errorf("the threads parser writes LOAD as %q and ATOMIC_LOAD as %q. They agree at "+
+			"cc535ad, which is what makes the missing `idx_opt` a property of the revision; a "+
+			"disagreement makes it a statement about atomics, and plaininstrShapes' widening of "+
+			"the six atomic kinds to immMemarg then has no authority behind it",
+			overlayLoad, overlayAtomicLoad)
+	}
+	if baseLoad == overlayLoad {
+		t.Errorf("both parsers write LOAD as %q, so this control has stopped measuring anything: "+
+			"the widening's premise is that the two revisions disagree about the memarg, and two "+
+			"agreeing revisions mean either the fetch landed the same file twice or multi-memory "+
+			"left the core grammar", baseLoad)
+	}
+	if seqs, ok := base["ATOMIC_LOAD"]; ok {
+		t.Errorf("the core parser now gives ATOMIC_LOAD an arm (%q); the widening is a deviation "+
+			"from the overlay, and with the base holding the arm it is the base that should be "+
+			"read — and base-wins already reads it, so plaininstrShapes' comment is stale rather "+
+			"than the table wrong", seqs)
+	}
+}
+
+// widenedMemargKinds are the kinds whose arm this package deliberately reads **wider** than the
+// authority writes it, with the reason and the ruling.
+//
+// Their arms are `offset_opt align_opt` and `plaininstrShapes` gives them `immMemarg`, which is
+// `idx_opt offset_opt align_opt`. Held as its own set rather than as a `"offset_opt align_opt":
+// immMemarg` row in `wantShapes` below, and the difference is a control rather than a style: a
+// `wantShapes` row would make the two written sequences *interchangeable*, so a core `LOAD` arm that
+// lost its `idx_opt` upstream — multi-memory removed, or a bad fetch landing an older parser.mly —
+// would map to `immMemarg` and pass. The narrowing this repo would then be blind to is the one it
+// most needs to see, since `retainMemarg`'s 0x40 bit is written from the memory index.
+//
+// So the widening is admitted for exactly these kinds, and TestPlaininstrShapesMatchTheReference
+// checks both halves of the admission: that each one's arm really is the narrow sequence, and that
+// no *other* kind carries it.
+//
+// See plaininstrShapes for why the narrowness is a fact about cc535ad rather than about atomics, and
+// TestAtomicMemargNarrownessIsTheRevisions for the measurement.
+var widenedMemargKinds = map[keywordKind]string{
+	"ATOMIC_LOAD":          "offset_opt align_opt", // spec-threads/parser.mly:456
+	"ATOMIC_STORE":         "offset_opt align_opt", // :457
+	"ATOMIC_RMW":           "offset_opt align_opt", // :458
+	"ATOMIC_RMW_CMPXCHG":   "offset_opt align_opt", // :459
+	"MEMORY_ATOMIC_WAIT":   "offset_opt align_opt", // :453
+	"MEMORY_ATOMIC_NOTIFY": "offset_opt align_opt", // :454
+}
+
 // wantShapes maps the reference's written immediate sequence to the shape this package names
 // for it. The one fact stated by hand; every kind→shape row is checked against it.
+//
+// `offset_opt align_opt` is deliberately **absent**: it is the six atomic kinds' written sequence and
+// admitting it here would license it for `LOAD` too. See widenedMemargKinds.
 var wantShapes = map[string]immShape{
 	"":                             immNone,
 	"idx":                          immIdx,
@@ -168,6 +468,20 @@ var wantShapes = map[string]immShape{
 func TestPlaininstrShapesMatchTheReference(t *testing.T) {
 	arms := plaininstrArms(t)
 
+	// The per-shape row counts, printed, because `immShape`'s own constant comments state a figure
+	// per shape — and a count in a comment is a claim. *Measure with the instrument, not by eye.*
+	//
+	// **Rows, which is not the figure those comments give.** They count the reference's *arms*, and
+	// the two differ by exactly the initSugarKinds pair: `MEMORY_INIT` and `TABLE_INIT` each
+	// contribute an `idx idx` arm and an `idx` arm while owning no row here at all, so immIdx reads
+	// 21 rows against 23 arms and immIdxIdx 7 against 9. Stated because the numbers look like a
+	// disagreement and are not one.
+	byShape := map[immShape]int{}
+	for _, shape := range plaininstrShapes {
+		byShape[shape]++
+	}
+	t.Logf("plaininstrShapes: %d rows over %d shapes %v", len(plaininstrShapes), len(byShape), byShape)
+
 	checked := 0
 	for kind, seqs := range arms {
 		if initSugarKinds[kind] {
@@ -187,6 +501,25 @@ func TestPlaininstrShapesMatchTheReference(t *testing.T) {
 				"one the parser cannot reach", kind, seqs[0])
 			continue
 		}
+		if narrow, widened := widenedMemargKinds[kind]; widened {
+			// The admitted widening, and both halves of the admission are checked here: the arm is
+			// still the narrow sequence, and the shape is still the wide one. A kind whose arm grew
+			// its `idx_opt` upstream leaves this set rather than staying in it — the widening is a
+			// deliberate deviation from an authority, so an authority that stopped needing it must
+			// stop being deviated from.
+			if seqs[0] != narrow {
+				t.Errorf("widenedMemargKinds says %s's arm is %q and the reference writes %q; the "+
+					"widening is admitted against a sequence that no longer exists, so this row is "+
+					"licensing a deviation from nothing", kind, narrow, seqs[0])
+				continue
+			}
+			if got != immMemarg {
+				t.Errorf("%s: plaininstrShapes says shape %d, and widenedMemargKinds admits it as "+
+					"immMemarg (%d) against the reference's %q", kind, got, immMemarg, seqs[0])
+			}
+			checked++
+			continue
+		}
 		want, ok := wantShapes[seqs[0]]
 		if !ok {
 			t.Errorf("%s's immediate sequence %q is not a shape this package names; a new "+
@@ -200,9 +533,25 @@ func TestPlaininstrShapesMatchTheReference(t *testing.T) {
 		}
 		checked++
 	}
-	if checked < 70 {
-		t.Errorf("only %d kinds compared against the reference, want >=70 (79 at bdd7164); the "+
-			"loop above is agreeing about almost nothing", checked)
+	// Above the base pin's own 79, per plaininstrArms' floors: a threads authority that stopped
+	// being read would satisfy 70 with nothing missing on the board.
+	if checked < 82 {
+		t.Errorf("only %d kinds compared against the reference, want >=82 (86 composed: 79 at "+
+			"bdd7164 plus 7 at cc535ad); the loop above is agreeing about an incomplete grammar",
+			checked)
+	}
+
+	// The widened set is a claim about the reference too, in the direction the loop above cannot
+	// take: a kind whose arm is the narrow sequence and which is *not* admitted here would fall
+	// through to `wantShapes`, find nothing, and report "not a shape this package names" — which is
+	// the right failure. What has no failure is a row here for a kind the reference gives no arm at
+	// all, so the widening would sit licensing a deviation from a grammar with nothing to deviate
+	// from. Same both-directions argument TestExpr1LeadersMatchTheReference makes about its list.
+	for kind := range widenedMemargKinds {
+		if _, ok := arms[kind]; !ok {
+			t.Errorf("widenedMemargKinds admits a widening for %s, which the reference gives no "+
+				"plaininstr arm; the row licenses a deviation from nothing", kind)
+		}
 	}
 
 	for kind := range plaininstrShapes {
@@ -383,9 +732,215 @@ func TestEveryPlaininstrKindIsInTheKeywordTable(t *testing.T) {
 			t.Errorf("initSugarKinds names %s, which no keyword lexes to", kind)
 		}
 	}
-	if checked < 70 {
-		t.Errorf("only %d kinds checked against the keyword table, want >=70 (81 at bdd7164); "+
-			"the tables shrank and this control is agreeing about almost nothing", checked)
+	// Above the pre-atomics 81, per plaininstrArms' argument: a floor the shrunken table still
+	// satisfies bounds the catastrophic case only.
+	if checked < 84 {
+		t.Errorf("only %d kinds checked against the keyword table, want >=84 (88 with the threads "+
+			"pin's seven; 81 at bdd7164 alone); the tables shrank and this control is agreeing "+
+			"about almost nothing", checked)
+	}
+}
+
+// reFeArm matches one arm of the reference encoder's 0xfe region: the two opcode bytes and whatever
+// the arm writes after them.
+//
+// Anchored on `op 0xfe; op 0x…` rather than on the constructor names, because the constructors are
+// the *AST*'s (`AtomicLoad {ty = I32Type; …}`) while this repo's join key is the operator name — so a
+// per-constructor reader would need a second vocabulary, and the byte is what the question is about.
+var reFeArm = regexp.MustCompile(`(?m)^\s*op 0xfe; op 0x([0-9a-f]+); (.*)$`)
+
+// TestReservedByteWireFormsAreTheReferences derives `reservedByteWireForms`' domain from the
+// reference encoder's 0xfe region instead of trusting the one mnemonic in it.
+//
+// The claim being controlled is *"`atomic.fence` is the one atomic instruction whose wire form
+// carries a byte no immediate shape writes"*, and the dangerous half is the word **one**: a second
+// such arm would encode truncated, silently, in the accept direction — and an enumeration cannot see
+// its own omission. So the partition is computed over all sixty-seven arms:
+//
+//	op 0xfe; op 0xNN; memop mo   → a memarg, and the text side must give it immMemarg
+//	op 0xfe; op 0xNN; op 0xMM    → a reserved byte, and the text side must refuse it
+//	anything else                → a tail this control does not model, which is a failure
+//
+// The third branch is the one that makes this a derivation rather than a two-case check: an upstream
+// arm writing something new (a lane byte, a second index) arrives as an unmodelled tail rather than
+// being silently sorted into whichever bucket its regex happens to match.
+//
+// The join is on the *code*, since that is the key both sides have — encode.ml writes the byte and
+// `mnemonicOpcodes` records it, machine-derived from the same revision. The memarg half is not
+// decoration either: it is where the widening in `plaininstrShapes` is checked against the wire form
+// rather than against the grammar, which is the direction §9 G-3 cares about.
+func TestReservedByteWireFormsAreTheReferences(t *testing.T) {
+	src := testenv.RequireSpecRef(t, testenv.ThreadsRefEncodeML)
+
+	// Every 0xfe mnemonic this package knows, by sub-opcode. A code with two mnemonics is a
+	// generator defect rather than this control's business, so they are collected and reported.
+	byCode := map[uint32][]string{}
+	for mnemonic, enc := range mnemonicOpcodes {
+		if enc.prefix == 0xfe {
+			byCode[enc.code] = append(byCode[enc.code], mnemonic)
+		}
+	}
+	for code := range byCode {
+		slices.Sort(byCode[code])
+	}
+
+	arms := reFeArm.FindAllStringSubmatch(src, -1)
+	// Vacuity: 67 arms at cc535ad. A regex that stopped matching — a reformatted encoder, a `vecop`
+	// spelling — yields none, and every assertion below then agrees with an empty partition.
+	if len(arms) < 60 {
+		t.Fatalf("found %d `op 0xfe; op 0xNN; …` arms in %s, want >=60 (67 at cc535ad); the reader "+
+			"is not seeing the region and the partition below would be over nothing",
+			len(arms), testenv.ThreadsRefEncodeML)
+	}
+
+	var memargCodes, reservedCodes []uint32
+	for _, m := range arms {
+		code, err := strconv.ParseUint(m[1], 16, 32)
+		if err != nil {
+			t.Errorf("could not read the sub-opcode from arm %q: %v", m[0], err)
+			continue
+		}
+		switch tail := strings.TrimSpace(m[2]); {
+		case tail == "memop mo":
+			memargCodes = append(memargCodes, uint32(code))
+		case strings.HasPrefix(tail, "op 0x"):
+			reservedCodes = append(reservedCodes, uint32(code))
+		default:
+			t.Errorf("0xfe %#02x's encode arm writes %q, which is neither a memop nor a reserved "+
+				"byte. This control partitions the region into those two, so an unmodelled tail is "+
+				"an immediate nothing on the text side has been asked to write — and the encoder "+
+				"would emit the opcode and stop, which decodes as a different instruction",
+				code, tail)
+		}
+	}
+	t.Logf("%d 0xfe arms: %d memop, %d reserved-byte (codes %#x)",
+		len(arms), len(memargCodes), len(reservedCodes), reservedCodes)
+
+	// The reserved-byte half, both directions.
+	refused := map[string]bool{}
+	for _, code := range reservedCodes {
+		mnemonics := byCode[code]
+		if len(mnemonics) == 0 {
+			t.Errorf("0xfe %#02x writes a reserved byte and no mnemonic in the generated table "+
+				"encodes to it; the instruction is unreachable from the text, so nothing refuses it "+
+				"and nothing needs to", code)
+			continue
+		}
+		for _, mnemonic := range mnemonics {
+			refused[mnemonic] = true
+			if !reservedByteWireForms[mnemonic] {
+				t.Errorf("%q encodes to 0xfe %#02x, whose reference arm writes a byte beyond the "+
+					"opcode, and reservedByteWireForms does not name it: this encoder writes the "+
+					"opcode and stops, producing a truncated instruction in a module the suite "+
+					"expects to work", mnemonic, code)
+			}
+		}
+	}
+	for mnemonic := range reservedByteWireForms {
+		if !refused[mnemonic] {
+			t.Errorf("reservedByteWireForms names %q, which no arm of the reference's 0xfe region "+
+				"gives a reserved byte; the refusal rejects a module the reference accepts, and it "+
+				"cites #532 for a reason the authority no longer states", mnemonic)
+		}
+	}
+
+	// The memarg half: the wire form takes a `memop`, so the text side must have a shape that writes
+	// one. This is the widening checked against the *encoding* rather than against the grammar.
+	checked := 0
+	for _, code := range memargCodes {
+		for _, mnemonic := range byCode[code] {
+			kind, ok := keywords[mnemonic]
+			if !ok {
+				t.Errorf("%q encodes to 0xfe %#02x and no keyword table row lexes it; the mnemonic "+
+					"cannot be reached from the text at all", mnemonic, code)
+				continue
+			}
+			shape, ok := shapeOf(kind)
+			if !ok {
+				t.Errorf("%q (%s) encodes to 0xfe %#02x with a `memop` and shapeOf answers for no "+
+					"such kind; `plaininstr` declines to start on it, so the mnemonic reads as an "+
+					"unexpected token", mnemonic, kind, code)
+				continue
+			}
+			if shape != immMemarg {
+				t.Errorf("%q (%s) encodes to 0xfe %#02x with a `memop`, and its text shape is %d "+
+					"rather than immMemarg (%d); the image wants flags/index/offset and the reader "+
+					"writes something else", mnemonic, kind, code, shape, immMemarg)
+			}
+			checked++
+		}
+	}
+	// 66 of the 67, the reserved-byte arm being the remainder. A floor because the mnemonic count per
+	// code is upstream's business, not this control's.
+	if checked < 60 {
+		t.Errorf("only %d memarg mnemonics checked against the 0xfe region, want >=60 (66 at "+
+			"cc535ad); the join through mnemonicOpcodes is resolving almost nothing", checked)
+	}
+}
+
+// TestAtomicEncodeReachesTheFrontierAndStops is the behaviour half of the two facts above: the six
+// memarg kinds encode, and `atomic.fence` is refused with the reason that names #532.
+//
+// Two directions in one control because they are one boundary, and each is the other's falsification:
+// a refusal broad enough to catch `i32.atomic.load` would leave the memarg rows failing, and a
+// mechanism that encoded `atomic.fence` would leave its row failing. The pair is what pins the
+// boundary where it was put rather than merely somewhere.
+//
+// It goes through `EncodeModule` — the real entry point — rather than through `reservedByteWireForms`
+// directly. *A control can test the helper, not the path*: asserting the map holds `atomic.fence`
+// proves the map holds it while nothing consults it.
+func TestAtomicEncodeReachesTheFrontierAndStops(t *testing.T) {
+	// `(memory 1 1 shared)` because a shared memory needs a maximum (valid.ml:601-605 at cc535ad) —
+	// though nothing here validates, the module is written the way the suite writes it so a later
+	// reader can paste it into a vector.
+	const frame = `(module (memory 1 1 shared) (func %s))`
+
+	for _, tc := range []struct {
+		mnemonic string
+		body     string
+		wantErr  string // "" means it must encode
+	}{
+		{mnemonic: "i32.atomic.load", body: "i32.const 0 i32.atomic.load drop"},
+		{mnemonic: "i64.atomic.store", body: "i32.const 0 i64.const 0 i64.atomic.store"},
+		{mnemonic: "i32.atomic.rmw.add", body: "i32.const 0 i32.const 1 i32.atomic.rmw.add drop"},
+		{
+			mnemonic: "i32.atomic.rmw.cmpxchg",
+			body:     "i32.const 0 i32.const 1 i32.const 2 i32.atomic.rmw.cmpxchg drop",
+		},
+		{
+			mnemonic: "memory.atomic.wait32",
+			body:     "i32.const 0 i32.const 0 i64.const 0 memory.atomic.wait32 drop",
+		},
+		{
+			mnemonic: "memory.atomic.notify",
+			body:     "i32.const 0 i32.const 0 memory.atomic.notify drop",
+		},
+		{
+			mnemonic: "atomic.fence",
+			body:     "atomic.fence",
+			wantErr:  "reserved byte",
+		},
+	} {
+		t.Run(tc.mnemonic, func(t *testing.T) {
+			src := fmt.Sprintf(frame, tc.body)
+			_, err := EncodeModule([]byte(src))
+			switch {
+			case tc.wantErr == "" && err != nil:
+				t.Errorf("EncodeModule(%q) = %v, want no error.\n\tThe six memarg atomics encode "+
+					"through retainMemarg over the generated naturalAlign table; a failure here is "+
+					"either a missing alignment row or a shape the table does not give immMemarg.",
+					src, err)
+			case tc.wantErr != "" && err == nil:
+				t.Errorf("EncodeModule(%q) succeeded, want a refusal naming %q.\n\tIts wire form is "+
+					"`op 0xfe; op 0x03; op 0x00` and no immediate shape writes that third byte, so "+
+					"an image was just produced that decodes as something else (#532).",
+					src, tc.wantErr)
+			case tc.wantErr != "" && !strings.Contains(err.Error(), tc.wantErr):
+				t.Errorf("EncodeModule(%q) = %v, want a refusal naming %q; the module is refused for "+
+					"a reason other than the one #532 records, which is testimony about a frontier "+
+					"that is not where the message says", src, err, tc.wantErr)
+			}
+		})
 	}
 }
 
@@ -784,10 +1339,15 @@ func TestEveryUnencodableShapeIsRefused(t *testing.T) {
 	// shapes), which is what a floor on the total, rather than on the unencodable subset, still
 	// catches — the same partition-not-total lesson `comparisons need a vacuity check` names,
 	// pointed at a domain that is legitimately supposed to be empty today.
-	if len(plaininstrShapes) < 70 || len(encodableShapes) < 16 {
-		t.Fatalf("plaininstrShapes has %d kinds and encodableShapes has %d shapes, too small to be "+
-			"the real tables: an empty or truncated map here would make every row below pass by "+
-			"comparing nothing", len(plaininstrShapes), len(encodableShapes))
+	// 86 rows and 16 shapes measured. The row floor sits above the 79 the table held before the
+	// threads pin's seven kinds arrived, so a `plaininstrShapes` that lost them fails here rather
+	// than passing a floor written for the smaller table — *floors bound the catastrophic case only*
+	// unless they are re-measured when the population grows.
+	if len(plaininstrShapes) < 82 || len(encodableShapes) < 16 {
+		t.Fatalf("plaininstrShapes has %d rows and encodableShapes has %d shapes, want >=82/16 "+
+			"(86/16 measured; 79 rows before the atomic kinds): an empty, truncated, or "+
+			"atomics-less map here would make every row below pass by comparing nothing",
+			len(plaininstrShapes), len(encodableShapes))
 	}
 
 	// **The frontier closed with #210, and that is the pass condition — not a fallback.** Every

@@ -42,6 +42,17 @@
 // said six, which was a count of the `extadd_pairwise`/`trunc_sat` families read off a sibling's
 // prose rather than of this table's own rows. What this package owns is one regexp over an arm's
 // *body*: finding `opt a N` and the token kind beside it.
+//
+// # More than one authority
+//
+// The table is composed over the pin set, base-wins, for keywordgen's measured reason: the
+// grammar this runtime accepts is the union of the tracked set (contract §9 G-2), and a proposal
+// pin's baseline predates part of core, so a wholesale read of the overlay deletes core clauses
+// rather than adding its own. The threads pin's 66 atomic mnemonics each carry a natural
+// alignment nothing in core states, and *for atomics the default is also the only legal
+// alignment* — every one of them is a naturally-aligned access by the proposal's own validation
+// rule — so a missing row here is not a suboptimal flags byte but an instruction the encoder
+// cannot write at all.
 package memarggen
 
 import (
@@ -49,8 +60,10 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
+	"sort"
 	"strings"
 
+	"github.com/scttfrdmn/burroughs/internal/gen"
 	"github.com/scttfrdmn/burroughs/internal/gen/mllex"
 )
 
@@ -64,6 +77,24 @@ var ErrUnrecognized = errors.New("unrecognized memarg arm in lexer.mll")
 
 // ErrVacuous reports an extraction that produced implausibly little. See Floors.
 var ErrVacuous = errors.New("extraction produced too few memarg rows")
+
+// ErrUndeclaredKind reports an arm that carries a natural alignment under a token kind
+// memargKinds does not declare.
+//
+// **This is the reverse of ErrUnrecognized, and it is the half that was missing.** The forward
+// check asks "this kind takes a memarg, so where is its `opt a N`?" — loud, and scoped to the
+// kinds already declared. The complement asks "this arm states a natural alignment, so why is
+// its kind not one we take?", and until the table was composed there was nothing to ask it of:
+// the core lexer's 45 `opt a N` arms are exactly the six declared kinds. The threads pin brought
+// 66 more under six kinds nothing here had heard of, and the *silent* failure was the one that
+// mattered — an undeclared kind is skipped by the `!memargKinds[kind]` branch above, which reads
+// as "the reference says this mnemonic takes no memarg" while the reference is saying the
+// opposite in the same line the reader just declined to use.
+//
+// It is a derived complement rather than a second list: the domain is "arms whose body contains
+// `opt a N`", which is the reader's own grammar, so the next proposal pin's kinds fire this
+// without anyone predicting their names.
+var ErrUndeclaredKind = errors.New("lexer.mll arm states a natural alignment under an undeclared kind")
 
 var (
 	// reOptAlign is the whole of this package's own grammar: `opt a N` inside the token
@@ -93,17 +124,81 @@ type Row struct {
 	Kind string
 	// Align is the log2 alignment the reference defaults to — the value `opt a N` supplies.
 	Align int
-	// Line is the 1-indexed lexer.mll line of the arm's head.
+	// Line is the 1-indexed line of the arm's head, in the file From names.
 	Line int
+	// From is the authority the row was read from, as gen.SourceTag renders it —
+	// `spec/lexer.mll` or `spec-threads/lexer.mll`.
+	//
+	// **Both halves, or the citation is half a citation** (grave #529). Two pins put two files
+	// named `lexer.mll` in the tree and their line numberings are unrelated: the core's
+	// `i32.load` is at :195 in one and :195 in the other by coincidence, and a bare
+	// `lexer.mll:266` resolves against whichever of the two the reader opens. Emit refuses a row
+	// whose From is empty.
+	From string
 }
 
 // Table is one extraction's result.
 type Table struct {
-	// SourceSHA is the reference revision the rows were read from. Stamped, not deduced.
-	SourceSHA string
+	// Sources is every authority this table was composed from, in application order: the base
+	// first, then each overlay. Stamped, not deduced — a generated artifact whose provenance
+	// needs git archaeology has hearsay for authority (0007, condition 3).
+	Sources []Source
 	// Rows, sorted by mnemonic so the emitted output is stable and a diff means a real
 	// change rather than a map iteration order.
 	Rows []Row
+}
+
+// Authority is one pin's text lexer: the file, its contents, and the revision it was read at.
+//
+// The contents are passed in rather than read here so the falsification tests can hand this
+// package a lexer with an injected defect — the seam Extract's signature has always had, kept.
+type Authority struct {
+	// LexerPath is the repo-relative source, in the spelling a row's citation carries (see
+	// Row.From) and the generated header prints.
+	LexerPath string
+	// Lexer is its contents.
+	Lexer string
+	// SHA is this pin's revision, read from the pin's own fetch script.
+	//
+	// **Per authority, not per table.** `Table.SourceSHA` used to be one field and say so; that
+	// is true of one pin's one file and false of the pin set, where a single stamp would have to
+	// name the core revision for rows read at the threads one.
+	SHA string
+	// Scope is why this authority is consulted, in one clause, carried from the pin's `Why` —
+	// *consultation is clause-scoped, never wholesale* (keywordgen.Source).
+	Scope string
+}
+
+// Source is one authority's contribution to a composed table: its provenance, plus how many rows
+// it actually put in, per token kind.
+//
+// **Per kind and per authority, which is what makes the widening auditable.** A total per
+// authority is not enough and the numbers say why: the threads pin contributes 66 rows of 111, an
+// amount no aggregate could hide, but within them `MEMORY_ATOMIC_NOTIFY` is **one** row — so a
+// reader that stopped recognizing that kind alone would lose 1 row of 111 and every floor in this
+// file would absorb it. This is opgen.Source's per-partition count with the partition being the
+// kind, and it is the instrument the floors cannot be.
+type Source struct {
+	// LexerPath, SHA and Scope are the Authority's, carried through.
+	LexerPath string
+	SHA       string
+	Scope     string
+	// ByKind is the rows this authority contributed, per token kind. Rows it *read* and lost to
+	// base-wins are not counted: a row is the thing the emitted table has.
+	ByKind map[string]int
+	// Total is their sum, kept beside them because the contribution check is a total (see
+	// checkContributions for why it is not per kind).
+	Total int
+}
+
+// Kinds returns the token kinds this source contributed, sorted — for a deterministic header.
+func (s Source) Kinds() []string {
+	out := make([]string, 0, len(s.ByKind))
+	for k := range s.ByKind {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // memargKinds are the token kinds whose arms take a memarg, and therefore the kinds an
@@ -115,18 +210,28 @@ type Table struct {
 // and carries no information. With it, `i32.load` losing its default is a hard failure while
 // `i32.add` having none is expected — the discriminator that turns an omission into a finding.
 //
-// The six kinds are `parser.mly`'s: LOAD, STORE, VEC_LOAD, VEC_STORE take
+// The core pin's six kinds are its `parser.mly`'s: LOAD, STORE, VEC_LOAD, VEC_STORE take
 // `idx_opt offset_opt align_opt` (:592-598), and VEC_LOAD_LANE / VEC_STORE_LANE take
 // `lane_imms` (:661), which is the same three plus a mandatory laneidx.
 //
-// **An upstream quirk this set must not "fix":** the five narrowing stores — `i32.store8`,
-// `i32.store16`, `i64.store8`, `i64.store16`, `i64.store32` (lexer.mll:265-269) — are tagged
-// **LOAD**, not STORE. That is the reference as written; the token kind only selects which
-// grammar arm parses the immediates and all four scalar arms are identical, so the mistagging
-// is invisible in the reference's own behaviour. Transcribed as-is, because this table is
-// evidence and correcting an authority's oddity is editing evidence. It is asserted
-// explicitly by TestNarrowingStoresAreTaggedLOAD so the oddity cannot be quietly normalized
-// by a future reader who assumes it was a typo here.
+// The threads pin's six are declared beside them at `spec-threads/parser.mly:221-222` and take
+// `offset_opt align_opt` (:453-459) — the same immediates *minus* the memory index, the snapshot
+// predating multi-memory. ATOMIC_FENCE is deliberately absent: it is the one atomic token with no
+// memarg, and admitting it would make the forward check demand an `opt a N` the reference does
+// not write.
+//
+// **An upstream quirk this set must not "fix", and the composition brought a second of them.**
+// In core, the five narrowing stores — `i32.store8`, `i32.store16`, `i64.store8`, `i64.store16`,
+// `i64.store32` (lexer.mll:265-269) — are tagged **LOAD**, not STORE. In the threads pin the
+// mirror image: the five narrowing atomic *loads* — `i32.atomic.load8_u`, `i32.atomic.load16_u`,
+// `i64.atomic.load8_u`, `i64.atomic.load16_u`, `i64.atomic.load32_u` — are tagged
+// **ATOMIC_STORE**, not ATOMIC_LOAD, leaving ATOMIC_LOAD with exactly the two wide loads. Both are
+// the reference as written and both are invisible in the reference's own behaviour, because the
+// grammar arms a mistagged kind reaches parse identical immediates (:456-457 are the same
+// production twice). Transcribed as-is, because this table is evidence and correcting an
+// authority's oddity is editing evidence; each is asserted explicitly — see
+// TestNarrowingStoresAreTaggedLOAD and TestNarrowingAtomicLoadsAreTaggedATOMIC_STORE — so neither
+// can be quietly normalized by a reader who assumes it was a typo here.
 var memargKinds = map[string]bool{
 	"LOAD":           true,
 	"STORE":          true,
@@ -134,6 +239,14 @@ var memargKinds = map[string]bool{
 	"VEC_STORE":      true,
 	"VEC_LOAD_LANE":  true,
 	"VEC_STORE_LANE": true,
+
+	// The threads pin's, `spec-threads/parser.mly:221-222`.
+	"ATOMIC_LOAD":          true,
+	"ATOMIC_STORE":         true,
+	"ATOMIC_RMW":           true,
+	"ATOMIC_RMW_CMPXCHG":   true,
+	"MEMORY_ATOMIC_WAIT":   true,
+	"MEMORY_ATOMIC_NOTIFY": true,
 }
 
 // Floors are the minimum row counts, **per token kind and in total**.
@@ -148,6 +261,17 @@ var memargKinds = map[string]bool{
 // without a false alarm. The **exact** counts live in the test beside them, because a floor
 // bounds the catastrophic case and cannot see a small silent loss — `Floors.Lexer` at 350
 // stayed green through #105's 411-of-436.
+// **They are floors on the composed table, and FloorPerAuthority is the other question.** No
+// single pin satisfies this map: the core lexer has zero ATOMIC_RMW arms and the threads lexer,
+// predating SIMD, has zero VEC_LOAD ones. So these bound the artifact and a separate, coarser
+// bound asks of each authority "did this read find anything at all" — two questions, and a
+// per-kind floor applied per authority would forbid every pin in the set.
+//
+// **They are also not enough once the table is composed**, and that is arithmetic rather than
+// principle: `MEMORY_ATOMIC_NOTIFY` is one row of 111, so its floor of 1 is the only thing between
+// that kind and silence — and a floor cannot see *which authority* a kind's rows came from at all.
+// What covers that is Source.ByKind, printed per authority in the header and pinned exactly in the
+// test.
 var Floors = map[string]int{
 	"LOAD":           15, // measured 19
 	"STORE":          3,  // measured 4
@@ -155,71 +279,138 @@ var Floors = map[string]int{
 	"VEC_STORE":      1,  // measured 1
 	"VEC_LOAD_LANE":  3,  // measured 4
 	"VEC_STORE_LANE": 3,  // measured 4
+
+	// The threads pin's. Every one of these is a naturally-aligned-only access, so a missing row
+	// is an instruction with no legal encoding rather than one encoded suboptimally.
+	"ATOMIC_LOAD":          1,  // measured 2 (the two wide loads; the narrow ones are ATOMIC_STORE)
+	"ATOMIC_STORE":         10, // measured 12 (7 stores + the 5 mistagged narrowing loads)
+	"ATOMIC_RMW":           36, // measured 42 (7 constructors x 6 operators)
+	"ATOMIC_RMW_CMPXCHG":   6,  // measured 7
+	"MEMORY_ATOMIC_WAIT":   1,  // measured 2
+	"MEMORY_ATOMIC_NOTIFY": 1,  // measured 1
 }
 
-// FloorTotal is the minimum total row count. Beside the per-kind floors, not instead of them.
-const FloorTotal = 38 // measured 45
+// FloorTotal is the minimum total row count of the composed table. Beside the per-kind floors,
+// not instead of them.
+const FloorTotal = 95 // measured 111 composed (45 core + 66 atomic)
 
-// Extract reads lexer.mll's source and returns the natural-alignment table.
+// FloorPerAuthority is the minimum row count one authority's lexer must yield, and it answers a
+// different question from Floors: *did this read happen at all.*
+//
+// A moved file or a renamed rule empties one pin's contribution, and the composed floors above
+// cannot see it — the other pin's rows satisfy them on their own. So each authority is bounded as
+// it is read, which is keywordgen.Extract's `checkFloor` in this grammar. Coarse deliberately: the
+// per-*kind* question cannot be asked of a single pin, since neither pin holds every kind.
+//
+// Both pins are full interpreter snapshots, so both carry core's scalar memarg families; the
+// measured numbers are 45 for the core lexer and 111 for the threads one (which holds its own
+// pre-multi-memory spellings of core's 45, all of them lost to base-wins).
+const FloorPerAuthority = 30
+
+// CoreLexerAuthority is the path Extract records for its single authority: the core
+// interpreter's text lexer, which is the base of every composition.
+const CoreLexerAuthority = "third_party/spec/interpreter/text/lexer.mll"
+
+// Extract reads one lexer.mll's source and returns the natural-alignment table.
 //
 // sha is recorded verbatim; the caller is responsible for it being the revision src was read
 // from (scripts/fetch-spec-ref.sh pins and verifies it).
+//
+// **This is the one-pin entry point, and it is no longer how the committed table is built** — see
+// BuildFromPins. It stays exported because the falsification tests need to hand the reader a
+// lexer with an injected defect, an input no pin produces; the path it records is the core pin's
+// because that is the only pin a single-authority read can honestly claim to be.
+//
+// It applies FloorPerAuthority and **not** the composed Floors, which is not a laxness: no single
+// pin satisfies the per-kind map, so applying it here would make this entry point refuse every
+// real input it could be given.
 func Extract(src, sha string) (*Table, error) {
-	t, err := extractRows(src, sha)
+	t, err := composeRows([]Authority{{LexerPath: CoreLexerAuthority, Lexer: src, SHA: sha}})
+	if err != nil {
+		return nil, err
+	}
+	if err := t.checkContributions(); err != nil {
+		return nil, err
+	}
+	return t, nil
+}
+
+// ExtractFrom composes the authorities in order, base first, and returns the table.
+//
+// # The composition is base-wins, and the direction is load-bearing
+//
+// Each authority contributes only the mnemonics the ones before it did not name. That is
+// keywordgen.Compose's rule, here for the same measured reason: the threads pin's baseline
+// predates SIMD, GC and memory64, so letting a later authority win would *delete* core rows
+// rather than add proposal ones — it holds all 45 of core's memarg mnemonics at its own
+// pre-multi-memory spellings, so an overlay-wins composition would leave the table the same size
+// and every row of it stamped with the wrong revision.
+func ExtractFrom(auths []Authority) (*Table, error) {
+	t, err := composeRows(auths)
 	if err != nil {
 		return nil, err
 	}
 	if err := t.checkFloors(); err != nil {
 		return nil, err
 	}
+	if err := t.checkContributions(); err != nil {
+		return nil, err
+	}
 	return t, nil
 }
 
-// extractRows is Extract without the floor gate.
+// composeRows is ExtractFrom without the floor and contribution gates.
 //
 // Split out for one reason, and it was found by falsifying: **a control cannot measure a count
 // through a gate that refuses on that count.** `TestEveryFloorIsBelowItsMeasuredCount` asserts
-// `floor <= measured`, and with a floor set above its partition Extract returns ErrVacuous — so
-// the test failed on the extraction rather than on its own assertion, and the `floor > got`
+// `floor <= measured`, and with a floor set above its partition ExtractFrom returns ErrVacuous —
+// so the test failed on the extraction rather than on its own assertion, and the `floor > got`
 // branch it exists for was unreachable. That is a stillborn branch behind a red board: right
 // verdict, dead assertion, indistinguishable on a green board from a working one. Reading the
 // rows here lets the distance check see the numbers the gate would have hidden.
-func extractRows(src, sha string) (*Table, error) {
-	lines := strings.Split(src, "\n")
-	block, err := mllex.FindBlock(lines)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrVacuous, err)
-	}
-	arms, err := mllex.Arms(lines, block)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrUnrecognized, err)
+func composeRows(auths []Authority) (*Table, error) {
+	if len(auths) == 0 {
+		return nil, fmt.Errorf("%w: no authority to read", ErrVacuous)
 	}
 
-	t := &Table{SourceSHA: sha}
-	for _, a := range arms {
-		km := reKind.FindStringSubmatch(a.Body)
-		// `len(km) < 2` rather than `km == nil`: a match against a one-group pattern is always
-		// length 2, so the two conditions coincide today, and the length form is the one that
-		// stays true of the index it guards if the pattern's group count ever changes.
-		if len(km) < 2 || !memargKinds[km[1]] {
-			// Not a memory-accessing arm. Silence is correct here and is *not* the skip the
-			// disciplines forbid: the discriminator is the kind set above, so this branch is
-			// "the reference says this mnemonic takes no memarg", which is a fact rather than
-			// an unread line.
-			continue
+	t := &Table{}
+	claimed := map[string]bool{}
+	for _, a := range auths {
+		if a.LexerPath == "" {
+			return nil, fmt.Errorf("%w: an authority with no path: a row read from it would carry "+
+				"a line number and no file, which is grave #529's half-citation", ErrVacuous)
 		}
-		om := reOptAlign.FindStringSubmatch(a.Body)
-		if om == nil {
-			return nil, fmt.Errorf("%w: lexer.mll:%d: %s arm for %q has no `opt a N` — the "+
-				"reference changed how the natural alignment is written, and a row missing "+
-				"from this table is an instruction the encoder defaults wrongly and silently",
-				ErrUnrecognized, a.Line, km[1], a.Keyword)
-		}
-		align, err := parseSmallNat(om[1])
+		rows, err := armRows(a)
 		if err != nil {
-			return nil, fmt.Errorf("%w: lexer.mll:%d: %q: %w", ErrUnrecognized, a.Line, a.Keyword, err)
+			return nil, fmt.Errorf("%s: %w", a.LexerPath, err)
 		}
-		t.Rows = append(t.Rows, Row{Mnemonic: a.Keyword, Kind: km[1], Align: align, Line: a.Line})
+		// Bounded on rows *read*, before base-wins takes any of them away — the two questions are
+		// different and both are asked. This one is "did this authority's lexer get read at all",
+		// and it belongs here rather than in a gate outside because a moved file yields zero arms
+		// and the composed floors are satisfied by the other pin alone. See FloorPerAuthority.
+		if len(rows) < FloorPerAuthority {
+			return nil, fmt.Errorf("%w: %s yielded %d memarg arms, floor %d — a read this small "+
+				"means the block locator or the kind discriminator stopped matching this file, "+
+				"which the composed floors cannot see because the other authority satisfies them",
+				ErrVacuous, a.LexerPath, len(rows), FloorPerAuthority)
+		}
+		src := Source{
+			LexerPath: a.LexerPath, SHA: a.SHA, Scope: a.Scope,
+			ByKind: map[string]int{},
+		}
+		for _, r := range rows {
+			if claimed[r.Mnemonic] {
+				// Base-wins. Not counted into ByKind: a row this authority read and lost is not a
+				// row the emitted table has, and counting it would let an overlay whose every
+				// mnemonic core already holds look like it contributed.
+				continue
+			}
+			claimed[r.Mnemonic] = true
+			src.ByKind[r.Kind]++
+			src.Total++
+			t.Rows = append(t.Rows, r)
+		}
+		t.Sources = append(t.Sources, src)
 	}
 
 	// Sorted by mnemonic so the emitted table reads as a table rather than as a transcript of
@@ -228,9 +419,68 @@ func extractRows(src, sha string) (*Table, error) {
 	// deterministic, there being no map between `mllex.Arms` and here, and a control claiming
 	// otherwise was found stillborn by falsifying it. What the order actually buys is that a
 	// diff of the generated file localizes: an upstream mnemonic added to the `f64` family shows
-	// up beside its neighbours instead of wherever upstream happened to put the line.
+	// up beside its neighbours instead of wherever upstream happened to put the line. Composition
+	// makes it do more: without it the 66 atomic rows would all land after the 45 core ones, so
+	// `i32.atomic.load` would sit a screen away from `i32.load` in a table keyed by neither.
 	slices.SortFunc(t.Rows, func(a, b Row) int { return strings.Compare(a.Mnemonic, b.Mnemonic) })
 	return t, nil
+}
+
+// armRows reads one authority's memarg arms, in file order.
+func armRows(a Authority) ([]Row, error) {
+	lines := strings.Split(a.Lexer, "\n")
+	block, err := mllex.FindBlock(lines)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrVacuous, err)
+	}
+	arms, err := mllex.Arms(lines, block)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrUnrecognized, err)
+	}
+	from := gen.SourceTag(a.LexerPath)
+
+	var out []Row
+	for _, arm := range arms {
+		km := reKind.FindStringSubmatch(arm.Body)
+		// `len(km) < 2` rather than `km == nil`: a match against a one-group pattern is always
+		// length 2, so the two conditions coincide today, and the length form is the one that
+		// stays true of the index it guards if the pattern's group count ever changes.
+		kind := ""
+		if len(km) >= 2 {
+			kind = km[1]
+		}
+		om := reOptAlign.FindStringSubmatch(arm.Body)
+		if !memargKinds[kind] {
+			if om != nil {
+				// The reverse check. See ErrUndeclaredKind: this is the branch that used to be a
+				// silent `continue`, and the arm it declined to read was stating the very fact
+				// this package exists to carry.
+				return nil, fmt.Errorf("%w: %s:%d: %q returns %s and states `opt a %s`; that kind "+
+					"is not in memargKinds, so the row was about to be dropped as "+
+					"\"takes no memarg\" while the reference says otherwise on the same line",
+					ErrUndeclaredKind, from, arm.Line, arm.Keyword, kind, om[1])
+			}
+			// Not a memory-accessing arm. Silence is correct here and is *not* the skip the
+			// disciplines forbid: the discriminator is the kind set above, and the branch that
+			// could have made it a false negative is the error just above, so this is "the
+			// reference says this mnemonic takes no memarg" — a fact rather than an unread line.
+			continue
+		}
+		if om == nil {
+			return nil, fmt.Errorf("%w: %s:%d: %s arm for %q has no `opt a N` — the "+
+				"reference changed how the natural alignment is written, and a row missing "+
+				"from this table is an instruction the encoder defaults wrongly and silently",
+				ErrUnrecognized, from, arm.Line, kind, arm.Keyword)
+		}
+		align, err := parseSmallNat(om[1])
+		if err != nil {
+			return nil, fmt.Errorf("%w: %s:%d: %q: %w", ErrUnrecognized, from, arm.Line, arm.Keyword, err)
+		}
+		out = append(out, Row{
+			Mnemonic: arm.Keyword, Kind: kind, Align: align, Line: arm.Line, From: from,
+		})
+	}
+	return out, nil
 }
 
 // parseSmallNat reads a log2 alignment, bounded.
@@ -267,6 +517,35 @@ func (t *Table) checkFloors() error {
 	}
 	if len(t.Rows) < FloorTotal {
 		return fmt.Errorf("%w: %d rows total, floor %d", ErrVacuous, len(t.Rows), FloorTotal)
+	}
+	return nil
+}
+
+// checkContributions is the check the floors cannot be: every authority put a row in.
+//
+// Distinct from FloorPerAuthority, which bounds the rows an authority *read*. This bounds the rows
+// it *kept* — an overlay every one of whose mnemonics the base already holds reads 111 arms,
+// clears that floor, and contributes nothing, leaving the composed table silently back to the
+// base's content and drift-checking clean against a file regenerated the same way. Two failure
+// modes, two checks; a read that happened and a contribution that survived are not the same fact.
+//
+// **A total per authority, not a per-kind requirement**, and the line is drawn where the honest
+// claim is. "This pin contributes at least one row" is true of any pin worth composing — a pin
+// naming nothing is a pin the caller should not have passed. "This pin contributes at least one
+// row of a kind of its own" is not: a proposal adding mnemonics of existing kinds only
+// (memory64's `i32.load` at a wider index, say) would contribute zero new kinds legitimately, and
+// a check that fired on it would teach the next author to route around the instrument. The
+// per-kind numbers are pinned instead where a change is visible without being forbidden — Emit
+// prints them per authority, so the drift check sees `MEMORY_ATOMIC_NOTIFY 1` become `0` as a
+// diff.
+func (t *Table) checkContributions() error {
+	for i, s := range t.Sources {
+		if s.Total > 0 {
+			continue
+		}
+		return fmt.Errorf("%w: authority %d (%s at %s) contributed no rows at all; the floors "+
+			"cannot see this, since one authority's rows satisfy them on their own",
+			ErrVacuous, i, s.LexerPath, s.SHA)
 	}
 	return nil
 }

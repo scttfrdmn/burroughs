@@ -694,10 +694,17 @@ func TestIntoSinkGatesOnTheModeNotTheSink(t *testing.T) {
 // **The prose in `idxPairLookupKinds` said this instrument finds 9 and it finds 10** — a number typed
 // before the extractor existed, and the count is now printed by the extractor's own vacuity floor
 // rather than asserted in a sentence. Same class as `plaininstrArms`' hand tally: a figure nobody ran.
+// # Composed over the pin set, and the overlay's contribution today is zero
+//
+// The reader walks every licensed text parser rather than the core one, base-wins by kind exactly as
+// `plaininstrArms` does. The threads pin contributes **no** category-passing arm — its seven atomic
+// actions are `fun c -> $1 $3 $2`, with no `$N c` lookup anywhere in them — so the composition adds
+// nothing measurable at cc535ad. That is the reason to compose it rather than to write the sentence:
+// *a negative claim is a citation with no target*, and "the overlay passes no categories" is checkable
+// only by a reader whose domain includes the overlay. Scoped to the space, not to the pin that has
+// arms today.
 func positionalLookups(t *testing.T) map[keywordKind][][]string {
 	t.Helper()
-	src := testenv.RequireSpecRef(t, testenv.RefParserMLY)
-	body := productionBody(t, src, "plaininstr")
 
 	// `$N c <expr>`. The argument alternative is ordered parenthesised-first, because Go's regexp is
 	// leftmost-first among alternatives at a position and a bare-word branch tried first would match
@@ -705,25 +712,38 @@ func positionalLookups(t *testing.T) map[keywordKind][][]string {
 	re := regexp.MustCompile(`\$\d+\s+c\s+(\([^)]*\)|[a-z_][a-z_0-9]*)`)
 
 	perKind := map[keywordKind][][]string{}
+	owner := map[keywordKind]string{}
 	arms := 0
-	for chunk := range strings.SplitSeq(body, "\n  | ") {
-		fields := strings.Fields(chunk)
-		if len(fields) == 0 {
-			continue
+	for _, auth := range plaininstrAuthorities(t) {
+		body := productionBody(t, auth.src, auth.production)
+		for chunk := range strings.SplitSeq(body, "\n  | ") {
+			fields := strings.Fields(chunk)
+			if len(fields) == 0 {
+				continue
+			}
+			kind := keywordKind(fields[0])
+			if kind != keywordKind(strings.ToUpper(string(kind))) {
+				continue // a lowercase leader is a nonterminal, not a mnemonic arm
+			}
+			if prev, claimed := owner[kind]; claimed && prev != auth.path {
+				continue // base-wins, per plaininstrArms: the overlay is three proposals stale
+			}
+			// Ownership is recorded **before** the category check, and the ordering is the whole
+			// correctness of base-wins here. Recording it after would mean a kind whose base arm
+			// passes no category is left unclaimed, so a *stale* overlay arm for that same kind
+			// could supply its lookups — base-wins would be conditional on the base arm happening
+			// to have categories, which is not what owns an arm.
+			owner[kind] = auth.path
+			var cats []string
+			for _, m := range re.FindAllStringSubmatch(chunk, -1) {
+				cats = append(cats, m[1])
+			}
+			if len(cats) == 0 {
+				continue // an arm passing no category: no immediate, or a non-idx one
+			}
+			arms++
+			perKind[kind] = append(perKind[kind], cats)
 		}
-		kind := keywordKind(fields[0])
-		if kind != keywordKind(strings.ToUpper(string(kind))) {
-			continue // a lowercase leader is a nonterminal, not a mnemonic arm
-		}
-		var cats []string
-		for _, m := range re.FindAllStringSubmatch(chunk, -1) {
-			cats = append(cats, m[1])
-		}
-		if len(cats) == 0 {
-			continue
-		}
-		arms++
-		perKind[kind] = append(perKind[kind], cats)
 	}
 
 	// Vacuity, per partition rather than one total, and the partitions here are *arms*, *kinds*, and
@@ -740,6 +760,11 @@ func positionalLookups(t *testing.T) map[keywordKind][][]string {
 			}
 		}
 	}
+	// Printed unconditionally, not only in the floor's message. A figure that appears solely inside a
+	// `t.Fatalf` is printed exactly when it is already known to be wrong; the composed number is the one
+	// the doc comment above claims, so the log is what makes that claim checkable while it holds.
+	t.Logf("positional lookups composed: %d lookup-passing arms over %d kinds, %d passing two",
+		arms, len(perKind), pairs)
 	if arms < 40 || len(perKind) < 38 || pairs < 8 {
 		t.Fatalf("the positional reader found %d lookup-passing arms over %d kinds with %d passing two, "+
 			"want >=40, >=38 and >=8 (49/47/10 at bdd7164): it is not seeing the production's actions, "+

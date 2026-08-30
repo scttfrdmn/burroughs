@@ -59,6 +59,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/scttfrdmn/burroughs/internal/gen"
 	"github.com/scttfrdmn/burroughs/internal/gen/mllex"
 )
 
@@ -104,11 +105,27 @@ type Row struct {
 	// carried so a consumer can cross-check against keywords.go without a second lookup.
 	Kind string
 
-	// Constructor is the reference's own constructor name, and it is the join key:
-	// `i32_add`, `local_get`. Kept in the emitted table because it is the *evidence* for
-	// the row — a reader auditing why `i32.add` is 0x6a follows this name into
-	// optable.go, which cites its own decode.ml line.
+	// Constructor is the reference's own constructor name — `i32_add`, `local_get` — and half
+	// the join key. Kept in the emitted table because it is the *evidence* for the row: a
+	// reader auditing why `i32.add` is 0x6a follows this name into optable.go, which cites its
+	// own decode.ml line.
 	Constructor string
+
+	// Operator is the operator constructor the instruction is applied to where it takes one —
+	// `RmwXor` from `i32_atomic_rmw (Values.I32 I32Op.RmwXor) (opt a 2)` — and empty otherwise,
+	// which is every core row (zero of them have one, counted by opcodegen at bdd7164).
+	//
+	// **It is the other half of the join key, and the join was wrong without it.** The threads
+	// pin builds the read-modify-write family by applying seven constructors to six operators
+	// each, so `Constructor` alone maps 42 opcodes onto 7 names: five of every six mnemonics
+	// took `codes[0]` — `i32.atomic.rmw.xor` encoding as `i32.atomic.rmw.add` — and the sixth
+	// landed in the ambiguity map by map-iteration order. That is the accept-direction defect
+	// §9 G-3 names, in the shape this whole table exists to prevent: a wrong row emits a
+	// different instruction than the text denotes, and it decodes clean. Found by reading the
+	// generated ambiguity set after the pin-set composition, where 3 entries became 10 —
+	// `opcodegen` had already paid for this one region over and named the field `Operator`
+	// there, which is what made the diagnosis a lookup rather than an investigation.
+	Operator string
 
 	// Prefix and Code are the encoding, copied from the opcode table's matching row.
 	Prefix byte
@@ -119,9 +136,20 @@ type Row struct {
 
 	// Line is the 1-indexed line in that authority this row's constructor was read from.
 	Line int
+
+	// From is the short tag of the file Line indexes — `spec/parser.mly`,
+	// `spec-threads/lexer.mll` — and it is the other half of the citation.
+	//
+	// **Origin is not enough to name the file, and that is grave #529's shape one generator
+	// over.** Origin says *which kind* of authority named the constructor, so a row used to
+	// render `lexer.mll:266`; with two pins licensing a file of that name, line 266 of the
+	// core lexer is an unrelated arm and the citation resolves — to the wrong place. Two pins
+	// times two authorities is four files a row's Line can index, and Origin distinguishes two
+	// of them.
+	From string
 }
 
-// Ambiguity is a constructor the opcode table holds under more than one encoding.
+// Ambiguity is a join key the opcode table holds under more than one encoding.
 //
 // **Emitted rather than resolved, and that is 0014's ruling.** Three exist at bdd7164 —
 // `select` (0x1b bare, 0x1c typed), `ref_test` and `ref_cast` (0xfb 20/21 and 22/23, null
@@ -132,6 +160,7 @@ type Row struct {
 // encoder chooses on the operand it read.
 type Ambiguity struct {
 	Constructor string
+	Operator    string
 	Keyword     string
 	Codes       []Code
 }
@@ -142,14 +171,63 @@ type Code struct {
 	Code   uint32
 }
 
+// Authority is one pin's pair of text sources, at that pin's own revision.
+//
+// A pair rather than a file, because this generator is the only one of the four whose rows
+// cite **two** authorities: a constructor comes from a grammar arm's semantic action or from
+// a lexer arm's payload, and the two files are read together or the partition below cannot be
+// checked. So a pin contributes both or neither.
+//
+// The paths are repo-relative and are what a row's citation names; the contents are passed in
+// rather than read here so that the falsification tests can hand this package a grammar with
+// an injected defect — the seam Extract's signature has always had, kept.
+type Authority struct {
+	// ParserPath and LexerPath are the repo-relative sources, in the spelling a row's
+	// citation carries (see Row.From) and the generated header prints.
+	ParserPath string
+	LexerPath  string
+	// Parser and Lexer are their contents.
+	Parser string
+	Lexer  string
+	// SHA is this pin's revision, read from the pin's own fetch script.
+	//
+	// **Per authority, not per table.** The join used to stamp one SHA and say so — "the join
+	// is only meaningful if both sides are the same revision" — which is true of one pin's two
+	// files and false of the pin set: the core pin is at bdd7164 and the threads pin at
+	// cc535ad, and a single stamp would have to name one of them for rows read from the other.
+	SHA string
+	// Scope is why this authority is consulted, in one clause, carried from the pin's `Why`.
+	// Present because *consultation is clause-scoped, never wholesale* — see keywordgen.Source.
+	Scope string
+}
+
+// Source is one authority's contribution to a composed table: its provenance, plus how many
+// rows it actually put in.
+//
+// The counts are per *partition* (grammar, lexer) and per authority, which is what makes the
+// widening auditable. A total is not enough: the threads pin contributes 66 lexer rows and
+// exactly **one** grammar row (`ATOMIC_FENCE`), so a grammar read that silently broke would
+// lose 1 row of 561 and every aggregate floor in this file would absorb it.
+type Source struct {
+	// ParserPath, LexerPath, SHA and Scope are the Authority's, carried through.
+	ParserPath string
+	LexerPath  string
+	SHA        string
+	Scope      string
+	// Grammar and Lexer are the rows this authority's two files contributed to the composed
+	// table — not the constructors it named. An authority can name a constructor that joins to
+	// no keyword, and a row is the thing the emitted table has.
+	Grammar int
+	Lexer   int
+}
+
 // Table is one extraction's result: the rows, the ambiguities, and the provenance needed to
 // audit them.
 type Table struct {
-	// SourceSHA is the reference revision both authorities were read from. Stamped, not
-	// deduced (0007, condition 3). One SHA rather than two, because the join is only
-	// meaningful if both sides are the same revision — see the cmd, which reads it from
-	// the fetch script's pin.
-	SourceSHA string
+	// Sources is every authority this table was composed from, in application order: the
+	// base first, then each overlay. Stamped, not deduced — a generated artifact whose
+	// provenance needs git archaeology has hearsay for authority (0007, condition 3).
+	Sources []Source
 
 	// Rows, sorted by keyword so the output is stable and a diff means a real change.
 	Rows []Row
@@ -176,14 +254,19 @@ type Table struct {
 // Set below the counts measured at bdd7164 with room for upstream to *remove* instructions
 // without a false alarm, and far above "a handful": an extractor finding 3 of 436 is as
 // broken as one finding none.
+// **They are also not enough on their own once the table is composed**, and the reason is
+// arithmetic rather than principle: the threads pin contributes 1 grammar row and 66 lexer
+// rows to a table of 561, so an authority whose read broke entirely stays inside every floor
+// here. What covers that is the per-authority contribution check in ExtractFrom — a floor
+// bounds the catastrophic case and cannot see a 1-in-561 silent loss.
 var Floors = struct {
 	Grammar int
 	Lexer   int
 	Total   int
 }{
-	Grammar: 40,  // measured 58
-	Lexer:   350, // measured 436
-	Total:   400, // measured 494
+	Grammar: 40,  // measured 59 composed (58 core + ATOMIC_FENCE)
+	Lexer:   350, // measured 502 composed (436 core + 66 atomic mnemonics)
+	Total:   400, // measured 561 composed (494 core + 67)
 }
 
 var (
@@ -215,9 +298,20 @@ var (
 // that have nothing to do with the reference. The caller passes what `opcodegen.Extract`
 // returned — the same authority, at the same revision, through the code that owns it.
 type OpTable interface {
-	// CodesFor returns every (prefix, opcode) the reference's named constructor encodes
-	// to, or nil. More than one is an Ambiguity, never a silent first-wins.
-	CodesFor(constructor string) []Code
+	// CodesFor returns every (prefix, opcode) the reference's named constructor, applied to
+	// the named operator, encodes to — or nil. More than one is an Ambiguity, never a silent
+	// first-wins.
+	//
+	// The pair, not the constructor: see Row.Operator for the 42 rows that make it a pair and
+	// the wrong answers `Constructor` alone gave.
+	CodesFor(constructor, operator string) []Code
+
+	// Holds reports whether the table names this constructor under *any* operator, and it is
+	// the question constructorIn asks — "is this lowercase OCaml identifier an instruction
+	// constructor at all", which is prior to knowing which operator the arm applies. Keeping
+	// the two questions separate is what stops the filter from having to guess an operator in
+	// order to decide whether it is looking at a constructor.
+	Holds(constructor string) bool
 }
 
 // Keyword is one keyword-table entry the join reads: what keywordgen already extracted.
@@ -230,19 +324,113 @@ type Keyword struct {
 	Line    int
 }
 
-// Extract joins the two authorities and returns the mnemonic→opcode table.
+// CoreParserAuthority and CoreLexerAuthority are the paths Extract records for its single
+// authority: the core interpreter's text sources, which are the base of every composition.
+const (
+	CoreParserAuthority = "third_party/spec/interpreter/text/parser.mly"
+	CoreLexerAuthority  = "third_party/spec/interpreter/text/lexer.mll"
+)
+
+// Extract joins one authority's two files against the keyword and opcode tables.
 //
-// mly and lex are the reference's parser and lexer sources; kws is the keyword table
+// mly and lex are that authority's parser and lexer sources; kws is the keyword table
 // (keywordgen's arms); ops is the opcode table. sha is recorded verbatim — the caller is
-// responsible for it being the revision all of these were read from.
+// responsible for it being the revision both files were read at.
+//
+// **This is the one-pin entry point, and it is no longer how the committed table is built** —
+// see BuildFromPins. It stays exported because the falsification tests need to hand the join a
+// grammar with an injected defect and a keyword set with a hole, inputs no pin produces; the
+// paths it records are the core pin's because that is the only pin a single-authority read can
+// honestly claim to be.
 func Extract(mly, lex string, kws []Keyword, ops OpTable, sha string) (*Table, error) {
-	byGrammar, err := grammarConstructors(mly, ops)
-	if err != nil {
-		return nil, err
+	return ExtractFrom([]Authority{{
+		ParserPath: CoreParserAuthority, LexerPath: CoreLexerAuthority,
+		Parser: mly, Lexer: lex, SHA: sha,
+	}}, kws, ops)
+}
+
+// ExtractFrom joins the authorities in order, base first, and returns the composed table.
+//
+// # The composition is base-wins, and the direction is load-bearing
+//
+// Each authority contributes only the constructors the ones before it did not name. That is
+// keywordgen.Compose's rule and it is here for the same measured reason: the threads pin's
+// baseline predates GC and memory64, so letting a later authority win would *delete* core
+// clauses rather than add proposal ones. Composing constructor maps rather than whole tables
+// is what this generator's shape allows — the keyword set and the opcode table arrive already
+// composed by their own generators, so the only thing left to compose is the link between
+// them, which is exactly the fact this package owns.
+//
+// # Why the grammar side is filtered by the keyword table's kinds
+//
+// A grammar arm's *token kind* is the join key, so a kind no keyword lexes to can never be
+// looked up — and reading one into the map is not merely useless, it is wrong. The threads
+// pin's `memory_fields` has `| LPAR DATA string_list RPAR /* Sugar */` whose action builds an
+// `i32_const` offset, so the reader resolves kind `LPAR` to constructor `i32_const`: grave
+// #107's shape (a nonterminal mistaken for a constructor) in its other direction, an arm whose
+// *head* is not a mnemonic at all. Filtering against the keyword table's kinds is a derivation
+// rather than an exclusion list — the domain is "kinds some keyword lexes to", which is the
+// only domain the join has — and it drops exactly one entry, LPAR, over the two pins.
+func ExtractFrom(auths []Authority, kws []Keyword, ops OpTable) (*Table, error) {
+	if len(auths) == 0 {
+		return nil, fmt.Errorf("%w: no authority to join", ErrVacuous)
 	}
-	byLexer, err := lexerConstructors(lex, ops)
-	if err != nil {
-		return nil, err
+
+	// The kinds the join can key on, derived from the keyword table rather than listed. See
+	// the header above for the one entry this drops and why it is wrong rather than idle.
+	joinable := make(map[string]bool, len(kws))
+	for _, kw := range kws {
+		joinable[kw.Kind] = true
+	}
+
+	byGrammar := map[string]named{}
+	byLexer := map[string]named{}
+	// Where a row's `From` tag sends its contribution count back. Keyed by tag rather than by
+	// index because the join loop below sees a row's *citation*, not the authority it walked —
+	// and deriving the count from the citation is what makes the two agree by construction
+	// instead of by a second bookkeeping pass that could disagree with the printed provenance.
+	sourceOf := map[string]int{}
+	tab := &Table{}
+	for _, a := range auths {
+		if a.ParserPath == "" || a.LexerPath == "" {
+			return nil, fmt.Errorf("%w: an authority with no path: a row read from it would carry "+
+				"a line number and no file, which is grave #529's half-citation", ErrVacuous)
+		}
+		g, err := grammarConstructors(a.Parser, ops)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", a.ParserPath, err)
+		}
+		l, err := lexerConstructors(a.Lexer, ops)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", a.LexerPath, err)
+		}
+		pTag, lTag := gen.SourceTag(a.ParserPath), gen.SourceTag(a.LexerPath)
+		if pTag == lTag {
+			return nil, fmt.Errorf("%w: %s and %s share the tag %q, so a row's citation cannot say "+
+				"which of the two it was read from", ErrVacuous, a.ParserPath, a.LexerPath, pTag)
+		}
+		tab.Sources = append(tab.Sources, Source{
+			ParserPath: a.ParserPath, LexerPath: a.LexerPath, SHA: a.SHA, Scope: a.Scope,
+		})
+		sourceOf[pTag] = len(tab.Sources) - 1
+		sourceOf[lTag] = len(tab.Sources) - 1
+		for kind, n := range g {
+			if !joinable[kind] {
+				continue
+			}
+			if _, ok := byGrammar[kind]; ok {
+				continue
+			}
+			n.from = pTag
+			byGrammar[kind] = n
+		}
+		for kw, n := range l {
+			if _, ok := byLexer[kw]; ok {
+				continue
+			}
+			n.from = lTag
+			byLexer[kw] = n
+		}
 	}
 
 	// The partition check, and it runs *before* the join rather than after: if a kind is
@@ -256,18 +444,22 @@ func Extract(mly, lex string, kws []Keyword, ops OpTable, sha string) (*Table, e
 	// on any input and was decoration. It read as a partition check and was a no-op, which is
 	// *a green that survives the bug it names*: found by writing the falsification test
 	// (injecting a constructor into `| BINARY { fun c -> $1 }`) and watching it not fail.
+	//
+	// **Composition does not weaken it.** The premise is over the composed maps, so a kind the
+	// core grammar names and the threads *lexer* also names would fire here even though
+	// neither pin alone has an overlap — which is the new way this could break and the reason
+	// the check is not scoped per authority.
 	for _, kw := range kws {
 		g, inGrammar := byGrammar[kw.Kind]
 		l, inLexer := byLexer[kw.Keyword]
 		if inGrammar && inLexer {
 			return nil, fmt.Errorf("%w: keyword %q (kind %s) has a constructor from both authorities — "+
-				"%q at parser.mly:%d and %q at lexer.mll:%d; decision 0014's premise was overlap 0, "+
+				"%q at %s:%d and %q at %s:%d; decision 0014's premise was overlap 0, "+
 				"and the join has no precedence rule to apply",
-				ErrPartition, kw.Keyword, kw.Kind, g.ctor, g.line, l.ctor, l.line)
+				ErrPartition, kw.Keyword, kw.Kind, g.ctor, g.from, g.line, l.ctor, l.from, l.line)
 		}
 	}
 
-	tab := &Table{SourceSHA: sha}
 	ambig := map[string]Ambiguity{}
 	nGrammar, nLexer := 0, 0
 
@@ -276,41 +468,54 @@ func Extract(mly, lex string, kws []Keyword, ops OpTable, sha string) (*Table, e
 		// its constructor covers every keyword of that kind, while a payload constructor is
 		// per-keyword. Overlap being 0 is what makes the order irrelevant to the result —
 		// checked above, so this is not relying on it silently.
-		ctor, origin, line := "", Origin(""), 0
+		ctor, op, origin, line, from := "", "", Origin(""), 0, ""
 		if g, ok := byGrammar[kw.Kind]; ok {
-			ctor, origin, line = g.ctor, FromGrammar, g.line
+			ctor, op, origin, line, from = g.ctor, g.op, FromGrammar, g.line, g.from
 		} else if l, ok := byLexer[kw.Keyword]; ok {
-			ctor, origin, line = l.ctor, FromLexer, l.line
+			ctor, op, origin, line, from = l.ctor, l.op, FromLexer, l.line, l.from
 		}
 		if ctor == "" {
 			tab.Unjoined++
 			continue
 		}
 
-		codes := ops.CodesFor(ctor)
+		codes := ops.CodesFor(ctor, op)
 		if len(codes) == 0 {
-			// Unreachable through the constructors these two readers return, since both
-			// filter on the opcode table. Asserted anyway: the filter is what makes a
-			// lowercase identifier a *constructor* rather than a local variable name, and
-			// if that filter ever moves, this is the difference between a wrong row and an
-			// error.
-			return nil, fmt.Errorf("%w: keyword %q resolved to constructor %q, which the opcode table does not hold",
-				ErrUnrecognized, kw.Keyword, ctor)
+			// **Reachable now, where it used to be unreachable, and the widening is the reason.**
+			// Both readers filter their identifiers through OpTable.Holds, so the *constructor*
+			// half cannot miss; the operator half can, because the two authorities spell the
+			// tagged operator differently and this package reads the text one. A text arm whose
+			// operator this reader failed to capture resolves to the pair (ctor, "") — which the
+			// opcode table does not hold for an rmw constructor — so the miss is this error
+			// rather than a row silently taking the family's first code.
+			return nil, fmt.Errorf("%w: keyword %q resolved to constructor %q with operator %q "+
+				"(%s:%d), which the opcode table does not hold; the join key is the pair, so an "+
+				"operator this reader missed is a pair that names no encoding",
+				ErrUnrecognized, kw.Keyword, ctor, op, from, line)
 		}
 		if len(codes) > 1 {
-			ambig[ctor] = Ambiguity{Constructor: ctor, Keyword: kw.Keyword, Codes: codes}
+			ambig[ctor+"/"+op] = Ambiguity{Constructor: ctor, Operator: op, Keyword: kw.Keyword, Codes: codes}
 		}
 
+		// The row's own citation decides which Source it is charged to, so the printed
+		// provenance and the counts cannot disagree.
+		si, ok := sourceOf[from]
+		if !ok {
+			return nil, fmt.Errorf("%w: keyword %q cites %q, which is no authority in this join",
+				ErrVacuous, kw.Keyword, from)
+		}
 		switch origin {
 		case FromGrammar:
 			nGrammar++
+			tab.Sources[si].Grammar++
 		case FromLexer:
 			nLexer++
+			tab.Sources[si].Lexer++
 		}
 		tab.Rows = append(tab.Rows, Row{
-			Keyword: kw.Keyword, Kind: kw.Kind, Constructor: ctor,
+			Keyword: kw.Keyword, Kind: kw.Kind, Constructor: ctor, Operator: op,
 			Prefix: codes[0].Prefix, Code: codes[0].Code,
-			Origin: origin, Line: line,
+			Origin: origin, Line: line, From: from,
 		})
 	}
 
@@ -326,20 +531,50 @@ func Extract(mly, lex string, kws []Keyword, ops OpTable, sha string) (*Table, e
 		return nil, fmt.Errorf("%w: %d joined rows, want >= %d", ErrVacuous, len(tab.Rows), Floors.Total)
 	}
 
+	// Every authority contributes, and this is the check the floors above cannot be: the threads
+	// pin puts 67 rows into a table of 561, so a pin whose *both* files stopped being read would
+	// leave all three floors satisfied and the composed table silently back to the core's content.
+	//
+	// **A total per authority, not a per-side floor**, and the line is drawn where the honest
+	// claim is. "This pin contributes at least one row" is true of any pin worth composing — a
+	// pin naming nothing is a pin the caller should not have passed. "This pin contributes at
+	// least one *grammar* row" is not: a proposal adding only mnemonics of existing kinds would
+	// contribute 0 grammar rows legitimately, and a check that fired on it would be teaching the
+	// next author to route around the instrument. The per-side numbers are pinned instead where a
+	// change is visible without being forbidden — Emit prints them per authority, so the drift
+	// check sees `grammar 1` become `grammar 0` as a diff.
+	for i, s := range tab.Sources {
+		if s.Grammar+s.Lexer > 0 {
+			continue
+		}
+		return nil, fmt.Errorf("%w: authority %d (%s + %s at %s) contributed no rows at all; "+
+			"the aggregate floors cannot see this, since a pin can be a small fraction of the table",
+			ErrVacuous, i, s.ParserPath, s.LexerPath, s.SHA)
+	}
+
 	sort.Slice(tab.Rows, func(i, j int) bool { return tab.Rows[i].Keyword < tab.Rows[j].Keyword })
 	for _, a := range ambig {
 		tab.Ambiguous = append(tab.Ambiguous, a)
 	}
 	sort.Slice(tab.Ambiguous, func(i, j int) bool {
-		return tab.Ambiguous[i].Constructor < tab.Ambiguous[j].Constructor
+		if tab.Ambiguous[i].Constructor != tab.Ambiguous[j].Constructor {
+			return tab.Ambiguous[i].Constructor < tab.Ambiguous[j].Constructor
+		}
+		return tab.Ambiguous[i].Operator < tab.Ambiguous[j].Operator
 	})
 	return tab, nil
 }
 
 // named is a constructor and where it was read from.
+//
+// `from` is stamped by ExtractFrom rather than by the two readers, because a reader is handed
+// one file's *contents* and has no idea which pin they came from — the file it is reading is the
+// caller's fact, and a reader that guessed would be inventing the citation half of grave #529.
 type named struct {
 	ctor string
+	op   string
 	line int
+	from string
 }
 
 // grammarConstructors reads *every* production in parser.mly and returns, per token kind,
@@ -388,17 +623,28 @@ func grammarConstructors(mly string, ops OpTable) (map[string]named, error) {
 		if c == "" {
 			return nil
 		}
+		// The operator is read here too, though no grammar arm at either pin applies one — the
+		// read-modify-write family names its operator in the *lexer's* payload. Derived rather
+		// than assumed absent, because "the grammar never applies an operator" is a claim about
+		// today's two authorities and reading it costs one regexp; assuming it would put a
+		// silently-dropped discriminator in the one direction that decodes clean.
+		op := operatorIn(body.String())
 		// A kind named twice must be named the same way. The plain and folded spellings of
 		// one instruction go through different productions, so this is the control on them
 		// encoding identically — and it is a real risk rather than a defensive one, because
 		// nothing upstream requires two arms of two productions to agree about anything.
-		if prev, ok := out[kind]; ok && prev.ctor != c {
-			return fmt.Errorf("%w: kind %s names constructor %q at parser.mly:%d and %q at :%d; "+
-				"one mnemonic cannot encode two ways depending on which production parsed it",
-				ErrPartition, kind, prev.ctor, prev.line, c, start)
+		//
+		// The comparison is on the *pair*, since the join key is the pair: two arms naming one
+		// constructor and two operators encode two different instructions, which is exactly the
+		// disagreement this check exists to refuse.
+		if prev, ok := out[kind]; ok && (prev.ctor != c || prev.op != op) {
+			return fmt.Errorf("%w: kind %s names constructor %q (operator %q) at parser.mly:%d and "+
+				"%q (operator %q) at :%d; one mnemonic cannot encode two ways depending on which "+
+				"production parsed it",
+				ErrPartition, kind, prev.ctor, prev.op, prev.line, c, op, start)
 		}
 		if _, ok := out[kind]; !ok {
-			out[kind] = named{ctor: c, line: start}
+			out[kind] = named{ctor: c, op: op, line: start}
 		}
 		return nil
 	}
@@ -498,10 +744,35 @@ func lexerConstructors(lex string, ops OpTable) (map[string]named, error) {
 	out := map[string]named{}
 	for _, a := range arms {
 		if c := constructorIn(a.Body, ops); c != "" {
-			out[a.Keyword] = named{ctor: c, line: a.Line}
+			out[a.Keyword] = named{ctor: c, op: operatorIn(a.Body), line: a.Line}
 		}
 	}
 	return out, nil
+}
+
+// reOperatorArg matches the operator constructor an arm's action applies:
+// `(i32_atomic_rmw (Values.I32 I32Op.RmwXor) (opt a 2)) o`
+// (spec-threads/interpreter/text/lexer.mll:321).
+//
+// **Not opcodegen's `reOperatorArg`, and the difference is the qualifier.** That one requires
+// `(I32 I32Op.RmwXor)` because the *decoder's* atomics region opens with `let open Values in`;
+// the text lexer does not, so it spells the tag `Values.I32`. One pattern accepting both would
+// have to make the qualifier optional on both sides, which loosens each reader to admit a
+// spelling its own authority does not use — two files spelling one thing two ways is two facts,
+// not one fact duplicated, so the *shape* is not shared even though the captured name is.
+//
+// The numeric-type names are spelled out rather than `\w+` for opcodegen's reason: what is being
+// recognized is `Values`' tagged operator, and a looser pattern would claim any parenthesised
+// qualified name, of which the reference has several that are not operators.
+var reOperatorArg = regexp.MustCompile(`\(\s*Values\.(?:I32|I64|F32|F64)\s+(?:I32|I64|F32|F64)Op\.(\w+)\s*\)`)
+
+// operatorIn returns the operator constructor an action applies, or "" where it applies none —
+// which is every core arm, so this reads "" for 494 of the 561 composed rows.
+func operatorIn(expr string) string {
+	if m := reOperatorArg.FindStringSubmatch(expr); m != nil {
+		return m[1]
+	}
+	return ""
 }
 
 // constructorIn returns the first lowercase identifier in an OCaml expression that the
@@ -524,7 +795,7 @@ func lexerConstructors(lex string, ops OpTable) (map[string]named, error) {
 // silently.
 func constructorIn(expr string, ops OpTable) string {
 	for _, id := range reIdent.FindAllString(expr, -1) {
-		if len(ops.CodesFor(id)) > 0 {
+		if ops.Holds(id) {
 			return id
 		}
 	}

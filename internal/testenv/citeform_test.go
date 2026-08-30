@@ -776,9 +776,30 @@ const bareContReferenceFloor = 450
 // by 3"*) — the sentence needed the drift and the subject, never the address. So the ratchet moved by
 // the two the record cannot do without, and the receipt is that the other five went the other way in
 // the same paragraph.
+// **`(unattributed)` rose to 52 in #524, and the +3 are three specimens of the bare form itself** —
+// the ADR 0024 case above, arrived at independently by three emitters. Grave #529 taught `opgen`'s and
+// `memarggen`'s `Emit`, and `opgen`'s test for it, to refuse a row that carries a line number and no
+// file; each of the three explains the refusal by quoting what such a row *renders* — a colon and the
+// line number, nothing before it. The sentence cannot do without it: the whole hazard is that the
+// output **looks like a citation** and resolves against whichever same-named file the reader opens, and
+// paraphrasing it describes the input while losing the thing that makes it dangerous. Same test as the
+// ADR 0024 rise — a citation the sentence does not need is the population; a specimen being exhibited
+// is not.
+//
+// This paragraph describes the rendering rather than reproducing it, and the reason is that the first
+// draft did reproduce it and **made the census 53**: a doc comment pinning the count of bare forms,
+// pushing that count by one, in the file that does the counting. *A ban reported in the banned form is
+// still the banned form* — the scanner reads tokens, not quotation marks, and the three sites it is
+// reporting on are the exhibit. The same move the ADR 0024 rise records for `docs/laws/`, which
+// described its four specimens rather than re-quoting them.
+//
+// Worth noting which way the ratchet moved in the same PR: that branch **removed 540** bare-basename
+// citations from the two generated tables by teaching the generators to emit pin-qualified paths. Three
+// added as specimens against 540 converted is the ratio the doctrine is aiming at, and it is also why
+// refMatchedFloor exists — see its doc for the floor that fired on that conversion.
 var bareContByAntecedent = map[string]int{
 	"go":             106,
-	"(unattributed)": 49,
+	"(unattributed)": 52,
 }
 
 // TestBareContinuationCitationsAreBounded answers the term Scott's #486 ruling folded into #456: what
@@ -929,8 +950,9 @@ func TestBareContinuationCitationsAreBounded(t *testing.T) {
 //
 // The pinned expectation is zero, and *an analytic zero is not a measurement* — so the two ways this
 // could report zero without looking are asserted separately. `refQualifiedFloor` says the qualified
-// form is actually present in the tree, which is what dies if the pattern stops matching; the basename
-// total is printed and floored, which is what dies if the pin vocabulary comes back empty. And the zero
+// form is actually present in the tree, which is what dies if the pattern stops matching; the matched
+// total is printed and floored (refMatchedFloor, both halves summed), which is what dies if the pin
+// vocabulary comes back empty. And the zero
 // is observable: this control was falsified by restoring one of the nickname citations it was written
 // for, which is a two-word edit any author can make by writing the form that reads most naturally.
 const refNickWindow = 8
@@ -944,11 +966,29 @@ const refNickWindow = 8
 // dead. Not a ratchet: this population is meant to grow with every conversion #497 makes.
 const refQualifiedFloor = 10
 
-// refBasenameFloor is the other vacuity guard, on the unqualified population — 2591 at the pin's
-// writing, and it is the number that goes to zero if the derived basename vocabulary comes back empty.
-// A floor well below it because #497's conversions will draw it down deliberately, and because *a
-// floor bounds the catastrophic case only*: what it catches is the vocabulary emptying, not a drift.
-const refBasenameFloor = 1500
+// refMatchedFloor is the other vacuity guard, and it is on the **total** the scan matches — qualified
+// plus unqualified — because that is the quantity that goes to zero if the derived basename vocabulary
+// comes back empty. 2867 at this writing.
+//
+// # It used to floor the unqualified half, and that floor was pointed at a population under demolition
+//
+// `refBasenameFloor = 1500` guarded the unqualified count alone, set "well below" its then-2591 with the
+// reason stated in its own doc: *"#497's conversions will draw it down deliberately."* They did. #524's
+// opgen and memarggen halves taught the two generators to emit each row's citation with its pin path,
+// which converted **540** bare basenames in `internal/text/opcodes.go` and `memarg.go` in one
+// regeneration, and the count landed at 1465 — below the floor, on a change that is the entire point of
+// #497.
+//
+// So the floor fired on success, which is a floor pointed the wrong way. Re-tuning it would have worked
+// and would have to happen again on the next conversion, each time with the number chosen after seeing
+// the result — *amending a threshold having seen the number*, indefinitely, on a schedule set by the
+// project's own progress. The invariant was available instead: conversion moves a citation between the
+// two halves and leaves the sum alone, while an emptied vocabulary takes the sum to zero. Same
+// catastrophic case, no re-tuning, and it stops floor maintenance from being a tax on doing the work.
+//
+// *A tripwire whose subject dissolves is re-pointed, not retired* — and the subject here did not even
+// dissolve, it just stopped being the thing the number could bound.
+const refMatchedFloor = 1200
 
 // TestReferenceCitationsNameTheirPinInThePath is grave #517's tripwire, tree-wide.
 //
@@ -1082,10 +1122,12 @@ func TestReferenceCitationsNameTheirPinInThePath(t *testing.T) {
 			"assertion above reports zero offenders when this pattern stops matching, so this is what "+
 			"fails instead (%s)", qualified, refQualifiedFloor, citeFormDoc)
 	}
-	if unqualified < refBasenameFloor {
-		t.Errorf("the scan found %d unqualified reference citations, below the floor of %d — the "+
-			"derived basename vocabulary is %v and a vocabulary that stops matching takes the pinned "+
-			"zero with it (%s)", unqualified, refBasenameFloor,
+	if matched := qualified + unqualified; matched < refMatchedFloor {
+		t.Errorf("the scan matched %d reference citations in total (%d qualified, %d unqualified), "+
+			"below the floor of %d — the derived basename vocabulary is %v and a vocabulary that stops "+
+			"matching takes the pinned zero with it. The total is floored rather than the unqualified "+
+			"half because a conversion moves a citation between the halves and leaves this sum alone "+
+			"(%s)", matched, qualified, unqualified, refMatchedFloor,
 			slices.Sorted(maps.Keys(bases)), citeFormDoc)
 	}
 
