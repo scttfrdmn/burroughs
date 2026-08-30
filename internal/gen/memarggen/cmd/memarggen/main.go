@@ -6,9 +6,11 @@
 //	go run ./internal/gen/memarggen/cmd/memarggen -o internal/text/memarg.go
 //
 // or, normally, 'make memarg'. The output is committed, so a fresh clone builds with no fetch;
-// 'make memarg-drift' asserts the committed file still agrees with the reference. The revision
-// is read from scripts/fetch-spec-ref.sh rather than passed in, because a SHA typed at a second
-// site is a citation that can drift from the pin it claims to describe.
+// 'make memarg-drift' asserts the committed file still agrees with every pinned reference. One
+// lexer per pin, one revision *per pin*, each read from that pin's own fetch script rather than
+// passed in — a SHA typed at a second site is a citation that can drift from the pin it claims to
+// describe, and a single SHA over a composed table would have to name one pin's revision for rows
+// read at another's.
 package main
 
 import (
@@ -18,7 +20,6 @@ import (
 
 	"github.com/scttfrdmn/burroughs/internal/gen"
 	"github.com/scttfrdmn/burroughs/internal/gen/memarggen"
-	"github.com/scttfrdmn/burroughs/internal/testenv"
 )
 
 func main() {
@@ -32,15 +33,7 @@ func main() {
 }
 
 func run(out string) error {
-	sha, err := gen.PinnedRefRev()
-	if err != nil {
-		return err
-	}
-	src, err := os.ReadFile(testenv.RefLexerMLL)
-	if err != nil {
-		return fmt.Errorf("%w (run: make spec-ref)", err)
-	}
-	tab, err := memarggen.Extract(string(src), sha)
+	tab, err := memarggen.BuildFromPins()
 	if err != nil {
 		return err
 	}

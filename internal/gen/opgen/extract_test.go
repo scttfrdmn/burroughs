@@ -22,6 +22,35 @@ import (
 // the fetch rather than asserted here — but stated, because a precondition that lives in a
 // shell script and nowhere else is a precondition nobody reading this package can see.
 
+// requireRef fails — never skips — unless every pin's two text sources are vendored, and the
+// domain is the pin set rather than a list of paths: the drift check builds from whatever
+// `RefPins` licenses, so a control asserting the presence of fewer files than the generator reads
+// is a control that can pass on a tree the generator cannot build from (grave #407, and *a skip
+// is not a verdict*).
+func requireRef(tb testing.TB) {
+	tb.Helper()
+	seen := 0
+	for _, pin := range testenv.RefPins() {
+		mly, hasMLY := ParserFor(pin)
+		lex, hasLex := keywordgen.LexerFor(pin)
+		if !hasMLY || !hasLex {
+			continue
+		}
+		testenv.RequireSpecRef(tb, mly)
+		testenv.RequireSpecRef(tb, lex)
+		seen++
+	}
+	if seen < 2 {
+		tb.Fatalf("%d pins license both text sources, want >=2: this control's own domain is the "+
+			"pin set, and a set offering one authority makes every assertion below about a table "+
+			"the generator would refuse to build", seen)
+	}
+}
+
+// refs reads the *core* pin's three sources for the single-authority controls: the partition
+// premise, the shape counts, and the falsifications that inject a defect into a grammar. Those
+// are about one authority's arms, so they read one authority — the drift check is the one that
+// must compose exactly as the generator does, and it calls BuildFromPins.
 func refs(tb testing.TB) (mly, lex string, kws []Keyword, ops OpTable) {
 	tb.Helper()
 
@@ -117,7 +146,7 @@ func TestAuthoritiesPartitionTheKinds(t *testing.T) {
 	for kind, keywords := range unnamed {
 		for _, kw := range keywords {
 			spelled := strings.ReplaceAll(kw, ".", "_")
-			if len(ops.CodesFor(spelled)) == 0 {
+			if !ops.Holds(spelled) {
 				continue
 			}
 			t.Errorf("keyword %q (kind %s) spells constructor %q, which the opcode table holds — "+
@@ -128,12 +157,16 @@ func TestAuthoritiesPartitionTheKinds(t *testing.T) {
 	}
 
 	// Vacuity: the detector must have found *something* to be capable of finding a gap.
-	// Without this, a broken `ops` makes every CodesFor return nil, the loop above never
+	// Without this, a broken `ops` makes every Holds return false, the loop above never
 	// fires, and the gap half passes by asking nothing — the empty-set agreement inside a
 	// control written against that very defect.
+	//
+	// `Holds`, not `CodesFor`: the question is whether the constructor exists, and asking
+	// `CodesFor(spelled, "")` would answer "no" for every rmw mnemonic — a detector that goes
+	// blind on exactly the region this slice adds, reported as a gap in the grammar.
 	var detectable int
 	for _, kw := range kws {
-		if len(ops.CodesFor(strings.ReplaceAll(kw.Keyword, ".", "_"))) > 0 {
+		if ops.Holds(strings.ReplaceAll(kw.Keyword, ".", "_")) {
 			detectable++
 		}
 	}
@@ -202,6 +235,87 @@ func TestExtractMatchesMeasuredShape(t *testing.T) {
 	if len(kws) != tab.Unjoined+len(tab.Rows) {
 		t.Errorf("%d keywords in, %d joined + %d unjoined = %d out: the join lost rows without "+
 			"accounting for them", len(kws), len(tab.Rows), tab.Unjoined, tab.Unjoined+len(tab.Rows))
+	}
+}
+
+// TestComposedTableMatchesMeasuredShape pins the shape of the *composed* table, per authority
+// and per partition, and it exists because none of the checks above or below can see a pin.
+//
+// # The arithmetic, derived rather than read off this extractor
+//
+// The threads pin adds 70 keywords to the keyword table (keywordgen's own composed count, 589 →
+// 659). 66 of them carry an `opt a N` memarg payload naming a constructor, `atomic.fence` is
+// named by the grammar instead (its parser arm, `| ATOMIC_FENCE { fun c -> atomic_fence }`), and
+// the remaining 3 join to nothing. So 494 + 67 = 561 rows, grammar 58 + 1 = 59, lexer 436 + 66 =
+// 502, unjoined 95 + 3 = 98 — and every one of those figures is checked, because a composition
+// that lost the grammar row would still satisfy all three of Floors.
+//
+// # Why the per-authority split is the point rather than the totals
+//
+// **The threads pin's entire grammar contribution is one row of 561.** `Floors.Grammar` is 40
+// against 59, so a threads parser that stopped being read at all would pass every floor, pass
+// the total, and lose `atomic.fence` — which is not a hypothetical shape but the one instruction
+// in this slice whose constructor comes from the grammar rather than the lexer. A total cannot
+// see a 1-in-561 loss; a per-authority count is the only instrument that can (floors bound the
+// catastrophic case only).
+func TestComposedTableMatchesMeasuredShape(t *testing.T) {
+	requireRef(t)
+	tab, err := BuildFromPins()
+	if err != nil {
+		t.Fatalf("BuildFromPins: %v", err)
+	}
+
+	var nGrammar, nLexer int
+	for _, r := range tab.Rows {
+		switch r.Origin {
+		case FromGrammar:
+			nGrammar++
+		case FromLexer:
+			nLexer++
+		default:
+			t.Errorf("row %q has origin %q, which is neither authority", r.Keyword, r.Origin)
+		}
+	}
+	for _, c := range []struct {
+		what      string
+		got, want int
+	}{
+		{"joined rows", len(tab.Rows), 561},
+		{"rows from a grammar body", nGrammar, 59},
+		{"rows from a lexer payload", nLexer, 502},
+		{"keywords with no constructor", tab.Unjoined, 98},
+		{"ambiguous join keys", len(tab.Ambiguous), 3},
+		{"authorities", len(tab.Sources), 2},
+	} {
+		if c.got != c.want {
+			t.Errorf("%s: got %d, want %d", c.what, c.got, c.want)
+		}
+	}
+
+	// The per-authority split, keyed by the pin's own path so an entry cannot carry its
+	// justification onto a different subject — and asserted as a *set*, so a pin arriving with
+	// no expectation here fails rather than being counted into nobody's total.
+	want := map[string][2]int{
+		testenv.RefParserMLY:        {58, 436},
+		testenv.ThreadsRefParserMLY: {1, 66},
+	}
+	for _, s := range tab.Sources {
+		w, ok := want[s.ParserPath]
+		if !ok {
+			t.Errorf("authority %s contributed %d grammar and %d lexer rows and has no measured "+
+				"figure here; a pin whose contribution nobody has read is a widening nobody has "+
+				"audited", s.ParserPath, s.Grammar, s.Lexer)
+			continue
+		}
+		if s.Grammar != w[0] || s.Lexer != w[1] {
+			t.Errorf("%s: contributed grammar %d, lexer %d; want grammar %d, lexer %d",
+				s.ParserPath, s.Grammar, s.Lexer, w[0], w[1])
+		}
+		delete(want, s.ParserPath)
+	}
+	for path := range want {
+		t.Errorf("%s contributed nothing: it is in the pin set with a measured contribution, so "+
+			"zero rows from it is a read that broke rather than a pin that has nothing to add", path)
 	}
 }
 
@@ -516,19 +630,26 @@ func TestOverlapIsAnErrorNotAPrecedenceRule(t *testing.T) {
 // the reference rather than skipping — a drift check that skips reports agreement with an
 // authority it never read (grave #407).
 //
-// One thing it inherits that the other two do not need: the join reads three sources, and it
-// stamps *one* SHA. That is a claim about the vendored tree, not about this test — see the
-// note at the top of this file.
+// **It builds through BuildFromPins rather than joining one authority**, for the failure
+// keywordgen's copy of this control produced on itself: composed against two pins by the
+// generator and one by the check, it reported drift in a table that was correct. A drift check
+// that composes differently from the generator measures the distance between two copies of the
+// composition, and the committed artifact is the innocent party. That matters more here than
+// there, because this generator has three composed inputs rather than one.
+//
+// The one-SHA note at the top of this file is per *pin* now, not per table: the join of one pin's
+// three files needs one revision, and across pins the revisions differ by construction.
 func TestCommittedTableMatchesTheReference(t *testing.T) {
-	mly, lex, kws, ops := refs(t)
-	sha, err := gen.PinnedRefRev()
+	requireRef(t)
+	tab, err := BuildFromPins()
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("BuildFromPins: %v", err)
 	}
-	tab, err := Extract(mly, lex, kws, ops, sha)
-	if err != nil {
-		t.Fatalf("Extract: %v", err)
+	if len(tab.Sources) < 2 {
+		t.Fatalf("composed from %d authorities, want >=2; the pin set is the derived domain and a "+
+			"single-authority table would agree with a committed file 67 rows short", len(tab.Sources))
 	}
+	sha := tab.Sources[0].SHA
 	code, err := tab.Emit()
 	if err != nil {
 		t.Fatalf("Emit: %v", err)
@@ -588,7 +709,7 @@ func firstDiff(a, b string) string {
 // anything". A drift check comparing that to a committed empty table agrees perfectly. So the
 // emitter asserts its own input, and this test is the assertion's falsification.
 func TestEmitRefusesAnEmptyTable(t *testing.T) {
-	if _, err := (&Table{SourceSHA: "test"}).Emit(); err == nil {
+	if _, err := (&Table{Sources: testSources()}).Emit(); err == nil {
 		t.Fatal("Emit accepted a table with no rows; an empty map renders as a valid file that " +
 			"says every mnemonic is unencodable, and a drift check against an empty committed " +
 			"table would agree with it")
@@ -603,12 +724,59 @@ func TestEmitRefusesAnEmptyTable(t *testing.T) {
 // row into one side, because defaulting picks an authority for a row that has none, which is
 // the invented-evidence failure (#36) in a generated comment.
 func TestEmitRejectsAnOriginlessRow(t *testing.T) {
-	tab := &Table{SourceSHA: "test", Rows: []Row{{
+	tab := &Table{Sources: testSources(), Rows: []Row{{
 		Keyword: "i32.add", Kind: "BINARY", Constructor: "i32_add", Code: 0x6a,
-		Origin: Origin("neither"), Line: 1,
+		Origin: Origin("neither"), Line: 1, From: "spec/lexer.mll",
 	}}}
 	if _, err := tab.Emit(); err == nil {
 		t.Fatal("Emit accepted a row with an unknown origin; it would be missing from the " +
 			"header's per-authority counts while present in the map")
+	}
+}
+
+// testSources is a provenance stub for the two Emit falsifications above and the two below,
+// whose subject is a *row*: Emit checks the table's sources too, so a literal with none fails
+// for the wrong reason and the test passes while asserting nothing about the row.
+func testSources() []Source {
+	return []Source{{
+		ParserPath: CoreParserAuthority, LexerPath: CoreLexerAuthority, SHA: "test",
+		Grammar: 1, Lexer: 1,
+	}}
+}
+
+// TestEmitRejectsARowWithNoFile is grave #529's half-citation at this emitter, and it is a
+// separate check from the origin one because the two failures are opposite in visibility.
+//
+// An unknown Origin makes a row uncountable, which the header's arithmetic shows. A row with a
+// known Origin and no `From` counts fine and renders `:266` — or, if the file were defaulted per
+// Origin as it used to be, `lexer.mll:266`, which **resolves**: line 266 of the other pin's lexer
+// is a real arm about an unrelated keyword. A citation that resolves to the wrong place is the
+// one a reader cannot catch by following it, which is why the emitter refuses the row rather than
+// picking a file for it.
+func TestEmitRejectsARowWithNoFile(t *testing.T) {
+	tab := &Table{Sources: testSources(), Rows: []Row{{
+		Keyword: "i32.add", Kind: "BINARY", Constructor: "i32_add", Code: 0x6a,
+		Origin: FromLexer, Line: 266,
+	}}}
+	if _, err := tab.Emit(); err == nil {
+		t.Fatal("Emit accepted a row citing a line of no file; with two pins in the tree a " +
+			"bare line number resolves against whichever lexer.mll the reader opens (grave #529)")
+	}
+}
+
+// TestEmitRefusesASourcelessTable pins the provenance half of Emit's input check.
+//
+// A table with rows and no Sources renders a header with no Authority line at all: no path, no
+// revision, nothing to audit the 561 rows against. That is 0007's condition 3 failing in the one
+// way a generated file cannot report — the file still compiles, the map is still right, and the
+// evidence for it is *absent* rather than wrong.
+func TestEmitRefusesASourcelessTable(t *testing.T) {
+	tab := &Table{Rows: []Row{{
+		Keyword: "i32.add", Kind: "BINARY", Constructor: "i32_add", Code: 0x6a,
+		Origin: FromLexer, Line: 266, From: "spec/lexer.mll",
+	}}}
+	if _, err := tab.Emit(); err == nil {
+		t.Fatal("Emit accepted a table with no sources; the header would name no authority and " +
+			"no revision for a table of derived rows")
 	}
 }

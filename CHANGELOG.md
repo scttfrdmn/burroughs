@@ -21,6 +21,46 @@ weakly-ordered platform.
 
 ### Added
 
+- **The 67 atomic mnemonics have immediate shapes, so `atomic.wast`'s modules parse and its atomic
+  functions encode** ([#524](https://github.com/scttfrdmn/burroughs/issues/524), `gate:threads`).
+  Six kinds take a memarg (`ATOMIC_LOAD`, `ATOMIC_STORE`, `ATOMIC_RMW`, `ATOMIC_RMW_CMPXCHG`,
+  `MEMORY_ATOMIC_WAIT`, `MEMORY_ATOMIC_NOTIFY`) and `ATOMIC_FENCE` takes none; no new byte writer
+  was needed, because the region's wire form is `op 0xfe; op 0xNN; memop mo`, which the existing
+  memarg path already emits. The arm reader now composes over the pin set base-wins with a
+  per-authority production-name resolver, since **the core pin spells the production `plaininstr`
+  and the threads pin spells it `plain_instr`** — grave [#529](https://github.com/scttfrdmn/burroughs/issues/529)'s
+  class (a nonterminal name is part of a citation) reappearing one level in, caught by a
+  pre-existing fatal rather than by review. Threads lane, `atomic.wast`: **0 → 59 pass, 297 → 238
+  fail**, and `GateSensitive` `false → true`.
+  - **The 59 are a finding, not a win, and the pre-registration is why.** #524 registered *"the
+    parser half alone should move the pass count by 0 … if pass moves above 0 from a parser-only
+    change, something else was wrong and it needs an explanation, not a win."* Measured
+    explanation: all 59 are the file's `(invoke "init" …)` directives, and `init` is a plain
+    `i64.store` carrying no `0xfe` opcode. They were failing only because the enclosing module did
+    not parse. **Nothing atomic executed.** The forecast's error was a partition error — it treated
+    "the 246 execution rows" as one mechanism when they are two, 187 that touch an atomic opcode and
+    59 that do not — and `atomicWastPartition` now asserts the whole partition so a fourth necessary
+    condition cannot be discovered by reading a delta.
+  - **The memarg shape is a widening past the union of the tracked grammars (§9 G-2), flagged not
+    settled.** The threads pin's atomic arms write `offset_opt align_opt`, with no `idx_opt`; core's
+    `LOAD` writes `idx_opt offset_opt align_opt`. The narrowness is *the overlay's*, not atomics' —
+    measured in-tree, since that pin's own `LOAD` arm also lacks `idx_opt`, its baseline predating
+    multi-memory — and `TestAtomicMemargNarrownessIsTheRevisions` pins all three premises. Consistent
+    with [#530](https://github.com/scttfrdmn/burroughs/pull/530)'s decode, which reads `0xfe`
+    memargs with the core `memop`. Admitted as a scoped `widenedMemargKinds` entry rather than a
+    `wantShapes` row, because a global row would make the two written sequences interchangeable and
+    a core `LOAD` arm that lost its `idx_opt` upstream would then pass.
+  - **`atomic.fence`'s encode is refused rather than truncated**
+    ([#532](https://github.com/scttfrdmn/burroughs/issues/532)). Its arm is empty, so its shape is
+    `immNone`, which *is* encodable — but its wire form is `op 0xfe; op 0x03; op 0x00`, and the
+    third byte belongs to the encoding rather than the grammar, so the shape-keyed path would emit
+    `fe 03` and stop while reporting success. Accept direction, and no `assert_malformed` can see
+    it. Keyed by mnemonic and derived over the region rather than trusted:
+    `TestReservedByteWireFormsAreTheReferences` partitions all 67 arms and errors on an unmodelled
+    tail. **No fetched-corpus vector reaches it** — `atomic.fence` appears nowhere in the suite at
+    that pin — so a hand-built row is the only thing that fires the refusal, which is the argument
+    for having it.
+
 - **The `0xfe` atomic opcode region — 67 arms, machine-derived from the threads pin and gated on
   `Threads`** ([#524](https://github.com/scttfrdmn/burroughs/issues/524), `gate:threads`).
   `opcodegen` now composes over the pin set the way `keywordgen` does: the core pin is the base, the
@@ -140,6 +180,35 @@ weakly-ordered platform.
 
 ### Changed
 
+- **[#9](https://github.com/scttfrdmn/burroughs/issues/9)'s closure criterion is now *un-achieved*
+  over the threads lane, which retracts the "and it holds" in the entry below — landed in the same
+  `[Unreleased]`, one slice later** ([#524](https://github.com/scttfrdmn/burroughs/issues/524),
+  `gate:threads`; the tracked event is [#477](https://github.com/scttfrdmn/burroughs/issues/477)).
+  Giving the 67 atomic mnemonics their shapes makes `atomic.wast`'s three modules parse, reach the
+  type checker, and be declined there — `validator: instruction not in this slice: prefixed opcode
+  0xfe 0x10 (i32_atomic_load)`. The lane's columns move **0 → 51 declined, 48 of them on
+  `assert_invalid`**, and `internal/validate` is untouched by the slice. So this is precisely Scott's
+  #476 sentence happening: *"closure can be un-achieved by a later widening with no regression in the
+  validator, and nothing currently notices that."* Flagged for Scott rather than re-dated here — a
+  closure criterion's discharge is a governance record, and the actor never chooses the instrument
+  that judges the actor.
+  - **#477's specified mechanism would not have fired on this, which is a finding about #477.** That
+    issue scopes its instrument to a per-command-kind predicate table pinned by digest — "which
+    properties the harness asserts" per `wast` kind — modelled on the #341 specimen where scoring
+    began consulting a different oracle. This slice edits no such table: every kind is asked exactly
+    as before, and what widened is the set of modules the **reader** can hand onward. Same harm,
+    second mechanism, detector blind to it — *a capability requirement can be a mechanism choice*,
+    one level up. What did notice is the lane's exact both-direction pins, where `Declined: 0` became
+    a failing assertion naming its own column: the crude instrument caught what the designed one was
+    scoped past. #477 stays open and its remedy needs widening.
+  - Two other claims in that entry are also spent, and are corrected rather than deleted: the
+    narrowing `InvalidReached` was *"14 against ValidateReached's 14, so the narrowing is a no-op
+    today"* and the two have now **separated, 48 against 51** — the three extra are `atomic.wast`'s
+    bare `module` definitions, scored on the validator's answer since #341, so the divergence arrived
+    from the accept direction the column was kept for. Had the aggregate been the criterion's figure,
+    this slice would have reported 51 declines against a population of 96 `assert_invalid` vectors,
+    three of them not `assert_invalid` at all.
+
 - **[#9](https://github.com/scttfrdmn/burroughs/issues/9)'s closure criterion is reissued as of
   2026-08-29, re-measured over the question set the threads lane widens — and it holds**
   ([#477](https://github.com/scttfrdmn/burroughs/issues/477), firing on its first real occasion).
@@ -213,6 +282,36 @@ weakly-ordered platform.
   domain.
 
 ### Fixed
+
+- **A citation named a basename that exists at two paths, and resolved to the stale one**
+  ([grave #533](https://github.com/scttfrdmn/burroughs/issues/533)). A comment justifying
+  `atomic.fence`'s encode refusal cited `atomic.wast:965` for a module expecting the fence to work.
+  The line is real — in `third_party/spec-threads/test/core/threads/atomic.wast`, the **pinned
+  snapshot's** copy at 1018 lines. The file the threads lane walks is
+  `testdata/spec/proposals/threads/atomic.wast` at 539 lines, where `atomic.fence` does not appear,
+  and neither does it anywhere in the fetched suite. So the claim was false in the direction that
+  matters: no corpus vector witnesses that refusal. Measured collision: **264 of the corpus's 288
+  `.wast` basenames also exist under `third_party/`**, both trees gitignored, so a `grep` by basename
+  can answer from a three-proposals-stale pin. `CLAUDE.md`'s worktree ruling — *an artifact that
+  answers a question is an oracle whether or not anyone appointed it one* — recurring in a tree that
+  had already paid for it once. **The citation resolved**, which is why no citation sweep could see
+  it: *a valid citation does not certify its sentence*, and here the uncertified part was which file
+  the basename named. Corrected in place with the reachability now stated; #533 holds the open
+  question of what instrument, if any, is worth building.
+- **`refBasenameFloor` fired on success, and is re-pointed at the invariant instead**
+  (`refMatchedFloor`, overhead charged to #524). The floor guarded the *unqualified* reference-citation
+  population against the vocabulary going dead — but that population is one
+  [#497](https://github.com/scttfrdmn/burroughs/issues/497) is deliberately driving to zero, and this
+  slice's generators converted **540** bare basenames in `internal/text/opcodes.go` and `memarg.go` to
+  pin-qualified paths in one regeneration, taking the count to 1465 against a floor of 1500. Re-tuning
+  would have worked and would recur on every conversion, each time with the number chosen after seeing
+  the result. The floor now bounds **qualified + unqualified**, which conversion leaves alone and an
+  emptied vocabulary still takes to zero — same catastrophic case, no maintenance tax on doing the
+  work. Falsified by killing the citation pattern, which reports `0 (0 qualified, 0 unqualified)`.
+- **`memarggen.Extract` returned a table alongside its own contribution error**, unlike
+  `ExtractFrom` beside it, which returns `nil` on every failure path; caught by `gocritic`'s
+  `evalOrder` on `return t, t.checkContributions()`. No caller read the table on the error path, so
+  this is a convention repair rather than a behaviour change.
 
 - **`ErrZeroFlagExpected` was enrolled in one of two registries over one sentinel space, and the
   comment licensing the omission was falsified by the fuzz find that exposed it**

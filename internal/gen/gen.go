@@ -32,6 +32,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 )
 
 // rePin matches the reference pin in scripts/fetch-spec-ref.sh, which is the *one* place
@@ -180,4 +181,41 @@ func GofmtSource(src string) (string, error) {
 		return "", fmt.Errorf("formatting generated source: %w", err)
 	}
 	return string(out), nil
+}
+
+// SourceTag shortens an authority path to what a generated row's citation carries:
+// `spec/lexer.mll`, `spec-threads/parser.mly`. The distinguishing components only — both
+// pins license files under an identical `interpreter/text/` subpath, so the filename alone
+// cannot say which, and the full path repeated on 659 rows says it 659 times.
+//
+// # Why this is here rather than in the generator that wrote it
+//
+// It was `keywordgen`'s, written for grave #529: with two pins licensing a file named
+// lexer.mll, a row citing `lexer.mll:266` resolves against whichever lexer the reader
+// opened, and *a citation that resolves to the wrong file is worse than one that does not
+// resolve, because it resolves.* The tag is that grave's repair.
+//
+// The repair then had to happen twice more — `opgen`'s rows cite two files each (a grammar
+// and a lexer, per pin), and `memarggen`'s cite one — which is the third occurrence that
+// un-froze the tooling under Scott's consolidation clause: three copies of one shortening
+// rule can disagree about what a row's citation names, and the disagreement would be
+// invisible because each generator's drift check only compares its own file against its own
+// regeneration. It lives in this package rather than in `mllex` because it knows about the
+// *repository's* layout — `third_party/<pin>/…` — and nothing about OCaml, which is the
+// seam this package's header draws.
+func SourceTag(path string) string {
+	trimmed := strings.TrimPrefix(path, "third_party/")
+	i := strings.LastIndex(trimmed, "/")
+	if i < 0 {
+		// A bare filename, which is what the falsification tests pass. Returned as it came:
+		// a tag is a shortening, and there is nothing to shorten.
+		return trimmed
+	}
+	dir, file := trimmed[:i], trimmed[i+1:]
+	// The pin's own directory, not the file's — `interpreter/text` is common to both pins,
+	// so it is the component that cannot distinguish them.
+	if i := strings.Index(dir, "/"); i >= 0 {
+		dir = dir[:i]
+	}
+	return dir + "/" + file
 }

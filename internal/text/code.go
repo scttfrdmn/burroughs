@@ -587,6 +587,55 @@ var encodableShapes = map[immShape]bool{
 	immLaneImms:    true,
 }
 
+// reservedByteWireForms are the mnemonics whose **wire form carries a byte no immediate shape
+// writes**, and they are refused for that reason rather than for their shape's.
+//
+// `encodableShapes` above is keyed on the immediate *shape*, which is the right key for every
+// frontier #8 has taken: a shape is the reference's written immediate sequence, and a sequence this
+// file cannot write is one no mnemonic carrying it can encode. This map is the case that key cannot
+// express. `atomic.fence`'s `plaininstr` arm is empty — `| ATOMIC_FENCE { fun c -> atomic_fence }`,
+// spec-threads/parser.mly:455 — so its shape is `immNone`, which *is* encodable and correctly so for
+// the twenty-four other kinds carrying it. Its encoding is three bytes:
+//
+//	| AtomicFence ->
+//	  op 0xfe; op 0x03; op 0x00
+//
+// spec-threads/encode.ml:305-306, mirrored on the decode side by `expect 0x00 s "zero flag expected"`
+// (spec-threads/decode.ml:786) and already held as `imms: []imm{immZeroByte}` in
+// internal/binary/optable.go. The third byte belongs to the *encoding*, not to the grammar, so
+// `immediates` has nothing to accumulate for it and `plaininstr` would emit `fe 03` and stop —
+// a truncated instruction, emitted while reporting success. Accept direction, and no
+// `assert_malformed` can see it.
+//
+// **No fetched-corpus vector reaches this, and the reachability is stated because the first draft of
+// this comment got it wrong.** That draft cited `atomic.wast:965` for a module expecting the fence to
+// work. The line exists — in `third_party/spec-threads/test/core/threads/atomic.wast`, the *pinned
+// snapshot's* copy (1018 lines, with `(func (export "fence") (atomic.fence))` and its
+// `assert_return`). The file the threads lane actually walks is
+// `testdata/spec/proposals/threads/atomic.wast` at suite pin de54fd2 — 539 lines, and `atomic.fence`
+// appears nowhere in the fetched suite at all. Two paths, one basename, and the grep answered from
+// the stale one: 264 of the corpus's 288 `.wast` basenames also exist under `third_party/`, both
+// trees gitignored, so this is a standing hazard rather than one slip (#533).
+//
+// So the corpus cannot witness this refusal, which is an argument *for* the refusal and against
+// trusting the board about it: `TestAtomicEncodeReachesTheFrontierAndStops`' hand-built row is the
+// only thing that fires it, and a truncation nothing asks about is exactly the accept-direction
+// defect that ships. The grammar pin and the corpus pin disagree about the population — cc535ad has
+// the arm, de54fd2 has no vector — and the reader is built to the grammar.
+//
+// **Keyed by mnemonic, and the key is the honest one here**: the fact is about one instruction's wire
+// form, not about a class. It is one arm of the sixty-seven in the 0xfe region, and *which* one is
+// derived from the region rather than trusted — the arms that write a byte beyond the two-byte opcode
+// without calling `memop` are exactly this map's members
+// (TestReservedByteWireFormsAreTheReferences).
+//
+// #532 holds the two ways to close it; both put the reserved byte somewhere, and choosing between
+// them is a decision about whether `immShape` names grammar or encoding. Out of #524's second half by
+// its pre-registration — that slice stops at the reader.
+var reservedByteWireForms = map[string]bool{
+	"atomic.fence": true, // fe 03 00 — spec-threads/encode.ml:305
+}
+
 // heaptypeRetained reads `ref.null`'s heap type immediate and encodes it.
 //
 // **The immediate is a bare `heaptype`, not a `reftype`, and the twelve-form agreement between them is
