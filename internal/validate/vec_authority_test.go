@@ -1430,7 +1430,14 @@ func TestReferenceRangeCitationsAreWellFormed(t *testing.T) {
 	// `checkMemoryType`'s doc block each cite `check_memory_type`'s second `require` in the threads
 	// pin, and the bound they are checked against is *that* file's length — which is what routing the
 	// citation by its qualifier buys here, the two validators being different lengths.
-	const wantRanges = 112
+	// **#524's atomic-alignment slice moves this +2, and the two split across the two pins below in
+	// opposite directions.** Both cite `check_memop`'s mode argument in the threads pin:
+	// `ErrAtomicAlignment`'s sentinel block, which keys there, and `atomicAccess`'s doc block, which is
+	// skipped for having no message at all — a `bool` predicate raises nothing, so it is the first row
+	// in this package's account where the third category is fed by a *classifier* rather than by an arm
+	// delegating its refusal. The slice wrote a third range, in `align_atomic_test.go`, which this
+	// pin's engine-file domain excludes and the subject pin holds.
+	const wantRanges = 114
 	if ranges != wantRanges {
 		t.Errorf("checked %d range citation(s) across %v, want %d — recount and re-pin, and if a "+
 			"file was added to citationFiles, read its point citations too",
@@ -1702,7 +1709,28 @@ func TestReferenceRangeCitationsContainTheirSubjectsSite(t *testing.T) {
 	// ranges locate their subject's site *in the file they cite*. Scored against the core validator
 	// they would have been residue instead — a checkable range recorded as unkeyable, which is the
 	// silent-loss direction this whole per-pin change is about.
-	const wantKeyed, wantResidue = 21, 32
+	// **#524's slice moves keyed +1 and residue not at all, and the row is `ErrAtomicAlignment`'s
+	// block.** `check_memop`'s `Atomic` arm writes `atomic alignment must be natural` as a complete
+	// literal inside the three lines the block cites, so the sentinel spells the reference's sentence
+	// and the
+	// range is checkable for content — #413's shape again, and routed to the threads pin the way #511's
+	// two were.
+	//
+	// The slice's other engine range, `atomicAccess`'s, names no sentinel: its subject is the predicate
+	// that *selects* the mode, and a predicate refuses nothing, so `subjectMessages` answers nil and the
+	// loop above skips its block. The miss over `wantRanges` therefore grows by exactly one, which the
+	// header's regularity paragraph would call the sixth such slice — except that the running figure it
+	// quotes stopped at 40 four slices ago and this one is re-derived rather than continued: 114 − 22 −
+	// 32 = 60, against 59 before. Stated with its arithmetic because a series nobody has been
+	// maintaining is not evidence, and the delta is.
+	//
+	// The paragraph above names the range in words rather than as `file:lines`, and that is not
+	// squeamishness about #497: a full citation *in this header* is a range citation in the sibling
+	// subject pin's domain, which reads every file in the package including the test files, so writing
+	// the path here would have moved that pin's residue by one for a sentence about counting. #497's
+	// repair form — write the antecedent's path — has that cost inside these two headers and nowhere
+	// else, and the third form it leaves open is to describe the range and cite nothing.
+	const wantKeyed, wantResidue = 22, 32
 	if keyed != wantKeyed || residue != wantResidue {
 		t.Errorf("checked %d keyed range citation(s) and excused %d as constructed-message residue "+
 			"across %v, want %d and %d — recount and re-pin. A range becomes keyable when its "+

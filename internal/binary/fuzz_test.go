@@ -54,6 +54,12 @@ var declaredErrors = []error{
 	// attacker-supplied, so `0x02` on a tabletype is a reachable input and the fuzzer will
 	// find it the first time it sets that bit.
 	ErrSharedTable,
+	// `atomic.fence`'s flag byte (`spec-threads/binary/decode.ml:786`). Enrolled for
+	// ErrSharedTable's reason and with the same standing: the byte is attacker-supplied, so a
+	// non-zero value is a reachable input rather than a bug here. It is reachable only with the
+	// Threads gate on, which is what makes it a *declared* verdict and not a fuzz find — the
+	// fuzzer's default-gate corpus cannot produce it at all.
+	ErrZeroFlagExpected,
 	ErrMalformedMutability,
 	ErrMalformedImportKind,
 	ErrMalformedExportKind,

@@ -84,7 +84,24 @@ import (
 var (
 	refValidML     = filepath.Join("..", "..", testenv.RefValidML)
 	refMnemonicsML = filepath.Join("..", "..", testenv.RefMnemonicsML)
+	// The threads pin's copy of the same table under its older name — see
+	// testenv.ThreadsRefOperatorsML on why the rename read as an absence for as long as it did.
+	refThreadsOperatorsML = filepath.Join("..", "..", testenv.ThreadsRefOperatorsML)
 )
+
+// mnemonicSources is the constructor table each pin supplies, keyed by the pin's short name.
+//
+// **Declared, not discovered, and the two candidate discovery rules are both wrong.** Matching
+// by filename suffix would need to accept two names for one file (upstream renamed
+// `syntax/operators.ml` to `syntax/mnemonics.ml`), so a pin holding both — a revision mid-rename
+// — would resolve to whichever the loop met first. And merging the two maps into one would let
+// the threads pin's copy answer for *core* instructions, at a baseline three proposals old:
+// exactly the "stale snapshot silently wins" failure `opcodegen.Overlay`'s doc refuses, which is
+// why the join below resolves per region rather than against a union.
+var mnemonicSources = map[string]string{
+	"spec":         refMnemonicsML,
+	"spec-threads": refThreadsOperatorsML,
+}
 
 // isConstArms is `is_const`'s pattern, read from valid.ml and expanded.
 //
@@ -278,15 +295,47 @@ func expandAlternatives(s string) []string {
 	return out
 }
 
-// mnemonicConstructors is mnemonics.ml's mnemonic→constructor map, normalized.
+// mnemonicParseFloors is the minimum binding count per pin's constructor table.
+//
+// Per pin and not a total, for censusRegionFloors' reason: a total of 800 is met by the core
+// pin's 499 alone while the threads table parsed 300 bindings short, and every atomic arm would
+// then be unresolved — which the join's coverage assertion would report, but as "the table is
+// stale" rather than "the parse failed". Two mechanisms, two messages.
+//
+// Stamped from the counts at each pin's own revision: 499 `let` lines in mnemonics.ml at bdd7164,
+// 466 in operators.ml at cc535ad.
+var mnemonicParseFloors = map[string]int{
+	"spec":         400,
+	"spec-threads": 380,
+}
+
+// mnemonicConstructors is one pin's mnemonic→constructor map, normalized.
 //
 // The key is the mnemonic decode.ml uses and `opInfo.mnemonic` carries, so this is the join key
 // between the two authorities. The value is the whole right-hand side, because `Binary` needs the
 // applied form and a head alone would drop the condition (see the file comment).
-func mnemonicConstructors(tb testing.TB) map[string]string {
+//
+// **Per pin**, because the region an arm came from decides which constructor table can answer for
+// it: see mnemonicSources on why a union would be a stale snapshot with a vote.
+func mnemonicConstructors(tb testing.TB, pin string) map[string]string {
 	tb.Helper()
 
-	src := testenv.RequireSpecRef(tb, refMnemonicsML)
+	path, licensed := mnemonicSources[pin]
+	if !licensed {
+		tb.Fatalf("pin %q supplies no constructor table: an arm from its region cannot be joined, "+
+			"and a skip here would classify it non-const by omission — the accept-direction "+
+			"failure no vector sees", pin)
+		return nil
+	}
+	floor, stamped := mnemonicParseFloors[pin]
+	if !stamped {
+		tb.Fatalf("pin %q has a constructor table and no parse floor in mnemonicParseFloors: a "+
+			"table parsed down to a handful of bindings would resolve nothing and complain only "+
+			"about staleness", pin)
+		return nil
+	}
+
+	src := testenv.RequireSpecRef(tb, path)
 	lines := strings.Split(src, "\n")
 
 	out := map[string]string{}
@@ -312,12 +361,37 @@ func mnemonicConstructors(tb testing.TB) map[string]string {
 		}
 		out[name[0]] = normalizeOCaml(rhs)
 	}
-	if len(out) < 400 {
-		tb.Fatalf("parsed %d bindings from %s; there are 499 `let` lines at the pin, and a join "+
-			"table this short would classify most of the opcode space as non-const by default — "+
-			"which is the silent direction", len(out), refMnemonicsML)
+	if len(out) < floor {
+		tb.Fatalf("parsed %d bindings from %s, floor %d: a join table this short would classify "+
+			"most of the region as non-const by default — which is the silent direction",
+			len(out), path, floor)
 	}
 	return out
+}
+
+// pinOfRegion is which pin's authority defined a prefix region, by name.
+//
+// Read from the generated `regionAuthority` and inverted through the pin set, so neither end is
+// spelled here. The alternative — a `map[byte]string` in this file — is the same fact in a third
+// place, and the fact it would be a copy of is precisely the one the generator learned by opening
+// the file.
+func pinOfRegion(tb testing.TB, prefix byte) string {
+	tb.Helper()
+
+	path, ok := regionAuthority[prefix]
+	if !ok {
+		tb.Fatalf("region %#02x has no entry in regionAuthority: the table and its generated "+
+			"provenance came from different runs — regenerate with: make opcodes", prefix)
+		return ""
+	}
+	for name, decoder := range decodersByPinName() {
+		if decoder == filepath.Join("..", "..", path) {
+			return name
+		}
+	}
+	tb.Fatalf("region %#02x cites authority %q, which is no pin's licensed decoder: the pin set "+
+		"and the generated table disagree about where this region came from", prefix, path)
+	return ""
 }
 
 // dispatchableOps is every opcode identity `instr` and `prefixed` can dispatch on: the single-byte
@@ -367,7 +441,10 @@ func dispatchableOps(tb testing.TB) [][2]uint32 {
 // them would let one be added without the other.
 func TestConstLegalSpaceMatchesIsConst(t *testing.T) {
 	arms := parseIsConst(t)
-	ctors := mnemonicConstructors(t)
+	ctors := map[string]map[string]string{}
+	for pin := range mnemonicSources {
+		ctors[pin] = mnemonicConstructors(t, pin)
+	}
 	mine := constLegalOps(t)
 	domain := dispatchableOps(t)
 
@@ -392,6 +469,7 @@ func TestConstLegalSpaceMatchesIsConst(t *testing.T) {
 
 	joined, refConst := 0, map[[2]uint32]bool{}
 	var unjoined []string
+	perPin := map[string]int{}
 	for _, k := range domain {
 		info, ok := infoFor(k)
 		if !ok {
@@ -399,12 +477,17 @@ func TestConstLegalSpaceMatchesIsConst(t *testing.T) {
 				"disagree about the same two structures", renderKey(k))
 			continue
 		}
-		rhs, ok := ctors[info.mnemonic]
+		// The arm's own region decides which constructor table answers for it. A union would
+		// resolve every atomic name *and* let the threads pin's three-proposal-old copy answer for
+		// core instructions it also happens to hold.
+		pin := pinOfRegion(t, byte(k[0]))
+		rhs, ok := ctors[pin][info.mnemonic]
 		if !ok {
-			unjoined = append(unjoined, info.mnemonic)
+			unjoined = append(unjoined, pin+"/"+info.mnemonic)
 			continue
 		}
 		joined++
+		perPin[pin]++
 		head, _ := cutHead(rhs)
 		if arms.heads[head] || arms.conditional[head] || arms.applied[rhs] {
 			refConst[k] = true
@@ -427,14 +510,29 @@ func TestConstLegalSpaceMatchesIsConst(t *testing.T) {
 	// means the generated table's vocabulary and mnemonics.ml have diverged — a rename upstream
 	// with a stale regeneration — and the arm would then be classified non-const by omission,
 	// rejecting valid modules in the direction no vector sees.
+	//
+	// The atomics region made the join plural, and its 67 arms are the case that shows why the
+	// direction above is the one doing the work: they resolved against nothing at all while
+	// `mnemonics.ml` was the only table consulted, and the message said "stale table" about a
+	// table that was current. The name it wanted is in the threads pin's `operators.ml` — the same
+	// file before upstream renamed it — and the 67 unresolved names are what sent anyone looking.
 	if joined != len(domain) {
 		sort.Strings(unjoined)
-		t.Errorf("%d of %d dispatchable arms joined through mnemonics.ml, want all of them; "+
-			"unresolved mnemonics: %v\n\t"+
-			"`opInfo.mnemonic` is mnemonics.ml's binding identifier, so a name that does not "+
-			"resolve means the generated table is stale against %s — and an unjoined arm is "+
-			"classified non-const by omission, which rejects valid modules",
-			joined, len(domain), unjoined, refMnemonicsML)
+		t.Errorf("%d of %d dispatchable arms joined through their region's constructor table, want "+
+			"all of them; unresolved (pin/mnemonic): %v\n\t"+
+			"`opInfo.mnemonic` is that table's binding identifier, so a name that does not resolve "+
+			"means the generated table is stale against %v — and an unjoined arm is classified "+
+			"non-const by omission, which rejects valid modules",
+			joined, len(domain), unjoined, mnemonicSources)
+	}
+	// Per pin, because a join that resolves every arm through one table and leaves the other
+	// unread is the shape a total cannot see: the second table could name a wrong file and this
+	// would still be green. Same argument as TestImmBytesCitationsResolve's per-pin count.
+	for pin := range mnemonicSources {
+		if perPin[pin] == 0 {
+			t.Errorf("no arm joined through pin %q's constructor table: it is parsed and never "+
+				"consulted, so a wrong path or a broken parse for it would pass here", pin)
+		}
 	}
 
 	for _, k := range domain {
@@ -457,8 +555,9 @@ func TestConstLegalSpaceMatchesIsConst(t *testing.T) {
 			"admits %d: the per-arm findings above name which", len(refConst), len(mine))
 	}
 	if !t.Failed() {
-		t.Logf("%d dispatchable arms (%d joined through mnemonics.ml), %d const-legal in both the "+
-			"reference and this decoder", len(domain), joined, len(refConst))
+		t.Logf("%d dispatchable arms (%d joined through their region's constructor table, %v), "+
+			"%d const-legal in both the "+
+			"reference and this decoder", len(domain), joined, perPin, len(refConst))
 	}
 }
 
@@ -484,9 +583,14 @@ func TestConstLegalSpaceIsTheWholeDispatchableSpace(t *testing.T) {
 	// Stamped at the pin, and the prefixed figure is the one that matters: it is what a byte-keyed
 	// helper could not name. Both halves are exact — *floors bound the catastrophic case; only an
 	// exact count sees a small silent loss*, and a region shrinking by one arm is exactly that.
+	//
+	// 305 → 372 when the 0xfe region landed: 67 atomic arms, which is the region's arm count
+	// exactly, so the delta is fully attributed rather than "about right". The *silent*
+	// direction remains a fall, and it is the one the message names — a region leaving
+	// prefixRegions narrows every const walk in this file and no per-arm assertion says so.
 	const (
 		wantSingle   = 192
-		wantPrefixed = 305
+		wantPrefixed = 372
 	)
 	if single != wantSingle || prefixed != wantPrefixed {
 		t.Errorf("the dispatchable space is %d single-byte + %d prefixed arms, want %d + %d: "+
@@ -639,8 +743,17 @@ func TestPrefixedNonConstOpsGetTheConstVerdict(t *testing.T) {
 	//
 	// 296 is #471's own figure, arrived at from the production path here rather than by counting the
 	// table: the same number the issue reported.
+	//
+	// 296 → 363 with the atomics region, and the delta is the one the region's arm count entails:
+	// 67 arms, none of them const-legal, so every one lands in `nonConst`. **`declined` staying at
+	// zero is the finding worth reading**, not the rise in the first column — it says all 67
+	// atomic arms have immediates a uniform fill can satisfy, which is a claim about `immMemop`
+	// and `immZeroByte` that nothing else here makes. And it holds for a stated reason rather
+	// than by luck: `wellFormedPrefixedExpr` tries an all-`0x00` fill first, which is the one
+	// value `expect 0x00 s` accepts. A builder whose first fill were `0x70` would have reported
+	// 362/9/1 here, and the message below is what would have said so.
 	const (
-		wantNonConst = 296
+		wantNonConst = 363
 		wantLegal    = 9
 		wantDeclined = 0
 	)

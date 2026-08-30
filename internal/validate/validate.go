@@ -386,6 +386,25 @@ var (
 	// detailed-wrap arrangement is ErrInvalidLaneIndex's above, adopted for the identical reason.
 	ErrAlignmentTooLarge = errors.New("alignment must not be larger than natural")
 
+	// ErrAtomicAlignment is the *other* branch of the same `require` — the threads pin's
+	// `check_memop` takes a mode, and in `Atomic` mode the alignment must **equal** the natural
+	// width rather than merely not exceed it (`spec-threads/valid/valid.ml:207-209`,
+	// `require (1 lsl memop.align = size) at "atomic alignment must be natural"`).
+	//
+	// A separate sentinel because the reference reports a separate string, which is 0003's rule and
+	// not a judgement about how related the two rules are: an under-aligned atomic access is legal
+	// for `i32.load` and illegal for `i32.atomic.load`, so a shared sentinel would render one of the
+	// two verdicts with the other's words.
+	//
+	// **Its reward figure is zero vectors, and that is measured rather than assumed**: the threads
+	// suite's four files contain no `assert_invalid` expecting this string, so nothing on any board
+	// moves when the rule is right and nothing moves when it is wrong. The direction it is wrong in
+	// is the accept direction — `<=` admits every under-aligned atomic access the reference refuses —
+	// which is §9 G-3's shape one layer up from malformed, and the reason the width and the mode are
+	// both re-derived from the authority in `align_authority_test.go` instead of being read off this
+	// comment.
+	ErrAtomicAlignment = errors.New("atomic alignment must be natural")
+
 	// ErrOffsetOutOfRange is a memarg whose static offset does not fit a 32-bit memory's address
 	// space — `check_memop`'s third and last `require` (`valid.ml:392`), which completes the
 	// function. The alignment rule above needed the decoder to stop dropping its operand; this one

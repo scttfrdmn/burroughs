@@ -66,10 +66,47 @@ const (
 	// shifts-every-subsequent-byte failure 0007 exists to prevent, and invisible on any
 	// board because every vector bearing on it is assert_malformed.
 	ImmLane16 Imm = "laneidx16"
+	// ImmZeroByte is one byte that must be 0x00 — `expect 0x00 s "zero flag expected"`,
+	// which is `atomic.fence`'s only immediate (spec-threads/binary/decode.ml:786).
+	//
+	// **It is here because the two controls that were supposed to catch a missing reader
+	// both cannot see it, and that is a fact about them rather than about this arm.**
+	// `errUnrecognized` cannot fire: the arm parses, yields the mnemonic `atomic_fence`,
+	// and simply comes out with an empty immediate list. `TestEveryReaderIsInTheVocabulary`
+	// cannot fire either, and the reason is narrower than it looks — it scans for
+	// `<ident> s`, and this reader is called as `expect <literal> s`, so the token before
+	// `s` is `0x00` and the regexp never matches. A reader taking an argument was outside
+	// the shape the control was written against, which is *scope controls to the space*
+	// arriving in a third grammar.
+	//
+	// Distinct from ImmByte, which reads a byte and accepts any value: this one's whole
+	// content is the *constraint*, and a decoder that read it as ImmByte would accept
+	// `atomic.fence` with a non-zero flag. **Nothing on the board would say so** —
+	// `atomic.wast` has 0 assert_malformed rows at cc535ad (counted, not assumed; its one
+	// `atomic.fence` mention is a positive row at :965), so the reject direction of this
+	// immediate has no corpus witness at all. That is 0007's premise in its purest form and
+	// the reason the constraint has to be a table fact rather than a decoder detail.
+	ImmZeroByte Imm = "expect_zero"
 )
 
 // Arm is one decoded opcode: its encoding and the immediates that follow it.
 type Arm struct {
+	// Path is the decoder this arm was read from, repo-relative, and it is a field because
+	// Line without it is a citation missing half of itself.
+	//
+	// Per extraction it is redundant with Table.SourcePath, and that redundancy is why it did
+	// not exist: every arm in one Extract call comes from one file. It stops being redundant at
+	// the composition, which moves the 0xfe *escape* arm into region 0x00 — a region whose
+	// authority is the core pin, carrying a line number from the threads pin. The generated
+	// table shipped that row as `0xfe: {escape: true, refLine: 780}`, and line 780 of the core
+	// decoder is `v128_store16_lane`: a citation that resolves, to the wrong arm in the wrong
+	// file. Nothing fired, because auditability is not a direction the suite has vectors for
+	// (contract §9 G-3) — grave
+	// [#529](https://github.com/scttfrdmn/burroughs/issues/529), and the same shape as grave
+	// #517, where a decode.ml line cited in prose named no pin.
+	//
+	// Stamped through Table.StampPath, never assigned alone.
+	Path string
 	// Prefix is 0 for a single-byte opcode, or the prefix byte (0xfb, 0xfc, 0xfd)
 	// when Code is a u32 sub-opcode read after it.
 	Prefix byte
@@ -87,6 +124,28 @@ type Arm struct {
 	// the prose written before it*, and a field documented as decorative is exactly the
 	// field a future change will treat as safe to rename.
 	Mnemonic string
+	// Operator is the reference's operator constructor where the arm's instruction takes one
+	// as an argument — `RmwXor` from `i64_atomic_rmw32_u (I64 I64Op.RmwXor) a o` — and empty
+	// otherwise.
+	//
+	// # It is a field because without it 42 of the 67 atomics rows are unidentifiable
+	//
+	// The threads pin builds the read-modify-write family by applying seven constructors to six
+	// operators each, so `Mnemonic` alone maps 42 codes onto 7 labels — measured, not feared:
+	// `i32_atomic_rmw` and six siblings each name six opcodes. **`Mnemonic` is the join key
+	// decision 0014 made load-bearing**, which is what turns a duplicate label from untidy into
+	// a wrong answer to "which opcode does this mnemonic encode to". `opgen`'s `OpsOf` already
+	// returns a *slice* of codes per constructor, so the collision would not have been a
+	// last-wins overwrite — it would have been seven mnemonics each claiming six encodings,
+	// which is worse in the way a plausible answer is worse than an obvious failure.
+	//
+	// Kept out of `Mnemonic` rather than folded into it, because that field's contract is *the
+	// reference's own constructor name* and `i64_atomic_rmw32_u` genuinely is one. The join key
+	// is the pair, and `checkJoinKeysAreAccountedFor` asserts every pair naming several encodings
+	// is one somebody has read — the assertion nothing was making while the collision could not
+	// happen. Not *uniqueness*: that version of the control was written first and the core pin
+	// falsified it in three places, for the reason recorded on multiEncodingJoinKeys.
+	Operator string
 	// Imms is the immediate sequence, in the order the reference reads them. Order is
 	// the point: a wrong order shifts every subsequent byte.
 	Imms []Imm
@@ -141,8 +200,26 @@ var (
 	reHexCode = regexp.MustCompile(`0x([0-9a-f]+)l?`)
 	// A head that wraps: codes and bars, no arrow. See parseArm.
 	reHeadContinues = regexp.MustCompile(`^\s*\|\s*(?:0x[0-9a-f]+l?\s*\|\s*)*0x[0-9a-f]+l?\s*$`)
-	// A line that starts a prefix block: `| 0xfd ->` followed by `(match u32 s with`.
-	reMatchU32 = regexp.MustCompile(`\(?\s*match u32 s with`)
+	// The `match` head that opens a prefix block's sub-table, with the sub-opcode reader
+	// captured rather than fixed.
+	//
+	// It was `match u32 s with` — the reader spelled into the regexp — and that was a
+	// correct reading of the core pin and only of the core pin: the threads pin's 0xfe
+	// region is `match op s with`, where `op s = byte s` (spec-threads/binary/decode.ml:219,
+	// :782). Fixing the pattern by adding `op` alone would have made the extractor *silently
+	// agree* with whichever reader it happened to meet; capturing it makes the difference a
+	// recorded fact the composed table can be checked against. See subOpcodeReaders, which
+	// is where the choice between the two readings is made and why.
+	//
+	// The alternation is closed, not `\w+`: an upstream region opening with a reader neither
+	// of the two pins uses is a reader whose width nobody here has read, and the right
+	// outcome is no block (hence a duplicate-arm error), not a block parsed on a guess.
+	reMatchHead = regexp.MustCompile(`^\s*\(?\s*match\s+(u32|op|byte)\s+s\s+with\b`)
+	// The lines a `| 0xNN ->` head may put between itself and its `(match`: `let open M in`
+	// and nothing else. Enumerated deliberately — a head followed by a line this does not
+	// cover is not treated as opening a block, which fails loudly downstream rather than
+	// swallowing whatever follows.
+	reBlockPreamble = regexp.MustCompile(`^\s*let\s+open\s+[A-Z]\w*\s+in\s*$`)
 )
 
 // vocab is the immediate vocabulary paired with the Go identifier the generated table
@@ -160,6 +237,7 @@ var vocab = []struct {
 	{"immLaneIdx", ImmLaneIdx},
 	{"immLane16", ImmLane16},
 	{"immByte", ImmByte},
+	{"immZeroByte", ImmZeroByte},
 	{"immU32", ImmU32},
 	{"immS32", ImmS32},
 	{"immS64", ImmS64},
@@ -219,6 +297,11 @@ var immPatterns = []struct {
 	{regexp.MustCompile(`\bat\s+valtype\s+s\b`), ImmValType},
 	{regexp.MustCompile(`\bat\s+idx\s+s\b`), ImmIdx},
 	{regexp.MustCompile(`\bidx\s+s\b`), ImmIdx},
+	// `expect 0x00 s "zero flag expected"` — a reader called with a literal argument,
+	// which is why the two reader controls are blind to it. See ImmZeroByte. The literal
+	// is in the pattern rather than captured: a different expected byte is a different
+	// immediate, and matching `expect \S+ s` would map both onto this one silently.
+	{regexp.MustCompile(`\bexpect\s+0x00\s+s\b`), ImmZeroByte},
 	{regexp.MustCompile(`\bbyte\s+s\b`), ImmByte},
 	{regexp.MustCompile(`\bu32\s+s\b`), ImmU32},
 	{regexp.MustCompile(`\binstr_block\s+s\b`), ImmBlock},

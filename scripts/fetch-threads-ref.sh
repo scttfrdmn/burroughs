@@ -41,6 +41,12 @@
 # reference" is a mirror of the first, and it is not: the pin set is plural *and the
 # file list is per-pin*.
 #
+# **`mnemonics.ml` is the rename, not the absence.** The same table is here as
+# `interpreter/syntax/operators.ml`, which is the name it had at this baseline, and it
+# is the sixth file below. The sentence above was true about the filename and was read
+# as a claim about the authority — see threadsRefFloors, where the correction is
+# recorded with what it cost.
+#
 # The same baseline gap is why this authority is consulted **clause by clause and
 # region by region, never wholesale**, and there are two measured witnesses for how
 # badly a wholesale read would go:
@@ -95,7 +101,7 @@ fi
 # this one's hole.
 for f in interpreter/binary/decode.ml interpreter/valid/valid.ml \
          interpreter/text/lexer.mll interpreter/text/parser.mly \
-         interpreter/binary/encode.ml; do
+         interpreter/binary/encode.ml interpreter/syntax/operators.ml; do
   if [ ! -f "$dest/$f" ]; then
     echo "threads reference vendored at $got but $dest/$f is missing" >&2
     exit 1

@@ -504,7 +504,31 @@ func TestRangeCitationSubjectsAreReadFromTheReference(t *testing.T) {
 	// same number, which is how the wrong-file citation was caught in the first place. The residue one
 	// is `ErrSharedMemoryNoMax`'s block, whose citation line carries no backticked reference
 	// identifier: region-shaped by the one-line window, and counted rather than excused.
-	const wantKeyed, wantResidue = 104, 45
+	// **#524's atomic-alignment slice moves residue +3 and keyed not at all, against three new ranges:
+	// every one of them is residue, and the three land in only two of this header's categories.** Which
+	// range fell where was read by eliding each citation in turn and re-reading the counts, not by
+	// inspecting the trigger — the same posture as measuring a width from the reference rather than from
+	// the mnemonic:
+	//
+	//   - `atomicAccess`'s, in `align.go`, is the **quoted-OCaml** category. Its line backticks the two
+	//     forms the mode selects between, `1 lsl align = size` and `<= size`, and a span carrying `=`
+	//     and spaces is outside the extractor's character class — a description faithful enough to
+	//     transcribe the rule keys nothing, which is the tension the third category exists to hold.
+	//   - `ErrAtomicAlignment`'s, in `validate.go`, is a **continuation line**: `check_memop` is named
+	//     two lines above the citation and the `require` is quoted on the line below it, so the range
+	//     and the name never share a line. This is the one of the three a repair could reach, and the
+	//     repair is the wrapping hazard this header names four times.
+	//   - `align_atomic_test.go`'s is the same category from the control file — the citation sits alone
+	//     beneath an indented quotation of the `Atomic` arm — and it is the range the sibling
+	//     `wantRanges` pin's engine-file domain excludes. So the excess over that pin goes 37 → 38, and
+	//     the +1 is wholly that file's.
+	//
+	// Worth one line against the pin next door, which moves keyed +1 on `ErrAtomicAlignment`'s block for
+	// the same slice. A block can be keyable *for content* — its sentinel's message written verbatim
+	// inside the cited range — while its citation line names no identifier this pin can key on, and #524
+	// is the cleanest instance yet: one block, keyed there, residue here, and neither reading is wrong
+	// about the other's question.
+	const wantKeyed, wantResidue = 104, 48
 	if keyed != wantKeyed || residue != wantResidue {
 		t.Errorf("keyed %d range citation(s) by named subject and left %d as residue, want %d and "+
 			"%d — recount and re-pin. A row moves from residue to keyed when its description starts "+

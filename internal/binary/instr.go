@@ -194,6 +194,7 @@ var prefixRegions = map[byte]map[uint32]opInfo{
 	0xfb: opTableFB,
 	0xfc: opTableFC,
 	0xfd: opTableFD,
+	0xfe: opTableFE,
 }
 
 // prefixRegion looks up a sub-table. The 0x00 entry is excluded deliberately: it is the
@@ -1272,6 +1273,31 @@ func (c *instrCtx) imm(r *reader, im imm) error {
 		}
 		c.stage(uint64(v))
 		return nil
+	case immZeroByte:
+		// `atomic.fence`'s only immediate: `expect 0x00 s "zero flag expected"`
+		// (spec-threads/binary/decode.ml:786), normatively `| 0xFE 0x03 0x00 => atomic.fence`
+		// (spec-threads/proposals/threads/Overview.md:598). One byte whose *whole content is
+		// the constraint*, which is why it is not immByte with a check bolted on: the reader
+		// that accepts any value and the reader that accepts one are different readers, and
+		// the table says which each row has.
+		//
+		// **The reject direction has no corpus witness**, so nothing on the board would report
+		// this arm reading the byte and not checking it: `atomic.wast` has 0 assert_malformed
+		// rows at cc535ad, and its one `atomic.fence` mention is a positive row (:965). That is
+		// §9 G-3 in its purest form — the reason the constraint is a table fact rather than a
+		// decoder detail, and the reason it is written here rather than trusted to a vector.
+		v, err := r.byte()
+		if err != nil {
+			return err
+		}
+		if v != 0x00 {
+			return ErrZeroFlagExpected
+		}
+		// Staged like any other immediate: the value is always 0, but a reader that stages
+		// nothing would make this arm's word count differ from every other single-immediate
+		// row, and the staging slots are Instr's wire form (0027 decision 1).
+		c.stage(uint64(v))
+		return nil
 	case immLaneIdx:
 		// `laneidx s = u8 s = uN 8` (decode.ml:152,103) — a LEB whose canonical form is
 		// one byte and whose legal form runs to two. Grave #47 read it as a raw byte.
@@ -1828,10 +1854,16 @@ func illegalPrefixed(prefix byte, sub uint32) error {
 // authority's lines, and TestPrefixIllegalRenderingMatchesTheAuthority derives the
 // truth from decode.ml and fails if this map disagrees, scoped to every region in
 // prefixRegions rather than to the two entries here.
+//
+// **Each comment cites its own region's decoder**, which is not the same file for all four:
+// 0xfe comes from the threads pin, whose baseline predates `illegal2` entirely. So this map
+// records a genuine inconsistency in the authorities rather than one this engine chose, and
+// the control that checks it resolves each region's file through `regionAuthority`.
 var twoFieldIllegal = map[byte]bool{
-	0xfb: true,  // `| n -> illegal2 s pos b n` — decode.ml:655
-	0xfc: true,  // `| n -> illegal2 s pos b n` — decode.ml:681
-	0xfd: false, // `| n -> illegal s pos (I32.to_int_u n)` — decode.ml:961
+	0xfb: true,  // `| n -> illegal2 s pos b n` — spec/binary/decode.ml:655
+	0xfc: true,  // `| n -> illegal2 s pos b n` — spec/binary/decode.ml:681
+	0xfd: false, // `| n -> illegal s pos (I32.to_int_u n)` — spec/binary/decode.ml:961
+	0xfe: false, // `| b -> illegal s (pos + 1) b` — spec-threads/binary/decode.ml:859
 }
 
 // expectEnd is `end_ s = expect 0x0b s "END opcode expected"` (decode.ml:322).

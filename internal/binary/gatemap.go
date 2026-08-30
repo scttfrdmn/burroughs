@@ -99,15 +99,15 @@ var gatedOpcodes = []gatedOpcode{
 	// --- exception handling: individual opcodes -----------------------------------
 	{
 		prefix: 0x00, lo: 0x08, hi: 0x08, gate: gateExceptionHandling,
-		cite: "proposals/exception-handling/Exceptions.md:461", what: "throw",
+		cite: "spec/proposals/exception-handling/Exceptions.md:461", what: "throw",
 	},
 	{
 		prefix: 0x00, lo: 0x0a, hi: 0x0a, gate: gateExceptionHandling,
-		cite: "proposals/exception-handling/Exceptions.md:462", what: "throw_ref",
+		cite: "spec/proposals/exception-handling/Exceptions.md:462", what: "throw_ref",
 	},
 	{
 		prefix: 0x00, lo: 0x1f, hi: 0x1f, gate: gateExceptionHandling,
-		cite: "proposals/exception-handling/Exceptions.md:460", what: "try_table",
+		cite: "spec/proposals/exception-handling/Exceptions.md:460", what: "try_table",
 	},
 
 	// --- tail calls: individual opcodes -------------------------------------------
@@ -117,11 +117,11 @@ var gatedOpcodes = []gatedOpcode{
 	// that the line resolves and says the number.
 	{
 		prefix: 0x00, lo: 0x12, hi: 0x12, gate: gateTailCall,
-		cite: "proposals/tail-call/Overview.md:139", what: "return_call",
+		cite: "spec/proposals/tail-call/Overview.md:139", what: "return_call",
 	},
 	{
 		prefix: 0x00, lo: 0x13, hi: 0x13, gate: gateTailCall,
-		cite: "proposals/tail-call/Overview.md:140", what: "return_call_indirect",
+		cite: "spec/proposals/tail-call/Overview.md:140", what: "return_call_indirect",
 	},
 
 	// --- GC: a whole region, plus single-byte opcodes ------------------------------
@@ -147,11 +147,11 @@ var gatedOpcodes = []gatedOpcode{
 	// *a test name is as checkable as a `.wast:N`.*
 	{
 		prefix: 0xfb, lo: 0x00, hi: 0xff, gate: gateGC,
-		cite: "proposals/gc/MVP.md:809", what: "the 0xfb region (struct, array, i31, cast)",
+		cite: "spec/proposals/gc/MVP.md:809", what: "the 0xfb region (struct, array, i31, cast)",
 	},
 	{
 		prefix: 0x00, lo: 0xd3, hi: 0xd3, gate: gateGC,
-		cite: "proposals/gc/MVP.md:805", what: "ref.eq",
+		cite: "spec/proposals/gc/MVP.md:805", what: "ref.eq",
 	},
 	// The function-references five, mapped to the GC gate rather than to a bool of
 	// their own — decision 0008: the proposal folded into 3.0 core alongside GC, which
@@ -161,13 +161,13 @@ var gatedOpcodes = []gatedOpcode{
 	// silence is how it got there the first time.
 	{
 		prefix: 0x00, lo: 0x14, hi: 0x15, gate: gateGC,
-		cite: "proposals/function-references/Overview.md:323",
-		what:  "call_ref, return_call_ref",
+		cite: "spec/proposals/function-references/Overview.md:323",
+		what: "call_ref, return_call_ref",
 	},
 	{
 		prefix: 0x00, lo: 0xd4, hi: 0xd6, gate: gateGC,
-		cite: "proposals/function-references/Overview.md:325",
-		what:  "ref.as_non_null, br_on_null, br_on_non_null",
+		cite: "spec/proposals/function-references/Overview.md:325",
+		what: "ref.as_non_null, br_on_null, br_on_non_null",
 	},
 
 	// --- SIMD and relaxed SIMD: a region and a sub-range of it ---------------------
@@ -178,12 +178,33 @@ var gatedOpcodes = []gatedOpcode{
 	// the containment so a future edit cannot quietly make them siblings.
 	{
 		prefix: 0xfd, lo: 0x00, hi: 0xffffffff, gate: gateSIMD,
-		cite: "proposals/simd/BinarySIMD.md:47", what: "the 0xfd region (v128)",
+		cite: "spec/proposals/simd/BinarySIMD.md:47", what: "the 0xfd region (v128)",
 	},
 	{
 		prefix: 0xfd, lo: 0x100, hi: 0x12f, gate: gateRelaxedSIMD,
-		cite: "proposals/relaxed-simd/Overview.md:312",
-		what:  "the relaxed SIMD window fd 0x100..0x12f",
+		cite: "spec/proposals/relaxed-simd/Overview.md:312",
+		what: "the relaxed SIMD window fd 0x100..0x12f",
+	},
+
+	// --- threads: a whole region -----------------------------------------------------
+	//
+	// 0xfe is entirely atomics — 67 arms, notify/wait/fence plus the load/store/rmw
+	// families — so the region is one entry, for the reason the 0xfb entry gives.
+	//
+	// **The citation is the first in this file to name a pin other than `spec`**, and it has to:
+	// the threads proposal was never merged into the core pin, whose `proposals/` tree holds 17
+	// directories and no `threads` (scripts/fetch-threads-ref.sh measures this). See
+	// testenv.ProposalDoc for why every citation here now starts at its pin rather than only
+	// this one.
+	//
+	// This gate was in `gatedNonOpcodes` alone until the region existed, governing the limits
+	// flags' shared bit and nothing else. It stays there too — the flags bit is a separate
+	// construct, and TestEveryGateMapsAtLeastOneConstruct treats the two maps as one domain, so
+	// an entry here does not make that one redundant.
+	{
+		prefix: 0xfe, lo: 0x00, hi: 0xffffffff, gate: gateThreads,
+		cite: "spec-threads/proposals/threads/Overview.md:594",
+		what: "the 0xfe region (atomics)",
 	},
 }
 

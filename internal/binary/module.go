@@ -1586,25 +1586,32 @@ func OpMnemonic(op uint32) (string, bool) {
 //
 // **Exported so a consumer's rule can have a *derived* domain rather than a guessed one.** The
 // alignment constraint (`valid.ml:380-389`) applies to exactly the rows carrying `immMemop`, and
-// that set lives in the generated table — 45 rows at the pinned revision, 23 core and 22 vector.
-// A consumer inferring it from the mnemonic instead would be asserting that "load"/"store" in a
-// name means "carries a memarg", which is a claim about the naming of every proposal not yet
-// merged upstream; `memory.copy` and `table.get` are already counterexamples in one direction,
-// and an atomic access arriving with a memarg would be one in the other. So the question is
-// answered by the table that knows, which is also what lets `internal/validate`'s width table be
-// checked against this predicate in both directions instead of against its own key set.
+// that set lives in the generated table — 111 rows at the pinned revision, 23 core, 22 vector and
+// 66 atomic. A consumer inferring it from the mnemonic instead would be asserting that
+// "load"/"store" in a name means "carries a memarg", which is a claim about the naming of every
+// proposal not yet merged upstream; `memory.copy` and `table.get` are already counterexamples in
+// one direction, and an atomic access arriving with a memarg would be one in the other. So the
+// question is answered by the table that knows, which is also what lets `internal/validate`'s
+// width table be checked against this predicate in both directions instead of against its own key
+// set.
+//
+// # The counterexample this comment predicted, arriving as a bug in this function
+//
+// "An atomic access arriving with a memarg would be one in the other" was written while the
+// region set here was a four-arm `switch` over {0, 0xfb, 0xfc, 0xfd}, so when the 0xfe region
+// landed this function answered `false` for all 66 of them — and `false` here does not mean "no
+// memarg", it means the alignment constraint is not applied. An accept-direction wrong answer,
+// scoped by a hand-written list, in the function whose whole purpose is to keep a consumer's
+// domain from being hand-written. *A hardcoded exception list is a blind spot with a comment*
+// (0006/#33), and this one had the counterexample in the comment.
+//
+// The dispatch is now `prefixRegions`, which TestPrefixRegionsCoverTheTable holds equal to the
+// table's own `escape` rows in both directions — so a region cannot arrive here unanswered. Its
+// 0x00 entry is the single-byte table, which is what this function wants for `prefix == 0` and
+// is why it reads the map directly rather than through prefixRegion.
 func HasMemarg(prefix byte, op uint32) bool {
-	var tab map[uint32]opInfo
-	switch prefix {
-	case 0:
-		tab = opTable
-	case 0xfb:
-		tab = opTableFB
-	case 0xfc:
-		tab = opTableFC
-	case 0xfd:
-		tab = opTableFD
-	default:
+	tab, region := prefixRegions[prefix]
+	if !region {
 		return false
 	}
 	info, found := tab[op]
@@ -1640,16 +1647,14 @@ func HasMemarg(prefix byte, op uint32) bool {
 // is "does the table have this instruction", and a consumer that cared which half was missing would
 // be reimplementing the decoder's own escape/illegal/absent distinction (see opInfo.escape) from
 // outside.
+//
+// The region dispatch is `prefixRegion` rather than a `switch` over the three prefixes this was
+// written for, for the reason HasMemarg's doc now records at length: the enumeration was silently
+// wrong about the fourth region the moment it existed, and prefixRegion's domain is checked
+// against the table's `escape` rows.
 func PrefixedOp(prefix byte, op uint32) (mnemonic string, imms int, ok bool) {
-	var tab map[uint32]opInfo
-	switch prefix {
-	case 0xfb:
-		tab = opTableFB
-	case 0xfc:
-		tab = opTableFC
-	case 0xfd:
-		tab = opTableFD
-	default:
+	tab, region := prefixRegion(prefix)
+	if !region {
 		return "", 0, false
 	}
 	info, found := tab[op]

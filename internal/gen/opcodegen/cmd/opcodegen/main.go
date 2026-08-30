@@ -7,9 +7,10 @@
 //
 // or, normally, 'make opcodes'. The output is committed, so a fresh clone builds with
 // no fetch; 'make opcode-drift' asserts the committed file still agrees with the
-// reference. The revision is read from scripts/fetch-spec-ref.sh rather than passed in,
+// reference. Each revision is read from its own pin's fetch script rather than passed in,
 // because a SHA typed at a second site is a citation that can drift from the pin it
-// claims to describe.
+// claims to describe — and there are two pins as of #524, the atomics region being
+// composed from the threads proposal's decoder.
 package main
 
 import (
@@ -19,7 +20,6 @@ import (
 
 	"github.com/scttfrdmn/burroughs/internal/gen"
 	"github.com/scttfrdmn/burroughs/internal/gen/opcodegen"
-	"github.com/scttfrdmn/burroughs/internal/testenv"
 )
 
 func main() {
@@ -33,15 +33,10 @@ func main() {
 }
 
 func run(out string) error {
-	sha, err := gen.PinnedRefRev()
-	if err != nil {
-		return err
-	}
-	src, err := os.ReadFile(testenv.RefDecodeML)
-	if err != nil {
-		return fmt.Errorf("%w (run: make spec-ref)", err)
-	}
-	tab, err := opcodegen.Extract(string(src), sha)
+	// One call, because a generator and its drift check are one fact about how the artifact is
+	// made: this used to read `testenv.RefDecodeML` and extract it here, which was correct for
+	// as long as there was one authority. See opcodegen.BuildFromPins.
+	tab, err := opcodegen.BuildFromPins()
 	if err != nil {
 		return err
 	}

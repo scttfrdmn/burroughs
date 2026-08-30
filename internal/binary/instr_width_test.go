@@ -77,7 +77,7 @@ func TestPrefixedSubOpcodesFitOp(t *testing.T) {
 	// moved-file failure the vacuity law names. 0xfd alone has hundreds of rows.
 	if rows < 400 {
 		t.Fatalf("walked %d rows across %d regions, want ≥400: the generated table declares "+
-			"542 arms, so a walk this short means the domain was lost, not that the table "+
+			"610 arms, so a walk this short means the domain was lost, not that the table "+
 			"shrank", rows, len(prefixRegions))
 	}
 	// The measurement, printed rather than asserted. The maxima are *why* Op is a uint32,
@@ -107,13 +107,17 @@ func TestPrefixedSubOpcodesFitOp(t *testing.T) {
 // Zero is a real entry, not a gap: `vec` immediates and heaptypes are read and *not*
 // retained, each with a reason at its arm in instrCtx.imm. They commit no bits.
 var immStagedBits = map[imm]int{
-	immIdx:       64, // stage(uint64(u32))
-	immU32:       64,
-	immS32:       64, // sign-extended to the full word
-	immS64:       64,
-	immF32:       64, // the bit pattern, in a word of its own
-	immF64:       64,
-	immByte:      64,
+	immIdx:  64, // stage(uint64(u32))
+	immU32:  64,
+	immS32:  64, // sign-extended to the full word
+	immS64:  64,
+	immF32:  64, // the bit pattern, in a word of its own
+	immF64:  64,
+	immByte: 64,
+	// A byte whose only legal value is 0, and staged all the same: the value carries no
+	// information, but the *slot* does, because a reader that staged nothing would give this
+	// row a word count no other single-immediate row has (instrCtx.imm's arm).
+	immZeroByte:  64,
 	immLaneIdx:   8,   // packed above a memarg's memory index when Imm1 is taken
 	immValType:   64,  // 0018: kind/null/idx packed into one word (see instrCtx.imm's arm)
 	immBlockType: 128, // 0018: tag bits above 2^32 in the first word, the valtype's resolved

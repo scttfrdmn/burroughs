@@ -140,6 +140,25 @@ var (
 	// refusal is in `decode.ml`'s `table_type`, before validation, so it is a fact about the
 	// wire form and not about a module's types. A validator-side check would score the wrong
 	// string if a vector ever arrives.
+	// ErrZeroFlagExpected is `atomic.fence`'s flag byte with a non-zero value — `expect 0x00 s
+	// "zero flag expected"` (`spec-threads/binary/decode.ml:786`), normatively `| 0xFE 0x03
+	// 0x00 => atomic.fence` (`spec-threads/proposals/threads/Overview.md:598`). The threads
+	// reference's message text verbatim.
+	//
+	// **The second accept-direction fact from this pin with no corpus witness at all**, and
+	// weaker-witnessed than ErrSharedTable's: that one at least had a vector for the sibling
+	// *memory* rule. Here `atomic.wast` has 0 assert_malformed rows at cc535ad — counted, not
+	// assumed — and its one `atomic.fence` mention is a positive row (`:965`). So a decoder
+	// reading the byte and not checking it is green on every vector in existence, in either
+	// direction, which is contract §9 G-3 with nothing left over.
+	//
+	// Malformed rather than invalid, and the reference's own layering: `expect` is a
+	// `decode.ml` reader, so a non-zero flag is a fact about the wire form. The immediate is
+	// its own vocabulary entry (`immZeroByte`) rather than `immByte` for the same reason — see
+	// opcodegen's ImmZeroByte, where the two controls that should have caught a missing reader
+	// both turn out to be blind to one taking an argument.
+	ErrZeroFlagExpected = errors.New("zero flag expected")
+
 	ErrSharedTable         = errors.New("tables cannot be shared (yet)")
 	ErrMalformedMutability = errors.New("malformed mutability")
 	ErrMalformedImportKind = errors.New("malformed import kind")

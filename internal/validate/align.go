@@ -219,6 +219,16 @@ func checkAlignment(in binary.Instr, name string) error {
 		return fmt.Errorf("%w: %s (%#02x %#02x)", errNoNaturalWidth, name, in.Prefix, in.Op)
 	}
 	_, _, alignExp := binary.Memarg(in.Imm0, in.Imm1)
+	if atomicAccess(name) {
+		// The threads pin's `Atomic` mode: equality, not a ceiling. Returned from here rather than
+		// falling through to the comparison below, because the two rules are not nested — an
+		// alignment *smaller* than natural passes the ceiling and fails this.
+		if uint64(1)<<alignExp != natural {
+			return fmt.Errorf("%w: %s aligns to %d bytes, natural is %d",
+				ErrAtomicAlignment, mnemonic(in), uint64(1)<<alignExp, natural)
+		}
+		return nil
+	}
 	if uint64(1)<<alignExp > natural {
 		// The reference's text verbatim, per 0003, and the detail after it: 62 corpus vectors
 		// expect this string and not one of them can say which row produced it, so the sentinel
@@ -228,6 +238,32 @@ func checkAlignment(in binary.Instr, name string) error {
 			ErrAlignmentTooLarge, mnemonic(in), uint64(1)<<alignExp, natural)
 	}
 	return nil
+}
+
+// atomicAccess reports whether a memarg row is checked in the threads pin's `Atomic` mode —
+// `1 lsl align = size` rather than `<= size` (`spec-threads/valid/valid.ml:203-209`).
+//
+// # Keyed on the name's `atomic` component, not on the 0xfe prefix
+//
+// The reference keys the mode on the *constructor family*: six arms pass `Atomic` and six pass
+// `NonAtomic`, and nothing about the opcode's encoding appears in the choice. The nearest thing this
+// package has to a family is the mnemonic, which is the same join `naturalWidth` and `signature`
+// already read, so this reads the mnemonic too. Keying on `in.Prefix == 0xfe` would be a claim about
+// *where the proposal put its opcodes* standing in for a claim about which rule applies — true
+// today, and true by a coincidence the authority does not state anywhere.
+//
+// A component rather than a substring, so a future mnemonic with `atomic` inside a longer word does
+// not silently acquire the stricter rule. `TestAtomicModeMatchesTheThreadsReference` derives the
+// mode per family from `valid.ml` and checks this predicate against it over both pins' constructor
+// sets, in both directions — which is what makes the paragraph above a checked claim rather than an
+// argument.
+func atomicAccess(name string) bool {
+	for _, part := range strings.Split(name, "_") {
+		if part == "atomic" {
+			return true
+		}
+	}
+	return false
 }
 
 // errNoNaturalWidth is a row the table says carries a memarg and naturalWidth could not read.
@@ -263,12 +299,44 @@ func naturalWidth(name string) (uint64, bool) {
 		rest = strings.TrimSuffix(rest, suffix)
 	}
 
+	// The atomics naming scheme, threads-pin spelling. `atomic` is a component of the name and not
+	// of the shape: `i32.atomic.load8_u`'s width comes from the same pack the non-atomic
+	// `i32.load8_u`'s does, and the reference says so by giving both `pack = Some Pack8`. Stripped
+	// rather than branched on, so the width arithmetic below has one form and the atomic rows cannot
+	// drift away from the core rows they share a rule with. `memory.atomic.wait32` reaches here as
+	// prefix `memory` and is the one row whose value type is in the *suffix* — handled below.
+	rest = strings.TrimPrefix(rest, "atomic.")
+
 	var op string
 	switch {
 	case strings.HasPrefix(rest, "load"):
 		op = strings.TrimPrefix(rest, "load")
 	case strings.HasPrefix(rest, "store"):
 		op = strings.TrimPrefix(rest, "store")
+	// `rmw` and `rmw.cmpxchg` read the same width as the load and store of the same pack, which is
+	// again the reference's own statement: `AtomicRmw`, `AtomicRmwCmpXchg`, `AtomicLoad` and
+	// `AtomicStore` all pass `num_size` and `(fun sz -> sz)` to `check_memop`, so the family is not
+	// a term in the width at all. The `.cmpxchg` suffix carries no width, like `.s` and `.u` above,
+	// and `i64.atomic.rmw32.u.cmpxchg` has already lost its `.u` to the trim above.
+	//
+	// `.cmpxchg` comes off before `.u`, and the order is the bug this would otherwise have: the
+	// signedness strip above only runs on a *suffix*, and `i64.atomic.rmw32_u_cmpxchg` spells its
+	// `u` in the middle, so `rmw32.u.cmpxchg` still carries it here. Trimmed in the other order the
+	// pack would read `32.u`, `ParseUint` would decline, and the row would return false — a
+	// decline, not a wrong width, so it fails loudly at the domain control rather than quietly at
+	// the rule.
+	case strings.HasPrefix(rest, "rmw"):
+		op = strings.TrimSuffix(strings.TrimSuffix(strings.TrimPrefix(rest, "rmw"), ".cmpxchg"), ".u")
+	// `memory.atomic.notify` and `memory.atomic.wait32`/`wait64`. The address prefix is `memory`, so
+	// nothing about the value type is on the left of the name: `notify` is `ty = I32Type, pack =
+	// None` (4 bytes) and `waitNN` is `ty = INNType, pack = None`, which the digits recover. Read as
+	// a value-type width and not as a pack for that reason — the pack is None on all three, and a
+	// row whose width came out of the pack branch would be agreeing with the reference by accident.
+	case prefix == "memory" && rest == "notify":
+		return 4, true
+	case prefix == "memory" && strings.HasPrefix(rest, "wait"):
+		bits, ok := numericTypeBits("i" + strings.TrimPrefix(rest, "wait"))
+		return bits / 8, ok
 	default:
 		return 0, false
 	}

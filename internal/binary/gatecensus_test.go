@@ -80,12 +80,16 @@ var censusPath = filepath.Join("testdata", "gate-census.txt")
 // file only if the golden file vanished too, which `-update-census` would cheerfully do.
 //
 // Stamped from the printed counts at bdd7164, set well under each real figure so the table
-// growing does not trip them: 0x00 had 211 accepted arms, 0xfb 37, 0xfc 18, 0xfd 256.
+// growing does not trip them: 0x00 had 211 accepted arms, 0xfb 37, 0xfc 18, 0xfd 256. 0xfe's 67
+// come from the threads pin at cc535ad, which is a *second* revision — the floor is stamped from
+// its own authority's count, not from a share of a total, for the same reason the two pins have
+// separate fetch scripts.
 var censusRegionFloors = map[byte]int{
 	0x00: 150,
 	0xfb: 25,
 	0xfc: 12,
 	0xfd: 200,
+	0xfe: 50,
 }
 
 // censusRow is one arm's classification, in the golden file's column order.

@@ -57,7 +57,7 @@ func TestExtendedConstOpsAreTheProposalsSix(t *testing.T) {
 	// The document's "New Instructions" list, one ``-quoted mnemonic per line. Licensed
 	// through testenv: a join that skips when the document is absent reports agreement with
 	// a file it never read, and BURROUGHS_NO_SKIP=1 revokes the license in CI.
-	const doc = "proposals/extended-const/Overview.md"
+	const doc = "spec/proposals/extended-const/Overview.md"
 	path := filepath.Join("..", "..", testenv.ProposalDoc(doc))
 	names := proposalConstInstrs(t, testenv.RequireProposalDoc(t, path))
 
